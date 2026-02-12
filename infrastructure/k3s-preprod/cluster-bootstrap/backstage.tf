@@ -1,13 +1,7 @@
-resource "kubernetes_namespace" "backstage" {
-  metadata {
-    name = "backstage"
-  }
-}
-
 resource "kubernetes_secret" "backstage_secrets" {
   metadata {
     name      = "backstage-secrets"
-    namespace = kubernetes_namespace.backstage.metadata[0].name
+    namespace = "backstage"
   }
 
   data = {
