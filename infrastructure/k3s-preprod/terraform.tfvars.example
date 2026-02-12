@@ -6,3 +6,12 @@ github_oauth_client_secret = "<your-github-oauth-client-secret>"
 github_repo_pat            = "<your-github-pat-for-argocd>"
 backstage_github_client_id     = "<your-backstage-github-oauth-client-id>"
 backstage_github_client_secret = "<your-backstage-github-oauth-client-secret>"
+
+# monteexchange bot secrets
+monteexchange_bot_token      = "<telegram-bot-token>"
+monteexchange_wise_token     = "<wise-api-token>"
+monteexchange_balance_id     = "<wise-balance-id>"
+monteexchange_profile_id     = "<wise-profile-id>"
+monteexchange_exchange_fee   = "1.75"
+monteexchange_withdrawal_fee = "0"
+monteexchange_wise_host      = "https://api.transferwise.com"

@@ -4,18 +4,34 @@
 # Chart: worker-service
 
 image:
-  repository: ghcr.io/dmitriimashkov/monteexchange
-  tag: "initial"
+  repository: ghcr.io/mashkovd/monteexchange
+  tag: "eeb1a64"
+  pullPolicy: Always
 
 workloadType: deployment
+
+envFrom:
+  - secretRef:
+      name: monteexchange-secrets
 
 resources:
   requests:
     cpu: 100m
     memory: 128Mi
   limits:
-    cpu: 500m
+    cpu: 200m
     memory: 256Mi
 
-env:
-  APP_ENV: preprod
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 8080
+  initialDelaySeconds: 10
+  periodSeconds: 30
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: 8080
+  initialDelaySeconds: 5
+  periodSeconds: 10
