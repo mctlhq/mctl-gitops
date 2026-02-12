@@ -6,3 +6,4 @@ __pycache__/
 # Packer
 *.box
 packer_cache/
+.claude/
