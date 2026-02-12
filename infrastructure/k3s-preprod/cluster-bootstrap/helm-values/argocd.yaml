@@ -51,6 +51,18 @@ configs:
       github-client-id: ""
       github-client-secret: ""
 
+  credentialTemplates:
+    github-https:
+      url: https://github.com/dmitriimashkov
+      username: argocd
+      password: ""
+
+  repositories:
+    mctl-me:
+      url: https://github.com/dmitriimashkov/mctl.me.git
+      username: argocd
+      password: ""
+
 server:
   ingress:
     enabled: true

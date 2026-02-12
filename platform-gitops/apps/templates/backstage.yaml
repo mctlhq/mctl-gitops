@@ -24,6 +24,12 @@ spec:
             secretName: backstage-tls
 
         backstage:
+          image:
+            registry: ghcr.io
+            repository: dmitriimashkov/backstage
+            tag: latest
+          extraEnvVarsSecrets:
+            - backstage-secrets
           appConfig:
             app:
               title: mctl.me Backstage
@@ -41,6 +47,16 @@ spec:
                   port: ${POSTGRES_PORT}
                   user: ${POSTGRES_USER}
                   password: ${POSTGRES_PASSWORD}
+            auth:
+              environment: production
+              providers:
+                github:
+                  production:
+                    clientId: ${AUTH_GITHUB_CLIENT_ID}
+                    clientSecret: ${AUTH_GITHUB_CLIENT_SECRET}
+                    signIn:
+                      resolvers:
+                        - resolver: usernameMatchingUserEntityName
             catalog:
               rules:
                 - allow: [Component, System, API, Resource, Location, Template, Group, User]

@@ -54,6 +54,26 @@ variable "github_oauth_client_secret" {
   description = "GitHub OAuth App Client Secret for ArgoCD Dex"
 }
 
+variable "github_repo_pat" {
+  type        = string
+  sensitive   = true
+  description = "GitHub PAT for ArgoCD to access private repos"
+}
+
+variable "backstage_github_client_id" {
+  type        = string
+  sensitive   = true
+  default     = ""
+  description = "GitHub OAuth Client ID for Backstage auth"
+}
+
+variable "backstage_github_client_secret" {
+  type        = string
+  sensitive   = true
+  default     = ""
+  description = "GitHub OAuth Client Secret for Backstage auth"
+}
+
 # --- Kube-Hetzner Module ---
 
 module "kube-hetzner" {
@@ -141,12 +161,17 @@ module "kube-hetzner" {
 # Deploys ArgoCD + root-app after cluster is ready
 module "cluster-bootstrap" {
   providers = {
-    helm = helm
+    helm       = helm
+    kubernetes = kubernetes
   }
   source = "./cluster-bootstrap"
 
   github_oauth_client_id     = var.github_oauth_client_id
   github_oauth_client_secret = var.github_oauth_client_secret
+  github_repo_pat            = var.github_repo_pat
+
+  backstage_github_client_id     = var.backstage_github_client_id
+  backstage_github_client_secret = var.backstage_github_client_secret
 
   depends_on = [
     module.kube-hetzner

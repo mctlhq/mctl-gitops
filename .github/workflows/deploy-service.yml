@@ -1,0 +1,181 @@
+name: Deploy Service
+
+on:
+  workflow_dispatch:
+    inputs:
+      team_name:
+        description: "Team name (e.g. payments)"
+        required: true
+        type: string
+      service_name:
+        description: "Service name (e.g. payment-api)"
+        required: true
+        type: string
+      dockerfile_repo:
+        description: "Source repo with Dockerfile (e.g. dmitriimashkov/payment-api)"
+        required: true
+        type: string
+      dockerfile_path:
+        description: "Path to Dockerfile in source repo"
+        required: false
+        default: "Dockerfile"
+        type: string
+      image_tag:
+        description: "Image tag (e.g. v1.2.3). Leave empty for auto (git sha)"
+        required: false
+        type: string
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_OWNER: dmitriimashkov
+
+jobs:
+  validate:
+    name: Validate service exists
+    runs-on: ubuntu-latest
+    outputs:
+      values_path: ${{ steps.find.outputs.values_path }}
+      service_type: ${{ steps.find.outputs.service_type }}
+      image_tag: ${{ steps.tag.outputs.image_tag }}
+    steps:
+      - name: Checkout platform repo
+        uses: actions/checkout@v4
+
+      - name: Find service config
+        id: find
+        run: |
+          TEAM="${{ inputs.team_name }}"
+          SERVICE="${{ inputs.service_name }}"
+
+          # Check in services/ (base-service)
+          if [[ -f "platform-gitops/services/preprod/${TEAM}/${SERVICE}/values.yaml" ]]; then
+            echo "values_path=platform-gitops/services/preprod/${TEAM}/${SERVICE}/values.yaml" >> $GITHUB_OUTPUT
+            echo "service_type=base-service" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Check in workers/ (worker-service)
+          if [[ -f "platform-gitops/workers/preprod/${TEAM}/${SERVICE}/values.yaml" ]]; then
+            echo "values_path=platform-gitops/workers/preprod/${TEAM}/${SERVICE}/values.yaml" >> $GITHUB_OUTPUT
+            echo "service_type=worker-service" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "::error::Service ${TEAM}/${SERVICE} not found. Use onboard-service workflow first."
+          echo "## ❌ Service Not Found" >> $GITHUB_STEP_SUMMARY
+          echo "Service \`${TEAM}/${SERVICE}\` does not exist." >> $GITHUB_STEP_SUMMARY
+          echo "Use the **Onboard Service** workflow to register it first." >> $GITHUB_STEP_SUMMARY
+          exit 1
+
+      - name: Determine image tag
+        id: tag
+        run: |
+          if [[ -n "${{ inputs.image_tag }}" ]]; then
+            echo "image_tag=${{ inputs.image_tag }}" >> $GITHUB_OUTPUT
+          else
+            SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+            echo "image_tag=sha-${SHORT_SHA}" >> $GITHUB_OUTPUT
+          fi
+
+  build-image:
+    name: Build & push Docker image
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout source repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.dockerfile_repo }}
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ inputs.dockerfile_path }}
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ inputs.service_name }}:${{ needs.validate.outputs.image_tag }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ inputs.service_name }}:latest
+
+      - name: Report build failure
+        if: failure()
+        run: |
+          echo "## ❌ Docker Build Failed" >> $GITHUB_STEP_SUMMARY
+          echo "Failed to build image for \`${{ inputs.service_name }}\`." >> $GITHUB_STEP_SUMMARY
+          echo "Check the build logs above for details." >> $GITHUB_STEP_SUMMARY
+
+  update-config:
+    name: Update image tag
+    needs: [validate, build-image]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout platform repo
+        uses: actions/checkout@v4
+
+      - name: Update image tag in values.yaml
+        run: |
+          VALUES_PATH="${{ needs.validate.outputs.values_path }}"
+          TAG="${{ needs.validate.outputs.image_tag }}"
+
+          # Install yq
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+          yq -i ".image.tag = \"${TAG}\"" "$VALUES_PATH"
+
+          echo "## Updated values.yaml" >> $GITHUB_STEP_SUMMARY
+          echo '```yaml' >> $GITHUB_STEP_SUMMARY
+          cat "$VALUES_PATH" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Validate Helm template
+        run: |
+          SERVICE_TYPE="${{ needs.validate.outputs.service_type }}"
+          VALUES_PATH="${{ needs.validate.outputs.values_path }}"
+          CHART_PATH="helm-charts/${SERVICE_TYPE}"
+
+          curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+          if ! helm template test "$CHART_PATH" -f "$VALUES_PATH" > /dev/null 2>&1; then
+            echo "::error::Helm validation failed after tag update"
+            echo "## ❌ Helm Validation Failed" >> $GITHUB_STEP_SUMMARY
+            helm template test "$CHART_PATH" -f "$VALUES_PATH" 2>&1 >> $GITHUB_STEP_SUMMARY || true
+            exit 1
+          fi
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          VALUES_PATH="${{ needs.validate.outputs.values_path }}"
+          TAG="${{ needs.validate.outputs.image_tag }}"
+
+          git add "$VALUES_PATH"
+          git commit -m "deploy: ${{ inputs.team_name }}/${{ inputs.service_name }} → ${TAG}"
+          git push
+
+      - name: Success summary
+        run: |
+          TAG="${{ needs.validate.outputs.image_tag }}"
+          echo "## ✅ Deployment Triggered" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Service** | \`${{ inputs.team_name }}/${{ inputs.service_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Image Tag** | \`${TAG}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Image** | \`${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ inputs.service_name }}:${TAG}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "ArgoCD will sync the new image tag automatically." >> $GITHUB_STEP_SUMMARY

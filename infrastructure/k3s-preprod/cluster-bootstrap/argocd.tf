@@ -20,5 +20,13 @@ resource "helm_release" "argocd" {
       name  = "configs.secret.extra.github-client-secret"
       value = var.github_oauth_client_secret
     },
+    {
+      name  = "configs.credentialTemplates.github-https.password"
+      value = var.github_repo_pat
+    },
+    {
+      name  = "configs.repositories.mctl-me.password"
+      value = var.github_repo_pat
+    },
   ]
 }
