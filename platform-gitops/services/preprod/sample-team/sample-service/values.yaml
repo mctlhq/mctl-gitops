@@ -1,0 +1,26 @@
+# Service: sample-service
+# Team: sample-team
+# Environment: preprod
+
+image:
+  repository: ghcr.io/dmitriimashkov/sample-service
+  tag: latest  # TODO: pin to specific tag via CI
+
+service:
+  port: 8080
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+env:
+  LOG_LEVEL: debug
+  APP_ENV: preprod
+
+ingress:
+  enabled: true
+  host: sample-service-preprod.mctl.me

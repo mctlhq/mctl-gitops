@@ -1,0 +1,53 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: preprod-workers
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - git:
+        repoURL: {{ .Values.spec.source.repoURL }}
+        revision: {{ .Values.spec.source.targetRevision }}
+        directories:
+          - path: platform-gitops/workers/preprod/*/*
+  template:
+    metadata:
+      name: '{{`preprod-{{ index .path.segments 3 }}-{{ index .path.segments 4 }}`}}'
+      labels:
+        env: preprod
+        team: '{{`{{ index .path.segments 3 }}`}}'
+        type: worker
+        backstage.io/kubernetes-id: '{{`{{ index .path.segments 4 }}`}}'
+      annotations:
+        backstage.io/kubernetes-id: '{{`{{ index .path.segments 4 }}`}}'
+        argocd/app-name: '{{`preprod-{{ index .path.segments 3 }}-{{ index .path.segments 4 }}`}}'
+    spec:
+      project: preprod
+      sources:
+        - repoURL: {{ .Values.spec.source.repoURL }}
+          targetRevision: {{ .Values.spec.source.targetRevision }}
+          path: helm-charts/worker-service
+          helm:
+            valueFiles:
+              - $values/{{ `{{ .path.path }}` }}/values.yaml
+        - repoURL: {{ .Values.spec.source.repoURL }}
+          targetRevision: {{ .Values.spec.source.targetRevision }}
+          ref: values
+      destination:
+        server: {{ .Values.spec.destination.server }}
+        namespace: '{{`{{ index .path.segments 3 }}`}}'
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
+          - ApplyOutOfSyncOnly=true
+        retry:
+          limit: 5
+          backoff:
+            duration: 5s
+            factor: 2
+            maxDuration: 3m

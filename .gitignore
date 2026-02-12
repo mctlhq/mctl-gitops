@@ -1,0 +1,8 @@
+.DS_Store
+.idea/
+*.pyc
+__pycache__/
+
+# Packer
+*.box
+packer_cache/

@@ -1,0 +1,71 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: backstage
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://backstage.github.io/charts
+    chart: backstage
+    targetRevision: 2.6.3
+    helm:
+      values: |
+        ingress:
+          enabled: true
+          className: traefik
+          annotations:
+            cert-manager.io/cluster-issuer: letsencrypt-prod
+          host: backstage-preprod.mctl.me
+          tls:
+            enabled: true
+            secretName: backstage-tls
+
+        backstage:
+          appConfig:
+            app:
+              title: mctl.me Backstage
+              baseUrl: https://backstage-preprod.mctl.me
+            organization:
+              name: mctl.me
+            backend:
+              baseUrl: https://backstage-preprod.mctl.me
+              listen:
+                port: 7007
+              database:
+                client: pg
+                connection:
+                  host: ${POSTGRES_HOST}
+                  port: ${POSTGRES_PORT}
+                  user: ${POSTGRES_USER}
+                  password: ${POSTGRES_PASSWORD}
+            catalog:
+              rules:
+                - allow: [Component, System, API, Resource, Location, Template, Group, User]
+              locations: []
+
+        postgresql:
+          enabled: true
+          auth:
+            username: backstage
+            password: backstage
+          architecture: standalone
+
+  destination:
+    server: {{ .Values.spec.destination.server }}
+    namespace: backstage
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

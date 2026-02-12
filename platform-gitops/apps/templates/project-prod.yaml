@@ -1,0 +1,8 @@
+{{- /*
+  TODO: Enable when prod cluster is ready
+  Copy project-preprod.yaml, change:
+  - name: prod
+  - description: Production environment
+  - Restrict namespaces
+  - Add approval requirements
+*/ -}}

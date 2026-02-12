@@ -1,0 +1,31 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: preprod
+  namespace: argocd
+spec:
+  description: Pre-production environment — services and workers
+
+  sourceRepos:
+    - {{ .Values.spec.source.repoURL }}
+
+  destinations:
+    - server: {{ .Values.spec.destination.server }}
+      namespace: "*"
+
+  clusterResourceWhitelist: []
+
+  namespaceResourceWhitelist:
+    - group: ""
+      kind: "*"
+    - group: apps
+      kind: "*"
+    - group: networking.k8s.io
+      kind: "*"
+    - group: autoscaling
+      kind: "*"
+    - group: batch
+      kind: "*"
+
+  orphanedResources:
+    warn: true

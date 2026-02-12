@@ -1,0 +1,95 @@
+## Argo CD configuration for mctl.me preprod
+## Chart: argo-cd v9.4.1
+
+nameOverride: argocd
+
+global:
+  domain: argocd-preprod.mctl.me
+
+configs:
+  cm:
+    url: https://argocd-preprod.mctl.me
+    admin.enabled: true
+    timeout.reconciliation: 180s
+    dex.config: |
+      logger:
+        level: info
+        format: json
+      connectors:
+      - type: github
+        id: github
+        name: GitHub
+        config:
+          baseURL: https://github.com
+          clientID: "$github-client-id"
+          clientSecret: "$github-client-secret"
+          orgs:
+            - name: dmitriimashkov
+              teams:
+                - admin
+                - developers
+
+  params:
+    server.insecure: true
+
+  rbac:
+    policy.default: role:readonly
+    policy.csv: |
+      p, role:admin, applications, *, */*, allow
+      p, role:admin, logs, get, */*, allow
+      p, role:admin, clusters, get, */*, allow
+      p, role:admin, repositories, *, */*, allow
+      p, role:admin, projects, *, */*, allow
+      g, dmitriimashkov:admin, role:admin
+      g, dmitriimashkov:developers, role:admin
+      g, dmitriimashkov:control, role:readonly
+    scopes: "[groups]"
+
+  secret:
+    createSecret: true
+    extra:
+      github-client-id: ""
+      github-client-secret: ""
+
+server:
+  ingress:
+    enabled: true
+    ingressClassName: traefik
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt-prod
+    tls: true
+    extraTls:
+      - hosts:
+          - argocd-preprod.mctl.me
+        secretName: argocd-tls
+
+extraObjects:
+  - apiVersion: argoproj.io/v1alpha1
+    kind: Application
+    metadata:
+      name: root-app
+      namespace: argocd
+      finalizers:
+        - resources-finalizer.argocd.argoproj.io
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/dmitriimashkov/mctl.me.git
+        targetRevision: main
+        path: platform-gitops/apps
+        helm:
+          valueFiles:
+            - values.yaml
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: argocd
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        retry:
+          limit: 5
+          backoff:
+            duration: 5s
+            factor: 2
+            maxDuration: 3m

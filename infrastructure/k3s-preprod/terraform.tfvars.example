@@ -1,0 +1,5 @@
+hcloud_token               = "<your-hetzner-api-token>"
+ssh_public_key             = "~/.ssh/id_ed25519.pub"
+ssh_private_key            = "~/.ssh/id_ed25519"
+github_oauth_client_id     = "<your-github-oauth-client-id>"
+github_oauth_client_secret = "<your-github-oauth-client-secret>"

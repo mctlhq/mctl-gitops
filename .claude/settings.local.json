@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:api.github.com)",
+      "Bash(helm template:*)",
+      "Bash(terraform init:*)",
+      "Bash(terraform validate:*)",
+      "Bash(terraform version:*)",
+      "Bash(git -C /Users/dmitriimashkov/PycharmProjects/mctl.me status)",
+      "Bash(grep:*)",
+      "Bash(wc:*)",
+      "Bash(find:*)",
+      "Bash(ls:*)",
+      "Bash(cmp:*)",
+      "Bash(xargs:*)",
+      "Bash(python3 -c \"import yaml; yaml.safe_load\\(open\\(''.github/workflows/onboard-service.yml''\\)\\); print\\(''onboard-service.yml: OK''\\)\")",
+      "Bash(python3 -c \"import yaml; yaml.safe_load\\(open\\(''.github/workflows/deploy-service.yml''\\)\\); print\\(''deploy-service.yml: OK''\\)\")",
+      "Bash(packer version:*)",
+      "Bash(terraform plan:*)",
+      "Bash(terraform apply:*)"
+    ]
+  }
+}

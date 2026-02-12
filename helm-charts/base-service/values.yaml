@@ -1,0 +1,77 @@
+# =============================================================================
+# base-service: default values
+# This chart is the single deployment contract for all services.
+# =============================================================================
+
+# -- Required: container image
+image:
+  repository: ""   # MUST be set per service
+  tag: "latest"    # MUST be pinned per service
+  pullPolicy: IfNotPresent
+
+# -- Required: service port
+service:
+  type: ClusterIP
+  port: 8080
+
+# -- Required: resource limits
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+# -- Required: environment variables (flat key-value)
+env: {}
+
+# -- Optional: replica count
+replicaCount: 1
+
+# -- Optional: ingress
+ingress:
+  enabled: false
+  className: traefik
+  host: ""
+  path: /
+  pathType: Prefix
+  annotations: {}
+  tls: []
+
+# -- Optional: autoscaling
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 80
+
+# -- Optional: service account
+serviceAccount:
+  create: false
+  name: ""
+  annotations: {}
+
+# -- Optional: extra volumes
+extraVolumes: []
+extraVolumeMounts: []
+
+# -- Pod-level settings
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# -- Health checks
+probes:
+  liveness:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 10
+    periodSeconds: 15
+  readiness:
+    path: /readyz
+    port: http
+    initialDelaySeconds: 5
+    periodSeconds: 10

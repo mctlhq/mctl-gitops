@@ -1,0 +1,33 @@
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+.terraform.lock.hcl
+.terraformrc
+terraform.rc
+
+# Sensitive variables
+*.tfvars
+*.tfvars.json
+!terraform.tfvars.example
+
+# Override files
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Generated files
+*_kubeconfig.yaml
+*_kubeconfig.yaml-e
+kubeconfig.yaml
+plans-custom.yaml
+kustomization.yaml
+*kustomization_backup.yaml
+
+# Misc
+.DS_Store
+.idea
