@@ -1,13 +1,7 @@
-resource "kubernetes_namespace" "bots" {
-  metadata {
-    name = "bots"
-  }
-}
-
 resource "kubernetes_secret" "monteexchange_secrets" {
   metadata {
     name      = "monteexchange-secrets"
-    namespace = kubernetes_namespace.bots.metadata[0].name
+    namespace = "bots"
   }
 
   data = {
@@ -19,4 +13,9 @@ resource "kubernetes_secret" "monteexchange_secrets" {
     WITHDRAWAL_FEE          = var.monteexchange_withdrawal_fee
     WISE_HOST               = var.monteexchange_wise_host
   }
+
+  depends_on = [
+    # Namespace created by ArgoCD ApplicationSet with CreateNamespace=true
+    # Wait a bit to ensure it exists before creating secret
+  ]
 }
