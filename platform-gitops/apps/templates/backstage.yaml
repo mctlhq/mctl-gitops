@@ -76,7 +76,7 @@ spec:
                       initialDelay:
                         seconds: 30
                       frequency:
-                        hours: 1
+                        minutes: 1
                       timeout:
                         minutes: 10
               locations:
