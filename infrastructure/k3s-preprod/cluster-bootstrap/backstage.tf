@@ -7,6 +7,7 @@ resource "kubernetes_secret" "backstage_secrets" {
   data = {
     AUTH_GITHUB_CLIENT_ID     = var.backstage_github_client_id
     AUTH_GITHUB_CLIENT_SECRET = var.backstage_github_client_secret
+    GITHUB_TOKEN              = var.github_repo_pat
   }
 }
 

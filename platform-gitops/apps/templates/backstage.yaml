@@ -59,9 +59,25 @@ spec:
                     signIn:
                       resolvers:
                         - resolver: usernameMatchingUserEntityName
+            integrations:
+              github:
+                - host: github.com
+                  token: ${GITHUB_TOKEN}
             catalog:
               rules:
                 - allow: [Component, System, API, Resource, Location, Template, Group, User]
+              providers:
+                githubOrg:
+                  production:
+                    id: production
+                    githubUrl: https://github.com
+                    orgs:
+                      - dmitriimashkov
+                    schedule:
+                      frequency:
+                        minutes: 30
+                      timeout:
+                        minutes: 3
               locations: []
 
         postgresql:
