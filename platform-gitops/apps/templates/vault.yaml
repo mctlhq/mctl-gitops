@@ -16,7 +16,7 @@ spec:
         server:
           ha:
             enabled: true
-            replicas: 2
+            replicas: 3
             raft:
               enabled: true
               config: |
@@ -33,6 +33,18 @@ spec:
                 }
 
                 service_registration "kubernetes" {}
+
+          affinity:
+            podAntiAffinity:
+              preferredDuringSchedulingIgnoredDuringExecution:
+                - weight: 100
+                  podAffinityTerm:
+                    labelSelector:
+                      matchLabels:
+                        app.kubernetes.io/instance: vault
+                        app.kubernetes.io/name: vault
+                        component: server
+                    topologyKey: kubernetes.io/hostname
 
           dataStorage:
             enabled: true
