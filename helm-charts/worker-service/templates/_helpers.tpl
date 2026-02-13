@@ -89,6 +89,10 @@ Container spec (shared between Deployment and CronJob)
       value: {{ $value | quote }}
     {{- end }}
   {{- end }}
+  {{- with .Values.envFrom }}
+  envFrom:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   {{- with .Values.extraVolumeMounts }}
   volumeMounts:
     {{- toYaml . | nindent 4 }}

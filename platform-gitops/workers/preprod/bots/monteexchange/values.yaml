@@ -22,16 +22,14 @@ resources:
     cpu: 200m
     memory: 256Mi
 
-livenessProbe:
-  httpGet:
+probes:
+  liveness:
     path: /health
     port: 8080
-  initialDelaySeconds: 10
-  periodSeconds: 30
-
-readinessProbe:
-  httpGet:
+    initialDelaySeconds: 10
+    periodSeconds: 30
+  readiness:
     path: /health
     port: 8080
-  initialDelaySeconds: 5
-  periodSeconds: 10
+    initialDelaySeconds: 5
+    periodSeconds: 10
