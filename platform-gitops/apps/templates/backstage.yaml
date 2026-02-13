@@ -68,16 +68,17 @@ spec:
                 - allow: [Component, System, API, Resource, Location, Template, Group, User]
               providers:
                 githubOrg:
-                  production:
-                    id: production
+                  - id: production
                     githubUrl: https://github.com
                     orgs:
                       - dmitriimashkov
                     schedule:
+                      initialDelay:
+                        seconds: 30
                       frequency:
-                        minutes: 30
+                        hours: 1
                       timeout:
-                        minutes: 3
+                        minutes: 10
               locations: []
 
         postgresql:
