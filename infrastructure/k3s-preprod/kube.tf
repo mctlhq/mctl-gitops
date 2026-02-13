@@ -74,46 +74,6 @@ variable "backstage_github_client_secret" {
   description = "GitHub OAuth Client Secret for Backstage auth"
 }
 
-variable "monteexchange_bot_token" {
-  type        = string
-  sensitive   = true
-  description = "Telegram Bot Token for monteexchange"
-}
-
-variable "monteexchange_wise_token" {
-  type        = string
-  sensitive   = true
-  description = "Wise API Token for monteexchange"
-}
-
-variable "monteexchange_balance_id" {
-  type        = string
-  description = "Wise Balance ID for monteexchange"
-}
-
-variable "monteexchange_profile_id" {
-  type        = string
-  description = "Wise Profile ID for monteexchange"
-}
-
-variable "monteexchange_exchange_fee" {
-  type        = string
-  default     = "1.75"
-  description = "Exchange fee percentage for monteexchange"
-}
-
-variable "monteexchange_withdrawal_fee" {
-  type        = string
-  default     = "0"
-  description = "Withdrawal fee for monteexchange"
-}
-
-variable "monteexchange_wise_host" {
-  type        = string
-  default     = "https://api.transferwise.com"
-  description = "Wise API host for monteexchange"
-}
-
 # --- Kube-Hetzner Module ---
 
 module "kube-hetzner" {
@@ -212,14 +172,6 @@ module "cluster-bootstrap" {
 
   backstage_github_client_id     = var.backstage_github_client_id
   backstage_github_client_secret = var.backstage_github_client_secret
-
-  monteexchange_bot_token      = var.monteexchange_bot_token
-  monteexchange_wise_token     = var.monteexchange_wise_token
-  monteexchange_balance_id     = var.monteexchange_balance_id
-  monteexchange_profile_id     = var.monteexchange_profile_id
-  monteexchange_exchange_fee   = var.monteexchange_exchange_fee
-  monteexchange_withdrawal_fee = var.monteexchange_withdrawal_fee
-  monteexchange_wise_host      = var.monteexchange_wise_host
 
   depends_on = [
     module.kube-hetzner
