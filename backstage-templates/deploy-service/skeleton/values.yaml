@@ -1,0 +1,103 @@
+{%- if values.serviceType == "base-service" -%}
+# Service: ${{ values.serviceName }}
+# Team: ${{ values.teamName }}
+# Environment: preprod
+
+image:
+  repository: ${{ values.imageRepository }}
+  tag: "${{ values.imageTag }}"
+{%- if values.imagePullSecretName %}
+
+imagePullSecrets:
+  - name: ${{ values.imagePullSecretName }}
+{%- endif %}
+
+service:
+  port: ${{ values.port | default(8080) }}
+
+replicaCount: ${{ values.replicaCount | default(1) }}
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+{%- if values.envVars and values.envVars | length > 0 %}
+
+env:
+{%- for key, value in values.envVars | items %}
+  ${{ key }}: "${{ value }}"
+{%- endfor %}
+{%- endif %}
+{%- if values.secretEnvVars and values.secretEnvVars | length > 0 %}
+
+envFrom:
+  - secretRef:
+      name: ${{ values.serviceName }}-secrets
+{%- endif %}
+{%- if values.host %}
+
+ingress:
+  enabled: true
+  host: ${{ values.host }}
+{%- endif %}
+{%- else -%}
+# Worker: ${{ values.serviceName }}
+# Team: ${{ values.teamName }}
+# Environment: preprod
+
+image:
+  repository: ${{ values.imageRepository }}
+  tag: "${{ values.imageTag }}"
+{%- if values.imagePullSecretName %}
+
+imagePullSecrets:
+  - name: ${{ values.imagePullSecretName }}
+{%- endif %}
+
+workloadType: ${{ values.workloadType | default("deployment") }}
+{%- if values.workloadType == "cronjob" and values.cronSchedule %}
+
+cronjob:
+  schedule: "${{ values.cronSchedule }}"
+{%- endif %}
+{%- if values.command and values.command | length > 0 %}
+
+command:
+{%- for cmd in values.command %}
+  - "${{ cmd }}"
+{%- endfor %}
+{%- endif %}
+{%- if values.args and values.args | length > 0 %}
+
+args:
+{%- for arg in values.args %}
+  - "${{ arg }}"
+{%- endfor %}
+{%- endif %}
+
+replicaCount: ${{ values.replicaCount | default(1) }}
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+{%- if values.envVars and values.envVars | length > 0 %}
+
+env:
+{%- for key, value in values.envVars | items %}
+  ${{ key }}: "${{ value }}"
+{%- endfor %}
+{%- endif %}
+{%- if values.secretEnvVars and values.secretEnvVars | length > 0 %}
+
+envFrom:
+  - secretRef:
+      name: ${{ values.serviceName }}-secrets
+{%- endif %}
+{%- endif %}

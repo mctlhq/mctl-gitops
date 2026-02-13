@@ -1,0 +1,155 @@
+apiVersion: scaffolder.backstage.io/v1beta3
+kind: Template
+metadata:
+  name: deploy-service
+  title: Deploy Service to Preprod
+  description: Deploy a Docker image as a service or worker to the preprod cluster
+  tags:
+    - deploy
+    - kubernetes
+    - preprod
+spec:
+  owner: group:admin
+  type: service
+
+  parameters:
+    - title: Service Info
+      required:
+        - teamName
+        - serviceName
+        - serviceType
+      properties:
+        teamName:
+          title: Team Name
+          type: string
+          description: "Must match your GitHub team name and directory in platform-gitops/services/preprod/"
+          pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
+        serviceName:
+          title: Service Name
+          type: string
+          pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
+        serviceType:
+          title: Service Type
+          type: string
+          enum:
+            - base-service
+            - worker-service
+          enumNames:
+            - "Web Service (with ingress)"
+            - "Worker (background)"
+
+    - title: Docker Image
+      required:
+        - imageRepository
+        - imageTag
+      properties:
+        imageRepository:
+          title: Image Repository
+          type: string
+          description: "e.g. ghcr.io/dmitriimashkov/myapp"
+        imageTag:
+          title: Image Tag
+          type: string
+          default: latest
+        imagePullSecretName:
+          title: Image Pull Secret Name
+          type: string
+          description: "K8s secret name for private registry auth (optional)"
+
+    - title: Configuration
+      properties:
+        port:
+          title: Port (base-service only)
+          type: number
+          default: 8080
+        host:
+          title: Ingress Host (base-service only)
+          type: string
+          description: "e.g. myapp-preprod.mctl.me"
+        replicaCount:
+          title: Replica Count
+          type: number
+          default: 1
+        envVars:
+          title: Environment Variables
+          type: object
+          additionalProperties:
+            type: string
+          description: "Key-value pairs: VAR_NAME → value"
+        secretEnvVars:
+          title: Secret Environment Variables
+          type: object
+          additionalProperties:
+            type: string
+          description: "Keys to store in Vault and inject via ExternalSecret"
+
+    - title: Worker Settings (worker-service only)
+      properties:
+        workloadType:
+          title: Workload Type
+          type: string
+          enum:
+            - deployment
+            - cronjob
+          default: deployment
+        cronSchedule:
+          title: Cron Schedule (cronjob only)
+          type: string
+          default: "*/5 * * * *"
+        command:
+          title: Container Command Override
+          type: array
+          items:
+            type: string
+        args:
+          title: Container Args Override
+          type: array
+          items:
+            type: string
+
+  steps:
+    - id: generate-files
+      name: Generate service files
+      action: fetch:template
+      input:
+        url: ./skeleton
+        targetPath: ./output/platform-gitops/${{ 'workers' if parameters.serviceType == 'worker-service' else 'services' }}/preprod/${{ parameters.teamName }}/${{ parameters.serviceName }}
+        values:
+          teamName: ${{ parameters.teamName }}
+          serviceName: ${{ parameters.serviceName }}
+          serviceType: ${{ parameters.serviceType }}
+          imageRepository: ${{ parameters.imageRepository }}
+          imageTag: ${{ parameters.imageTag }}
+          imagePullSecretName: ${{ parameters.imagePullSecretName }}
+          port: ${{ parameters.port }}
+          host: ${{ parameters.host }}
+          replicaCount: ${{ parameters.replicaCount }}
+          envVars: ${{ parameters.envVars }}
+          secretEnvVars: ${{ parameters.secretEnvVars }}
+          workloadType: ${{ parameters.workloadType }}
+          cronSchedule: ${{ parameters.cronSchedule }}
+          command: ${{ parameters.command }}
+          args: ${{ parameters.args }}
+
+    - id: create-pr
+      name: Create Pull Request
+      action: publish:github:pull-request
+      input:
+        repoUrl: github.com?repo=mctl.me&owner=dmitriimashkov
+        title: "deploy: ${{ parameters.teamName }}/${{ parameters.serviceName }}"
+        branchName: "deploy/${{ parameters.teamName }}-${{ parameters.serviceName }}"
+        description: |
+          ## Deploy ${{ parameters.serviceName }}
+
+          **Team:** ${{ parameters.teamName }}
+          **Type:** ${{ parameters.serviceType }}
+          **Image:** ${{ parameters.imageRepository }}:${{ parameters.imageTag }}
+
+          Created by Backstage scaffolder.
+        sourcePath: ./output
+        targetPath: "."
+
+  output:
+    links:
+      - title: Pull Request
+        url: ${{ steps['create-pr'].output.remoteUrl }}

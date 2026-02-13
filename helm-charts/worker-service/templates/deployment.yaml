@@ -22,6 +22,10 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- if .Values.serviceAccount.create }}
       serviceAccountName: {{ include "worker-service.serviceAccountName" . }}
       {{- end }}

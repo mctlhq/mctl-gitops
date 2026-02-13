@@ -79,7 +79,11 @@ spec:
                         hours: 1
                       timeout:
                         minutes: 10
-              locations: []
+              locations:
+                - type: url
+                  target: https://github.com/dmitriimashkov/mctl.me/blob/main/backstage-templates/deploy-service/template.yaml
+                  rules:
+                    - allow: [Template]
 
         postgresql:
           enabled: true

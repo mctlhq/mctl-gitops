@@ -26,6 +26,12 @@ resources:
 # -- Required: environment variables (flat key-value)
 env: {}
 
+# -- Optional: environment variables from ConfigMaps/Secrets
+envFrom: []
+
+# -- Optional: image pull secrets for private registries
+imagePullSecrets: []
+
 # -- Optional: replica count
 replicaCount: 1
 
