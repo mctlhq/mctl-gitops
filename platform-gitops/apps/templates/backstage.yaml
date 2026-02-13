@@ -28,6 +28,8 @@ spec:
             registry: ghcr.io
             repository: dmitriimashkov/backstage
             tag: latest
+            pullSecrets:
+              - ghcr-credentials
           extraEnvVarsSecrets:
             - backstage-secrets
           appConfig:
@@ -43,10 +45,10 @@ spec:
               database:
                 client: pg
                 connection:
-                  host: ${POSTGRES_HOST}
-                  port: ${POSTGRES_PORT}
-                  user: ${POSTGRES_USER}
-                  password: ${POSTGRES_PASSWORD}
+                  host: backstage-postgresql
+                  port: "5432"
+                  user: backstage
+                  password: backstage
             auth:
               environment: production
               providers:
