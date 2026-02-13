@@ -10,9 +10,32 @@ image:
 
 workloadType: deployment
 
+env:
+  EXCHANGE_FEE_IN_PERCENT: "1.75"
+  WITHDRAWAL_FEE: "0"
+  WISE_HOST: "https://api.transferwise.com"
+
 envFrom:
   - secretRef:
       name: monteexchange-secrets
+
+externalSecret:
+  store: vault-backend
+  targetSecret: monteexchange-secrets
+  refreshInterval: 1h
+  data:
+    - secretKey: BOT_TOKEN
+      remoteKey: preprod/bots/monteexchange
+      property: BOT_TOKEN
+    - secretKey: WISE_TOKEN
+      remoteKey: preprod/bots/monteexchange
+      property: WISE_TOKEN
+    - secretKey: BALANCE_ID
+      remoteKey: preprod/bots/monteexchange
+      property: BALANCE_ID
+    - secretKey: PROFILE_ID
+      remoteKey: preprod/bots/monteexchange
+      property: PROFILE_ID
 
 resources:
   requests:
