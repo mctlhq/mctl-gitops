@@ -170,8 +170,8 @@ module "kube-hetzner" {
   # Matches ingress.className: traefik in helm-charts/base-service
 
   # --- Storage ---
-  # enable_longhorn = true
-  # longhorn_replica_count = 1  # For preprod, 1 replica is sufficient
+  enable_longhorn = true
+  longhorn_replica_count = 1  # For preprod, 1 replica is sufficient
 
   # --- Cert Manager ---
   # Enabled by default (enable_cert_manager = true)
