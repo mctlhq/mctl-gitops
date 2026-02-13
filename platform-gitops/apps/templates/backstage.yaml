@@ -91,6 +91,9 @@ spec:
             username: backstage
             password: backstage
           architecture: standalone
+          primary:
+            persistence:
+              storageClass: longhorn
 
   destination:
     server: {{ .Values.spec.destination.server }}
