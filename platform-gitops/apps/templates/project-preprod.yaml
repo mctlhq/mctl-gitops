@@ -28,6 +28,8 @@ spec:
       kind: "*"
     - group: batch
       kind: "*"
+    - group: external-secrets.io
+      kind: "*"
 
   orphanedResources:
     warn: true
