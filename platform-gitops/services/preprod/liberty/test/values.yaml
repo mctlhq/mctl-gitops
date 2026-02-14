@@ -3,11 +3,11 @@
 # Environment: preprod
 
 image:
-  repository: hello-world
-  tag: "latest"
+  repository: nginxdemos/hello
+  tag: "plain-text"
 
 service:
-  port: 8080
+  port: 80
 
 replicaCount: 1
 
