@@ -27,7 +27,7 @@ resources:
 {%- if values.envVars and values.envVars | length > 0 %}
 
 env:
-{%- for key, value in values.envVars | items %}
+{%- for key, value in values.envVars %}
   ${{ key }}: "${{ value }}"
 {%- endfor %}
 {%- endif %}
@@ -90,7 +90,7 @@ resources:
 {%- if values.envVars and values.envVars | length > 0 %}
 
 env:
-{%- for key, value in values.envVars | items %}
+{%- for key, value in values.envVars %}
   ${{ key }}: "${{ value }}"
 {%- endfor %}
 {%- endif %}
