@@ -1,0 +1,176 @@
+name: Sync ArgoCD Teams RBAC
+
+on:
+  schedule:
+    # Run every 6 hours
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+    # Allow manual trigger
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync-teams:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Fetch GitHub teams
+        id: fetch-teams
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Fetching teams from dmitriimashkov organization..."
+          gh api /orgs/dmitriimashkov/teams --paginate --jq '.[].slug' > /tmp/teams.txt
+          echo "Found teams:"
+          cat /tmp/teams.txt
+          echo "team_count=$(wc -l < /tmp/teams.txt)" >> $GITHUB_OUTPUT
+
+      - name: Generate RBAC policies
+        id: generate-rbac
+        run: |
+          cat > /tmp/generate-rbac.sh << 'SCRIPT'
+          #!/bin/bash
+          set -e
+
+          # Output file
+          OUTPUT="platform-gitops/apps/templates/argocd-rbac-cm.yaml"
+
+          # Start ConfigMap
+          cat > "$OUTPUT" << 'EOF'
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: argocd-rbac-cm
+            namespace: argocd
+            labels:
+              app.kubernetes.io/name: argocd-rbac-cm
+              app.kubernetes.io/part-of: argocd
+          data:
+            policy.default: ""
+            policy.csv: |
+              # ============================================================================
+              # ArgoCD RBAC Policies - Auto-synced with GitHub Teams
+              # Generated: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+              # ============================================================================
+
+              # Admin team: full access to ArgoCD
+              p, role:admin, applications, *, */*, allow
+              p, role:admin, logs, get, */*, allow
+              p, role:admin, exec, create, */*, allow
+              p, role:admin, clusters, get, */*, allow
+              p, role:admin, repositories, *, */*, allow
+              p, role:admin, projects, *, */*, allow
+              g, dmitriimashkov:admin, role:admin
+
+              # ============================================================================
+              # Team-Based Access (Auto-generated from GitHub Teams)
+              # ============================================================================
+          EOF
+
+          # Generate policies for each team (except admin)
+          while IFS= read -r team; do
+            # Skip admin team (already defined above)
+            if [ "$team" = "admin" ]; then
+              continue
+            fi
+
+            cat >> "$OUTPUT" << EOF
+
+              # Team: $team
+              p, role:team-$team, applications, get, argocd/preview-$team-*, allow
+              p, role:team-$team, logs, get, argocd/preview-$team-*, allow
+              g, dmitriimashkov:$team, role:team-$team
+          EOF
+          done < /tmp/teams.txt
+
+          echo "Generated RBAC config for $(wc -l < /tmp/teams.txt) teams"
+          SCRIPT
+
+          chmod +x /tmp/generate-rbac.sh
+          /tmp/generate-rbac.sh
+
+      - name: Check for changes
+        id: check-changes
+        run: |
+          if git diff --quiet platform-gitops/apps/templates/argocd-rbac-cm.yaml; then
+            echo "No changes detected in RBAC config"
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          else
+            echo "Changes detected in RBAC config"
+            git diff platform-gitops/apps/templates/argocd-rbac-cm.yaml
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Pull Request
+        if: steps.check-changes.outputs.has_changes == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Configure git
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Create branch
+          BRANCH="chore/sync-argocd-teams-$(date +%s)"
+          git checkout -b "$BRANCH"
+
+          # Commit changes
+          git add platform-gitops/apps/templates/argocd-rbac-cm.yaml
+          git commit -m "chore(argocd): sync RBAC policies with GitHub teams
+
+          Auto-generated update from GitHub teams sync workflow.
+
+          Teams synced: ${{ steps.fetch-teams.outputs.team_count }}
+          $(cat /tmp/teams.txt | sed 's/^/- /')
+
+          Co-Authored-By: github-actions[bot] <github-actions[bot]@users.noreply.github.com>"
+
+          # Push branch
+          git push origin "$BRANCH"
+
+          # Create PR
+          gh pr create \
+            --title "chore(argocd): sync RBAC policies with GitHub teams" \
+            --body "## Auto-generated RBAC Update
+
+          This PR updates ArgoCD RBAC policies to match current GitHub teams in the \`dmitriimashkov\` organization.
+
+          ### Changes
+          - Synced team-based RBAC policies from GitHub teams API
+          - Teams are granted read-only access to their namespace applications (\`preview-{team}-*\`)
+
+          ### Teams Included (${{ steps.fetch-teams.outputs.team_count }} teams)
+          $(cat /tmp/teams.txt | sed 's/^/- /')
+
+          ### Review Checklist
+          - [ ] Verify all active teams are included
+          - [ ] Check no sensitive teams are exposed
+          - [ ] Confirm permissions are read-only for non-admin teams
+
+          **Note:** This is an automated PR. Review carefully before merging.
+
+          ---
+          🤖 Auto-generated by [sync-argocd-teams workflow](https://github.com/dmitriimashkov/mctl.me/actions/workflows/sync-argocd-teams.yml)" \
+            --base main \
+            --head "$BRANCH" \
+            --label "automated,argocd,rbac"
+
+      - name: Summary
+        run: |
+          echo "## ArgoCD Teams Sync Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Teams found:** ${{ steps.fetch-teams.outputs.team_count }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Teams:**" >> $GITHUB_STEP_SUMMARY
+          cat /tmp/teams.txt | sed 's/^/- /' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ steps.check-changes.outputs.has_changes }}" = "true" ]; then
+            echo "✅ **Changes detected** - PR created" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✅ **No changes** - RBAC config is up to date" >> $GITHUB_STEP_SUMMARY
+          fi
