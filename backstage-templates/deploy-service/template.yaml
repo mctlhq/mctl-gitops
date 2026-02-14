@@ -69,7 +69,7 @@ spec:
         host:
           title: Ingress Host (base-service only)
           type: string
-          description: "e.g. myapp-preprod.mctl.me"
+          description: "e.g. myapp-preview.mctl.me"
         replicaCount:
           title: Replica Count
           type: number

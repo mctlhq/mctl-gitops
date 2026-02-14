@@ -24,7 +24,7 @@ on:
         default: "8080"
         type: string
       host:
-        description: "Ingress host (base-service only, e.g. payment-api.preprod.mctl.me)"
+        description: "Ingress host (base-service only, e.g. payment-api.preview.mctl.me)"
         required: false
         type: string
       dockerfile_repo:
@@ -90,7 +90,7 @@ jobs:
           if [[ -z "${{ inputs.host }}" ]]; then
             echo "::error::host is required for base-service"
             echo "## ❌ Missing Input" >> $GITHUB_STEP_SUMMARY
-            echo "**host** is required for base-service (e.g. \`my-app.preprod.mctl.me\`)." >> $GITHUB_STEP_SUMMARY
+            echo "**host** is required for base-service (e.g. \`my-app.preview.mctl.me\`)." >> $GITHUB_STEP_SUMMARY
             exit 1
           fi
 

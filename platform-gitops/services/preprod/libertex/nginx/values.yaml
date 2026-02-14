@@ -35,4 +35,4 @@ envFrom:
 
 ingress:
   enabled: true
-  host: plain-text-preprod.mctl.me
+  host: plain-text-preview.mctl.me
