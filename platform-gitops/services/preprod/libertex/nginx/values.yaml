@@ -1,0 +1,31 @@
+# Service: nginx
+# Team: libertex
+# Environment: preprod
+
+image:
+  repository: nginxdemos/hello
+  tag: "plain-text"
+
+service:
+  port: 80
+
+replicaCount: 1
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+env:
+  newKey: "New Value1"
+
+envFrom:
+  - secretRef:
+      name: nginx-secrets
+
+ingress:
+  enabled: true
+  host: plain-text-preprod.mctl.me
