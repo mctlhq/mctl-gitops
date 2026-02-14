@@ -1,0 +1,33 @@
+{%- if values.serviceType == "base-service" -%}
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: ${{ values.serviceName }}
+  description: "${{ values.serviceName }} service deployed to preprod"
+  annotations:
+    backstage.io/kubernetes-id: ${{ values.serviceName }}
+    argocd/app-name: preprod-${{ values.teamName }}-${{ values.serviceName }}
+  labels:
+    team: ${{ values.teamName }}
+    env: preprod
+spec:
+  type: service
+  lifecycle: production
+  owner: group:${{ values.teamName }}
+{%- else -%}
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: ${{ values.serviceName }}
+  description: "${{ values.serviceName }} worker deployed to preprod"
+  annotations:
+    backstage.io/kubernetes-id: ${{ values.serviceName }}
+    argocd/app-name: preprod-${{ values.teamName }}-${{ values.serviceName }}
+  labels:
+    team: ${{ values.teamName }}
+    env: preprod
+spec:
+  type: worker
+  lifecycle: production
+  owner: group:${{ values.teamName }}
+{%- endif %}

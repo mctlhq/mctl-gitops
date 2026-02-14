@@ -1,0 +1,15 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: nginx
+  description: "nginx service deployed to preprod"
+  annotations:
+    backstage.io/kubernetes-id: nginx
+    argocd/app-name: preprod-libertex-nginx
+  labels:
+    team: libertex
+    env: preprod
+spec:
+  type: service
+  lifecycle: production
+  owner: group:libertex
