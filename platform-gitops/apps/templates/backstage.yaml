@@ -67,8 +67,13 @@ spec:
               endpoints:
                 /vault:
                   target: ${VAULT_ADDR}
+                  credentials: dangerously-allow-unauthenticated
                   headers:
                     X-Vault-Token: ${VAULT_TOKEN}
+                  allowedMethods:
+                    - GET
+                    - POST
+                    - PUT
                   allowedHeaders:
                     - Content-Type
             catalog:
