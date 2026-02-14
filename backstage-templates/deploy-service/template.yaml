@@ -3,7 +3,7 @@ kind: Template
 metadata:
   name: deploy-service
   title: Deploy Web Service
-  description: Deploy a Docker image as a web service with ingress to the preview cluster
+  description: Build & deploy a web service with ingress to the preview cluster
   tags:
     - deploy
     - kubernetes
@@ -33,25 +33,26 @@ spec:
           type: string
           pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
 
-    - title: Docker Image
+    - title: Source Repository
       required:
-        - imageRepository
-        - imageTag
+        - dockerfileRepo
       properties:
-        imageRepository:
-          title: Image Repository
+        dockerfileRepo:
+          title: GitHub Repository
           type: string
-          description: "Full image path (e.g. ghcr.io/dmitriimashkov/myapp or nginxdemos/hello)"
-        imageTag:
-          title: Image Tag
+          description: "owner/repo with Dockerfile (e.g. dmitriimashkov/my-app)"
+          pattern: "^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$"
+        dockerfilePath:
+          title: Dockerfile Path
           type: string
-          default: latest
-        imagePullSecretName:
-          title: Image Pull Secret Name
+          default: Dockerfile
+        repoPat:
+          title: Repository PAT (private repos only)
           type: string
-          description: "K8s secret for private registry auth (optional)"
+          description: "Fine-grained PAT with Contents:read scope for the source repo"
+          ui:widget: password
 
-    - title: Configuration
+    - title: Service Configuration
       required:
         - port
         - host
@@ -64,20 +65,9 @@ spec:
           title: Ingress Host
           type: string
           description: "e.g. myapp.preview.mctl.me"
-        replicaCount:
-          title: Replica Count
-          type: number
-          default: 1
-        healthCheckPath:
-          title: Health Check Path
-          type: string
-          description: "HTTP path for liveness/readiness probes (leave empty to disable)"
-        envVars:
-          title: Environment Variables
-          type: object
-          additionalProperties:
-            type: string
-          description: "Key-value pairs: VAR_NAME → value"
+
+    - title: Secrets
+      properties:
         secretEnvVars:
           title: Secret Environment Variables
           type: object
@@ -86,27 +76,21 @@ spec:
           description: "Keys to store in Vault and inject via ExternalSecret"
 
   steps:
-    - id: generate-files
-      name: Generate service files
-      action: fetch:template
+    - id: save-repo-pat
+      name: Save repo PAT to Vault
+      if: ${{ parameters.repoPat }}
+      action: http:backstage:request
       input:
-        url: ./skeleton
-        targetPath: ./output/platform-gitops/services/preview/${{ parameters.teamName | parseEntityRef | pick('name') }}/${{ parameters.serviceName }}
-        values:
-          teamName: ${{ parameters.teamName | parseEntityRef | pick('name') }}
-          serviceName: ${{ parameters.serviceName }}
-          imageRepository: ${{ parameters.imageRepository }}
-          imageTag: ${{ parameters.imageTag }}
-          imagePullSecretName: ${{ parameters.imagePullSecretName }}
-          port: ${{ parameters.port }}
-          host: ${{ parameters.host }}
-          replicaCount: ${{ parameters.replicaCount }}
-          healthCheckPath: ${{ parameters.healthCheckPath }}
-          envVars: ${{ parameters.envVars }}
-          secretEnvVars: ${{ parameters.secretEnvVars }}
+        method: POST
+        path: /proxy/vault/v1/secret/data/preview/${{ parameters.teamName | parseEntityRef | pick('name') }}/${{ parameters.serviceName }}/repo-pat
+        headers:
+          Content-Type: application/json
+        body:
+          data:
+            pat: ${{ parameters.repoPat }}
 
-    - id: create-vault-secrets
-      name: Create Vault secrets
+    - id: save-secrets
+      name: Save secrets to Vault
       if: ${{ parameters.secretEnvVars and parameters.secretEnvVars | length > 0 }}
       action: http:backstage:request
       input:
@@ -117,26 +101,24 @@ spec:
         body:
           data: ${{ parameters.secretEnvVars }}
 
-    - id: create-pr
-      name: Create Pull Request
-      action: publish:github:pull-request
+    - id: trigger-build
+      name: Build & deploy via GitHub Actions
+      action: github:actions:dispatch
       input:
         repoUrl: github.com?repo=mctl.me&owner=dmitriimashkov
-        title: "deploy: ${{ parameters.teamName | parseEntityRef | pick('name') }}/${{ parameters.serviceName }}"
-        branchName: "deploy/${{ parameters.teamName | parseEntityRef | pick('name') }}-${{ parameters.serviceName }}"
-        description: |
-          ## Deploy ${{ parameters.serviceName }}
-
-          **Team:** ${{ parameters.teamName | parseEntityRef | pick('name') }}
-          **Type:** Web Service (base-service)
-          **Image:** ${{ parameters.imageRepository }}:${{ parameters.imageTag }}
-          **Host:** ${{ parameters.host }}
-
-          Created by Backstage scaffolder.
-        sourcePath: ./output
-        targetPath: "."
+        workflowId: service.yml
+        branchOrTagName: main
+        workflowInputs:
+          action: onboard
+          team_name: ${{ parameters.teamName | parseEntityRef | pick('name') }}
+          service_name: ${{ parameters.serviceName }}
+          service_type: base-service
+          dockerfile_repo: ${{ parameters.dockerfileRepo }}
+          dockerfile_path: ${{ parameters.dockerfilePath | default('Dockerfile') }}
+          port: ${{ parameters.port | string }}
+          host: ${{ parameters.host }}
 
   output:
     links:
-      - title: Pull Request
-        url: ${{ steps['create-pr'].output.remoteUrl }}
+      - title: GitHub Actions Run
+        url: https://github.com/dmitriimashkov/mctl.me/actions/workflows/service.yml

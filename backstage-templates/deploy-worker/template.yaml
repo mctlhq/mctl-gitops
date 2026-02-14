@@ -3,7 +3,7 @@ kind: Template
 metadata:
   name: deploy-worker
   title: Deploy Worker
-  description: Deploy a background worker (deployment or cronjob) to the preview cluster
+  description: Build & deploy a background worker (deployment or cronjob) to the preview cluster
   tags:
     - deploy
     - kubernetes
@@ -33,63 +33,27 @@ spec:
           type: string
           pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
 
-    - title: Docker Image
+    - title: Source Repository
       required:
-        - imageRepository
-        - imageTag
+        - dockerfileRepo
       properties:
-        imageRepository:
-          title: Image Repository
+        dockerfileRepo:
+          title: GitHub Repository
           type: string
-          description: "Full image path (e.g. ghcr.io/dmitriimashkov/myworker or python:3.12)"
-        imageTag:
-          title: Image Tag
+          description: "owner/repo with Dockerfile (e.g. dmitriimashkov/my-worker)"
+          pattern: "^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$"
+        dockerfilePath:
+          title: Dockerfile Path
           type: string
-          default: latest
-        imagePullSecretName:
-          title: Image Pull Secret Name
+          default: Dockerfile
+        repoPat:
+          title: Repository PAT (private repos only)
           type: string
-          description: "K8s secret for private registry auth (optional)"
+          description: "Fine-grained PAT with Contents:read scope for the source repo"
+          ui:widget: password
 
-    - title: Worker Configuration
+    - title: Secrets
       properties:
-        workloadType:
-          title: Workload Type
-          type: string
-          enum:
-            - deployment
-            - cronjob
-          enumNames:
-            - "Deployment (long-running)"
-            - "CronJob (scheduled)"
-          default: deployment
-        cronSchedule:
-          title: Cron Schedule (cronjob only)
-          type: string
-          default: "*/5 * * * *"
-          description: "Standard cron expression"
-        replicaCount:
-          title: Replica Count
-          type: number
-          default: 1
-        command:
-          title: Container Command Override
-          type: array
-          items:
-            type: string
-          description: "Override entrypoint (optional)"
-        args:
-          title: Container Args Override
-          type: array
-          items:
-            type: string
-          description: "Override args (optional)"
-        envVars:
-          title: Environment Variables
-          type: object
-          additionalProperties:
-            type: string
-          description: "Key-value pairs: VAR_NAME → value"
         secretEnvVars:
           title: Secret Environment Variables
           type: object
@@ -98,28 +62,21 @@ spec:
           description: "Keys to store in Vault and inject via ExternalSecret"
 
   steps:
-    - id: generate-files
-      name: Generate worker files
-      action: fetch:template
+    - id: save-repo-pat
+      name: Save repo PAT to Vault
+      if: ${{ parameters.repoPat }}
+      action: http:backstage:request
       input:
-        url: ./skeleton
-        targetPath: ./output/platform-gitops/workers/preview/${{ parameters.teamName | parseEntityRef | pick('name') }}/${{ parameters.serviceName }}
-        values:
-          teamName: ${{ parameters.teamName | parseEntityRef | pick('name') }}
-          serviceName: ${{ parameters.serviceName }}
-          imageRepository: ${{ parameters.imageRepository }}
-          imageTag: ${{ parameters.imageTag }}
-          imagePullSecretName: ${{ parameters.imagePullSecretName }}
-          workloadType: ${{ parameters.workloadType }}
-          cronSchedule: ${{ parameters.cronSchedule }}
-          replicaCount: ${{ parameters.replicaCount }}
-          command: ${{ parameters.command }}
-          args: ${{ parameters.args }}
-          envVars: ${{ parameters.envVars }}
-          secretEnvVars: ${{ parameters.secretEnvVars }}
+        method: POST
+        path: /proxy/vault/v1/secret/data/preview/${{ parameters.teamName | parseEntityRef | pick('name') }}/${{ parameters.serviceName }}/repo-pat
+        headers:
+          Content-Type: application/json
+        body:
+          data:
+            pat: ${{ parameters.repoPat }}
 
-    - id: create-vault-secrets
-      name: Create Vault secrets
+    - id: save-secrets
+      name: Save secrets to Vault
       if: ${{ parameters.secretEnvVars and parameters.secretEnvVars | length > 0 }}
       action: http:backstage:request
       input:
@@ -130,25 +87,22 @@ spec:
         body:
           data: ${{ parameters.secretEnvVars }}
 
-    - id: create-pr
-      name: Create Pull Request
-      action: publish:github:pull-request
+    - id: trigger-build
+      name: Build & deploy via GitHub Actions
+      action: github:actions:dispatch
       input:
         repoUrl: github.com?repo=mctl.me&owner=dmitriimashkov
-        title: "deploy: ${{ parameters.teamName | parseEntityRef | pick('name') }}/${{ parameters.serviceName }}"
-        branchName: "deploy/${{ parameters.teamName | parseEntityRef | pick('name') }}-${{ parameters.serviceName }}"
-        description: |
-          ## Deploy Worker ${{ parameters.serviceName }}
-
-          **Team:** ${{ parameters.teamName | parseEntityRef | pick('name') }}
-          **Type:** Worker (${{ parameters.workloadType }})
-          **Image:** ${{ parameters.imageRepository }}:${{ parameters.imageTag }}
-
-          Created by Backstage scaffolder.
-        sourcePath: ./output
-        targetPath: "."
+        workflowId: service.yml
+        branchOrTagName: main
+        workflowInputs:
+          action: onboard
+          team_name: ${{ parameters.teamName | parseEntityRef | pick('name') }}
+          service_name: ${{ parameters.serviceName }}
+          service_type: worker-service
+          dockerfile_repo: ${{ parameters.dockerfileRepo }}
+          dockerfile_path: ${{ parameters.dockerfilePath | default('Dockerfile') }}
 
   output:
     links:
-      - title: Pull Request
-        url: ${{ steps['create-pr'].output.remoteUrl }}
+      - title: GitHub Actions Run
+        url: https://github.com/dmitriimashkov/mctl.me/actions/workflows/service.yml

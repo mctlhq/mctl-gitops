@@ -133,10 +133,37 @@ jobs:
           fi
 
       - name: Verify source repo accessible
+        id: repo_access
         run: |
-          if ! git ls-remote "https://github.com/${{ inputs.dockerfile_repo }}" HEAD > /dev/null 2>&1; then
-            echo "::error::Cannot access repo: ${{ inputs.dockerfile_repo }}"
-            exit 1
+          REPO="${{ inputs.dockerfile_repo }}"
+
+          # Try with PAT from Vault first (for private repos)
+          PAT=""
+          if [[ -n "${{ secrets.VAULT_ADDR }}" && -n "${{ secrets.VAULT_TOKEN }}" ]]; then
+            PAT=$(curl -sL \
+              -H "X-Vault-Token: ${{ secrets.VAULT_TOKEN }}" \
+              "${{ secrets.VAULT_ADDR }}/v1/secret/data/preview/${{ inputs.team_name }}/${{ inputs.service_name }}/repo-pat" \
+              2>/dev/null | jq -r '.data.data.pat // empty' 2>/dev/null || true)
+          fi
+
+          if [[ -n "$PAT" ]]; then
+            echo "::add-mask::${PAT}"
+            echo "repo_pat=${PAT}" >> $GITHUB_OUTPUT
+            if git ls-remote "https://x-access-token:${PAT}@github.com/${REPO}" HEAD > /dev/null 2>&1; then
+              echo "✅ Private repo accessible with PAT"
+              echo "is_private=true" >> $GITHUB_OUTPUT
+            else
+              echo "::error::PAT provided but cannot access repo: ${REPO}"
+              exit 1
+            fi
+          else
+            if git ls-remote "https://github.com/${REPO}" HEAD > /dev/null 2>&1; then
+              echo "✅ Public repo accessible"
+              echo "is_private=false" >> $GITHUB_OUTPUT
+            else
+              echo "::error::Cannot access repo: ${REPO}. If private, save a PAT via Backstage."
+              exit 1
+            fi
           fi
 
       - name: Determine image tag
@@ -176,10 +203,29 @@ jobs:
       contents: read
       packages: write
     steps:
+      - name: Get repo PAT from Vault
+        id: vault_pat
+        run: |
+          PAT=""
+          if [[ -n "${{ secrets.VAULT_ADDR }}" && -n "${{ secrets.VAULT_TOKEN }}" ]]; then
+            PAT=$(curl -sL \
+              -H "X-Vault-Token: ${{ secrets.VAULT_TOKEN }}" \
+              "${{ secrets.VAULT_ADDR }}/v1/secret/data/preview/${{ inputs.team_name }}/${{ inputs.service_name }}/repo-pat" \
+              2>/dev/null | jq -r '.data.data.pat // empty' 2>/dev/null || true)
+          fi
+          if [[ -n "$PAT" ]]; then
+            echo "::add-mask::${PAT}"
+            echo "pat=${PAT}" >> $GITHUB_OUTPUT
+            echo "has_pat=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_pat=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Checkout source repo
         uses: actions/checkout@v4
         with:
           repository: ${{ inputs.dockerfile_repo }}
+          token: ${{ steps.vault_pat.outputs.has_pat == 'true' && steps.vault_pat.outputs.pat || github.token }}
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
