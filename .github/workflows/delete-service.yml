@@ -1,0 +1,125 @@
+name: Delete Service
+
+on:
+  workflow_dispatch:
+    inputs:
+      team_name:
+        description: "Team name (e.g. payments)"
+        required: true
+        type: string
+      service_name:
+        description: "Service name (e.g. payment-api)"
+        required: true
+        type: string
+      service_type:
+        description: "Service type"
+        required: true
+        type: choice
+        options:
+          - base-service
+          - worker-service
+      delete_vault_secrets:
+        description: "Also delete Vault secrets?"
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  delete:
+    name: Delete service
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Determine service path
+        id: path
+        run: |
+          TYPE="${{ inputs.service_type }}"
+          TEAM="${{ inputs.team_name }}"
+          SERVICE="${{ inputs.service_name }}"
+
+          if [[ "$TYPE" == "base-service" ]]; then
+            DIR="platform-gitops/services/preview/${TEAM}/${SERVICE}"
+          else
+            DIR="platform-gitops/workers/preview/${TEAM}/${SERVICE}"
+          fi
+
+          echo "dir=${DIR}" >> $GITHUB_OUTPUT
+
+      - name: Validate service exists
+        run: |
+          DIR="${{ steps.path.outputs.dir }}"
+          if [[ ! -d "$DIR" ]]; then
+            echo "::error::Service directory not found: $DIR"
+            echo "## ❌ Service Not Found" >> $GITHUB_STEP_SUMMARY
+            echo "Directory \`$DIR\` does not exist." >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+          echo "Found service at $DIR"
+          ls -la "$DIR"
+
+      - name: Delete Vault secrets
+        if: inputs.delete_vault_secrets
+        continue-on-error: true
+        env:
+          VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
+          VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
+        run: |
+          TEAM="${{ inputs.team_name }}"
+          SERVICE="${{ inputs.service_name }}"
+          VAULT_PATH="preview/${TEAM}/${SERVICE}"
+
+          if [[ -z "$VAULT_ADDR" || -z "$VAULT_TOKEN" ]]; then
+            echo "::warning::VAULT_ADDR or VAULT_TOKEN not set, skipping Vault cleanup"
+            echo "⚠️ Vault secrets not deleted (missing credentials)" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X DELETE \
+            -H "X-Vault-Token: ${VAULT_TOKEN}" \
+            "${VAULT_ADDR}/v1/secret/metadata/${VAULT_PATH}")
+
+          if [[ "$RESPONSE" == "204" || "$RESPONSE" == "404" ]]; then
+            echo "✅ Vault secrets deleted (or not found) for ${VAULT_PATH}"
+            echo "✅ Vault secrets cleaned up" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "::warning::Vault delete returned HTTP ${RESPONSE}"
+            echo "⚠️ Vault cleanup returned HTTP ${RESPONSE}" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Remove service files
+        run: |
+          DIR="${{ steps.path.outputs.dir }}"
+          git rm -r "$DIR"
+
+          # Check if team directory is now empty and clean it up
+          TEAM_DIR=$(dirname "$DIR")
+          if [[ -d "$TEAM_DIR" ]] && [[ -z "$(ls -A "$TEAM_DIR")" ]]; then
+            rmdir "$TEAM_DIR"
+            echo "Removed empty team directory: $TEAM_DIR"
+          fi
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git commit -m "delete: ${{ inputs.team_name }}/${{ inputs.service_name }}"
+          git push
+
+      - name: Success summary
+        run: |
+          echo "## ✅ Service Deleted" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Team** | \`${{ inputs.team_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Service** | \`${{ inputs.service_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Type** | \`${{ inputs.service_type }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Vault** | ${{ inputs.delete_vault_secrets && '✅ Deleted' || '⏭️ Skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "ArgoCD will remove Kubernetes resources on next sync." >> $GITHUB_STEP_SUMMARY

@@ -48,15 +48,15 @@ jobs:
           SERVICE="${{ inputs.service_name }}"
 
           # Check in services/ (base-service)
-          if [[ -f "platform-gitops/services/preprod/${TEAM}/${SERVICE}/values.yaml" ]]; then
-            echo "values_path=platform-gitops/services/preprod/${TEAM}/${SERVICE}/values.yaml" >> $GITHUB_OUTPUT
+          if [[ -f "platform-gitops/services/preview/${TEAM}/${SERVICE}/values.yaml" ]]; then
+            echo "values_path=platform-gitops/services/preview/${TEAM}/${SERVICE}/values.yaml" >> $GITHUB_OUTPUT
             echo "service_type=base-service" >> $GITHUB_OUTPUT
             exit 0
           fi
 
           # Check in workers/ (worker-service)
-          if [[ -f "platform-gitops/workers/preprod/${TEAM}/${SERVICE}/values.yaml" ]]; then
-            echo "values_path=platform-gitops/workers/preprod/${TEAM}/${SERVICE}/values.yaml" >> $GITHUB_OUTPUT
+          if [[ -f "platform-gitops/workers/preview/${TEAM}/${SERVICE}/values.yaml" ]]; then
+            echo "values_path=platform-gitops/workers/preview/${TEAM}/${SERVICE}/values.yaml" >> $GITHUB_OUTPUT
             echo "service_type=worker-service" >> $GITHUB_OUTPUT
             exit 0
           fi

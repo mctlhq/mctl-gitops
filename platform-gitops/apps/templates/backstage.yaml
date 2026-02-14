@@ -76,6 +76,7 @@ spec:
                     - GET
                     - POST
                     - PUT
+                    - DELETE
                   allowedHeaders:
                     - Content-Type
             catalog:

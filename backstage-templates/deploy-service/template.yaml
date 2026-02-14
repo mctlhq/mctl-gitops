@@ -2,7 +2,7 @@ apiVersion: scaffolder.backstage.io/v1beta3
 kind: Template
 metadata:
   name: deploy-service
-  title: Deploy Service to Preprod
+  title: Deploy Service to Preview
   description: Deploy a Docker image as a service or worker to the preview cluster
   tags:
     - deploy
