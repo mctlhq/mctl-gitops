@@ -92,11 +92,31 @@ spec:
                         minutes: 1
                       timeout:
                         minutes: 10
+                github:
+                  mctlMe:
+                    organization: dmitriimashkov
+                    catalogPath: /catalog-info.yaml
+                    filters:
+                      repository: mctl.me
+                      branch: main
+                    schedule:
+                      frequency:
+                        minutes: 5
+                      timeout:
+                        minutes: 3
               locations:
                 - type: url
                   target: https://github.com/dmitriimashkov/mctl.me/blob/main/backstage-templates/deploy-service/template.yaml
                   rules:
                     - allow: [Template]
+                - type: url
+                  target: https://github.com/dmitriimashkov/mctl.me/blob/main/platform-gitops/services/preprod/admin/monteexchange/catalog-info.yaml
+                  rules:
+                    - allow: [Component]
+                - type: url
+                  target: https://github.com/dmitriimashkov/mctl.me/blob/main/platform-gitops/services/preprod/libertex/nginx/catalog-info.yaml
+                  rules:
+                    - allow: [Component]
 
         postgresql:
           enabled: true
