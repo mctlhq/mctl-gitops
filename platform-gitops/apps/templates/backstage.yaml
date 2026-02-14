@@ -63,6 +63,14 @@ spec:
               github:
                 - host: github.com
                   token: ${GITHUB_TOKEN}
+            proxy:
+              endpoints:
+                /vault:
+                  target: ${VAULT_ADDR}
+                  headers:
+                    X-Vault-Token: ${VAULT_TOKEN}
+                  allowedHeaders:
+                    - Content-Type
             catalog:
               rules:
                 - allow: [Component, System, API, Resource, Location, Template, Group, User]
