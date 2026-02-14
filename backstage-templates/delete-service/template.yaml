@@ -1,0 +1,87 @@
+apiVersion: scaffolder.backstage.io/v1beta3
+kind: Template
+metadata:
+  name: delete-service
+  title: Delete Service from Preview
+  description: Remove a deployed service — deletes Vault secrets and unregisters from catalog
+  tags:
+    - delete
+    - kubernetes
+    - preview
+spec:
+  owner: group:admin
+  type: service
+
+  parameters:
+    - title: Select Service to Delete
+      required:
+        - teamName
+        - serviceName
+        - serviceType
+      properties:
+        teamName:
+          title: Team Name
+          type: string
+          description: "Select your team"
+          ui:field: EntityPicker
+          ui:options:
+            catalogFilter:
+              kind: Group
+            defaultKind: Group
+        serviceName:
+          title: Service Name
+          type: string
+          pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
+          description: "Exact name of the service to delete"
+        serviceType:
+          title: Service Type
+          type: string
+          enum:
+            - base-service
+            - worker-service
+          enumNames:
+            - "Web Service (services/)"
+            - "Worker (workers/)"
+
+    - title: Confirm Deletion
+      properties:
+        deleteVaultSecrets:
+          title: Also delete Vault secrets?
+          type: boolean
+          default: true
+          description: "Remove secrets from Vault for this service"
+
+  steps:
+    - id: delete-vault-secrets
+      name: Delete Vault secrets
+      if: ${{ parameters.deleteVaultSecrets }}
+      action: http:backstage:request
+      input:
+        method: DELETE
+        path: /proxy/vault/v1/secret/metadata/preview/${{ parameters.teamName | parseEntityRef | pick('name') }}/${{ parameters.serviceName }}
+        headers:
+          Content-Type: application/json
+
+    - id: unregister
+      name: Unregister from catalog
+      action: catalog:unregister
+      input:
+        entityRef: component:default/${{ parameters.serviceName }}
+
+  output:
+    text:
+      - title: Service Deletion
+        content: |
+          ## Vault secrets: ${{ '✅ Deleted' if parameters.deleteVaultSecrets else '⚠️ Preserved' }}
+          ## Catalog: ✅ Unregistered
+
+          ### Manual step required — delete files from Git:
+
+          ```bash
+          cd /Users/dmitriimashkov/PycharmProjects/mctl.me
+          git rm -r platform-gitops/${{ 'workers' if parameters.serviceType == 'worker-service' else 'services' }}/preview/${{ parameters.teamName | parseEntityRef | pick('name') }}/${{ parameters.serviceName }}
+          git commit -m "delete(${{ parameters.teamName | parseEntityRef | pick('name') }}): remove ${{ parameters.serviceName }}"
+          git push
+          ```
+
+          ArgoCD will then remove all Kubernetes resources automatically.
