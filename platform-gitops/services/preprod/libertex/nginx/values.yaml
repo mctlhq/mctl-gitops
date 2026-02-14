@@ -22,6 +22,13 @@ resources:
 env:
   newKey: "New Value1"
 
+externalSecret:
+  targetSecret: nginx-secrets
+  data:
+    - secretKey: newKeys
+      remoteKey: preprod/libertex/nginx
+      property: newKeys
+
 envFrom:
   - secretRef:
       name: nginx-secrets
