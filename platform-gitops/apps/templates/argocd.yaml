@@ -135,6 +135,8 @@ spec:
                 automated:
                   prune: true
                   selfHeal: true
+                syncOptions:
+                  - ServerSideApply=true  # Prevent CRD annotation bloat
                 retry:
                   limit: 5
                   backoff:
@@ -153,6 +155,7 @@ spec:
     syncOptions:
       - CreateNamespace=false  # Namespace already exists
       - RespectIgnoreDifferences=true
+      - ServerSideApply=true  # Prevent CRD annotation bloat
     retry:
       limit: 5
       backoff:
