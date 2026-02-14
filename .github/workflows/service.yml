@@ -175,12 +175,13 @@ jobs:
             echo "image_tag=v0.1.0" >> $GITHUB_OUTPUT
           else
             # Auto-increment: get latest semver tag from GHCR
-            LATEST=$(gh api \
+            LATEST=""
+            API_RESPONSE=$(gh api \
               "/users/${{ env.IMAGE_OWNER }}/packages/container/${{ inputs.service_name }}/versions" \
               --jq '[.[] | .metadata.container.tags[] | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))] | sort | last // empty' \
-              2>/dev/null || true)
+              2>/dev/null) && LATEST="$API_RESPONSE" || true
 
-            if [[ -z "$LATEST" ]]; then
+            if [[ -z "$LATEST" || ! "$LATEST" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
               echo "image_tag=v0.1.0" >> $GITHUB_OUTPUT
             else
               # Increment patch: v1.2.3 → v1.2.4
