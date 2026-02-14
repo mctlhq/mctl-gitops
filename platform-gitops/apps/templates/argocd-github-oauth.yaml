@@ -14,11 +14,11 @@ spec:
     name: argocd-secret
     creationPolicy: Merge  # merge with existing secret, don't overwrite
   data:
-    - secretKey: dex.github.clientId
+    - secretKey: github-client-id
       remoteRef:
         key: preview/argocd/github-oauth
         property: client-id
-    - secretKey: dex.github.clientSecret
+    - secretKey: github-client-secret
       remoteRef:
         key: preview/argocd/github-oauth
         property: client-secret
