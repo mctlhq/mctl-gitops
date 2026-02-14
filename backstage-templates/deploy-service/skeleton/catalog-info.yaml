@@ -3,13 +3,13 @@ apiVersion: backstage.io/v1alpha1
 kind: Component
 metadata:
   name: ${{ values.serviceName }}
-  description: "${{ values.serviceName }} service deployed to preprod"
+  description: "${{ values.serviceName }} service deployed to preview"
   annotations:
     backstage.io/kubernetes-id: ${{ values.serviceName }}
-    argocd/app-name: preprod-${{ values.teamName }}-${{ values.serviceName }}
+    argocd/app-name: preview-${{ values.teamName }}-${{ values.serviceName }}
   labels:
     team: ${{ values.teamName }}
-    env: preprod
+    env: preview
 spec:
   type: service
   lifecycle: production
@@ -19,13 +19,13 @@ apiVersion: backstage.io/v1alpha1
 kind: Component
 metadata:
   name: ${{ values.serviceName }}
-  description: "${{ values.serviceName }} worker deployed to preprod"
+  description: "${{ values.serviceName }} worker deployed to preview"
   annotations:
     backstage.io/kubernetes-id: ${{ values.serviceName }}
-    argocd/app-name: preprod-${{ values.teamName }}-${{ values.serviceName }}
+    argocd/app-name: preview-${{ values.teamName }}-${{ values.serviceName }}
   labels:
     team: ${{ values.teamName }}
-    env: preprod
+    env: preview
 spec:
   type: worker
   lifecycle: production

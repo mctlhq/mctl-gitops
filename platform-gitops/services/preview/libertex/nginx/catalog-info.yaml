@@ -2,13 +2,13 @@ apiVersion: backstage.io/v1alpha1
 kind: Component
 metadata:
   name: nginx
-  description: "nginx service deployed to preprod"
+  description: "nginx service deployed to preview"
   annotations:
     backstage.io/kubernetes-id: nginx
-    argocd/app-name: preprod-libertex-nginx
+    argocd/app-name: preview-libertex-nginx
   labels:
     team: libertex
-    env: preprod
+    env: preview
 spec:
   type: service
   lifecycle: production

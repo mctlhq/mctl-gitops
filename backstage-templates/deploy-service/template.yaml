@@ -3,11 +3,11 @@ kind: Template
 metadata:
   name: deploy-service
   title: Deploy Service to Preprod
-  description: Deploy a Docker image as a service or worker to the preprod cluster
+  description: Deploy a Docker image as a service or worker to the preview cluster
   tags:
     - deploy
     - kubernetes
-    - preprod
+    - preview
 spec:
   owner: group:admin
   type: service
@@ -121,7 +121,7 @@ spec:
       action: fetch:template
       input:
         url: ./skeleton
-        targetPath: ./output/platform-gitops/${{ 'workers' if parameters.serviceType == 'worker-service' else 'services' }}/preprod/${{ parameters.teamName | parseEntityRef | pick('name') }}/${{ parameters.serviceName }}
+        targetPath: ./output/platform-gitops/${{ 'workers' if parameters.serviceType == 'worker-service' else 'services' }}/preview/${{ parameters.teamName | parseEntityRef | pick('name') }}/${{ parameters.serviceName }}
         values:
           teamName: ${{ parameters.teamName | parseEntityRef | pick('name') }}
           serviceName: ${{ parameters.serviceName }}
@@ -146,7 +146,7 @@ spec:
       action: http:backstage:request
       input:
         method: POST
-        path: /proxy/vault/v1/secret/data/preprod/${{ parameters.teamName | parseEntityRef | pick('name') }}/${{ parameters.serviceName }}
+        path: /proxy/vault/v1/secret/data/preview/${{ parameters.teamName | parseEntityRef | pick('name') }}/${{ parameters.serviceName }}
         headers:
           Content-Type: application/json
         body:

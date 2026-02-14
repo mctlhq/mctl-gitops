@@ -1,7 +1,7 @@
 {%- if values.serviceType == "base-service" -%}
 # Service: ${{ values.serviceName }}
 # Team: ${{ values.teamName }}
-# Environment: preprod
+# Environment: preview
 
 image:
   repository: ${{ values.imageRepository }}
@@ -38,7 +38,7 @@ externalSecret:
   data:
 {%- for key, value in values.secretEnvVars %}
     - secretKey: ${{ key }}
-      remoteKey: preprod/${{ values.teamName }}/${{ values.serviceName }}
+      remoteKey: preview/${{ values.teamName }}/${{ values.serviceName }}
       property: ${{ key }}
 {%- endfor %}
 
@@ -74,7 +74,7 @@ probes:
 {%- else -%}
 # Worker: ${{ values.serviceName }}
 # Team: ${{ values.teamName }}
-# Environment: preprod
+# Environment: preview
 
 image:
   repository: ${{ values.imageRepository }}
@@ -129,7 +129,7 @@ externalSecret:
   data:
 {%- for key, value in values.secretEnvVars %}
     - secretKey: ${{ key }}
-      remoteKey: preprod/${{ values.teamName }}/${{ values.serviceName }}
+      remoteKey: preview/${{ values.teamName }}/${{ values.serviceName }}
       property: ${{ key }}
 {%- endfor %}
 
