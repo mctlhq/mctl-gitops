@@ -60,6 +60,13 @@ jobs:
               continue
             fi
 
+            # Only validate GHCR images
+            if [[ "$REPO" != ghcr.io/* ]]; then
+              echo "⏭️ skipped (not GHCR)"
+              echo "⏭️ \`${REPO}:${TAG}\` — skipped (external registry)" >> $GITHUB_STEP_SUMMARY
+              continue
+            fi
+
             # Extract package name from ghcr.io/owner/name
             PACKAGE_NAME=$(echo "$REPO" | sed 's|ghcr.io/[^/]*/||')
             OWNER=$(echo "$REPO" | sed 's|ghcr.io/\([^/]*\)/.*|\1|')
