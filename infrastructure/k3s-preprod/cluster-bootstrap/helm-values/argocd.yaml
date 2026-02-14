@@ -4,11 +4,11 @@
 nameOverride: argocd
 
 global:
-  domain: argocd-preprod.mctl.me
+  domain: argocd-preview.mctl.me
 
 configs:
   cm:
-    url: https://argocd-preprod.mctl.me
+    url: https://argocd-preview.mctl.me
     admin.enabled: true
     timeout.reconciliation: 180s
     dex.config: |
@@ -80,7 +80,7 @@ server:
     tls: true
     extraTls:
       - hosts:
-          - argocd-preprod.mctl.me
+          - argocd-preview.mctl.me
         secretName: argocd-tls
 
 extraObjects:
