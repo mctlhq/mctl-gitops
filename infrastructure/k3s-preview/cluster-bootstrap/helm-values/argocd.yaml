@@ -94,11 +94,9 @@ configs:
       github-client-id: ""
       github-client-secret: ""
 
-  credentialTemplates:
-    github-https:
-      url: https://github.com/dmitriimashkov
-      username: argocd
-      password: ""
+  # Credential templates and repositories are managed by ExternalSecrets
+  # See platform-gitops/apps/templates/argocd-repo-creds.yaml
+  # and platform-gitops/apps/templates/argocd-repo-credentials.yaml
 
 server:
   ingress:
