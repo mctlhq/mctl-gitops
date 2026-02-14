@@ -134,6 +134,8 @@ extraObjects:
         automated:
           prune: true
           selfHeal: true
+        syncOptions:
+          - ServerSideApply=true  # Prevent CRD annotation bloat
         retry:
           limit: 5
           backoff:
