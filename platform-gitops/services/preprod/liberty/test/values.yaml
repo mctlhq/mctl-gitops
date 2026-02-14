@@ -3,7 +3,7 @@
 # Environment: preprod
 
 image:
-  repository: docker pull hello-world
+  repository: hello-world
   tag: "nanoserver-ltsc2025"
 
 service:
