@@ -22,7 +22,7 @@ resources:
 env:
   WISE_HOST: "https://api.wise.com"
   EXCHANGE_FEE_IN_PERCENT: "0.005"
-  WITHDRAWAL_FEE: "0.48"
+  WITHDRAWAL_FEE: "5"
 
 externalSecret:
   targetSecret: monteexchange-secrets
