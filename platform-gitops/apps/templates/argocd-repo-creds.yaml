@@ -1,0 +1,28 @@
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: argocd-repo-creds-github
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: vault-backend
+  target:
+    name: argocd-repo-creds-github-https
+    creationPolicy: Merge
+    template:
+      metadata:
+        labels:
+          argocd.argoproj.io/secret-type: repo-creds
+      data:
+        url: https://github.com/dmitriimashkov
+        username: argocd
+        password: "{{ .password }}"
+  data:
+    - secretKey: password
+      remoteRef:
+        key: preview/argocd/github-repo
+        property: pat
