@@ -78,7 +78,7 @@ jobs:
             exit 0
           fi
 
-          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
+          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -L \
             -X DELETE \
             -H "X-Vault-Token: ${VAULT_TOKEN}" \
             "${VAULT_ADDR}/v1/secret/metadata/${VAULT_PATH}")
