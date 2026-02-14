@@ -1,5 +1,6 @@
-## Argo CD configuration for mctl.me preview
-## Chart: argo-cd v9.4.1
+## Argo CD bootstrap configuration for mctl.me preview
+## Minimal config — full configuration managed by argocd-self-managed via GitOps
+## See: platform-gitops/argocd/values.yaml
 
 nameOverride: argocd
 
@@ -12,6 +13,7 @@ configs:
     admin.enabled: true
     timeout.reconciliation: 180s
 
+    # Health checks needed for bootstrap
     resource.customizations.health.external-secrets.io_ExternalSecret: |
       hs = {}
       if obj.status ~= nil then
@@ -47,20 +49,6 @@ configs:
         end
       end
       return hs
-    dex.config: |
-      logger:
-        level: info
-        format: json
-      connectors:
-      - type: github
-        id: github
-        name: GitHub
-        config:
-          baseURL: https://github.com
-          clientID: "$github-client-id"
-          clientSecret: "$github-client-secret"
-          orgs:
-            - name: dmitriimashkov
 
   params:
     server.insecure: true
@@ -68,45 +56,9 @@ configs:
   rbac:
     policy.default: ""
     scopes: "[groups]"
-    policy.csv: |
-      # Admin team: full access to ArgoCD
-      p, role:admin, applications, *, */*, allow
-      p, role:admin, logs, get, */*, allow
-      p, role:admin, exec, create, */*, allow
-      p, role:admin, clusters, get, */*, allow
-      p, role:admin, repositories, *, */*, allow
-      p, role:admin, projects, *, */*, allow
-      g, dmitriimashkov:admin, role:admin
-
-      # Team: developers
-      p, role:team-developers, applications, get, argocd/preview-developers-*, allow
-      p, role:team-developers, logs, get, argocd/preview-developers-*, allow
-      g, dmitriimashkov:developers, role:team-developers
-
-      # Team: internal
-      p, role:team-internal, applications, get, argocd/preview-internal-*, allow
-      p, role:team-internal, logs, get, argocd/preview-internal-*, allow
-      g, dmitriimashkov:internal, role:team-internal
-
-      # Team: libertex
-      p, role:team-libertex, applications, get, argocd/preview-libertex-*, allow
-      p, role:team-libertex, logs, get, argocd/preview-libertex-*, allow
-      g, dmitriimashkov:libertex, role:team-libertex
-
-      # Team: test
-      p, role:team-test, applications, get, argocd/preview-test-*, allow
-      p, role:team-test, logs, get, argocd/preview-test-*, allow
-      g, dmitriimashkov:test, role:team-test
 
   secret:
     createSecret: true
-    extra:
-      github-client-id: ""
-      github-client-secret: ""
-
-  # Credential templates and repositories are managed by ExternalSecrets
-  # See platform-gitops/apps/templates/argocd-repo-creds.yaml
-  # and platform-gitops/apps/templates/argocd-repo-credentials.yaml
 
 server:
   ingress:
@@ -121,138 +73,22 @@ server:
         secretName: argocd-tls
 
 extraObjects:
-  # ArgoCD self-managed Application (independent from root-app)
+  # ArgoCD self-managed — manages its own configuration from git
   - apiVersion: argoproj.io/v1alpha1
     kind: Application
     metadata:
       name: argocd-self-managed
       namespace: argocd
-      finalizers:
-        - resources-finalizer.argocd.argoproj.io
     spec:
       project: default
       source:
-        repoURL: https://argoproj.github.io/argo-helm
-        chart: argo-cd
-        targetRevision: "9.4.1"
+        repoURL: https://github.com/dmitriimashkov/mctl.me.git
+        targetRevision: main
+        path: platform-gitops/argocd
         helm:
           releaseName: argocd
-          values: |
-            nameOverride: argocd
-
-            global:
-              domain: argocd-preview.mctl.me
-
-            configs:
-              cm:
-                url: https://argocd-preview.mctl.me
-                admin.enabled: true
-                timeout.reconciliation: 180s
-
-                resource.customizations.health.external-secrets.io_ExternalSecret: |
-                  hs = {}
-                  if obj.status ~= nil then
-                    if obj.status.conditions ~= nil then
-                      for _, condition in ipairs(obj.status.conditions) do
-                        if condition.type == "Ready" then
-                          if condition.status == "True" then
-                            hs.status = "Healthy"
-                            hs.message = condition.message or "SecretSynced"
-                          else
-                            hs.status = "Degraded"
-                            hs.message = condition.message or "Not ready"
-                          end
-                          return hs
-                        end
-                      end
-                    end
-                  end
-                  hs.status = "Progressing"
-                  hs.message = "Waiting for sync"
-                  return hs
-
-                resource.customizations.health.argoproj.io_Application: |
-                  hs = {}
-                  hs.status = "Progressing"
-                  hs.message = ""
-                  if obj.status ~= nil then
-                    if obj.status.health ~= nil then
-                      hs.status = obj.status.health.status
-                      if obj.status.health.message ~= nil then
-                        hs.message = obj.status.health.message
-                      end
-                    end
-                  end
-                  return hs
-
-                dex.config: |
-                  logger:
-                    level: info
-                    format: json
-                  connectors:
-                  - type: github
-                    id: github
-                    name: GitHub
-                    config:
-                      baseURL: https://github.com
-                      clientID: "$github-client-id"
-                      clientSecret: "$github-client-secret"
-                      orgs:
-                        - name: dmitriimashkov
-
-              params:
-                server.insecure: true
-
-              rbac:
-                policy.default: ""
-                scopes: "[groups]"
-                policy.csv: |
-                  # Admin team: full access to ArgoCD
-                  p, role:admin, applications, *, */*, allow
-                  p, role:admin, logs, get, */*, allow
-                  p, role:admin, exec, create, */*, allow
-                  p, role:admin, clusters, get, */*, allow
-                  p, role:admin, repositories, *, */*, allow
-                  p, role:admin, projects, *, */*, allow
-                  g, dmitriimashkov:admin, role:admin
-
-                  # Team: developers
-                  p, role:team-developers, applications, get, argocd/preview-developers-*, allow
-                  p, role:team-developers, logs, get, argocd/preview-developers-*, allow
-                  g, dmitriimashkov:developers, role:team-developers
-
-                  # Team: internal
-                  p, role:team-internal, applications, get, argocd/preview-internal-*, allow
-                  p, role:team-internal, logs, get, argocd/preview-internal-*, allow
-                  g, dmitriimashkov:internal, role:team-internal
-
-                  # Team: libertex
-                  p, role:team-libertex, applications, get, argocd/preview-libertex-*, allow
-                  p, role:team-libertex, logs, get, argocd/preview-libertex-*, allow
-                  g, dmitriimashkov:libertex, role:team-libertex
-
-                  # Team: test
-                  p, role:team-test, applications, get, argocd/preview-test-*, allow
-                  p, role:team-test, logs, get, argocd/preview-test-*, allow
-                  g, dmitriimashkov:test, role:team-test
-
-              secret:
-                createSecret: true
-                extra:
-                  github-client-id: ""
-                  github-client-secret: ""
-
-            server:
-              ingress:
-                enabled: true
-                ingressClassName: traefik
-                annotations:
-                  cert-manager.io/cluster-issuer: letsencrypt-prod
-                tls: true
-                extraTls:
-                  - hosts:
-                      - argocd-preview.mctl.me
-                    secretName: argocd-tls
+          valueFiles:
+            - values.yaml
       destination:
         server: https://kubernetes.default.svc
         namespace: argocd
@@ -262,7 +98,6 @@ extraObjects:
           selfHeal: true
         syncOptions:
           - CreateNamespace=false
-          - RespectIgnoreDifferences=true
           - ServerSideApply=true
         retry:
           limit: 5
@@ -277,14 +112,12 @@ extraObjects:
           jsonPointers:
             - /data
 
-  # Root app for user applications (managed separately from ArgoCD)
+  # Root app — manages user applications (separate from ArgoCD)
   - apiVersion: argoproj.io/v1alpha1
     kind: Application
     metadata:
       name: root-app
       namespace: argocd
-      finalizers:
-        - resources-finalizer.argocd.argoproj.io
     spec:
       project: default
       source:
