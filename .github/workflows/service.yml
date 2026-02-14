@@ -144,11 +144,29 @@ jobs:
         run: |
           if [[ -n "${{ inputs.image_tag }}" ]]; then
             echo "image_tag=${{ inputs.image_tag }}" >> $GITHUB_OUTPUT
+          elif [[ "${{ inputs.action }}" == "onboard" ]]; then
+            echo "image_tag=v0.1.0" >> $GITHUB_OUTPUT
           else
-            SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
-            DATE=$(date +%Y%m%d)
-            echo "image_tag=v${DATE}-${SHORT_SHA}" >> $GITHUB_OUTPUT
+            # Auto-increment: get latest semver tag from GHCR
+            LATEST=$(gh api \
+              "/users/${{ env.IMAGE_OWNER }}/packages/container/${{ inputs.service_name }}/versions" \
+              --jq '[.[] | .metadata.container.tags[] | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))] | sort | last // empty' \
+              2>/dev/null || true)
+
+            if [[ -z "$LATEST" ]]; then
+              echo "image_tag=v0.1.0" >> $GITHUB_OUTPUT
+            else
+              # Increment patch: v1.2.3 → v1.2.4
+              MAJOR=$(echo "$LATEST" | sed 's/v\([0-9]*\)\..*/\1/')
+              MINOR=$(echo "$LATEST" | sed 's/v[0-9]*\.\([0-9]*\)\..*/\1/')
+              PATCH=$(echo "$LATEST" | sed 's/v[0-9]*\.[0-9]*\.\([0-9]*\)/\1/')
+              PATCH=$((PATCH + 1))
+              echo "image_tag=v${MAJOR}.${MINOR}.${PATCH}" >> $GITHUB_OUTPUT
+            fi
           fi
+          echo "Resolved tag: $(grep image_tag $GITHUB_OUTPUT | cut -d= -f2)"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build:
     name: Build & push image
