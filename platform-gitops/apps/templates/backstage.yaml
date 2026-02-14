@@ -63,6 +63,8 @@ spec:
               github:
                 - host: github.com
                   token: ${GITHUB_TOKEN}
+            permission:
+              enabled: true
             proxy:
               endpoints:
                 /vault:
