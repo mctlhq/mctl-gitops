@@ -1,6 +1,6 @@
 # Service: monteexchange
 # Team: admin
-# Environment: preprod
+# Environment: preview
 
 image:
   repository: ghcr.io/mashkovd/monteexchange
@@ -28,16 +28,16 @@ externalSecret:
   targetSecret: monteexchange-secrets
   data:
     - secretKey: BOT_TOKEN
-      remoteKey: preprod/admin/monteexchange
+      remoteKey: preview/admin/monteexchange
       property: BOT_TOKEN
     - secretKey: WISE_TOKEN
-      remoteKey: preprod/admin/monteexchange
+      remoteKey: preview/admin/monteexchange
       property: WISE_TOKEN
     - secretKey: BALANCE_ID
-      remoteKey: preprod/admin/monteexchange
+      remoteKey: preview/admin/monteexchange
       property: BALANCE_ID
     - secretKey: PROFILE_ID
-      remoteKey: preprod/admin/monteexchange
+      remoteKey: preview/admin/monteexchange
       property: PROFILE_ID
 
 envFrom:

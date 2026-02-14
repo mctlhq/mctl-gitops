@@ -1,4 +1,4 @@
-## Argo CD configuration for mctl.me preprod
+## Argo CD configuration for mctl.me preview
 ## Chart: argo-cd v9.4.1
 
 nameOverride: argocd
@@ -41,15 +41,15 @@ configs:
       g, dmitriimashkov:admin, role:admin
 
       # Team: developers
-      p, role:team-developers, applications, get, preprod/preprod-developers-*, allow
-      p, role:team-developers, applications, sync, preprod/preprod-developers-*, allow
-      p, role:team-developers, logs, get, preprod/preprod-developers-*, allow
+      p, role:team-developers, applications, get, argocd/preview-developers-*, allow
+      p, role:team-developers, applications, sync, argocd/preview-developers-*, allow
+      p, role:team-developers, logs, get, argocd/preview-developers-*, allow
       g, dmitriimashkov:developers, role:team-developers
 
       # Team: control
-      p, role:team-control, applications, get, preprod/preprod-control-*, allow
-      p, role:team-control, applications, sync, preprod/preprod-control-*, allow
-      p, role:team-control, logs, get, preprod/preprod-control-*, allow
+      p, role:team-control, applications, get, argocd/preview-control-*, allow
+      p, role:team-control, applications, sync, argocd/preview-control-*, allow
+      p, role:team-control, logs, get, argocd/preview-control-*, allow
       g, dmitriimashkov:control, role:team-control
     scopes: "[groups]"
 

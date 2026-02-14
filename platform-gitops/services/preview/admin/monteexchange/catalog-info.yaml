@@ -2,13 +2,13 @@ apiVersion: backstage.io/v1alpha1
 kind: Component
 metadata:
   name: monteexchange
-  description: "monteexchange service deployed to preprod"
+  description: "monteexchange service deployed to preview"
   annotations:
     backstage.io/kubernetes-id: monteexchange
-    argocd/app-name: preprod-admin-monteexchange
+    argocd/app-name: preview-admin-monteexchange
   labels:
     team: admin
-    env: preprod
+    env: preview
 spec:
   type: service
   lifecycle: production

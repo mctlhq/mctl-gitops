@@ -72,9 +72,9 @@ jobs:
         run: |
           TYPE="${{ inputs.service_type }}"
           if [[ "$TYPE" == "base-service" ]]; then
-            DIR="platform-gitops/services/preprod/${{ inputs.team_name }}/${{ inputs.service_name }}"
+            DIR="platform-gitops/services/preview/${{ inputs.team_name }}/${{ inputs.service_name }}"
           else
-            DIR="platform-gitops/workers/preprod/${{ inputs.team_name }}/${{ inputs.service_name }}"
+            DIR="platform-gitops/workers/preview/${{ inputs.team_name }}/${{ inputs.service_name }}"
           fi
 
           if [[ -d "$DIR" ]]; then
@@ -162,10 +162,10 @@ jobs:
           SERVICE="${{ inputs.service_name }}"
 
           if [[ "$TYPE" == "base-service" ]]; then
-            TARGET_DIR="platform-gitops/services/preprod/${TEAM}/${SERVICE}"
+            TARGET_DIR="platform-gitops/services/preview/${TEAM}/${SERVICE}"
             TEMPLATE=".github/templates/base-service-values.yaml.tpl"
           else
-            TARGET_DIR="platform-gitops/workers/preprod/${TEAM}/${SERVICE}"
+            TARGET_DIR="platform-gitops/workers/preview/${TEAM}/${SERVICE}"
             TEMPLATE=".github/templates/worker-service-values.yaml.tpl"
           fi
 
@@ -211,9 +211,9 @@ jobs:
 
           TYPE="${{ inputs.service_type }}"
           if [[ "$TYPE" == "base-service" ]]; then
-            DIR="platform-gitops/services/preprod/${{ inputs.team_name }}/${{ inputs.service_name }}"
+            DIR="platform-gitops/services/preview/${{ inputs.team_name }}/${{ inputs.service_name }}"
           else
-            DIR="platform-gitops/workers/preprod/${{ inputs.team_name }}/${{ inputs.service_name }}"
+            DIR="platform-gitops/workers/preview/${{ inputs.team_name }}/${{ inputs.service_name }}"
           fi
 
           git add "$DIR/values.yaml"

@@ -1,6 +1,6 @@
 # Service: nginx
 # Team: libertex
-# Environment: preprod
+# Environment: preview
 
 image:
   repository: nginxdemos/hello
@@ -26,7 +26,7 @@ externalSecret:
   targetSecret: nginx-secrets
   data:
     - secretKey: newKeys
-      remoteKey: preprod/libertex/nginx
+      remoteKey: preview/libertex/nginx
       property: newKeys
 
 envFrom:

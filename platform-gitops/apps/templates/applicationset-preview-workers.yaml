@@ -1,7 +1,7 @@
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
-  name: preprod-apps
+  name: preview-workers
   namespace: argocd
 spec:
   goTemplate: true
@@ -13,29 +13,24 @@ spec:
         repoURL: {{ .Values.spec.source.repoURL }}
         revision: {{ .Values.spec.source.targetRevision }}
         directories:
-          - path: platform-gitops/services/preprod/*/*
+          - path: platform-gitops/workers/preview/*/*
   template:
     metadata:
-      name: '{{`preprod-{{ index .path.segments 3 }}-{{ index .path.segments 4 }}`}}'
+      name: '{{`preview-{{ index .path.segments 3 }}-{{ index .path.segments 4 }}`}}'
       labels:
-        env: preprod
+        env: preview
         team: '{{`{{ index .path.segments 3 }}`}}'
+        type: worker
         backstage.io/kubernetes-id: '{{`{{ index .path.segments 4 }}`}}'
       annotations:
         backstage.io/kubernetes-id: '{{`{{ index .path.segments 4 }}`}}'
-        argocd/app-name: '{{`preprod-{{ index .path.segments 3 }}-{{ index .path.segments 4 }}`}}'
+        argocd/app-name: '{{`preview-{{ index .path.segments 3 }}-{{ index .path.segments 4 }}`}}'
     spec:
-      project: preprod
+      project: preview
       sources:
         - repoURL: {{ .Values.spec.source.repoURL }}
           targetRevision: {{ .Values.spec.source.targetRevision }}
-          # TODO: Support custom helm charts per service.
-          # Currently all services use base-service. To support custom charts:
-          # 1. Add chart to helm-charts/<chart-name>/
-          # 2. Create a second ApplicationSet with git file generator that reads
-          #    a "chart" field from each service's values.yaml
-          # 3. Or use convention: if service dir contains Chart.yaml → use it as chart
-          path: helm-charts/base-service
+          path: helm-charts/worker-service
           helm:
             valueFiles:
               - $values/{{ `{{ .path.path }}` }}/values.yaml
