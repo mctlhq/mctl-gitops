@@ -1,0 +1,45 @@
+name: Migrate Terraform State to R2
+
+on:
+  workflow_dispatch:  # Manual trigger
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infrastructure/k3s-preview
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.14.4
+
+      - name: Restore state from backup
+        run: |
+          cp terraform.tfstate.backup terraform.tfstate
+          ls -lh terraform.tfstate
+
+      - name: Clean terraform cache
+        run: |
+          rm -rf .terraform .terraform.lock.hcl
+
+      - name: Migrate to R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          terraform init -migrate-state -input=false
+          echo "✅ State migrated to R2!"
+
+      - name: Verify migration
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          terraform state list | wc -l
+          echo "Resources in state ^^"
