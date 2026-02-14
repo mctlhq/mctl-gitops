@@ -1,7 +1,0 @@
-image:
-  repository: ghcr.io/dmitriimashkov/test-vault-delete
-  tag: initial
-service:
-  port: 8080
-ingress:
-  host: test-vault-delete.preview.mctl.me
