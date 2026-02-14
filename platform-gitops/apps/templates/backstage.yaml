@@ -18,7 +18,7 @@ spec:
           className: traefik
           annotations:
             cert-manager.io/cluster-issuer: letsencrypt-prod
-          host: backstage-preprod.mctl.me
+          host: backstage-preview.mctl.me
           tls:
             enabled: true
             secretName: backstage-tls
@@ -35,11 +35,11 @@ spec:
           appConfig:
             app:
               title: mctl.me Backstage
-              baseUrl: https://backstage-preprod.mctl.me
+              baseUrl: https://backstage-preview.mctl.me
             organization:
               name: mctl.me
             backend:
-              baseUrl: https://backstage-preprod.mctl.me
+              baseUrl: https://backstage-preview.mctl.me
               listen:
                 port: 7007
               database:

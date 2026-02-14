@@ -57,10 +57,10 @@ spec:
             annotations:
               cert-manager.io/cluster-issuer: letsencrypt-prod
             hosts:
-              - host: vault-preprod.mctl.me
+              - host: vault-preview.mctl.me
             tls:
               - hosts:
-                  - vault-preprod.mctl.me
+                  - vault-preview.mctl.me
                 secretName: vault-tls
 
         ui:
