@@ -1,6 +1,6 @@
 # Service: __SERVICE_NAME__
 # Team: __TEAM_NAME__
-# Environment: preprod
+# Environment: preview
 # Chart: base-service
 
 image:
@@ -19,7 +19,7 @@ resources:
     memory: 256Mi
 
 env:
-  APP_ENV: preprod
+  APP_ENV: preview
 
 ingress:
   enabled: true

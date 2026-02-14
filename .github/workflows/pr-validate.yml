@@ -1,0 +1,114 @@
+name: PR Validate & Auto-Merge
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'platform-gitops/services/**'
+      - 'platform-gitops/workers/**'
+
+jobs:
+  validate:
+    name: Validate images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      packages: read
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v4
+
+      - name: Get changed values files
+        id: changed
+        run: |
+          FILES=$(gh pr diff ${{ github.event.pull_request.number }} --name-only | grep 'values.yaml$' || true)
+          if [[ -z "$FILES" ]]; then
+            echo "No values.yaml changes found"
+            echo "has_values=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          echo "has_values=true" >> $GITHUB_OUTPUT
+          echo "files<<EOF" >> $GITHUB_OUTPUT
+          echo "$FILES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          echo "Found: $FILES"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install yq
+        if: steps.changed.outputs.has_values == 'true'
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Validate images exist in GHCR
+        if: steps.changed.outputs.has_values == 'true'
+        id: check
+        run: |
+          ALL_OK=true
+
+          while IFS= read -r FILE; do
+            [[ -z "$FILE" ]] && continue
+            [[ ! -f "$FILE" ]] && continue
+
+            REPO=$(yq '.image.repository' "$FILE" 2>/dev/null)
+            TAG=$(yq '.image.tag' "$FILE" 2>/dev/null)
+
+            if [[ -z "$REPO" || "$REPO" == "null" || -z "$TAG" || "$TAG" == "null" ]]; then
+              echo "⚠️ Skipping $FILE — no image.repository or image.tag"
+              continue
+            fi
+
+            # Extract package name from ghcr.io/owner/name
+            PACKAGE_NAME=$(echo "$REPO" | sed 's|ghcr.io/[^/]*/||')
+            OWNER=$(echo "$REPO" | sed 's|ghcr.io/\([^/]*\)/.*|\1|')
+
+            echo -n "Checking ${REPO}:${TAG} ... "
+
+            # Check via GHCR API
+            RESPONSE=$(gh api \
+              "/users/${OWNER}/packages/container/${PACKAGE_NAME}/versions" \
+              --jq "[.[] | select(.metadata.container.tags[] == \"${TAG}\")] | length" \
+              2>/dev/null || echo "0")
+
+            if [[ "$RESPONSE" -gt 0 ]]; then
+              echo "✅ exists"
+              echo "✅ \`${REPO}:${TAG}\` — image found" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "❌ NOT FOUND"
+              echo "❌ \`${REPO}:${TAG}\` — image not found in GHCR" >> $GITHUB_STEP_SUMMARY
+              ALL_OK=false
+            fi
+          done <<< "${{ steps.changed.outputs.files }}"
+
+          echo "all_ok=${ALL_OK}" >> $GITHUB_OUTPUT
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Auto-merge PR
+        if: steps.changed.outputs.has_values == 'true' && steps.check.outputs.all_ok == 'true'
+        run: |
+          BRANCH="${{ github.head_ref }}"
+
+          # Only auto-merge PRs from deploy/ branches (Backstage scaffolder)
+          if [[ "$BRANCH" != deploy/* ]]; then
+            echo "⏭️ Skipping auto-merge — branch \`$BRANCH\` is not a deploy/ branch" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          echo "## 🔀 Auto-merging PR" >> $GITHUB_STEP_SUMMARY
+          gh pr merge ${{ github.event.pull_request.number }} \
+            --squash \
+            --delete-branch \
+            --body "Auto-merged: all images validated ✅"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fail if images missing
+        if: steps.changed.outputs.has_values == 'true' && steps.check.outputs.all_ok == 'false'
+        run: |
+          echo "## ❌ Image validation failed" >> $GITHUB_STEP_SUMMARY
+          echo "Some images referenced in values.yaml do not exist in GHCR." >> $GITHUB_STEP_SUMMARY
+          echo "Push the images first, then re-run this check." >> $GITHUB_STEP_SUMMARY
+          exit 1
