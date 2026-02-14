@@ -4,7 +4,7 @@
 
 image:
   repository: hello-world
-  tag: "nanoserver-ltsc2025"
+  tag: "latest"
 
 service:
   port: 8080
