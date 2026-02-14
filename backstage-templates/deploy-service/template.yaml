@@ -141,7 +141,7 @@ spec:
       action: http:backstage:request
       input:
         method: POST
-        path: /api/proxy/vault/v1/secret/data/preprod/${{ parameters.teamName | parseEntityRef | pick('name') }}/${{ parameters.serviceName }}
+        path: /proxy/vault/v1/secret/data/preprod/${{ parameters.teamName | parseEntityRef | pick('name') }}/${{ parameters.serviceName }}
         headers:
           Content-Type: application/json
         body:
