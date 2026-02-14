@@ -36,56 +36,80 @@ jobs:
           #!/bin/bash
           set -e
 
-          # Output file
-          OUTPUT="platform-gitops/apps/templates/argocd-rbac-cm.yaml"
+          # Output file — ArgoCD values managed by argocd-self-managed
+          VALUES="platform-gitops/argocd/values.yaml"
 
-          # Start ConfigMap
-          cat > "$OUTPUT" << 'EOF'
-          apiVersion: v1
-          kind: ConfigMap
-          metadata:
-            name: argocd-rbac-cm
-            namespace: argocd
-            labels:
-              app.kubernetes.io/name: argocd-rbac-cm
-              app.kubernetes.io/part-of: argocd
-          data:
-            policy.default: ""
-            policy.csv: |
-              # ============================================================================
-              # ArgoCD RBAC Policies - Auto-synced with GitHub Teams
-              # Generated: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
-              # ============================================================================
-
-              # Admin team: full access to ArgoCD
-              p, role:admin, applications, *, */*, allow
-              p, role:admin, logs, get, */*, allow
-              p, role:admin, exec, create, */*, allow
-              p, role:admin, clusters, get, */*, allow
-              p, role:admin, repositories, *, */*, allow
-              p, role:admin, projects, *, */*, allow
-              g, dmitriimashkov:admin, role:admin
-
-              # ============================================================================
-              # Team-Based Access (Auto-generated from GitHub Teams)
-              # ============================================================================
-          EOF
+          # Build new policy.csv content
+          POLICY_CSV=""
+          POLICY_CSV+="        # ============================================================================\n"
+          POLICY_CSV+="        # ArgoCD RBAC Policies - Auto-synced with GitHub Teams\n"
+          POLICY_CSV+="        # ============================================================================\n"
+          POLICY_CSV+="\n"
+          POLICY_CSV+="        # Admin team: full access to ArgoCD\n"
+          POLICY_CSV+="        p, role:admin, applications, *, */*, allow\n"
+          POLICY_CSV+="        p, role:admin, logs, get, */*, allow\n"
+          POLICY_CSV+="        p, role:admin, exec, create, */*, allow\n"
+          POLICY_CSV+="        p, role:admin, clusters, get, */*, allow\n"
+          POLICY_CSV+="        p, role:admin, repositories, *, */*, allow\n"
+          POLICY_CSV+="        p, role:admin, projects, *, */*, allow\n"
+          POLICY_CSV+="        g, dmitriimashkov:admin, role:admin\n"
+          POLICY_CSV+="\n"
+          POLICY_CSV+="        # ============================================================================\n"
+          POLICY_CSV+="        # Team-Based Access (Auto-generated from GitHub Teams)\n"
+          POLICY_CSV+="        # ============================================================================\n"
 
           # Generate policies for each team (except admin)
           while IFS= read -r team; do
-            # Skip admin team (already defined above)
             if [ "$team" = "admin" ]; then
               continue
             fi
-
-            cat >> "$OUTPUT" << EOF
-
-              # Team: $team
-              p, role:team-$team, applications, get, argocd/preview-$team-*, allow
-              p, role:team-$team, logs, get, argocd/preview-$team-*, allow
-              g, dmitriimashkov:$team, role:team-$team
-          EOF
+            POLICY_CSV+="\n"
+            POLICY_CSV+="        # Team: $team\n"
+            POLICY_CSV+="        p, role:team-$team, applications, get, argocd/preview-$team-*, allow\n"
+            POLICY_CSV+="        p, role:team-$team, logs, get, argocd/preview-$team-*, allow\n"
+            POLICY_CSV+="        g, dmitriimashkov:$team, role:team-$team\n"
           done < /tmp/teams.txt
+
+          # Replace policy.csv block in values.yaml using python for reliable multiline replacement
+          python3 << PYEOF
+          import re
+
+          with open("$VALUES", "r") as f:
+              content = f.read()
+
+          # Match the policy.csv block (from "policy.csv: |" to the next key at same indentation)
+          pattern = r'(      policy\.csv: \|)\n(.*?)(\n    [a-z])'
+          replacement = r'\1\n$(echo -e "$POLICY_CSV")\3'
+
+          # Use a simpler approach: find and replace the policy.csv section
+          lines = content.split('\n')
+          new_lines = []
+          in_policy = False
+          policy_indent = 0
+
+          for line in lines:
+              if 'policy.csv: |' in line and not in_policy:
+                  in_policy = True
+                  policy_indent = len(line) - len(line.lstrip())
+                  new_lines.append(line)
+                  # Add new policy content
+                  new_lines.append("""$(echo -e "$POLICY_CSV")""".rstrip())
+                  continue
+
+              if in_policy:
+                  # Check if we've left the block (non-empty line with same or less indent)
+                  stripped = line.lstrip()
+                  if stripped and not line.startswith(' ' * (policy_indent + 2)):
+                      in_policy = False
+                      new_lines.append(line)
+                  # Skip old policy lines
+                  continue
+
+              new_lines.append(line)
+
+          with open("$VALUES", "w") as f:
+              f.write('\n'.join(new_lines))
+          PYEOF
 
           echo "Generated RBAC config for $(wc -l < /tmp/teams.txt) teams"
           SCRIPT
@@ -96,12 +120,12 @@ jobs:
       - name: Check for changes
         id: check-changes
         run: |
-          if git diff --quiet platform-gitops/apps/templates/argocd-rbac-cm.yaml; then
+          if git diff --quiet platform-gitops/argocd/values.yaml; then
             echo "No changes detected in RBAC config"
             echo "has_changes=false" >> $GITHUB_OUTPUT
           else
             echo "Changes detected in RBAC config"
-            git diff platform-gitops/apps/templates/argocd-rbac-cm.yaml
+            git diff platform-gitops/argocd/values.yaml
             echo "has_changes=true" >> $GITHUB_OUTPUT
           fi
 
@@ -119,7 +143,7 @@ jobs:
           git checkout -b "$BRANCH"
 
           # Commit changes
-          git add platform-gitops/apps/templates/argocd-rbac-cm.yaml
+          git add platform-gitops/argocd/values.yaml
           git commit -m "chore(argocd): sync RBAC policies with GitHub teams
 
           Auto-generated update from GitHub teams sync workflow.
