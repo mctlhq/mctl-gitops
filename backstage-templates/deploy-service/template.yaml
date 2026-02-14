@@ -135,6 +135,18 @@ spec:
           command: ${{ parameters.command }}
           args: ${{ parameters.args }}
 
+    - id: create-vault-secrets
+      name: Create Vault secrets (placeholders)
+      if: ${{ parameters.secretEnvVars and parameters.secretEnvVars | length > 0 }}
+      action: http:backstage:request
+      input:
+        method: POST
+        path: /api/proxy/vault/v1/secret/data/preprod/${{ parameters.teamName | parseEntityRef | pick('name') }}/${{ parameters.serviceName }}
+        headers:
+          Content-Type: application/json
+        body:
+          data: ${{ parameters.secretEnvVars }}
+
     - id: create-pr
       name: Create Pull Request
       action: publish:github:pull-request
