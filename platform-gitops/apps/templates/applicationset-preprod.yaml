@@ -6,6 +6,8 @@ metadata:
 spec:
   goTemplate: true
   goTemplateOptions: ["missingkey=error"]
+  syncPolicy:
+    preserveResourcesOnDeletion: false
   generators:
     - git:
         repoURL: {{ .Values.spec.source.repoURL }}
