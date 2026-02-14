@@ -10,15 +10,8 @@ data:
   policy.default: ""
   policy.csv: |
     # ============================================================================
-    # ArgoCD RBAC Policies - Synced with GitHub Teams
-    # ============================================================================
-    #
-    # To add a new team:
-    # 1. Create GitHub team in dmitriimashkov organization
-    # 2. Add team mapping below: g, dmitriimashkov:<team>, role:team-<team>
-    # 3. Add team policies below
-    # 4. Commit to git → ArgoCD syncs automatically
-    #
+    # ArgoCD RBAC Policies - Auto-synced with GitHub Teams
+    # Generated: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
     # ============================================================================
 
     # Admin team: full access to ArgoCD
@@ -31,32 +24,25 @@ data:
     g, dmitriimashkov:admin, role:admin
 
     # ============================================================================
-    # Team-Based Access (Read-Only)
-    # Pattern: preview-{team}-* applications
+    # Team-Based Access (Auto-generated from GitHub Teams)
     # ============================================================================
 
-    # Team: libertex
-    p, role:team-libertex, applications, get, argocd/preview-libertex-*, allow
-    p, role:team-libertex, logs, get, argocd/preview-libertex-*, allow
-    g, dmitriimashkov:libertex, role:team-libertex
+    # Team: developers
+    p, role:team-developers, applications, get, argocd/preview-developers-*, allow
+    p, role:team-developers, logs, get, argocd/preview-developers-*, allow
+    g, dmitriimashkov:developers, role:team-developers
 
     # Team: internal
     p, role:team-internal, applications, get, argocd/preview-internal-*, allow
     p, role:team-internal, logs, get, argocd/preview-internal-*, allow
     g, dmitriimashkov:internal, role:team-internal
 
-    # ============================================================================
-    # Example: To add "backend" team:
-    # ============================================================================
-    # 1. Create GitHub team: https://github.com/orgs/dmitriimashkov/teams
-    # 2. Add users to team
-    # 3. Add these lines:
-    #
-    # # Team: backend
-    # p, role:team-backend, applications, get, argocd/preview-backend-*, allow
-    # p, role:team-backend, logs, get, argocd/preview-backend-*, allow
-    # g, dmitriimashkov:backend, role:team-backend
-    #
-    # 4. Commit → Push → ArgoCD syncs
-    # 5. Users in backend team can now view preview-backend-* applications
-    # ============================================================================
+    # Team: libertex
+    p, role:team-libertex, applications, get, argocd/preview-libertex-*, allow
+    p, role:team-libertex, logs, get, argocd/preview-libertex-*, allow
+    g, dmitriimashkov:libertex, role:team-libertex
+
+    # Team: test
+    p, role:team-test, applications, get, argocd/preview-test-*, allow
+    p, role:team-test, logs, get, argocd/preview-test-*, allow
+    g, dmitriimashkov:test, role:team-test
