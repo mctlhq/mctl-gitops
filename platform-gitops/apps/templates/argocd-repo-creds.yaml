@@ -12,7 +12,7 @@ spec:
     name: vault-backend
   target:
     name: argocd-repo-creds-github-https
-    creationPolicy: Merge
+    creationPolicy: Owner
     template:
       metadata:
         labels:
