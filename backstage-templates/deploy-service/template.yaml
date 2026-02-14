@@ -22,8 +22,12 @@ spec:
         teamName:
           title: Team Name
           type: string
-          description: "Must match your GitHub team name and directory in platform-gitops/services/preprod/"
-          pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
+          description: "Select your team"
+          ui:field: EntityPicker
+          ui:options:
+            catalogFilter:
+              kind: Group
+            defaultKind: Group
         serviceName:
           title: Service Name
           type: string
@@ -113,9 +117,9 @@ spec:
       action: fetch:template
       input:
         url: ./skeleton
-        targetPath: ./output/platform-gitops/${{ 'workers' if parameters.serviceType == 'worker-service' else 'services' }}/preprod/${{ parameters.teamName }}/${{ parameters.serviceName }}
+        targetPath: ./output/platform-gitops/${{ 'workers' if parameters.serviceType == 'worker-service' else 'services' }}/preprod/${{ parameters.teamName | parseEntityRef | pick('name') }}/${{ parameters.serviceName }}
         values:
-          teamName: ${{ parameters.teamName }}
+          teamName: ${{ parameters.teamName | parseEntityRef | pick('name') }}
           serviceName: ${{ parameters.serviceName }}
           serviceType: ${{ parameters.serviceType }}
           imageRepository: ${{ parameters.imageRepository }}
@@ -136,12 +140,12 @@ spec:
       action: publish:github:pull-request
       input:
         repoUrl: github.com?repo=mctl.me&owner=dmitriimashkov
-        title: "deploy: ${{ parameters.teamName }}/${{ parameters.serviceName }}"
-        branchName: "deploy/${{ parameters.teamName }}-${{ parameters.serviceName }}"
+        title: "deploy: ${{ parameters.teamName | parseEntityRef | pick('name') }}/${{ parameters.serviceName }}"
+        branchName: "deploy/${{ parameters.teamName | parseEntityRef | pick('name') }}-${{ parameters.serviceName }}"
         description: |
           ## Deploy ${{ parameters.serviceName }}
 
-          **Team:** ${{ parameters.teamName }}
+          **Team:** ${{ parameters.teamName | parseEntityRef | pick('name') }}
           **Type:** ${{ parameters.serviceType }}
           **Image:** ${{ parameters.imageRepository }}:${{ parameters.imageTag }}
 
