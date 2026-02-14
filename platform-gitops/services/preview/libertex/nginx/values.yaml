@@ -4,7 +4,7 @@
 
 image:
   repository: nginxdemos/hello
-  tag: "plain-text"
+  tag: "latest"
 
 service:
   port: 80
