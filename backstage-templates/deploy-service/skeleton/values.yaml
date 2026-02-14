@@ -52,6 +52,25 @@ ingress:
   enabled: true
   host: ${{ values.host }}
 {%- endif %}
+{%- if values.healthCheckPath %}
+
+probes:
+  liveness:
+    path: ${{ values.healthCheckPath }}
+    port: http
+    initialDelaySeconds: 10
+    periodSeconds: 15
+  readiness:
+    path: ${{ values.healthCheckPath }}
+    port: http
+    initialDelaySeconds: 5
+    periodSeconds: 10
+{%- else %}
+
+probes:
+  liveness: null
+  readiness: null
+{%- endif %}
 {%- else -%}
 # Worker: ${{ values.serviceName }}
 # Team: ${{ values.teamName }}

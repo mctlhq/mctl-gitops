@@ -74,6 +74,10 @@ spec:
           title: Replica Count
           type: number
           default: 1
+        healthCheckPath:
+          title: Health Check Path
+          type: string
+          description: "HTTP path for liveness/readiness probes (leave empty to disable probes)"
         envVars:
           title: Environment Variables
           type: object
@@ -128,6 +132,7 @@ spec:
           port: ${{ parameters.port }}
           host: ${{ parameters.host }}
           replicaCount: ${{ parameters.replicaCount }}
+          healthCheckPath: ${{ parameters.healthCheckPath }}
           envVars: ${{ parameters.envVars }}
           secretEnvVars: ${{ parameters.secretEnvVars }}
           workloadType: ${{ parameters.workloadType }}
