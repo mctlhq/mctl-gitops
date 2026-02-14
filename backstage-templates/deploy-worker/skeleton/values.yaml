@@ -1,4 +1,4 @@
-# Service: ${{ values.serviceName }}
+# Worker: ${{ values.serviceName }}
 # Team: ${{ values.teamName }}
 # Environment: preview
 
@@ -11,8 +11,26 @@ imagePullSecrets:
   - name: ${{ values.imagePullSecretName }}
 {%- endif %}
 
-service:
-  port: ${{ values.port | default(8080) }}
+workloadType: ${{ values.workloadType | default("deployment") }}
+{%- if values.workloadType == "cronjob" and values.cronSchedule %}
+
+cronjob:
+  schedule: "${{ values.cronSchedule }}"
+{%- endif %}
+{%- if values.command and values.command | length > 0 %}
+
+command:
+{%- for cmd in values.command %}
+  - "${{ cmd }}"
+{%- endfor %}
+{%- endif %}
+{%- if values.args and values.args | length > 0 %}
+
+args:
+{%- for arg in values.args %}
+  - "${{ arg }}"
+{%- endfor %}
+{%- endif %}
 
 replicaCount: ${{ values.replicaCount | default(1) }}
 
@@ -44,29 +62,4 @@ externalSecret:
 envFrom:
   - secretRef:
       name: ${{ values.serviceName }}-secrets
-{%- endif %}
-{%- if values.host %}
-
-ingress:
-  enabled: true
-  host: ${{ values.host }}
-{%- endif %}
-{%- if values.healthCheckPath %}
-
-probes:
-  liveness:
-    path: ${{ values.healthCheckPath }}
-    port: http
-    initialDelaySeconds: 10
-    periodSeconds: 15
-  readiness:
-    path: ${{ values.healthCheckPath }}
-    port: http
-    initialDelaySeconds: 5
-    periodSeconds: 10
-{%- else %}
-
-probes:
-  liveness: null
-  readiness: null
 {%- endif %}

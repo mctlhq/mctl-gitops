@@ -113,6 +113,14 @@ spec:
                   rules:
                     - allow: [Template]
                 - type: url
+                  target: https://github.com/dmitriimashkov/mctl.me/blob/main/backstage-templates/deploy-worker/template.yaml
+                  rules:
+                    - allow: [Template]
+                - type: url
+                  target: https://github.com/dmitriimashkov/mctl.me/blob/main/backstage-templates/delete-service/template.yaml
+                  rules:
+                    - allow: [Template]
+                - type: url
                   target: https://github.com/dmitriimashkov/mctl.me/blob/main/platform-gitops/services/preview/admin/monteexchange/catalog-info.yaml
                   rules:
                     - allow: [Component]

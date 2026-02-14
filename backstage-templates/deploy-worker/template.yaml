@@ -1,20 +1,20 @@
 apiVersion: scaffolder.backstage.io/v1beta3
 kind: Template
 metadata:
-  name: deploy-service
-  title: Deploy Web Service
-  description: Deploy a Docker image as a web service with ingress to the preview cluster
+  name: deploy-worker
+  title: Deploy Worker
+  description: Deploy a background worker (deployment or cronjob) to the preview cluster
   tags:
     - deploy
     - kubernetes
     - preview
-    - service
+    - worker
 spec:
   owner: group:admin
   type: service
 
   parameters:
-    - title: Service Info
+    - title: Worker Info
       required:
         - teamName
         - serviceName
@@ -29,7 +29,7 @@ spec:
               kind: Group
             defaultKind: Group
         serviceName:
-          title: Service Name
+          title: Worker Name
           type: string
           pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
 
@@ -41,7 +41,7 @@ spec:
         imageRepository:
           title: Image Repository
           type: string
-          description: "Full image path (e.g. ghcr.io/dmitriimashkov/myapp or nginxdemos/hello)"
+          description: "Full image path (e.g. ghcr.io/dmitriimashkov/myworker or python:3.12)"
         imageTag:
           title: Image Tag
           type: string
@@ -51,27 +51,39 @@ spec:
           type: string
           description: "K8s secret for private registry auth (optional)"
 
-    - title: Configuration
-      required:
-        - port
-        - host
+    - title: Worker Configuration
       properties:
-        port:
-          title: Port
-          type: number
-          default: 8080
-        host:
-          title: Ingress Host
+        workloadType:
+          title: Workload Type
           type: string
-          description: "e.g. myapp.preview.mctl.me"
+          enum:
+            - deployment
+            - cronjob
+          enumNames:
+            - "Deployment (long-running)"
+            - "CronJob (scheduled)"
+          default: deployment
+        cronSchedule:
+          title: Cron Schedule (cronjob only)
+          type: string
+          default: "*/5 * * * *"
+          description: "Standard cron expression"
         replicaCount:
           title: Replica Count
           type: number
           default: 1
-        healthCheckPath:
-          title: Health Check Path
-          type: string
-          description: "HTTP path for liveness/readiness probes (leave empty to disable)"
+        command:
+          title: Container Command Override
+          type: array
+          items:
+            type: string
+          description: "Override entrypoint (optional)"
+        args:
+          title: Container Args Override
+          type: array
+          items:
+            type: string
+          description: "Override args (optional)"
         envVars:
           title: Environment Variables
           type: object
@@ -87,21 +99,22 @@ spec:
 
   steps:
     - id: generate-files
-      name: Generate service files
+      name: Generate worker files
       action: fetch:template
       input:
         url: ./skeleton
-        targetPath: ./output/platform-gitops/services/preview/${{ parameters.teamName | parseEntityRef | pick('name') }}/${{ parameters.serviceName }}
+        targetPath: ./output/platform-gitops/workers/preview/${{ parameters.teamName | parseEntityRef | pick('name') }}/${{ parameters.serviceName }}
         values:
           teamName: ${{ parameters.teamName | parseEntityRef | pick('name') }}
           serviceName: ${{ parameters.serviceName }}
           imageRepository: ${{ parameters.imageRepository }}
           imageTag: ${{ parameters.imageTag }}
           imagePullSecretName: ${{ parameters.imagePullSecretName }}
-          port: ${{ parameters.port }}
-          host: ${{ parameters.host }}
+          workloadType: ${{ parameters.workloadType }}
+          cronSchedule: ${{ parameters.cronSchedule }}
           replicaCount: ${{ parameters.replicaCount }}
-          healthCheckPath: ${{ parameters.healthCheckPath }}
+          command: ${{ parameters.command }}
+          args: ${{ parameters.args }}
           envVars: ${{ parameters.envVars }}
           secretEnvVars: ${{ parameters.secretEnvVars }}
 
@@ -125,12 +138,11 @@ spec:
         title: "deploy: ${{ parameters.teamName | parseEntityRef | pick('name') }}/${{ parameters.serviceName }}"
         branchName: "deploy/${{ parameters.teamName | parseEntityRef | pick('name') }}-${{ parameters.serviceName }}"
         description: |
-          ## Deploy ${{ parameters.serviceName }}
+          ## Deploy Worker ${{ parameters.serviceName }}
 
           **Team:** ${{ parameters.teamName | parseEntityRef | pick('name') }}
-          **Type:** Web Service (base-service)
+          **Type:** Worker (${{ parameters.workloadType }})
           **Image:** ${{ parameters.imageRepository }}:${{ parameters.imageTag }}
-          **Host:** ${{ parameters.host }}
 
           Created by Backstage scaffolder.
         sourcePath: ./output
