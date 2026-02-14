@@ -1,0 +1,103 @@
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: vault-backup-r2
+  namespace: vault
+spec:
+  refreshInterval: 24h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: vault-backend
+  target:
+    name: vault-backup-r2-credentials
+    creationPolicy: Owner
+  data:
+    - secretKey: AWS_ACCESS_KEY_ID
+      remoteRef:
+        key: preview/vault/r2-backup
+        property: access-key-id
+    - secretKey: AWS_SECRET_ACCESS_KEY
+      remoteRef:
+        key: preview/vault/r2-backup
+        property: secret-access-key
+    - secretKey: BUCKET
+      remoteRef:
+        key: preview/vault/r2-backup
+        property: bucket
+    - secretKey: ENDPOINT
+      remoteRef:
+        key: preview/vault/r2-backup
+        property: endpoint
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: vault-backup
+  namespace: vault
+spec:
+  schedule: "0 3 * * *"
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      ttlSecondsAfterFinished: 86400
+      template:
+        spec:
+          serviceAccountName: vault-unseal
+          restartPolicy: Never
+          volumes:
+            - name: snapshot
+              emptyDir: {}
+          initContainers:
+            - name: snapshot
+              image: bitnami/kubectl:latest
+              volumeMounts:
+                - name: snapshot
+                  mountPath: /snapshot
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -e
+                  echo "Taking Vault raft snapshot..."
+                  kubectl exec -n vault vault-0 -- vault operator raft snapshot save /tmp/vault-snapshot.snap
+                  kubectl cp vault/vault-0:/tmp/vault-snapshot.snap /snapshot/vault-snapshot.snap
+                  ls -lh /snapshot/vault-snapshot.snap
+                  echo "✅ Snapshot saved"
+          containers:
+            - name: upload
+              image: amazon/aws-cli:latest
+              envFrom:
+                - secretRef:
+                    name: vault-backup-r2-credentials
+              volumeMounts:
+                - name: snapshot
+                  mountPath: /snapshot
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -e
+                  TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+
+                  echo "Uploading snapshot to R2..."
+                  aws s3 cp /snapshot/vault-snapshot.snap \
+                    "s3://${BUCKET}/vault-backups/vault-snapshot-${TIMESTAMP}.snap" \
+                    --endpoint-url "${ENDPOINT}" \
+                    --region auto
+
+                  echo "Cleaning old backups (keep last 30)..."
+                  aws s3 ls "s3://${BUCKET}/vault-backups/" \
+                    --endpoint-url "${ENDPOINT}" \
+                    --region auto | sort | head -n -30 | while read -r line; do
+                    FILE=$(echo "$line" | awk '{print $4}')
+                    if [ -n "$FILE" ]; then
+                      aws s3 rm "s3://${BUCKET}/vault-backups/${FILE}" \
+                        --endpoint-url "${ENDPOINT}" \
+                        --region auto
+                    fi
+                  done
+
+                  echo "✅ Backup complete: vault-snapshot-${TIMESTAMP}.snap"
