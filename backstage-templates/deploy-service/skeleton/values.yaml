@@ -33,6 +33,15 @@ env:
 {%- endif %}
 {%- if values.secretEnvVars and values.secretEnvVars | length > 0 %}
 
+externalSecret:
+  targetSecret: ${{ values.serviceName }}-secrets
+  data:
+{%- for key, value in values.secretEnvVars %}
+    - secretKey: ${{ key }}
+      remoteKey: preprod/${{ values.teamName }}/${{ values.serviceName }}
+      property: ${{ key }}
+{%- endfor %}
+
 envFrom:
   - secretRef:
       name: ${{ values.serviceName }}-secrets
@@ -95,6 +104,15 @@ env:
 {%- endfor %}
 {%- endif %}
 {%- if values.secretEnvVars and values.secretEnvVars | length > 0 %}
+
+externalSecret:
+  targetSecret: ${{ values.serviceName }}-secrets
+  data:
+{%- for key, value in values.secretEnvVars %}
+    - secretKey: ${{ key }}
+      remoteKey: preprod/${{ values.teamName }}/${{ values.serviceName }}
+      property: ${{ key }}
+{%- endfor %}
 
 envFrom:
   - secretRef:
