@@ -1,0 +1,281 @@
+name: Service
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Action to perform"
+        required: true
+        type: choice
+        options:
+          - onboard
+          - deploy
+      team_name:
+        description: "Team name (e.g. payments)"
+        required: true
+        type: string
+      service_name:
+        description: "Service name (e.g. payment-api)"
+        required: true
+        type: string
+      service_type:
+        description: "Helm chart type (onboard only)"
+        required: false
+        type: choice
+        options:
+          - base-service
+          - worker-service
+      port:
+        description: "Service port (base-service onboard only)"
+        required: false
+        default: "8080"
+        type: string
+      host:
+        description: "Ingress host (base-service onboard only, e.g. my-app.preview.mctl.me)"
+        required: false
+        type: string
+      dockerfile_repo:
+        description: "Source repo with Dockerfile (e.g. dmitriimashkov/payment-api)"
+        required: true
+        type: string
+      dockerfile_path:
+        description: "Path to Dockerfile in source repo"
+        required: false
+        default: "Dockerfile"
+        type: string
+      image_tag:
+        description: "Image tag (default: v{date}-{short_sha})"
+        required: false
+        type: string
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_OWNER: dmitriimashkov
+
+jobs:
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.tag.outputs.image_tag }}
+      service_dir: ${{ steps.paths.outputs.service_dir }}
+      service_type: ${{ steps.paths.outputs.service_type }}
+    steps:
+      - name: Validate naming conventions
+        run: |
+          TEAM="${{ inputs.team_name }}"
+          SERVICE="${{ inputs.service_name }}"
+
+          if [[ ! "$TEAM" =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]]; then
+            echo "::error::team_name must be lowercase alphanumeric with hyphens, ≤63 chars. Got: $TEAM"
+            exit 1
+          fi
+          if [[ ! "$SERVICE" =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]]; then
+            echo "::error::service_name must be lowercase alphanumeric with hyphens, ≤63 chars. Got: $SERVICE"
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Determine paths
+        id: paths
+        run: |
+          TEAM="${{ inputs.team_name }}"
+          SERVICE="${{ inputs.service_name }}"
+          ACTION="${{ inputs.action }}"
+
+          # For deploy, auto-detect service type
+          if [[ "$ACTION" == "deploy" ]]; then
+            if [[ -d "platform-gitops/services/preview/${TEAM}/${SERVICE}" ]]; then
+              TYPE="base-service"
+            elif [[ -d "platform-gitops/workers/preview/${TEAM}/${SERVICE}" ]]; then
+              TYPE="worker-service"
+            else
+              echo "::error::Service ${TEAM}/${SERVICE} not found. Use 'onboard' action first."
+              echo "## ❌ Service Not Found" >> $GITHUB_STEP_SUMMARY
+              exit 1
+            fi
+          else
+            TYPE="${{ inputs.service_type }}"
+            if [[ -z "$TYPE" ]]; then
+              echo "::error::service_type is required for onboard"
+              exit 1
+            fi
+          fi
+
+          if [[ "$TYPE" == "base-service" ]]; then
+            DIR="platform-gitops/services/preview/${TEAM}/${SERVICE}"
+          else
+            DIR="platform-gitops/workers/preview/${TEAM}/${SERVICE}"
+          fi
+
+          # Onboard: must NOT exist. Deploy: must exist.
+          if [[ "$ACTION" == "onboard" && -d "$DIR" ]]; then
+            echo "::error::Service already exists at $DIR. Use 'deploy' to update."
+            echo "## ❌ Service Already Exists" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+          if [[ "$ACTION" == "deploy" && ! -f "$DIR/values.yaml" ]]; then
+            echo "::error::values.yaml not found at $DIR"
+            exit 1
+          fi
+
+          echo "service_dir=${DIR}" >> $GITHUB_OUTPUT
+          echo "service_type=${TYPE}" >> $GITHUB_OUTPUT
+
+      - name: Validate base-service inputs
+        if: inputs.action == 'onboard' && inputs.service_type == 'base-service'
+        run: |
+          if [[ -z "${{ inputs.host }}" ]]; then
+            echo "::error::host is required for base-service onboard"
+            exit 1
+          fi
+
+      - name: Verify source repo accessible
+        run: |
+          if ! git ls-remote "https://github.com/${{ inputs.dockerfile_repo }}" HEAD > /dev/null 2>&1; then
+            echo "::error::Cannot access repo: ${{ inputs.dockerfile_repo }}"
+            exit 1
+          fi
+
+      - name: Determine image tag
+        id: tag
+        run: |
+          if [[ -n "${{ inputs.image_tag }}" ]]; then
+            echo "image_tag=${{ inputs.image_tag }}" >> $GITHUB_OUTPUT
+          else
+            SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+            DATE=$(date +%Y%m%d)
+            echo "image_tag=v${DATE}-${SHORT_SHA}" >> $GITHUB_OUTPUT
+          fi
+
+  build:
+    name: Build & push image
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout source repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.dockerfile_repo }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ inputs.dockerfile_path }}
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ inputs.service_name }}:${{ needs.validate.outputs.image_tag }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ inputs.service_name }}:latest
+
+      - name: Report failure
+        if: failure()
+        run: |
+          echo "## ❌ Docker Build Failed" >> $GITHUB_STEP_SUMMARY
+          echo "Failed to build \`${{ inputs.service_name }}\`. Check logs above." >> $GITHUB_STEP_SUMMARY
+
+  apply:
+    name: Apply config
+    needs: [validate, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout platform repo
+        uses: actions/checkout@v4
+
+      - name: Create values.yaml (onboard)
+        if: inputs.action == 'onboard'
+        run: |
+          TYPE="${{ needs.validate.outputs.service_type }}"
+          DIR="${{ needs.validate.outputs.service_dir }}"
+          TAG="${{ needs.validate.outputs.image_tag }}"
+
+          if [[ "$TYPE" == "base-service" ]]; then
+            TEMPLATE=".github/templates/base-service-values.yaml.tpl"
+          else
+            TEMPLATE=".github/templates/worker-service-values.yaml.tpl"
+          fi
+
+          mkdir -p "$DIR"
+
+          sed \
+            -e "s|__TEAM_NAME__|${{ inputs.team_name }}|g" \
+            -e "s|__SERVICE_NAME__|${{ inputs.service_name }}|g" \
+            -e "s|__IMAGE_TAG__|${TAG}|g" \
+            -e "s|__PORT__|${{ inputs.port }}|g" \
+            -e "s|__HOST__|${{ inputs.host }}|g" \
+            "$TEMPLATE" > "${DIR}/values.yaml"
+
+      - name: Update image tag (deploy)
+        if: inputs.action == 'deploy'
+        run: |
+          DIR="${{ needs.validate.outputs.service_dir }}"
+          TAG="${{ needs.validate.outputs.image_tag }}"
+
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+          yq -i ".image.tag = \"${TAG}\"" "${DIR}/values.yaml"
+
+      - name: Validate Helm template
+        run: |
+          TYPE="${{ needs.validate.outputs.service_type }}"
+          DIR="${{ needs.validate.outputs.service_dir }}"
+
+          curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+          if ! helm template test "helm-charts/${TYPE}" -f "${DIR}/values.yaml" > /dev/null 2>&1; then
+            echo "::error::Helm template validation failed"
+            echo "## ❌ Helm Validation Failed" >> $GITHUB_STEP_SUMMARY
+            helm template test "helm-charts/${TYPE}" -f "${DIR}/values.yaml" 2>&1 >> $GITHUB_STEP_SUMMARY || true
+            exit 1
+          fi
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          DIR="${{ needs.validate.outputs.service_dir }}"
+          TAG="${{ needs.validate.outputs.image_tag }}"
+          ACTION="${{ inputs.action }}"
+
+          git add "${DIR}/values.yaml"
+
+          if [[ "$ACTION" == "onboard" ]]; then
+            git commit -m "feat: onboard ${{ inputs.team_name }}/${{ inputs.service_name }} (${TAG})"
+          else
+            git commit -m "deploy: ${{ inputs.team_name }}/${{ inputs.service_name }} → ${TAG}"
+          fi
+
+          git push
+
+      - name: Summary
+        run: |
+          TAG="${{ needs.validate.outputs.image_tag }}"
+          ACTION="${{ inputs.action }}"
+          EMOJI=$([[ "$ACTION" == "onboard" ]] && echo "🚀" || echo "🔄")
+
+          echo "## ${EMOJI} Service ${ACTION}ed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Team** | \`${{ inputs.team_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Service** | \`${{ inputs.service_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Action** | \`${ACTION}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Image** | \`${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ inputs.service_name }}:${TAG}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "ArgoCD will sync automatically." >> $GITHUB_STEP_SUMMARY
