@@ -187,19 +187,27 @@ jobs:
       - name: Validate Helm template
         run: |
           TYPE="${{ inputs.service_type }}"
+          TEAM="${{ inputs.team_name }}"
+          SERVICE="${{ inputs.service_name }}"
           CHART_PATH="helm-charts/${TYPE}"
+
+          if [[ "$TYPE" == "base-service" ]]; then
+            VALUES_PATH="platform-gitops/services/preview/${TEAM}/${SERVICE}/values.yaml"
+          else
+            VALUES_PATH="platform-gitops/workers/preview/${TEAM}/${SERVICE}/values.yaml"
+          fi
 
           # Install helm
           curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
           if ! helm template test "$CHART_PATH" \
-            -f "platform-gitops/$([[ "$TYPE" == "base-service" ]] && echo "services" || echo "workers")/preprod/${{ inputs.team_name }}/${{ inputs.service_name }}/values.yaml" \
+            -f "${VALUES_PATH}" \
             > /dev/null 2>&1; then
             echo "::error::Helm template validation failed"
             echo "## ❌ Helm Validation Failed" >> $GITHUB_STEP_SUMMARY
             echo "The generated values.yaml is incompatible with the \`${TYPE}\` chart." >> $GITHUB_STEP_SUMMARY
             helm template test "$CHART_PATH" \
-              -f "platform-gitops/$([[ "$TYPE" == "base-service" ]] && echo "services" || echo "workers")/preprod/${{ inputs.team_name }}/${{ inputs.service_name }}/values.yaml" \
+              -f "${VALUES_PATH}" \
               2>&1 >> $GITHUB_STEP_SUMMARY || true
             exit 1
           fi

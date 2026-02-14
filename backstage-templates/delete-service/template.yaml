@@ -3,7 +3,7 @@ kind: Template
 metadata:
   name: delete-service
   title: Delete Service from Preview
-  description: Remove a deployed service — deletes Vault secrets and unregisters from catalog
+  description: Remove a deployed service — triggers GitHub Actions to delete files, Vault secrets, and K8s resources
   tags:
     - delete
     - kubernetes
@@ -52,36 +52,20 @@ spec:
           description: "Remove secrets from Vault for this service"
 
   steps:
-    - id: delete-vault-secrets
-      name: Delete Vault secrets
-      if: ${{ parameters.deleteVaultSecrets }}
-      action: http:backstage:request
+    - id: trigger-delete
+      name: Trigger delete workflow
+      action: github:actions:dispatch
       input:
-        method: DELETE
-        path: /proxy/vault/v1/secret/metadata/preview/${{ parameters.teamName | parseEntityRef | pick('name') }}/${{ parameters.serviceName }}
-        headers:
-          Content-Type: application/json
-
-    - id: unregister
-      name: Unregister from catalog
-      action: catalog:unregister
-      input:
-        entityRef: component:default/${{ parameters.serviceName }}
+        repoUrl: github.com?repo=mctl.me&owner=dmitriimashkov
+        workflowId: delete-service.yml
+        branchOrTagName: main
+        workflowInputs:
+          team_name: ${{ parameters.teamName | parseEntityRef | pick('name') }}
+          service_name: ${{ parameters.serviceName }}
+          service_type: ${{ parameters.serviceType }}
+          delete_vault_secrets: ${{ parameters.deleteVaultSecrets | string }}
 
   output:
-    text:
-      - title: Service Deletion
-        content: |
-          ## Vault secrets: ${{ '✅ Deleted' if parameters.deleteVaultSecrets else '⚠️ Preserved' }}
-          ## Catalog: ✅ Unregistered
-
-          ### Manual step required — delete files from Git:
-
-          ```bash
-          cd /Users/dmitriimashkov/PycharmProjects/mctl.me
-          git rm -r platform-gitops/${{ 'workers' if parameters.serviceType == 'worker-service' else 'services' }}/preview/${{ parameters.teamName | parseEntityRef | pick('name') }}/${{ parameters.serviceName }}
-          git commit -m "delete(${{ parameters.teamName | parseEntityRef | pick('name') }}): remove ${{ parameters.serviceName }}"
-          git push
-          ```
-
-          ArgoCD will then remove all Kubernetes resources automatically.
+    links:
+      - title: GitHub Actions Run
+        url: https://github.com/dmitriimashkov/mctl.me/actions/workflows/delete-service.yml
