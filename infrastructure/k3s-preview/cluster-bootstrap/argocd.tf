@@ -11,22 +11,8 @@ resource "helm_release" "argocd" {
     file("${path.module}/helm-values/argocd.yaml"),
   ]
 
-  set_sensitive = [
-    {
-      name  = "configs.secret.extra.github-client-id"
-      value = var.github_oauth_client_id
-    },
-    {
-      name  = "configs.secret.extra.github-client-secret"
-      value = var.github_oauth_client_secret
-    },
-    {
-      name  = "configs.credentialTemplates.github-https.password"
-      value = var.github_repo_pat
-    },
-    {
-      name  = "configs.repositories.mctl-me.password"
-      value = var.github_repo_pat
-    },
-  ]
+  # All secrets now managed by ExternalSecrets:
+  # - argocd-github-oauth: OAuth credentials
+  # - argocd-repo-credentials: GitHub PAT for repo access
+  # No set_sensitive needed!
 }

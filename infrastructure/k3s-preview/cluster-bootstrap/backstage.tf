@@ -1,15 +1,5 @@
-resource "kubernetes_secret" "backstage_secrets" {
-  metadata {
-    name      = "backstage-secrets"
-    namespace = "backstage"
-  }
-
-  data = {
-    AUTH_GITHUB_CLIENT_ID     = var.backstage_github_client_id
-    AUTH_GITHUB_CLIENT_SECRET = var.backstage_github_client_secret
-    GITHUB_TOKEN              = var.github_repo_pat
-  }
-}
+# backstage-secrets now managed by ExternalSecret (backstage-oauth)
+# See: platform-gitops/apps/templates/backstage-secrets.yaml
 
 resource "kubernetes_secret" "backstage_ghcr" {
   metadata {
