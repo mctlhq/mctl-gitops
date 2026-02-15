@@ -1,6 +1,6 @@
 image:
   repository: ghcr.io/mashkovd/mctl-landing
-  tag: "sha-b57f9ed"
+  tag: "sha-22500bb"
   pullPolicy: Always
 
 service:
