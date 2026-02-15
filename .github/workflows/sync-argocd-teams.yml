@@ -21,7 +21,7 @@ jobs:
       - name: Fetch GitHub teams
         id: fetch-teams
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_PAT }}
+          GH_TOKEN: ${{ secrets.GITHUB_PAT || github.token }}
         run: |
           echo "Fetching teams from dmitriimashkov organization..."
           gh api /orgs/dmitriimashkov/teams --paginate --jq '.[].slug' > /tmp/teams.txt
@@ -132,7 +132,7 @@ jobs:
       - name: Create Pull Request
         if: steps.check-changes.outputs.has_changes == 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_PAT }}
+          GH_TOKEN: ${{ secrets.GITHUB_PAT || github.token }}
         run: |
           # Configure git
           git config user.name "github-actions[bot]"
