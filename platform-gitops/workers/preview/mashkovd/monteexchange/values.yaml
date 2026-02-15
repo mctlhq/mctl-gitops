@@ -1,0 +1,41 @@
+# Worker: monteexchange
+# Team: mashkovd
+# Environment: preview
+# Chart: worker-service
+
+image:
+  repository: ghcr.io/dmitriimashkov/monteexchange
+  tag: "1.0.0"
+workloadType: deployment
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+env:
+  APP_ENV: preview
+  EXCHANGE_FEE_IN_PERCENT: "1.75"
+  WITHDRAWAL_FEE: "0"
+externalSecret:
+  targetSecret: monteexchange-secrets
+  data:
+    - secretKey: WISE_TOKEN
+      remoteKey: teams/mashkovd/monteexchange
+      property: WISE_TOKEN
+    - secretKey: PROFILE_ID
+      remoteKey: teams/mashkovd/monteexchange
+      property: PROFILE_ID
+    - secretKey: BALANCE_ID
+      remoteKey: teams/mashkovd/monteexchange
+      property: BALANCE_ID
+    - secretKey: BOT_TOKEN
+      remoteKey: teams/mashkovd/monteexchange
+      property: BOT_TOKEN
+    - secretKey: WISE_HOST
+      remoteKey: teams/mashkovd/monteexchange
+      property: WISE_HOST
+envFrom:
+  - secretRef:
+      name: monteexchange-secrets
