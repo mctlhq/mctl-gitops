@@ -1,0 +1,21 @@
+# Worker: monteexchange
+# Team: mashkovd
+# Environment: preview
+# Chart: worker-service
+
+image:
+  repository: ghcr.io/dmitriimashkov/monteexchange
+  tag: "latest"
+
+workloadType: deployment
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+env:
+  APP_ENV: preview
