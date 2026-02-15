@@ -108,6 +108,16 @@ spec:
                       timeout:
                         minutes: 3
               locations:
+                # Auto-discover all services in platform-gitops
+                - type: url
+                  target: https://github.com/dmitriimashkov/mctl.me/blob/main/platform-gitops/services/preview/*/*/catalog-info.yaml
+                  rules:
+                    - allow: [Component]
+                - type: url
+                  target: https://github.com/dmitriimashkov/mctl.me/blob/main/platform-gitops/workers/preview/*/*/catalog-info.yaml
+                  rules:
+                    - allow: [Component]
+                # Backstage templates
                 - type: url
                   target: https://github.com/dmitriimashkov/mctl.me/blob/main/backstage-templates/deploy-service/template.yaml
                   rules:
