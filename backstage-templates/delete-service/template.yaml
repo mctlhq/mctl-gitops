@@ -1,0 +1,82 @@
+apiVersion: scaffolder.backstage.io/v1beta3
+kind: Template
+metadata:
+  name: delete-service
+  title: Delete Service or Worker
+  description: Delete a service or worker from the platform (GitOps, ArgoCD, Kubernetes, Vault)
+  tags:
+    - delete
+    - cleanup
+    - worker
+    - service
+spec:
+  owner: group:platform
+  type: service
+
+  parameters:
+    - title: Service Information
+      required:
+        - teamName
+        - serviceName
+        - serviceType
+      properties:
+        teamName:
+          title: Team Name
+          type: string
+          description: "Team that owns the service (e.g., mashkovd, payments)"
+          ui:field: EntityPicker
+          ui:options:
+            catalogFilter:
+              kind: Group
+        serviceName:
+          title: Service Name
+          type: string
+          description: "Name of the service to delete"
+          pattern: "^[a-z0-9-]+$"
+        serviceType:
+          title: Service Type
+          type: string
+          description: "Type of service to delete"
+          enum:
+            - worker-service
+            - base-service
+          enumNames:
+            - Worker (Background Job/CronJob)
+            - Service (HTTP API/Web Service)
+        deleteVaultSecrets:
+          title: Delete Vault Secrets
+          type: boolean
+          description: "Also delete secrets from Vault? (Recommended: Yes)"
+          default: true
+
+    - title: Confirmation
+      required:
+        - confirmDeletion
+      properties:
+        confirmDeletion:
+          title: Type 'DELETE' to confirm
+          type: string
+          description: "This action is irreversible. All resources will be permanently deleted."
+          pattern: "^DELETE$"
+
+  steps:
+    - id: trigger-delete
+      name: Trigger deletion via GitHub Actions
+      action: github:actions:dispatch
+      input:
+        repoUrl: github.com?repo=mctl.me&owner=dmitriimashkov
+        workflowId: delete-service.yml
+        branchOrTagName: main
+        workflowInputs:
+          team_name: ${{ parameters.teamName | parseEntityRef | pick('name') }}
+          service_name: ${{ parameters.serviceName }}
+          service_type: ${{ parameters.serviceType }}
+          delete_vault_secrets: ${{ parameters.deleteVaultSecrets }}
+
+  output:
+    links:
+      - title: GitHub Actions Run
+        url: https://github.com/dmitriimashkov/mctl.me/actions/workflows/delete-service.yml
+      - title: View Logs
+        icon: github
+        url: https://github.com/dmitriimashkov/mctl.me/actions/workflows/delete-service.yml
