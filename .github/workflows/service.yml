@@ -227,11 +227,13 @@ jobs:
           if [[ -n "$PAT" ]]; then
             echo "::add-mask::${PAT}"
             echo "repo_pat=${PAT}" >> $GITHUB_OUTPUT
-            if git ls-remote "https://x-access-token:${PAT}@github.com/${REPO}" HEAD > /dev/null 2>&1; then
+            echo "🔍 Testing repo access with PAT (length: ${#PAT})"
+            if git ls-remote "https://x-access-token:${PAT}@github.com/${REPO}" HEAD 2>&1 | tee /tmp/git-output.log; then
               echo "✅ Private repo accessible with PAT"
               echo "is_private=true" >> $GITHUB_OUTPUT
             else
               echo "::error::PAT provided but cannot access repo: ${REPO}"
+              echo "::error::Git output: $(cat /tmp/git-output.log 2>/dev/null || echo 'no output')"
               exit 1
             fi
           else
