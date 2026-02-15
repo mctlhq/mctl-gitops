@@ -25,8 +25,8 @@ spec:
           description: "Select your team"
           ui:field: OwnedEntityPicker
           ui:options:
-            catalogFilter:
-              kind: Group
+            allowedKinds:
+              - Group
             defaultKind: Group
         serviceName:
           title: Worker Name
