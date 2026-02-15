@@ -42,6 +42,11 @@ spec:
           title: Dockerfile Path
           type: string
           default: Dockerfile
+        gitTag:
+          title: Git Tag (optional)
+          type: string
+          description: "Git tag to checkout and build (e.g., v1.0.0). Leave empty for latest commit."
+          pattern: "^v?[0-9]+\\.[0-9]+\\.[0-9]+.*$"
         repoPat:
           title: Repository PAT (private repos only)
           type: string
@@ -119,6 +124,7 @@ spec:
           service_type: base-service
           dockerfile_repo: ${{ parameters.dockerfileRepo }}
           dockerfile_path: ${{ parameters.dockerfilePath | default('Dockerfile') }}
+          git_tag: ${{ parameters.gitTag | default('') }}
           port: ${{ parameters.port | string }}
           host: ${{ parameters.host }}
           env_vars: ${{ parameters.envVars | default('') }}
