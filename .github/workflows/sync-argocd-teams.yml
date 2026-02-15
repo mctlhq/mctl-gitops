@@ -70,46 +70,26 @@ jobs:
             POLICY_CSV+="        g, dmitriimashkov:$team, role:team-$team\n"
           done < /tmp/teams.txt
 
-          # Replace policy.csv block in values.yaml using python for reliable multiline replacement
-          python3 << PYEOF
-          import re
-
-          with open("$VALUES", "r") as f:
-              content = f.read()
-
-          # Match the policy.csv block (from "policy.csv: |" to the next key at same indentation)
-          pattern = r'(      policy\.csv: \|)\n(.*?)(\n    [a-z])'
-          replacement = r'\1\n$(echo -e "$POLICY_CSV")\3'
-
-          # Use a simpler approach: find and replace the policy.csv section
-          lines = content.split('\n')
-          new_lines = []
-          in_policy = False
-          policy_indent = 0
-
-          for line in lines:
-              if 'policy.csv: |' in line and not in_policy:
-                  in_policy = True
-                  policy_indent = len(line) - len(line.lstrip())
-                  new_lines.append(line)
-                  # Add new policy content
-                  new_lines.append("""$(echo -e "$POLICY_CSV")""".rstrip())
-                  continue
-
-              if in_policy:
-                  # Check if we've left the block (non-empty line with same or less indent)
-                  stripped = line.lstrip()
-                  if stripped and not line.startswith(' ' * (policy_indent + 2)):
-                      in_policy = False
-                      new_lines.append(line)
-                  # Skip old policy lines
-                  continue
-
-              new_lines.append(line)
-
-          with open("$VALUES", "w") as f:
-              f.write('\n'.join(new_lines))
-          PYEOF
+          # Replace policy.csv block in values.yaml
+          # Find line number where policy.csv starts and ends
+          START=$(grep -n 'policy\.csv: |' "$VALUES" | cut -d: -f1)
+          
+          # Save everything before policy.csv
+          head -n "$START" "$VALUES" > /tmp/values_new.yaml
+          
+          # Add new policy content
+          echo -e "$POLICY_CSV" >> /tmp/values_new.yaml
+          
+          # Find and add everything after policy.csv block
+          # (skip lines until we hit a key at same indentation level as 'policy.csv')
+          tail -n +$((START + 1)) "$VALUES" | awk '
+            BEGIN { in_policy=1 }
+            /^    [a-z]/ { in_policy=0 }
+            !in_policy { print }
+          ' >> /tmp/values_new.yaml
+          
+          # Replace original file
+          mv /tmp/values_new.yaml "$VALUES"
 
           echo "Generated RBAC config for $(wc -l < /tmp/teams.txt) teams"
           SCRIPT
