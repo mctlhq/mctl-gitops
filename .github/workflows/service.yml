@@ -377,6 +377,28 @@ jobs:
             echo "✅ Added $(echo "${{ inputs.env_vars }}" | grep -c '=' || echo 0) environment variables"
           fi
           
+          # Add externalSecret section if secrets provided
+          if [[ -n "${{ inputs.secret_env_vars }}" ]]; then
+            echo "🔐 Adding ExternalSecret configuration..."
+            
+            # Create externalSecret section
+            yq eval -i '.externalSecret.targetSecret = "${{ inputs.service_name }}-secrets"' "${DIR}/values.yaml"
+            yq eval -i '.externalSecret.data = []' "${DIR}/values.yaml"
+            
+            # Parse and add each secret
+            while IFS='=' read -r key value; do
+              [[ -z "$key" || "$key" =~ ^# ]] && continue
+              key=$(echo "$key" | xargs)
+              
+              yq eval -i ".externalSecret.data += [{\"secretKey\": \"${key}\", \"remoteKey\": \"preview/${{ inputs.team_name }}/${{ inputs.service_name }}\", \"property\": \"${key}\"}]" "${DIR}/values.yaml"
+            done <<< "${{ inputs.secret_env_vars }}"
+            
+            # Add envFrom section
+            yq eval -i '.envFrom = [{"secretRef": {"name": "${{ inputs.service_name }}-secrets"}}]' "${DIR}/values.yaml"
+            
+            echo "✅ Added $(echo "${{ inputs.secret_env_vars }}" | grep -c '=' || echo 0) secret environment variables"
+          fi
+          
           # Create catalog-info.yaml for Backstage
           sed \
             -e "s|__TEAM_NAME__|${{ inputs.team_name }}|g" \
