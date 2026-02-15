@@ -9,6 +9,10 @@ image:
 
 imagePullSecrets:
   - name: ${{ values.imagePullSecretName }}
+{%- elif values.imageRepository and values.imageRepository.startswith('ghcr.io') %}
+
+imagePullSecrets:
+  - name: ghcr-credentials
 {%- endif %}
 
 service:
