@@ -112,6 +112,11 @@ argo-cd:
         p, role:team-libertex, logs, get, argocd/preview-libertex-*, allow
         g, dmitriimashkov:libertex, role:team-libertex
 
+        # Team: test
+        p, role:team-test, applications, get, argocd/preview-test-*, allow
+        p, role:team-test, logs, get, argocd/preview-test-*, allow
+        g, dmitriimashkov:test, role:team-test
+
     secret:
       createSecret: true
 
