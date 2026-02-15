@@ -47,6 +47,10 @@ on:
         description: "Image tag (default: v{date}-{short_sha})"
         required: false
         type: string
+      secret_env_vars:
+        description: "Plaintext KEY=value pairs (one per line)"
+        required: false
+        type: string
 
 env:
   REGISTRY: ghcr.io
@@ -101,6 +105,48 @@ jobs:
             gh api "/user/teams" --jq '.[] | "- " + .name' >> $GITHUB_STEP_SUMMARY || echo "- (unable to fetch teams)" >> $GITHUB_STEP_SUMMARY
             exit 1
           fi
+
+      - name: Parse and save secrets to Vault
+        if: inputs.secret_env_vars != ''
+        env:
+          VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
+          VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
+        run: |
+          TEAM="${{ inputs.team_name }}"
+          SERVICE="${{ inputs.service_name }}"
+          SECRET_TEXT="${{ inputs.secret_env_vars }}"
+          
+          echo "🔐 Parsing and saving secrets to Vault..."
+          
+          # Parse KEY=value format into JSON
+          JSON_DATA="{"
+          while IFS='=' read -r key value; do
+            # Skip empty lines and comments
+            [[ -z "$key" || "$key" =~ ^# ]] && continue
+            # Trim whitespace
+            key=$(echo "$key" | xargs)
+            value=$(echo "$value" | xargs)
+            # Add to JSON (escape quotes in value)
+            value_escaped=$(echo "$value" | sed 's/"/\\"/g')
+            JSON_DATA+="\"$key\":\"$value_escaped\","
+          done <<< "$SECRET_TEXT"
+          
+          # Remove trailing comma and close JSON
+          JSON_DATA="${JSON_DATA%,}}"
+          
+          echo "📝 Saving $(echo "$JSON_DATA" | jq 'keys | length') secrets to secret/preview/$TEAM/$SERVICE"
+          
+          # Save to Vault
+          curl -sS -X POST \
+            -H "X-Vault-Token: $VAULT_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"data\":$JSON_DATA}" \
+            "$VAULT_ADDR/v1/secret/data/preview/$TEAM/$SERVICE" || {
+            echo "::error::Failed to save secrets to Vault"
+            exit 1
+          }
+          
+          echo "✅ Secrets saved successfully"
 
       - name: Determine paths
         id: paths
