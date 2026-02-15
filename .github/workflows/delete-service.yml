@@ -78,18 +78,33 @@ jobs:
             exit 0
           fi
 
+          echo "🗑️  Deleting Vault secrets at ${VAULT_PATH}..."
+          
+          # Delete main secrets (all versions + metadata)
           RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -L \
             -X DELETE \
             -H "X-Vault-Token: ${VAULT_TOKEN}" \
             "${VAULT_ADDR}/v1/secret/metadata/${VAULT_PATH}")
 
           if [[ "$RESPONSE" == "204" || "$RESPONSE" == "404" ]]; then
-            echo "✅ Vault secrets deleted (or not found) for ${VAULT_PATH}"
-            echo "✅ Vault secrets cleaned up" >> $GITHUB_STEP_SUMMARY
+            echo "✅ Main secrets deleted: ${VAULT_PATH}"
           else
-            echo "::warning::Vault delete returned HTTP ${RESPONSE}"
-            echo "⚠️ Vault cleanup returned HTTP ${RESPONSE}" >> $GITHUB_STEP_SUMMARY
+            echo "::warning::Main secrets delete returned HTTP ${RESPONSE}"
           fi
+          
+          # Delete repo-pat if exists
+          PAT_RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -L \
+            -X DELETE \
+            -H "X-Vault-Token: ${VAULT_TOKEN}" \
+            "${VAULT_ADDR}/v1/secret/metadata/${VAULT_PATH}/repo-pat")
+          
+          if [[ "$PAT_RESPONSE" == "204" || "$PAT_RESPONSE" == "404" ]]; then
+            echo "✅ Repo PAT deleted: ${VAULT_PATH}/repo-pat"
+          else
+            echo "::warning::Repo PAT delete returned HTTP ${PAT_RESPONSE}"
+          fi
+          
+          echo "✅ Vault cleanup completed" >> $GITHUB_STEP_SUMMARY
 
       - name: Remove service files
         run: |
