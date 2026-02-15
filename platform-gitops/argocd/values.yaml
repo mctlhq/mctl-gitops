@@ -114,9 +114,6 @@ argo-cd:
 
     secret:
       createSecret: true
-      extra:
-        github-client-id: ""
-        github-client-secret: ""
 
   # Server ingress configuration
   server:
