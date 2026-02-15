@@ -126,6 +126,38 @@ jobs:
           git commit -m "delete: ${{ inputs.team_name }}/${{ inputs.service_name }}"
           git push
 
+      - name: Remove entity from Backstage catalog
+        continue-on-error: true
+        env:
+          BACKSTAGE_URL: ${{ secrets.BACKSTAGE_URL || 'https://backstage-preview.mctl.me' }}
+          BACKSTAGE_TOKEN: ${{ secrets.BACKSTAGE_TOKEN }}
+        run: |
+          if [[ -z "$BACKSTAGE_TOKEN" ]]; then
+            echo "::warning::BACKSTAGE_TOKEN not set, skipping Backstage cleanup"
+            echo "⚠️ Entity will disappear after next catalog refresh (~5 min)" >> $GITHUB_STEP_SUMMARY
+            echo "💡 Or manually unregister at: Settings → Advanced → Unregister Entity" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          SERVICE="${{ inputs.service_name }}"
+          ENTITY_REF="component:default/${SERVICE}"
+          
+          echo "Removing entity from Backstage: ${ENTITY_REF}"
+          
+          # Delete entity using Backstage API
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X DELETE \
+            -H "Authorization: Bearer ${BACKSTAGE_TOKEN}" \
+            "${BACKSTAGE_URL}/api/catalog/entities/by-name/${ENTITY_REF}")
+          
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          
+          if [[ "$HTTP_CODE" == "204" || "$HTTP_CODE" == "404" ]]; then
+            echo "✅ Entity removed from Backstage catalog" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ Backstage API returned HTTP ${HTTP_CODE}" >> $GITHUB_STEP_SUMMARY
+            echo "Response: $(echo "$RESPONSE" | head -1)"
+          fi
+
       - name: Trigger ArgoCD ApplicationSet refresh
         continue-on-error: true
         env:
