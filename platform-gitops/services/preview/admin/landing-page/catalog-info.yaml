@@ -1,0 +1,17 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: landing-page
+  description: mctl.me platform landing page with access request form
+  annotations:
+    github.com/project-slug: dmitriimashkov/mctl-landing
+    argocd/app-name: preview-admin-landing-page
+  links:
+    - url: https://platform.mctl.me
+      title: Landing Page
+      icon: web
+spec:
+  type: website
+  lifecycle: production
+  owner: admin
+  system: platform
