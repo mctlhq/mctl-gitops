@@ -14,19 +14,19 @@ spec:
   data:
     - secretKey: AWS_ACCESS_KEY_ID
       remoteRef:
-        key: preview/vault/r2-backup
+        key: platform/vault/r2-backup
         property: access-key-id
     - secretKey: AWS_SECRET_ACCESS_KEY
       remoteRef:
-        key: preview/vault/r2-backup
+        key: platform/vault/r2-backup
         property: secret-access-key
     - secretKey: BUCKET
       remoteRef:
-        key: preview/vault/r2-backup
+        key: platform/vault/r2-backup
         property: bucket
     - secretKey: ENDPOINT
       remoteRef:
-        key: preview/vault/r2-backup
+        key: platform/vault/r2-backup
         property: endpoint
 ---
 apiVersion: batch/v1
