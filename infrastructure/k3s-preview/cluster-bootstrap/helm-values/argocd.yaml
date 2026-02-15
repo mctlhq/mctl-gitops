@@ -13,6 +13,19 @@ configs:
     admin.enabled: true
     timeout.reconciliation: 180s
 
+    # Dex connector for GitHub OAuth
+    dex.config: |
+      connectors:
+      - type: github
+        id: github
+        name: GitHub
+        config:
+          baseURL: https://github.com
+          clientID: "$github-client-id"
+          clientSecret: "$github-client-secret"
+          orgs:
+            - name: dmitriimashkov
+
     # Health checks needed for bootstrap
     resource.customizations.health.external-secrets.io_ExternalSecret: |
       hs = {}
