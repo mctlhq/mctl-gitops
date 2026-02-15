@@ -307,6 +307,44 @@ jobs:
             echo "has_pat=false" >> $GITHUB_OUTPUT
           fi
 
+      - name: Validate PAT and repository access
+        if: steps.vault_pat.outputs.has_pat == 'true'
+        env:
+          PAT: ${{ steps.vault_pat.outputs.pat }}
+        run: |
+          REPO="${{ inputs.dockerfile_repo }}"
+          echo "🔐 Validating PAT access to repository: $REPO"
+          
+          # Test repository access with PAT
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: token ${PAT}" \
+            "https://api.github.com/repos/$REPO")
+          
+          if [[ "$HTTP_CODE" != "200" ]]; then
+            echo "::error::Failed to access repository $REPO with provided PAT (HTTP $HTTP_CODE)"
+            echo "::error::Please verify:"
+            echo "::error::  1. PAT is valid and not expired"
+            echo "::error::  2. PAT has 'Contents: Read' scope"
+            echo "::error::  3. Repository exists and is accessible"
+            exit 1
+          fi
+          
+          echo "✅ PAT is valid and repository is accessible"
+          
+          # Check PAT scopes (for fine-grained tokens, metadata is limited)
+          SCOPES=$(curl -s -I -H "Authorization: token ${PAT}" \
+            "https://api.github.com/repos/$REPO" \
+            | grep -i "x-oauth-scopes:" | cut -d: -f2 | tr -d ' \r\n')
+          
+          if [[ -n "$SCOPES" ]]; then
+            echo "📋 PAT scopes: $SCOPES"
+            if [[ ! "$SCOPES" =~ "repo" ]] && [[ ! "$SCOPES" =~ "public_repo" ]]; then
+              echo "::warning::PAT may not have required 'repo' or 'public_repo' scope"
+            fi
+          else
+            echo "📋 Fine-grained PAT detected (scope validation skipped)"
+          fi
+
       - name: Checkout source repo
         uses: actions/checkout@v4
         with:

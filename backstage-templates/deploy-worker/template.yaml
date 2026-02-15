@@ -50,7 +50,7 @@ spec:
         repoPat:
           title: Repository PAT (private repos only)
           type: string
-          description: "Fine-grained PAT with Contents:read scope for the source repo"
+          description: "Fine-grained PAT with 'Contents: Read' scope. Create at: https://github.com/settings/tokens?type=beta"
           ui:field: Secret
 
     - title: Environment Variables
