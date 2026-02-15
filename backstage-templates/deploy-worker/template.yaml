@@ -23,10 +23,10 @@ spec:
           title: Team Name
           type: string
           description: "Select your team"
-          ui:field: EntityPicker
+          ui:field: OwnedEntityPicker
           ui:options:
-            catalogFilter:
-              - kind: Group
+            allowedKinds:
+              - Group
             defaultKind: Group
         serviceName:
           title: Worker Name
