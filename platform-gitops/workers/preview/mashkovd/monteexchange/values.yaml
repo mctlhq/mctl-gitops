@@ -6,6 +6,8 @@
 image:
   repository: ghcr.io/dmitriimashkov/monteexchange
   tag: "1.0.0"
+imagePullSecrets:
+  - name: ghcr-credentials
 workloadType: deployment
 resources:
   requests:
