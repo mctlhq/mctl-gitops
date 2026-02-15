@@ -62,19 +62,34 @@ spec:
           type: string
           description: "e.g. myapp.preview.mctl.me"
 
+    - title: Environment Variables
+      properties:
+        envVars:
+          title: Environment Variables (non-secret)
+          type: string
+          description: "Plaintext KEY=value pairs (one per line). Will be visible in Kubernetes manifests."
+          ui:widget: textarea
+          ui:options:
+            rows: 5
+          ui:placeholder: |
+            APP_ENV=production
+            LOG_LEVEL=info
+            PORT=8080
+            TIMEOUT_SECONDS=30
+
     - title: Secrets
       properties:
         secretEnvVars:
           title: Secret Environment Variables
           type: string
-          description: "Plaintext KEY=value pairs (one per line). Example:\nBALANCE_ID=31808246\nBOT_TOKEN=abc123\nWISE_HOST=https://api.example.com"
+          description: "Plaintext KEY=value pairs (one per line). Will be stored in Vault and injected securely."
           ui:widget: textarea
           ui:options:
             rows: 10
           ui:placeholder: |
-            BALANCE_ID=31808246
-            BOT_TOKEN=5504401510:AAEHW6AsTdsN6y30o-TOwSdFXOlgg3RscmM
-            EXCHANGE_FEE_IN_PERCENT=1.75
+            API_KEY=your-api-key-here
+            DATABASE_PASSWORD=your-db-password
+            SECRET_TOKEN=your-secret-token
 
   steps:
     - id: save-repo-pat
@@ -106,6 +121,7 @@ spec:
           dockerfile_path: ${{ parameters.dockerfilePath | default('Dockerfile') }}
           port: ${{ parameters.port | string }}
           host: ${{ parameters.host }}
+          env_vars: ${{ parameters.envVars | default('') }}
           secret_env_vars: ${{ parameters.secretEnvVars | default('') }}
 
   output:
