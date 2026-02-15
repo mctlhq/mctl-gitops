@@ -41,7 +41,7 @@ externalSecret:
   data:
 {%- for key, value in values.secretEnvVars %}
     - secretKey: ${{ key }}
-      remoteKey: preview/${{ values.teamName }}/${{ values.serviceName }}
+      remoteKey: teams/${{ values.teamName }}/${{ values.serviceName }}
       property: ${{ key }}
 {%- endfor %}
 

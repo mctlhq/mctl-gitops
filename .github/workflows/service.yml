@@ -142,14 +142,14 @@ jobs:
           # Remove trailing comma and close JSON
           JSON_DATA="${JSON_DATA%,}}"
           
-          echo "📝 Saving $(echo "$JSON_DATA" | jq 'keys | length') secrets to secret/preview/$TEAM/$SERVICE"
+          echo "📝 Saving $(echo "$JSON_DATA" | jq 'keys | length') secrets to secret/teams/$TEAM/$SERVICE"
           
           # Save to Vault
           curl -sS -X POST \
             -H "X-Vault-Token: $VAULT_TOKEN" \
             -H "Content-Type: application/json" \
             -d "{\"data\":$JSON_DATA}" \
-            "$VAULT_ADDR/v1/secret/data/preview/$TEAM/$SERVICE" || {
+            "$VAULT_ADDR/v1/secret/data/teams/$TEAM/$SERVICE" || {
             echo "::error::Failed to save secrets to Vault"
             exit 1
           }
@@ -296,7 +296,7 @@ jobs:
           if [[ -n "${{ secrets.VAULT_ADDR }}" && -n "${{ secrets.VAULT_TOKEN }}" ]]; then
             PAT=$(curl -sL \
               -H "X-Vault-Token: ${{ secrets.VAULT_TOKEN }}" \
-              "${{ secrets.VAULT_ADDR }}/v1/secret/data/preview/${{ inputs.team_name }}/${{ inputs.service_name }}/repo-pat" \
+              "${{ secrets.VAULT_ADDR }}/v1/secret/data/teams/${{ inputs.team_name }}/${{ inputs.service_name }}/repo-pat" \
               2>/dev/null | jq -r '.data.data.pat // empty' 2>/dev/null || true)
           fi
           if [[ -n "$PAT" ]]; then
@@ -440,7 +440,7 @@ jobs:
               [[ -z "$key" || "$key" =~ ^# ]] && continue
               key=$(echo "$key" | xargs)
               
-              yq eval -i ".externalSecret.data += [{\"secretKey\": \"${key}\", \"remoteKey\": \"preview/${{ inputs.team_name }}/${{ inputs.service_name }}\", \"property\": \"${key}\"}]" "${DIR}/values.yaml"
+              yq eval -i ".externalSecret.data += [{\"secretKey\": \"${key}\", \"remoteKey\": \"teams/${{ inputs.team_name }}/${{ inputs.service_name }}\", \"property\": \"${key}\"}]" "${DIR}/values.yaml"
             done <<< "${{ inputs.secret_env_vars }}"
             
             # Add envFrom section

@@ -70,7 +70,7 @@ jobs:
         run: |
           TEAM="${{ inputs.team_name }}"
           SERVICE="${{ inputs.service_name }}"
-          VAULT_PATH="preview/${TEAM}/${SERVICE}"
+          VAULT_PATH="teams/${TEAM}/${SERVICE}"
 
           if [[ -z "$VAULT_ADDR" || -z "$VAULT_TOKEN" ]]; then
             echo "::warning::VAULT_ADDR or VAULT_TOKEN not set, skipping Vault cleanup"
