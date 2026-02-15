@@ -112,6 +112,7 @@ extraObjects:
         syncOptions:
           - CreateNamespace=false
           - ServerSideApply=true
+          - RespectIgnoreDifferences=true
         retry:
           limit: 5
           backoff:
@@ -124,6 +125,15 @@ extraObjects:
           name: argocd-secret
           jsonPointers:
             - /data
+        - group: external-secrets.io
+          kind: ExternalSecret
+          jqPathExpressions:
+            - .spec.data[].remoteRef.conversionStrategy
+            - .spec.data[].remoteRef.decodingStrategy
+            - .spec.data[].remoteRef.metadataPolicy
+            - .spec.target.deletionPolicy
+            - .spec.target.template.engineVersion
+            - .spec.target.template.mergePolicy
 
   # Root app — manages user applications (separate from ArgoCD)
   - apiVersion: argoproj.io/v1alpha1
