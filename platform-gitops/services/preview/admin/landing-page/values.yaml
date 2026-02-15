@@ -30,8 +30,7 @@ ingress:
       secretName: landing-page-tls
 
 # No external secrets needed - static site only
-externalSecret:
-  enabled: false
+# externalSecret removed - not needed for static site
 
 probes:
   liveness:
