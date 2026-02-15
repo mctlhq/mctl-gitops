@@ -23,7 +23,6 @@ ingress:
   host: platform.mctl.me
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
-    traefik.ingress.kubernetes.io/router.middlewares: default-redirect-https@kubernetescrd
   tls:
     - hosts:
         - platform.mctl.me
