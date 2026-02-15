@@ -70,6 +70,10 @@ argo-cd:
 
     params:
       server.insecure: true
+      
+      # Disable server-side apply for CRDs to avoid annotation size issues
+      # See: https://github.com/argoproj/argo-cd/issues/9476
+      application.resourceTrackingMethod: annotation
 
     rbac:
       policy.default: ""
