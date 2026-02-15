@@ -14,40 +14,19 @@ spec:
   type: service
 
   parameters:
-    - title: Service Information
+    - title: Select Service to Delete
       required:
-        - teamName
-        - serviceName
-        - serviceType
+        - service
       properties:
-        teamName:
-          title: Team Name
+        service:
+          title: Service to Delete
           type: string
-          description: "Team that owns the service (e.g., mashkovd, payments)"
+          description: "Select the service you want to delete"
           ui:field: EntityPicker
           ui:options:
             catalogFilter:
-              kind: Group
-        serviceName:
-          title: Service Name
-          type: string
-          description: "Name of the service to delete"
-          pattern: "^[a-z0-9-]+$"
-        serviceType:
-          title: Service Type
-          type: string
-          description: "Type of service to delete"
-          enum:
-            - worker-service
-            - base-service
-          enumNames:
-            - Worker (Background Job/CronJob)
-            - Service (HTTP API/Web Service)
-        deleteVaultSecrets:
-          title: Delete Vault Secrets
-          type: boolean
-          description: "Also delete secrets from Vault? (Recommended: Yes)"
-          default: true
+              kind: Component
+            defaultKind: Component
 
     - title: Confirmation
       required:
@@ -56,10 +35,16 @@ spec:
         confirmDeletion:
           title: Type 'DELETE' to confirm
           type: string
-          description: "This action is irreversible. All resources will be permanently deleted."
+          description: "⚠️ This action is IRREVERSIBLE. All resources will be permanently deleted (GitOps files, ArgoCD Application, Kubernetes resources, Vault secrets)."
           pattern: "^DELETE$"
 
   steps:
+    - id: parse-service
+      name: Parse service metadata
+      action: catalog:fetch
+      input:
+        entityRef: ${{ parameters.service }}
+
     - id: trigger-delete
       name: Trigger deletion via GitHub Actions
       action: github:actions:dispatch
@@ -68,10 +53,10 @@ spec:
         workflowId: delete-service.yml
         branchOrTagName: main
         workflowInputs:
-          team_name: ${{ parameters.teamName | parseEntityRef | pick('name') }}
-          service_name: ${{ parameters.serviceName }}
-          service_type: ${{ parameters.serviceType }}
-          delete_vault_secrets: ${{ parameters.deleteVaultSecrets }}
+          team_name: ${{ steps['parse-service'].output.entity.metadata.labels.team }}
+          service_name: ${{ steps['parse-service'].output.entity.metadata.name }}
+          service_type: ${{ steps['parse-service'].output.entity.spec.type === 'worker' and 'worker-service' or 'base-service' }}
+          delete_vault_secrets: "true"
 
   output:
     links:
