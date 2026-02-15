@@ -47,8 +47,12 @@ on:
         description: "Image tag (default: v{date}-{short_sha})"
         required: false
         type: string
+      env_vars:
+        description: "Plaintext ENV KEY=value pairs (non-secret)"
+        required: false
+        type: string
       secret_env_vars:
-        description: "Plaintext KEY=value pairs (one per line)"
+        description: "Plaintext SECRET KEY=value pairs (for Vault)"
         required: false
         type: string
 
@@ -356,6 +360,22 @@ jobs:
             -e "s|__PORT__|${{ inputs.port }}|g" \
             -e "s|__HOST__|${{ inputs.host }}|g" \
             "$TEMPLATE" > "${DIR}/values.yaml"
+          
+          # Add custom env vars if provided
+          if [[ -n "${{ inputs.env_vars }}" ]]; then
+            echo "📝 Adding custom environment variables..."
+            
+            # Parse and add each env var
+            while IFS='=' read -r key value; do
+              [[ -z "$key" || "$key" =~ ^# ]] && continue
+              key=$(echo "$key" | xargs)
+              value=$(echo "$value" | xargs)
+              
+              yq eval -i ".env.${key} = \"${value}\"" "${DIR}/values.yaml"
+            done <<< "${{ inputs.env_vars }}"
+            
+            echo "✅ Added $(echo "${{ inputs.env_vars }}" | grep -c '=' || echo 0) environment variables"
+          fi
           
           # Create catalog-info.yaml for Backstage
           sed \
