@@ -92,6 +92,11 @@ argo-cd:
         # Team-Based Access (Auto-generated from GitHub Teams)
         # ============================================================================
 
+        # Team: africaone-dev
+        p, role:team-africaone-dev, applications, get, argocd/preview-africaone-dev-*, allow
+        p, role:team-africaone-dev, logs, get, argocd/preview-africaone-dev-*, allow
+        g, dmitriimashkov:africaone-dev, role:team-africaone-dev
+
         # Team: developers
         p, role:team-developers, applications, get, argocd/preview-developers-*, allow
         p, role:team-developers, logs, get, argocd/preview-developers-*, allow
@@ -106,11 +111,6 @@ argo-cd:
         p, role:team-libertex, applications, get, argocd/preview-libertex-*, allow
         p, role:team-libertex, logs, get, argocd/preview-libertex-*, allow
         g, dmitriimashkov:libertex, role:team-libertex
-
-        # Team: test
-        p, role:team-test, applications, get, argocd/preview-test-*, allow
-        p, role:team-test, logs, get, argocd/preview-test-*, allow
-        g, dmitriimashkov:test, role:team-test
 
     secret:
       createSecret: true
