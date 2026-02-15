@@ -1,0 +1,20 @@
+# Worker: monteexchange
+# Team: mashkovd
+# Environment: preview
+# Chart: worker-service
+
+image:
+  repository: ghcr.io/dmitriimashkov/monteexchange
+  tag: "v0.1.0"
+workloadType: deployment
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+env:
+  APP_ENV: preview
+  EXCHANGE_FEE_IN_PERCENT: "1.75"
+  WITHDRAWAL_FEE: "0"
