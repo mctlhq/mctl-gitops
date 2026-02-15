@@ -293,6 +293,12 @@ jobs:
             -e "s|__SERVICE_NAME__|${{ inputs.service_name }}|g" \
             -e "s|__COMPONENT_TYPE__|${COMPONENT_TYPE}|g" \
             ".github/templates/catalog-info.yaml.tpl" > "${DIR}/catalog-info.yaml"
+          
+          # Create vault-cleanup.yaml for ArgoCD PreDelete hook
+          sed \
+            -e "s|__TEAM_NAME__|${{ inputs.team_name }}|g" \
+            -e "s|__SERVICE_NAME__|${{ inputs.service_name }}|g" \
+            ".github/templates/vault-cleanup.yaml.tpl" > "${DIR}/vault-cleanup.yaml"
 
       - name: Update image tag (deploy)
         if: inputs.action == 'deploy'
@@ -332,6 +338,7 @@ jobs:
           
           if [[ "$ACTION" == "onboard" ]]; then
             git add "${DIR}/catalog-info.yaml"
+            git add "${DIR}/vault-cleanup.yaml"
             git commit -m "feat: onboard ${{ inputs.team_name }}/${{ inputs.service_name }} (${TAG})"
           else
             git commit -m "deploy: ${{ inputs.team_name }}/${{ inputs.service_name }} → ${TAG}"
