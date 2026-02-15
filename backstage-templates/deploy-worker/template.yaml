@@ -23,11 +23,7 @@ spec:
           title: Team Name
           type: string
           description: "Select your team"
-          ui:field: OwnedEntityPicker
-          ui:options:
-            allowedKinds:
-              - Group
-            defaultKind: Group
+          ui:field: MyGroupsPicker
         serviceName:
           title: Worker Name
           type: string
