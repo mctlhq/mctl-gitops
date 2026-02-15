@@ -22,3 +22,31 @@ env:
   APP_ENV: preview
   EXCHANGE_FEE_IN_PERCENT: "1.75"
   WITHDRAWAL_FEE: "0"
+
+externalSecret:
+  targetSecret: monteexchange-secrets
+  data:
+    - secretKey: BALANCE_ID
+      remoteRef:
+        key: preview/mashkovd/monteexchange
+        property: BALANCE_ID
+    - secretKey: BOT_TOKEN
+      remoteRef:
+        key: preview/mashkovd/monteexchange
+        property: BOT_TOKEN
+    - secretKey: PROFILE_ID
+      remoteRef:
+        key: preview/mashkovd/monteexchange
+        property: PROFILE_ID
+    - secretKey: WISE_HOST
+      remoteRef:
+        key: preview/mashkovd/monteexchange
+        property: WISE_HOST
+    - secretKey: WISE_TOKEN
+      remoteRef:
+        key: preview/mashkovd/monteexchange
+        property: WISE_TOKEN
+
+envFrom:
+  - secretRef:
+      name: monteexchange-secrets
