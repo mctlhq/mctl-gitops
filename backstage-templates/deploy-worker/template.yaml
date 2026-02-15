@@ -52,10 +52,15 @@ spec:
       properties:
         secretEnvVars:
           title: Secret Environment Variables
-          type: object
-          additionalProperties:
-            type: string
-          description: "Keys to store in Vault and inject via ExternalSecret"
+          type: string
+          description: "Plaintext KEY=value pairs (one per line). Example:\nBALANCE_ID=31808246\nBOT_TOKEN=abc123\nWISE_HOST=https://api.example.com"
+          ui:widget: textarea
+          ui:options:
+            rows: 10
+          ui:placeholder: |
+            BALANCE_ID=31808246
+            BOT_TOKEN=5504401510:AAEHW6AsTdsN6y30o-TOwSdFXOlgg3RscmM
+            EXCHANGE_FEE_IN_PERCENT=1.75
 
   steps:
     - id: save-repo-pat
@@ -71,18 +76,6 @@ spec:
           data:
             pat: ${{ parameters.repoPat }}
 
-    - id: save-secrets
-      name: Save secrets to Vault
-      if: ${{ parameters.secretEnvVars and parameters.secretEnvVars | length > 0 }}
-      action: http:backstage:request
-      input:
-        method: POST
-        path: /proxy/vault/v1/secret/data/preview/${{ parameters.teamName | parseEntityRef | pick('name') }}/${{ parameters.serviceName }}
-        headers:
-          Content-Type: application/json
-        body:
-          data: ${{ parameters.secretEnvVars }}
-
     - id: trigger-build
       name: Build & deploy via GitHub Actions
       action: github:actions:dispatch
@@ -97,6 +90,7 @@ spec:
           service_type: worker-service
           dockerfile_repo: ${{ parameters.dockerfileRepo }}
           dockerfile_path: ${{ parameters.dockerfilePath | default('Dockerfile') }}
+          secret_env_vars: ${{ parameters.secretEnvVars | default('') }}
 
   output:
     links:
