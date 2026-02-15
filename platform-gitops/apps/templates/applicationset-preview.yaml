@@ -59,8 +59,7 @@ spec:
             factor: 2
             maxDuration: 3m
       ignoreDifferences:
-        - group: ""
-          kind: Secret
+        - kind: Secret
           name: ghcr-credentials
           jqPathExpressions:
             - .data
