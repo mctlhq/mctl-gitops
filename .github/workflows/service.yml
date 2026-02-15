@@ -43,6 +43,10 @@ on:
         required: false
         default: "Dockerfile"
         type: string
+      git_tag:
+        description: "Git tag to checkout and build (e.g. v1.0.0). Leave empty for latest."
+        required: false
+        type: string
       image_tag:
         description: "Image tag (default: v{date}-{short_sha})"
         required: false
@@ -244,7 +248,14 @@ jobs:
         id: tag
         run: |
           if [[ -n "${{ inputs.image_tag }}" ]]; then
+            # Explicit image_tag provided
             echo "image_tag=${{ inputs.image_tag }}" >> $GITHUB_OUTPUT
+          elif [[ -n "${{ inputs.git_tag }}" ]]; then
+            # Git tag provided - normalize by removing "v" prefix for Docker tag
+            GIT_TAG="${{ inputs.git_tag }}"
+            NORMALIZED_TAG="${GIT_TAG#v}"  # Remove leading "v"
+            echo "image_tag=${NORMALIZED_TAG}" >> $GITHUB_OUTPUT
+            echo "📌 Using git tag: $GIT_TAG → Docker tag: ${NORMALIZED_TAG}"
           elif [[ "${{ inputs.action }}" == "onboard" ]]; then
             echo "image_tag=v0.1.0" >> $GITHUB_OUTPUT
           else
@@ -300,6 +311,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ inputs.dockerfile_repo }}
+          ref: ${{ inputs.git_tag || '' }}
           token: ${{ steps.vault_pat.outputs.has_pat == 'true' && steps.vault_pat.outputs.pat || github.token }}
 
       - name: Log in to GHCR
