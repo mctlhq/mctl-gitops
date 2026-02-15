@@ -270,12 +270,15 @@ jobs:
 
           if [[ "$TYPE" == "base-service" ]]; then
             TEMPLATE=".github/templates/base-service-values.yaml.tpl"
+            COMPONENT_TYPE="service"
           else
             TEMPLATE=".github/templates/worker-service-values.yaml.tpl"
+            COMPONENT_TYPE="worker"
           fi
 
           mkdir -p "$DIR"
 
+          # Create values.yaml
           sed \
             -e "s|__TEAM_NAME__|${{ inputs.team_name }}|g" \
             -e "s|__SERVICE_NAME__|${{ inputs.service_name }}|g" \
@@ -283,6 +286,13 @@ jobs:
             -e "s|__PORT__|${{ inputs.port }}|g" \
             -e "s|__HOST__|${{ inputs.host }}|g" \
             "$TEMPLATE" > "${DIR}/values.yaml"
+          
+          # Create catalog-info.yaml for Backstage
+          sed \
+            -e "s|__TEAM_NAME__|${{ inputs.team_name }}|g" \
+            -e "s|__SERVICE_NAME__|${{ inputs.service_name }}|g" \
+            -e "s|__COMPONENT_TYPE__|${COMPONENT_TYPE}|g" \
+            ".github/templates/catalog-info.yaml.tpl" > "${DIR}/catalog-info.yaml"
 
       - name: Update image tag (deploy)
         if: inputs.action == 'deploy'
@@ -319,8 +329,9 @@ jobs:
           ACTION="${{ inputs.action }}"
 
           git add "${DIR}/values.yaml"
-
+          
           if [[ "$ACTION" == "onboard" ]]; then
+            git add "${DIR}/catalog-info.yaml"
             git commit -m "feat: onboard ${{ inputs.team_name }}/${{ inputs.service_name }} (${TAG})"
           else
             git commit -m "deploy: ${{ inputs.team_name }}/${{ inputs.service_name }} → ${TAG}"
