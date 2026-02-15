@@ -11,7 +11,7 @@ argo-cd:
   configs:
     cm:
       url: https://argocd-preview.mctl.me
-      admin.enabled: true
+      admin.enabled: false
       timeout.reconciliation: 180s
 
       # Health check for ExternalSecrets
