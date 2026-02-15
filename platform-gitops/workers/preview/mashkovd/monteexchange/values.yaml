@@ -7,6 +7,9 @@ image:
   repository: ghcr.io/dmitriimashkov/monteexchange
   tag: "latest"
 
+imagePullSecrets:
+  - name: ghcr-credentials
+
 workloadType: deployment
 
 resources:
@@ -19,3 +22,26 @@ resources:
 
 env:
   APP_ENV: preview
+
+externalSecret:
+  targetSecret: monteexchange-secrets
+  data:
+    - secretKey: BALANCE_ID
+      remoteKey: teams/mashkovd/monteexchange
+      property: BALANCE_ID
+    - secretKey: BOT_TOKEN
+      remoteKey: teams/mashkovd/monteexchange
+      property: BOT_TOKEN
+    - secretKey: PROFILE_ID
+      remoteKey: teams/mashkovd/monteexchange
+      property: PROFILE_ID
+    - secretKey: WISE_HOST
+      remoteKey: teams/mashkovd/monteexchange
+      property: WISE_HOST
+    - secretKey: WISE_TOKEN
+      remoteKey: teams/mashkovd/monteexchange
+      property: WISE_TOKEN
+
+envFrom:
+  - secretRef:
+      name: monteexchange-secrets
