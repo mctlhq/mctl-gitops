@@ -23,7 +23,7 @@ spec:
           title: Team Name
           type: string
           description: "Select your team"
-          ui:field: EntityPicker
+          ui:field: OwnedEntityPicker
           ui:options:
             catalogFilter:
               kind: Group
@@ -50,7 +50,7 @@ spec:
           title: Repository PAT (private repos only)
           type: string
           description: "Fine-grained PAT with Contents:read scope for the source repo"
-          ui:widget: password
+          ui:field: Secret
 
     - title: Service Configuration
       required:
