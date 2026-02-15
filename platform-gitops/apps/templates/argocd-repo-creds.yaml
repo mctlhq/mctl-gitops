@@ -24,5 +24,5 @@ spec:
   data:
     - secretKey: password
       remoteRef:
-        key: preview/argocd/github-repo
+        key: platform/argocd/github-repo
         property: pat
