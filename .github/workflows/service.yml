@@ -220,7 +220,7 @@ jobs:
           if [[ -n "${{ secrets.VAULT_ADDR }}" && -n "${{ secrets.VAULT_TOKEN }}" ]]; then
             PAT=$(curl -sL \
               -H "X-Vault-Token: ${{ secrets.VAULT_TOKEN }}" \
-              "${{ secrets.VAULT_ADDR }}/v1/secret/data/preview/${{ inputs.team_name }}/${{ inputs.service_name }}/repo-pat" \
+              "${{ secrets.VAULT_ADDR }}/v1/secret/data/teams/${{ inputs.team_name }}/${{ inputs.service_name }}/repo-pat" \
               2>/dev/null | jq -r '.data.data.pat // empty' 2>/dev/null || true)
           fi
 
