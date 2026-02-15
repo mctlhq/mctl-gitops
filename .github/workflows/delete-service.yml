@@ -126,6 +126,84 @@ jobs:
           git commit -m "delete: ${{ inputs.team_name }}/${{ inputs.service_name }}"
           git push
 
+      - name: Trigger ArgoCD ApplicationSet refresh
+        continue-on-error: true
+        env:
+          ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER || 'argocd-preview.mctl.me' }}
+          ARGOCD_TOKEN: ${{ secrets.ARGOCD_TOKEN }}
+        run: |
+          if [[ -z "$ARGOCD_TOKEN" ]]; then
+            echo "::warning::ARGOCD_TOKEN not set, skipping ApplicationSet refresh"
+            echo "⚠️ ApplicationSet will refresh automatically in ~3 minutes" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          TYPE="${{ inputs.service_type }}"
+          if [[ "$TYPE" == "base-service" ]]; then
+            APPSET="preview-apps"
+          else
+            APPSET="preview-workers"
+          fi
+
+          echo "Triggering refresh for ApplicationSet: ${APPSET}"
+          
+          # Patch ApplicationSet to trigger immediate refresh
+          curl -k -X PATCH \
+            -H "Authorization: Bearer ${ARGOCD_TOKEN}" \
+            -H "Content-Type: application/merge-patch+json" \
+            "https://${ARGOCD_SERVER}/api/v1/applications/argocd/${APPSET}" \
+            -d '{"metadata":{"annotations":{"argocd.argoproj.io/refresh":"hard"}}}'
+          
+          echo "✅ ApplicationSet refresh triggered" >> $GITHUB_STEP_SUMMARY
+
+      - name: Clean up empty namespace
+        continue-on-error: true
+        env:
+          KUBECONFIG_DATA: ${{ secrets.KUBECONFIG }}
+        run: |
+          if [[ -z "$KUBECONFIG_DATA" ]]; then
+            echo "::warning::KUBECONFIG not set, skipping namespace cleanup"
+            echo "⚠️ Namespace cleanup skipped (no cluster access)" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          TEAM="${{ inputs.team_name }}"
+          
+          # Setup kubectl
+          echo "$KUBECONFIG_DATA" | base64 -d > /tmp/kubeconfig
+          export KUBECONFIG=/tmp/kubeconfig
+          
+          # Wait for Application to be deleted (up to 2 minutes)
+          echo "Waiting for Application deletion..."
+          for i in {1..24}; do
+            if ! kubectl get application "preview-${TEAM}-${{ inputs.service_name }}" -n argocd &>/dev/null; then
+              echo "Application deleted"
+              break
+            fi
+            sleep 5
+          done
+          
+          # Check if namespace is empty (no applications for this team)
+          APPS_COUNT=$(kubectl get application -n argocd -l team="${TEAM}" --no-headers 2>/dev/null | wc -l | tr -d ' ')
+          
+          if [[ "$APPS_COUNT" == "0" ]]; then
+            echo "No applications left for team ${TEAM}, deleting namespace..."
+            
+            # Check if namespace has any pods, deployments, etc.
+            RESOURCES=$(kubectl get all -n "${TEAM}" --no-headers 2>/dev/null | wc -l | tr -d ' ')
+            
+            if [[ "$RESOURCES" == "0" ]]; then
+              kubectl delete namespace "${TEAM}" --wait=false
+              echo "✅ Empty namespace '${TEAM}' marked for deletion" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "⚠️ Namespace '${TEAM}' still has resources, not deleting" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "ℹ️  Namespace '${TEAM}' has ${APPS_COUNT} other application(s), keeping it" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          rm -f /tmp/kubeconfig
+
       - name: Success summary
         run: |
           echo "## ✅ Service Deleted" >> $GITHUB_STEP_SUMMARY
