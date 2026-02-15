@@ -65,12 +65,12 @@ jobs:
             fi
             POLICY_CSV+="\n"
             POLICY_CSV+="        # Team: $team\n"
-            POLICY_CSV+="        p, role:team-$team, applications, get, argocd/preview-$team-*, allow\n"
-            POLICY_CSV+="        p, role:team-$team, applications, list, argocd/preview-$team-*, allow\n"
-            POLICY_CSV+="        p, role:team-$team, applications, sync, argocd/preview-$team-*, allow\n"
-            POLICY_CSV+="        p, role:team-$team, applications, override, argocd/preview-$team-*, allow\n"
-            POLICY_CSV+="        p, role:team-$team, logs, get, argocd/preview-$team-*, allow\n"
-            POLICY_CSV+="        p, role:team-$team, exec, create, argocd/preview-$team-*, allow\n"
+            POLICY_CSV+="        p, role:team-$team, applications, get, preview/preview-$team-*, allow\n"
+            POLICY_CSV+="        p, role:team-$team, applications, list, preview/preview-$team-*, allow\n"
+            POLICY_CSV+="        p, role:team-$team, applications, sync, preview/preview-$team-*, allow\n"
+            POLICY_CSV+="        p, role:team-$team, applications, override, preview/preview-$team-*, allow\n"
+            POLICY_CSV+="        p, role:team-$team, logs, get, preview/preview-$team-*, allow\n"
+            POLICY_CSV+="        p, role:team-$team, exec, create, preview/preview-$team-*, allow\n"
             POLICY_CSV+="        g, dmitriimashkov:$team, role:team-$team\n"
           done < /tmp/teams.txt
 

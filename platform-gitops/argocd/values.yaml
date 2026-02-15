@@ -93,48 +93,48 @@ argo-cd:
         # ============================================================================
 
         # Team: africaone-dev
-        p, role:team-africaone-dev, applications, get, argocd/preview-africaone-dev-*, allow
-        p, role:team-africaone-dev, applications, list, argocd/preview-africaone-dev-*, allow
-        p, role:team-africaone-dev, applications, sync, argocd/preview-africaone-dev-*, allow
-        p, role:team-africaone-dev, applications, override, argocd/preview-africaone-dev-*, allow
-        p, role:team-africaone-dev, logs, get, argocd/preview-africaone-dev-*, allow
-        p, role:team-africaone-dev, exec, create, argocd/preview-africaone-dev-*, allow
+        p, role:team-africaone-dev, applications, get, preview/preview-africaone-dev-*, allow
+        p, role:team-africaone-dev, applications, list, preview/preview-africaone-dev-*, allow
+        p, role:team-africaone-dev, applications, sync, preview/preview-africaone-dev-*, allow
+        p, role:team-africaone-dev, applications, override, preview/preview-africaone-dev-*, allow
+        p, role:team-africaone-dev, logs, get, preview/preview-africaone-dev-*, allow
+        p, role:team-africaone-dev, exec, create, preview/preview-africaone-dev-*, allow
         g, dmitriimashkov:africaone-dev, role:team-africaone-dev
 
         # Team: developers
-        p, role:team-developers, applications, get, argocd/preview-developers-*, allow
-        p, role:team-developers, applications, list, argocd/preview-developers-*, allow
-        p, role:team-developers, applications, sync, argocd/preview-developers-*, allow
-        p, role:team-developers, applications, override, argocd/preview-developers-*, allow
-        p, role:team-developers, logs, get, argocd/preview-developers-*, allow
-        p, role:team-developers, exec, create, argocd/preview-developers-*, allow
+        p, role:team-developers, applications, get, preview/preview-developers-*, allow
+        p, role:team-developers, applications, list, preview/preview-developers-*, allow
+        p, role:team-developers, applications, sync, preview/preview-developers-*, allow
+        p, role:team-developers, applications, override, preview/preview-developers-*, allow
+        p, role:team-developers, logs, get, preview/preview-developers-*, allow
+        p, role:team-developers, exec, create, preview/preview-developers-*, allow
         g, dmitriimashkov:developers, role:team-developers
 
         # Team: internal
-        p, role:team-internal, applications, get, argocd/preview-internal-*, allow
-        p, role:team-internal, applications, list, argocd/preview-internal-*, allow
-        p, role:team-internal, applications, sync, argocd/preview-internal-*, allow
-        p, role:team-internal, applications, override, argocd/preview-internal-*, allow
-        p, role:team-internal, logs, get, argocd/preview-internal-*, allow
-        p, role:team-internal, exec, create, argocd/preview-internal-*, allow
+        p, role:team-internal, applications, get, preview/preview-internal-*, allow
+        p, role:team-internal, applications, list, preview/preview-internal-*, allow
+        p, role:team-internal, applications, sync, preview/preview-internal-*, allow
+        p, role:team-internal, applications, override, preview/preview-internal-*, allow
+        p, role:team-internal, logs, get, preview/preview-internal-*, allow
+        p, role:team-internal, exec, create, preview/preview-internal-*, allow
         g, dmitriimashkov:internal, role:team-internal
 
         # Team: libertex
-        p, role:team-libertex, applications, get, argocd/preview-libertex-*, allow
-        p, role:team-libertex, applications, list, argocd/preview-libertex-*, allow
-        p, role:team-libertex, applications, sync, argocd/preview-libertex-*, allow
-        p, role:team-libertex, applications, override, argocd/preview-libertex-*, allow
-        p, role:team-libertex, logs, get, argocd/preview-libertex-*, allow
-        p, role:team-libertex, exec, create, argocd/preview-libertex-*, allow
+        p, role:team-libertex, applications, get, preview/preview-libertex-*, allow
+        p, role:team-libertex, applications, list, preview/preview-libertex-*, allow
+        p, role:team-libertex, applications, sync, preview/preview-libertex-*, allow
+        p, role:team-libertex, applications, override, preview/preview-libertex-*, allow
+        p, role:team-libertex, logs, get, preview/preview-libertex-*, allow
+        p, role:team-libertex, exec, create, preview/preview-libertex-*, allow
         g, dmitriimashkov:libertex, role:team-libertex
 
         # Team: mashkovd
-        p, role:team-mashkovd, applications, get, argocd/preview-mashkovd-*, allow
-        p, role:team-mashkovd, applications, list, argocd/preview-mashkovd-*, allow
-        p, role:team-mashkovd, applications, sync, argocd/preview-mashkovd-*, allow
-        p, role:team-mashkovd, applications, override, argocd/preview-mashkovd-*, allow
-        p, role:team-mashkovd, logs, get, argocd/preview-mashkovd-*, allow
-        p, role:team-mashkovd, exec, create, argocd/preview-mashkovd-*, allow
+        p, role:team-mashkovd, applications, get, preview/preview-mashkovd-*, allow
+        p, role:team-mashkovd, applications, list, preview/preview-mashkovd-*, allow
+        p, role:team-mashkovd, applications, sync, preview/preview-mashkovd-*, allow
+        p, role:team-mashkovd, applications, override, preview/preview-mashkovd-*, allow
+        p, role:team-mashkovd, logs, get, preview/preview-mashkovd-*, allow
+        p, role:team-mashkovd, exec, create, preview/preview-mashkovd-*, allow
         g, dmitriimashkov:mashkovd, role:team-mashkovd
 
     secret:
