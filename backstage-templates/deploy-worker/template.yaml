@@ -89,7 +89,7 @@ spec:
       action: http:backstage:request
       input:
         method: POST
-        path: /proxy/vault/v1/secret/data/preview/${{ parameters.teamName | parseEntityRef | pick('name') }}/${{ parameters.serviceName }}/repo-pat
+        path: /proxy/vault/v1/secret/data/teams/${{ parameters.teamName | parseEntityRef | pick('name') }}/${{ parameters.serviceName }}/repo-pat
         headers:
           Content-Type: application/json
         body:
