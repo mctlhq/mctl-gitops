@@ -1,0 +1,15 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: monteexchange
+  description: "monteexchange service deployed to preview"
+  annotations:
+    backstage.io/kubernetes-id: monteexchange
+    argocd/app-name: preview-mashkovd-monteexchange
+  labels:
+    team: mashkovd
+    env: preview
+spec:
+  type: worker
+  lifecycle: production
+  owner: group:mashkovd
