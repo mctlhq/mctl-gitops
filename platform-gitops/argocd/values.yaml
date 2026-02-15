@@ -5,6 +5,12 @@
 argo-cd:
   nameOverride: argocd
 
+  # Disable CRD management to prevent annotation overflow
+  # CRDs are already installed and should not be modified
+  crds:
+    install: false
+    keep: true
+
   global:
     domain: argocd-preview.mctl.me
 
