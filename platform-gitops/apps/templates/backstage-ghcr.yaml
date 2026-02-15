@@ -19,10 +19,8 @@ spec:
           reflector.v1.k8s.emberstack.com/reflection-allowed-namespaces: ".*"
           reflector.v1.k8s.emberstack.com/reflection-auto-enabled: "true"
           argocd.argoproj.io/compare-options: IgnoreExtraneous
-      data:
-        .dockerconfigjson: "{{ `{{ .dockerconfigjson }}` }}"
   data:
-    - secretKey: dockerconfigjson
+    - secretKey: .dockerconfigjson
       remoteRef:
         key: platform/backstage/ghcr-credentials
         property: dockerconfigjson
