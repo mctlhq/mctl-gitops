@@ -71,7 +71,7 @@ spec:
           description: "Plaintext KEY=value pairs (one per line). Will be stored in Vault and injected securely."
           ui:widget: textarea
           ui:options:
-            rows: 10
+            minRows: 10
           ui:placeholder: |
             API_KEY=your-api-key-here
             DATABASE_PASSWORD=your-db-password
