@@ -49,11 +49,11 @@ spec:
           # Delete all secrets for this service
           echo "🧹 Cleaning up Vault secrets for ${TEAM}/${SERVICE}"
           
-          vault kv metadata delete secret/preview/${TEAM}/${SERVICE} 2>/dev/null && \
-            echo "  ✅ Deleted secret/preview/${TEAM}/${SERVICE}" || \
+          vault kv metadata delete secret/teams/${TEAM}/${SERVICE} 2>/dev/null && \
+            echo "  ✅ Deleted secret/teams/${TEAM}/${SERVICE}" || \
             echo "  ℹ️  No main secrets found"
           
-          vault kv metadata delete secret/preview/${TEAM}/${SERVICE}/repo-pat 2>/dev/null && \
+          vault kv metadata delete secret/teams/${TEAM}/${SERVICE}/repo-pat 2>/dev/null && \
             echo "  ✅ Deleted repo-pat" || \
             echo "  ℹ️  No repo-pat found"
           
