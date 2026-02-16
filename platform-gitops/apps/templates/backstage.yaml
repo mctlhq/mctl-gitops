@@ -80,6 +80,7 @@ spec:
                   allowedHeaders:
                     - Content-Type
             catalog:
+              orphanStrategy: delete
               rules:
                 - allow: [Component, System, API, Resource, Location, Template, Group, User]
               providers:
@@ -107,17 +108,30 @@ spec:
                         minutes: 5
                       timeout:
                         minutes: 3
+                  previewServices:
+                    organization: dmitriimashkov
+                    catalogPath: /platform-gitops/services/preview/*/*/catalog-info.yaml
+                    filters:
+                      repository: mctl.me
+                      branch: main
+                    schedule:
+                      frequency:
+                        minutes: 5
+                      timeout:
+                        minutes: 3
+                  previewWorkers:
+                    organization: dmitriimashkov
+                    catalogPath: /platform-gitops/workers/preview/*/*/catalog-info.yaml
+                    filters:
+                      repository: mctl.me
+                      branch: main
+                    schedule:
+                      frequency:
+                        minutes: 5
+                      timeout:
+                        minutes: 3
               locations:
-                # Auto-discover all services in platform-gitops
-                - type: url
-                  target: https://github.com/dmitriimashkov/mctl.me/blob/main/platform-gitops/services/preview/*/*/catalog-info.yaml
-                  rules:
-                    - allow: [Component]
-                - type: url
-                  target: https://github.com/dmitriimashkov/mctl.me/blob/main/platform-gitops/workers/preview/*/*/catalog-info.yaml
-                  rules:
-                    - allow: [Component]
-                # Backstage templates
+                # Backstage templates (static, no need for provider-based discovery)
                 - type: url
                   target: https://github.com/dmitriimashkov/mctl.me/blob/main/backstage-templates/deploy-service/template.yaml
                   rules:
