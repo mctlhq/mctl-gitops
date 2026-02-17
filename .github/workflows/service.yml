@@ -218,10 +218,25 @@ jobs:
           # Try with PAT from Vault first (for private repos)
           PAT=""
           if [[ -n "${{ secrets.VAULT_ADDR }}" && -n "${{ secrets.VAULT_TOKEN }}" ]]; then
-            PAT=$(curl -sL \
+            echo "🔑 Vault configured — fetching repo PAT…"
+            VAULT_URL="${{ secrets.VAULT_ADDR }}/v1/secret/data/teams/${{ inputs.team_name }}/${{ inputs.service_name }}/repo-pat"
+            HTTP_CODE=$(curl -sL -o /tmp/vault-resp.json -w "%{http_code}" \
               -H "X-Vault-Token: ${{ secrets.VAULT_TOKEN }}" \
-              "${{ secrets.VAULT_ADDR }}/v1/secret/data/teams/${{ inputs.team_name }}/${{ inputs.service_name }}/repo-pat" \
-              2>/dev/null | jq -r '.data.data.pat // empty' 2>/dev/null || true)
+              "$VAULT_URL" 2>/dev/null || echo "000")
+            echo "   Vault HTTP status: $HTTP_CODE"
+            if [[ "$HTTP_CODE" == "200" ]]; then
+              PAT=$(jq -r '.data.data.pat // empty' /tmp/vault-resp.json 2>/dev/null || true)
+              if [[ -n "$PAT" ]]; then
+                echo "   ✅ PAT retrieved (length: ${#PAT})"
+              else
+                echo "   ⚠️ Vault returned 200 but no PAT in response"
+              fi
+            else
+              echo "   ⚠️ Vault returned HTTP $HTTP_CODE — cannot retrieve PAT"
+            fi
+            rm -f /tmp/vault-resp.json
+          else
+            echo "⚠️ VAULT_ADDR or VAULT_TOKEN not configured — skipping Vault PAT lookup"
           fi
 
           if [[ -n "$PAT" ]]; then
@@ -241,7 +256,7 @@ jobs:
               echo "✅ Public repo accessible"
               echo "is_private=false" >> $GITHUB_OUTPUT
             else
-              echo "::error::Cannot access repo: ${REPO}. If private, save a PAT via Backstage."
+              echo "::error::Cannot access repo: ${REPO}. If private, ensure PAT is saved via Backstage and Vault is reachable."
               exit 1
             fi
           fi
@@ -296,10 +311,25 @@ jobs:
         run: |
           PAT=""
           if [[ -n "${{ secrets.VAULT_ADDR }}" && -n "${{ secrets.VAULT_TOKEN }}" ]]; then
-            PAT=$(curl -sL \
+            echo "🔑 Vault configured — fetching repo PAT…"
+            VAULT_URL="${{ secrets.VAULT_ADDR }}/v1/secret/data/teams/${{ inputs.team_name }}/${{ inputs.service_name }}/repo-pat"
+            HTTP_CODE=$(curl -sL -o /tmp/vault-resp.json -w "%{http_code}" \
               -H "X-Vault-Token: ${{ secrets.VAULT_TOKEN }}" \
-              "${{ secrets.VAULT_ADDR }}/v1/secret/data/teams/${{ inputs.team_name }}/${{ inputs.service_name }}/repo-pat" \
-              2>/dev/null | jq -r '.data.data.pat // empty' 2>/dev/null || true)
+              "$VAULT_URL" 2>/dev/null || echo "000")
+            echo "   Vault HTTP status: $HTTP_CODE"
+            if [[ "$HTTP_CODE" == "200" ]]; then
+              PAT=$(jq -r '.data.data.pat // empty' /tmp/vault-resp.json 2>/dev/null || true)
+              if [[ -n "$PAT" ]]; then
+                echo "   ✅ PAT retrieved (length: ${#PAT})"
+              else
+                echo "   ⚠️ Vault returned 200 but no PAT in response"
+              fi
+            else
+              echo "   ⚠️ Vault returned HTTP $HTTP_CODE — cannot retrieve PAT"
+            fi
+            rm -f /tmp/vault-resp.json
+          else
+            echo "⚠️ VAULT_ADDR or VAULT_TOKEN not configured — skipping Vault PAT lookup"
           fi
           if [[ -n "$PAT" ]]; then
             echo "::add-mask::${PAT}"
