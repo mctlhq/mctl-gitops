@@ -275,7 +275,7 @@ jobs:
             echo "image_tag=${NORMALIZED_TAG}" >> $GITHUB_OUTPUT
             echo "📌 Using git tag: $GIT_TAG → Docker tag: ${NORMALIZED_TAG}"
           elif [[ "${{ inputs.action }}" == "onboard" ]]; then
-            echo "image_tag=v0.1.0" >> $GITHUB_OUTPUT
+            echo "image_tag=latest" >> $GITHUB_OUTPUT
           else
             # Auto-increment: get latest semver tag from GHCR
             LATEST=""
@@ -285,7 +285,7 @@ jobs:
               2>/dev/null) && LATEST="$API_RESPONSE" || true
 
             if [[ -z "$LATEST" || ! "$LATEST" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "image_tag=v0.1.0" >> $GITHUB_OUTPUT
+              echo "image_tag=latest" >> $GITHUB_OUTPUT
             else
               # Increment patch: v1.2.3 → v1.2.4
               MAJOR=$(echo "$LATEST" | sed 's/v\([0-9]*\)\..*/\1/')
