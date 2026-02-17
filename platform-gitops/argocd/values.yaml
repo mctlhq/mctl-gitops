@@ -138,6 +138,15 @@ argo-cd:
         p, role:team-libertex, exec, create, preview/preview-libertex-*, allow
         g, dmitriimashkov:libertex, role:team-libertex
 
+        # Team: libertex2
+        p, role:team-libertex2, applications, get, preview/preview-libertex2-*, allow
+        p, role:team-libertex2, applications, list, preview/preview-libertex2-*, allow
+        p, role:team-libertex2, applications, sync, preview/preview-libertex2-*, allow
+        p, role:team-libertex2, applications, override, preview/preview-libertex2-*, allow
+        p, role:team-libertex2, logs, get, preview/preview-libertex2-*, allow
+        p, role:team-libertex2, exec, create, preview/preview-libertex2-*, allow
+        g, dmitriimashkov:libertex2, role:team-libertex2
+
         # Team: mashkovd
         p, role:team-mashkovd, applications, get, preview/preview-mashkovd-*, allow
         p, role:team-mashkovd, applications, list, preview/preview-mashkovd-*, allow
@@ -146,6 +155,33 @@ argo-cd:
         p, role:team-mashkovd, logs, get, preview/preview-mashkovd-*, allow
         p, role:team-mashkovd, exec, create, preview/preview-mashkovd-*, allow
         g, dmitriimashkov:mashkovd, role:team-mashkovd
+
+        # Team: qwerty
+        p, role:team-qwerty, applications, get, preview/preview-qwerty-*, allow
+        p, role:team-qwerty, applications, list, preview/preview-qwerty-*, allow
+        p, role:team-qwerty, applications, sync, preview/preview-qwerty-*, allow
+        p, role:team-qwerty, applications, override, preview/preview-qwerty-*, allow
+        p, role:team-qwerty, logs, get, preview/preview-qwerty-*, allow
+        p, role:team-qwerty, exec, create, preview/preview-qwerty-*, allow
+        g, dmitriimashkov:qwerty, role:team-qwerty
+
+        # Team: qwerty123
+        p, role:team-qwerty123, applications, get, preview/preview-qwerty123-*, allow
+        p, role:team-qwerty123, applications, list, preview/preview-qwerty123-*, allow
+        p, role:team-qwerty123, applications, sync, preview/preview-qwerty123-*, allow
+        p, role:team-qwerty123, applications, override, preview/preview-qwerty123-*, allow
+        p, role:team-qwerty123, logs, get, preview/preview-qwerty123-*, allow
+        p, role:team-qwerty123, exec, create, preview/preview-qwerty123-*, allow
+        g, dmitriimashkov:qwerty123, role:team-qwerty123
+
+        # Team: www
+        p, role:team-www, applications, get, preview/preview-www-*, allow
+        p, role:team-www, applications, list, preview/preview-www-*, allow
+        p, role:team-www, applications, sync, preview/preview-www-*, allow
+        p, role:team-www, applications, override, preview/preview-www-*, allow
+        p, role:team-www, logs, get, preview/preview-www-*, allow
+        p, role:team-www, exec, create, preview/preview-www-*, allow
+        g, dmitriimashkov:www, role:team-www
 
     secret:
       createSecret: true
