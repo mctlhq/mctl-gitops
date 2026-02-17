@@ -111,6 +111,15 @@ argo-cd:
         p, role:team-africaone-dev, exec, create, preview/preview-africaone-dev-*, allow
         g, dmitriimashkov:africaone-dev, role:team-africaone-dev
 
+        # Team: cyan-rhino
+        p, role:team-cyan-rhino, applications, get, preview/preview-cyan-rhino-*, allow
+        p, role:team-cyan-rhino, applications, list, preview/preview-cyan-rhino-*, allow
+        p, role:team-cyan-rhino, applications, sync, preview/preview-cyan-rhino-*, allow
+        p, role:team-cyan-rhino, applications, override, preview/preview-cyan-rhino-*, allow
+        p, role:team-cyan-rhino, logs, get, preview/preview-cyan-rhino-*, allow
+        p, role:team-cyan-rhino, exec, create, preview/preview-cyan-rhino-*, allow
+        g, dmitriimashkov:cyan-rhino, role:team-cyan-rhino
+
         # Team: developers
         p, role:team-developers, applications, get, preview/preview-developers-*, allow
         p, role:team-developers, applications, list, preview/preview-developers-*, allow
