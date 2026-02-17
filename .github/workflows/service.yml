@@ -243,6 +243,7 @@ jobs:
             echo "::add-mask::${PAT}"
             echo "repo_pat=${PAT}" >> $GITHUB_OUTPUT
             echo "🔍 Testing repo access with PAT (length: ${#PAT})"
+            set -o pipefail
             if git ls-remote "https://x-access-token:${PAT}@github.com/${REPO}" HEAD 2>&1 | tee /tmp/git-output.log; then
               echo "✅ Private repo accessible with PAT"
               echo "is_private=true" >> $GITHUB_OUTPUT
