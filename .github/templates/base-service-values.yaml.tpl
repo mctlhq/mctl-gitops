@@ -7,6 +7,9 @@ image:
   repository: ghcr.io/dmitriimashkov/__SERVICE_NAME__
   tag: "__IMAGE_TAG__"
 
+imagePullSecrets:
+  - name: ghcr-credentials
+
 service:
   port: __PORT__
 
