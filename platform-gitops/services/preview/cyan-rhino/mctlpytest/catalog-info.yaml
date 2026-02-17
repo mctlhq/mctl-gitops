@@ -1,0 +1,15 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: mctlpytest
+  description: "mctlpytest service deployed to preview"
+  annotations:
+    backstage.io/kubernetes-id: mctlpytest
+    argocd/app-name: preview-cyan-rhino-mctlpytest
+  labels:
+    team: cyan-rhino
+    env: preview
+spec:
+  type: service
+  lifecycle: production
+  owner: group:cyan-rhino
