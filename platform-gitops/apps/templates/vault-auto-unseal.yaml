@@ -63,10 +63,12 @@ spec:
                   PODS=$(kubectl get pods -n vault -l app.kubernetes.io/name=vault,component=server --no-headers -o custom-columns=":metadata.name" 2>/dev/null)
                   for pod in $PODS; do
                     echo "Checking $pod..."
-                    STATUS=$(kubectl exec -n vault $pod -- vault status -format=json 2>/dev/null) || {
+                    # vault status returns exit 1 (initialized+sealed) or 2 (sealed) — capture output regardless
+                    STATUS=$(kubectl exec -n vault $pod -- vault status -format=json 2>/dev/null) || true
+                    if [ -z "$STATUS" ]; then
                       echo "$pod: not ready, skipping"
                       continue
-                    }
+                    fi
 
                     SEALED=$(echo "$STATUS" | grep -o '"sealed":[a-z]*' | cut -d: -f2)
 
