@@ -84,12 +84,13 @@ module "kube-hetzner" {
   # --- Agent (Worker) Nodes ---
   agent_nodepools = [
     {
-      name        = "worker-fsn1",
-      server_type = "cx33",
-      location    = "fsn1",
-      labels      = [],
-      taints      = [],
-      count       = 3
+      name                 = "worker-fsn1",
+      server_type          = "cx33",
+      location             = "fsn1",
+      labels               = [],
+      taints               = [],
+      count                = 3,
+      longhorn_volume_size = 20
     },
   ]
 
@@ -119,8 +120,8 @@ module "kube-hetzner" {
   hetzner_ccm_use_helm = true
 
   # --- Upgrades ---
-  # With 3 workers, OS upgrades are safe (drain + migrate to remaining 2)
-  automatically_upgrade_os = true
+  # TODO: enable after first apply (cycle with os_upgrade_toggle on initial change)
+  automatically_upgrade_os = false
   system_upgrade_use_drain = true
 
   # --- Kubeconfig ---
