@@ -16,7 +16,7 @@ spec:
         server:
           ha:
             enabled: true
-            replicas: 2
+            replicas: 3
             raft:
               enabled: true
               config: |
@@ -30,21 +30,28 @@ spec:
 
                 storage "raft" {
                   path = "/vault/data"
+                  retry_join {
+                    leader_api_addr = "http://vault-0.vault-internal:8200"
+                  }
+                  retry_join {
+                    leader_api_addr = "http://vault-1.vault-internal:8200"
+                  }
+                  retry_join {
+                    leader_api_addr = "http://vault-2.vault-internal:8200"
+                  }
                 }
 
                 service_registration "kubernetes" {}
 
           affinity:
             podAntiAffinity:
-              preferredDuringSchedulingIgnoredDuringExecution:
-                - weight: 100
-                  podAffinityTerm:
-                    labelSelector:
-                      matchLabels:
-                        app.kubernetes.io/instance: vault
-                        app.kubernetes.io/name: vault
-                        component: server
-                    topologyKey: kubernetes.io/hostname
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - labelSelector:
+                    matchLabels:
+                      app.kubernetes.io/instance: vault
+                      app.kubernetes.io/name: vault
+                      component: server
+                  topologyKey: kubernetes.io/hostname
 
           dataStorage:
             enabled: true
