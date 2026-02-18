@@ -89,7 +89,7 @@ module "kube-hetzner" {
       location    = "fsn1",
       labels      = [],
       taints      = [],
-      count       = 2
+      count       = 3
     },
   ]
 
@@ -102,7 +102,7 @@ module "kube-hetzner" {
 
   # --- Storage ---
   enable_longhorn = true
-  longhorn_replica_count = 1  # For preprod, 1 replica is sufficient
+  longhorn_replica_count = 2  # HA: each volume on 2 of 3 nodes
 
   # --- Cert Manager ---
   # Enabled by default (enable_cert_manager = true)
@@ -119,8 +119,8 @@ module "kube-hetzner" {
   hetzner_ccm_use_helm = true
 
   # --- Upgrades ---
-  # Non-HA (1 CP): disable automatic OS upgrades
-  automatically_upgrade_os = false
+  # With 3 workers, OS upgrades are safe (drain + migrate to remaining 2)
+  automatically_upgrade_os = true
   system_upgrade_use_drain = true
 
   # --- Kubeconfig ---
