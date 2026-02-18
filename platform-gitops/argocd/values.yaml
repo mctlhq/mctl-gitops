@@ -183,6 +183,15 @@ argo-cd:
         p, role:team-qwerty123, exec, create, preview/preview-qwerty123-*, allow
         g, dmitriimashkov:qwerty123, role:team-qwerty123
 
+        # Team: rauf
+        p, role:team-rauf, applications, get, preview/preview-rauf-*, allow
+        p, role:team-rauf, applications, list, preview/preview-rauf-*, allow
+        p, role:team-rauf, applications, sync, preview/preview-rauf-*, allow
+        p, role:team-rauf, applications, override, preview/preview-rauf-*, allow
+        p, role:team-rauf, logs, get, preview/preview-rauf-*, allow
+        p, role:team-rauf, exec, create, preview/preview-rauf-*, allow
+        g, dmitriimashkov:rauf, role:team-rauf
+
         # Team: www
         p, role:team-www, applications, get, preview/preview-www-*, allow
         p, role:team-www, applications, list, preview/preview-www-*, allow
