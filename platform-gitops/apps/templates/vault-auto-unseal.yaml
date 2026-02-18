@@ -70,7 +70,7 @@ spec:
                       continue
                     fi
 
-                    SEALED=$(echo "$STATUS" | grep -o '"sealed":[a-z]*' | cut -d: -f2)
+                    SEALED=$(echo "$STATUS" | grep -o '"sealed" *: *[a-z]*' | grep -o '[a-z]*$')
 
                     if [ "$SEALED" = "true" ]; then
                       echo "$pod is SEALED — unsealing..."
