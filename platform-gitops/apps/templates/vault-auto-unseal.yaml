@@ -60,7 +60,8 @@ spec:
                 - -c
                 - |
                   echo "=== Vault Auto-Unseal Check ==="
-                  for pod in vault-0 vault-1; do
+                  PODS=$(kubectl get pods -n vault -l app.kubernetes.io/name=vault,component=server --no-headers -o custom-columns=":metadata.name" 2>/dev/null)
+                  for pod in $PODS; do
                     echo "Checking $pod..."
                     STATUS=$(kubectl exec -n vault $pod -- vault status -format=json 2>/dev/null) || {
                       echo "$pod: not ready, skipping"
