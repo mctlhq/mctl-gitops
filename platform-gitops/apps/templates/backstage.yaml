@@ -38,7 +38,7 @@ spec:
               port: 7007
             initialDelaySeconds: 10
             periodSeconds: 5
-            failureThreshold: 24
+            failureThreshold: 60
           livenessProbe:
             httpGet:
               path: /.backstage/health/v1/readiness
