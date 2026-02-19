@@ -10,6 +10,7 @@ on:
         options:
           - onboard
           - deploy
+          - update-config
       team_name:
         description: "Team name (e.g. payments)"
         required: true
@@ -163,8 +164,8 @@ jobs:
           SERVICE="${{ inputs.service_name }}"
           ACTION="${{ inputs.action }}"
 
-          # For deploy, auto-detect service type
-          if [[ "$ACTION" == "deploy" ]]; then
+          # For deploy/update-config, auto-detect service type
+          if [[ "$ACTION" == "deploy" || "$ACTION" == "update-config" ]]; then
             if [[ -d "platform-gitops/services/preview/${TEAM}/${SERVICE}" ]]; then
               TYPE="base-service"
             elif [[ -d "platform-gitops/workers/preview/${TEAM}/${SERVICE}" ]]; then
@@ -188,13 +189,13 @@ jobs:
             DIR="platform-gitops/workers/preview/${TEAM}/${SERVICE}"
           fi
 
-          # Onboard: must NOT exist. Deploy: must exist.
+          # Onboard: must NOT exist. Deploy/update-config: must exist.
           if [[ "$ACTION" == "onboard" && -d "$DIR" ]]; then
             echo "::error::Service already exists at $DIR. Use 'deploy' to update."
             echo "## ❌ Service Already Exists" >> $GITHUB_STEP_SUMMARY
             exit 1
           fi
-          if [[ "$ACTION" == "deploy" && ! -f "$DIR/values.yaml" ]]; then
+          if [[ ("$ACTION" == "deploy" || "$ACTION" == "update-config") && ! -f "$DIR/values.yaml" ]]; then
             echo "::error::values.yaml not found at $DIR"
             exit 1
           fi
@@ -212,6 +213,7 @@ jobs:
 
       - name: Verify source repo accessible
         id: repo_access
+        if: inputs.action != 'update-config'
         run: |
           REPO="${{ inputs.dockerfile_repo }}"
 
@@ -264,6 +266,7 @@ jobs:
 
       - name: Determine image tag
         id: tag
+        if: inputs.action != 'update-config'
         run: |
           if [[ -n "${{ inputs.image_tag }}" ]]; then
             # Explicit image_tag provided
@@ -302,6 +305,7 @@ jobs:
   build:
     name: Build & push image
     needs: validate
+    if: inputs.action != 'update-config'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -411,6 +415,7 @@ jobs:
   apply:
     name: Apply config
     needs: [validate, build]
+    if: always() && needs.validate.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -506,7 +511,61 @@ jobs:
 
           yq -i ".image.tag = \"${TAG}\"" "${DIR}/values.yaml"
 
+      - name: Update env vars (update-config)
+        if: inputs.action == 'update-config'
+        run: |
+          TEAM="${{ inputs.team_name }}"
+          SERVICE="${{ inputs.service_name }}"
+          ENV_VARS="${{ inputs.env_vars }}"
+
+          # Auto-detect service directory
+          if [[ -d "platform-gitops/services/preview/${TEAM}/${SERVICE}" ]]; then
+            DIR="platform-gitops/services/preview/${TEAM}/${SERVICE}"
+          elif [[ -d "platform-gitops/workers/preview/${TEAM}/${SERVICE}" ]]; then
+            DIR="platform-gitops/workers/preview/${TEAM}/${SERVICE}"
+          else
+            echo "::error::Service ${TEAM}/${SERVICE} not found. Use 'onboard' action first."
+            exit 1
+          fi
+
+          if [[ -z "$ENV_VARS" ]]; then
+            echo "No env vars provided, skipping."
+            exit 0
+          fi
+
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+          echo "📝 Updating environment variables in ${DIR}/values.yaml..."
+          COUNT=0
+          while IFS='=' read -r key value; do
+            [[ -z "$key" || "$key" =~ ^# ]] && continue
+            key=$(echo "$key" | xargs)
+            value=$(echo "$value" | xargs)
+            yq eval -i ".env.${key} = \"${value}\"" "${DIR}/values.yaml"
+            echo "  ✅ ${key}=***"
+            COUNT=$((COUNT + 1))
+          done <<< "$ENV_VARS"
+          echo "Updated ${COUNT} environment variable(s)"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "${DIR}/values.yaml"
+          git commit -m "config: update env for ${TEAM}/${SERVICE}"
+          git push
+
+          echo "## ✅ Env vars updated" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Team** | \`${TEAM}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Service** | \`${SERVICE}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Variables updated** | ${COUNT} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "ArgoCD will sync automatically." >> $GITHUB_STEP_SUMMARY
+
       - name: Validate Helm template
+        if: inputs.action != 'update-config'
         run: |
           TYPE="${{ needs.validate.outputs.service_type }}"
           DIR="${{ needs.validate.outputs.service_dir }}"
@@ -521,6 +580,7 @@ jobs:
           fi
 
       - name: Commit and push
+        if: inputs.action != 'update-config'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -530,7 +590,7 @@ jobs:
           ACTION="${{ inputs.action }}"
 
           git add "${DIR}/values.yaml"
-          
+
           if [[ "$ACTION" == "onboard" ]]; then
             git add "${DIR}/catalog-info.yaml"
             git add "${DIR}/vault-cleanup.yaml"
@@ -542,6 +602,7 @@ jobs:
           git push
 
       - name: Summary
+        if: inputs.action != 'update-config'
         run: |
           TAG="${{ needs.validate.outputs.image_tag }}"
           ACTION="${{ inputs.action }}"
