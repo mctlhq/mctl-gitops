@@ -33,26 +33,22 @@ spec:
     - title: Source Repository
       required:
         - dockerfileRepo
+        - gitTag
       properties:
         dockerfileRepo:
           title: GitHub Repository
           type: string
-          description: "owner/repo with Dockerfile (e.g. dmitriimashkov/my-app)"
+          description: "owner/repo containing the Dockerfile (e.g. dmitriimashkov/my-app). Make sure the platform GitHub App has access to this repository."
           pattern: "^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$"
         dockerfilePath:
           title: Dockerfile Path
           type: string
           default: Dockerfile
         gitTag:
-          title: Git Tag (optional)
+          title: Git Tag
           type: string
-          description: "Git tag to checkout and build (e.g., v1.0.0). Leave empty for latest commit."
+          description: "Semver tag to checkout and build (e.g., v1.0.0)."
           pattern: "^v?[0-9]+\\.[0-9]+\\.[0-9]+.*$"
-        repoPat:
-          title: Repository PAT (private repos only)
-          type: string
-          description: "Fine-grained PAT with 'Contents: Read' scope. Create at: https://github.com/settings/tokens?type=beta"
-          ui:field: Secret
 
     - title: Network Configuration (optional)
       properties:
@@ -96,19 +92,6 @@ spec:
             SECRET_TOKEN=your-secret-token
 
   steps:
-    - id: save-repo-pat
-      name: Save repo PAT to Vault
-      if: ${{ parameters.repoPat }}
-      action: http:backstage:request
-      input:
-        method: POST
-        path: /proxy/vault/v1/secret/data/teams/${{ parameters.teamName | parseEntityRef | pick('name') }}/${{ parameters.serviceName }}/repo-pat
-        headers:
-          Content-Type: application/json
-        body:
-          data:
-            pat: ${{ parameters.repoPat }}
-
     - id: trigger-build
       name: Build & deploy via GitHub Actions
       action: github:actions:dispatch
@@ -123,7 +106,7 @@ spec:
           service_type: ${{ 'base-service' if parameters.host else 'worker-service' }}
           dockerfile_repo: ${{ parameters.dockerfileRepo }}
           dockerfile_path: ${{ parameters.dockerfilePath | default('Dockerfile') }}
-          git_tag: ${{ parameters.gitTag | default('') }}
+          git_tag: ${{ parameters.gitTag }}
           port: ${{ parameters.port | string }}
           host: ${{ parameters.host | default('') }}
           env_vars: ${{ parameters.envVars | default('') }}

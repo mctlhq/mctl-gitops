@@ -2,7 +2,7 @@ apiVersion: scaffolder.backstage.io/v1beta3
 kind: Template
 metadata:
   name: delete-service
-  title: Delete Service or Worker
+  title: Delete Service
   description: Delete a service or worker from the platform (GitOps, ArgoCD, Kubernetes, Vault)
   tags:
     - delete
@@ -10,7 +10,7 @@ metadata:
     - worker
     - service
 spec:
-  owner: group:platform
+  owner: group:admin
   type: service
 
   parameters:

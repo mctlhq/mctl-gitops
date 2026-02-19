@@ -26,8 +26,11 @@ spec:
         serviceName:
           title: Service Name
           type: string
-          pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
-          description: "Name of the deployed service to update"
+          description: "Select the deployed service to update"
+          ui:field: OwnedEntityPicker
+          ui:options:
+            allowedKinds:
+              - Component
 
     - title: Environment Variables (non-secret)
       properties:
@@ -47,27 +50,20 @@ spec:
       properties:
         secretEnvVars:
           title: Secret Environment Variables
-          type: object
-          description: "Stored in Vault — injected securely into the pod. Use '+' to add key-value pairs."
-          additionalProperties:
-            type: string
+          type: string
+          description: "Plaintext KEY=value pairs (one per line). Will be stored in Vault and injected securely."
+          ui:widget: textarea
+          ui:options:
+            minRows: 10
+          ui:placeholder: |
+            API_KEY=your-api-key-here
+            DATABASE_PASSWORD=your-db-password
+            SECRET_TOKEN=your-secret-token
 
   steps:
-    - id: update-vault-secrets
-      name: Update secrets in Vault
-      if: ${{ parameters.secretEnvVars | length > 0 }}
-      action: http:backstage:request
-      input:
-        method: PATCH
-        path: /proxy/vault/v1/secret/data/teams/${{ parameters.teamName | parseEntityRef | pick('name') }}/${{ parameters.serviceName }}
-        headers:
-          Content-Type: application/merge-patch+json
-        body:
-          data: ${{ parameters.secretEnvVars }}
-
-    - id: update-env-vars
-      name: Update env vars via GitHub Actions
-      if: ${{ parameters.envVars }}
+    - id: update-config
+      name: Update config via GitHub Actions
+      if: ${{ parameters.envVars or parameters.secretEnvVars }}
       action: github:actions:dispatch
       input:
         repoUrl: github.com?repo=mctl.me&owner=dmitriimashkov
@@ -76,19 +72,20 @@ spec:
         workflowInputs:
           action: update-config
           team_name: ${{ parameters.teamName | parseEntityRef | pick('name') }}
-          service_name: ${{ parameters.serviceName }}
-          env_vars: ${{ parameters.envVars }}
+          service_name: ${{ parameters.serviceName | parseEntityRef | pick('name') }}
+          env_vars: ${{ parameters.envVars | default('') }}
+          secret_env_vars: ${{ parameters.secretEnvVars | default('') }}
 
   output:
     text:
       - title: Summary
         content: |
-          **Service:** `${{ parameters.teamName | parseEntityRef | pick('name') }}/${{ parameters.serviceName }}`
+          **Service:** `${{ parameters.teamName | parseEntityRef | pick('name') }}/${{ parameters.serviceName | parseEntityRef | pick('name') }}`
 
-          ${{ parameters.secretEnvVars | length > 0 and '✅ **Secrets** updated in Vault. ESO will sync to Kubernetes within 1 hour (or force refresh with `kubectl annotate externalsecret ... force-sync=true`).' or '' }}
+          ${{ parameters.secretEnvVars and '✅ **Secrets** update dispatched — will be stored in Vault and synced to Kubernetes automatically.' or '' }}
 
           ${{ parameters.envVars and '✅ **Env vars** update dispatched to GitHub Actions. ArgoCD will sync automatically (~2-3 min).' or '' }}
     links:
       - title: GitHub Actions Run
         url: https://github.com/dmitriimashkov/mctl.me/actions/workflows/service.yml
-        if: ${{ parameters.envVars }}
+        if: ${{ parameters.envVars or parameters.secretEnvVars }}
