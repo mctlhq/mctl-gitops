@@ -1,7 +1,10 @@
 image:
-  repository: ghcr.io/mashkovd/mctl-landing
-  tag: "sha-6ed52e5"
+  repository: ghcr.io/dmitriimashkov/platform
+  tag: "sha-ef999ae"
   pullPolicy: Always
+
+imagePullSecrets:
+  - name: ghcr-credentials
 
 service:
   port: 80
