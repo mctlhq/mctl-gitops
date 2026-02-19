@@ -1,0 +1,24 @@
+# =============================================================================
+# Team App Databases
+# =============================================================================
+# One Database CRD per team app. Add new entries when onboarding.
+# Each database is owned by its matching role (defined in cluster.yaml managed.roles).
+#
+# Onboarding a new app:
+# 1. Add role + pg_hba entry in cluster.yaml
+# 2. Add Database CRD below
+# 3. Add ExternalSecret in secrets.yaml
+# 4. Create Vault secret at platform/teams/<team>/<app>/database
+# =============================================================================
+
+# --- Example: uncomment and customize when onboarding first team app ---
+# apiVersion: postgresql.cnpg.io/v1
+# kind: Database
+# metadata:
+#   name: team1-app1-db
+# spec:
+#   name: team1_app1
+#   owner: team1_app1
+#   cluster:
+#     name: shared-pg
+#   databaseReclaimPolicy: retain
