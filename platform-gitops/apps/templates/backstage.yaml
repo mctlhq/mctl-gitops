@@ -64,11 +64,17 @@ spec:
                 port: 7007
               database:
                 client: pg
+                pluginDivisionMode: schema
                 connection:
-                  host: backstage-postgresql
-                  port: "5432"
-                  user: backstage
-                  password: backstage
+                  host: ${POSTGRES_HOST}
+                  port: ${POSTGRES_PORT}
+                  user: ${POSTGRES_USER}
+                  password: ${POSTGRES_PASSWORD}
+                  database: ${POSTGRES_DB}
+                knexConfig:
+                  pool:
+                    min: 0
+                    max: 7
             auth:
               environment: production
               providers:
@@ -165,15 +171,9 @@ spec:
                   rules:
                     - allow: [Template]
 
+        # PostgreSQL subchart disabled — using shared CNPG cluster in platform-db namespace
         postgresql:
-          enabled: true
-          auth:
-            username: backstage
-            password: backstage
-          architecture: standalone
-          primary:
-            persistence:
-              storageClass: longhorn
+          enabled: false
 
   destination:
     server: {{ .Values.spec.destination.server }}
