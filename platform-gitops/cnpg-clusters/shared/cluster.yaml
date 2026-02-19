@@ -40,7 +40,7 @@ spec:
     roles:
       - name: backstage
         login: true
-        connectionLimit: 20
+        connectionLimit: 50  # 11 plugins * 3 conns + replica conns
         ensure: present
         passwordSecret:
           name: backstage-db-creds
