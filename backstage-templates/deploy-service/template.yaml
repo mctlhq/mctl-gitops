@@ -2,13 +2,14 @@ apiVersion: scaffolder.backstage.io/v1beta3
 kind: Template
 metadata:
   name: deploy-service
-  title: Deploy Web Service
-  description: Build & deploy a web service with ingress to the preview cluster
+  title: Deploy Service
+  description: Build & deploy a service to the preview cluster. Provide a host for web services with ingress, or leave it empty for a background worker.
   tags:
     - deploy
     - kubernetes
     - preview
     - service
+    - worker
 spec:
   owner: group:admin
   type: service
@@ -53,19 +54,17 @@ spec:
           description: "Fine-grained PAT with 'Contents: Read' scope. Create at: https://github.com/settings/tokens?type=beta"
           ui:field: Secret
 
-    - title: Service Configuration
-      required:
-        - port
-        - host
+    - title: Network Configuration (optional)
       properties:
         port:
           title: Port
           type: number
           default: 8080
+          description: "HTTP port. Required for web services with ingress."
         host:
           title: Ingress Host
           type: string
-          description: "e.g. myapp.preview.mctl.me"
+          description: "Ingress hostname (e.g. myapp.preview.mctl.me). Leave empty to deploy as a background worker."
 
     - title: Environment Variables
       properties:
@@ -121,12 +120,12 @@ spec:
           action: onboard
           team_name: ${{ parameters.teamName | parseEntityRef | pick('name') }}
           service_name: ${{ parameters.serviceName }}
-          service_type: base-service
+          service_type: ${{ 'base-service' if parameters.host else 'worker-service' }}
           dockerfile_repo: ${{ parameters.dockerfileRepo }}
           dockerfile_path: ${{ parameters.dockerfilePath | default('Dockerfile') }}
           git_tag: ${{ parameters.gitTag | default('') }}
           port: ${{ parameters.port | string }}
-          host: ${{ parameters.host }}
+          host: ${{ parameters.host | default('') }}
           env_vars: ${{ parameters.envVars | default('') }}
           secret_env_vars: ${{ parameters.secretEnvVars | default('') }}
 
