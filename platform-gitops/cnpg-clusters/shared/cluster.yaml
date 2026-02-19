@@ -28,8 +28,9 @@ spec:
       idle_in_transaction_session_timeout: "300s"
       log_min_duration_statement: "1000"  # log queries >1s
     pg_hba:
-      # Backstage — only its own database (no SSL required for intra-cluster traffic)
+      # Backstage — access to own db + postgres db (assertDatabaseExists check)
       - host backstage backstage all scram-sha-256
+      - host postgres backstage all scram-sha-256
       # Team apps — each role only its own database
       # Add new entries when onboarding a new app:
       # - host <db_name> <role_name> all scram-sha-256
