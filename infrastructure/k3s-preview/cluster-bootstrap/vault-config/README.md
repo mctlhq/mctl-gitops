@@ -1,34 +1,56 @@
-# Vault policies per team
-# Apply after Vault is initialized and unsealed.
-#
-# Usage:
-#   vault policy write team-developers vault-policy-developers.hcl
-#   vault policy write team-control vault-policy-control.hcl
-#
-# To add a new team, create a file with:
-#   path "secret/data/preprod/<TEAM_NAME>/*" {
-#     capabilities = ["read", "list"]
-#   }
+# Vault Policies
 
-# --- Team: developers ---
-# File: vault-policy-developers.hcl
-# path "secret/data/preprod/developers/*" {
-#   capabilities = ["read", "list"]
-# }
+Apply after Vault is initialized and unsealed.
 
-# --- Team: control ---
-# File: vault-policy-control.hcl
-# path "secret/data/preprod/control/*" {
-#   capabilities = ["read", "list"]
-# }
+## Policies
 
-# --- ESO read-all policy ---
-# This policy is used by the ExternalSecrets Operator service account.
-# It needs read access to all team secrets.
-# File: vault-policy-external-secrets-read.hcl
-# path "secret/data/preprod/*" {
-#   capabilities = ["read"]
-# }
-# path "secret/metadata/preprod/*" {
-#   capabilities = ["read", "list"]
-# }
+### external-secrets-read
+Used by the ExternalSecrets Operator (ESO) service account.
+Grants read access to all platform and team secrets.
+
+```bash
+vault policy write external-secrets-read vault-policy-external-secrets-read.hcl
+```
+
+### backstage-teams-rw
+Used by the Backstage VAULT_TOKEN (injected via backstage-secrets ExternalSecret).
+Grants read/write access to `secret/teams/*/*` so Backstage scaffolder templates
+can manage service secrets via the /proxy/vault endpoint.
+
+```bash
+vault policy write backstage-teams-rw vault-policy-backstage-teams-rw.hcl
+```
+
+Create/update the Backstage Vault token with both policies:
+```bash
+vault token create \
+  -policy=backstage-teams-rw \
+  -policy=external-secrets-read \
+  -no-parent \
+  -period=87600h \
+  -orphan \
+  -display-name=backstage
+
+# Store the new token:
+vault kv put secret/platform/backstage/vault-token token="<TOKEN>"
+```
+
+## Vault Secret Structure
+
+```
+secret/
+├── platform/
+│   ├── github-app          ← GitHub App credentials (ArgoCD + Backstage)
+│   │   app-id, client-id, client-secret, installation-id, private-key
+│   ├── argocd/
+│   │   └── github-oauth    ← ArgoCD Dex OAuth (client-id, client-secret)
+│   ├── backstage/
+│   │   ├── vault-token     ← Backstage Vault API token
+│   │   └── database        ← Backstage PostgreSQL credentials
+│   └── vault/
+│       └── r2-backup       ← Vault backup R2 credentials
+└── teams/
+    └── {team}/
+        └── {service}       ← Service secrets (KEY=value, managed via Backstage UI)
+            /repo-pat        ← Private registry PAT (optional)
+```

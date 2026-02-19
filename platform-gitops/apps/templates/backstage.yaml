@@ -88,7 +88,11 @@ spec:
             integrations:
               github:
                 - host: github.com
-                  token: ${GITHUB_TOKEN}
+                  apps:
+                    - appId: ${GITHUB_APP_ID}
+                      clientId: ${GITHUB_APP_CLIENT_ID}
+                      clientSecret: ${GITHUB_APP_CLIENT_SECRET}
+                      privateKey: ${GITHUB_APP_PRIVATE_KEY}
             permission:
               enabled: true
             proxy:
@@ -103,6 +107,7 @@ spec:
                     - POST
                     - PUT
                     - DELETE
+                    - PATCH
                   allowedHeaders:
                     - Content-Type
             catalog:
@@ -168,6 +173,10 @@ spec:
                     - allow: [Template]
                 - type: url
                   target: https://github.com/dmitriimashkov/mctl.me/blob/main/backstage-templates/delete-service/template.yaml
+                  rules:
+                    - allow: [Template]
+                - type: url
+                  target: https://github.com/dmitriimashkov/mctl.me/blob/main/backstage-templates/update-service-config/template.yaml
                   rules:
                     - allow: [Template]
 
