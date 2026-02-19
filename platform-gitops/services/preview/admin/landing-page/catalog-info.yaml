@@ -4,7 +4,7 @@ metadata:
   name: landing-page
   description: mctl.me platform landing page with access request form
   annotations:
-    github.com/project-slug: dmitriimashkov/mctl-landing
+    github.com/project-slug: dmitriimashkov/platform
     argocd/app-name: preview-admin-landing-page
   links:
     - url: https://platform.mctl.me
