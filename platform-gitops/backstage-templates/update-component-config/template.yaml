@@ -15,31 +15,31 @@ spec:
   type: configuration
 
   parameters:
-    - title: Component
+    - title: Service
       required:
         - teamName
         - serviceName
       properties:
         teamName:
-          title: Team Name
+          title: Team
           type: string
           description: "Select your team"
           ui:field: MyGroupsPicker
         serviceName:
-          title: Component Name
+          title: Service Name
           type: string
-          description: "Select the deployed component to update"
+          description: "Select the deployed service to update"
           ui:field: OwnedEntityPicker
           ui:options:
             allowedKinds:
               - Component
 
-    - title: Environment Variables (non-secret)
+    - title: Environment
       properties:
         envVars:
           title: Environment Variables
           type: string
-          description: "Plaintext KEY=value pairs (one per line). Stored in git — visible in Kubernetes manifests."
+          description: "KEY=VALUE pairs, one per line. Stored as plaintext in GitOps manifests — do not put secrets here."
           ui:widget: textarea
           ui:options:
             rows: 6
@@ -48,12 +48,12 @@ spec:
             TIMEOUT_SECONDS=30
             FEATURE_FLAG=true
 
-    - title: Secrets
+    - title: Secure Variables
       properties:
         secretEnvVars:
-          title: Secret Environment Variables
+          title: Secure Variables
           type: string
-          description: "Plaintext KEY=value pairs (one per line). Will be stored in Vault and injected securely."
+          description: "KEY=VALUE pairs, one per line. Stored securely in Vault — never exposed in Git."
           ui:widget: textarea
           ui:options:
             minRows: 10
@@ -82,7 +82,7 @@ spec:
     text:
       - title: Summary
         content: |
-          **Component:** `${{ parameters.teamName | parseEntityRef | pick('name') }}/${{ parameters.serviceName | parseEntityRef | pick('name') }}`
+          **Service:** `${{ parameters.teamName | parseEntityRef | pick('name') }}/${{ parameters.serviceName | parseEntityRef | pick('name') }}`
 
           ${{ parameters.secretEnvVars and '✅ **Secrets** update dispatched — will be stored in Vault and synced to Kubernetes automatically.' or '' }}
 
