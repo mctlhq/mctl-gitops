@@ -250,7 +250,7 @@ jobs:
 
       - name: Generate GitHub App token
         id: app_token
-        if: inputs.action != 'update-config' && steps.repo_access.outputs.has_vault_pat != 'true' && secrets.APP_ID != ''
+        if: inputs.action != 'update-config' && steps.repo_access.outputs.has_vault_pat != 'true'
         uses: actions/create-github-app-token@v1
         continue-on-error: true
         with:
@@ -392,7 +392,7 @@ jobs:
 
       - name: Generate GitHub App token
         id: app_token
-        if: steps.vault_pat.outputs.has_pat != 'true' && secrets.APP_ID != ''
+        if: steps.vault_pat.outputs.has_pat != 'true'
         uses: actions/create-github-app-token@v1
         continue-on-error: true
         with:
