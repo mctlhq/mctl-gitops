@@ -210,8 +210,12 @@ jobs:
         if: inputs.action != 'update-config'
         run: |
           REPO="${{ inputs.dockerfile_repo }}"
+          OWNER="${REPO%%/*}"
+          REPO_NAME="${REPO##*/}"
+          echo "repo_owner=${OWNER}" >> $GITHUB_OUTPUT
+          echo "repo_name=${REPO_NAME}" >> $GITHUB_OUTPUT
 
-          # Try with PAT from Vault first (for private repos)
+          # Tier 1: Try Vault PAT
           PAT=""
           if [[ -n "${{ secrets.VAULT_ADDR }}" && -n "${{ secrets.VAULT_TOKEN }}" ]]; then
             echo "🔑 Vault configured — fetching repo PAT…"
@@ -238,22 +242,66 @@ jobs:
           if [[ -n "$PAT" ]]; then
             echo "::add-mask::${PAT}"
             echo "repo_pat=${PAT}" >> $GITHUB_OUTPUT
-            echo "🔍 Testing repo access with PAT (length: ${#PAT})"
+            echo "has_vault_pat=true" >> $GITHUB_OUTPUT
+            echo "access_method=vault_pat" >> $GITHUB_OUTPUT
+          else
+            echo "has_vault_pat=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate GitHub App token
+        id: app_token
+        if: inputs.action != 'update-config' && steps.repo_access.outputs.has_vault_pat != 'true' && secrets.APP_ID != ''
+        uses: actions/create-github-app-token@v1
+        continue-on-error: true
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ steps.repo_access.outputs.repo_owner }}
+          repositories: ${{ steps.repo_access.outputs.repo_name }}
+
+      - name: Verify repo access with resolved token
+        id: repo_verify
+        if: inputs.action != 'update-config'
+        run: |
+          REPO="${{ inputs.dockerfile_repo }}"
+
+          # Determine which token to use (Tier 1 → 2 → 3)
+          if [[ "${{ steps.repo_access.outputs.has_vault_pat }}" == "true" ]]; then
+            TOKEN="${{ steps.repo_access.outputs.repo_pat }}"
+            METHOD="vault_pat"
+            echo "🔑 Using Vault PAT"
+          elif [[ -n "${{ steps.app_token.outputs.token }}" ]]; then
+            TOKEN="${{ steps.app_token.outputs.token }}"
+            METHOD="app_token"
+            echo "🤖 Using GitHub App token"
+          else
+            TOKEN=""
+            METHOD="public"
+            echo "🌐 No PAT or App token — trying public access"
+          fi
+
+          if [[ -n "$TOKEN" ]]; then
+            echo "::add-mask::${TOKEN}"
+            echo "🔍 Testing repo access with ${METHOD}..."
             set -o pipefail
-            if git ls-remote "https://x-access-token:${PAT}@github.com/${REPO}" HEAD 2>&1 | tee /tmp/git-output.log; then
-              echo "✅ Private repo accessible with PAT"
-              echo "is_private=true" >> $GITHUB_OUTPUT
+            if git ls-remote "https://x-access-token:${TOKEN}@github.com/${REPO}" HEAD 2>&1 | tee /tmp/git-output.log; then
+              echo "✅ Repo accessible via ${METHOD}"
+              echo "clone_token=${TOKEN}" >> $GITHUB_OUTPUT
+              echo "access_method=${METHOD}" >> $GITHUB_OUTPUT
             else
-              echo "::error::PAT provided but cannot access repo: ${REPO}"
+              echo "::error::Cannot access repo ${REPO} with ${METHOD}"
               echo "::error::Git output: $(cat /tmp/git-output.log 2>/dev/null || echo 'no output')"
               exit 1
             fi
           else
             if git ls-remote "https://github.com/${REPO}" HEAD > /dev/null 2>&1; then
               echo "✅ Public repo accessible"
-              echo "is_private=false" >> $GITHUB_OUTPUT
+              echo "access_method=public" >> $GITHUB_OUTPUT
             else
-              echo "::error::Cannot access repo: ${REPO}. If private, ensure PAT is saved via Backstage and Vault is reachable."
+              echo "::error::Cannot access repo: ${REPO}."
+              echo "::error::For private repos, either:"
+              echo "::error::  1. Install the mctl-me GitHub App on the repo owner's account"
+              echo "::error::  2. Provide a PAT via Backstage or CLI (--pat flag)"
               exit 1
             fi
           fi
@@ -308,6 +356,10 @@ jobs:
       - name: Get repo PAT from Vault
         id: vault_pat
         run: |
+          REPO="${{ inputs.dockerfile_repo }}"
+          echo "repo_owner=${REPO%%/*}" >> $GITHUB_OUTPUT
+          echo "repo_name=${REPO##*/}" >> $GITHUB_OUTPUT
+
           PAT=""
           if [[ -n "${{ secrets.VAULT_ADDR }}" && -n "${{ secrets.VAULT_TOKEN }}" ]]; then
             echo "🔑 Vault configured — fetching repo PAT…"
@@ -338,42 +390,29 @@ jobs:
             echo "has_pat=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Validate PAT and repository access
-        if: steps.vault_pat.outputs.has_pat == 'true'
-        env:
-          PAT: ${{ steps.vault_pat.outputs.pat }}
+      - name: Generate GitHub App token
+        id: app_token
+        if: steps.vault_pat.outputs.has_pat != 'true' && secrets.APP_ID != ''
+        uses: actions/create-github-app-token@v1
+        continue-on-error: true
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ steps.vault_pat.outputs.repo_owner }}
+          repositories: ${{ steps.vault_pat.outputs.repo_name }}
+
+      - name: Resolve checkout token
+        id: checkout_token
         run: |
-          REPO="${{ inputs.dockerfile_repo }}"
-          echo "🔐 Validating PAT access to repository: $REPO"
-          
-          # Test repository access with PAT
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-            -H "Authorization: token ${PAT}" \
-            "https://api.github.com/repos/$REPO")
-          
-          if [[ "$HTTP_CODE" != "200" ]]; then
-            echo "::error::Failed to access repository $REPO with provided PAT (HTTP $HTTP_CODE)"
-            echo "::error::Please verify:"
-            echo "::error::  1. PAT is valid and not expired"
-            echo "::error::  2. PAT has 'Contents: Read' scope"
-            echo "::error::  3. Repository exists and is accessible"
-            exit 1
-          fi
-          
-          echo "✅ PAT is valid and repository is accessible"
-          
-          # Check PAT scopes (for fine-grained tokens, metadata is limited)
-          SCOPES=$(curl -s -I -H "Authorization: token ${PAT}" \
-            "https://api.github.com/repos/$REPO" \
-            | grep -i "x-oauth-scopes:" | cut -d: -f2 | tr -d ' \r\n')
-          
-          if [[ -n "$SCOPES" ]]; then
-            echo "📋 PAT scopes: $SCOPES"
-            if [[ ! "$SCOPES" =~ "repo" ]] && [[ ! "$SCOPES" =~ "public_repo" ]]; then
-              echo "::warning::PAT may not have required 'repo' or 'public_repo' scope"
-            fi
+          if [[ "${{ steps.vault_pat.outputs.has_pat }}" == "true" ]]; then
+            echo "token=${{ steps.vault_pat.outputs.pat }}" >> $GITHUB_OUTPUT
+            echo "🔑 Using Vault PAT for checkout"
+          elif [[ -n "${{ steps.app_token.outputs.token }}" ]]; then
+            echo "token=${{ steps.app_token.outputs.token }}" >> $GITHUB_OUTPUT
+            echo "🤖 Using GitHub App token for checkout"
           else
-            echo "📋 Fine-grained PAT detected (scope validation skipped)"
+            echo "token=${{ github.token }}" >> $GITHUB_OUTPUT
+            echo "🌐 Using github.token for checkout (public repos only)"
           fi
 
       - name: Checkout source repo
@@ -381,7 +420,7 @@ jobs:
         with:
           repository: ${{ inputs.dockerfile_repo }}
           ref: ${{ inputs.git_tag || '' }}
-          token: ${{ steps.vault_pat.outputs.has_pat == 'true' && steps.vault_pat.outputs.pat || github.token }}
+          token: ${{ steps.checkout_token.outputs.token }}
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
