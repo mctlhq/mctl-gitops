@@ -283,14 +283,9 @@ jobs:
           if [[ -n "$TOKEN" ]]; then
             echo "::add-mask::${TOKEN}"
             echo "🔍 Testing repo access with ${METHOD}..."
-            echo "   Token length: ${#TOKEN}"
-            # Debug: verify token via API
-            API_RESP=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: token ${TOKEN}" "https://api.github.com/repos/${REPO}" 2>/dev/null || true)
-            echo "   API check: HTTP ${API_RESP}"
-            REPOS_RESP=$(curl -s -H "Authorization: token ${TOKEN}" "https://api.github.com/installation/repositories?per_page=5" 2>/dev/null | jq -r '.repositories[]?.full_name // empty' 2>/dev/null || true)
-            echo "   Accessible repos: ${REPOS_RESP:-none}"
             set -o pipefail
-            if git ls-remote "https://x-access-token:${TOKEN}@github.com/${REPO}" HEAD 2>&1 | tee /tmp/git-output.log; then
+            # Use -c credential.helper= to prevent Actions' GITHUB_TOKEN credential helper from overriding our token
+            if git -c credential.helper= ls-remote "https://x-access-token:${TOKEN}@github.com/${REPO}" HEAD 2>&1 | tee /tmp/git-output.log; then
               echo "✅ Repo accessible via ${METHOD}"
               echo "clone_token=${TOKEN}" >> $GITHUB_OUTPUT
               echo "access_method=${METHOD}" >> $GITHUB_OUTPUT
