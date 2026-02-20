@@ -15,11 +15,11 @@ on:
         description: "Team name (e.g. payments)"
         required: true
         type: string
-      service_name:
+      component_name:
         description: "Service name (e.g. payment-api)"
         required: true
         type: string
-      service_type:
+      component_type:
         description: "Helm chart type (onboard only)"
         required: false
         type: choice
@@ -72,19 +72,19 @@ jobs:
     outputs:
       image_tag: ${{ steps.tag.outputs.image_tag }}
       service_dir: ${{ steps.paths.outputs.service_dir }}
-      service_type: ${{ steps.paths.outputs.service_type }}
+      component_type: ${{ steps.paths.outputs.component_type }}
     steps:
       - name: Validate naming conventions
         run: |
           TEAM="${{ inputs.team_name }}"
-          SERVICE="${{ inputs.service_name }}"
+          SERVICE="${{ inputs.component_name }}"
 
           if [[ ! "$TEAM" =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]]; then
             echo "::error::team_name must be lowercase alphanumeric with hyphens, ≤63 chars. Got: $TEAM"
             exit 1
           fi
           if [[ ! "$SERVICE" =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]]; then
-            echo "::error::service_name must be lowercase alphanumeric with hyphens, ≤63 chars. Got: $SERVICE"
+            echo "::error::component_name must be lowercase alphanumeric with hyphens, ≤63 chars. Got: $SERVICE"
             exit 1
           fi
 
@@ -123,7 +123,7 @@ jobs:
           VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
         run: |
           TEAM="${{ inputs.team_name }}"
-          SERVICE="${{ inputs.service_name }}"
+          SERVICE="${{ inputs.component_name }}"
           SECRET_TEXT="${{ inputs.secret_env_vars }}"
           
           echo "🔐 Parsing and saving secrets to Vault..."
@@ -162,7 +162,7 @@ jobs:
         id: paths
         run: |
           TEAM="${{ inputs.team_name }}"
-          SERVICE="${{ inputs.service_name }}"
+          SERVICE="${{ inputs.component_name }}"
           ACTION="${{ inputs.action }}"
 
           # For deploy/update-config, auto-detect service type
@@ -177,9 +177,9 @@ jobs:
               exit 1
             fi
           else
-            TYPE="${{ inputs.service_type }}"
+            TYPE="${{ inputs.component_type }}"
             if [[ -z "$TYPE" ]]; then
-              echo "::error::service_type is required for onboard"
+              echo "::error::component_type is required for onboard"
               exit 1
             fi
           fi
@@ -202,10 +202,10 @@ jobs:
           fi
 
           echo "service_dir=${DIR}" >> $GITHUB_OUTPUT
-          echo "service_type=${TYPE}" >> $GITHUB_OUTPUT
+          echo "component_type=${TYPE}" >> $GITHUB_OUTPUT
 
       - name: Validate base-service inputs
-        if: inputs.action == 'onboard' && inputs.service_type == 'base-service'
+        if: inputs.action == 'onboard' && inputs.component_type == 'base-service'
         run: |
           if [[ -z "${{ inputs.host }}" ]]; then
             echo "::error::host is required for base-service onboard"
@@ -226,7 +226,7 @@ jobs:
           PAT=""
           if [[ -n "${{ secrets.VAULT_ADDR }}" && -n "${{ secrets.VAULT_TOKEN }}" ]]; then
             echo "🔑 Vault configured — fetching repo PAT…"
-            VAULT_URL="${{ secrets.VAULT_ADDR }}/v1/secret/data/teams/${{ inputs.team_name }}/${{ inputs.service_name }}/repo-pat"
+            VAULT_URL="${{ secrets.VAULT_ADDR }}/v1/secret/data/teams/${{ inputs.team_name }}/${{ inputs.component_name }}/repo-pat"
             HTTP_CODE=$(curl -sL -o /tmp/vault-resp.json -w "%{http_code}" \
               -H "X-Vault-Token: ${{ secrets.VAULT_TOKEN }}" \
               "$VAULT_URL" 2>/dev/null || echo "000")
@@ -334,7 +334,7 @@ jobs:
             # Auto-increment: get latest semver tag from GHCR
             LATEST=""
             API_RESPONSE=$(gh api \
-              "/users/${{ env.IMAGE_OWNER }}/packages/container/${{ inputs.service_name }}/versions" \
+              "/users/${{ env.IMAGE_OWNER }}/packages/container/${{ inputs.component_name }}/versions" \
               --jq '[.[] | .metadata.container.tags[] | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))] | sort | last // empty' \
               2>/dev/null) && LATEST="$API_RESPONSE" || true
 
@@ -372,7 +372,7 @@ jobs:
           PAT=""
           if [[ -n "${{ secrets.VAULT_ADDR }}" && -n "${{ secrets.VAULT_TOKEN }}" ]]; then
             echo "🔑 Vault configured — fetching repo PAT…"
-            VAULT_URL="${{ secrets.VAULT_ADDR }}/v1/secret/data/teams/${{ inputs.team_name }}/${{ inputs.service_name }}/repo-pat"
+            VAULT_URL="${{ secrets.VAULT_ADDR }}/v1/secret/data/teams/${{ inputs.team_name }}/${{ inputs.component_name }}/repo-pat"
             HTTP_CODE=$(curl -sL -o /tmp/vault-resp.json -w "%{http_code}" \
               -H "X-Vault-Token: ${{ secrets.VAULT_TOKEN }}" \
               "$VAULT_URL" 2>/dev/null || echo "000")
@@ -445,14 +445,14 @@ jobs:
           file: ${{ inputs.dockerfile_path }}
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ inputs.service_name }}:${{ needs.validate.outputs.image_tag }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ inputs.service_name }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ inputs.component_name }}:${{ needs.validate.outputs.image_tag }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ inputs.component_name }}:latest
 
       - name: Report failure
         if: failure()
         run: |
           echo "## ❌ Docker Build Failed" >> $GITHUB_STEP_SUMMARY
-          echo "Failed to build \`${{ inputs.service_name }}\`. Check logs above." >> $GITHUB_STEP_SUMMARY
+          echo "Failed to build \`${{ inputs.component_name }}\`. Check logs above." >> $GITHUB_STEP_SUMMARY
 
   apply:
     name: Apply config
@@ -468,7 +468,7 @@ jobs:
       - name: Create values.yaml (onboard)
         if: inputs.action == 'onboard'
         run: |
-          TYPE="${{ needs.validate.outputs.service_type }}"
+          TYPE="${{ needs.validate.outputs.component_type }}"
           DIR="${{ needs.validate.outputs.service_dir }}"
           TAG="${{ needs.validate.outputs.image_tag }}"
 
@@ -485,7 +485,7 @@ jobs:
           # Create values.yaml
           sed \
             -e "s|__TEAM_NAME__|${{ inputs.team_name }}|g" \
-            -e "s|__SERVICE_NAME__|${{ inputs.service_name }}|g" \
+            -e "s|__SERVICE_NAME__|${{ inputs.component_name }}|g" \
             -e "s|__IMAGE_TAG__|${TAG}|g" \
             -e "s|__PORT__|${{ inputs.port }}|g" \
             -e "s|__HOST__|${{ inputs.host }}|g" \
@@ -512,7 +512,7 @@ jobs:
             echo "🔐 Adding ExternalSecret configuration..."
             
             # Create externalSecret section
-            yq eval -i '.externalSecret.targetSecret = "${{ inputs.service_name }}-secrets"' "${DIR}/values.yaml"
+            yq eval -i '.externalSecret.targetSecret = "${{ inputs.component_name }}-secrets"' "${DIR}/values.yaml"
             yq eval -i '.externalSecret.data = []' "${DIR}/values.yaml"
             
             # Parse and add each secret
@@ -520,11 +520,11 @@ jobs:
               [[ -z "$key" || "$key" =~ ^# ]] && continue
               key=$(echo "$key" | xargs)
               
-              yq eval -i ".externalSecret.data += [{\"secretKey\": \"${key}\", \"remoteKey\": \"teams/${{ inputs.team_name }}/${{ inputs.service_name }}\", \"property\": \"${key}\"}]" "${DIR}/values.yaml"
+              yq eval -i ".externalSecret.data += [{\"secretKey\": \"${key}\", \"remoteKey\": \"teams/${{ inputs.team_name }}/${{ inputs.component_name }}\", \"property\": \"${key}\"}]" "${DIR}/values.yaml"
             done <<< "${{ inputs.secret_env_vars }}"
             
             # Add envFrom section
-            yq eval -i '.envFrom = [{"secretRef": {"name": "${{ inputs.service_name }}-secrets"}}]' "${DIR}/values.yaml"
+            yq eval -i '.envFrom = [{"secretRef": {"name": "${{ inputs.component_name }}-secrets"}}]' "${DIR}/values.yaml"
             
             echo "✅ Added $(echo "${{ inputs.secret_env_vars }}" | grep -c '=' || echo 0) secret environment variables"
           fi
@@ -532,14 +532,14 @@ jobs:
           # Create catalog-info.yaml for Backstage
           sed \
             -e "s|__TEAM_NAME__|${{ inputs.team_name }}|g" \
-            -e "s|__SERVICE_NAME__|${{ inputs.service_name }}|g" \
+            -e "s|__SERVICE_NAME__|${{ inputs.component_name }}|g" \
             -e "s|__COMPONENT_TYPE__|${COMPONENT_TYPE}|g" \
             ".github/templates/catalog-info.yaml.tpl" > "${DIR}/catalog-info.yaml"
           
           # Create vault-cleanup.yaml for ArgoCD PreDelete hook
           sed \
             -e "s|__TEAM_NAME__|${{ inputs.team_name }}|g" \
-            -e "s|__SERVICE_NAME__|${{ inputs.service_name }}|g" \
+            -e "s|__SERVICE_NAME__|${{ inputs.component_name }}|g" \
             ".github/templates/vault-cleanup.yaml.tpl" > "${DIR}/vault-cleanup.yaml"
 
       - name: Update image tag (deploy)
@@ -557,7 +557,7 @@ jobs:
         if: inputs.action == 'update-config'
         run: |
           TEAM="${{ inputs.team_name }}"
-          SERVICE="${{ inputs.service_name }}"
+          SERVICE="${{ inputs.component_name }}"
           ENV_VARS="${{ inputs.env_vars }}"
 
           # Auto-detect service directory
@@ -609,7 +609,7 @@ jobs:
       - name: Validate Helm template
         if: inputs.action != 'update-config'
         run: |
-          TYPE="${{ needs.validate.outputs.service_type }}"
+          TYPE="${{ needs.validate.outputs.component_type }}"
           DIR="${{ needs.validate.outputs.service_dir }}"
 
           curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
@@ -636,9 +636,9 @@ jobs:
           if [[ "$ACTION" == "onboard" ]]; then
             git add "${DIR}/catalog-info.yaml"
             git add "${DIR}/vault-cleanup.yaml"
-            git commit -m "feat: onboard ${{ inputs.team_name }}/${{ inputs.service_name }} (${TAG})"
+            git commit -m "feat: onboard ${{ inputs.team_name }}/${{ inputs.component_name }} (${TAG})"
           else
-            git commit -m "deploy: ${{ inputs.team_name }}/${{ inputs.service_name }} → ${TAG}"
+            git commit -m "deploy: ${{ inputs.team_name }}/${{ inputs.component_name }} → ${TAG}"
           fi
 
           git push
@@ -655,8 +655,8 @@ jobs:
           echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| **Team** | \`${{ inputs.team_name }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Service** | \`${{ inputs.service_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Service** | \`${{ inputs.component_name }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Action** | \`${ACTION}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Image** | \`${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ inputs.service_name }}:${TAG}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Image** | \`${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ inputs.component_name }}:${TAG}\` |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "ArgoCD will sync automatically." >> $GITHUB_STEP_SUMMARY

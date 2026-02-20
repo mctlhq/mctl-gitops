@@ -54,8 +54,8 @@ spec:
         branchOrTagName: main
         workflowInputs:
           team_name: ${{ steps['parse-service'].output.entity.metadata.labels.team }}
-          service_name: ${{ steps['parse-service'].output.entity.metadata.name }}
-          service_type: ${{ steps['parse-service'].output.entity.spec.type === 'worker' and 'worker-service' or 'base-service' }}
+          component_name: ${{ steps['parse-service'].output.entity.metadata.name }}
+          component_type: ${{ steps['parse-service'].output.entity.spec.type === 'worker' and 'worker-service' or 'base-service' }}
           delete_vault_secrets: "true"
 
   output:
