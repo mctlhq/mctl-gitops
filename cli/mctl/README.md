@@ -11,7 +11,7 @@ Same operations as the Backstage UI, but from your terminal.
 ## Install
 
 ```bash
-cd tools/mctl
+cd cli/mctl
 make install
 ```
 

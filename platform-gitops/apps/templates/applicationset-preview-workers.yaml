@@ -30,7 +30,7 @@ spec:
       sources:
         - repoURL: {{ .Values.spec.source.repoURL }}
           targetRevision: {{ .Values.spec.source.targetRevision }}
-          path: helm-charts/worker-service
+          path: platform-gitops/helm-charts/worker-service
           helm:
             valueFiles:
               - $values/{{ `{{ .path.path }}` }}/values.yaml

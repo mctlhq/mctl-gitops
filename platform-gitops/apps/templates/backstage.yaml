@@ -168,19 +168,19 @@ spec:
               locations:
                 # Backstage templates (static, no need for provider-based discovery)
                 - type: url
-                  target: https://github.com/dmitriimashkov/mctl.me/blob/main/backstage-templates/deploy-service/template.yaml
+                  target: https://github.com/dmitriimashkov/mctl.me/blob/main/platform-gitops/backstage-templates/deploy-component/template.yaml
                   rules:
                     - allow: [Template]
                 - type: url
-                  target: https://github.com/dmitriimashkov/mctl.me/blob/main/backstage-templates/deploy-worker/template.yaml
+                  target: https://github.com/dmitriimashkov/mctl.me/blob/main/platform-gitops/backstage-templates/deploy-worker/template.yaml
                   rules:
                     - allow: [Template]
                 - type: url
-                  target: https://github.com/dmitriimashkov/mctl.me/blob/main/backstage-templates/delete-service/template.yaml
+                  target: https://github.com/dmitriimashkov/mctl.me/blob/main/platform-gitops/backstage-templates/delete-component/template.yaml
                   rules:
                     - allow: [Template]
                 - type: url
-                  target: https://github.com/dmitriimashkov/mctl.me/blob/main/backstage-templates/update-service-config/template.yaml
+                  target: https://github.com/dmitriimashkov/mctl.me/blob/main/platform-gitops/backstage-templates/update-component-config/template.yaml
                   rules:
                     - allow: [Template]
 

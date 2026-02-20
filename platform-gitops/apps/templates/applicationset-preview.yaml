@@ -35,7 +35,7 @@ spec:
           # 2. Create a second ApplicationSet with git file generator that reads
           #    a "chart" field from each service's values.yaml
           # 3. Or use convention: if service dir contains Chart.yaml → use it as chart
-          path: helm-charts/base-service
+          path: platform-gitops/helm-charts/base-service
           helm:
             valueFiles:
               - $values/{{ `{{ .path.path }}` }}/values.yaml
