@@ -143,6 +143,17 @@ spec:
                         minutes: 5
                       timeout:
                         minutes: 3
+                  platformCatalog:
+                    organization: dmitriimashkov
+                    catalogPath: /platform-gitops/catalog-info.yaml
+                    filters:
+                      repository: mctl.me
+                      branch: main
+                    schedule:
+                      frequency:
+                        minutes: 5
+                      timeout:
+                        minutes: 3
                   previewServices:
                     organization: dmitriimashkov
                     catalogPath: /platform-gitops/services/preview/*/*/catalog-info.yaml
@@ -177,6 +188,10 @@ spec:
                     - allow: [Template]
                 - type: url
                   target: https://github.com/dmitriimashkov/mctl.me/blob/main/platform-gitops/backstage-templates/update-component-config/template.yaml
+                  rules:
+                    - allow: [Template]
+                - type: url
+                  target: https://github.com/dmitriimashkov/mctl.me/blob/main/platform-gitops/backstage-templates/provision-database/template.yaml
                   rules:
                     - allow: [Template]
 
