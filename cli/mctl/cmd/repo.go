@@ -10,7 +10,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/dmitriimashkov/mctl.me/tools/mctl/internal/auth"
+	"github.com/dmitriimashkov/mctl.me/cli/mctl/internal/auth"
 	"github.com/spf13/cobra"
 )
 
