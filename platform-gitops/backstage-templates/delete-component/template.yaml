@@ -1,27 +1,26 @@
 apiVersion: scaffolder.backstage.io/v1beta3
 kind: Template
 metadata:
-  name: delete-service
-  title: Delete Component
-  description: Delete a component from the platform (GitOps, ArgoCD, Kubernetes, Vault)
+  name: retire-service
+  title: 🧹 Retire Service
+  description: Permanently remove a service from the platform — deletes GitOps files, ArgoCD app, Kubernetes resources, and Vault secrets.
   tags:
-    - delete
+    - retire
     - cleanup
-    - worker
-    - service
+    - lifecycle
 spec:
   owner: group:admin
-  type: service
+  type: lifecycle
 
   parameters:
-    - title: Select Component to Delete
+    - title: Select Service to Retire
       required:
         - service
       properties:
         service:
-          title: Component to Delete
+          title: Service to Retire
           type: string
-          description: "Select the component you want to delete"
+          description: "Select the service you want to retire"
           ui:field: EntityPicker
           ui:options:
             catalogFilter:
@@ -33,10 +32,10 @@ spec:
         - confirmDeletion
       properties:
         confirmDeletion:
-          title: Type 'DELETE' to confirm
+          title: Type 'RETIRE' to confirm
           type: string
-          description: "⚠️ This action is IRREVERSIBLE. All resources will be permanently deleted (GitOps files, ArgoCD Application, Kubernetes resources, Vault secrets)."
-          pattern: "^DELETE$"
+          description: "⚠️ This action is irreversible. All resources will be permanently removed (GitOps files, ArgoCD app, Kubernetes resources, Vault secrets)."
+          pattern: "^RETIRE$"
 
   steps:
     - id: parse-service
