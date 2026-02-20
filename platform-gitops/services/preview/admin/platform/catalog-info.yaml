@@ -1,0 +1,15 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: platform
+  description: "platform service deployed to preview"
+  annotations:
+    backstage.io/kubernetes-id: platform
+    argocd/app-name: preview-admin-platform
+  labels:
+    team: admin
+    env: preview
+spec:
+  type: service
+  lifecycle: production
+  owner: group:admin
