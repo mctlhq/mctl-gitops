@@ -2,8 +2,8 @@ apiVersion: scaffolder.backstage.io/v1beta3
 kind: Template
 metadata:
   name: delete-service
-  title: Delete Service
-  description: Delete a service or worker from the platform (GitOps, ArgoCD, Kubernetes, Vault)
+  title: Delete Component
+  description: Delete a component from the platform (GitOps, ArgoCD, Kubernetes, Vault)
   tags:
     - delete
     - cleanup
@@ -14,14 +14,14 @@ spec:
   type: service
 
   parameters:
-    - title: Select Service to Delete
+    - title: Select Component to Delete
       required:
         - service
       properties:
         service:
-          title: Service to Delete
+          title: Component to Delete
           type: string
-          description: "Select the service you want to delete"
+          description: "Select the component you want to delete"
           ui:field: EntityPicker
           ui:options:
             catalogFilter:
