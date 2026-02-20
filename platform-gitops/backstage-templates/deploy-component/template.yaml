@@ -1,18 +1,17 @@
 apiVersion: scaffolder.backstage.io/v1beta3
 kind: Template
 metadata:
-  name: deploy-service
-  title: Deploy Component
-  description: Build & deploy a component to the preview cluster. Provide a host for web services with ingress, or leave it empty for a background worker.
+  name: release-service
+  title: 🚀 Release Service
+  description: Build and release a service to the preview cluster. Provide a host for web services, or leave empty for a background worker.
   tags:
+    - release
     - deploy
     - kubernetes
     - preview
-    - service
-    - worker
 spec:
   owner: group:admin
-  type: service
+  type: deployment
 
   parameters:
     - title: Component Info
