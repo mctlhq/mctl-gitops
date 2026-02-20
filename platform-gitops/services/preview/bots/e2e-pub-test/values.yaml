@@ -6,13 +6,10 @@
 image:
   repository: ghcr.io/dmitriimashkov/e2e-pub-test
   tag: "1.0.0"
-
 imagePullSecrets:
   - name: ghcr-credentials
-
 service:
   port: 8080
-
 resources:
   requests:
     cpu: 100m
@@ -20,10 +17,9 @@ resources:
   limits:
     cpu: 500m
     memory: 256Mi
-
 env:
   APP_ENV: preview
-
+  PUBLIC_VAR: yes
 ingress:
   enabled: true
   host: e2e-pub-test.preview.mctl.me
