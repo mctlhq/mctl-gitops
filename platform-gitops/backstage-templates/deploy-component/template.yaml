@@ -116,7 +116,7 @@ spec:
 
     - id: trigger-build
       name: Release service
-      action: github:actions:dispatch
+      action: github:actions:dispatch-and-stream
       input:
         repoUrl: github.com?repo=mctl.me&owner=dmitriimashkov
         workflowId: release-service.yml
@@ -143,9 +143,6 @@ spec:
       - title: Preview URL
         content: "${{ 'https://' + parameters.host if parameters.host else 'N/A — background worker' }}"
     links:
-      - title: Release Pipeline
-        icon: github
-        url: https://github.com/dmitriimashkov/mctl.me/actions/workflows/release-service.yml
       - title: ArgoCD Dashboard
         icon: dashboard
         url: "https://argocd-preview.mctl.me"
