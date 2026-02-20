@@ -24,6 +24,7 @@ spec:
       required:
         - teamName
         - dockerfileRepo
+        - serviceName
         - gitTag
       properties:
         teamName:
@@ -37,6 +38,11 @@ spec:
           description: "Select a repository or type owner/repo"
           pattern: "^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$"
           ui:field: GitHubRepoPicker
+        serviceName:
+          title: Service Name
+          type: string
+          description: "Lowercase name for this service (e.g. my-app). Used as the component identifier."
+          pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
         repoPat:
           title: Repository PAT (optional)
           type: string
@@ -64,7 +70,7 @@ spec:
         host:
           title: Ingress Host
           type: string
-          description: "Public hostname (e.g. myapp.preview.mctl.me). Leave empty for a background worker — no ingress will be created."
+          description: "Public hostname (e.g. myapp.mctl.me). Leave empty for a background worker — no ingress will be created."
 
     - title: Environment
       properties:
@@ -101,7 +107,7 @@ spec:
       action: http:backstage:request
       input:
         method: POST
-        path: /proxy/vault/v1/secret/data/teams/${{ parameters.teamName | parseEntityRef | pick('name') }}/${{ parameters.dockerfileRepo | repoName }}/repo-pat
+        path: /proxy/vault/v1/secret/data/teams/${{ parameters.teamName | parseEntityRef | pick('name') }}/${{ parameters.serviceName }}/repo-pat
         headers:
           Content-Type: application/json
         body:
@@ -118,7 +124,7 @@ spec:
         workflowInputs:
           action: onboard
           team_name: ${{ parameters.teamName | parseEntityRef | pick('name') }}
-          component_name: ${{ parameters.dockerfileRepo | repoName }}
+          component_name: ${{ parameters.serviceName }}
           component_type: ${{ 'base-service' if parameters.host else 'worker-service' }}
           dockerfile_repo: ${{ parameters.dockerfileRepo }}
           dockerfile_path: ${{ parameters.dockerfilePath | default('Dockerfile') }}
@@ -142,4 +148,4 @@ spec:
         url: https://github.com/dmitriimashkov/mctl.me/actions/workflows/release-service.yml
       - title: ArgoCD Dashboard
         icon: dashboard
-        url: "https://argocd.preview.mctl.me"
+        url: "https://argocd-preview.mctl.me"
