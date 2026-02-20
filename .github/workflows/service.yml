@@ -37,7 +37,7 @@ on:
         type: string
       dockerfile_repo:
         description: "Source repo with Dockerfile (e.g. dmitriimashkov/payment-api)"
-        required: true
+        required: false
         type: string
       dockerfile_path:
         description: "Path to Dockerfile in source repo"
@@ -85,6 +85,13 @@ jobs:
           fi
           if [[ ! "$SERVICE" =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]]; then
             echo "::error::service_name must be lowercase alphanumeric with hyphens, ≤63 chars. Got: $SERVICE"
+            exit 1
+          fi
+
+          ACTION="${{ inputs.action }}"
+          REPO="${{ inputs.dockerfile_repo }}"
+          if [[ "$ACTION" != "update-config" && -z "$REPO" ]]; then
+            echo "::error::dockerfile_repo is required for onboard/deploy actions"
             exit 1
           fi
 
