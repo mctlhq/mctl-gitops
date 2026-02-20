@@ -2,7 +2,7 @@ apiVersion: scaffolder.backstage.io/v1beta3
 kind: Template
 metadata:
   name: release-service
-  title: Release Service
+  title: 🚀 Release Service
   description: Build and release a service to the preview cluster. Provide a host for web services, or leave empty for a background worker.
   tags:
     - release
