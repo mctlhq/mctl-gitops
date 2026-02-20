@@ -2,7 +2,7 @@ apiVersion: scaffolder.backstage.io/v1beta3
 kind: Template
 metadata:
   name: release-service
-  title: 🚀 Release Service
+  title: Release Service
   description: Build and release a service to the preview cluster. Provide a host for web services, or leave empty for a background worker.
   tags:
     - release
@@ -14,87 +14,77 @@ metadata:
 spec:
   owner: group:admin
   type: deployment
+  presentation:
+    buttonLabels:
+      createButtonText: 'Release Service'
+      reviewButtonText: 'Review & Release'
 
   parameters:
-    - title: Component Info
+    - title: Service & Source
       required:
         - teamName
-        - serviceName
-      properties:
-        teamName:
-          title: Team Name
-          type: string
-          description: "Select your team"
-          ui:field: MyGroupsPicker
-        serviceName:
-          title: Component Name
-          type: string
-          pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
-
-    - title: Source Repository
-      required:
         - dockerfileRepo
         - gitTag
       properties:
+        teamName:
+          title: Team
+          type: string
+          description: "Select your team"
+          ui:field: MyGroupsPicker
         dockerfileRepo:
           title: GitHub Repository
           type: string
-          description: >-
-            owner/repo containing the Dockerfile (e.g. dmitriimashkov/my-app).
-            For private repos: install the GitHub App at https://github.com/apps/mctl-me/installations/new
-            or provide a PAT below.
+          description: "Repository containing the Dockerfile (e.g. dmitriimashkov/my-app). The repo name will be used as the service name."
           pattern: "^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$"
+        repoPat:
+          title: Repository PAT (optional)
+          type: string
+          description: >-
+            Only needed if the GitHub App is not installed on this repo.
+            Fine-grained PAT with 'Contents: Read' scope.
+          ui:field: Secret
         dockerfilePath:
           title: Dockerfile Path
           type: string
           default: Dockerfile
         gitTag:
-          title: Git Tag
+          title: Version Tag
           type: string
-          description: "Semver tag to checkout and build (e.g., v1.0.0)."
+          description: "Semver tag to checkout and build (e.g. v1.0.0)"
           pattern: "^v?[0-9]+\\.[0-9]+\\.[0-9]+.*$"
-        repoPat:
-          title: Repository PAT (private repos only — optional if GitHub App is installed)
-          type: string
-          description: >-
-            Only needed if the GitHub App is not installed on this repo.
-            Fine-grained PAT with 'Contents: Read' scope.
-            Create at: https://github.com/settings/tokens?type=beta
-          ui:field: Secret
 
-    - title: Network Configuration (optional)
+    - title: Networking
       properties:
         port:
           title: Port
           type: number
           default: 8080
-          description: "HTTP port. Required for web services with ingress."
+          description: "Container port exposed by the service."
         host:
           title: Ingress Host
           type: string
-          description: "Ingress hostname (e.g. myapp.preview.mctl.me). Leave empty to deploy as a background worker."
+          description: "Public hostname (e.g. myapp.preview.mctl.me). Leave empty for a background worker — no ingress will be created."
 
-    - title: Environment Variables
+    - title: Environment
       properties:
         envVars:
-          title: Environment Variables (non-secret)
+          title: Environment Variables
           type: string
-          description: "Plaintext KEY=value pairs (one per line). Will be visible in Kubernetes manifests."
+          description: "KEY=VALUE pairs, one per line. Stored as plaintext in GitOps manifests — do not put secrets here."
           ui:widget: textarea
           ui:options:
             rows: 5
           ui:placeholder: |
             APP_ENV=production
             LOG_LEVEL=info
-            PORT=8080
             TIMEOUT_SECONDS=30
 
-    - title: Secrets
+    - title: Secure Variables
       properties:
         secretEnvVars:
-          title: Secret Environment Variables
+          title: Secure Variables
           type: string
-          description: "Plaintext KEY=value pairs (one per line). Will be stored in Vault and injected securely."
+          description: "KEY=VALUE pairs, one per line. Stored securely in Vault — never exposed in Git."
           ui:widget: textarea
           ui:options:
             minRows: 10
@@ -110,7 +100,7 @@ spec:
       action: http:backstage:request
       input:
         method: POST
-        path: /proxy/vault/v1/secret/data/teams/${{ parameters.teamName | parseEntityRef | pick('name') }}/${{ parameters.serviceName }}/repo-pat
+        path: /proxy/vault/v1/secret/data/teams/${{ parameters.teamName | parseEntityRef | pick('name') }}/${{ parameters.dockerfileRepo | repoName }}/repo-pat
         headers:
           Content-Type: application/json
         body:
@@ -127,7 +117,7 @@ spec:
         workflowInputs:
           action: onboard
           team_name: ${{ parameters.teamName | parseEntityRef | pick('name') }}
-          component_name: ${{ parameters.serviceName }}
+          component_name: ${{ parameters.dockerfileRepo | repoName }}
           component_type: ${{ 'base-service' if parameters.host else 'worker-service' }}
           dockerfile_repo: ${{ parameters.dockerfileRepo }}
           dockerfile_path: ${{ parameters.dockerfilePath | default('Dockerfile') }}
@@ -138,7 +128,17 @@ spec:
           secret_env_vars: ${{ parameters.secretEnvVars | default('') }}
 
   output:
+    text:
+      - title: Type
+        content: "${{ 'Web Service' if parameters.host else 'Background Worker' }}"
+      - title: Version
+        content: "${{ parameters.gitTag }}"
+      - title: Preview URL
+        content: "${{ 'https://' + parameters.host if parameters.host else 'N/A — background worker' }}"
     links:
-      - title: View release run
+      - title: Release Pipeline
         icon: github
         url: https://github.com/dmitriimashkov/mctl.me/actions/workflows/release-service.yml
+      - title: ArgoCD Dashboard
+        icon: dashboard
+        url: "https://argocd.preview.mctl.me"
