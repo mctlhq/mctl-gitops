@@ -2,8 +2,8 @@ apiVersion: scaffolder.backstage.io/v1beta3
 kind: Template
 metadata:
   name: deploy-service
-  title: Deploy Service
-  description: Build & deploy a service to the preview cluster. Provide a host for web services with ingress, or leave it empty for a background worker.
+  title: Deploy Component
+  description: Build & deploy a component to the preview cluster. Provide a host for web services with ingress, or leave it empty for a background worker.
   tags:
     - deploy
     - kubernetes
@@ -15,7 +15,7 @@ spec:
   type: service
 
   parameters:
-    - title: Service Info
+    - title: Component Info
       required:
         - teamName
         - serviceName
@@ -26,7 +26,7 @@ spec:
           description: "Select your team"
           ui:field: MyGroupsPicker
         serviceName:
-          title: Service Name
+          title: Component Name
           type: string
           pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
 

@@ -2,8 +2,8 @@ apiVersion: scaffolder.backstage.io/v1beta3
 kind: Template
 metadata:
   name: update-service-config
-  title: Update Service Config
-  description: Update environment variables and secrets for a deployed service without triggering a new build
+  title: Update Component Config
+  description: Update environment variables and secrets for a deployed component without triggering a new build
   tags:
     - configure
     - secrets
@@ -13,7 +13,7 @@ spec:
   type: service
 
   parameters:
-    - title: Service
+    - title: Component
       required:
         - teamName
         - serviceName
@@ -24,9 +24,9 @@ spec:
           description: "Select your team"
           ui:field: MyGroupsPicker
         serviceName:
-          title: Service Name
+          title: Component Name
           type: string
-          description: "Select the deployed service to update"
+          description: "Select the deployed component to update"
           ui:field: OwnedEntityPicker
           ui:options:
             allowedKinds:
@@ -80,7 +80,7 @@ spec:
     text:
       - title: Summary
         content: |
-          **Service:** `${{ parameters.teamName | parseEntityRef | pick('name') }}/${{ parameters.serviceName | parseEntityRef | pick('name') }}`
+          **Component:** `${{ parameters.teamName | parseEntityRef | pick('name') }}/${{ parameters.serviceName | parseEntityRef | pick('name') }}`
 
           ${{ parameters.secretEnvVars and '✅ **Secrets** update dispatched — will be stored in Vault and synced to Kubernetes automatically.' or '' }}
 
