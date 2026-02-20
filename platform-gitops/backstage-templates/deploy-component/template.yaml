@@ -34,8 +34,9 @@ spec:
         dockerfileRepo:
           title: GitHub Repository
           type: string
-          description: "Repository containing the Dockerfile (e.g. dmitriimashkov/my-app). The repo name will be used as the service name."
+          description: "Select a repository or type owner/repo"
           pattern: "^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$"
+          ui:field: GitHubRepoPicker
         repoPat:
           title: Repository PAT (optional)
           type: string
