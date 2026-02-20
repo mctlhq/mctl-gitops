@@ -7,11 +7,11 @@ on:
         description: "Team name (e.g. payments)"
         required: true
         type: string
-      service_name:
+      component_name:
         description: "Service name (e.g. payment-api)"
         required: true
         type: string
-      service_type:
+      component_type:
         description: "Service type"
         required: true
         type: choice
@@ -37,9 +37,9 @@ jobs:
       - name: Determine service path
         id: path
         run: |
-          TYPE="${{ inputs.service_type }}"
+          TYPE="${{ inputs.component_type }}"
           TEAM="${{ inputs.team_name }}"
-          SERVICE="${{ inputs.service_name }}"
+          SERVICE="${{ inputs.component_name }}"
 
           if [[ "$TYPE" == "base-service" ]]; then
             DIR="platform-gitops/services/preview/${TEAM}/${SERVICE}"
@@ -69,7 +69,7 @@ jobs:
           VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
         run: |
           TEAM="${{ inputs.team_name }}"
-          SERVICE="${{ inputs.service_name }}"
+          SERVICE="${{ inputs.component_name }}"
           VAULT_PATH="teams/${TEAM}/${SERVICE}"
 
           if [[ -z "$VAULT_ADDR" || -z "$VAULT_TOKEN" ]]; then
@@ -123,7 +123,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git commit -m "delete: ${{ inputs.team_name }}/${{ inputs.service_name }}"
+          git commit -m "delete: ${{ inputs.team_name }}/${{ inputs.component_name }}"
           git push
 
       - name: Remove entity from Backstage catalog
@@ -139,7 +139,7 @@ jobs:
             exit 0
           fi
 
-          SERVICE="${{ inputs.service_name }}"
+          SERVICE="${{ inputs.component_name }}"
           ENTITY_REF="component:default/${SERVICE}"
           
           echo "Removing entity from Backstage: ${ENTITY_REF}"
@@ -170,7 +170,7 @@ jobs:
             exit 0
           fi
 
-          TYPE="${{ inputs.service_type }}"
+          TYPE="${{ inputs.component_type }}"
           if [[ "$TYPE" == "base-service" ]]; then
             APPSET="preview-apps"
           else
@@ -208,7 +208,7 @@ jobs:
           # Wait for Application to be deleted (up to 2 minutes)
           echo "Waiting for Application deletion..."
           for i in {1..24}; do
-            if ! kubectl get application "preview-${TEAM}-${{ inputs.service_name }}" -n argocd &>/dev/null; then
+            if ! kubectl get application "preview-${TEAM}-${{ inputs.component_name }}" -n argocd &>/dev/null; then
               echo "Application deleted"
               break
             fi
@@ -243,8 +243,8 @@ jobs:
           echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| **Team** | \`${{ inputs.team_name }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Service** | \`${{ inputs.service_name }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Type** | \`${{ inputs.service_type }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Service** | \`${{ inputs.component_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Type** | \`${{ inputs.component_type }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Vault** | ${{ inputs.delete_vault_secrets && '✅ Deleted' || '⏭️ Skipped' }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "ArgoCD will remove Kubernetes resources on next sync." >> $GITHUB_STEP_SUMMARY

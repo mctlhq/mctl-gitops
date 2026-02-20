@@ -72,7 +72,7 @@ spec:
         workflowInputs:
           action: update-config
           team_name: ${{ parameters.teamName | parseEntityRef | pick('name') }}
-          service_name: ${{ parameters.serviceName | parseEntityRef | pick('name') }}
+          component_name: ${{ parameters.serviceName | parseEntityRef | pick('name') }}
           env_vars: ${{ parameters.envVars | default('') }}
           secret_env_vars: ${{ parameters.secretEnvVars | default('') }}
 

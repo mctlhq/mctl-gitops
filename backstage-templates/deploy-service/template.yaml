@@ -126,8 +126,8 @@ spec:
         workflowInputs:
           action: onboard
           team_name: ${{ parameters.teamName | parseEntityRef | pick('name') }}
-          service_name: ${{ parameters.serviceName }}
-          service_type: ${{ 'base-service' if parameters.host else 'worker-service' }}
+          component_name: ${{ parameters.serviceName }}
+          component_type: ${{ 'base-service' if parameters.host else 'worker-service' }}
           dockerfile_repo: ${{ parameters.dockerfileRepo }}
           dockerfile_path: ${{ parameters.dockerfilePath | default('Dockerfile') }}
           git_tag: ${{ parameters.gitTag }}

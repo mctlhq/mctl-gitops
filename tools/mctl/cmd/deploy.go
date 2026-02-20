@@ -90,8 +90,8 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	inputs := map[string]string{
 		"action":          "onboard",
 		"team_name":       deployTeam,
-		"service_name":    deployName,
-		"service_type":    serviceType,
+		"component_name":    deployName,
+		"component_type":    serviceType,
 		"dockerfile_repo": deployRepo,
 		"dockerfile_path": deployDockerfile,
 		"git_tag":         deployTag,

@@ -69,8 +69,8 @@ func runDelete(cmd *cobra.Command, args []string) error {
 
 	inputs := map[string]string{
 		"team_name":            deleteTeam,
-		"service_name":         deleteName,
-		"service_type":         deleteType,
+		"component_name":         deleteName,
+		"component_type":         deleteType,
 		"delete_vault_secrets": deleteVault,
 	}
 
