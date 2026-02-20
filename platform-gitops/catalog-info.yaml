@@ -1,0 +1,7 @@
+apiVersion: backstage.io/v1alpha1
+kind: System
+metadata:
+  name: platform
+  description: mctl.me developer platform — self-service workspace for deploying and managing services
+spec:
+  owner: group:admin
