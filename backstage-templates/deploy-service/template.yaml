@@ -49,6 +49,11 @@ spec:
           type: string
           description: "Semver tag to checkout and build (e.g., v1.0.0)."
           pattern: "^v?[0-9]+\\.[0-9]+\\.[0-9]+.*$"
+        repoPat:
+          title: Repository PAT (private repos only)
+          type: string
+          description: "Fine-grained PAT with 'Contents: Read' scope. Create at: https://github.com/settings/tokens?type=beta"
+          ui:field: Secret
 
     - title: Network Configuration (optional)
       properties:
@@ -92,6 +97,19 @@ spec:
             SECRET_TOKEN=your-secret-token
 
   steps:
+    - id: save-repo-pat
+      name: Save repo PAT to Vault
+      if: ${{ parameters.repoPat }}
+      action: http:backstage:request
+      input:
+        method: POST
+        path: /proxy/vault/v1/secret/data/teams/${{ parameters.teamName | parseEntityRef | pick('name') }}/${{ parameters.serviceName }}/repo-pat
+        headers:
+          Content-Type: application/json
+        body:
+          data:
+            pat: ${{ parameters.repoPat }}
+
     - id: trigger-build
       name: Build & deploy via GitHub Actions
       action: github:actions:dispatch

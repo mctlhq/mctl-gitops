@@ -7,6 +7,7 @@ import (
 
 	"github.com/dmitriimashkov/mctl.me/tools/mctl/internal/auth"
 	gh "github.com/dmitriimashkov/mctl.me/tools/mctl/internal/github"
+	"github.com/dmitriimashkov/mctl.me/tools/mctl/internal/vault"
 	"github.com/spf13/cobra"
 )
 
@@ -40,6 +41,7 @@ var (
 	deployEnv        []string
 	deploySecret     []string
 	deployWait       bool
+	deployPat        string
 )
 
 func init() {
@@ -53,6 +55,7 @@ func init() {
 	deployCmd.Flags().StringSliceVar(&deployEnv, "env", nil, "Environment variable KEY=VALUE (repeatable)")
 	deployCmd.Flags().StringSliceVar(&deploySecret, "secret", nil, "Secret KEY=VALUE (repeatable)")
 	deployCmd.Flags().BoolVarP(&deployWait, "wait", "w", false, "Wait for workflow to complete")
+	deployCmd.Flags().StringVar(&deployPat, "pat", "", "Repository PAT for private repos (saved to Vault)")
 
 	deployCmd.MarkFlagRequired("team")
 	deployCmd.MarkFlagRequired("name")
@@ -64,6 +67,19 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	token, err := auth.GetToken()
 	if err != nil {
 		return err
+	}
+
+	// Save PAT to Vault if provided
+	if deployPat != "" {
+		fmt.Printf("🔐 Saving repo PAT to Vault for %s/%s...\n", deployTeam, deployName)
+		vc, err := vault.NewClientFromEnv()
+		if err != nil {
+			return fmt.Errorf("cannot save PAT: %w\n  Set VAULT_ADDR and VAULT_TOKEN environment variables", err)
+		}
+		if err := vc.SaveRepoPAT(deployTeam, deployName, deployPat); err != nil {
+			return fmt.Errorf("failed to save PAT to Vault: %w", err)
+		}
+		fmt.Println("   ✅ PAT saved to Vault")
 	}
 
 	serviceType := "base-service"
