@@ -38,7 +38,10 @@ spec:
         dockerfileRepo:
           title: GitHub Repository
           type: string
-          description: "owner/repo containing the Dockerfile (e.g. dmitriimashkov/my-app). Make sure the platform GitHub App has access to this repository."
+          description: >-
+            owner/repo containing the Dockerfile (e.g. dmitriimashkov/my-app).
+            For private repos: install the GitHub App at https://github.com/apps/mctl-me/installations/new
+            or provide a PAT below.
           pattern: "^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$"
         dockerfilePath:
           title: Dockerfile Path
@@ -50,9 +53,12 @@ spec:
           description: "Semver tag to checkout and build (e.g., v1.0.0)."
           pattern: "^v?[0-9]+\\.[0-9]+\\.[0-9]+.*$"
         repoPat:
-          title: Repository PAT (private repos only)
+          title: Repository PAT (private repos only — optional if GitHub App is installed)
           type: string
-          description: "Fine-grained PAT with 'Contents: Read' scope. Create at: https://github.com/settings/tokens?type=beta"
+          description: >-
+            Only needed if the GitHub App is not installed on this repo.
+            Fine-grained PAT with 'Contents: Read' scope.
+            Create at: https://github.com/settings/tokens?type=beta
           ui:field: Secret
 
     - title: Network Configuration (optional)
