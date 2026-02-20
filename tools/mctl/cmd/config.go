@@ -58,7 +58,6 @@ func runConfig(cmd *cobra.Command, args []string) error {
 		"action":          "update-config",
 		"team_name":       configTeam,
 		"service_name":    configName,
-		"dockerfile_repo": "placeholder",
 		"env_vars":        strings.Join(configEnv, "\n"),
 		"secret_env_vars": strings.Join(configSecret, "\n"),
 	}
