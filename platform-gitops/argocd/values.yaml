@@ -147,15 +147,6 @@ argo-cd:
         p, role:team-libertex, exec, create, preview/preview-libertex-*, allow
         g, dmitriimashkov:libertex, role:team-libertex
 
-        # Team: mashkovd
-        p, role:team-mashkovd, applications, get, preview/preview-mashkovd-*, allow
-        p, role:team-mashkovd, applications, list, preview/preview-mashkovd-*, allow
-        p, role:team-mashkovd, applications, sync, preview/preview-mashkovd-*, allow
-        p, role:team-mashkovd, applications, override, preview/preview-mashkovd-*, allow
-        p, role:team-mashkovd, logs, get, preview/preview-mashkovd-*, allow
-        p, role:team-mashkovd, exec, create, preview/preview-mashkovd-*, allow
-        g, dmitriimashkov:mashkovd, role:team-mashkovd
-
     secret:
       createSecret: true
 
