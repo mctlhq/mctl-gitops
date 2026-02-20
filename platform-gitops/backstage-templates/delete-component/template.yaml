@@ -8,6 +8,8 @@ metadata:
     - retire
     - cleanup
     - lifecycle
+  annotations:
+    backstage.io/techdocs-ref: dir:.
 spec:
   owner: group:admin
   type: lifecycle
@@ -39,28 +41,26 @@ spec:
 
   steps:
     - id: parse-service
-      name: Parse service metadata
+      name: Fetch service details
       action: catalog:fetch
       input:
         entityRef: ${{ parameters.service }}
 
     - id: trigger-delete
-      name: Trigger deletion via GitHub Actions
+      name: Retire service
       action: github:actions:dispatch
       input:
         repoUrl: github.com?repo=mctl.me&owner=dmitriimashkov
-        workflowId: delete-service.yml
+        workflowId: retire-service.yml
         branchOrTagName: main
         workflowInputs:
-          team_name: ${{ steps['parse-service'].output.entity.metadata.labels.team }}
+          team_name: ${{ steps['parse-service'].output.entity.metadata.labels.team or steps['parse-service'].output.entity.spec.owner | replace('group:', '') }}
           component_name: ${{ steps['parse-service'].output.entity.metadata.name }}
           component_type: ${{ steps['parse-service'].output.entity.spec.type === 'worker' and 'worker-service' or 'base-service' }}
           delete_vault_secrets: "true"
 
   output:
     links:
-      - title: GitHub Actions Run
-        url: https://github.com/dmitriimashkov/mctl.me/actions/workflows/delete-service.yml
-      - title: View Logs
+      - title: View retirement run
         icon: github
-        url: https://github.com/dmitriimashkov/mctl.me/actions/workflows/delete-service.yml
+        url: https://github.com/dmitriimashkov/mctl.me/actions/workflows/retire-service.yml
