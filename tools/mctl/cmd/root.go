@@ -25,6 +25,7 @@ func init() {
 	rootCmd.AddCommand(deleteCmd)
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(authCmd)
+	rootCmd.AddCommand(repoCmd)
 
 	rootCmd.AddCommand(&cobra.Command{
 		Use:   "version",
