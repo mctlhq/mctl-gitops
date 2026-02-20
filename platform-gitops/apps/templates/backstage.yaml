@@ -172,10 +172,6 @@ spec:
                   rules:
                     - allow: [Template]
                 - type: url
-                  target: https://github.com/dmitriimashkov/mctl.me/blob/main/platform-gitops/backstage-templates/deploy-worker/template.yaml
-                  rules:
-                    - allow: [Template]
-                - type: url
                   target: https://github.com/dmitriimashkov/mctl.me/blob/main/platform-gitops/backstage-templates/delete-component/template.yaml
                   rules:
                     - allow: [Template]
