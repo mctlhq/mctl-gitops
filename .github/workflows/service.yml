@@ -91,27 +91,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Validate team membership
+      - name: Validate team exists
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
           TEAM="${{ inputs.team_name }}"
-          ACTOR="${{ github.actor }}"
           ORG="dmitriimashkov"
           
-          echo "🔍 Checking if $ACTOR is a member of team $TEAM..."
+          echo "🔍 Checking if team $TEAM exists in org $ORG..."
           
-          # Check team membership via GitHub API
-          if gh api "/orgs/${ORG}/teams/${TEAM}/memberships/${ACTOR}" --silent 2>/dev/null; then
-            echo "✅ User $ACTOR is a member of team $TEAM"
+          if gh api "/orgs/${ORG}/teams/${TEAM}" --silent 2>/dev/null; then
+            echo "✅ Team $TEAM exists"
           else
-            echo "::error::User $ACTOR is NOT a member of team $TEAM"
-            echo "## ❌ Team Membership Required" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "You must be a member of the **${TEAM}** team to deploy services for this team." >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "Your teams:" >> $GITHUB_STEP_SUMMARY
-            gh api "/user/teams" --jq '.[] | "- " + .name' >> $GITHUB_STEP_SUMMARY || echo "- (unable to fetch teams)" >> $GITHUB_STEP_SUMMARY
+            echo "::error::Team $TEAM does not exist in org $ORG"
+            echo "## ❌ Team Not Found" >> $GITHUB_STEP_SUMMARY
+            echo "Team **${TEAM}** does not exist. Create it first at https://github.com/orgs/${ORG}/teams" >> $GITHUB_STEP_SUMMARY
             exit 1
           fi
 
