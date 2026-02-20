@@ -8,6 +8,8 @@ metadata:
     - configure
     - secrets
     - environment
+  annotations:
+    backstage.io/techdocs-ref: dir:.
 spec:
   owner: group:admin
   type: configuration
@@ -62,12 +64,12 @@ spec:
 
   steps:
     - id: update-config
-      name: Update config via GitHub Actions
+      name: Apply changes
       if: ${{ parameters.envVars or parameters.secretEnvVars }}
       action: github:actions:dispatch
       input:
         repoUrl: github.com?repo=mctl.me&owner=dmitriimashkov
-        workflowId: service.yml
+        workflowId: release-service.yml
         branchOrTagName: main
         workflowInputs:
           action: update-config
@@ -87,5 +89,5 @@ spec:
           ${{ parameters.envVars and '✅ **Env vars** update dispatched to GitHub Actions. ArgoCD will sync automatically (~2-3 min).' or '' }}
     links:
       - title: GitHub Actions Run
-        url: https://github.com/dmitriimashkov/mctl.me/actions/workflows/service.yml
+        url: https://github.com/dmitriimashkov/mctl.me/actions/workflows/release-service.yml
         if: ${{ parameters.envVars or parameters.secretEnvVars }}

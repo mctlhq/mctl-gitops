@@ -72,8 +72,8 @@ mctl auth status
 
 | Command | Workflow | Action |
 |---------|----------|--------|
-| `mctl deploy` | `service.yml` | `onboard` |
-| `mctl config` | `service.yml` | `update-config` |
-| `mctl delete` | `delete-service.yml` | — |
+| `mctl deploy` | `release-service.yml` | `onboard` |
+| `mctl config` | `release-service.yml` | `update-config` |
+| `mctl delete` | `retire-service.yml` | — |
 
 Authentication uses your existing `gh` CLI token — no separate login needed.

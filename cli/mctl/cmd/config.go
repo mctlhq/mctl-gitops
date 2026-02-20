@@ -73,15 +73,15 @@ func runConfig(cmd *cobra.Command, args []string) error {
 		fmt.Printf("   🔐 %d secret(s)\n", len(configSecret))
 	}
 
-	if err := client.DispatchWorkflow("service.yml", inputs); err != nil {
+	if err := client.DispatchWorkflow("release-service.yml", inputs); err != nil {
 		return fmt.Errorf("dispatch failed: %w", err)
 	}
 	fmt.Println("✅ Config update dispatched")
-	fmt.Printf("   https://github.com/%s/%s/actions/workflows/service.yml\n", gh.Owner, gh.Repo)
+	fmt.Printf("   https://github.com/%s/%s/actions/workflows/release-service.yml\n", gh.Owner, gh.Repo)
 
 	if configWait {
 		fmt.Println("\n⏳ Waiting for workflow to complete...")
-		run, err := client.WaitForRun("service.yml", dispatchTime, 5*time.Minute)
+		run, err := client.WaitForRun("release-service.yml", dispatchTime, 5*time.Minute)
 		if err != nil {
 			return err
 		}

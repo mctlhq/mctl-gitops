@@ -1,0 +1,58 @@
+apiVersion: scaffolder.backstage.io/v1beta3
+kind: Template
+metadata:
+  name: provision-database
+  title: 🗄️ Provision Database
+  description: Provision a PostgreSQL database for your service. Creates a dedicated role, database, and Kubernetes secret populated from Vault.
+  tags:
+    - database
+    - postgresql
+    - provisioning
+  annotations:
+    backstage.io/techdocs-ref: dir:.
+spec:
+  owner: group:admin
+  type: provisioning
+
+  parameters:
+    - title: Database Details
+      required:
+        - teamName
+        - appName
+      properties:
+        teamName:
+          title: Team
+          type: string
+          description: "Your team"
+          ui:field: MyGroupsPicker
+        appName:
+          title: App / Service Name
+          type: string
+          description: "Name of the app this database belongs to (must match the service slug, e.g. billing-api)"
+          pattern: "^[a-z0-9][a-z0-9-]{0,30}$"
+          ui:autofocus: true
+
+  steps:
+    - id: trigger-provision
+      name: Provision database
+      action: github:actions:dispatch
+      input:
+        repoUrl: github.com?repo=mctl.me&owner=dmitriimashkov
+        workflowId: provision-db.yml
+        branchOrTagName: main
+        workflowInputs:
+          team: ${{ parameters.teamName | parseEntityRef | pick('name') }}
+          app: ${{ parameters.appName }}
+
+  output:
+    text:
+      - title: Database name
+        content: "`${{ parameters.teamName | parseEntityRef | pick('name') }}-${{ parameters.appName }}`"
+      - title: Vault path
+        content: "`platform/teams/${{ parameters.teamName | parseEntityRef | pick('name') }}/${{ parameters.appName }}/database`"
+      - title: Kubernetes secret
+        content: "`${{ parameters.teamName | parseEntityRef | pick('name') }}-${{ parameters.appName }}-db-creds`"
+    links:
+      - title: View GitHub Actions Run
+        icon: github
+        url: https://github.com/dmitriimashkov/mctl.me/actions/workflows/provision-db.yml
