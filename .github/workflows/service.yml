@@ -284,8 +284,9 @@ jobs:
             echo "::add-mask::${TOKEN}"
             echo "🔍 Testing repo access with ${METHOD}..."
             set -o pipefail
-            # Use -c credential.helper= to prevent Actions' GITHUB_TOKEN credential helper from overriding our token
-            if git -c credential.helper= ls-remote "https://x-access-token:${TOKEN}@github.com/${REPO}" HEAD 2>&1 | tee /tmp/git-output.log; then
+            # Clear the extraheader set by actions/checkout (persist-credentials) which injects GITHUB_TOKEN
+            if git -c "http.https://github.com/.extraheader=" -c credential.helper= \
+              ls-remote "https://x-access-token:${TOKEN}@github.com/${REPO}" HEAD 2>&1 | tee /tmp/git-output.log; then
               echo "✅ Repo accessible via ${METHOD}"
               echo "clone_token=${TOKEN}" >> $GITHUB_OUTPUT
               echo "access_method=${METHOD}" >> $GITHUB_OUTPUT
