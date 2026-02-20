@@ -1,4 +1,4 @@
-name: Delete Service
+name: Retire Service
 
 on:
   workflow_dispatch:

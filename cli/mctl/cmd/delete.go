@@ -15,7 +15,7 @@ import (
 var deleteCmd = &cobra.Command{
 	Use:   "delete",
 	Short: "Delete a service from the platform",
-	Long:  "Delete a service by dispatching the delete-service.yml workflow. Removes GitOps files, Vault secrets, and Kubernetes resources.",
+	Long:  "Delete a service by dispatching the retire-service.yml workflow. Removes GitOps files, Vault secrets, and Kubernetes resources.",
 	Example: `  # Delete with confirmation prompt
   mctl delete -t my-team -n my-api
 
@@ -78,15 +78,15 @@ func runDelete(cmd *cobra.Command, args []string) error {
 	dispatchTime := time.Now().Add(-5 * time.Second)
 
 	fmt.Printf("🗑️  Deleting %s/%s...\n", deleteTeam, deleteName)
-	if err := client.DispatchWorkflow("delete-service.yml", inputs); err != nil {
+	if err := client.DispatchWorkflow("retire-service.yml", inputs); err != nil {
 		return fmt.Errorf("dispatch failed: %w", err)
 	}
 	fmt.Println("✅ Delete workflow dispatched")
-	fmt.Printf("   https://github.com/%s/%s/actions/workflows/delete-service.yml\n", gh.Owner, gh.Repo)
+	fmt.Printf("   https://github.com/%s/%s/actions/workflows/retire-service.yml\n", gh.Owner, gh.Repo)
 
 	if deleteWait {
 		fmt.Println("\n⏳ Waiting for workflow to complete...")
-		run, err := client.WaitForRun("delete-service.yml", dispatchTime, 5*time.Minute)
+		run, err := client.WaitForRun("retire-service.yml", dispatchTime, 5*time.Minute)
 		if err != nil {
 			return err
 		}

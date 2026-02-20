@@ -1,0 +1,290 @@
+name: Provision Database
+
+on:
+  workflow_dispatch:
+    inputs:
+      team:
+        description: "Team name (e.g. payments)"
+        required: true
+        type: string
+      app:
+        description: "App/service name (e.g. billing)"
+        required: true
+        type: string
+
+jobs:
+  provision:
+    name: Provision Database
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate inputs
+        run: |
+          TEAM="${{ inputs.team }}"
+          APP="${{ inputs.app }}"
+
+          if ! echo "$TEAM" | grep -qE '^[a-z0-9][a-z0-9-]{0,30}$'; then
+            echo "::error::Invalid team name: '$TEAM'. Must be lowercase alphanumeric with dashes."
+            exit 1
+          fi
+          if ! echo "$APP" | grep -qE '^[a-z0-9][a-z0-9-]{0,30}$'; then
+            echo "::error::Invalid app name: '$APP'. Must be lowercase alphanumeric with dashes."
+            exit 1
+          fi
+
+          DB_NAME="${TEAM}-${APP}"
+          echo "DB_NAME=${DB_NAME}" >> $GITHUB_ENV
+
+          if grep -q "name: ${DB_NAME}-db" platform-gitops/cnpg-clusters/shared/databases.yaml 2>/dev/null; then
+            echo "::error::Database '${DB_NAME}' already exists in databases.yaml"
+            exit 1
+          fi
+
+          echo "✅ Inputs valid: team=${TEAM}, app=${APP}, db=${DB_NAME}"
+
+      - name: Generate password and store in Vault
+        env:
+          VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
+          VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
+        run: |
+          TEAM="${{ inputs.team }}"
+          APP="${{ inputs.app }}"
+          DB_NAME="${{ env.DB_NAME }}"
+          VAULT_PATH="platform/teams/${TEAM}/${APP}/database"
+
+          if [[ -z "$VAULT_ADDR" || -z "$VAULT_TOKEN" ]]; then
+            echo "::error::VAULT_ADDR or VAULT_TOKEN not set"
+            exit 1
+          fi
+
+          PASSWORD=$(openssl rand -base64 32 | tr -d '/+=\n' | head -c 32)
+
+          HTTP_CODE=$(curl -s -o /tmp/vault-resp.json -w "%{http_code}" \
+            -X POST \
+            -H "X-Vault-Token: ${VAULT_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "{\"data\": {
+              \"host\": \"shared-pg-rw.cnpg-system.svc.cluster.local\",
+              \"port\": \"5432\",
+              \"database\": \"${DB_NAME}\",
+              \"username\": \"${DB_NAME}\",
+              \"password\": \"${PASSWORD}\"
+            }}" \
+            "${VAULT_ADDR}/v1/secret/data/${VAULT_PATH}")
+
+          if [[ "$HTTP_CODE" != "200" && "$HTTP_CODE" != "204" ]]; then
+            echo "::error::Vault write failed (HTTP ${HTTP_CODE})"
+            cat /tmp/vault-resp.json
+            exit 1
+          fi
+
+          rm -f /tmp/vault-resp.json
+          echo "✅ Credentials stored in Vault at ${VAULT_PATH}"
+
+      - name: Patch cluster.yaml — add role and pg_hba entry
+        run: |
+          DB_NAME="${{ env.DB_NAME }}"
+          CLUSTER_FILE="platform-gitops/cnpg-clusters/shared/cluster.yaml"
+
+          # Insert pg_hba entry before the catch-all reject rule
+          awk -v db="${DB_NAME}" '
+            /- host all all 0\.0\.0\.0\/0 reject/ {
+              print "      - host " db " " db " all scram-sha-256"
+            }
+            { print }
+          ' "${CLUSTER_FILE}" > "${CLUSTER_FILE}.tmp" && mv "${CLUSTER_FILE}.tmp" "${CLUSTER_FILE}"
+
+          # Insert managed role entry before the "# Team app roles" comment
+          awk -v db="${DB_NAME}" '
+            /# Team app roles/ {
+              print "      - name: " db
+              print "        login: true"
+              print "        connectionLimit: 10"
+              print "        ensure: present"
+              print "        passwordSecret:"
+              print "          name: " db "-db-creds"
+            }
+            { print }
+          ' "${CLUSTER_FILE}" > "${CLUSTER_FILE}.tmp" && mv "${CLUSTER_FILE}.tmp" "${CLUSTER_FILE}"
+
+          echo "✅ cluster.yaml updated"
+
+      - name: Append to databases.yaml — new Database CRD
+        run: |
+          TEAM="${{ inputs.team }}"
+          APP="${{ inputs.app }}"
+          DB_NAME="${{ env.DB_NAME }}"
+          DB_FILE="platform-gitops/cnpg-clusters/shared/databases.yaml"
+
+          cat >> "${DB_FILE}" << EOF
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: ${DB_NAME}-db
+spec:
+  name: "${DB_NAME}"
+  owner: "${DB_NAME}"
+  cluster:
+    name: shared-pg
+  databaseReclaimPolicy: retain
+EOF
+          echo "✅ databases.yaml updated"
+
+      - name: Append to secrets.yaml — new ExternalSecret
+        run: |
+          TEAM="${{ inputs.team }}"
+          APP="${{ inputs.app }}"
+          DB_NAME="${{ env.DB_NAME }}"
+          SECRET_FILE="platform-gitops/cnpg-clusters/shared/secrets.yaml"
+          VAULT_PATH="platform/teams/${TEAM}/${APP}/database"
+
+          cat >> "${SECRET_FILE}" << EOF
+---
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: ${DB_NAME}-db-creds
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: vault-backend
+  target:
+    name: ${DB_NAME}-db-creds
+    creationPolicy: Owner
+    template:
+      type: Opaque
+      data:
+        host: "{{ .host }}"
+        port: "{{ .port }}"
+        database: "{{ .database }}"
+        username: "{{ .username }}"
+        password: "{{ .password }}"
+        url: "postgresql://{{ .username }}:{{ .password }}@{{ .host }}:{{ .port }}/{{ .database }}"
+  data:
+    - secretKey: host
+      remoteRef:
+        key: ${VAULT_PATH}
+        property: host
+    - secretKey: port
+      remoteRef:
+        key: ${VAULT_PATH}
+        property: port
+    - secretKey: database
+      remoteRef:
+        key: ${VAULT_PATH}
+        property: database
+    - secretKey: username
+      remoteRef:
+        key: ${VAULT_PATH}
+        property: username
+    - secretKey: password
+      remoteRef:
+        key: ${VAULT_PATH}
+        property: password
+EOF
+          echo "✅ secrets.yaml updated"
+
+      - name: Annotate service catalog-info.yaml
+        run: |
+          TEAM="${{ inputs.team }}"
+          APP="${{ inputs.app }}"
+          DB_NAME="${{ env.DB_NAME }}"
+
+          # Look for catalog-info.yaml in services and workers paths
+          CATALOG_FILE=""
+          for dir in "platform-gitops/services/preview/${TEAM}/${APP}" "platform-gitops/workers/preview/${TEAM}/${APP}"; do
+            if [ -f "${dir}/catalog-info.yaml" ]; then
+              CATALOG_FILE="${dir}/catalog-info.yaml"
+              break
+            fi
+          done
+
+          if [ -z "$CATALOG_FILE" ]; then
+            echo "⚠️  catalog-info.yaml not found for ${TEAM}/${APP} — skipping annotation"
+            echo "   Deploy the service first, then re-run this workflow to add DB annotations."
+            exit 0
+          fi
+
+          # Add annotations if not already present
+          if grep -q "platform.mctl.me/database" "${CATALOG_FILE}"; then
+            echo "ℹ️  DB annotations already present in ${CATALOG_FILE}"
+            exit 0
+          fi
+
+          # Insert annotations after the existing annotations block (or after metadata.name if no annotations block)
+          python3 << PYEOF
+import re
+
+with open('${CATALOG_FILE}', 'r') as f:
+    content = f.read()
+
+annotations_block = '''  annotations:
+    platform.mctl.me/database: "true"
+    platform.mctl.me/database-team: "${TEAM}"
+    platform.mctl.me/database-app: "${APP}"'''
+
+if 'annotations:' in content:
+    # Append to existing annotations block
+    content = content.replace('  annotations:', '  annotations:\n    platform.mctl.me/database: "true"\n    platform.mctl.me/database-team: "${TEAM}"\n    platform.mctl.me/database-app: "${APP}"', 1)
+else:
+    # Insert annotations block after metadata.name line
+    content = re.sub(
+        r'(  name: .+\n)',
+        r'\1' + annotations_block + '\n',
+        content,
+        count=1
+    )
+
+with open('${CATALOG_FILE}', 'w') as f:
+    f.write(content)
+PYEOF
+          echo "✅ DB annotations added to ${CATALOG_FILE}"
+
+      - name: Commit and push
+        run: |
+          TEAM="${{ inputs.team }}"
+          APP="${{ inputs.app }}"
+          DB_NAME="${{ env.DB_NAME }}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add platform-gitops/cnpg-clusters/shared/cluster.yaml \
+                  platform-gitops/cnpg-clusters/shared/databases.yaml \
+                  platform-gitops/cnpg-clusters/shared/secrets.yaml \
+                  platform-gitops/services/preview/${TEAM}/${APP}/catalog-info.yaml \
+                  platform-gitops/workers/preview/${TEAM}/${APP}/catalog-info.yaml \
+                  2>/dev/null || true
+
+          git commit -m "feat: provision database ${DB_NAME}
+
+Provisioned PostgreSQL database for ${TEAM}/${APP}:
+- Role: ${DB_NAME}
+- Database: ${DB_NAME}
+- Vault path: platform/teams/${TEAM}/${APP}/database
+- K8s secret: ${DB_NAME}-db-creds (ExternalSecret → CNPG)"
+
+          git push
+          echo "✅ GitOps commit pushed — ArgoCD will sync automatically"
+
+      - name: Summary
+        run: |
+          TEAM="${{ inputs.team }}"
+          APP="${{ inputs.app }}"
+          DB_NAME="${{ env.DB_NAME }}"
+          echo "## 🗄️ Database Provisioned" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| Database | \`${DB_NAME}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Role | \`${DB_NAME}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| K8s Secret | \`${DB_NAME}-db-creds\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Vault path | \`platform/teams/${TEAM}/${APP}/database\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "ArgoCD will pick up the changes automatically. The database will be available once CNPG reconciles (~1-2 min)." >> $GITHUB_STEP_SUMMARY

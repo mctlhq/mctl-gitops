@@ -14,7 +14,7 @@ import (
 var deployCmd = &cobra.Command{
 	Use:   "deploy",
 	Short: "Deploy a new service to the platform",
-	Long: `Deploy a new service by dispatching the service.yml workflow.
+	Long: `Deploy a new service by dispatching the release-service.yml workflow.
 Builds a Docker image from the specified repo and creates the GitOps configuration.`,
 	Example: `  # Deploy a web service with ingress
   mctl deploy -t my-team -n my-api -r dmitriimashkov/my-api -g v1.0.0 --host my-api.preview.mctl.me
@@ -105,15 +105,15 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	dispatchTime := time.Now().Add(-5 * time.Second)
 
 	fmt.Printf("🚀 Deploying %s/%s (type: %s)...\n", deployTeam, deployName, serviceType)
-	if err := client.DispatchWorkflow("service.yml", inputs); err != nil {
+	if err := client.DispatchWorkflow("release-service.yml", inputs); err != nil {
 		return fmt.Errorf("dispatch failed: %w", err)
 	}
 	fmt.Println("✅ Workflow dispatched successfully")
-	fmt.Printf("   https://github.com/%s/%s/actions/workflows/service.yml\n", gh.Owner, gh.Repo)
+	fmt.Printf("   https://github.com/%s/%s/actions/workflows/release-service.yml\n", gh.Owner, gh.Repo)
 
 	if deployWait {
 		fmt.Println("\n⏳ Waiting for workflow to complete...")
-		run, err := client.WaitForRun("service.yml", dispatchTime, 10*time.Minute)
+		run, err := client.WaitForRun("release-service.yml", dispatchTime, 10*time.Minute)
 		if err != nil {
 			return err
 		}

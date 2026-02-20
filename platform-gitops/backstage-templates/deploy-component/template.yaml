@@ -9,6 +9,8 @@ metadata:
     - deploy
     - kubernetes
     - preview
+  annotations:
+    backstage.io/techdocs-ref: dir:.
 spec:
   owner: group:admin
   type: deployment
@@ -116,11 +118,11 @@ spec:
             pat: ${{ parameters.repoPat }}
 
     - id: trigger-build
-      name: Build & deploy via GitHub Actions
+      name: Release service
       action: github:actions:dispatch
       input:
         repoUrl: github.com?repo=mctl.me&owner=dmitriimashkov
-        workflowId: service.yml
+        workflowId: release-service.yml
         branchOrTagName: main
         workflowInputs:
           action: onboard
@@ -137,5 +139,6 @@ spec:
 
   output:
     links:
-      - title: GitHub Actions Run
-        url: https://github.com/dmitriimashkov/mctl.me/actions/workflows/service.yml
+      - title: View release run
+        icon: github
+        url: https://github.com/dmitriimashkov/mctl.me/actions/workflows/release-service.yml
