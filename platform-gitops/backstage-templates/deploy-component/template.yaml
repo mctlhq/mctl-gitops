@@ -140,6 +140,7 @@ spec:
           port: ${{ parameters.port | string }}
           host: ${{ parameters.host | default('') }}
           skip_health_check: ${{ parameters.skipHealthCheck | string }}
+          provision_database: ${{ parameters.provisionDatabase | string }}
           env_vars: ${{ parameters.envVars | default('') }}
           secret_env_vars: ${{ parameters.secretEnvVars | default('') }}
 
@@ -164,7 +165,7 @@ spec:
       - title: Preview URL
         content: "${{ 'https://' + parameters.host if parameters.host else 'N/A — background worker' }}"
       - title: Database
-        content: "${{ parameters.provisionDatabase and '✅ Provisioning dispatched' or 'Not requested' }}"
+        content: "${{ parameters.provisionDatabase and '✅ Provisioning dispatched — DATABASE_URL, DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD will be injected as env vars from K8s secret' or 'Not requested' }}"
     links:
       - title: ArgoCD Dashboard
         icon: dashboard

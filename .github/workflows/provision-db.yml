@@ -166,12 +166,12 @@ spec:
     template:
       type: Opaque
       data:
-        host: "{{ .host }}"
-        port: "{{ .port }}"
-        database: "{{ .database }}"
-        username: "{{ .username }}"
-        password: "{{ .password }}"
-        url: "postgresql://{{ .username }}:{{ .password }}@{{ .host }}:{{ .port }}/{{ .database }}"
+        DATABASE_URL: "postgresql://{{ .username }}:{{ .password }}@{{ .host }}:{{ .port }}/{{ .database }}"
+        DB_HOST: "{{ .host }}"
+        DB_PORT: "{{ .port }}"
+        DB_NAME: "{{ .database }}"
+        DB_USER: "{{ .username }}"
+        DB_PASSWORD: "{{ .password }}"
   data:
     - secretKey: host
       remoteRef:
