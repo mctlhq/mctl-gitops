@@ -15,11 +15,11 @@ service:
 
 resources:
   requests:
-    cpu: 100m
-    memory: 128Mi
+    cpu: 200m
+    memory: 256Mi
   limits:
     cpu: 500m
-    memory: 256Mi
+    memory: 512Mi
 
 env:
   APP_ENV: preview
