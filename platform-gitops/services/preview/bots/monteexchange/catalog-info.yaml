@@ -4,8 +4,8 @@ metadata:
   name: monteexchange
   description: "monteexchange service deployed to preview"
   annotations:
-    backstage.io/kubernetes-id: monteexchange
-    backstage.io/kubernetes-namespace: preview
+    backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=preview-bots-monteexchange
+    backstage.io/kubernetes-namespace: bots
     argocd/app-name: preview-bots-monteexchange
     github.com/source-repo: mashkovd/monteexchange
   links:

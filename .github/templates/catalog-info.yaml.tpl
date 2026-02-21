@@ -4,8 +4,8 @@ metadata:
   name: __SERVICE_NAME__
   description: "__SERVICE_NAME__ service deployed to preview"
   annotations:
-    backstage.io/kubernetes-id: __SERVICE_NAME__
-    backstage.io/kubernetes-namespace: preview
+    backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=preview-__TEAM_NAME__-__SERVICE_NAME__
+    backstage.io/kubernetes-namespace: __TEAM_NAME__
     argocd/app-name: preview-__TEAM_NAME__-__SERVICE_NAME__
     github.com/source-repo: __DOCKERFILE_REPO__
   links:

@@ -4,8 +4,8 @@ metadata:
   name: platform
   description: "platform service deployed to preview"
   annotations:
-    backstage.io/kubernetes-id: platform
-    backstage.io/kubernetes-namespace: preview
+    backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=preview-admin-platform
+    backstage.io/kubernetes-namespace: admin
     argocd/app-name: preview-admin-platform
     github.com/source-repo: dmitriimashkov/platform
   links:
