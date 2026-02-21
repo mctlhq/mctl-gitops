@@ -102,6 +102,17 @@ spec:
             vaultSecrets:
               endpoint: ${VAULT_ADDR}
               token: ${VAULT_TOKEN}
+            kubernetes:
+              serviceLocatorMethod:
+                type: multiTenant
+              clusterLocatorMethods:
+                - type: config
+                  clusters:
+                    - url: https://kubernetes.default.svc
+                      name: preview
+                      authProvider: serviceAccount
+                      skipTLSVerify: true
+                      serviceAccountToken: ${K8S_SERVICE_ACCOUNT_TOKEN}
             proxy:
               endpoints:
                 /vault:

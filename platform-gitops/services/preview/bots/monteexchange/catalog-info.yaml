@@ -5,8 +5,22 @@ metadata:
   description: "monteexchange service deployed to preview"
   annotations:
     backstage.io/kubernetes-id: monteexchange
+    backstage.io/kubernetes-namespace: preview
     argocd/app-name: preview-bots-monteexchange
     github.com/source-repo: mashkovd/monteexchange
+  links:
+    - url: https://argocd-preview.mctl.me/applications/argocd/preview-bots-monteexchange
+      title: ArgoCD
+      icon: dashboard
+    - url: https://github.com/mashkovd/monteexchange
+      title: Source Repository
+      icon: github
+    - url: https://monteexchange.mctl.me
+      title: Service URL
+      icon: web
+    - url: https://github.com/dmitriimashkov/mctl.me/actions/workflows/release-service.yml
+      title: GitHub Actions
+      icon: github
   labels:
     team: bots
     env: preview

@@ -560,6 +560,11 @@ jobs:
             -e "s|__DOCKERFILE_REPO__|${{ inputs.dockerfile_repo }}|g" \
             ".github/templates/catalog-info.yaml.tpl" > "${DIR}/catalog-info.yaml"
           
+          # Add service URL link if ingress host is set
+          if [[ -n "${{ inputs.host }}" ]]; then
+            yq eval -i '.metadata.links += [{"url": "https://${{ inputs.host }}", "title": "Service URL", "icon": "web"}]' "${DIR}/catalog-info.yaml"
+          fi
+          
           # Create vault-cleanup.yaml for ArgoCD PreDelete hook
           sed \
             -e "s|__TEAM_NAME__|${{ inputs.team_name }}|g" \

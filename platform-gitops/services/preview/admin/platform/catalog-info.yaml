@@ -5,8 +5,22 @@ metadata:
   description: "platform service deployed to preview"
   annotations:
     backstage.io/kubernetes-id: platform
+    backstage.io/kubernetes-namespace: preview
     argocd/app-name: preview-admin-platform
     github.com/source-repo: dmitriimashkov/platform
+  links:
+    - url: https://argocd-preview.mctl.me/applications/argocd/preview-admin-platform
+      title: ArgoCD
+      icon: dashboard
+    - url: https://github.com/dmitriimashkov/platform
+      title: Source Repository
+      icon: github
+    - url: https://platform.mctl.me
+      title: Service URL
+      icon: web
+    - url: https://github.com/dmitriimashkov/mctl.me/actions/workflows/release-service.yml
+      title: GitHub Actions
+      icon: github
   labels:
     team: admin
     env: preview
