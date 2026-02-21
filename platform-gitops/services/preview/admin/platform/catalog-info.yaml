@@ -6,6 +6,7 @@ metadata:
   annotations:
     backstage.io/kubernetes-id: platform
     argocd/app-name: preview-admin-platform
+    github.com/source-repo: dmitriimashkov/platform
   labels:
     team: admin
     env: preview
