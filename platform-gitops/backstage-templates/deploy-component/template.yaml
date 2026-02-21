@@ -69,7 +69,13 @@ spec:
           title: Provision PostgreSQL Database
           type: boolean
           default: false
-          description: "Create a dedicated database, Vault secret, and K8s ExternalSecret for this service. Safe to enable — skips if database already exists."
+          description: |
+            Create a dedicated database, Vault secret, and K8s ExternalSecret for this service.
+            Safe to enable — skips if database already exists.
+
+            When enabled, the following env vars will be auto-injected into the service:
+              DATABASE_URL  — postgresql://user:pass@host:port/dbname
+              DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD
 
     - title: Environment
       properties:

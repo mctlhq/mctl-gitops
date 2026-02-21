@@ -13,3 +13,4 @@ spec:
   type: __COMPONENT_TYPE__
   lifecycle: production
   owner: group:__TEAM_NAME__
+  system: team-__TEAM_NAME__
