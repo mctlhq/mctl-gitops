@@ -1,0 +1,30 @@
+# Service: kuptsi-v2
+# Team: internal
+# Environment: preview
+# Chart: base-service
+
+image:
+  repository: ghcr.io/dmitriimashkov/kuptsi-v2
+  tag: "latest"
+imagePullSecrets:
+  - name: ghcr-credentials
+service:
+  port: 5000
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+env:
+  APP_ENV: preview
+ingress:
+  enabled: true
+  host: kupsi.mctl.me
+probes:
+  liveness: null
+  readiness: null
+envFrom:
+  - secretRef:
+      name: internal-kuptsi-v2-db-creds
