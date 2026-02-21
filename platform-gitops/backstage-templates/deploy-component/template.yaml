@@ -41,10 +41,10 @@ spec:
           type: string
           default: Dockerfile
         gitTag:
-          title: Version Tag
+          title: Tag
           type: string
-          description: "Semver tag to checkout and build (e.g. v1.0.0). Leave empty to build from HEAD (image tagged 'latest')."
-          pattern: "^v?[0-9]+\\.[0-9]+\\.[0-9]+.*$"
+          description: "Select a tag to checkout and build, or leave empty to build from HEAD (image tagged 'latest')."
+          ui:field: GitTagPicker
 
     - title: Networking
       properties:

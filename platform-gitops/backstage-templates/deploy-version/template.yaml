@@ -36,7 +36,7 @@ spec:
     - title: Version
       properties:
         gitTag:
-          title: Version Tag
+          title: Tag
           type: string
           description: "Select a tag from the source repo, or leave empty to auto-increment from the latest version."
           ui:field: GitTagPicker
