@@ -18,19 +18,21 @@ spec:
     - title: Database Details
       required:
         - teamName
-        - appName
+        - serviceName
       properties:
         teamName:
           title: Team
           type: string
-          description: "Your team"
+          description: "Select your team"
           ui:field: MyGroupsPicker
-        appName:
+        serviceName:
           title: App / Service Name
           type: string
-          description: "Name of the app this database belongs to (must match the service slug, e.g. billing-api)"
-          pattern: "^[a-z0-9][a-z0-9-]{0,30}$"
-          ui:autofocus: true
+          description: "Select the service this database belongs to"
+          ui:field: OwnedEntityPicker
+          ui:options:
+            allowedKinds:
+              - Component
 
   steps:
     - id: trigger-provision
@@ -42,16 +44,16 @@ spec:
         branchOrTagName: main
         workflowInputs:
           team: ${{ parameters.teamName | parseEntityRef | pick('name') }}
-          app: ${{ parameters.appName }}
+          app: ${{ parameters.serviceName | parseEntityRef | pick('name') }}
 
   output:
     text:
       - title: Database name
-        content: "`${{ parameters.teamName | parseEntityRef | pick('name') }}-${{ parameters.appName }}`"
+        content: "`${{ parameters.teamName | parseEntityRef | pick('name') }}-${{ parameters.serviceName | parseEntityRef | pick('name') }}`"
       - title: Vault path
-        content: "`platform/teams/${{ parameters.teamName | parseEntityRef | pick('name') }}/${{ parameters.appName }}/database`"
+        content: "`platform/teams/${{ parameters.teamName | parseEntityRef | pick('name') }}/${{ parameters.serviceName | parseEntityRef | pick('name') }}/database`"
       - title: Kubernetes secret
-        content: "`${{ parameters.teamName | parseEntityRef | pick('name') }}-${{ parameters.appName }}-db-creds`"
+        content: "`${{ parameters.teamName | parseEntityRef | pick('name') }}-${{ parameters.serviceName | parseEntityRef | pick('name') }}-db-creds`"
     links:
       - title: View GitHub Actions Run
         icon: github
