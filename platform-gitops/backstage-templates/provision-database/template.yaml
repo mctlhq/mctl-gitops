@@ -37,7 +37,7 @@ spec:
 
     - id: trigger-provision
       name: Provision database
-      action: github:actions:dispatch
+      action: github:actions:dispatch-and-stream
       input:
         repoUrl: github.com?repo=mctl.me&owner=dmitriimashkov
         workflowId: provision-db.yml
@@ -55,6 +55,6 @@ spec:
       - title: Kubernetes secret
         content: "`${{ steps['fetch-service'].output.entity.metadata.labels.team or steps['fetch-service'].output.entity.spec.owner | replace('group:', '') }}-${{ steps['fetch-service'].output.entity.metadata.name }}-db-creds`"
     links:
-      - title: View GitHub Actions Run
+      - title: Provision Run
         icon: github
-        url: https://github.com/dmitriimashkov/mctl.me/actions/workflows/provision-db.yml
+        url: ${{ steps['trigger-provision'].output.runUrl }}

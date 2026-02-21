@@ -616,13 +616,18 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add "${DIR}/values.yaml"
-          git commit -m "config: update env for ${TEAM}/${SERVICE}"
 
-          for i in 1 2 3 4 5; do
-            git push && break
-            echo "⚠️  Push failed (attempt $i), rebasing..."
-            git pull --rebase origin main
-          done
+          if git diff --cached --quiet; then
+            echo "ℹ️  No changes detected — values already up to date"
+          else
+            git commit -m "config: update env for ${TEAM}/${SERVICE}"
+
+            for i in 1 2 3 4 5; do
+              git push && break
+              echo "⚠️  Push failed (attempt $i), rebasing..."
+              git pull --rebase origin main
+            done
+          fi
 
           echo "## ✅ Env vars updated" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -666,14 +671,20 @@ jobs:
             git add "${DIR}/vault-cleanup.yaml"
             git commit -m "feat: onboard ${{ inputs.team_name }}/${{ inputs.component_name }} (${TAG})"
           else
-            git commit -m "deploy: ${{ inputs.team_name }}/${{ inputs.component_name }} → ${TAG}"
+            if git diff --cached --quiet; then
+              echo "ℹ️  No changes detected — already at ${TAG}"
+            else
+              git commit -m "deploy: ${{ inputs.team_name }}/${{ inputs.component_name }} → ${TAG}"
+            fi
           fi
 
-          for i in 1 2 3 4 5; do
-            git push && break
-            echo "⚠️  Push failed (attempt $i), rebasing..."
-            git pull --rebase origin main
-          done
+          if ! git diff --quiet HEAD origin/main 2>/dev/null; then
+            for i in 1 2 3 4 5; do
+              git push && break
+              echo "⚠️  Push failed (attempt $i), rebasing..."
+              git pull --rebase origin main
+            done
+          fi
 
       - name: Summary
         if: inputs.action != 'update-config'

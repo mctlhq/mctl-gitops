@@ -48,7 +48,7 @@ spec:
 
     - id: trigger-delete
       name: Retire service
-      action: github:actions:dispatch
+      action: github:actions:dispatch-and-stream
       input:
         repoUrl: github.com?repo=mctl.me&owner=dmitriimashkov
         workflowId: retire-service.yml
@@ -61,6 +61,6 @@ spec:
 
   output:
     links:
-      - title: View retirement run
+      - title: Retirement Run
         icon: github
-        url: https://github.com/dmitriimashkov/mctl.me/actions/workflows/retire-service.yml
+        url: ${{ steps['trigger-delete'].output.runUrl }}

@@ -30,6 +30,10 @@ spec:
 
     - title: Environment
       properties:
+        currentConfig:
+          title: " "
+          type: string
+          ui:field: CurrentConfig
         envVars:
           title: Environment Variables
           type: string
@@ -66,7 +70,7 @@ spec:
     - id: update-config
       name: Apply changes
       if: ${{ parameters.envVars or parameters.secretEnvVars }}
-      action: github:actions:dispatch
+      action: github:actions:dispatch-and-stream
       input:
         repoUrl: github.com?repo=mctl.me&owner=dmitriimashkov
         workflowId: release-service.yml
@@ -89,5 +93,5 @@ spec:
           ${{ parameters.envVars and '✅ **Env vars** update dispatched to GitHub Actions. ArgoCD will sync automatically (~2-3 min).' or '' }}
     links:
       - title: GitHub Actions Run
-        url: https://github.com/dmitriimashkov/mctl.me/actions/workflows/release-service.yml
-        if: ${{ parameters.envVars or parameters.secretEnvVars }}
+        icon: github
+        url: ${{ steps['update-config'].output.runUrl }}
