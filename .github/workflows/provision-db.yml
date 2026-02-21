@@ -278,7 +278,11 @@ Provisioned PostgreSQL database for ${TEAM}/${APP}:
 - Vault path: platform/teams/${TEAM}/${APP}/database
 - K8s secret: ${DB_NAME}-db-creds (ExternalSecret → CNPG)"
 
-          git push
+          for i in 1 2 3 4 5; do
+            git push && break
+            echo "⚠️  Push failed (attempt $i), rebasing..."
+            git pull --rebase origin main
+          done
           echo "✅ GitOps commit pushed — ArgoCD will sync automatically"
 
       - name: Summary

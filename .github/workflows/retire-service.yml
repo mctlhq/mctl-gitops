@@ -124,7 +124,12 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           git commit -m "delete: ${{ inputs.team_name }}/${{ inputs.component_name }}"
-          git push
+
+          for i in 1 2 3 4 5; do
+            git push && break
+            echo "⚠️  Push failed (attempt $i), rebasing..."
+            git pull --rebase origin main
+          done
 
       - name: Remove entity from Backstage catalog
         continue-on-error: true
