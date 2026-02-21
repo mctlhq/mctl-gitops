@@ -171,3 +171,19 @@ argo-cd:
         - hosts:
             - argocd-preview.mctl.me
           secretName: argocd-tls
+
+  # Controller resource optimization for preview
+  controller:
+    resources:
+      limits:
+        memory: 384Mi
+      requests:
+        cpu: 50m
+        memory: 256Mi
+    env:
+      - name: GOMEMLIMIT
+        value: "350MiB"
+    extraArgs:
+      - --status-processors=5
+      - --operation-processors=3
+      - --repo-server-timeout-seconds=60
