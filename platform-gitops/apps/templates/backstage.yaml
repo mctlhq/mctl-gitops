@@ -197,6 +197,10 @@ spec:
                   target: https://github.com/dmitriimashkov/mctl.me/blob/main/platform-gitops/backstage-templates/provision-database/template.yaml
                   rules:
                     - allow: [Template]
+                - type: url
+                  target: https://github.com/dmitriimashkov/mctl.me/blob/main/platform-gitops/backstage-templates/deploy-version/template.yaml
+                  rules:
+                    - allow: [Template]
 
         # PostgreSQL subchart disabled — using shared CNPG cluster in platform-db namespace
         postgresql:
