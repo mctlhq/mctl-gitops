@@ -24,7 +24,7 @@ env:
   WITHDRAWAL_FEE: "0"
 ingress:
   enabled: true
-  host: monteexchange
+  host: monteexchange.mctl.me
 externalSecret:
   targetSecret: monteexchange-secrets
   data:
