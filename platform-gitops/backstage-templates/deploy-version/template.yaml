@@ -20,7 +20,7 @@ spec:
       reviewButtonText: 'Review & Deploy'
 
   parameters:
-    - title: Service
+    - title: Service & Version
       required:
         - serviceName
       properties:
@@ -32,9 +32,6 @@ spec:
           ui:options:
             allowedKinds:
               - Component
-
-    - title: Version
-      properties:
         gitTag:
           title: Tag
           type: string
