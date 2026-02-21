@@ -99,6 +99,7 @@ spec:
               appSlug: mctl-me
               appId: ${GITHUB_APP_ID}
               privateKey: ${GITHUB_APP_PRIVATE_KEY}
+              webhookSecret: ${GITHUB_WEBHOOK_SECRET}
             vaultSecrets:
               endpoint: ${VAULT_ADDR}
               token: ${VAULT_TOKEN}

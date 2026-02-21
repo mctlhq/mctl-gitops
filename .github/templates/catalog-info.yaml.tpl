@@ -8,6 +8,7 @@ metadata:
     backstage.io/kubernetes-namespace: __TEAM_NAME__
     argocd/app-name: preview-__TEAM_NAME__-__SERVICE_NAME__
     github.com/source-repo: __DOCKERFILE_REPO__
+    mctl.me/auto-deploy: "false"
   links:
     - url: https://argocd-preview.mctl.me/applications/argocd/preview-__TEAM_NAME__-__SERVICE_NAME__
       title: ArgoCD
