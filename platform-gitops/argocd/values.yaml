@@ -76,6 +76,9 @@ argo-cd:
 
     params:
       server.insecure: true
+      controller.status.processors: "5"
+      controller.operation.processors: "3"
+      controller.repo.server.timeout.seconds: "60"
       
       # Disable server-side apply for CRDs to avoid annotation size issues
       # See: https://github.com/argoproj/argo-cd/issues/9476
@@ -183,7 +186,3 @@ argo-cd:
     env:
       - name: GOMEMLIMIT
         value: "350MiB"
-    extraArgs:
-      - --status-processors=5
-      - --operation-processors=3
-      - --repo-server-timeout-seconds=60
