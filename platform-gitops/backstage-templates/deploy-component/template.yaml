@@ -63,6 +63,14 @@ spec:
           default: true
           description: "Skip liveness/readiness probes. Recommended for onboarding if /healthz and /readyz are not yet implemented."
 
+    - title: Database
+      properties:
+        provisionDatabase:
+          title: Provision PostgreSQL Database
+          type: boolean
+          default: false
+          description: "Create a dedicated database, Vault secret, and K8s ExternalSecret for this service. Safe to enable — skips if database already exists."
+
     - title: Environment
       properties:
         envVars:
@@ -135,6 +143,18 @@ spec:
           env_vars: ${{ parameters.envVars | default('') }}
           secret_env_vars: ${{ parameters.secretEnvVars | default('') }}
 
+    - id: trigger-provision-db
+      name: Provision database
+      if: ${{ parameters.provisionDatabase }}
+      action: github:actions:dispatch
+      input:
+        repoUrl: github.com?repo=mctl.me&owner=dmitriimashkov
+        workflowId: provision-db.yml
+        branchOrTagName: main
+        workflowInputs:
+          team: ${{ parameters.teamName | parseEntityRef | pick('name') }}
+          app: ${{ parameters.dockerfileRepo | repoName }}
+
   output:
     text:
       - title: Type
@@ -143,6 +163,8 @@ spec:
         content: "${{ parameters.gitTag or 'latest (HEAD)' }}"
       - title: Preview URL
         content: "${{ 'https://' + parameters.host if parameters.host else 'N/A — background worker' }}"
+      - title: Database
+        content: "${{ parameters.provisionDatabase and '✅ Provisioning dispatched' or 'Not requested' }}"
     links:
       - title: ArgoCD Dashboard
         icon: dashboard

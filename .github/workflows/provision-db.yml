@@ -40,13 +40,16 @@ jobs:
           echo "DB_NAME=${DB_NAME}" >> $GITHUB_ENV
 
           if grep -q "name: ${DB_NAME}-db" platform-gitops/cnpg-clusters/shared/databases.yaml 2>/dev/null; then
-            echo "::error::Database '${DB_NAME}' already exists in databases.yaml"
-            exit 1
+            echo "ℹ️  Database '${DB_NAME}' already exists — skipping provisioning"
+            echo "DB_EXISTS=true" >> $GITHUB_ENV
+          else
+            echo "DB_EXISTS=false" >> $GITHUB_ENV
           fi
 
           echo "✅ Inputs valid: team=${TEAM}, app=${APP}, db=${DB_NAME}"
 
       - name: Generate password and store in Vault
+        if: env.DB_EXISTS != 'true'
         env:
           VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
           VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
@@ -86,6 +89,7 @@ jobs:
           echo "✅ Credentials stored in Vault at ${VAULT_PATH}"
 
       - name: Patch cluster.yaml — add role and pg_hba entry
+        if: env.DB_EXISTS != 'true'
         run: |
           DB_NAME="${{ env.DB_NAME }}"
           CLUSTER_FILE="platform-gitops/cnpg-clusters/shared/cluster.yaml"
@@ -114,6 +118,7 @@ jobs:
           echo "✅ cluster.yaml updated"
 
       - name: Append to databases.yaml — new Database CRD
+        if: env.DB_EXISTS != 'true'
         run: |
           TEAM="${{ inputs.team }}"
           APP="${{ inputs.app }}"
@@ -136,6 +141,7 @@ EOF
           echo "✅ databases.yaml updated"
 
       - name: Append to secrets.yaml — new ExternalSecret
+        if: env.DB_EXISTS != 'true'
         run: |
           TEAM="${{ inputs.team }}"
           APP="${{ inputs.app }}"
@@ -191,6 +197,7 @@ EOF
           echo "✅ secrets.yaml updated"
 
       - name: Annotate service catalog-info.yaml
+        if: env.DB_EXISTS != 'true'
         run: |
           TEAM="${{ inputs.team }}"
           APP="${{ inputs.app }}"
@@ -247,6 +254,7 @@ PYEOF
           echo "✅ DB annotations added to ${CATALOG_FILE}"
 
       - name: Commit and push
+        if: env.DB_EXISTS != 'true'
         run: |
           TEAM="${{ inputs.team }}"
           APP="${{ inputs.app }}"
@@ -278,13 +286,19 @@ Provisioned PostgreSQL database for ${TEAM}/${APP}:
           TEAM="${{ inputs.team }}"
           APP="${{ inputs.app }}"
           DB_NAME="${{ env.DB_NAME }}"
-          echo "## 🗄️ Database Provisioned" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
-          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
-          echo "| Database | \`${DB_NAME}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Role | \`${DB_NAME}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| K8s Secret | \`${DB_NAME}-db-creds\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Vault path | \`platform/teams/${TEAM}/${APP}/database\` |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "ArgoCD will pick up the changes automatically. The database will be available once CNPG reconciles (~1-2 min)." >> $GITHUB_STEP_SUMMARY
+          if [[ "${{ env.DB_EXISTS }}" == "true" ]]; then
+            echo "## ℹ️ Database Already Exists" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Database \`${DB_NAME}\` is already provisioned — no changes made." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## 🗄️ Database Provisioned" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+            echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+            echo "| Database | \`${DB_NAME}\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| Role | \`${DB_NAME}\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| K8s Secret | \`${DB_NAME}-db-creds\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| Vault path | \`platform/teams/${TEAM}/${APP}/database\` |" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "ArgoCD will pick up the changes automatically. The database will be available once CNPG reconciles (~1-2 min)." >> $GITHUB_STEP_SUMMARY
+          fi
