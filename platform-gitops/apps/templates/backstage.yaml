@@ -27,7 +27,7 @@ spec:
           image:
             registry: ghcr.io
             repository: dmitriimashkov/backstage
-            tag: 1.20.0
+            tag: 1.21.1
             pullSecrets:
               - ghcr-credentials
           extraEnvVarsSecrets:
