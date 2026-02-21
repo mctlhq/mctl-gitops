@@ -11,7 +11,7 @@ metadata:
   name: backstage-k8s-reader
 rules:
   - apiGroups: [""]
-    resources: ["pods", "services", "configmaps", "events", "namespaces"]
+    resources: ["pods", "services", "configmaps", "events", "namespaces", "limitranges", "resourcequotas"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["apps"]
     resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
