@@ -17,16 +17,10 @@ spec:
   parameters:
     - title: Database Details
       required:
-        - teamName
         - serviceName
       properties:
-        teamName:
-          title: Team
-          type: string
-          description: "Select your team"
-          ui:field: MyGroupsPicker
         serviceName:
-          title: App / Service Name
+          title: Service
           type: string
           description: "Select the service this database belongs to"
           ui:field: OwnedEntityPicker
@@ -35,6 +29,12 @@ spec:
               - Component
 
   steps:
+    - id: fetch-service
+      name: Fetch service details
+      action: catalog:fetch
+      input:
+        entityRef: ${{ parameters.serviceName }}
+
     - id: trigger-provision
       name: Provision database
       action: github:actions:dispatch
@@ -43,17 +43,17 @@ spec:
         workflowId: provision-db.yml
         branchOrTagName: main
         workflowInputs:
-          team: ${{ parameters.teamName | parseEntityRef | pick('name') }}
-          app: ${{ parameters.serviceName | parseEntityRef | pick('name') }}
+          team: ${{ steps['fetch-service'].output.entity.metadata.labels.team or steps['fetch-service'].output.entity.spec.owner | replace('group:', '') }}
+          app: ${{ steps['fetch-service'].output.entity.metadata.name }}
 
   output:
     text:
       - title: Database name
-        content: "`${{ parameters.teamName | parseEntityRef | pick('name') }}-${{ parameters.serviceName | parseEntityRef | pick('name') }}`"
+        content: "`${{ steps['fetch-service'].output.entity.metadata.labels.team or steps['fetch-service'].output.entity.spec.owner | replace('group:', '') }}-${{ steps['fetch-service'].output.entity.metadata.name }}`"
       - title: Vault path
-        content: "`platform/teams/${{ parameters.teamName | parseEntityRef | pick('name') }}/${{ parameters.serviceName | parseEntityRef | pick('name') }}/database`"
+        content: "`platform/teams/${{ steps['fetch-service'].output.entity.metadata.labels.team or steps['fetch-service'].output.entity.spec.owner | replace('group:', '') }}/${{ steps['fetch-service'].output.entity.metadata.name }}/database`"
       - title: Kubernetes secret
-        content: "`${{ parameters.teamName | parseEntityRef | pick('name') }}-${{ parameters.serviceName | parseEntityRef | pick('name') }}-db-creds`"
+        content: "`${{ steps['fetch-service'].output.entity.metadata.labels.team or steps['fetch-service'].output.entity.spec.owner | replace('group:', '') }}-${{ steps['fetch-service'].output.entity.metadata.name }}-db-creds`"
     links:
       - title: View GitHub Actions Run
         icon: github

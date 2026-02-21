@@ -60,6 +60,11 @@ on:
         description: "Plaintext SECRET KEY=value pairs (for Vault)"
         required: false
         type: string
+      skip_health_check:
+        description: "Skip liveness/readiness probes (default: false)"
+        required: false
+        default: "false"
+        type: string
 
 env:
   REGISTRY: ghcr.io
@@ -491,6 +496,12 @@ jobs:
             -e "s|__HOST__|${{ inputs.host }}|g" \
             "$TEMPLATE" > "${DIR}/values.yaml"
           
+          # Disable health probes if requested
+          if [[ "${{ inputs.skip_health_check }}" == "true" ]]; then
+            echo "⏭️ Skipping health checks (probes disabled)"
+            yq eval -i '.probes.liveness = null | .probes.readiness = null' "${DIR}/values.yaml"
+          fi
+
           # Add custom env vars if provided
           if [[ -n "${{ inputs.env_vars }}" ]]; then
             echo "📝 Adding custom environment variables..."

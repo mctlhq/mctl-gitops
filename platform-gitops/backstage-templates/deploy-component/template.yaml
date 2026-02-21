@@ -24,7 +24,6 @@ spec:
       required:
         - teamName
         - dockerfileRepo
-        - gitTag
       properties:
         teamName:
           title: Team
@@ -37,13 +36,6 @@ spec:
           description: "Select a repository or type owner/repo"
           pattern: "^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$"
           ui:field: GitHubRepoPicker
-        repoPat:
-          title: Repository PAT (optional)
-          type: string
-          description: >-
-            Only needed if the GitHub App is not installed on this repo.
-            Fine-grained PAT with 'Contents: Read' scope.
-          ui:field: Secret
         dockerfilePath:
           title: Dockerfile Path
           type: string
@@ -51,7 +43,7 @@ spec:
         gitTag:
           title: Version Tag
           type: string
-          description: "Semver tag to checkout and build (e.g. v1.0.0)"
+          description: "Semver tag to checkout and build (e.g. v1.0.0). Leave empty to build from HEAD (image tagged 'latest')."
           pattern: "^v?[0-9]+\\.[0-9]+\\.[0-9]+.*$"
 
     - title: Networking
@@ -65,6 +57,11 @@ spec:
           title: Ingress Host
           type: string
           description: "Public hostname (e.g. myapp.mctl.me). Leave empty for a background worker — no ingress will be created."
+        skipHealthCheck:
+          title: Skip Health Checks
+          type: boolean
+          default: true
+          description: "Skip liveness/readiness probes. Recommended for onboarding if /healthz and /readyz are not yet implemented."
 
     - title: Environment
       properties:
@@ -94,6 +91,15 @@ spec:
             DATABASE_PASSWORD=your-db-password
             SECRET_TOKEN=your-secret-token
 
+    - title: Advanced (optional)
+      description: "Only needed if the GitHub App is not installed on your repository."
+      properties:
+        repoPat:
+          title: Repository PAT
+          type: string
+          description: "Fine-grained PAT with 'Contents: Read' scope. Stored securely in Vault."
+          ui:field: Secret
+
   steps:
     - id: save-repo-pat
       name: Save repo PAT to Vault
@@ -122,9 +128,10 @@ spec:
           component_type: ${{ 'base-service' if parameters.host else 'worker-service' }}
           dockerfile_repo: ${{ parameters.dockerfileRepo }}
           dockerfile_path: ${{ parameters.dockerfilePath | default('Dockerfile') }}
-          git_tag: ${{ parameters.gitTag }}
+          git_tag: ${{ parameters.gitTag | default('') }}
           port: ${{ parameters.port | string }}
           host: ${{ parameters.host | default('') }}
+          skip_health_check: ${{ parameters.skipHealthCheck | string }}
           env_vars: ${{ parameters.envVars | default('') }}
           secret_env_vars: ${{ parameters.secretEnvVars | default('') }}
 
@@ -133,7 +140,7 @@ spec:
       - title: Type
         content: "${{ 'Web Service' if parameters.host else 'Background Worker' }}"
       - title: Version
-        content: "${{ parameters.gitTag }}"
+        content: "${{ parameters.gitTag or 'latest (HEAD)' }}"
       - title: Preview URL
         content: "${{ 'https://' + parameters.host if parameters.host else 'N/A — background worker' }}"
     links:

@@ -17,16 +17,10 @@ spec:
   parameters:
     - title: Service
       required:
-        - teamName
         - serviceName
       properties:
-        teamName:
-          title: Team
-          type: string
-          description: "Select your team"
-          ui:field: MyGroupsPicker
         serviceName:
-          title: Service Name
+          title: Service
           type: string
           description: "Select the deployed service to update"
           ui:field: OwnedEntityPicker
@@ -63,6 +57,12 @@ spec:
             SECRET_TOKEN=your-secret-token
 
   steps:
+    - id: fetch-service
+      name: Fetch service details
+      action: catalog:fetch
+      input:
+        entityRef: ${{ parameters.serviceName }}
+
     - id: update-config
       name: Apply changes
       if: ${{ parameters.envVars or parameters.secretEnvVars }}
@@ -73,8 +73,8 @@ spec:
         branchOrTagName: main
         workflowInputs:
           action: update-config
-          team_name: ${{ parameters.teamName | parseEntityRef | pick('name') }}
-          component_name: ${{ parameters.serviceName | parseEntityRef | pick('name') }}
+          team_name: ${{ steps['fetch-service'].output.entity.metadata.labels.team or steps['fetch-service'].output.entity.spec.owner | replace('group:', '') }}
+          component_name: ${{ steps['fetch-service'].output.entity.metadata.name }}
           env_vars: ${{ parameters.envVars | default('') }}
           secret_env_vars: ${{ parameters.secretEnvVars | default('') }}
 
@@ -82,7 +82,7 @@ spec:
     text:
       - title: Summary
         content: |
-          **Service:** `${{ parameters.teamName | parseEntityRef | pick('name') }}/${{ parameters.serviceName | parseEntityRef | pick('name') }}`
+          **Service:** `${{ steps['fetch-service'].output.entity.metadata.labels.team or steps['fetch-service'].output.entity.spec.owner | replace('group:', '') }}/${{ steps['fetch-service'].output.entity.metadata.name }}`
 
           ${{ parameters.secretEnvVars and '✅ **Secrets** update dispatched — will be stored in Vault and synced to Kubernetes automatically.' or '' }}
 
