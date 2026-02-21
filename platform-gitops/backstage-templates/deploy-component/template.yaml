@@ -1,11 +1,11 @@
 apiVersion: scaffolder.backstage.io/v1beta3
 kind: Template
 metadata:
-  name: release-service
-  title: 🚀 Release Service
-  description: Build and release a service to the preview cluster. Provide a host for web services, or leave empty for a background worker.
+  name: onboard-service
+  title: 🆕 Onboard Service
+  description: First-time setup — clone a repo, build the image, and deploy a new service to the preview cluster.
   tags:
-    - release
+    - onboard
     - deploy
     - kubernetes
     - preview
@@ -16,8 +16,8 @@ spec:
   type: deployment
   presentation:
     buttonLabels:
-      createButtonText: 'Release Service'
-      reviewButtonText: 'Review & Release'
+      createButtonText: 'Onboard Service'
+      reviewButtonText: 'Review & Onboard'
 
   parameters:
     - title: Service & Source

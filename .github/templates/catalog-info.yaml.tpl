@@ -6,6 +6,7 @@ metadata:
   annotations:
     backstage.io/kubernetes-id: __SERVICE_NAME__
     argocd/app-name: preview-__TEAM_NAME__-__SERVICE_NAME__
+    github.com/source-repo: __DOCKERFILE_REPO__
   labels:
     team: __TEAM_NAME__
     env: preview

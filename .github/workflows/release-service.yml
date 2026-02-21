@@ -557,6 +557,7 @@ jobs:
             -e "s|__TEAM_NAME__|${{ inputs.team_name }}|g" \
             -e "s|__SERVICE_NAME__|${{ inputs.component_name }}|g" \
             -e "s|__COMPONENT_TYPE__|${COMPONENT_TYPE}|g" \
+            -e "s|__DOCKERFILE_REPO__|${{ inputs.dockerfile_repo }}|g" \
             ".github/templates/catalog-info.yaml.tpl" > "${DIR}/catalog-info.yaml"
           
           # Create vault-cleanup.yaml for ArgoCD PreDelete hook
