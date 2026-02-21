@@ -120,7 +120,7 @@ spec:
             catalog:
               orphanStrategy: delete
               rules:
-                - allow: [Component, System, API, Resource, Location, Template, Group, User]
+                - allow: [Component, System, Domain, API, Resource, Location, Template, Group, User]
               providers:
                 githubOrg:
                   - id: production

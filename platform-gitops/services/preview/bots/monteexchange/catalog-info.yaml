@@ -13,3 +13,4 @@ spec:
   type: service
   lifecycle: production
   owner: group:bots
+  system: team-bots

@@ -1,7 +1,42 @@
 apiVersion: backstage.io/v1alpha1
-kind: System
+kind: Domain
 metadata:
   name: platform
-  description: mctl.me developer platform — self-service workspace for deploying and managing services
+  description: Internal platform capabilities — Backstage, ArgoCD, Vault, observability, and infrastructure tooling
 spec:
   owner: group:admin
+---
+apiVersion: backstage.io/v1alpha1
+kind: Domain
+metadata:
+  name: tenants
+  description: Customer and team-owned workloads deployed on the platform
+spec:
+  owner: group:admin
+---
+apiVersion: backstage.io/v1alpha1
+kind: System
+metadata:
+  name: mctl-platform
+  description: Core mctl platform services — Backstage portal, ArgoCD, Vault, CNPG, Longhorn
+spec:
+  owner: group:admin
+  domain: platform
+---
+apiVersion: backstage.io/v1alpha1
+kind: System
+metadata:
+  name: team-admin
+  description: Admin team workloads
+spec:
+  owner: group:admin
+  domain: tenants
+---
+apiVersion: backstage.io/v1alpha1
+kind: System
+metadata:
+  name: team-bots
+  description: Bots team workloads
+spec:
+  owner: group:bots
+  domain: tenants
