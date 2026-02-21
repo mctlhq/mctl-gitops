@@ -8,6 +8,7 @@ metadata:
     backstage.io/kubernetes-namespace: admin
     argocd/app-name: preview-admin-platform
     github.com/source-repo: dmitriimashkov/platform
+    mctl.me/auto-deploy: "true"
   links:
     - url: https://argocd-preview.mctl.me/applications/argocd/preview-admin-platform
       title: ArgoCD
