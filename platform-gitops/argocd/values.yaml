@@ -132,6 +132,33 @@ argo-cd:
         p, role:team-developers, exec, create, preview/preview-developers-*, allow
         g, mctlhq:developers, role:team-developers
 
+        # Team: doo
+        p, role:team-doo, applications, get, preview/preview-doo-*, allow
+        p, role:team-doo, applications, list, preview/preview-doo-*, allow
+        p, role:team-doo, applications, sync, preview/preview-doo-*, allow
+        p, role:team-doo, applications, override, preview/preview-doo-*, allow
+        p, role:team-doo, logs, get, preview/preview-doo-*, allow
+        p, role:team-doo, exec, create, preview/preview-doo-*, allow
+        g, mctlhq:doo, role:team-doo
+
+        # Team: fff
+        p, role:team-fff, applications, get, preview/preview-fff-*, allow
+        p, role:team-fff, applications, list, preview/preview-fff-*, allow
+        p, role:team-fff, applications, sync, preview/preview-fff-*, allow
+        p, role:team-fff, applications, override, preview/preview-fff-*, allow
+        p, role:team-fff, logs, get, preview/preview-fff-*, allow
+        p, role:team-fff, exec, create, preview/preview-fff-*, allow
+        g, mctlhq:fff, role:team-fff
+
+        # Team: gygy
+        p, role:team-gygy, applications, get, preview/preview-gygy-*, allow
+        p, role:team-gygy, applications, list, preview/preview-gygy-*, allow
+        p, role:team-gygy, applications, sync, preview/preview-gygy-*, allow
+        p, role:team-gygy, applications, override, preview/preview-gygy-*, allow
+        p, role:team-gygy, logs, get, preview/preview-gygy-*, allow
+        p, role:team-gygy, exec, create, preview/preview-gygy-*, allow
+        g, mctlhq:gygy, role:team-gygy
+
         # Team: internal
         p, role:team-internal, applications, get, preview/preview-internal-*, allow
         p, role:team-internal, applications, list, preview/preview-internal-*, allow
@@ -150,6 +177,24 @@ argo-cd:
         p, role:team-libertex, exec, create, preview/preview-libertex-*, allow
         g, mctlhq:libertex, role:team-libertex
 
+        # Team: rere
+        p, role:team-rere, applications, get, preview/preview-rere-*, allow
+        p, role:team-rere, applications, list, preview/preview-rere-*, allow
+        p, role:team-rere, applications, sync, preview/preview-rere-*, allow
+        p, role:team-rere, applications, override, preview/preview-rere-*, allow
+        p, role:team-rere, logs, get, preview/preview-rere-*, allow
+        p, role:team-rere, exec, create, preview/preview-rere-*, allow
+        g, mctlhq:rere, role:team-rere
+
+        # Team: team
+        p, role:team-team, applications, get, preview/preview-team-*, allow
+        p, role:team-team, applications, list, preview/preview-team-*, allow
+        p, role:team-team, applications, sync, preview/preview-team-*, allow
+        p, role:team-team, applications, override, preview/preview-team-*, allow
+        p, role:team-team, logs, get, preview/preview-team-*, allow
+        p, role:team-team, exec, create, preview/preview-team-*, allow
+        g, mctlhq:team, role:team-team
+
         # Team: ttt
         p, role:team-ttt, applications, get, preview/preview-ttt-*, allow
         p, role:team-ttt, applications, list, preview/preview-ttt-*, allow
@@ -158,6 +203,42 @@ argo-cd:
         p, role:team-ttt, logs, get, preview/preview-ttt-*, allow
         p, role:team-ttt, exec, create, preview/preview-ttt-*, allow
         g, mctlhq:ttt, role:team-ttt
+
+        # Team: tttt
+        p, role:team-tttt, applications, get, preview/preview-tttt-*, allow
+        p, role:team-tttt, applications, list, preview/preview-tttt-*, allow
+        p, role:team-tttt, applications, sync, preview/preview-tttt-*, allow
+        p, role:team-tttt, applications, override, preview/preview-tttt-*, allow
+        p, role:team-tttt, logs, get, preview/preview-tttt-*, allow
+        p, role:team-tttt, exec, create, preview/preview-tttt-*, allow
+        g, mctlhq:tttt, role:team-tttt
+
+        # Team: ttttg
+        p, role:team-ttttg, applications, get, preview/preview-ttttg-*, allow
+        p, role:team-ttttg, applications, list, preview/preview-ttttg-*, allow
+        p, role:team-ttttg, applications, sync, preview/preview-ttttg-*, allow
+        p, role:team-ttttg, applications, override, preview/preview-ttttg-*, allow
+        p, role:team-ttttg, logs, get, preview/preview-ttttg-*, allow
+        p, role:team-ttttg, exec, create, preview/preview-ttttg-*, allow
+        g, mctlhq:ttttg, role:team-ttttg
+
+        # Team: ttttt
+        p, role:team-ttttt, applications, get, preview/preview-ttttt-*, allow
+        p, role:team-ttttt, applications, list, preview/preview-ttttt-*, allow
+        p, role:team-ttttt, applications, sync, preview/preview-ttttt-*, allow
+        p, role:team-ttttt, applications, override, preview/preview-ttttt-*, allow
+        p, role:team-ttttt, logs, get, preview/preview-ttttt-*, allow
+        p, role:team-ttttt, exec, create, preview/preview-ttttt-*, allow
+        g, mctlhq:ttttt, role:team-ttttt
+
+        # Team: werwer
+        p, role:team-werwer, applications, get, preview/preview-werwer-*, allow
+        p, role:team-werwer, applications, list, preview/preview-werwer-*, allow
+        p, role:team-werwer, applications, sync, preview/preview-werwer-*, allow
+        p, role:team-werwer, applications, override, preview/preview-werwer-*, allow
+        p, role:team-werwer, logs, get, preview/preview-werwer-*, allow
+        p, role:team-werwer, exec, create, preview/preview-werwer-*, allow
+        g, mctlhq:werwer, role:team-werwer
 
         # Team: www
         p, role:team-www, applications, get, preview/preview-www-*, allow
@@ -168,6 +249,15 @@ argo-cd:
         p, role:team-www, exec, create, preview/preview-www-*, allow
         g, mctlhq:www, role:team-www
 
+        # Team: yes
+        p, role:team-yes, applications, get, preview/preview-yes-*, allow
+        p, role:team-yes, applications, list, preview/preview-yes-*, allow
+        p, role:team-yes, applications, sync, preview/preview-yes-*, allow
+        p, role:team-yes, applications, override, preview/preview-yes-*, allow
+        p, role:team-yes, logs, get, preview/preview-yes-*, allow
+        p, role:team-yes, exec, create, preview/preview-yes-*, allow
+        g, mctlhq:yes, role:team-yes
+
         # Team: ytytyt
         p, role:team-ytytyt, applications, get, preview/preview-ytytyt-*, allow
         p, role:team-ytytyt, applications, list, preview/preview-ytytyt-*, allow
@@ -176,6 +266,15 @@ argo-cd:
         p, role:team-ytytyt, logs, get, preview/preview-ytytyt-*, allow
         p, role:team-ytytyt, exec, create, preview/preview-ytytyt-*, allow
         g, mctlhq:ytytyt, role:team-ytytyt
+
+        # Team: yyy
+        p, role:team-yyy, applications, get, preview/preview-yyy-*, allow
+        p, role:team-yyy, applications, list, preview/preview-yyy-*, allow
+        p, role:team-yyy, applications, sync, preview/preview-yyy-*, allow
+        p, role:team-yyy, applications, override, preview/preview-yyy-*, allow
+        p, role:team-yyy, logs, get, preview/preview-yyy-*, allow
+        p, role:team-yyy, exec, create, preview/preview-yyy-*, allow
+        g, mctlhq:yyy, role:team-yyy
 
     secret:
       createSecret: true
