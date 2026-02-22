@@ -159,6 +159,15 @@ argo-cd:
         p, role:team-www, exec, create, preview/preview-www-*, allow
         g, dmitriimashkov:www, role:team-www
 
+        # Team: ytytyt
+        p, role:team-ytytyt, applications, get, preview/preview-ytytyt-*, allow
+        p, role:team-ytytyt, applications, list, preview/preview-ytytyt-*, allow
+        p, role:team-ytytyt, applications, sync, preview/preview-ytytyt-*, allow
+        p, role:team-ytytyt, applications, override, preview/preview-ytytyt-*, allow
+        p, role:team-ytytyt, logs, get, preview/preview-ytytyt-*, allow
+        p, role:team-ytytyt, exec, create, preview/preview-ytytyt-*, allow
+        g, dmitriimashkov:ytytyt, role:team-ytytyt
+
     secret:
       createSecret: true
 
