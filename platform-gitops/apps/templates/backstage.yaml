@@ -96,7 +96,7 @@ spec:
             permission:
               enabled: true
             githubAppConnect:
-              appSlug: mctl-me
+              appSlug: mctl-app
               appId: ${GITHUB_APP_ID}
               privateKey: ${GITHUB_APP_PRIVATE_KEY}
               webhookSecret: ${GITHUB_WEBHOOK_SECRET}

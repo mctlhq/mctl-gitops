@@ -329,7 +329,7 @@ jobs:
             else
               echo "::error::Cannot access repo: ${REPO}."
               echo "::error::For private repos, either:"
-              echo "::error::  1. Install the mctl-me GitHub App on the repo owner's account"
+              echo "::error::  1. Install the mctl-app GitHub App on the repo owner's account"
               echo "::error::  2. Provide a PAT via Backstage or CLI (--pat flag)"
               exit 1
             fi
