@@ -12,11 +12,11 @@ argo-cd:
     keep: true
 
   global:
-    domain: argocd-preview.mctl.me
+    domain: ops.mctl.me
 
   configs:
     cm:
-      url: https://argocd-preview.mctl.me
+      url: https://ops.mctl.me
       admin.enabled: false
       timeout.reconciliation: 60s
 
@@ -72,7 +72,7 @@ argo-cd:
             clientID: "$github-client-id"
             clientSecret: "$github-client-secret"
             orgs:
-              - name: dmitriimashkov
+              - name: mctlhq
 
     params:
       server.insecure: true
@@ -99,7 +99,7 @@ argo-cd:
         p, role:admin, clusters, get, */*, allow
         p, role:admin, repositories, *, */*, allow
         p, role:admin, projects, *, */*, allow
-        g, dmitriimashkov:admin, role:admin
+        g, mctlhq:admin, role:admin
 
         # ============================================================================
         # Team-Based Access (Auto-generated from GitHub Teams)
@@ -112,7 +112,7 @@ argo-cd:
         p, role:team-africaone-dev, applications, override, preview/preview-africaone-dev-*, allow
         p, role:team-africaone-dev, logs, get, preview/preview-africaone-dev-*, allow
         p, role:team-africaone-dev, exec, create, preview/preview-africaone-dev-*, allow
-        g, dmitriimashkov:africaone-dev, role:team-africaone-dev
+        g, mctlhq:africaone-dev, role:team-africaone-dev
 
         # Team: bots
         p, role:team-bots, applications, get, preview/preview-bots-*, allow
@@ -121,7 +121,7 @@ argo-cd:
         p, role:team-bots, applications, override, preview/preview-bots-*, allow
         p, role:team-bots, logs, get, preview/preview-bots-*, allow
         p, role:team-bots, exec, create, preview/preview-bots-*, allow
-        g, dmitriimashkov:bots, role:team-bots
+        g, mctlhq:bots, role:team-bots
 
         # Team: developers
         p, role:team-developers, applications, get, preview/preview-developers-*, allow
@@ -130,7 +130,7 @@ argo-cd:
         p, role:team-developers, applications, override, preview/preview-developers-*, allow
         p, role:team-developers, logs, get, preview/preview-developers-*, allow
         p, role:team-developers, exec, create, preview/preview-developers-*, allow
-        g, dmitriimashkov:developers, role:team-developers
+        g, mctlhq:developers, role:team-developers
 
         # Team: internal
         p, role:team-internal, applications, get, preview/preview-internal-*, allow
@@ -139,7 +139,7 @@ argo-cd:
         p, role:team-internal, applications, override, preview/preview-internal-*, allow
         p, role:team-internal, logs, get, preview/preview-internal-*, allow
         p, role:team-internal, exec, create, preview/preview-internal-*, allow
-        g, dmitriimashkov:internal, role:team-internal
+        g, mctlhq:internal, role:team-internal
 
         # Team: libertex
         p, role:team-libertex, applications, get, preview/preview-libertex-*, allow
@@ -148,7 +148,7 @@ argo-cd:
         p, role:team-libertex, applications, override, preview/preview-libertex-*, allow
         p, role:team-libertex, logs, get, preview/preview-libertex-*, allow
         p, role:team-libertex, exec, create, preview/preview-libertex-*, allow
-        g, dmitriimashkov:libertex, role:team-libertex
+        g, mctlhq:libertex, role:team-libertex
 
         # Team: ttt
         p, role:team-ttt, applications, get, preview/preview-ttt-*, allow
@@ -166,7 +166,7 @@ argo-cd:
         p, role:team-www, applications, override, preview/preview-www-*, allow
         p, role:team-www, logs, get, preview/preview-www-*, allow
         p, role:team-www, exec, create, preview/preview-www-*, allow
-        g, dmitriimashkov:www, role:team-www
+        g, mctlhq:www, role:team-www
 
         # Team: ytytyt
         p, role:team-ytytyt, applications, get, preview/preview-ytytyt-*, allow
@@ -175,7 +175,7 @@ argo-cd:
         p, role:team-ytytyt, applications, override, preview/preview-ytytyt-*, allow
         p, role:team-ytytyt, logs, get, preview/preview-ytytyt-*, allow
         p, role:team-ytytyt, exec, create, preview/preview-ytytyt-*, allow
-        g, dmitriimashkov:ytytyt, role:team-ytytyt
+        g, mctlhq:ytytyt, role:team-ytytyt
 
     secret:
       createSecret: true
@@ -190,7 +190,7 @@ argo-cd:
       tls: true
       extraTls:
         - hosts:
-            - argocd-preview.mctl.me
+            - ops.mctl.me
           secretName: argocd-tls
 
   # Controller resource optimization for preview

@@ -4,9 +4,8 @@
 # Chart: base-service
 
 image:
-  repository: ghcr.io/dmitriimashkov/platform
+  repository: ghcr.io/mctlhq/mctl-web
   tag: 1.0.14
-tag: "1.0.10"
 imagePullSecrets:
   - name: ghcr-credentials
 service:

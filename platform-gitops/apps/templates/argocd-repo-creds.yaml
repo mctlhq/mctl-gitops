@@ -18,7 +18,7 @@ spec:
         labels:
           argocd.argoproj.io/secret-type: repo-creds
       data:
-        url: https://github.com/dmitriimashkov
+        url: https://github.com/mctlhq
         username: argocd
         password: '{{ `{{ .password }}` }}'
   data:

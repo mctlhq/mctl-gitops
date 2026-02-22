@@ -5,9 +5,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dmitriimashkov/mctl.me/cli/mctl/internal/auth"
-	gh "github.com/dmitriimashkov/mctl.me/cli/mctl/internal/github"
-	"github.com/dmitriimashkov/mctl.me/cli/mctl/internal/vault"
+	"github.com/mctlhq/mctl-core/cli/mctl/internal/auth"
+	gh "github.com/mctlhq/mctl-core/cli/mctl/internal/github"
+	"github.com/mctlhq/mctl-core/cli/mctl/internal/vault"
 	"github.com/spf13/cobra"
 )
 
@@ -17,13 +17,13 @@ var deployCmd = &cobra.Command{
 	Long: `Deploy a new service by dispatching the release-service.yml workflow.
 Builds a Docker image from the specified repo and creates the GitOps configuration.`,
 	Example: `  # Deploy a web service with ingress
-  mctl deploy -t my-team -n my-api -r dmitriimashkov/my-api -g v1.0.0 --host my-api.preview.mctl.me
+  mctl deploy -t my-team -n my-api -r mctlhq/my-api -g v1.0.0 --host my-api.preview.mctl.me
 
   # Deploy a background worker (no host = worker)
-  mctl deploy -t my-team -n my-worker -r dmitriimashkov/my-worker -g v1.0.0
+  mctl deploy -t my-team -n my-worker -r mctlhq/my-worker -g v1.0.0
 
   # Deploy with env vars and secrets
-  mctl deploy -t my-team -n my-api -r dmitriimashkov/my-api -g v1.0.0 \
+  mctl deploy -t my-team -n my-api -r mctlhq/my-api -g v1.0.0 \
     --host my-api.preview.mctl.me \
     --env LOG_LEVEL=info --env PORT=3000 \
     --secret API_KEY=sk-xxx --secret DB_PASS=hunter2`,

@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	Owner = "dmitriimashkov"
+	Owner = "mctlhq"
 	Repo  = "mctl.me"
 	APIURL = "https://api.github.com"
 )

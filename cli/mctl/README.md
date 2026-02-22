@@ -28,20 +28,20 @@ make build
 
 ```bash
 # Web service with ingress
-mctl deploy -t my-team -n my-api -r dmitriimashkov/my-api -g v1.0.0 \
+mctl deploy -t my-team -n my-api -r mctlhq/my-api -g v1.0.0 \
   --host my-api.preview.mctl.me
 
 # Background worker (no --host)
-mctl deploy -t my-team -n my-worker -r dmitriimashkov/my-worker -g v1.0.0
+mctl deploy -t my-team -n my-worker -r mctlhq/my-worker -g v1.0.0
 
 # With env vars and secrets
-mctl deploy -t my-team -n my-api -r dmitriimashkov/my-api -g v1.0.0 \
+mctl deploy -t my-team -n my-api -r mctlhq/my-api -g v1.0.0 \
   --host my-api.preview.mctl.me \
   --env LOG_LEVEL=info --env PORT=3000 \
   --secret API_KEY=sk-xxx
 
 # Wait for completion
-mctl deploy -t my-team -n my-api -r dmitriimashkov/my-api -g v1.0.0 --wait
+mctl deploy -t my-team -n my-api -r mctlhq/my-api -g v1.0.0 --wait
 ```
 
 ### Update service config

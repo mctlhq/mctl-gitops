@@ -72,7 +72,7 @@ spec:
       if: ${{ parameters.envVars or parameters.secretEnvVars }}
       action: github:actions:dispatch-and-stream
       input:
-        repoUrl: github.com?repo=mctl.me&owner=dmitriimashkov
+        repoUrl: github.com?repo=mctl-core&owner=mctlhq
         workflowId: release-service.yml
         branchOrTagName: main
         workflowInputs:

@@ -33,4 +33,4 @@ Use this template when a service is being decommissioned and you want to:
 
 ## Links
 
-- [GitHub Actions workflow](https://github.com/dmitriimashkov/mctl.me/actions/workflows/retire-service.yml)
+- [GitHub Actions workflow](https://github.com/mctlhq/mctl-core/actions/workflows/retire-service.yml)

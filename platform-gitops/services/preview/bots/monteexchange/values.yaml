@@ -4,7 +4,7 @@
 # Chart: base-service
 
 image:
-  repository: ghcr.io/dmitriimashkov/monteexchange
+  repository: ghcr.io/mctlhq/monteexchange
   tag: "1.0.1"
 imagePullSecrets:
   - name: ghcr-credentials

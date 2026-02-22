@@ -7,19 +7,19 @@ metadata:
     backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=preview-admin-platform
     backstage.io/kubernetes-namespace: admin
     argocd/app-name: preview-admin-platform
-    github.com/source-repo: dmitriimashkov/platform
+    github.com/source-repo: mctlhq/mctl-web
     mctl.me/auto-deploy: "true"
   links:
-    - url: https://argocd-preview.mctl.me/applications/argocd/preview-admin-platform
+    - url: https://ops.mctl.me/applications/argocd/preview-admin-platform
       title: ArgoCD
       icon: dashboard
-    - url: https://github.com/dmitriimashkov/platform
+    - url: https://github.com/mctlhq/mctl-web
       title: Source Repository
       icon: github
     - url: https://platform.mctl.me
       title: Service URL
       icon: web
-    - url: https://github.com/dmitriimashkov/mctl.me/actions/workflows/release-service.yml
+    - url: https://github.com/mctlhq/mctl-core/actions/workflows/release-service.yml
       title: GitHub Actions
       icon: github
   labels:

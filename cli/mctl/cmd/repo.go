@@ -10,11 +10,11 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/dmitriimashkov/mctl.me/cli/mctl/internal/auth"
+	"github.com/mctlhq/mctl-core/cli/mctl/internal/auth"
 	"github.com/spf13/cobra"
 )
 
-const defaultBackstageURL = "https://backstage-preprod.mctl.me"
+const defaultBackstageURL = "https://app.mctl.me"
 
 var repoCmd = &cobra.Command{
 	Use:   "repo",
@@ -35,17 +35,17 @@ var repoConnectCmd = &cobra.Command{
 	Long: `Opens the GitHub App installation page so you can grant access to your private repository.
 After installation, the platform can clone your repo without a PAT.`,
 	Example: `  # Connect a repo for a service
-  mctl repo connect --repo dmitriimashkov/my-api --team my-team --service my-api
+  mctl repo connect --repo mctlhq/my-api --team my-team --service my-api
 
   # Connect and wait for confirmation
-  mctl repo connect --repo dmitriimashkov/my-api --team my-team --service my-api --wait`,
+  mctl repo connect --repo mctlhq/my-api --team my-team --service my-api --wait`,
 	RunE: runRepoConnect,
 }
 
 var repoStatusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Check repo connection status",
-	Example: `  mctl repo status --repo dmitriimashkov/my-api --team my-team --service my-api`,
+	Example: `  mctl repo status --repo mctlhq/my-api --team my-team --service my-api`,
 	RunE: runRepoStatus,
 }
 

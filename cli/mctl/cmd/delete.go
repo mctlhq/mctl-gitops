@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dmitriimashkov/mctl.me/cli/mctl/internal/auth"
-	gh "github.com/dmitriimashkov/mctl.me/cli/mctl/internal/github"
+	"github.com/mctlhq/mctl-core/cli/mctl/internal/auth"
+	gh "github.com/mctlhq/mctl-core/cli/mctl/internal/github"
 	"github.com/spf13/cobra"
 )
 

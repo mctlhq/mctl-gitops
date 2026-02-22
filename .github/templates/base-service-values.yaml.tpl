@@ -4,7 +4,7 @@
 # Chart: base-service
 
 image:
-  repository: ghcr.io/dmitriimashkov/__SERVICE_NAME__
+  repository: ghcr.io/mctlhq/__SERVICE_NAME__
   tag: "__IMAGE_TAG__"
 
 imagePullSecrets:

@@ -79,7 +79,7 @@ spec:
       name: Deploy new version
       action: github:actions:dispatch-and-stream
       input:
-        repoUrl: github.com?repo=mctl.me&owner=dmitriimashkov
+        repoUrl: github.com?repo=mctl-core&owner=mctlhq
         workflowId: release-service.yml
         branchOrTagName: main
         workflowInputs:
@@ -103,4 +103,4 @@ spec:
         url: ${{ steps['deploy-version'].output.runUrl }}
       - title: ArgoCD Dashboard
         icon: dashboard
-        url: "https://argocd-preview.mctl.me"
+        url: "https://ops.mctl.me"

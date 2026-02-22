@@ -50,7 +50,7 @@ spec:
       name: Retire service
       action: github:actions:dispatch-and-stream
       input:
-        repoUrl: github.com?repo=mctl.me&owner=dmitriimashkov
+        repoUrl: github.com?repo=mctl-core&owner=mctlhq
         workflowId: retire-service.yml
         branchOrTagName: main
         workflowInputs:

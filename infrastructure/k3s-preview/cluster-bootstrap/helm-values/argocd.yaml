@@ -5,11 +5,11 @@
 nameOverride: argocd
 
 global:
-  domain: argocd-preview.mctl.me
+  domain: ops.mctl.me
 
 configs:
   cm:
-    url: https://argocd-preview.mctl.me
+    url: https://ops.mctl.me
     admin.enabled: false
     timeout.reconciliation: 180s
 
@@ -24,7 +24,7 @@ configs:
           clientID: "$github-client-id"
           clientSecret: "$github-client-secret"
           orgs:
-            - name: dmitriimashkov
+            - name: mctlhq
 
     # Health checks needed for bootstrap
     resource.customizations.health.external-secrets.io_ExternalSecret: |
@@ -82,7 +82,7 @@ server:
     tls: true
     extraTls:
       - hosts:
-          - argocd-preview.mctl.me
+          - ops.mctl.me
         secretName: argocd-tls
 
 extraObjects:
@@ -95,7 +95,7 @@ extraObjects:
     spec:
       project: default
       source:
-        repoURL: https://github.com/dmitriimashkov/mctl.me.git
+        repoURL: https://github.com/mctlhq/mctl-core.git
         targetRevision: main
         path: platform-gitops/argocd
         helm:
@@ -144,7 +144,7 @@ extraObjects:
     spec:
       project: default
       source:
-        repoURL: https://github.com/dmitriimashkov/mctl.me.git
+        repoURL: https://github.com/mctlhq/mctl-core.git
         targetRevision: main
         path: platform-gitops/apps
         helm:

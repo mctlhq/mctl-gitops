@@ -19,7 +19,7 @@ Use this template when you want to:
 | Dockerfile path | | Path to Dockerfile, default: `Dockerfile` |
 | Git tag | | Tag to build, default: latest commit |
 | Port | | HTTP port for web services (e.g. `8080`) |
-| Ingress host | | Public hostname (e.g. `payment-api.preview.mctl.me`) — leave empty for workers |
+| Ingress host | | Public hostname (e.g. `myteam-payment-api.mctl.me`) — leave empty for workers |
 | Provision DB | | Auto-provision PostgreSQL database and inject credentials |
 | Env vars | | Plaintext `KEY=value` pairs (stored in Kubernetes manifest) |
 | Secret env vars | | Plaintext `KEY=value` pairs (stored in Vault, injected securely) |
@@ -41,5 +41,5 @@ Use this template when you want to:
 
 ## Links
 
-- [GitHub Actions workflow](https://github.com/dmitriimashkov/mctl.me/actions/workflows/release-service.yml)
+- [GitHub Actions workflow](https://github.com/mctlhq/mctl-core/actions/workflows/release-service.yml)
 - [View deployed services in Catalog](/catalog?filters[kind]=component)

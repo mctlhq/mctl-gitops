@@ -24,8 +24,8 @@ Kubernetes service manifests managed by ArgoCD.
 #### Option 1: GitHub UI (Easiest)
 
 1. Navigate to service folder:
-   - **Services:** [`platform-gitops/services/preview/{team}/{service}/`](https://github.com/dmitriimashkov/mctl.me/tree/main/platform-gitops/services/preview)
-   - **Workers:** [`platform-gitops/workers/preview/{team}/{service}/`](https://github.com/dmitriimashkov/mctl.me/tree/main/platform-gitops/workers/preview)
+   - **Services:** [`platform-gitops/services/preview/{team}/{service}/`](https://github.com/mctlhq/mctl-core/tree/main/platform-gitops/services/preview)
+   - **Workers:** [`platform-gitops/workers/preview/{team}/{service}/`](https://github.com/mctlhq/mctl-core/tree/main/platform-gitops/workers/preview)
 
 2. Click **"..."** → **"Delete directory"**
 

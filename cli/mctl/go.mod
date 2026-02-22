@@ -1,4 +1,4 @@
-module github.com/dmitriimashkov/mctl.me/cli/mctl
+module github.com/mctlhq/mctl-core/cli/mctl
 
 go 1.25.0
 

@@ -39,7 +39,7 @@ spec:
       name: Provision database
       action: github:actions:dispatch-and-stream
       input:
-        repoUrl: github.com?repo=mctl.me&owner=dmitriimashkov
+        repoUrl: github.com?repo=mctl-core&owner=mctlhq
         workflowId: provision-db.yml
         branchOrTagName: main
         workflowInputs:

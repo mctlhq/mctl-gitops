@@ -32,11 +32,11 @@ on:
         default: "8080"
         type: string
       host:
-        description: "Ingress host (base-service onboard only, e.g. my-app.preview.mctl.me)"
+        description: "Ingress host (base-service onboard only, e.g. myteam-myapp.mctl.me)"
         required: false
         type: string
       dockerfile_repo:
-        description: "Source repo with Dockerfile (e.g. dmitriimashkov/payment-api)"
+        description: "Source repo with Dockerfile (e.g. mctlhq/payment-api)"
         required: false
         type: string
       dockerfile_path:
@@ -73,7 +73,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_OWNER: dmitriimashkov
+  IMAGE_OWNER: mctlhq
 
 jobs:
   validate:
@@ -113,7 +113,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
           TEAM="${{ inputs.team_name }}"
-          ORG="dmitriimashkov"
+          ORG="mctlhq"
           
           echo "🔍 Checking if team $TEAM exists in org $ORG..."
           

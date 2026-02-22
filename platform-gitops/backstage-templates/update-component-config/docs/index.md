@@ -33,4 +33,4 @@ Use this template when you need to:
 
 ## Links
 
-- [GitHub Actions workflow](https://github.com/dmitriimashkov/mctl.me/actions/workflows/release-service.yml)
+- [GitHub Actions workflow](https://github.com/mctlhq/mctl-core/actions/workflows/release-service.yml)

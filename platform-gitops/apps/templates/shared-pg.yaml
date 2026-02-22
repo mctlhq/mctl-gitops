@@ -8,7 +8,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/dmitriimashkov/mctl.me.git
+    repoURL: https://github.com/mctlhq/mctl-core.git
     targetRevision: main
     path: platform-gitops/cnpg-clusters/shared
   destination:

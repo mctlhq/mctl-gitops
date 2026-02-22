@@ -10,13 +10,13 @@ metadata:
     github.com/source-repo: __DOCKERFILE_REPO__
     mctl.me/auto-deploy: "false"
   links:
-    - url: https://argocd-preview.mctl.me/applications/argocd/preview-__TEAM_NAME__-__SERVICE_NAME__
+    - url: https://ops.mctl.me/applications/argocd/preview-__TEAM_NAME__-__SERVICE_NAME__
       title: ArgoCD
       icon: dashboard
     - url: https://github.com/__DOCKERFILE_REPO__
       title: Source Repository
       icon: github
-    - url: https://github.com/dmitriimashkov/mctl.me/actions/workflows/release-service.yml
+    - url: https://github.com/mctlhq/mctl-core/actions/workflows/release-service.yml
       title: GitHub Actions
       icon: github
   labels:

@@ -23,8 +23,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
-          echo "Fetching teams from dmitriimashkov organization..."
-          gh api /orgs/dmitriimashkov/teams --paginate --jq '.[].slug' > /tmp/teams.txt
+          echo "Fetching teams from mctlhq organization..."
+          gh api /orgs/mctlhq/teams --paginate --jq '.[].slug' > /tmp/teams.txt
           echo "Found teams:"
           cat /tmp/teams.txt
           echo "team_count=$(wc -l < /tmp/teams.txt)" >> $GITHUB_OUTPUT
@@ -52,7 +52,7 @@ jobs:
           POLICY_CSV+="        p, role:admin, clusters, get, */*, allow\n"
           POLICY_CSV+="        p, role:admin, repositories, *, */*, allow\n"
           POLICY_CSV+="        p, role:admin, projects, *, */*, allow\n"
-          POLICY_CSV+="        g, dmitriimashkov:admin, role:admin\n"
+          POLICY_CSV+="        g, mctlhq:admin, role:admin\n"
           POLICY_CSV+="\n"
           POLICY_CSV+="        # ============================================================================\n"
           POLICY_CSV+="        # Team-Based Access (Auto-generated from GitHub Teams)\n"
@@ -71,7 +71,7 @@ jobs:
             POLICY_CSV+="        p, role:team-$team, applications, override, preview/preview-$team-*, allow\n"
             POLICY_CSV+="        p, role:team-$team, logs, get, preview/preview-$team-*, allow\n"
             POLICY_CSV+="        p, role:team-$team, exec, create, preview/preview-$team-*, allow\n"
-            POLICY_CSV+="        g, dmitriimashkov:$team, role:team-$team\n"
+            POLICY_CSV+="        g, mctlhq:$team, role:team-$team\n"
           done < /tmp/teams.txt
 
           # Replace policy.csv block in values.yaml

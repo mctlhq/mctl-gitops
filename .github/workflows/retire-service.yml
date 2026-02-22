@@ -134,7 +134,7 @@ jobs:
       - name: Remove entity from Backstage catalog
         continue-on-error: true
         env:
-          BACKSTAGE_URL: ${{ secrets.BACKSTAGE_URL || 'https://backstage-preview.mctl.me' }}
+          BACKSTAGE_URL: ${{ secrets.BACKSTAGE_URL || 'https://app.mctl.me' }}
           BACKSTAGE_TOKEN: ${{ secrets.BACKSTAGE_TOKEN }}
         run: |
           if [[ -z "$BACKSTAGE_TOKEN" ]]; then
@@ -166,7 +166,7 @@ jobs:
       - name: Trigger ArgoCD ApplicationSet refresh
         continue-on-error: true
         env:
-          ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER || 'argocd-preview.mctl.me' }}
+          ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER || 'ops.mctl.me' }}
           ARGOCD_TOKEN: ${{ secrets.ARGOCD_TOKEN }}
         run: |
           if [[ -z "$ARGOCD_TOKEN" ]]; then

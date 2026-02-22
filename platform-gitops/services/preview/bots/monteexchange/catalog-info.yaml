@@ -9,7 +9,7 @@ metadata:
     argocd/app-name: preview-bots-monteexchange
     github.com/source-repo: mashkovd/monteexchange
   links:
-    - url: https://argocd-preview.mctl.me/applications/argocd/preview-bots-monteexchange
+    - url: https://ops.mctl.me/applications/argocd/preview-bots-monteexchange
       title: ArgoCD
       icon: dashboard
     - url: https://github.com/mashkovd/monteexchange
@@ -18,7 +18,7 @@ metadata:
     - url: https://monteexchange.mctl.me
       title: Service URL
       icon: web
-    - url: https://github.com/dmitriimashkov/mctl.me/actions/workflows/release-service.yml
+    - url: https://github.com/mctlhq/mctl-core/actions/workflows/release-service.yml
       title: GitHub Actions
       icon: github
   labels:
