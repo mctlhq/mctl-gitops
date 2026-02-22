@@ -157,7 +157,7 @@ argo-cd:
         p, role:team-ttt, applications, override, preview/preview-ttt-*, allow
         p, role:team-ttt, logs, get, preview/preview-ttt-*, allow
         p, role:team-ttt, exec, create, preview/preview-ttt-*, allow
-        g, dmitriimashkov:ttt, role:team-ttt
+        g, mctlhq:ttt, role:team-ttt
 
         # Team: www
         p, role:team-www, applications, get, preview/preview-www-*, allow
