@@ -53,6 +53,12 @@ spec:
           initContainers:
             - name: snapshot
               image: bitnami/kubectl:latest
+              env:
+                - name: VAULT_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: vault-backup-token
+                      key: VAULT_TOKEN
               volumeMounts:
                 - name: snapshot
                   mountPath: /snapshot
@@ -62,7 +68,7 @@ spec:
                 - |
                   set -e
                   echo "Taking Vault raft snapshot..."
-                  kubectl exec -n vault vault-0 -- vault operator raft snapshot save /tmp/vault-snapshot.snap
+                  kubectl exec -n vault vault-0 -- env VAULT_TOKEN="$VAULT_TOKEN" vault operator raft snapshot save /tmp/vault-snapshot.snap
                   kubectl cp vault/vault-0:/tmp/vault-snapshot.snap /snapshot/vault-snapshot.snap
                   ls -lh /snapshot/vault-snapshot.snap
                   echo "✅ Snapshot saved"
