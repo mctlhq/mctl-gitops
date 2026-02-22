@@ -15,7 +15,8 @@ on:
 jobs:
   provision:
     name: Provision Database
-    runs-on: ubuntu-latest
+    # Self-hosted runner inside k8s cluster — has direct access to Vault internal service
+    runs-on: [self-hosted, k8s-preview]
     permissions:
       contents: write
     steps:
@@ -51,8 +52,9 @@ jobs:
       - name: Generate password and store in Vault
         if: env.DB_EXISTS != 'true'
         env:
-          VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
-          VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
+          # Internal Vault URL — accessible only from self-hosted runner inside k8s cluster
+          VAULT_ADDR: http://vault.vault.svc.cluster.local:8200
+          VAULT_TOKEN: ${{ secrets.VAULT_PROVISION_TOKEN }}
         run: |
           TEAM="${{ inputs.team }}"
           APP="${{ inputs.app }}"
