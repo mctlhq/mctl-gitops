@@ -8,7 +8,7 @@ metadata:
     backstage.io/kubernetes-namespace: admin
     argocd/app-name: preview-admin-mctl-web
     github.com/source-repo: mctlhq/mctl-web
-    mctl.me/auto-deploy: "false"
+    mctl.me/auto-deploy: "true"
   links:
     - url: https://ops.mctl.me/applications/argocd/preview-admin-mctl-web
       title: ArgoCD
