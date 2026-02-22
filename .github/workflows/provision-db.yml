@@ -241,8 +241,9 @@ jobs:
 
           git add platform-gitops/cnpg-clusters/shared/cluster.yaml \
                   platform-gitops/cnpg-clusters/shared/databases.yaml \
-                  platform-gitops/cnpg-clusters/shared/secrets.yaml \
-                  platform-gitops/services/preview/${TEAM}/${APP}/catalog-info.yaml \
+                  platform-gitops/cnpg-clusters/shared/secrets.yaml
+          # Optional: catalog-info.yaml (may not exist if service not yet deployed)
+          git add platform-gitops/services/preview/${TEAM}/${APP}/catalog-info.yaml \
                   platform-gitops/workers/preview/${TEAM}/${APP}/catalog-info.yaml \
                   2>/dev/null || true
 
