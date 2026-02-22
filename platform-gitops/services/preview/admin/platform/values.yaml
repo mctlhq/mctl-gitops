@@ -22,7 +22,7 @@ env:
   a: "1"
 ingress:
   enabled: true
-  host: platform.mctl.me
+  host: mctl.me
 externalSecret:
   targetSecret: platform-secrets
   data:
