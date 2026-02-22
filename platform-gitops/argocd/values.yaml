@@ -150,6 +150,15 @@ argo-cd:
         p, role:team-libertex, exec, create, preview/preview-libertex-*, allow
         g, dmitriimashkov:libertex, role:team-libertex
 
+        # Team: ttt
+        p, role:team-ttt, applications, get, preview/preview-ttt-*, allow
+        p, role:team-ttt, applications, list, preview/preview-ttt-*, allow
+        p, role:team-ttt, applications, sync, preview/preview-ttt-*, allow
+        p, role:team-ttt, applications, override, preview/preview-ttt-*, allow
+        p, role:team-ttt, logs, get, preview/preview-ttt-*, allow
+        p, role:team-ttt, exec, create, preview/preview-ttt-*, allow
+        g, dmitriimashkov:ttt, role:team-ttt
+
         # Team: www
         p, role:team-www, applications, get, preview/preview-www-*, allow
         p, role:team-www, applications, list, preview/preview-www-*, allow
