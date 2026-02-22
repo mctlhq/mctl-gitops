@@ -22,3 +22,14 @@
 #   cluster:
 #     name: shared-pg
 #   databaseReclaimPolicy: retain
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: test-django-test-db
+spec:
+  name: "test-django-test"
+  owner: "test-django-test"
+  cluster:
+    name: shared-pg
+  databaseReclaimPolicy: retain
