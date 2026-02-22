@@ -8,6 +8,10 @@ metadata:
     backstage.io/kubernetes-namespace: __TEAM_NAME__
     argocd/app-name: preview-__TEAM_NAME__-__SERVICE_NAME__
     github.com/source-repo: __DOCKERFILE_REPO__
+    # mctl.me/auto-deploy — triggered by GitHub App webhook on tag push
+    #   "true" or "auto" — deploy immediately via scaffolder
+    #   "confirm"         — log only, user deploys manually from UI
+    #   "false" or absent — skip (no auto-deploy)
     mctl.me/auto-deploy: "false"
   links:
     - url: https://ops.mctl.me/applications/argocd/preview-__TEAM_NAME__-__SERVICE_NAME__
