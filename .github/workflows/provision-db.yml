@@ -66,11 +66,6 @@ jobs:
             exit 1
           fi
 
-          # Debug: check token length and connectivity
-          echo "Token length: ${#VAULT_TOKEN}"
-          echo "Vault health:"
-          curl -s "${VAULT_ADDR}/v1/sys/health" | head -c 200
-
           PASSWORD=$(openssl rand -base64 32 | tr -d '/+=\n' | head -c 32)
 
           HTTP_CODE=$(curl -s -o /tmp/vault-resp.json -w "%{http_code}" \
