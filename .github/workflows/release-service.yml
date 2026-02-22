@@ -520,8 +520,11 @@ jobs:
           # Inject database credentials secret if requested
           if [[ "${{ inputs.provision_database }}" == "true" ]]; then
             DB_SECRET="${{ inputs.team_name }}-${{ inputs.component_name }}-db-creds"
+            VAULT_PATH="platform/teams/${{ inputs.team_name }}/${{ inputs.component_name }}/database"
             echo "🗄️ Injecting database credentials from secret ${DB_SECRET}"
             yq eval -i ".envFrom = [{\"secretRef\": {\"name\": \"${DB_SECRET}\"}}]" "${DIR}/values.yaml"
+            yq eval -i ".dbSecret.vaultPath = \"${VAULT_PATH}\"" "${DIR}/values.yaml"
+            yq eval -i ".dbSecret.secretName = \"${DB_SECRET}\"" "${DIR}/values.yaml"
           fi
 
           # Add custom env vars if provided
