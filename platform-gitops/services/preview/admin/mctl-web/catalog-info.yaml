@@ -1,0 +1,32 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: mctl-web
+  description: "mctl-web service deployed to preview"
+  annotations:
+    backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=preview-admin-mctl-web
+    backstage.io/kubernetes-namespace: admin
+    argocd/app-name: preview-admin-mctl-web
+    github.com/source-repo: mctlhq/mctl-web
+    mctl.me/auto-deploy: "false"
+  links:
+    - url: https://ops.mctl.me/applications/argocd/preview-admin-mctl-web
+      title: ArgoCD
+      icon: dashboard
+    - url: https://github.com/mctlhq/mctl-web
+      title: Source Repository
+      icon: github
+    - url: https://github.com/mctlhq/mctl-core/actions/workflows/release-service.yml
+      title: GitHub Actions
+      icon: github
+    - url: https://mctl.me
+      title: Service URL
+      icon: web
+  labels:
+    team: admin
+    env: preview
+spec:
+  type: service
+  lifecycle: production
+  owner: group:admin
+  system: team-admin
