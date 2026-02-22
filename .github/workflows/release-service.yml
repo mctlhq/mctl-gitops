@@ -301,17 +301,27 @@ jobs:
             echo "::add-mask::${TOKEN}"
             echo "🔍 Testing repo access with ${METHOD}..."
             set -o pipefail
-            # Clear the extraheader set by actions/checkout (persist-credentials) which injects GITHUB_TOKEN
-            if git -c "http.https://github.com/.extraheader=" -c credential.helper= \
-              ls-remote "https://x-access-token:${TOKEN}@github.com/${REPO}" HEAD 2>&1 | tee /tmp/git-output.log; then
-              echo "✅ Repo accessible via ${METHOD}"
-              echo "clone_token=${TOKEN}" >> $GITHUB_OUTPUT
-              echo "access_method=${METHOD}" >> $GITHUB_OUTPUT
-            else
-              echo "::error::Cannot access repo ${REPO} with ${METHOD}"
-              echo "::error::Git output: $(cat /tmp/git-output.log 2>/dev/null || echo 'no output')"
-              exit 1
-            fi
+            MAX_RETRIES=3
+            RETRY_DELAY=5
+            for attempt in $(seq 1 $MAX_RETRIES); do
+              if git -c "http.https://github.com/.extraheader=" -c credential.helper= \
+                ls-remote "https://x-access-token:${TOKEN}@github.com/${REPO}" HEAD 2>&1 | tee /tmp/git-output.log; then
+                echo "✅ Repo accessible via ${METHOD}"
+                echo "clone_token=${TOKEN}" >> $GITHUB_OUTPUT
+                echo "access_method=${METHOD}" >> $GITHUB_OUTPUT
+                break
+              else
+                if [[ $attempt -lt $MAX_RETRIES ]]; then
+                  echo "⚠️ Attempt ${attempt}/${MAX_RETRIES} failed, retrying in ${RETRY_DELAY}s..."
+                  sleep $RETRY_DELAY
+                  RETRY_DELAY=$((RETRY_DELAY * 2))
+                else
+                  echo "::error::Cannot access repo ${REPO} with ${METHOD} after ${MAX_RETRIES} attempts"
+                  echo "::error::Git output: $(cat /tmp/git-output.log 2>/dev/null || echo 'no output')"
+                  exit 1
+                fi
+              fi
+            done
           else
             if git ls-remote "https://github.com/${REPO}" HEAD > /dev/null 2>&1; then
               echo "✅ Public repo accessible"
