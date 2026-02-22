@@ -127,19 +127,19 @@ jobs:
           DB_NAME="${{ env.DB_NAME }}"
           DB_FILE="platform-gitops/cnpg-clusters/shared/databases.yaml"
 
-          cat >> "${DB_FILE}" << EOF
----
-apiVersion: postgresql.cnpg.io/v1
-kind: Database
-metadata:
-  name: ${DB_NAME}-db
-spec:
-  name: "${DB_NAME}"
-  owner: "${DB_NAME}"
-  cluster:
-    name: shared-pg
-  databaseReclaimPolicy: retain
-EOF
+          printf '%s\n' \
+            '---' \
+            'apiVersion: postgresql.cnpg.io/v1' \
+            'kind: Database' \
+            'metadata:' \
+            "  name: ${DB_NAME}-db" \
+            'spec:' \
+            "  name: \"${DB_NAME}\"" \
+            "  owner: \"${DB_NAME}\"" \
+            '  cluster:' \
+            '    name: shared-pg' \
+            '  databaseReclaimPolicy: retain' \
+            >> "${DB_FILE}"
           echo "✅ databases.yaml updated"
 
       - name: Append to secrets.yaml — new ExternalSecret
@@ -151,51 +151,36 @@ EOF
           SECRET_FILE="platform-gitops/cnpg-clusters/shared/secrets.yaml"
           VAULT_PATH="platform/teams/${TEAM}/${APP}/database"
 
-          cat >> "${SECRET_FILE}" << EOF
----
-apiVersion: external-secrets.io/v1beta1
-kind: ExternalSecret
-metadata:
-  name: ${DB_NAME}-db-creds
-spec:
-  refreshInterval: 1h
-  secretStoreRef:
-    kind: ClusterSecretStore
-    name: vault-backend
-  target:
-    name: ${DB_NAME}-db-creds
-    creationPolicy: Owner
-    template:
-      type: Opaque
-      data:
-        DATABASE_URL: "postgresql://{{ .username }}:{{ .password }}@{{ .host }}:{{ .port }}/{{ .database }}"
-        DB_HOST: "{{ .host }}"
-        DB_PORT: "{{ .port }}"
-        DB_NAME: "{{ .database }}"
-        DB_USER: "{{ .username }}"
-        DB_PASSWORD: "{{ .password }}"
-  data:
-    - secretKey: host
-      remoteRef:
-        key: ${VAULT_PATH}
-        property: host
-    - secretKey: port
-      remoteRef:
-        key: ${VAULT_PATH}
-        property: port
-    - secretKey: database
-      remoteRef:
-        key: ${VAULT_PATH}
-        property: database
-    - secretKey: username
-      remoteRef:
-        key: ${VAULT_PATH}
-        property: username
-    - secretKey: password
-      remoteRef:
-        key: ${VAULT_PATH}
-        property: password
-EOF
+          {
+            printf '%s\n' '---'
+            printf '%s\n' 'apiVersion: external-secrets.io/v1beta1'
+            printf '%s\n' 'kind: ExternalSecret'
+            printf '%s\n' 'metadata:'
+            printf '  name: %s-db-creds\n' "${DB_NAME}"
+            printf '%s\n' 'spec:'
+            printf '%s\n' '  refreshInterval: 1h'
+            printf '%s\n' '  secretStoreRef:'
+            printf '%s\n' '    kind: ClusterSecretStore'
+            printf '%s\n' '    name: vault-backend'
+            printf '%s\n' '  target:'
+            printf '    name: %s-db-creds\n' "${DB_NAME}"
+            printf '%s\n' '    creationPolicy: Owner'
+            printf '%s\n' '    template:'
+            printf '%s\n' '      type: Opaque'
+            printf '%s\n' '      data:'
+            printf '%s\n' '        DATABASE_URL: "postgresql://{{ .username }}:{{ .password }}@{{ .host }}:{{ .port }}/{{ .database }}"'
+            printf '%s\n' '        DB_HOST: "{{ .host }}"'
+            printf '%s\n' '        DB_PORT: "{{ .port }}"'
+            printf '%s\n' '        DB_NAME: "{{ .database }}"'
+            printf '%s\n' '        DB_USER: "{{ .username }}"'
+            printf '%s\n' '        DB_PASSWORD: "{{ .password }}"'
+            printf '%s\n' '  data:'
+            printf '    - secretKey: host\n      remoteRef:\n        key: %s\n        property: host\n' "${VAULT_PATH}"
+            printf '    - secretKey: port\n      remoteRef:\n        key: %s\n        property: port\n' "${VAULT_PATH}"
+            printf '    - secretKey: database\n      remoteRef:\n        key: %s\n        property: database\n' "${VAULT_PATH}"
+            printf '    - secretKey: username\n      remoteRef:\n        key: %s\n        property: username\n' "${VAULT_PATH}"
+            printf '    - secretKey: password\n      remoteRef:\n        key: %s\n        property: password\n' "${VAULT_PATH}"
+          } >> "${SECRET_FILE}"
           echo "✅ secrets.yaml updated"
 
       - name: Annotate service catalog-info.yaml
@@ -227,32 +212,21 @@ EOF
           fi
 
           # Insert annotations after the existing annotations block (or after metadata.name if no annotations block)
-          python3 << PYEOF
-import re
-
-with open('${CATALOG_FILE}', 'r') as f:
-    content = f.read()
-
-annotations_block = '''  annotations:
-    platform.mctl.me/database: "true"
-    platform.mctl.me/database-team: "${TEAM}"
-    platform.mctl.me/database-app: "${APP}"'''
-
-if 'annotations:' in content:
-    # Append to existing annotations block
-    content = content.replace('  annotations:', '  annotations:\n    platform.mctl.me/database: "true"\n    platform.mctl.me/database-team: "${TEAM}"\n    platform.mctl.me/database-app: "${APP}"', 1)
-else:
-    # Insert annotations block after metadata.name line
-    content = re.sub(
-        r'(  name: .+\n)',
-        r'\1' + annotations_block + '\n',
-        content,
-        count=1
-    )
-
-with open('${CATALOG_FILE}', 'w') as f:
-    f.write(content)
-PYEOF
+          python3 -c "
+          import re
+          catalog = '${CATALOG_FILE}'
+          team = '${TEAM}'
+          app = '${APP}'
+          with open(catalog) as f:
+              content = f.read()
+          new_anns = '    platform.mctl.me/database: \"true\"\n    platform.mctl.me/database-team: \"' + team + '\"\n    platform.mctl.me/database-app: \"' + app + '\"'
+          if 'annotations:' in content:
+              content = content.replace('  annotations:', '  annotations:\n' + new_anns, 1)
+          else:
+              content = re.sub(r'(  name: .+\n)', r'\1  annotations:\n' + new_anns + '\n', content, count=1)
+          with open(catalog, 'w') as f:
+              f.write(content)
+          "
           echo "✅ DB annotations added to ${CATALOG_FILE}"
 
       - name: Commit and push
@@ -272,13 +246,12 @@ PYEOF
                   platform-gitops/workers/preview/${TEAM}/${APP}/catalog-info.yaml \
                   2>/dev/null || true
 
-          git commit -m "feat: provision database ${DB_NAME}
-
-Provisioned PostgreSQL database for ${TEAM}/${APP}:
-- Role: ${DB_NAME}
-- Database: ${DB_NAME}
-- Vault path: platform/teams/${TEAM}/${APP}/database
-- K8s secret: ${DB_NAME}-db-creds (ExternalSecret → CNPG)"
+          git commit -m "feat: provision database ${DB_NAME}" \
+            -m "Provisioned PostgreSQL database for ${TEAM}/${APP}:
+          - Role: ${DB_NAME}
+          - Database: ${DB_NAME}
+          - Vault path: platform/teams/${TEAM}/${APP}/database
+          - K8s secret: ${DB_NAME}-db-creds (ExternalSecret -> CNPG)"
 
           for i in 1 2 3 4 5; do
             git push && break
