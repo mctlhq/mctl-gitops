@@ -35,6 +35,7 @@ spec:
       # Add new entries when onboarding a new app:
       # - host <db_name> <role_name> all scram-sha-256
       - host test-django-test test-django-test all scram-sha-256
+      - host test-spring-test test-spring-test all scram-sha-256
       - host all all 0.0.0.0/0 reject
 
   managed:
@@ -51,6 +52,12 @@ spec:
         ensure: present
         passwordSecret:
           name: test-django-test-db-creds
+      - name: test-spring-test
+        login: true
+        connectionLimit: 10
+        ensure: present
+        passwordSecret:
+          name: test-spring-test-db-creds
       # Team app roles — add new entries when onboarding:
       # - name: team1_app1
       #   login: true

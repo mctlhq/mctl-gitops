@@ -33,3 +33,14 @@ spec:
   cluster:
     name: shared-pg
   databaseReclaimPolicy: retain
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: test-spring-test-db
+spec:
+  name: "test-spring-test"
+  owner: "test-spring-test"
+  cluster:
+    name: shared-pg
+  databaseReclaimPolicy: retain
