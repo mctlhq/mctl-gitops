@@ -1,0 +1,33 @@
+# Service: spring-test
+# Team: test
+# Environment: preview
+# Chart: base-service
+
+image:
+  repository: ghcr.io/mctlhq/spring-test
+  tag: "latest"
+imagePullSecrets:
+  - name: ghcr-credentials
+service:
+  port: 8080
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+env:
+  APP_ENV: preview
+ingress:
+  enabled: true
+  host: test-spring-test.mctl.me
+probes:
+  liveness: null
+  readiness: null
+envFrom:
+  - secretRef:
+      name: test-spring-test-db-creds
+dbSecret:
+  vaultPath: platform/teams/test/spring-test/database
+  secretName: test-spring-test-db-creds
