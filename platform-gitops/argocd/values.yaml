@@ -195,6 +195,15 @@ argo-cd:
         p, role:team-team, exec, create, preview/preview-team-*, allow
         g, mctlhq:team, role:team-team
 
+        # Team: test
+        p, role:team-test, applications, get, preview/preview-test-*, allow
+        p, role:team-test, applications, list, preview/preview-test-*, allow
+        p, role:team-test, applications, sync, preview/preview-test-*, allow
+        p, role:team-test, applications, override, preview/preview-test-*, allow
+        p, role:team-test, logs, get, preview/preview-test-*, allow
+        p, role:team-test, exec, create, preview/preview-test-*, allow
+        g, mctlhq:test, role:team-test
+
         # Team: ttt
         p, role:team-ttt, applications, get, preview/preview-ttt-*, allow
         p, role:team-ttt, applications, list, preview/preview-ttt-*, allow
