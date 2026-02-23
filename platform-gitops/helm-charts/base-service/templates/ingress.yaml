@@ -17,6 +17,21 @@ spec:
   tls:
     {{- toYaml .Values.ingress.tls | nindent 4 }}
   {{- end }}
+  {{- if .Values.ingress.hosts }}
+  rules:
+    {{- range $host := .Values.ingress.hosts }}
+    - host: {{ $host | quote }}
+      http:
+        paths:
+          - path: {{ $.Values.ingress.path }}
+            pathType: {{ $.Values.ingress.pathType }}
+            backend:
+              service:
+                name: {{ include "base-service.fullname" $ }}
+                port:
+                  number: {{ $.Values.service.port }}
+    {{- end }}
+  {{- else }}
   rules:
     - host: {{ .Values.ingress.host | quote }}
       http:
@@ -28,4 +43,5 @@ spec:
                 name: {{ include "base-service.fullname" . }}
                 port:
                   number: {{ .Values.service.port }}
+  {{- end }}
 {{- end }}

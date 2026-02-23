@@ -40,6 +40,7 @@ ingress:
   enabled: false
   className: traefik
   host: ""
+  hosts: []
   path: /
   pathType: Prefix
   annotations: {}

@@ -22,6 +22,14 @@ env:
 ingress:
   enabled: true
   host: mctl.me
+  hosts:
+    - mctl.me
+    - mctl.ru
+  tls:
+    - secretName: mctl-web-tls
+      hosts:
+        - mctl.me
+        - mctl.ru
 probes:
   liveness: null
   readiness: null
