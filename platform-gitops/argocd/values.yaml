@@ -132,6 +132,15 @@ argo-cd:
         p, role:team-developers, exec, create, preview/preview-developers-*, allow
         g, mctlhq:developers, role:team-developers
 
+        # Team: devops-1
+        p, role:team-devops-1, applications, get, preview/preview-devops-1-*, allow
+        p, role:team-devops-1, applications, list, preview/preview-devops-1-*, allow
+        p, role:team-devops-1, applications, sync, preview/preview-devops-1-*, allow
+        p, role:team-devops-1, applications, override, preview/preview-devops-1-*, allow
+        p, role:team-devops-1, logs, get, preview/preview-devops-1-*, allow
+        p, role:team-devops-1, exec, create, preview/preview-devops-1-*, allow
+        g, mctlhq:devops-1, role:team-devops-1
+
         # Team: doo
         p, role:team-doo, applications, get, preview/preview-doo-*, allow
         p, role:team-doo, applications, list, preview/preview-doo-*, allow
