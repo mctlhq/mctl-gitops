@@ -1,0 +1,5 @@
+site_name: Onboard Service
+site_description: Documentation for the Onboard Service template
+docs_dir: docs
+plugins:
+  - techdocs-core
