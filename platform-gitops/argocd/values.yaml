@@ -105,6 +105,15 @@ argo-cd:
         # Team-Based Access (Auto-generated from GitHub Teams)
         # ============================================================================
 
+        # Team: admins
+        p, role:team-admins, applications, get, preview/preview-admins-*, allow
+        p, role:team-admins, applications, list, preview/preview-admins-*, allow
+        p, role:team-admins, applications, sync, preview/preview-admins-*, allow
+        p, role:team-admins, applications, override, preview/preview-admins-*, allow
+        p, role:team-admins, logs, get, preview/preview-admins-*, allow
+        p, role:team-admins, exec, create, preview/preview-admins-*, allow
+        g, mctlhq:admins, role:team-admins
+
         # Team: africaone-dev
         p, role:team-africaone-dev, applications, get, preview/preview-africaone-dev-*, allow
         p, role:team-africaone-dev, applications, list, preview/preview-africaone-dev-*, allow
