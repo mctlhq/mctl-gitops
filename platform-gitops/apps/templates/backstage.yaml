@@ -57,7 +57,7 @@ spec:
               title: mctl.me User Portal
               baseUrl: https://app.mctl.me
             organization:
-              name: mctlhq
+              name: MCTL
             backend:
               baseUrl: https://app.mctl.me
               listen:
