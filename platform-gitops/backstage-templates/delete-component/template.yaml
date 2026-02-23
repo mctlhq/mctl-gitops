@@ -23,11 +23,10 @@ spec:
           title: Service to Retire
           type: string
           description: "Select the service you want to retire"
-          ui:field: EntityPicker
+          ui:field: OwnedEntityPicker
           ui:options:
-            catalogFilter:
-              kind: Component
-            defaultKind: Component
+            allowedKinds:
+              - Component
 
     - title: Confirmation
       required:

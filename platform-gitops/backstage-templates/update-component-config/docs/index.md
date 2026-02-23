@@ -27,7 +27,7 @@ Use this template when you need to:
 
 ## Notes
 
-- Providing an empty value for a field **clears** all vars of that type
+- If both fields are left empty, no changes are applied
 - To remove a single var, submit the full list without the key you want removed
 - Secrets are never stored in Git — only Vault paths are referenced
 

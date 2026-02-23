@@ -12,8 +12,7 @@ Use this template when your service needs a PostgreSQL database. It provisions a
 
 | Field | Required | Description |
 |---|---|---|
-| Team | ✅ | Your team name |
-| App / Service name | ✅ | Must match the service slug used in Release Service (e.g. `billing-api`) |
+| Service | ✅ | Select the service from your catalog (uses the service name and team from catalog metadata) |
 
 ## What gets created
 

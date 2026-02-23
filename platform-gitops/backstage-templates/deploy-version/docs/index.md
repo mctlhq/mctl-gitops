@@ -29,10 +29,10 @@ Use this template when you want to:
 4. Dispatches the `release-service.yml` workflow with `action: deploy`
 5. The workflow clones the source repo, builds a new Docker image, and updates the image tag in GitOps
 
-## Version resolution
+## Notes
 
-- **Specific tag** (e.g. `v1.2.0`) — checks out that tag and builds
-- **Empty / latest** — auto-increments the patch version from the latest image in GHCR (e.g. `v1.2.3` → `v1.2.4`)
+- The source repo is read from the `github.com/source-repo` catalog annotation. If this annotation is missing on your service, the deployment will fail — contact your platform team to add it to the `catalog-info.yaml`
+- Version auto-increment reads the latest image tag from GHCR and bumps the patch version
 
 ## Links
 
