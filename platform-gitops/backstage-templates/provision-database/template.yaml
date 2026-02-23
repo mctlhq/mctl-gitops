@@ -3,7 +3,7 @@ kind: Template
 metadata:
   name: provision-database
   title: 🗄️ Provision Database
-  description: Provision a PostgreSQL database for your service. Creates a dedicated role, database, and Kubernetes secret populated from Vault.
+  description: Provision a PostgreSQL database for an existing service. Use this if you skipped database provisioning during onboarding. Creates a dedicated role, database, and Kubernetes secret populated from Vault.
   tags:
     - database
     - postgresql
