@@ -21,7 +21,6 @@ env:
   APP_ENV: preview
 ingress:
   enabled: true
-  host: mctl.me
   hosts:
     - mctl.me
     - mctl.ru
