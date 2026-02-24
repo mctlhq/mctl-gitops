@@ -464,6 +464,8 @@ jobs:
           context: .
           file: ${{ inputs.dockerfile_path }}
           push: true
+          build-args: |
+            APP_VERSION=${{ inputs.git_tag || needs.validate.outputs.image_tag }}
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ inputs.component_name }}:${{ needs.validate.outputs.image_tag }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ inputs.component_name }}:latest
