@@ -21,6 +21,8 @@ env:
   APP_ENV: preview
 ingress:
   enabled: true
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
   hosts:
     - mctl.me
     - mctl.ru
