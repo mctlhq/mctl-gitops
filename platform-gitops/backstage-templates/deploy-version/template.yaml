@@ -2,7 +2,7 @@ apiVersion: scaffolder.backstage.io/v1beta3
 kind: Template
 metadata:
   name: deploy-version
-  title: 🔄 Deploy Version
+  title: Deploy Version
   description: Build and deploy a new version of an existing service. Picks up source repo from the service catalog automatically.
   tags:
     - deploy

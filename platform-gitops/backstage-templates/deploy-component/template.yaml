@@ -2,7 +2,7 @@ apiVersion: scaffolder.backstage.io/v1beta3
 kind: Template
 metadata:
   name: onboard-service
-  title: 🆕 Onboard Service
+  title: Onboard Service
   description: First-time setup — clone a repo, build the image, and deploy a new service to the preview cluster.
   tags:
     - onboard

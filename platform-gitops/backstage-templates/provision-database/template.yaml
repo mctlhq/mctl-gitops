@@ -2,7 +2,7 @@ apiVersion: scaffolder.backstage.io/v1beta3
 kind: Template
 metadata:
   name: provision-database
-  title: 🗄️ Provision Database
+  title: Provision Database
   description: Provision a PostgreSQL database for an existing service. Use this if you skipped database provisioning during onboarding. Creates a dedicated role, database, and Kubernetes secret populated from Vault.
   tags:
     - database

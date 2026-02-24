@@ -2,7 +2,7 @@ apiVersion: scaffolder.backstage.io/v1beta3
 kind: Template
 metadata:
   name: retire-service
-  title: 🧹 Retire Service
+  title: Retire Service
   description: Permanently remove a service from the platform — deletes GitOps files, ArgoCD app, Kubernetes resources, and Vault secrets.
   tags:
     - retire

@@ -2,7 +2,7 @@ apiVersion: scaffolder.backstage.io/v1beta3
 kind: Template
 metadata:
   name: update-environment
-  title: ⚙️ Update Environment
+  title: Update Environment
   description: Update environment variables and secrets for a running service without triggering a rebuild.
   tags:
     - configure
