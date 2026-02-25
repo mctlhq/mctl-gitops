@@ -157,9 +157,8 @@ jobs:
           echo "📝 Saving $(echo "$JSON_DATA" | jq 'keys | length') secrets to secret/teams/$TEAM/$SERVICE"
           
           # Merge with existing secrets: read current → merge → write back
-          # (avoids needing 'patch' capability; uses only read + create/update)
           EXISTING_JSON="{}"
-          HTTP_GET=$(curl -sS -L -o /tmp/vault-get-resp.json -w "%{http_code}" \
+          HTTP_GET=$(curl -sS -o /tmp/vault-get-resp.json -w "%{http_code}" \
             -H "X-Vault-Token: $VAULT_TOKEN" \
             "$VAULT_ADDR/v1/secret/data/teams/$TEAM/$SERVICE")
           
@@ -176,8 +175,15 @@ jobs:
           # Merge: existing keys + new keys (new keys win on conflict)
           MERGED_JSON=$(echo "$EXISTING_JSON $JSON_DATA" | jq -s '.[0] * .[1]')
           
+          # Check token capabilities on this path (diagnostic)
+          echo "🔍 Checking token capabilities on secret/data/teams/$TEAM/$SERVICE..."
+          curl -sS -X POST \
+            -H "X-Vault-Token: $VAULT_TOKEN" \
+            -d "{\"paths\":[\"secret/data/teams/$TEAM/$SERVICE\"]}" \
+            "$VAULT_ADDR/v1/sys/capabilities-self" 2>/dev/null | jq -r '.capabilities // .errors' || true
+          
           # Save merged data to Vault
-          HTTP_CODE=$(curl -sS -L -o /tmp/vault-write-resp.json -w "%{http_code}" \
+          HTTP_CODE=$(curl -sS -o /tmp/vault-write-resp.json -w "%{http_code}" \
             -X POST \
             -H "X-Vault-Token: $VAULT_TOKEN" \
             -H "Content-Type: application/json" \
