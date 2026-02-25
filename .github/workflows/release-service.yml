@@ -156,16 +156,32 @@ jobs:
           
           echo "📝 Saving $(echo "$JSON_DATA" | jq 'keys | length') secrets to secret/teams/$TEAM/$SERVICE"
           
-          # Save to Vault
-          curl -sS -X POST \
+          # Try PATCH first (merges with existing keys) — requires Vault 1.9+
+          HTTP_CODE=$(curl -sS -o /tmp/vault-write-resp.json -w "%{http_code}" \
+            -X PATCH \
             -H "X-Vault-Token: $VAULT_TOKEN" \
-            -H "Content-Type: application/json" \
+            -H "Content-Type: application/merge-patch+json" \
             -d "{\"data\":$JSON_DATA}" \
-            "$VAULT_ADDR/v1/secret/data/teams/$TEAM/$SERVICE" || {
-            echo "::error::Failed to save secrets to Vault"
-            exit 1
-          }
+            "$VAULT_ADDR/v1/secret/data/teams/$TEAM/$SERVICE")
           
+          if [[ "$HTTP_CODE" == "405" || "$HTTP_CODE" == "404" ]]; then
+            # PATCH not supported or secret doesn't exist yet — fall back to POST (create)
+            echo "ℹ️  PATCH failed (HTTP $HTTP_CODE), creating new secret..."
+            curl -sS -X POST \
+              -H "X-Vault-Token: $VAULT_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"data\":$JSON_DATA}" \
+              "$VAULT_ADDR/v1/secret/data/teams/$TEAM/$SERVICE" || {
+              echo "::error::Failed to save secrets to Vault"
+              exit 1
+            }
+          elif [[ "$HTTP_CODE" != "200" ]]; then
+            echo "::error::Failed to save secrets to Vault (HTTP $HTTP_CODE)"
+            cat /tmp/vault-write-resp.json || true
+            exit 1
+          fi
+          
+          rm -f /tmp/vault-write-resp.json
           echo "✅ Secrets saved successfully"
 
       - name: Determine paths
@@ -603,6 +619,7 @@ jobs:
           TEAM="${{ inputs.team_name }}"
           SERVICE="${{ inputs.component_name }}"
           ENV_VARS="${{ inputs.env_vars }}"
+          SECRET_VARS="${{ inputs.secret_env_vars }}"
 
           # Auto-detect service directory
           if [[ -d "platform-gitops/services/preview/${TEAM}/${SERVICE}" ]]; then
@@ -614,25 +631,52 @@ jobs:
             exit 1
           fi
 
-          if [[ -z "$ENV_VARS" ]]; then
-            echo "No env vars provided, skipping."
+          if [[ -z "$ENV_VARS" && -z "$SECRET_VARS" ]]; then
+            echo "No env vars or secrets provided, skipping."
             exit 0
           fi
 
           sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
 
-          echo "📝 Updating environment variables in ${DIR}/values.yaml..."
-          COUNT=0
-          while IFS='=' read -r key value; do
-            [[ -z "$key" || "$key" =~ ^# ]] && continue
-            key=$(echo "$key" | xargs)
-            value=$(echo "$value" | xargs)
-            yq eval -i ".env.${key} = \"${value}\"" "${DIR}/values.yaml"
-            echo "  ✅ ${key}=***"
-            COUNT=$((COUNT + 1))
-          done <<< "$ENV_VARS"
-          echo "Updated ${COUNT} environment variable(s)"
+          if [[ -n "$ENV_VARS" ]]; then
+            echo "📝 Updating environment variables in ${DIR}/values.yaml..."
+            COUNT=0
+            while IFS='=' read -r key value; do
+              [[ -z "$key" || "$key" =~ ^# ]] && continue
+              key=$(echo "$key" | xargs)
+              value=$(echo "$value" | xargs)
+              yq eval -i ".env.${key} = \"${value}\"" "${DIR}/values.yaml"
+              echo "  ✅ ${key}=***"
+              COUNT=$((COUNT + 1))
+            done <<< "$ENV_VARS"
+            echo "Updated ${COUNT} environment variable(s)"
+          fi
+
+          if [[ -n "$SECRET_VARS" ]]; then
+            echo "🔐 Updating ExternalSecret configuration in ${DIR}/values.yaml..."
+            # Ensure externalSecret section exists
+            yq eval -i '.externalSecret.targetSecret = "'${SERVICE}'-secrets"' "${DIR}/values.yaml"
+            if [[ "$(yq '.externalSecret.data' "${DIR}/values.yaml")" == "null" ]]; then
+              yq eval -i '.externalSecret.data = []' "${DIR}/values.yaml"
+            fi
+            # Add missing secret keys to externalSecret.data (skip duplicates)
+            while IFS='=' read -r key value; do
+              [[ -z "$key" || "$key" =~ ^# ]] && continue
+              key=$(echo "$key" | xargs)
+              # Only add if not already present
+              EXISTS=$(yq ".externalSecret.data[] | select(.secretKey == \"${key}\")" "${DIR}/values.yaml")
+              if [[ -z "$EXISTS" ]]; then
+                yq eval -i ".externalSecret.data += [{\"secretKey\": \"${key}\", \"remoteKey\": \"teams/${TEAM}/${SERVICE}\", \"property\": \"${key}\"}]" "${DIR}/values.yaml"
+                echo "  ✅ Added externalSecret entry for ${key}"
+              fi
+            done <<< "$SECRET_VARS"
+            # Ensure envFrom references the secret
+            ENVFROM_EXISTS=$(yq ".envFrom[] | select(.secretRef.name == \"${SERVICE}-secrets\")" "${DIR}/values.yaml" 2>/dev/null)
+            if [[ -z "$ENVFROM_EXISTS" ]]; then
+              yq eval -i '.envFrom = [{"secretRef": {"name": "'${SERVICE}'-secrets"}}]' "${DIR}/values.yaml"
+            fi
+          fi
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -650,13 +694,12 @@ jobs:
             done
           fi
 
-          echo "## ✅ Env vars updated" >> $GITHUB_STEP_SUMMARY
+          echo "## ✅ Config updated" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| **Team** | \`${TEAM}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Service** | \`${SERVICE}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Variables updated** | ${COUNT} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "ArgoCD will sync automatically." >> $GITHUB_STEP_SUMMARY
 
