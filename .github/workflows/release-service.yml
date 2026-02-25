@@ -156,26 +156,35 @@ jobs:
           
           echo "📝 Saving $(echo "$JSON_DATA" | jq 'keys | length') secrets to secret/teams/$TEAM/$SERVICE"
           
-          # Try PATCH first (merges with existing keys) — requires Vault 1.9+
-          HTTP_CODE=$(curl -sS -o /tmp/vault-write-resp.json -w "%{http_code}" \
-            -X PATCH \
+          # Merge with existing secrets: read current → merge → write back
+          # (avoids needing 'patch' capability; uses only read + create/update)
+          EXISTING_JSON="{}"
+          HTTP_GET=$(curl -sS -L -o /tmp/vault-get-resp.json -w "%{http_code}" \
             -H "X-Vault-Token: $VAULT_TOKEN" \
-            -H "Content-Type: application/merge-patch+json" \
-            -d "{\"data\":$JSON_DATA}" \
             "$VAULT_ADDR/v1/secret/data/teams/$TEAM/$SERVICE")
           
-          if [[ "$HTTP_CODE" == "405" || "$HTTP_CODE" == "404" ]]; then
-            # PATCH not supported or secret doesn't exist yet — fall back to POST (create)
-            echo "ℹ️  PATCH failed (HTTP $HTTP_CODE), creating new secret..."
-            curl -sS -X POST \
-              -H "X-Vault-Token: $VAULT_TOKEN" \
-              -H "Content-Type: application/json" \
-              -d "{\"data\":$JSON_DATA}" \
-              "$VAULT_ADDR/v1/secret/data/teams/$TEAM/$SERVICE" || {
-              echo "::error::Failed to save secrets to Vault"
-              exit 1
-            }
-          elif [[ "$HTTP_CODE" != "200" ]]; then
+          if [[ "$HTTP_GET" == "200" ]]; then
+            EXISTING_JSON=$(jq -c '.data.data // {}' /tmp/vault-get-resp.json)
+            echo "ℹ️  Merging with $(echo "$EXISTING_JSON" | jq 'keys | length') existing secret(s)"
+          elif [[ "$HTTP_GET" == "404" ]]; then
+            echo "ℹ️  No existing secret — creating new"
+          else
+            echo "⚠️  Could not read existing secrets (HTTP $HTTP_GET) — will overwrite"
+          fi
+          rm -f /tmp/vault-get-resp.json
+          
+          # Merge: existing keys + new keys (new keys win on conflict)
+          MERGED_JSON=$(echo "$EXISTING_JSON $JSON_DATA" | jq -s '.[0] * .[1]')
+          
+          # Save merged data to Vault
+          HTTP_CODE=$(curl -sS -L -o /tmp/vault-write-resp.json -w "%{http_code}" \
+            -X POST \
+            -H "X-Vault-Token: $VAULT_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"data\":$MERGED_JSON}" \
+            "$VAULT_ADDR/v1/secret/data/teams/$TEAM/$SERVICE")
+          
+          if [[ "$HTTP_CODE" != "200" ]]; then
             echo "::error::Failed to save secrets to Vault (HTTP $HTTP_CODE)"
             cat /tmp/vault-write-resp.json || true
             exit 1
