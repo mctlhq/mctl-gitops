@@ -1,0 +1,36 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: monteexchange
+  description: "monteexchange service deployed to preview"
+  annotations:
+    backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=preview-bots-monteexchange
+    backstage.io/kubernetes-namespace: bots
+    argocd/app-name: preview-bots-monteexchange
+    github.com/source-repo: mashkovd/monteexchange
+    # mctl.me/auto-deploy — triggered by GitHub App webhook on tag push
+    #   "true" or "auto" — deploy immediately via scaffolder
+    #   "confirm"         — notify only, user deploys manually from UI
+    #   "false" or absent — skip
+    mctl.me/auto-deploy: "false"
+  links:
+    - url: https://ops.mctl.me/applications/argocd/preview-bots-monteexchange
+      title: ArgoCD
+      icon: dashboard
+    - url: https://github.com/mashkovd/monteexchange
+      title: Source Repository
+      icon: github
+    - url: https://github.com/mctlhq/mctl-core/actions/workflows/release-service.yml
+      title: GitHub Actions
+      icon: github
+    - url: https://monteexchange.mctl.me
+      title: Service URL
+      icon: web
+  labels:
+    team: bots
+    env: preview
+spec:
+  type: service
+  lifecycle: production
+  owner: group:bots
+  system: team-bots
