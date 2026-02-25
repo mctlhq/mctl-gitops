@@ -38,13 +38,7 @@ spec:
           title: Environment Variables
           type: string
           description: "KEY=VALUE pairs, one per line. Stored as plaintext in GitOps manifests — do not put secrets here."
-          ui:widget: textarea
-          ui:options:
-            rows: 6
-          ui:placeholder: |
-            LOG_LEVEL=info
-            TIMEOUT_SECONDS=30
-            FEATURE_FLAG=true
+          ui:field: EnvVarsEditor
 
     - title: Secure Variables
       properties:
@@ -52,13 +46,7 @@ spec:
           title: Secure Variables
           type: string
           description: "KEY=VALUE pairs, one per line. Stored securely in Vault — never exposed in Git."
-          ui:widget: textarea
-          ui:options:
-            minRows: 10
-          ui:placeholder: |
-            API_KEY=your-api-key-here
-            DATABASE_PASSWORD=your-db-password
-            SECRET_TOKEN=your-secret-token
+          ui:field: SecureVarsEditor
 
   steps:
     - id: fetch-service
