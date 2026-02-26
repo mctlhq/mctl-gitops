@@ -5,7 +5,7 @@
 
 image:
   repository: ghcr.io/mctlhq/spring-test
-  tag: "1.0.1"
+  tag: "latest"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
@@ -19,7 +19,6 @@ resources:
     memory: 512Mi
 env:
   APP_ENV: preview
-  a: "1"
 ingress:
   enabled: true
   host: test-spring-test.mctl.me
@@ -28,7 +27,7 @@ probes:
   readiness: null
 envFrom:
   - secretRef:
-      name: spring-test-secrets
+      name: test-spring-test-db-creds
 dbSecret:
   vaultPath: platform/teams/test/spring-test/database
   secretName: test-spring-test-db-creds
