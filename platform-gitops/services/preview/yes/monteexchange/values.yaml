@@ -21,7 +21,7 @@ env:
   APP_ENV: preview
   EXCHANGE_FEE_IN_PERCENT: "1.75"
   WISE_HOST: https://api.transferwise.com
-  WITHDRAWAL_FEE: "0"
+  WITHDRAWAL_FEE: "5"
 ingress:
   enabled: true
   host: monteexchange.mctl.me
