@@ -46,6 +46,9 @@ externalSecret:
     - secretKey: WISE_TOKEN
       remoteKey: teams/yes/monteexchange
       property: WISE_TOKEN
+    - secretKey: s
+      remoteKey: teams/yes/monteexchange
+      property: s
 envFrom:
   - secretRef:
       name: monteexchange-secrets
