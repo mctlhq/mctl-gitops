@@ -177,15 +177,6 @@ argo-cd:
         p, role:team-internal, exec, create, preview/preview-internal-*, allow
         g, mctlhq:internal, role:team-internal
 
-        # Team: libertex
-        p, role:team-libertex, applications, get, preview/preview-libertex-*, allow
-        p, role:team-libertex, applications, list, preview/preview-libertex-*, allow
-        p, role:team-libertex, applications, sync, preview/preview-libertex-*, allow
-        p, role:team-libertex, applications, override, preview/preview-libertex-*, allow
-        p, role:team-libertex, logs, get, preview/preview-libertex-*, allow
-        p, role:team-libertex, exec, create, preview/preview-libertex-*, allow
-        g, mctlhq:libertex, role:team-libertex
-
         # Team: team
         p, role:team-team, applications, get, preview/preview-team-*, allow
         p, role:team-team, applications, list, preview/preview-team-*, allow
@@ -203,15 +194,6 @@ argo-cd:
         p, role:team-test, logs, get, preview/preview-test-*, allow
         p, role:team-test, exec, create, preview/preview-test-*, allow
         g, mctlhq:test, role:team-test
-
-        # Team: tt
-        p, role:team-tt, applications, get, preview/preview-tt-*, allow
-        p, role:team-tt, applications, list, preview/preview-tt-*, allow
-        p, role:team-tt, applications, sync, preview/preview-tt-*, allow
-        p, role:team-tt, applications, override, preview/preview-tt-*, allow
-        p, role:team-tt, logs, get, preview/preview-tt-*, allow
-        p, role:team-tt, exec, create, preview/preview-tt-*, allow
-        g, mctlhq:tt, role:team-tt
 
         # Team: www
         p, role:team-www, applications, get, preview/preview-www-*, allow
