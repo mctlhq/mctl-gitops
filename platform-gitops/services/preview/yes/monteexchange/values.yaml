@@ -19,7 +19,7 @@ resources:
     memory: 512Mi
 env:
   APP_ENV: preview
-  EXCHANGE_FEE_IN_PERCENT: "4"
+  EXCHANGE_FEE_IN_PERCENT: "2"
   WISE_HOST: https://api.transferwise.com
   WITHDRAWAL_FEE: "5"
 ingress:
