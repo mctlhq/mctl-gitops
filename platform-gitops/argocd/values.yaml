@@ -159,15 +159,6 @@ argo-cd:
         p, role:team-devops-1, exec, create, preview/preview-devops-1-*, allow
         g, mctlhq:devops-1, role:team-devops-1
 
-        # Team: doo
-        p, role:team-doo, applications, get, preview/preview-doo-*, allow
-        p, role:team-doo, applications, list, preview/preview-doo-*, allow
-        p, role:team-doo, applications, sync, preview/preview-doo-*, allow
-        p, role:team-doo, applications, override, preview/preview-doo-*, allow
-        p, role:team-doo, logs, get, preview/preview-doo-*, allow
-        p, role:team-doo, exec, create, preview/preview-doo-*, allow
-        g, mctlhq:doo, role:team-doo
-
         # Team: internal
         p, role:team-internal, applications, get, preview/preview-internal-*, allow
         p, role:team-internal, applications, list, preview/preview-internal-*, allow
@@ -194,15 +185,6 @@ argo-cd:
         p, role:team-test, logs, get, preview/preview-test-*, allow
         p, role:team-test, exec, create, preview/preview-test-*, allow
         g, mctlhq:test, role:team-test
-
-        # Team: www
-        p, role:team-www, applications, get, preview/preview-www-*, allow
-        p, role:team-www, applications, list, preview/preview-www-*, allow
-        p, role:team-www, applications, sync, preview/preview-www-*, allow
-        p, role:team-www, applications, override, preview/preview-www-*, allow
-        p, role:team-www, logs, get, preview/preview-www-*, allow
-        p, role:team-www, exec, create, preview/preview-www-*, allow
-        g, mctlhq:www, role:team-www
 
         # Team: yes
         p, role:team-yes, applications, get, preview/preview-yes-*, allow
