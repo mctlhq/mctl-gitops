@@ -177,7 +177,7 @@ spec:
                         minutes: 3
                   previewServices:
                     organization: mctlhq
-                    catalogPath: /platform-gitops/services/preview/*/*/catalog-info.yaml
+                    catalogPath: /platform-gitops/services/*/*/catalog-info.yaml
                     filters:
                       repository: mctl-core
                       branch: main

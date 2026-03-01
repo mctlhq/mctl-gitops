@@ -82,7 +82,7 @@ spec:
 
           # ── 4. Determine component type for deploy/update-config ─────────────
           if [ "$ACTION" = "deploy" ] || [ "$ACTION" = "update-config" ]; then
-            if [ -d "platform-gitops/services/preview/${TEAM}/${SERVICE}" ]; then
+            if [ -d "platform-gitops/services/${TEAM}/${SERVICE}" ]; then
               TYPE="base-service"
             elif [ -d "platform-gitops/workers/preview/${TEAM}/${SERVICE}" ]; then
               TYPE="worker-service"
@@ -94,7 +94,7 @@ spec:
 
           # ── 5. Determine service directory ───────────────────────────────────
           if [ "$TYPE" = "base-service" ]; then
-            DIR="platform-gitops/services/preview/${TEAM}/${SERVICE}"
+            DIR="platform-gitops/services/${TEAM}/${SERVICE}"
           else
             DIR="platform-gitops/workers/preview/${TEAM}/${SERVICE}"
           fi

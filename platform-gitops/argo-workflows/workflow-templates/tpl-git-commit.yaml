@@ -89,13 +89,13 @@ spec:
 
           # ── 3. Determine service directory ────────────────────────────────
           if [ "$TYPE" = "base-service" ]; then
-            DIR="platform-gitops/services/preview/${TEAM}/${SERVICE}"
+            DIR="platform-gitops/services/${TEAM}/${SERVICE}"
           else
             DIR="platform-gitops/workers/preview/${TEAM}/${SERVICE}"
           fi
 
           # ── 4. Security: validate path stays within allowed scope ─────────
-          ALLOWED_BASES="platform-gitops/services/preview/${TEAM} platform-gitops/workers/preview/${TEAM}"
+          ALLOWED_BASES="platform-gitops/services/${TEAM} platform-gitops/workers/preview/${TEAM}"
           ALLOWED=false
           for base in $ALLOWED_BASES; do
             case "$DIR" in
@@ -334,7 +334,7 @@ spec:
           git config user.email "argo-workflows[bot]@users.noreply.github.com"
 
           if [ "$TYPE" = "base-service" ]; then
-            DIR="platform-gitops/services/preview/${TEAM}/${SERVICE}"
+            DIR="platform-gitops/services/${TEAM}/${SERVICE}"
           else
             DIR="platform-gitops/workers/preview/${TEAM}/${SERVICE}"
           fi
