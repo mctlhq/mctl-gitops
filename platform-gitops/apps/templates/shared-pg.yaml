@@ -17,11 +17,8 @@ spec:
   ignoreDifferences:
     - group: postgresql.cnpg.io
       kind: Cluster
-      managedFieldsManagers:
-        - manager
       jqPathExpressions:
         - .metadata.annotations
-        - .spec.postgresql.pg_hba
         - .status
   syncPolicy:
     automated:
@@ -31,7 +28,6 @@ spec:
       - CreateNamespace=true
       - ApplyOutOfSyncOnly=true
       - RespectIgnoreDifferences=true
-      - ServerSideDiff=false
     retry:
       limit: 5
       backoff:

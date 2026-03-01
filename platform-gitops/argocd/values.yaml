@@ -58,31 +58,10 @@ argo-cd:
         end
         return hs
 
-      # Ignore CNPG operator-defaulted fields globally for all Cluster resources
-      # CNPG mutating webhook defaults many spec fields after ArgoCD applies them
+      # Ignore CNPG Cluster metadata annotations and status in global diff
       resource.customizations.ignoreDifferences.postgresql.cnpg.io_Cluster: |
         jqPathExpressions:
-        - .spec.affinity
-        - .spec.enablePDB
-        - .spec.enableSuperuserAccess
-        - .spec.failoverDelay
-        - .spec.imageName
-        - .spec.logLevel
-        - .spec.maxSyncReplicas
-        - .spec.minSyncReplicas
-        - .spec.postgresGID
-        - .spec.postgresUID
-        - .spec.primaryUpdateMethod
-        - .spec.primaryUpdateStrategy
-        - .spec.replicationSlots
-        - .spec.smartShutdownTimeout
-        - .spec.startDelay
-        - .spec.stopDelay
-        - .spec.switchoverDelay
-        - .spec.managed.roles[].inherit
-        - .spec.bootstrap.initdb.encoding
-        - .spec.bootstrap.initdb.localeCType
-        - .spec.bootstrap.initdb.localeCollate
+        - .metadata.annotations
         - .status
 
       # Dex connector for GitHub OAuth
