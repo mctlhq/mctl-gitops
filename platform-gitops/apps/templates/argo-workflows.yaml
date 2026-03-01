@@ -39,9 +39,6 @@ spec:
                 secondsAfterFailure: 86400
               podGC:
                 strategy: OnPodCompletion
-          persistence:
-            enabled: false
-
         workflow:
           serviceAccount:
             create: false
