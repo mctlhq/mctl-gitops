@@ -1,5 +1,5 @@
 # Service: mctl-web
-# Team: admin
+# Team: admins
 # Environment: preview
 # Chart: base-service
 
@@ -39,7 +39,7 @@ externalSecret:
   targetSecret: mctl-web-secrets
   data:
     - secretKey: s
-      remoteKey: teams/admin/mctl-web
+      remoteKey: teams/admins/mctl-web
       property: s
 envFrom:
   - secretRef:

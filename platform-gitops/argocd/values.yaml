@@ -112,20 +112,11 @@ argo-cd:
         p, role:admin, clusters, get, */*, allow
         p, role:admin, repositories, *, */*, allow
         p, role:admin, projects, *, */*, allow
-        g, mctlhq:admin, role:admin
+        g, mctlhq:admins, role:admin
 
         # ============================================================================
         # Team-Based Access (Auto-generated from tenant definitions)
         # ============================================================================
-
-        # Tenant: admins (github: admins)
-        p, role:team-admins, applications, get, preview/preview-admins-*, allow
-        p, role:team-admins, applications, list, preview/preview-admins-*, allow
-        p, role:team-admins, applications, sync, preview/preview-admins-*, allow
-        p, role:team-admins, applications, override, preview/preview-admins-*, allow
-        p, role:team-admins, logs, get, preview/preview-admins-*, allow
-        p, role:team-admins, exec, create, preview/preview-admins-*, allow
-        g, mctlhq:admins, role:team-admins
 
         # Tenant: africaone-dev (github: africaone-dev)
         p, role:team-africaone-dev, applications, get, preview/preview-africaone-dev-*, allow

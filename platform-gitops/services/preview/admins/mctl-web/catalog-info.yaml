@@ -4,13 +4,13 @@ metadata:
   name: mctl-web
   description: "mctl-web service deployed to preview"
   annotations:
-    backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=preview-admin-mctl-web
-    backstage.io/kubernetes-namespace: admin
-    argocd/app-name: preview-admin-mctl-web
+    backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=preview-admins-mctl-web
+    backstage.io/kubernetes-namespace: admins
+    argocd/app-name: preview-admins-mctl-web
     github.com/source-repo: mctlhq/mctl-web
     mctl.me/auto-deploy: "true"
   links:
-    - url: https://ops.mctl.me/applications/argocd/preview-admin-mctl-web
+    - url: https://ops.mctl.me/applications/argocd/preview-admins-mctl-web
       title: ArgoCD
       icon: dashboard
     - url: https://github.com/mctlhq/mctl-web
@@ -23,10 +23,10 @@ metadata:
       title: Service URL
       icon: web
   labels:
-    team: admin
+    team: admins
     env: preview
 spec:
   type: service
   lifecycle: production
-  owner: group:admin
-  system: team-admin
+  owner: group:admins
+  system: team-admins

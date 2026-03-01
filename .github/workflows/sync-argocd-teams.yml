@@ -78,7 +78,7 @@ jobs:
           POLICY_CSV+="        p, role:admin, clusters, get, */*, allow\n"
           POLICY_CSV+="        p, role:admin, repositories, *, */*, allow\n"
           POLICY_CSV+="        p, role:admin, projects, *, */*, allow\n"
-          POLICY_CSV+="        g, mctlhq:admin, role:admin\n"
+          POLICY_CSV+="        g, mctlhq:admins, role:admin\n"
           POLICY_CSV+="\n"
           POLICY_CSV+="        # ============================================================================\n"
           POLICY_CSV+="        # Team-Based Access (Auto-generated from tenant definitions)\n"
@@ -86,7 +86,7 @@ jobs:
 
           # Generate policies for each tenant (except admin)
           while IFS=: read -r tenant_name github_team; do
-            if [ "$tenant_name" = "admin" ]; then
+            if [ "$tenant_name" = "admins" ]; then
               continue
             fi
             POLICY_CSV+="\n"
