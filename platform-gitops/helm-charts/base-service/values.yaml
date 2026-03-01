@@ -92,3 +92,13 @@ probes:
 #   store: vault-backend               # optional
 #   refreshInterval: 1h               # optional
 dbSecret: null
+
+# -- Optional: Prometheus metrics endpoint
+# When enabled, adds a named 'metrics' port to the Service and Deployment,
+# and creates a ServiceMonitor CRD for Prometheus scraping.
+# Requires kube-prometheus-stack (or any Prometheus Operator) to be installed.
+metrics:
+  enabled: false
+  port: 9090
+  path: /metrics
+  interval: 30s
