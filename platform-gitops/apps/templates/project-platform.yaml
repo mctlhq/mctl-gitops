@@ -1,0 +1,29 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: platform
+  namespace: argocd
+spec:
+  description: Platform tenants — namespace provisioning (ResourceQuota, NetworkPolicy, LimitRange)
+
+  sourceRepos:
+    - {{ .Values.spec.source.repoURL }}
+
+  destinations:
+    - server: {{ .Values.spec.destination.server }}
+      namespace: "*"
+
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+
+  namespaceResourceWhitelist:
+    - group: ""
+      kind: ResourceQuota
+    - group: ""
+      kind: LimitRange
+    - group: networking.k8s.io
+      kind: NetworkPolicy
+
+  orphanedResources:
+    warn: true
