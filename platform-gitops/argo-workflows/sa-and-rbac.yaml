@@ -23,6 +23,10 @@ metadata:
   annotations:
     kubernetes.io/service-account.name: argo-workflows-admin
 type: kubernetes.io/service-account-token
+---
+# Bind argo-workflows-admin SA to the argo-workflows-admin ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
 metadata:
   name: argo-workflows-admin-sso
 subjects:
