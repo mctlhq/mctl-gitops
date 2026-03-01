@@ -113,6 +113,7 @@ spec:
           quota_pods: ${{ parameters.quotaPods | default('20') }}
           allow_internet_egress: ${{ parameters.allowInternetEgress | string }}
           contact_email: ${{ parameters.contactEmail | default('') }}
+          creator_username: ${{ user.entity.metadata.name | default('') }}
 
   output:
     text:
@@ -129,10 +130,11 @@ spec:
         content: "`vault-policy: tenant-${{ parameters.tenantName }}`"
       - title: Next Steps
         content: |
-          1. ✅ Tenant directory committed to `mctl-core`
-          2. ⏳ ArgoCD will provision namespace + quotas + NetworkPolicy (~2-3 min)
-          3. ⏳ Backstage catalog will refresh tenant Resource entity (~5 min)
-          4. Share the ArgoCD link with your team members so they can view their services.
+          1. ✅ GitHub team `${{ parameters.githubTeam | default(parameters.tenantName) }}` created in mctlhq org
+          2. ✅ Tenant directory committed to `mctl-core`
+          3. ⏳ ArgoCD will provision namespace + quotas + NetworkPolicy (~2-3 min)
+          4. ⏳ Backstage catalog will refresh tenant Resource entity (~5 min)
+          5. Share the ArgoCD link with your team members so they can view their services.
     links:
       - title: Argo Workflows Run
         icon: dashboard

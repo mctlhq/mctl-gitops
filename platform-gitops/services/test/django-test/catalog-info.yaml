@@ -4,9 +4,9 @@ metadata:
   name: django-test
   description: "django-test service deployed to preview"
   annotations:
-    backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=preview-test-django-test
+    backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=test-django-test
     backstage.io/kubernetes-namespace: test
-    argocd/app-name: preview-test-django-test
+    argocd/app-name: test-django-test
     github.com/source-repo: mctlhq/django-test
     # mctl.me/auto-deploy — triggered by GitHub App webhook on tag push
     #   "true" or "auto" — deploy immediately via scaffolder
@@ -14,7 +14,7 @@ metadata:
     #   "false" or absent — skip
     mctl.me/auto-deploy: "false"
   links:
-    - url: https://ops.mctl.me/applications/argocd/preview-test-django-test
+    - url: https://ops.mctl.me/applications/argocd/test-django-test
       title: ArgoCD
       icon: dashboard
     - url: https://github.com/mctlhq/django-test
@@ -28,7 +28,7 @@ metadata:
       icon: web
   labels:
     team: test
-    env: preview
+    env: apps
 spec:
   type: service
   lifecycle: production

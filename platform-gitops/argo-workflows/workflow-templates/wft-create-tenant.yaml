@@ -15,6 +15,12 @@ metadata:
       Triggered by: Backstage scaffolder template "Create Tenant [v2 · Argo]"
       Replaces: manual GitHub team creation + cron sync
 
+      Steps:
+        1. validate        — name format + non-existence check
+        2a. create-vault-policy — Vault policy scoped to teams/{name}/*
+        2b. create-github-team  — GitHub team creation + add creator as maintainer
+        3. commit-to-git   — tenant files + ArgoCD RBAC pushed to mctl-core
+
 spec:
   entrypoint: create-tenant-pipeline
   serviceAccountName: argo-workflow-sa
@@ -45,6 +51,9 @@ spec:
         default: "false"
       - name: contact_email
         default: ""
+      - name: creator_username
+        # GitHub username of the person creating the tenant (added as team maintainer)
+        default: ""
 
   templates:
     # ────────────────────────────────────────────────────────────────────────
@@ -59,7 +68,7 @@ spec:
                 - name: tenant_name
                   value: "{{workflow.parameters.tenant_name}}"
 
-          # Step 2a: create Vault policy (parallel with nothing, after validate)
+          # Step 2a: create Vault policy (parallel, after validate)
           - name: create-vault-policy
             dependencies: [validate]
             template: create-vault-policy
@@ -68,9 +77,22 @@ spec:
                 - name: tenant_name
                   value: "{{workflow.parameters.tenant_name}}"
 
-          # Step 2b: commit tenant files + ArgoCD RBAC to Git (after validate)
-          - name: commit-to-git
+          # Step 2b: create GitHub team + add creator as maintainer (parallel, after validate)
+          - name: create-github-team
             dependencies: [validate]
+            template: create-github-team
+            arguments:
+              parameters:
+                - name: github_team
+                  value: "{{workflow.parameters.github_team}}"
+                - name: display_name
+                  value: "{{workflow.parameters.display_name}}"
+                - name: creator_username
+                  value: "{{workflow.parameters.creator_username}}"
+
+          # Step 3: commit tenant files + ArgoCD RBAC to Git (after both step 2s)
+          - name: commit-to-git
+            dependencies: [create-vault-policy, create-github-team]
             template: commit-tenant-to-git
             arguments:
               parameters:
@@ -96,6 +118,98 @@ spec:
                   value: "{{workflow.parameters.allow_internet_egress}}"
                 - name: contact_email
                   value: "{{workflow.parameters.contact_email}}"
+
+    # ────────────────────────────────────────────────────────────────────────
+    - name: create-github-team
+      inputs:
+        parameters:
+          - name: github_team
+          - name: display_name
+          - name: creator_username
+      volumes:
+        - name: github-app-creds
+          secret:
+            secretName: github-app-credentials
+      script:
+        image: alpine:3.19
+        command: [sh]
+        volumeMounts:
+          - name: github-app-creds
+            mountPath: /secrets/github-app
+            readOnly: true
+        source: |
+          set -e
+          apk add --no-cache openssl curl jq 2>/dev/null || true
+
+          GITHUB_TEAM="{{inputs.parameters.github_team}}"
+          DISPLAY_NAME="{{inputs.parameters.display_name}}"
+          CREATOR="{{inputs.parameters.creator_username}}"
+          ORG="mctlhq"
+
+          [ -z "$GITHUB_TEAM" ] && { echo "No github_team specified, skipping GitHub team creation"; exit 0; }
+
+          # ── GitHub App token ──────────────────────────────────────────────
+          APP_ID=$(cat /secrets/github-app/app-id)
+          PRIVATE_KEY=$(cat /secrets/github-app/private-key)
+          INSTALLATION_ID=$(cat /secrets/github-app/installation-id)
+
+          NOW=$(date +%s)
+          IAT=$((NOW - 60))
+          EXP=$((NOW + 540))
+          HEADER=$(printf '{"alg":"RS256","typ":"JWT"}' | base64 | tr -d '=' | tr '/+' '_-' | tr -d '\n')
+          PAYLOAD=$(printf '{"iat":%d,"exp":%d,"iss":"%s"}' "$IAT" "$EXP" "$APP_ID" | base64 | tr -d '=' | tr '/+' '_-' | tr -d '\n')
+          SIGN_INPUT="${HEADER}.${PAYLOAD}"
+          SIGNATURE=$(printf '%s' "$SIGN_INPUT" | openssl dgst -sha256 -sign <(printf '%s' "$PRIVATE_KEY") | base64 | tr -d '=' | tr '/+' '_-' | tr -d '\n')
+          JWT="${HEADER}.${PAYLOAD}.${SIGNATURE}"
+
+          GH_TOKEN=$(curl -sf -X POST \
+            -H "Authorization: Bearer $JWT" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens" \
+            | jq -r '.token')
+
+          if [ -z "$GH_TOKEN" ] || [ "$GH_TOKEN" = "null" ]; then
+            echo "ERROR: Failed to get GitHub App installation token"
+            exit 1
+          fi
+
+          # ── Create GitHub team ─────────────────────────────────────────────
+          echo "Creating GitHub team: ${ORG}/${GITHUB_TEAM}"
+          HTTP_STATUS=$(curl -s -o /tmp/gh_team_response.json -w "%{http_code}" \
+            -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/orgs/${ORG}/teams" \
+            -d "{\"name\":\"${GITHUB_TEAM}\",\"description\":\"${DISPLAY_NAME} team (managed by mctl.me)\",\"privacy\":\"closed\"}")
+
+          if [ "$HTTP_STATUS" = "201" ]; then
+            echo "GitHub team '${GITHUB_TEAM}' created successfully."
+          elif [ "$HTTP_STATUS" = "422" ]; then
+            echo "GitHub team '${GITHUB_TEAM}' already exists — skipping creation."
+          else
+            echo "WARNING: Unexpected response creating GitHub team (HTTP $HTTP_STATUS):"
+            cat /tmp/gh_team_response.json
+          fi
+
+          # ── Add creator as team maintainer ────────────────────────────────
+          if [ -n "$CREATOR" ]; then
+            echo "Adding '${CREATOR}' as maintainer of team '${GITHUB_TEAM}'"
+            HTTP_STATUS=$(curl -s -o /tmp/gh_member_response.json -w "%{http_code}" \
+              -X PUT \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/orgs/${ORG}/teams/${GITHUB_TEAM}/memberships/${CREATOR}" \
+              -d '{"role":"maintainer"}')
+
+            if [ "$HTTP_STATUS" = "200" ]; then
+              echo "User '${CREATOR}' added as maintainer."
+            else
+              echo "WARNING: Could not add '${CREATOR}' to team (HTTP $HTTP_STATUS):"
+              cat /tmp/gh_member_response.json
+            fi
+          else
+            echo "No creator_username specified, skipping membership assignment."
+          fi
 
     # ────────────────────────────────────────────────────────────────────────
     - name: validate-tenant-name
