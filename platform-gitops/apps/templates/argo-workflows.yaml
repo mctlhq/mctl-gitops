@@ -16,7 +16,23 @@ spec:
         server:
           enabled: true
           extraArgs:
-            - --auth-mode=server
+            - --auth-mode=sso
+          sso:
+            issuer: https://ops.mctl.me/api/dex
+            clientId:
+              name: argo-workflows-sso
+              key: client-id
+            clientSecret:
+              name: argo-workflows-sso
+              key: client-secret
+            redirectUrl: https://workflows.mctl.me/oauth2/callback
+            scopes:
+              - openid
+              - profile
+              - email
+              - groups
+            rbac:
+              enabled: true
           ingress:
             enabled: true
             ingressClassName: traefik

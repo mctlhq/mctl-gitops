@@ -22,3 +22,7 @@ spec:
       remoteRef:
         key: platform/github-app
         property: client-secret
+    - secretKey: argo-workflows-sso-client-secret
+      remoteRef:
+        key: platform/argo-workflows/sso
+        property: client-secret

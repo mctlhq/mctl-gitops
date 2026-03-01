@@ -73,6 +73,12 @@ argo-cd:
             clientSecret: "$github-client-secret"
             orgs:
               - name: mctlhq
+        staticClients:
+        - id: argo-workflows
+          name: Argo Workflows
+          redirectURIs:
+            - https://workflows.mctl.me/oauth2/callback
+          secret: "$argo-workflows-sso-client-secret"
 
     params:
       server.insecure: true
