@@ -62,6 +62,9 @@ spec:
               baseUrl: https://app.mctl.me
               listen:
                 port: 7007
+              reading:
+                allow:
+                  - host: app.mctl.me
               database:
                 client: pg
                 pluginDivisionMode: schema
