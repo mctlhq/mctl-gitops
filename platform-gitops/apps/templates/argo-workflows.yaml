@@ -15,8 +15,9 @@ spec:
       values: |
         server:
           enabled: true
-          extraArgs:
-            - --auth-mode=sso
+          authModes:
+            - sso
+          extraArgs: []
           sso:
             enabled: true
             issuer: https://ops.mctl.me/api/dex
