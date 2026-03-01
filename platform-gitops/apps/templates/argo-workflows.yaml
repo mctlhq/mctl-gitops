@@ -53,7 +53,7 @@ spec:
               host: shared-pg-rw.platform-db.svc
               port: 5432
               database: argo-workflows
-              tableName: argo_workflows
+              tableName: argo_archived_workflows
               userNameSecret:
                 name: argo-workflows-db-creds
                 key: username
