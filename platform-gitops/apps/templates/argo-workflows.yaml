@@ -40,7 +40,7 @@ spec:
               podGC:
                 strategy: OnPodCompletion
           persistence:
-            archive: false
+            enabled: false
 
         workflow:
           serviceAccount:
