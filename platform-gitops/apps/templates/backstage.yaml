@@ -115,6 +115,7 @@ spec:
               tenantsPath: platform-gitops/tenants
               syncIntervalMinutes: 5
               landingPageToken: ${BACKSTAGE_LANDING_TOKEN}
+              githubAppInstallationId: ${GITHUB_APP_INSTALLATION_ID}
             resourceUsage:
               kubeConfigType: token
               kubeApiUrl: https://kubernetes.default.svc
