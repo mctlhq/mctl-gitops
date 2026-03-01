@@ -20,6 +20,23 @@ spec:
       jqPathExpressions:
         - .metadata.annotations
         - .spec.postgresql.pg_hba
+        - .spec.affinity
+        - .spec.enablePDB
+        - .spec.enableSuperuserAccess
+        - .spec.failoverDelay
+        - .spec.imageName
+        - .spec.logLevel
+        - .spec.maxSyncReplicas
+        - .spec.minSyncReplicas
+        - .spec.postgresGID
+        - .spec.postgresUID
+        - .spec.primaryUpdateMethod
+        - .spec.primaryUpdateStrategy
+        - .spec.replicationSlots
+        - .spec.smartShutdownTimeout
+        - .spec.startDelay
+        - .spec.stopDelay
+        - .spec.switchoverDelay
         - .status
         - .spec.managed.roles[]?.status
   syncPolicy:
@@ -30,7 +47,6 @@ spec:
       - CreateNamespace=true
       - ApplyOutOfSyncOnly=true
       - RespectIgnoreDifferences=true
-      - ServerSideApply=true
     retry:
       limit: 5
       backoff:
