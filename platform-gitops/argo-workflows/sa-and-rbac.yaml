@@ -14,8 +14,15 @@ metadata:
     workflows.argoproj.io/rbac-rule: "'mctlhq:admin' in groups"
     workflows.argoproj.io/rbac-rule-precedence: "1"
 ---
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
+# Kubernetes 1.24+ requires explicit SA token secret creation
+apiVersion: v1
+kind: Secret
+metadata:
+  name: argo-workflows-admin.service-account-token
+  namespace: argo-workflows
+  annotations:
+    kubernetes.io/service-account.name: argo-workflows-admin
+type: kubernetes.io/service-account-token
 metadata:
   name: argo-workflows-admin-sso
 subjects:
