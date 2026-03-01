@@ -1,0 +1,63 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: tenants
+  namespace: argocd
+  annotations:
+    # Managed by platform-gitops ApplicationSet (part of apps Helm release)
+    argocd/description: |
+      Creates one ArgoCD Application per tenant directory in platform-gitops/tenants/*.
+      Each application deploys the tenant Helm chart to the tenant's namespace,
+      provisioning: ResourceQuota, NetworkPolicy, LimitRange.
+      Namespace is auto-created by CreateNamespace=true.
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  syncPolicy:
+    preserveResourcesOnDeletion: false
+  generators:
+    - git:
+        repoURL: {{ .Values.spec.source.repoURL }}
+        revision: {{ .Values.spec.source.targetRevision }}
+        directories:
+          - path: platform-gitops/tenants/*
+  template:
+    metadata:
+      name: '{{`tenant-{{ .path.basename }}`}}'
+      labels:
+        env: platform
+        mctl.me/tenant: '{{`{{ .path.basename }}`}}'
+      annotations:
+        argocd/app-name: '{{`tenant-{{ .path.basename }}`}}'
+        argocd/description: '{{`Namespace provisioning for tenant: {{ .path.basename }}`}}'
+    spec:
+      project: platform
+      sources:
+        # Tenant Helm chart (logic)
+        - repoURL: {{ .Values.spec.source.repoURL }}
+          targetRevision: {{ .Values.spec.source.targetRevision }}
+          path: platform-gitops/helm-charts/tenant
+          helm:
+            valueFiles:
+              - $values/{{ `{{ .path.path }}` }}/values.yaml
+        # Tenant values (data)
+        - repoURL: {{ .Values.spec.source.repoURL }}
+          targetRevision: {{ .Values.spec.source.targetRevision }}
+          ref: values
+      destination:
+        server: {{ .Values.spec.destination.server }}
+        namespace: '{{`{{ .path.basename }}`}}'
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
+          - ApplyOutOfSyncOnly=true
+          - ServerSideApply=true
+        retry:
+          limit: 3
+          backoff:
+            duration: 10s
+            factor: 2
+            maxDuration: 2m

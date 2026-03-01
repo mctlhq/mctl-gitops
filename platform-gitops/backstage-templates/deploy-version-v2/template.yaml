@@ -1,0 +1,98 @@
+apiVersion: scaffolder.backstage.io/v1beta3
+kind: Template
+metadata:
+  name: deploy-version-v2
+  title: "Deploy Version [v2 · Argo]"
+  description: |
+    Build and deploy a new version of an existing service via Argo Workflows.
+    Picks up source repo from the service catalog automatically.
+    Powered by Argo Workflows (replaces GitHub Actions).
+  tags:
+    - deploy
+    - release
+    - version
+    - kubernetes
+    - argo
+  annotations:
+    backstage.io/techdocs-ref: dir:.
+spec:
+  owner: group:admin
+  type: deployment
+  presentation:
+    buttonLabels:
+      createButtonText: 'Deploy'
+      reviewButtonText: 'Review & Deploy'
+
+  parameters:
+    - title: Service & Version
+      required:
+        - serviceName
+      properties:
+        serviceName:
+          title: Service
+          type: string
+          description: "Select the deployed service to update"
+          ui:field: OwnedEntityPicker
+          ui:options:
+            allowedKinds:
+              - Component
+        gitTag:
+          title: Tag
+          type: string
+          description: "Select a tag from the source repo, or leave empty to auto-increment from the latest version."
+          ui:field: GitTagPicker
+
+    - title: Environment
+      properties:
+        currentConfig:
+          title: " "
+          type: string
+          ui:field: CurrentConfig
+        envVars:
+          title: Environment Variables
+          type: string
+          description: "KEY=VALUE pairs, one per line. Leave empty to keep current values unchanged."
+          ui:field: EnvVarsEditor
+
+    - title: Secure Variables
+      properties:
+        secretEnvVars:
+          title: Secure Variables
+          type: string
+          description: "KEY=VALUE pairs, one per line. Leave empty to keep current values unchanged."
+          ui:field: SecureVarsEditor
+
+  steps:
+    - id: fetch-service
+      name: Fetch service details
+      action: catalog:fetch
+      input:
+        entityRef: ${{ parameters.serviceName }}
+
+    - id: deploy-version
+      name: Deploy new version via Argo Workflows
+      action: mctl:workflow:submit
+      input:
+        templateName: deploy-service
+        parameters:
+          action: deploy
+          team_name: ${{ steps['fetch-service'].output.entity.metadata.labels.team or steps['fetch-service'].output.entity.spec.owner | replace('group:', '') }}
+          component_name: ${{ steps['fetch-service'].output.entity.metadata.name }}
+          dockerfile_repo: ${{ steps['fetch-service'].output.entity.metadata.annotations['github.com/source-repo'] or '' }}
+          git_tag: ${{ parameters.gitTag | default('') }}
+          env_vars: ${{ parameters.envVars | default('') }}
+          secret_env_vars: ${{ parameters.secretEnvVars | default('') }}
+
+  output:
+    text:
+      - title: Service
+        content: "${{ steps['fetch-service'].output.entity.metadata.labels.team or steps['fetch-service'].output.entity.spec.owner | replace('group:', '') }}/${{ steps['fetch-service'].output.entity.metadata.name }}"
+      - title: Version
+        content: "${{ parameters.gitTag or 'latest (auto-increment)' }}"
+    links:
+      - title: Argo Workflows Run
+        icon: dashboard
+        url: ${{ steps['deploy-version'].output.workflowUrl }}
+      - title: ArgoCD Dashboard
+        icon: dashboard
+        url: "https://ops.mctl.me"

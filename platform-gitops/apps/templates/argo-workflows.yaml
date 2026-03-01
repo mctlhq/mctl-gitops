@@ -1,0 +1,77 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: argo-workflows
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://argoproj.github.io/argo-helm
+    chart: argo-workflows
+    targetRevision: 0.45.1
+    helm:
+      values: |
+        server:
+          enabled: true
+          extraArgs:
+            - --auth-mode=server
+          ingress:
+            enabled: true
+            ingressClassName: traefik
+            annotations:
+              cert-manager.io/cluster-issuer: letsencrypt-prod
+            hosts:
+              - workflows.mctl.me
+            tls:
+              - hosts:
+                  - workflows.mctl.me
+                secretName: argo-workflows-tls
+
+        controller:
+          workflowDefaults:
+            spec:
+              serviceAccountName: argo-workflow-sa
+              ttlStrategy:
+                secondsAfterCompletion: 3600
+                secondsAfterSuccess: 1800
+                secondsAfterFailure: 86400
+              podGC:
+                strategy: OnPodCompletion
+          persistence:
+            archive: true
+            postgresql:
+              host: shared-pg-rw.platform-db.svc.cluster.local
+              port: 5432
+              database: argo-workflows
+              userNameSecret:
+                name: argo-workflows-db-creds
+                key: username
+              passwordSecret:
+                name: argo-workflows-db-creds
+                key: password
+
+        workflow:
+          serviceAccount:
+            create: false
+            name: argo-workflow-sa
+
+        useStaticCredentials: false
+
+  destination:
+    server: {{ .Values.spec.destination.server }}
+    namespace: argo-workflows
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

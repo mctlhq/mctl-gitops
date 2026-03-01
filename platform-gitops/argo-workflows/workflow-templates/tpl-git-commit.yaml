@@ -1,0 +1,373 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: tpl-git-commit
+  namespace: argo-workflows
+  annotations:
+    workflows.argoproj.io/description: |
+      Reusable template: clones mctl-core, runs a generation script,
+      commits and pushes only within the allowed path prefix.
+      Uses GitHub App token from mounted secret.
+spec:
+  templates:
+    # ── Generate and commit service manifests ─────────────────────────────────
+    - name: commit-service
+      inputs:
+        parameters:
+          - name: action          # onboard | deploy | update-config
+          - name: team_name
+          - name: component_name
+          - name: component_type  # base-service | worker-service
+          - name: image_tag
+            default: "latest"
+          - name: port
+            default: "8080"
+          - name: host
+            default: ""
+          - name: env_vars
+            default: ""
+          - name: secret_env_vars
+            default: ""
+          - name: provision_database
+            default: "false"
+          - name: skip_health_check
+            default: "false"
+          - name: dockerfile_repo
+            default: ""
+      script:
+        image: mikefarah/yq:4.40.5
+        command: [sh]
+        source: |
+          set -e
+
+          TEAM="{{inputs.parameters.team_name}}"
+          SERVICE="{{inputs.parameters.component_name}}"
+          TYPE="{{inputs.parameters.component_type}}"
+          ACTION="{{inputs.parameters.action}}"
+          TAG="{{inputs.parameters.image_tag}}"
+          PORT="{{inputs.parameters.port}}"
+          HOST="{{inputs.parameters.host}}"
+          ENV_VARS="{{inputs.parameters.env_vars}}"
+          SECRET_VARS="{{inputs.parameters.secret_env_vars}}"
+          REPO="{{inputs.parameters.dockerfile_repo}}"
+          PROVISION_DB="{{inputs.parameters.provision_database}}"
+          SKIP_HEALTH="{{inputs.parameters.skip_health_check}}"
+
+          # ── 1. Get GitHub App token ────────────────────────────────────────
+          APP_ID=$(cat /var/run/secrets/github-app/app-id)
+          INSTALL_ID=$(cat /var/run/secrets/github-app/installation-id)
+          APP_KEY=/var/run/secrets/github-app/private-key
+
+          NOW=$(date +%s)
+          EXP=$((NOW + 540))
+          HEADER=$(printf '{"alg":"RS256","typ":"JWT"}' | base64 | tr -d '=' | tr '/+' '_-' | tr -d '\n')
+          PAYLOAD=$(printf '{"iat":%s,"exp":%s,"iss":"%s"}' "$NOW" "$EXP" "$APP_ID" | base64 | tr -d '=' | tr '/+' '_-' | tr -d '\n')
+          SIG=$(printf '%s.%s' "$HEADER" "$PAYLOAD" | openssl dgst -sha256 -sign "$APP_KEY" | base64 | tr -d '=' | tr '/+' '_-' | tr -d '\n')
+          JWT="${HEADER}.${PAYLOAD}.${SIG}"
+
+          GH_TOKEN=$(wget -qO- \
+            --header="Authorization: Bearer ${JWT}" \
+            --header="Accept: application/vnd.github+json" \
+            --post-data='{"repositories":["mctl-core"]}' \
+            "https://api.github.com/app/installations/${INSTALL_ID}/access_tokens" | \
+            grep '"token"' | head -1 | cut -d'"' -f4)
+
+          if [ -z "$GH_TOKEN" ]; then
+            echo "❌ Failed to get GitHub App token"
+            exit 1
+          fi
+
+          # ── 2. Clone mctl-core ────────────────────────────────────────────
+          echo "📥 Cloning mctl-core..."
+          git clone --depth=1 \
+            "https://x-access-token:${GH_TOKEN}@github.com/mctlhq/mctl-core.git" \
+            /tmp/mctl-core 2>&1 | grep -v 'x-access-token'
+          cd /tmp/mctl-core
+
+          git config user.name "argo-workflows[bot]"
+          git config user.email "argo-workflows[bot]@users.noreply.github.com"
+
+          # ── 3. Determine service directory ────────────────────────────────
+          if [ "$TYPE" = "base-service" ]; then
+            DIR="platform-gitops/services/preview/${TEAM}/${SERVICE}"
+          else
+            DIR="platform-gitops/workers/preview/${TEAM}/${SERVICE}"
+          fi
+
+          # ── 4. Security: validate path stays within allowed scope ─────────
+          ALLOWED_BASES="platform-gitops/services/preview/${TEAM} platform-gitops/workers/preview/${TEAM}"
+          ALLOWED=false
+          for base in $ALLOWED_BASES; do
+            case "$DIR" in
+              ${base}/*) ALLOWED=true ;;
+              ${base}) ALLOWED=true ;;
+            esac
+          done
+          if [ "$ALLOWED" != "true" ]; then
+            echo "❌ Security: path $DIR is outside allowed scope for team $TEAM"
+            exit 1
+          fi
+
+          # ── 5. Generate files ──────────────────────────────────────────────
+          if [ "$ACTION" = "onboard" ]; then
+            mkdir -p "$DIR"
+
+            # values.yaml from template
+            if [ "$TYPE" = "base-service" ]; then
+              TPL=".github/templates/base-service-values.yaml.tpl"
+            else
+              TPL=".github/templates/worker-service-values.yaml.tpl"
+            fi
+
+            sed \
+              -e "s|__TEAM_NAME__|${TEAM}|g" \
+              -e "s|__SERVICE_NAME__|${SERVICE}|g" \
+              -e "s|__IMAGE_TAG__|${TAG}|g" \
+              -e "s|__PORT__|${PORT}|g" \
+              -e "s|__HOST__|${HOST}|g" \
+              "$TPL" > "${DIR}/values.yaml"
+
+            # Disable probes if requested
+            if [ "$SKIP_HEALTH" = "true" ]; then
+              yq eval -i '.probes.liveness = null | .probes.readiness = null' "${DIR}/values.yaml"
+            fi
+
+            # Database secret injection
+            if [ "$PROVISION_DB" = "true" ]; then
+              DB_SECRET="${TEAM}-${SERVICE}-db-creds"
+              VAULT_PATH="platform/teams/${TEAM}/${SERVICE}/database"
+              yq eval -i ".envFrom = [{\"secretRef\": {\"name\": \"${DB_SECRET}\"}}]" "${DIR}/values.yaml"
+              yq eval -i ".dbSecret.vaultPath = \"${VAULT_PATH}\"" "${DIR}/values.yaml"
+              yq eval -i ".dbSecret.secretName = \"${DB_SECRET}\"" "${DIR}/values.yaml"
+            fi
+
+            # env_vars
+            if [ -n "$ENV_VARS" ]; then
+              while IFS='=' read -r key rest; do
+                [ -z "$key" ] && continue
+                echo "$key" | grep -q '^#' && continue
+                key=$(echo "$key" | xargs)
+                value=$(echo "$rest" | xargs)
+                [ -z "$key" ] && continue
+                yq eval -i ".env.${key} = \"${value}\"" "${DIR}/values.yaml"
+              done << 'ENVEOF'
+          {{inputs.parameters.env_vars}}
+          ENVEOF
+            fi
+
+            # secret_env_vars → ExternalSecret config
+            if [ -n "$SECRET_VARS" ]; then
+              yq eval -i ".externalSecret.targetSecret = \"${SERVICE}-secrets\"" "${DIR}/values.yaml"
+              yq eval -i '.externalSecret.data = []' "${DIR}/values.yaml"
+              while IFS='=' read -r key rest; do
+                [ -z "$key" ] && continue
+                echo "$key" | grep -q '^#' && continue
+                key=$(echo "$key" | xargs)
+                [ -z "$key" ] && continue
+                yq eval -i ".externalSecret.data += [{\"secretKey\": \"${key}\", \"remoteKey\": \"teams/${TEAM}/${SERVICE}\", \"property\": \"${key}\"}]" "${DIR}/values.yaml"
+              done << 'SECRETEOF'
+          {{inputs.parameters.secret_env_vars}}
+          SECRETEOF
+              yq eval -i ".envFrom = [{\"secretRef\": {\"name\": \"${SERVICE}-secrets\"}}]" "${DIR}/values.yaml"
+            fi
+
+            # catalog-info.yaml
+            COMPONENT_TYPE=$( [ "$TYPE" = "base-service" ] && echo "service" || echo "worker" )
+            sed \
+              -e "s|__TEAM_NAME__|${TEAM}|g" \
+              -e "s|__SERVICE_NAME__|${SERVICE}|g" \
+              -e "s|__COMPONENT_TYPE__|${COMPONENT_TYPE}|g" \
+              -e "s|__DOCKERFILE_REPO__|${REPO}|g" \
+              ".github/templates/catalog-info.yaml.tpl" > "${DIR}/catalog-info.yaml"
+
+            # Update catalog-info: replace GitHub Actions link with Argo Workflows
+            sed -i 's|url: https://github.com/mctlhq/mctl-core/actions/workflows/release-service.yml|url: https://workflows.mctl.me|g' "${DIR}/catalog-info.yaml"
+            sed -i 's|title: GitHub Actions|title: Argo Workflows|g' "${DIR}/catalog-info.yaml"
+
+            if [ -n "$HOST" ]; then
+              yq eval -i ".metadata.links += [{\"url\": \"https://${HOST}\", \"title\": \"Service URL\", \"icon\": \"web\"}]" "${DIR}/catalog-info.yaml"
+            fi
+
+            # vault-cleanup.yaml
+            sed \
+              -e "s|__TEAM_NAME__|${TEAM}|g" \
+              -e "s|__SERVICE_NAME__|${SERVICE}|g" \
+              ".github/templates/vault-cleanup.yaml.tpl" > "${DIR}/vault-cleanup.yaml"
+
+            # Validate Helm template before committing
+            echo "🔍 Validating Helm template..."
+            wget -qO /tmp/helm.tar.gz \
+              "https://get.helm.sh/helm-v3.14.0-linux-amd64.tar.gz" && \
+              tar -xzf /tmp/helm.tar.gz -C /tmp && \
+              mv /tmp/linux-amd64/helm /usr/local/bin/helm
+
+            if ! helm template test "platform-gitops/helm-charts/${TYPE}" \
+              -f "${DIR}/values.yaml" > /dev/null 2>&1; then
+              echo "❌ Helm validation failed:"
+              helm template test "platform-gitops/helm-charts/${TYPE}" -f "${DIR}/values.yaml" 2>&1 || true
+              exit 1
+            fi
+            echo "✅ Helm template valid"
+
+            git add "${DIR}/"
+            git commit -m "feat: onboard ${TEAM}/${SERVICE} (${TAG})"
+
+          elif [ "$ACTION" = "deploy" ]; then
+            yq eval -i ".image.tag = \"${TAG}\"" "${DIR}/values.yaml"
+            git add "${DIR}/values.yaml"
+            if git diff --cached --quiet; then
+              echo "ℹ️  No changes — already at ${TAG}"
+            else
+              git commit -m "deploy: ${TEAM}/${SERVICE} → ${TAG}"
+            fi
+
+          elif [ "$ACTION" = "update-config" ]; then
+            CHANGED=false
+
+            if [ -n "$ENV_VARS" ]; then
+              while IFS='=' read -r key rest; do
+                [ -z "$key" ] && continue
+                echo "$key" | grep -q '^#' && continue
+                key=$(echo "$key" | xargs)
+                value=$(echo "$rest" | xargs)
+                [ -z "$key" ] && continue
+                yq eval -i ".env.${key} = \"${value}\"" "${DIR}/values.yaml"
+              done << 'ENVEOF2'
+          {{inputs.parameters.env_vars}}
+          ENVEOF2
+              CHANGED=true
+            fi
+
+            if [ -n "$SECRET_VARS" ]; then
+              yq eval -i ".externalSecret.targetSecret = \"${SERVICE}-secrets\"" "${DIR}/values.yaml"
+              if yq eval '.externalSecret.data' "${DIR}/values.yaml" | grep -q 'null'; then
+                yq eval -i '.externalSecret.data = []' "${DIR}/values.yaml"
+              fi
+              while IFS='=' read -r key rest; do
+                [ -z "$key" ] && continue
+                echo "$key" | grep -q '^#' && continue
+                key=$(echo "$key" | xargs)
+                [ -z "$key" ] && continue
+                EXISTS=$(yq ".externalSecret.data[] | select(.secretKey == \"${key}\")" "${DIR}/values.yaml")
+                if [ -z "$EXISTS" ]; then
+                  yq eval -i ".externalSecret.data += [{\"secretKey\": \"${key}\", \"remoteKey\": \"teams/${TEAM}/${SERVICE}\", \"property\": \"${key}\"}]" "${DIR}/values.yaml"
+                fi
+              done << 'SECRETEOF2'
+          {{inputs.parameters.secret_env_vars}}
+          SECRETEOF2
+              CHANGED=true
+            fi
+
+            git add "${DIR}/values.yaml"
+            if git diff --cached --quiet; then
+              echo "ℹ️  No changes detected"
+            else
+              git commit -m "config: update env for ${TEAM}/${SERVICE}"
+            fi
+          fi
+
+          # ── 6. Push with rebase retry ──────────────────────────────────────
+          MAX_RETRIES=5
+          for i in $(seq 1 $MAX_RETRIES); do
+            if git push "https://x-access-token:${GH_TOKEN}@github.com/mctlhq/mctl-core.git" main \
+              2>&1 | grep -v 'x-access-token'; then
+              echo "✅ Pushed successfully"
+              break
+            fi
+            if [ $i -lt $MAX_RETRIES ]; then
+              echo "⚠️  Push failed (attempt $i), rebasing..."
+              git pull --rebase "https://x-access-token:${GH_TOKEN}@github.com/mctlhq/mctl-core.git" main \
+                2>&1 | grep -v 'x-access-token'
+            else
+              echo "❌ Push failed after $MAX_RETRIES attempts"
+              exit 1
+            fi
+          done
+
+          echo "✅ Commit pushed — ArgoCD will sync automatically"
+        volumeMounts:
+          - name: github-app-credentials
+            mountPath: /var/run/secrets/github-app
+      volumes:
+        - name: github-app-credentials
+          secret:
+            secretName: github-app-credentials
+
+    # ── Delete service directory ──────────────────────────────────────────────
+    - name: delete-service
+      inputs:
+        parameters:
+          - name: team_name
+          - name: component_name
+          - name: component_type
+      script:
+        image: alpine/git:2.43.0
+        command: [sh]
+        source: |
+          set -e
+          TEAM="{{inputs.parameters.team_name}}"
+          SERVICE="{{inputs.parameters.component_name}}"
+          TYPE="{{inputs.parameters.component_type}}"
+
+          # Get GitHub App token
+          APP_ID=$(cat /var/run/secrets/github-app/app-id)
+          INSTALL_ID=$(cat /var/run/secrets/github-app/installation-id)
+          APP_KEY=/var/run/secrets/github-app/private-key
+
+          NOW=$(date +%s); EXP=$((NOW + 540))
+          HEADER=$(printf '{"alg":"RS256","typ":"JWT"}' | base64 | tr -d '=' | tr '/+' '_-' | tr -d '\n')
+          PAYLOAD=$(printf '{"iat":%s,"exp":%s,"iss":"%s"}' "$NOW" "$EXP" "$APP_ID" | base64 | tr -d '=' | tr '/+' '_-' | tr -d '\n')
+          SIG=$(printf '%s.%s' "$HEADER" "$PAYLOAD" | openssl dgst -sha256 -sign "$APP_KEY" | base64 | tr -d '=' | tr '/+' '_-' | tr -d '\n')
+          JWT="${HEADER}.${PAYLOAD}.${SIG}"
+          GH_TOKEN=$(wget -qO- \
+            --header="Authorization: Bearer ${JWT}" \
+            --header="Accept: application/vnd.github+json" \
+            --post-data='{"repositories":["mctl-core"]}' \
+            "https://api.github.com/app/installations/${INSTALL_ID}/access_tokens" | \
+            grep '"token"' | head -1 | cut -d'"' -f4)
+
+          git clone --depth=1 \
+            "https://x-access-token:${GH_TOKEN}@github.com/mctlhq/mctl-core.git" \
+            /tmp/mctl-core 2>&1 | grep -v 'x-access-token'
+          cd /tmp/mctl-core
+          git config user.name "argo-workflows[bot]"
+          git config user.email "argo-workflows[bot]@users.noreply.github.com"
+
+          if [ "$TYPE" = "base-service" ]; then
+            DIR="platform-gitops/services/preview/${TEAM}/${SERVICE}"
+          else
+            DIR="platform-gitops/workers/preview/${TEAM}/${SERVICE}"
+          fi
+
+          if [ ! -d "$DIR" ]; then
+            echo "⚠️  Service directory not found: $DIR — already deleted?"
+            exit 0
+          fi
+
+          git rm -rf "$DIR"
+
+          # Clean up empty team directory
+          TEAM_DIR=$(dirname "$DIR")
+          if [ -d "$TEAM_DIR" ] && [ -z "$(ls -A "$TEAM_DIR")" ]; then
+            rmdir "$TEAM_DIR"
+            echo "🗑️  Removed empty team directory: $TEAM_DIR"
+          fi
+
+          git commit -m "delete: ${TEAM}/${SERVICE}"
+
+          for i in $(seq 1 5); do
+            if git push "https://x-access-token:${GH_TOKEN}@github.com/mctlhq/mctl-core.git" main \
+              2>&1 | grep -v 'x-access-token'; then
+              echo "✅ Deleted and pushed"
+              break
+            fi
+            git pull --rebase "https://x-access-token:${GH_TOKEN}@github.com/mctlhq/mctl-core.git" main \
+              2>&1 | grep -v 'x-access-token'
+          done
+        volumeMounts:
+          - name: github-app-credentials
+            mountPath: /var/run/secrets/github-app
+      volumes:
+        - name: github-app-credentials
+          secret:
+            secretName: github-app-credentials

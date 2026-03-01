@@ -1,0 +1,270 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: provision-database
+  namespace: argo-workflows
+  annotations:
+    workflows.argoproj.io/description: |
+      Provisions a PostgreSQL database for a service:
+        1. Generate password, store credentials in Vault
+        2. Patch CNPG cluster.yaml + databases.yaml + secrets.yaml
+        3. Commit to mctl-core → ArgoCD syncs
+
+      Replaces: .github/workflows/provision-db.yml
+      Note: This workflow runs in-cluster with direct Vault access (no self-hosted runner needed).
+spec:
+  entrypoint: provision-pipeline
+  serviceAccountName: argo-workflow-sa
+
+  arguments:
+    parameters:
+      - name: team_name
+      - name: app_name
+
+  templates:
+    - name: provision-pipeline
+      dag:
+        tasks:
+          - name: provision
+            template: do-provision
+
+    - name: do-provision
+      inputs:
+        parameters:
+          - name: team_name
+            value: "{{workflow.parameters.team_name}}"
+          - name: app_name
+            value: "{{workflow.parameters.app_name}}"
+      script:
+        image: hashicorp/vault:1.15
+        command: [sh]
+        source: |
+          set -e
+          apk add --no-cache curl openssl git python3 wget 2>/dev/null || \
+            apt-get install -y curl openssl git python3 wget 2>/dev/null || true
+
+          TEAM="{{inputs.parameters.team_name}}"
+          APP="{{inputs.parameters.app_name}}"
+          DB_NAME="${TEAM}-${APP}"
+          VAULT_PATH="platform/teams/${TEAM}/${APP}/database"
+
+          # ── Validate inputs ──────────────────────────────────────────────
+          echo "$TEAM" | grep -qE '^[a-z0-9][a-z0-9-]{0,30}$' || {
+            echo "❌ Invalid team name: $TEAM"
+            exit 1
+          }
+          echo "$APP" | grep -qE '^[a-z0-9][a-z0-9-]{0,30}$' || {
+            echo "❌ Invalid app name: $APP"
+            exit 1
+          }
+
+          # ── Authenticate with Vault (K8s auth) ───────────────────────────
+          echo "🔐 Authenticating with Vault..."
+          SA_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+          VAULT_TOKEN=$(vault write -field=token auth/kubernetes/login \
+            role=argo-workflow jwt="$SA_TOKEN")
+          export VAULT_TOKEN
+
+          # ── Get GitHub App token ─────────────────────────────────────────
+          APP_ID=$(cat /var/run/secrets/github-app/app-id)
+          INSTALL_ID=$(cat /var/run/secrets/github-app/installation-id)
+          APP_KEY=/var/run/secrets/github-app/private-key
+
+          NOW=$(date +%s); EXP=$((NOW + 540))
+          HEADER=$(printf '{"alg":"RS256","typ":"JWT"}' | base64 | tr -d '=' | tr '/+' '_-' | tr -d '\n')
+          PAYLOAD=$(printf '{"iat":%s,"exp":%s,"iss":"%s"}' "$NOW" "$EXP" "$APP_ID" | base64 | tr -d '=' | tr '/+' '_-' | tr -d '\n')
+          SIG=$(printf '%s.%s' "$HEADER" "$PAYLOAD" | openssl dgst -sha256 -sign "$APP_KEY" | base64 | tr -d '=' | tr '/+' '_-' | tr -d '\n')
+          JWT="${HEADER}.${PAYLOAD}.${SIG}"
+          GH_TOKEN=$(wget -qO- \
+            --header="Authorization: Bearer ${JWT}" \
+            --header="Accept: application/vnd.github+json" \
+            --post-data='{"repositories":["mctl-core"]}' \
+            "https://api.github.com/app/installations/${INSTALL_ID}/access_tokens" | \
+            grep '"token"' | head -1 | cut -d'"' -f4)
+
+          # ── Clone mctl-core ───────────────────────────────────────────────
+          git clone --depth=1 \
+            "https://x-access-token:${GH_TOKEN}@github.com/mctlhq/mctl-core.git" \
+            /tmp/mctl-core 2>&1 | grep -v 'x-access-token'
+          cd /tmp/mctl-core
+          git config user.name "argo-workflows[bot]"
+          git config user.email "argo-workflows[bot]@users.noreply.github.com"
+
+          # ── Check if DB already exists ────────────────────────────────────
+          CLUSTER_FILE="platform-gitops/cnpg-clusters/shared/cluster.yaml"
+          if grep -q "name: ${DB_NAME}-db" platform-gitops/cnpg-clusters/shared/databases.yaml 2>/dev/null; then
+            echo "ℹ️  Database '${DB_NAME}' already exists — skipping"
+            exit 0
+          fi
+
+          # ── Generate password + store in Vault ───────────────────────────
+          PASSWORD=$(openssl rand -base64 32 | tr -d '/+=\n' | head -c 32)
+
+          HTTP_CODE=$(curl -sS -o /tmp/vault-resp.json -w "%{http_code}" \
+            -X POST \
+            -H "X-Vault-Token: ${VAULT_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "{\"data\": {
+              \"host\": \"shared-pg-rw.platform-db.svc.cluster.local\",
+              \"port\": \"5432\",
+              \"database\": \"${DB_NAME}\",
+              \"username\": \"${DB_NAME}\",
+              \"password\": \"${PASSWORD}\"
+            }}" \
+            "${VAULT_ADDR}/v1/secret/data/${VAULT_PATH}")
+
+          [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "204" ] || {
+            echo "❌ Vault write failed (HTTP $HTTP_CODE)"
+            cat /tmp/vault-resp.json
+            exit 1
+          }
+          echo "✅ Credentials stored in Vault at ${VAULT_PATH}"
+
+          # ── Patch cluster.yaml: add pg_hba entry ──────────────────────────
+          awk -v db="${DB_NAME}" '
+            /- host all all 0\.0\.0\.0\/0 reject/ {
+              print "      - host " db " " db " all scram-sha-256"
+            }
+            { print }
+          ' "$CLUSTER_FILE" > "${CLUSTER_FILE}.tmp" && mv "${CLUSTER_FILE}.tmp" "$CLUSTER_FILE"
+
+          # Add managed role entry
+          awk -v db="${DB_NAME}" '
+            /# Team app roles/ {
+              print "      - name: " db
+              print "        login: true"
+              print "        connectionLimit: 10"
+              print "        ensure: present"
+              print "        passwordSecret:"
+              print "          name: " db "-db-creds"
+            }
+            { print }
+          ' "$CLUSTER_FILE" > "${CLUSTER_FILE}.tmp" && mv "${CLUSTER_FILE}.tmp" "$CLUSTER_FILE"
+          echo "✅ cluster.yaml updated"
+
+          # ── Append to databases.yaml ──────────────────────────────────────
+          cat >> platform-gitops/cnpg-clusters/shared/databases.yaml << DBEOF
+          ---
+          apiVersion: postgresql.cnpg.io/v1
+          kind: Database
+          metadata:
+            name: ${DB_NAME}-db
+          spec:
+            name: "${DB_NAME}"
+            owner: "${DB_NAME}"
+            cluster:
+              name: shared-pg
+            databaseReclaimPolicy: retain
+          DBEOF
+          echo "✅ databases.yaml updated"
+
+          # ── Append ExternalSecret to secrets.yaml ─────────────────────────
+          cat >> platform-gitops/cnpg-clusters/shared/secrets.yaml << ESEOF
+          ---
+          apiVersion: external-secrets.io/v1beta1
+          kind: ExternalSecret
+          metadata:
+            name: ${DB_NAME}-db-creds
+          spec:
+            refreshInterval: 1h
+            secretStoreRef:
+              kind: ClusterSecretStore
+              name: vault-backend
+            target:
+              name: ${DB_NAME}-db-creds
+              creationPolicy: Owner
+              template:
+                type: Opaque
+                data:
+                  DATABASE_URL: "postgresql://{{ .username }}:{{ .password }}@{{ .host }}:{{ .port }}/{{ .database }}"
+                  DB_HOST: "{{ .host }}"
+                  DB_PORT: "{{ .port }}"
+                  DB_NAME: "{{ .database }}"
+                  DB_USER: "{{ .username }}"
+                  DB_PASSWORD: "{{ .password }}"
+                  username: "{{ .username }}"
+                  password: "{{ .password }}"
+            data:
+              - secretKey: host
+                remoteRef:
+                  key: ${VAULT_PATH}
+                  property: host
+              - secretKey: port
+                remoteRef:
+                  key: ${VAULT_PATH}
+                  property: port
+              - secretKey: database
+                remoteRef:
+                  key: ${VAULT_PATH}
+                  property: database
+              - secretKey: username
+                remoteRef:
+                  key: ${VAULT_PATH}
+                  property: username
+              - secretKey: password
+                remoteRef:
+                  key: ${VAULT_PATH}
+                  property: password
+          ESEOF
+          echo "✅ secrets.yaml updated"
+
+          # ── Annotate catalog-info.yaml if exists ──────────────────────────
+          CATALOG_FILE=""
+          for dir in \
+            "platform-gitops/services/preview/${TEAM}/${APP}" \
+            "platform-gitops/workers/preview/${TEAM}/${APP}"; do
+            [ -f "${dir}/catalog-info.yaml" ] && CATALOG_FILE="${dir}/catalog-info.yaml" && break
+          done
+
+          if [ -n "$CATALOG_FILE" ] && ! grep -q "platform.mctl.me/database" "$CATALOG_FILE"; then
+            python3 -c "
+          import re, sys
+          catalog = '${CATALOG_FILE}'
+          team = '${TEAM}'
+          app = '${APP}'
+          with open(catalog) as f:
+              content = f.read()
+          new_anns = '    platform.mctl.me/database: \"true\"\n    platform.mctl.me/database-team: \"' + team + '\"\n    platform.mctl.me/database-app: \"' + app + '\"'
+          if 'annotations:' in content:
+              content = content.replace('  annotations:', '  annotations:\n' + new_anns, 1)
+          else:
+              content = re.sub(r'(  name: .+\n)', r'\1  annotations:\n' + new_anns + '\n', content, count=1)
+          with open(catalog, 'w') as f:
+              f.write(content)
+          "
+            git add "$CATALOG_FILE"
+            echo "✅ catalog-info.yaml annotated"
+          fi
+
+          # ── Commit and push ────────────────────────────────────────────────
+          git add \
+            platform-gitops/cnpg-clusters/shared/cluster.yaml \
+            platform-gitops/cnpg-clusters/shared/databases.yaml \
+            platform-gitops/cnpg-clusters/shared/secrets.yaml
+
+          git commit -m "feat: provision database ${DB_NAME}" \
+            -m "Provisioned PostgreSQL database for ${TEAM}/${APP}:
+          - Role: ${DB_NAME}
+          - Database: ${DB_NAME}
+          - Vault path: ${VAULT_PATH}
+          - K8s secret: ${DB_NAME}-db-creds (ExternalSecret -> CNPG)"
+
+          for i in $(seq 1 5); do
+            if git push "https://x-access-token:${GH_TOKEN}@github.com/mctlhq/mctl-core.git" main \
+              2>&1 | grep -v 'x-access-token'; then
+              echo "✅ Pushed — ArgoCD will sync automatically"
+              break
+            fi
+            git pull --rebase "https://x-access-token:${GH_TOKEN}@github.com/mctlhq/mctl-core.git" main \
+              2>&1 | grep -v 'x-access-token'
+          done
+        env:
+          - name: VAULT_ADDR
+            value: "http://vault.vault.svc.cluster.local:8200"
+        volumeMounts:
+          - name: github-app-credentials
+            mountPath: /var/run/secrets/github-app
+      volumes:
+        - name: github-app-credentials
+          secret:
+            secretName: github-app-credentials

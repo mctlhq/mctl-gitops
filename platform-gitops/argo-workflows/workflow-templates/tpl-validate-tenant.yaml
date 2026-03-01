@@ -1,0 +1,143 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: tpl-validate-tenant
+  namespace: argo-workflows
+  annotations:
+    workflows.argoproj.io/description: |
+      Reusable template: validates tenant and service naming conventions,
+      checks team exists in Git tenants/ directory.
+spec:
+  templates:
+    - name: validate
+      inputs:
+        parameters:
+          - name: team_name
+          - name: component_name
+            default: ""
+          - name: action
+            default: "onboard"
+          - name: component_type
+            default: "base-service"
+          - name: host
+            default: ""
+          - name: dockerfile_repo
+            default: ""
+          - name: git_tag
+            default: ""
+            # e.g. "v1.2.3" — used to derive image_tag
+          - name: image_tag
+            default: ""
+            # explicit override; empty = derived from git_tag
+      outputs:
+        parameters:
+          - name: service_dir
+            valueFrom:
+              path: /tmp/service_dir
+          - name: component_type
+            valueFrom:
+              path: /tmp/component_type
+          - name: image_tag
+            valueFrom:
+              path: /tmp/image_tag
+      script:
+        image: alpine/git:2.43.0
+        command: [sh]
+        source: |
+          set -e
+
+          TEAM="{{inputs.parameters.team_name}}"
+          SERVICE="{{inputs.parameters.component_name}}"
+          ACTION="{{inputs.parameters.action}}"
+          TYPE="{{inputs.parameters.component_type}}"
+          HOST="{{inputs.parameters.host}}"
+          REPO="{{inputs.parameters.dockerfile_repo}}"
+
+          # ── 1. Naming convention checks ─────────────────────────────────────
+          if ! echo "$TEAM" | grep -qE '^[a-z0-9][a-z0-9-]{0,62}$'; then
+            echo "❌ team_name must be lowercase alphanumeric with hyphens, ≤63 chars. Got: $TEAM"
+            exit 1
+          fi
+
+          if [ -n "$SERVICE" ] && ! echo "$SERVICE" | grep -qE '^[a-z0-9][a-z0-9-]{0,62}$'; then
+            echo "❌ component_name must be lowercase alphanumeric with hyphens, ≤63 chars. Got: $SERVICE"
+            exit 1
+          fi
+
+          # ── 2. dockerfile_repo required for onboard/deploy ──────────────────
+          if [ "$ACTION" != "update-config" ] && [ -z "$REPO" ]; then
+            echo "❌ dockerfile_repo is required for onboard/deploy actions"
+            exit 1
+          fi
+
+          # ── 3. Clone mctl-core to check tenant/service existence ─────────────
+          echo "📥 Cloning mctl-core for validation..."
+          git clone --depth=1 \
+            "https://x-access-token:$(cat /var/run/secrets/git-token)@github.com/mctlhq/mctl-core.git" \
+            /tmp/mctl-core 2>/dev/null || \
+          git clone --depth=1 \
+            "https://github.com/mctlhq/mctl-core.git" \
+            /tmp/mctl-core
+          cd /tmp/mctl-core
+
+          # ── 4. Determine component type for deploy/update-config ─────────────
+          if [ "$ACTION" = "deploy" ] || [ "$ACTION" = "update-config" ]; then
+            if [ -d "platform-gitops/services/preview/${TEAM}/${SERVICE}" ]; then
+              TYPE="base-service"
+            elif [ -d "platform-gitops/workers/preview/${TEAM}/${SERVICE}" ]; then
+              TYPE="worker-service"
+            else
+              echo "❌ Service ${TEAM}/${SERVICE} not found. Use 'onboard' action first."
+              exit 1
+            fi
+          fi
+
+          # ── 5. Determine service directory ───────────────────────────────────
+          if [ "$TYPE" = "base-service" ]; then
+            DIR="platform-gitops/services/preview/${TEAM}/${SERVICE}"
+          else
+            DIR="platform-gitops/workers/preview/${TEAM}/${SERVICE}"
+          fi
+
+          # ── 6. Onboard: service must NOT exist; deploy: must exist ───────────
+          if [ "$ACTION" = "onboard" ] && [ -d "$DIR" ]; then
+            echo "❌ Service already exists at $DIR. Use 'deploy' to update."
+            exit 1
+          fi
+          if [ "$ACTION" = "deploy" ] && [ ! -f "$DIR/values.yaml" ]; then
+            echo "❌ values.yaml not found at $DIR. Onboard first."
+            exit 1
+          fi
+
+          # ── 7. base-service requires host ────────────────────────────────────
+          if [ "$ACTION" = "onboard" ] && [ "$TYPE" = "base-service" ] && [ -z "$HOST" ]; then
+            echo "❌ host is required for base-service onboard"
+            exit 1
+          fi
+
+          echo "✅ Validation passed: ${TEAM}/${SERVICE} (${TYPE}) action=${ACTION}"
+          echo "$DIR" > /tmp/service_dir
+          echo "$TYPE" > /tmp/component_type
+
+          # ── 8. Resolve image tag ─────────────────────────────────────────────
+          GIT_TAG="{{inputs.parameters.git_tag}}"
+          IMG_OVERRIDE="{{inputs.parameters.image_tag}}"
+          if [ -n "$IMG_OVERRIDE" ]; then
+            echo "$IMG_OVERRIDE" > /tmp/image_tag
+          elif [ -n "$GIT_TAG" ]; then
+            # Normalize: v1.2.3 → 1.2.3, strip leading 'v'
+            printf '%s' "${GIT_TAG#v}" > /tmp/image_tag
+          else
+            echo "latest" > /tmp/image_tag
+          fi
+          echo "🏷 Image tag: $(cat /tmp/image_tag)"
+        volumeMounts:
+          - name: git-token
+            mountPath: /var/run/secrets
+      volumes:
+        - name: git-token
+          secret:
+            secretName: github-app-credentials
+            items:
+              - key: mctl-core-token
+                path: git-token

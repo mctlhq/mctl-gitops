@@ -1,0 +1,167 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: tpl-kaniko-build
+  namespace: argo-workflows
+  annotations:
+    workflows.argoproj.io/description: |
+      Reusable template: builds Docker image from a GitHub repository using Kaniko
+      (no Docker daemon required, runs in-cluster).
+      Supports: Vault PAT, GitHub App token, or public repo access.
+spec:
+  templates:
+    - name: build
+      inputs:
+        parameters:
+          - name: dockerfile_repo    # e.g. "myorg/my-service"
+          - name: git_tag            # e.g. "v1.2.3" or "main"
+          - name: image_name         # e.g. "ghcr.io/mctlhq/my-service"
+          - name: image_tag          # e.g. "1.2.3"
+          - name: dockerfile_path
+            default: "Dockerfile"
+          - name: team_name          # for Vault PAT lookup
+          - name: component_name     # for Vault PAT lookup
+      outputs:
+        parameters:
+          - name: image
+            valueFrom:
+              path: /tmp/image
+      initContainers:
+        # Step 1: resolve clone token (Vault PAT → GitHub App → public)
+        - name: resolve-token
+          image: hashicorp/vault:1.15
+          command: [sh, -c]
+          args:
+            - |
+              set -e
+              TEAM="{{inputs.parameters.team_name}}"
+              SERVICE="{{inputs.parameters.component_name}}"
+              REPO="{{inputs.parameters.dockerfile_repo}}"
+
+              # Try Vault PAT first
+              echo "🔑 Looking for repo PAT in Vault..."
+              SA_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+              VAULT_TOKEN=$(vault write -field=token auth/kubernetes/login \
+                role=argo-workflow jwt="$SA_TOKEN" 2>/dev/null || true)
+
+              if [ -n "$VAULT_TOKEN" ]; then
+                export VAULT_TOKEN
+                PAT=$(vault kv get -field=pat \
+                  secret/teams/${TEAM}/${SERVICE}/repo-pat 2>/dev/null || true)
+                if [ -n "$PAT" ]; then
+                  echo "✅ Using Vault PAT"
+                  echo "https://x-access-token:${PAT}@github.com/${REPO}" > /workspace/clone-url
+                  exit 0
+                fi
+              fi
+
+              # Try GitHub App token (from mounted secret)
+              APP_KEY_FILE=/var/run/secrets/github-app/private-key
+              APP_ID_FILE=/var/run/secrets/github-app/app-id
+              INSTALL_ID_FILE=/var/run/secrets/github-app/installation-id
+
+              if [ -f "$APP_KEY_FILE" ] && [ -f "$APP_ID_FILE" ]; then
+                echo "🤖 Generating GitHub App token..."
+                APP_ID=$(cat $APP_ID_FILE)
+                INSTALL_ID=$(cat $INSTALL_ID_FILE)
+                NOW=$(date +%s)
+                EXP=$((NOW + 540))
+
+                # Create JWT (header.payload.signature)
+                HEADER=$(echo -n '{"alg":"RS256","typ":"JWT"}' | base64 | tr -d '=' | tr '/+' '_-')
+                PAYLOAD=$(echo -n "{\"iat\":${NOW},\"exp\":${EXP},\"iss\":\"${APP_ID}\"}" | base64 | tr -d '=' | tr '/+' '_-')
+                SIG=$(echo -n "${HEADER}.${PAYLOAD}" | openssl dgst -sha256 -sign $APP_KEY_FILE | base64 | tr -d '=' | tr '/+' '_-')
+                JWT="${HEADER}.${PAYLOAD}.${SIG}"
+
+                TOKEN=$(curl -sS \
+                  -H "Authorization: Bearer ${JWT}" \
+                  -H "Accept: application/vnd.github+json" \
+                  "https://api.github.com/app/installations/${INSTALL_ID}/access_tokens" \
+                  -d "{\"repositories\":[\"${REPO##*/}\"]}" | \
+                  grep '"token"' | head -1 | cut -d'"' -f4)
+
+                if [ -n "$TOKEN" ]; then
+                  echo "✅ Using GitHub App token"
+                  echo "https://x-access-token:${TOKEN}@github.com/${REPO}" > /workspace/clone-url
+                  exit 0
+                fi
+              fi
+
+              # Public repo fallback
+              echo "🌐 Using public access"
+              echo "https://github.com/${REPO}" > /workspace/clone-url
+          env:
+            - name: VAULT_ADDR
+              value: "http://vault.vault.svc.cluster.local:8200"
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: github-app-credentials
+              mountPath: /var/run/secrets/github-app
+
+        # Step 2: clone source repo
+        - name: git-clone
+          image: alpine/git:2.43.0
+          command: [sh, -c]
+          args:
+            - |
+              set -e
+              CLONE_URL=$(cat /workspace/clone-url)
+              echo "📥 Cloning {{inputs.parameters.dockerfile_repo}}@{{inputs.parameters.git_tag}}..."
+              git clone --depth=1 \
+                --branch "{{inputs.parameters.git_tag}}" \
+                "$CLONE_URL" /workspace/src 2>&1 | grep -v 'x-access-token' || \
+              git clone --depth=1 "$CLONE_URL" /workspace/src 2>&1 | grep -v 'x-access-token'
+              echo "✅ Cloned successfully"
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+
+      container:
+        image: gcr.io/kaniko-project/executor:v1.23.0
+        args:
+          - --dockerfile=/workspace/src/{{inputs.parameters.dockerfile_path}}
+          - --context=/workspace/src
+          - --destination={{inputs.parameters.image_name}}:{{inputs.parameters.image_tag}}
+          - --destination={{inputs.parameters.image_name}}:latest
+          - --cache=true
+          - --cache-repo={{inputs.parameters.image_name}}/cache
+          - --snapshot-mode=redo
+          - --build-arg=APP_VERSION={{inputs.parameters.git_tag}}
+        volumeMounts:
+          - name: workspace
+            mountPath: /workspace
+          - name: ghcr-push-credentials
+            mountPath: /kaniko/.docker
+
+      # Write image ref to output
+      sidecars:
+        - name: output-writer
+          image: alpine:3.19
+          command: [sh, -c]
+          args:
+            - |
+              sleep 5
+              echo "{{inputs.parameters.image_name}}:{{inputs.parameters.image_tag}}" > /tmp/image
+              sleep infinity
+          mirrorVolumeMounts: true
+
+      volumes:
+        - name: workspace
+          emptyDir: {}
+        - name: ghcr-push-credentials
+          secret:
+            secretName: ghcr-push-credentials
+            items:
+              - key: config.json
+                path: config.json
+        - name: github-app-credentials
+          secret:
+            secretName: github-app-credentials
+      resources:
+        requests:
+          cpu: "1"
+          memory: 2Gi
+        limits:
+          cpu: "2"
+          memory: 4Gi

@@ -1,0 +1,16 @@
+apiVersion: backstage.io/v1alpha1
+kind: Resource
+metadata:
+  name: tenant-africaone-dev
+  namespace: default
+  description: "Tenant AfricaOne Dev — namespace, quotas, and network policies"
+  annotations:
+    mctl.me/tenant-name: "africaone-dev"
+    mctl.me/github-team: "africaone-dev"
+    backstage.io/managed-by-location: "url:https://github.com/mctlhq/mctl-core/blob/main/platform-gitops/tenants/africaone-dev/catalog-info.yaml"
+    backstage.io/managed-by-origin-location: "url:https://github.com/mctlhq/mctl-core/blob/main/platform-gitops/tenants/africaone-dev/catalog-info.yaml"
+spec:
+  type: tenant
+  owner: group:default/africaone-dev
+  system: mctl-platform
+  dependsOn: []

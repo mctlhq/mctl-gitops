@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: {{ include "tenant.name" . }}-quota
+  namespace: {{ include "tenant.name" . }}
+  labels:
+    {{- include "tenant.labels" . | nindent 4 }}
+spec:
+  hard:
+    {{- range $key, $val := .Values.tenant.quotas }}
+    {{ $key }}: {{ $val | quote }}
+    {{- end }}

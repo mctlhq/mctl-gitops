@@ -1,0 +1,82 @@
+# Vault Kubernetes auth configuration for Argo Workflows
+#
+# This file documents the Vault setup needed. Apply these commands manually
+# or via Terraform after deploying Argo Workflows:
+#
+# 1. Enable Kubernetes auth (if not already enabled):
+#    vault auth enable kubernetes
+#
+# 2. Configure Kubernetes auth:
+#    vault write auth/kubernetes/config \
+#      kubernetes_host="https://kubernetes.default.svc:443"
+#
+# 3. Create the platform-ops policy for Argo Workflows (Phase 2: allows creating per-tenant policies):
+#    vault policy write argo-workflow-global - <<EOF
+#    # Global: read/write team secrets
+#    path "secret/data/teams/*" {
+#      capabilities = ["create", "read", "update", "delete", "list"]
+#    }
+#    path "secret/metadata/teams/*" {
+#      capabilities = ["read", "list", "delete"]
+#    }
+#    # Database provisioning (per-tenant paths)
+#    path "secret/data/platform/teams/*" {
+#      capabilities = ["create", "read", "update"]
+#    }
+#    # Phase 2: Allow workflow to create per-tenant Vault policies
+#    # Used by wft-create-tenant to create "tenant-{name}" policies
+#    path "sys/policies/acl/tenant-*" {
+#      capabilities = ["create", "read", "update"]
+#    }
+#    # Allow reading own policy
+#    path "sys/policies/acl/argo-workflow-global" {
+#      capabilities = ["read"]
+#    }
+#    EOF
+#
+# 4. Create Kubernetes auth role:
+#    vault write auth/kubernetes/role/argo-workflow \
+#      bound_service_account_names=argo-workflow-sa \
+#      bound_service_account_namespaces=argo-workflows \
+#      policies=argo-workflow-global \
+#      ttl=1h
+#
+# Per-tenant policies (created by wft-create-tenant workflow, Phase 2):
+#
+#    vault policy write tenant-{TEAM} - <<EOF
+#    # Scoped access for tenant {TEAM}
+#    path "secret/data/teams/{TEAM}/*" {
+#      capabilities = ["create", "read", "update", "delete", "list"]
+#    }
+#    path "secret/metadata/teams/{TEAM}/*" {
+#      capabilities = ["read", "list", "delete"]
+#    }
+#    path "secret/data/platform/teams/{TEAM}/*" {
+#      capabilities = ["create", "read", "update", "delete"]
+#    }
+#    EOF
+
+---
+# ExternalSecret for Argo Workflows database credentials
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: argo-workflows-db-creds
+  namespace: argo-workflows
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: vault-backend
+  target:
+    name: argo-workflows-db-creds
+    creationPolicy: Owner
+  data:
+    - secretKey: username
+      remoteRef:
+        key: platform/argo-workflows/database
+        property: username
+    - secretKey: password
+      remoteRef:
+        key: platform/argo-workflows/database
+        property: password

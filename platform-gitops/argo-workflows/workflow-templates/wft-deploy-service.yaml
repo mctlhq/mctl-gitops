@@ -1,0 +1,158 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: deploy-service
+  namespace: argo-workflows
+  annotations:
+    workflows.argoproj.io/description: |
+      Main deployment workflow: validate → build image (Kaniko) → write Vault secrets
+      → generate Helm manifests → commit to mctl-core → ArgoCD syncs.
+
+      Actions:
+        onboard      — first deploy: creates values.yaml, catalog-info.yaml, vault-cleanup.yaml
+        deploy       — update image tag in existing service
+        update-config — update env vars / secrets without rebuilding
+
+      Replaces: .github/workflows/release-service.yml
+spec:
+  entrypoint: deploy-pipeline
+  serviceAccountName: argo-workflow-sa
+
+  arguments:
+    parameters:
+      - name: action
+        # onboard | deploy | update-config
+      - name: team_name
+      - name: component_name
+      - name: component_type
+        default: "base-service"
+        # base-service | worker-service (onboard only; auto-detected for deploy/update-config)
+      - name: dockerfile_repo
+        default: ""
+        # e.g. "myorg/my-service"
+      - name: git_tag
+        default: ""
+        # e.g. "v1.2.3"
+      - name: port
+        default: "8080"
+      - name: host
+        default: ""
+        # e.g. "myteam-myapp.mctl.me"
+      - name: env_vars
+        default: ""
+        # KEY=value newline-separated plaintext
+      - name: secret_env_vars
+        default: ""
+        # KEY=value newline-separated (stored in Vault)
+      - name: provision_database
+        default: "false"
+      - name: skip_health_check
+        default: "false"
+      - name: dockerfile_path
+        default: "Dockerfile"
+      - name: image_tag
+        default: ""
+        # explicit image tag override (empty = derived from git_tag)
+
+  templates:
+    # ────────────────────────────────────────────────────────────────────────
+    - name: deploy-pipeline
+      dag:
+        tasks:
+          # Step 1: validate naming, team, service existence + resolve image_tag
+          - name: validate
+            templateRef:
+              name: tpl-validate-tenant
+              template: validate
+            arguments:
+              parameters:
+                - name: team_name
+                  value: "{{workflow.parameters.team_name}}"
+                - name: component_name
+                  value: "{{workflow.parameters.component_name}}"
+                - name: action
+                  value: "{{workflow.parameters.action}}"
+                - name: component_type
+                  value: "{{workflow.parameters.component_type}}"
+                - name: host
+                  value: "{{workflow.parameters.host}}"
+                - name: dockerfile_repo
+                  value: "{{workflow.parameters.dockerfile_repo}}"
+                - name: git_tag
+                  value: "{{workflow.parameters.git_tag}}"
+                - name: image_tag
+                  value: "{{workflow.parameters.image_tag}}"
+
+          # Step 2a: build image (skip for update-config)
+          - name: build-image
+            dependencies: [validate]
+            when: "\"{{workflow.parameters.action}}\" != \"update-config\""
+            templateRef:
+              name: tpl-kaniko-build
+              template: build
+            arguments:
+              parameters:
+                - name: dockerfile_repo
+                  value: "{{workflow.parameters.dockerfile_repo}}"
+                - name: git_tag
+                  value: "{{workflow.parameters.git_tag}}"
+                - name: image_name
+                  value: "ghcr.io/mctlhq/{{workflow.parameters.component_name}}"
+                - name: image_tag
+                  value: "{{tasks.validate.outputs.parameters.image_tag}}"
+                - name: dockerfile_path
+                  value: "{{workflow.parameters.dockerfile_path}}"
+                - name: team_name
+                  value: "{{workflow.parameters.team_name}}"
+                - name: component_name
+                  value: "{{workflow.parameters.component_name}}"
+
+          # Step 2b: write Vault secrets (parallel with build, skip if no secrets)
+          - name: write-secrets
+            dependencies: [validate]
+            when: "\"{{workflow.parameters.secret_env_vars}}\" != \"\""
+            templateRef:
+              name: tpl-vault-write
+              template: write-service-secrets
+            arguments:
+              parameters:
+                - name: team_name
+                  value: "{{workflow.parameters.team_name}}"
+                - name: component_name
+                  value: "{{workflow.parameters.component_name}}"
+                - name: secret_env_vars
+                  value: "{{workflow.parameters.secret_env_vars}}"
+
+          # Step 3: generate manifests + git commit (after build AND secrets)
+          - name: commit
+            dependencies: [build-image, write-secrets]
+            templateRef:
+              name: tpl-git-commit
+              template: commit-service
+            arguments:
+              parameters:
+                - name: action
+                  value: "{{workflow.parameters.action}}"
+                - name: team_name
+                  value: "{{workflow.parameters.team_name}}"
+                - name: component_name
+                  value: "{{workflow.parameters.component_name}}"
+                - name: component_type
+                  value: "{{tasks.validate.outputs.parameters.component_type}}"
+                - name: image_tag
+                  value: "{{tasks.validate.outputs.parameters.image_tag}}"
+                - name: port
+                  value: "{{workflow.parameters.port}}"
+                - name: host
+                  value: "{{workflow.parameters.host}}"
+                - name: env_vars
+                  value: "{{workflow.parameters.env_vars}}"
+                - name: secret_env_vars
+                  value: "{{workflow.parameters.secret_env_vars}}"
+                - name: provision_database
+                  value: "{{workflow.parameters.provision_database}}"
+                - name: skip_health_check
+                  value: "{{workflow.parameters.skip_health_check}}"
+                - name: dockerfile_repo
+                  value: "{{workflow.parameters.dockerfile_repo}}"
+

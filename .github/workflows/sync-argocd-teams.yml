@@ -6,6 +6,12 @@ on:
     - cron: '0 */6 * * *'
   workflow_dispatch:
     # Allow manual trigger
+  push:
+    # Re-sync when tenant definitions change
+    branches:
+      - main
+    paths:
+      - 'platform-gitops/tenants/*/values.yaml'
 
 permissions:
   contents: write
@@ -18,16 +24,35 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Fetch GitHub teams
-        id: fetch-teams
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+      - name: Install yq
         run: |
-          echo "Fetching teams from mctlhq organization..."
-          gh api /orgs/mctlhq/teams --paginate --jq '.[].slug' > /tmp/teams.txt
-          echo "Found teams:"
-          cat /tmp/teams.txt
-          echo "team_count=$(wc -l < /tmp/teams.txt)" >> $GITHUB_OUTPUT
+          wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          chmod +x /usr/local/bin/yq
+          yq --version
+
+      - name: Read tenant definitions
+        id: read-tenants
+        run: |
+          echo "Reading tenant definitions from platform-gitops/tenants/..."
+
+          # Extract tenant name and github team slug from each tenant values.yaml
+          # Output: "tenant_name:github_team" one per line
+          > /tmp/tenants.txt
+
+          for f in platform-gitops/tenants/*/values.yaml; do
+            if [ -f "$f" ]; then
+              tenant_name=$(yq '.tenant.name' "$f" 2>/dev/null)
+              github_team=$(yq '.tenant.githubTeam // .tenant.name' "$f" 2>/dev/null)
+
+              if [ -n "$tenant_name" ] && [ "$tenant_name" != "null" ]; then
+                echo "${tenant_name}:${github_team}" >> /tmp/tenants.txt
+              fi
+            fi
+          done
+
+          echo "Found tenants:"
+          cat /tmp/tenants.txt
+          echo "tenant_count=$(wc -l < /tmp/tenants.txt)" >> $GITHUB_OUTPUT
 
       - name: Generate RBAC policies
         id: generate-rbac
@@ -42,7 +67,8 @@ jobs:
           # Build new policy.csv content
           POLICY_CSV=""
           POLICY_CSV+="        # ============================================================================\n"
-          POLICY_CSV+="        # ArgoCD RBAC Policies - Auto-synced with GitHub Teams\n"
+          POLICY_CSV+="        # ArgoCD RBAC Policies - Auto-generated from tenant definitions\n"
+          POLICY_CSV+="        # Source: platform-gitops/tenants/*/values.yaml\n"
           POLICY_CSV+="        # ============================================================================\n"
           POLICY_CSV+="\n"
           POLICY_CSV+="        # Admin team: full access to ArgoCD\n"
@@ -55,47 +81,46 @@ jobs:
           POLICY_CSV+="        g, mctlhq:admin, role:admin\n"
           POLICY_CSV+="\n"
           POLICY_CSV+="        # ============================================================================\n"
-          POLICY_CSV+="        # Team-Based Access (Auto-generated from GitHub Teams)\n"
+          POLICY_CSV+="        # Team-Based Access (Auto-generated from tenant definitions)\n"
           POLICY_CSV+="        # ============================================================================\n"
 
-          # Generate policies for each team (except admin)
-          while IFS= read -r team; do
-            if [ "$team" = "admin" ]; then
+          # Generate policies for each tenant (except admin)
+          while IFS=: read -r tenant_name github_team; do
+            if [ "$tenant_name" = "admin" ]; then
               continue
             fi
             POLICY_CSV+="\n"
-            POLICY_CSV+="        # Team: $team\n"
-            POLICY_CSV+="        p, role:team-$team, applications, get, preview/preview-$team-*, allow\n"
-            POLICY_CSV+="        p, role:team-$team, applications, list, preview/preview-$team-*, allow\n"
-            POLICY_CSV+="        p, role:team-$team, applications, sync, preview/preview-$team-*, allow\n"
-            POLICY_CSV+="        p, role:team-$team, applications, override, preview/preview-$team-*, allow\n"
-            POLICY_CSV+="        p, role:team-$team, logs, get, preview/preview-$team-*, allow\n"
-            POLICY_CSV+="        p, role:team-$team, exec, create, preview/preview-$team-*, allow\n"
-            POLICY_CSV+="        g, mctlhq:$team, role:team-$team\n"
-          done < /tmp/teams.txt
+            POLICY_CSV+="        # Tenant: $tenant_name (github: $github_team)\n"
+            POLICY_CSV+="        p, role:team-$tenant_name, applications, get, preview/preview-$tenant_name-*, allow\n"
+            POLICY_CSV+="        p, role:team-$tenant_name, applications, list, preview/preview-$tenant_name-*, allow\n"
+            POLICY_CSV+="        p, role:team-$tenant_name, applications, sync, preview/preview-$tenant_name-*, allow\n"
+            POLICY_CSV+="        p, role:team-$tenant_name, applications, override, preview/preview-$tenant_name-*, allow\n"
+            POLICY_CSV+="        p, role:team-$tenant_name, logs, get, preview/preview-$tenant_name-*, allow\n"
+            POLICY_CSV+="        p, role:team-$tenant_name, exec, create, preview/preview-$tenant_name-*, allow\n"
+            # Map GitHub team to ArgoCD role (using github_team slug for Dex group claim)
+            POLICY_CSV+="        g, mctlhq:$github_team, role:team-$tenant_name\n"
+          done < /tmp/tenants.txt
 
           # Replace policy.csv block in values.yaml
-          # Find line number where policy.csv starts and ends
           START=$(grep -n 'policy\.csv: |' "$VALUES" | cut -d: -f1)
-          
+
           # Save everything before policy.csv
           head -n "$START" "$VALUES" > /tmp/values_new.yaml
-          
+
           # Add new policy content
           echo -e "$POLICY_CSV" >> /tmp/values_new.yaml
-          
+
           # Find and add everything after policy.csv block
-          # (skip lines until we hit a key at same indentation level as 'policy.csv')
           tail -n +$((START + 1)) "$VALUES" | awk '
             BEGIN { in_policy=1 }
             /^    [a-z]/ { in_policy=0 }
             !in_policy { print }
           ' >> /tmp/values_new.yaml
-          
+
           # Replace original file
           mv /tmp/values_new.yaml "$VALUES"
 
-          echo "Generated RBAC config for $(wc -l < /tmp/teams.txt) teams"
+          echo "Generated RBAC config for $(wc -l < /tmp/tenants.txt) tenants"
           SCRIPT
 
           chmod +x /tmp/generate-rbac.sh
@@ -124,12 +149,12 @@ jobs:
 
           # Commit changes directly to main
           git add platform-gitops/argocd/values.yaml
-          git commit -m "chore(argocd): sync RBAC policies with GitHub teams
+          git commit -m "chore(argocd): sync RBAC policies from tenant definitions
 
-          Auto-generated update from GitHub teams sync workflow.
+          Auto-generated update from tenant definitions sync workflow.
+          Source: platform-gitops/tenants/*/values.yaml
 
-          Teams synced: ${{ steps.fetch-teams.outputs.team_count }}
-          $(cat /tmp/teams.txt | sed 's/^/- /')
+          Tenants synced: ${{ steps.read-tenants.outputs.tenant_count }}
 
           Co-Authored-By: github-actions[bot] <github-actions[bot]@users.noreply.github.com>"
 
@@ -140,10 +165,11 @@ jobs:
         run: |
           echo "## ArgoCD Teams Sync Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Teams found:** ${{ steps.fetch-teams.outputs.team_count }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Source:** \`platform-gitops/tenants/*/values.yaml\` (tenant definitions, no GitHub API)" >> $GITHUB_STEP_SUMMARY
+          echo "**Tenants found:** ${{ steps.read-tenants.outputs.tenant_count }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Teams:**" >> $GITHUB_STEP_SUMMARY
-          cat /tmp/teams.txt | sed 's/^/- /' >> $GITHUB_STEP_SUMMARY
+          echo "**Tenants:**" >> $GITHUB_STEP_SUMMARY
+          cat /tmp/tenants.txt | awk -F: '{print "- " $1 " (github: " $2 ")"}' >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
           if [ "${{ steps.check-changes.outputs.has_changes }}" = "true" ]; then

@@ -1,0 +1,60 @@
+# =============================================================================
+# tenant: default values
+# Override per-tenant in platform-gitops/tenants/{name}/values.yaml
+# =============================================================================
+
+tenant:
+  # -- Required: tenant slug (lowercase, DNS-safe)
+  name: ""
+
+  # -- Optional: human-readable display name
+  displayName: ""
+
+  # -- Optional: description
+  description: ""
+
+  # -- Optional: GitHub team slug (for ArgoCD RBAC mapping)
+  githubTeam: ""
+
+  # -- Optional: contact email
+  contactEmail: ""
+
+  # -- Resource quotas for the namespace
+  quotas:
+    # Aggregate CPU/memory requests across all pods
+    requests.cpu: "4"
+    requests.memory: "8Gi"
+    # Aggregate CPU/memory limits across all pods
+    limits.cpu: "8"
+    limits.memory: "16Gi"
+    # Maximum number of pods
+    pods: "20"
+    # Maximum number of PVCs
+    persistentvolumeclaims: "5"
+    # Maximum number of services
+    services: "10"
+
+  # -- LimitRange defaults (applied to containers without explicit limits)
+  limitRange:
+    enabled: true
+    default:
+      cpu: "500m"
+      memory: "256Mi"
+    defaultRequest:
+      cpu: "100m"
+      memory: "128Mi"
+    max:
+      cpu: "2"
+      memory: "4Gi"
+
+  # -- Network policies
+  networking:
+    # Allow pods within the same namespace to communicate
+    allowIntraNamespace: true
+    # Allow egress to cluster-internal services (Vault, ArgoCD, DNS, etc.)
+    allowClusterEgress: true
+    # Allow egress to the internet (0.0.0.0/0)
+    # Set to false for most tenants, true for admin/platform teams
+    allowInternetEgress: false
+    # Specific CIDR ranges to allow (in addition to cluster egress)
+    # allowedCIDRs: []

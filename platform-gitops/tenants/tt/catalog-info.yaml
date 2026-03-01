@@ -1,0 +1,16 @@
+apiVersion: backstage.io/v1alpha1
+kind: Resource
+metadata:
+  name: tenant-tt
+  namespace: default
+  description: "Tenant TT — namespace, quotas, and network policies"
+  annotations:
+    mctl.me/tenant-name: "tt"
+    mctl.me/github-team: "tt"
+    backstage.io/managed-by-location: "url:https://github.com/mctlhq/mctl-core/blob/main/platform-gitops/tenants/tt/catalog-info.yaml"
+    backstage.io/managed-by-origin-location: "url:https://github.com/mctlhq/mctl-core/blob/main/platform-gitops/tenants/tt/catalog-info.yaml"
+spec:
+  type: tenant
+  owner: group:default/tt
+  system: mctl-platform
+  dependsOn: []

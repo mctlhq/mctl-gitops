@@ -1,0 +1,16 @@
+apiVersion: backstage.io/v1alpha1
+kind: Resource
+metadata:
+  name: tenant-yes
+  namespace: default
+  description: "Tenant Yes — namespace, quotas, and network policies"
+  annotations:
+    mctl.me/tenant-name: "yes"
+    mctl.me/github-team: "yes"
+    backstage.io/managed-by-location: "url:https://github.com/mctlhq/mctl-core/blob/main/platform-gitops/tenants/yes/catalog-info.yaml"
+    backstage.io/managed-by-origin-location: "url:https://github.com/mctlhq/mctl-core/blob/main/platform-gitops/tenants/yes/catalog-info.yaml"
+spec:
+  type: tenant
+  owner: group:default/yes
+  system: mctl-platform
+  dependsOn: []
