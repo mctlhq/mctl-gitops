@@ -40,19 +40,7 @@ spec:
               podGC:
                 strategy: OnPodCompletion
           persistence:
-            archive: true
-            postgresql:
-              host: shared-pg-rw.platform-db.svc.cluster.local
-              port: 5432
-              database: argo-workflows
-              tableName: argo_archived_workflows
-              userNameSecret:
-                name: argo-workflows-db-creds
-                key: username
-              passwordSecret:
-                name: argo-workflows-db-creds
-                key: password
-            nodeStatusOffLoad: true
+            archive: false
 
         workflow:
           serviceAccount:
