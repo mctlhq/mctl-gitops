@@ -16,7 +16,7 @@ metadata:
   annotations:
     backstage.io/techdocs-ref: dir:.
 spec:
-  owner: group:admin
+  owner: group:admins
   type: deployment
   presentation:
     buttonLabels:
