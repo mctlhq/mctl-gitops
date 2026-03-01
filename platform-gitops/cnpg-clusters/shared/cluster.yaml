@@ -31,6 +31,8 @@ spec:
       # Backstage — access to own db + postgres db (assertDatabaseExists check)
       - host backstage backstage all scram-sha-256
       - host postgres backstage all scram-sha-256
+      # Argo Workflows — persistence and archive
+      - host argo-workflows argoworkflows all scram-sha-256
       # Team apps — each role only its own database
       # Add new entries when onboarding a new app:
       # - host <db_name> <role_name> all scram-sha-256
@@ -58,6 +60,12 @@ spec:
         ensure: present
         passwordSecret:
           name: test-spring-test-db-creds
+      - name: argoworkflows
+        login: true
+        connectionLimit: 20
+        ensure: present
+        passwordSecret:
+          name: argoworkflows-db-creds
       # Team app roles — add new entries when onboarding:
       # - name: team1_app1
       #   login: true

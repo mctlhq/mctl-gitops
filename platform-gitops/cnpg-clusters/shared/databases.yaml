@@ -26,6 +26,17 @@
 apiVersion: postgresql.cnpg.io/v1
 kind: Database
 metadata:
+  name: argo-workflows-db
+spec:
+  name: "argo-workflows"
+  owner: "argoworkflows"
+  cluster:
+    name: shared-pg
+  databaseReclaimPolicy: retain
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
   name: test-django-test-db
 spec:
   name: "test-django-test"
