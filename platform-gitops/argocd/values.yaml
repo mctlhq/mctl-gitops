@@ -108,8 +108,8 @@ argo-cd:
       scopes: "[groups]"
       policy.csv: |
         # ============================================================================
-        # ArgoCD RBAC Policies
-        # Groups from Backstage OIDC (tenant_members DB)
+        # ArgoCD RBAC Policies - Auto-generated from tenant definitions
+        # Source: platform-gitops/tenants/*/values.yaml
         # ============================================================================
 
         # Admin team: full access to ArgoCD
@@ -119,20 +119,20 @@ argo-cd:
         p, role:admin, clusters, get, */*, allow
         p, role:admin, repositories, *, */*, allow
         p, role:admin, projects, *, */*, allow
-        g, admins, role:admin
+        g, mctlhq:admins, role:admin
 
         # ============================================================================
-        # Team-Based Access
+        # Team-Based Access (Auto-generated from tenant definitions)
         # ============================================================================
 
-        # Tenant: internal
+        # Tenant: internal (github: internal)
         p, role:team-internal, applications, get, preview/preview-internal-*, allow
         p, role:team-internal, applications, list, preview/preview-internal-*, allow
         p, role:team-internal, applications, sync, preview/preview-internal-*, allow
         p, role:team-internal, applications, override, preview/preview-internal-*, allow
         p, role:team-internal, logs, get, preview/preview-internal-*, allow
         p, role:team-internal, exec, create, preview/preview-internal-*, allow
-        g, internal, role:team-internal
+        g, mctlhq:internal, role:team-internal
 
     secret:
       createSecret: true
