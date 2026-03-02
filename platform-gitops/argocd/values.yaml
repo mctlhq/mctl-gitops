@@ -119,21 +119,21 @@ argo-cd:
         # ============================================================================
 
         # Tenant: developers (github: developers)
-        p, role:team-developers, applications, get, apps/developers-*, allow
-        p, role:team-developers, applications, list, apps/developers-*, allow
-        p, role:team-developers, applications, sync, apps/developers-*, allow
-        p, role:team-developers, applications, override, apps/developers-*, allow
-        p, role:team-developers, logs, get, apps/developers-*, allow
-        p, role:team-developers, exec, create, apps/developers-*, allow
+        p, role:team-developers, applications, get, preview/preview-developers-*, allow
+        p, role:team-developers, applications, list, preview/preview-developers-*, allow
+        p, role:team-developers, applications, sync, preview/preview-developers-*, allow
+        p, role:team-developers, applications, override, preview/preview-developers-*, allow
+        p, role:team-developers, logs, get, preview/preview-developers-*, allow
+        p, role:team-developers, exec, create, preview/preview-developers-*, allow
         g, mctlhq:developers, role:team-developers
 
         # Tenant: tests (github: tests)
-        p, role:team-tests, applications, get, apps/tests-*, allow
-        p, role:team-tests, applications, list, apps/tests-*, allow
-        p, role:team-tests, applications, sync, apps/tests-*, allow
-        p, role:team-tests, applications, override, apps/tests-*, allow
-        p, role:team-tests, logs, get, apps/tests-*, allow
-        p, role:team-tests, exec, create, apps/tests-*, allow
+        p, role:team-tests, applications, get, preview/preview-tests-*, allow
+        p, role:team-tests, applications, list, preview/preview-tests-*, allow
+        p, role:team-tests, applications, sync, preview/preview-tests-*, allow
+        p, role:team-tests, applications, override, preview/preview-tests-*, allow
+        p, role:team-tests, logs, get, preview/preview-tests-*, allow
+        p, role:team-tests, exec, create, preview/preview-tests-*, allow
         g, mctlhq:tests, role:team-tests
 
     secret:
