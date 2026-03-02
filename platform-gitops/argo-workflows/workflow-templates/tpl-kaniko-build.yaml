@@ -78,11 +78,12 @@ spec:
                 echo "JWT length: ${#JWT}"
 
                 TOKEN=$(curl -sS \
+                  -X POST \
                   -H "Authorization: Bearer ${JWT}" \
                   -H "Accept: application/vnd.github+json" \
-                  "https://api.github.com/app/installations/${INSTALL_ID}/access_tokens" \
-                  -d '{"permissions":{"contents":"read"}}' | \
+                  "https://api.github.com/app/installations/${INSTALL_ID}/access_tokens" | tee /tmp/gh-resp.json | \
                   grep -o '"token":"[^"]*"' | head -1 | cut -d'"' -f4 || true)
+                echo "GitHub API response: $(grep -v '"token"' /tmp/gh-resp.json || true)"
 
                 if [ -n "$TOKEN" ]; then
                   echo "✅ Using GitHub App token"
@@ -115,8 +116,7 @@ spec:
               echo "Clone URL type: $(echo $CLONE_URL | sed 's|x-access-token:[^@]*|x-access-token:REDACTED|')"
               GIT_TERMINAL_PROMPT=0 git clone --depth=1 \
                 --branch "{{inputs.parameters.git_tag}}" \
-                "$CLONE_URL" /workspace/src 2>&1 | sed 's|x-access-token:[^@]*|x-access-token:REDACTED|'
-              echo "Exit: $?"
+                "$CLONE_URL" /workspace/src || { echo "❌ git clone failed (exit $?)"; exit 1; }
               echo "✅ Cloned successfully"
           volumeMounts:
             - name: workspace
