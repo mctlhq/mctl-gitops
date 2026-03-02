@@ -12,14 +12,13 @@ metadata:
         4. Appends ArgoCD RBAC entries to argocd/values.yaml
         5. ArgoCD ApplicationSet picks up new directory → namespace provisioned
 
+      Auth: Backstage OIDC groups (from tenant_members DB), no GitHub teams needed.
       Triggered by: Backstage scaffolder template "Create Tenant [v2 · Argo]"
-      Replaces: manual GitHub team creation + cron sync
 
       Steps:
-        1. validate        — name format + non-existence check
-        2a. create-vault-policy — Vault policy scoped to teams/{name}/*
-        2b. create-github-team  — GitHub team creation + add creator as maintainer
-        3. commit-to-git   — tenant files + ArgoCD RBAC pushed to mctl-core
+        1. validate           — name format + non-existence check
+        2. create-vault-policy — Vault policy scoped to teams/{name}/*
+        3. commit-to-git      — tenant files + ArgoCD RBAC pushed to mctl-core
 
 spec:
   entrypoint: create-tenant-pipeline
@@ -33,10 +32,6 @@ spec:
         default: ""
       - name: description
         default: ""
-      - name: github_team
-        # GitHub team slug for OAuth/ArgoCD RBAC mapping
-        default: ""
-        # If empty, defaults to tenant_name
       - name: quota_cpu_req
         default: "4"
       - name: quota_cpu_lim
@@ -68,7 +63,7 @@ spec:
                 - name: tenant_name
                   value: "{{workflow.parameters.tenant_name}}"
 
-          # Step 2a: create Vault policy (parallel, after validate)
+          # Step 2: create Vault policy (after validate)
           - name: create-vault-policy
             dependencies: [validate]
             template: create-vault-policy
@@ -77,22 +72,9 @@ spec:
                 - name: tenant_name
                   value: "{{workflow.parameters.tenant_name}}"
 
-          # Step 2b: create GitHub team + add creator as maintainer (parallel, after validate)
-          - name: create-github-team
-            dependencies: [validate]
-            template: create-github-team
-            arguments:
-              parameters:
-                - name: github_team
-                  value: "{{workflow.parameters.github_team}}"
-                - name: display_name
-                  value: "{{workflow.parameters.display_name}}"
-                - name: creator_username
-                  value: "{{workflow.parameters.creator_username}}"
-
-          # Step 3: commit tenant files + ArgoCD RBAC to Git (after both step 2s)
+          # Step 3: commit tenant files + ArgoCD RBAC to Git (after vault policy)
           - name: commit-to-git
-            dependencies: [create-vault-policy, create-github-team]
+            dependencies: [create-vault-policy]
             template: commit-tenant-to-git
             arguments:
               parameters:
@@ -102,8 +84,6 @@ spec:
                   value: "{{workflow.parameters.display_name}}"
                 - name: description
                   value: "{{workflow.parameters.description}}"
-                - name: github_team
-                  value: "{{workflow.parameters.github_team}}"
                 - name: quota_cpu_req
                   value: "{{workflow.parameters.quota_cpu_req}}"
                 - name: quota_cpu_lim
@@ -118,98 +98,6 @@ spec:
                   value: "{{workflow.parameters.allow_internet_egress}}"
                 - name: contact_email
                   value: "{{workflow.parameters.contact_email}}"
-
-    # ────────────────────────────────────────────────────────────────────────
-    - name: create-github-team
-      inputs:
-        parameters:
-          - name: github_team
-          - name: display_name
-          - name: creator_username
-      volumes:
-        - name: github-app-creds
-          secret:
-            secretName: github-app-credentials
-      script:
-        image: alpine:3.19
-        command: [sh]
-        volumeMounts:
-          - name: github-app-creds
-            mountPath: /secrets/github-app
-            readOnly: true
-        source: |
-          set -e
-          apk add --no-cache openssl curl jq 2>/dev/null || true
-
-          GITHUB_TEAM="{{inputs.parameters.github_team}}"
-          DISPLAY_NAME="{{inputs.parameters.display_name}}"
-          CREATOR="{{inputs.parameters.creator_username}}"
-          ORG="mctlhq"
-
-          [ -z "$GITHUB_TEAM" ] && { echo "No github_team specified, skipping GitHub team creation"; exit 0; }
-
-          # ── GitHub App token ──────────────────────────────────────────────
-          APP_ID=$(cat /secrets/github-app/app-id)
-          PRIVATE_KEY=$(cat /secrets/github-app/private-key)
-          INSTALLATION_ID=$(cat /secrets/github-app/installation-id)
-
-          NOW=$(date +%s)
-          IAT=$((NOW - 60))
-          EXP=$((NOW + 540))
-          HEADER=$(printf '{"alg":"RS256","typ":"JWT"}' | base64 | tr -d '=' | tr '/+' '_-' | tr -d '\n')
-          PAYLOAD=$(printf '{"iat":%d,"exp":%d,"iss":"%s"}' "$IAT" "$EXP" "$APP_ID" | base64 | tr -d '=' | tr '/+' '_-' | tr -d '\n')
-          SIGN_INPUT="${HEADER}.${PAYLOAD}"
-          SIGNATURE=$(printf '%s' "$SIGN_INPUT" | openssl dgst -sha256 -sign <(printf '%s' "$PRIVATE_KEY") | base64 | tr -d '=' | tr '/+' '_-' | tr -d '\n')
-          JWT="${HEADER}.${PAYLOAD}.${SIGNATURE}"
-
-          GH_TOKEN=$(curl -sf -X POST \
-            -H "Authorization: Bearer $JWT" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens" \
-            | jq -r '.token')
-
-          if [ -z "$GH_TOKEN" ] || [ "$GH_TOKEN" = "null" ]; then
-            echo "ERROR: Failed to get GitHub App installation token"
-            exit 1
-          fi
-
-          # ── Create GitHub team ─────────────────────────────────────────────
-          echo "Creating GitHub team: ${ORG}/${GITHUB_TEAM}"
-          HTTP_STATUS=$(curl -s -o /tmp/gh_team_response.json -w "%{http_code}" \
-            -X POST \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/orgs/${ORG}/teams" \
-            -d "{\"name\":\"${GITHUB_TEAM}\",\"description\":\"${DISPLAY_NAME} team (managed by mctl.me)\",\"privacy\":\"closed\"}")
-
-          if [ "$HTTP_STATUS" = "201" ]; then
-            echo "GitHub team '${GITHUB_TEAM}' created successfully."
-          elif [ "$HTTP_STATUS" = "422" ]; then
-            echo "GitHub team '${GITHUB_TEAM}' already exists — skipping creation."
-          else
-            echo "WARNING: Unexpected response creating GitHub team (HTTP $HTTP_STATUS):"
-            cat /tmp/gh_team_response.json
-          fi
-
-          # ── Add creator as team maintainer ────────────────────────────────
-          if [ -n "$CREATOR" ]; then
-            echo "Adding '${CREATOR}' as maintainer of team '${GITHUB_TEAM}'"
-            HTTP_STATUS=$(curl -s -o /tmp/gh_member_response.json -w "%{http_code}" \
-              -X PUT \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/orgs/${ORG}/teams/${GITHUB_TEAM}/memberships/${CREATOR}" \
-              -d '{"role":"maintainer"}')
-
-            if [ "$HTTP_STATUS" = "200" ]; then
-              echo "User '${CREATOR}' added as maintainer."
-            else
-              echo "WARNING: Could not add '${CREATOR}' to team (HTTP $HTTP_STATUS):"
-              cat /tmp/gh_member_response.json
-            fi
-          else
-            echo "No creator_username specified, skipping membership assignment."
-          fi
 
     # ────────────────────────────────────────────────────────────────────────
     - name: validate-tenant-name
@@ -295,7 +183,6 @@ spec:
           - name: tenant_name
           - name: display_name
           - name: description
-          - name: github_team
           - name: quota_cpu_req
           - name: quota_cpu_lim
           - name: quota_memory_req
@@ -328,7 +215,6 @@ spec:
           TENANT="{{inputs.parameters.tenant_name}}"
           DISPLAY_NAME="{{inputs.parameters.display_name}}"
           DESCRIPTION="{{inputs.parameters.description}}"
-          GITHUB_TEAM="{{inputs.parameters.github_team}}"
           CPU_REQ="{{inputs.parameters.quota_cpu_req}}"
           CPU_LIM="{{inputs.parameters.quota_cpu_lim}}"
           MEM_REQ="{{inputs.parameters.quota_memory_req}}"
@@ -339,7 +225,6 @@ spec:
 
           # Defaults
           [ -z "$DISPLAY_NAME" ] && DISPLAY_NAME="$TENANT"
-          [ -z "$GITHUB_TEAM" ] && GITHUB_TEAM="$TENANT"
 
           # ── Setup SSH for git operations ────────────────────────────────────
           apk add --no-cache openssl curl jq git openssh-client ca-certificates
@@ -404,7 +289,6 @@ spec:
             name: ${TENANT}
             displayName: "${DISPLAY_NAME}"
             description: "${DESCRIPTION}"
-            githubTeam: ${GITHUB_TEAM}
             contactEmail: "${CONTACT_EMAIL}"
             quotas:
               requests.cpu: "${CPU_REQ}"
@@ -441,7 +325,6 @@ spec:
             description: "Tenant ${DISPLAY_NAME} — namespace, quotas, and network policies"
             annotations:
               mctl.me/tenant-name: "${TENANT}"
-              mctl.me/github-team: "${GITHUB_TEAM}"
               backstage.io/managed-by-location: "url:https://github.com/mctlhq/mctl-core/blob/main/platform-gitops/tenants/${TENANT}/catalog-info.yaml"
               backstage.io/managed-by-origin-location: "url:https://github.com/mctlhq/mctl-core/blob/main/platform-gitops/tenants/${TENANT}/catalog-info.yaml"
           spec:
@@ -457,14 +340,14 @@ spec:
           # Find the line with the last policy entry (before the 'secret:' key)
           # We insert new tenant RBAC before the 'secret:' section
           RBAC_BLOCK="
-                  # Tenant: ${TENANT} (github: ${GITHUB_TEAM})
+                  # Tenant: ${TENANT}
                   p, role:team-${TENANT}, applications, get, apps/${TENANT}-*, allow
                   p, role:team-${TENANT}, applications, list, apps/${TENANT}-*, allow
                   p, role:team-${TENANT}, applications, sync, apps/${TENANT}-*, allow
                   p, role:team-${TENANT}, applications, override, apps/${TENANT}-*, allow
                   p, role:team-${TENANT}, logs, get, apps/${TENANT}-*, allow
                   p, role:team-${TENANT}, exec, create, apps/${TENANT}-*, allow
-                  g, mctlhq:${GITHUB_TEAM}, role:team-${TENANT}"
+                  g, ${TENANT}, role:team-${TENANT}"
 
           # Check if tenant already has RBAC (shouldn't happen given validate step, but be safe)
           if grep -q "role:team-${TENANT}," "$ARGOCD_VALUES"; then
@@ -493,12 +376,11 @@ spec:
           git commit -m "feat(tenant): create tenant ${TENANT}
 
           Display name: ${DISPLAY_NAME}
-          GitHub team: ${GITHUB_TEAM}
           Quotas: CPU ${CPU_REQ}/${CPU_LIM}, Memory ${MEM_REQ}/${MEM_LIM}, Pods ${PODS}
 
           - Creates platform-gitops/tenants/${TENANT}/
           - Vault policy: tenant-${TENANT}
-          - ArgoCD RBAC: role:team-${TENANT} -> mctlhq:${GITHUB_TEAM}
+          - ArgoCD RBAC: role:team-${TENANT} -> ${TENANT} (Backstage OIDC group)
           - ArgoCD ApplicationSet will provision namespace + quotas + network policies
 
           Created by Argo Workflows (wft-create-tenant)"

@@ -4,7 +4,6 @@
 tenant:
   name: admins
   displayName: "Admins"
-  githubTeam: admins
   quotas:
     requests.cpu: "4"
     requests.memory: "8Gi"
