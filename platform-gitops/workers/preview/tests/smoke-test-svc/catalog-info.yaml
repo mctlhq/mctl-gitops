@@ -1,0 +1,33 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: smoke-test-svc
+  description: "smoke-test-svc service deployed to preview"
+  annotations:
+    backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=preview-tests-smoke-test-svc
+    backstage.io/kubernetes-namespace: tests
+    argocd/app-name: preview-tests-smoke-test-svc
+    github.com/source-repo: mctlhq/e2e-public-test
+    # mctl.me/auto-deploy — triggered by GitHub App webhook on tag push
+    #   "true" or "auto" — deploy immediately via scaffolder
+    #   "confirm"         — notify only, user deploys manually from UI
+    #   "false" or absent — skip
+    mctl.me/auto-deploy: "false"
+  links:
+    - url: https://ops.mctl.me/applications/argocd/preview-tests-smoke-test-svc
+      title: ArgoCD
+      icon: dashboard
+    - url: https://github.com/mctlhq/e2e-public-test
+      title: Source Repository
+      icon: github
+    - url: https://workflows.mctl.me
+      title: Argo Workflows
+      icon: github
+  labels:
+    team: tests
+    env: preview
+spec:
+  type: worker
+  lifecycle: production
+  owner: group:tests
+  system: team-tests
