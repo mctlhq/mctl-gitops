@@ -307,12 +307,19 @@ spec:
         - name: github-app-creds
           secret:
             secretName: github-app-credentials
+        - name: deploy-key
+          secret:
+            secretName: mctl-core-deploy-key
+            defaultMode: 0600
       script:
         image: alpine:3.19
         command: [sh]
         volumeMounts:
           - name: github-app-creds
             mountPath: /secrets/github-app
+            readOnly: true
+          - name: deploy-key
+            mountPath: /secrets/deploy-key
             readOnly: true
         source: |
           set -e
@@ -334,13 +341,17 @@ spec:
           [ -z "$DISPLAY_NAME" ] && DISPLAY_NAME="$TENANT"
           [ -z "$GITHUB_TEAM" ] && GITHUB_TEAM="$TENANT"
 
-          # ── GitHub App token ────────────────────────────────────────────────
+          # ── Setup SSH for git operations ────────────────────────────────────
+          apk add --no-cache openssl curl jq git openssh-client ca-certificates
+          mkdir -p ~/.ssh
+          cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H github.com >> ~/.ssh/known_hosts 2>/dev/null
+
+          # ── GitHub App token (for API calls only) ───────────────────────────
           APP_ID=$(cat /secrets/github-app/app-id)
           PRIVATE_KEY=$(cat /secrets/github-app/private-key)
           INSTALLATION_ID=$(cat /secrets/github-app/installation-id)
-
-          # Install jwt dependencies
-          apk add --no-cache openssl curl jq git
 
           # Generate JWT
           NOW=$(date +%s)
@@ -364,12 +375,11 @@ spec:
             exit 1
           fi
 
-          # ── Clone mctl-core ─────────────────────────────────────────────────
+          # ── Clone mctl-core via SSH ─────────────────────────────────────────
           git config --global user.email "argo-workflows[bot]@mctl.me"
           git config --global user.name "Argo Workflows Bot"
 
-          REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/mctlhq/mctl-core.git"
-          git clone --depth=1 "$REPO_URL" /tmp/mctl-core
+          git clone --depth=1 "git@github.com:mctlhq/mctl-core.git" /tmp/mctl-core
           cd /tmp/mctl-core
 
           # ── Security: check tenant doesn't already exist ────────────────────
@@ -478,11 +488,7 @@ spec:
 
           git status
 
-          # Retry loop: rebase if push fails due to concurrent commits
-          MAX_ATTEMPTS=5
-          for attempt in $(seq 1 $MAX_ATTEMPTS); do
-            echo "Push attempt $attempt/$MAX_ATTEMPTS..."
-            if git commit -m "feat(tenant): create tenant ${TENANT}
+          git commit -m "feat(tenant): create tenant ${TENANT}
 
           Display name: ${DISPLAY_NAME}
           GitHub team: ${GITHUB_TEAM}
@@ -490,19 +496,23 @@ spec:
 
           - Creates platform-gitops/tenants/${TENANT}/
           - Vault policy: tenant-${TENANT}
-          - ArgoCD RBAC: role:team-${TENANT} → mctlhq:${GITHUB_TEAM}
+          - ArgoCD RBAC: role:team-${TENANT} -> mctlhq:${GITHUB_TEAM}
           - ArgoCD ApplicationSet will provision namespace + quotas + network policies
 
-          Created by Argo Workflows (wft-create-tenant)"; then
-              if git push origin HEAD:main; then
-                echo "Successfully pushed tenant ${TENANT}!"
-                break
-              else
-                echo "Push failed (attempt $attempt). Rebasing..."
-                git pull --rebase origin main
-              fi
-            else
-              echo "Nothing to commit (already exists?)"
+          Created by Argo Workflows (wft-create-tenant)"
+
+          # Push with retry/rebase loop
+          MAX_ATTEMPTS=5
+          for attempt in $(seq 1 $MAX_ATTEMPTS); do
+            echo "Push attempt $attempt/$MAX_ATTEMPTS..."
+            if git push origin HEAD:main; then
+              echo "Successfully pushed tenant ${TENANT}!"
               break
+            elif [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
+              echo "Push failed (attempt $attempt). Rebasing..."
+              git pull --rebase origin main
+            else
+              echo "ERROR: Push failed after $MAX_ATTEMPTS attempts"
+              exit 1
             fi
           done

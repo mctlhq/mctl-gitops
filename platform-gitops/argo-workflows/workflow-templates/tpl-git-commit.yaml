@@ -54,11 +54,15 @@ spec:
           SKIP_HEALTH="{{inputs.parameters.skip_health_check}}"
 
           # ── 0. Install dependencies ───────────────────────────────────────────
-          apk add --no-cache openssl curl wget git ca-certificates
+          apk add --no-cache openssl curl wget git ca-certificates openssh-client
           wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/download/v4.40.5/yq_linux_amd64
           chmod +x /usr/local/bin/yq
+          mkdir -p ~/.ssh
+          cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H github.com >> ~/.ssh/known_hosts 2>/dev/null
 
-          # ── 1. Get GitHub App token ────────────────────────────────────────
+          # ── 1. Get GitHub App token (API calls only) ──────────────────────
           APP_ID=$(cat /var/run/secrets/github-app/app-id)
           INSTALL_ID=$(cat /var/run/secrets/github-app/installation-id)
           APP_KEY=/var/run/secrets/github-app/private-key
@@ -82,11 +86,9 @@ spec:
             exit 1
           fi
 
-          # ── 2. Clone mctl-core ────────────────────────────────────────────
+          # ── 2. Clone mctl-core via SSH ────────────────────────────────────
           echo "📥 Cloning mctl-core..."
-          git clone --depth=1 \
-            "https://x-access-token:${GH_TOKEN}@github.com/mctlhq/mctl-core.git" \
-            /tmp/mctl-core 2>&1 | grep -v 'x-access-token'
+          git clone --depth=1 "git@github.com:mctlhq/mctl-core.git" /tmp/mctl-core
           cd /tmp/mctl-core
 
           git config user.name "argo-workflows[bot]"
@@ -274,15 +276,13 @@ spec:
           # ── 6. Push with rebase retry ──────────────────────────────────────
           MAX_RETRIES=5
           for i in $(seq 1 $MAX_RETRIES); do
-            if git push "https://x-access-token:${GH_TOKEN}@github.com/mctlhq/mctl-core.git" main \
-              2>&1 | grep -v 'x-access-token'; then
+            if git push origin HEAD:main; then
               echo "✅ Pushed successfully"
               break
             fi
             if [ $i -lt $MAX_RETRIES ]; then
               echo "⚠️  Push failed (attempt $i), rebasing..."
-              git pull --rebase "https://x-access-token:${GH_TOKEN}@github.com/mctlhq/mctl-core.git" main \
-                2>&1 | grep -v 'x-access-token'
+              git pull --rebase origin main
             else
               echo "❌ Push failed after $MAX_RETRIES attempts"
               exit 1
@@ -293,10 +293,15 @@ spec:
         volumeMounts:
           - name: github-app-credentials
             mountPath: /var/run/secrets/github-app
+          - name: deploy-key
+            mountPath: /secrets/deploy-key
       volumes:
         - name: github-app-credentials
           secret:
             secretName: github-app-credentials
+        - name: deploy-key
+          secret:
+            secretName: mctl-core-deploy-key
 
     # ── Delete service directory ──────────────────────────────────────────────
     - name: delete-service
@@ -306,7 +311,7 @@ spec:
           - name: component_name
           - name: component_type
       script:
-        image: alpine/git:2.43.0
+        image: alpine:3.19
         command: [sh]
         source: |
           set -e
@@ -314,26 +319,14 @@ spec:
           SERVICE="{{inputs.parameters.component_name}}"
           TYPE="{{inputs.parameters.component_type}}"
 
-          # Get GitHub App token
-          APP_ID=$(cat /var/run/secrets/github-app/app-id)
-          INSTALL_ID=$(cat /var/run/secrets/github-app/installation-id)
-          APP_KEY=/var/run/secrets/github-app/private-key
+          # Setup SSH
+          apk add --no-cache openssl wget git openssh-client ca-certificates
+          mkdir -p ~/.ssh
+          cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H github.com >> ~/.ssh/known_hosts 2>/dev/null
 
-          NOW=$(date +%s); EXP=$((NOW + 540))
-          HEADER=$(printf '{"alg":"RS256","typ":"JWT"}' | base64 | tr -d '=' | tr '/+' '_-' | tr -d '\n')
-          PAYLOAD=$(printf '{"iat":%s,"exp":%s,"iss":"%s"}' "$NOW" "$EXP" "$APP_ID" | base64 | tr -d '=' | tr '/+' '_-' | tr -d '\n')
-          SIG=$(printf '%s.%s' "$HEADER" "$PAYLOAD" | openssl dgst -sha256 -sign "$APP_KEY" | base64 | tr -d '=' | tr '/+' '_-' | tr -d '\n')
-          JWT="${HEADER}.${PAYLOAD}.${SIG}"
-          GH_TOKEN=$(wget -qO- \
-            --header="Authorization: Bearer ${JWT}" \
-            --header="Accept: application/vnd.github+json" \
-            --post-data='{"repositories":["mctl-core"]}' \
-            "https://api.github.com/app/installations/${INSTALL_ID}/access_tokens" | \
-            grep '"token"' | head -1 | cut -d'"' -f4)
-
-          git clone --depth=1 \
-            "https://x-access-token:${GH_TOKEN}@github.com/mctlhq/mctl-core.git" \
-            /tmp/mctl-core 2>&1 | grep -v 'x-access-token'
+          git clone --depth=1 "git@github.com:mctlhq/mctl-core.git" /tmp/mctl-core
           cd /tmp/mctl-core
           git config user.name "argo-workflows[bot]"
           git config user.email "argo-workflows[bot]@users.noreply.github.com"
@@ -361,18 +354,26 @@ spec:
           git commit -m "delete: ${TEAM}/${SERVICE}"
 
           for i in $(seq 1 5); do
-            if git push "https://x-access-token:${GH_TOKEN}@github.com/mctlhq/mctl-core.git" main \
-              2>&1 | grep -v 'x-access-token'; then
+            if git push origin HEAD:main; then
               echo "✅ Deleted and pushed"
               break
             fi
-            git pull --rebase "https://x-access-token:${GH_TOKEN}@github.com/mctlhq/mctl-core.git" main \
-              2>&1 | grep -v 'x-access-token'
+            if [ $i -lt 5 ]; then
+              git pull --rebase origin main
+            else
+              echo "❌ Push failed after 5 attempts"
+              exit 1
+            fi
           done
         volumeMounts:
           - name: github-app-credentials
             mountPath: /var/run/secrets/github-app
+          - name: deploy-key
+            mountPath: /secrets/deploy-key
       volumes:
         - name: github-app-credentials
           secret:
             secretName: github-app-credentials
+        - name: deploy-key
+          secret:
+            secretName: mctl-core-deploy-key
