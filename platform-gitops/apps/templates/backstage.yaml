@@ -216,6 +216,17 @@ spec:
                         minutes: 1
                       timeout:
                         minutes: 3
+                  tenants:
+                    organization: mctlhq
+                    catalogPath: /platform-gitops/tenants/*/catalog-info.yaml
+                    filters:
+                      repository: mctl-core
+                      branch: main
+                    schedule:
+                      frequency:
+                        minutes: 1
+                      timeout:
+                        minutes: 3
               locations:
                 # Backstage templates (static, no need for provider-based discovery)
                 - type: url
