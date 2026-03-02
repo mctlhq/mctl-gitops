@@ -370,18 +370,23 @@ spec:
           TEAM="{{workflow.parameters.team_name}}"
           SVC="{{workflow.parameters.component_name}}"
           INSTANCE_LABEL="${TEAM}-${SVC}"
-          echo "⏳ Waiting for rollout to complete..."
-          DEPLOY=$(kubectl get deployment -n "${TEAM}" -l "app.kubernetes.io/instance=${INSTANCE_LABEL}" -o name 2>/dev/null | head -1)
-          [ -z "${DEPLOY}" ] && { echo "❌ Deployment not found"; exit 1; }
-          kubectl rollout status "${DEPLOY}" -n "${TEAM}" --timeout=180s
-          POD=$(kubectl get pods -n "${TEAM}" \
-            -l "app.kubernetes.io/instance=${INSTANCE_LABEL}" \
-            --field-selector=status.phase=Running \
-            -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
-          if [ -z "${POD}" ]; then
-            echo "❌ No running pod found for instance=${INSTANCE_LABEL} in ${TEAM}"
-            exit 1
-          fi
-          echo "🔍 Checking env var in pod ${POD}..."
-          kubectl exec -n "${TEAM}" "${POD}" -- env | grep "SMOKE_TEST=true"
-          echo "✅ SMOKE_TEST=true confirmed in pod environment"
+          # Retry loop: wait for ArgoCD sync + rollout + SMOKE_TEST to appear
+          for i in $(seq 1 24); do
+            echo "[${i}/24] Checking for SMOKE_TEST=true in ${TEAM}/${SVC} pod..."
+            DEPLOY=$(kubectl get deployment -n "${TEAM}" -l "app.kubernetes.io/instance=${INSTANCE_LABEL}" -o name 2>/dev/null | head -1)
+            if [ -z "${DEPLOY}" ]; then echo "  deployment not found yet..."; sleep 15; continue; fi
+            kubectl rollout status "${DEPLOY}" -n "${TEAM}" --timeout=30s 2>/dev/null || true
+            POD=$(kubectl get pods -n "${TEAM}" \
+              -l "app.kubernetes.io/instance=${INSTANCE_LABEL}" \
+              --field-selector=status.phase=Running \
+              -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+            if [ -z "${POD}" ]; then echo "  no running pod yet..."; sleep 15; continue; fi
+            if kubectl exec -n "${TEAM}" "${POD}" -- env 2>/dev/null | grep -q "SMOKE_TEST=true"; then
+              echo "✅ SMOKE_TEST=true confirmed in pod ${POD}"
+              exit 0
+            fi
+            echo "  SMOKE_TEST not yet present, waiting..."
+            sleep 15
+          done
+          echo "❌ SMOKE_TEST=true not found after 6 minutes"
+          exit 1
