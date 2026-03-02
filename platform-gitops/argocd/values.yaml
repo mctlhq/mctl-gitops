@@ -127,6 +127,15 @@ argo-cd:
         p, role:team-developers, exec, create, preview/preview-developers-*, allow
         g, mctlhq:developers, role:team-developers
 
+        # Tenant: interals (github: interals)
+        p, role:team-interals, applications, get, preview/preview-interals-*, allow
+        p, role:team-interals, applications, list, preview/preview-interals-*, allow
+        p, role:team-interals, applications, sync, preview/preview-interals-*, allow
+        p, role:team-interals, applications, override, preview/preview-interals-*, allow
+        p, role:team-interals, logs, get, preview/preview-interals-*, allow
+        p, role:team-interals, exec, create, preview/preview-interals-*, allow
+        g, mctlhq:interals, role:team-interals
+
         # Tenant: tests (github: tests)
         p, role:team-tests, applications, get, preview/preview-tests-*, allow
         p, role:team-tests, applications, list, preview/preview-tests-*, allow
@@ -136,15 +145,6 @@ argo-cd:
         p, role:team-tests, exec, create, preview/preview-tests-*, allow
         g, mctlhq:tests, role:team-tests
 
-
-        # Tenant: interals (github: interals)
-        p, role:team-interals, applications, get, apps/interals-*, allow
-        p, role:team-interals, applications, list, apps/interals-*, allow
-        p, role:team-interals, applications, sync, apps/interals-*, allow
-        p, role:team-interals, applications, override, apps/interals-*, allow
-        p, role:team-interals, logs, get, apps/interals-*, allow
-        p, role:team-interals, exec, create, apps/interals-*, allow
-        g, mctlhq:interals, role:team-interals
     secret:
       createSecret: true
 
