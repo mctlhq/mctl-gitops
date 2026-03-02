@@ -122,7 +122,7 @@ argo-cd:
         g, mctlhq:admins, role:admin
 
         # ============================================================================
-        # Team-Based Access (auto-generated per tenant)
+        # Team-Based Access (Auto-generated from tenant definitions)
         # ============================================================================
 
     secret:
