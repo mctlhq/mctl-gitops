@@ -95,12 +95,13 @@ spec:
 
           # ── Check if DB already exists ────────────────────────────────────
           CLUSTER_FILE="platform-gitops/cnpg-clusters/shared/cluster.yaml"
+          DB_EXISTS=false
           if grep -q "name: ${DB_NAME}-db" platform-gitops/cnpg-clusters/shared/databases.yaml 2>/dev/null; then
-            echo "ℹ️  Database '${DB_NAME}' already exists — skipping"
-            exit 0
+            echo "ℹ️  Database '${DB_NAME}' already exists — skipping DB creation"
+            DB_EXISTS=true
           fi
 
-          # ── Generate password + store in Vault ───────────────────────────
+          if [ "$DB_EXISTS" = "false" ]; then
           PASSWORD=$(openssl rand -base64 32 | tr -d '/+=\n' | head -c 32)
 
           HTTP_CODE=$(curl -sS -o /tmp/vault-resp.json -w "%{http_code}" \
@@ -232,7 +233,10 @@ spec:
             echo "✅ catalog-info.yaml annotated"
           fi
 
-          # ── Inject dbSecret into service values.yaml (if service exists) ─────
+          # ── Close DB-creation-only block ──────────────────────────────────
+          fi  # end if [ "$DB_EXISTS" = "false" ]
+
+          # ── Always: inject dbSecret into service values.yaml ──────────────
           SVC_VALUES="platform-gitops/services/${TEAM}/${APP}/values.yaml"
           if [ -f "$SVC_VALUES" ]; then
             DB_SECRET="${TEAM}-${APP}-db-creds"
@@ -244,27 +248,33 @@ spec:
           fi
 
           # ── Commit and push ────────────────────────────────────────────────
-          git add \
-            platform-gitops/cnpg-clusters/shared/cluster.yaml \
-            platform-gitops/cnpg-clusters/shared/databases.yaml \
-            platform-gitops/cnpg-clusters/shared/secrets.yaml
+          if [ "$DB_EXISTS" = "false" ]; then
+            git add \
+              platform-gitops/cnpg-clusters/shared/cluster.yaml \
+              platform-gitops/cnpg-clusters/shared/databases.yaml \
+              platform-gitops/cnpg-clusters/shared/secrets.yaml
+          fi
 
-          git commit -m "feat: provision database ${DB_NAME}" \
-            -m "Provisioned PostgreSQL database for ${TEAM}/${APP}:
+          if git diff --cached --quiet; then
+            echo "ℹ️  Nothing to commit — dbSecret already set"
+          else
+            git commit -m "feat: provision database ${DB_NAME}" \
+              -m "Provisioned PostgreSQL database for ${TEAM}/${APP}:
           - Role: ${DB_NAME}
           - Database: ${DB_NAME}
           - Vault path: ${VAULT_PATH}
           - K8s secret: ${DB_NAME}-db-creds (ExternalSecret -> CNPG)"
 
-          for i in $(seq 1 5); do
-            if git push "https://x-access-token:${GH_TOKEN}@github.com/mctlhq/mctl-core.git" main \
-              2>&1 | grep -v 'x-access-token'; then
-              echo "✅ Pushed — ArgoCD will sync automatically"
-              break
-            fi
-            git pull --rebase "https://x-access-token:${GH_TOKEN}@github.com/mctlhq/mctl-core.git" main \
-              2>&1 | grep -v 'x-access-token'
-          done
+            for i in $(seq 1 5); do
+              if git push "https://x-access-token:${GH_TOKEN}@github.com/mctlhq/mctl-core.git" main \
+                2>&1 | grep -v 'x-access-token'; then
+                echo "✅ Pushed — ArgoCD will sync automatically"
+                break
+              fi
+              git pull --rebase "https://x-access-token:${GH_TOKEN}@github.com/mctlhq/mctl-core.git" main \
+                2>&1 | grep -v 'x-access-token'
+            done
+          fi
         env:
           - name: VAULT_ADDR
             value: "http://vault.vault.svc.cluster.local:8200"

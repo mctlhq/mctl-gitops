@@ -55,6 +55,8 @@ spec:
             template: check-pod-running
         - - name: provision-db
             template: run-provision-db
+        - - name: sync-argocd-app
+            template: trigger-argocd-sync
         - - name: verify-vault-secret
             template: check-vault-secret
         - - name: verify-k8s-secret
@@ -271,6 +273,21 @@ spec:
             --timeout=180s
           READY=$(kubectl get "${DEPLOY}" -n "${TEAM}" -o jsonpath='{.status.readyReplicas}')
           echo "✅ Deployment available (${READY:-0} ready replicas)"
+
+    # ─── Trigger ArgoCD sync for service app ─────────────────────────────────
+    - name: trigger-argocd-sync
+      script:
+        image: bitnami/kubectl:latest
+        command: [sh]
+        source: |
+          TEAM="{{workflow.parameters.team_name}}"
+          SVC="{{workflow.parameters.component_name}}"
+          APP="${TEAM}-${SVC}"
+          echo "▶ Triggering ArgoCD hard refresh for ${APP}..."
+          kubectl annotate app "${APP}" argocd.argoproj.io/refresh=hard --overwrite -n argocd || true
+          # Give ArgoCD time to detect and apply the change
+          sleep 30
+          echo "✅ ArgoCD sync triggered"
 
     # ─── Verification: Vault DB secret exists ────────────────────────────────
     - name: check-vault-secret
