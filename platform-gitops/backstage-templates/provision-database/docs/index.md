@@ -50,5 +50,5 @@ After provisioning, open the service in the Backstage catalog and go to the **Da
 
 ## Links
 
-- [GitHub Actions workflow](https://github.com/mctlhq/mctl-core/actions/workflows/provision-db.yml)
+- [Argo Workflows UI](https://workflows.mctl.me)
 - [CNPG cluster config](https://github.com/mctlhq/mctl-core/tree/main/platform-gitops/cnpg-clusters/shared)

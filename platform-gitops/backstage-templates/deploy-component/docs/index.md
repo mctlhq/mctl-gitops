@@ -21,16 +21,18 @@ Use this template when you want to:
 | Port | | HTTP port for web services (e.g. `8080`) |
 | Ingress host | | Public hostname (e.g. `myteam-payment-api.mctl.me`) — leave empty for workers |
 | Provision DB | | Auto-provision PostgreSQL database and inject credentials |
+| Skip health checks | | Skip liveness/readiness probes (recommended if `/healthz` not implemented yet) |
 | Env vars | | Plaintext `KEY=value` pairs (stored in Kubernetes manifest) |
 | Secret env vars | | Plaintext `KEY=value` pairs (stored in Vault, injected securely) |
+| Repo PAT | | Fine-grained PAT with Contents:Read — only needed if GitHub App is not installed on the repo |
 
 ## What gets created
 
-1. **GitOps files** in `mctl.me/platform-gitops/services/preview/{team}/{service}/`
+1. **GitOps files** in `mctl.me/platform-gitops/services/{team}/{service}/`
    - `values.yaml` — Helm values for the service
    - `catalog-info.yaml` — Backstage catalog entry
 2. **ArgoCD Application** — auto-syncs from GitOps files
-3. **Docker image** — built and pushed to GHCR
+3. **Docker image** — built in-cluster via Kaniko and pushed to GHCR
 4. **Vault secrets** — if secret env vars provided
 5. **PostgreSQL database** — if "Provision Database" is enabled
 
@@ -41,5 +43,5 @@ Use this template when you want to:
 
 ## Links
 
-- [GitHub Actions workflow](https://github.com/mctlhq/mctl-core/actions/workflows/release-service.yml)
+- [Argo Workflows UI](https://workflows.mctl.me)
 - [View deployed services in Catalog](/catalog?filters[kind]=component)

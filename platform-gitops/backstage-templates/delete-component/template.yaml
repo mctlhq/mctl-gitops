@@ -3,11 +3,14 @@ kind: Template
 metadata:
   name: retire-service
   title: Retire Service
-  description: Permanently remove a service from the platform — deletes GitOps files, ArgoCD app, Kubernetes resources, and Vault secrets.
+  description: |
+    Permanently remove a service from the platform — deletes GitOps files, ArgoCD app,
+    Kubernetes resources, and Vault secrets.
   tags:
     - retire
     - cleanup
     - lifecycle
+    - argo
   annotations:
     backstage.io/techdocs-ref: dir:.
 spec:
@@ -46,13 +49,11 @@ spec:
         entityRef: ${{ parameters.service }}
 
     - id: trigger-delete
-      name: Retire service
-      action: github:actions:dispatch-and-stream
+      name: Retire service via Argo Workflows
+      action: mctl:workflow:submit
       input:
-        repoUrl: github.com?repo=mctl-core&owner=mctlhq
-        workflowId: retire-service.yml
-        branchOrTagName: main
-        workflowInputs:
+        templateName: retire-service
+        parameters:
           team_name: ${{ steps['parse-service'].output.entity.metadata.labels.team or steps['parse-service'].output.entity.spec.owner | replace('group:', '') }}
           component_name: ${{ steps['parse-service'].output.entity.metadata.name }}
           component_type: ${{ steps['parse-service'].output.entity.spec.type === 'worker' and 'worker-service' or 'base-service' }}
@@ -60,6 +61,9 @@ spec:
 
   output:
     links:
-      - title: Retirement Run
-        icon: github
-        url: ${{ steps['trigger-delete'].output.runUrl }}
+      - title: Argo Workflows Run
+        icon: dashboard
+        url: ${{ steps['trigger-delete'].output.workflowUrl }}
+      - title: ArgoCD Dashboard
+        icon: dashboard
+        url: "https://ops.mctl.me"

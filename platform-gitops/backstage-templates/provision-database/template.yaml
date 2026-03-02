@@ -3,11 +3,15 @@ kind: Template
 metadata:
   name: provision-database
   title: Provision Database
-  description: Provision a PostgreSQL database for an existing service. Use this if you skipped database provisioning during onboarding. Creates a dedicated role, database, and Kubernetes secret populated from Vault.
+  description: |
+    Provision a PostgreSQL database for an existing service. Use this if you skipped
+    database provisioning during onboarding. Creates a dedicated role, database, Vault secret,
+    and Kubernetes ExternalSecret.
   tags:
     - database
     - postgresql
     - provisioning
+    - argo
   annotations:
     backstage.io/techdocs-ref: dir:.
 spec:
@@ -36,15 +40,13 @@ spec:
         entityRef: ${{ parameters.serviceName }}
 
     - id: trigger-provision
-      name: Provision database
-      action: github:actions:dispatch-and-stream
+      name: Provision database via Argo Workflows
+      action: mctl:workflow:submit
       input:
-        repoUrl: github.com?repo=mctl-core&owner=mctlhq
-        workflowId: provision-db.yml
-        branchOrTagName: main
-        workflowInputs:
-          team: ${{ steps['fetch-service'].output.entity.metadata.labels.team or steps['fetch-service'].output.entity.spec.owner | replace('group:', '') }}
-          app: ${{ steps['fetch-service'].output.entity.metadata.name }}
+        templateName: provision-database
+        parameters:
+          team_name: ${{ steps['fetch-service'].output.entity.metadata.labels.team or steps['fetch-service'].output.entity.spec.owner | replace('group:', '') }}
+          app_name: ${{ steps['fetch-service'].output.entity.metadata.name }}
 
   output:
     text:
@@ -55,6 +57,9 @@ spec:
       - title: Kubernetes secret
         content: "`${{ steps['fetch-service'].output.entity.metadata.labels.team or steps['fetch-service'].output.entity.spec.owner | replace('group:', '') }}-${{ steps['fetch-service'].output.entity.metadata.name }}-db-creds`"
     links:
-      - title: Provision Run
-        icon: github
-        url: ${{ steps['trigger-provision'].output.runUrl }}
+      - title: Argo Workflows Run
+        icon: dashboard
+        url: ${{ steps['trigger-provision'].output.workflowUrl }}
+      - title: Argo Workflows UI
+        icon: dashboard
+        url: "https://workflows.mctl.me"

@@ -1,13 +1,13 @@
 apiVersion: scaffolder.backstage.io/v1beta3
 kind: Template
 metadata:
-  name: create-tenant-v2
-  title: "Create Tenant [v2 · Argo]"
+  name: create-tenant
+  title: Create Tenant
   description: |
     Provision a new tenant on the mctl.me platform.
     Creates a dedicated Kubernetes namespace with ResourceQuota, NetworkPolicy, and LimitRange.
     Also creates a scoped Vault policy and ArgoCD RBAC entry for the team.
-    Powered by Argo Workflows.
+
   tags:
     - tenant
     - provisioning

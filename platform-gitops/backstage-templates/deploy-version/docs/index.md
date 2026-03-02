@@ -36,5 +36,5 @@ Use this template when you want to:
 
 ## Links
 
-- [GitHub Actions workflow](https://github.com/mctlhq/mctl-core/actions/workflows/release-service.yml)
+- [Argo Workflows UI](https://workflows.mctl.me)
 - [View deployed services in Catalog](/catalog?filters[kind]=component)

@@ -3,12 +3,15 @@ kind: Template
 metadata:
   name: onboard-service
   title: Onboard Service
-  description: First-time setup — clone a repo, build the image, and deploy a new service to the preview cluster.
+  description: |
+    First-time setup — clone a repo, build the Docker image in-cluster via Kaniko,
+    and deploy a new service to the preview cluster.
   tags:
     - onboard
     - deploy
     - kubernetes
     - preview
+    - argo
   annotations:
     backstage.io/techdocs-ref: dir:.
 spec:
@@ -111,7 +114,7 @@ spec:
         repoPat:
           title: Repository PAT
           type: string
-          description: "Fine-grained PAT with 'Contents: Read' scope. Stored securely in Vault."
+          description: "Fine-grained PAT with 'Contents: Read' scope. Stored securely in Vault and used by the in-cluster Kaniko build."
           ui:field: Secret
 
   steps:
@@ -128,14 +131,12 @@ spec:
           data:
             pat: ${{ parameters.repoPat }}
 
-    - id: trigger-build
-      name: Release service
-      action: github:actions:dispatch-and-stream
+    - id: trigger-deploy
+      name: Onboard service via Argo Workflows
+      action: mctl:workflow:submit
       input:
-        repoUrl: github.com?repo=mctl-core&owner=mctlhq
-        workflowId: release-service.yml
-        branchOrTagName: main
-        workflowInputs:
+        templateName: deploy-service
+        parameters:
           action: onboard
           team_name: ${{ parameters.teamName | parseEntityRef | pick('name') }}
           component_name: ${{ parameters.dockerfileRepo | repoName }}
@@ -150,17 +151,15 @@ spec:
           env_vars: ${{ parameters.envVars | default('') }}
           secret_env_vars: ${{ parameters.secretEnvVars | default('') }}
 
-    - id: trigger-provision-db
+    - id: provision-db
       name: Provision database
       if: ${{ parameters.provisionDatabase }}
-      action: github:actions:dispatch
+      action: mctl:workflow:submit
       input:
-        repoUrl: github.com?repo=mctl-core&owner=mctlhq
-        workflowId: provision-db.yml
-        branchOrTagName: main
-        workflowInputs:
-          team: ${{ parameters.teamName | parseEntityRef | pick('name') }}
-          app: ${{ parameters.dockerfileRepo | repoName }}
+        templateName: provision-database
+        parameters:
+          team_name: ${{ parameters.teamName | parseEntityRef | pick('name') }}
+          app_name: ${{ parameters.dockerfileRepo | repoName }}
 
   output:
     text:
@@ -171,11 +170,11 @@ spec:
       - title: Preview URL
         content: "${{ 'https://' + parameters.host if parameters.host else 'N/A — background worker' }}"
       - title: Database
-        content: "${{ parameters.provisionDatabase and '✅ Provisioning dispatched — DATABASE_URL, DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD will be injected as env vars from K8s secret' or 'Not requested' }}"
+        content: "${{ parameters.provisionDatabase and '✅ Database provisioned — DATABASE_URL, DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD injected from K8s secret' or 'Not requested' }}"
     links:
-      - title: Release Pipeline
-        icon: github
-        url: ${{ steps['trigger-build'].output.runUrl }}
+      - title: Argo Workflows Run
+        icon: dashboard
+        url: ${{ steps['trigger-deploy'].output.workflowUrl }}
       - title: ArgoCD Dashboard
         icon: dashboard
         url: "https://ops.mctl.me"

@@ -3,12 +3,15 @@ kind: Template
 metadata:
   name: deploy-version
   title: Deploy Version
-  description: Build and deploy a new version of an existing service. Picks up source repo from the service catalog automatically.
+  description: |
+    Build and deploy a new version of an existing service via Argo Workflows.
+    Picks up source repo from the service catalog automatically.
   tags:
     - deploy
     - release
     - version
     - kubernetes
+    - argo
   annotations:
     backstage.io/techdocs-ref: dir:.
 spec:
@@ -66,13 +69,11 @@ spec:
         entityRef: ${{ parameters.serviceName }}
 
     - id: deploy-version
-      name: Deploy new version
-      action: github:actions:dispatch-and-stream
+      name: Deploy new version via Argo Workflows
+      action: mctl:workflow:submit
       input:
-        repoUrl: github.com?repo=mctl-core&owner=mctlhq
-        workflowId: release-service.yml
-        branchOrTagName: main
-        workflowInputs:
+        templateName: deploy-service
+        parameters:
           action: deploy
           team_name: ${{ steps['fetch-service'].output.entity.metadata.labels.team or steps['fetch-service'].output.entity.spec.owner | replace('group:', '') }}
           component_name: ${{ steps['fetch-service'].output.entity.metadata.name }}
@@ -88,9 +89,9 @@ spec:
       - title: Version
         content: "${{ parameters.gitTag or 'latest (auto-increment)' }}"
     links:
-      - title: Release Pipeline
-        icon: github
-        url: ${{ steps['deploy-version'].output.runUrl }}
+      - title: Argo Workflows Run
+        icon: dashboard
+        url: ${{ steps['deploy-version'].output.workflowUrl }}
       - title: ArgoCD Dashboard
         icon: dashboard
         url: "https://ops.mctl.me"
