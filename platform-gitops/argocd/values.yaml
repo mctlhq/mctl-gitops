@@ -1,4 +1,4 @@
-## ArgoCD configuration for mctl.me preview
+## ArgoCD configuration for mctl.me
 ## Managed by argocd-self-managed Application (GitOps)
 ## Changes here are auto-synced to the cluster
 
@@ -122,17 +122,8 @@ argo-cd:
         g, mctlhq:admins, role:admin
 
         # ============================================================================
-        # Team-Based Access (Auto-generated from tenant definitions)
+        # Team-Based Access (auto-generated per tenant)
         # ============================================================================
-
-        # Tenant: mctl-internals (github: mctl-internals)
-        p, role:team-mctl-internals, applications, get, preview/preview-mctl-internals-*, allow
-        p, role:team-mctl-internals, applications, list, preview/preview-mctl-internals-*, allow
-        p, role:team-mctl-internals, applications, sync, preview/preview-mctl-internals-*, allow
-        p, role:team-mctl-internals, applications, override, preview/preview-mctl-internals-*, allow
-        p, role:team-mctl-internals, logs, get, preview/preview-mctl-internals-*, allow
-        p, role:team-mctl-internals, exec, create, preview/preview-mctl-internals-*, allow
-        g, mctlhq:mctl-internals, role:team-mctl-internals
 
     secret:
       createSecret: true

@@ -2,7 +2,7 @@ apiVersion: backstage.io/v1alpha1
 kind: Component
 metadata:
   name: django-test
-  description: "django-test service deployed to preview"
+  description: "django-test service deployed to production"
   annotations:
     backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=test-django-test
     backstage.io/kubernetes-namespace: test

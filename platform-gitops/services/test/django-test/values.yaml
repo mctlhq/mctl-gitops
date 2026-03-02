@@ -1,6 +1,6 @@
 # Service: django-test
 # Team: test
-# Environment: preview
+# Environment: production
 # Chart: base-service
 
 image:
@@ -18,7 +18,7 @@ resources:
     cpu: 500m
     memory: 512Mi
 env:
-  APP_ENV: preview
+  APP_ENV: production
 ingress:
   enabled: true
   host: test-django-test.mctl.me

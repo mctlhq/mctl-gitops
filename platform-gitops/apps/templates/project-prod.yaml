@@ -1,6 +1,6 @@
 {{- /*
   TODO: Enable when prod cluster is ready
-  Copy project-preview.yaml, change:
+  Copy project-apps.yaml, change:
   - name: prod
   - description: Production environment
   - Restrict namespaces

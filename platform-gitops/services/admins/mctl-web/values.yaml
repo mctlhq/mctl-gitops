@@ -1,6 +1,6 @@
 # Service: mctl-web
 # Team: admins
-# Environment: preview
+# Environment: production
 # Chart: base-service
 
 image:
@@ -18,7 +18,7 @@ resources:
     cpu: 500m
     memory: 512Mi
 env:
-  APP_ENV: preview
+  APP_ENV: production
   t: "1"
 ingress:
   enabled: true

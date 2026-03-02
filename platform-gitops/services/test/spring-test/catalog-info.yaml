@@ -2,7 +2,7 @@ apiVersion: backstage.io/v1alpha1
 kind: Component
 metadata:
   name: spring-test
-  description: "spring-test service deployed to preview"
+  description: "spring-test service deployed to production"
   annotations:
     backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=test-spring-test
     backstage.io/kubernetes-namespace: test

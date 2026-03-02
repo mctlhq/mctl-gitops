@@ -2,7 +2,7 @@ apiVersion: backstage.io/v1alpha1
 kind: Component
 metadata:
   name: monteexchange
-  description: "monteexchange service deployed to preview"
+  description: "monteexchange service deployed to production"
   annotations:
     backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=yes-monteexchange
     backstage.io/kubernetes-namespace: yes

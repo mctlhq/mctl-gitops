@@ -1,1 +1,1 @@
-{{- /* TODO: Enable when prod cluster is ready. Copy applicationset-preview.yaml for prod environment. */ -}}
+{{- /* TODO: Enable when prod cluster is ready. Copy applicationset-apps.yaml for prod environment. */ -}}
