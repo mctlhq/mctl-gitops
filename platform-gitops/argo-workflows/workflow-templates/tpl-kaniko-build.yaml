@@ -82,8 +82,8 @@ spec:
                   -H "Authorization: Bearer ${JWT}" \
                   -H "Accept: application/vnd.github+json" \
                   "https://api.github.com/app/installations/${INSTALL_ID}/access_tokens" | tee /tmp/gh-resp.json | \
-                  grep -o '"token":"[^"]*"' | head -1 | cut -d'"' -f4 || true)
-                echo "GitHub API response: $(grep -v '"token"' /tmp/gh-resp.json || true)"
+                  grep '"token"' | head -1 | sed 's/.*"token": *"\([^"]*\)".*/\1/' || true)
+                echo "GitHub API response (redacted): $(grep -v '"token"' /tmp/gh-resp.json || true)"
 
                 if [ -n "$TOKEN" ]; then
                   echo "✅ Using GitHub App token"
