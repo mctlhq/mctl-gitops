@@ -127,7 +127,6 @@ argo-cd:
         p, role:team-developers, exec, create, preview/preview-developers-*, allow
         g, mctlhq:developers, role:team-developers
 
-
         # Tenant: testdeploy6 (github: testdeploy6)
         p, role:team-testdeploy6, applications, get, preview/preview-testdeploy6-*, allow
         p, role:team-testdeploy6, applications, list, preview/preview-testdeploy6-*, allow
@@ -136,6 +135,7 @@ argo-cd:
         p, role:team-testdeploy6, logs, get, preview/preview-testdeploy6-*, allow
         p, role:team-testdeploy6, exec, create, preview/preview-testdeploy6-*, allow
         g, mctlhq:testdeploy6, role:team-testdeploy6
+
     secret:
       createSecret: true
 
