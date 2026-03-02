@@ -109,6 +109,7 @@ spec:
             argoWorkflows:
               baseUrl: https://workflows.mctl.me
               namespace: argo-workflows
+              token: ${ARGO_WORKFLOWS_TOKEN}
             tenantManagement:
               githubOrg: mctlhq
               repoName: mctl-core
