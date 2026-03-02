@@ -17,6 +17,7 @@ spec:
           enabled: true
           authModes:
             - sso
+            - client
           extraArgs: []
           sso:
             enabled: true
