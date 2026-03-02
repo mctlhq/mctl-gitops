@@ -254,7 +254,13 @@ spec:
           set -e
           TEAM="{{workflow.parameters.team_name}}"
           SVC="{{workflow.parameters.component_name}}"
-          echo "⏳ Waiting for deployment ${SVC} in namespace ${TEAM}..."
+          echo "⏳ Waiting for ArgoCD to sync deployment ${SVC} in namespace ${TEAM}..."
+          for i in $(seq 1 30); do
+            kubectl get deployment "${SVC}" -n "${TEAM}" 2>/dev/null && break || true
+            echo "  [${i}/30] Not created yet..."
+            sleep 10
+          done
+          kubectl get deployment "${SVC}" -n "${TEAM}" || { echo "❌ Deployment never created"; exit 1; }
           kubectl wait deployment "${SVC}" \
             --namespace "${TEAM}" \
             --for=condition=available \
