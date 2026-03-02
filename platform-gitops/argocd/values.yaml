@@ -84,6 +84,7 @@ argo-cd:
               - groups
             getUserInfo: true
             userNameKey: preferred_username
+            insecureEnableGroups: true
             claimMapping:
               groups: groups
         staticClients:
@@ -119,20 +120,11 @@ argo-cd:
         p, role:admin, clusters, get, */*, allow
         p, role:admin, repositories, *, */*, allow
         p, role:admin, projects, *, */*, allow
-        g, mctlhq:admins, role:admin
+        g, admins, role:admin
 
         # ============================================================================
         # Team-Based Access (Auto-generated from tenant definitions)
         # ============================================================================
-
-        # Tenant: mctl-internals (github: mctl-internals)
-        p, role:team-mctl-internals, applications, get, preview/preview-mctl-internals-*, allow
-        p, role:team-mctl-internals, applications, list, preview/preview-mctl-internals-*, allow
-        p, role:team-mctl-internals, applications, sync, preview/preview-mctl-internals-*, allow
-        p, role:team-mctl-internals, applications, override, preview/preview-mctl-internals-*, allow
-        p, role:team-mctl-internals, logs, get, preview/preview-mctl-internals-*, allow
-        p, role:team-mctl-internals, exec, create, preview/preview-mctl-internals-*, allow
-        g, mctlhq:mctl-internals, role:team-mctl-internals
 
     secret:
       createSecret: true
