@@ -25,29 +25,32 @@ spec:
         parameters:
           - name: image
             valueFrom:
-              path: /tmp/image
+              path: /workspace/image-ref
       initContainers:
         # Step 1: resolve clone token (Vault PAT → GitHub App → public)
         - name: resolve-token
-          image: hashicorp/vault:1.15
+          image: alpine:3.19
           command: [sh, -c]
           args:
             - |
               set -e
+              apk add -q curl openssl
               TEAM="{{inputs.parameters.team_name}}"
               SERVICE="{{inputs.parameters.component_name}}"
               REPO="{{inputs.parameters.dockerfile_repo}}"
 
-              # Try Vault PAT first
+              # Try Vault PAT first (via API)
               echo "🔑 Looking for repo PAT in Vault..."
               SA_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
-              VAULT_TOKEN=$(vault write -field=token auth/kubernetes/login \
-                role=argo-workflow jwt="$SA_TOKEN" 2>/dev/null || true)
+              VAULT_TOKEN=$(curl -s -X POST "${VAULT_ADDR}/v1/auth/kubernetes/login" \
+                -H "Content-Type: application/json" \
+                -d "{\"role\":\"argo-workflow\",\"jwt\":\"${SA_TOKEN}\"}" | \
+                grep -o '"client_token":"[^"]*"' | cut -d'"' -f4 || true)
 
               if [ -n "$VAULT_TOKEN" ]; then
-                export VAULT_TOKEN
-                PAT=$(vault kv get -field=pat \
-                  secret/teams/${TEAM}/${SERVICE}/repo-pat 2>/dev/null || true)
+                PAT=$(curl -s -H "X-Vault-Token: ${VAULT_TOKEN}" \
+                  "${VAULT_ADDR}/v1/secret/data/teams/${TEAM}/${SERVICE}/repo-pat" | \
+                  grep -o '"pat":"[^"]*"' | cut -d'"' -f4 || true)
                 if [ -n "$PAT" ]; then
                   echo "✅ Using Vault PAT"
                   echo "https://x-access-token:${PAT}@github.com/${REPO}" > /workspace/clone-url
@@ -68,17 +71,17 @@ spec:
                 EXP=$((NOW + 540))
 
                 # Create JWT (header.payload.signature)
-                HEADER=$(echo -n '{"alg":"RS256","typ":"JWT"}' | base64 | tr -d '=' | tr '/+' '_-')
-                PAYLOAD=$(echo -n "{\"iat\":${NOW},\"exp\":${EXP},\"iss\":\"${APP_ID}\"}" | base64 | tr -d '=' | tr '/+' '_-')
-                SIG=$(echo -n "${HEADER}.${PAYLOAD}" | openssl dgst -sha256 -sign $APP_KEY_FILE | base64 | tr -d '=' | tr '/+' '_-')
+                HEADER=$(printf '%s' '{"alg":"RS256","typ":"JWT"}' | base64 | tr -d '=' | tr '/+' '_-')
+                PAYLOAD=$(printf '%s' "{\"iat\":${NOW},\"exp\":${EXP},\"iss\":\"${APP_ID}\"}" | base64 | tr -d '=' | tr '/+' '_-')
+                SIG=$(printf '%s' "${HEADER}.${PAYLOAD}" | openssl dgst -sha256 -sign $APP_KEY_FILE | base64 | tr -d '=' | tr '/+' '_-')
                 JWT="${HEADER}.${PAYLOAD}.${SIG}"
 
                 TOKEN=$(curl -sS \
                   -H "Authorization: Bearer ${JWT}" \
                   -H "Accept: application/vnd.github+json" \
                   "https://api.github.com/app/installations/${INSTALL_ID}/access_tokens" \
-                  -d "{\"repositories\":[\"${REPO##*/}\"]}" | \
-                  grep '"token"' | head -1 | cut -d'"' -f4)
+                  -d '{"permissions":{"contents":"read"}}' | \
+                  grep -o '"token":"[^"]*"' | head -1 | cut -d'"' -f4 || true)
 
                 if [ -n "$TOKEN" ]; then
                   echo "✅ Using GitHub App token"
@@ -110,8 +113,9 @@ spec:
               echo "📥 Cloning {{inputs.parameters.dockerfile_repo}}@{{inputs.parameters.git_tag}}..."
               git clone --depth=1 \
                 --branch "{{inputs.parameters.git_tag}}" \
-                "$CLONE_URL" /workspace/src 2>&1 | grep -v 'x-access-token' || \
-              git clone --depth=1 "$CLONE_URL" /workspace/src 2>&1 | grep -v 'x-access-token'
+                "$CLONE_URL" /workspace/src > /tmp/git-out 2>&1; RC=$?
+              cat /tmp/git-out | grep -v 'x-access-token' || true
+              if [ $RC -ne 0 ]; then echo "❌ git clone failed (rc=$RC)"; exit 1; fi
               echo "✅ Cloned successfully"
           volumeMounts:
             - name: workspace
@@ -142,7 +146,7 @@ spec:
           args:
             - |
               sleep 5
-              echo "{{inputs.parameters.image_name}}:{{inputs.parameters.image_tag}}" > /tmp/image
+              echo "{{inputs.parameters.image_name}}:{{inputs.parameters.image_tag}}" > /workspace/image-ref
               sleep infinity
           mirrorVolumeMounts: true
 
