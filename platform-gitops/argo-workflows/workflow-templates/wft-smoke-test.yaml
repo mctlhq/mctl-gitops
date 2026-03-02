@@ -1,0 +1,284 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: smoke-test
+  namespace: argo-workflows
+  annotations:
+    workflows.argoproj.io/description: |
+      End-to-end smoke test for the mctl.me platform.
+
+      Lifecycle tested:
+        1. onboard     — build image from e2e-public-test repo, deploy to tests namespace
+        2. verify-pod  — wait for Deployment to become available
+        3. provision-db — create PostgreSQL database + store credentials in Vault
+        4. verify-vault — confirm Vault secret exists at expected path
+        5. verify-secret — confirm ExternalSecret synced into k8s Secret
+        6. update-config — redeploy with SMOKE_TEST=true env var
+        7. verify-env   — exec into pod and confirm env var is set
+        8. retire       — delete service and Vault secrets
+
+      onExit handler always runs retire to clean up even on failure.
+
+      Usage:
+        argo submit --from workflowtemplate/smoke-test -n argo-workflows
+spec:
+  entrypoint: smoke-pipeline
+  serviceAccountName: argo-workflow-sa
+  onExit: cleanup
+
+  # Fixed parameters — smoke test always uses the same service identity
+  arguments:
+    parameters:
+      - name: team_name
+        value: "tests"
+      - name: component_name
+        value: "smoke-test-svc"
+      - name: dockerfile_repo
+        value: "mctlhq/e2e-public-test"
+
+  templates:
+
+    # ── Main pipeline ─────────────────────────────────────────────────────────
+    - name: smoke-pipeline
+      dag:
+        tasks:
+
+          - name: onboard
+            templateRef:
+              name: deploy-service
+              template: deploy-pipeline
+            arguments:
+              parameters:
+                - name: action
+                  value: "onboard"
+                - name: team_name
+                  value: "{{workflow.parameters.team_name}}"
+                - name: component_name
+                  value: "{{workflow.parameters.component_name}}"
+                - name: component_type
+                  value: "worker-service"
+                - name: dockerfile_repo
+                  value: "{{workflow.parameters.dockerfile_repo}}"
+                - name: git_tag
+                  value: "main"
+                - name: port
+                  value: "8080"
+                - name: host
+                  value: ""
+                - name: env_vars
+                  value: ""
+                - name: secret_env_vars
+                  value: ""
+                - name: provision_database
+                  value: "false"
+                - name: skip_health_check
+                  value: "false"
+                - name: dockerfile_path
+                  value: "Dockerfile"
+                - name: image_tag
+                  value: ""
+
+          - name: verify-pod
+            dependencies: [onboard]
+            template: check-pod-running
+
+          - name: provision-db
+            dependencies: [verify-pod]
+            templateRef:
+              name: provision-database
+              template: provision-pipeline
+            arguments:
+              parameters:
+                - name: team_name
+                  value: "{{workflow.parameters.team_name}}"
+                - name: app_name
+                  value: "{{workflow.parameters.component_name}}"
+
+          - name: verify-vault-secret
+            dependencies: [provision-db]
+            template: check-vault-secret
+
+          - name: verify-k8s-secret
+            dependencies: [verify-vault-secret]
+            template: check-k8s-secret
+
+          - name: update-config
+            dependencies: [verify-k8s-secret]
+            templateRef:
+              name: deploy-service
+              template: deploy-pipeline
+            arguments:
+              parameters:
+                - name: action
+                  value: "update-config"
+                - name: team_name
+                  value: "{{workflow.parameters.team_name}}"
+                - name: component_name
+                  value: "{{workflow.parameters.component_name}}"
+                - name: component_type
+                  value: "worker-service"
+                - name: dockerfile_repo
+                  value: ""
+                - name: git_tag
+                  value: ""
+                - name: port
+                  value: "8080"
+                - name: host
+                  value: ""
+                - name: env_vars
+                  value: "SMOKE_TEST=true"
+                - name: secret_env_vars
+                  value: ""
+                - name: provision_database
+                  value: "false"
+                - name: skip_health_check
+                  value: "false"
+                - name: dockerfile_path
+                  value: "Dockerfile"
+                - name: image_tag
+                  value: ""
+
+          - name: verify-env-var
+            dependencies: [update-config]
+            template: check-env-var
+
+          - name: retire
+            dependencies: [verify-env-var]
+            templateRef:
+              name: retire-service
+              template: retire-pipeline
+            arguments:
+              parameters:
+                - name: team_name
+                  value: "{{workflow.parameters.team_name}}"
+                - name: component_name
+                  value: "{{workflow.parameters.component_name}}"
+                - name: component_type
+                  value: "worker-service"
+                - name: delete_vault_secrets
+                  value: "true"
+
+    # ── onExit cleanup (runs even if pipeline fails) ──────────────────────────
+    - name: cleanup
+      steps:
+        - - name: retire-on-exit
+            templateRef:
+              name: retire-service
+              template: retire-pipeline
+            arguments:
+              parameters:
+                - name: team_name
+                  value: "{{workflow.parameters.team_name}}"
+                - name: component_name
+                  value: "{{workflow.parameters.component_name}}"
+                - name: component_type
+                  value: "worker-service"
+                - name: delete_vault_secrets
+                  value: "true"
+
+    # ── Verification: pod running ─────────────────────────────────────────────
+    - name: check-pod-running
+      script:
+        image: bitnami/kubectl:latest
+        command: [bash]
+        source: |
+          set -e
+          TEAM="{{workflow.parameters.team_name}}"
+          SVC="{{workflow.parameters.component_name}}"
+
+          echo "⏳ Waiting for deployment ${SVC} in namespace ${TEAM}..."
+          kubectl wait deployment "${SVC}" \
+            --namespace "${TEAM}" \
+            --for=condition=available \
+            --timeout=180s
+
+          READY=$(kubectl get deployment "${SVC}" -n "${TEAM}" \
+            -o jsonpath='{.status.readyReplicas}')
+          echo "✅ Deployment ${SVC} is available (${READY} ready replicas)"
+
+    # ── Verification: Vault secret exists ────────────────────────────────────
+    - name: check-vault-secret
+      script:
+        image: hashicorp/vault:1.15
+        command: [sh]
+        source: |
+          set -e
+          TEAM="{{workflow.parameters.team_name}}"
+          SVC="{{workflow.parameters.component_name}}"
+          VAULT_PATH="platform/teams/${TEAM}/${SVC}/database"
+
+          echo "🔐 Authenticating to Vault..."
+          TOKEN=$(vault write -field=token auth/kubernetes/login \
+            role="argo-workflows" \
+            jwt="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)")
+          export VAULT_TOKEN="${TOKEN}"
+
+          echo "🔍 Checking Vault secret at ${VAULT_PATH}..."
+          vault kv get "secret/${VAULT_PATH}" | grep -E "DB_NAME|DB_USER|DB_PASSWORD|DATABASE_URL"
+          echo "✅ Vault secret exists and contains expected database keys"
+        env:
+          - name: VAULT_ADDR
+            value: "http://vault.vault.svc.cluster.local:8200"
+
+    # ── Verification: k8s ExternalSecret synced ───────────────────────────────
+    - name: check-k8s-secret
+      script:
+        image: bitnami/kubectl:latest
+        command: [bash]
+        source: |
+          set -e
+          TEAM="{{workflow.parameters.team_name}}"
+          SVC="{{workflow.parameters.component_name}}"
+          SECRET_NAME="${SVC}-db"
+
+          echo "🔍 Checking ExternalSecret sync status..."
+          # Wait up to 60s for ExternalSecret to sync
+          for i in $(seq 1 12); do
+            STATUS=$(kubectl get externalsecret "${SECRET_NAME}" -n "${TEAM}" \
+              -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
+            if [ "${STATUS}" = "True" ]; then
+              break
+            fi
+            echo "  Waiting for ExternalSecret... (${i}/12)"
+            sleep 5
+          done
+
+          STATUS=$(kubectl get externalsecret "${SECRET_NAME}" -n "${TEAM}" \
+            -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')
+          if [ "${STATUS}" != "True" ]; then
+            echo "❌ ExternalSecret ${SECRET_NAME} not synced (status: ${STATUS})"
+            exit 1
+          fi
+
+          # Confirm the k8s Secret was created and has expected keys
+          kubectl get secret "${SECRET_NAME}" -n "${TEAM}" -o jsonpath='{.data}' | \
+            grep -qE "DATABASE_URL|DB_NAME" && echo "✅ k8s Secret ${SECRET_NAME} exists with DB keys" || {
+            echo "❌ k8s Secret missing expected keys"
+            exit 1
+          }
+
+    # ── Verification: env var in running pod ──────────────────────────────────
+    - name: check-env-var
+      script:
+        image: bitnami/kubectl:latest
+        command: [bash]
+        source: |
+          set -e
+          TEAM="{{workflow.parameters.team_name}}"
+          SVC="{{workflow.parameters.component_name}}"
+
+          echo "⏳ Waiting for rollout after config update..."
+          kubectl rollout status deployment/"${SVC}" -n "${TEAM}" --timeout=120s
+
+          POD=$(kubectl get pods -n "${TEAM}" -l "app=${SVC}" \
+            --field-selector=status.phase=Running \
+            -o jsonpath='{.items[0].metadata.name}')
+
+          if [ -z "${POD}" ]; then
+            echo "❌ No running pod found for ${SVC} in ${TEAM}"
+            exit 1
+          fi
+
+          echo "🔍 Checking env var in pod ${POD}..."
+          kubectl exec -n "${TEAM}" "${POD}" -- env | grep "SMOKE_TEST=true"
+          echo "✅ SMOKE_TEST=true confirmed in pod environment"
