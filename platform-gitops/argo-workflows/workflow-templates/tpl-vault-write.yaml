@@ -16,10 +16,11 @@ spec:
           - name: component_name
           - name: secret_env_vars    # KEY=value newline-separated
       script:
-        image: hashicorp/vault:1.15
+        image: alpine:3.19
         command: [sh]
         source: |
           set -e
+          apk add --no-cache curl > /dev/null 2>&1
           TEAM="{{inputs.parameters.team_name}}"
           SERVICE="{{inputs.parameters.component_name}}"
           SECRET_TEXT="{{inputs.parameters.secret_env_vars}}"
@@ -27,9 +28,11 @@ spec:
 
           echo "🔐 Authenticating with Vault (Kubernetes auth)..."
           SA_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
-          VAULT_TOKEN=$(vault write -field=token auth/kubernetes/login \
-            role=argo-workflow \
-            jwt="$SA_TOKEN")
+          VAULT_TOKEN=$(curl -sS -X POST \
+            -H "Content-Type: application/json" \
+            -d "{\"role\":\"argo-workflow\",\"jwt\":\"${SA_TOKEN}\"}" \
+            "${VAULT_ADDR}/v1/auth/kubernetes/login" | \
+            grep '"client_token"' | sed 's/.*"client_token":"\([^"]*\)".*/\1/')
 
           if [ -z "$VAULT_TOKEN" ]; then
             echo "❌ Failed to authenticate with Vault"
@@ -114,13 +117,17 @@ spec:
           - name: vault_path        # e.g. "platform/teams/payments/myapp/database"
           - name: json_data         # JSON string: '{"key":"val"}'
       script:
-        image: hashicorp/vault:1.15
+        image: alpine:3.19
         command: [sh]
         source: |
           set -e
+          apk add --no-cache curl > /dev/null 2>&1
           SA_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
-          VAULT_TOKEN=$(vault write -field=token auth/kubernetes/login \
-            role=argo-workflow jwt="$SA_TOKEN")
+          VAULT_TOKEN=$(curl -sS -X POST \
+            -H "Content-Type: application/json" \
+            -d "{\"role\":\"argo-workflow\",\"jwt\":\"${SA_TOKEN}\"}" \
+            "${VAULT_ADDR}/v1/auth/kubernetes/login" | \
+            grep '"client_token"' | sed 's/.*"client_token":"\([^"]*\)".*/\1/')
           export VAULT_TOKEN
 
           HTTP_CODE=$(curl -sS -o /tmp/vault-write.json -w "%{http_code}" \
@@ -146,16 +153,20 @@ spec:
           - name: team_name
           - name: component_name
       script:
-        image: hashicorp/vault:1.15
+        image: alpine:3.19
         command: [sh]
         source: |
           set -e
+          apk add --no-cache curl > /dev/null 2>&1
           TEAM="{{inputs.parameters.team_name}}"
           SERVICE="{{inputs.parameters.component_name}}"
 
           SA_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
-          VAULT_TOKEN=$(vault write -field=token auth/kubernetes/login \
-            role=argo-workflow jwt="$SA_TOKEN")
+          VAULT_TOKEN=$(curl -sS -X POST \
+            -H "Content-Type: application/json" \
+            -d "{\"role\":\"argo-workflow\",\"jwt\":\"${SA_TOKEN}\"}" \
+            "${VAULT_ADDR}/v1/auth/kubernetes/login" | \
+            grep '"client_token"' | sed 's/.*"client_token":"\([^"]*\)".*/\1/')
           export VAULT_TOKEN
 
           echo "🗑️  Deleting Vault secrets for ${TEAM}/${SERVICE}..."

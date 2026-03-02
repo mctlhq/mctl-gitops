@@ -36,12 +36,11 @@ spec:
           - name: app_name
             value: "{{workflow.parameters.app_name}}"
       script:
-        image: hashicorp/vault:1.15
+        image: alpine:3.19
         command: [sh]
         source: |
           set -e
-          apk add --no-cache curl openssl git python3 wget 2>/dev/null || \
-            apt-get install -y curl openssl git python3 wget 2>/dev/null || true
+          apk add --no-cache curl openssl git wget > /dev/null 2>&1
 
           TEAM="{{inputs.parameters.team_name}}"
           APP="{{inputs.parameters.app_name}}"
@@ -61,8 +60,11 @@ spec:
           # ── Authenticate with Vault (K8s auth) ───────────────────────────
           echo "🔐 Authenticating with Vault..."
           SA_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
-          VAULT_TOKEN=$(vault write -field=token auth/kubernetes/login \
-            role=argo-workflow jwt="$SA_TOKEN")
+          VAULT_TOKEN=$(curl -sS -X POST \
+            -H "Content-Type: application/json" \
+            -d "{\"role\":\"argo-workflow\",\"jwt\":\"${SA_TOKEN}\"}" \
+            "${VAULT_ADDR}/v1/auth/kubernetes/login" | \
+            grep '"client_token"' | sed 's/.*"client_token":"\([^"]*\)".*/\1/')
           export VAULT_TOKEN
 
           # ── Get GitHub App token ─────────────────────────────────────────

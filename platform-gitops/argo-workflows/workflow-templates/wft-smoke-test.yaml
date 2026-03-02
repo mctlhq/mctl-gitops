@@ -275,22 +275,36 @@ spec:
     # ─── Verification: Vault DB secret exists ────────────────────────────────
     - name: check-vault-secret
       script:
-        image: hashicorp/vault:1.15
+        image: alpine:3.19
         command: [sh]
         source: |
           set -e
+          apk add --no-cache curl > /dev/null 2>&1
           TEAM="{{workflow.parameters.team_name}}"
           SVC="{{workflow.parameters.component_name}}"
-          VAULT_PATH="platform/teams/${TEAM}/${SVC}/database"
+          VAULT_PATH="secret/data/platform/teams/${TEAM}/${SVC}/database"
           echo "🔐 Authenticating to Vault via Kubernetes auth..."
-          TOKEN=$(vault write -field=token auth/kubernetes/login \
-            role="argo-workflows" \
-            jwt="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)")
-          export VAULT_TOKEN="${TOKEN}"
-          echo "🔍 Checking Vault secret at secret/${VAULT_PATH}..."
-          vault kv get "secret/${VAULT_PATH}"
-          vault kv get -field=DB_NAME "secret/${VAULT_PATH}" > /dev/null
-          vault kv get -field=DB_PASSWORD "secret/${VAULT_PATH}" > /dev/null
+          SA_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+          VAULT_TOKEN=$(curl -sS -X POST \
+            -H "Content-Type: application/json" \
+            -d "{\"role\":\"argo-workflow\",\"jwt\":\"${SA_TOKEN}\"}" \
+            "${VAULT_ADDR}/v1/auth/kubernetes/login" | \
+            grep '"client_token"' | sed 's/.*"client_token":"\([^"]*\)".*/\1/')
+          if [ -z "$VAULT_TOKEN" ]; then
+            echo "❌ Failed to authenticate with Vault"
+            exit 1
+          fi
+          echo "🔍 Checking Vault secret at ${VAULT_PATH}..."
+          HTTP=$(curl -sS -o /tmp/vsecret.json -w "%{http_code}" \
+            -H "X-Vault-Token: $VAULT_TOKEN" \
+            "${VAULT_ADDR}/v1/${VAULT_PATH}")
+          if [ "$HTTP" != "200" ]; then
+            echo "❌ Secret not found (HTTP $HTTP)"
+            cat /tmp/vsecret.json || true
+            exit 1
+          fi
+          grep -q '"DB_NAME"' /tmp/vsecret.json || { echo "❌ DB_NAME key missing"; exit 1; }
+          grep -q '"DB_PASSWORD"' /tmp/vsecret.json || { echo "❌ DB_PASSWORD key missing"; exit 1; }
           echo "✅ Vault secret exists with expected DB keys"
         env:
           - name: VAULT_ADDR
