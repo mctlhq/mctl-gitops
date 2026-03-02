@@ -127,7 +127,6 @@ argo-cd:
         p, role:team-developers, exec, create, preview/preview-developers-*, allow
         g, mctlhq:developers, role:team-developers
 
-
         # Tenant: tests (github: tests)
         p, role:team-tests, applications, get, preview/preview-tests-*, allow
         p, role:team-tests, applications, list, preview/preview-tests-*, allow
