@@ -96,15 +96,11 @@ spec:
           git config user.name "argo-workflows[bot]"
           git config user.email "argo-workflows[bot]@users.noreply.github.com"
 
-          # ── 3. Determine service directory ────────────────────────────────
-          if [ "$TYPE" = "base-service" ]; then
-            DIR="platform-gitops/services/${TEAM}/${SERVICE}"
-          else
-            DIR="platform-gitops/workers/preview/${TEAM}/${SERVICE}"
-          fi
+          # ── 3. Service directory ──────────────────────────────────────────
+          DIR="platform-gitops/services/${TEAM}/${SERVICE}"
 
           # ── 4. Security: validate path stays within allowed scope ─────────
-          ALLOWED_BASES="platform-gitops/services/${TEAM} platform-gitops/workers/preview/${TEAM}"
+          ALLOWED_BASES="platform-gitops/services/${TEAM}"
           ALLOWED=false
           for base in $ALLOWED_BASES; do
             case "$DIR" in
@@ -210,10 +206,10 @@ spec:
               tar -xzf /tmp/helm.tar.gz -C /tmp && \
               mv /tmp/linux-amd64/helm /usr/local/bin/helm
 
-            if ! helm template test "platform-gitops/helm-charts/${TYPE}" \
+            if ! helm template test "platform-gitops/helm-charts/base-service" \
               -f "${DIR}/values.yaml" > /dev/null 2>&1; then
               echo "❌ Helm validation failed:"
-              helm template test "platform-gitops/helm-charts/${TYPE}" -f "${DIR}/values.yaml" 2>&1 || true
+              helm template test "platform-gitops/helm-charts/base-service" -f "${DIR}/values.yaml" 2>&1 || true
               exit 1
             fi
             echo "✅ Helm template valid"
@@ -335,11 +331,7 @@ spec:
           git config user.name "argo-workflows[bot]"
           git config user.email "argo-workflows[bot]@users.noreply.github.com"
 
-          if [ "$TYPE" = "base-service" ]; then
-            DIR="platform-gitops/services/${TEAM}/${SERVICE}"
-          else
-            DIR="platform-gitops/workers/preview/${TEAM}/${SERVICE}"
-          fi
+          DIR="platform-gitops/services/${TEAM}/${SERVICE}"
 
           if [ ! -d "$DIR" ]; then
             echo "⚠️  Service directory not found: $DIR — already deleted?"

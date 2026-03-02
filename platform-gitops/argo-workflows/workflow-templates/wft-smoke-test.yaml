@@ -254,7 +254,7 @@ spec:
           set -e
           TEAM="{{workflow.parameters.team_name}}"
           SVC="{{workflow.parameters.component_name}}"
-          INSTANCE_LABEL="preview-${TEAM}-${SVC}"
+          INSTANCE_LABEL="${TEAM}-${SVC}"
           echo "⏳ Waiting for ArgoCD to sync deployment (instance=${INSTANCE_LABEL}) in namespace ${TEAM}..."
           for i in $(seq 1 30); do
             DEPLOY=$(kubectl get deployment -n "${TEAM}" -l "app.kubernetes.io/instance=${INSTANCE_LABEL}" -o name 2>/dev/null | head -1)
@@ -333,7 +333,7 @@ spec:
           set -e
           TEAM="{{workflow.parameters.team_name}}"
           SVC="{{workflow.parameters.component_name}}"
-          INSTANCE_LABEL="preview-${TEAM}-${SVC}"
+          INSTANCE_LABEL="${TEAM}-${SVC}"
           echo "⏳ Waiting for rollout to complete..."
           DEPLOY=$(kubectl get deployment -n "${TEAM}" -l "app.kubernetes.io/instance=${INSTANCE_LABEL}" -o name 2>/dev/null | head -1)
           [ -z "${DEPLOY}" ] && { echo "❌ Deployment not found"; exit 1; }

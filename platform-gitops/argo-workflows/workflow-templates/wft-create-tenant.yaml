@@ -458,12 +458,12 @@ spec:
           # We insert new tenant RBAC before the 'secret:' section
           RBAC_BLOCK="
                   # Tenant: ${TENANT} (github: ${GITHUB_TEAM})
-                  p, role:team-${TENANT}, applications, get, preview/preview-${TENANT}-*, allow
-                  p, role:team-${TENANT}, applications, list, preview/preview-${TENANT}-*, allow
-                  p, role:team-${TENANT}, applications, sync, preview/preview-${TENANT}-*, allow
-                  p, role:team-${TENANT}, applications, override, preview/preview-${TENANT}-*, allow
-                  p, role:team-${TENANT}, logs, get, preview/preview-${TENANT}-*, allow
-                  p, role:team-${TENANT}, exec, create, preview/preview-${TENANT}-*, allow
+                  p, role:team-${TENANT}, applications, get, apps/${TENANT}-*, allow
+                  p, role:team-${TENANT}, applications, list, apps/${TENANT}-*, allow
+                  p, role:team-${TENANT}, applications, sync, apps/${TENANT}-*, allow
+                  p, role:team-${TENANT}, applications, override, apps/${TENANT}-*, allow
+                  p, role:team-${TENANT}, logs, get, apps/${TENANT}-*, allow
+                  p, role:team-${TENANT}, exec, create, apps/${TENANT}-*, allow
                   g, mctlhq:${GITHUB_TEAM}, role:team-${TENANT}"
 
           # Check if tenant already has RBAC (shouldn't happen given validate step, but be safe)

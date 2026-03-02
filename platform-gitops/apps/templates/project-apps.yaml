@@ -1,10 +1,10 @@
 apiVersion: argoproj.io/v1alpha1
 kind: AppProject
 metadata:
-  name: preview
+  name: apps
   namespace: argocd
 spec:
-  description: Preview environment — services and workers
+  description: Services and workers
 
   sourceRepos:
     - {{ .Values.spec.source.repoURL }}

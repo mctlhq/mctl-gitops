@@ -212,7 +212,7 @@ spec:
           CATALOG_FILE=""
           for dir in \
             "platform-gitops/services/${TEAM}/${APP}" \
-            "platform-gitops/workers/preview/${TEAM}/${APP}"; do
+            "platform-gitops/services/${TEAM}/${APP}"; do
             [ -f "${dir}/catalog-info.yaml" ] && CATALOG_FILE="${dir}/catalog-info.yaml" && break
           done
 

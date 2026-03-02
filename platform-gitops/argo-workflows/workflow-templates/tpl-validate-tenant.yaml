@@ -81,24 +81,16 @@ spec:
           git clone --depth=1 "git@github.com:mctlhq/mctl-core.git" /tmp/mctl-core
           cd /tmp/mctl-core
 
-          # ── 4. Determine component type for deploy/update-config ─────────────
+          # ── 4. Verify service exists for deploy/update-config ────────────────
           if [ "$ACTION" = "deploy" ] || [ "$ACTION" = "update-config" ]; then
-            if [ -d "platform-gitops/services/${TEAM}/${SERVICE}" ]; then
-              TYPE="base-service"
-            elif [ -d "platform-gitops/workers/preview/${TEAM}/${SERVICE}" ]; then
-              TYPE="worker-service"
-            else
+            if [ ! -d "platform-gitops/services/${TEAM}/${SERVICE}" ]; then
               echo "❌ Service ${TEAM}/${SERVICE} not found. Use 'onboard' action first."
               exit 1
             fi
           fi
 
-          # ── 5. Determine service directory ───────────────────────────────────
-          if [ "$TYPE" = "base-service" ]; then
-            DIR="platform-gitops/services/${TEAM}/${SERVICE}"
-          else
-            DIR="platform-gitops/workers/preview/${TEAM}/${SERVICE}"
-          fi
+          # ── 5. Service directory (all types live under services/) ─────────────
+          DIR="platform-gitops/services/${TEAM}/${SERVICE}"
 
           # ── 6. Onboard: service must NOT exist; deploy: must exist ───────────
           if [ "$ACTION" = "onboard" ] && [ -d "$DIR" ]; then

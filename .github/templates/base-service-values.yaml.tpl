@@ -1,6 +1,6 @@
 # Service: __SERVICE_NAME__
 # Team: __TEAM_NAME__
-# Environment: preview
+
 # Chart: base-service
 
 image:

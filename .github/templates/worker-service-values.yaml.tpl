@@ -1,7 +1,6 @@
 # Worker: __SERVICE_NAME__
 # Team: __TEAM_NAME__
-# Environment: preview
-# Chart: worker-service
+# Chart: base-service (ingress disabled)
 
 image:
   repository: ghcr.io/mctlhq/__SERVICE_NAME__
@@ -10,7 +9,8 @@ image:
 imagePullSecrets:
   - name: ghcr-credentials
 
-workloadType: deployment
+ingress:
+  enabled: false
 
 resources:
   requests:
@@ -20,5 +20,4 @@ resources:
     cpu: 500m
     memory: 256Mi
 
-env:
-  APP_ENV: preview
+env: {}

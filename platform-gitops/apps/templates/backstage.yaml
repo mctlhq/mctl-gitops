@@ -129,7 +129,7 @@ spec:
                 - type: config
                   clusters:
                     - url: https://kubernetes.default.svc
-                      name: preview
+                      name: production
                       authProvider: serviceAccount
                       skipTLSVerify: true
                       serviceAccountToken: ${K8S_SERVICE_ACCOUNT_TOKEN}
@@ -194,20 +194,9 @@ spec:
                         minutes: 1
                       timeout:
                         minutes: 3
-                  previewServices:
+                  services:
                     organization: mctlhq
                     catalogPath: /platform-gitops/services/*/*/catalog-info.yaml
-                    filters:
-                      repository: mctl-core
-                      branch: main
-                    schedule:
-                      frequency:
-                        minutes: 1
-                      timeout:
-                        minutes: 3
-                  previewWorkers:
-                    organization: mctlhq
-                    catalogPath: /platform-gitops/workers/preview/*/*/catalog-info.yaml
                     filters:
                       repository: mctl-core
                       branch: main
