@@ -64,6 +64,7 @@ spec:
       # - host <db_name> <role_name> all scram-sha-256
       - host test-django-test test-django-test all scram-sha-256
       - host test-spring-test test-spring-test all scram-sha-256
+      - host tests-pdb-test-svc tests-pdb-test-svc all scram-sha-256
       - host all all 0.0.0.0/0 reject
 
   managed:
@@ -96,6 +97,12 @@ spec:
         ensure: present
         passwordSecret:
           name: argoworkflows-db-creds
+      - name: tests-pdb-test-svc
+        login: true
+        connectionLimit: 10
+        ensure: present
+        passwordSecret:
+          name: tests-pdb-test-svc-db-creds
       # Team app roles — add new entries when onboarding:
       # - name: team1_app1
       #   login: true

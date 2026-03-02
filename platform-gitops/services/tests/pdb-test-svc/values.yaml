@@ -3,3 +3,10 @@ image:
   tag: "1.0"
 ingress:
   enabled: false
+
+dbSecret:
+  vaultPath: "platform/teams/tests/pdb-test-svc/database"
+  secretName: "tests-pdb-test-svc-db-creds"
+envFrom:
+  - secretRef:
+      name: "tests-pdb-test-svc-db-creds"

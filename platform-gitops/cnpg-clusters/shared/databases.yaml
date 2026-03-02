@@ -55,3 +55,14 @@ spec:
   cluster:
     name: shared-pg
   databaseReclaimPolicy: retain
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: tests-pdb-test-svc-db
+spec:
+  name: "tests-pdb-test-svc"
+  owner: "tests-pdb-test-svc"
+  cluster:
+    name: shared-pg
+  databaseReclaimPolicy: retain
