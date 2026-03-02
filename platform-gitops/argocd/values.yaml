@@ -118,24 +118,6 @@ argo-cd:
         # Team-Based Access (Auto-generated from tenant definitions)
         # ============================================================================
 
-        # Tenant: developers (github: developers)
-        p, role:team-developers, applications, get, preview/preview-developers-*, allow
-        p, role:team-developers, applications, list, preview/preview-developers-*, allow
-        p, role:team-developers, applications, sync, preview/preview-developers-*, allow
-        p, role:team-developers, applications, override, preview/preview-developers-*, allow
-        p, role:team-developers, logs, get, preview/preview-developers-*, allow
-        p, role:team-developers, exec, create, preview/preview-developers-*, allow
-        g, mctlhq:developers, role:team-developers
-
-        # Tenant: interals (github: interals)
-        p, role:team-interals, applications, get, preview/preview-interals-*, allow
-        p, role:team-interals, applications, list, preview/preview-interals-*, allow
-        p, role:team-interals, applications, sync, preview/preview-interals-*, allow
-        p, role:team-interals, applications, override, preview/preview-interals-*, allow
-        p, role:team-interals, logs, get, preview/preview-interals-*, allow
-        p, role:team-interals, exec, create, preview/preview-interals-*, allow
-        g, mctlhq:interals, role:team-interals
-
         # Tenant: internal (github: internal)
         p, role:team-internal, applications, get, preview/preview-internal-*, allow
         p, role:team-internal, applications, list, preview/preview-internal-*, allow
@@ -144,15 +126,6 @@ argo-cd:
         p, role:team-internal, logs, get, preview/preview-internal-*, allow
         p, role:team-internal, exec, create, preview/preview-internal-*, allow
         g, mctlhq:internal, role:team-internal
-
-        # Tenant: tests (github: tests)
-        p, role:team-tests, applications, get, preview/preview-tests-*, allow
-        p, role:team-tests, applications, list, preview/preview-tests-*, allow
-        p, role:team-tests, applications, sync, preview/preview-tests-*, allow
-        p, role:team-tests, applications, override, preview/preview-tests-*, allow
-        p, role:team-tests, logs, get, preview/preview-tests-*, allow
-        p, role:team-tests, exec, create, preview/preview-tests-*, allow
-        g, mctlhq:tests, role:team-tests
 
     secret:
       createSecret: true
