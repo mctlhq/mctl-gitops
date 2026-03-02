@@ -346,7 +346,8 @@ spec:
           mkdir -p ~/.ssh
           cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -H github.com >> ~/.ssh/known_hosts 2>/dev/null
+          # Hardcode GitHub's known SSH fingerprints (published at https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints)
+          printf 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C8okWNjr7jQjZHMj\ngithub.com ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFobtEHop2oiN/Mn2PoQHH7N3k8DFt5gLJiHgUkFTklDGlrFCTNyxZYfLnJA=\n' >> ~/.ssh/known_hosts
 
           # ── GitHub App token (for API calls only) ───────────────────────────
           APP_ID=$(cat /secrets/github-app/app-id)

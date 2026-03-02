@@ -60,7 +60,7 @@ spec:
           mkdir -p ~/.ssh
           cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -H github.com >> ~/.ssh/known_hosts 2>/dev/null
+          printf 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C8okWNjr7jQjZHMj\ngithub.com ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFobtEHop2oiN/Mn2PoQHH7N3k8DFt5gLJiHgUkFTklDGlrFCTNyxZYfLnJA=\n' >> ~/.ssh/known_hosts
 
           # ── 1. Get GitHub App token (API calls only) ──────────────────────
           APP_ID=$(cat /var/run/secrets/github-app/app-id)
@@ -324,7 +324,7 @@ spec:
           mkdir -p ~/.ssh
           cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -H github.com >> ~/.ssh/known_hosts 2>/dev/null
+          printf 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C8okWNjr7jQjZHMj\ngithub.com ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFobtEHop2oiN/Mn2PoQHH7N3k8DFt5gLJiHgUkFTklDGlrFCTNyxZYfLnJA=\n' >> ~/.ssh/known_hosts
 
           git clone --depth=1 "git@github.com:mctlhq/mctl-core.git" /tmp/mctl-core
           cd /tmp/mctl-core
