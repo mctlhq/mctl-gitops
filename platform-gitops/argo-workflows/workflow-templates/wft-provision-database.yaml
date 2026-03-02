@@ -219,21 +219,14 @@ spec:
           done
 
           if [ -n "$CATALOG_FILE" ] && ! grep -q "platform.mctl.me/database" "$CATALOG_FILE"; then
-            python3 -c "
-          import re, sys
-          catalog = '${CATALOG_FILE}'
-          team = '${TEAM}'
-          app = '${APP}'
-          with open(catalog) as f:
-              content = f.read()
-          new_anns = '    platform.mctl.me/database: \"true\"\n    platform.mctl.me/database-team: \"' + team + '\"\n    platform.mctl.me/database-app: \"' + app + '\"'
-          if 'annotations:' in content:
-              content = content.replace('  annotations:', '  annotations:\n' + new_anns, 1)
-          else:
-              content = re.sub(r'(  name: .+\n)', r'\1  annotations:\n' + new_anns + '\n', content, count=1)
-          with open(catalog, 'w') as f:
-              f.write(content)
-          "
+            ANN1="    platform.mctl.me/database: \"true\""
+            ANN2="    platform.mctl.me/database-team: \"${TEAM}\""
+            ANN3="    platform.mctl.me/database-app: \"${APP}\""
+            if grep -q "^  annotations:" "$CATALOG_FILE"; then
+              sed -i "s|^  annotations:|  annotations:\\n${ANN1}\\n${ANN2}\\n${ANN3}|" "$CATALOG_FILE"
+            else
+              sed -i "s|^  name: .*|&\\n  annotations:\\n${ANN1}\\n${ANN2}\\n${ANN3}|" "$CATALOG_FILE"
+            fi
             git add "$CATALOG_FILE"
             echo "✅ catalog-info.yaml annotated"
           fi
