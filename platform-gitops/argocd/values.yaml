@@ -118,33 +118,6 @@ argo-cd:
         # Team-Based Access (Auto-generated from tenant definitions)
         # ============================================================================
 
-        # Tenant: africaone-dev (github: africaone-dev)
-        p, role:team-africaone-dev, applications, get, preview/preview-africaone-dev-*, allow
-        p, role:team-africaone-dev, applications, list, preview/preview-africaone-dev-*, allow
-        p, role:team-africaone-dev, applications, sync, preview/preview-africaone-dev-*, allow
-        p, role:team-africaone-dev, applications, override, preview/preview-africaone-dev-*, allow
-        p, role:team-africaone-dev, logs, get, preview/preview-africaone-dev-*, allow
-        p, role:team-africaone-dev, exec, create, preview/preview-africaone-dev-*, allow
-        g, mctlhq:africaone-dev, role:team-africaone-dev
-
-        # Tenant: bots (github: bots)
-        p, role:team-bots, applications, get, preview/preview-bots-*, allow
-        p, role:team-bots, applications, list, preview/preview-bots-*, allow
-        p, role:team-bots, applications, sync, preview/preview-bots-*, allow
-        p, role:team-bots, applications, override, preview/preview-bots-*, allow
-        p, role:team-bots, logs, get, preview/preview-bots-*, allow
-        p, role:team-bots, exec, create, preview/preview-bots-*, allow
-        g, mctlhq:bots, role:team-bots
-
-        # Tenant: cyan-rhino (github: cyan-rhino)
-        p, role:team-cyan-rhino, applications, get, preview/preview-cyan-rhino-*, allow
-        p, role:team-cyan-rhino, applications, list, preview/preview-cyan-rhino-*, allow
-        p, role:team-cyan-rhino, applications, sync, preview/preview-cyan-rhino-*, allow
-        p, role:team-cyan-rhino, applications, override, preview/preview-cyan-rhino-*, allow
-        p, role:team-cyan-rhino, logs, get, preview/preview-cyan-rhino-*, allow
-        p, role:team-cyan-rhino, exec, create, preview/preview-cyan-rhino-*, allow
-        g, mctlhq:cyan-rhino, role:team-cyan-rhino
-
         # Tenant: developers (github: developers)
         p, role:team-developers, applications, get, preview/preview-developers-*, allow
         p, role:team-developers, applications, list, preview/preview-developers-*, allow
@@ -153,87 +126,6 @@ argo-cd:
         p, role:team-developers, logs, get, preview/preview-developers-*, allow
         p, role:team-developers, exec, create, preview/preview-developers-*, allow
         g, mctlhq:developers, role:team-developers
-
-        # Tenant: devops-1 (github: devops-1)
-        p, role:team-devops-1, applications, get, preview/preview-devops-1-*, allow
-        p, role:team-devops-1, applications, list, preview/preview-devops-1-*, allow
-        p, role:team-devops-1, applications, sync, preview/preview-devops-1-*, allow
-        p, role:team-devops-1, applications, override, preview/preview-devops-1-*, allow
-        p, role:team-devops-1, logs, get, preview/preview-devops-1-*, allow
-        p, role:team-devops-1, exec, create, preview/preview-devops-1-*, allow
-        g, mctlhq:devops-1, role:team-devops-1
-
-        # Tenant: doo (github: doo)
-        p, role:team-doo, applications, get, preview/preview-doo-*, allow
-        p, role:team-doo, applications, list, preview/preview-doo-*, allow
-        p, role:team-doo, applications, sync, preview/preview-doo-*, allow
-        p, role:team-doo, applications, override, preview/preview-doo-*, allow
-        p, role:team-doo, logs, get, preview/preview-doo-*, allow
-        p, role:team-doo, exec, create, preview/preview-doo-*, allow
-        g, mctlhq:doo, role:team-doo
-
-        # Tenant: internal (github: internal)
-        p, role:team-internal, applications, get, preview/preview-internal-*, allow
-        p, role:team-internal, applications, list, preview/preview-internal-*, allow
-        p, role:team-internal, applications, sync, preview/preview-internal-*, allow
-        p, role:team-internal, applications, override, preview/preview-internal-*, allow
-        p, role:team-internal, logs, get, preview/preview-internal-*, allow
-        p, role:team-internal, exec, create, preview/preview-internal-*, allow
-        g, mctlhq:internal, role:team-internal
-
-        # Tenant: libertex (github: libertex)
-        p, role:team-libertex, applications, get, preview/preview-libertex-*, allow
-        p, role:team-libertex, applications, list, preview/preview-libertex-*, allow
-        p, role:team-libertex, applications, sync, preview/preview-libertex-*, allow
-        p, role:team-libertex, applications, override, preview/preview-libertex-*, allow
-        p, role:team-libertex, logs, get, preview/preview-libertex-*, allow
-        p, role:team-libertex, exec, create, preview/preview-libertex-*, allow
-        g, mctlhq:libertex, role:team-libertex
-
-        # Tenant: team (github: team)
-        p, role:team-team, applications, get, preview/preview-team-*, allow
-        p, role:team-team, applications, list, preview/preview-team-*, allow
-        p, role:team-team, applications, sync, preview/preview-team-*, allow
-        p, role:team-team, applications, override, preview/preview-team-*, allow
-        p, role:team-team, logs, get, preview/preview-team-*, allow
-        p, role:team-team, exec, create, preview/preview-team-*, allow
-        g, mctlhq:team, role:team-team
-
-        # Tenant: test (github: test)
-        p, role:team-test, applications, get, preview/preview-test-*, allow
-        p, role:team-test, applications, list, preview/preview-test-*, allow
-        p, role:team-test, applications, sync, preview/preview-test-*, allow
-        p, role:team-test, applications, override, preview/preview-test-*, allow
-        p, role:team-test, logs, get, preview/preview-test-*, allow
-        p, role:team-test, exec, create, preview/preview-test-*, allow
-        g, mctlhq:test, role:team-test
-
-        # Tenant: tt (github: tt)
-        p, role:team-tt, applications, get, preview/preview-tt-*, allow
-        p, role:team-tt, applications, list, preview/preview-tt-*, allow
-        p, role:team-tt, applications, sync, preview/preview-tt-*, allow
-        p, role:team-tt, applications, override, preview/preview-tt-*, allow
-        p, role:team-tt, logs, get, preview/preview-tt-*, allow
-        p, role:team-tt, exec, create, preview/preview-tt-*, allow
-        g, mctlhq:tt, role:team-tt
-
-        # Tenant: www (github: www)
-        p, role:team-www, applications, get, preview/preview-www-*, allow
-        p, role:team-www, applications, list, preview/preview-www-*, allow
-        p, role:team-www, applications, sync, preview/preview-www-*, allow
-        p, role:team-www, applications, override, preview/preview-www-*, allow
-        p, role:team-www, logs, get, preview/preview-www-*, allow
-        p, role:team-www, exec, create, preview/preview-www-*, allow
-        g, mctlhq:www, role:team-www
-
-        # Tenant: yes (github: yes)
-        p, role:team-yes, applications, get, preview/preview-yes-*, allow
-        p, role:team-yes, applications, list, preview/preview-yes-*, allow
-        p, role:team-yes, applications, sync, preview/preview-yes-*, allow
-        p, role:team-yes, applications, override, preview/preview-yes-*, allow
-        p, role:team-yes, logs, get, preview/preview-yes-*, allow
-        p, role:team-yes, exec, create, preview/preview-yes-*, allow
-        g, mctlhq:yes, role:team-yes
 
     secret:
       createSecret: true
