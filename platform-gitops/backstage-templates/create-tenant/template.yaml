@@ -15,8 +15,9 @@ metadata:
     - argo
   annotations:
     backstage.io/techdocs-ref: dir:.
+    mctl.me/admin-only: "true"
 spec:
-  owner: group:admins
+  owner: group:default/admins
   type: provisioning
   presentation:
     buttonLabels:
