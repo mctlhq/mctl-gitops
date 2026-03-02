@@ -3,10 +3,10 @@
 # Managed by: ArgoCD ApplicationSet (applicationset-tenants)
 tenant:
   name: internal
-  displayName: "mashkoffdmitry"
-  description: ""
+  displayName: "Internal"
+  description: "Internal team"
   githubTeam: internal
-  contactEmail: "mashkoffdmitry@gmail.com"
+  contactEmail: ""
   quotas:
     requests.cpu: "4"
     requests.memory: "8Gi"

@@ -3,7 +3,7 @@ kind: Resource
 metadata:
   name: tenant-internal
   namespace: default
-  description: "Tenant mashkoffdmitry — namespace, quotas, and network policies"
+  description: "Tenant internal — namespace, quotas, and network policies"
   annotations:
     mctl.me/tenant-name: "internal"
     mctl.me/github-team: "internal"
