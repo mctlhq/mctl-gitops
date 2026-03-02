@@ -350,6 +350,7 @@ spec:
           printf 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C8okWNjr7jQjZHMj\ngithub.com ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFobtEHop2oiN/Mn2PoQHH7N3k8DFt5gLJiHgUkFTklDGlrFCTNyxZYfLnJA=\n' >> ~/.ssh/known_hosts
           # Use port 443 in case port 22 is blocked (GitHub supports SSH over 443 via ssh.github.com)
           printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
+          chmod 600 ~/.ssh/config
           printf '[ssh.github.com]:443 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C8okWNjr7jQjZHMj\n[ssh.github.com]:443 ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFobtEHop2oiN/Mn2PoQHH7N3k8DFt5gLJiHgUkFTklDGlrFCTNyxZYfLnJA=\n' >> ~/.ssh/known_hosts
 
           # ── GitHub App token (for API calls only) ───────────────────────────
