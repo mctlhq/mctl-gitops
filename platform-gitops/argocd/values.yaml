@@ -145,6 +145,15 @@ argo-cd:
         p, role:team-tests, exec, create, preview/preview-tests-*, allow
         g, mctlhq:tests, role:team-tests
 
+
+        # Tenant: internal (github: internal)
+        p, role:team-internal, applications, get, apps/internal-*, allow
+        p, role:team-internal, applications, list, apps/internal-*, allow
+        p, role:team-internal, applications, sync, apps/internal-*, allow
+        p, role:team-internal, applications, override, apps/internal-*, allow
+        p, role:team-internal, logs, get, apps/internal-*, allow
+        p, role:team-internal, exec, create, apps/internal-*, allow
+        g, mctlhq:internal, role:team-internal
     secret:
       createSecret: true
 
