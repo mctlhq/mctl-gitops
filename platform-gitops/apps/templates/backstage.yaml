@@ -27,7 +27,7 @@ spec:
           image:
             registry: ghcr.io
             repository: mctlhq/mctl-app
-            tag: 3.17.16
+            tag: 3.17.17
             pullSecrets:
               - ghcr-credentials
           extraEnvVarsSecrets:
