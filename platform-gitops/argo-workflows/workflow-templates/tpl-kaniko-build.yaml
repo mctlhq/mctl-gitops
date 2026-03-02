@@ -70,11 +70,12 @@ spec:
                 NOW=$(date +%s)
                 EXP=$((NOW + 540))
 
-                # Create JWT (header.payload.signature)
-                HEADER=$(printf '%s' '{"alg":"RS256","typ":"JWT"}' | base64 | tr -d '=' | tr '/+' '_-')
-                PAYLOAD=$(printf '%s' "{\"iat\":${NOW},\"exp\":${EXP},\"iss\":\"${APP_ID}\"}" | base64 | tr -d '=' | tr '/+' '_-')
-                SIG=$(printf '%s' "${HEADER}.${PAYLOAD}" | openssl dgst -sha256 -sign $APP_KEY_FILE | base64 | tr -d '=' | tr '/+' '_-')
+                # Create JWT (header.payload.signature) — base64 must have no newlines
+                HEADER=$(printf '%s' '{"alg":"RS256","typ":"JWT"}' | base64 | tr -d '=\n' | tr '/+' '_-')
+                PAYLOAD=$(printf '%s' "{\"iat\":${NOW},\"exp\":${EXP},\"iss\":\"${APP_ID}\"}" | base64 | tr -d '=\n' | tr '/+' '_-')
+                SIG=$(printf '%s' "${HEADER}.${PAYLOAD}" | openssl dgst -sha256 -sign $APP_KEY_FILE | base64 | tr -d '=\n' | tr '/+' '_-')
                 JWT="${HEADER}.${PAYLOAD}.${SIG}"
+                echo "JWT length: ${#JWT}"
 
                 TOKEN=$(curl -sS \
                   -H "Authorization: Bearer ${JWT}" \
@@ -111,11 +112,11 @@ spec:
               set -e
               CLONE_URL=$(cat /workspace/clone-url)
               echo "📥 Cloning {{inputs.parameters.dockerfile_repo}}@{{inputs.parameters.git_tag}}..."
-              git clone --depth=1 \
+              echo "Clone URL type: $(echo $CLONE_URL | sed 's|x-access-token:[^@]*|x-access-token:REDACTED|')"
+              GIT_TERMINAL_PROMPT=0 git clone --depth=1 \
                 --branch "{{inputs.parameters.git_tag}}" \
-                "$CLONE_URL" /workspace/src > /tmp/git-out 2>&1; RC=$?
-              cat /tmp/git-out | grep -v 'x-access-token' || true
-              if [ $RC -ne 0 ]; then echo "❌ git clone failed (rc=$RC)"; exit 1; fi
+                "$CLONE_URL" /workspace/src 2>&1 | sed 's|x-access-token:[^@]*|x-access-token:REDACTED|'
+              echo "Exit: $?"
               echo "✅ Cloned successfully"
           volumeMounts:
             - name: workspace
