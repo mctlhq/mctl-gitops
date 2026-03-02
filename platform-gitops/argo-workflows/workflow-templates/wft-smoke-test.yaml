@@ -254,20 +254,23 @@ spec:
           set -e
           TEAM="{{workflow.parameters.team_name}}"
           SVC="{{workflow.parameters.component_name}}"
-          echo "⏳ Waiting for ArgoCD to sync deployment ${SVC} in namespace ${TEAM}..."
+          INSTANCE_LABEL="preview-${TEAM}-${SVC}"
+          echo "⏳ Waiting for ArgoCD to sync deployment (instance=${INSTANCE_LABEL}) in namespace ${TEAM}..."
           for i in $(seq 1 30); do
-            kubectl get deployment "${SVC}" -n "${TEAM}" 2>/dev/null && break || true
+            DEPLOY=$(kubectl get deployment -n "${TEAM}" -l "app.kubernetes.io/instance=${INSTANCE_LABEL}" -o name 2>/dev/null | head -1)
+            [ -n "${DEPLOY}" ] && break || true
             echo "  [${i}/30] Not created yet..."
             sleep 10
           done
-          kubectl get deployment "${SVC}" -n "${TEAM}" || { echo "❌ Deployment never created"; exit 1; }
-          kubectl wait deployment "${SVC}" \
+          DEPLOY=$(kubectl get deployment -n "${TEAM}" -l "app.kubernetes.io/instance=${INSTANCE_LABEL}" -o name 2>/dev/null | head -1)
+          [ -z "${DEPLOY}" ] && { echo "❌ Deployment never created"; exit 1; }
+          echo "Found: ${DEPLOY}"
+          kubectl wait "${DEPLOY}" \
             --namespace "${TEAM}" \
             --for=condition=available \
             --timeout=180s
-          READY=$(kubectl get deployment "${SVC}" -n "${TEAM}" \
-            -o jsonpath='{.status.readyReplicas}')
-          echo "✅ Deployment ${SVC} available (${READY:-0} ready replicas)"
+          READY=$(kubectl get "${DEPLOY}" -n "${TEAM}" -o jsonpath='{.status.readyReplicas}')
+          echo "✅ Deployment available (${READY:-0} ready replicas)"
 
     # ─── Verification: Vault DB secret exists ────────────────────────────────
     - name: check-vault-secret
@@ -330,17 +333,17 @@ spec:
           set -e
           TEAM="{{workflow.parameters.team_name}}"
           SVC="{{workflow.parameters.component_name}}"
+          INSTANCE_LABEL="preview-${TEAM}-${SVC}"
           echo "⏳ Waiting for rollout to complete..."
-          kubectl rollout status deployment/"${SVC}" -n "${TEAM}" --timeout=180s
+          DEPLOY=$(kubectl get deployment -n "${TEAM}" -l "app.kubernetes.io/instance=${INSTANCE_LABEL}" -o name 2>/dev/null | head -1)
+          [ -z "${DEPLOY}" ] && { echo "❌ Deployment not found"; exit 1; }
+          kubectl rollout status "${DEPLOY}" -n "${TEAM}" --timeout=180s
           POD=$(kubectl get pods -n "${TEAM}" \
-            -l "app.kubernetes.io/name=${SVC}" \
-            --field-selector=status.phase=Running \
-            -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || \
-            kubectl get pods -n "${TEAM}" -l "app=${SVC}" \
+            -l "app.kubernetes.io/instance=${INSTANCE_LABEL}" \
             --field-selector=status.phase=Running \
             -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
           if [ -z "${POD}" ]; then
-            echo "❌ No running pod found for ${SVC} in ${TEAM}"
+            echo "❌ No running pod found for instance=${INSTANCE_LABEL} in ${TEAM}"
             exit 1
           fi
           echo "🔍 Checking env var in pod ${POD}..."
