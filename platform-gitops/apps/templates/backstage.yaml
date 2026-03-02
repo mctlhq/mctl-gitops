@@ -114,6 +114,13 @@ spec:
               syncIntervalMinutes: 5
               landingPageToken: ${BACKSTAGE_LANDING_TOKEN}
               githubAppInstallationId: ${GITHUB_APP_INSTALLATION_ID}
+            oidcProvider:
+              issuer: https://app.mctl.me/api/oidc-provider
+              clients:
+                - clientId: ${OIDC_CLIENT_ID}
+                  clientSecret: ${OIDC_CLIENT_SECRET}
+                  redirectUris:
+                    - https://ops.mctl.me/api/dex/callback
             resourceUsage:
               kubeConfigType: token
               kubeApiUrl: https://kubernetes.default.svc
