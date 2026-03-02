@@ -40,12 +40,3 @@ metadata:
 spec:
   owner: group:bots
   domain: tenants
----
-apiVersion: backstage.io/v1alpha1
-kind: System
-metadata:
-  name: team-internal
-  description: Internal team workloads
-spec:
-  owner: group:internal
-  domain: tenants
