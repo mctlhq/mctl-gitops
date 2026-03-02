@@ -303,8 +303,8 @@ spec:
             cat /tmp/vsecret.json || true
             exit 1
           fi
-          grep -q '"DB_NAME"' /tmp/vsecret.json || { echo "❌ DB_NAME key missing"; exit 1; }
-          grep -q '"DB_PASSWORD"' /tmp/vsecret.json || { echo "❌ DB_PASSWORD key missing"; exit 1; }
+          grep -q '"database"' /tmp/vsecret.json || { echo "❌ database key missing"; exit 1; }
+          grep -q '"password"' /tmp/vsecret.json || { echo "❌ password key missing"; exit 1; }
           echo "✅ Vault secret exists with expected DB keys"
         env:
           - name: VAULT_ADDR
