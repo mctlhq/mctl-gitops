@@ -136,6 +136,15 @@ argo-cd:
         p, role:team-interals, exec, create, preview/preview-interals-*, allow
         g, mctlhq:interals, role:team-interals
 
+        # Tenant: internal (github: internal)
+        p, role:team-internal, applications, get, preview/preview-internal-*, allow
+        p, role:team-internal, applications, list, preview/preview-internal-*, allow
+        p, role:team-internal, applications, sync, preview/preview-internal-*, allow
+        p, role:team-internal, applications, override, preview/preview-internal-*, allow
+        p, role:team-internal, logs, get, preview/preview-internal-*, allow
+        p, role:team-internal, exec, create, preview/preview-internal-*, allow
+        g, mctlhq:internal, role:team-internal
+
         # Tenant: tests (github: tests)
         p, role:team-tests, applications, get, preview/preview-tests-*, allow
         p, role:team-tests, applications, list, preview/preview-tests-*, allow
@@ -145,15 +154,6 @@ argo-cd:
         p, role:team-tests, exec, create, preview/preview-tests-*, allow
         g, mctlhq:tests, role:team-tests
 
-
-        # Tenant: internal (github: internal)
-        p, role:team-internal, applications, get, apps/internal-*, allow
-        p, role:team-internal, applications, list, apps/internal-*, allow
-        p, role:team-internal, applications, sync, apps/internal-*, allow
-        p, role:team-internal, applications, override, apps/internal-*, allow
-        p, role:team-internal, logs, get, apps/internal-*, allow
-        p, role:team-internal, exec, create, apps/internal-*, allow
-        g, mctlhq:internal, role:team-internal
     secret:
       createSecret: true
 
