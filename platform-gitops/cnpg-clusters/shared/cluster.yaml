@@ -71,7 +71,7 @@ spec:
       - name: backstage
         login: true
         inherit: true
-        connectionLimit: 50  # 11 plugins * 3 conns + replica conns
+        connectionLimit: 100  # 2 replicas * ~25 plugin connections during rolling deploy
         ensure: present
         passwordSecret:
           name: backstage-db-creds
