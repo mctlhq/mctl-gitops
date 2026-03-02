@@ -20,7 +20,7 @@ metadata:
       onExit handler always retires (cleanup even on failure).
 
       Usage:
-        kubectl create -f - <<EOF
+        kubectl create -n argo-workflows -f - <<EOF
         apiVersion: argoproj.io/v1alpha1
         kind: Workflow
         metadata:
@@ -70,31 +70,6 @@ spec:
     - name: retire-on-exit
       template: run-retire
 
-    # ─── Helper: wait for child workflow to Succeed ───────────────────────────
-    - name: wait-for-workflow
-      inputs:
-        parameters:
-          - name: wf_name
-      script:
-        image: bitnami/kubectl:latest
-        command: [bash]
-        source: |
-          set -e
-          WF="{{inputs.parameters.wf_name}}"
-          NS="argo-workflows"
-          echo "⏳ Waiting for workflow ${WF}..."
-          for i in $(seq 1 80); do
-            PHASE=$(kubectl get workflow "${WF}" -n "${NS}" \
-              -o jsonpath='{.status.phase}' 2>/dev/null || echo "Pending")
-            echo "  [${i}/80] ${WF}: ${PHASE}"
-            case "${PHASE}" in
-              Succeeded) echo "✅ ${WF} Succeeded"; exit 0 ;;
-              Failed|Error) echo "❌ ${WF} ${PHASE}"; exit 1 ;;
-            esac
-            sleep 15
-          done
-          echo "❌ Timed out waiting for ${WF}"; exit 1
-
     # ─── Step 1: Onboard service ──────────────────────────────────────────────
     - name: run-onboard
       script:
@@ -106,7 +81,7 @@ spec:
           SVC="{{workflow.parameters.component_name}}"
           REPO="{{workflow.parameters.dockerfile_repo}}"
 
-          WF_NAME=$(cat << EOF | kubectl create -n argo-workflows -f - -o jsonpath='{.metadata.name}'
+          WF_NAME=$(kubectl create -n argo-workflows -o jsonpath='{.metadata.name}' -f - << EOF
           apiVersion: argoproj.io/v1alpha1
           kind: Workflow
           metadata:
@@ -117,28 +92,27 @@ spec:
               name: deploy-service
             arguments:
               parameters:
-              - {name: action,            value: onboard}
-              - {name: team_name,         value: "${TEAM}"}
-              - {name: component_name,    value: "${SVC}"}
-              - {name: component_type,    value: worker-service}
-              - {name: dockerfile_repo,   value: "${REPO}"}
-              - {name: git_tag,           value: main}
-              - {name: port,              value: "8080"}
-              - {name: host,              value: ""}
-              - {name: env_vars,          value: ""}
-              - {name: secret_env_vars,   value: ""}
-              - {name: provision_database,value: "false"}
-              - {name: skip_health_check, value: "false"}
-              - {name: dockerfile_path,   value: Dockerfile}
-              - {name: image_tag,         value: ""}
+              - {name: action,             value: onboard}
+              - {name: team_name,          value: "${TEAM}"}
+              - {name: component_name,     value: "${SVC}"}
+              - {name: component_type,     value: worker-service}
+              - {name: dockerfile_repo,    value: "${REPO}"}
+              - {name: git_tag,            value: main}
+              - {name: port,               value: "8080"}
+              - {name: host,               value: ""}
+              - {name: env_vars,           value: ""}
+              - {name: secret_env_vars,    value: ""}
+              - {name: provision_database, value: "false"}
+              - {name: skip_health_check,  value: "false"}
+              - {name: dockerfile_path,    value: Dockerfile}
+              - {name: image_tag,          value: ""}
           EOF
           )
           echo "Submitted: ${WF_NAME}"
-
           for i in $(seq 1 80); do
             PHASE=$(kubectl get workflow "${WF_NAME}" -n argo-workflows \
               -o jsonpath='{.status.phase}' 2>/dev/null || echo "Pending")
-            echo "  [${i}/80] ${WF_NAME}: ${PHASE}"
+            echo "  [${i}/80] ${PHASE}"
             case "${PHASE}" in
               Succeeded) echo "✅ onboard Succeeded"; exit 0 ;;
               Failed|Error) echo "❌ onboard ${PHASE}"; exit 1 ;;
@@ -157,7 +131,7 @@ spec:
           TEAM="{{workflow.parameters.team_name}}"
           SVC="{{workflow.parameters.component_name}}"
 
-          WF_NAME=$(cat << EOF | kubectl create -n argo-workflows -f - -o jsonpath='{.metadata.name}'
+          WF_NAME=$(kubectl create -n argo-workflows -o jsonpath='{.metadata.name}' -f - << EOF
           apiVersion: argoproj.io/v1alpha1
           kind: Workflow
           metadata:
@@ -173,11 +147,10 @@ spec:
           EOF
           )
           echo "Submitted: ${WF_NAME}"
-
           for i in $(seq 1 40); do
             PHASE=$(kubectl get workflow "${WF_NAME}" -n argo-workflows \
               -o jsonpath='{.status.phase}' 2>/dev/null || echo "Pending")
-            echo "  [${i}/40] ${WF_NAME}: ${PHASE}"
+            echo "  [${i}/40] ${PHASE}"
             case "${PHASE}" in
               Succeeded) echo "✅ provision-db Succeeded"; exit 0 ;;
               Failed|Error) echo "❌ provision-db ${PHASE}"; exit 1 ;;
@@ -196,7 +169,7 @@ spec:
           TEAM="{{workflow.parameters.team_name}}"
           SVC="{{workflow.parameters.component_name}}"
 
-          WF_NAME=$(cat << EOF | kubectl create -n argo-workflows -f - -o jsonpath='{.metadata.name}'
+          WF_NAME=$(kubectl create -n argo-workflows -o jsonpath='{.metadata.name}' -f - << EOF
           apiVersion: argoproj.io/v1alpha1
           kind: Workflow
           metadata:
@@ -207,28 +180,27 @@ spec:
               name: deploy-service
             arguments:
               parameters:
-              - {name: action,            value: update-config}
-              - {name: team_name,         value: "${TEAM}"}
-              - {name: component_name,    value: "${SVC}"}
-              - {name: component_type,    value: worker-service}
-              - {name: dockerfile_repo,   value: ""}
-              - {name: git_tag,           value: ""}
-              - {name: port,              value: "8080"}
-              - {name: host,              value: ""}
-              - {name: env_vars,          value: "SMOKE_TEST=true"}
-              - {name: secret_env_vars,   value: ""}
-              - {name: provision_database,value: "false"}
-              - {name: skip_health_check, value: "false"}
-              - {name: dockerfile_path,   value: Dockerfile}
-              - {name: image_tag,         value: ""}
+              - {name: action,             value: update-config}
+              - {name: team_name,          value: "${TEAM}"}
+              - {name: component_name,     value: "${SVC}"}
+              - {name: component_type,     value: worker-service}
+              - {name: dockerfile_repo,    value: ""}
+              - {name: git_tag,            value: ""}
+              - {name: port,               value: "8080"}
+              - {name: host,               value: ""}
+              - {name: env_vars,           value: "SMOKE_TEST=true"}
+              - {name: secret_env_vars,    value: ""}
+              - {name: provision_database, value: "false"}
+              - {name: skip_health_check,  value: "false"}
+              - {name: dockerfile_path,    value: Dockerfile}
+              - {name: image_tag,          value: ""}
           EOF
           )
           echo "Submitted: ${WF_NAME}"
-
           for i in $(seq 1 40); do
             PHASE=$(kubectl get workflow "${WF_NAME}" -n argo-workflows \
               -o jsonpath='{.status.phase}' 2>/dev/null || echo "Pending")
-            echo "  [${i}/40] ${WF_NAME}: ${PHASE}"
+            echo "  [${i}/40] ${PHASE}"
             case "${PHASE}" in
               Succeeded) echo "✅ update-config Succeeded"; exit 0 ;;
               Failed|Error) echo "❌ update-config ${PHASE}"; exit 1 ;;
@@ -247,7 +219,7 @@ spec:
           TEAM="{{workflow.parameters.team_name}}"
           SVC="{{workflow.parameters.component_name}}"
 
-          WF_NAME=$(cat << EOF | kubectl create -n argo-workflows -f - -o jsonpath='{.metadata.name}'
+          WF_NAME=$(kubectl create -n argo-workflows -o jsonpath='{.metadata.name}' -f - << EOF
           apiVersion: argoproj.io/v1alpha1
           kind: Workflow
           metadata:
@@ -258,18 +230,17 @@ spec:
               name: retire-service
             arguments:
               parameters:
-              - {name: team_name,           value: "${TEAM}"}
-              - {name: component_name,      value: "${SVC}"}
-              - {name: component_type,      value: worker-service}
-              - {name: delete_vault_secrets,value: "true"}
+              - {name: team_name,            value: "${TEAM}"}
+              - {name: component_name,       value: "${SVC}"}
+              - {name: component_type,       value: worker-service}
+              - {name: delete_vault_secrets, value: "true"}
           EOF
           )
           echo "Submitted: ${WF_NAME}"
-
           for i in $(seq 1 20); do
             PHASE=$(kubectl get workflow "${WF_NAME}" -n argo-workflows \
               -o jsonpath='{.status.phase}' 2>/dev/null || echo "Pending")
-            echo "  [${i}/20] ${WF_NAME}: ${PHASE}"
+            echo "  [${i}/20] ${PHASE}"
             case "${PHASE}" in
               Succeeded) echo "✅ retire Succeeded"; exit 0 ;;
               Failed|Error) echo "❌ retire ${PHASE}"; exit 1 ;;
@@ -287,13 +258,11 @@ spec:
           set -e
           TEAM="{{workflow.parameters.team_name}}"
           SVC="{{workflow.parameters.component_name}}"
-
           echo "⏳ Waiting for deployment ${SVC} in namespace ${TEAM}..."
           kubectl wait deployment "${SVC}" \
             --namespace "${TEAM}" \
             --for=condition=available \
             --timeout=180s
-
           READY=$(kubectl get deployment "${SVC}" -n "${TEAM}" \
             -o jsonpath='{.status.readyReplicas}')
           echo "✅ Deployment ${SVC} available (${READY:-0} ready replicas)"
@@ -308,13 +277,11 @@ spec:
           TEAM="{{workflow.parameters.team_name}}"
           SVC="{{workflow.parameters.component_name}}"
           VAULT_PATH="platform/teams/${TEAM}/${SVC}/database"
-
           echo "🔐 Authenticating to Vault via Kubernetes auth..."
           TOKEN=$(vault write -field=token auth/kubernetes/login \
             role="argo-workflows" \
             jwt="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)")
           export VAULT_TOKEN="${TOKEN}"
-
           echo "🔍 Checking Vault secret at secret/${VAULT_PATH}..."
           vault kv get "secret/${VAULT_PATH}"
           vault kv get -field=DB_NAME "secret/${VAULT_PATH}" > /dev/null
@@ -334,26 +301,20 @@ spec:
           TEAM="{{workflow.parameters.team_name}}"
           SVC="{{workflow.parameters.component_name}}"
           SECRET_NAME="${SVC}-db"
-
           echo "🔍 Waiting for ExternalSecret ${SECRET_NAME} to sync (up to 90s)..."
           for i in $(seq 1 18); do
             STATUS=$(kubectl get externalsecret "${SECRET_NAME}" -n "${TEAM}" \
               -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
-            if [ "${STATUS}" = "True" ]; then
-              echo "✅ ExternalSecret synced"
-              break
-            fi
+            [ "${STATUS}" = "True" ] && { echo "✅ ExternalSecret synced"; break; }
             echo "  [${i}/18] status=${STATUS:-NotFound}, retrying in 5s..."
             sleep 5
           done
-
           STATUS=$(kubectl get externalsecret "${SECRET_NAME}" -n "${TEAM}" \
             -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
           if [ "${STATUS}" != "True" ]; then
             echo "❌ ExternalSecret ${SECRET_NAME} not Ready (status: ${STATUS})"
             exit 1
           fi
-
           kubectl get secret "${SECRET_NAME}" -n "${TEAM}" \
             -o jsonpath='{.data.DATABASE_URL}' | base64 -d | grep -q "postgresql://"
           echo "✅ k8s Secret ${SECRET_NAME} contains valid DATABASE_URL"
@@ -367,353 +328,19 @@ spec:
           set -e
           TEAM="{{workflow.parameters.team_name}}"
           SVC="{{workflow.parameters.component_name}}"
-
           echo "⏳ Waiting for rollout to complete..."
           kubectl rollout status deployment/"${SVC}" -n "${TEAM}" --timeout=180s
-
           POD=$(kubectl get pods -n "${TEAM}" \
             -l "app.kubernetes.io/name=${SVC}" \
             --field-selector=status.phase=Running \
             -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || \
-            kubectl get pods -n "${TEAM}" \
-            -l "app=${SVC}" \
+            kubectl get pods -n "${TEAM}" -l "app=${SVC}" \
             --field-selector=status.phase=Running \
             -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
-
           if [ -z "${POD}" ]; then
             echo "❌ No running pod found for ${SVC} in ${TEAM}"
-            kubectl get pods -n "${TEAM}" -l "app=${SVC}" 2>/dev/null || true
             exit 1
           fi
-
-          echo "🔍 Checking env var in pod ${POD}..."
-          kubectl exec -n "${TEAM}" "${POD}" -- env | grep "SMOKE_TEST=true"
-          echo "✅ SMOKE_TEST=true confirmed in pod environment"
-  namespace: argo-workflows
-  annotations:
-    workflows.argoproj.io/description: |
-      End-to-end smoke test for the mctl.me platform.
-
-      Lifecycle tested:
-        1. onboard      — submit deploy-service(onboard) as child workflow, wait for Succeeded
-        2. verify-pod   — kubectl wait for Deployment available
-        3. provision-db — submit provision-database as child workflow, wait for Succeeded
-        4. verify-vault — vault kv get confirms DB secret exists
-        5. verify-secret — ExternalSecret synced into k8s Secret
-        6. update-config — submit deploy-service(update-config) as child workflow
-        7. verify-env   — kubectl exec confirms SMOKE_TEST=true in pod env
-        8. retire       — submit retire-service as child workflow
-
-      onExit handler always retires (cleanup even on failure).
-
-      Usage:
-        kubectl create -f - <<EOF
-        apiVersion: argoproj.io/v1alpha1
-        kind: Workflow
-        metadata:
-          generateName: smoke-test-
-          namespace: argo-workflows
-        spec:
-          workflowTemplateRef:
-            name: smoke-test
-        EOF
-spec:
-  entrypoint: smoke-pipeline
-  serviceAccountName: argo-workflow-sa
-  onExit: cleanup
-
-  arguments:
-    parameters:
-      - name: team_name
-        value: "tests"
-      - name: component_name
-        value: "smoke-test-svc"
-      - name: dockerfile_repo
-        value: "mctlhq/e2e-public-test"
-
-  templates:
-
-    # ─── Helper: submit a child workflow and wait for Succeeded ───────────────
-    - name: submit-and-wait
-      inputs:
-        parameters:
-          - name: workflow_name       # WorkflowTemplate name (e.g. deploy-service)
-          - name: params_json         # JSON array of {name, value} parameter objects
-      script:
-        image: bitnami/kubectl:latest
-        command: [bash]
-        source: |
-          set -e
-          TEMPLATE="{{inputs.parameters.workflow_name}}"
-          PARAMS='{{inputs.parameters.params_json}}'
-          NS="argo-workflows"
-
-          # Build parameter overrides (--parameter name=value ...)
-          PARAM_ARGS=""
-          while IFS= read -r line; do
-            NAME=$(echo "$line" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d['name'])")
-            VALUE=$(echo "$line" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d['value'])")
-            PARAM_ARGS="${PARAM_ARGS} --parameter ${NAME}=$(printf '%s' "$VALUE" | base64 | tr -d '\n')"
-          done < <(echo "$PARAMS" | python3 -c "import sys,json; [print(json.dumps(p)) for p in json.load(sys.stdin)]")
-
-          # Create child workflow from WorkflowTemplate via kubectl
-          MANIFEST=$(cat << YAML
-          apiVersion: argoproj.io/v1alpha1
-          kind: Workflow
-          metadata:
-            generateName: smoke-child-
-            namespace: ${NS}
-            labels:
-              smoke-test-parent: "{{workflow.name}}"
-          spec:
-            workflowTemplateRef:
-              name: ${TEMPLATE}
-            arguments:
-              parameters: $(echo "${PARAMS}")
-          YAML
-          )
-
-          WF_NAME=$(echo "$MANIFEST" | kubectl apply -f - -o jsonpath='{.metadata.name}')
-          echo "⏳ Submitted child workflow: ${WF_NAME} (template: ${TEMPLATE})"
-
-          # Poll until workflow phase is terminal (Succeeded/Failed/Error)
-          for i in $(seq 1 120); do
-            PHASE=$(kubectl get workflow "${WF_NAME}" -n "${NS}" \
-              -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
-            echo "  [${i}/120] Phase: ${PHASE:-Pending}"
-            if [ "${PHASE}" = "Succeeded" ]; then
-              echo "✅ Child workflow ${WF_NAME} Succeeded"
-              exit 0
-            fi
-            if [ "${PHASE}" = "Failed" ] || [ "${PHASE}" = "Error" ]; then
-              echo "❌ Child workflow ${WF_NAME} ${PHASE}"
-              exit 1
-            fi
-            sleep 15
-          done
-          echo "❌ Timed out waiting for ${WF_NAME}"
-          exit 1
-
-    # ─── Main pipeline ────────────────────────────────────────────────────────
-    - name: smoke-pipeline
-      steps:
-        - - name: onboard
-            template: submit-and-wait
-            arguments:
-              parameters:
-                - name: workflow_name
-                  value: "deploy-service"
-                - name: params_json
-                  value: |
-                    [
-                      {"name":"action","value":"onboard"},
-                      {"name":"team_name","value":"{{workflow.parameters.team_name}}"},
-                      {"name":"component_name","value":"{{workflow.parameters.component_name}}"},
-                      {"name":"component_type","value":"worker-service"},
-                      {"name":"dockerfile_repo","value":"{{workflow.parameters.dockerfile_repo}}"},
-                      {"name":"git_tag","value":"main"},
-                      {"name":"port","value":"8080"},
-                      {"name":"host","value":""},
-                      {"name":"env_vars","value":""},
-                      {"name":"secret_env_vars","value":""},
-                      {"name":"provision_database","value":"false"},
-                      {"name":"skip_health_check","value":"false"},
-                      {"name":"dockerfile_path","value":"Dockerfile"},
-                      {"name":"image_tag","value":""}
-                    ]
-
-        - - name: verify-pod
-            template: check-pod-running
-
-        - - name: provision-db
-            template: submit-and-wait
-            arguments:
-              parameters:
-                - name: workflow_name
-                  value: "provision-database"
-                - name: params_json
-                  value: |
-                    [
-                      {"name":"team_name","value":"{{workflow.parameters.team_name}}"},
-                      {"name":"app_name","value":"{{workflow.parameters.component_name}}"}
-                    ]
-
-        - - name: verify-vault-secret
-            template: check-vault-secret
-
-        - - name: verify-k8s-secret
-            template: check-k8s-secret
-
-        - - name: update-config
-            template: submit-and-wait
-            arguments:
-              parameters:
-                - name: workflow_name
-                  value: "deploy-service"
-                - name: params_json
-                  value: |
-                    [
-                      {"name":"action","value":"update-config"},
-                      {"name":"team_name","value":"{{workflow.parameters.team_name}}"},
-                      {"name":"component_name","value":"{{workflow.parameters.component_name}}"},
-                      {"name":"component_type","value":"worker-service"},
-                      {"name":"dockerfile_repo","value":""},
-                      {"name":"git_tag","value":""},
-                      {"name":"port","value":"8080"},
-                      {"name":"host","value":""},
-                      {"name":"env_vars","value":"SMOKE_TEST=true"},
-                      {"name":"secret_env_vars","value":""},
-                      {"name":"provision_database","value":"false"},
-                      {"name":"skip_health_check","value":"false"},
-                      {"name":"dockerfile_path","value":"Dockerfile"},
-                      {"name":"image_tag","value":""}
-                    ]
-
-        - - name: verify-env-var
-            template: check-env-var
-
-        - - name: retire
-            template: submit-and-wait
-            arguments:
-              parameters:
-                - name: workflow_name
-                  value: "retire-service"
-                - name: params_json
-                  value: |
-                    [
-                      {"name":"team_name","value":"{{workflow.parameters.team_name}}"},
-                      {"name":"component_name","value":"{{workflow.parameters.component_name}}"},
-                      {"name":"component_type","value":"worker-service"},
-                      {"name":"delete_vault_secrets","value":"true"}
-                    ]
-
-    # ─── onExit cleanup ───────────────────────────────────────────────────────
-    - name: cleanup
-      steps:
-        - - name: retire-on-exit
-            template: submit-and-wait
-            arguments:
-              parameters:
-                - name: workflow_name
-                  value: "retire-service"
-                - name: params_json
-                  value: |
-                    [
-                      {"name":"team_name","value":"{{workflow.parameters.team_name}}"},
-                      {"name":"component_name","value":"{{workflow.parameters.component_name}}"},
-                      {"name":"component_type","value":"worker-service"},
-                      {"name":"delete_vault_secrets","value":"true"}
-                    ]
-
-    # ─── Verification: pod running ────────────────────────────────────────────
-    - name: check-pod-running
-      script:
-        image: bitnami/kubectl:latest
-        command: [bash]
-        source: |
-          set -e
-          TEAM="{{workflow.parameters.team_name}}"
-          SVC="{{workflow.parameters.component_name}}"
-
-          echo "⏳ Waiting for deployment ${SVC} in namespace ${TEAM}..."
-          kubectl wait deployment "${SVC}" \
-            --namespace "${TEAM}" \
-            --for=condition=available \
-            --timeout=180s
-
-          READY=$(kubectl get deployment "${SVC}" -n "${TEAM}" \
-            -o jsonpath='{.status.readyReplicas}')
-          echo "✅ Deployment ${SVC} available (${READY:-0} ready replicas)"
-
-    # ─── Verification: Vault DB secret exists ────────────────────────────────
-    - name: check-vault-secret
-      script:
-        image: hashicorp/vault:1.15
-        command: [sh]
-        source: |
-          set -e
-          TEAM="{{workflow.parameters.team_name}}"
-          SVC="{{workflow.parameters.component_name}}"
-          VAULT_PATH="platform/teams/${TEAM}/${SVC}/database"
-
-          echo "🔐 Authenticating to Vault via Kubernetes auth..."
-          TOKEN=$(vault write -field=token auth/kubernetes/login \
-            role="argo-workflows" \
-            jwt="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)")
-          export VAULT_TOKEN="${TOKEN}"
-
-          echo "🔍 Checking Vault secret at secret/${VAULT_PATH}..."
-          vault kv get "secret/${VAULT_PATH}"
-          vault kv get -field=DB_NAME "secret/${VAULT_PATH}" > /dev/null
-          vault kv get -field=DB_PASSWORD "secret/${VAULT_PATH}" > /dev/null
-          echo "✅ Vault secret exists with expected DB keys"
-        env:
-          - name: VAULT_ADDR
-            value: "http://vault.vault.svc.cluster.local:8200"
-
-    # ─── Verification: ExternalSecret synced ─────────────────────────────────
-    - name: check-k8s-secret
-      script:
-        image: bitnami/kubectl:latest
-        command: [bash]
-        source: |
-          set -e
-          TEAM="{{workflow.parameters.team_name}}"
-          SVC="{{workflow.parameters.component_name}}"
-          SECRET_NAME="${SVC}-db"
-
-          echo "🔍 Waiting for ExternalSecret ${SECRET_NAME} to sync (up to 90s)..."
-          for i in $(seq 1 18); do
-            STATUS=$(kubectl get externalsecret "${SECRET_NAME}" -n "${TEAM}" \
-              -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
-            if [ "${STATUS}" = "True" ]; then
-              echo "✅ ExternalSecret synced"
-              break
-            fi
-            echo "  [${i}/18] status=${STATUS:-NotFound}, retrying in 5s..."
-            sleep 5
-          done
-
-          STATUS=$(kubectl get externalsecret "${SECRET_NAME}" -n "${TEAM}" \
-            -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
-          if [ "${STATUS}" != "True" ]; then
-            echo "❌ ExternalSecret ${SECRET_NAME} not Ready (${STATUS})"
-            exit 1
-          fi
-
-          # Confirm k8s Secret has the expected key
-          kubectl get secret "${SECRET_NAME}" -n "${TEAM}" \
-            -o jsonpath='{.data.DATABASE_URL}' | base64 -d | grep -q "postgresql://"
-          echo "✅ k8s Secret ${SECRET_NAME} contains valid DATABASE_URL"
-
-    # ─── Verification: env var in running pod ────────────────────────────────
-    - name: check-env-var
-      script:
-        image: bitnami/kubectl:latest
-        command: [bash]
-        source: |
-          set -e
-          TEAM="{{workflow.parameters.team_name}}"
-          SVC="{{workflow.parameters.component_name}}"
-
-          echo "⏳ Waiting for rollout to complete..."
-          kubectl rollout status deployment/"${SVC}" -n "${TEAM}" --timeout=180s
-
-          POD=$(kubectl get pods -n "${TEAM}" \
-            -l "app.kubernetes.io/name=${SVC}" \
-            --field-selector=status.phase=Running \
-            -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || \
-            kubectl get pods -n "${TEAM}" \
-            -l "app=${SVC}" \
-            --field-selector=status.phase=Running \
-            -o jsonpath='{.items[0].metadata.name}')
-
-          if [ -z "${POD}" ]; then
-            echo "❌ No running pod found for ${SVC} in ${TEAM}"
-            kubectl get pods -n "${TEAM}" -l "app=${SVC}"
-            exit 1
-          fi
-
           echo "🔍 Checking env var in pod ${POD}..."
           kubectl exec -n "${TEAM}" "${POD}" -- env | grep "SMOKE_TEST=true"
           echo "✅ SMOKE_TEST=true confirmed in pod environment"
