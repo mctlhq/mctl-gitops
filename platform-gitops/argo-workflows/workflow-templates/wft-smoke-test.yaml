@@ -63,6 +63,8 @@ spec:
             template: check-k8s-secret
         - - name: update-config
             template: run-update-config
+        - - name: sync-argocd-app-2
+            template: trigger-argocd-sync
         - - name: verify-env-var
             template: check-env-var
         - - name: retire
