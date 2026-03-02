@@ -119,10 +119,10 @@ argo-cd:
         p, role:admin, clusters, get, */*, allow
         p, role:admin, repositories, *, */*, allow
         p, role:admin, projects, *, */*, allow
-        g, admins, role:admin
+        g, mctlhq:admins, role:admin
 
         # ============================================================================
-        # Team-Based Access (auto-generated per tenant)
+        # Team-Based Access (Auto-generated from tenant definitions)
         # ============================================================================
 
     secret:
