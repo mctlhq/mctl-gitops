@@ -241,16 +241,8 @@ spec:
             DB_SECRET="${TEAM}-${APP}-db-creds"
             # Only append if dbSecret not already present
             if ! grep -q "dbSecret:" "$SVC_VALUES"; then
-              cat >> "$SVC_VALUES" << DBSEOF
-
-dbSecret:
-  vaultPath: "${VAULT_PATH}"
-  secretName: "${DB_SECRET}"
-
-envFrom:
-  - secretRef:
-      name: "${DB_SECRET}"
-DBSEOF
+              printf '\ndbSecret:\n  vaultPath: "%s"\n  secretName: "%s"\nenvFrom:\n  - secretRef:\n      name: "%s"\n' \
+                "${VAULT_PATH}" "${DB_SECRET}" "${DB_SECRET}" >> "$SVC_VALUES"
             fi
             git add "$SVC_VALUES"
             echo "✅ service values.yaml updated with dbSecret"
