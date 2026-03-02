@@ -319,19 +319,22 @@ spec:
           set -e
           TEAM="{{workflow.parameters.team_name}}"
           SVC="{{workflow.parameters.component_name}}"
-          SECRET_NAME="${SVC}-db"
-          echo "🔍 Waiting for ExternalSecret ${SECRET_NAME} to sync (up to 90s)..."
-          for i in $(seq 1 18); do
-            STATUS=$(kubectl get externalsecret "${SECRET_NAME}" -n "${TEAM}" \
+          # Secret name matches dbSecret.secretName set by provision-database
+          SECRET_NAME="${TEAM}-${SVC}-db-creds"
+          ES_NAME="${TEAM}-${SVC}-base-service-db-creds"
+          echo "🔍 Waiting for ExternalSecret ${ES_NAME} to sync (up to 5min)..."
+          for i in $(seq 1 30); do
+            STATUS=$(kubectl get externalsecret "${ES_NAME}" -n "${TEAM}" \
               -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
             [ "${STATUS}" = "True" ] && { echo "✅ ExternalSecret synced"; break; }
-            echo "  [${i}/18] status=${STATUS:-NotFound}, retrying in 5s..."
-            sleep 5
+            echo "  [${i}/30] status=${STATUS:-NotFound}, retrying in 10s..."
+            sleep 10
           done
-          STATUS=$(kubectl get externalsecret "${SECRET_NAME}" -n "${TEAM}" \
+          STATUS=$(kubectl get externalsecret "${ES_NAME}" -n "${TEAM}" \
             -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
           if [ "${STATUS}" != "True" ]; then
-            echo "❌ ExternalSecret ${SECRET_NAME} not Ready (status: ${STATUS})"
+            echo "❌ ExternalSecret ${ES_NAME} not Ready (status: ${STATUS})"
+            kubectl get externalsecret -n "${TEAM}" 2>/dev/null || true
             exit 1
           fi
           kubectl get secret "${SECRET_NAME}" -n "${TEAM}" \

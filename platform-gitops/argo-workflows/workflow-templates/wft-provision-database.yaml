@@ -41,6 +41,7 @@ spec:
         source: |
           set -e
           apk add --no-cache curl openssl git wget > /dev/null 2>&1
+          wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/download/v4.40.5/yq_linux_amd64 && chmod +x /usr/local/bin/yq
 
           TEAM="{{inputs.parameters.team_name}}"
           APP="{{inputs.parameters.app_name}}"
@@ -229,6 +230,17 @@ spec:
             fi
             git add "$CATALOG_FILE"
             echo "✅ catalog-info.yaml annotated"
+          fi
+
+          # ── Inject dbSecret into service values.yaml (if service exists) ─────
+          SVC_VALUES="platform-gitops/services/${TEAM}/${APP}/values.yaml"
+          if [ -f "$SVC_VALUES" ]; then
+            DB_SECRET="${TEAM}-${APP}-db-creds"
+            yq eval -i ".dbSecret.vaultPath = \"${VAULT_PATH}\"" "$SVC_VALUES"
+            yq eval -i ".dbSecret.secretName = \"${DB_SECRET}\"" "$SVC_VALUES"
+            yq eval -i ".envFrom = [{\"secretRef\": {\"name\": \"${DB_SECRET}\"}}]" "$SVC_VALUES"
+            git add "$SVC_VALUES"
+            echo "✅ service values.yaml updated with dbSecret"
           fi
 
           # ── Commit and push ────────────────────────────────────────────────
