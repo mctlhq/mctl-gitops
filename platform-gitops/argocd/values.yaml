@@ -126,15 +126,6 @@ argo-cd:
         # Team-Based Access (Auto-generated from tenant definitions)
         # ============================================================================
 
-        # Tenant: mctl-internals (github: mctl-internals)
-        p, role:team-mctl-internals, applications, get, preview/preview-mctl-internals-*, allow
-        p, role:team-mctl-internals, applications, list, preview/preview-mctl-internals-*, allow
-        p, role:team-mctl-internals, applications, sync, preview/preview-mctl-internals-*, allow
-        p, role:team-mctl-internals, applications, override, preview/preview-mctl-internals-*, allow
-        p, role:team-mctl-internals, logs, get, preview/preview-mctl-internals-*, allow
-        p, role:team-mctl-internals, exec, create, preview/preview-mctl-internals-*, allow
-        g, mctlhq:mctl-internals, role:team-mctl-internals
-
     secret:
       createSecret: true
 
