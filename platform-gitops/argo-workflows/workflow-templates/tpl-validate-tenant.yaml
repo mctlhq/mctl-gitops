@@ -72,12 +72,11 @@ spec:
 
           # ── 3. Clone mctl-core to check tenant/service existence ─────────────
           echo "📥 Cloning mctl-core for validation..."
-          git clone --depth=1 \
-            "https://x-access-token:$(cat /var/run/secrets/git-token)@github.com/mctlhq/mctl-core.git" \
-            /tmp/mctl-core 2>/dev/null || \
-          git clone --depth=1 \
-            "https://github.com/mctlhq/mctl-core.git" \
-            /tmp/mctl-core
+          mkdir -p ~/.ssh
+          cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  StrictHostKeyChecking no\n' > ~/.ssh/config
+          git clone --depth=1 "git@github.com:mctlhq/mctl-core.git" /tmp/mctl-core
           cd /tmp/mctl-core
 
           # ── 4. Determine component type for deploy/update-config ─────────────
@@ -132,12 +131,9 @@ spec:
           fi
           echo "🏷 Image tag: $(cat /tmp/image_tag)"
         volumeMounts:
-          - name: git-token
-            mountPath: /var/run/secrets
+          - name: deploy-key
+            mountPath: /secrets/deploy-key
       volumes:
-        - name: git-token
+        - name: deploy-key
           secret:
-            secretName: github-app-credentials
-            items:
-              - key: mctl-core-token
-                path: git-token
+            secretName: mctl-core-deploy-key
