@@ -33,7 +33,7 @@ metadata:
 spec:
   entrypoint: smoke-pipeline
   serviceAccountName: argo-workflow-sa
-  onExit: retire-on-exit
+  onExit: run-retire
 
   arguments:
     parameters:
@@ -65,10 +65,6 @@ spec:
             template: check-env-var
         - - name: retire
             template: run-retire
-
-    # ─── onExit cleanup ───────────────────────────────────────────────────────
-    - name: retire-on-exit
-      template: run-retire
 
     # ─── Step 1: Onboard service ──────────────────────────────────────────────
     - name: run-onboard
