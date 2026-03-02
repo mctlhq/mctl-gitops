@@ -1,0 +1,16 @@
+apiVersion: backstage.io/v1alpha1
+kind: Resource
+metadata:
+  name: tenant-tests
+  namespace: default
+  description: "Tenant teststests — namespace, quotas, and network policies"
+  annotations:
+    mctl.me/tenant-name: "tests"
+    mctl.me/github-team: "tests"
+    backstage.io/managed-by-location: "url:https://github.com/mctlhq/mctl-core/blob/main/platform-gitops/tenants/tests/catalog-info.yaml"
+    backstage.io/managed-by-origin-location: "url:https://github.com/mctlhq/mctl-core/blob/main/platform-gitops/tenants/tests/catalog-info.yaml"
+spec:
+  type: tenant
+  owner: group:default/tests
+  system: mctl-platform
+  dependsOn: []

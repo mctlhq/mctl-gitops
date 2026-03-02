@@ -1,0 +1,32 @@
+# Tenant configuration for: tests
+# Created by: wft-create-tenant workflow
+# Managed by: ArgoCD ApplicationSet (applicationset-tenants)
+tenant:
+  name: tests
+  displayName: "teststests"
+  description: ""
+  githubTeam: tests
+  contactEmail: ""
+  quotas:
+    requests.cpu: "4"
+    requests.memory: "8Gi"
+    limits.cpu: "8"
+    limits.memory: "16Gi"
+    pods: "20"
+    persistentvolumeclaims: "5"
+    services: "10"
+  limitRange:
+    enabled: true
+    default:
+      cpu: "500m"
+      memory: "256Mi"
+    defaultRequest:
+      cpu: "100m"
+      memory: "128Mi"
+    max:
+      cpu: "2"
+      memory: "4Gi"
+  networking:
+    allowIntraNamespace: true
+    allowClusterEgress: true
+    allowInternetEgress: false
