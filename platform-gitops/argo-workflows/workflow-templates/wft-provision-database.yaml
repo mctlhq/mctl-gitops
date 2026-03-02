@@ -40,7 +40,7 @@ spec:
         command: [sh]
         source: |
           set -e
-          apk add --no-cache curl openssl git > /dev/null 2>&1
+          apk add --no-cache curl openssl git openssh-client > /dev/null 2>&1
 
           TEAM="{{inputs.parameters.team_name}}"
           APP="{{inputs.parameters.app_name}}"
@@ -67,27 +67,15 @@ spec:
             grep '"client_token"' | sed 's/.*"client_token":"\([^"]*\)".*/\1/')
           export VAULT_TOKEN
 
-          # ── Get GitHub App token ─────────────────────────────────────────
-          APP_ID=$(cat /var/run/secrets/github-app/app-id)
-          INSTALL_ID=$(cat /var/run/secrets/github-app/installation-id)
-          APP_KEY=/var/run/secrets/github-app/private-key
-
-          NOW=$(date +%s); EXP=$((NOW + 540))
-          HEADER=$(printf '{"alg":"RS256","typ":"JWT"}' | base64 | tr -d '=' | tr '/+' '_-' | tr -d '\n')
-          PAYLOAD=$(printf '{"iat":%s,"exp":%s,"iss":"%s"}' "$NOW" "$EXP" "$APP_ID" | base64 | tr -d '=' | tr '/+' '_-' | tr -d '\n')
-          SIG=$(printf '%s.%s' "$HEADER" "$PAYLOAD" | openssl dgst -sha256 -sign "$APP_KEY" | base64 | tr -d '=' | tr '/+' '_-' | tr -d '\n')
-          JWT="${HEADER}.${PAYLOAD}.${SIG}"
-          GH_TOKEN=$(wget -qO- \
-            --header="Authorization: Bearer ${JWT}" \
-            --header="Accept: application/vnd.github+json" \
-            --post-data='{"repositories":["mctl-core"]}' \
-            "https://api.github.com/app/installations/${INSTALL_ID}/access_tokens" | \
-            grep '"token"' | head -1 | cut -d'"' -f4)
+          # ── Set up SSH for git ───────────────────────────────────────────
+          mkdir -p ~/.ssh
+          cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  StrictHostKeyChecking no\n' > ~/.ssh/config
+          chmod 600 ~/.ssh/config
 
           # ── Clone mctl-core ───────────────────────────────────────────────
-          git clone --depth=1 \
-            "https://x-access-token:${GH_TOKEN}@github.com/mctlhq/mctl-core.git" \
-            /tmp/mctl-core 2>&1 | grep -v 'x-access-token'
+          git clone --depth=1 "git@github.com:mctlhq/mctl-core.git" /tmp/mctl-core
           cd /tmp/mctl-core
           git config user.name "argo-workflows[bot]"
           git config user.email "argo-workflows[bot]@users.noreply.github.com"
@@ -269,22 +257,20 @@ spec:
           - K8s secret: ${DB_NAME}-db-creds (ExternalSecret -> CNPG)"
 
             for i in $(seq 1 5); do
-              if git push "https://x-access-token:${GH_TOKEN}@github.com/mctlhq/mctl-core.git" main \
-                2>&1 | grep -v 'x-access-token'; then
+              if git push origin HEAD:main; then
                 echo "✅ Pushed — ArgoCD will sync automatically"
                 break
               fi
-              git pull --rebase "https://x-access-token:${GH_TOKEN}@github.com/mctlhq/mctl-core.git" main \
-                2>&1 | grep -v 'x-access-token'
+              git pull --rebase origin main
             done
           fi
         env:
           - name: VAULT_ADDR
             value: "http://vault.vault.svc.cluster.local:8200"
         volumeMounts:
-          - name: github-app-credentials
-            mountPath: /var/run/secrets/github-app
+          - name: deploy-key
+            mountPath: /secrets/deploy-key
       volumes:
-        - name: github-app-credentials
+        - name: deploy-key
           secret:
-            secretName: github-app-credentials
+            secretName: mctl-core-deploy-key
