@@ -35,7 +35,7 @@ spec:
           - name: dockerfile_repo
             default: ""
       script:
-        image: mikefarah/yq:4.40.5
+        image: alpine:3.19
         command: [sh]
         source: |
           set -e
@@ -52,6 +52,11 @@ spec:
           REPO="{{inputs.parameters.dockerfile_repo}}"
           PROVISION_DB="{{inputs.parameters.provision_database}}"
           SKIP_HEALTH="{{inputs.parameters.skip_health_check}}"
+
+          # ── 0. Install dependencies ───────────────────────────────────────────
+          apk add --no-cache openssl curl wget git ca-certificates
+          wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/download/v4.40.5/yq_linux_amd64
+          chmod +x /usr/local/bin/yq
 
           # ── 1. Get GitHub App token ────────────────────────────────────────
           APP_ID=$(cat /var/run/secrets/github-app/app-id)

@@ -71,7 +71,7 @@ spec:
                 secondsAfterSuccess: 1800
                 secondsAfterFailure: 86400
               podGC:
-                strategy: OnPodCompletion
+                strategy: OnWorkflowCompletion
         workflow:
           serviceAccount:
             create: false

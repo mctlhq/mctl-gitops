@@ -308,7 +308,7 @@ spec:
           secret:
             secretName: github-app-credentials
       script:
-        image: mikefarah/yq:4.40.5
+        image: alpine:3.19
         command: [sh]
         volumeMounts:
           - name: github-app-creds
@@ -340,7 +340,7 @@ spec:
           INSTALLATION_ID=$(cat /secrets/github-app/installation-id)
 
           # Install jwt dependencies
-          apk add --no-cache openssl curl jq git 2>/dev/null || true
+          apk add --no-cache openssl curl jq git
 
           # Generate JWT
           NOW=$(date +%s)
