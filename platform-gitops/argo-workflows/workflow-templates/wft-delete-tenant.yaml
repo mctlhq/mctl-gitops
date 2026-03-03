@@ -7,7 +7,7 @@ metadata:
     workflows.argoproj.io/description: |
       Fully deletes a tenant from the mctl.me platform:
         1. validate        — checks tenant exists, not reserved
-        2. delete-vault    — removes Vault policy tenant-{name}
+        2. delete-vault    — removes Vault policy + secrets under teams/{name}/
         3. delete-from-git — removes tenant dir + ArgoCD RBAC from mctl-core
         4. delete-k8s      — deletes ArgoCD app + K8s namespace
 
@@ -73,7 +73,7 @@ spec:
           echo "Validating tenant: $TENANT"
 
           # Reserved — cannot delete
-          for reserved in admins argocd argo-workflows argo-events kube-system kube-public kube-node-lease default cert-manager traefik vault external-secrets monitoring; do
+          for reserved in admins argocd argo-workflows argo-events kube-system kube-public kube-node-lease default cert-manager traefik vault external-secrets monitoring backstage platform-db; do
             if [ "$TENANT" = "$reserved" ]; then
               echo "ERROR: '$TENANT' is a reserved/protected tenant and cannot be deleted."
               exit 1
@@ -104,11 +104,34 @@ spec:
             jwt="$KUBE_TOKEN")
           export VAULT_TOKEN
 
+          # Delete Vault policy
           if vault policy read "tenant-${TENANT}" > /dev/null 2>&1; then
             vault policy delete "tenant-${TENANT}"
             echo "Vault policy tenant-${TENANT} deleted."
           else
             echo "Vault policy tenant-${TENANT} not found (already deleted). Skipping."
+          fi
+
+          # Delete all secrets under teams/{tenant}/
+          echo "Cleaning up Vault secrets under teams/${TENANT}/..."
+          SERVICES=$(vault kv list -format=json -mount=secret "teams/${TENANT}/" 2>/dev/null || echo "[]")
+          if [ "$SERVICES" != "[]" ]; then
+            for SVC in $(echo "$SERVICES" | sed 's/[][]//g' | tr ',' '\n' | tr -d '" '); do
+              # Each service may have sub-keys (repo-pat, database, etc.)
+              SUB_KEYS=$(vault kv list -format=json -mount=secret "teams/${TENANT}/${SVC}" 2>/dev/null || echo "[]")
+              if [ "$SUB_KEYS" != "[]" ]; then
+                for KEY in $(echo "$SUB_KEYS" | sed 's/[][]//g' | tr ',' '\n' | tr -d '" '); do
+                  vault kv metadata delete -mount=secret "teams/${TENANT}/${SVC}${KEY}" 2>/dev/null && \
+                    echo "  Deleted secret teams/${TENANT}/${SVC}${KEY}" || true
+                done
+              fi
+              # Delete the service-level metadata too
+              vault kv metadata delete -mount=secret "teams/${TENANT}/${SVC}" 2>/dev/null && \
+                echo "  Deleted secret teams/${TENANT}/${SVC}" || true
+            done
+            echo "Vault secrets for tenant ${TENANT} cleaned up."
+          else
+            echo "No Vault secrets found for tenant ${TENANT}."
           fi
 
     # ────────────────────────────────────────────────────────────────────────
