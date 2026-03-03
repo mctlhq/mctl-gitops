@@ -4,14 +4,14 @@ metadata:
   name: argo-workflow-sa
   namespace: argo-workflows
 ---
-# SSO RBAC: admin access for mctlhq:admins GitHub team members
+# SSO RBAC: admin access for admins group (Backstage OIDC)
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: argo-workflows-admin
   namespace: argo-workflows
   annotations:
-    workflows.argoproj.io/rbac-rule: "'mctlhq:admins' in groups"
+    workflows.argoproj.io/rbac-rule: "'admins' in groups"
     workflows.argoproj.io/rbac-rule-precedence: "1"
 ---
 # Kubernetes 1.24+ requires explicit SA token secret creation
