@@ -126,6 +126,15 @@ argo-cd:
         p, role:team-oca-6, logs, get, apps/oca-6-*, allow
         p, role:team-oca-6, exec, create, apps/oca-6-*, allow
         g, oca-6, role:team-oca-6
+
+        # Tenant: mctl-internals
+        p, role:team-mctl-internals, applications, get, apps/mctl-internals-*, allow
+        p, role:team-mctl-internals, applications, list, apps/mctl-internals-*, allow
+        p, role:team-mctl-internals, applications, sync, apps/mctl-internals-*, allow
+        p, role:team-mctl-internals, applications, override, apps/mctl-internals-*, allow
+        p, role:team-mctl-internals, logs, get, apps/mctl-internals-*, allow
+        p, role:team-mctl-internals, exec, create, apps/mctl-internals-*, allow
+        g, mctl-internals, role:team-mctl-internals
     secret:
       createSecret: true
 
