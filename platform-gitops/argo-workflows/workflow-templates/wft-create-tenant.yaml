@@ -46,9 +46,6 @@ spec:
         default: "false"
       - name: contact_email
         default: ""
-      - name: creator_username
-        # GitHub username of the person creating the tenant (added as team maintainer)
-        default: ""
 
   templates:
     # ────────────────────────────────────────────────────────────────────────
