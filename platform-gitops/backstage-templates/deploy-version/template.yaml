@@ -77,6 +77,7 @@ spec:
           action: deploy
           team_name: ${{ steps['fetch-service'].output.entity.metadata.labels.team or steps['fetch-service'].output.entity.spec.owner | replace('group:', '') }}
           component_name: ${{ steps['fetch-service'].output.entity.metadata.name }}
+          component_type: ${{ steps['fetch-service'].output.entity.metadata.annotations['mctl.me/component-type'] or 'base-service' }}
           dockerfile_repo: ${{ steps['fetch-service'].output.entity.metadata.annotations['github.com/source-repo'] or '' }}
           git_tag: ${{ parameters.gitTag | default('') }}
           env_vars: ${{ parameters.envVars | default('') }}
