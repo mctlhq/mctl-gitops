@@ -122,6 +122,7 @@ spec:
                 pods: "10"
                 pvcs: "2"
                 services: "5"
+              maxTeamsPerTenant: 1
             oidcProvider:
               issuer: https://app.mctl.me/api/oidc-provider
               github:
