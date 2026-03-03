@@ -116,6 +116,9 @@ spec:
               githubAppInstallationId: ${GITHUB_APP_INSTALLATION_ID}
             oidcProvider:
               issuer: https://app.mctl.me/api/oidc-provider
+              github:
+                clientId: ${AUTH_GITHUB_CLIENT_ID}
+                clientSecret: ${AUTH_GITHUB_CLIENT_SECRET}
               clients:
                 - clientId: ${OIDC_CLIENT_ID}
                   clientSecret: ${OIDC_CLIENT_SECRET}
