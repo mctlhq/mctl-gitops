@@ -42,9 +42,9 @@ jobs:
           SERVICE="${{ inputs.component_name }}"
 
           if [[ "$TYPE" == "base-service" ]]; then
-            DIR="platform-gitops/services/preview/${TEAM}/${SERVICE}"
+            DIR="platform-gitops/services/${TEAM}/${SERVICE}"
           else
-            DIR="platform-gitops/workers/preview/${TEAM}/${SERVICE}"
+            DIR="platform-gitops/workers/${TEAM}/${SERVICE}"
           fi
 
           echo "dir=${DIR}" >> $GITHUB_OUTPUT
@@ -175,12 +175,7 @@ jobs:
             exit 0
           fi
 
-          TYPE="${{ inputs.component_type }}"
-          if [[ "$TYPE" == "base-service" ]]; then
-            APPSET="preview-apps"
-          else
-            APPSET="preview-workers"
-          fi
+          APPSET="apps"
 
           echo "Triggering refresh for ApplicationSet: ${APPSET}"
           
@@ -213,7 +208,7 @@ jobs:
           # Wait for Application to be deleted (up to 2 minutes)
           echo "Waiting for Application deletion..."
           for i in {1..24}; do
-            if ! kubectl get application "preview-${TEAM}-${{ inputs.component_name }}" -n argocd &>/dev/null; then
+            if ! kubectl get application "${TEAM}-${{ inputs.component_name }}" -n argocd &>/dev/null; then
               echo "Application deleted"
               break
             fi

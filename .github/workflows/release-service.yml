@@ -108,24 +108,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Validate team exists
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
-        run: |
-          TEAM="${{ inputs.team_name }}"
-          ORG="mctlhq"
-          
-          echo "🔍 Checking if team $TEAM exists in org $ORG..."
-          
-          if gh api "/orgs/${ORG}/teams/${TEAM}" --silent 2>/dev/null; then
-            echo "✅ Team $TEAM exists"
-          else
-            echo "::error::Team $TEAM does not exist in org $ORG"
-            echo "## ❌ Team Not Found" >> $GITHUB_STEP_SUMMARY
-            echo "Team **${TEAM}** does not exist. Create it first at https://github.com/orgs/${ORG}/teams" >> $GITHUB_STEP_SUMMARY
-            exit 1
-          fi
-
       - name: Parse and save secrets to Vault
         if: inputs.secret_env_vars != ''
         env:
@@ -208,9 +190,9 @@ jobs:
 
           # For deploy/update-config, auto-detect service type
           if [[ "$ACTION" == "deploy" || "$ACTION" == "update-config" ]]; then
-            if [[ -d "platform-gitops/services/preview/${TEAM}/${SERVICE}" ]]; then
+            if [[ -d "platform-gitops/services/${TEAM}/${SERVICE}" ]]; then
               TYPE="base-service"
-            elif [[ -d "platform-gitops/workers/preview/${TEAM}/${SERVICE}" ]]; then
+            elif [[ -d "platform-gitops/workers/${TEAM}/${SERVICE}" ]]; then
               TYPE="worker-service"
             else
               echo "::error::Service ${TEAM}/${SERVICE} not found. Use 'onboard' action first."
@@ -226,9 +208,9 @@ jobs:
           fi
 
           if [[ "$TYPE" == "base-service" ]]; then
-            DIR="platform-gitops/services/preview/${TEAM}/${SERVICE}"
+            DIR="platform-gitops/services/${TEAM}/${SERVICE}"
           else
-            DIR="platform-gitops/workers/preview/${TEAM}/${SERVICE}"
+            DIR="platform-gitops/workers/${TEAM}/${SERVICE}"
           fi
 
           # Onboard: must NOT exist. Deploy/update-config: must exist.
@@ -637,10 +619,10 @@ jobs:
           SECRET_VARS="${{ inputs.secret_env_vars }}"
 
           # Auto-detect service directory
-          if [[ -d "platform-gitops/services/preview/${TEAM}/${SERVICE}" ]]; then
-            DIR="platform-gitops/services/preview/${TEAM}/${SERVICE}"
-          elif [[ -d "platform-gitops/workers/preview/${TEAM}/${SERVICE}" ]]; then
-            DIR="platform-gitops/workers/preview/${TEAM}/${SERVICE}"
+          if [[ -d "platform-gitops/services/${TEAM}/${SERVICE}" ]]; then
+            DIR="platform-gitops/services/${TEAM}/${SERVICE}"
+          elif [[ -d "platform-gitops/workers/${TEAM}/${SERVICE}" ]]; then
+            DIR="platform-gitops/workers/${TEAM}/${SERVICE}"
           else
             echo "::error::Service ${TEAM}/${SERVICE} not found. Use 'onboard' action first."
             exit 1

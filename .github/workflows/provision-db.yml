@@ -194,7 +194,7 @@ jobs:
 
           # Look for catalog-info.yaml in services and workers paths
           CATALOG_FILE=""
-          for dir in "platform-gitops/services/preview/${TEAM}/${APP}" "platform-gitops/workers/preview/${TEAM}/${APP}"; do
+          for dir in "platform-gitops/services/${TEAM}/${APP}" "platform-gitops/workers/${TEAM}/${APP}"; do
             if [ -f "${dir}/catalog-info.yaml" ]; then
               CATALOG_FILE="${dir}/catalog-info.yaml"
               break
@@ -245,8 +245,8 @@ jobs:
                   platform-gitops/cnpg-clusters/shared/databases.yaml \
                   platform-gitops/cnpg-clusters/shared/secrets.yaml
           # Optional: catalog-info.yaml (may not exist if service not yet deployed)
-          git add platform-gitops/services/preview/${TEAM}/${APP}/catalog-info.yaml \
-                  platform-gitops/workers/preview/${TEAM}/${APP}/catalog-info.yaml \
+          git add platform-gitops/services/${TEAM}/${APP}/catalog-info.yaml \
+                  platform-gitops/workers/${TEAM}/${APP}/catalog-info.yaml \
                   2>/dev/null || true
 
           git commit -m "feat: provision database ${DB_NAME}" \
