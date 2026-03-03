@@ -21,3 +21,10 @@ resources:
     memory: 256Mi
 
 env: {}
+
+dbSecret:
+  vaultPath: "platform/teams/tests/smoke-test-svc/database"
+  secretName: "tests-smoke-test-svc-db-creds"
+envFrom:
+  - secretRef:
+      name: "tests-smoke-test-svc-db-creds"
