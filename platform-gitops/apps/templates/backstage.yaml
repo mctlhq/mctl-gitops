@@ -114,6 +114,14 @@ spec:
               syncIntervalMinutes: 5
               landingPageToken: ${BACKSTAGE_LANDING_TOKEN}
               githubAppInstallationId: ${GITHUB_APP_INSTALLATION_ID}
+              defaultQuotas:
+                cpuReq: "250m"
+                cpuLim: "500m"
+                memReq: "256Mi"
+                memLim: "512Mi"
+                pods: "10"
+                pvcs: "2"
+                services: "5"
             oidcProvider:
               issuer: https://app.mctl.me/api/oidc-provider
               github:
