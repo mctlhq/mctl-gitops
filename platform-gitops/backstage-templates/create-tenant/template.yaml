@@ -130,7 +130,7 @@ spec:
           2. ⏳ ArgoCD will provision namespace + quotas + NetworkPolicy (~2-3 min)
           3. ⏳ Backstage catalog will refresh tenant Resource entity (~5 min)
           4. Add team members via Backstage tenant management
-          5. Members get ArgoCD RBAC automatically via Backstage OIDC groups
+          5. Members get ArgoCD RBAC automatically via OIDC teams
     links:
       - title: Argo Workflows Run
         icon: dashboard
