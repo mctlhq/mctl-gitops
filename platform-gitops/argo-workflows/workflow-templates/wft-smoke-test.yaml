@@ -340,7 +340,7 @@ spec:
           SVC="{{workflow.parameters.component_name}}"
           # Secret name matches dbSecret.secretName set by provision-database
           SECRET_NAME="${TEAM}-${SVC}-db-creds"
-          ES_NAME="${TEAM}-${SVC}-base-service-db-creds"
+          ES_NAME="${TEAM}-${SVC}-db-creds"
           echo "🔍 Waiting for ExternalSecret ${ES_NAME} to sync (up to 5min)..."
           for i in $(seq 1 30); do
             STATUS=$(kubectl get externalsecret "${ES_NAME}" -n "${TEAM}" \

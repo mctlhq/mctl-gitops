@@ -123,9 +123,11 @@ spec:
                 - name: secret_env_vars
                   value: "{{workflow.parameters.secret_env_vars}}"
 
-          # Step 3: generate manifests + git commit (after build AND secrets)
+          # Step 3: generate manifests + git commit
+          # Depends on validate (always) + build-image + write-secrets (both optional).
+          # Including validate ensures commit runs even when both optional steps are skipped.
           - name: commit
-            dependencies: [build-image, write-secrets]
+            dependencies: [validate, build-image, write-secrets]
             templateRef:
               name: tpl-git-commit
               template: commit-service

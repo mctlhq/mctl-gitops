@@ -202,7 +202,6 @@ spec:
           # ── Annotate catalog-info.yaml if exists ──────────────────────────
           CATALOG_FILE=""
           for dir in \
-            "platform-gitops/services/${TEAM}/${APP}" \
             "platform-gitops/services/${TEAM}/${APP}"; do
             [ -f "${dir}/catalog-info.yaml" ] && CATALOG_FILE="${dir}/catalog-info.yaml" && break
           done
