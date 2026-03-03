@@ -13,7 +13,7 @@ metadata:
   annotations:
     backstage.io/techdocs-ref: dir:.
 spec:
-  owner: group:admins
+  owner: group:default/admins
   type: configuration
 
   parameters:
