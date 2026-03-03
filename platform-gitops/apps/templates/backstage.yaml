@@ -246,6 +246,10 @@ spec:
                   target: https://github.com/mctlhq/mctl-core/blob/main/platform-gitops/backstage-templates/create-tenant/template.yaml
                   rules:
                     - allow: [Template]
+                - type: url
+                  target: https://github.com/mctlhq/mctl-core/blob/main/platform-gitops/backstage-templates/delete-tenant/template.yaml
+                  rules:
+                    - allow: [Template]
                 # Tenant entities from the tenant-management backend
                 - type: url
                   target: https://app.mctl.me/api/tenant-management/backstage/catalog.yaml

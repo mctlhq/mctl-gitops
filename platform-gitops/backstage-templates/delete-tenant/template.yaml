@@ -1,0 +1,63 @@
+apiVersion: scaffolder.backstage.io/v1beta3
+kind: Template
+metadata:
+  name: delete-tenant
+  title: Delete Tenant
+  description: |
+    Permanently delete a tenant from the mctl.me platform.
+    Removes: K8s namespace, Vault policy, ArgoCD RBAC, DB records, and catalog entities.
+    ⚠️ This action is irreversible.
+
+  tags:
+    - tenant
+    - provisioning
+    - admin
+  annotations:
+    backstage.io/techdocs-ref: dir:.
+    mctl.me/admin-only: "true"
+spec:
+  owner: group:default/admins
+  type: provisioning
+  presentation:
+    buttonLabels:
+      createButtonText: 'Delete Tenant'
+      reviewButtonText: 'Review & Delete'
+
+  parameters:
+    - title: Select Tenant to Delete
+      required:
+        - tenantName
+        - confirmName
+      properties:
+        tenantName:
+          title: Tenant Name
+          type: string
+          description: "Enter the exact name of the tenant to delete."
+        confirmName:
+          title: Confirm Tenant Name
+          type: string
+          description: "Type the tenant name again to confirm deletion."
+
+  steps:
+    - id: delete-tenant
+      name: Delete tenant via Backstage API
+      action: http:backstage:request
+      input:
+        method: DELETE
+        path: /api/tenant-management/tenants/${{ parameters.tenantName }}
+
+  output:
+    text:
+      - title: Status
+        content: "Tenant `${{ parameters.tenantName }}` has been deleted."
+      - title: What was removed
+        content: |
+          - ✅ Database records (tenant + members)
+          - ⏳ K8s namespace `${{ parameters.tenantName }}` (deleting)
+          - ⏳ Vault policy `tenant-${{ parameters.tenantName }}` (deleting)
+          - ⏳ ArgoCD RBAC entries (syncing)
+          - ⏳ Git directory `tenants/${{ parameters.tenantName }}/` (pushed)
+    links:
+      - title: Argo Workflows Run
+        icon: dashboard
+        url: ${{ steps['delete-tenant'].output.body.workflowUrl }}
