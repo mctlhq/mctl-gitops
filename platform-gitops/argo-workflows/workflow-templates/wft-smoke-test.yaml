@@ -303,7 +303,7 @@ spec:
           apk add --no-cache curl > /dev/null 2>&1
           TEAM="{{workflow.parameters.team_name}}"
           SVC="{{workflow.parameters.component_name}}"
-          VAULT_PATH="secret/data/platform/teams/${TEAM}/${SVC}/database"
+          VAULT_PATH="secret/data/teams/${TEAM}/${SVC}/database"
           echo "🔐 Authenticating to Vault via Kubernetes auth..."
           SA_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
           VAULT_TOKEN=$(curl -sS -X POST \

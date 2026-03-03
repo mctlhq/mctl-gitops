@@ -139,7 +139,7 @@ spec:
             # Database secret injection
             if [ "$PROVISION_DB" = "true" ]; then
               DB_SECRET="${TEAM}-${SERVICE}-db-creds"
-              VAULT_PATH="platform/teams/${TEAM}/${SERVICE}/database"
+              VAULT_PATH="teams/${TEAM}/${SERVICE}/database"
               yq eval -i ".envFrom = [{\"secretRef\": {\"name\": \"${DB_SECRET}\"}}]" "${DIR}/values.yaml"
               yq eval -i ".dbSecret.vaultPath = \"${VAULT_PATH}\"" "${DIR}/values.yaml"
               yq eval -i ".dbSecret.secretName = \"${DB_SECRET}\"" "${DIR}/values.yaml"

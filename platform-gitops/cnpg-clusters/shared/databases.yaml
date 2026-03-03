@@ -8,7 +8,7 @@
 # 1. Add role + pg_hba entry in cluster.yaml
 # 2. Add Database CRD below
 # 3. Add ExternalSecret in secrets.yaml
-# 4. Create Vault secret at platform/teams/<team>/<app>/database
+# 4. Create Vault secret at teams/<team>/<app>/database
 # =============================================================================
 
 # --- Example: uncomment and customize when onboarding first team app ---

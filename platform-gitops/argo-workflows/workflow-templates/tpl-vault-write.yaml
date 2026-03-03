@@ -114,7 +114,7 @@ spec:
     - name: write-platform-secret
       inputs:
         parameters:
-          - name: vault_path        # e.g. "platform/teams/payments/myapp/database"
+          - name: vault_path        # e.g. "teams/payments/myapp/database"
           - name: json_data         # JSON string: '{"key":"val"}'
       script:
         image: alpine:3.19

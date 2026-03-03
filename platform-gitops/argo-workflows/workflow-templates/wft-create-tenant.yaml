@@ -162,12 +162,6 @@ spec:
           path "secret/metadata/teams/${TENANT}/*" {
             capabilities = ["read", "list", "delete"]
           }
-          path "secret/data/platform/teams/${TENANT}/*" {
-            capabilities = ["create", "read", "update", "delete"]
-          }
-          path "secret/metadata/platform/teams/${TENANT}/*" {
-            capabilities = ["read", "list", "delete"]
-          }
           EOF
 
           echo "Vault policy tenant-${TENANT} created successfully."

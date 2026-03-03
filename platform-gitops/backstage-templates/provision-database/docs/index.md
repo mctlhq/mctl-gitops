@@ -21,7 +21,7 @@ Use this template when your service needs a PostgreSQL database. It provisions a
 | PostgreSQL role | `{team}-{app}` |
 | PostgreSQL database | `{team}-{app}` |
 | Kubernetes secret | `{team}-{app}-db-creds` |
-| Vault secret | `platform/teams/{team}/{app}/database` |
+| Vault secret | `teams/{team}/{app}/database` |
 
 ### Kubernetes secret fields
 

@@ -53,7 +53,7 @@ spec:
       - title: Database name
         content: "`${{ steps['fetch-service'].output.entity.metadata.labels.team or steps['fetch-service'].output.entity.spec.owner | replace('group:', '') }}-${{ steps['fetch-service'].output.entity.metadata.name }}`"
       - title: Vault path
-        content: "`platform/teams/${{ steps['fetch-service'].output.entity.metadata.labels.team or steps['fetch-service'].output.entity.spec.owner | replace('group:', '') }}/${{ steps['fetch-service'].output.entity.metadata.name }}/database`"
+        content: "`teams/${{ steps['fetch-service'].output.entity.metadata.labels.team or steps['fetch-service'].output.entity.spec.owner | replace('group:', '') }}/${{ steps['fetch-service'].output.entity.metadata.name }}/database`"
       - title: Kubernetes secret
         content: "`${{ steps['fetch-service'].output.entity.metadata.labels.team or steps['fetch-service'].output.entity.spec.owner | replace('group:', '') }}-${{ steps['fetch-service'].output.entity.metadata.name }}-db-creds`"
     links:

@@ -87,7 +87,7 @@ probes:
 # When set, creates an ExternalSecret that syncs DB credentials from Vault
 # and creates a k8s secret with DATABASE_URL, DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD
 # dbSecret:
-#   vaultPath: platform/teams/myteam/myapp/database
+#   vaultPath: teams/myteam/myapp/database
 #   secretName: myteam-myapp-db-creds  # optional, defaults to {fullname}-db-creds
 #   store: vault-backend               # optional
 #   refreshInterval: 1h               # optional

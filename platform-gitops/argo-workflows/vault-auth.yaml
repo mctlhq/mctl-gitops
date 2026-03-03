@@ -19,8 +19,8 @@
 #    path "secret/metadata/teams/*" {
 #      capabilities = ["read", "list", "delete"]
 #    }
-#    # Database provisioning (per-tenant paths)
-#    path "secret/data/platform/teams/*" {
+#    # Database provisioning (per-tenant paths — now under teams/)
+#    path "secret/data/teams/*" {
 #      capabilities = ["create", "read", "update"]
 #    }
 #    # Phase 2: Allow workflow to create per-tenant Vault policies
@@ -51,7 +51,7 @@
 #    path "secret/metadata/teams/{TEAM}/*" {
 #      capabilities = ["read", "list", "delete"]
 #    }
-#    path "secret/data/platform/teams/{TEAM}/*" {
+#    path "secret/data/teams/{TEAM}/*" {
 #      capabilities = ["create", "read", "update", "delete"]
 #    }
 #    EOF
