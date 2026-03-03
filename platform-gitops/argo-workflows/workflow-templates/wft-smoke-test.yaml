@@ -335,30 +335,29 @@ spec:
         image: bitnami/kubectl:latest
         command: [bash]
         source: |
-          set -e
           TEAM="{{workflow.parameters.team_name}}"
           SVC="{{workflow.parameters.component_name}}"
-          # Secret name matches dbSecret.secretName set by provision-database
-          SECRET_NAME="${TEAM}-${SVC}-db-creds"
+          # ExternalSecret and Secret live in platform-db (shared CNPG namespace)
+          ES_NS="platform-db"
           ES_NAME="${TEAM}-${SVC}-db-creds"
-          echo "🔍 Waiting for ExternalSecret ${ES_NAME} to sync (up to 5min)..."
+          echo "🔍 Waiting for ExternalSecret ${ES_NAME} in ${ES_NS} to sync (up to 5min)..."
           for i in $(seq 1 30); do
-            STATUS=$(kubectl get externalsecret "${ES_NAME}" -n "${TEAM}" \
+            STATUS=$(kubectl get externalsecret "${ES_NAME}" -n "${ES_NS}" \
               -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
             [ "${STATUS}" = "True" ] && { echo "✅ ExternalSecret synced"; break; }
             echo "  [${i}/30] status=${STATUS:-NotFound}, retrying in 10s..."
             sleep 10
           done
-          STATUS=$(kubectl get externalsecret "${ES_NAME}" -n "${TEAM}" \
+          STATUS=$(kubectl get externalsecret "${ES_NAME}" -n "${ES_NS}" \
             -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
           if [ "${STATUS}" != "True" ]; then
             echo "❌ ExternalSecret ${ES_NAME} not Ready (status: ${STATUS})"
-            kubectl get externalsecret -n "${TEAM}" 2>/dev/null || true
+            kubectl get externalsecret -n "${ES_NS}" 2>/dev/null || true
             exit 1
           fi
-          kubectl get secret "${SECRET_NAME}" -n "${TEAM}" \
+          kubectl get secret "${ES_NAME}" -n "${ES_NS}" \
             -o jsonpath='{.data.DATABASE_URL}' | base64 -d | grep -q "postgresql://"
-          echo "✅ k8s Secret ${SECRET_NAME} contains valid DATABASE_URL"
+          echo "✅ k8s Secret ${ES_NAME} in ${ES_NS} contains valid DATABASE_URL"
 
     # ─── Verification: env var in running pod ────────────────────────────────
     - name: check-env-var
