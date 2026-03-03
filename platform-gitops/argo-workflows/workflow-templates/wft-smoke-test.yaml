@@ -287,8 +287,10 @@ spec:
           APP="${TEAM}-${SVC}"
           echo "▶ Triggering ArgoCD hard refresh for ${APP}..."
           kubectl annotate app "${APP}" argocd.argoproj.io/refresh=hard --overwrite -n argocd || true
+          echo "▶ Triggering ArgoCD hard refresh for shared-pg (ExternalSecrets)..."
+          kubectl annotate app "shared-pg" argocd.argoproj.io/refresh=hard --overwrite -n argocd || true
           # Give ArgoCD time to detect and apply the change
-          sleep 30
+          sleep 60
           echo "✅ ArgoCD sync triggered"
 
     # ─── Verification: Vault DB secret exists ────────────────────────────────
