@@ -187,17 +187,6 @@ spec:
                         minutes: 1
                       timeout:
                         minutes: 3
-                  platformCatalog:
-                    organization: mctlhq
-                    catalogPath: /platform-gitops/catalog-info.yaml
-                    filters:
-                      repository: mctl-core
-                      branch: main
-                    schedule:
-                      frequency:
-                        minutes: 1
-                      timeout:
-                        minutes: 3
                   services:
                     organization: mctlhq
                     catalogPath: /platform-gitops/services/*/*/catalog-info.yaml

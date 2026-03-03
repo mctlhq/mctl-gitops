@@ -327,7 +327,6 @@ spec:
           spec:
             type: tenant
             owner: group:default/admins
-            system: mctl-platform
             dependsOn: []
           YAML
 
