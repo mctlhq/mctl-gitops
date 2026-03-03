@@ -82,6 +82,12 @@ spec:
           git_tag: ${{ parameters.gitTag | default('') }}
           env_vars: ${{ parameters.envVars | default('') }}
           secret_env_vars: ${{ parameters.secretEnvVars | default('') }}
+          port: "8080"
+          host: ""
+          provision_database: "false"
+          skip_health_check: "false"
+          dockerfile_path: "Dockerfile"
+          image_tag: ""
 
   output:
     text:
