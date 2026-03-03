@@ -29,3 +29,4 @@ spec:
   type: service
   lifecycle: production
   owner: group:admins
+  system: team-admins

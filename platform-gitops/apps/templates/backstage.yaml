@@ -174,7 +174,7 @@ spec:
               processingInterval: { seconds: 30 }
               orphanStrategy: delete
               rules:
-                - allow: [Component, Resource, Location, Template, Group, User]
+                - allow: [Component, System, Resource, Location, Template, Group, User]
               providers:
                 github:
                   mctlMe:

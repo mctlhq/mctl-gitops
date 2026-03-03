@@ -327,6 +327,7 @@ spec:
           spec:
             type: tenant
             owner: group:default/admins
+            system: team-${TENANT}
             dependsOn: []
           YAML
 

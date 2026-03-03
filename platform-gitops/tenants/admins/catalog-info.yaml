@@ -11,4 +11,5 @@ metadata:
 spec:
   type: tenant
   owner: group:default/admins
+  system: team-admins
   dependsOn: []
