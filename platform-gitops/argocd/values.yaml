@@ -117,6 +117,15 @@ argo-cd:
         p, role:admin, projects, *, */*, allow
         g, admins, role:admin
 
+
+        # Tenant: oca-6
+        p, role:team-oca-6, applications, get, apps/oca-6-*, allow
+        p, role:team-oca-6, applications, list, apps/oca-6-*, allow
+        p, role:team-oca-6, applications, sync, apps/oca-6-*, allow
+        p, role:team-oca-6, applications, override, apps/oca-6-*, allow
+        p, role:team-oca-6, logs, get, apps/oca-6-*, allow
+        p, role:team-oca-6, exec, create, apps/oca-6-*, allow
+        g, oca-6, role:team-oca-6
     secret:
       createSecret: true
 
