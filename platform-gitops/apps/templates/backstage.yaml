@@ -171,9 +171,10 @@ spec:
               publisher:
                 type: local
             catalog:
+              processingInterval: { seconds: 30 }
               orphanStrategy: delete
               rules:
-                - allow: [Component, System, Domain, API, Resource, Location, Template, Group, User]
+                - allow: [Component, Resource, Location, Template, Group, User]
               providers:
                 github:
                   mctlMe:
