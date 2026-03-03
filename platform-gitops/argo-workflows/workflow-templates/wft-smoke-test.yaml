@@ -366,10 +366,12 @@ spec:
         image: bitnami/kubectl:latest
         command: [bash]
         source: |
-          set -e
           TEAM="{{workflow.parameters.team_name}}"
           SVC="{{workflow.parameters.component_name}}"
           INSTANCE_LABEL="${TEAM}-${SVC}"
+          # Give ArgoCD time to detect the config change and start syncing
+          echo "Waiting 60s for ArgoCD sync to start..."
+          sleep 60
           # Retry loop: wait for ArgoCD sync + rollout + SMOKE_TEST to appear
           for i in $(seq 1 24); do
             echo "[${i}/24] Checking for SMOKE_TEST=true in ${TEAM}/${SVC} pod..."
