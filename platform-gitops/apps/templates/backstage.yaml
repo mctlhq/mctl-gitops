@@ -166,18 +166,6 @@ spec:
               rules:
                 - allow: [Component, System, Domain, API, Resource, Location, Template, Group, User]
               providers:
-                githubOrg:
-                  - id: production
-                    githubUrl: https://github.com
-                    orgs:
-                      - mctlhq
-                    schedule:
-                      initialDelay:
-                        seconds: 30
-                      frequency:
-                        minutes: 1
-                      timeout:
-                        minutes: 10
                 github:
                   mctlMe:
                     organization: mctlhq
