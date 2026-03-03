@@ -214,11 +214,16 @@ spec:
         parameters:
           - name: tenant_name
       script:
-        image: bitnami/kubectl:1.28
+        image: alpine:3.19
         command: [sh]
         source: |
           set -e
+          apk add --no-cache curl
           TENANT="{{inputs.parameters.tenant_name}}"
+
+          # Download kubectl
+          curl -sLO "https://dl.k8s.io/release/v1.28.0/bin/linux/amd64/kubectl"
+          chmod +x kubectl && mv kubectl /usr/local/bin/
 
           # Delete ArgoCD Application (if exists)
           if kubectl get app -n argocd "tenant-${TENANT}" > /dev/null 2>&1; then
