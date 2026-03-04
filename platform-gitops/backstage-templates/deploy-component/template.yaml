@@ -31,7 +31,7 @@ spec:
           title: Team
           type: string
           description: "Select your team"
-          ui:field: MyGroupsPicker
+          ui:field: TeamPicker
         dockerfileRepo:
           title: GitHub Repository
           type: string
