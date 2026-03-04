@@ -73,24 +73,26 @@ spec:
                 secondsAfterFailure: 86400
               podGC:
                 strategy: OnWorkflowSuccess
-          artifactRepository:
-            archiveLogs: true
-            s3:
-              endpoint: minio.minio.svc:9000
-              bucket: argo-workflows-logs
-              insecure: true
-              accessKeySecret:
-                name: minio-artifact-credentials
-                key: accessKey
-              secretKeySecret:
-                name: minio-artifact-credentials
-                key: secretKey
+
+        artifactRepository:
+          archiveLogs: true
+          s3:
+            endpoint: minio.minio.svc:9000
+            bucket: argo-workflows-logs
+            insecure: true
+            accessKeySecret:
+              name: minio-artifact-credentials
+              key: accessKey
+            secretKeySecret:
+              name: minio-artifact-credentials
+              key: secretKey
+
         workflow:
           serviceAccount:
             create: false
             name: argo-workflow-sa
 
-        useStaticCredentials: false
+        useStaticCredentials: true
 
   destination:
     server: {{ .Values.spec.destination.server }}

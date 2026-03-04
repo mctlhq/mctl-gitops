@@ -13,9 +13,10 @@ spec:
     - server: {{ .Values.spec.destination.server }}
       namespace: "*"
 
-  clusterResourceWhitelist:
-    - group: ""
-      kind: Namespace
+  # No cluster-scoped resources allowed — namespaces are managed by the
+  # "platform" project via tenant ApplicationSet. Apps should only deploy
+  # namespace-scoped resources into their own tenant namespace.
+  clusterResourceWhitelist: []
 
   namespaceResourceWhitelist:
     - group: ""

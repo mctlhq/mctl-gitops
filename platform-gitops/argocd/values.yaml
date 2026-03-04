@@ -84,7 +84,6 @@ argo-cd:
               - groups
             getUserInfo: true
             userNameKey: preferred_username
-            insecureEnableGroups: true
             claimMapping:
               groups: groups
         staticClients:
