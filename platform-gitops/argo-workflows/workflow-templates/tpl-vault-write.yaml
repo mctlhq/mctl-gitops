@@ -19,7 +19,7 @@ spec:
         command: [sh]
         source: |
           set -e
-          apk add --no-cache curl > /dev/null 2>&1
+          apk add --no-cache curl python3 > /dev/null 2>&1
           TEAM="{{inputs.parameters.team_name}}"
           SERVICE="{{inputs.parameters.component_name}}"
           SECRET_TEXT="{{inputs.parameters.secret_env_vars}}"
@@ -72,8 +72,13 @@ spec:
             "${VAULT_ADDR}/v1/${VAULT_PATH}")
 
           if [ "$HTTP_GET" = "200" ]; then
-            EXISTING_JSON=$(cat /tmp/vault-get.json | grep -o '"data":{[^}]*}' | \
-              sed 's/"data"://' || echo "{}")
+            # KV v2 response: {"data":{"data":{...},"metadata":{...}}}
+            # Extract the inner .data.data object using python3
+            EXISTING_JSON=$(python3 -c "
+import json, sys
+d = json.load(open('/tmp/vault-get.json'))
+print(json.dumps(d.get('data',{}).get('data',{})))
+" 2>/dev/null || echo "{}")
             echo "ℹ️  Merging with existing secrets"
           elif [ "$HTTP_GET" = "404" ]; then
             echo "ℹ️  Creating new secret path"
@@ -81,18 +86,14 @@ spec:
             echo "⚠️  Could not read existing secrets (HTTP $HTTP_GET) — will write fresh"
           fi
 
-          # Merge via simple string manipulation — no awk regex issues
-          # EXISTING_JSON = "{}" or '{"k":"v",...}'
-          # JSON_DATA     = '{"k":"v",...}'
-          E_INNER=$(printf '%s' "$EXISTING_JSON" | sed 's/^{//;s/}$//')
-          N_INNER=$(printf '%s' "$JSON_DATA" | sed 's/^{//;s/}$//')
-          if [ -z "$E_INNER" ]; then
-            MERGED_JSON="{${N_INNER}}"
-          elif [ -z "$N_INNER" ]; then
-            MERGED_JSON="{${E_INNER}}"
-          else
-            MERGED_JSON="{${E_INNER},${N_INNER}}"
-          fi
+          # Merge: existing keys + new keys (new values win on conflict)
+          MERGED_JSON=$(python3 -c "
+import json, sys
+existing = json.loads('$EXISTING_JSON')
+new_data = json.loads('$JSON_DATA')
+existing.update(new_data)
+print(json.dumps(existing))
+" 2>/dev/null || echo "$JSON_DATA")
 
           # ── Write to Vault ───────────────────────────────────────────────────
           HTTP_CODE=$(curl -sS -o /tmp/vault-write.json -w "%{http_code}" \
