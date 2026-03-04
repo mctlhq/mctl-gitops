@@ -74,11 +74,9 @@ spec:
           if [ "$HTTP_GET" = "200" ]; then
             # KV v2 response: {"data":{"data":{...},"metadata":{...}}}
             # Extract the inner .data.data object using python3
-            EXISTING_JSON=$(python3 -c "
-import json, sys
-d = json.load(open('/tmp/vault-get.json'))
-print(json.dumps(d.get('data',{}).get('data',{})))
-" 2>/dev/null || echo "{}")
+            EXISTING_JSON=$(python3 -c \
+              "import json; d=json.load(open('/tmp/vault-get.json')); print(json.dumps(d.get('data',{}).get('data',{})))" \
+              2>/dev/null || echo "{}")
             echo "ℹ️  Merging with existing secrets"
           elif [ "$HTTP_GET" = "404" ]; then
             echo "ℹ️  Creating new secret path"
@@ -87,13 +85,9 @@ print(json.dumps(d.get('data',{}).get('data',{})))
           fi
 
           # Merge: existing keys + new keys (new values win on conflict)
-          MERGED_JSON=$(python3 -c "
-import json, sys
-existing = json.loads('$EXISTING_JSON')
-new_data = json.loads('$JSON_DATA')
-existing.update(new_data)
-print(json.dumps(existing))
-" 2>/dev/null || echo "$JSON_DATA")
+          MERGED_JSON=$(python3 -c \
+            "import json; e=json.loads('$EXISTING_JSON'); n=json.loads('$JSON_DATA'); e.update(n); print(json.dumps(e))" \
+            2>/dev/null || echo "$JSON_DATA")
 
           # ── Write to Vault ───────────────────────────────────────────────────
           HTTP_CODE=$(curl -sS -o /tmp/vault-write.json -w "%{http_code}" \
