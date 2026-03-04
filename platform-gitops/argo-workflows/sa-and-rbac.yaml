@@ -4,7 +4,7 @@ metadata:
   name: argo-workflow-sa
   namespace: argo-workflows
 ---
-# SSO RBAC: admin access for admins group (Backstage OIDC)
+# SSO RBAC: admin access for admins group — ClusterRole = sees ALL namespaces
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -12,42 +12,8 @@ metadata:
   namespace: argo-workflows
   annotations:
     workflows.argoproj.io/rbac-rule: "'admins' in groups"
-    workflows.argoproj.io/rbac-rule-precedence: "1"
+    workflows.argoproj.io/rbac-rule-precedence: "10"
 ---
-# SSO RBAC: default read-only access for any authenticated user
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: sso-default
-  namespace: argo-workflows
-  annotations:
-    workflows.argoproj.io/rbac-rule: "true"
-    workflows.argoproj.io/rbac-rule-precedence: "0"
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: sso-default-admin
-subjects:
-  - kind: ServiceAccount
-    name: sso-default
-    namespace: argo-workflows
-roleRef:
-  kind: ClusterRole
-  name: argo-workflows-admin
-  apiGroup: rbac.authorization.k8s.io
----
-# Kubernetes 1.24+ requires explicit SA token secret creation
-apiVersion: v1
-kind: Secret
-metadata:
-  name: sso-default.service-account-token
-  namespace: argo-workflows
-  annotations:
-    kubernetes.io/service-account.name: sso-default
-type: kubernetes.io/service-account-token
----
-# Kubernetes 1.24+ requires explicit SA token secret creation
 apiVersion: v1
 kind: Secret
 metadata:
@@ -57,7 +23,6 @@ metadata:
     kubernetes.io/service-account.name: argo-workflows-admin
 type: kubernetes.io/service-account-token
 ---
-# Bind argo-workflows-admin SA to the argo-workflows-admin ClusterRole
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:

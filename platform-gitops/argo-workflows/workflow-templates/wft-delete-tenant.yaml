@@ -1,8 +1,7 @@
 apiVersion: argoproj.io/v1alpha1
-kind: WorkflowTemplate
+kind: ClusterWorkflowTemplate
 metadata:
   name: delete-tenant
-  namespace: argo-workflows
   annotations:
     workflows.argoproj.io/description: |
       Fully deletes a tenant from the mctl.me platform:

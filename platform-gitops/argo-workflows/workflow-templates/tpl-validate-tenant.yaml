@@ -1,8 +1,7 @@
 apiVersion: argoproj.io/v1alpha1
-kind: WorkflowTemplate
+kind: ClusterWorkflowTemplate
 metadata:
   name: tpl-validate-tenant
-  namespace: argo-workflows
   annotations:
     workflows.argoproj.io/description: |
       Reusable template: validates tenant and service naming conventions,

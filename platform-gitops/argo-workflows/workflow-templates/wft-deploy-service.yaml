@@ -1,8 +1,7 @@
 apiVersion: argoproj.io/v1alpha1
-kind: WorkflowTemplate
+kind: ClusterWorkflowTemplate
 metadata:
   name: deploy-service
-  namespace: argo-workflows
   annotations:
     workflows.argoproj.io/description: |
       Main deployment workflow: validate → build image (Kaniko) → write Vault secrets
@@ -63,6 +62,7 @@ spec:
           - name: validate
             templateRef:
               name: tpl-validate-tenant
+              clusterScope: true
               template: validate
             arguments:
               parameters:
@@ -89,6 +89,7 @@ spec:
             when: "\"{{workflow.parameters.action}}\" != \"update-config\""
             templateRef:
               name: tpl-kaniko-build
+              clusterScope: true
               template: build
             arguments:
               parameters:
@@ -113,6 +114,7 @@ spec:
             when: "\"{{workflow.parameters.secret_env_vars}}\" != \"\""
             templateRef:
               name: tpl-vault-write
+              clusterScope: true
               template: write-service-secrets
             arguments:
               parameters:
@@ -130,6 +132,7 @@ spec:
             dependencies: [validate, build-image, write-secrets]
             templateRef:
               name: tpl-git-commit
+              clusterScope: true
               template: commit-service
             arguments:
               parameters:

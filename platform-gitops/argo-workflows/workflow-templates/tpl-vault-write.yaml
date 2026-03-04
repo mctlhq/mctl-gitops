@@ -1,8 +1,7 @@
 apiVersion: argoproj.io/v1alpha1
-kind: WorkflowTemplate
+kind: ClusterWorkflowTemplate
 metadata:
   name: tpl-vault-write
-  namespace: argo-workflows
   annotations:
     workflows.argoproj.io/description: |
       Reusable template: writes secrets to Vault using Kubernetes auth.

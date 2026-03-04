@@ -1,8 +1,7 @@
 apiVersion: argoproj.io/v1alpha1
-kind: WorkflowTemplate
+kind: ClusterWorkflowTemplate
 metadata:
   name: tpl-git-commit
-  namespace: argo-workflows
   annotations:
     workflows.argoproj.io/description: |
       Reusable template: clones mctl-core, runs a generation script,

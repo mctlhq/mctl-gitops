@@ -135,6 +135,8 @@ spec:
       action: mctl:workflow:submit
       input:
         templateName: deploy-service
+        clusterScope: true
+        namespace: ${{ parameters.teamName | parseEntityRef | pick('name') }}
         parameters:
           action: onboard
           team_name: ${{ parameters.teamName | parseEntityRef | pick('name') }}
@@ -157,6 +159,8 @@ spec:
       action: mctl:workflow:submit
       input:
         templateName: provision-database
+        clusterScope: true
+        namespace: ${{ parameters.teamName | parseEntityRef | pick('name') }}
         parameters:
           team_name: ${{ parameters.teamName | parseEntityRef | pick('name') }}
           app_name: ${{ parameters.dockerfileRepo | serviceName }}

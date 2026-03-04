@@ -1,8 +1,7 @@
 apiVersion: argoproj.io/v1alpha1
-kind: WorkflowTemplate
+kind: ClusterWorkflowTemplate
 metadata:
   name: tpl-kaniko-build
-  namespace: argo-workflows
   annotations:
     workflows.argoproj.io/description: |
       Reusable template: builds Docker image from a GitHub repository using Kaniko

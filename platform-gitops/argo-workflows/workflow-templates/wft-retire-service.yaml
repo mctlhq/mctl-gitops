@@ -1,8 +1,7 @@
 apiVersion: argoproj.io/v1alpha1
-kind: WorkflowTemplate
+kind: ClusterWorkflowTemplate
 metadata:
   name: retire-service
-  namespace: argo-workflows
   annotations:
     workflows.argoproj.io/description: |
       Deletes a service: removes Git manifests and optionally cleans up Vault secrets.
@@ -31,6 +30,7 @@ spec:
             when: "\"{{workflow.parameters.delete_vault_secrets}}\" == \"true\""
             templateRef:
               name: tpl-vault-write
+              clusterScope: true
               template: delete-service-secrets
             arguments:
               parameters:
@@ -43,6 +43,7 @@ spec:
           - name: delete-from-git
             templateRef:
               name: tpl-git-commit
+              clusterScope: true
               template: delete-service
             arguments:
               parameters:

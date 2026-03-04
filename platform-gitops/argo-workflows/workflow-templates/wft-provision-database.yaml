@@ -1,8 +1,7 @@
 apiVersion: argoproj.io/v1alpha1
-kind: WorkflowTemplate
+kind: ClusterWorkflowTemplate
 metadata:
   name: provision-database
-  namespace: argo-workflows
   annotations:
     workflows.argoproj.io/description: |
       Provisions a PostgreSQL database for a service:
