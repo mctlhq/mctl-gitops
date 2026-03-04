@@ -115,10 +115,10 @@ spec:
               landingPageToken: ${BACKSTAGE_LANDING_TOKEN}
               githubAppInstallationId: ${GITHUB_APP_INSTALLATION_ID}
               defaultQuotas:
-                cpuReq: "250m"
-                cpuLim: "500m"
-                memReq: "256Mi"
-                memLim: "512Mi"
+                cpuReq: "1"
+                cpuLim: "2"
+                memReq: "2Gi"
+                memLim: "3Gi"
                 pods: "10"
                 pvcs: "2"
                 services: "5"
