@@ -53,6 +53,7 @@ spec:
       action: mctl:workflow:submit
       input:
         templateName: retire-service
+        namespace: ${{ steps['parse-service'].output.entity.metadata.labels.team or steps['parse-service'].output.entity.spec.owner | replace('group:', '') }}
         parameters:
           team_name: ${{ steps['parse-service'].output.entity.metadata.labels.team or steps['parse-service'].output.entity.spec.owner | replace('group:', '') }}
           component_name: ${{ steps['parse-service'].output.entity.metadata.name }}

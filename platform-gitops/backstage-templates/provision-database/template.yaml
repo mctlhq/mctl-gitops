@@ -44,6 +44,7 @@ spec:
       action: mctl:workflow:submit
       input:
         templateName: provision-database
+        namespace: ${{ steps['fetch-service'].output.entity.metadata.labels.team or steps['fetch-service'].output.entity.spec.owner | replace('group:', '') }}
         parameters:
           team_name: ${{ steps['fetch-service'].output.entity.metadata.labels.team or steps['fetch-service'].output.entity.spec.owner | replace('group:', '') }}
           app_name: ${{ steps['fetch-service'].output.entity.metadata.name }}

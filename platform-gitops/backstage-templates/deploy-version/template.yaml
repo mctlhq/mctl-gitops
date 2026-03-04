@@ -73,6 +73,7 @@ spec:
       action: mctl:workflow:submit
       input:
         templateName: deploy-service
+        namespace: ${{ steps['fetch-service'].output.entity.metadata.labels.team or steps['fetch-service'].output.entity.spec.owner | replace('group:', '') }}
         parameters:
           action: deploy
           team_name: ${{ steps['fetch-service'].output.entity.metadata.labels.team or steps['fetch-service'].output.entity.spec.owner | replace('group:', '') }}
