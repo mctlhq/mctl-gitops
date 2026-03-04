@@ -1,0 +1,16 @@
+{{- $tenantName := include "tenant.name" . }}
+# Explicit Namespace resource to enforce Pod Security Standards.
+# ArgoCD ApplicationSet has CreateNamespace=true as fallback,
+# but this template takes precedence and adds required security labels.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $tenantName }}
+  labels:
+    {{- include "tenant.labels" . | nindent 4 }}
+    # Pod Security Standards — enforce restricted profile
+    # Prevents privileged containers, host namespaces, and other risky capabilities.
+    # See: https://kubernetes.io/docs/concepts/security/pod-security-standards/
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted

@@ -42,7 +42,7 @@ spec:
       - name: quota_pods
         default: "10"
       - name: allow_internet_egress
-        default: "false"
+        default: "true"
       - name: contact_email
         default: ""
 

@@ -55,6 +55,6 @@ tenant:
     allowClusterEgress: true
     # Allow egress to the internet (0.0.0.0/0)
     # Set to false for most tenants, true for admin/platform teams
-    allowInternetEgress: false
+    allowInternetEgress: true
     # Specific CIDR ranges to allow (in addition to cluster egress)
     # allowedCIDRs: []
