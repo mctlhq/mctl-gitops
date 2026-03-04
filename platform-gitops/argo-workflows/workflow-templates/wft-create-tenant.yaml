@@ -34,11 +34,11 @@ spec:
       - name: quota_cpu_req
         default: "1"
       - name: quota_cpu_lim
-        default: "4"
+        default: "2"
       - name: quota_memory_req
         default: "2Gi"
       - name: quota_memory_lim
-        default: "4Gi"
+        default: "3Gi"
       - name: quota_pods
         default: "10"
       - name: allow_internet_egress
