@@ -4,7 +4,7 @@ metadata:
   name: platform
   namespace: argocd
 spec:
-  description: Platform tenants — namespace provisioning (ResourceQuota, NetworkPolicy, LimitRange)
+  description: Platform tenants — namespace provisioning and workflow RBAC
 
   sourceRepos:
     - {{ .Values.spec.source.repoURL }}
@@ -24,6 +24,12 @@ spec:
       kind: LimitRange
     - group: networking.k8s.io
       kind: NetworkPolicy
+    - group: ""
+      kind: ServiceAccount
+    - group: rbac.authorization.k8s.io
+      kind: Role
+    - group: rbac.authorization.k8s.io
+      kind: RoleBinding
 
   orphanedResources:
     warn: true
