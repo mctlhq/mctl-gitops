@@ -40,7 +40,7 @@ spec:
       - name: quota_memory_lim
         default: "4Gi"
       - name: quota_pods
-        default: "20"
+        default: "10"
       - name: allow_internet_egress
         default: "false"
       - name: contact_email

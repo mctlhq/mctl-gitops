@@ -77,7 +77,7 @@ spec:
         quotaPods:
           title: Max Pods
           type: string
-          default: "20"
+          default: "10"
           description: "Maximum number of pods in the namespace."
 
     - title: Networking
@@ -107,7 +107,7 @@ spec:
           quotaCpuLim: ${{ parameters.quotaCpuLim | default('4') }}
           quotaMemoryReq: ${{ parameters.quotaMemoryReq | default('2Gi') }}
           quotaMemoryLim: ${{ parameters.quotaMemoryLim | default('4Gi') }}
-          quotaPods: ${{ parameters.quotaPods | default('20') }}
+          quotaPods: ${{ parameters.quotaPods | default('10') }}
           allowInternetEgress: ${{ parameters.allowInternetEgress }}
           creatorUserId: ${{ user.entity.metadata.name }}
 
