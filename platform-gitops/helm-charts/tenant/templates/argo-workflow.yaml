@@ -118,3 +118,30 @@ roleRef:
   kind: ClusterRole
   name: argo-workflows-admin
   apiGroup: rbac.authorization.k8s.io
+---
+# MinIO artifact credentials — required by Argo Workflows argoexec init container
+# to upload/download workflow artifacts (logs) to MinIO in this namespace
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: minio-artifact-credentials
+  namespace: {{ $tenantName }}
+  labels:
+    {{- include "tenant.labels" . | nindent 4 }}
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: vault-backend
+  target:
+    name: minio-artifact-credentials
+    creationPolicy: Owner
+  data:
+    - secretKey: accessKey
+      remoteRef:
+        key: teams/platform/minio
+        property: root-user
+    - secretKey: secretKey
+      remoteRef:
+        key: teams/platform/minio
+        property: root-password
