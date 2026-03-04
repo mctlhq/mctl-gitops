@@ -36,6 +36,7 @@ spec:
               - groups
             rbac:
               enabled: true
+            customGroupClaimName: groups
           ingress:
             enabled: true
             ingressClassName: traefik

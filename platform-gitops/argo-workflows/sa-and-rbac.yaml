@@ -14,6 +14,29 @@ metadata:
     workflows.argoproj.io/rbac-rule: "'admins' in groups"
     workflows.argoproj.io/rbac-rule-precedence: "1"
 ---
+# SSO RBAC: default read-only access for any authenticated user
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sso-default
+  namespace: argo-workflows
+  annotations:
+    workflows.argoproj.io/rbac-rule: "true"
+    workflows.argoproj.io/rbac-rule-precedence: "0"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: sso-default-admin
+subjects:
+  - kind: ServiceAccount
+    name: sso-default
+    namespace: argo-workflows
+roleRef:
+  kind: ClusterRole
+  name: argo-workflows-admin
+  apiGroup: rbac.authorization.k8s.io
+---
 # Kubernetes 1.24+ requires explicit SA token secret creation
 apiVersion: v1
 kind: Secret
