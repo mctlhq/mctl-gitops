@@ -41,6 +41,16 @@ roleRef:
 apiVersion: v1
 kind: Secret
 metadata:
+  name: sso-default.service-account-token
+  namespace: argo-workflows
+  annotations:
+    kubernetes.io/service-account.name: sso-default
+type: kubernetes.io/service-account-token
+---
+# Kubernetes 1.24+ requires explicit SA token secret creation
+apiVersion: v1
+kind: Secret
+metadata:
   name: argo-workflows-admin.service-account-token
   namespace: argo-workflows
   annotations:
