@@ -58,3 +58,8 @@ tenant:
     allowInternetEgress: true
     # Specific CIDR ranges to allow (in addition to cluster egress)
     # allowedCIDRs: []
+
+  # -- Pod Security Standards level for the namespace
+  # "baseline" allows workflow/CI pods running as root (required for apk, git, etc.)
+  # "restricted" enforces non-root + no privilege escalation (stricter, for app-only namespaces)
+  podSecurityLevel: "baseline"
