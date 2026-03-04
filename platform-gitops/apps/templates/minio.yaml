@@ -46,6 +46,10 @@ spec:
 
           defaultBuckets: "argo-workflows-logs"
 
+          # Disable MinIO console (separate deployment with broken image in chart 17.0.x)
+          # The API endpoint is sufficient for Argo Workflows artifact storage
+          disableWebUI: true
+
     - repoURL: https://github.com/mctlhq/mctl-core.git
       targetRevision: main
       path: platform-gitops/minio
