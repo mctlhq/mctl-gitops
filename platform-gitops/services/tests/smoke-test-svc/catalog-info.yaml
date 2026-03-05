@@ -4,6 +4,9 @@ metadata:
   name: smoke-test-svc
   description: "smoke-test-svc service"
   annotations:
+    platform.mctl.me/database: "true"
+    platform.mctl.me/database-team: "tests"
+    platform.mctl.me/database-app: "smoke-test-svc"
     backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=tests-smoke-test-svc
     backstage.io/kubernetes-namespace: tests
     argocd/app-name: tests-smoke-test-svc
