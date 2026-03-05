@@ -21,7 +21,16 @@ env:
   APP_ENV: production
 ingress:
   enabled: true
-  host: tsvilt.mctl.me
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    - tsvilt.mctl.me
+    - tsvilt.mctl.io
+  tls:
+    - secretName: tsvilt-tls
+      hosts:
+        - tsvilt.mctl.me
+        - tsvilt.mctl.io
 probes:
   liveness: null
   readiness: null

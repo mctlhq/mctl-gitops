@@ -92,6 +92,7 @@ argo-cd:
           name: Argo Workflows
           redirectURIs:
             - https://workflows.mctl.me/oauth2/callback
+            - https://workflows.mctl.io/oauth2/callback
           secret: "$argo-workflows-sso-client-secret"
 
     params:
@@ -145,9 +146,13 @@ argo-cd:
       annotations:
         cert-manager.io/cluster-issuer: letsencrypt-prod
       tls: true
+      extraHosts:
+        - name: ops.mctl.io
+          path: /
       extraTls:
         - hosts:
             - ops.mctl.me
+            - ops.mctl.io
           secretName: argocd-tls
 
   # Controller resource optimization

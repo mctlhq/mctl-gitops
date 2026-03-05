@@ -44,9 +44,11 @@ spec:
               cert-manager.io/cluster-issuer: letsencrypt-prod
             hosts:
               - workflows.mctl.me
+              - workflows.mctl.io
             tls:
               - hosts:
                   - workflows.mctl.me
+                  - workflows.mctl.io
                 secretName: argo-workflows-tls
 
         controller:

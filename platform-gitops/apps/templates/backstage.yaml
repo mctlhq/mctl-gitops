@@ -19,9 +19,15 @@ spec:
           annotations:
             cert-manager.io/cluster-issuer: letsencrypt-prod
           host: app.mctl.me
+          extraHosts:
+            - name: app.mctl.io
           tls:
             enabled: true
             secretName: backstage-tls
+          extraTls:
+            - hosts:
+                - app.mctl.io
+              secretName: backstage-mctl-io-tls
 
         backstage:
           image:
@@ -65,6 +71,7 @@ spec:
               reading:
                 allow:
                   - host: app.mctl.me
+                  - host: app.mctl.io
               database:
                 client: pg
                 pluginDivisionMode: schema
@@ -133,6 +140,7 @@ spec:
                   clientSecret: ${OIDC_CLIENT_SECRET}
                   redirectUris:
                     - https://ops.mctl.me/api/dex/callback
+                    - https://ops.mctl.io/api/dex/callback
             resourceUsage:
               kubeConfigType: token
               kubeApiUrl: https://kubernetes.default.svc

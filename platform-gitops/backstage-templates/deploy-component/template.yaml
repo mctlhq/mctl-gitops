@@ -58,7 +58,7 @@ spec:
         host:
           title: Ingress Host
           type: string
-          description: "Public hostname (e.g. myapp.mctl.me). Leave empty for a background worker — no ingress will be created."
+          description: "Public hostname (e.g. myapp.mctl.io). Leave empty for a background worker — no ingress will be created."
         skipHealthCheck:
           title: Skip Health Checks
           type: boolean

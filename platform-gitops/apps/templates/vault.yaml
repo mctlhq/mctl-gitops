@@ -49,9 +49,11 @@ spec:
               cert-manager.io/cluster-issuer: letsencrypt-prod
             hosts:
               - host: secrets.mctl.me
+              - host: secrets.mctl.io
             tls:
               - hosts:
                   - secrets.mctl.me
+                  - secrets.mctl.io
                 secretName: vault-tls
 
         ui:
