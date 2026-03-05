@@ -65,7 +65,6 @@ spec:
       - host test-django-test test-django-test all scram-sha-256
       - host test-spring-test test-spring-test all scram-sha-256
       - host tests-pdb-test-svc tests-pdb-test-svc all scram-sha-256
-      - host tests-smoke-test-svc tests-smoke-test-svc all scram-sha-256
       - host all all 0.0.0.0/0 reject
 
   managed:
