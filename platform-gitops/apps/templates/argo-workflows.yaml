@@ -52,7 +52,7 @@ spec:
         controller:
           persistence:
             archive: true
-            nodeStatusOffLoad: true
+            nodeStatusOffLoad: false
             postgresql:
               host: shared-pg-rw.platform-db.svc
               port: 5432

@@ -45,6 +45,8 @@ spec:
         default: "true"
       - name: contact_email
         default: ""
+      - name: creator_user_id
+        default: ""
 
   templates:
     # ────────────────────────────────────────────────────────────────────────
@@ -94,6 +96,8 @@ spec:
                   value: "{{workflow.parameters.allow_internet_egress}}"
                 - name: contact_email
                   value: "{{workflow.parameters.contact_email}}"
+                - name: creator_user_id
+                  value: "{{workflow.parameters.creator_user_id}}"
 
     # ────────────────────────────────────────────────────────────────────────
     - name: validate-tenant-name
@@ -180,6 +184,7 @@ spec:
           - name: quota_pods
           - name: allow_internet_egress
           - name: contact_email
+          - name: creator_user_id
       volumes:
         - name: github-app-creds
           secret:
@@ -212,6 +217,7 @@ spec:
           PODS="{{inputs.parameters.quota_pods}}"
           INTERNET_EGRESS="{{inputs.parameters.allow_internet_egress}}"
           CONTACT_EMAIL="{{inputs.parameters.contact_email}}"
+          CREATOR_USER_ID="{{inputs.parameters.creator_user_id}}"
 
           # Defaults
           [ -z "$DISPLAY_NAME" ] && DISPLAY_NAME="$TENANT"
@@ -256,7 +262,7 @@ spec:
           git config --global user.email "argo-workflows[bot]@mctl.me"
           git config --global user.name "Argo Workflows Bot"
 
-          git clone --depth=1 "git@github.com:mctlhq/mctl-core.git" /tmp/mctl-core
+          git clone --depth=50 "git@github.com:mctlhq/mctl-core.git" /tmp/mctl-core
           cd /tmp/mctl-core
 
           # ── Security: check tenant doesn't already exist ────────────────────
@@ -270,8 +276,14 @@ spec:
           # ── Create tenant directory ─────────────────────────────────────────
           mkdir -p "$TENANT_DIR"
 
+          # Build members section if creator is specified
+          MEMBERS_BLOCK=""
+          if [ -n "$CREATOR_USER_ID" ]; then
+            MEMBERS_BLOCK=$(printf '  members:\n    - userId: %s\n      role: owner' "$CREATOR_USER_ID")
+          fi
+
           # Write values.yaml
-          cat > "${TENANT_DIR}/values.yaml" << YAML
+          cat > "${TENANT_DIR}/values.yaml" <<EOF
           # Tenant configuration for: ${TENANT}
           # Created by: wft-create-tenant workflow
           # Managed by: ArgoCD ApplicationSet (applicationset-tenants)
@@ -280,6 +292,7 @@ spec:
             displayName: "${DISPLAY_NAME}"
             description: "${DESCRIPTION}"
             contactEmail: "${CONTACT_EMAIL}"
+          ${MEMBERS_BLOCK}
             quotas:
               requests.cpu: "${CPU_REQ}"
               requests.memory: "${MEM_REQ}"
@@ -303,7 +316,7 @@ spec:
               allowIntraNamespace: true
               allowClusterEgress: true
               allowInternetEgress: ${INTERNET_EGRESS}
-          YAML
+          EOF
 
           # Write catalog-info.yaml (Backstage Resource entity)
           cat > "${TENANT_DIR}/catalog-info.yaml" << YAML
@@ -410,8 +423,9 @@ spec:
               echo "Successfully pushed tenant ${TENANT}!"
               break
             elif [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
-              echo "Push failed (attempt $attempt). Rebasing..."
-              git pull --rebase origin main
+              echo "Push failed (attempt $attempt). Fetching latest and rebasing..."
+              git fetch --unshallow origin main 2>/dev/null || git fetch origin main
+              git rebase origin/main
             else
               echo "ERROR: Push failed after $MAX_ATTEMPTS attempts"
               exit 1
