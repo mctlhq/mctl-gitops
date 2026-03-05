@@ -9,12 +9,14 @@ metadata:
       Lifecycle tested:
         1. onboard      — submit deploy-service(onboard) child workflow
         2. verify-pod   — kubectl wait for Deployment available
-        3. provision-db — submit provision-database child workflow
-        4. verify-vault — vault kv get confirms DB secret exists
-        5. verify-secret — ExternalSecret synced into k8s Secret
-        6. update-config — submit deploy-service(update-config) child workflow
-        7. verify-env   — kubectl exec confirms SMOKE_TEST=true in pod env
-        8. retire       — submit retire-service child workflow
+        3. deploy       — submit deploy-service(deploy) to redeploy same image
+        4. verify-pod   — confirm Deployment still available after redeploy
+        5. provision-db — submit provision-database child workflow
+        6. verify-vault — vault kv get confirms DB secret exists
+        7. verify-secret — ExternalSecret synced into k8s Secret
+        8. update-config — submit deploy-service(update-config) child workflow
+        9. verify-env   — kubectl exec confirms SMOKE_TEST=true in pod env
+       10. retire       — submit retire-service child workflow
 
       onExit handler always retires (cleanup even on failure).
 
@@ -51,6 +53,10 @@ spec:
         - - name: onboard
             template: run-onboard
         - - name: verify-pod
+            template: check-pod-running
+        - - name: deploy-version
+            template: run-deploy
+        - - name: verify-pod-after-deploy
             template: check-pod-running
         - - name: provision-db
             template: run-provision-db
@@ -120,7 +126,58 @@ spec:
           done
           echo "❌ Timed out"; exit 1
 
-    # ─── Step 3: Provision database ───────────────────────────────────────────
+    # ─── Step 3: Deploy new version (redeploy same image) ────────────────────
+    - name: run-deploy
+      script:
+        image: bitnami/kubectl:latest
+        command: [bash]
+        source: |
+          set -e
+          TEAM="{{workflow.parameters.team_name}}"
+          SVC="{{workflow.parameters.component_name}}"
+          REPO="{{workflow.parameters.dockerfile_repo}}"
+
+          WF_NAME=$(kubectl create -n argo-workflows -o jsonpath='{.metadata.name}' -f - << EOF
+          apiVersion: argoproj.io/v1alpha1
+          kind: Workflow
+          metadata:
+            generateName: smoke-deploy-
+            namespace: argo-workflows
+          spec:
+            workflowTemplateRef:
+              name: deploy-service
+            arguments:
+              parameters:
+              - {name: action,             value: deploy}
+              - {name: team_name,          value: "${TEAM}"}
+              - {name: component_name,     value: "${SVC}"}
+              - {name: component_type,     value: worker-service}
+              - {name: dockerfile_repo,    value: "${REPO}"}
+              - {name: git_tag,            value: main}
+              - {name: port,               value: "8080"}
+              - {name: host,               value: ""}
+              - {name: env_vars,           value: ""}
+              - {name: secret_env_vars,    value: ""}
+              - {name: provision_database, value: "false"}
+              - {name: skip_health_check,  value: "false"}
+              - {name: dockerfile_path,    value: Dockerfile}
+              - {name: image_tag,          value: ""}
+          EOF
+          )
+          echo "Submitted: ${WF_NAME}"
+          for i in $(seq 1 80); do
+            PHASE=$(kubectl get workflow "${WF_NAME}" -n argo-workflows \
+              -o jsonpath='{.status.phase}' 2>/dev/null || echo "Pending")
+            echo "  [${i}/80] ${PHASE}"
+            case "${PHASE}" in
+              Succeeded) echo "✅ deploy Succeeded"; exit 0 ;;
+              Failed|Error) echo "❌ deploy ${PHASE}"; exit 1 ;;
+            esac
+            sleep 15
+          done
+          echo "❌ Timed out"; exit 1
+
+    # ─── Step 5: Provision database ───────────────────────────────────────────
     - name: run-provision-db
       script:
         image: bitnami/kubectl:latest
