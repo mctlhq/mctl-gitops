@@ -26,4 +26,5 @@ env:
 
 ingress:
   enabled: true
-  host: __HOST__
+  hosts:
+    - __HOST__

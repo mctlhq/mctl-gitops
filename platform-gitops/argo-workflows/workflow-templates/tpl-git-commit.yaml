@@ -134,6 +134,21 @@ spec:
               -e "s|__HOST__|${HOST}|g" \
               "$TPL" > "${DIR}/values.yaml"
 
+            # Auto-add mirror domain (.mctl.me ↔ .mctl.ai) + TLS
+            if [ "$HOST" != "none" ] && [ -n "$HOST" ]; then
+              MIRROR=""
+              case "$HOST" in
+                *.mctl.me) MIRROR=$(echo "$HOST" | sed 's/\.mctl\.me$/.mctl.ai/') ;;
+                *.mctl.ai) MIRROR=$(echo "$HOST" | sed 's/\.mctl\.ai$/.mctl.me/') ;;
+              esac
+              if [ -n "$MIRROR" ]; then
+                yq eval -i ".ingress.hosts += [\"${MIRROR}\"]" "${DIR}/values.yaml"
+              fi
+              TLS_NAME="${SERVICE}-tls"
+              yq eval -i ".ingress.annotations.\"cert-manager.io/cluster-issuer\" = \"letsencrypt-prod\"" "${DIR}/values.yaml"
+              yq eval -i ".ingress.tls = [{\"secretName\": \"${TLS_NAME}\", \"hosts\": .ingress.hosts}]" "${DIR}/values.yaml"
+            fi
+
             # Disable probes if requested
             if [ "$SKIP_HEALTH" = "true" ]; then
               yq eval -i '.probes.liveness = null | .probes.readiness = null' "${DIR}/values.yaml"

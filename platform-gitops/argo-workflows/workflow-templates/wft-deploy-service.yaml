@@ -36,7 +36,7 @@ spec:
         default: "8080"
       - name: host
         default: ""
-        # e.g. "myteam-myapp.mctl.me"
+        # e.g. "myteam-myapp.mctl.ai"
       - name: env_vars
         default: ""
         # KEY=value newline-separated plaintext
