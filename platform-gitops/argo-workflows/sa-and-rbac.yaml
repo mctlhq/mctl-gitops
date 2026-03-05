@@ -71,6 +71,31 @@ roleRef:
   name: argo-workflow-runner
   apiGroup: rbac.authorization.k8s.io
 ---
+# Allow workflow SA to trigger ArgoCD sync (annotate apps for hard refresh)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: argo-workflow-argocd-sync
+  namespace: argocd
+rules:
+  - apiGroups: ["argoproj.io"]
+    resources: ["applications"]
+    verbs: ["get", "list", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argo-workflow-argocd-sync
+  namespace: argocd
+subjects:
+  - kind: ServiceAccount
+    name: argo-workflow-sa
+    namespace: argo-workflows
+roleRef:
+  kind: Role
+  name: argo-workflow-argocd-sync
+  apiGroup: rbac.authorization.k8s.io
+---
 # SSO admin: events + secrets + pods/log access for viewing logs in the UI
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
