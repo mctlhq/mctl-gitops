@@ -27,13 +27,13 @@ ingress:
   hosts:
     - mctl.me
     - mctl.ru
-    - mctl.io
+    - mctl.ai
   tls:
     - secretName: mctl-web-tls
       hosts:
         - mctl.me
         - mctl.ru
-        - mctl.io
+        - mctl.ai
 probes:
   liveness: null
   readiness: null

@@ -25,12 +25,12 @@ ingress:
     cert-manager.io/cluster-issuer: letsencrypt-prod
   hosts:
     - tsvilt.mctl.me
-    - tsvilt.mctl.io
+    - tsvilt.mctl.ai
   tls:
     - secretName: tsvilt-tls
       hosts:
         - tsvilt.mctl.me
-        - tsvilt.mctl.io
+        - tsvilt.mctl.ai
 probes:
   liveness: null
   readiness: null

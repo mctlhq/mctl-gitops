@@ -25,12 +25,12 @@ spec:
               cert-manager.io/cluster-issuer: letsencrypt-prod
             hosts:
               - grafana.mctl.me
-              - grafana.mctl.io
+              - grafana.mctl.ai
             tls:
               - secretName: grafana-tls
                 hosts:
                   - grafana.mctl.me
-                  - grafana.mctl.io
+                  - grafana.mctl.ai
           defaultDashboardsEnabled: true
           sidecar:
             datasources:
