@@ -96,6 +96,34 @@ roleRef:
   name: argo-workflow-argocd-sync
   apiGroup: rbac.authorization.k8s.io
 ---
+# Workflow SA: read ExternalSecrets + Secrets in platform-db (for smoke-test verification)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: argo-workflow-platform-db-read
+  namespace: platform-db
+rules:
+  - apiGroups: ["external-secrets.io"]
+    resources: ["externalsecrets"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argo-workflow-platform-db-read
+  namespace: platform-db
+subjects:
+  - kind: ServiceAccount
+    name: argo-workflow-sa
+    namespace: argo-workflows
+roleRef:
+  kind: Role
+  name: argo-workflow-platform-db-read
+  apiGroup: rbac.authorization.k8s.io
+---
 # SSO admin: events + secrets + pods/log access for viewing logs in the UI
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
