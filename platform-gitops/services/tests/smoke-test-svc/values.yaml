@@ -16,8 +16,8 @@ resources:
   limits:
     cpu: 500m
     memory: 256Mi
-env: {}
-
+env:
+  SMOKE_TEST: "true"
 dbSecret:
   vaultPath: "teams/tests/smoke-test-svc/database"
   secretName: "tests-smoke-test-svc-db-creds"
