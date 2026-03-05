@@ -50,6 +50,8 @@ spec:
         alertmanager:
           enabled: true
           alertmanagerSpec:
+            secrets:
+              - alertmanager-telegram-secret
             storage:
               volumeClaimTemplate:
                 spec:
@@ -60,8 +62,9 @@ spec:
           config:
             global:
               resolve_timeout: 5m
+              telegram_api_url: "https://api.telegram.org"
             route:
-              receiver: "null"
+              receiver: telegram
               group_by: ["alertname", "namespace"]
               group_wait: 30s
               group_interval: 5m
@@ -72,11 +75,17 @@ spec:
                     - alertname =~ "InfoInhibitor|Watchdog"
             receivers:
               - name: "null"
-            # TODO: add Telegram / Slack receiver when ready
-            # - name: telegram
-            #   telegram_configs:
-            #     - bot_token: "<token>"
-            #       chat_id: <id>
+              - name: telegram
+                telegram_configs:
+                  - bot_token_file: /etc/alertmanager/secrets/alertmanager-telegram-secret/bot-token
+                    chat_id: {{ .Values.alertmanager.telegramChatId }}
+                    parse_mode: HTML
+                    message: |
+                      {{ "{{" }} range .Alerts {{ "}}" }}
+                      <b>{{ "{{" }} .Status | toUpper {{ "}}" }}: {{ "{{" }} .Labels.alertname {{ "}}" }}</b>
+                      {{ "{{" }} .Annotations.summary {{ "}}" }}
+                      <i>Namespace: {{ "{{" }} .Labels.namespace {{ "}}" }}</i>
+                      {{ "{{" }} end {{ "}}" }}
 
         # Critical alerts for multi-tenant platform
         additionalPrometheusRulesMap:
@@ -90,21 +99,21 @@ spec:
                     labels:
                       severity: warning
                     annotations:
-                      summary: "Node {{ $labels.instance }} CPU > 85%"
+                      summary: "Node {{ "{{" }} $labels.instance {{ "}}" }} CPU > 85%"
                   - alert: NodeHighMemory
                     expr: (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100 > 90
                     for: 5m
                     labels:
                       severity: critical
                     annotations:
-                      summary: "Node {{ $labels.instance }} memory > 90%"
+                      summary: "Node {{ "{{" }} $labels.instance {{ "}}" }} memory > 90%"
                   - alert: NodeDiskPressure
                     expr: (1 - node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100 > 85
                     for: 10m
                     labels:
                       severity: warning
                     annotations:
-                      summary: "Node {{ $labels.instance }} disk > 85%"
+                      summary: "Node {{ "{{" }} $labels.instance {{ "}}" }} disk > 85%"
               - name: pod-alerts
                 rules:
                   - alert: PodCrashLooping
@@ -113,14 +122,14 @@ spec:
                     labels:
                       severity: critical
                     annotations:
-                      summary: "Pod {{ $labels.namespace }}/{{ $labels.pod }} crash-looping"
+                      summary: "Pod {{ "{{" }} $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.pod {{ "}}" }} crash-looping"
                   - alert: PodNotReady
                     expr: kube_pod_status_ready{condition="true"} == 0
                     for: 15m
                     labels:
                       severity: warning
                     annotations:
-                      summary: "Pod {{ $labels.namespace }}/{{ $labels.pod }} not ready"
+                      summary: "Pod {{ "{{" }} $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.pod {{ "}}" }} not ready"
               - name: tenant-alerts
                 rules:
                   - alert: TenantCPUQuotaHigh
@@ -129,14 +138,14 @@ spec:
                     labels:
                       severity: warning
                     annotations:
-                      summary: "Tenant {{ $labels.namespace }} using >80% CPU quota"
+                      summary: "Tenant {{ "{{" }} $labels.namespace {{ "}}" }} using >80% CPU quota"
                   - alert: TenantMemoryQuotaHigh
                     expr: sum by(namespace) (container_memory_working_set_bytes) / on(namespace) kube_resourcequota{resource="requests.memory",type="hard"} > 0.85
                     for: 5m
                     labels:
                       severity: warning
                     annotations:
-                      summary: "Tenant {{ $labels.namespace }} using >85% memory quota"
+                      summary: "Tenant {{ "{{" }} $labels.namespace {{ "}}" }} using >85% memory quota"
               - name: vault-alerts
                 rules:
                   - alert: VaultSealed

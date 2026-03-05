@@ -4,3 +4,8 @@ spec:
     targetRevision: main
   destination:
     server: https://kubernetes.default.svc
+
+# AlertManager Telegram notifications
+# Set the chat ID for your Telegram group/channel
+alertmanager:
+  telegramChatId: 0

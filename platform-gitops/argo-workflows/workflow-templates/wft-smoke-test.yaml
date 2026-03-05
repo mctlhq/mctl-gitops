@@ -351,11 +351,18 @@ spec:
           kubectl annotate app "${APP}" argocd.argoproj.io/refresh=hard --overwrite -n argocd || true
           echo "▶ Triggering ArgoCD hard refresh for shared-pg (ExternalSecrets)..."
           kubectl annotate app "shared-pg" argocd.argoproj.io/refresh=hard --overwrite -n argocd || true
-          # Wait for shared-pg to become Synced (up to 3 min)
+          # Give ArgoCD time to process the refresh annotation and detect OutOfSync
+          echo "⏳ Waiting 30s for ArgoCD to detect changes..."
+          sleep 30
+          # Re-annotate in case first was missed
+          kubectl annotate app "shared-pg" argocd.argoproj.io/refresh=hard --overwrite -n argocd || true
+          kubectl annotate app "${APP}" argocd.argoproj.io/refresh=hard --overwrite -n argocd || true
+          # Wait for shared-pg to become Synced (up to 5 min)
           echo "⏳ Waiting for shared-pg to sync..."
-          for i in $(seq 1 18); do
+          for i in $(seq 1 30); do
             STATUS=$(kubectl get app shared-pg -n argocd -o jsonpath='{.status.sync.status}' 2>/dev/null || echo "Unknown")
-            echo "  [${i}/18] shared-pg: ${STATUS}"
+            HEALTH=$(kubectl get app shared-pg -n argocd -o jsonpath='{.status.health.status}' 2>/dev/null || echo "Unknown")
+            echo "  [${i}/30] shared-pg: ${STATUS} / ${HEALTH}"
             [ "$STATUS" = "Synced" ] && break
             sleep 10
           done
