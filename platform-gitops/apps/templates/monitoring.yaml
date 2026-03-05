@@ -48,7 +48,104 @@ spec:
                     requests:
                       storage: 20Gi
         alertmanager:
-          enabled: false
+          enabled: true
+          alertmanagerSpec:
+            storage:
+              volumeClaimTemplate:
+                spec:
+                  accessModes: ["ReadWriteOnce"]
+                  resources:
+                    requests:
+                      storage: 1Gi
+          config:
+            global:
+              resolve_timeout: 5m
+            route:
+              receiver: "null"
+              group_by: ["alertname", "namespace"]
+              group_wait: 30s
+              group_interval: 5m
+              repeat_interval: 4h
+              routes:
+                - receiver: "null"
+                  matchers:
+                    - alertname =~ "InfoInhibitor|Watchdog"
+            receivers:
+              - name: "null"
+            # TODO: add Telegram / Slack receiver when ready
+            # - name: telegram
+            #   telegram_configs:
+            #     - bot_token: "<token>"
+            #       chat_id: <id>
+
+        # Critical alerts for multi-tenant platform
+        additionalPrometheusRulesMap:
+          platform-alerts:
+            groups:
+              - name: node-alerts
+                rules:
+                  - alert: NodeHighCPU
+                    expr: 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 85
+                    for: 10m
+                    labels:
+                      severity: warning
+                    annotations:
+                      summary: "Node {{ $labels.instance }} CPU > 85%"
+                  - alert: NodeHighMemory
+                    expr: (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100 > 90
+                    for: 5m
+                    labels:
+                      severity: critical
+                    annotations:
+                      summary: "Node {{ $labels.instance }} memory > 90%"
+                  - alert: NodeDiskPressure
+                    expr: (1 - node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100 > 85
+                    for: 10m
+                    labels:
+                      severity: warning
+                    annotations:
+                      summary: "Node {{ $labels.instance }} disk > 85%"
+              - name: pod-alerts
+                rules:
+                  - alert: PodCrashLooping
+                    expr: rate(kube_pod_container_status_restarts_total[15m]) * 60 * 15 > 3
+                    for: 5m
+                    labels:
+                      severity: critical
+                    annotations:
+                      summary: "Pod {{ $labels.namespace }}/{{ $labels.pod }} crash-looping"
+                  - alert: PodNotReady
+                    expr: kube_pod_status_ready{condition="true"} == 0
+                    for: 15m
+                    labels:
+                      severity: warning
+                    annotations:
+                      summary: "Pod {{ $labels.namespace }}/{{ $labels.pod }} not ready"
+              - name: tenant-alerts
+                rules:
+                  - alert: TenantCPUQuotaHigh
+                    expr: sum by(namespace) (rate(container_cpu_usage_seconds_total[5m])) / on(namespace) kube_resourcequota{resource="requests.cpu",type="hard"} > 0.8
+                    for: 10m
+                    labels:
+                      severity: warning
+                    annotations:
+                      summary: "Tenant {{ $labels.namespace }} using >80% CPU quota"
+                  - alert: TenantMemoryQuotaHigh
+                    expr: sum by(namespace) (container_memory_working_set_bytes) / on(namespace) kube_resourcequota{resource="requests.memory",type="hard"} > 0.85
+                    for: 5m
+                    labels:
+                      severity: warning
+                    annotations:
+                      summary: "Tenant {{ $labels.namespace }} using >85% memory quota"
+              - name: vault-alerts
+                rules:
+                  - alert: VaultSealed
+                    expr: vault_core_unsealed == 0
+                    for: 2m
+                    labels:
+                      severity: critical
+                    annotations:
+                      summary: "Vault instance is sealed"
         kubeStateMetrics:
           enabled: true
         nodeExporter:
