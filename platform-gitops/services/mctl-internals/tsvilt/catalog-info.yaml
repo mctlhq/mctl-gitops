@@ -4,9 +4,9 @@ metadata:
   name: tsvilt
   description: "tsvilt service deployed to preview"
   annotations:
-    backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=preview-mctl-internals-tsvilt
+    backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=mctl-internals-tsvilt
     backstage.io/kubernetes-namespace: mctl-internals
-    argocd/app-name: preview-mctl-internals-tsvilt
+    argocd/app-name: mctl-internals-tsvilt
     github.com/source-repo: mashkoffdmitry/tsvilt
     # mctl.me/auto-deploy — triggered by GitHub App webhook on tag push
     #   "true" or "auto" — deploy immediately via scaffolder
@@ -14,7 +14,7 @@ metadata:
     #   "false" or absent — skip
     mctl.me/auto-deploy: "false"
   links:
-    - url: https://ops.mctl.me/applications/argocd/preview-mctl-internals-tsvilt
+    - url: https://ops.mctl.me/applications/argocd/mctl-internals-tsvilt
       title: ArgoCD
       icon: dashboard
     - url: https://github.com/mashkoffdmitry/tsvilt

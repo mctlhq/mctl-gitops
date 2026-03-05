@@ -244,7 +244,7 @@ spec:
                 - type: url
                   target: https://app.mctl.me/api/tenant-management/backstage/catalog.yaml
                   rules:
-                    - allow: [User, Group]
+                    - allow: [User, Group, System]
 
         # PostgreSQL subchart disabled — using shared CNPG cluster in platform-db namespace
         postgresql:
