@@ -125,6 +125,15 @@ argo-cd:
         p, role:team-mctl-internals, logs, get, apps/mctl-internals-*, allow
         p, role:team-mctl-internals, exec, create, apps/mctl-internals-*, allow
         g, mctl-internals, role:team-mctl-internals
+
+        # Tenant: tests
+        p, role:team-tests, applications, get, apps/tests-*, allow
+        p, role:team-tests, applications, list, apps/tests-*, allow
+        p, role:team-tests, applications, sync, apps/tests-*, allow
+        p, role:team-tests, applications, override, apps/tests-*, allow
+        p, role:team-tests, logs, get, apps/tests-*, allow
+        p, role:team-tests, exec, create, apps/tests-*, allow
+        g, tests, role:team-tests
     secret:
       createSecret: true
 
