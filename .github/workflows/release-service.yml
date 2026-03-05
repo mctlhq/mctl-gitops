@@ -508,10 +508,10 @@ jobs:
           TAG="${{ needs.validate.outputs.image_tag }}"
 
           if [[ "$TYPE" == "base-service" ]]; then
-            TEMPLATE=".github/templates/base-service-values.yaml.tpl"
+            TEMPLATE="platform-gitops/argo-workflows/templates/base-service-values.yaml.tpl"
             COMPONENT_TYPE="service"
           else
-            TEMPLATE=".github/templates/worker-service-values.yaml.tpl"
+            TEMPLATE="platform-gitops/argo-workflows/templates/worker-service-values.yaml.tpl"
             COMPONENT_TYPE="worker"
           fi
 
@@ -586,7 +586,7 @@ jobs:
             -e "s|__SERVICE_NAME__|${{ inputs.component_name }}|g" \
             -e "s|__COMPONENT_TYPE__|${COMPONENT_TYPE}|g" \
             -e "s|__DOCKERFILE_REPO__|${{ inputs.dockerfile_repo }}|g" \
-            ".github/templates/catalog-info.yaml.tpl" > "${DIR}/catalog-info.yaml"
+            "platform-gitops/argo-workflows/templates/catalog-info.yaml.tpl" > "${DIR}/catalog-info.yaml"
           
           # Add service URL link if ingress host is set
           if [[ -n "${{ inputs.host }}" ]]; then
@@ -597,7 +597,7 @@ jobs:
           sed \
             -e "s|__TEAM_NAME__|${{ inputs.team_name }}|g" \
             -e "s|__SERVICE_NAME__|${{ inputs.component_name }}|g" \
-            ".github/templates/vault-cleanup.yaml.tpl" > "${DIR}/vault-cleanup.yaml"
+            "platform-gitops/argo-workflows/templates/vault-cleanup.yaml.tpl" > "${DIR}/vault-cleanup.yaml"
 
       - name: Update image tag (deploy)
         if: inputs.action == 'deploy'

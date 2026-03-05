@@ -22,7 +22,7 @@ resources:
     memory: 512Mi
 
 env:
-  APP_ENV: preview
+  APP_ENV: production
 
 ingress:
   enabled: true

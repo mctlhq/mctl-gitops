@@ -2,7 +2,7 @@ apiVersion: backstage.io/v1alpha1
 kind: Component
 metadata:
   name: __SERVICE_NAME__
-  description: "__SERVICE_NAME__ service deployed to preview"
+  description: "__SERVICE_NAME__ service"
   annotations:
     backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=__TEAM_NAME__-__SERVICE_NAME__
     backstage.io/kubernetes-namespace: __TEAM_NAME__
@@ -20,12 +20,12 @@ metadata:
     - url: https://github.com/__DOCKERFILE_REPO__
       title: Source Repository
       icon: github
-    - url: https://github.com/mctlhq/mctl-core/actions/workflows/release-service.yml
-      title: GitHub Actions
+    - url: https://workflows.mctl.me
+      title: Argo Workflows
       icon: github
   labels:
     team: __TEAM_NAME__
-    env: preview
+    env: apps
 spec:
   type: __COMPONENT_TYPE__
   lifecycle: production

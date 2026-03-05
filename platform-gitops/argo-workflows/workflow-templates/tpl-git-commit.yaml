@@ -117,9 +117,9 @@ spec:
 
             # values.yaml from template
             if [ "$TYPE" = "base-service" ]; then
-              TPL=".github/templates/base-service-values.yaml.tpl"
+              TPL="platform-gitops/argo-workflows/templates/base-service-values.yaml.tpl"
             else
-              TPL=".github/templates/worker-service-values.yaml.tpl"
+              TPL="platform-gitops/argo-workflows/templates/worker-service-values.yaml.tpl"
             fi
 
             sed \
@@ -181,11 +181,7 @@ spec:
               -e "s|__SERVICE_NAME__|${SERVICE}|g" \
               -e "s|__COMPONENT_TYPE__|${COMPONENT_TYPE}|g" \
               -e "s|__DOCKERFILE_REPO__|${REPO}|g" \
-              ".github/templates/catalog-info.yaml.tpl" > "${DIR}/catalog-info.yaml"
-
-            # Update catalog-info: replace GitHub Actions link with Argo Workflows
-            sed -i 's|url: https://github.com/mctlhq/mctl-core/actions/workflows/release-service.yml|url: https://workflows.mctl.me|g' "${DIR}/catalog-info.yaml"
-            sed -i 's|title: GitHub Actions|title: Argo Workflows|g' "${DIR}/catalog-info.yaml"
+              "platform-gitops/argo-workflows/templates/catalog-info.yaml.tpl" > "${DIR}/catalog-info.yaml"
 
             if [ -n "$HOST" ]; then
               yq eval -i ".metadata.links += [{\"url\": \"https://${HOST}\", \"title\": \"Service URL\", \"icon\": \"web\"}]" "${DIR}/catalog-info.yaml"
@@ -195,7 +191,7 @@ spec:
             sed \
               -e "s|__TEAM_NAME__|${TEAM}|g" \
               -e "s|__SERVICE_NAME__|${SERVICE}|g" \
-              ".github/templates/vault-cleanup.yaml.tpl" > "${DIR}/vault-cleanup.yaml"
+              "platform-gitops/argo-workflows/templates/vault-cleanup.yaml.tpl" > "${DIR}/vault-cleanup.yaml"
 
             # Validate Helm template before committing
             echo "🔍 Validating Helm template..."

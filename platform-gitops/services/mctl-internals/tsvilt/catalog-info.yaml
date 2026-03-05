@@ -2,7 +2,7 @@ apiVersion: backstage.io/v1alpha1
 kind: Component
 metadata:
   name: tsvilt
-  description: "tsvilt service deployed to preview"
+  description: "tsvilt service"
   annotations:
     backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=mctl-internals-tsvilt
     backstage.io/kubernetes-namespace: mctl-internals
@@ -28,7 +28,7 @@ metadata:
       icon: web
   labels:
     team: mctl-internals
-    env: preview
+    env: apps
 spec:
   type: service
   lifecycle: production
