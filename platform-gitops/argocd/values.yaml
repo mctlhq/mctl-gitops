@@ -154,10 +154,10 @@ argo-cd:
   controller:
     resources:
       limits:
-        memory: 384Mi
+        memory: 768Mi
       requests:
-        cpu: 50m
-        memory: 256Mi
+        cpu: 100m
+        memory: 384Mi
     env:
       - name: GOMEMLIMIT
-        value: "350MiB"
+        value: "700MiB"
