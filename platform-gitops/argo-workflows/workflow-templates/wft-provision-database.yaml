@@ -87,28 +87,40 @@ spec:
             DB_EXISTS=true
           fi
 
-          if [ "$DB_EXISTS" = "false" ]; then
+          # Always ensure Vault secret exists (may have been deleted by retire)
           PASSWORD=$(openssl rand -base64 32 | tr -d '/+=\n' | head -c 32)
-
-          HTTP_CODE=$(curl -sS -o /tmp/vault-resp.json -w "%{http_code}" \
-            -X POST \
+          VAULT_SECRET_EXISTS=false
+          VHTTP=$(curl -sS -o /dev/null -w "%{http_code}" \
             -H "X-Vault-Token: ${VAULT_TOKEN}" \
-            -H "Content-Type: application/json" \
-            -d "{\"data\": {
-              \"host\": \"shared-pg-rw.platform-db.svc.cluster.local\",
-              \"port\": \"5432\",
-              \"database\": \"${DB_NAME}\",
-              \"username\": \"${DB_NAME}\",
-              \"password\": \"${PASSWORD}\"
-            }}" \
-            "${VAULT_ADDR}/v1/secret/data/${VAULT_PATH}")
+            "${VAULT_ADDR}/v1/secret/data/${VAULT_PATH}" 2>/dev/null || echo "000")
+          [ "$VHTTP" = "200" ] && VAULT_SECRET_EXISTS=true
 
-          [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "204" ] || {
-            echo "❌ Vault write failed (HTTP $HTTP_CODE)"
-            cat /tmp/vault-resp.json
-            exit 1
-          }
-          echo "✅ Credentials stored in Vault at ${VAULT_PATH}"
+          if [ "$VAULT_SECRET_EXISTS" = "false" ]; then
+            echo "📝 Writing credentials to Vault at ${VAULT_PATH}..."
+            HTTP_CODE=$(curl -sS -o /tmp/vault-resp.json -w "%{http_code}" \
+              -X POST \
+              -H "X-Vault-Token: ${VAULT_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d "{\"data\": {
+                \"host\": \"shared-pg-rw.platform-db.svc.cluster.local\",
+                \"port\": \"5432\",
+                \"database\": \"${DB_NAME}\",
+                \"username\": \"${DB_NAME}\",
+                \"password\": \"${PASSWORD}\"
+              }}" \
+              "${VAULT_ADDR}/v1/secret/data/${VAULT_PATH}")
+
+            [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "204" ] || {
+              echo "❌ Vault write failed (HTTP $HTTP_CODE)"
+              cat /tmp/vault-resp.json
+              exit 1
+            }
+            echo "✅ Credentials stored in Vault at ${VAULT_PATH}"
+          else
+            echo "ℹ️  Vault secret already exists at ${VAULT_PATH}"
+          fi
+
+          if [ "$DB_EXISTS" = "false" ]; then
 
           # ── Patch cluster.yaml: add pg_hba entry ──────────────────────────
           awk -v db="${DB_NAME}" '
