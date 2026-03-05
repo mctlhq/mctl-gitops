@@ -44,7 +44,7 @@ spec:
       - name: component_name
         value: "smoke-test-svc"
       - name: dockerfile_repo
-        value: "mctlhq/e2e-public-test"
+        value: "mctlhq/spring-test"
 
   templates:
 
