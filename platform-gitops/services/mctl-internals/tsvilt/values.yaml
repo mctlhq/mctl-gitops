@@ -1,0 +1,27 @@
+# Service: tsvilt
+# Team: mctl-internals
+
+# Chart: base-service
+
+image:
+  repository: ghcr.io/mctlhq/tsvilt
+  tag: "1.2.0"
+imagePullSecrets:
+  - name: ghcr-credentials
+service:
+  port: 8000
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+env:
+  APP_ENV: production
+ingress:
+  enabled: true
+  host: tsvilt.mctl.me
+probes:
+  liveness: null
+  readiness: null
