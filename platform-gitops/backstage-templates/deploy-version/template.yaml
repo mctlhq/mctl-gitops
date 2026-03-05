@@ -84,11 +84,11 @@ spec:
           env_vars: ${{ parameters.envVars | default('') }}
           secret_env_vars: ${{ parameters.secretEnvVars | default('') }}
           port: "8080"
-          host: ""
+          host: "none"
           provision_database: "false"
           skip_health_check: "false"
           dockerfile_path: "Dockerfile"
-          image_tag: ""
+          image_tag: "auto"
 
   output:
     text:

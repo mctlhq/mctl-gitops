@@ -50,6 +50,10 @@ spec:
           SECRET_VARS="{{inputs.parameters.secret_env_vars}}"
           REPO="{{inputs.parameters.dockerfile_repo}}"
           PROVISION_DB="{{inputs.parameters.provision_database}}"
+
+          # Normalize sentinels (Backstage strips bare empty strings from YAML)
+          [ "$HOST" = "none" ] && HOST=""
+          [ "$TAG" = "auto" ] && TAG=""
           SKIP_HEALTH="{{inputs.parameters.skip_health_check}}"
 
           # ── 0. Install dependencies ───────────────────────────────────────────

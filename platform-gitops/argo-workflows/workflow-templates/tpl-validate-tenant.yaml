@@ -52,6 +52,9 @@ spec:
           HOST="{{inputs.parameters.host}}"
           REPO="{{inputs.parameters.dockerfile_repo}}"
 
+          # Normalize sentinels: "none" → empty (Backstage strips bare empty strings)
+          [ "$HOST" = "none" ] && HOST=""
+
           # ── 1. Naming convention checks ─────────────────────────────────────
           if ! echo "$TEAM" | grep -qE '^[a-z0-9][a-z0-9-]{0,62}$'; then
             echo "❌ team_name must be lowercase alphanumeric with hyphens, ≤63 chars. Got: $TEAM"
@@ -114,6 +117,8 @@ spec:
           # ── 8. Resolve image tag ─────────────────────────────────────────────
           GIT_TAG="{{inputs.parameters.git_tag}}"
           IMG_OVERRIDE="{{inputs.parameters.image_tag}}"
+          # Normalize sentinel: "auto" → empty (Backstage strips bare empty strings)
+          [ "$IMG_OVERRIDE" = "auto" ] && IMG_OVERRIDE=""
           if [ -n "$IMG_OVERRIDE" ]; then
             echo "$IMG_OVERRIDE" > /tmp/image_tag
           elif [ -n "$GIT_TAG" ]; then

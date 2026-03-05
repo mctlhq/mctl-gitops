@@ -145,9 +145,9 @@ spec:
           dockerfile_repo: ${{ parameters.dockerfileRepo }}
           dockerfile_path: ${{ parameters.dockerfilePath | default('Dockerfile') }}
           git_tag: ${{ parameters.gitTag | default('') }}
-          image_tag: ${{ parameters.gitTag | default('') }}
+          image_tag: ${{ parameters.gitTag | default('auto') }}
           port: ${{ parameters.port | string }}
-          host: ${{ parameters.host | default('') }}
+          host: ${{ parameters.host | default('none') }}
           skip_health_check: ${{ parameters.skipHealthCheck | string }}
           provision_database: ${{ parameters.provisionDatabase | string }}
           env_vars: ${{ parameters.envVars | default('') }}
