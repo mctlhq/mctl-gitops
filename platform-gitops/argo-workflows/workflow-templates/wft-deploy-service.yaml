@@ -31,7 +31,7 @@ spec:
         # e.g. "myorg/my-service"
       - name: git_tag
         default: ""
-        # e.g. "v1.2.3"
+        # e.g. "1.2.3"
       - name: port
         default: "8080"
       - name: host
