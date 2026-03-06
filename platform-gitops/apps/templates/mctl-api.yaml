@@ -20,9 +20,11 @@ spec:
 
           ingress:
             enabled: true
-            host: api.mctl.ai
             className: traefik
             tls: true
+            hosts:
+              - host: api.mctl.ai
+              - host: api.mctl.me
 
           env:
             GITOPS_REPO_URL: https://github.com/mctlhq/mctl-core.git
