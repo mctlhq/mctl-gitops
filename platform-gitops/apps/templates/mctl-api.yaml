@@ -1,0 +1,66 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: mctl-api
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: platform
+  sources:
+    # Helm chart from the mctl-api repository
+    - repoURL: https://github.com/mctlhq/mctl-api.git
+      targetRevision: main
+      path: helm
+      helm:
+        values: |
+          image:
+            repository: ghcr.io/mctlhq/mctl-api
+            tag: latest
+
+          ingress:
+            enabled: true
+            host: api.mctl.ai
+            className: traefik
+            tls: true
+
+          env:
+            GITOPS_REPO_URL: https://github.com/mctlhq/mctl-core.git
+            GITOPS_BRANCH: main
+            GITOPS_LOCAL_PATH: /data/mctl-core
+            ARGOCD_URL: https://ops.mctl.me
+            ARGO_WORKFLOWS_NAMESPACE: argo-workflows
+            GITHUB_ORG: mctlhq
+            ADMIN_USERS: mashkovd
+            AUTH_REQUIRED: "true"
+            BACKSTAGE_URL: https://app.mctl.me
+            DEX_ISSUER_URL: https://ops.mctl.me/api/dex
+            DEX_CLIENT_ID: mctl-api
+            SELF_URL: https://api.mctl.ai
+
+          envFromSecret: mctl-api-secrets
+
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+
+  destination:
+    server: {{ .Values.spec.destination.server }}
+    namespace: mctl-api
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

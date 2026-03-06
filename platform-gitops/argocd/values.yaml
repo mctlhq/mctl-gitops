@@ -94,6 +94,11 @@ argo-cd:
             - https://workflows.mctl.me/oauth2/callback
             - https://workflows.mctl.ai/oauth2/callback
           secret: "$argo-workflows-sso-client-secret"
+        - id: mctl-api
+          name: mctl-api
+          redirectURIs:
+            - https://api.mctl.ai/oauth2/callback
+          secret: "$mctl-api-sso-client-secret"
 
     params:
       server.insecure: true
