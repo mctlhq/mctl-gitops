@@ -1,4 +1,4 @@
-name: Terraform Apply
+name: Terraform
 
 on:
   push:
@@ -7,6 +7,11 @@ on:
       - 'infrastructure/k3s-preview/**'
       - '.github/workflows/terraform.yml'
   workflow_dispatch:
+    inputs:
+      apply:
+        description: "Run terraform apply (default: plan only)"
+        type: boolean
+        default: false
 
 jobs:
   terraform:
@@ -29,12 +34,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       
+      # SSH keys are only needed for terraform apply (modifying cluster).
+      # On push (plan only) we skip this — secrets may not be set.
       - name: Setup SSH keys
+        if: inputs.apply == true
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
-          echo "${{ secrets.SSH_PUBLIC_KEY }}" > ~/.ssh/id_ed25519.pub
+          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          printf '%s\n' "${{ secrets.SSH_PUBLIC_KEY }}" > ~/.ssh/id_ed25519.pub
           chmod 600 ~/.ssh/id_ed25519
+      
+      # Dummy keys for plan/validate so file() calls don't fail
+      - name: Setup dummy SSH keys (plan only)
+        if: inputs.apply != true
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N "" -C "ci-plan-dummy" -q
       
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -52,5 +67,5 @@ jobs:
         continue-on-error: true
       
       - name: Terraform Apply
-        if: github.ref == 'refs/heads/main'
+        if: inputs.apply == true
         run: terraform apply -auto-approve
