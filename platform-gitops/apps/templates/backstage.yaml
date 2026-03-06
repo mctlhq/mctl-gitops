@@ -21,6 +21,7 @@ spec:
           host: app.mctl.ai
           extraHosts:
             - name: app.mctl.ai
+            - name: app.mctl.me
           tls:
             enabled: true
             secretName: backstage-tls
@@ -28,6 +29,9 @@ spec:
             - hosts:
                 - app.mctl.ai
               secretName: backstage-mctl-ai-tls
+            - hosts:
+                - app.mctl.me
+              secretName: backstage-mctl-me-tls
 
         backstage:
           image:
