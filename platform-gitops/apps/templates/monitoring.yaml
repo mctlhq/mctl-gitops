@@ -75,6 +75,11 @@ spec:
                 - receiver: "null"
                   matchers:
                     - alertname =~ "InfoInhibitor|Watchdog"
+                # K3s embeds controller-manager, scheduler, and replaces kube-proxy
+                # These metrics are never exported, so these alerts are always false positives
+                - receiver: "null"
+                  matchers:
+                    - alertname =~ "KubeControllerManagerDown|KubeSchedulerDown|KubeProxyDown"
             receivers:
               - name: "null"
               - name: telegram
