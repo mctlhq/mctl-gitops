@@ -8,16 +8,13 @@ metadata:
     backstage.io/kubernetes-namespace: admins
     argocd/app-name: admins-mctl-web
     github.com/source-repo: mctlhq/mctl-web
-    mctl.me/auto-deploy: "true"
+    mctl.me/auto-deploy: "confirm"
   links:
     - url: https://ops.mctl.ai/applications/argocd/admins-mctl-web
       title: ArgoCD
       icon: dashboard
     - url: https://github.com/mctlhq/mctl-web
       title: Source Repository
-      icon: github
-    - url: https://github.com/mctlhq/mctl-core/actions/workflows/release-service.yml
-      title: GitHub Actions
       icon: github
     - url: https://mctl.ai
       title: Service URL
