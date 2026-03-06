@@ -4,7 +4,7 @@ metadata:
   name: create-tenant
   title: Create Tenant
   description: |
-    Provision a new tenant on the mctl.me platform.
+    Provision a new tenant on the mctl.ai platform.
     Creates a dedicated Kubernetes namespace with ResourceQuota, NetworkPolicy, and LimitRange.
     Also creates a scoped Vault policy and ArgoCD RBAC entry for the team.
 
@@ -136,7 +136,7 @@ spec:
         url: ${{ steps['create-tenant'].output.body.workflowUrl }}
       - title: ArgoCD — Tenant App
         icon: dashboard
-        url: "https://ops.mctl.me/applications/tenant-${{ parameters.tenantName }}"
+        url: "https://ops.mctl.ai/applications/tenant-${{ parameters.tenantName }}"
       - title: Backstage Catalog — Tenant
         icon: catalog
-        url: "https://app.mctl.me/catalog/default/resource/tenant-${{ parameters.tenantName }}"
+        url: "https://app.mctl.ai/catalog/default/resource/tenant-${{ parameters.tenantName }}"

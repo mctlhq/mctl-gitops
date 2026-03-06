@@ -4,7 +4,7 @@ metadata:
   name: delete-tenant
   title: Delete Tenant
   description: |
-    Permanently delete a tenant from the mctl.me platform.
+    Permanently delete a tenant from the mctl.ai platform.
     Removes: K8s namespace, Vault policy, ArgoCD RBAC, DB records, and catalog entities.
     ⚠️ This action is irreversible.
 

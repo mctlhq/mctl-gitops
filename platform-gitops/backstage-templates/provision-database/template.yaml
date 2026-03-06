@@ -63,4 +63,4 @@ spec:
         url: ${{ steps['trigger-provision'].output.workflowUrl }}
       - title: Argo Workflows UI
         icon: dashboard
-        url: "https://workflows.mctl.me"
+        url: "https://workflows.mctl.ai"

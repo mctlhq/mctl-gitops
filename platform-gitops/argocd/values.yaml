@@ -1,4 +1,4 @@
-## ArgoCD configuration for mctl.me
+## ArgoCD configuration for mctl.ai
 ## Managed by argocd-self-managed Application (GitOps)
 ## Changes here are auto-synced to the cluster
 
@@ -12,11 +12,11 @@ argo-cd:
     keep: true
 
   global:
-    domain: ops.mctl.me
+    domain: ops.mctl.ai
 
   configs:
     cm:
-      url: https://ops.mctl.me
+      url: https://ops.mctl.ai
       admin.enabled: false
       timeout.reconciliation: 60s
 
@@ -72,9 +72,9 @@ argo-cd:
         connectors:
         - type: oidc
           id: backstage
-          name: mctl.me
+          name: mctl.ai
           config:
-            issuer: https://app.mctl.me/api/oidc-provider
+            issuer: https://app.mctl.ai/api/oidc-provider
             clientID: "$backstage-oidc-client-id"
             clientSecret: "$backstage-oidc-client-secret"
             scopes:
@@ -91,7 +91,7 @@ argo-cd:
         - id: argo-workflows
           name: Argo Workflows
           redirectURIs:
-            - https://workflows.mctl.me/oauth2/callback
+            - https://workflows.mctl.ai/oauth2/callback
             - https://workflows.mctl.ai/oauth2/callback
           secret: "$argo-workflows-sso-client-secret"
         - id: mctl-api
@@ -165,7 +165,7 @@ argo-cd:
           path: /
       extraTls:
         - hosts:
-            - ops.mctl.me
+            - ops.mctl.ai
             - ops.mctl.ai
           secretName: argocd-tls
 

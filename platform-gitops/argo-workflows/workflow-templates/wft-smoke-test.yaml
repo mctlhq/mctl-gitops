@@ -4,7 +4,7 @@ metadata:
   name: smoke-test
   annotations:
     workflows.argoproj.io/description: |
-      End-to-end smoke test for the mctl.me platform.
+      End-to-end smoke test for the mctl.ai platform.
 
       Lifecycle tested:
         1. onboard      — submit deploy-service(onboard) child workflow

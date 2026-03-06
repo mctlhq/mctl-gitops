@@ -32,7 +32,7 @@ on:
         default: "8080"
         type: string
       host:
-        description: "Ingress host (base-service onboard only, e.g. myteam-myapp.mctl.me)"
+        description: "Ingress host (base-service onboard only, e.g. myteam-myapp.mctl.ai)"
         required: false
         type: string
       dockerfile_repo:

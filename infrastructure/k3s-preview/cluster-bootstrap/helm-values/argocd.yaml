@@ -5,11 +5,11 @@
 nameOverride: argocd
 
 global:
-  domain: ops.mctl.me
+  domain: ops.mctl.ai
 
 configs:
   cm:
-    url: https://ops.mctl.me
+    url: https://ops.mctl.ai
     admin.enabled: false
     timeout.reconciliation: 180s
 
@@ -82,7 +82,7 @@ server:
     tls: true
     extraTls:
       - hosts:
-          - ops.mctl.me
+          - ops.mctl.ai
         secretName: argocd-tls
 
 extraObjects:

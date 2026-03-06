@@ -67,4 +67,4 @@ spec:
         url: ${{ steps['trigger-delete'].output.workflowUrl }}
       - title: ArgoCD Dashboard
         icon: dashboard
-        url: "https://ops.mctl.me"
+        url: "https://ops.mctl.ai"

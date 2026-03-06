@@ -4,7 +4,7 @@ metadata:
   name: delete-tenant
   annotations:
     workflows.argoproj.io/description: |
-      Fully deletes a tenant from the mctl.me platform:
+      Fully deletes a tenant from the mctl.ai platform:
         1. validate        — checks tenant exists, not reserved
         2. delete-vault    — removes Vault policy + secrets under teams/{name}/
         3. delete-from-git — removes tenant dir + ArgoCD RBAC from mctl-core
@@ -169,7 +169,7 @@ spec:
           chmod 600 ~/.ssh/config
 
           # ── Clone mctl-core ────────────────────────────────────────────────
-          git config --global user.email "argo-workflows[bot]@mctl.me"
+          git config --global user.email "argo-workflows[bot]@mctl.ai"
           git config --global user.name "Argo Workflows Bot"
           git clone --depth=1 "git@github.com:mctlhq/mctl-core.git" /tmp/mctl-core
           cd /tmp/mctl-core

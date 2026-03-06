@@ -18,7 +18,7 @@ spec:
           className: traefik
           annotations:
             cert-manager.io/cluster-issuer: letsencrypt-prod
-          host: app.mctl.me
+          host: app.mctl.ai
           extraHosts:
             - name: app.mctl.ai
           tls:
@@ -60,17 +60,17 @@ spec:
             failureThreshold: 2
           appConfig:
             app:
-              title: mctl.me User Portal
-              baseUrl: https://app.mctl.me
+              title: mctl.ai User Portal
+              baseUrl: https://app.mctl.ai
             organization:
               name: MCTL
             backend:
-              baseUrl: https://app.mctl.me
+              baseUrl: https://app.mctl.ai
               listen:
                 port: 7007
               reading:
                 allow:
-                  - host: app.mctl.me
+                  - host: app.mctl.ai
                   - host: app.mctl.ai
               database:
                 client: pg
@@ -111,7 +111,7 @@ spec:
               endpoint: ${VAULT_ADDR}
               token: ${VAULT_TOKEN}
             argoWorkflows:
-              baseUrl: https://workflows.mctl.me
+              baseUrl: https://workflows.mctl.ai
               namespace: argo-workflows
               token: ${ARGO_WORKFLOWS_TOKEN}
             tenantManagement:
@@ -131,7 +131,7 @@ spec:
                 services: "5"
               maxTeamsPerTenant: 1
             oidcProvider:
-              issuer: https://app.mctl.me/api/oidc-provider
+              issuer: https://app.mctl.ai/api/oidc-provider
               github:
                 clientId: ${AUTH_GITHUB_CLIENT_ID}
                 clientSecret: ${AUTH_GITHUB_CLIENT_SECRET}
@@ -139,7 +139,7 @@ spec:
                 - clientId: ${OIDC_CLIENT_ID}
                   clientSecret: ${OIDC_CLIENT_SECRET}
                   redirectUris:
-                    - https://ops.mctl.me/api/dex/callback
+                    - https://ops.mctl.ai/api/dex/callback
                     - https://ops.mctl.ai/api/dex/callback
             resourceUsage:
               kubeConfigType: token
@@ -250,7 +250,7 @@ spec:
                     - allow: [Template]
                 # Tenant entities from the tenant-management backend
                 - type: url
-                  target: https://app.mctl.me/api/tenant-management/backstage/catalog.yaml
+                  target: https://app.mctl.ai/api/tenant-management/backstage/catalog.yaml
                   rules:
                     - allow: [User, Group, System]
 

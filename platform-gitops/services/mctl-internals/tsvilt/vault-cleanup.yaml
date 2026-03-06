@@ -19,7 +19,7 @@ spec:
         image: hashicorp/vault:1.15
         env:
         - name: VAULT_ADDR
-          value: "https://secrets.mctl.me"
+          value: "https://secrets.mctl.ai"
         - name: TEAM
           value: "mctl-internals"
         - name: SERVICE

@@ -10,7 +10,7 @@ metadata:
     github.com/source-repo: mctlhq/mctl-web
     mctl.me/auto-deploy: "true"
   links:
-    - url: https://ops.mctl.me/applications/argocd/admins-mctl-web
+    - url: https://ops.mctl.ai/applications/argocd/admins-mctl-web
       title: ArgoCD
       icon: dashboard
     - url: https://github.com/mctlhq/mctl-web
@@ -19,7 +19,7 @@ metadata:
     - url: https://github.com/mctlhq/mctl-core/actions/workflows/release-service.yml
       title: GitHub Actions
       icon: github
-    - url: https://mctl.me
+    - url: https://mctl.ai
       title: Service URL
       icon: web
   labels:

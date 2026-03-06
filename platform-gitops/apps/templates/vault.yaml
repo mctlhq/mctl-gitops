@@ -48,11 +48,11 @@ spec:
             annotations:
               cert-manager.io/cluster-issuer: letsencrypt-prod
             hosts:
-              - host: secrets.mctl.me
+              - host: secrets.mctl.ai
               - host: secrets.mctl.ai
             tls:
               - hosts:
-                  - secrets.mctl.me
+                  - secrets.mctl.ai
                   - secrets.mctl.ai
                 secretName: vault-tls
 

@@ -24,19 +24,18 @@ spec:
             tls: true
             hosts:
               - host: api.mctl.ai
-              - host: api.mctl.me
 
           env:
             GITOPS_REPO_URL: https://github.com/mctlhq/mctl-core.git
             GITOPS_BRANCH: main
             GITOPS_LOCAL_PATH: /data/mctl-core
-            ARGOCD_URL: https://ops.mctl.me
+            ARGOCD_URL: https://ops.mctl.ai
             ARGO_WORKFLOWS_NAMESPACE: argo-workflows
             GITHUB_ORG: mctlhq
             ADMIN_USERS: mashkovd
             AUTH_REQUIRED: "true"
-            BACKSTAGE_URL: https://app.mctl.me
-            DEX_ISSUER_URL: https://ops.mctl.me/api/dex
+            BACKSTAGE_URL: https://app.mctl.ai
+            DEX_ISSUER_URL: https://ops.mctl.ai/api/dex
             DEX_CLIENT_ID: mctl-api
             SELF_URL: https://api.mctl.ai
 

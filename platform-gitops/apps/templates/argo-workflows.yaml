@@ -21,14 +21,14 @@ spec:
           extraArgs: []
           sso:
             enabled: true
-            issuer: https://ops.mctl.me/api/dex
+            issuer: https://ops.mctl.ai/api/dex
             clientId:
               name: argo-workflows-sso
               key: client-id
             clientSecret:
               name: argo-workflows-sso
               key: client-secret
-            redirectUrl: https://workflows.mctl.me/oauth2/callback
+            redirectUrl: https://workflows.mctl.ai/oauth2/callback
             scopes:
               - openid
               - profile
@@ -43,11 +43,11 @@ spec:
             annotations:
               cert-manager.io/cluster-issuer: letsencrypt-prod
             hosts:
-              - workflows.mctl.me
+              - workflows.mctl.ai
               - workflows.mctl.ai
             tls:
               - hosts:
-                  - workflows.mctl.me
+                  - workflows.mctl.ai
                   - workflows.mctl.ai
                 secretName: argo-workflows-tls
 

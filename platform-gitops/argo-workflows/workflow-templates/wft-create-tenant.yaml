@@ -4,7 +4,7 @@ metadata:
   name: create-tenant
   annotations:
     workflows.argoproj.io/description: |
-      Creates a new tenant on the mctl.me platform:
+      Creates a new tenant on the mctl.ai platform:
         1. Validates tenant name (DNS-safe, not already exists)
         2. Creates Vault policy tenant-{name} (scoped to secret/data/teams/{name}/*)
         3. Commits tenant directory to mctl-core (values.yaml + catalog-info.yaml)
@@ -259,7 +259,7 @@ spec:
           fi
 
           # ── Clone mctl-core via SSH ─────────────────────────────────────────
-          git config --global user.email "argo-workflows[bot]@mctl.me"
+          git config --global user.email "argo-workflows[bot]@mctl.ai"
           git config --global user.name "Argo Workflows Bot"
 
           git clone --depth=50 "git@github.com:mctlhq/mctl-core.git" /tmp/mctl-core
