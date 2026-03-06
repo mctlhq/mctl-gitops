@@ -1,6 +1,6 @@
-# 🏗️ Create Tenant
+# Create Tenant
 
-Provision a new tenant (team) on the mctl.me platform — creates a Kubernetes namespace with quotas, a Vault policy, and ArgoCD RBAC.
+Provision a new tenant (team) on the mctl.ai platform — creates a Kubernetes namespace with quotas, a Vault policy, and ArgoCD RBAC.
 
 ## When to use
 
@@ -46,5 +46,5 @@ Use this template when you want to:
 
 ## Links
 
-- [Argo Workflows UI](https://workflows.mctl.me)
-- [ArgoCD Dashboard](https://ops.mctl.me)
+- [Argo Workflows UI](https://workflows.mctl.ai)
+- [ArgoCD Dashboard](https://ops.mctl.ai)

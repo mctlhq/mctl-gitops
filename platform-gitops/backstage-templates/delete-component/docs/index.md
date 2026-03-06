@@ -1,4 +1,4 @@
-# 🧹 Retire Service
+# Retire Service
 
 Permanently removes a service from the platform.
 
@@ -33,4 +33,4 @@ Use this template when a service is being decommissioned and you want to:
 
 ## Links
 
-- [Argo Workflows UI](https://workflows.mctl.me)
+- [Argo Workflows UI](https://workflows.mctl.ai)

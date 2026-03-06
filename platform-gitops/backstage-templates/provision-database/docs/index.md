@@ -1,4 +1,4 @@
-# 🗄️ Provision Database
+# Provision Database
 
 Provisions a dedicated PostgreSQL database for your service.
 
@@ -50,5 +50,5 @@ After provisioning, open the service in the Backstage catalog and go to the **Da
 
 ## Links
 
-- [Argo Workflows UI](https://workflows.mctl.me)
+- [Argo Workflows UI](https://workflows.mctl.ai)
 - [CNPG cluster config](https://github.com/mctlhq/mctl-core/tree/main/platform-gitops/cnpg-clusters/shared)

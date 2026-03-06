@@ -1,4 +1,4 @@
-# 🔄 Deploy Version
+# Deploy Version
 
 Build and deploy a new version of an existing service.
 
@@ -9,8 +9,8 @@ Use this template when you want to:
 - Rebuild and deploy from a specific git tag
 - Update env vars or secrets alongside a version bump
 
-> For onboarding a **new** service, use [🆕 Onboard Service](/create/templates/default/onboard-service) instead.
-> To update only env vars/secrets without rebuilding, use [⚙️ Update Environment](/create/templates/default/update-environment).
+> For onboarding a **new** service, use [Onboard Service](/create/templates/default/onboard-service) instead.
+> To update only env vars/secrets without rebuilding, use [Update Environment](/create/templates/default/update-environment).
 
 ## Inputs
 
@@ -36,5 +36,5 @@ Use this template when you want to:
 
 ## Links
 
-- [Argo Workflows UI](https://workflows.mctl.me)
+- [Argo Workflows UI](https://workflows.mctl.ai)
 - [View deployed services in Catalog](/catalog?filters[kind]=component)

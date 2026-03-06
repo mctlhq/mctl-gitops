@@ -1,4 +1,4 @@
-# ⚙️ Update Environment
+# Update Environment
 
 Update environment variables and secrets for a running service without triggering a full rebuild.
 
@@ -33,4 +33,4 @@ Use this template when you need to:
 
 ## Links
 
-- [Argo Workflows UI](https://workflows.mctl.me)
+- [Argo Workflows UI](https://workflows.mctl.ai)
