@@ -23,10 +23,10 @@ tenant:
   quotas:
     # Aggregate CPU/memory requests across all pods
     requests.cpu: "4"
-    requests.memory: "8Gi"
+    requests.memory: "1Gi"
     # Aggregate CPU/memory limits across all pods
     limits.cpu: "8"
-    limits.memory: "16Gi"
+    limits.memory: "2Gi"
     # Maximum number of pods
     pods: "20"
     # Maximum number of PVCs
