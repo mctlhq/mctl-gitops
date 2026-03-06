@@ -109,7 +109,36 @@ spec:
 
 ---
 # ─────────────────────────────────────────────────────────────────────────────
-# 5. Allow ingress from Traefik ingress controller (for services with ingress).
+# 5. Allow internet egress for Argo Workflow pods only.
+#    Workflow pods need to clone repos (GitHub), push images (GHCR), etc.
+#    Selected by the label that Argo Workflows adds to all workflow pods.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-workflow-internet-egress
+  namespace: {{ $tenantName }}
+  labels:
+    {{- include "tenant.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: workflows.argoproj.io/workflow
+        operator: Exists
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+
+---
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. Allow ingress from Traefik ingress controller (for services with ingress).
 # ─────────────────────────────────────────────────────────────────────────────
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
