@@ -131,14 +131,6 @@ argo-cd:
         p, role:team-mctl-internals, logs, get, apps/mctl-internals-*, allow
         p, role:team-mctl-internals, exec, create, apps/mctl-internals-*, allow
         g, mctl-internals, role:team-mctl-internals
-        # Tenant: www
-        p, role:team-www, applications, get, apps/www-*, allow
-        p, role:team-www, applications, list, apps/www-*, allow
-        p, role:team-www, applications, sync, apps/www-*, allow
-        p, role:team-www, applications, override, apps/www-*, allow
-        p, role:team-www, logs, get, apps/www-*, allow
-        p, role:team-www, exec, create, apps/www-*, allow
-        g, www, role:team-www
     secret:
       createSecret: true
 
