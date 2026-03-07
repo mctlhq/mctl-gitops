@@ -369,28 +369,51 @@ spec:
         source: |
           TEAM="{{workflow.parameters.team_name}}"
           SVC="{{workflow.parameters.component_name}}"
-          ES_NAME="${SVC}-secrets"
-          echo "🔍 Waiting for ExternalSecret ${ES_NAME} in ${TEAM} to sync (up to 5min)..."
+          TARGET_SECRET="${SVC}-secrets"
+          echo "🔍 Looking for ExternalSecret targeting '${TARGET_SECRET}' in namespace '${TEAM}'..."
+
+          # Find the ExternalSecret by its target secret name (ES object name varies by chart)
           for i in $(seq 1 30); do
-            STATUS=$(kubectl get externalsecret "${ES_NAME}" -n "${TEAM}" \
-              -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
-            [ "${STATUS}" = "True" ] && { echo "✅ ExternalSecret synced"; break; }
-            echo "  [${i}/30] status=${STATUS:-NotFound}, retrying in 10s..."
+            ES_NAME=$(kubectl get externalsecret -n "${TEAM}" \
+              -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.target.name}{"\n"}{end}' \
+              2>/dev/null | awk -F'\t' -v target="${TARGET_SECRET}" '$2==target{print $1}' | head -1)
+            if [ -n "${ES_NAME}" ]; then
+              echo "  Found ExternalSecret: ${ES_NAME}"
+              break
+            fi
+            echo "  [${i}/30] ExternalSecret not created yet, waiting 10s..."
             sleep 10
           done
-          STATUS=$(kubectl get externalsecret "${ES_NAME}" -n "${TEAM}" \
-            -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
-          if [ "${STATUS}" != "True" ]; then
-            echo "❌ ExternalSecret ${ES_NAME} in ${TEAM} not Ready (status: ${STATUS})"
+
+          if [ -z "${ES_NAME}" ]; then
+            echo "❌ No ExternalSecret targeting '${TARGET_SECRET}' found in ${TEAM}"
             kubectl get externalsecret -n "${TEAM}" 2>/dev/null || true
             exit 1
           fi
+
+          echo "🔍 Waiting for ExternalSecret ${ES_NAME} to be Ready (up to 5min)..."
+          for i in $(seq 1 30); do
+            STATUS=$(kubectl get externalsecret "${ES_NAME}" -n "${TEAM}" \
+              -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
+            [ "${STATUS}" = "True" ] && { echo "✅ ExternalSecret ${ES_NAME} synced (Ready=True)"; break; }
+            echo "  [${i}/30] status=${STATUS:-NotFound}, retrying in 10s..."
+            sleep 10
+          done
+
+          STATUS=$(kubectl get externalsecret "${ES_NAME}" -n "${TEAM}" \
+            -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
+          if [ "${STATUS}" != "True" ]; then
+            echo "❌ ExternalSecret ${ES_NAME} not Ready (status: ${STATUS})"
+            kubectl get externalsecret "${ES_NAME}" -n "${TEAM}" -o yaml 2>/dev/null | tail -20 || true
+            exit 1
+          fi
+
           # Verify the k8s Secret actually exists
-          kubectl get secret "${ES_NAME}" -n "${TEAM}" > /dev/null 2>&1 || {
-            echo "❌ k8s Secret ${ES_NAME} not found in ${TEAM}"
+          kubectl get secret "${TARGET_SECRET}" -n "${TEAM}" > /dev/null 2>&1 || {
+            echo "❌ k8s Secret ${TARGET_SECRET} not found in ${TEAM}"
             exit 1
           }
-          echo "✅ k8s Secret ${ES_NAME} exists in ${TEAM}"
+          echo "✅ k8s Secret ${TARGET_SECRET} exists in ${TEAM}"
 
     # ─── Verification: env var + secret in pod (from deploy action) ──────────
     - name: check-deploy-env-and-secret
