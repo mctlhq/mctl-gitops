@@ -1,0 +1,184 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterWorkflowTemplate
+metadata:
+  name: add-custom-domain
+  annotations:
+    workflows.argoproj.io/description: |
+      Add a verified custom domain to a service:
+        1. Validate domain format (FQDN, not *.mctl.ai)
+        2. DNS verify: CNAME must point to {team}-{service}.mctl.ai
+        3. Update service values.yaml: add host to ingress.hosts + TLS with http01 issuer
+        4. Commit to mctl-core → ArgoCD syncs
+        5. Callback to Backstage to mark domain as active
+spec:
+  entrypoint: add-domain-pipeline
+  serviceAccountName: argo-workflow-sa
+
+  arguments:
+    parameters:
+      - name: team_name
+      - name: service_name
+      - name: domain
+        # e.g. "api.mycompany.com"
+
+  templates:
+    - name: add-domain-pipeline
+      dag:
+        tasks:
+          - name: add-domain
+            template: do-add-domain
+
+    - name: do-add-domain
+      inputs:
+        parameters:
+          - name: team_name
+            value: "{{workflow.parameters.team_name}}"
+          - name: service_name
+            value: "{{workflow.parameters.service_name}}"
+          - name: domain
+            value: "{{workflow.parameters.domain}}"
+      script:
+        image: alpine:3.19
+        command: [sh]
+        source: |
+          set -e
+          apk add --no-cache curl git openssh-client bind-tools yq > /dev/null 2>&1
+
+          TEAM="{{inputs.parameters.team_name}}"
+          SERVICE="{{inputs.parameters.service_name}}"
+          DOMAIN="{{inputs.parameters.domain}}"
+          AUTO_DOMAIN="${TEAM}-${SERVICE}.mctl.ai"
+          BACKSTAGE_URL="http://backstage.backstage.svc.cluster.local:7007"
+
+          # ── 1. Validate domain format ─────────────────────────────────────
+          echo "🔍 Validating domain: ${DOMAIN}"
+          echo "$DOMAIN" | grep -qE '^[a-z0-9]([a-z0-9.-]*[a-z0-9])?(\.[a-z]{2,})+$' || {
+            echo "❌ Invalid domain format: ${DOMAIN}"
+            exit 1
+          }
+          # Reject platform domains
+          echo "$DOMAIN" | grep -qvE '\.(mctl\.ai|mctl\.me)$' || {
+            echo "❌ Cannot add platform domain as custom: ${DOMAIN}"
+            exit 1
+          }
+          echo "✅ Domain format valid"
+
+          # ── 2. DNS verification ───────────────────────────────────────────
+          echo "🔍 Checking DNS for ${DOMAIN}..."
+          CNAME_TARGET=$(dig +short CNAME "${DOMAIN}" | sed 's/\.$//' | head -1)
+          if [ -z "$CNAME_TARGET" ]; then
+            echo "❌ No CNAME record found for ${DOMAIN}"
+            echo "   Please create: ${DOMAIN} CNAME → ${AUTO_DOMAIN}"
+            exit 1
+          fi
+          echo "   CNAME: ${DOMAIN} → ${CNAME_TARGET}"
+          if [ "$CNAME_TARGET" != "$AUTO_DOMAIN" ]; then
+            echo "❌ CNAME points to '${CNAME_TARGET}', expected '${AUTO_DOMAIN}'"
+            exit 1
+          fi
+          echo "✅ DNS verified"
+
+          # ── 3. Set up SSH for git ─────────────────────────────────────────
+          mkdir -p ~/.ssh
+          cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  StrictHostKeyChecking no\n' > ~/.ssh/config
+          chmod 600 ~/.ssh/config
+
+          # ── 4. Clone mctl-core ────────────────────────────────────────────
+          git clone --depth=1 "git@github.com:mctlhq/mctl-core.git" /tmp/mctl-core
+          cd /tmp/mctl-core
+          git config user.name "argo-workflows[bot]"
+          git config user.email "argo-workflows[bot]@users.noreply.github.com"
+
+          # ── 5. Verify service exists ──────────────────────────────────────
+          SVC_VALUES="platform-gitops/services/${TEAM}/${SERVICE}/values.yaml"
+          if [ ! -f "$SVC_VALUES" ]; then
+            echo "❌ Service not found: ${TEAM}/${SERVICE}"
+            exit 1
+          fi
+
+          # ── 6. Check domain not already in ingress ────────────────────────
+          if yq eval '.ingress.hosts[]' "$SVC_VALUES" 2>/dev/null | grep -qF "$DOMAIN"; then
+            echo "ℹ️  Domain ${DOMAIN} already in ingress.hosts — nothing to do"
+            exit 0
+          fi
+
+          # ── 7. Add domain to ingress.hosts ────────────────────────────────
+          echo "📝 Adding ${DOMAIN} to ingress.hosts..."
+          yq eval -i ".ingress.hosts += [\"${DOMAIN}\"]" "$SVC_VALUES"
+
+          # ── 8. Add TLS for custom domain with HTTP-01 issuer ──────────────
+          CUSTOM_TLS_NAME="${SERVICE}-custom-tls"
+          # Check if custom TLS entry already exists
+          EXISTING_TLS=$(yq eval ".ingress.tls[] | select(.secretName == \"${CUSTOM_TLS_NAME}\")" "$SVC_VALUES" 2>/dev/null)
+          if [ -z "$EXISTING_TLS" ]; then
+            # Add a separate TLS entry for custom domains using HTTP-01
+            yq eval -i ".ingress.tls += [{\"secretName\": \"${CUSTOM_TLS_NAME}\", \"hosts\": [\"${DOMAIN}\"]}]" "$SVC_VALUES"
+          else
+            # Append domain to existing custom TLS entry
+            yq eval -i "(.ingress.tls[] | select(.secretName == \"${CUSTOM_TLS_NAME}\")).hosts += [\"${DOMAIN}\"]" "$SVC_VALUES"
+          fi
+
+          # Use HTTP-01 issuer annotation for this ingress (cert-manager picks up all TLS hosts)
+          # We need a separate Certificate resource or annotate differently
+          # For simplicity, we add a Certificate resource for the custom domain
+          CERT_DIR="platform-gitops/services/${TEAM}/${SERVICE}"
+          cat > "${CERT_DIR}/custom-domain-cert-${DOMAIN%%.*}.yaml" << CERTEOF
+          apiVersion: cert-manager.io/v1
+          kind: Certificate
+          metadata:
+            name: ${CUSTOM_TLS_NAME}
+            namespace: ${TEAM}
+          spec:
+            secretName: ${CUSTOM_TLS_NAME}
+            issuerRef:
+              name: letsencrypt-http01
+              kind: ClusterIssuer
+            dnsNames:
+          CERTEOF
+
+          # Add all custom domain hosts to the Certificate
+          for h in $(yq eval "(.ingress.tls[] | select(.secretName == \"${CUSTOM_TLS_NAME}\")).hosts[]" "$SVC_VALUES"); do
+            echo "      - ${h}" >> "${CERT_DIR}/custom-domain-cert-${DOMAIN%%.*}.yaml"
+          done
+
+          echo "✅ Custom domain TLS certificate configured"
+
+          # ── 9. Commit and push ────────────────────────────────────────────
+          git add -A
+          git commit -m "feat: add custom domain ${DOMAIN} to ${TEAM}/${SERVICE}" \
+            -m "Custom domain: ${DOMAIN} → ${AUTO_DOMAIN}
+          DNS verified: CNAME points to ${AUTO_DOMAIN}
+          TLS: HTTP-01 via letsencrypt-http01 ClusterIssuer"
+
+          for i in $(seq 1 5); do
+            if git push origin HEAD:main; then
+              echo "✅ Pushed — ArgoCD will sync"
+              break
+            fi
+            git pull --rebase origin main
+          done
+
+          # ── 10. Callback to Backstage to activate domain ──────────────────
+          echo "📡 Notifying Backstage..."
+          # Find domain ID from Backstage
+          DOMAIN_DATA=$(curl -sS "${BACKSTAGE_URL}/api/custom-domains/domains?team=${TEAM}&service=${SERVICE}" 2>/dev/null)
+          DOMAIN_ID=$(echo "$DOMAIN_DATA" | grep -o "\"id\":\"[^\"]*\"" | grep -B0 "$DOMAIN" | head -1 | sed 's/"id":"//;s/"//')
+          if [ -n "$DOMAIN_ID" ]; then
+            curl -sS -X POST "${BACKSTAGE_URL}/api/custom-domains/domains/${DOMAIN_ID}/activate" 2>/dev/null || true
+            echo "✅ Domain status updated to active"
+          fi
+
+          echo ""
+          echo "🎉 Custom domain ${DOMAIN} added successfully!"
+          echo "   Service: ${TEAM}/${SERVICE}"
+          echo "   Domain: https://${DOMAIN}"
+          echo "   CNAME target: ${AUTO_DOMAIN}"
+        volumeMounts:
+          - name: deploy-key
+            mountPath: /secrets/deploy-key
+      volumes:
+        - name: deploy-key
+          secret:
+            secretName: mctl-core-deploy-key
