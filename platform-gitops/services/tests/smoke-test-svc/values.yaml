@@ -27,3 +27,10 @@ externalSecret:
 envFrom:
   - secretRef:
       name: smoke-test-svc-secrets
+
+dbSecret:
+  vaultPath: "teams/tests/smoke-test-svc/database"
+  secretName: "tests-smoke-test-svc-db-creds"
+envFrom:
+  - secretRef:
+      name: "tests-smoke-test-svc-db-creds"
