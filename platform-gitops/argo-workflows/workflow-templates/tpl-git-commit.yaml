@@ -232,6 +232,42 @@ spec:
 
           elif [ "$ACTION" = "deploy" ]; then
             yq eval -i ".image.tag = \"${TAG}\"" "${DIR}/values.yaml"
+
+            # Apply env var changes if provided (alongside the image tag update)
+            if [ -n "$ENV_VARS" ]; then
+              while IFS='=' read -r key rest; do
+                [ -z "$key" ] && continue
+                echo "$key" | grep -q '^#' && continue
+                key=$(echo "$key" | xargs)
+                value=$(echo "$rest" | xargs)
+                [ -z "$key" ] && continue
+                yq eval -i ".env.${key} = \"${value}\"" "${DIR}/values.yaml"
+              done << 'ENVEOF3'
+          {{inputs.parameters.env_vars}}
+          ENVEOF3
+            fi
+
+            # Add new secret keys to ExternalSecret config if provided
+            if [ -n "$SECRET_VARS" ]; then
+              yq eval -i ".externalSecret.targetSecret = \"${SERVICE}-secrets\"" "${DIR}/values.yaml"
+              if yq eval '.externalSecret.data' "${DIR}/values.yaml" | grep -q 'null'; then
+                yq eval -i '.externalSecret.data = []' "${DIR}/values.yaml"
+              fi
+              while IFS='=' read -r key rest; do
+                [ -z "$key" ] && continue
+                echo "$key" | grep -q '^#' && continue
+                key=$(echo "$key" | xargs)
+                [ -z "$key" ] && continue
+                EXISTS=$(yq ".externalSecret.data[] | select(.secretKey == \"${key}\")" "${DIR}/values.yaml")
+                if [ -z "$EXISTS" ]; then
+                  yq eval -i ".externalSecret.data += [{\"secretKey\": \"${key}\", \"remoteKey\": \"teams/${TEAM}/${SERVICE}\", \"property\": \"${key}\"}]" "${DIR}/values.yaml"
+                fi
+              done << 'SECRETEOF3'
+          {{inputs.parameters.secret_env_vars}}
+          SECRETEOF3
+              yq eval -i ".envFrom = [{\"secretRef\": {\"name\": \"${SERVICE}-secrets\"}}]" "${DIR}/values.yaml"
+            fi
+
             git add "${DIR}/values.yaml"
             if git diff --cached --quiet; then
               echo "ℹ️  No changes — already at ${TAG}"
