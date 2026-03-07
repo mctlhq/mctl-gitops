@@ -54,6 +54,12 @@ spec:
           # Normalize sentinels (Backstage strips bare empty strings from YAML)
           [ "$HOST" = "none" ] && HOST=""
           [ "$TAG" = "auto" ] && TAG=""
+
+          # Auto-generate domain for base-service if host not explicitly set
+          if [ "$TYPE" = "base-service" ] && { [ -z "$HOST" ] || [ "$HOST" = "auto" ]; }; then
+            HOST="${TEAM}-${SERVICE}.mctl.ai"
+            echo "Auto-generated domain: ${HOST}"
+          fi
           SKIP_HEALTH="{{inputs.parameters.skip_health_check}}"
 
           # ── 0. Install dependencies ───────────────────────────────────────────

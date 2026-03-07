@@ -55,15 +55,19 @@ spec:
           type: number
           default: 8080
           description: "Container port exposed by the service."
-        host:
-          title: Ingress Host
-          type: string
-          description: "Public hostname (e.g. myapp.mctl.ai). Leave empty for a background worker — no ingress will be created."
+        isWorker:
+          title: Background Worker (no ingress)
+          type: boolean
+          default: false
+          description: "Enable for background workers that don't need a public URL."
         skipHealthCheck:
           title: Skip Health Checks
           type: boolean
           default: true
           description: "Skip liveness/readiness probes. Recommended for onboarding if /healthz and /readyz are not yet implemented."
+      description: |
+        Domain will be auto-generated as {team}-{service}.mctl.ai.
+        Custom domains can be added after deployment.
 
     - title: Database
       properties:
@@ -141,13 +145,13 @@ spec:
           action: onboard
           team_name: ${{ parameters.teamName | parseEntityRef | pick('name') }}
           component_name: ${{ parameters.dockerfileRepo | serviceName }}
-          component_type: ${{ 'base-service' if parameters.host else 'worker-service' }}
+          component_type: ${{ 'worker-service' if parameters.isWorker else 'base-service' }}
           dockerfile_repo: ${{ parameters.dockerfileRepo }}
           dockerfile_path: ${{ parameters.dockerfilePath | default('Dockerfile') }}
           git_tag: ${{ parameters.gitTag | default('') }}
           image_tag: ${{ parameters.gitTag | default('auto') }}
           port: ${{ parameters.port | string }}
-          host: ${{ parameters.host | default('none') }}
+          host: ${{ 'none' if parameters.isWorker else 'auto' }}
           skip_health_check: ${{ parameters.skipHealthCheck | string }}
           provision_database: ${{ parameters.provisionDatabase | string }}
           env_vars: ${{ parameters.envVars | default('') }}
