@@ -62,10 +62,10 @@ spec:
             factor: 2
             maxDuration: 2m
       ignoreDifferences:
-        # ESO controller writes .status after sync; ignore to prevent perpetual OutOfSync with SSA
+        # ESO controller adds defaults (deletionPolicy, status) via Update after ArgoCD Apply.
+        # managedFieldsManagers ignores all fields owned by external-secrets manager,
+        # preventing perpetual OutOfSync with ServerSideApply=true.
         - group: external-secrets.io
           kind: ExternalSecret
-          jqPathExpressions:
-            - .status
-            - .metadata.resourceVersion
-            - .metadata.generation
+          managedFieldsManagers:
+            - external-secrets
