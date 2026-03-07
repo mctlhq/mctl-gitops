@@ -61,3 +61,11 @@ spec:
             duration: 10s
             factor: 2
             maxDuration: 2m
+      ignoreDifferences:
+        # ESO controller writes .status after sync; ignore to prevent perpetual OutOfSync with SSA
+        - group: external-secrets.io
+          kind: ExternalSecret
+          jqPathExpressions:
+            - .status
+            - .metadata.resourceVersion
+            - .metadata.generation

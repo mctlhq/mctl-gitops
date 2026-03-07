@@ -41,7 +41,7 @@ spec:
       cpu: 500m
     limits:
       memory: 1Gi
-      cpu: 1000m
+      cpu: "1"   # CNPG normalizes 1000m → "1"; use "1" to match live state
 
   postgresql:
     parameters:
@@ -65,7 +65,7 @@ spec:
       - host test-django-test test-django-test all scram-sha-256
       - host test-spring-test test-spring-test all scram-sha-256
       - host tests-pdb-test-svc tests-pdb-test-svc all scram-sha-256
-      - host tests-smoke-test-svc tests-smoke-test-svc all scram-sha-256
+      # smoke-test-svc: ephemeral — added/removed by smoke-test CWT, not managed here
       - host all all 0.0.0.0/0 reject
 
   managed:

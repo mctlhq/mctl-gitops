@@ -20,6 +20,7 @@ spec:
       jqPathExpressions:
         - .metadata.annotations
         - .status
+        - .spec.resources   # CNPG normalizes CPU/memory quantities (e.g. 1000m → "1")
   syncPolicy:
     automated:
       prune: true
