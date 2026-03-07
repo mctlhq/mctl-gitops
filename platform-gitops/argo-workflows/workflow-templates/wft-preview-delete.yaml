@@ -1,0 +1,50 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterWorkflowTemplate
+metadata:
+  name: preview-delete
+  annotations:
+    workflows.argoproj.io/description: |
+      Delete a preview environment by removing the preview namespace and all its resources.
+spec:
+  entrypoint: delete-pipeline
+  serviceAccountName: argo-workflow-sa
+
+  arguments:
+    parameters:
+      - name: team_name
+      - name: component_name
+      - name: preview_id
+
+  templates:
+    - name: delete-pipeline
+      dag:
+        tasks:
+          - name: delete-namespace
+            template: delete
+
+    - name: delete
+      inputs:
+        parameters:
+          - name: team_name
+            value: "{{workflow.parameters.team_name}}"
+          - name: component_name
+            value: "{{workflow.parameters.component_name}}"
+          - name: preview_id
+            value: "{{workflow.parameters.preview_id}}"
+      script:
+        image: bitnami/kubectl:1.31
+        command: [sh]
+        source: |
+          set -euo pipefail
+
+          TEAM="{{inputs.parameters.team_name}}"
+          COMPONENT="{{inputs.parameters.component_name}}"
+          PREVIEW_ID="{{inputs.parameters.preview_id}}"
+          NAMESPACE="preview-${TEAM}-${COMPONENT}-${PREVIEW_ID}"
+
+          if kubectl get namespace "${NAMESPACE}" > /dev/null 2>&1; then
+            kubectl delete namespace "${NAMESPACE}" --wait=true
+            echo "Preview namespace ${NAMESPACE} deleted"
+          else
+            echo "Namespace ${NAMESPACE} not found — already deleted or never existed"
+          fi

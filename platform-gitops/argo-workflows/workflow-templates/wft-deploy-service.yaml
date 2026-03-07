@@ -52,6 +52,14 @@ spec:
       - name: image_tag
         default: ""
         # explicit image tag override (empty = derived from git_tag)
+      - name: autoscaling_enabled
+        default: "false"
+      - name: min_replicas
+        default: "1"
+      - name: max_replicas
+        default: "5"
+      - name: cpu_threshold
+        default: "80"
 
   templates:
     # ────────────────────────────────────────────────────────────────────────
@@ -160,4 +168,60 @@ spec:
                   value: "{{workflow.parameters.skip_health_check}}"
                 - name: dockerfile_repo
                   value: "{{workflow.parameters.dockerfile_repo}}"
+                - name: autoscaling_enabled
+                  value: "{{workflow.parameters.autoscaling_enabled}}"
+                - name: min_replicas
+                  value: "{{workflow.parameters.min_replicas}}"
+                - name: max_replicas
+                  value: "{{workflow.parameters.max_replicas}}"
+                - name: cpu_threshold
+                  value: "{{workflow.parameters.cpu_threshold}}"
 
+          # Step 4: patch autoscaling block in values.yaml (conditional)
+          - name: patch-autoscaling
+            dependencies: [commit]
+            when: "\"{{workflow.parameters.autoscaling_enabled}}\" == \"true\""
+            template: patch-autoscaling-values
+
+    # ────────────────────────────────────────────────────────────────────────
+    - name: patch-autoscaling-values
+      script:
+        image: alpine/git:2.45.2
+        command: [sh]
+        env:
+          - name: GITOPS_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: gitops-token
+                key: token
+        source: |
+          set -euo pipefail
+
+          TEAM="{{workflow.parameters.team_name}}"
+          COMPONENT="{{workflow.parameters.component_name}}"
+          MIN="{{workflow.parameters.min_replicas}}"
+          MAX="{{workflow.parameters.max_replicas}}"
+          CPU="{{workflow.parameters.cpu_threshold}}"
+          REPO="https://x-access-token:${GITOPS_TOKEN}@github.com/mctlhq/mctl-core.git"
+          VALUES="platform-gitops/services/${TEAM}/${COMPONENT}/values.yaml"
+
+          git clone --depth=1 "${REPO}" /tmp/mctl-core
+          cd /tmp/mctl-core
+
+          # Append or update autoscaling block
+          if grep -q "^autoscaling:" "${VALUES}"; then
+            sed -i "s|^\( *enabled: *\).*|\1true|" "${VALUES}"
+            sed -i "s|^\( *minReplicas: *\).*|\1${MIN}|" "${VALUES}"
+            sed -i "s|^\( *maxReplicas: *\).*|\1${MAX}|" "${VALUES}"
+            sed -i "s|^\( *targetCPUUtilizationPercentage: *\).*|\1${CPU}|" "${VALUES}"
+          else
+            printf '\nautoscaling:\n  enabled: true\n  minReplicas: %s\n  maxReplicas: %s\n  targetCPUUtilizationPercentage: %s\n' \
+              "${MIN}" "${MAX}" "${CPU}" >> "${VALUES}"
+          fi
+
+          git config user.email "ci@mctl.ai"
+          git config user.name "mctl-deploy"
+          git add "${VALUES}"
+          git diff --staged --quiet && echo "Autoscaling already configured" && exit 0
+          git commit -m "chore: enable autoscaling for ${TEAM}/${COMPONENT} (min=${MIN} max=${MAX} cpu=${CPU}%)"
+          git push

@@ -1,0 +1,70 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterWorkflowTemplate
+metadata:
+  name: rollback-service
+  annotations:
+    workflows.argoproj.io/description: |
+      Roll back a service to a previous image tag by patching image.tag in the
+      GitOps values.yaml and committing. ArgoCD picks up the change and redeploys.
+spec:
+  entrypoint: rollback-pipeline
+  serviceAccountName: argo-workflow-sa
+
+  arguments:
+    parameters:
+      - name: team_name
+      - name: component_name
+      - name: target_tag
+
+  templates:
+    - name: rollback-pipeline
+      dag:
+        tasks:
+          - name: patch-and-commit
+            template: patch-values
+
+    - name: patch-values
+      inputs:
+        parameters:
+          - name: team_name
+            value: "{{workflow.parameters.team_name}}"
+          - name: component_name
+            value: "{{workflow.parameters.component_name}}"
+          - name: target_tag
+            value: "{{workflow.parameters.target_tag}}"
+      script:
+        image: alpine/git:2.45.2
+        command: [sh]
+        env:
+          - name: GITOPS_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: gitops-token
+                key: token
+        source: |
+          set -euo pipefail
+
+          TEAM="{{inputs.parameters.team_name}}"
+          COMPONENT="{{inputs.parameters.component_name}}"
+          TAG="{{inputs.parameters.target_tag}}"
+          REPO="https://x-access-token:${GITOPS_TOKEN}@github.com/mctlhq/mctl-core.git"
+          VALUES="platform-gitops/services/${TEAM}/${COMPONENT}/values.yaml"
+
+          git clone --depth=1 "${REPO}" /tmp/mctl-core
+          cd /tmp/mctl-core
+
+          if [ ! -f "${VALUES}" ]; then
+            echo "ERROR: ${VALUES} not found — service may not exist"
+            exit 1
+          fi
+
+          # Patch image.tag using sed (safe for simple tag strings)
+          sed -i "s|^\( *tag: *\).*|\1\"${TAG}\"|" "${VALUES}"
+
+          git config user.email "ci@mctl.ai"
+          git config user.name "mctl-rollback"
+          git add "${VALUES}"
+          git diff --staged --quiet && echo "No changes needed (already at ${TAG})" && exit 0
+          git commit -m "chore: rollback ${TEAM}/${COMPONENT} to ${TAG}"
+          git push
+          echo "Rolled back ${TEAM}/${COMPONENT} to tag ${TAG}"
