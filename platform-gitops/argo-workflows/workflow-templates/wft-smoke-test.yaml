@@ -7,16 +7,20 @@ metadata:
       End-to-end smoke test for the mctl.ai platform.
 
       Lifecycle tested:
-        1. onboard      — submit deploy-service(onboard) child workflow
-        2. verify-pod   — kubectl wait for Deployment available
-        3. deploy       — submit deploy-service(deploy) to redeploy same image
-        4. verify-pod   — confirm Deployment still available after redeploy
-        5. provision-db — submit provision-database child workflow
-        6. verify-vault — vault kv get confirms DB secret exists
-        7. verify-secret — ExternalSecret synced into k8s Secret
-        8. update-config — submit deploy-service(update-config) child workflow
-        9. verify-env   — kubectl exec confirms SMOKE_TEST=true in pod env
-       10. retire       — submit retire-service child workflow
+        1.  onboard      — submit deploy-service(onboard) child workflow
+        2.  verify-pod   — kubectl wait for Deployment available
+        3.  deploy       — submit deploy-service(deploy) with env_vars + secret_env_vars
+        4.  verify-pod   — confirm Deployment still available after redeploy
+        5.  sync-argocd  — trigger ArgoCD hard refresh for the service app
+        6.  verify-vault-app-secret — Vault has SMOKE_SECRET at teams/tests/smoke-test-svc
+        7.  verify-app-externalsecret — ExternalSecret smoke-test-svc-secrets synced in tests ns
+        8.  verify-deploy-env-and-secret — kubectl exec confirms SMOKE_ENV + SMOKE_SECRET in pod
+        9.  provision-db — submit provision-database child workflow
+        10. verify-vault — vault kv get confirms DB secret exists
+        11. verify-secret — ExternalSecret synced into k8s Secret (platform-db ns)
+        12. update-config — submit deploy-service(update-config) child workflow
+        13. verify-env   — kubectl exec confirms SMOKE_TEST=true in pod env
+        14. retire       — submit retire-service child workflow
 
       onExit handler always retires (cleanup even on failure).
 
@@ -59,9 +63,17 @@ spec:
             template: run-deploy
         - - name: verify-pod-after-deploy
             template: check-pod-running
+        - - name: sync-argocd-app-0
+            template: trigger-argocd-sync
+        - - name: verify-vault-app-secret
+            template: check-vault-app-secret
+        - - name: verify-app-externalsecret
+            template: check-app-externalsecret
+        - - name: verify-deploy-env-and-secret
+            template: check-deploy-env-and-secret
         - - name: provision-db
             template: run-provision-db
-        - - name: sync-argocd-app
+        - - name: sync-argocd-app-1
             template: trigger-argocd-sync
         - - name: verify-vault-secret
             template: check-vault-secret
@@ -128,7 +140,7 @@ spec:
           done
           echo "❌ Timed out"; exit 1
 
-    # ─── Step 3: Deploy new version (redeploy same image) ────────────────────
+    # ─── Step 3: Deploy new version (with env vars + secrets to test deploy action) ──
     - name: run-deploy
       script:
         image: bitnami/kubectl:latest
@@ -159,8 +171,8 @@ spec:
               - {name: git_tag,            value: main}
               - {name: port,               value: "8080"}
               - {name: host,               value: ""}
-              - {name: env_vars,           value: ""}
-              - {name: secret_env_vars,    value: ""}
+              - {name: env_vars,           value: "SMOKE_ENV=deploy_action"}
+              - {name: secret_env_vars,    value: "SMOKE_SECRET=smoke_secret_value"}
               - {name: provision_database, value: "false"}
               - {name: skip_health_check,  value: "false"}
               - {name: dockerfile_path,    value: Dockerfile}
@@ -310,6 +322,116 @@ spec:
             sleep 15
           done
           echo "❌ Timed out"; exit 1
+
+    # ─── Verification: Vault app secret written by deploy action ─────────────
+    - name: check-vault-app-secret
+      script:
+        image: alpine:3.19
+        command: [sh]
+        source: |
+          set -e
+          apk add --no-cache curl > /dev/null 2>&1
+          TEAM="{{workflow.parameters.team_name}}"
+          SVC="{{workflow.parameters.component_name}}"
+          VAULT_PATH="secret/data/teams/${TEAM}/${SVC}"
+          echo "🔐 Authenticating to Vault via Kubernetes auth..."
+          SA_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+          VAULT_TOKEN=$(curl -sS -X POST \
+            -H "Content-Type: application/json" \
+            -d "{\"role\":\"argo-workflow\",\"jwt\":\"${SA_TOKEN}\"}" \
+            "${VAULT_ADDR}/v1/auth/kubernetes/login" | \
+            grep '"client_token"' | sed 's/.*"client_token":"\([^"]*\)".*/\1/')
+          if [ -z "$VAULT_TOKEN" ]; then
+            echo "❌ Failed to authenticate with Vault"
+            exit 1
+          fi
+          echo "🔍 Checking Vault secret at ${VAULT_PATH}..."
+          HTTP=$(curl -sS -o /tmp/vsecret.json -w "%{http_code}" \
+            -H "X-Vault-Token: $VAULT_TOKEN" \
+            "${VAULT_ADDR}/v1/${VAULT_PATH}")
+          if [ "$HTTP" != "200" ]; then
+            echo "❌ App secret not found (HTTP $HTTP)"
+            cat /tmp/vsecret.json || true
+            exit 1
+          fi
+          grep -q '"SMOKE_SECRET"' /tmp/vsecret.json || { echo "❌ SMOKE_SECRET key missing from Vault"; exit 1; }
+          grep -q '"smoke_secret_value"' /tmp/vsecret.json || { echo "❌ SMOKE_SECRET value incorrect in Vault"; exit 1; }
+          echo "✅ Vault app secret exists with SMOKE_SECRET=smoke_secret_value"
+        env:
+          - name: VAULT_ADDR
+            value: "http://vault.vault.svc.cluster.local:8200"
+
+    # ─── Verification: ExternalSecret for app secrets synced in service ns ───
+    - name: check-app-externalsecret
+      script:
+        image: bitnami/kubectl:latest
+        command: [bash]
+        source: |
+          TEAM="{{workflow.parameters.team_name}}"
+          SVC="{{workflow.parameters.component_name}}"
+          ES_NAME="${SVC}-secrets"
+          echo "🔍 Waiting for ExternalSecret ${ES_NAME} in ${TEAM} to sync (up to 5min)..."
+          for i in $(seq 1 30); do
+            STATUS=$(kubectl get externalsecret "${ES_NAME}" -n "${TEAM}" \
+              -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
+            [ "${STATUS}" = "True" ] && { echo "✅ ExternalSecret synced"; break; }
+            echo "  [${i}/30] status=${STATUS:-NotFound}, retrying in 10s..."
+            sleep 10
+          done
+          STATUS=$(kubectl get externalsecret "${ES_NAME}" -n "${TEAM}" \
+            -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
+          if [ "${STATUS}" != "True" ]; then
+            echo "❌ ExternalSecret ${ES_NAME} in ${TEAM} not Ready (status: ${STATUS})"
+            kubectl get externalsecret -n "${TEAM}" 2>/dev/null || true
+            exit 1
+          fi
+          # Verify the k8s Secret actually exists
+          kubectl get secret "${ES_NAME}" -n "${TEAM}" > /dev/null 2>&1 || {
+            echo "❌ k8s Secret ${ES_NAME} not found in ${TEAM}"
+            exit 1
+          }
+          echo "✅ k8s Secret ${ES_NAME} exists in ${TEAM}"
+
+    # ─── Verification: env var + secret in pod (from deploy action) ──────────
+    - name: check-deploy-env-and-secret
+      script:
+        image: bitnami/kubectl:latest
+        command: [bash]
+        source: |
+          TEAM="{{workflow.parameters.team_name}}"
+          SVC="{{workflow.parameters.component_name}}"
+          INSTANCE_LABEL="${TEAM}-${SVC}"
+          echo "Waiting 60s for ArgoCD sync + pod restart..."
+          sleep 60
+          for i in $(seq 1 24); do
+            echo "[${i}/24] Checking pod env in ${TEAM}/${SVC}..."
+            DEPLOY=$(kubectl get deployment -n "${TEAM}" -l "app.kubernetes.io/instance=${INSTANCE_LABEL}" -o name 2>/dev/null | head -1)
+            if [ -z "${DEPLOY}" ]; then echo "  deployment not found yet..."; sleep 15; continue; fi
+            kubectl rollout status "${DEPLOY}" -n "${TEAM}" --timeout=30s 2>/dev/null || true
+            POD=$(kubectl get pods -n "${TEAM}" \
+              -l "app.kubernetes.io/instance=${INSTANCE_LABEL}" \
+              --field-selector=status.phase=Running \
+              -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+            if [ -z "${POD}" ]; then echo "  no running pod yet..."; sleep 15; continue; fi
+            ENV_OUT=$(kubectl exec -n "${TEAM}" "${POD}" -- env 2>/dev/null || echo "")
+            ENV_OK=true
+            echo "${ENV_OUT}" | grep -q "SMOKE_ENV=deploy_action" || {
+              echo "  SMOKE_ENV=deploy_action not yet present"
+              ENV_OK=false
+            }
+            echo "${ENV_OUT}" | grep -q "SMOKE_SECRET=smoke_secret_value" || {
+              echo "  SMOKE_SECRET=smoke_secret_value not yet present (ExternalSecret may still be syncing)"
+              ENV_OK=false
+            }
+            if [ "${ENV_OK}" = "true" ]; then
+              echo "✅ SMOKE_ENV=deploy_action confirmed in pod ${POD}"
+              echo "✅ SMOKE_SECRET=smoke_secret_value confirmed in pod ${POD}"
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "❌ env vars / secrets not found in pod after 6 minutes"
+          exit 1
 
     # ─── Verification: pod running ────────────────────────────────────────────
     - name: check-pod-running
