@@ -26,7 +26,7 @@ spec:
               - host: api.mctl.ai
 
           env:
-            GITOPS_REPO_URL: git@github.com:mctlhq/mctl-core.git
+            GITOPS_REPO_URL: https://github.com/mctlhq/mctl-core.git
             GITOPS_BRANCH: main
             GITOPS_LOCAL_PATH: /data/mctl-core
             ARGOCD_URL: https://ops.mctl.ai
@@ -39,9 +39,8 @@ spec:
             DEX_CLIENT_ID: mctl-api
             SELF_URL: https://api.mctl.ai
 
-          gitopsSSHSecret: mctl-core-deploy-key
-
           envFromSecret: mctl-api-secrets
+          envFromExtraSecret: mctl-api-gitops-token
 
           resources:
             requests:
