@@ -162,6 +162,24 @@ spec:
                       severity: critical
                     annotations:
                       summary: "Vault instance is sealed"
+              - name: argo-workflows-alerts
+                rules:
+                  - alert: ArgoWorkflowFailed
+                    expr: increase(argo_workflows_error_count[5m]) > 0
+                    for: 0m
+                    labels:
+                      severity: warning
+                      namespace: argo-workflows
+                    annotations:
+                      summary: "Argo Workflow error detected ({{ "{{" }} $value {{ "}}" }} new errors in 5m)"
+                  - alert: ArgoWorkflowHighFailureRate
+                    expr: increase(argo_workflows_error_count[30m]) > 5
+                    for: 0m
+                    labels:
+                      severity: critical
+                      namespace: argo-workflows
+                    annotations:
+                      summary: "High Argo Workflow failure rate: {{ "{{" }} $value {{ "}}" }} errors in 30m"
         kubeStateMetrics:
           enabled: true
         nodeExporter:

@@ -52,6 +52,9 @@ spec:
                 secretName: argo-workflows-tls
 
         controller:
+          metricsConfig:
+            enabled: true
+            port: 9090
           persistence:
             archive: true
             nodeStatusOffLoad: false
