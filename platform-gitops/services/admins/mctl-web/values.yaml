@@ -5,7 +5,7 @@
 
 image:
   repository: ghcr.io/mctlhq/mctl-web
-  tag: "1.2.2"
+  tag: "1.2.3"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
@@ -20,6 +20,7 @@ resources:
 env:
   APP_ENV: production
   t: "123"
+  r: "321"
 ingress:
   enabled: true
   annotations:
@@ -43,6 +44,9 @@ externalSecret:
     - secretKey: s
       remoteKey: teams/admins/mctl-web
       property: s
+    - secretKey: r
+      remoteKey: teams/admins/mctl-web
+      property: r
 envFrom:
   - secretRef:
       name: mctl-web-secrets
