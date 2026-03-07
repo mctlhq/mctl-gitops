@@ -63,10 +63,14 @@ spec:
             factor: 2
             maxDuration: 2m
       ignoreDifferences:
-        # ESO controller adds defaults (deletionPolicy, status) via Update after ArgoCD Apply.
-        # managedFieldsManagers ignores all fields owned by external-secrets manager,
-        # preventing perpetual OutOfSync with ServerSideApply=true.
+        # ESO admission webhook injects default fields into .spec that are absent in git.
+        # These are structural defaults (not set by external-secrets manager in managedFields),
+        # so jqPathExpressions is used to explicitly ignore each injected path.
         - group: external-secrets.io
           kind: ExternalSecret
-          managedFieldsManagers:
-            - external-secrets
+          jqPathExpressions:
+            - .spec.target.deletionPolicy
+            - .spec.data[].remoteRef.conversionStrategy
+            - .spec.data[].remoteRef.decodingStrategy
+            - .spec.data[].remoteRef.metadataPolicy
+            - .status
