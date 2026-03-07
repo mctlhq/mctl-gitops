@@ -5,7 +5,7 @@
 
 image:
   repository: ghcr.io/mctlhq/mctl-web
-  tag: "1.2.1"
+  tag: "1.2.2"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
@@ -19,7 +19,7 @@ resources:
     memory: 512Mi
 env:
   APP_ENV: production
-  t: "1"
+  t: "123"
 ingress:
   enabled: true
   annotations:
