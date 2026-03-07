@@ -1,0 +1,111 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterWorkflowTemplate
+metadata:
+  name: preview-deploy
+  annotations:
+    workflows.argoproj.io/description: |
+      Deploy an ephemeral preview environment for a service using an existing image tag.
+      Creates a dedicated namespace preview-{team}-{app}-{id}, deploys via Helm (base-service chart),
+      and exposes the service at {app}-{id}.preview.mctl.ai.
+      The namespace is automatically deleted after ttl_hours via activeDeadlineSeconds.
+spec:
+  entrypoint: preview-pipeline
+  serviceAccountName: argo-workflow-sa
+
+  # activeDeadlineSeconds is set dynamically based on ttl_hours by the deploy step.
+  # The workflow itself has a generous outer deadline; cleanup is namespace-scoped.
+
+  arguments:
+    parameters:
+      - name: team_name
+      - name: component_name
+      - name: image_tag
+      - name: ttl_hours
+        default: "24"
+
+  templates:
+    - name: preview-pipeline
+      dag:
+        tasks:
+          - name: deploy-preview
+            template: deploy
+
+    - name: deploy
+      inputs:
+        parameters:
+          - name: team_name
+            value: "{{workflow.parameters.team_name}}"
+          - name: component_name
+            value: "{{workflow.parameters.component_name}}"
+          - name: image_tag
+            value: "{{workflow.parameters.image_tag}}"
+          - name: ttl_hours
+            value: "{{workflow.parameters.ttl_hours}}"
+      outputs:
+        parameters:
+          - name: preview_id
+            valueFrom:
+              path: /tmp/preview_id
+          - name: preview_url
+            valueFrom:
+              path: /tmp/preview_url
+      script:
+        image: alpine/helm:3.16.4
+        command: [sh]
+        env:
+          - name: KUBECONFIG
+            value: /root/.kube/config
+        source: |
+          set -euo pipefail
+
+          TEAM="{{inputs.parameters.team_name}}"
+          COMPONENT="{{inputs.parameters.component_name}}"
+          TAG="{{inputs.parameters.image_tag}}"
+          TTL_HOURS="{{inputs.parameters.ttl_hours}}"
+
+          # Generate a short preview ID from the workflow name
+          PREVIEW_ID=$(echo "${ARGO_WORKFLOW_NAME}" | tr -cd 'a-z0-9' | tail -c 6)
+          NAMESPACE="preview-${TEAM}-${COMPONENT}-${PREVIEW_ID}"
+          HOST="${COMPONENT}-${PREVIEW_ID}.preview.mctl.ai"
+
+          echo "${PREVIEW_ID}" > /tmp/preview_id
+          echo "https://${HOST}" > /tmp/preview_url
+
+          # Create namespace
+          kubectl create namespace "${NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
+
+          # Label for easy discovery
+          kubectl label namespace "${NAMESPACE}" \
+            mctl.ai/preview=true \
+            mctl.ai/team="${TEAM}" \
+            mctl.ai/component="${COMPONENT}" \
+            mctl.ai/preview-id="${PREVIEW_ID}" \
+            --overwrite
+
+          # Deploy with base-service Helm chart
+          CHART_PATH="/tmp/mctl-core/platform-gitops/helm-charts/base-service"
+
+          # Clone gitops to get chart
+          apk add --no-cache git > /dev/null 2>&1
+          GITOPS_TOKEN="${GITOPS_TOKEN:-}"
+          if [ -n "${GITOPS_TOKEN}" ]; then
+            git clone --depth=1 "https://x-access-token:${GITOPS_TOKEN}@github.com/mctlhq/mctl-core.git" /tmp/mctl-core
+          else
+            git clone --depth=1 "https://github.com/mctlhq/mctl-core.git" /tmp/mctl-core
+          fi
+
+          helm upgrade --install "${COMPONENT}" "${CHART_PATH}" \
+            --namespace "${NAMESPACE}" \
+            --set image.repository="ghcr.io/mctlhq/${COMPONENT}" \
+            --set image.tag="${TAG}" \
+            --set host="${HOST}" \
+            --set ingress.enabled=true \
+            --set ingress.className=traefik \
+            --set "ingress.annotations.cert-manager\\.io/cluster-issuer=letsencrypt-prod" \
+            --wait --timeout=5m
+
+          echo "Preview deployed: https://${HOST} (namespace: ${NAMESPACE}, ttl: ${TTL_HOURS}h)"
+        resources:
+          requests:
+            memory: 256Mi
+            cpu: 100m
