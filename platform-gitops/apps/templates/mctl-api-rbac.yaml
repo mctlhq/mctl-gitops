@@ -1,10 +1,14 @@
-# Allow mctl-api to submit Argo Workflows and read ClusterWorkflowTemplates
+# Allow mctl-api to submit Argo Workflows into any namespace (team namespaces)
+# and to read ClusterWorkflowTemplates (cluster-scoped).
 # The ServiceAccount itself is created by the mctl-api Helm chart.
+#
+# Workflows are submitted into the target team's namespace so they are visible
+# at workflows.mctl.ai/workflows/<team>. A ClusterRole is used so that new
+# team namespaces do not require additional RBAC changes.
 apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
+kind: ClusterRole
 metadata:
   name: mctl-api-workflow-submitter
-  namespace: argo-workflows
 rules:
   - apiGroups: ["argoproj.io"]
     resources: ["workflows"]
@@ -14,38 +18,14 @@ rules:
     verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: mctl-api-workflow-submitter
-  namespace: argo-workflows
-subjects:
-  - kind: ServiceAccount
-    name: mctl-api
-    namespace: mctl-api
-roleRef:
-  kind: Role
-  name: mctl-api-workflow-submitter
-  apiGroup: rbac.authorization.k8s.io
----
-# Allow reading ClusterWorkflowTemplates (cluster-scoped resource)
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: mctl-api-cwt-reader
-rules:
-  - apiGroups: ["argoproj.io"]
-    resources: ["clusterworkflowtemplates"]
-    verbs: ["get", "list"]
----
-apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: mctl-api-cwt-reader
+  name: mctl-api-workflow-submitter
 subjects:
   - kind: ServiceAccount
     name: mctl-api
     namespace: mctl-api
 roleRef:
   kind: ClusterRole
-  name: mctl-api-cwt-reader
+  name: mctl-api-workflow-submitter
   apiGroup: rbac.authorization.k8s.io
