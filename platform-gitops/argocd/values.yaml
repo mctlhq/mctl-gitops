@@ -123,6 +123,15 @@ argo-cd:
         p, role:admin, projects, *, */*, allow
         g, admins, role:admin
 
+
+        # Tenant: test-alerting
+        p, role:team-test-alerting, applications, get, apps/test-alerting-*, allow
+        p, role:team-test-alerting, applications, list, apps/test-alerting-*, allow
+        p, role:team-test-alerting, applications, sync, apps/test-alerting-*, allow
+        p, role:team-test-alerting, applications, override, apps/test-alerting-*, allow
+        p, role:team-test-alerting, logs, get, apps/test-alerting-*, allow
+        p, role:team-test-alerting, exec, create, apps/test-alerting-*, allow
+        g, test-alerting, role:team-test-alerting
     secret:
       createSecret: true
 
