@@ -5,13 +5,10 @@
 image:
   repository: ghcr.io/mctlhq/smoke-test-svc
   tag: "main"
-
 imagePullSecrets:
   - name: ghcr-credentials
-
 ingress:
   enabled: false
-
 resources:
   requests:
     cpu: 100m
@@ -19,5 +16,14 @@ resources:
   limits:
     cpu: 500m
     memory: 256Mi
-
-env: {}
+env:
+  SMOKE_ENV: deploy_action
+externalSecret:
+  targetSecret: smoke-test-svc-secrets
+  data:
+    - secretKey: SMOKE_SECRET
+      remoteKey: teams/tests/smoke-test-svc
+      property: SMOKE_SECRET
+envFrom:
+  - secretRef:
+      name: smoke-test-svc-secrets
