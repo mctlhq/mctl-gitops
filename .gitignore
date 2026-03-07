@@ -6,4 +6,11 @@ __pycache__/
 # Packer
 *.box
 packer_cache/
+
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+crash.log
+
 .claude/
