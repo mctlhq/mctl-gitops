@@ -168,14 +168,6 @@ spec:
                   value: "{{workflow.parameters.skip_health_check}}"
                 - name: dockerfile_repo
                   value: "{{workflow.parameters.dockerfile_repo}}"
-                - name: autoscaling_enabled
-                  value: "{{workflow.parameters.autoscaling_enabled}}"
-                - name: min_replicas
-                  value: "{{workflow.parameters.min_replicas}}"
-                - name: max_replicas
-                  value: "{{workflow.parameters.max_replicas}}"
-                - name: cpu_threshold
-                  value: "{{workflow.parameters.cpu_threshold}}"
 
           # Step 4: patch autoscaling block in values.yaml (conditional)
           - name: patch-autoscaling
