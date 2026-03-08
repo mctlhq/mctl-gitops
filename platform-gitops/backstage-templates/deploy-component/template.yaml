@@ -156,6 +156,10 @@ spec:
           provision_database: ${{ parameters.provisionDatabase | string }}
           env_vars: ${{ parameters.envVars | default('') }}
           secret_env_vars: ${{ parameters.secretEnvVars | default('') }}
+          autoscaling_enabled: "false"
+          min_replicas: "1"
+          max_replicas: "5"
+          cpu_threshold: "80"
 
     - id: provision-db
       name: Provision database
