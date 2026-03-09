@@ -1,0 +1,33 @@
+# Service: tsvilt
+# Team: mashkoffdmitry
+
+# Chart: base-service
+
+image:
+  repository: ghcr.io/mctlhq/tsvilt
+  tag: "1.2.0"
+imagePullSecrets:
+  - name: ghcr-credentials
+service:
+  port: 8080
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+env:
+  APP_ENV: production
+ingress:
+  enabled: true
+  hosts:
+    - mashkoffdmitry-tsvilt.mctl.ai
+    - mashkoffdmitry-tsvilt.mctl.me
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls:
+    - secretName: tsvilt-tls
+      hosts:
+        - mashkoffdmitry-tsvilt.mctl.ai
+        - mashkoffdmitry-tsvilt.mctl.me
