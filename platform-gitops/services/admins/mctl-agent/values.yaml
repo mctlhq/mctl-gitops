@@ -22,7 +22,7 @@ env:
   GITHUB_OWNER: mctlhq
   GITHUB_REPO: mctl-core
   POLL_INTERVAL: "5m"
-  DRY_RUN: "true"
+  DRY_RUN: "false"
   DB_PATH: "/data/mctl-agent.db"
 envFrom:
   - secretRef:
