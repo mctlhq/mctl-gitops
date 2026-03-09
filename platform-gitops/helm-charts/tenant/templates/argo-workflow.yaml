@@ -65,7 +65,7 @@ rules:
     verbs: ["get", "list"]
   - apiGroups: ["external-secrets.io"]
     resources: ["externalsecrets"]
-    verbs: ["get", "list", "watch"]
+    verbs: ["get", "list", "watch", "patch", "update"]
 ---
 # Bind tenant's local workflow SA to smoke-verify Role
 apiVersion: rbac.authorization.k8s.io/v1
