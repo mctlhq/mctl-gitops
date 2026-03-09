@@ -46,6 +46,7 @@ spec:
             GIT_CONFIG_COUNT: "1"
             GIT_CONFIG_KEY_0: "safe.directory"
             GIT_CONFIG_VALUE_0: "*"
+            LOKI_URL: "http://loki-stack.monitoring.svc.cluster.local:3100"
 
           envFromSecret: mctl-api-secrets
           envFromExtraSecret: mctl-api-gitops-token
