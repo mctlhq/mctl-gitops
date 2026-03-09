@@ -86,8 +86,17 @@ spec:
                   matchers:
                     - alertname =~ "KubePodNotReady|PodNotReady"
                     - namespace = "argo-workflows"
+                # Forward actionable alerts to mctl-agent for auto-diagnosis/fix
+                - receiver: mctl-agent
+                  continue: true
+                  matchers:
+                    - alertname =~ "PodCrashLooping|KubePodNotReady|PodNotReady|TenantCPUQuotaHigh|TenantMemoryQuotaHigh|ArgoWorkflowFailed|ArgoWorkflowHighFailureRate"
             receivers:
               - name: "null"
+              - name: mctl-agent
+                webhook_configs:
+                  - url: "http://admins-mctl-agent.admins.svc:8081/api/v1/alerts"
+                    send_resolved: true
               - name: telegram
                 telegram_configs:
                   - bot_token_file: /etc/alertmanager/secrets/alertmanager-telegram-secret/bot-token

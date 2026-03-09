@@ -1,0 +1,52 @@
+# Service: mctl-agent
+# Team: admins
+# Environment: production
+# Chart: base-service
+
+image:
+  repository: ghcr.io/mctlhq/mctl-agent
+  tag: "0.1.0"
+imagePullSecrets:
+  - name: ghcr-credentials
+service:
+  port: 8081
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 256Mi
+env:
+  MCTL_API_URL: "http://mctl-api.mctl-api.svc:8080"
+  GITHUB_OWNER: mctlhq
+  GITHUB_REPO: mctl-core
+  POLL_INTERVAL: "5m"
+  DRY_RUN: "true"
+  DB_PATH: "/data/mctl-agent.db"
+envFrom:
+  - secretRef:
+      name: mctl-agent-secrets
+ingress:
+  enabled: true
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    - agent.mctl.ai
+  tls:
+    - secretName: mctl-agent-tls
+      hosts:
+        - agent.mctl.ai
+probes:
+  liveness:
+    path: /healthz
+    port: http
+  readiness:
+    path: /readyz
+    port: http
+extraVolumes:
+  - name: data
+    emptyDir: {}
+extraVolumeMounts:
+  - name: data
+    mountPath: /data
