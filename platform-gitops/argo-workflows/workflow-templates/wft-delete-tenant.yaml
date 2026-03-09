@@ -202,6 +202,16 @@ spec:
             echo "WARNING: No ArgoCD RBAC found for tenant ${TENANT}, skipping."
           fi
 
+          # ── Remove Argo Workflows SSO RBAC file ───────────────────────────
+          SSO_FILE="platform-gitops/argo-workflows/sso-team-${TENANT}.yaml"
+          if [ -f "$SSO_FILE" ]; then
+            git rm "$SSO_FILE"
+            echo "Removed $SSO_FILE"
+            CHANGED=true
+          else
+            echo "WARNING: $SSO_FILE not found (already deleted). Skipping."
+          fi
+
           # ── Commit and push ────────────────────────────────────────────────
           if [ "$CHANGED" = "true" ]; then
             git status
@@ -209,6 +219,7 @@ spec:
 
           - Removed platform-gitops/tenants/${TENANT}/
           - Removed ArgoCD RBAC for role:team-${TENANT}
+          - Removed Argo Workflows SSO RBAC for team-${TENANT}
 
           Deleted by Argo Workflows (wft-delete-tenant)"
 
