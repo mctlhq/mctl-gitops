@@ -17,6 +17,7 @@ spec:
       - name: team_name
       - name: component_name
       - name: component_type
+        default: "base-service"
         # base-service | worker-service
       - name: delete_vault_secrets
         default: "true"
