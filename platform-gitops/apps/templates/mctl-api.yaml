@@ -38,6 +38,10 @@ spec:
             DEX_ISSUER_URL: https://ops.mctl.ai/api/dex
             DEX_CLIENT_ID: mctl-api
             SELF_URL: https://api.mctl.ai
+            # OAuth 2.0 for Claude.ai custom connector (PKCE, public client)
+            # Secrets (OAUTH_GITHUB_CLIENT_ID, OAUTH_GITHUB_CLIENT_SECRET, OAUTH_JWT_SECRET)
+            # come from mctl-api-secrets (Vault: platform/mctl-api/oauth-github)
+            OAUTH_ALLOWED_REDIRECT_URIS: "https://claude.ai/api/mcp/auth_callback"
 
           envFromSecret: mctl-api-secrets
           envFromExtraSecret: mctl-api-gitops-token
