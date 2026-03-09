@@ -42,6 +42,10 @@ spec:
             # Secrets (OAUTH_GITHUB_CLIENT_ID, OAUTH_GITHUB_CLIENT_SECRET, OAUTH_JWT_SECRET)
             # come from mctl-api-secrets (Vault: platform/mctl-api/oauth-github)
             OAUTH_ALLOWED_REDIRECT_URIS: "https://claude.ai/api/mcp/auth_callback"
+            # Allow git operations on emptyDir volume (owned by root, run as uid=1000)
+            GIT_CONFIG_COUNT: "1"
+            GIT_CONFIG_KEY_0: "safe.directory"
+            GIT_CONFIG_VALUE_0: "*"
 
           envFromSecret: mctl-api-secrets
           envFromExtraSecret: mctl-api-gitops-token
