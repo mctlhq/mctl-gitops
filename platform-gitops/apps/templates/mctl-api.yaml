@@ -26,9 +26,9 @@ spec:
               - host: api.mctl.ai
 
           env:
-            GITOPS_REPO_URL: https://github.com/mctlhq/mctl-core.git
+            GITOPS_REPO_URL: https://github.com/mctlhq/mctl-gitops.git
             GITOPS_BRANCH: main
-            GITOPS_LOCAL_PATH: /data/mctl-core
+            GITOPS_LOCAL_PATH: /data/mctl-gitops
             ARGOCD_URL: https://ops.mctl.ai
             ARGO_WORKFLOWS_NAMESPACE: argo-workflows
             GITHUB_ORG: mctlhq

@@ -7,7 +7,7 @@ metadata:
       Remove a custom domain from a service:
         1. Remove domain from ingress.hosts in values.yaml
         2. Clean up custom TLS hosts
-        3. Commit to mctl-core → ArgoCD syncs
+        3. Commit to mctl-gitops → ArgoCD syncs
 spec:
   entrypoint: remove-domain-pipeline
   serviceAccountName: argo-workflow-sa
@@ -53,9 +53,9 @@ spec:
           printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  StrictHostKeyChecking no\n' > ~/.ssh/config
           chmod 600 ~/.ssh/config
 
-          # ── Clone mctl-core ────────────────────────────────────────────────
-          git clone --depth=1 "git@github.com:mctlhq/mctl-core.git" /tmp/mctl-core
-          cd /tmp/mctl-core
+          # ── Clone mctl-gitops ────────────────────────────────────────────────
+          git clone --depth=1 "git@github.com:mctlhq/mctl-gitops.git" /tmp/mctl-gitops
+          cd /tmp/mctl-gitops
           git config user.name "argo-workflows[bot]"
           git config user.email "argo-workflows[bot]@users.noreply.github.com"
 
@@ -114,4 +114,4 @@ spec:
       volumes:
         - name: deploy-key
           secret:
-            secretName: mctl-core-deploy-key
+            secretName: mctl-gitops-deploy-key

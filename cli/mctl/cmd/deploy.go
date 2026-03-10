@@ -5,9 +5,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mctlhq/mctl-core/cli/mctl/internal/auth"
-	gh "github.com/mctlhq/mctl-core/cli/mctl/internal/github"
-	"github.com/mctlhq/mctl-core/cli/mctl/internal/vault"
+	"github.com/mctlhq/mctl-gitops/cli/mctl/internal/auth"
+	gh "github.com/mctlhq/mctl-gitops/cli/mctl/internal/github"
+	"github.com/mctlhq/mctl-gitops/cli/mctl/internal/vault"
 	"github.com/spf13/cobra"
 )
 

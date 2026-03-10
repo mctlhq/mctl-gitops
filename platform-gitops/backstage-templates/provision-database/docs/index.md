@@ -48,4 +48,4 @@ Open the service in the Backstage catalog and go to the **Database** tab. Creden
 ## Links
 
 - [Argo Workflows UI](https://workflows.mctl.ai)
-- [CNPG cluster config](https://github.com/mctlhq/mctl-core/tree/main/platform-gitops/cnpg-clusters/shared)
+- [CNPG cluster config](https://github.com/mctlhq/mctl-gitops/tree/main/platform-gitops/cnpg-clusters/shared)

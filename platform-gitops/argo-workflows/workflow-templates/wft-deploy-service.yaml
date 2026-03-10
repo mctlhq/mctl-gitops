@@ -5,7 +5,7 @@ metadata:
   annotations:
     workflows.argoproj.io/description: |
       Main deployment workflow: validate → build image (Kaniko) → write Vault secrets
-      → generate Helm manifests → commit to mctl-core → ArgoCD syncs.
+      → generate Helm manifests → commit to mctl-gitops → ArgoCD syncs.
 
       Actions:
         onboard      — first deploy: creates values.yaml, catalog-info.yaml, vault-cleanup.yaml
@@ -194,11 +194,11 @@ spec:
           MIN="{{workflow.parameters.min_replicas}}"
           MAX="{{workflow.parameters.max_replicas}}"
           CPU="{{workflow.parameters.cpu_threshold}}"
-          REPO="https://x-access-token:${GITOPS_TOKEN}@github.com/mctlhq/mctl-core.git"
+          REPO="https://x-access-token:${GITOPS_TOKEN}@github.com/mctlhq/mctl-gitops.git"
           VALUES="platform-gitops/services/${TEAM}/${COMPONENT}/values.yaml"
 
-          git clone --depth=1 "${REPO}" /tmp/mctl-core
-          cd /tmp/mctl-core
+          git clone --depth=1 "${REPO}" /tmp/mctl-gitops
+          cd /tmp/mctl-gitops
 
           # Append or update autoscaling block
           if grep -q "^autoscaling:" "${VALUES}"; then

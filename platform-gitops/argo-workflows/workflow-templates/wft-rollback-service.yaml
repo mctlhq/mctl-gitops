@@ -47,11 +47,11 @@ spec:
           TEAM="{{inputs.parameters.team_name}}"
           COMPONENT="{{inputs.parameters.component_name}}"
           TAG="{{inputs.parameters.target_tag}}"
-          REPO="https://x-access-token:${GITOPS_TOKEN}@github.com/mctlhq/mctl-core.git"
+          REPO="https://x-access-token:${GITOPS_TOKEN}@github.com/mctlhq/mctl-gitops.git"
           VALUES="platform-gitops/services/${TEAM}/${COMPONENT}/values.yaml"
 
-          git clone --depth=1 "${REPO}" /tmp/mctl-core
-          cd /tmp/mctl-core
+          git clone --depth=1 "${REPO}" /tmp/mctl-gitops
+          cd /tmp/mctl-gitops
 
           if [ ! -f "${VALUES}" ]; then
             echo "ERROR: ${VALUES} not found — service may not exist"

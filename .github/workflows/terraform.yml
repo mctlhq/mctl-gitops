@@ -77,7 +77,7 @@ jobs:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           message: |
-            ❌ *mctl-core terraform failed*
+            ❌ *mctl-gitops terraform failed*
             Branch: `${{ github.ref_name }}`
             Apply: `${{ inputs.apply }}`
             Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

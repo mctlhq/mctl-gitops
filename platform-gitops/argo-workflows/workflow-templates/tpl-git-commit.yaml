@@ -4,7 +4,7 @@ metadata:
   name: tpl-git-commit
   annotations:
     workflows.argoproj.io/description: |
-      Reusable template: clones mctl-core, runs a generation script,
+      Reusable template: clones mctl-gitops, runs a generation script,
       commits and pushes only within the allowed path prefix.
       Uses GitHub App token from mounted secret.
 spec:
@@ -102,10 +102,10 @@ spec:
             echo "⚠️  GitHub App token unavailable (non-fatal, git uses SSH deploy key)"
           fi
 
-          # ── 2. Clone mctl-core via SSH ────────────────────────────────────
-          echo "📥 Cloning mctl-core..."
-          git clone --depth=1 "git@github.com:mctlhq/mctl-core.git" /tmp/mctl-core
-          cd /tmp/mctl-core
+          # ── 2. Clone mctl-gitops via SSH ────────────────────────────────────
+          echo "📥 Cloning mctl-gitops..."
+          git clone --depth=1 "git@github.com:mctlhq/mctl-gitops.git" /tmp/mctl-gitops
+          cd /tmp/mctl-gitops
 
           git config user.name "argo-workflows[bot]"
           git config user.email "argo-workflows[bot]@users.noreply.github.com"
@@ -377,7 +377,7 @@ spec:
             secretName: github-app-credentials
         - name: deploy-key
           secret:
-            secretName: mctl-core-deploy-key
+            secretName: mctl-gitops-deploy-key
 
     # ── Delete service directory ──────────────────────────────────────────────
     - name: delete-service
@@ -404,8 +404,8 @@ spec:
           printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  StrictHostKeyChecking no\n' > ~/.ssh/config
           chmod 600 ~/.ssh/config
 
-          git clone --depth=1 "git@github.com:mctlhq/mctl-core.git" /tmp/mctl-core
-          cd /tmp/mctl-core
+          git clone --depth=1 "git@github.com:mctlhq/mctl-gitops.git" /tmp/mctl-gitops
+          cd /tmp/mctl-gitops
           git config user.name "argo-workflows[bot]"
           git config user.email "argo-workflows[bot]@users.noreply.github.com"
 
@@ -450,4 +450,4 @@ spec:
             secretName: github-app-credentials
         - name: deploy-key
           secret:
-            secretName: mctl-core-deploy-key
+            secretName: mctl-gitops-deploy-key

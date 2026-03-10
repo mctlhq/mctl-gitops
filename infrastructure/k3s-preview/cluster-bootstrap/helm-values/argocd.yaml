@@ -95,7 +95,7 @@ extraObjects:
     spec:
       project: default
       source:
-        repoURL: https://github.com/mctlhq/mctl-core.git
+        repoURL: https://github.com/mctlhq/mctl-gitops.git
         targetRevision: main
         path: platform-gitops/argocd
         helm:
@@ -144,7 +144,7 @@ extraObjects:
     spec:
       project: default
       source:
-        repoURL: https://github.com/mctlhq/mctl-core.git
+        repoURL: https://github.com/mctlhq/mctl-gitops.git
         targetRevision: main
         path: platform-gitops/apps
         helm:

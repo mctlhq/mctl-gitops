@@ -7,7 +7,7 @@ metadata:
       Creates a new tenant on the mctl.ai platform:
         1. Validates tenant name (DNS-safe, not already exists)
         2. Creates Vault policy tenant-{name} (scoped to secret/data/teams/{name}/*)
-        3. Commits tenant directory to mctl-core (values.yaml + catalog-info.yaml)
+        3. Commits tenant directory to mctl-gitops (values.yaml + catalog-info.yaml)
         4. Appends ArgoCD RBAC entries to argocd/values.yaml
         5. ArgoCD ApplicationSet picks up new directory → namespace provisioned
 
@@ -17,7 +17,7 @@ metadata:
       Steps:
         1. validate           — name format + non-existence check
         2. create-vault-policy — Vault policy scoped to teams/{name}/*
-        3. commit-to-git      — tenant files + ArgoCD RBAC pushed to mctl-core
+        3. commit-to-git      — tenant files + ArgoCD RBAC pushed to mctl-gitops
 
 spec:
   entrypoint: create-tenant-pipeline
@@ -191,7 +191,7 @@ spec:
             secretName: github-app-credentials
         - name: deploy-key
           secret:
-            secretName: mctl-core-deploy-key
+            secretName: mctl-gitops-deploy-key
             defaultMode: 0600
       script:
         image: alpine:3.19
@@ -258,12 +258,12 @@ spec:
             exit 1
           fi
 
-          # ── Clone mctl-core via SSH ─────────────────────────────────────────
+          # ── Clone mctl-gitops via SSH ─────────────────────────────────────────
           git config --global user.email "argo-workflows[bot]@mctl.ai"
           git config --global user.name "Argo Workflows Bot"
 
-          git clone --depth=50 "git@github.com:mctlhq/mctl-core.git" /tmp/mctl-core
-          cd /tmp/mctl-core
+          git clone --depth=50 "git@github.com:mctlhq/mctl-gitops.git" /tmp/mctl-gitops
+          cd /tmp/mctl-gitops
 
           # ── Security: check tenant doesn't already exist ────────────────────
           TENANT_DIR="platform-gitops/tenants/${TENANT}"
@@ -328,8 +328,8 @@ spec:
             description: "Tenant ${DISPLAY_NAME} — namespace, quotas, and network policies"
             annotations:
               mctl.me/tenant-name: "${TENANT}"
-              backstage.io/managed-by-location: "url:https://github.com/mctlhq/mctl-core/blob/main/platform-gitops/tenants/${TENANT}/catalog-info.yaml"
-              backstage.io/managed-by-origin-location: "url:https://github.com/mctlhq/mctl-core/blob/main/platform-gitops/tenants/${TENANT}/catalog-info.yaml"
+              backstage.io/managed-by-location: "url:https://github.com/mctlhq/mctl-gitops/blob/main/platform-gitops/tenants/${TENANT}/catalog-info.yaml"
+              backstage.io/managed-by-origin-location: "url:https://github.com/mctlhq/mctl-gitops/blob/main/platform-gitops/tenants/${TENANT}/catalog-info.yaml"
           spec:
             type: tenant
             owner: group:default/admins

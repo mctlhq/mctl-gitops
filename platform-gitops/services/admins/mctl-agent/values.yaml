@@ -20,7 +20,7 @@ resources:
 env:
   MCTL_API_URL: "http://mctl-api.mctl-api.svc:8080"
   GITHUB_OWNER: mctlhq
-  GITHUB_REPO: mctl-core
+  GITHUB_REPO: mctl-gitops
   POLL_INTERVAL: "5m"
   DRY_RUN: "false"
   DB_PATH: "/data/mctl-agent.db"

@@ -6,7 +6,7 @@ Permanently removes a service from the platform.
 
 Use this template when a service is being decommissioned:
 - Remove it from ArgoCD and the cluster
-- Delete its GitOps files from `mctl-core`
+- Delete its GitOps files from `mctl-gitops`
 - Clean up Vault secrets
 - Remove it from the Backstage catalog
 
@@ -21,7 +21,7 @@ Use this template when a service is being decommissioned:
 
 ## What gets deleted
 
-1. **GitOps files** — `platform-gitops/services/{team}/{service}/` removed from `mctl-core`
+1. **GitOps files** — `platform-gitops/services/{team}/{service}/` removed from `mctl-gitops`
 2. **ArgoCD Application** — all Kubernetes resources (Deployment, Service, Ingress, etc.) deleted from the cluster
 3. **Vault secrets** — `teams/{team}/{service}/` removed
 4. **Catalog entry** — Backstage removes the component on next catalog sync

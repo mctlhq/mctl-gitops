@@ -1,6 +1,6 @@
 spec:
   source:
-    repoURL: https://github.com/mctlhq/mctl-core.git
+    repoURL: https://github.com/mctlhq/mctl-gitops.git
     targetRevision: main
   destination:
     server: https://kubernetes.default.svc

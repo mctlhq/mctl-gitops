@@ -32,7 +32,7 @@ spec:
         backstage:
           image:
             registry: ghcr.io
-            repository: mctlhq/mctl-app
+            repository: mctlhq/mctl-portal
             tag: 3.31.12
             pullSecrets:
               - ghcr-credentials
@@ -116,7 +116,7 @@ spec:
               token: ${ARGO_WORKFLOWS_TOKEN}
             tenantManagement:
               githubOrg: mctlhq
-              repoName: mctl-core
+              repoName: mctl-gitops
               tenantsPath: platform-gitops/tenants
               syncIntervalMinutes: 5
               landingPageToken: ${BACKSTAGE_LANDING_TOKEN}
@@ -189,7 +189,7 @@ spec:
                     organization: mctlhq
                     catalogPath: /catalog-info.yaml
                     filters:
-                      repository: mctl-core
+                      repository: mctl-gitops
                       branch: main
                     schedule:
                       frequency:
@@ -200,7 +200,7 @@ spec:
                     organization: mctlhq
                     catalogPath: /platform-gitops/services/*/*/catalog-info.yaml
                     filters:
-                      repository: mctl-core
+                      repository: mctl-gitops
                       branch: main
                     schedule:
                       frequency:
@@ -211,7 +211,7 @@ spec:
                     organization: mctlhq
                     catalogPath: /platform-gitops/tenants/*/catalog-info.yaml
                     filters:
-                      repository: mctl-core
+                      repository: mctl-gitops
                       branch: main
                     schedule:
                       frequency:
@@ -221,31 +221,31 @@ spec:
               locations:
                 # Backstage templates (static, no need for provider-based discovery)
                 - type: url
-                  target: https://github.com/mctlhq/mctl-core/blob/main/platform-gitops/backstage-templates/deploy-component/template.yaml
+                  target: https://github.com/mctlhq/mctl-gitops/blob/main/platform-gitops/backstage-templates/deploy-component/template.yaml
                   rules:
                     - allow: [Template]
                 - type: url
-                  target: https://github.com/mctlhq/mctl-core/blob/main/platform-gitops/backstage-templates/delete-component/template.yaml
+                  target: https://github.com/mctlhq/mctl-gitops/blob/main/platform-gitops/backstage-templates/delete-component/template.yaml
                   rules:
                     - allow: [Template]
                 - type: url
-                  target: https://github.com/mctlhq/mctl-core/blob/main/platform-gitops/backstage-templates/update-component-config/template.yaml
+                  target: https://github.com/mctlhq/mctl-gitops/blob/main/platform-gitops/backstage-templates/update-component-config/template.yaml
                   rules:
                     - allow: [Template]
                 - type: url
-                  target: https://github.com/mctlhq/mctl-core/blob/main/platform-gitops/backstage-templates/provision-database/template.yaml
+                  target: https://github.com/mctlhq/mctl-gitops/blob/main/platform-gitops/backstage-templates/provision-database/template.yaml
                   rules:
                     - allow: [Template]
                 - type: url
-                  target: https://github.com/mctlhq/mctl-core/blob/main/platform-gitops/backstage-templates/deploy-version/template.yaml
+                  target: https://github.com/mctlhq/mctl-gitops/blob/main/platform-gitops/backstage-templates/deploy-version/template.yaml
                   rules:
                     - allow: [Template]
                 - type: url
-                  target: https://github.com/mctlhq/mctl-core/blob/main/platform-gitops/backstage-templates/create-tenant/template.yaml
+                  target: https://github.com/mctlhq/mctl-gitops/blob/main/platform-gitops/backstage-templates/create-tenant/template.yaml
                   rules:
                     - allow: [Template]
                 - type: url
-                  target: https://github.com/mctlhq/mctl-core/blob/main/platform-gitops/backstage-templates/delete-tenant/template.yaml
+                  target: https://github.com/mctlhq/mctl-gitops/blob/main/platform-gitops/backstage-templates/delete-tenant/template.yaml
                   rules:
                     - allow: [Template]
                 # Tenant entities from the tenant-management backend

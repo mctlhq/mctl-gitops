@@ -37,7 +37,7 @@ Provision a new team workspace on the mctl.ai platform — creates a Kubernetes 
 ## What gets created
 
 1. **Vault policy** — `tenant-{name}` scoped to `secret/data/teams/{name}/*`
-2. **GitOps files** committed to `mctl-core`:
+2. **GitOps files** committed to `mctl-gitops`:
    - `platform-gitops/tenants/{name}/values.yaml` — quotas, networking config
    - `platform-gitops/tenants/{name}/catalog-info.yaml` — Backstage catalog entry
 3. **Kubernetes resources** provisioned by ArgoCD (~2-3 min):

@@ -49,7 +49,7 @@ spec:
             - name: argo-workflows-logs
               policy: none
 
-    - repoURL: https://github.com/mctlhq/mctl-core.git
+    - repoURL: https://github.com/mctlhq/mctl-gitops.git
       targetRevision: main
       path: platform-gitops/minio
 

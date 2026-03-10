@@ -50,7 +50,7 @@ First-time setup for a new service — clones the repo, builds the Docker image 
 ## What gets created
 
 1. **Docker image** — built in-cluster via Kaniko, pushed to GHCR as `ghcr.io/mctlhq/{service}:{tag}`
-2. **GitOps files** committed to `mctl-core` under `platform-gitops/services/{team}/{service}/`:
+2. **GitOps files** committed to `mctl-gitops` under `platform-gitops/services/{team}/{service}/`:
    - `values.yaml` — Helm values (image, port, ingress, env vars, secrets reference)
    - `catalog-info.yaml` — Backstage catalog entry
 3. **ArgoCD Application** — auto-syncs GitOps files to the cluster

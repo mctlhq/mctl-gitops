@@ -7,7 +7,7 @@ metadata:
       Provisions a PostgreSQL database for a service:
         1. Generate password, store credentials in Vault
         2. Patch CNPG cluster.yaml + databases.yaml + secrets.yaml
-        3. Commit to mctl-core → ArgoCD syncs
+        3. Commit to mctl-gitops → ArgoCD syncs
 
       Replaces: .github/workflows/provision-db.yml
       Note: This workflow runs in-cluster with direct Vault access (no self-hosted runner needed).
@@ -73,9 +73,9 @@ spec:
           printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  StrictHostKeyChecking no\n' > ~/.ssh/config
           chmod 600 ~/.ssh/config
 
-          # ── Clone mctl-core ───────────────────────────────────────────────
-          git clone --depth=1 "git@github.com:mctlhq/mctl-core.git" /tmp/mctl-core
-          cd /tmp/mctl-core
+          # ── Clone mctl-gitops ───────────────────────────────────────────────
+          git clone --depth=1 "git@github.com:mctlhq/mctl-gitops.git" /tmp/mctl-gitops
+          cd /tmp/mctl-gitops
           git config user.name "argo-workflows[bot]"
           git config user.email "argo-workflows[bot]@users.noreply.github.com"
 
@@ -283,4 +283,4 @@ spec:
       volumes:
         - name: deploy-key
           secret:
-            secretName: mctl-core-deploy-key
+            secretName: mctl-gitops-deploy-key

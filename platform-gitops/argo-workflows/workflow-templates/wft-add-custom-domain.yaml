@@ -8,7 +8,7 @@ metadata:
         1. Validate domain format (FQDN, not *.mctl.ai)
         2. DNS verify: CNAME must point to {team}-{service}.mctl.ai
         3. Update service values.yaml: add host to ingress.hosts + TLS with http01 issuer
-        4. Commit to mctl-core → ArgoCD syncs
+        4. Commit to mctl-gitops → ArgoCD syncs
         5. Callback to Backstage to mark domain as active
 spec:
   entrypoint: add-domain-pipeline
@@ -85,9 +85,9 @@ spec:
           printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  StrictHostKeyChecking no\n' > ~/.ssh/config
           chmod 600 ~/.ssh/config
 
-          # ── 4. Clone mctl-core ────────────────────────────────────────────
-          git clone --depth=1 "git@github.com:mctlhq/mctl-core.git" /tmp/mctl-core
-          cd /tmp/mctl-core
+          # ── 4. Clone mctl-gitops ────────────────────────────────────────────
+          git clone --depth=1 "git@github.com:mctlhq/mctl-gitops.git" /tmp/mctl-gitops
+          cd /tmp/mctl-gitops
           git config user.name "argo-workflows[bot]"
           git config user.email "argo-workflows[bot]@users.noreply.github.com"
 
@@ -181,4 +181,4 @@ spec:
       volumes:
         - name: deploy-key
           secret:
-            secretName: mctl-core-deploy-key
+            secretName: mctl-gitops-deploy-key

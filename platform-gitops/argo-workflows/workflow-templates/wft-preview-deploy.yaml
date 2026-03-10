@@ -83,15 +83,15 @@ spec:
             --overwrite
 
           # Deploy with base-service Helm chart
-          CHART_PATH="/tmp/mctl-core/platform-gitops/helm-charts/base-service"
+          CHART_PATH="/tmp/mctl-gitops/platform-gitops/helm-charts/base-service"
 
           # Clone gitops to get chart
           apk add --no-cache git > /dev/null 2>&1
           GITOPS_TOKEN="${GITOPS_TOKEN:-}"
           if [ -n "${GITOPS_TOKEN}" ]; then
-            git clone --depth=1 "https://x-access-token:${GITOPS_TOKEN}@github.com/mctlhq/mctl-core.git" /tmp/mctl-core
+            git clone --depth=1 "https://x-access-token:${GITOPS_TOKEN}@github.com/mctlhq/mctl-gitops.git" /tmp/mctl-gitops
           else
-            git clone --depth=1 "https://github.com/mctlhq/mctl-core.git" /tmp/mctl-core
+            git clone --depth=1 "https://github.com/mctlhq/mctl-gitops.git" /tmp/mctl-gitops
           fi
 
           helm upgrade --install "${COMPONENT}" "${CHART_PATH}" \

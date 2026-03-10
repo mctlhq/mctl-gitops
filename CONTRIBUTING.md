@@ -1,6 +1,6 @@
-# Contributing to mctl-core
+# Contributing to mctl-gitops
 
-Thank you for your interest in contributing to mctl-core! This repository is the **GitOps source of truth** for the entire mctl platform, managed by [ArgoCD](https://argo-cd.readthedocs.io/).
+Thank you for your interest in contributing to mctl-gitops! This repository is the **GitOps source of truth** for the entire mctl platform, managed by [ArgoCD](https://argo-cd.readthedocs.io/).
 
 ## Prerequisites
 
@@ -13,7 +13,7 @@ Before contributing, make sure you have the following tools installed:
 ## Repository Structure
 
 ```
-mctl-core/
+mctl-gitops/
 ├── platform-gitops/
 │   ├── apps/              # ArgoCD Application manifests
 │   ├── services/          # Per-tenant service configurations

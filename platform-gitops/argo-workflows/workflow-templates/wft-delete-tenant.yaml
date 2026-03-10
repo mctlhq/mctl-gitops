@@ -7,7 +7,7 @@ metadata:
       Fully deletes a tenant from the mctl.ai platform:
         1. validate        — checks tenant exists, not reserved
         2. delete-vault    — removes Vault policy + secrets under teams/{name}/
-        3. delete-from-git — removes tenant dir + ArgoCD RBAC from mctl-core
+        3. delete-from-git — removes tenant dir + ArgoCD RBAC from mctl-gitops
         4. delete-k8s      — deletes ArgoCD app + K8s namespace
 
       DB cleanup (tenants + tenant_members) is handled by the Backstage API
@@ -144,7 +144,7 @@ spec:
             secretName: github-app-credentials
         - name: deploy-key
           secret:
-            secretName: mctl-core-deploy-key
+            secretName: mctl-gitops-deploy-key
             defaultMode: 0600
       script:
         image: alpine:3.19
@@ -168,11 +168,11 @@ spec:
           printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  StrictHostKeyChecking no\n' > ~/.ssh/config
           chmod 600 ~/.ssh/config
 
-          # ── Clone mctl-core ────────────────────────────────────────────────
+          # ── Clone mctl-gitops ────────────────────────────────────────────────
           git config --global user.email "argo-workflows[bot]@mctl.ai"
           git config --global user.name "Argo Workflows Bot"
-          git clone --depth=1 "git@github.com:mctlhq/mctl-core.git" /tmp/mctl-core
-          cd /tmp/mctl-core
+          git clone --depth=1 "git@github.com:mctlhq/mctl-gitops.git" /tmp/mctl-gitops
+          cd /tmp/mctl-gitops
 
           CHANGED=false
 

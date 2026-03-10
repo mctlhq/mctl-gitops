@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/mctlhq/mctl-core/cli/mctl/cmd"
+	"github.com/mctlhq/mctl-gitops/cli/mctl/cmd"
 )
 
 func main() {

@@ -1,4 +1,4 @@
-# mctl-core
+# mctl-gitops
 
 GitOps repository for the mctl.ai platform. ArgoCD watches this repo and syncs all platform components to the Kubernetes cluster.
 

@@ -26,7 +26,7 @@ Use this template when a team is being disbanded or removed from the platform an
 | Kubernetes namespace | All pods, services, and configs inside are deleted |
 | Vault policy | `tenant-{name}` policy removed; all secrets under `teams/{name}/` deleted |
 | ArgoCD RBAC | Team RBAC entry removed from ArgoCD config |
-| GitOps directory | `platform-gitops/tenants/{name}/` removed from `mctl-core` |
+| GitOps directory | `platform-gitops/tenants/{name}/` removed from `mctl-gitops` |
 | Database records | Tenant and member records deleted from Backstage DB |
 | Catalog entities | Backstage removes the tenant resource and team group on next sync |
 

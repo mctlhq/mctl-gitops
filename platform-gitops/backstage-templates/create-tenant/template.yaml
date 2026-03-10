@@ -125,7 +125,7 @@ spec:
         content: "`vault-policy: tenant-${{ parameters.tenantName }}`"
       - title: Next Steps
         content: |
-          1. ✅ Tenant directory committed to `mctl-core`
+          1. ✅ Tenant directory committed to `mctl-gitops`
           2. ⏳ ArgoCD will provision namespace + quotas + NetworkPolicy (~2-3 min)
           3. ⏳ Backstage catalog will refresh tenant Resource entity (~5 min)
           4. Add team members via Backstage tenant management

@@ -72,16 +72,16 @@ spec:
             exit 1
           fi
 
-          # ── 3. Clone mctl-core to check tenant/service existence ─────────────
-          echo "📥 Cloning mctl-core for validation..."
+          # ── 3. Clone mctl-gitops to check tenant/service existence ─────────────
+          echo "📥 Cloning mctl-gitops for validation..."
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
           cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  StrictHostKeyChecking no\n' > ~/.ssh/config
           chmod 600 ~/.ssh/config
-          git clone --depth=1 "git@github.com:mctlhq/mctl-core.git" /tmp/mctl-core
-          cd /tmp/mctl-core
+          git clone --depth=1 "git@github.com:mctlhq/mctl-gitops.git" /tmp/mctl-gitops
+          cd /tmp/mctl-gitops
 
           # ── 4. Verify service exists for deploy/update-config ────────────────
           if [ "$ACTION" = "deploy" ] || [ "$ACTION" = "update-config" ]; then
@@ -134,4 +134,4 @@ spec:
       volumes:
         - name: deploy-key
           secret:
-            secretName: mctl-core-deploy-key
+            secretName: mctl-gitops-deploy-key

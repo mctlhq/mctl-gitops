@@ -3,7 +3,7 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/mctlhq/mctl-core/cli/mctl/internal/auth"
+	"github.com/mctlhq/mctl-gitops/cli/mctl/internal/auth"
 	"github.com/spf13/cobra"
 )
 
