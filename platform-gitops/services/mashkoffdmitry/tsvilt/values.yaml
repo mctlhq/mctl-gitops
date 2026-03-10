@@ -24,6 +24,7 @@ ingress:
   hosts:
     - mashkoffdmitry-tsvilt.mctl.ai
     - mashkoffdmitry-tsvilt.mctl.me
+    - tsvilt.dmitriimashkov.com
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
   tls:
@@ -31,3 +32,6 @@ ingress:
       hosts:
         - mashkoffdmitry-tsvilt.mctl.ai
         - mashkoffdmitry-tsvilt.mctl.me
+    - secretName: tsvilt-custom-tls
+      hosts:
+        - tsvilt.dmitriimashkov.com
