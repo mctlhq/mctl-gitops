@@ -54,6 +54,10 @@ spec:
           # Normalize sentinels (Backstage strips bare empty strings from YAML)
           [ "$HOST" = "none" ] && HOST=""
           [ "$TAG" = "auto" ] && TAG=""
+          CLEAR_ENV=false
+          CLEAR_SECRETS=false
+          [ "$ENV_VARS" = "__CLEAR__" ] && CLEAR_ENV=true && ENV_VARS=""
+          [ "$SECRET_VARS" = "__CLEAR__" ] && CLEAR_SECRETS=true && SECRET_VARS=""
 
           # Auto-generate domain for base-service if host not explicitly set
           if [ "$TYPE" = "base-service" ] && { [ -z "$HOST" ] || [ "$HOST" = "auto" ]; }; then
@@ -242,8 +246,11 @@ spec:
           elif [ "$ACTION" = "deploy" ]; then
             yq eval -i ".image.tag = \"${TAG}\"" "${DIR}/values.yaml"
 
-            # Apply env var changes if provided (alongside the image tag update)
-            if [ -n "$ENV_VARS" ]; then
+            # Clear env vars if sentinel __CLEAR__ was set
+            if [ "$CLEAR_ENV" = "true" ]; then
+              yq eval -i '.env = {}' "${DIR}/values.yaml"
+              echo "Cleared all env vars"
+            elif [ -n "$ENV_VARS" ]; then
               while IFS='=' read -r key rest; do
                 [ -z "$key" ] && continue
                 echo "$key" | grep -q '^#' && continue
@@ -256,8 +263,12 @@ spec:
           ENVEOF3
             fi
 
-            # Add new secret keys to ExternalSecret config if provided
-            if [ -n "$SECRET_VARS" ]; then
+            # Clear secrets if sentinel __CLEAR__ was set
+            if [ "$CLEAR_SECRETS" = "true" ]; then
+              yq eval -i '.externalSecret = {}' "${DIR}/values.yaml"
+              yq eval -i '.envFrom = []' "${DIR}/values.yaml"
+              echo "Cleared all secret env vars"
+            elif [ -n "$SECRET_VARS" ]; then
               yq eval -i ".externalSecret.targetSecret = \"${SERVICE}-secrets\"" "${DIR}/values.yaml"
               if yq eval '.externalSecret.data' "${DIR}/values.yaml" | grep -q 'null'; then
                 yq eval -i '.externalSecret.data = []' "${DIR}/values.yaml"
@@ -287,7 +298,11 @@ spec:
           elif [ "$ACTION" = "update-config" ]; then
             CHANGED=false
 
-            if [ -n "$ENV_VARS" ]; then
+            if [ "$CLEAR_ENV" = "true" ]; then
+              yq eval -i '.env = {}' "${DIR}/values.yaml"
+              echo "Cleared all env vars"
+              CHANGED=true
+            elif [ -n "$ENV_VARS" ]; then
               while IFS='=' read -r key rest; do
                 [ -z "$key" ] && continue
                 echo "$key" | grep -q '^#' && continue
@@ -301,7 +316,12 @@ spec:
               CHANGED=true
             fi
 
-            if [ -n "$SECRET_VARS" ]; then
+            if [ "$CLEAR_SECRETS" = "true" ]; then
+              yq eval -i '.externalSecret = {}' "${DIR}/values.yaml"
+              yq eval -i '.envFrom = []' "${DIR}/values.yaml"
+              echo "Cleared all secret env vars"
+              CHANGED=true
+            elif [ -n "$SECRET_VARS" ]; then
               yq eval -i ".externalSecret.targetSecret = \"${SERVICE}-secrets\"" "${DIR}/values.yaml"
               if yq eval '.externalSecret.data' "${DIR}/values.yaml" | grep -q 'null'; then
                 yq eval -i '.externalSecret.data = []' "${DIR}/values.yaml"
