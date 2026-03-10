@@ -2,8 +2,6 @@
 
 GitOps repository. ArgoCD source of truth for the entire mctl platform.
 
-**Note:** This repo is being renamed from `mctl-gitops` to `mctl-gitops`.
-
 ## Stack
 - Kubernetes manifests, Helm charts, Argo Workflows, Terraform
 - ArgoCD watches this repo and reconciles cluster state
