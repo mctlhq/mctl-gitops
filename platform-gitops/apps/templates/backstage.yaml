@@ -33,7 +33,7 @@ spec:
           image:
             registry: ghcr.io
             repository: mctlhq/mctl-portal
-            tag: 3.31.13
+            tag: 0.1.0
             pullSecrets:
               - ghcr-credentials
           extraEnvVarsSecrets:
