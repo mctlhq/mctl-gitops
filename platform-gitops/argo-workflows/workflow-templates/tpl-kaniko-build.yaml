@@ -132,6 +132,13 @@ spec:
           - --cache-repo={{inputs.parameters.image_name}}/cache
           - --snapshot-mode=redo
           - --build-arg=APP_VERSION={{inputs.parameters.git_tag}}
+        resources:
+          requests:
+            cpu: "1"
+            memory: 2Gi
+          limits:
+            cpu: "2"
+            memory: 6Gi
         volumeMounts:
           - name: workspace
             mountPath: /workspace
@@ -162,10 +169,3 @@ spec:
         - name: github-app-credentials
           secret:
             secretName: github-app-credentials
-      resources:
-        requests:
-          cpu: "1"
-          memory: 2Gi
-        limits:
-          cpu: "2"
-          memory: 4Gi
