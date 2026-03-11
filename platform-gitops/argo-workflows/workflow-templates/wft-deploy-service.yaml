@@ -61,7 +61,7 @@ spec:
       - name: cpu_threshold
         default: "80"
       - name: container_registry
-        default: "ghcr.io/mctlhq"
+        value: "ghcr.io/mctlhq"
 
   templates:
     # ────────────────────────────────────────────────────────────────────────
