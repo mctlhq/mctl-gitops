@@ -68,12 +68,14 @@ mctl auth status
 
 ## How it works
 
-`mctl` dispatches the same GitHub Actions workflows that Backstage templates use:
+`mctl` calls the mctl-api REST endpoint to trigger platform operations via Argo Workflows:
 
-| Command | Workflow | Action |
-|---------|----------|--------|
-| `mctl deploy` | `release-service.yml` | `onboard` |
-| `mctl config` | `release-service.yml` | `update-config` |
-| `mctl delete` | `retire-service.yml` | — |
+| Command | API Operation | Action |
+|---------|---------------|--------|
+| `mctl deploy` | deploy-service | onboard |
+| `mctl config` | deploy-service | update-config |
+| `mctl delete` | retire-service | — |
+| `mctl status` | (read) | GET /api/v1/status |
+| `mctl logs` | (read) | GET /api/v1/logs |
 
-Authentication uses your existing `gh` CLI token — no separate login needed.
+Authentication: set `MCTL_TOKEN` or `GITHUB_TOKEN`, or fall back to `gh auth token`.

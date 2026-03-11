@@ -200,7 +200,7 @@ Located at `platform-gitops/tenants/{team}/values.yaml`. Consumed by the `tenant
 
 ## CLI (mctl)
 
-The `mctl` CLI is a Go/Cobra tool for platform operations. It lives in `cli/mctl/` and communicates with Argo Workflows and the GitOps repo.
+The `mctl` CLI is a Go/Cobra tool for platform operations. It lives in `cli/mctl/` and communicates with the mctl-api REST endpoint.
 
 | Command | Purpose |
 |---|---|
