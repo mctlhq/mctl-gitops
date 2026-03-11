@@ -1,6 +1,6 @@
-# mctl — CLI for the mctl.me platform
+# mctl — CLI for the mctl.ai platform
 
-Command-line tool for deploying, managing, and deleting services on the mctl.me platform.
+Command-line tool for deploying, managing, and deleting services on the mctl.ai platform.
 Same operations as the Backstage UI, but from your terminal.
 
 ## Prerequisites
@@ -29,14 +29,14 @@ make build
 ```bash
 # Web service with ingress
 mctl deploy -t my-team -n my-api -r mctlhq/my-api -g v1.0.0 \
-  --host my-api.preview.mctl.me
+  --host my-api.preview.mctl.ai
 
 # Background worker (no --host)
 mctl deploy -t my-team -n my-worker -r mctlhq/my-worker -g v1.0.0
 
 # With env vars and secrets
 mctl deploy -t my-team -n my-api -r mctlhq/my-api -g v1.0.0 \
-  --host my-api.preview.mctl.me \
+  --host my-api.preview.mctl.ai \
   --env LOG_LEVEL=info --env PORT=3000 \
   --secret API_KEY=sk-xxx
 
