@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mctlhq/mctl-gitops/cli/mctl/internal/api"
 	"github.com/mctlhq/mctl-gitops/cli/mctl/internal/auth"
-	gh "github.com/mctlhq/mctl-gitops/cli/mctl/internal/github"
 	"github.com/mctlhq/mctl-gitops/cli/mctl/internal/vault"
 	"github.com/spf13/cobra"
 )
@@ -14,17 +14,16 @@ import (
 var deployCmd = &cobra.Command{
 	Use:   "deploy",
 	Short: "Deploy a new service to the platform",
-	Long: `Deploy a new service by dispatching the release-service.yml workflow.
-Builds a Docker image from the specified repo and creates the GitOps configuration.`,
+	Long: `Deploy a new service via the mctl API. Builds a Docker image from the specified repo and creates the GitOps configuration.`,
 	Example: `  # Deploy a web service with ingress
-  mctl deploy -t my-team -n my-api -r mctlhq/my-api -g v1.0.0 --host my-api.preview.mctl.me
+  mctl deploy -t my-team -n my-api -r mctlhq/my-api -g v1.0.0 --host my-api.preview.mctl.ai
 
   # Deploy a background worker (no host = worker)
   mctl deploy -t my-team -n my-worker -r mctlhq/my-worker -g v1.0.0
 
   # Deploy with env vars and secrets
   mctl deploy -t my-team -n my-api -r mctlhq/my-api -g v1.0.0 \
-    --host my-api.preview.mctl.me \
+    --host my-api.preview.mctl.ai \
     --env LOG_LEVEL=info --env PORT=3000 \
     --secret API_KEY=sk-xxx --secret DB_PASS=hunter2`,
 	RunE: runDeploy,
@@ -101,28 +100,25 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		"secret_env_vars": strings.Join(deploySecret, "\n"),
 	}
 
-	client := gh.NewClient(token)
-	dispatchTime := time.Now().Add(-5 * time.Second)
+	client := api.NewClient(token)
 
 	fmt.Printf("🚀 Deploying %s/%s (type: %s)...\n", deployTeam, deployName, serviceType)
-	if err := client.DispatchWorkflow("release-service.yml", inputs); err != nil {
-		return fmt.Errorf("dispatch failed: %w", err)
+	result, err := client.ExecuteOperation("deploy-service", inputs)
+	if err != nil {
+		return fmt.Errorf("deploy failed: %w", err)
 	}
-	fmt.Println("✅ Workflow dispatched successfully")
-	fmt.Printf("   https://github.com/%s/%s/actions/workflows/release-service.yml\n", gh.Owner, gh.Repo)
+	fmt.Println("✅ Workflow submitted:", result.WorkflowName)
 
 	if deployWait {
-		fmt.Println("\n⏳ Waiting for workflow to complete...")
-		run, err := client.WaitForRun("release-service.yml", dispatchTime, 10*time.Minute)
+		ws, err := client.PollWorkflow(result.WorkflowName, 10*time.Minute)
 		if err != nil {
 			return err
 		}
-		fmt.Println()
-		if run.Conclusion == "success" {
-			fmt.Printf("✅ Deploy completed successfully!\n   %s\n", run.HTMLURL)
+		if ws.Phase == "Succeeded" {
+			fmt.Printf("✅ Deploy completed successfully!\n")
 		} else {
-			fmt.Printf("❌ Deploy %s\n   %s\n", run.Conclusion, run.HTMLURL)
-			return fmt.Errorf("workflow %s", run.Conclusion)
+			fmt.Printf("❌ Deploy %s: %s\n", ws.Phase, ws.Message)
+			return fmt.Errorf("workflow %s", ws.Phase)
 		}
 	}
 

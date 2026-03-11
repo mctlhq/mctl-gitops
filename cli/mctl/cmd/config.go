@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mctlhq/mctl-gitops/cli/mctl/internal/api"
 	"github.com/mctlhq/mctl-gitops/cli/mctl/internal/auth"
-	gh "github.com/mctlhq/mctl-gitops/cli/mctl/internal/github"
 	"github.com/spf13/cobra"
 )
 
@@ -62,8 +62,7 @@ func runConfig(cmd *cobra.Command, args []string) error {
 		"secret_env_vars": strings.Join(configSecret, "\n"),
 	}
 
-	client := gh.NewClient(token)
-	dispatchTime := time.Now().Add(-5 * time.Second)
+	client := api.NewClient(token)
 
 	fmt.Printf("⚙️  Updating config for %s/%s...\n", configTeam, configName)
 	if len(configEnv) > 0 {
@@ -73,24 +72,22 @@ func runConfig(cmd *cobra.Command, args []string) error {
 		fmt.Printf("   🔐 %d secret(s)\n", len(configSecret))
 	}
 
-	if err := client.DispatchWorkflow("release-service.yml", inputs); err != nil {
-		return fmt.Errorf("dispatch failed: %w", err)
+	result, err := client.ExecuteOperation("deploy-service", inputs)
+	if err != nil {
+		return fmt.Errorf("config update failed: %w", err)
 	}
-	fmt.Println("✅ Config update dispatched")
-	fmt.Printf("   https://github.com/%s/%s/actions/workflows/release-service.yml\n", gh.Owner, gh.Repo)
+	fmt.Println("✅ Config update submitted:", result.WorkflowName)
 
 	if configWait {
-		fmt.Println("\n⏳ Waiting for workflow to complete...")
-		run, err := client.WaitForRun("release-service.yml", dispatchTime, 5*time.Minute)
+		ws, err := client.PollWorkflow(result.WorkflowName, 5*time.Minute)
 		if err != nil {
 			return err
 		}
-		fmt.Println()
-		if run.Conclusion == "success" {
-			fmt.Printf("✅ Config updated! ArgoCD will sync automatically.\n   %s\n", run.HTMLURL)
+		if ws.Phase == "Succeeded" {
+			fmt.Println("✅ Config updated! ArgoCD will sync automatically.")
 		} else {
-			fmt.Printf("❌ Config update %s\n   %s\n", run.Conclusion, run.HTMLURL)
-			return fmt.Errorf("workflow %s", run.Conclusion)
+			fmt.Printf("❌ Config update %s: %s\n", ws.Phase, ws.Message)
+			return fmt.Errorf("workflow %s", ws.Phase)
 		}
 	}
 

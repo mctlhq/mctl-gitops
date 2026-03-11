@@ -1,20 +1,16 @@
 package cmd
 
 import (
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"net/url"
 	"os/exec"
 	"runtime"
 	"time"
 
+	"github.com/mctlhq/mctl-gitops/cli/mctl/internal/api"
 	"github.com/mctlhq/mctl-gitops/cli/mctl/internal/auth"
 	"github.com/spf13/cobra"
 )
-
-const defaultBackstageURL = "https://app.mctl.me"
 
 var repoCmd = &cobra.Command{
 	Use:   "repo",
@@ -69,10 +65,6 @@ func init() {
 	repoCmd.AddCommand(repoStatusCmd)
 }
 
-func backstageURL() string {
-	return defaultBackstageURL
-}
-
 func openBrowser(url string) error {
 	switch runtime.GOOS {
 	case "darwin":
@@ -85,37 +77,25 @@ func openBrowser(url string) error {
 }
 
 func runRepoConnect(cmd *cobra.Command, args []string) error {
-	// Verify auth first
-	if _, err := auth.GetToken(); err != nil {
+	token, err := auth.GetToken()
+	if err != nil {
 		return err
 	}
 
-	base := backstageURL()
+	client := api.NewClient(token)
+
 	params := url.Values{
 		"team":    {repoConnTeam},
 		"service": {repoConnService},
 		"repo":    {repoConnRepo},
 	}
 
-	// Get install URL from backend
-	installURLEndpoint := fmt.Sprintf("%s/api/github-app-connect/install-url?%s", base, params.Encode())
-	resp, err := http.Get(installURLEndpoint)
-	if err != nil {
-		return fmt.Errorf("failed to reach Backstage API: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("API error (HTTP %d): %s", resp.StatusCode, string(body))
-	}
-
 	var result struct {
 		URL   string `json:"url"`
 		State string `json:"state"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return fmt.Errorf("failed to parse response: %w", err)
+	if err := client.Get("/api/v1/repos/install-url?"+params.Encode(), &result); err != nil {
+		return fmt.Errorf("failed to get install URL: %w", err)
 	}
 
 	fmt.Println("🔗 Opening GitHub App installation page...")
@@ -133,22 +113,16 @@ func runRepoConnect(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	// Poll for connection status
 	fmt.Println("\n⏳ Waiting for connection...")
-	statusURL := fmt.Sprintf("%s/api/github-app-connect/install-status?%s", base, params.Encode())
-
-	for i := 0; i < 60; i++ { // 5 min timeout (60 * 5s)
+	for i := 0; i < 60; i++ {
 		time.Sleep(5 * time.Second)
-
-		statusResp, err := http.Get(statusURL)
-		if err != nil {
-			continue
-		}
 		var statusResult struct {
 			Status string `json:"status"`
 		}
-		json.NewDecoder(statusResp.Body).Decode(&statusResult)
-		statusResp.Body.Close()
-
+		if err := client.Get("/api/v1/repos?"+params.Encode(), &statusResult); err != nil {
+			continue
+		}
 		if statusResult.Status == "connected" {
 			fmt.Printf("\n✅ Repository %s connected successfully!\n", repoConnRepo)
 			fmt.Println("   You can now deploy without --pat flag.")
@@ -161,27 +135,17 @@ func runRepoConnect(cmd *cobra.Command, args []string) error {
 }
 
 func runRepoStatus(cmd *cobra.Command, args []string) error {
-	if _, err := auth.GetToken(); err != nil {
+	token, err := auth.GetToken()
+	if err != nil {
 		return err
 	}
 
-	base := backstageURL()
+	client := api.NewClient(token)
+
 	params := url.Values{
 		"team":    {repoConnTeam},
 		"service": {repoConnService},
 		"repo":    {repoConnRepo},
-	}
-
-	accessURL := fmt.Sprintf("%s/api/github-app-connect/repo-access?%s", base, params.Encode())
-	resp, err := http.Get(accessURL)
-	if err != nil {
-		return fmt.Errorf("failed to reach Backstage API: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("API error (HTTP %d): %s", resp.StatusCode, string(body))
 	}
 
 	var result struct {
@@ -190,8 +154,8 @@ func runRepoStatus(cmd *cobra.Command, args []string) error {
 		InstallationID int64  `json:"installation_id,omitempty"`
 		InstallURL     string `json:"install_url,omitempty"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return fmt.Errorf("failed to parse response: %w", err)
+	if err := client.Get("/api/v1/repos?"+params.Encode(), &result); err != nil {
+		return fmt.Errorf("failed to check repo status: %w", err)
 	}
 
 	fmt.Printf("📦 Repository: %s\n", repoConnRepo)

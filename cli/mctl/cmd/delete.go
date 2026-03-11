@@ -7,15 +7,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mctlhq/mctl-gitops/cli/mctl/internal/api"
 	"github.com/mctlhq/mctl-gitops/cli/mctl/internal/auth"
-	gh "github.com/mctlhq/mctl-gitops/cli/mctl/internal/github"
 	"github.com/spf13/cobra"
 )
 
 var deleteCmd = &cobra.Command{
 	Use:   "delete",
 	Short: "Delete a service from the platform",
-	Long:  "Delete a service by dispatching the retire-service.yml workflow. Removes GitOps files, Vault secrets, and Kubernetes resources.",
+	Long:  "Delete a service via the mctl API. Removes GitOps files, Vault secrets, and Kubernetes resources.",
 	Example: `  # Delete with confirmation prompt
   mctl delete -t my-team -n my-api
 
@@ -74,28 +74,25 @@ func runDelete(cmd *cobra.Command, args []string) error {
 		"delete_vault_secrets": deleteVault,
 	}
 
-	client := gh.NewClient(token)
-	dispatchTime := time.Now().Add(-5 * time.Second)
+	client := api.NewClient(token)
 
 	fmt.Printf("🗑️  Deleting %s/%s...\n", deleteTeam, deleteName)
-	if err := client.DispatchWorkflow("retire-service.yml", inputs); err != nil {
-		return fmt.Errorf("dispatch failed: %w", err)
+	result, err := client.ExecuteOperation("retire-service", inputs)
+	if err != nil {
+		return fmt.Errorf("delete failed: %w", err)
 	}
-	fmt.Println("✅ Delete workflow dispatched")
-	fmt.Printf("   https://github.com/%s/%s/actions/workflows/retire-service.yml\n", gh.Owner, gh.Repo)
+	fmt.Println("✅ Delete workflow submitted:", result.WorkflowName)
 
 	if deleteWait {
-		fmt.Println("\n⏳ Waiting for workflow to complete...")
-		run, err := client.WaitForRun("retire-service.yml", dispatchTime, 5*time.Minute)
+		ws, err := client.PollWorkflow(result.WorkflowName, 5*time.Minute)
 		if err != nil {
 			return err
 		}
-		fmt.Println()
-		if run.Conclusion == "success" {
-			fmt.Printf("✅ Service deleted successfully!\n   %s\n", run.HTMLURL)
+		if ws.Phase == "Succeeded" {
+			fmt.Println("✅ Service deleted successfully!")
 		} else {
-			fmt.Printf("❌ Delete %s\n   %s\n", run.Conclusion, run.HTMLURL)
-			return fmt.Errorf("workflow %s", run.Conclusion)
+			fmt.Printf("❌ Delete %s: %s\n", ws.Phase, ws.Message)
+			return fmt.Errorf("workflow %s", ws.Phase)
 		}
 	}
 
