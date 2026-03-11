@@ -5,10 +5,10 @@ metadata:
   annotations:
     workflows.argoproj.io/description: |
       Add a verified custom domain to a service:
-        1. Validate domain format (FQDN, not *.mctl.ai)
-        2. DNS verify: CNAME must point to {team}-{service}.mctl.ai
+        1. Validate domain format (FQDN, not a platform domain)
+        2. DNS verify: CNAME must point to {team}-{service}.{PLATFORM_DOMAIN}
         3. Update service values.yaml: add host to ingress.hosts + TLS with http01 issuer
-        4. Commit to mctl-gitops → ArgoCD syncs
+        4. Commit to gitops repo → ArgoCD syncs
         5. Callback to Backstage to mark domain as active
 spec:
   entrypoint: add-domain-pipeline
@@ -40,6 +40,9 @@ spec:
       script:
         image: alpine:3.19
         command: [sh]
+        envFrom:
+          - configMapRef:
+              name: mctl-platform-config
         source: |
           set -e
           apk add --no-cache curl git openssh-client bind-tools yq > /dev/null 2>&1
@@ -47,7 +50,7 @@ spec:
           TEAM="{{inputs.parameters.team_name}}"
           SERVICE="{{inputs.parameters.service_name}}"
           DOMAIN="{{inputs.parameters.domain}}"
-          AUTO_DOMAIN="${TEAM}-${SERVICE}.mctl.ai"
+          AUTO_DOMAIN="${TEAM}-${SERVICE}.${PLATFORM_DOMAIN}"
           BACKSTAGE_URL="http://backstage.backstage.svc.cluster.local:7007"
 
           # ── 1. Validate domain format ─────────────────────────────────────
@@ -57,7 +60,7 @@ spec:
             exit 1
           }
           # Reject platform domains
-          echo "$DOMAIN" | grep -qvE '\.(mctl\.ai|mctl\.me)$' || {
+          echo "$DOMAIN" | grep -qvE "\.(${PLATFORM_DOMAIN//./\\.}|${PLATFORM_DOMAIN_ALT//./\\.})$" || {
             echo "❌ Cannot add platform domain as custom: ${DOMAIN}"
             exit 1
           }
@@ -86,7 +89,7 @@ spec:
           chmod 600 ~/.ssh/config
 
           # ── 4. Clone mctl-gitops ────────────────────────────────────────────
-          git clone --depth=1 "git@github.com:mctlhq/mctl-gitops.git" /tmp/mctl-gitops
+          git clone --depth=1 "git@github.com:${GITOPS_ORG}/${GITOPS_REPO}.git" /tmp/mctl-gitops
           cd /tmp/mctl-gitops
           git config user.name "argo-workflows[bot]"
           git config user.email "argo-workflows[bot]@users.noreply.github.com"

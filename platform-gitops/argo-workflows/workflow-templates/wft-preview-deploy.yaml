@@ -6,7 +6,7 @@ metadata:
     workflows.argoproj.io/description: |
       Deploy an ephemeral preview environment for a service using an existing image tag.
       Creates a dedicated namespace preview-{team}-{app}-{id}, deploys via Helm (base-service chart),
-      and exposes the service at {app}-{id}.preview.mctl.ai.
+      and exposes the service at {app}-{id}.preview.{PLATFORM_DOMAIN}.
       The namespace is automatically deleted after ttl_hours via activeDeadlineSeconds.
 spec:
   entrypoint: preview-pipeline
@@ -55,6 +55,9 @@ spec:
         env:
           - name: KUBECONFIG
             value: /root/.kube/config
+        envFrom:
+          - configMapRef:
+              name: mctl-platform-config
         source: |
           set -euo pipefail
 
@@ -66,7 +69,7 @@ spec:
           # Generate a short preview ID from the workflow name
           PREVIEW_ID=$(echo "${ARGO_WORKFLOW_NAME}" | tr -cd 'a-z0-9' | tail -c 6)
           NAMESPACE="preview-${TEAM}-${COMPONENT}-${PREVIEW_ID}"
-          HOST="${COMPONENT}-${PREVIEW_ID}.preview.mctl.ai"
+          HOST="${COMPONENT}-${PREVIEW_ID}.preview.${PLATFORM_DOMAIN}"
 
           echo "${PREVIEW_ID}" > /tmp/preview_id
           echo "https://${HOST}" > /tmp/preview_url
@@ -89,14 +92,14 @@ spec:
           apk add --no-cache git > /dev/null 2>&1
           GITOPS_TOKEN="${GITOPS_TOKEN:-}"
           if [ -n "${GITOPS_TOKEN}" ]; then
-            git clone --depth=1 "https://x-access-token:${GITOPS_TOKEN}@github.com/mctlhq/mctl-gitops.git" /tmp/mctl-gitops
+            git clone --depth=1 "https://x-access-token:${GITOPS_TOKEN}@github.com/${GITOPS_ORG}/${GITOPS_REPO}.git" /tmp/mctl-gitops
           else
-            git clone --depth=1 "https://github.com/mctlhq/mctl-gitops.git" /tmp/mctl-gitops
+            git clone --depth=1 "https://github.com/${GITOPS_ORG}/${GITOPS_REPO}.git" /tmp/mctl-gitops
           fi
 
           helm upgrade --install "${COMPONENT}" "${CHART_PATH}" \
             --namespace "${NAMESPACE}" \
-            --set image.repository="ghcr.io/mctlhq/${COMPONENT}" \
+            --set image.repository="${CONTAINER_REGISTRY}/${COMPONENT}" \
             --set image.tag="${TAG}" \
             --set host="${HOST}" \
             --set ingress.enabled=true \

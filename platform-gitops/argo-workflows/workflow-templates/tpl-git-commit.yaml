@@ -4,7 +4,7 @@ metadata:
   name: tpl-git-commit
   annotations:
     workflows.argoproj.io/description: |
-      Reusable template: clones mctl-gitops, runs a generation script,
+      Reusable template: clones the gitops repo, runs a generation script,
       commits and pushes only within the allowed path prefix.
       Uses GitHub App token from mounted secret.
 spec:
@@ -36,6 +36,9 @@ spec:
       script:
         image: alpine:3.19
         command: [sh]
+        envFrom:
+          - configMapRef:
+              name: mctl-platform-config
         source: |
           set -e
 
@@ -61,7 +64,7 @@ spec:
 
           # Auto-generate domain for base-service if host not explicitly set
           if [ "$TYPE" = "base-service" ] && { [ -z "$HOST" ] || [ "$HOST" = "auto" ]; }; then
-            HOST="${TEAM}-${SERVICE}.mctl.ai"
+            HOST="${TEAM}-${SERVICE}.${PLATFORM_DOMAIN}"
             echo "Auto-generated domain: ${HOST}"
           fi
           SKIP_HEALTH="{{inputs.parameters.skip_health_check}}"
@@ -102,9 +105,9 @@ spec:
             echo "⚠️  GitHub App token unavailable (non-fatal, git uses SSH deploy key)"
           fi
 
-          # ── 2. Clone mctl-gitops via SSH ────────────────────────────────────
-          echo "📥 Cloning mctl-gitops..."
-          git clone --depth=1 "git@github.com:mctlhq/mctl-gitops.git" /tmp/mctl-gitops
+          # ── 2. Clone gitops repo via SSH ─────────────────────────────────────
+          echo "📥 Cloning ${GITOPS_REPO}..."
+          git clone --depth=1 "git@github.com:${GITOPS_ORG}/${GITOPS_REPO}.git" /tmp/mctl-gitops
           cd /tmp/mctl-gitops
 
           git config user.name "argo-workflows[bot]"
@@ -146,13 +149,15 @@ spec:
               -e "s|__HOST__|${HOST}|g" \
               "$TPL" > "${DIR}/values.yaml"
 
-            # Auto-add mirror domain (.mctl.me ↔ .mctl.ai) + TLS
+            # Auto-add mirror domain (alternate ↔ primary) + TLS
             if [ "$HOST" != "none" ] && [ -n "$HOST" ]; then
               MIRROR=""
-              case "$HOST" in
-                *.mctl.me) MIRROR=$(echo "$HOST" | sed 's/\.mctl\.me$/.mctl.ai/') ;;
-                *.mctl.ai) MIRROR=$(echo "$HOST" | sed 's/\.mctl\.ai$/.mctl.me/') ;;
-              esac
+              if [ -n "${PLATFORM_DOMAIN_ALT}" ]; then
+                case "$HOST" in
+                  *.${PLATFORM_DOMAIN_ALT}) MIRROR=$(echo "$HOST" | sed "s/\.${PLATFORM_DOMAIN_ALT}$/.${PLATFORM_DOMAIN}/") ;;
+                  *.${PLATFORM_DOMAIN}) MIRROR=$(echo "$HOST" | sed "s/\.${PLATFORM_DOMAIN}$/.${PLATFORM_DOMAIN_ALT}/") ;;
+                esac
+              fi
               if [ -n "$MIRROR" ]; then
                 yq eval -i ".ingress.hosts += [\"${MIRROR}\"]" "${DIR}/values.yaml"
               fi
@@ -389,6 +394,9 @@ spec:
       script:
         image: alpine:3.19
         command: [sh]
+        envFrom:
+          - configMapRef:
+              name: mctl-platform-config
         source: |
           set -e
           TEAM="{{inputs.parameters.team_name}}"
@@ -404,7 +412,7 @@ spec:
           printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  StrictHostKeyChecking no\n' > ~/.ssh/config
           chmod 600 ~/.ssh/config
 
-          git clone --depth=1 "git@github.com:mctlhq/mctl-gitops.git" /tmp/mctl-gitops
+          git clone --depth=1 "git@github.com:${GITOPS_ORG}/${GITOPS_REPO}.git" /tmp/mctl-gitops
           cd /tmp/mctl-gitops
           git config user.name "argo-workflows[bot]"
           git config user.email "argo-workflows[bot]@users.noreply.github.com"

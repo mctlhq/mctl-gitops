@@ -4,10 +4,10 @@ metadata:
   name: create-tenant
   annotations:
     workflows.argoproj.io/description: |
-      Creates a new tenant on the mctl.ai platform:
+      Creates a new tenant on the platform:
         1. Validates tenant name (DNS-safe, not already exists)
         2. Creates Vault policy tenant-{name} (scoped to secret/data/teams/{name}/*)
-        3. Commits tenant directory to mctl-gitops (values.yaml + catalog-info.yaml)
+        3. Commits tenant directory to gitops repo (values.yaml + catalog-info.yaml)
         4. Appends ArgoCD RBAC entries to argocd/values.yaml
         5. ArgoCD ApplicationSet picks up new directory → namespace provisioned
 
@@ -196,6 +196,9 @@ spec:
       script:
         image: alpine:3.19
         command: [sh]
+        envFrom:
+          - configMapRef:
+              name: mctl-platform-config
         volumeMounts:
           - name: github-app-creds
             mountPath: /secrets/github-app
@@ -262,7 +265,7 @@ spec:
           git config --global user.email "argo-workflows[bot]@mctl.ai"
           git config --global user.name "Argo Workflows Bot"
 
-          git clone --depth=50 "git@github.com:mctlhq/mctl-gitops.git" /tmp/mctl-gitops
+          git clone --depth=50 "git@github.com:${GITOPS_ORG}/${GITOPS_REPO}.git" /tmp/mctl-gitops
           cd /tmp/mctl-gitops
 
           # ── Security: check tenant doesn't already exist ────────────────────
@@ -328,8 +331,8 @@ spec:
             description: "Tenant ${DISPLAY_NAME} — namespace, quotas, and network policies"
             annotations:
               mctl.me/tenant-name: "${TENANT}"
-              backstage.io/managed-by-location: "url:https://github.com/mctlhq/mctl-gitops/blob/main/platform-gitops/tenants/${TENANT}/catalog-info.yaml"
-              backstage.io/managed-by-origin-location: "url:https://github.com/mctlhq/mctl-gitops/blob/main/platform-gitops/tenants/${TENANT}/catalog-info.yaml"
+              backstage.io/managed-by-location: "url:https://github.com/${GITOPS_ORG}/${GITOPS_REPO}/blob/main/platform-gitops/tenants/${TENANT}/catalog-info.yaml"
+              backstage.io/managed-by-origin-location: "url:https://github.com/${GITOPS_ORG}/${GITOPS_REPO}/blob/main/platform-gitops/tenants/${TENANT}/catalog-info.yaml"
           spec:
             type: tenant
             owner: group:default/admins

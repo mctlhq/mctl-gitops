@@ -5,7 +5,7 @@ metadata:
   annotations:
     workflows.argoproj.io/description: |
       Main deployment workflow: validate → build image (Kaniko) → write Vault secrets
-      → generate Helm manifests → commit to mctl-gitops → ArgoCD syncs.
+      → generate Helm manifests → commit to gitops repo → ArgoCD syncs.
 
       Actions:
         onboard      — first deploy: creates values.yaml, catalog-info.yaml, vault-cleanup.yaml
@@ -36,7 +36,7 @@ spec:
         default: "8080"
       - name: host
         default: ""
-        # e.g. "myteam-myapp.mctl.ai"
+        # e.g. "myteam-myapp.example.com"
       - name: env_vars
         default: ""
         # KEY=value newline-separated plaintext
@@ -60,6 +60,8 @@ spec:
         default: "5"
       - name: cpu_threshold
         default: "80"
+      - name: container_registry
+        default: "ghcr.io/mctlhq"
 
   templates:
     # ────────────────────────────────────────────────────────────────────────
@@ -106,7 +108,7 @@ spec:
                 - name: git_tag
                   value: "{{workflow.parameters.git_tag}}"
                 - name: image_name
-                  value: "ghcr.io/mctlhq/{{workflow.parameters.component_name}}"
+                  value: "{{workflow.parameters.container_registry}}/{{workflow.parameters.component_name}}"
                 - name: image_tag
                   value: "{{tasks.validate.outputs.parameters.image_tag}}"
                 - name: dockerfile_path
@@ -186,6 +188,9 @@ spec:
               secretKeyRef:
                 name: gitops-token
                 key: token
+        envFrom:
+          - configMapRef:
+              name: mctl-platform-config
         source: |
           set -euo pipefail
 
@@ -194,7 +199,7 @@ spec:
           MIN="{{workflow.parameters.min_replicas}}"
           MAX="{{workflow.parameters.max_replicas}}"
           CPU="{{workflow.parameters.cpu_threshold}}"
-          REPO="https://x-access-token:${GITOPS_TOKEN}@github.com/mctlhq/mctl-gitops.git"
+          REPO="https://x-access-token:${GITOPS_TOKEN}@github.com/${GITOPS_ORG}/${GITOPS_REPO}.git"
           VALUES="platform-gitops/services/${TEAM}/${COMPONENT}/values.yaml"
 
           git clone --depth=1 "${REPO}" /tmp/mctl-gitops

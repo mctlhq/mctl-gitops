@@ -41,13 +41,16 @@ spec:
               secretKeyRef:
                 name: gitops-token
                 key: token
+        envFrom:
+          - configMapRef:
+              name: mctl-platform-config
         source: |
           set -euo pipefail
 
           TEAM="{{inputs.parameters.team_name}}"
           COMPONENT="{{inputs.parameters.component_name}}"
           TAG="{{inputs.parameters.target_tag}}"
-          REPO="https://x-access-token:${GITOPS_TOKEN}@github.com/mctlhq/mctl-gitops.git"
+          REPO="https://x-access-token:${GITOPS_TOKEN}@github.com/${GITOPS_ORG}/${GITOPS_REPO}.git"
           VALUES="platform-gitops/services/${TEAM}/${COMPONENT}/values.yaml"
 
           git clone --depth=1 "${REPO}" /tmp/mctl-gitops

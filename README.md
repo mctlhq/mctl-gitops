@@ -55,6 +55,12 @@ Or use the platform:
 → mctl_create_tenant(tenant_name="payments") via Claude/mctl-api
 ```
 
+## Forking
+
+See [FORK.md](FORK.md) for step-by-step instructions on deploying this platform under your own organization and domain.
+
+Workflow templates read org/domain config from the `mctl-platform-config` ConfigMap in the `argo-workflows` namespace. Edit `platform-gitops/argo-workflows/mctl-platform-config.yaml` to set your values.
+
 ## Key URLs
 
 | URL | What |

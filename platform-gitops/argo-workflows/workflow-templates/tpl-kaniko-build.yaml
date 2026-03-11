@@ -14,7 +14,7 @@ spec:
         parameters:
           - name: dockerfile_repo    # e.g. "myorg/my-service"
           - name: git_tag            # e.g. "1.2.3" or "main"
-          - name: image_name         # e.g. "ghcr.io/mctlhq/my-service"
+          - name: image_name         # e.g. "ghcr.io/your-org/my-service"
           - name: image_tag          # e.g. "1.2.3"
           - name: dockerfile_path
             default: "Dockerfile"
