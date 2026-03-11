@@ -6,6 +6,10 @@ kind: ConfigMap
 metadata:
   name: mctl-platform-config
   namespace: argo-workflows
+  annotations:
+    reflector.v1.k8s.emberstack.com/reflection-allowed: "true"
+    reflector.v1.k8s.emberstack.com/reflection-auto-enabled: "true"
+    reflector.v1.k8s.emberstack.com/reflection-auto-namespaces: ""
 data:
   # GitHub organization that owns the repos
   GITOPS_ORG: "mctlhq"
