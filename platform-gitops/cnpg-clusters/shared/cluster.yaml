@@ -99,6 +99,7 @@ spec:
         ensure: present
         passwordSecret:
           name: argoworkflows-db-creds
+      # Team app roles
       - name: tests-pdb-test-svc
         login: true
         connectionLimit: 10

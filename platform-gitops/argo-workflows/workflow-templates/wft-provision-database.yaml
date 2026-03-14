@@ -133,18 +133,25 @@ spec:
             { print }
           ' "$CLUSTER_FILE" > "${CLUSTER_FILE}.tmp" && mv "${CLUSTER_FILE}.tmp" "$CLUSTER_FILE"
 
-          # Add managed role entry
+          # Add managed role entry (insert after "# Team app roles" anchor)
           awk -v db="${DB_NAME}" '
             /# Team app roles/ {
+              print
               print "      - name: " db
               print "        login: true"
               print "        connectionLimit: 10"
               print "        ensure: present"
               print "        passwordSecret:"
               print "          name: " db "-db-creds"
+              next
             }
             { print }
           ' "$CLUSTER_FILE" > "${CLUSTER_FILE}.tmp" && mv "${CLUSTER_FILE}.tmp" "$CLUSTER_FILE"
+          # Verify the role was actually added
+          if ! grep -q "name: ${DB_NAME}$" "$CLUSTER_FILE"; then
+            echo "❌ Failed to insert managed role for ${DB_NAME} — anchor '# Team app roles' not found in cluster.yaml"
+            exit 1
+          fi
           echo "✅ cluster.yaml updated"
 
           # ── Append to databases.yaml ──────────────────────────────────────
