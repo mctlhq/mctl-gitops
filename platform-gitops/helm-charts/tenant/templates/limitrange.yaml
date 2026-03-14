@@ -1,22 +1,33 @@
 {{- if .Values.tenant.limitRange.enabled }}
+{{- $tenantName := include "tenant.name" . }}
+{{- $namespaces := list }}
+{{- if .Values.tenant.teams }}
+  {{- range .Values.tenant.teams }}
+    {{- $namespaces = append $namespaces (printf "%s-%s" $tenantName .name) }}
+  {{- end }}
+{{- else }}
+  {{- $namespaces = append $namespaces $tenantName }}
+{{- end }}
+{{- range $ns := $namespaces }}
+---
 apiVersion: v1
 kind: LimitRange
 metadata:
-  name: {{ include "tenant.name" . }}-limits
-  namespace: {{ include "tenant.name" . }}
+  name: {{ $ns }}-limits
+  namespace: {{ $ns }}
   labels:
-    {{- include "tenant.labels" . | nindent 4 }}
+    {{- include "tenant.labels" $ | nindent 4 }}
 spec:
   limits:
     - type: Container
-      # Applied when a container does not specify its own limits/requests
       default:
-        cpu: {{ .Values.tenant.limitRange.default.cpu | quote }}
-        memory: {{ .Values.tenant.limitRange.default.memory | quote }}
+        cpu: {{ $.Values.tenant.limitRange.default.cpu | quote }}
+        memory: {{ $.Values.tenant.limitRange.default.memory | quote }}
       defaultRequest:
-        cpu: {{ .Values.tenant.limitRange.defaultRequest.cpu | quote }}
-        memory: {{ .Values.tenant.limitRange.defaultRequest.memory | quote }}
+        cpu: {{ $.Values.tenant.limitRange.defaultRequest.cpu | quote }}
+        memory: {{ $.Values.tenant.limitRange.defaultRequest.memory | quote }}
       max:
-        cpu: {{ .Values.tenant.limitRange.max.cpu | quote }}
-        memory: {{ .Values.tenant.limitRange.max.memory | quote }}
+        cpu: {{ $.Values.tenant.limitRange.max.cpu | quote }}
+        memory: {{ $.Values.tenant.limitRange.max.memory | quote }}
+{{- end }}
 {{- end }}

@@ -1,12 +1,24 @@
+{{- $tenantName := include "tenant.name" . }}
+{{- $namespaces := list }}
+{{- if .Values.tenant.teams }}
+  {{- range .Values.tenant.teams }}
+    {{- $namespaces = append $namespaces (printf "%s-%s" $tenantName .name) }}
+  {{- end }}
+{{- else }}
+  {{- $namespaces = append $namespaces $tenantName }}
+{{- end }}
+{{- range $ns := $namespaces }}
+---
 apiVersion: v1
 kind: ResourceQuota
 metadata:
-  name: {{ include "tenant.name" . }}-quota
-  namespace: {{ include "tenant.name" . }}
+  name: {{ $ns }}-quota
+  namespace: {{ $ns }}
   labels:
-    {{- include "tenant.labels" . | nindent 4 }}
+    {{- include "tenant.labels" $ | nindent 4 }}
 spec:
   hard:
-    {{- range $key, $val := .Values.tenant.quotas }}
+    {{- range $key, $val := $.Values.tenant.quotas }}
     {{ $key }}: {{ $val | quote }}
     {{- end }}
+{{- end }}

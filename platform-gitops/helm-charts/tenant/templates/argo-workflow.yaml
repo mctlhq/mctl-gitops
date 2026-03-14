@@ -1,21 +1,32 @@
 {{- $tenantName := include "tenant.name" . }}
+{{- /* Build list of namespaces: multi-team → [{tenant}-{team}, ...], legacy → [{tenant}] */}}
+{{- $namespaces := list }}
+{{- if .Values.tenant.teams }}
+  {{- range .Values.tenant.teams }}
+    {{- $namespaces = append $namespaces (printf "%s-%s" $tenantName .name) }}
+  {{- end }}
+{{- else }}
+  {{- $namespaces = append $namespaces $tenantName }}
+{{- end }}
+
+{{- range $ns := $namespaces }}
 # ServiceAccount used by Argo Workflows pods running in this namespace
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: argo-workflow-sa
-  namespace: {{ $tenantName }}
+  namespace: {{ $ns }}
   labels:
-    {{- include "tenant.labels" . | nindent 4 }}
+    {{- include "tenant.labels" $ | nindent 4 }}
 ---
 # Allow workflow pods to create workflows, read pods/logs/secrets in tenant namespace
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: argo-workflow-runner
-  namespace: {{ $tenantName }}
+  namespace: {{ $ns }}
   labels:
-    {{- include "tenant.labels" . | nindent 4 }}
+    {{- include "tenant.labels" $ | nindent 4 }}
 rules:
   - apiGroups: ["argoproj.io"]
     resources: ["workflows", "workflowtaskresults"]
@@ -31,28 +42,27 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: argo-workflow-runner
-  namespace: {{ $tenantName }}
+  namespace: {{ $ns }}
   labels:
-    {{- include "tenant.labels" . | nindent 4 }}
+    {{- include "tenant.labels" $ | nindent 4 }}
 subjects:
   - kind: ServiceAccount
     name: argo-workflow-sa
-    namespace: {{ $tenantName }}
+    namespace: {{ $ns }}
 roleRef:
   kind: Role
   name: argo-workflow-runner
   apiGroup: rbac.authorization.k8s.io
 ---
 # Namespace-scoped smoke-test permissions: verify deployments, pods, secrets,
-# and ExternalSecrets ONLY in this tenant's namespace.
-# Replaces the former cluster-wide ClusterRole to prevent cross-tenant access.
+# and ExternalSecrets ONLY in this namespace.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: argo-workflow-smoke-verify
-  namespace: {{ $tenantName }}
+  namespace: {{ $ns }}
   labels:
-    {{- include "tenant.labels" . | nindent 4 }}
+    {{- include "tenant.labels" $ | nindent 4 }}
 rules:
   - apiGroups: ["apps"]
     resources: ["deployments"]
@@ -72,27 +82,26 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: argo-workflow-smoke-verify
-  namespace: {{ $tenantName }}
+  namespace: {{ $ns }}
   labels:
-    {{- include "tenant.labels" . | nindent 4 }}
+    {{- include "tenant.labels" $ | nindent 4 }}
 subjects:
   - kind: ServiceAccount
     name: argo-workflow-sa
-    namespace: {{ $tenantName }}
+    namespace: {{ $ns }}
 roleRef:
   kind: Role
   name: argo-workflow-smoke-verify
   apiGroup: rbac.authorization.k8s.io
 ---
 # Bind central workflow SA (argo-workflows ns) to smoke-verify Role in this namespace.
-# This allows platform workflows to verify deployments in tenant namespace.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: argo-workflow-smoke-verify-central
-  namespace: {{ $tenantName }}
+  namespace: {{ $ns }}
   labels:
-    {{- include "tenant.labels" . | nindent 4 }}
+    {{- include "tenant.labels" $ | nindent 4 }}
 subjects:
   - kind: ServiceAccount
     name: argo-workflow-sa
@@ -107,9 +116,9 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: sso-team-workflows
-  namespace: {{ $tenantName }}
+  namespace: {{ $ns }}
   labels:
-    {{- include "tenant.labels" . | nindent 4 }}
+    {{- include "tenant.labels" $ | nindent 4 }}
 subjects:
   - kind: ServiceAccount
     name: sso-team-{{ $tenantName }}
@@ -124,9 +133,9 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: sso-team-logs
-  namespace: {{ $tenantName }}
+  namespace: {{ $ns }}
   labels:
-    {{- include "tenant.labels" . | nindent 4 }}
+    {{- include "tenant.labels" $ | nindent 4 }}
 subjects:
   - kind: ServiceAccount
     name: sso-team-{{ $tenantName }}
@@ -136,15 +145,14 @@ roleRef:
   name: argo-workflows-admin-extra
   apiGroup: rbac.authorization.k8s.io
 ---
-# Allow mctl-api to submit and manage workflows in this tenant namespace.
-# mctl-api creates Workflow CRs here; the local argo-workflow-sa executes them.
+# Allow mctl-api to submit and manage workflows in this namespace.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: mctl-api-workflow-submitter
-  namespace: {{ $tenantName }}
+  namespace: {{ $ns }}
   labels:
-    {{- include "tenant.labels" . | nindent 4 }}
+    {{- include "tenant.labels" $ | nindent 4 }}
 subjects:
   - kind: ServiceAccount
     name: mctl-api
@@ -155,14 +163,13 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
 ---
 # MinIO artifact credentials — required by Argo Workflows argoexec init container
-# to upload/download workflow artifacts (logs) to MinIO in this namespace
 apiVersion: external-secrets.io/v1beta1
 kind: ExternalSecret
 metadata:
   name: minio-artifact-credentials
-  namespace: {{ $tenantName }}
+  namespace: {{ $ns }}
   labels:
-    {{- include "tenant.labels" . | nindent 4 }}
+    {{- include "tenant.labels" $ | nindent 4 }}
 spec:
   refreshInterval: 1h
   secretStoreRef:
@@ -180,3 +187,5 @@ spec:
       remoteRef:
         key: teams/platform/minio
         property: root-password
+---
+{{- end }}

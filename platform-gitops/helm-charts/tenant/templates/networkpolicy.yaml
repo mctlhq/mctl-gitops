@@ -1,35 +1,44 @@
 {{- $tenantName := include "tenant.name" . }}
 {{- $networking := .Values.tenant.networking }}
+{{- $namespaces := list }}
+{{- if .Values.tenant.teams }}
+  {{- range .Values.tenant.teams }}
+    {{- $namespaces = append $namespaces (printf "%s-%s" $tenantName .name) }}
+  {{- end }}
+{{- else }}
+  {{- $namespaces = append $namespaces $tenantName }}
+{{- end }}
 
+{{- range $ns := $namespaces }}
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. Default deny: block all ingress and all egress by default.
-#    Other policies below selectively re-open specific traffic.
 # ─────────────────────────────────────────────────────────────────────────────
+---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: default-deny-all
-  namespace: {{ $tenantName }}
+  namespace: {{ $ns }}
   labels:
-    {{- include "tenant.labels" . | nindent 4 }}
+    {{- include "tenant.labels" $ | nindent 4 }}
 spec:
   podSelector: {}
   policyTypes:
     - Ingress
     - Egress
 
----
+{{- if $networking.allowIntraNamespace }}
 # ─────────────────────────────────────────────────────────────────────────────
 # 2. Allow intra-namespace traffic (pod-to-pod within same namespace).
 # ─────────────────────────────────────────────────────────────────────────────
-{{- if $networking.allowIntraNamespace }}
+---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: allow-intra-namespace
-  namespace: {{ $tenantName }}
+  namespace: {{ $ns }}
   labels:
-    {{- include "tenant.labels" . | nindent 4 }}
+    {{- include "tenant.labels" $ | nindent 4 }}
 spec:
   podSelector: {}
   policyTypes:
@@ -37,38 +46,34 @@ spec:
     - Egress
   ingress:
     - from:
-        - podSelector: {}  # any pod in this namespace
+        - podSelector: {}
   egress:
     - to:
-        - podSelector: {}  # any pod in this namespace
+        - podSelector: {}
 {{- end }}
 
----
-# ─────────────────────────────────────────────────────────────────────────────
-# 3. Allow cluster egress: DNS (kube-dns), ArgoCD, Vault, Argo Workflows, etc.
-#    This allows services to reach platform infrastructure without full internet.
-# ─────────────────────────────────────────────────────────────────────────────
 {{- if $networking.allowClusterEgress }}
+# ─────────────────────────────────────────────────────────────────────────────
+# 3. Allow cluster egress: DNS, ArgoCD, Vault, Argo Workflows, etc.
+# ─────────────────────────────────────────────────────────────────────────────
+---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: allow-cluster-egress
-  namespace: {{ $tenantName }}
+  namespace: {{ $ns }}
   labels:
-    {{- include "tenant.labels" . | nindent 4 }}
+    {{- include "tenant.labels" $ | nindent 4 }}
 spec:
   podSelector: {}
   policyTypes:
     - Egress
   egress:
-    # DNS resolution (kube-dns in kube-system)
     - ports:
         - port: 53
           protocol: UDP
         - port: 53
           protocol: TCP
-    # Access to other cluster namespaces (Vault, ArgoCD, Argo Workflows, etc.)
-    # Allows egress to RFC1918 private ranges used by cluster services
     - to:
         - ipBlock:
             cidr: 10.0.0.0/8
@@ -81,18 +86,17 @@ spec:
 {{- end }}
 
 {{- if $networking.allowInternetEgress }}
----
 # ─────────────────────────────────────────────────────────────────────────────
 # 4. Allow internet egress (only for admin/platform tenants).
-#    Allows all outbound traffic to public internet (0.0.0.0/0 except RFC1918).
 # ─────────────────────────────────────────────────────────────────────────────
+---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: allow-internet-egress
-  namespace: {{ $tenantName }}
+  namespace: {{ $ns }}
   labels:
-    {{- include "tenant.labels" . | nindent 4 }}
+    {{- include "tenant.labels" $ | nindent 4 }}
 spec:
   podSelector: {}
   policyTypes:
@@ -107,19 +111,17 @@ spec:
               - 192.168.0.0/16
 {{- end }}
 
----
 # ─────────────────────────────────────────────────────────────────────────────
 # 5. Allow internet egress for Argo Workflow pods only.
-#    Workflow pods need to clone repos (GitHub), push images (GHCR), etc.
-#    Selected by the label that Argo Workflows adds to all workflow pods.
 # ─────────────────────────────────────────────────────────────────────────────
+---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: allow-workflow-internet-egress
-  namespace: {{ $tenantName }}
+  namespace: {{ $ns }}
   labels:
-    {{- include "tenant.labels" . | nindent 4 }}
+    {{- include "tenant.labels" $ | nindent 4 }}
 spec:
   podSelector:
     matchExpressions:
@@ -136,17 +138,17 @@ spec:
               - 172.16.0.0/12
               - 192.168.0.0/16
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. Allow ingress from Traefik ingress controller.
+# ─────────────────────────────────────────────────────────────────────────────
 ---
-# ─────────────────────────────────────────────────────────────────────────────
-# 6. Allow ingress from Traefik ingress controller (for services with ingress).
-# ─────────────────────────────────────────────────────────────────────────────
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: allow-ingress-from-traefik
-  namespace: {{ $tenantName }}
+  namespace: {{ $ns }}
   labels:
-    {{- include "tenant.labels" . | nindent 4 }}
+    {{- include "tenant.labels" $ | nindent 4 }}
 spec:
   podSelector: {}
   policyTypes:
@@ -159,3 +161,4 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: traefik
+{{- end }}

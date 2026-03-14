@@ -1,17 +1,31 @@
 {{- $tenantName := include "tenant.name" . }}
-# Explicit Namespace resource to enforce Pod Security Standards.
+# Namespace resources to enforce Pod Security Standards.
 # ArgoCD ApplicationSet has CreateNamespace=true as fallback,
 # but this template takes precedence and adds required security labels.
+{{- if .Values.tenant.teams }}
+{{- /* Multi-team tenant: create a namespace per team */}}
+{{- range .Values.tenant.teams }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $tenantName }}-{{ .name }}
+  labels:
+    {{- include "tenant.labels" $ | nindent 4 }}
+    mctl.me/team: {{ .name | quote }}
+    pod-security.kubernetes.io/enforce: {{ $.Values.podSecurityLevel | default "baseline" }}
+    pod-security.kubernetes.io/audit: {{ $.Values.podSecurityLevel | default "baseline" }}
+    pod-security.kubernetes.io/warn: {{ $.Values.podSecurityLevel | default "baseline" }}
+{{- end }}
+{{- else }}
+{{- /* Legacy single-namespace tenant */}}
 apiVersion: v1
 kind: Namespace
 metadata:
   name: {{ $tenantName }}
   labels:
     {{- include "tenant.labels" . | nindent 4 }}
-    # Pod Security Standards — enforce configured profile (default: baseline)
-    # baseline: prevents privileged containers + host namespace access
-    # restricted: additionally requires non-root + dropped capabilities
-    # See: https://kubernetes.io/docs/concepts/security/pod-security-standards/
     pod-security.kubernetes.io/enforce: {{ .Values.podSecurityLevel | default "baseline" }}
     pod-security.kubernetes.io/audit: {{ .Values.podSecurityLevel | default "baseline" }}
     pod-security.kubernetes.io/warn: {{ .Values.podSecurityLevel | default "baseline" }}
+{{- end }}
