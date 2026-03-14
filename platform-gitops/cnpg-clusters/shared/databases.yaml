@@ -67,3 +67,14 @@ spec:
     name: shared-pg
   databaseReclaimPolicy: retain
 # tests-smoke-test-svc-db: ephemeral — created/deleted by smoke-test CWT, not managed here
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: mashkoffdmitry-knot-mvp-db
+spec:
+  name: "mashkoffdmitry-knot-mvp"
+  owner: "mashkoffdmitry-knot-mvp"
+  cluster:
+    name: shared-pg
+  databaseReclaimPolicy: retain
