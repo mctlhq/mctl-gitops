@@ -1,0 +1,12 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: hello-world
+  namespace: demo
+  description: Sample service for connector review
+  annotations:
+    mctl.ai/team: demo
+spec:
+  type: service
+  lifecycle: production
+  owner: demo

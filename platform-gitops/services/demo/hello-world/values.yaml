@@ -1,0 +1,29 @@
+# Service: hello-world
+# Team: demo
+
+# Chart: base-service
+
+image:
+  repository: nginx
+  tag: "1.27-alpine"
+service:
+  port: 80
+resources:
+  requests:
+    cpu: 50m
+    memory: 32Mi
+  limits:
+    cpu: 100m
+    memory: 64Mi
+env:
+  APP_ENV: demo
+ingress:
+  enabled: true
+  hosts:
+    - demo-hello-world.mctl.ai
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls:
+    - secretName: hello-world-tls
+      hosts:
+        - demo-hello-world.mctl.ai
