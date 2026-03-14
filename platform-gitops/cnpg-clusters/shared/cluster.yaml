@@ -105,6 +105,12 @@ spec:
         ensure: present
         passwordSecret:
           name: tests-pdb-test-svc-db-creds
+      - name: mashkoffdmitry-knot-mvp
+        login: true
+        connectionLimit: 10
+        ensure: present
+        passwordSecret:
+          name: mashkoffdmitry-knot-mvp-db-creds
       # - name: team1_app1
       #   login: true
       #   connectionLimit: 10
