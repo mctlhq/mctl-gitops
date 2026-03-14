@@ -136,6 +136,24 @@ roleRef:
   name: argo-workflows-admin-extra
   apiGroup: rbac.authorization.k8s.io
 ---
+# Allow mctl-api to submit and manage workflows in this tenant namespace.
+# mctl-api creates Workflow CRs here; the local argo-workflow-sa executes them.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: mctl-api-workflow-submitter
+  namespace: {{ $tenantName }}
+  labels:
+    {{- include "tenant.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: mctl-api
+    namespace: mctl-api
+roleRef:
+  kind: Role
+  name: argo-workflow-runner
+  apiGroup: rbac.authorization.k8s.io
+---
 # MinIO artifact credentials — required by Argo Workflows argoexec init container
 # to upload/download workflow artifacts (logs) to MinIO in this namespace
 apiVersion: external-secrets.io/v1beta1

@@ -1,6 +1,7 @@
-# Allow mctl-api to submit Argo Workflows and read ClusterWorkflowTemplates.
+# Allow mctl-api to read ClusterWorkflowTemplates and manage workflows in argo-workflows ns.
 # The ServiceAccount itself is created by the mctl-api Helm chart.
-# Workflows always execute in the argo-workflows namespace (infrastructure SA + secrets live there).
+# Per-tenant workflow submission RBAC is provisioned by the tenant Helm chart
+# (see helm-charts/tenant/templates/argo-workflow.yaml — mctl-api-workflow-submitter RB).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
