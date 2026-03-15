@@ -1,0 +1,9 @@
+apiVersion: v2
+name: tenant
+description: |
+  Helm chart for mctl.ai tenant provisioning.
+  Creates per-tenant Kubernetes resources: ResourceQuota, NetworkPolicy, LimitRange.
+  Namespace is created by the ArgoCD ApplicationSet (CreateNamespace=true).
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

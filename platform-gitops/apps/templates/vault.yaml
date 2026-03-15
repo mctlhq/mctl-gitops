@@ -1,0 +1,80 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: vault
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://helm.releases.hashicorp.com
+    chart: vault
+    targetRevision: 0.28.1
+    helm:
+      values: |
+        server:
+          ha:
+            enabled: true
+            replicas: 1
+            raft:
+              enabled: true
+              config: |
+                ui = true
+
+                listener "tcp" {
+                  tls_disable = 1
+                  address = "[::]:8200"
+                  cluster_address = "[::]:8201"
+                }
+
+                storage "raft" {
+                  path = "/vault/data"
+                }
+
+                service_registration "kubernetes" {}
+
+          standalone:
+            enabled: false
+
+          dataStorage:
+            enabled: true
+            size: 1Gi
+            storageClass: hcloud-volumes
+
+          ingress:
+            enabled: true
+            ingressClassName: traefik
+            annotations:
+              cert-manager.io/cluster-issuer: letsencrypt-prod
+            hosts:
+              - host: secrets.mctl.ai
+              - host: secrets.mctl.ai
+            tls:
+              - hosts:
+                  - secrets.mctl.ai
+                  - secrets.mctl.ai
+                secretName: vault-tls
+
+        ui:
+          enabled: true
+
+        injector:
+          enabled: false
+
+  destination:
+    server: {{ .Values.spec.destination.server }}
+    namespace: vault
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

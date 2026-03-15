@@ -1,0 +1,50 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterWorkflowTemplate
+metadata:
+  name: preview-delete
+  annotations:
+    workflows.argoproj.io/description: |
+      Delete a preview environment by running helm uninstall on the preview release.
+spec:
+  entrypoint: delete-pipeline
+  serviceAccountName: argo-workflow-sa
+
+  arguments:
+    parameters:
+      - name: team_name
+      - name: component_name
+      - name: preview_id
+
+  templates:
+    - name: delete-pipeline
+      dag:
+        tasks:
+          - name: delete-preview
+            template: delete
+
+    - name: delete
+      inputs:
+        parameters:
+          - name: team_name
+            value: "{{workflow.parameters.team_name}}"
+          - name: component_name
+            value: "{{workflow.parameters.component_name}}"
+          - name: preview_id
+            value: "{{workflow.parameters.preview_id}}"
+      script:
+        image: alpine/helm:3.16.4
+        command: [sh]
+        source: |
+          set -euo pipefail
+
+          TEAM="{{inputs.parameters.team_name}}"
+          COMPONENT="{{inputs.parameters.component_name}}"
+          PREVIEW_ID="{{inputs.parameters.preview_id}}"
+          RELEASE="preview-${COMPONENT}-${PREVIEW_ID}"
+
+          if helm status "${RELEASE}" -n "${TEAM}" > /dev/null 2>&1; then
+            helm uninstall "${RELEASE}" -n "${TEAM}" --wait
+            echo "Preview release ${RELEASE} uninstalled from namespace ${TEAM}"
+          else
+            echo "Release ${RELEASE} not found in namespace ${TEAM} — already deleted or never existed"
+          fi

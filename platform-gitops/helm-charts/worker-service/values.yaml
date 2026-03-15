@@ -1,0 +1,68 @@
+# =============================================================================
+# worker-service: default values
+# For background workers, queue consumers, cron jobs — no ingress, no HPA.
+# =============================================================================
+
+# -- Required: container image
+image:
+  repository: ""   # MUST be set per service
+  tag: "latest"    # MUST be pinned per service
+  pullPolicy: IfNotPresent
+
+# -- Workload type: "deployment" (default) or "cronjob"
+workloadType: deployment
+
+# -- Optional: command and args override
+command: []
+args: []
+
+# -- Required: resource limits
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+# -- Required: environment variables (flat key-value)
+env: {}
+
+# -- Optional: environment variables from ConfigMaps/Secrets
+envFrom: []
+
+# -- Optional: image pull secrets for private registries
+imagePullSecrets: []
+
+# -- Optional: replica count (only for deployment)
+replicaCount: 1
+
+# -- CronJob settings (only when workloadType: cronjob)
+cronjob:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  restartPolicy: OnFailure
+
+# -- Optional: service account
+serviceAccount:
+  create: false
+  name: ""
+  annotations: {}
+
+# -- Optional: extra volumes
+extraVolumes: []
+extraVolumeMounts: []
+
+# -- Pod-level settings
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# -- Health checks (optional for workers)
+probes:
+  liveness: {}
+  readiness: {}

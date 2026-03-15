@@ -1,0 +1,21 @@
+# ServiceMonitor for Argo Workflows controller metrics
+# Prometheus discovers this automatically (serviceMonitorSelectorNilUsesHelmValues: false)
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: argo-workflows-controller
+  namespace: argo-workflows
+  labels:
+    app.kubernetes.io/name: argo-workflows
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: workflow-controller
+      app.kubernetes.io/name: argo-workflows-workflow-controller
+  endpoints:
+    - port: metrics
+      interval: 30s
+      path: /metrics
+      scheme: https
+      tlsConfig:
+        insecureSkipVerify: true

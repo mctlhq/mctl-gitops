@@ -1,0 +1,5 @@
+site_name: Create Tenant
+site_description: Documentation for the Create Tenant template
+docs_dir: docs
+plugins:
+  - techdocs-core

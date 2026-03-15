@@ -1,0 +1,5 @@
+site_name: Delete Tenant
+site_description: Documentation for the Delete Tenant template
+docs_dir: docs
+plugins:
+  - techdocs-core

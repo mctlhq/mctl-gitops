@@ -1,0 +1,60 @@
+# Service: openclaw
+# Team: mashkoffdmitry
+
+# Chart: base-service
+
+image:
+  repository: ghcr.io/mctlhq/openclaw
+  tag: "main"
+imagePullSecrets:
+  - name: ghcr-credentials
+service:
+  port: 18789
+resources:
+  requests:
+    cpu: 200m
+    memory: 512Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+env:
+  APP_ENV: production
+  NODE_OPTIONS: "--max-old-space-size=768"
+  OPENCLAW_CONFIG_PATH: /config/openclaw.json
+probes:
+  startup:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    failureThreshold: 30
+  liveness:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 10
+    periodSeconds: 15
+  readiness:
+    path: /readyz
+    port: http
+    initialDelaySeconds: 5
+    periodSeconds: 10
+extraVolumeMounts:
+  - name: openclaw-config
+    mountPath: /config
+    readOnly: true
+extraVolumes:
+  - name: openclaw-config
+    configMap:
+      name: openclaw-config
+ingress:
+  enabled: true
+  hosts:
+    - mashkoffdmitry-openclaw.mctl.ai
+    - mashkoffdmitry-openclaw.mctl.me
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls:
+    - secretName: openclaw-tls
+      hosts:
+        - mashkoffdmitry-openclaw.mctl.ai
+        - mashkoffdmitry-openclaw.mctl.me

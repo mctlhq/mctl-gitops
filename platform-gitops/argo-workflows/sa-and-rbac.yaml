@@ -1,0 +1,154 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: argo-workflow-sa
+  namespace: argo-workflows
+---
+# SSO RBAC: admin access for admins group — ClusterRole = sees ALL namespaces
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: argo-workflows-admin
+  namespace: argo-workflows
+  annotations:
+    workflows.argoproj.io/rbac-rule: "'admins' in groups"
+    workflows.argoproj.io/rbac-rule-precedence: "10"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: argo-workflows-admin.service-account-token
+  namespace: argo-workflows
+  annotations:
+    kubernetes.io/service-account.name: argo-workflows-admin
+type: kubernetes.io/service-account-token
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: argo-workflows-admin-sso
+subjects:
+  - kind: ServiceAccount
+    name: argo-workflows-admin
+    namespace: argo-workflows
+roleRef:
+  kind: ClusterRole
+  name: argo-workflows-admin
+  apiGroup: rbac.authorization.k8s.io
+---
+# Allow workflow SA to create workflows (needed for resubmit/retry)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: argo-workflow-runner
+  namespace: argo-workflows
+rules:
+  - apiGroups: ["argoproj.io"]
+    resources: ["workflows", "workflowtaskresults"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+---
+# NOTE: Smoke-test permissions (secrets, pods/exec, deployments, externalsecrets)
+# are now namespace-scoped via per-tenant Role in helm-charts/tenant/templates/argo-workflow.yaml.
+# This prevents cross-tenant secret access through the central argo-workflow-sa.
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argo-workflow-runner
+  namespace: argo-workflows
+subjects:
+  - kind: ServiceAccount
+    name: argo-workflow-sa
+    namespace: argo-workflows
+roleRef:
+  kind: Role
+  name: argo-workflow-runner
+  apiGroup: rbac.authorization.k8s.io
+---
+# Allow workflow SA to trigger ArgoCD sync (annotate apps for hard refresh)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: argo-workflow-argocd-sync
+  namespace: argocd
+rules:
+  - apiGroups: ["argoproj.io"]
+    resources: ["applications"]
+    verbs: ["get", "list", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argo-workflow-argocd-sync
+  namespace: argocd
+subjects:
+  - kind: ServiceAccount
+    name: argo-workflow-sa
+    namespace: argo-workflows
+roleRef:
+  kind: Role
+  name: argo-workflow-argocd-sync
+  apiGroup: rbac.authorization.k8s.io
+---
+# Workflow SA: read ExternalSecrets + Secrets in platform-db (for smoke-test verification)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: argo-workflow-platform-db-read
+  namespace: platform-db
+rules:
+  - apiGroups: ["external-secrets.io"]
+    resources: ["externalsecrets"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argo-workflow-platform-db-read
+  namespace: platform-db
+subjects:
+  - kind: ServiceAccount
+    name: argo-workflow-sa
+    namespace: argo-workflows
+roleRef:
+  kind: Role
+  name: argo-workflow-platform-db-read
+  apiGroup: rbac.authorization.k8s.io
+---
+# SSO admin: events + secrets + pods/log access for viewing logs in the UI
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: argo-workflows-admin-extra
+rules:
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: argo-workflows-admin-extra
+subjects:
+  - kind: ServiceAccount
+    name: argo-workflows-admin
+    namespace: argo-workflows
+roleRef:
+  kind: ClusterRole
+  name: argo-workflows-admin-extra
+  apiGroup: rbac.authorization.k8s.io

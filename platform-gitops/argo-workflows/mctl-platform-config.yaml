@@ -1,0 +1,23 @@
+# Platform configuration for Argo Workflow templates.
+# Forks: edit these values to match your org — all workflow templates
+# read from this ConfigMap via envFrom, so this is the single source of truth.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mctl-platform-config
+  namespace: argo-workflows
+  annotations:
+    reflector.v1.k8s.emberstack.com/reflection-allowed: "true"
+    reflector.v1.k8s.emberstack.com/reflection-auto-enabled: "true"
+    reflector.v1.k8s.emberstack.com/reflection-auto-namespaces: ""
+data:
+  # GitHub organization that owns the repos
+  GITOPS_ORG: "mctlhq"
+  # GitOps repository name
+  GITOPS_REPO: "mctl-gitops"
+  # Primary platform domain (auto-generated service hostnames use this)
+  PLATFORM_DOMAIN: "mctl.ai"
+  # Alternate/mirror domain (optional, leave empty to disable mirroring)
+  PLATFORM_DOMAIN_ALT: "mctl.me"
+  # Container registry prefix (images are pushed as {CONTAINER_REGISTRY}/{component}:{tag})
+  CONTAINER_REGISTRY: "ghcr.io/mctlhq"

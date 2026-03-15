@@ -1,0 +1,6 @@
+hcloud_token               = "<your-hetzner-api-token>"
+ssh_public_key             = "~/.ssh/id_ed25519.pub"
+ssh_private_key            = "~/.ssh/id_ed25519"
+
+# All other secrets managed by Vault + ExternalSecrets
+# See: platform-gitops/apps/templates/

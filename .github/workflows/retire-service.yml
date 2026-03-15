@@ -1,0 +1,250 @@
+name: Retire Service
+
+on:
+  workflow_dispatch:
+    inputs:
+      team_name:
+        description: "Team name (e.g. payments)"
+        required: true
+        type: string
+      component_name:
+        description: "Service name (e.g. payment-api)"
+        required: true
+        type: string
+      component_type:
+        description: "Service type"
+        required: true
+        type: choice
+        options:
+          - base-service
+          - worker-service
+      delete_vault_secrets:
+        description: "Also delete Vault secrets?"
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  delete:
+    name: Delete service
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Determine service path
+        id: path
+        run: |
+          TYPE="${{ inputs.component_type }}"
+          TEAM="${{ inputs.team_name }}"
+          SERVICE="${{ inputs.component_name }}"
+
+          if [[ "$TYPE" == "base-service" ]]; then
+            DIR="platform-gitops/services/${TEAM}/${SERVICE}"
+          else
+            DIR="platform-gitops/workers/${TEAM}/${SERVICE}"
+          fi
+
+          echo "dir=${DIR}" >> $GITHUB_OUTPUT
+
+      - name: Validate service exists
+        run: |
+          DIR="${{ steps.path.outputs.dir }}"
+          if [[ ! -d "$DIR" ]]; then
+            echo "::error::Service directory not found: $DIR"
+            echo "## ❌ Service Not Found" >> $GITHUB_STEP_SUMMARY
+            echo "Directory \`$DIR\` does not exist." >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+          echo "Found service at $DIR"
+          ls -la "$DIR"
+
+      - name: Delete Vault secrets
+        if: inputs.delete_vault_secrets
+        continue-on-error: true
+        env:
+          VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
+          VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
+        run: |
+          TEAM="${{ inputs.team_name }}"
+          SERVICE="${{ inputs.component_name }}"
+          VAULT_PATH="teams/${TEAM}/${SERVICE}"
+
+          if [[ -z "$VAULT_ADDR" || -z "$VAULT_TOKEN" ]]; then
+            echo "::warning::VAULT_ADDR or VAULT_TOKEN not set, skipping Vault cleanup"
+            echo "⚠️ Vault secrets not deleted (missing credentials)" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          echo "🗑️  Deleting Vault secrets at ${VAULT_PATH}..."
+          
+          # Delete main secrets (all versions + metadata)
+          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -L \
+            -X DELETE \
+            -H "X-Vault-Token: ${VAULT_TOKEN}" \
+            "${VAULT_ADDR}/v1/secret/metadata/${VAULT_PATH}")
+
+          if [[ "$RESPONSE" == "204" || "$RESPONSE" == "404" ]]; then
+            echo "✅ Main secrets deleted: ${VAULT_PATH}"
+          else
+            echo "::warning::Main secrets delete returned HTTP ${RESPONSE}"
+          fi
+          
+          # Delete repo-pat if exists
+          PAT_RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -L \
+            -X DELETE \
+            -H "X-Vault-Token: ${VAULT_TOKEN}" \
+            "${VAULT_ADDR}/v1/secret/metadata/${VAULT_PATH}/repo-pat")
+          
+          if [[ "$PAT_RESPONSE" == "204" || "$PAT_RESPONSE" == "404" ]]; then
+            echo "✅ Repo PAT deleted: ${VAULT_PATH}/repo-pat"
+          else
+            echo "::warning::Repo PAT delete returned HTTP ${PAT_RESPONSE}"
+          fi
+          
+          echo "✅ Vault cleanup completed" >> $GITHUB_STEP_SUMMARY
+
+      - name: Remove service files
+        run: |
+          DIR="${{ steps.path.outputs.dir }}"
+          git rm -r "$DIR"
+
+          # Check if team directory is now empty and clean it up
+          TEAM_DIR=$(dirname "$DIR")
+          if [[ -d "$TEAM_DIR" ]] && [[ -z "$(ls -A "$TEAM_DIR")" ]]; then
+            rmdir "$TEAM_DIR"
+            echo "Removed empty team directory: $TEAM_DIR"
+          fi
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git commit -m "delete: ${{ inputs.team_name }}/${{ inputs.component_name }}"
+
+          for i in 1 2 3 4 5; do
+            git push && break
+            echo "⚠️  Push failed (attempt $i), rebasing..."
+            git pull --rebase origin main
+          done
+
+      - name: Remove entity from Backstage catalog
+        continue-on-error: true
+        env:
+          BACKSTAGE_URL: ${{ secrets.BACKSTAGE_URL || 'https://app.mctl.ai' }}
+          BACKSTAGE_TOKEN: ${{ secrets.BACKSTAGE_TOKEN }}
+        run: |
+          if [[ -z "$BACKSTAGE_TOKEN" ]]; then
+            echo "::warning::BACKSTAGE_TOKEN not set, skipping Backstage cleanup"
+            echo "⚠️ Entity will disappear after next catalog refresh (~5 min)" >> $GITHUB_STEP_SUMMARY
+            echo "💡 Or manually unregister at: Settings → Advanced → Unregister Entity" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          SERVICE="${{ inputs.component_name }}"
+          ENTITY_REF="component:default/${SERVICE}"
+          
+          echo "Removing entity from Backstage: ${ENTITY_REF}"
+          
+          # Delete entity using Backstage API
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X DELETE \
+            -H "Authorization: Bearer ${BACKSTAGE_TOKEN}" \
+            "${BACKSTAGE_URL}/api/catalog/entities/by-name/${ENTITY_REF}")
+          
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          
+          if [[ "$HTTP_CODE" == "204" || "$HTTP_CODE" == "404" ]]; then
+            echo "✅ Entity removed from Backstage catalog" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ Backstage API returned HTTP ${HTTP_CODE}" >> $GITHUB_STEP_SUMMARY
+            echo "Response: $(echo "$RESPONSE" | head -1)"
+          fi
+
+      - name: Trigger ArgoCD ApplicationSet refresh
+        continue-on-error: true
+        env:
+          ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER || 'ops.mctl.ai' }}
+          ARGOCD_TOKEN: ${{ secrets.ARGOCD_TOKEN }}
+        run: |
+          if [[ -z "$ARGOCD_TOKEN" ]]; then
+            echo "::warning::ARGOCD_TOKEN not set, skipping ApplicationSet refresh"
+            echo "⚠️ ApplicationSet will refresh automatically in ~3 minutes" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          APPSET="apps"
+
+          echo "Triggering refresh for ApplicationSet: ${APPSET}"
+          
+          # Patch ApplicationSet to trigger immediate refresh
+          curl -k -X PATCH \
+            -H "Authorization: Bearer ${ARGOCD_TOKEN}" \
+            -H "Content-Type: application/merge-patch+json" \
+            "https://${ARGOCD_SERVER}/api/v1/applications/argocd/${APPSET}" \
+            -d '{"metadata":{"annotations":{"argocd.argoproj.io/refresh":"hard"}}}'
+          
+          echo "✅ ApplicationSet refresh triggered" >> $GITHUB_STEP_SUMMARY
+
+      - name: Clean up empty namespace
+        continue-on-error: true
+        env:
+          KUBECONFIG_DATA: ${{ secrets.KUBECONFIG }}
+        run: |
+          if [[ -z "$KUBECONFIG_DATA" ]]; then
+            echo "::warning::KUBECONFIG not set, skipping namespace cleanup"
+            echo "⚠️ Namespace cleanup skipped (no cluster access)" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          TEAM="${{ inputs.team_name }}"
+          
+          # Setup kubectl
+          echo "$KUBECONFIG_DATA" | base64 -d > /tmp/kubeconfig
+          export KUBECONFIG=/tmp/kubeconfig
+          
+          # Wait for Application to be deleted (up to 2 minutes)
+          echo "Waiting for Application deletion..."
+          for i in {1..24}; do
+            if ! kubectl get application "${TEAM}-${{ inputs.component_name }}" -n argocd &>/dev/null; then
+              echo "Application deleted"
+              break
+            fi
+            sleep 5
+          done
+          
+          # Check if namespace is empty (no applications for this team)
+          APPS_COUNT=$(kubectl get application -n argocd -l team="${TEAM}" --no-headers 2>/dev/null | wc -l | tr -d ' ')
+          
+          if [[ "$APPS_COUNT" == "0" ]]; then
+            echo "No applications left for team ${TEAM}, deleting namespace..."
+            
+            # Check if namespace has any pods, deployments, etc.
+            RESOURCES=$(kubectl get all -n "${TEAM}" --no-headers 2>/dev/null | wc -l | tr -d ' ')
+            
+            if [[ "$RESOURCES" == "0" ]]; then
+              kubectl delete namespace "${TEAM}" --wait=false
+              echo "✅ Empty namespace '${TEAM}' marked for deletion" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "⚠️ Namespace '${TEAM}' still has resources, not deleting" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "ℹ️  Namespace '${TEAM}' has ${APPS_COUNT} other application(s), keeping it" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          rm -f /tmp/kubeconfig
+
+      - name: Success summary
+        run: |
+          echo "## ✅ Service Deleted" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Team** | \`${{ inputs.team_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Service** | \`${{ inputs.component_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Type** | \`${{ inputs.component_type }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Vault** | ${{ inputs.delete_vault_secrets && '✅ Deleted' || '⏭️ Skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "ArgoCD will remove Kubernetes resources on next sync." >> $GITHUB_STEP_SUMMARY

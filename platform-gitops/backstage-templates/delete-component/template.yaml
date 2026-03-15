@@ -1,0 +1,70 @@
+apiVersion: scaffolder.backstage.io/v1beta3
+kind: Template
+metadata:
+  name: retire-service
+  title: Retire Service
+  description: |
+    Permanently remove a service from the platform — deletes GitOps files, ArgoCD app,
+    Kubernetes resources, and Vault secrets.
+  tags:
+    - retire
+    - cleanup
+    - lifecycle
+    - argo
+  annotations:
+    backstage.io/techdocs-ref: dir:.
+spec:
+  owner: group:default/admins
+  type: lifecycle
+
+  parameters:
+    - title: Select Service to Retire
+      required:
+        - service
+      properties:
+        service:
+          title: Service to Retire
+          type: string
+          description: "Select the service you want to retire"
+          ui:field: OwnedEntityPicker
+          ui:options:
+            allowedKinds:
+              - Component
+
+    - title: Confirmation
+      required:
+        - confirmDeletion
+      properties:
+        confirmDeletion:
+          title: Type 'RETIRE' to confirm
+          type: string
+          description: "⚠️ This action is irreversible. All resources will be permanently removed (GitOps files, ArgoCD app, Kubernetes resources, Vault secrets)."
+          pattern: "^RETIRE$"
+
+  steps:
+    - id: parse-service
+      name: Fetch service details
+      action: catalog:fetch
+      input:
+        entityRef: ${{ parameters.service }}
+
+    - id: trigger-delete
+      name: Retire service via Argo Workflows
+      action: mctl:workflow:submit
+      input:
+        templateName: retire-service
+        namespace: ${{ steps['parse-service'].output.entity.metadata.labels.team or steps['parse-service'].output.entity.spec.owner | replace('group:', '') }}
+        parameters:
+          team_name: ${{ steps['parse-service'].output.entity.metadata.labels.team or steps['parse-service'].output.entity.spec.owner | replace('group:', '') }}
+          component_name: ${{ steps['parse-service'].output.entity.metadata.name }}
+          component_type: ${{ steps['parse-service'].output.entity.spec.type === 'worker' and 'worker-service' or 'base-service' }}
+          delete_vault_secrets: "true"
+
+  output:
+    links:
+      - title: Argo Workflows Run
+        icon: dashboard
+        url: ${{ steps['trigger-delete'].output.workflowUrl }}
+      - title: ArgoCD Dashboard
+        icon: dashboard
+        url: "https://ops.mctl.ai"

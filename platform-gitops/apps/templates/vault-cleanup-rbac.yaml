@@ -1,0 +1,8 @@
+# ServiceAccount for vault-cleanup PreDelete hook
+# Authentication is handled via Vault Kubernetes auth method
+# No static tokens or secrets needed - Pod authenticates using ServiceAccount JWT
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vault-cleanup
+  namespace: default

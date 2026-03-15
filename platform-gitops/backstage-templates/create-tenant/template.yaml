@@ -1,0 +1,142 @@
+apiVersion: scaffolder.backstage.io/v1beta3
+kind: Template
+metadata:
+  name: create-tenant
+  title: Create Tenant
+  description: |
+    Provision a new tenant on the mctl.ai platform.
+    Creates a dedicated Kubernetes namespace with ResourceQuota, NetworkPolicy, and LimitRange.
+    Also creates a scoped Vault policy and ArgoCD RBAC entry for the team.
+
+  tags:
+    - tenant
+    - provisioning
+    - kubernetes
+    - argo
+  annotations:
+    backstage.io/techdocs-ref: dir:.
+    mctl.me/admin-only: "true"
+spec:
+  owner: group:default/admins
+  type: provisioning
+  presentation:
+    buttonLabels:
+      createButtonText: 'Create Tenant'
+      reviewButtonText: 'Review & Create'
+
+  parameters:
+    - title: Tenant Identity
+      required:
+        - tenantName
+        - displayName
+      properties:
+        tenantName:
+          title: Tenant Name
+          type: string
+          description: "Lowercase, DNS-safe slug (e.g. my-team). Used as Kubernetes namespace name."
+          pattern: "^[a-z0-9][a-z0-9-]{1,62}$"
+          ui:field: TenantNameField
+        displayName:
+          title: Display Name
+          type: string
+          description: "Human-readable name shown in Backstage and dashboards."
+        description:
+          title: Description
+          type: string
+          description: "Brief description of the team and what they build."
+          ui:widget: textarea
+          ui:options:
+            rows: 3
+        contactEmail:
+          title: Contact Email
+          type: string
+          description: "Team email for platform notifications."
+
+    - title: Resource Quotas
+      properties:
+        quotaCpuReq:
+          title: CPU Requests (total)
+          type: string
+          default: "2"
+          description: "Sum of CPU requests across all pods in the namespace (e.g. 1, 2, 500m)."
+        quotaCpuLim:
+          title: CPU Limits (total)
+          type: string
+          default: "4"
+          description: "Sum of CPU limits across all pods in the namespace."
+        quotaMemoryReq:
+          title: Memory Requests (total)
+          type: string
+          default: "3Gi"
+          description: "Sum of memory requests (e.g. 1Gi, 2Gi)."
+        quotaMemoryLim:
+          title: Memory Limits (total)
+          type: string
+          default: "6Gi"
+          description: "Sum of memory limits."
+        quotaPods:
+          title: Max Pods
+          type: string
+          default: "10"
+          description: "Maximum number of pods in the namespace."
+
+    - title: Networking
+      properties:
+        allowInternetEgress:
+          title: Allow Internet Egress
+          type: boolean
+          default: true
+          description: |
+            Allow pods in this namespace to make outbound requests to the internet.
+            Enabled by default — workflow pods need to reach GitHub, and services may call external APIs.
+
+  steps:
+    - id: create-tenant
+      name: Create tenant via Backstage API
+      action: http:backstage:request
+      input:
+        method: POST
+        path: /api/tenant-management/tenants
+        body:
+          tenantName: ${{ parameters.tenantName }}
+          displayName: ${{ parameters.displayName }}
+          description: ${{ parameters.description | default('') }}
+          contactEmail: ${{ parameters.contactEmail | default('') }}
+          quotaCpuReq: ${{ parameters.quotaCpuReq | default('2') }}
+          quotaCpuLim: ${{ parameters.quotaCpuLim | default('4') }}
+          quotaMemoryReq: ${{ parameters.quotaMemoryReq | default('3Gi') }}
+          quotaMemoryLim: ${{ parameters.quotaMemoryLim | default('6Gi') }}
+          quotaPods: ${{ parameters.quotaPods | default('10') }}
+          allowInternetEgress: ${{ parameters.allowInternetEgress }}
+          creatorUserId: ${{ user.entity.metadata.name }}
+
+  output:
+    text:
+      - title: Tenant Name
+        content: "`${{ parameters.tenantName }}`"
+      - title: Namespace
+        content: "`${{ parameters.tenantName }}`"
+      - title: Resource Quotas
+        content: |
+          CPU: `${{ parameters.quotaCpuReq }}` req / `${{ parameters.quotaCpuLim }}` lim
+          Memory: `${{ parameters.quotaMemoryReq }}` req / `${{ parameters.quotaMemoryLim }}` lim
+          Pods: `${{ parameters.quotaPods }}`
+      - title: Vault Policy
+        content: "`vault-policy: tenant-${{ parameters.tenantName }}`"
+      - title: Next Steps
+        content: |
+          1. ✅ Tenant directory committed to `mctl-gitops`
+          2. ⏳ ArgoCD will provision namespace + quotas + NetworkPolicy (~2-3 min)
+          3. ⏳ Backstage catalog will refresh tenant Resource entity (~5 min)
+          4. Add team members via Backstage tenant management
+          5. Members get ArgoCD RBAC automatically via OIDC teams
+    links:
+      - title: Argo Workflows Run
+        icon: dashboard
+        url: ${{ steps['create-tenant'].output.body.workflowUrl }}
+      - title: ArgoCD — Tenant App
+        icon: dashboard
+        url: "https://ops.mctl.ai/applications/tenant-${{ parameters.tenantName }}"
+      - title: Backstage Catalog — Tenant
+        icon: catalog
+        url: "https://app.mctl.ai/catalog/default/resource/tenant-${{ parameters.tenantName }}"

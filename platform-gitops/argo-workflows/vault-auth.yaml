@@ -1,0 +1,97 @@
+# Vault Kubernetes auth configuration for Argo Workflows
+#
+# This file documents the Vault setup needed. Apply these commands manually
+# or via Terraform after deploying Argo Workflows:
+#
+# 1. Enable Kubernetes auth (if not already enabled):
+#    vault auth enable kubernetes
+#
+# 2. Configure Kubernetes auth:
+#    vault write auth/kubernetes/config \
+#      kubernetes_host="https://kubernetes.default.svc:443"
+#
+# 3. Create TWO policies for Argo Workflows (split for least-privilege):
+#
+#    a) argo-workflow-teams-rw — read/write team secrets (used by all workflows)
+#       vault policy write argo-workflow-teams-rw \
+#         infrastructure/k3s-preview/cluster-bootstrap/vault-config/vault-policy-argo-workflow-teams-rw.hcl
+#
+#    b) argo-workflow-provisioner — create per-tenant Vault policies (admin ops only)
+#       vault policy write argo-workflow-provisioner \
+#         infrastructure/k3s-preview/cluster-bootstrap/vault-config/vault-policy-argo-workflow-provisioner.hcl
+#
+# 4. Create Kubernetes auth role (attach both policies):
+#    vault write auth/kubernetes/role/argo-workflow \
+#      bound_service_account_names=argo-workflow-sa \
+#      bound_service_account_namespaces=argo-workflows \
+#      policies="argo-workflow-teams-rw,argo-workflow-provisioner" \
+#      ttl=1h
+#
+#    NOTE: The old "argo-workflow-global" policy should be deleted after migration:
+#      vault policy delete argo-workflow-global
+#
+# Per-tenant policies (created by wft-create-tenant workflow):
+#
+#    vault policy write tenant-{TEAM} - <<EOF
+#    # Scoped access for tenant {TEAM}
+#    path "secret/data/teams/{TEAM}/*" {
+#      capabilities = ["create", "read", "update", "delete", "list"]
+#    }
+#    path "secret/metadata/teams/{TEAM}/*" {
+#      capabilities = ["read", "list", "delete"]
+#    }
+#    EOF
+#
+# TODO (P1): Create a dedicated ServiceAccount (argo-workflow-provisioner-sa)
+# for provisioning workflows, and bind argo-workflow-provisioner policy only
+# to that SA. This way regular CI/CD workflows cannot modify Vault policies.
+
+---
+# ExternalSecret for Argo Workflows database credentials
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: argo-workflows-db-creds
+  namespace: argo-workflows
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: vault-backend
+  target:
+    name: argo-workflows-db-creds
+    creationPolicy: Owner
+  data:
+    - secretKey: username
+      remoteRef:
+        key: platform/argo-workflows/database
+        property: username
+    - secretKey: password
+      remoteRef:
+        key: platform/argo-workflows/database
+        property: password
+
+---
+# ExternalSecret for MinIO credentials (used as Argo Workflows artifact repository)
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: minio-artifact-credentials
+  namespace: argo-workflows
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: vault-backend
+  target:
+    name: minio-artifact-credentials
+    creationPolicy: Owner
+  data:
+    - secretKey: accessKey
+      remoteRef:
+        key: teams/platform/minio
+        property: root-user
+    - secretKey: secretKey
+      remoteRef:
+        key: teams/platform/minio
+        property: root-password

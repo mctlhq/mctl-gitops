@@ -1,0 +1,241 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: monitoring
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://prometheus-community.github.io/helm-charts
+    chart: kube-prometheus-stack
+    targetRevision: "56.6.2"
+    helm:
+      values: |
+        grafana:
+          admin:
+            existingSecret: grafana-admin-secret
+            userKey: admin-user
+            passwordKey: admin-password
+          ingress:
+            enabled: true
+            ingressClassName: traefik
+            annotations:
+              cert-manager.io/cluster-issuer: letsencrypt-prod
+            hosts:
+              - grafana.mctl.ai
+              - grafana.mctl.ai
+            tls:
+              - secretName: grafana-tls
+                hosts:
+                  - grafana.mctl.ai
+                  - grafana.mctl.ai
+          defaultDashboardsEnabled: true
+          sidecar:
+            datasources:
+              enabled: true
+        prometheus:
+          prometheusSpec:
+            # Pick up all ServiceMonitors across all namespaces
+            serviceMonitorSelectorNilUsesHelmValues: false
+            serviceMonitorNamespaceSelector: {}
+            serviceMonitorSelector: {}
+            retention: 7d
+            storageSpec:
+              volumeClaimTemplate:
+                spec:
+                  accessModes: ["ReadWriteOnce"]
+                  resources:
+                    requests:
+                      storage: 20Gi
+        alertmanager:
+          enabled: true
+          alertmanagerSpec:
+            secrets:
+              - alertmanager-telegram-secret
+            storage:
+              volumeClaimTemplate:
+                spec:
+                  accessModes: ["ReadWriteOnce"]
+                  resources:
+                    requests:
+                      storage: 1Gi
+          config:
+            global:
+              resolve_timeout: 5m
+              telegram_api_url: "https://api.telegram.org"
+            route:
+              receiver: telegram
+              group_by: ["alertname", "namespace"]
+              group_wait: 30s
+              group_interval: 5m
+              repeat_interval: 4h
+              routes:
+                - receiver: "null"
+                  matchers:
+                    - alertname =~ "InfoInhibitor|Watchdog"
+                # K3s embeds controller-manager, scheduler, and replaces kube-proxy
+                # These metrics are never exported, so these alerts are always false positives
+                - receiver: "null"
+                  matchers:
+                    - alertname =~ "KubeControllerManagerDown|KubeSchedulerDown|KubeProxyDown"
+                # Argo Workflow step pods are expected to be in Error/Completed state
+                # and live in tenant namespaces — suppress pod-level alerts for them
+                - receiver: "null"
+                  matchers:
+                    - alertname =~ "KubePodNotReady|PodNotReady"
+                    - namespace = "argo-workflows"
+                # Forward actionable alerts to mctl-agent for auto-diagnosis/fix
+                - receiver: mctl-agent
+                  continue: true
+                  matchers:
+                    - alertname =~ "PodCrashLooping|KubePodNotReady|PodNotReady|TenantCPUQuotaHigh|TenantMemoryQuotaHigh|ArgoWorkflowFailed|ArgoWorkflowHighFailureRate"
+            receivers:
+              - name: "null"
+              - name: mctl-agent
+                webhook_configs:
+                  - url: "http://admins-mctl-agent.admins.svc:8081/api/v1/alerts"
+                    send_resolved: true
+              - name: telegram
+                telegram_configs:
+                  - bot_token_file: /etc/alertmanager/secrets/alertmanager-telegram-secret/bot-token
+                    chat_id: {{ .Values.alertmanager.telegramChatId | int64 }}
+                    parse_mode: HTML
+                    message: |
+                      {{ "{{" }} range .Alerts {{ "}}" }}
+                      <b>{{ "{{" }} .Status | toUpper {{ "}}" }}: {{ "{{" }} .Labels.alertname {{ "}}" }}</b>
+                      {{ "{{" }} .Annotations.summary {{ "}}" }}
+                      <i>Namespace: {{ "{{" }} .Labels.namespace {{ "}}" }}</i>
+                      {{ "{{" }} end {{ "}}" }}
+
+        defaultRules:
+          disabled:
+            # Overridden below with Workflow-pod exclusion
+            KubePodNotReady: true
+
+        # Critical alerts for multi-tenant platform
+        additionalPrometheusRulesMap:
+          platform-alerts:
+            groups:
+              - name: node-alerts
+                rules:
+                  - alert: NodeHighCPU
+                    expr: 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 85
+                    for: 10m
+                    labels:
+                      severity: warning
+                    annotations:
+                      summary: "Node {{ "{{" }} $labels.instance {{ "}}" }} CPU > 85%"
+                  - alert: NodeHighMemory
+                    expr: (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100 > 90
+                    for: 5m
+                    labels:
+                      severity: critical
+                    annotations:
+                      summary: "Node {{ "{{" }} $labels.instance {{ "}}" }} memory > 90%"
+                  - alert: NodeDiskPressure
+                    expr: (1 - node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100 > 85
+                    for: 10m
+                    labels:
+                      severity: warning
+                    annotations:
+                      summary: "Node {{ "{{" }} $labels.instance {{ "}}" }} disk > 85%"
+              - name: pod-alerts
+                rules:
+                  - alert: KubePodNotReady
+                    expr: |
+                      sum by (namespace, pod, cluster) (
+                        max by (namespace, pod, cluster) (
+                          kube_pod_status_phase{job="kube-state-metrics", phase=~"Pending|Unknown|Failed"}
+                        ) * on (namespace, pod, cluster) group_left(owner_kind) topk by (namespace, pod, cluster) (
+                          1, max by (namespace, pod, owner_kind, cluster) (
+                            kube_pod_owner{owner_kind!~"Job|Workflow"}
+                          )
+                        )
+                      ) > 0
+                    for: 15m
+                    labels:
+                      severity: warning
+                    annotations:
+                      summary: "Pod {{ "{{" }} $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.pod {{ "}}" }} has been in a non-ready state for more than 15 minutes."
+                  - alert: PodCrashLooping
+                    expr: rate(kube_pod_container_status_restarts_total[15m]) * 60 * 15 > 3
+                    for: 5m
+                    labels:
+                      severity: critical
+                    annotations:
+                      summary: "Pod {{ "{{" }} $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.pod {{ "}}" }} crash-looping"
+                  - alert: PodNotReady
+                    expr: |
+                      (kube_pod_status_ready{condition="true"} == 0
+                        unless on(pod, namespace) kube_pod_status_phase{phase=~"Succeeded|Failed"} == 1)
+                      unless on(pod, namespace) kube_pod_owner{owner_kind=~"Workflow|Job"} == 1
+                    for: 15m
+                    labels:
+                      severity: warning
+                    annotations:
+                      summary: "Pod {{ "{{" }} $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.pod {{ "}}" }} not ready"
+              - name: tenant-alerts
+                rules:
+                  - alert: TenantCPUQuotaHigh
+                    expr: sum by(namespace) (rate(container_cpu_usage_seconds_total[5m])) / on(namespace) kube_resourcequota{resource="requests.cpu",type="hard"} > 0.8
+                    for: 10m
+                    labels:
+                      severity: warning
+                    annotations:
+                      summary: "Tenant {{ "{{" }} $labels.namespace {{ "}}" }} using >80% CPU quota"
+                  - alert: TenantMemoryQuotaHigh
+                    expr: sum by(namespace) (container_memory_working_set_bytes) / on(namespace) kube_resourcequota{resource="requests.memory",type="hard"} > 0.85
+                    for: 5m
+                    labels:
+                      severity: warning
+                    annotations:
+                      summary: "Tenant {{ "{{" }} $labels.namespace {{ "}}" }} using >85% memory quota"
+              - name: vault-alerts
+                rules:
+                  - alert: VaultSealed
+                    expr: vault_core_unsealed == 0
+                    for: 2m
+                    labels:
+                      severity: critical
+                    annotations:
+                      summary: "Vault instance is sealed"
+              - name: argo-workflows-alerts
+                rules:
+                  - alert: ArgoWorkflowFailed
+                    expr: increase(argo_workflows_total_count{phase="Failed"}[5m]) > 0
+                    for: 5m
+                    labels:
+                      severity: warning
+                    annotations:
+                      summary: "Argo Workflow failed in {{ "{{" }} $labels.exported_namespace {{ "}}" }} ({{ "{{" }} $value {{ "}}" }} failures in 5m)"
+                  - alert: ArgoWorkflowHighFailureRate
+                    expr: sum(increase(argo_workflows_total_count{phase="Failed"}[30m])) > 5
+                    for: 0m
+                    labels:
+                      severity: critical
+                    annotations:
+                      summary: "High Argo Workflow failure rate: {{ "{{" }} $value {{ "}}" }} total failures in 30m"
+        kubeStateMetrics:
+          enabled: true
+        nodeExporter:
+          enabled: true
+
+  destination:
+    server: {{ .Values.spec.destination.server }}
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true
+      - ServerSideApply=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

@@ -1,0 +1,120 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterWorkflowTemplate
+metadata:
+  name: remove-custom-domain
+  annotations:
+    workflows.argoproj.io/description: |
+      Remove a custom domain from a service:
+        1. Remove domain from ingress.hosts in values.yaml
+        2. Clean up custom TLS hosts
+        3. Commit to gitops repo → ArgoCD syncs
+spec:
+  entrypoint: remove-domain-pipeline
+  serviceAccountName: argo-workflow-sa
+
+  arguments:
+    parameters:
+      - name: team_name
+      - name: service_name
+      - name: domain
+
+  templates:
+    - name: remove-domain-pipeline
+      dag:
+        tasks:
+          - name: remove-domain
+            template: do-remove-domain
+
+    - name: do-remove-domain
+      inputs:
+        parameters:
+          - name: team_name
+            value: "{{workflow.parameters.team_name}}"
+          - name: service_name
+            value: "{{workflow.parameters.service_name}}"
+          - name: domain
+            value: "{{workflow.parameters.domain}}"
+      script:
+        image: alpine:3.19
+        command: [sh]
+        envFrom:
+          - configMapRef:
+              name: mctl-platform-config
+        source: |
+          set -e
+          apk add --no-cache curl git openssh-client yq > /dev/null 2>&1
+
+          TEAM="{{inputs.parameters.team_name}}"
+          SERVICE="{{inputs.parameters.service_name}}"
+          DOMAIN="{{inputs.parameters.domain}}"
+          BACKSTAGE_URL="http://backstage.backstage.svc.cluster.local:7007"
+
+          # ── Set up SSH for git ─────────────────────────────────────────────
+          mkdir -p ~/.ssh
+          cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  StrictHostKeyChecking no\n' > ~/.ssh/config
+          chmod 600 ~/.ssh/config
+
+          # ── Clone mctl-gitops ────────────────────────────────────────────────
+          git clone --depth=1 "git@github.com:${GITOPS_ORG}/${GITOPS_REPO}.git" /tmp/mctl-gitops
+          cd /tmp/mctl-gitops
+          git config user.name "argo-workflows[bot]"
+          git config user.email "argo-workflows[bot]@users.noreply.github.com"
+
+          SVC_VALUES="platform-gitops/services/${TEAM}/${SERVICE}/values.yaml"
+          if [ ! -f "$SVC_VALUES" ]; then
+            echo "❌ Service not found: ${TEAM}/${SERVICE}"
+            exit 1
+          fi
+
+          # ── Remove domain from ingress.hosts ───────────────────────────────
+          echo "📝 Removing ${DOMAIN} from ingress.hosts..."
+          yq eval -i "del(.ingress.hosts[] | select(. == \"${DOMAIN}\"))" "$SVC_VALUES"
+
+          # ── Remove domain from custom TLS hosts ────────────────────────────
+          CUSTOM_TLS_NAME="${SERVICE}-custom-tls"
+          yq eval -i "del((.ingress.tls[] | select(.secretName == \"${CUSTOM_TLS_NAME}\")).hosts[] | select(. == \"${DOMAIN}\"))" "$SVC_VALUES" 2>/dev/null || true
+
+          # If custom TLS has no more hosts, remove the entry entirely
+          REMAINING=$(yq eval "(.ingress.tls[] | select(.secretName == \"${CUSTOM_TLS_NAME}\")).hosts | length" "$SVC_VALUES" 2>/dev/null || echo "0")
+          if [ "$REMAINING" = "0" ]; then
+            yq eval -i "del(.ingress.tls[] | select(.secretName == \"${CUSTOM_TLS_NAME}\"))" "$SVC_VALUES" 2>/dev/null || true
+            # Also remove the Certificate resource
+            CERT_DIR="platform-gitops/services/${TEAM}/${SERVICE}"
+            rm -f "${CERT_DIR}/custom-domain-cert-"*.yaml 2>/dev/null || true
+          fi
+
+          # ── Commit and push ────────────────────────────────────────────────
+          git add -A
+          if git diff --cached --quiet; then
+            echo "ℹ️  Nothing to commit — domain was not in ingress"
+            exit 0
+          fi
+
+          git commit -m "feat: remove custom domain ${DOMAIN} from ${TEAM}/${SERVICE}"
+
+          for i in $(seq 1 5); do
+            if git push origin HEAD:main; then
+              echo "✅ Pushed — ArgoCD will sync"
+              break
+            fi
+            git pull --rebase origin main
+          done
+
+          # ── Callback to Backstage to delete domain record ──────────────────
+          echo "📡 Notifying Backstage..."
+          DOMAIN_DATA=$(curl -sS "${BACKSTAGE_URL}/api/custom-domains/domains?team=${TEAM}&service=${SERVICE}" 2>/dev/null)
+          DOMAIN_ID=$(echo "$DOMAIN_DATA" | grep -o "\"id\":\"[^\"]*\"" | grep -B0 "$DOMAIN" | head -1 | sed 's/"id":"//;s/"//')
+          if [ -n "$DOMAIN_ID" ]; then
+            curl -sS -X DELETE "${BACKSTAGE_URL}/api/custom-domains/domains/${DOMAIN_ID}" 2>/dev/null || true
+          fi
+
+          echo "🎉 Custom domain ${DOMAIN} removed from ${TEAM}/${SERVICE}"
+        volumeMounts:
+          - name: deploy-key
+            mountPath: /secrets/deploy-key
+      volumes:
+        - name: deploy-key
+          secret:
+            secretName: mctl-gitops-deploy-key

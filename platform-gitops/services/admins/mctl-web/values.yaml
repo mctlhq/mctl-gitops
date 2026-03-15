@@ -1,0 +1,52 @@
+# Service: mctl-web
+# Team: admins
+# Environment: production
+# Chart: base-service
+
+image:
+  repository: ghcr.io/mctlhq/mctl-web
+  tag: "4.3.0"
+imagePullSecrets:
+  - name: ghcr-credentials
+service:
+  port: 80
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+env:
+  APP_ENV: production
+  t: "123"
+  r: "321"
+ingress:
+  enabled: true
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    - mctl.me
+    - mctl.ru
+    - mctl.ai
+  tls:
+    - secretName: mctl-web-tls
+      hosts:
+        - mctl.me
+        - mctl.ru
+        - mctl.ai
+probes:
+  liveness: null
+  readiness: null
+externalSecret:
+  targetSecret: mctl-web-secrets
+  data:
+    - secretKey: s
+      remoteKey: teams/admins/mctl-web
+      property: s
+    - secretKey: r
+      remoteKey: teams/admins/mctl-web
+      property: r
+envFrom:
+  - secretRef:
+      name: mctl-web-secrets

@@ -1,0 +1,29 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: mctl-web
+  description: "mctl-web service deployed to production"
+  annotations:
+    backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=admins-mctl-web
+    backstage.io/kubernetes-namespace: admins
+    argocd/app-name: admins-mctl-web
+    github.com/source-repo: mctlhq/mctl-web
+    mctl.me/auto-deploy: "confirm"
+  links:
+    - url: https://ops.mctl.ai/applications/argocd/admins-mctl-web
+      title: ArgoCD
+      icon: dashboard
+    - url: https://github.com/mctlhq/mctl-web
+      title: Source Repository
+      icon: github
+    - url: https://mctl.ai
+      title: Service URL
+      icon: web
+  labels:
+    team: admins
+    env: apps
+spec:
+  type: service
+  lifecycle: production
+  owner: group:admins
+  system: team-admins

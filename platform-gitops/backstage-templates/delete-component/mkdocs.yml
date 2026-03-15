@@ -1,0 +1,5 @@
+site_name: Retire Service
+site_description: Documentation for the Retire Service template
+docs_dir: docs
+plugins:
+  - techdocs-core

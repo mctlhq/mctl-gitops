@@ -1,0 +1,36 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: apps
+  namespace: argocd
+spec:
+  description: Services and workers
+
+  sourceRepos:
+    - {{ .Values.spec.source.repoURL }}
+
+  destinations:
+    - server: {{ .Values.spec.destination.server }}
+      namespace: "*"
+
+  # No cluster-scoped resources allowed — namespaces are managed by the
+  # "platform" project via tenant ApplicationSet. Apps should only deploy
+  # namespace-scoped resources into their own tenant namespace.
+  clusterResourceWhitelist: []
+
+  namespaceResourceWhitelist:
+    - group: ""
+      kind: "*"
+    - group: apps
+      kind: "*"
+    - group: networking.k8s.io
+      kind: "*"
+    - group: autoscaling
+      kind: "*"
+    - group: batch
+      kind: "*"
+    - group: external-secrets.io
+      kind: "*"
+
+  orphanedResources:
+    warn: true

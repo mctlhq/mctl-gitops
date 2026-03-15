@@ -1,0 +1,93 @@
+apiVersion: scaffolder.backstage.io/v1beta3
+kind: Template
+metadata:
+  name: update-environment
+  title: Update Environment
+  description: |
+    Update environment variables and secrets for a running service without triggering a rebuild.
+  tags:
+    - configure
+    - secrets
+    - environment
+    - argo
+  annotations:
+    backstage.io/techdocs-ref: dir:.
+spec:
+  owner: group:default/admins
+  type: configuration
+
+  parameters:
+    - title: Service
+      required:
+        - serviceName
+      properties:
+        serviceName:
+          title: Service
+          type: string
+          description: "Select the deployed service to update"
+          ui:field: OwnedEntityPicker
+          ui:options:
+            allowedKinds:
+              - Component
+
+    - title: Environment
+      properties:
+        currentConfig:
+          title: " "
+          type: string
+          ui:field: CurrentConfig
+        envVars:
+          title: Environment Variables
+          type: string
+          description: "KEY=VALUE pairs, one per line. Stored as plaintext in GitOps manifests — do not put secrets here."
+          ui:field: EnvVarsEditor
+
+    - title: Secure Variables
+      properties:
+        secretEnvVars:
+          title: Secure Variables
+          type: string
+          description: "KEY=VALUE pairs, one per line. Stored securely in Vault — never exposed in Git."
+          ui:field: SecureVarsEditor
+
+  steps:
+    - id: fetch-service
+      name: Fetch service details
+      action: catalog:fetch
+      input:
+        entityRef: ${{ parameters.serviceName }}
+
+    - id: update-config
+      name: Apply changes via Argo Workflows
+      if: ${{ parameters.envVars or parameters.secretEnvVars }}
+      action: mctl:workflow:submit
+      input:
+        templateName: deploy-service
+        namespace: ${{ steps['fetch-service'].output.entity.metadata.labels.team or steps['fetch-service'].output.entity.spec.owner | replace('group:', '') }}
+        parameters:
+          action: update-config
+          team_name: ${{ steps['fetch-service'].output.entity.metadata.labels.team or steps['fetch-service'].output.entity.spec.owner | replace('group:', '') }}
+          component_name: ${{ steps['fetch-service'].output.entity.metadata.name }}
+          env_vars: ${{ parameters.envVars | default('') }}
+          secret_env_vars: ${{ parameters.secretEnvVars | default('') }}
+          autoscaling_enabled: "false"
+          min_replicas: "1"
+          max_replicas: "5"
+          cpu_threshold: "80"
+
+  output:
+    text:
+      - title: Summary
+        content: |
+          **Service:** `${{ steps['fetch-service'].output.entity.metadata.labels.team or steps['fetch-service'].output.entity.spec.owner | replace('group:', '') }}/${{ steps['fetch-service'].output.entity.metadata.name }}`
+
+          ${{ parameters.secretEnvVars and '✅ **Secrets** updated — stored in Vault and synced to Kubernetes automatically.' or '' }}
+
+          ${{ parameters.envVars and '✅ **Env vars** updated — ArgoCD will sync automatically (~2-3 min).' or '' }}
+    links:
+      - title: Argo Workflows Run
+        icon: dashboard
+        url: ${{ steps['update-config'].output.workflowUrl }}
+      - title: ArgoCD Dashboard
+        icon: dashboard
+        url: "https://ops.mctl.ai"

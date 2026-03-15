@@ -1,0 +1,152 @@
+name: Build Image
+run-name: "build-${{ inputs.build_id }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: "Source repo (e.g. openclaw/openclaw)"
+        required: true
+        type: string
+      git_ref:
+        description: "Git ref: branch, tag, or commit SHA"
+        required: true
+        type: string
+      image_name:
+        description: "Full image name (e.g. ghcr.io/mctlhq/openclaw)"
+        required: true
+        type: string
+      image_tag:
+        description: "Image tag (e.g. main-abc1234)"
+        required: true
+        type: string
+      dockerfile_path:
+        description: "Path to Dockerfile in source repo"
+        required: false
+        default: "Dockerfile"
+        type: string
+      team_name:
+        description: "Team name (for Vault PAT lookup)"
+        required: true
+        type: string
+      component_name:
+        description: "Service name (for Vault PAT lookup)"
+        required: true
+        type: string
+      build_id:
+        description: "Unique build ID for correlation with Argo workflow"
+        required: true
+        type: string
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build:
+    name: Build & Push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      # --- Tier 1: Vault PAT ---
+      - name: Fetch Vault PAT
+        id: vault_pat
+        run: |
+          REPO="${{ inputs.repo }}"
+          echo "repo_owner=${REPO%%/*}" >> $GITHUB_OUTPUT
+          echo "repo_name=${REPO##*/}" >> $GITHUB_OUTPUT
+
+          PAT=""
+          if [[ -n "${{ secrets.VAULT_ADDR }}" && -n "${{ secrets.VAULT_TOKEN }}" ]]; then
+            echo "🔑 Vault configured — fetching repo PAT…"
+            VAULT_URL="${{ secrets.VAULT_ADDR }}/v1/secret/data/teams/${{ inputs.team_name }}/${{ inputs.component_name }}/repo-pat"
+            HTTP_CODE=$(curl -sL -o /tmp/vault-resp.json -w "%{http_code}" \
+              -H "X-Vault-Token: ${{ secrets.VAULT_TOKEN }}" \
+              "$VAULT_URL" 2>/dev/null || echo "000")
+            echo "   Vault HTTP status: $HTTP_CODE"
+            if [[ "$HTTP_CODE" == "200" ]]; then
+              PAT=$(jq -r '.data.data.pat // empty' /tmp/vault-resp.json 2>/dev/null || true)
+              if [[ -n "$PAT" ]]; then
+                echo "   ✅ PAT retrieved (length: ${#PAT})"
+              fi
+            fi
+            rm -f /tmp/vault-resp.json
+          fi
+
+          if [[ -n "$PAT" ]]; then
+            echo "::add-mask::${PAT}"
+            echo "pat=${PAT}" >> $GITHUB_OUTPUT
+            echo "has_pat=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_pat=false" >> $GITHUB_OUTPUT
+          fi
+
+      # --- Tier 2: GitHub App token ---
+      - name: Generate GitHub App token
+        id: app_token
+        if: steps.vault_pat.outputs.has_pat != 'true'
+        uses: actions/create-github-app-token@v1
+        continue-on-error: true
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ steps.vault_pat.outputs.repo_owner }}
+          repositories: ${{ steps.vault_pat.outputs.repo_name }}
+
+      # --- Resolve final checkout token ---
+      - name: Resolve checkout token
+        id: checkout_token
+        run: |
+          if [[ "${{ steps.vault_pat.outputs.has_pat }}" == "true" ]]; then
+            echo "token=${{ steps.vault_pat.outputs.pat }}" >> $GITHUB_OUTPUT
+            echo "🔑 Using Vault PAT for checkout"
+          elif [[ -n "${{ steps.app_token.outputs.token }}" ]]; then
+            echo "token=${{ steps.app_token.outputs.token }}" >> $GITHUB_OUTPUT
+            echo "🤖 Using GitHub App token for checkout"
+          else
+            echo "token=${{ github.token }}" >> $GITHUB_OUTPUT
+            echo "🌐 Using github.token for checkout (public repos)"
+          fi
+
+      # --- Checkout source repo ---
+      - name: Checkout source repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.repo }}
+          ref: ${{ inputs.git_ref }}
+          token: ${{ steps.checkout_token.outputs.token }}
+
+      # --- Build & Push ---
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ inputs.dockerfile_path }}
+          push: true
+          build-args: |
+            APP_VERSION=${{ inputs.git_ref }}
+          tags: |
+            ${{ inputs.image_name }}:${{ inputs.image_tag }}
+            ${{ inputs.image_name }}:latest
+
+      - name: Summary
+        run: |
+          echo "## ✅ Image Built" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Repo** | \`${{ inputs.repo }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Ref** | \`${{ inputs.git_ref }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Image** | \`${{ inputs.image_name }}:${{ inputs.image_tag }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Build ID** | \`${{ inputs.build_id }}\` |" >> $GITHUB_STEP_SUMMARY

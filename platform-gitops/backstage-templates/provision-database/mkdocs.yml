@@ -1,0 +1,5 @@
+site_name: Provision Database
+site_description: Documentation for the Provision Database template
+docs_dir: docs
+plugins:
+  - techdocs-core
