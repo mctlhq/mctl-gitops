@@ -234,12 +234,10 @@ spec:
 
           case "$TEMPLATE" in
             openclaw)
-              # Generate random gateway token
-              TOKEN=$(cat /dev/urandom | tr -dc 'a-f0-9' | fold -w 32 | head -n 1)
+              TOKEN=$(dd if=/dev/urandom bs=16 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')
               echo "🔑 Generated gateway token: ${TOKEN:0:8}..."
 
-              # Create openclaw config ConfigMap
-              cat <<CFGEOF | kubectl apply -f -
+              cat > /tmp/configmap.yaml <<EOF
           apiVersion: v1
           kind: ConfigMap
           metadata:
@@ -269,8 +267,9 @@ spec:
                   "enabled": true
                 }
               }
-          CFGEOF
+          EOF
 
+              kubectl apply -f /tmp/configmap.yaml
               echo "✅ ConfigMap ${SERVICE}-config created in namespace ${TEAM}"
               echo "📋 Gateway token (full): ${TOKEN}"
               echo "🔗 Dashboard URL: https://${TEAM}-${SERVICE}.mctl.ai/#token=${TOKEN}"
