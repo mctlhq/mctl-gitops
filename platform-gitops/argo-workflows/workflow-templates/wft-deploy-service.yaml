@@ -95,6 +95,28 @@ spec:
                 - name: image_tag
                   value: "{{workflow.parameters.image_tag}}"
 
+          # Step 1b: build Docker image via GitHub Actions (skip for update-config)
+          - name: build-image
+            dependencies: [validate]
+            when: "\"{{workflow.parameters.action}}\" != \"update-config\" && \"{{workflow.parameters.dockerfile_repo}}\" != \"\""
+            template: trigger-github-build
+            arguments:
+              parameters:
+                - name: dockerfile_repo
+                  value: "{{workflow.parameters.dockerfile_repo}}"
+                - name: git_tag
+                  value: "{{workflow.parameters.git_tag}}"
+                - name: image_name
+                  value: "{{workflow.parameters.container_registry}}/{{workflow.parameters.component_name}}"
+                - name: image_tag
+                  value: "{{tasks.validate.outputs.parameters.image_tag}}"
+                - name: dockerfile_path
+                  value: "{{workflow.parameters.dockerfile_path}}"
+                - name: team_name
+                  value: "{{workflow.parameters.team_name}}"
+                - name: component_name
+                  value: "{{workflow.parameters.component_name}}"
+
           # Step 2: write Vault secrets (skip if no secrets)
           - name: write-secrets
             dependencies: [validate]
@@ -119,10 +141,9 @@ spec:
             template: setup-service-template
 
           # Step 3: generate manifests + git commit
-          # Depends on validate (always) + write-secrets (optional) + template-setup (optional).
-          # Including validate ensures commit runs even when optional steps are skipped.
+          # Depends on validate (always) + build-image (optional) + write-secrets (optional) + template-setup (optional).
           - name: commit
-            dependencies: [validate, write-secrets, template-setup]
+            dependencies: [validate, build-image, write-secrets, template-setup]
             templateRef:
               name: tpl-git-commit
               clusterScope: true
@@ -280,3 +301,131 @@ spec:
               echo "⚠️ Unknown template: ${TEMPLATE}, skipping setup"
               ;;
           esac
+
+    # ────────────────────────────────────────────────────────────────────────
+    - name: trigger-github-build
+      inputs:
+        parameters:
+          - name: dockerfile_repo
+          - name: git_tag
+          - name: image_name
+          - name: image_tag
+          - name: dockerfile_path
+            default: "Dockerfile"
+          - name: team_name
+          - name: component_name
+      script:
+        image: python:3.12-alpine
+        command: [python3]
+        envFrom:
+          - configMapRef:
+              name: mctl-platform-config
+        env:
+          - name: GITHUB_PAT
+            valueFrom:
+              secretKeyRef:
+                name: github-actions-pat
+                key: token
+        source: |
+          import os, json, time, urllib.request, urllib.error, sys
+
+          PAT = os.environ["GITHUB_PAT"]
+          GITOPS_ORG = os.environ["GITOPS_ORG"]
+          GITOPS_REPO = os.environ["GITOPS_REPO"]
+          API = "https://api.github.com"
+
+          repo = "{{inputs.parameters.dockerfile_repo}}"
+          git_tag = "{{inputs.parameters.git_tag}}"
+          image_name = "{{inputs.parameters.image_name}}"
+          image_tag = "{{inputs.parameters.image_tag}}"
+          dockerfile_path = "{{inputs.parameters.dockerfile_path}}"
+          team_name = "{{inputs.parameters.team_name}}"
+          component_name = "{{inputs.parameters.component_name}}"
+          build_id = "{{workflow.name}}"
+
+          git_ref = git_tag if git_tag else "HEAD"
+
+          headers = {
+              "Authorization": f"Bearer {PAT}",
+              "Accept": "application/vnd.github+json",
+              "X-GitHub-Api-Version": "2022-11-28",
+              "Content-Type": "application/json",
+          }
+
+          def api_request(method, path, data=None):
+              url = f"{API}{path}"
+              body = json.dumps(data).encode() if data else None
+              req = urllib.request.Request(url, data=body, headers=headers, method=method)
+              try:
+                  with urllib.request.urlopen(req) as resp:
+                      if resp.status == 204:
+                          return None
+                      return json.loads(resp.read())
+              except urllib.error.HTTPError as e:
+                  body_text = e.read().decode()
+                  print(f"HTTP {e.code}: {body_text}", file=sys.stderr)
+                  raise
+
+          # Trigger workflow_dispatch
+          print(f"🚀 Triggering build: {repo}@{git_ref} → {image_name}:{image_tag}")
+          dispatch_path = f"/repos/{GITOPS_ORG}/{GITOPS_REPO}/actions/workflows/build-image.yaml/dispatches"
+          api_request("POST", dispatch_path, {
+              "ref": "main",
+              "inputs": {
+                  "repo": repo,
+                  "git_ref": git_ref,
+                  "image_name": image_name,
+                  "image_tag": image_tag,
+                  "dockerfile_path": dockerfile_path,
+                  "team_name": team_name,
+                  "component_name": component_name,
+                  "build_id": build_id,
+              }
+          })
+          print("✅ Workflow dispatched, waiting for run to appear...")
+
+          # Poll for the workflow run (correlation via build_id in run_name)
+          run_name = f"build-{build_id}"
+          run_id = None
+          for attempt in range(30):
+              time.sleep(10)
+              runs = api_request("GET",
+                  f"/repos/{GITOPS_ORG}/{GITOPS_REPO}/actions/workflows/build-image.yaml/runs?per_page=5")
+              for run in runs.get("workflow_runs", []):
+                  if run.get("name", "") == run_name or build_id in run.get("name", ""):
+                      run_id = run["id"]
+                      break
+              if run_id:
+                  break
+              print(f"   Waiting for run... (attempt {attempt + 1}/30)")
+
+          if not run_id:
+              print("❌ Timed out waiting for workflow run to appear", file=sys.stderr)
+              sys.exit(1)
+
+          print(f"📦 Found run: {run_id}")
+          run_url = f"https://github.com/{GITOPS_ORG}/{GITOPS_REPO}/actions/runs/{run_id}"
+          print(f"🔗 {run_url}")
+
+          # Poll for completion
+          for attempt in range(120):
+              time.sleep(15)
+              run = api_request("GET",
+                  f"/repos/{GITOPS_ORG}/{GITOPS_REPO}/actions/runs/{run_id}")
+              status = run["status"]
+              conclusion = run.get("conclusion")
+              if status == "completed":
+                  if conclusion == "success":
+                      print(f"✅ Build succeeded: {image_name}:{image_tag}")
+                      # Write image ref for downstream steps
+                      with open("/tmp/image-ref", "w") as f:
+                          f.write(f"{image_name}:{image_tag}")
+                      sys.exit(0)
+                  else:
+                      print(f"❌ Build failed: {conclusion}", file=sys.stderr)
+                      print(f"🔗 Details: {run_url}", file=sys.stderr)
+                      sys.exit(1)
+              print(f"   Build {status}... (attempt {attempt + 1}/120)")
+
+          print("❌ Timed out waiting for build to complete (30 min)", file=sys.stderr)
+          sys.exit(1)
