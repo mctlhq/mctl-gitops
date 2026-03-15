@@ -86,23 +86,26 @@ spec:
           chmod 600 ~/.ssh/config
 
           # ── 1. Get GitHub App token (API calls only; not critical — git uses SSH) ──
-          APP_ID=$(cat /var/run/secrets/github-app/app-id)
-          INSTALL_ID=$(cat /var/run/secrets/github-app/installation-id)
-          APP_KEY=/var/run/secrets/github-app/private-key
+          GH_TOKEN=""
+          if [ -f /var/run/secrets/github-app/app-id ]; then
+            APP_ID=$(cat /var/run/secrets/github-app/app-id)
+            INSTALL_ID=$(cat /var/run/secrets/github-app/installation-id)
+            APP_KEY=/var/run/secrets/github-app/private-key
 
-          NOW=$(date +%s)
-          IAT=$((NOW - 60))
-          EXP=$((NOW + 540))
-          HEADER=$(printf '{"alg":"RS256","typ":"JWT"}' | base64 | tr -d '=' | tr '/+' '_-' | tr -d '\n')
-          PAYLOAD=$(printf '{"iat":%d,"exp":%d,"iss":"%s"}' "$IAT" "$EXP" "$APP_ID" | base64 | tr -d '=' | tr '/+' '_-' | tr -d '\n')
-          SIG=$(printf '%s.%s' "$HEADER" "$PAYLOAD" | openssl dgst -sha256 -sign "$APP_KEY" | base64 | tr -d '=' | tr '/+' '_-' | tr -d '\n')
-          JWT="${HEADER}.${PAYLOAD}.${SIG}"
+            NOW=$(date +%s)
+            IAT=$((NOW - 60))
+            EXP=$((NOW + 540))
+            HEADER=$(printf '{"alg":"RS256","typ":"JWT"}' | base64 | tr -d '=' | tr '/+' '_-' | tr -d '\n')
+            PAYLOAD=$(printf '{"iat":%d,"exp":%d,"iss":"%s"}' "$IAT" "$EXP" "$APP_ID" | base64 | tr -d '=' | tr '/+' '_-' | tr -d '\n')
+            SIG=$(printf '%s.%s' "$HEADER" "$PAYLOAD" | openssl dgst -sha256 -sign "$APP_KEY" | base64 | tr -d '=' | tr '/+' '_-' | tr -d '\n')
+            JWT="${HEADER}.${PAYLOAD}.${SIG}"
 
-          GH_TOKEN=$(curl -sf -X POST \
-            -H "Authorization: Bearer ${JWT}" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/app/installations/${INSTALL_ID}/access_tokens" | \
-            grep '"token"' | head -1 | cut -d'"' -f4)
+            GH_TOKEN=$(curl -sf -X POST \
+              -H "Authorization: Bearer ${JWT}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/app/installations/${INSTALL_ID}/access_tokens" | \
+              grep '"token"' | head -1 | cut -d'"' -f4) || true
+          fi
 
           if [ -z "$GH_TOKEN" ]; then
             echo "⚠️  GitHub App token unavailable (non-fatal, git uses SSH deploy key)"
@@ -389,6 +392,7 @@ spec:
         - name: github-app-credentials
           secret:
             secretName: github-app-credentials
+            optional: true
         - name: deploy-key
           secret:
             secretName: mctl-gitops-deploy-key
@@ -465,6 +469,7 @@ spec:
         - name: github-app-credentials
           secret:
             secretName: github-app-credentials
+            optional: true
         - name: deploy-key
           secret:
             secretName: mctl-gitops-deploy-key
