@@ -1,0 +1,766 @@
+name: Release Service
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Action to perform"
+        required: true
+        type: choice
+        options:
+          - onboard
+          - deploy
+          - update-config
+      team_name:
+        description: "Team name (e.g. payments)"
+        required: true
+        type: string
+      component_name:
+        description: "Service name (e.g. payment-api)"
+        required: true
+        type: string
+      component_type:
+        description: "Helm chart type (onboard only)"
+        required: false
+        type: choice
+        options:
+          - base-service
+          - worker-service
+      port:
+        description: "Service port (base-service onboard only)"
+        required: false
+        default: "8080"
+        type: string
+      host:
+        description: "Ingress host (base-service onboard only, e.g. myteam-myapp.mctl.ai)"
+        required: false
+        type: string
+      dockerfile_repo:
+        description: "Source repo with Dockerfile (e.g. mctlhq/payment-api)"
+        required: false
+        type: string
+      dockerfile_path:
+        description: "Path to Dockerfile in source repo"
+        required: false
+        default: "Dockerfile"
+        type: string
+      git_tag:
+        description: "Git tag to checkout and build (e.g. 1.0.0). Leave empty for latest."
+        required: false
+        type: string
+      image_tag:
+        description: "Image tag (default: {date}-{short_sha})"
+        required: false
+        type: string
+      env_vars:
+        description: "Plaintext ENV KEY=value pairs (non-secret)"
+        required: false
+        type: string
+      secret_env_vars:
+        description: "Plaintext SECRET KEY=value pairs (for Vault)"
+        required: false
+        type: string
+      skip_health_check:
+        description: "Skip liveness/readiness probes (default: false)"
+        required: false
+        default: "false"
+        type: string
+      provision_database:
+        description: "Auto-inject database credentials from db-creds secret (default: false)"
+        required: false
+        default: "false"
+        type: string
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_OWNER: mctlhq
+
+jobs:
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.tag.outputs.image_tag }}
+      service_dir: ${{ steps.paths.outputs.service_dir }}
+      component_type: ${{ steps.paths.outputs.component_type }}
+    steps:
+      - name: Validate naming conventions
+        run: |
+          TEAM="${{ inputs.team_name }}"
+          SERVICE="${{ inputs.component_name }}"
+
+          if [[ ! "$TEAM" =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]]; then
+            echo "::error::team_name must be lowercase alphanumeric with hyphens, ≤63 chars. Got: $TEAM"
+            exit 1
+          fi
+          if [[ ! "$SERVICE" =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]]; then
+            echo "::error::component_name must be lowercase alphanumeric with hyphens, ≤63 chars. Got: $SERVICE"
+            exit 1
+          fi
+
+          ACTION="${{ inputs.action }}"
+          REPO="${{ inputs.dockerfile_repo }}"
+          if [[ "$ACTION" != "update-config" && -z "$REPO" ]]; then
+            echo "::error::dockerfile_repo is required for onboard/deploy actions"
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Parse and save secrets to Vault
+        if: inputs.secret_env_vars != ''
+        env:
+          VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
+          VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
+        run: |
+          TEAM="${{ inputs.team_name }}"
+          SERVICE="${{ inputs.component_name }}"
+          SECRET_TEXT="${{ inputs.secret_env_vars }}"
+          
+          echo "🔐 Parsing and saving secrets to Vault..."
+          
+          # Parse KEY=value format into JSON
+          JSON_DATA="{"
+          while IFS='=' read -r key value; do
+            # Skip empty lines and comments
+            [[ -z "$key" || "$key" =~ ^# ]] && continue
+            # Trim whitespace
+            key=$(echo "$key" | xargs)
+            value=$(echo "$value" | xargs)
+            # Add to JSON (escape quotes in value)
+            value_escaped=$(echo "$value" | sed 's/"/\\"/g')
+            JSON_DATA+="\"$key\":\"$value_escaped\","
+          done <<< "$SECRET_TEXT"
+          
+          # Remove trailing comma and close JSON
+          JSON_DATA="${JSON_DATA%,}}"
+          
+          echo "📝 Saving $(echo "$JSON_DATA" | jq 'keys | length') secrets to secret/teams/$TEAM/$SERVICE"
+          
+          # Merge with existing secrets: read current → merge → write back
+          EXISTING_JSON="{}"
+          HTTP_GET=$(curl -sS -o /tmp/vault-get-resp.json -w "%{http_code}" \
+            -H "X-Vault-Token: $VAULT_TOKEN" \
+            "$VAULT_ADDR/v1/secret/data/teams/$TEAM/$SERVICE")
+          
+          if [[ "$HTTP_GET" == "200" ]]; then
+            EXISTING_JSON=$(jq -c '.data.data // {}' /tmp/vault-get-resp.json)
+            echo "ℹ️  Merging with $(echo "$EXISTING_JSON" | jq 'keys | length') existing secret(s)"
+          elif [[ "$HTTP_GET" == "404" ]]; then
+            echo "ℹ️  No existing secret — creating new"
+          else
+            echo "⚠️  Could not read existing secrets (HTTP $HTTP_GET) — will overwrite"
+          fi
+          rm -f /tmp/vault-get-resp.json
+          
+          # Merge: existing keys + new keys (new keys win on conflict)
+          MERGED_JSON=$(echo "$EXISTING_JSON $JSON_DATA" | jq -s '.[0] * .[1]')
+          
+          # Check token capabilities on this path (diagnostic)
+          echo "🔍 Checking token capabilities on secret/data/teams/$TEAM/$SERVICE..."
+          curl -sS -X POST \
+            -H "X-Vault-Token: $VAULT_TOKEN" \
+            -d "{\"paths\":[\"secret/data/teams/$TEAM/$SERVICE\"]}" \
+            "$VAULT_ADDR/v1/sys/capabilities-self" 2>/dev/null | jq -r '.capabilities // .errors' || true
+          
+          # Save merged data to Vault
+          HTTP_CODE=$(curl -sS -o /tmp/vault-write-resp.json -w "%{http_code}" \
+            -X POST \
+            -H "X-Vault-Token: $VAULT_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"data\":$MERGED_JSON}" \
+            "$VAULT_ADDR/v1/secret/data/teams/$TEAM/$SERVICE")
+          
+          if [[ "$HTTP_CODE" != "200" ]]; then
+            echo "::error::Failed to save secrets to Vault (HTTP $HTTP_CODE)"
+            cat /tmp/vault-write-resp.json || true
+            exit 1
+          fi
+          
+          rm -f /tmp/vault-write-resp.json
+          echo "✅ Secrets saved successfully"
+
+      - name: Determine paths
+        id: paths
+        run: |
+          TEAM="${{ inputs.team_name }}"
+          SERVICE="${{ inputs.component_name }}"
+          ACTION="${{ inputs.action }}"
+
+          # For deploy/update-config, auto-detect service type
+          if [[ "$ACTION" == "deploy" || "$ACTION" == "update-config" ]]; then
+            if [[ -d "platform-gitops/services/${TEAM}/${SERVICE}" ]]; then
+              TYPE="base-service"
+            elif [[ -d "platform-gitops/workers/${TEAM}/${SERVICE}" ]]; then
+              TYPE="worker-service"
+            else
+              echo "::error::Service ${TEAM}/${SERVICE} not found. Use 'onboard' action first."
+              echo "## ❌ Service Not Found" >> $GITHUB_STEP_SUMMARY
+              exit 1
+            fi
+          else
+            TYPE="${{ inputs.component_type }}"
+            if [[ -z "$TYPE" ]]; then
+              echo "::error::component_type is required for onboard"
+              exit 1
+            fi
+          fi
+
+          if [[ "$TYPE" == "base-service" ]]; then
+            DIR="platform-gitops/services/${TEAM}/${SERVICE}"
+          else
+            DIR="platform-gitops/workers/${TEAM}/${SERVICE}"
+          fi
+
+          # Onboard: must NOT exist. Deploy/update-config: must exist.
+          if [[ "$ACTION" == "onboard" && -d "$DIR" ]]; then
+            echo "::error::Service already exists at $DIR. Use 'deploy' to update."
+            echo "## ❌ Service Already Exists" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+          if [[ ("$ACTION" == "deploy" || "$ACTION" == "update-config") && ! -f "$DIR/values.yaml" ]]; then
+            echo "::error::values.yaml not found at $DIR"
+            exit 1
+          fi
+
+          echo "service_dir=${DIR}" >> $GITHUB_OUTPUT
+          echo "component_type=${TYPE}" >> $GITHUB_OUTPUT
+
+      - name: Validate base-service inputs
+        if: inputs.action == 'onboard' && inputs.component_type == 'base-service'
+        run: |
+          if [[ -z "${{ inputs.host }}" ]]; then
+            echo "::error::host is required for base-service onboard"
+            exit 1
+          fi
+
+      - name: Verify source repo accessible
+        id: repo_access
+        if: inputs.action != 'update-config'
+        run: |
+          REPO="${{ inputs.dockerfile_repo }}"
+          OWNER="${REPO%%/*}"
+          REPO_NAME="${REPO##*/}"
+          echo "repo_owner=${OWNER}" >> $GITHUB_OUTPUT
+          echo "repo_name=${REPO_NAME}" >> $GITHUB_OUTPUT
+
+          # Tier 1: Try Vault PAT
+          PAT=""
+          if [[ -n "${{ secrets.VAULT_ADDR }}" && -n "${{ secrets.VAULT_TOKEN }}" ]]; then
+            echo "🔑 Vault configured — fetching repo PAT…"
+            VAULT_URL="${{ secrets.VAULT_ADDR }}/v1/secret/data/teams/${{ inputs.team_name }}/${{ inputs.component_name }}/repo-pat"
+            HTTP_CODE=$(curl -sL -o /tmp/vault-resp.json -w "%{http_code}" \
+              -H "X-Vault-Token: ${{ secrets.VAULT_TOKEN }}" \
+              "$VAULT_URL" 2>/dev/null || echo "000")
+            echo "   Vault HTTP status: $HTTP_CODE"
+            if [[ "$HTTP_CODE" == "200" ]]; then
+              PAT=$(jq -r '.data.data.pat // empty' /tmp/vault-resp.json 2>/dev/null || true)
+              if [[ -n "$PAT" ]]; then
+                echo "   ✅ PAT retrieved (length: ${#PAT})"
+              else
+                echo "   ⚠️ Vault returned 200 but no PAT in response"
+              fi
+            else
+              echo "   ⚠️ Vault returned HTTP $HTTP_CODE — cannot retrieve PAT"
+            fi
+            rm -f /tmp/vault-resp.json
+          else
+            echo "⚠️ VAULT_ADDR or VAULT_TOKEN not configured — skipping Vault PAT lookup"
+          fi
+
+          if [[ -n "$PAT" ]]; then
+            echo "::add-mask::${PAT}"
+            echo "repo_pat=${PAT}" >> $GITHUB_OUTPUT
+            echo "has_vault_pat=true" >> $GITHUB_OUTPUT
+            echo "access_method=vault_pat" >> $GITHUB_OUTPUT
+          else
+            echo "has_vault_pat=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate GitHub App token
+        id: app_token
+        if: inputs.action != 'update-config' && steps.repo_access.outputs.has_vault_pat != 'true'
+        uses: actions/create-github-app-token@v1
+        continue-on-error: true
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ steps.repo_access.outputs.repo_owner }}
+          repositories: ${{ steps.repo_access.outputs.repo_name }}
+
+      - name: Verify repo access with resolved token
+        id: repo_verify
+        if: inputs.action != 'update-config'
+        run: |
+          REPO="${{ inputs.dockerfile_repo }}"
+
+          # Determine which token to use (Tier 1 → 2 → 3)
+          if [[ "${{ steps.repo_access.outputs.has_vault_pat }}" == "true" ]]; then
+            TOKEN="${{ steps.repo_access.outputs.repo_pat }}"
+            METHOD="vault_pat"
+            echo "🔑 Using Vault PAT"
+          elif [[ -n "${{ steps.app_token.outputs.token }}" ]]; then
+            TOKEN="${{ steps.app_token.outputs.token }}"
+            METHOD="app_token"
+            echo "🤖 Using GitHub App token"
+          else
+            TOKEN=""
+            METHOD="public"
+            echo "🌐 No PAT or App token — trying public access"
+          fi
+
+          if [[ -n "$TOKEN" ]]; then
+            echo "::add-mask::${TOKEN}"
+            echo "🔍 Testing repo access with ${METHOD}..."
+            set -o pipefail
+            MAX_RETRIES=3
+            RETRY_DELAY=5
+            for attempt in $(seq 1 $MAX_RETRIES); do
+              if git -c "http.https://github.com/.extraheader=" -c credential.helper= \
+                ls-remote "https://x-access-token:${TOKEN}@github.com/${REPO}" HEAD 2>&1 | tee /tmp/git-output.log; then
+                echo "✅ Repo accessible via ${METHOD}"
+                echo "clone_token=${TOKEN}" >> $GITHUB_OUTPUT
+                echo "access_method=${METHOD}" >> $GITHUB_OUTPUT
+                break
+              else
+                if [[ $attempt -lt $MAX_RETRIES ]]; then
+                  echo "⚠️ Attempt ${attempt}/${MAX_RETRIES} failed, retrying in ${RETRY_DELAY}s..."
+                  sleep $RETRY_DELAY
+                  RETRY_DELAY=$((RETRY_DELAY * 2))
+                else
+                  echo "::error::Cannot access repo ${REPO} with ${METHOD} after ${MAX_RETRIES} attempts"
+                  echo "::error::Git output: $(cat /tmp/git-output.log 2>/dev/null || echo 'no output')"
+                  exit 1
+                fi
+              fi
+            done
+          else
+            if git ls-remote "https://github.com/${REPO}" HEAD > /dev/null 2>&1; then
+              echo "✅ Public repo accessible"
+              echo "access_method=public" >> $GITHUB_OUTPUT
+            else
+              echo "::error::Cannot access repo: ${REPO}."
+              echo "::error::For private repos, either:"
+              echo "::error::  1. Install the mctl-app GitHub App on the repo owner's account"
+              echo "::error::  2. Provide a PAT via Backstage or CLI (--pat flag)"
+              exit 1
+            fi
+          fi
+
+      - name: Determine image tag
+        id: tag
+        if: inputs.action != 'update-config'
+        run: |
+          if [[ -n "${{ inputs.image_tag }}" ]]; then
+            # Explicit image_tag provided
+            echo "image_tag=${{ inputs.image_tag }}" >> $GITHUB_OUTPUT
+          elif [[ -n "${{ inputs.git_tag }}" ]]; then
+            # Git tag provided - normalize by removing "v" prefix for Docker tag
+            GIT_TAG="${{ inputs.git_tag }}"
+            NORMALIZED_TAG="${GIT_TAG#v}"  # Remove leading "v"
+            echo "image_tag=${NORMALIZED_TAG}" >> $GITHUB_OUTPUT
+            echo "📌 Using git tag: $GIT_TAG → Docker tag: ${NORMALIZED_TAG}"
+          elif [[ "${{ inputs.action }}" == "onboard" ]]; then
+            echo "image_tag=latest" >> $GITHUB_OUTPUT
+          else
+            # Auto-increment: get latest semver tag from GHCR
+            LATEST=""
+            API_RESPONSE=$(gh api \
+              "/users/${{ env.IMAGE_OWNER }}/packages/container/${{ inputs.component_name }}/versions" \
+              --jq '[.[] | .metadata.container.tags[] | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))] | sort | last // empty' \
+              2>/dev/null) && LATEST="$API_RESPONSE" || true
+
+            if [[ -z "$LATEST" || ! "$LATEST" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "image_tag=latest" >> $GITHUB_OUTPUT
+            else
+              # Increment patch: 1.2.3 → 1.2.4
+              MAJOR=$(echo "$LATEST" | sed 's/\([0-9]*\)\..*/\1/')
+              MINOR=$(echo "$LATEST" | sed 's/[0-9]*\.\([0-9]*\)\..*/\1/')
+              PATCH=$(echo "$LATEST" | sed 's/[0-9]*\.[0-9]*\.\([0-9]*\)/\1/')
+              PATCH=$((PATCH + 1))
+              echo "image_tag=${MAJOR}.${MINOR}.${PATCH}" >> $GITHUB_OUTPUT
+            fi
+          fi
+          echo "Resolved tag: $(grep image_tag $GITHUB_OUTPUT | cut -d= -f2)"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build:
+    name: Build & push image
+    needs: validate
+    if: inputs.action != 'update-config'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Get repo PAT from Vault
+        id: vault_pat
+        run: |
+          REPO="${{ inputs.dockerfile_repo }}"
+          echo "repo_owner=${REPO%%/*}" >> $GITHUB_OUTPUT
+          echo "repo_name=${REPO##*/}" >> $GITHUB_OUTPUT
+
+          PAT=""
+          if [[ -n "${{ secrets.VAULT_ADDR }}" && -n "${{ secrets.VAULT_TOKEN }}" ]]; then
+            echo "🔑 Vault configured — fetching repo PAT…"
+            VAULT_URL="${{ secrets.VAULT_ADDR }}/v1/secret/data/teams/${{ inputs.team_name }}/${{ inputs.component_name }}/repo-pat"
+            HTTP_CODE=$(curl -sL -o /tmp/vault-resp.json -w "%{http_code}" \
+              -H "X-Vault-Token: ${{ secrets.VAULT_TOKEN }}" \
+              "$VAULT_URL" 2>/dev/null || echo "000")
+            echo "   Vault HTTP status: $HTTP_CODE"
+            if [[ "$HTTP_CODE" == "200" ]]; then
+              PAT=$(jq -r '.data.data.pat // empty' /tmp/vault-resp.json 2>/dev/null || true)
+              if [[ -n "$PAT" ]]; then
+                echo "   ✅ PAT retrieved (length: ${#PAT})"
+              else
+                echo "   ⚠️ Vault returned 200 but no PAT in response"
+              fi
+            else
+              echo "   ⚠️ Vault returned HTTP $HTTP_CODE — cannot retrieve PAT"
+            fi
+            rm -f /tmp/vault-resp.json
+          else
+            echo "⚠️ VAULT_ADDR or VAULT_TOKEN not configured — skipping Vault PAT lookup"
+          fi
+          if [[ -n "$PAT" ]]; then
+            echo "::add-mask::${PAT}"
+            echo "pat=${PAT}" >> $GITHUB_OUTPUT
+            echo "has_pat=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_pat=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate GitHub App token
+        id: app_token
+        if: steps.vault_pat.outputs.has_pat != 'true'
+        uses: actions/create-github-app-token@v1
+        continue-on-error: true
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ steps.vault_pat.outputs.repo_owner }}
+          repositories: ${{ steps.vault_pat.outputs.repo_name }}
+
+      - name: Resolve checkout token
+        id: checkout_token
+        run: |
+          if [[ "${{ steps.vault_pat.outputs.has_pat }}" == "true" ]]; then
+            echo "token=${{ steps.vault_pat.outputs.pat }}" >> $GITHUB_OUTPUT
+            echo "🔑 Using Vault PAT for checkout"
+          elif [[ -n "${{ steps.app_token.outputs.token }}" ]]; then
+            echo "token=${{ steps.app_token.outputs.token }}" >> $GITHUB_OUTPUT
+            echo "🤖 Using GitHub App token for checkout"
+          else
+            echo "token=${{ github.token }}" >> $GITHUB_OUTPUT
+            echo "🌐 Using github.token for checkout (public repos only)"
+          fi
+
+      - name: Checkout source repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.dockerfile_repo }}
+          ref: ${{ inputs.git_tag || '' }}
+          token: ${{ steps.checkout_token.outputs.token }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ inputs.dockerfile_path }}
+          push: true
+          build-args: |
+            APP_VERSION=${{ inputs.git_tag || needs.validate.outputs.image_tag }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ inputs.component_name }}:${{ needs.validate.outputs.image_tag }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ inputs.component_name }}:latest
+
+      - name: Report failure
+        if: failure()
+        run: |
+          echo "## ❌ Docker Build Failed" >> $GITHUB_STEP_SUMMARY
+          echo "Failed to build \`${{ inputs.component_name }}\`. Check logs above." >> $GITHUB_STEP_SUMMARY
+
+  apply:
+    name: Apply config
+    needs: [validate, build]
+    if: always() && needs.validate.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout platform repo
+        uses: actions/checkout@v4
+
+      - name: Create values.yaml (onboard)
+        if: inputs.action == 'onboard'
+        run: |
+          TYPE="${{ needs.validate.outputs.component_type }}"
+          DIR="${{ needs.validate.outputs.service_dir }}"
+          TAG="${{ needs.validate.outputs.image_tag }}"
+
+          if [[ "$TYPE" == "base-service" ]]; then
+            TEMPLATE="platform-gitops/argo-workflows/templates/base-service-values.yaml.tpl"
+            COMPONENT_TYPE="service"
+          else
+            TEMPLATE="platform-gitops/argo-workflows/templates/worker-service-values.yaml.tpl"
+            COMPONENT_TYPE="worker"
+          fi
+
+          mkdir -p "$DIR"
+
+          # Create values.yaml
+          sed \
+            -e "s|__TEAM_NAME__|${{ inputs.team_name }}|g" \
+            -e "s|__SERVICE_NAME__|${{ inputs.component_name }}|g" \
+            -e "s|__IMAGE_TAG__|${TAG}|g" \
+            -e "s|__PORT__|${{ inputs.port }}|g" \
+            -e "s|__HOST__|${{ inputs.host }}|g" \
+            "$TEMPLATE" > "${DIR}/values.yaml"
+          
+          # Disable health probes if requested
+          if [[ "${{ inputs.skip_health_check }}" == "true" ]]; then
+            echo "⏭️ Skipping health checks (probes disabled)"
+            yq eval -i '.probes.liveness = null | .probes.readiness = null' "${DIR}/values.yaml"
+          fi
+
+          # Inject database credentials secret if requested
+          if [[ "${{ inputs.provision_database }}" == "true" ]]; then
+            DB_SECRET="${{ inputs.team_name }}-${{ inputs.component_name }}-db-creds"
+            VAULT_PATH="platform/teams/${{ inputs.team_name }}/${{ inputs.component_name }}/database"
+            echo "🗄️ Injecting database credentials from secret ${DB_SECRET}"
+            yq eval -i ".envFrom = [{\"secretRef\": {\"name\": \"${DB_SECRET}\"}}]" "${DIR}/values.yaml"
+            yq eval -i ".dbSecret.vaultPath = \"${VAULT_PATH}\"" "${DIR}/values.yaml"
+            yq eval -i ".dbSecret.secretName = \"${DB_SECRET}\"" "${DIR}/values.yaml"
+          fi
+
+          # Add custom env vars if provided
+          if [[ -n "${{ inputs.env_vars }}" ]]; then
+            echo "📝 Adding custom environment variables..."
+            
+            # Parse and add each env var
+            while IFS='=' read -r key value; do
+              [[ -z "$key" || "$key" =~ ^# ]] && continue
+              key=$(echo "$key" | xargs)
+              value=$(echo "$value" | xargs)
+              
+              yq eval -i ".env.${key} = \"${value}\"" "${DIR}/values.yaml"
+            done <<< "${{ inputs.env_vars }}"
+            
+            echo "✅ Added $(echo "${{ inputs.env_vars }}" | grep -c '=' || echo 0) environment variables"
+          fi
+          
+          # Add externalSecret section if secrets provided
+          if [[ -n "${{ inputs.secret_env_vars }}" ]]; then
+            echo "🔐 Adding ExternalSecret configuration..."
+            
+            # Create externalSecret section
+            yq eval -i '.externalSecret.targetSecret = "${{ inputs.component_name }}-secrets"' "${DIR}/values.yaml"
+            yq eval -i '.externalSecret.data = []' "${DIR}/values.yaml"
+            
+            # Parse and add each secret
+            while IFS='=' read -r key value; do
+              [[ -z "$key" || "$key" =~ ^# ]] && continue
+              key=$(echo "$key" | xargs)
+              
+              yq eval -i ".externalSecret.data += [{\"secretKey\": \"${key}\", \"remoteKey\": \"teams/${{ inputs.team_name }}/${{ inputs.component_name }}\", \"property\": \"${key}\"}]" "${DIR}/values.yaml"
+            done <<< "${{ inputs.secret_env_vars }}"
+            
+            # Add envFrom section
+            yq eval -i '.envFrom = [{"secretRef": {"name": "${{ inputs.component_name }}-secrets"}}]' "${DIR}/values.yaml"
+            
+            echo "✅ Added $(echo "${{ inputs.secret_env_vars }}" | grep -c '=' || echo 0) secret environment variables"
+          fi
+          
+          # Create catalog-info.yaml for Backstage
+          sed \
+            -e "s|__TEAM_NAME__|${{ inputs.team_name }}|g" \
+            -e "s|__SERVICE_NAME__|${{ inputs.component_name }}|g" \
+            -e "s|__COMPONENT_TYPE__|${COMPONENT_TYPE}|g" \
+            -e "s|__DOCKERFILE_REPO__|${{ inputs.dockerfile_repo }}|g" \
+            "platform-gitops/argo-workflows/templates/catalog-info.yaml.tpl" > "${DIR}/catalog-info.yaml"
+          
+          # Add service URL link if ingress host is set
+          if [[ -n "${{ inputs.host }}" ]]; then
+            yq eval -i '.metadata.links += [{"url": "https://${{ inputs.host }}", "title": "Service URL", "icon": "web"}]' "${DIR}/catalog-info.yaml"
+          fi
+          
+          # Create vault-cleanup.yaml for ArgoCD PreDelete hook
+          sed \
+            -e "s|__TEAM_NAME__|${{ inputs.team_name }}|g" \
+            -e "s|__SERVICE_NAME__|${{ inputs.component_name }}|g" \
+            "platform-gitops/argo-workflows/templates/vault-cleanup.yaml.tpl" > "${DIR}/vault-cleanup.yaml"
+
+      - name: Update image tag (deploy)
+        if: inputs.action == 'deploy'
+        run: |
+          DIR="${{ needs.validate.outputs.service_dir }}"
+          TAG="${{ needs.validate.outputs.image_tag }}"
+
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+          yq -i ".image.tag = \"${TAG}\"" "${DIR}/values.yaml"
+
+      - name: Update env vars (update-config)
+        if: inputs.action == 'update-config'
+        run: |
+          TEAM="${{ inputs.team_name }}"
+          SERVICE="${{ inputs.component_name }}"
+          ENV_VARS="${{ inputs.env_vars }}"
+          SECRET_VARS="${{ inputs.secret_env_vars }}"
+
+          # Auto-detect service directory
+          if [[ -d "platform-gitops/services/${TEAM}/${SERVICE}" ]]; then
+            DIR="platform-gitops/services/${TEAM}/${SERVICE}"
+          elif [[ -d "platform-gitops/workers/${TEAM}/${SERVICE}" ]]; then
+            DIR="platform-gitops/workers/${TEAM}/${SERVICE}"
+          else
+            echo "::error::Service ${TEAM}/${SERVICE} not found. Use 'onboard' action first."
+            exit 1
+          fi
+
+          if [[ -z "$ENV_VARS" && -z "$SECRET_VARS" ]]; then
+            echo "No env vars or secrets provided, skipping."
+            exit 0
+          fi
+
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+          if [[ -n "$ENV_VARS" ]]; then
+            echo "📝 Updating environment variables in ${DIR}/values.yaml..."
+            COUNT=0
+            while IFS='=' read -r key value; do
+              [[ -z "$key" || "$key" =~ ^# ]] && continue
+              key=$(echo "$key" | xargs)
+              value=$(echo "$value" | xargs)
+              yq eval -i ".env.${key} = \"${value}\"" "${DIR}/values.yaml"
+              echo "  ✅ ${key}=***"
+              COUNT=$((COUNT + 1))
+            done <<< "$ENV_VARS"
+            echo "Updated ${COUNT} environment variable(s)"
+          fi
+
+          if [[ -n "$SECRET_VARS" ]]; then
+            echo "🔐 Updating ExternalSecret configuration in ${DIR}/values.yaml..."
+            # Ensure externalSecret section exists
+            yq eval -i '.externalSecret.targetSecret = "'${SERVICE}'-secrets"' "${DIR}/values.yaml"
+            if [[ "$(yq '.externalSecret.data' "${DIR}/values.yaml")" == "null" ]]; then
+              yq eval -i '.externalSecret.data = []' "${DIR}/values.yaml"
+            fi
+            # Add missing secret keys to externalSecret.data (skip duplicates)
+            while IFS='=' read -r key value; do
+              [[ -z "$key" || "$key" =~ ^# ]] && continue
+              key=$(echo "$key" | xargs)
+              # Only add if not already present
+              EXISTS=$(yq ".externalSecret.data[] | select(.secretKey == \"${key}\")" "${DIR}/values.yaml")
+              if [[ -z "$EXISTS" ]]; then
+                yq eval -i ".externalSecret.data += [{\"secretKey\": \"${key}\", \"remoteKey\": \"teams/${TEAM}/${SERVICE}\", \"property\": \"${key}\"}]" "${DIR}/values.yaml"
+                echo "  ✅ Added externalSecret entry for ${key}"
+              fi
+            done <<< "$SECRET_VARS"
+            # Ensure envFrom references the secret
+            ENVFROM_EXISTS=$(yq ".envFrom[] | select(.secretRef.name == \"${SERVICE}-secrets\")" "${DIR}/values.yaml" 2>/dev/null)
+            if [[ -z "$ENVFROM_EXISTS" ]]; then
+              yq eval -i '.envFrom = [{"secretRef": {"name": "'${SERVICE}'-secrets"}}]' "${DIR}/values.yaml"
+            fi
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "${DIR}/values.yaml"
+
+          if git diff --cached --quiet; then
+            echo "ℹ️  No changes detected — values already up to date"
+          else
+            git commit -m "config: update env for ${TEAM}/${SERVICE}"
+
+            for i in 1 2 3 4 5; do
+              git push && break
+              echo "⚠️  Push failed (attempt $i), rebasing..."
+              git pull --rebase origin main
+            done
+          fi
+
+          echo "## ✅ Config updated" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Team** | \`${TEAM}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Service** | \`${SERVICE}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "ArgoCD will sync automatically." >> $GITHUB_STEP_SUMMARY
+
+      - name: Validate Helm template
+        if: inputs.action != 'update-config'
+        run: |
+          TYPE="${{ needs.validate.outputs.component_type }}"
+          DIR="${{ needs.validate.outputs.service_dir }}"
+
+          curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+          if ! helm template test "platform-gitops/helm-charts/${TYPE}" -f "${DIR}/values.yaml" > /dev/null 2>&1; then
+            echo "::error::Helm template validation failed"
+            echo "## ❌ Helm Validation Failed" >> $GITHUB_STEP_SUMMARY
+            helm template test "platform-gitops/helm-charts/${TYPE}" -f "${DIR}/values.yaml" 2>&1 >> $GITHUB_STEP_SUMMARY || true
+            exit 1
+          fi
+
+      - name: Commit and push
+        if: inputs.action != 'update-config'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          DIR="${{ needs.validate.outputs.service_dir }}"
+          TAG="${{ needs.validate.outputs.image_tag }}"
+          ACTION="${{ inputs.action }}"
+
+          git add "${DIR}/values.yaml"
+
+          if [[ "$ACTION" == "onboard" ]]; then
+            git add "${DIR}/catalog-info.yaml"
+            git add "${DIR}/vault-cleanup.yaml"
+            git commit -m "feat: onboard ${{ inputs.team_name }}/${{ inputs.component_name }} (${TAG})"
+          else
+            if git diff --cached --quiet; then
+              echo "ℹ️  No changes detected — already at ${TAG}"
+            else
+              git commit -m "deploy: ${{ inputs.team_name }}/${{ inputs.component_name }} → ${TAG}"
+            fi
+          fi
+
+          if ! git diff --quiet HEAD origin/main 2>/dev/null; then
+            for i in 1 2 3 4 5; do
+              git push && break
+              echo "⚠️  Push failed (attempt $i), rebasing..."
+              git pull --rebase origin main
+            done
+          fi
+
+      - name: Summary
+        if: inputs.action != 'update-config'
+        run: |
+          TAG="${{ needs.validate.outputs.image_tag }}"
+          ACTION="${{ inputs.action }}"
+          EMOJI=$([[ "$ACTION" == "onboard" ]] && echo "🚀" || echo "🔄")
+
+          echo "## ${EMOJI} Service ${ACTION}ed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Team** | \`${{ inputs.team_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Service** | \`${{ inputs.component_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Action** | \`${ACTION}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Image** | \`${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ inputs.component_name }}:${TAG}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "ArgoCD will sync automatically." >> $GITHUB_STEP_SUMMARY

@@ -1,0 +1,77 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: mctl-api
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: platform
+  sources:
+    # Helm chart from the mctl-api repository
+    - repoURL: https://github.com/mctlhq/mctl-api.git
+      targetRevision: main
+      path: helm
+      helm:
+        values: |
+          image:
+            repository: ghcr.io/mctlhq/mctl-api
+            tag: "1.8.2"
+
+          ingress:
+            enabled: true
+            className: traefik
+            tls: true
+            hosts:
+              - host: api.mctl.ai
+
+          env:
+            GITOPS_REPO_URL: https://github.com/mctlhq/mctl-gitops.git
+            GITOPS_BRANCH: main
+            GITOPS_LOCAL_PATH: /data/mctl-gitops
+            ARGOCD_URL: https://ops.mctl.ai
+            ARGO_WORKFLOWS_NAMESPACE: argo-workflows
+            GITHUB_ORG: mctlhq
+            ADMIN_USERS: mashkovd
+            AUTH_REQUIRED: "true"
+            BACKSTAGE_URL: https://app.mctl.ai
+            DEX_ISSUER_URL: https://ops.mctl.ai/api/dex
+            DEX_CLIENT_ID: mctl-api
+            SELF_URL: https://api.mctl.ai
+            # OAuth 2.0 for Claude.ai custom connector (PKCE, public client)
+            # Secrets (OAUTH_GITHUB_CLIENT_ID, OAUTH_GITHUB_CLIENT_SECRET, OAUTH_JWT_SECRET)
+            # come from mctl-api-secrets (Vault: platform/mctl-api/oauth-github)
+            OAUTH_ALLOWED_REDIRECT_URIS: "https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback,http://localhost:6274/oauth/callback,http://localhost:6274/oauth/callback/debug"
+            # Allow git operations on emptyDir volume (owned by root, run as uid=1000)
+            GIT_CONFIG_COUNT: "1"
+            GIT_CONFIG_KEY_0: "safe.directory"
+            GIT_CONFIG_VALUE_0: "*"
+            LOKI_URL: "http://loki-stack.monitoring.svc.cluster.local:3100"
+
+          envFromSecret: mctl-api-secrets
+          envFromExtraSecret: mctl-api-gitops-token
+
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+
+  destination:
+    server: {{ .Values.spec.destination.server }}
+    namespace: mctl-api
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

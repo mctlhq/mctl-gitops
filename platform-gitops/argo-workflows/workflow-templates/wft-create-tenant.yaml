@@ -1,0 +1,436 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterWorkflowTemplate
+metadata:
+  name: create-tenant
+  annotations:
+    workflows.argoproj.io/description: |
+      Creates a new tenant on the platform:
+        1. Validates tenant name (DNS-safe, not already exists)
+        2. Creates Vault policy tenant-{name} (scoped to secret/data/teams/{name}/*)
+        3. Commits tenant directory to gitops repo (values.yaml + catalog-info.yaml)
+        4. Appends ArgoCD RBAC entries to argocd/values.yaml
+        5. ArgoCD ApplicationSet picks up new directory → namespace provisioned
+
+      Auth: Backstage OIDC groups (from tenant_members DB), no GitHub teams needed.
+      Triggered by: Backstage scaffolder template "Create Tenant [v2 · Argo]"
+
+      Steps:
+        1. validate           — name format + non-existence check
+        2. create-vault-policy — Vault policy scoped to teams/{name}/*
+        3. commit-to-git      — tenant files + ArgoCD RBAC pushed to mctl-gitops
+
+spec:
+  entrypoint: create-tenant-pipeline
+  serviceAccountName: argo-workflow-sa
+
+  arguments:
+    parameters:
+      - name: tenant_name
+        # Lowercase, DNS-safe slug (^[a-z0-9][a-z0-9-]{1,62}$)
+      - name: display_name
+        default: ""
+      - name: description
+        default: ""
+      - name: quota_cpu_req
+        default: "2"
+      - name: quota_cpu_lim
+        default: "4"
+      - name: quota_memory_req
+        default: "3Gi"
+      - name: quota_memory_lim
+        default: "6Gi"
+      - name: quota_pods
+        default: "10"
+      - name: allow_internet_egress
+        default: "true"
+      - name: contact_email
+        default: ""
+      - name: creator_user_id
+        default: ""
+
+  templates:
+    # ────────────────────────────────────────────────────────────────────────
+    - name: create-tenant-pipeline
+      dag:
+        tasks:
+          # Step 1: validate name format and check non-existence
+          - name: validate
+            template: validate-tenant-name
+            arguments:
+              parameters:
+                - name: tenant_name
+                  value: "{{workflow.parameters.tenant_name}}"
+
+          # Step 2: create Vault policy (after validate)
+          - name: create-vault-policy
+            dependencies: [validate]
+            template: create-vault-policy
+            arguments:
+              parameters:
+                - name: tenant_name
+                  value: "{{workflow.parameters.tenant_name}}"
+
+          # Step 3: commit tenant files + ArgoCD RBAC to Git (after vault policy)
+          - name: commit-to-git
+            dependencies: [create-vault-policy]
+            template: commit-tenant-to-git
+            arguments:
+              parameters:
+                - name: tenant_name
+                  value: "{{workflow.parameters.tenant_name}}"
+                - name: display_name
+                  value: "{{workflow.parameters.display_name}}"
+                - name: description
+                  value: "{{workflow.parameters.description}}"
+                - name: quota_cpu_req
+                  value: "{{workflow.parameters.quota_cpu_req}}"
+                - name: quota_cpu_lim
+                  value: "{{workflow.parameters.quota_cpu_lim}}"
+                - name: quota_memory_req
+                  value: "{{workflow.parameters.quota_memory_req}}"
+                - name: quota_memory_lim
+                  value: "{{workflow.parameters.quota_memory_lim}}"
+                - name: quota_pods
+                  value: "{{workflow.parameters.quota_pods}}"
+                - name: allow_internet_egress
+                  value: "{{workflow.parameters.allow_internet_egress}}"
+                - name: contact_email
+                  value: "{{workflow.parameters.contact_email}}"
+                - name: creator_user_id
+                  value: "{{workflow.parameters.creator_user_id}}"
+
+    # ────────────────────────────────────────────────────────────────────────
+    - name: validate-tenant-name
+      inputs:
+        parameters:
+          - name: tenant_name
+      script:
+        image: alpine:3.19
+        command: [sh]
+        source: |
+          set -e
+          TENANT="{{inputs.parameters.tenant_name}}"
+
+          echo "Validating tenant name: $TENANT"
+
+          # Format check: lowercase alphanumeric + hyphens, 2-63 chars, no leading/trailing hyphens
+          if ! echo "$TENANT" | grep -qE '^[a-z0-9][a-z0-9-]{1,62}$'; then
+            echo "ERROR: Tenant name '$TENANT' is invalid."
+            echo "Must match: ^[a-z0-9][a-z0-9-]{1,62}$"
+            echo "Examples: my-team, team1, dev-platform"
+            exit 1
+          fi
+
+          # Reserved names
+          for reserved in argocd argo-workflows argo-events kube-system kube-public kube-node-lease default cert-manager traefik vault external-secrets monitoring; do
+            if [ "$TENANT" = "$reserved" ]; then
+              echo "ERROR: '$TENANT' is a reserved namespace name."
+              exit 1
+            fi
+          done
+
+          echo "Tenant name '$TENANT' is valid."
+
+    # ────────────────────────────────────────────────────────────────────────
+    - name: create-vault-policy
+      inputs:
+        parameters:
+          - name: tenant_name
+      script:
+        image: hashicorp/vault:1.15
+        command: [sh]
+        env:
+          - name: VAULT_ADDR
+            value: "http://vault.vault.svc.cluster.local:8200"
+        source: |
+          set -e
+          TENANT="{{inputs.parameters.tenant_name}}"
+
+          echo "Authenticating to Vault via Kubernetes auth..."
+          KUBE_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+          VAULT_TOKEN=$(vault write -field=token auth/kubernetes/login \
+            role=argo-workflow \
+            jwt="$KUBE_TOKEN")
+          export VAULT_TOKEN
+
+          echo "Creating Vault policy: tenant-${TENANT}"
+          vault policy write "tenant-${TENANT}" - <<EOF
+          # Scoped Vault policy for tenant: ${TENANT}
+          # Created by: wft-create-tenant workflow
+          # Grants Argo Workflows access to only this tenant's secrets
+
+          path "secret/data/teams/${TENANT}/*" {
+            capabilities = ["create", "read", "update", "delete", "list"]
+          }
+          path "secret/metadata/teams/${TENANT}/*" {
+            capabilities = ["read", "list", "delete"]
+          }
+          EOF
+
+          echo "Vault policy tenant-${TENANT} created successfully."
+          vault policy read "tenant-${TENANT}"
+
+    # ────────────────────────────────────────────────────────────────────────
+    - name: commit-tenant-to-git
+      inputs:
+        parameters:
+          - name: tenant_name
+          - name: display_name
+          - name: description
+          - name: quota_cpu_req
+          - name: quota_cpu_lim
+          - name: quota_memory_req
+          - name: quota_memory_lim
+          - name: quota_pods
+          - name: allow_internet_egress
+          - name: contact_email
+          - name: creator_user_id
+      volumes:
+        - name: github-app-creds
+          secret:
+            secretName: github-app-credentials
+        - name: deploy-key
+          secret:
+            secretName: mctl-gitops-deploy-key
+            defaultMode: 0600
+      script:
+        image: alpine:3.19
+        command: [sh]
+        envFrom:
+          - configMapRef:
+              name: mctl-platform-config
+        volumeMounts:
+          - name: github-app-creds
+            mountPath: /secrets/github-app
+            readOnly: true
+          - name: deploy-key
+            mountPath: /secrets/deploy-key
+            readOnly: true
+        source: |
+          set -e
+
+          # ── Parameters ──────────────────────────────────────────────────────
+          TENANT="{{inputs.parameters.tenant_name}}"
+          DISPLAY_NAME="{{inputs.parameters.display_name}}"
+          DESCRIPTION="{{inputs.parameters.description}}"
+          CPU_REQ="{{inputs.parameters.quota_cpu_req}}"
+          CPU_LIM="{{inputs.parameters.quota_cpu_lim}}"
+          MEM_REQ="{{inputs.parameters.quota_memory_req}}"
+          MEM_LIM="{{inputs.parameters.quota_memory_lim}}"
+          PODS="{{inputs.parameters.quota_pods}}"
+          INTERNET_EGRESS="{{inputs.parameters.allow_internet_egress}}"
+          CONTACT_EMAIL="{{inputs.parameters.contact_email}}"
+          CREATOR_USER_ID="{{inputs.parameters.creator_user_id}}"
+
+          # Defaults
+          [ -z "$DISPLAY_NAME" ] && DISPLAY_NAME="$TENANT"
+
+          # ── Setup SSH for git operations ────────────────────────────────────
+          apk add --no-cache openssl curl jq git openssh-client ca-certificates
+          mkdir -p ~/.ssh
+          cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          # Use port 443 (port 22 is blocked); disable strict host checking for ephemeral container
+          printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  StrictHostKeyChecking no\n' > ~/.ssh/config
+          chmod 600 ~/.ssh/config
+
+          # ── GitHub App token (for API calls only) ───────────────────────────
+          APP_ID=$(cat /secrets/github-app/app-id)
+          PRIVATE_KEY=$(cat /secrets/github-app/private-key)
+          INSTALLATION_ID=$(cat /secrets/github-app/installation-id)
+
+          # Generate JWT
+          NOW=$(date +%s)
+          IAT=$((NOW - 60))
+          EXP=$((NOW + 540))
+          HEADER=$(printf '{"alg":"RS256","typ":"JWT"}' | base64 | tr -d '=' | tr '/+' '_-' | tr -d '\n')
+          PAYLOAD=$(printf '{"iat":%d,"exp":%d,"iss":"%s"}' "$IAT" "$EXP" "$APP_ID" | base64 | tr -d '=' | tr '/+' '_-' | tr -d '\n')
+          SIGN_INPUT="${HEADER}.${PAYLOAD}"
+          SIGNATURE=$(printf '%s' "$SIGN_INPUT" | openssl dgst -sha256 -sign <(printf '%s' "$PRIVATE_KEY") | base64 | tr -d '=' | tr '/+' '_-' | tr -d '\n')
+          JWT="${HEADER}.${PAYLOAD}.${SIGNATURE}"
+
+          # Get installation token
+          GH_TOKEN=$(curl -sf -X POST \
+            -H "Authorization: Bearer $JWT" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens" \
+            | jq -r '.token')
+
+          if [ -z "$GH_TOKEN" ] || [ "$GH_TOKEN" = "null" ]; then
+            echo "ERROR: Failed to get GitHub App installation token"
+            exit 1
+          fi
+
+          # ── Clone mctl-gitops via SSH ─────────────────────────────────────────
+          git config --global user.email "argo-workflows[bot]@mctl.ai"
+          git config --global user.name "Argo Workflows Bot"
+
+          git clone --depth=50 "git@github.com:${GITOPS_ORG}/${GITOPS_REPO}.git" /tmp/mctl-gitops
+          cd /tmp/mctl-gitops
+
+          # ── Security: check tenant doesn't already exist ────────────────────
+          TENANT_DIR="platform-gitops/tenants/${TENANT}"
+          if [ -d "$TENANT_DIR" ]; then
+            echo "ERROR: Tenant directory already exists: $TENANT_DIR"
+            echo "Use the 'Update Tenant' workflow to modify an existing tenant."
+            exit 1
+          fi
+
+          # ── Create tenant directory ─────────────────────────────────────────
+          mkdir -p "$TENANT_DIR"
+
+          # Build members section if creator is specified
+          MEMBERS_BLOCK=""
+          if [ -n "$CREATOR_USER_ID" ]; then
+            MEMBERS_BLOCK=$(printf '  members:\n    - userId: %s\n      role: owner' "$CREATOR_USER_ID")
+          fi
+
+          # Write values.yaml
+          cat > "${TENANT_DIR}/values.yaml" <<EOF
+          # Tenant configuration for: ${TENANT}
+          # Created by: wft-create-tenant workflow
+          # Managed by: ArgoCD ApplicationSet (applicationset-tenants)
+          tenant:
+            name: ${TENANT}
+            displayName: "${DISPLAY_NAME}"
+            description: "${DESCRIPTION}"
+            contactEmail: "${CONTACT_EMAIL}"
+          ${MEMBERS_BLOCK}
+            quotas:
+              requests.cpu: "${CPU_REQ}"
+              requests.memory: "${MEM_REQ}"
+              limits.cpu: "${CPU_LIM}"
+              limits.memory: "${MEM_LIM}"
+              pods: "${PODS}"
+              persistentvolumeclaims: "5"
+              services: "10"
+            limitRange:
+              enabled: true
+              default:
+                cpu: "500m"
+                memory: "256Mi"
+              defaultRequest:
+                cpu: "100m"
+                memory: "128Mi"
+              max:
+                cpu: "2"
+                memory: "5Gi"
+            networking:
+              allowIntraNamespace: true
+              allowClusterEgress: true
+              allowInternetEgress: ${INTERNET_EGRESS}
+          EOF
+
+          # Write catalog-info.yaml (Backstage Resource entity)
+          cat > "${TENANT_DIR}/catalog-info.yaml" << YAML
+          apiVersion: backstage.io/v1alpha1
+          kind: Resource
+          metadata:
+            name: tenant-${TENANT}
+            namespace: default
+            description: "Tenant ${DISPLAY_NAME} — namespace, quotas, and network policies"
+            annotations:
+              mctl.me/tenant-name: "${TENANT}"
+              backstage.io/managed-by-location: "url:https://github.com/${GITOPS_ORG}/${GITOPS_REPO}/blob/main/platform-gitops/tenants/${TENANT}/catalog-info.yaml"
+              backstage.io/managed-by-origin-location: "url:https://github.com/${GITOPS_ORG}/${GITOPS_REPO}/blob/main/platform-gitops/tenants/${TENANT}/catalog-info.yaml"
+          spec:
+            type: tenant
+            owner: group:default/admins
+            system: team-${TENANT}
+            dependsOn: []
+          YAML
+
+          # ── Create SSO RBAC SA for Argo Workflows UI ─────────────────────────
+          SSO_FILE="platform-gitops/argo-workflows/sso-team-${TENANT}.yaml"
+          if [ ! -f "$SSO_FILE" ]; then
+            cat > "$SSO_FILE" << YAML
+          # SSO RBAC: team ${TENANT} — scoped to team namespace only
+          apiVersion: v1
+          kind: ServiceAccount
+          metadata:
+            name: sso-team-${TENANT}
+            namespace: argo-workflows
+            annotations:
+              workflows.argoproj.io/rbac-rule: "'${TENANT}' in groups"
+              workflows.argoproj.io/rbac-rule-precedence: "5"
+          ---
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: sso-team-${TENANT}.service-account-token
+            namespace: argo-workflows
+            annotations:
+              kubernetes.io/service-account.name: sso-team-${TENANT}
+          type: kubernetes.io/service-account-token
+          YAML
+            echo "SSO RBAC SA created for tenant: ${TENANT}"
+          fi
+
+          # ── Append ArgoCD RBAC entries ──────────────────────────────────────
+          ARGOCD_VALUES="platform-gitops/argocd/values.yaml"
+
+          # Find the line with the last policy entry (before the 'secret:' key)
+          # We insert new tenant RBAC before the 'secret:' section
+          RBAC_BLOCK="
+                  # Tenant: ${TENANT}
+                  p, role:team-${TENANT}, applications, get, apps/${TENANT}-*, allow
+                  p, role:team-${TENANT}, applications, list, apps/${TENANT}-*, allow
+                  p, role:team-${TENANT}, applications, sync, apps/${TENANT}-*, allow
+                  p, role:team-${TENANT}, applications, override, apps/${TENANT}-*, allow
+                  p, role:team-${TENANT}, logs, get, apps/${TENANT}-*, allow
+                  p, role:team-${TENANT}, exec, create, apps/${TENANT}-*, allow
+                  g, ${TENANT}, role:team-${TENANT}"
+
+          # Check if tenant already has RBAC (shouldn't happen given validate step, but be safe)
+          if grep -q "role:team-${TENANT}," "$ARGOCD_VALUES"; then
+            echo "WARNING: ArgoCD RBAC for tenant ${TENANT} already exists, skipping."
+          else
+            # Insert before the 'secret:' key (after the last policy entry)
+            # Use awk to insert before the line matching '    secret:'
+            awk -v rbac="$RBAC_BLOCK" '
+              /^    secret:/ {
+                print rbac
+              }
+              { print }
+            ' "$ARGOCD_VALUES" > /tmp/argocd_values_new.yaml
+            mv /tmp/argocd_values_new.yaml "$ARGOCD_VALUES"
+            echo "ArgoCD RBAC entries added for tenant: ${TENANT}"
+          fi
+
+          # ── Commit and push ──────────────────────────────────────────────────
+          git add \
+            "platform-gitops/tenants/${TENANT}/values.yaml" \
+            "platform-gitops/tenants/${TENANT}/catalog-info.yaml" \
+            "platform-gitops/argocd/values.yaml" \
+            "platform-gitops/argo-workflows/sso-team-${TENANT}.yaml"
+
+          git status
+
+          git commit -m "feat(tenant): create tenant ${TENANT}
+
+          Display name: ${DISPLAY_NAME}
+          Quotas: CPU ${CPU_REQ}/${CPU_LIM}, Memory ${MEM_REQ}/${MEM_LIM}, Pods ${PODS}
+
+          - Creates platform-gitops/tenants/${TENANT}/
+          - Vault policy: tenant-${TENANT}
+          - ArgoCD RBAC: role:team-${TENANT} -> ${TENANT} (Backstage OIDC group)
+          - ArgoCD ApplicationSet will provision namespace + quotas + network policies
+
+          Created by Argo Workflows (wft-create-tenant)"
+
+          # Push with retry/rebase loop
+          MAX_ATTEMPTS=5
+          for attempt in $(seq 1 $MAX_ATTEMPTS); do
+            echo "Push attempt $attempt/$MAX_ATTEMPTS..."
+            if git push origin HEAD:main; then
+              echo "Successfully pushed tenant ${TENANT}!"
+              break
+            elif [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
+              echo "Push failed (attempt $attempt). Fetching latest and rebasing..."
+              git fetch --unshallow origin main 2>/dev/null || git fetch origin main
+              git rebase origin/main
+            else
+              echo "ERROR: Push failed after $MAX_ATTEMPTS attempts"
+              exit 1
+            fi
+          done

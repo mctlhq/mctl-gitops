@@ -1,0 +1,232 @@
+{{- $tenantName := include "tenant.name" . }}
+{{- /* Build list of namespaces: multi-team → [{tenant}-{team}, ...], legacy → [{tenant}] */}}
+{{- $namespaces := list }}
+{{- if .Values.tenant.teams }}
+  {{- range .Values.tenant.teams }}
+    {{- $namespaces = append $namespaces (printf "%s-%s" $tenantName .name) }}
+  {{- end }}
+{{- else }}
+  {{- $namespaces = append $namespaces $tenantName }}
+{{- end }}
+
+{{- range $ns := $namespaces }}
+# ServiceAccount used by Argo Workflows pods running in this namespace
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: argo-workflow-sa
+  namespace: {{ $ns }}
+  labels:
+    {{- include "tenant.labels" $ | nindent 4 }}
+---
+# Allow workflow pods to create workflows, read pods/logs/secrets in tenant namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: argo-workflow-runner
+  namespace: {{ $ns }}
+  labels:
+    {{- include "tenant.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: ["argoproj.io"]
+    resources: ["workflows", "workflowtaskresults"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["resourcequotas"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argo-workflow-runner
+  namespace: {{ $ns }}
+  labels:
+    {{- include "tenant.labels" $ | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: argo-workflow-sa
+    namespace: {{ $ns }}
+roleRef:
+  kind: Role
+  name: argo-workflow-runner
+  apiGroup: rbac.authorization.k8s.io
+---
+# Namespace-scoped smoke-test permissions: verify deployments, pods, secrets,
+# and ExternalSecrets ONLY in this namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: argo-workflow-smoke-verify
+  namespace: {{ $ns }}
+  labels:
+    {{- include "tenant.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/exec"]
+    verbs: ["get", "list", "watch", "create"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list"]
+  - apiGroups: ["external-secrets.io"]
+    resources: ["externalsecrets"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+---
+# Bind tenant's local workflow SA to smoke-verify Role
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argo-workflow-smoke-verify
+  namespace: {{ $ns }}
+  labels:
+    {{- include "tenant.labels" $ | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: argo-workflow-sa
+    namespace: {{ $ns }}
+roleRef:
+  kind: Role
+  name: argo-workflow-smoke-verify
+  apiGroup: rbac.authorization.k8s.io
+---
+# Bind central workflow SA (argo-workflows ns) to smoke-verify Role in this namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argo-workflow-smoke-verify-central
+  namespace: {{ $ns }}
+  labels:
+    {{- include "tenant.labels" $ | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: argo-workflow-sa
+    namespace: argo-workflows
+roleRef:
+  kind: Role
+  name: argo-workflow-smoke-verify
+  apiGroup: rbac.authorization.k8s.io
+---
+# SSO RBAC: give the team's SSO SA (in argo-workflows ns) access to workflows here
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sso-team-workflows
+  namespace: {{ $ns }}
+  labels:
+    {{- include "tenant.labels" $ | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: sso-team-{{ $tenantName }}
+    namespace: argo-workflows
+roleRef:
+  kind: ClusterRole
+  name: argo-workflows-admin
+  apiGroup: rbac.authorization.k8s.io
+---
+# SSO RBAC: give the team's SSO SA access to events/secrets/pods/logs for log viewing
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sso-team-logs
+  namespace: {{ $ns }}
+  labels:
+    {{- include "tenant.labels" $ | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: sso-team-{{ $tenantName }}
+    namespace: argo-workflows
+roleRef:
+  kind: ClusterRole
+  name: argo-workflows-admin-extra
+  apiGroup: rbac.authorization.k8s.io
+---
+# Allow mctl-api to submit and manage workflows in this namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: mctl-api-workflow-submitter
+  namespace: {{ $ns }}
+  labels:
+    {{- include "tenant.labels" $ | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: mctl-api
+    namespace: mctl-api
+roleRef:
+  kind: Role
+  name: argo-workflow-runner
+  apiGroup: rbac.authorization.k8s.io
+---
+# Helm deploy permissions for preview environments (helm install/uninstall in own namespace)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: argo-workflow-helm-deploy
+  namespace: {{ $ns }}
+  labels:
+    {{- include "tenant.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets", "statefulsets"]
+    verbs: ["*"]
+  - apiGroups: [""]
+    resources: ["services", "configmaps", "secrets", "serviceaccounts", "pods"]
+    verbs: ["*"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["*"]
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argo-workflow-helm-deploy
+  namespace: {{ $ns }}
+  labels:
+    {{- include "tenant.labels" $ | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: argo-workflow-sa
+    namespace: {{ $ns }}
+roleRef:
+  kind: Role
+  name: argo-workflow-helm-deploy
+  apiGroup: rbac.authorization.k8s.io
+---
+# MinIO artifact credentials — required by Argo Workflows argoexec init container
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: minio-artifact-credentials
+  namespace: {{ $ns }}
+  labels:
+    {{- include "tenant.labels" $ | nindent 4 }}
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: vault-backend
+  target:
+    name: minio-artifact-credentials
+    creationPolicy: Owner
+  data:
+    - secretKey: accessKey
+      remoteRef:
+        key: teams/platform/minio
+        property: root-user
+    - secretKey: secretKey
+      remoteRef:
+        key: teams/platform/minio
+        property: root-password
+---
+{{- end }}

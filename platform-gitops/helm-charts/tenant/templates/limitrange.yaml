@@ -1,0 +1,33 @@
+{{- if .Values.tenant.limitRange.enabled }}
+{{- $tenantName := include "tenant.name" . }}
+{{- $namespaces := list }}
+{{- if .Values.tenant.teams }}
+  {{- range .Values.tenant.teams }}
+    {{- $namespaces = append $namespaces (printf "%s-%s" $tenantName .name) }}
+  {{- end }}
+{{- else }}
+  {{- $namespaces = append $namespaces $tenantName }}
+{{- end }}
+{{- range $ns := $namespaces }}
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: {{ $ns }}-limits
+  namespace: {{ $ns }}
+  labels:
+    {{- include "tenant.labels" $ | nindent 4 }}
+spec:
+  limits:
+    - type: Container
+      default:
+        cpu: {{ $.Values.tenant.limitRange.default.cpu | quote }}
+        memory: {{ $.Values.tenant.limitRange.default.memory | quote }}
+      defaultRequest:
+        cpu: {{ $.Values.tenant.limitRange.defaultRequest.cpu | quote }}
+        memory: {{ $.Values.tenant.limitRange.defaultRequest.memory | quote }}
+      max:
+        cpu: {{ $.Values.tenant.limitRange.max.cpu | quote }}
+        memory: {{ $.Values.tenant.limitRange.max.memory | quote }}
+{{- end }}
+{{- end }}

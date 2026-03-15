@@ -1,0 +1,5 @@
+site_name: Update Environment
+site_description: Documentation for the Update Environment template
+docs_dir: docs
+plugins:
+  - techdocs-core

@@ -1,0 +1,28 @@
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: argocd-github-oauth
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"  # sync before ArgoCD apps
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: vault-backend
+  target:
+    name: argocd-secret
+    creationPolicy: Merge  # merge with existing secret, don't overwrite
+  data:
+    - secretKey: github-client-id
+      remoteRef:
+        key: platform/github-app
+        property: client-id
+    - secretKey: github-client-secret
+      remoteRef:
+        key: platform/github-app
+        property: client-secret
+    - secretKey: argo-workflows-sso-client-secret
+      remoteRef:
+        key: platform/argo-workflows/sso
+        property: client-secret

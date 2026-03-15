@@ -1,0 +1,60 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterWorkflowTemplate
+metadata:
+  name: retire-service
+  annotations:
+    workflows.argoproj.io/description: |
+      Deletes a service: removes Git manifests and optionally cleans up Vault secrets.
+      ArgoCD PreDelete hook (vault-cleanup.yaml) handles in-cluster cleanup automatically.
+
+      Replaces: .github/workflows/retire-service.yml
+spec:
+  entrypoint: retire-pipeline
+  serviceAccountName: argo-workflow-sa
+
+  arguments:
+    parameters:
+      - name: team_name
+      - name: component_name
+      - name: component_type
+        default: "base-service"
+        # base-service | worker-service
+      - name: delete_vault_secrets
+        default: "true"
+
+  templates:
+    - name: retire-pipeline
+      dag:
+        tasks:
+          # Step 1: delete Vault secrets (parallel with git delete)
+          - name: delete-vault-secrets
+            when: "\"{{workflow.parameters.delete_vault_secrets}}\" == \"true\""
+            templateRef:
+              name: tpl-vault-write
+              clusterScope: true
+              template: delete-service-secrets
+            arguments:
+              parameters:
+                - name: team_name
+                  value: "{{workflow.parameters.team_name}}"
+                - name: component_name
+                  value: "{{workflow.parameters.component_name}}"
+
+          # Step 2: remove service directory + git commit
+          - name: delete-from-git
+            templateRef:
+              name: tpl-git-commit
+              clusterScope: true
+              template: delete-service
+            arguments:
+              parameters:
+                - name: team_name
+                  value: "{{workflow.parameters.team_name}}"
+                - name: component_name
+                  value: "{{workflow.parameters.component_name}}"
+                - name: component_type
+                  value: "{{workflow.parameters.component_type}}"
+
+          # Note: ArgoCD PreDelete hook (vault-cleanup.yaml already deployed in service dir)
+          # will handle Vault cleanup of in-cluster ExternalSecrets before ArgoCD removes the app.
+          # The delete-vault-secrets step above handles the Vault KV secrets directly.

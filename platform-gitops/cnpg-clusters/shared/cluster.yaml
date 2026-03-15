@@ -1,0 +1,136 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: shared-pg
+spec:
+  instances: 2  # primary + 1 replica for HA
+
+  # CNPG operator defaults (explicitly set to prevent ArgoCD OutOfSync)
+  imageName: ghcr.io/cloudnative-pg/postgresql:17.2
+  affinity:
+    podAntiAffinityType: preferred
+  enablePDB: true
+  enableSuperuserAccess: false
+  failoverDelay: 0
+  logLevel: info
+  maxSyncReplicas: 0
+  minSyncReplicas: 0
+  postgresGID: 26
+  postgresUID: 26
+  primaryUpdateMethod: restart
+  primaryUpdateStrategy: unsupervised
+  replicationSlots:
+    highAvailability:
+      enabled: true
+      slotPrefix: _cnpg_
+    synchronizeReplicas:
+      enabled: true
+    updateInterval: 30
+  smartShutdownTimeout: 180
+  startDelay: 3600
+  stopDelay: 1800
+  switchoverDelay: 3600
+
+  storage:
+    storageClass: hcloud-volumes
+    size: 20Gi
+
+  resources:
+    requests:
+      memory: 1Gi
+      cpu: 500m
+    limits:
+      memory: 1Gi
+      cpu: "1"   # CNPG normalizes 1000m → "1"; use "1" to match live state
+
+  postgresql:
+    parameters:
+      max_connections: "200"
+      shared_buffers: "256MB"
+      work_mem: "4MB"
+      temp_file_limit: "256MB"
+      statement_timeout: "60s"
+      lock_timeout: "10s"
+      idle_in_transaction_session_timeout: "300s"
+      log_min_duration_statement: "1000"  # log queries >1s
+    pg_hba:
+      # Backstage — access to own db + postgres db (assertDatabaseExists check)
+      - host backstage backstage all scram-sha-256
+      - host postgres backstage all scram-sha-256
+      # Argo Workflows — persistence and archive
+      - host argo-workflows argoworkflows all scram-sha-256
+      # Team apps — each role only its own database
+      # Add new entries when onboarding a new app:
+      # - host <db_name> <role_name> all scram-sha-256
+      - host test-django-test test-django-test all scram-sha-256
+      - host test-spring-test test-spring-test all scram-sha-256
+      - host tests-pdb-test-svc tests-pdb-test-svc all scram-sha-256
+      # smoke-test-svc: ephemeral — added/removed by smoke-test CWT, not managed here
+      - host mashkoffdmitry-knot-mvp mashkoffdmitry-knot-mvp all scram-sha-256
+      - host all all 0.0.0.0/0 reject
+
+  managed:
+    roles:
+      - name: backstage
+        login: true
+        inherit: true
+        connectionLimit: 100  # 2 replicas * ~25 plugin connections during rolling deploy
+        ensure: present
+        passwordSecret:
+          name: backstage-db-creds
+      - name: test-django-test
+        login: true
+        inherit: true
+        connectionLimit: 10
+        ensure: present
+        passwordSecret:
+          name: test-django-test-db-creds
+      - name: test-spring-test
+        login: true
+        inherit: true
+        connectionLimit: 10
+        ensure: present
+        passwordSecret:
+          name: test-spring-test-db-creds
+      - name: argoworkflows
+        login: true
+        inherit: true
+        connectionLimit: 20
+        ensure: present
+        passwordSecret:
+          name: argoworkflows-db-creds
+      # Team app roles
+      - name: tests-pdb-test-svc
+        login: true
+        connectionLimit: 10
+        ensure: present
+        passwordSecret:
+          name: tests-pdb-test-svc-db-creds
+      - name: mashkoffdmitry-knot-mvp
+        login: true
+        connectionLimit: 10
+        ensure: present
+        passwordSecret:
+          name: mashkoffdmitry-knot-mvp-db-creds
+      # - name: team1_app1
+      #   login: true
+      #   connectionLimit: 10
+      #   ensure: present
+      #   passwordSecret:
+      #     name: team1-app1-db-creds
+
+  bootstrap:
+    initdb:
+      database: backstage
+      owner: backstage
+      encoding: UTF8
+      localeCType: C
+      localeCollate: C
+      secret:
+        name: backstage-db-creds
+
+  # backup: — deferred, not needed for preprod
+  # When needed, add barmanObjectStore config pointing to R2 or Hetzner Object Storage
+
+  monitoring:
+    enablePodMonitor: false  # enable when Prometheus is added

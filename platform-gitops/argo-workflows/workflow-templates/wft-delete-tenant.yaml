@@ -1,0 +1,280 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterWorkflowTemplate
+metadata:
+  name: delete-tenant
+  annotations:
+    workflows.argoproj.io/description: |
+      Fully deletes a tenant from the platform:
+        1. validate        — checks tenant exists, not reserved
+        2. delete-vault    — removes Vault policy + secrets under teams/{name}/
+        3. delete-from-git — removes tenant dir + ArgoCD RBAC from gitops repo
+        4. delete-k8s      — deletes ArgoCD app + K8s namespace
+
+      DB cleanup (tenants + tenant_members) is handled by the Backstage API
+      that triggers this workflow (DELETE /api/tenant-management/tenants/:name).
+
+spec:
+  entrypoint: delete-tenant-pipeline
+  serviceAccountName: argo-workflow-sa
+
+  arguments:
+    parameters:
+      - name: tenant_name
+
+  templates:
+    # ────────────────────────────────────────────────────────────────────────
+    - name: delete-tenant-pipeline
+      dag:
+        tasks:
+          - name: validate
+            template: validate-tenant-exists
+            arguments:
+              parameters:
+                - name: tenant_name
+                  value: "{{workflow.parameters.tenant_name}}"
+
+          - name: delete-vault
+            dependencies: [validate]
+            template: delete-vault-policy
+            arguments:
+              parameters:
+                - name: tenant_name
+                  value: "{{workflow.parameters.tenant_name}}"
+
+          - name: delete-from-git
+            dependencies: [validate]
+            template: delete-tenant-from-git
+            arguments:
+              parameters:
+                - name: tenant_name
+                  value: "{{workflow.parameters.tenant_name}}"
+
+          - name: delete-k8s
+            dependencies: [delete-from-git]
+            template: delete-k8s-resources
+            arguments:
+              parameters:
+                - name: tenant_name
+                  value: "{{workflow.parameters.tenant_name}}"
+
+    # ────────────────────────────────────────────────────────────────────────
+    - name: validate-tenant-exists
+      inputs:
+        parameters:
+          - name: tenant_name
+      script:
+        image: alpine:3.19
+        command: [sh]
+        source: |
+          set -e
+          TENANT="{{inputs.parameters.tenant_name}}"
+
+          echo "Validating tenant: $TENANT"
+
+          # Reserved — cannot delete
+          for reserved in admins argocd argo-workflows argo-events kube-system kube-public kube-node-lease default cert-manager traefik vault external-secrets monitoring backstage platform-db; do
+            if [ "$TENANT" = "$reserved" ]; then
+              echo "ERROR: '$TENANT' is a reserved/protected tenant and cannot be deleted."
+              exit 1
+            fi
+          done
+
+          echo "Tenant '$TENANT' passed validation."
+
+    # ────────────────────────────────────────────────────────────────────────
+    - name: delete-vault-policy
+      inputs:
+        parameters:
+          - name: tenant_name
+      script:
+        image: hashicorp/vault:1.15
+        command: [sh]
+        env:
+          - name: VAULT_ADDR
+            value: "http://vault.vault.svc.cluster.local:8200"
+        source: |
+          set -e
+          TENANT="{{inputs.parameters.tenant_name}}"
+
+          echo "Authenticating to Vault via Kubernetes auth..."
+          KUBE_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+          VAULT_TOKEN=$(vault write -field=token auth/kubernetes/login \
+            role=argo-workflow \
+            jwt="$KUBE_TOKEN")
+          export VAULT_TOKEN
+
+          # Delete Vault policy
+          if vault policy read "tenant-${TENANT}" > /dev/null 2>&1; then
+            vault policy delete "tenant-${TENANT}"
+            echo "Vault policy tenant-${TENANT} deleted."
+          else
+            echo "Vault policy tenant-${TENANT} not found (already deleted). Skipping."
+          fi
+
+          # Delete all secrets under teams/{tenant}/
+          echo "Cleaning up Vault secrets under teams/${TENANT}/..."
+          SERVICES=$(vault kv list -format=json -mount=secret "teams/${TENANT}/" 2>/dev/null || echo "[]")
+          if [ "$SERVICES" != "[]" ]; then
+            for SVC in $(echo "$SERVICES" | sed 's/[][]//g' | tr ',' '\n' | tr -d '" '); do
+              # Each service may have sub-keys (repo-pat, database, etc.)
+              SUB_KEYS=$(vault kv list -format=json -mount=secret "teams/${TENANT}/${SVC}" 2>/dev/null || echo "[]")
+              if [ "$SUB_KEYS" != "[]" ]; then
+                for KEY in $(echo "$SUB_KEYS" | sed 's/[][]//g' | tr ',' '\n' | tr -d '" '); do
+                  vault kv metadata delete -mount=secret "teams/${TENANT}/${SVC}${KEY}" 2>/dev/null && \
+                    echo "  Deleted secret teams/${TENANT}/${SVC}${KEY}" || true
+                done
+              fi
+              # Delete the service-level metadata too
+              vault kv metadata delete -mount=secret "teams/${TENANT}/${SVC}" 2>/dev/null && \
+                echo "  Deleted secret teams/${TENANT}/${SVC}" || true
+            done
+            echo "Vault secrets for tenant ${TENANT} cleaned up."
+          else
+            echo "No Vault secrets found for tenant ${TENANT}."
+          fi
+
+    # ────────────────────────────────────────────────────────────────────────
+    - name: delete-tenant-from-git
+      inputs:
+        parameters:
+          - name: tenant_name
+      volumes:
+        - name: github-app-creds
+          secret:
+            secretName: github-app-credentials
+        - name: deploy-key
+          secret:
+            secretName: mctl-gitops-deploy-key
+            defaultMode: 0600
+      script:
+        image: alpine:3.19
+        command: [sh]
+        envFrom:
+          - configMapRef:
+              name: mctl-platform-config
+        volumeMounts:
+          - name: github-app-creds
+            mountPath: /secrets/github-app
+            readOnly: true
+          - name: deploy-key
+            mountPath: /secrets/deploy-key
+            readOnly: true
+        source: |
+          set -e
+          TENANT="{{inputs.parameters.tenant_name}}"
+
+          # ── Setup SSH ──────────────────────────────────────────────────────
+          apk add --no-cache openssl curl jq git openssh-client ca-certificates
+          mkdir -p ~/.ssh
+          cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  StrictHostKeyChecking no\n' > ~/.ssh/config
+          chmod 600 ~/.ssh/config
+
+          # ── Clone mctl-gitops ────────────────────────────────────────────────
+          git config --global user.email "argo-workflows[bot]@mctl.ai"
+          git config --global user.name "Argo Workflows Bot"
+          git clone --depth=1 "git@github.com:${GITOPS_ORG}/${GITOPS_REPO}.git" /tmp/mctl-gitops
+          cd /tmp/mctl-gitops
+
+          CHANGED=false
+
+          # ── Remove tenant directory ────────────────────────────────────────
+          TENANT_DIR="platform-gitops/tenants/${TENANT}"
+          if [ -d "$TENANT_DIR" ]; then
+            git rm -rf "$TENANT_DIR"
+            echo "Removed $TENANT_DIR"
+            CHANGED=true
+          else
+            echo "WARNING: $TENANT_DIR not found, skipping."
+          fi
+
+          # ── Remove ArgoCD RBAC entries ─────────────────────────────────────
+          ARGOCD_VALUES="platform-gitops/argocd/values.yaml"
+          if grep -q "role:team-${TENANT}," "$ARGOCD_VALUES"; then
+            # Remove the comment line and all RBAC lines for this tenant
+            sed -i "/# Tenant: ${TENANT}/d" "$ARGOCD_VALUES"
+            sed -i "/role:team-${TENANT},/d" "$ARGOCD_VALUES"
+            sed -i "/g, ${TENANT}, role:team-${TENANT}/d" "$ARGOCD_VALUES"
+            # Clean up any resulting double blank lines
+            sed -i '/^$/N;/^\n$/d' "$ARGOCD_VALUES"
+            git add "$ARGOCD_VALUES"
+            echo "Removed ArgoCD RBAC for tenant: ${TENANT}"
+            CHANGED=true
+          else
+            echo "WARNING: No ArgoCD RBAC found for tenant ${TENANT}, skipping."
+          fi
+
+          # ── Remove Argo Workflows SSO RBAC file ───────────────────────────
+          SSO_FILE="platform-gitops/argo-workflows/sso-team-${TENANT}.yaml"
+          if [ -f "$SSO_FILE" ]; then
+            git rm "$SSO_FILE"
+            echo "Removed $SSO_FILE"
+            CHANGED=true
+          else
+            echo "WARNING: $SSO_FILE not found (already deleted). Skipping."
+          fi
+
+          # ── Commit and push ────────────────────────────────────────────────
+          if [ "$CHANGED" = "true" ]; then
+            git status
+            git commit -m "chore(tenant): delete tenant ${TENANT}
+
+          - Removed platform-gitops/tenants/${TENANT}/
+          - Removed ArgoCD RBAC for role:team-${TENANT}
+          - Removed Argo Workflows SSO RBAC for team-${TENANT}
+
+          Deleted by Argo Workflows (wft-delete-tenant)"
+
+            MAX_ATTEMPTS=5
+            for attempt in $(seq 1 $MAX_ATTEMPTS); do
+              echo "Push attempt $attempt/$MAX_ATTEMPTS..."
+              if git push origin HEAD:main; then
+                echo "Successfully pushed deletion of tenant ${TENANT}!"
+                break
+              elif [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
+                echo "Push failed (attempt $attempt). Rebasing..."
+                git pull --rebase origin main
+              else
+                echo "ERROR: Push failed after $MAX_ATTEMPTS attempts"
+                exit 1
+              fi
+            done
+          else
+            echo "No git changes needed."
+          fi
+
+    # ────────────────────────────────────────────────────────────────────────
+    - name: delete-k8s-resources
+      inputs:
+        parameters:
+          - name: tenant_name
+      script:
+        image: alpine:3.19
+        command: [sh]
+        source: |
+          set -e
+          apk add --no-cache curl
+          TENANT="{{inputs.parameters.tenant_name}}"
+
+          # Download kubectl
+          curl -sLO "https://dl.k8s.io/release/v1.28.0/bin/linux/amd64/kubectl"
+          chmod +x kubectl && mv kubectl /usr/local/bin/
+
+          # Delete ArgoCD Application (if exists)
+          if kubectl get app -n argocd "tenant-${TENANT}" > /dev/null 2>&1; then
+            kubectl delete app -n argocd "tenant-${TENANT}" --wait=false
+            echo "ArgoCD app tenant-${TENANT} deletion initiated."
+          else
+            echo "ArgoCD app tenant-${TENANT} not found, skipping."
+          fi
+
+          # Delete K8s namespace (if exists)
+          if kubectl get ns "${TENANT}" > /dev/null 2>&1; then
+            kubectl delete ns "${TENANT}" --wait=false
+            echo "Namespace ${TENANT} deletion initiated."
+          else
+            echo "Namespace ${TENANT} not found, skipping."
+          fi
+
+          echo "K8s cleanup complete for tenant ${TENANT}."

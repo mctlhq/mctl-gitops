@@ -1,0 +1,15 @@
+apiVersion: backstage.io/v1alpha1
+kind: Resource
+metadata:
+  name: tenant-admins
+  namespace: default
+  description: "Tenant Admins — namespace, quotas, and network policies"
+  annotations:
+    mctl.me/tenant-name: "admins"
+    backstage.io/managed-by-location: "url:https://github.com/mctlhq/mctl-gitops/blob/main/platform-gitops/tenants/admins/catalog-info.yaml"
+    backstage.io/managed-by-origin-location: "url:https://github.com/mctlhq/mctl-gitops/blob/main/platform-gitops/tenants/admins/catalog-info.yaml"
+spec:
+  type: tenant
+  owner: group:default/admins
+  system: team-admins
+  dependsOn: []

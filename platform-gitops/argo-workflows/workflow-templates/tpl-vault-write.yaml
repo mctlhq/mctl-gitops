@@ -1,0 +1,191 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterWorkflowTemplate
+metadata:
+  name: tpl-vault-write
+  annotations:
+    workflows.argoproj.io/description: |
+      Reusable template: writes secrets to Vault using Kubernetes auth.
+      Merges new secrets with existing ones (new values win on conflict).
+spec:
+  templates:
+    - name: write-service-secrets
+      inputs:
+        parameters:
+          - name: team_name
+          - name: component_name
+          - name: secret_env_vars    # KEY=value newline-separated
+      script:
+        image: alpine:3.19
+        command: [sh]
+        source: |
+          set -e
+          apk add --no-cache curl python3 > /dev/null 2>&1
+          TEAM="{{inputs.parameters.team_name}}"
+          SERVICE="{{inputs.parameters.component_name}}"
+          SECRET_TEXT="{{inputs.parameters.secret_env_vars}}"
+          VAULT_PATH="secret/data/teams/${TEAM}/${SERVICE}"
+
+          echo "🔐 Authenticating with Vault (Kubernetes auth)..."
+          SA_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+          VAULT_TOKEN=$(curl -sS -X POST \
+            -H "Content-Type: application/json" \
+            -d "{\"role\":\"argo-workflow\",\"jwt\":\"${SA_TOKEN}\"}" \
+            "${VAULT_ADDR}/v1/auth/kubernetes/login" | \
+            grep '"client_token"' | sed 's/.*"client_token":"\([^"]*\)".*/\1/')
+
+          if [ -z "$VAULT_TOKEN" ]; then
+            echo "❌ Failed to authenticate with Vault"
+            exit 1
+          fi
+          export VAULT_TOKEN
+          echo "✅ Authenticated"
+
+          # ── Parse KEY=value lines into JSON ─────────────────────────────────
+          JSON_DATA="{"
+          FIRST=true
+          while IFS='=' read -r key rest; do
+            # Skip empty lines and comments
+            [ -z "$key" ] && continue
+            echo "$key" | grep -q '^#' && continue
+            key=$(echo "$key" | xargs)
+            value=$(echo "$rest" | xargs)
+            [ -z "$key" ] && continue
+
+            # Escape double-quotes in value
+            value_escaped=$(echo "$value" | sed 's/"/\\"/g')
+
+            if [ "$FIRST" = "true" ]; then
+              JSON_DATA="${JSON_DATA}\"${key}\":\"${value_escaped}\""
+              FIRST=false
+            else
+              JSON_DATA="${JSON_DATA},\"${key}\":\"${value_escaped}\""
+            fi
+          done << 'SECRETS_EOF'
+          {{inputs.parameters.secret_env_vars}}
+          SECRETS_EOF
+          JSON_DATA="${JSON_DATA}}"
+
+          # ── Merge with existing secrets ──────────────────────────────────────
+          EXISTING_JSON="{}"
+          HTTP_GET=$(curl -sS -o /tmp/vault-get.json -w "%{http_code}" \
+            -H "X-Vault-Token: $VAULT_TOKEN" \
+            "${VAULT_ADDR}/v1/${VAULT_PATH}")
+
+          if [ "$HTTP_GET" = "200" ]; then
+            # KV v2 response: {"data":{"data":{...},"metadata":{...}}}
+            # Extract the inner .data.data object using python3
+            EXISTING_JSON=$(python3 -c \
+              "import json; d=json.load(open('/tmp/vault-get.json')); print(json.dumps(d.get('data',{}).get('data',{})))" \
+              2>/dev/null || echo "{}")
+            echo "ℹ️  Merging with existing secrets"
+          elif [ "$HTTP_GET" = "404" ]; then
+            echo "ℹ️  Creating new secret path"
+          else
+            echo "⚠️  Could not read existing secrets (HTTP $HTTP_GET) — will write fresh"
+          fi
+
+          # Merge: existing keys + new keys (new values win on conflict)
+          MERGED_JSON=$(python3 -c \
+            "import json; e=json.loads('$EXISTING_JSON'); n=json.loads('$JSON_DATA'); e.update(n); print(json.dumps(e))" \
+            2>/dev/null || echo "$JSON_DATA")
+
+          # ── Write to Vault ───────────────────────────────────────────────────
+          HTTP_CODE=$(curl -sS -o /tmp/vault-write.json -w "%{http_code}" \
+            -X POST \
+            -H "X-Vault-Token: $VAULT_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"data\":${MERGED_JSON}}" \
+            "${VAULT_ADDR}/v1/${VAULT_PATH}")
+
+          if [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "204" ]; then
+            echo "❌ Failed to save secrets (HTTP $HTTP_CODE)"
+            cat /tmp/vault-write.json || true
+            exit 1
+          fi
+
+          echo "✅ Secrets saved to Vault at ${VAULT_PATH}"
+        env:
+          - name: VAULT_ADDR
+            value: "http://vault.vault.svc.cluster.local:8200"
+
+    - name: write-platform-secret
+      inputs:
+        parameters:
+          - name: vault_path        # e.g. "teams/payments/myapp/database"
+          - name: json_data         # JSON string: '{"key":"val"}'
+      script:
+        image: alpine:3.19
+        command: [sh]
+        source: |
+          set -e
+          apk add --no-cache curl > /dev/null 2>&1
+          SA_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+          VAULT_TOKEN=$(curl -sS -X POST \
+            -H "Content-Type: application/json" \
+            -d "{\"role\":\"argo-workflow\",\"jwt\":\"${SA_TOKEN}\"}" \
+            "${VAULT_ADDR}/v1/auth/kubernetes/login" | \
+            grep '"client_token"' | sed 's/.*"client_token":"\([^"]*\)".*/\1/')
+          export VAULT_TOKEN
+
+          HTTP_CODE=$(curl -sS -o /tmp/vault-write.json -w "%{http_code}" \
+            -X POST \
+            -H "X-Vault-Token: $VAULT_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"data\":{{inputs.parameters.json_data}}}" \
+            "${VAULT_ADDR}/v1/secret/data/{{inputs.parameters.vault_path}}")
+
+          if [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "204" ]; then
+            echo "❌ Vault write failed (HTTP $HTTP_CODE)"
+            cat /tmp/vault-write.json || true
+            exit 1
+          fi
+          echo "✅ Saved to Vault: {{inputs.parameters.vault_path}}"
+        env:
+          - name: VAULT_ADDR
+            value: "http://vault.vault.svc.cluster.local:8200"
+
+    - name: delete-service-secrets
+      inputs:
+        parameters:
+          - name: team_name
+          - name: component_name
+      script:
+        image: alpine:3.19
+        command: [sh]
+        source: |
+          set -e
+          apk add --no-cache curl > /dev/null 2>&1
+          TEAM="{{inputs.parameters.team_name}}"
+          SERVICE="{{inputs.parameters.component_name}}"
+
+          SA_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+          VAULT_TOKEN=$(curl -sS -X POST \
+            -H "Content-Type: application/json" \
+            -d "{\"role\":\"argo-workflow\",\"jwt\":\"${SA_TOKEN}\"}" \
+            "${VAULT_ADDR}/v1/auth/kubernetes/login" | \
+            grep '"client_token"' | sed 's/.*"client_token":"\([^"]*\)".*/\1/')
+          export VAULT_TOKEN
+
+          echo "🗑️  Deleting Vault secrets for ${TEAM}/${SERVICE}..."
+
+          # Delete all versions + metadata
+          for path in \
+            "secret/metadata/teams/${TEAM}/${SERVICE}" \
+            "secret/metadata/teams/${TEAM}/${SERVICE}/repo-pat"; do
+
+            HTTP=$(curl -sS -o /dev/null -w "%{http_code}" \
+              -X DELETE \
+              -H "X-Vault-Token: $VAULT_TOKEN" \
+              "${VAULT_ADDR}/v1/${path}")
+
+            if [ "$HTTP" = "204" ] || [ "$HTTP" = "404" ]; then
+              echo "  ✅ ${path}"
+            else
+              echo "  ⚠️  ${path} returned HTTP ${HTTP}"
+            fi
+          done
+
+          echo "✅ Vault cleanup done"
+        env:
+          - name: VAULT_ADDR
+            value: "http://vault.vault.svc.cluster.local:8200"

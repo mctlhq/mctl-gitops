@@ -1,0 +1,50 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: platform
+  namespace: argocd
+spec:
+  description: Platform tenants — namespace provisioning and workflow RBAC
+
+  sourceRepos:
+    - {{ .Values.spec.source.repoURL }}
+    - https://github.com/mctlhq/mctl-api.git
+
+  destinations:
+    - server: {{ .Values.spec.destination.server }}
+      namespace: "*"
+
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+    - group: rbac.authorization.k8s.io
+      kind: ClusterRole
+    - group: rbac.authorization.k8s.io
+      kind: ClusterRoleBinding
+
+  namespaceResourceWhitelist:
+    - group: ""
+      kind: ResourceQuota
+    - group: ""
+      kind: LimitRange
+    - group: networking.k8s.io
+      kind: NetworkPolicy
+    - group: ""
+      kind: ServiceAccount
+    - group: ""
+      kind: Service
+    - group: ""
+      kind: ConfigMap
+    - group: rbac.authorization.k8s.io
+      kind: Role
+    - group: rbac.authorization.k8s.io
+      kind: RoleBinding
+    - group: external-secrets.io
+      kind: ExternalSecret
+    - group: apps
+      kind: Deployment
+    - group: networking.k8s.io
+      kind: Ingress
+
+  orphanedResources:
+    warn: true

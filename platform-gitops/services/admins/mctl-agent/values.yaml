@@ -1,0 +1,70 @@
+# Service: mctl-agent
+# Team: admins
+# Environment: production
+# Chart: base-service
+
+image:
+  repository: ghcr.io/mctlhq/mctl-agent
+  tag: "0.3.1"
+imagePullSecrets:
+  - name: ghcr-credentials
+service:
+  port: 8081
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 256Mi
+env:
+  MCTL_API_URL: "http://mctl-api.mctl-api.svc:8080"
+  GITHUB_OWNER: mctlhq
+  GITHUB_REPO: mctl-gitops
+  POLL_INTERVAL: "5m"
+  DRY_RUN: "false"
+  DB_PATH: "/data/mctl-agent.db"
+envFrom:
+  - secretRef:
+      name: mctl-agent-secrets
+externalSecret:
+  targetSecret: mctl-agent-secrets
+  data:
+    - secretKey: MCTL_API_TOKEN
+      remoteKey: platform/mctl-agent/tokens
+      property: mctl-api-token
+    - secretKey: ANTHROPIC_API_KEY
+      remoteKey: platform/mctl-agent/tokens
+      property: anthropic-api-key
+    - secretKey: GITHUB_TOKEN
+      remoteKey: platform/mctl-agent/tokens
+      property: github-token
+    - secretKey: TELEGRAM_BOT_TOKEN
+      remoteKey: platform/mctl-agent/tokens
+      property: telegram-bot-token
+    - secretKey: TELEGRAM_CHAT_ID
+      remoteKey: platform/mctl-agent/tokens
+      property: telegram-chat-id
+ingress:
+  enabled: true
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    - agent.mctl.ai
+  tls:
+    - secretName: mctl-agent-tls
+      hosts:
+        - agent.mctl.ai
+probes:
+  liveness:
+    path: /healthz
+    port: http
+  readiness:
+    path: /readyz
+    port: http
+extraVolumes:
+  - name: data
+    emptyDir: {}
+extraVolumeMounts:
+  - name: data
+    mountPath: /data

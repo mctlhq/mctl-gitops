@@ -1,0 +1,178 @@
+## Argo CD bootstrap configuration for mctl.me preview
+## Minimal config — full configuration managed by argocd-self-managed via GitOps
+## See: platform-gitops/argocd/values.yaml
+
+nameOverride: argocd
+
+global:
+  domain: ops.mctl.ai
+
+configs:
+  cm:
+    url: https://ops.mctl.ai
+    admin.enabled: false
+    timeout.reconciliation: 180s
+
+    # Dex connector for GitHub OAuth
+    dex.config: |
+      connectors:
+      - type: github
+        id: github
+        name: GitHub
+        config:
+          baseURL: https://github.com
+          clientID: "$github-client-id"
+          clientSecret: "$github-client-secret"
+          orgs:
+            - name: mctlhq
+
+    # Health checks needed for bootstrap
+    resource.customizations.health.external-secrets.io_ExternalSecret: |
+      hs = {}
+      if obj.status ~= nil then
+        if obj.status.conditions ~= nil then
+          for _, condition in ipairs(obj.status.conditions) do
+            if condition.type == "Ready" then
+              if condition.status == "True" then
+                hs.status = "Healthy"
+                hs.message = condition.message or "SecretSynced"
+              else
+                hs.status = "Degraded"
+                hs.message = condition.message or "Not ready"
+              end
+              return hs
+            end
+          end
+        end
+      end
+      hs.status = "Progressing"
+      hs.message = "Waiting for sync"
+      return hs
+
+    resource.customizations.health.argoproj.io_Application: |
+      hs = {}
+      hs.status = "Progressing"
+      hs.message = ""
+      if obj.status ~= nil then
+        if obj.status.health ~= nil then
+          hs.status = obj.status.health.status
+          if obj.status.health.message ~= nil then
+            hs.message = obj.status.health.message
+          end
+        end
+      end
+      return hs
+
+  params:
+    server.insecure: true
+
+  rbac:
+    policy.default: ""
+    scopes: "[groups]"
+
+  secret:
+    createSecret: true
+
+server:
+  ingress:
+    enabled: true
+    ingressClassName: traefik
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt-prod
+    tls: true
+    extraTls:
+      - hosts:
+          - ops.mctl.ai
+        secretName: argocd-tls
+
+extraObjects:
+  # ArgoCD self-managed — manages its own configuration from git
+  - apiVersion: argoproj.io/v1alpha1
+    kind: Application
+    metadata:
+      name: argocd-self-managed
+      namespace: argocd
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/mctlhq/mctl-gitops.git
+        targetRevision: main
+        path: platform-gitops/argocd
+        helm:
+          releaseName: argocd
+          valueFiles:
+            - values.yaml
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: argocd
+      syncPolicy:
+        automated:
+          prune: false
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=false
+          - ServerSideApply=true
+          - RespectIgnoreDifferences=true
+        retry:
+          limit: 5
+          backoff:
+            duration: 5s
+            factor: 2
+            maxDuration: 3m
+      ignoreDifferences:
+        - group: ""
+          kind: Secret
+          name: argocd-secret
+          jsonPointers:
+            - /data
+        - group: external-secrets.io
+          kind: ExternalSecret
+          jqPathExpressions:
+            - .spec.data[].remoteRef.conversionStrategy
+            - .spec.data[].remoteRef.decodingStrategy
+            - .spec.data[].remoteRef.metadataPolicy
+            - .spec.target.deletionPolicy
+            - .spec.target.template.engineVersion
+            - .spec.target.template.mergePolicy
+
+  # Root app — manages user applications (separate from ArgoCD)
+  - apiVersion: argoproj.io/v1alpha1
+    kind: Application
+    metadata:
+      name: root-app
+      namespace: argocd
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/mctlhq/mctl-gitops.git
+        targetRevision: main
+        path: platform-gitops/apps
+        helm:
+          valueFiles:
+            - values.yaml
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: argocd
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - ServerSideApply=true
+          - RespectIgnoreDifferences=true
+        retry:
+          limit: 5
+          backoff:
+            duration: 5s
+            factor: 2
+            maxDuration: 3m
+      ignoreDifferences:
+        - group: external-secrets.io
+          kind: ExternalSecret
+          jqPathExpressions:
+            - .spec.data[].remoteRef.conversionStrategy
+            - .spec.data[].remoteRef.decodingStrategy
+            - .spec.data[].remoteRef.metadataPolicy
+            - .spec.target.deletionPolicy
+            - .spec.target.template.engineVersion
+            - .spec.target.template.mergePolicy

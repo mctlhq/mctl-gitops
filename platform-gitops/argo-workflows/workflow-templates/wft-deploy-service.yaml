@@ -1,0 +1,208 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterWorkflowTemplate
+metadata:
+  name: deploy-service
+  annotations:
+    workflows.argoproj.io/description: |
+      Main deployment workflow: validate → write Vault secrets
+      → generate Helm manifests → commit to gitops repo → ArgoCD syncs.
+
+      Actions:
+        onboard      — first deploy: creates values.yaml, catalog-info.yaml, vault-cleanup.yaml
+        deploy       — update image tag in existing service
+        update-config — update env vars / secrets without rebuilding
+
+      Replaces: .github/workflows/release-service.yml
+spec:
+  entrypoint: deploy-pipeline
+  serviceAccountName: argo-workflow-sa
+
+  arguments:
+    parameters:
+      - name: action
+        # onboard | deploy | update-config
+      - name: team_name
+      - name: component_name
+      - name: component_type
+        default: "base-service"
+        # base-service | worker-service (onboard only; auto-detected for deploy/update-config)
+      - name: dockerfile_repo
+        default: ""
+        # e.g. "myorg/my-service"
+      - name: git_tag
+        default: ""
+        # e.g. "1.2.3"
+      - name: port
+        default: "8080"
+      - name: host
+        default: ""
+        # e.g. "myteam-myapp.example.com"
+      - name: env_vars
+        default: ""
+        # KEY=value newline-separated plaintext
+      - name: secret_env_vars
+        default: ""
+        # KEY=value newline-separated (stored in Vault)
+      - name: provision_database
+        default: "false"
+      - name: skip_health_check
+        default: "false"
+      - name: dockerfile_path
+        default: "Dockerfile"
+      - name: image_tag
+        default: ""
+        # explicit image tag override (empty = derived from git_tag)
+      - name: autoscaling_enabled
+        default: "false"
+      - name: min_replicas
+        default: "1"
+      - name: max_replicas
+        default: "5"
+      - name: cpu_threshold
+        default: "80"
+      - name: container_registry
+        value: "ghcr.io/mctlhq"
+
+  templates:
+    # ────────────────────────────────────────────────────────────────────────
+    - name: deploy-pipeline
+      dag:
+        tasks:
+          # Step 1: validate naming, team, service existence + resolve image_tag
+          - name: validate
+            templateRef:
+              name: tpl-validate-tenant
+              clusterScope: true
+              template: validate
+            arguments:
+              parameters:
+                - name: team_name
+                  value: "{{workflow.parameters.team_name}}"
+                - name: component_name
+                  value: "{{workflow.parameters.component_name}}"
+                - name: action
+                  value: "{{workflow.parameters.action}}"
+                - name: component_type
+                  value: "{{workflow.parameters.component_type}}"
+                - name: host
+                  value: "{{workflow.parameters.host}}"
+                - name: dockerfile_repo
+                  value: "{{workflow.parameters.dockerfile_repo}}"
+                - name: git_tag
+                  value: "{{workflow.parameters.git_tag}}"
+                - name: image_tag
+                  value: "{{workflow.parameters.image_tag}}"
+
+          # Step 2: write Vault secrets (skip if no secrets)
+          - name: write-secrets
+            dependencies: [validate]
+            when: "\"{{workflow.parameters.secret_env_vars}}\" != \"\""
+            templateRef:
+              name: tpl-vault-write
+              clusterScope: true
+              template: write-service-secrets
+            arguments:
+              parameters:
+                - name: team_name
+                  value: "{{workflow.parameters.team_name}}"
+                - name: component_name
+                  value: "{{workflow.parameters.component_name}}"
+                - name: secret_env_vars
+                  value: "{{workflow.parameters.secret_env_vars}}"
+
+          # Step 3: generate manifests + git commit
+          # Depends on validate (always) + write-secrets (optional).
+          # Including validate ensures commit runs even when optional steps are skipped.
+          - name: commit
+            dependencies: [validate, write-secrets]
+            templateRef:
+              name: tpl-git-commit
+              clusterScope: true
+              template: commit-service
+            arguments:
+              parameters:
+                - name: action
+                  value: "{{workflow.parameters.action}}"
+                - name: team_name
+                  value: "{{workflow.parameters.team_name}}"
+                - name: component_name
+                  value: "{{workflow.parameters.component_name}}"
+                - name: component_type
+                  value: "{{tasks.validate.outputs.parameters.component_type}}"
+                - name: image_tag
+                  value: "{{tasks.validate.outputs.parameters.image_tag}}"
+                - name: port
+                  value: "{{workflow.parameters.port}}"
+                - name: host
+                  value: "{{workflow.parameters.host}}"
+                - name: env_vars
+                  value: "{{workflow.parameters.env_vars}}"
+                - name: secret_env_vars
+                  value: "{{workflow.parameters.secret_env_vars}}"
+                - name: provision_database
+                  value: "{{workflow.parameters.provision_database}}"
+                - name: skip_health_check
+                  value: "{{workflow.parameters.skip_health_check}}"
+                - name: dockerfile_repo
+                  value: "{{workflow.parameters.dockerfile_repo}}"
+
+          # Step 4: patch autoscaling block in values.yaml (conditional)
+          - name: patch-autoscaling
+            dependencies: [commit]
+            when: "\"{{workflow.parameters.autoscaling_enabled}}\" == \"true\""
+            template: patch-autoscaling-values
+
+    # ────────────────────────────────────────────────────────────────────────
+    - name: patch-autoscaling-values
+      script:
+        image: alpine/git:2.45.2
+        command: [sh]
+        envFrom:
+          - configMapRef:
+              name: mctl-platform-config
+        volumeMounts:
+          - name: deploy-key
+            mountPath: /secrets/deploy-key
+            readOnly: true
+        source: |
+          set -euo pipefail
+
+          # Configure SSH for git push
+          mkdir -p ~/.ssh
+          cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -p 443 ssh.github.com >> ~/.ssh/known_hosts 2>/dev/null
+          git config --global url."ssh://git@ssh.github.com:443/".insteadOf "https://github.com/"
+
+          TEAM="{{workflow.parameters.team_name}}"
+          COMPONENT="{{workflow.parameters.component_name}}"
+          MIN="{{workflow.parameters.min_replicas}}"
+          MAX="{{workflow.parameters.max_replicas}}"
+          CPU="{{workflow.parameters.cpu_threshold}}"
+          REPO="https://github.com/${GITOPS_ORG}/${GITOPS_REPO}.git"
+          VALUES="platform-gitops/services/${TEAM}/${COMPONENT}/values.yaml"
+
+          git clone --depth=1 "${REPO}" /tmp/mctl-gitops
+          cd /tmp/mctl-gitops
+
+          # Append or update autoscaling block
+          if grep -q "^autoscaling:" "${VALUES}"; then
+            sed -i "s|^\( *enabled: *\).*|\1true|" "${VALUES}"
+            sed -i "s|^\( *minReplicas: *\).*|\1${MIN}|" "${VALUES}"
+            sed -i "s|^\( *maxReplicas: *\).*|\1${MAX}|" "${VALUES}"
+            sed -i "s|^\( *targetCPUUtilizationPercentage: *\).*|\1${CPU}|" "${VALUES}"
+          else
+            printf '\nautoscaling:\n  enabled: true\n  minReplicas: %s\n  maxReplicas: %s\n  targetCPUUtilizationPercentage: %s\n' \
+              "${MIN}" "${MAX}" "${CPU}" >> "${VALUES}"
+          fi
+
+          git config user.email "ci@mctl.ai"
+          git config user.name "mctl-deploy"
+          git add "${VALUES}"
+          git diff --staged --quiet && echo "Autoscaling already configured" && exit 0
+          git commit -m "chore: enable autoscaling for ${TEAM}/${COMPONENT} (min=${MIN} max=${MAX} cpu=${CPU}%)"
+          git push
+      volumes:
+        - name: deploy-key
+          secret:
+            secretName: mctl-gitops-deploy-key

@@ -1,0 +1,175 @@
+## ArgoCD configuration for mctl.ai
+## Managed by argocd-self-managed Application (GitOps)
+## Changes here are auto-synced to the cluster
+
+argo-cd:
+  nameOverride: argocd
+
+  # Disable CRD management to prevent annotation overflow
+  # CRDs are already installed and should not be modified
+  crds:
+    install: false
+    keep: true
+
+  global:
+    domain: ops.mctl.ai
+
+  configs:
+    cm:
+      url: https://ops.mctl.ai
+      admin.enabled: false
+      timeout.reconciliation: 60s
+      accounts.mctl-api: apiKey
+
+      # Health check for ExternalSecrets
+      resource.customizations.health.external-secrets.io_ExternalSecret: |
+        hs = {}
+        if obj.status ~= nil then
+          if obj.status.conditions ~= nil then
+            for _, condition in ipairs(obj.status.conditions) do
+              if condition.type == "Ready" then
+                if condition.status == "True" then
+                  hs.status = "Healthy"
+                  hs.message = condition.message or "SecretSynced"
+                else
+                  hs.status = "Degraded"
+                  hs.message = condition.message or "Not ready"
+                end
+                return hs
+              end
+            end
+          end
+        end
+        hs.status = "Progressing"
+        hs.message = "Waiting for sync"
+        return hs
+
+      # Health check for Applications
+      resource.customizations.health.argoproj.io_Application: |
+        hs = {}
+        hs.status = "Progressing"
+        hs.message = ""
+        if obj.status ~= nil then
+          if obj.status.health ~= nil then
+            hs.status = obj.status.health.status
+            if obj.status.health.message ~= nil then
+              hs.message = obj.status.health.message
+            end
+          end
+        end
+        return hs
+
+      # Ignore CNPG Cluster metadata annotations and status in global diff
+      resource.customizations.ignoreDifferences.postgresql.cnpg.io_Cluster: |
+        jqPathExpressions:
+        - .metadata.annotations
+        - .status
+
+      # Dex connector for Backstage OIDC
+      dex.config: |
+        logger:
+          level: info
+          format: json
+        connectors:
+        - type: oidc
+          id: backstage
+          name: mctl.ai
+          config:
+            issuer: https://app.mctl.ai/api/oidc-provider
+            clientID: "$backstage-oidc-client-id"
+            clientSecret: "$backstage-oidc-client-secret"
+            scopes:
+              - openid
+              - profile
+              - email
+              - groups
+            getUserInfo: true
+            insecureEnableGroups: true
+            userNameKey: preferred_username
+            claimMapping:
+              groups: groups
+        staticClients:
+        - id: argo-workflows
+          name: Argo Workflows
+          redirectURIs:
+            - https://workflows.mctl.ai/oauth2/callback
+            - https://workflows.mctl.me/oauth2/callback
+          secret: "$argo-workflows-sso-client-secret"
+        - id: mctl-api
+          name: mctl-api
+          redirectURIs:
+            - https://api.mctl.ai/oauth2/callback
+          secret: "$mctl-api-sso-client-secret"
+
+    params:
+      server.insecure: true
+      controller.status.processors: "5"
+      controller.operation.processors: "3"
+      controller.repo.server.timeout.seconds: "60"
+      
+      # Disable server-side apply for CRDs to avoid annotation size issues
+      # See: https://github.com/argoproj/argo-cd/issues/9476
+      application.resourceTrackingMethod: annotation
+
+    rbac:
+      policy.default: ""
+      scopes: "[groups]"
+      policy.csv: |
+        # Admin team: full access to ArgoCD
+        p, role:admin, applications, *, */*, allow
+        p, role:admin, logs, get, */*, allow
+        p, role:admin, exec, create, */*, allow
+        p, role:admin, clusters, get, */*, allow
+        p, role:admin, repositories, *, */*, allow
+        p, role:admin, projects, *, */*, allow
+        g, admins, role:admin
+
+        # mctl-api service account: read all applications for status checks
+        p, mctl-api, applications, get, */*, allow
+        # Tenant: mashkoffdmitry
+        p, role:team-mashkoffdmitry, applications, get, apps/mashkoffdmitry-*, allow
+        p, role:team-mashkoffdmitry, applications, list, apps/mashkoffdmitry-*, allow
+        p, role:team-mashkoffdmitry, applications, sync, apps/mashkoffdmitry-*, allow
+        p, role:team-mashkoffdmitry, applications, override, apps/mashkoffdmitry-*, allow
+        p, role:team-mashkoffdmitry, logs, get, apps/mashkoffdmitry-*, allow
+        p, role:team-mashkoffdmitry, exec, create, apps/mashkoffdmitry-*, allow
+        g, mashkoffdmitry, role:team-mashkoffdmitry
+        # Tenant: demo
+        p, role:team-demo, applications, get, apps/demo-*, allow
+        p, role:team-demo, applications, list, apps/demo-*, allow
+        p, role:team-demo, applications, sync, apps/demo-*, allow
+        p, role:team-demo, applications, override, apps/demo-*, allow
+        p, role:team-demo, logs, get, apps/demo-*, allow
+        p, role:team-demo, exec, create, apps/demo-*, allow
+        g, demo, role:team-demo
+    secret:
+      createSecret: true
+
+  # Server ingress configuration
+  server:
+    ingress:
+      enabled: true
+      ingressClassName: traefik
+      annotations:
+        cert-manager.io/cluster-issuer: letsencrypt-prod
+      tls: true
+      extraHosts:
+        - name: ops.mctl.ai
+          path: /
+      extraTls:
+        - hosts:
+            - ops.mctl.ai
+            - ops.mctl.ai
+          secretName: argocd-tls
+
+  # Controller resource optimization
+  controller:
+    resources:
+      limits:
+        memory: 768Mi
+      requests:
+        cpu: 100m
+        memory: 384Mi
+    env:
+      - name: GOMEMLIMIT
+        value: "700MiB"

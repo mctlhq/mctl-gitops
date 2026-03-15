@@ -1,0 +1,276 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: backstage
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://backstage.github.io/charts
+    chart: backstage
+    targetRevision: 2.6.3
+    helm:
+      values: |
+        ingress:
+          enabled: true
+          className: traefik
+          annotations:
+            cert-manager.io/cluster-issuer: letsencrypt-prod
+          host: app.mctl.ai
+          extraHosts:
+            - name: app.mctl.ai
+          tls:
+            enabled: true
+            secretName: backstage-tls
+          extraTls:
+            - hosts:
+                - app.mctl.ai
+              secretName: backstage-mctl-ai-tls
+
+        backstage:
+          image:
+            registry: ghcr.io
+            repository: mctlhq/mctl-portal
+            tag: 4.1.3
+            pullSecrets:
+              - ghcr-credentials
+          extraEnvVarsSecrets:
+            - backstage-secrets
+          startupProbe:
+            httpGet:
+              path: /.backstage/health/v1/readiness
+              port: 7007
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 60
+          livenessProbe:
+            httpGet:
+              path: /.backstage/health/v1/readiness
+              port: 7007
+            initialDelaySeconds: 0
+            periodSeconds: 15
+            failureThreshold: 4
+          readinessProbe:
+            httpGet:
+              path: /.backstage/health/v1/readiness
+              port: 7007
+            periodSeconds: 10
+            failureThreshold: 2
+          appConfig:
+            app:
+              title: mctl.ai User Portal
+              baseUrl: https://app.mctl.ai
+            organization:
+              name: MCTL
+            backend:
+              baseUrl: https://app.mctl.ai
+              listen:
+                port: 7007
+              reading:
+                allow:
+                  - host: app.mctl.ai
+                  - host: app.mctl.ai
+              database:
+                client: pg
+                pluginDivisionMode: schema
+                connection:
+                  host: ${POSTGRES_HOST}
+                  port: ${POSTGRES_PORT}
+                  user: ${POSTGRES_USER}
+                  password: ${POSTGRES_PASSWORD}
+                  database: ${POSTGRES_DB}
+                knexConfig:
+                  pool:
+                    min: 0
+                    max: 3
+            auth:
+              environment: production
+              providers:
+                github:
+                  production:
+                    clientId: ${AUTH_GITHUB_CLIENT_ID}
+                    clientSecret: ${AUTH_GITHUB_CLIENT_SECRET}
+            integrations:
+              github:
+                - host: github.com
+                  apps:
+                    - appId: ${GITHUB_APP_ID}
+                      clientId: ${GITHUB_APP_CLIENT_ID}
+                      clientSecret: ${GITHUB_APP_CLIENT_SECRET}
+                      privateKey: ${GITHUB_APP_PRIVATE_KEY}
+            permission:
+              enabled: true
+            githubAppConnect:
+              appSlug: mctl-app
+              appId: ${GITHUB_APP_ID}
+              privateKey: ${GITHUB_APP_PRIVATE_KEY}
+              webhookSecret: ${GITHUB_WEBHOOK_SECRET}
+            vaultSecrets:
+              endpoint: ${VAULT_ADDR}
+              token: ${VAULT_TOKEN}
+            argoWorkflows:
+              baseUrl: https://workflows.mctl.ai
+              namespace: argo-workflows
+              token: ${ARGO_WORKFLOWS_TOKEN}
+            tenantManagement:
+              githubOrg: mctlhq
+              repoName: mctl-gitops
+              tenantsPath: platform-gitops/tenants
+              syncIntervalMinutes: 5
+              landingPageToken: ${BACKSTAGE_LANDING_TOKEN}
+              githubAppInstallationId: ${GITHUB_APP_INSTALLATION_ID}
+              defaultQuotas:
+                cpuReq: "1"
+                cpuLim: "2"
+                memReq: "2Gi"
+                memLim: "3Gi"
+                pods: "10"
+                pvcs: "2"
+                services: "5"
+              maxTeamsPerTenant: 1
+            oidcProvider:
+              issuer: https://app.mctl.ai/api/oidc-provider
+              github:
+                clientId: ${AUTH_GITHUB_CLIENT_ID}
+                clientSecret: ${AUTH_GITHUB_CLIENT_SECRET}
+              clients:
+                - clientId: ${OIDC_CLIENT_ID}
+                  clientSecret: ${OIDC_CLIENT_SECRET}
+                  redirectUris:
+                    - https://ops.mctl.ai/api/dex/callback
+                    - https://ops.mctl.ai/api/dex/callback
+            resourceUsage:
+              kubeConfigType: token
+              kubeApiUrl: https://kubernetes.default.svc
+              kubeToken: ${K8S_SERVICE_ACCOUNT_TOKEN}
+              skipTLSVerify: true
+            kubernetes:
+              serviceLocatorMethod:
+                type: multiTenant
+              clusterLocatorMethods:
+                - type: config
+                  clusters:
+                    - url: https://kubernetes.default.svc
+                      name: production
+                      authProvider: serviceAccount
+                      skipTLSVerify: true
+                      serviceAccountToken: ${K8S_SERVICE_ACCOUNT_TOKEN}
+            proxy:
+              endpoints:
+                /vault:
+                  target: ${VAULT_ADDR}
+                  credentials: dangerously-allow-unauthenticated
+                  headers:
+                    X-Vault-Token: ${VAULT_TOKEN}
+                  allowedMethods:
+                    - GET
+                    - POST
+                    - PUT
+                    - DELETE
+                    - PATCH
+                  allowedHeaders:
+                    - Content-Type
+            techdocs:
+              builder: local
+              generator:
+                runIn: local
+              publisher:
+                type: local
+            catalog:
+              processingInterval: { seconds: 30 }
+              orphanStrategy: delete
+              rules:
+                - allow: [Component, System, Resource, Location, Template, Group, User]
+              providers:
+                github:
+                  mctlMe:
+                    organization: mctlhq
+                    catalogPath: /catalog-info.yaml
+                    filters:
+                      repository: mctl-gitops
+                      branch: main
+                    schedule:
+                      frequency:
+                        minutes: 1
+                      timeout:
+                        minutes: 3
+                  services:
+                    organization: mctlhq
+                    catalogPath: /platform-gitops/services/*/*/catalog-info.yaml
+                    filters:
+                      repository: mctl-gitops
+                      branch: main
+                    schedule:
+                      frequency:
+                        minutes: 1
+                      timeout:
+                        minutes: 3
+                  tenants:
+                    organization: mctlhq
+                    catalogPath: /platform-gitops/tenants/*/catalog-info.yaml
+                    filters:
+                      repository: mctl-gitops
+                      branch: main
+                    schedule:
+                      frequency:
+                        minutes: 1
+                      timeout:
+                        minutes: 3
+              locations:
+                # Backstage templates (static, no need for provider-based discovery)
+                - type: url
+                  target: https://github.com/mctlhq/mctl-gitops/blob/main/platform-gitops/backstage-templates/deploy-component/template.yaml
+                  rules:
+                    - allow: [Template]
+                - type: url
+                  target: https://github.com/mctlhq/mctl-gitops/blob/main/platform-gitops/backstage-templates/delete-component/template.yaml
+                  rules:
+                    - allow: [Template]
+                - type: url
+                  target: https://github.com/mctlhq/mctl-gitops/blob/main/platform-gitops/backstage-templates/update-component-config/template.yaml
+                  rules:
+                    - allow: [Template]
+                - type: url
+                  target: https://github.com/mctlhq/mctl-gitops/blob/main/platform-gitops/backstage-templates/provision-database/template.yaml
+                  rules:
+                    - allow: [Template]
+                - type: url
+                  target: https://github.com/mctlhq/mctl-gitops/blob/main/platform-gitops/backstage-templates/deploy-version/template.yaml
+                  rules:
+                    - allow: [Template]
+                - type: url
+                  target: https://github.com/mctlhq/mctl-gitops/blob/main/platform-gitops/backstage-templates/create-tenant/template.yaml
+                  rules:
+                    - allow: [Template]
+                - type: url
+                  target: https://github.com/mctlhq/mctl-gitops/blob/main/platform-gitops/backstage-templates/delete-tenant/template.yaml
+                  rules:
+                    - allow: [Template]
+                # Tenant entities from the tenant-management backend
+                - type: url
+                  target: https://app.mctl.ai/api/tenant-management/backstage/catalog.yaml
+                  rules:
+                    - allow: [User, Group, System]
+
+        # PostgreSQL subchart disabled — using shared CNPG cluster in platform-db namespace
+        postgresql:
+          enabled: false
+
+  destination:
+    server: {{ .Values.spec.destination.server }}
+    namespace: backstage
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

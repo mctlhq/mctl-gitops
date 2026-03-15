@@ -1,0 +1,64 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: minio
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  sources:
+    - repoURL: https://charts.min.io/
+      chart: minio
+      targetRevision: 5.4.0
+      helm:
+        values: |
+          mode: standalone
+
+          existingSecret: minio-root-credentials
+          rootUser: ""
+          rootPassword: ""
+
+          persistence:
+            enabled: true
+            size: 5Gi
+
+          service:
+            type: ClusterIP
+            port: 9000
+
+          consoleService:
+            type: ClusterIP
+            port: 9001
+
+          ingress:
+            enabled: false
+
+          consoleIngress:
+            enabled: false
+
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+
+          buckets:
+            - name: argo-workflows-logs
+              policy: none
+
+    - repoURL: https://github.com/mctlhq/mctl-gitops.git
+      targetRevision: main
+      path: platform-gitops/minio
+
+  destination:
+    server: {{ .Values.spec.destination.server }}
+    namespace: minio
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

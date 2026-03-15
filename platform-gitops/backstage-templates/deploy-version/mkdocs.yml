@@ -1,0 +1,5 @@
+site_name: Deploy Version
+site_description: Documentation for the Deploy Version template
+docs_dir: docs
+plugins:
+  - techdocs-core

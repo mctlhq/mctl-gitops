@@ -1,0 +1,172 @@
+apiVersion: scaffolder.backstage.io/v1beta3
+kind: Template
+metadata:
+  name: onboard-service
+  title: Onboard Service
+  description: |
+    First-time setup — configure GitOps manifests and deploy a new service.
+  tags:
+    - onboard
+    - deploy
+    - kubernetes
+    - argo
+  annotations:
+    backstage.io/techdocs-ref: dir:.
+spec:
+  owner: group:default/admins
+  type: deployment
+  presentation:
+    buttonLabels:
+      createButtonText: 'Onboard Service'
+      reviewButtonText: 'Review & Onboard'
+
+  parameters:
+    - title: Service & Source
+      required:
+        - teamName
+        - dockerfileRepo
+      properties:
+        teamName:
+          title: Team
+          type: string
+          description: "Select your team"
+          ui:field: TeamPicker
+        dockerfileRepo:
+          title: GitHub Repository
+          type: string
+          description: "Select a repository or type owner/repo"
+          pattern: "^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$"
+          ui:field: GitHubRepoPicker
+        dockerfilePath:
+          title: Dockerfile Path
+          type: string
+          default: Dockerfile
+        gitTag:
+          title: Tag
+          type: string
+          description: "Select a tag to checkout and build, or leave empty to build from HEAD (image tagged 'latest')."
+          ui:field: GitTagPicker
+
+    - title: Networking
+      properties:
+        port:
+          title: Port
+          type: number
+          default: 8080
+          description: "Container port exposed by the service."
+        isWorker:
+          title: Background Worker (no ingress)
+          type: boolean
+          default: false
+          description: "Enable for background workers that don't need a public URL."
+        skipHealthCheck:
+          title: Skip Health Checks
+          type: boolean
+          default: true
+          description: "Skip liveness/readiness probes. Recommended for onboarding if /healthz and /readyz are not yet implemented."
+      description: |
+        Domain will be auto-generated as {team}-{service}.mctl.ai.
+        Custom domains can be added after deployment.
+
+    - title: Database
+      properties:
+        provisionDatabase:
+          title: Provision PostgreSQL Database
+          type: boolean
+          default: false
+          description: |
+            Create a dedicated database, Vault secret, and K8s ExternalSecret for this service.
+            Safe to enable — skips if database already exists.
+
+            When enabled, the following env vars will be auto-injected into the service:
+              DATABASE_URL  — postgresql://user:pass@host:port/dbname
+              DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD
+
+    - title: Environment
+      properties:
+        envVars:
+          title: Environment Variables
+          type: string
+          description: "KEY=VALUE pairs, one per line. Stored as plaintext in GitOps manifests — do not put secrets here."
+          ui:widget: textarea
+          ui:options:
+            rows: 5
+          ui:placeholder: |
+            APP_ENV=production
+            LOG_LEVEL=info
+            TIMEOUT_SECONDS=30
+
+    - title: Secure Variables
+      properties:
+        secretEnvVars:
+          title: Secure Variables
+          type: string
+          description: "KEY=VALUE pairs, one per line. Stored securely in Vault — never exposed in Git."
+          ui:widget: textarea
+          ui:options:
+            minRows: 10
+          ui:placeholder: |
+            API_KEY=your-api-key-here
+            DATABASE_PASSWORD=your-db-password
+            SECRET_TOKEN=your-secret-token
+
+
+
+  steps:
+
+    - id: trigger-deploy
+      name: Onboard service via Argo Workflows
+      action: mctl:workflow:submit
+      input:
+        templateName: deploy-service
+        clusterScope: true
+        namespace: ${{ parameters.teamName | parseEntityRef | pick('name') }}
+        parameters:
+          action: onboard
+          team_name: ${{ parameters.teamName | parseEntityRef | pick('name') }}
+          component_name: ${{ parameters.dockerfileRepo | serviceName }}
+          component_type: ${{ 'worker-service' if parameters.isWorker else 'base-service' }}
+          dockerfile_repo: ${{ parameters.dockerfileRepo }}
+          dockerfile_path: ${{ parameters.dockerfilePath | default('Dockerfile') }}
+          git_tag: ${{ parameters.gitTag | default('') }}
+          image_tag: ${{ parameters.gitTag | default('auto') }}
+          port: ${{ parameters.port | string }}
+          host: ${{ 'none' if parameters.isWorker else 'auto' }}
+          skip_health_check: ${{ parameters.skipHealthCheck | string }}
+          provision_database: ${{ parameters.provisionDatabase | string }}
+          env_vars: ${{ parameters.envVars | default('') }}
+          secret_env_vars: ${{ parameters.secretEnvVars | default('') }}
+          autoscaling_enabled: "false"
+          min_replicas: "1"
+          max_replicas: "5"
+          cpu_threshold: "80"
+
+    - id: provision-db
+      name: Provision database
+      if: ${{ parameters.provisionDatabase }}
+      action: mctl:workflow:submit
+      input:
+        templateName: provision-database
+        clusterScope: true
+        namespace: ${{ parameters.teamName | parseEntityRef | pick('name') }}
+        parameters:
+          team_name: ${{ parameters.teamName | parseEntityRef | pick('name') }}
+          app_name: ${{ parameters.dockerfileRepo | serviceName }}
+
+  output:
+    text:
+      - title: Type
+        content: "${{ 'Web Service' if parameters.host else 'Background Worker' }}"
+      - title: Version
+        content: "${{ parameters.gitTag or 'latest (HEAD)' }}"
+      - title: Preview URL
+        content: "${{ 'https://' + parameters.host if parameters.host else 'N/A — background worker' }}"
+      - title: Database
+        content: "${{ parameters.provisionDatabase and '✅ Database provisioned — DATABASE_URL, DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD injected from K8s secret' or 'Not requested' }}"
+    links:
+      - title: Argo Workflows Run
+        icon: dashboard
+        url: ${{ steps['trigger-deploy'].output.workflowUrl }}
+      - title: ArgoCD Dashboard
+        icon: dashboard
+        url: "https://ops.mctl.ai"
