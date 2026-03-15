@@ -60,6 +60,8 @@ spec:
         default: "5"
       - name: cpu_threshold
         default: "80"
+      - name: service_template
+        default: "default"
       - name: container_registry
         value: "ghcr.io/mctlhq"
 
@@ -110,11 +112,17 @@ spec:
                 - name: secret_env_vars
                   value: "{{workflow.parameters.secret_env_vars}}"
 
+          # Step 2b: template-specific setup (e.g. create ConfigMap for openclaw)
+          - name: template-setup
+            dependencies: [validate]
+            when: "\"{{workflow.parameters.service_template}}\" != \"default\" && \"{{workflow.parameters.action}}\" == \"onboard\""
+            template: setup-service-template
+
           # Step 3: generate manifests + git commit
-          # Depends on validate (always) + write-secrets (optional).
+          # Depends on validate (always) + write-secrets (optional) + template-setup (optional).
           # Including validate ensures commit runs even when optional steps are skipped.
           - name: commit
-            dependencies: [validate, write-secrets]
+            dependencies: [validate, write-secrets, template-setup]
             templateRef:
               name: tpl-git-commit
               clusterScope: true
@@ -145,6 +153,8 @@ spec:
                   value: "{{workflow.parameters.skip_health_check}}"
                 - name: dockerfile_repo
                   value: "{{workflow.parameters.dockerfile_repo}}"
+                - name: service_template
+                  value: "{{workflow.parameters.service_template}}"
 
           # Step 4: patch autoscaling block in values.yaml (conditional)
           - name: patch-autoscaling
@@ -206,3 +216,65 @@ spec:
         - name: deploy-key
           secret:
             secretName: mctl-gitops-deploy-key
+
+    # ────────────────────────────────────────────────────────────────────────
+    - name: setup-service-template
+      script:
+        image: bitnami/kubectl:1.29
+        command: [bash]
+        source: |
+          set -euo pipefail
+
+          TEAM="{{workflow.parameters.team_name}}"
+          SERVICE="{{workflow.parameters.component_name}}"
+          TEMPLATE="{{workflow.parameters.service_template}}"
+
+          echo "🔧 Setting up template: ${TEMPLATE} for ${TEAM}/${SERVICE}"
+
+          case "$TEMPLATE" in
+            openclaw)
+              # Generate random gateway token
+              TOKEN=$(cat /dev/urandom | tr -dc 'a-f0-9' | fold -w 32 | head -n 1)
+              echo "🔑 Generated gateway token: ${TOKEN:0:8}..."
+
+              # Create openclaw config ConfigMap
+              cat <<CFGEOF | kubectl apply -f -
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: ${SERVICE}-config
+            namespace: ${TEAM}
+            labels:
+              app: ${SERVICE}
+              managed-by: mctl
+              template: openclaw
+          data:
+            openclaw.json: |
+              {
+                "gateway": {
+                  "bind": "lan",
+                  "port": 18789,
+                  "auth": {
+                    "mode": "token",
+                    "token": "${TOKEN}"
+                  },
+                  "trustedProxies": [
+                    "10.42.0.0/16",
+                    "10.43.0.0/16",
+                    "172.16.0.0/12"
+                  ]
+                },
+                "controlUi": {
+                  "enabled": true
+                }
+              }
+          CFGEOF
+
+              echo "✅ ConfigMap ${SERVICE}-config created in namespace ${TEAM}"
+              echo "📋 Gateway token (full): ${TOKEN}"
+              echo "🔗 Dashboard URL: https://${TEAM}-${SERVICE}.mctl.ai/#token=${TOKEN}"
+              ;;
+            *)
+              echo "⚠️ Unknown template: ${TEMPLATE}, skipping setup"
+              ;;
+          esac

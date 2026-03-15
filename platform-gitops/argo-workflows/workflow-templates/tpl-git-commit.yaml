@@ -33,6 +33,8 @@ spec:
             default: "false"
           - name: dockerfile_repo
             default: ""
+          - name: service_template
+            default: "default"
       script:
         image: alpine:3.19
         command: [sh]
@@ -53,6 +55,7 @@ spec:
           SECRET_VARS="{{inputs.parameters.secret_env_vars}}"
           REPO="{{inputs.parameters.dockerfile_repo}}"
           PROVISION_DB="{{inputs.parameters.provision_database}}"
+          SERVICE_TEMPLATE="{{inputs.parameters.service_template}}"
 
           # Normalize sentinels (Backstage strips bare empty strings from YAML)
           [ "$HOST" = "none" ] && HOST=""
@@ -136,7 +139,13 @@ spec:
 
             # values.yaml from template
             if [ "$TYPE" = "base-service" ]; then
-              TPL="platform-gitops/argo-workflows/templates/base-service-values.yaml.tpl"
+              # Check for service-specific template (e.g. openclaw)
+              if [ "$SERVICE_TEMPLATE" != "default" ] && [ -f "platform-gitops/argo-workflows/templates/base-service-${SERVICE_TEMPLATE}-values.yaml.tpl" ]; then
+                TPL="platform-gitops/argo-workflows/templates/base-service-${SERVICE_TEMPLATE}-values.yaml.tpl"
+                echo "📋 Using service template: ${SERVICE_TEMPLATE}"
+              else
+                TPL="platform-gitops/argo-workflows/templates/base-service-values.yaml.tpl"
+              fi
             else
               TPL="platform-gitops/argo-workflows/templates/worker-service-values.yaml.tpl"
             fi
