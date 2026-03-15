@@ -219,8 +219,9 @@ spec:
 
     # ────────────────────────────────────────────────────────────────────────
     - name: setup-service-template
+      serviceAccountName: argo-workflow-sa
       script:
-        image: bitnami/kubectl:1.29
+        image: bitnami/kubectl:latest
         command: [bash]
         source: |
           set -euo pipefail
