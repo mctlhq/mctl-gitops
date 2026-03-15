@@ -263,6 +263,7 @@ spec:
                     "172.16.0.0/12"
                   ],
                   "controlUi": {
+                    "enabled": true,
                     "allowedOrigins": [
                       "https://${TEAM}-${SERVICE}.mctl.ai",
                       "https://${TEAM}-${SERVICE}.mctl.me"
