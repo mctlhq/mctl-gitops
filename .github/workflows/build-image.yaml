@@ -125,10 +125,6 @@ jobs:
             echo "token=${{ steps.vault_pat.outputs.pat }}" >> $GITHUB_OUTPUT
             echo "username=x-access-token" >> $GITHUB_OUTPUT
             echo "🔑 Using Vault PAT for GHCR push"
-          elif [[ -n "${{ steps.app_token.outputs.token }}" ]]; then
-            echo "token=${{ steps.app_token.outputs.token }}" >> $GITHUB_OUTPUT
-            echo "username=x-access-token" >> $GITHUB_OUTPUT
-            echo "🤖 Using GitHub App token for GHCR push"
           elif [[ -n "${{ secrets.GHCR_PAT }}" ]]; then
             echo "token=${{ secrets.GHCR_PAT }}" >> $GITHUB_OUTPUT
             echo "username=x-access-token" >> $GITHUB_OUTPUT
