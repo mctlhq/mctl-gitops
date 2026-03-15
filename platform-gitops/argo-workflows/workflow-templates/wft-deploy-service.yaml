@@ -407,8 +407,8 @@ spec:
           run_url = f"https://github.com/{GITOPS_ORG}/{GITOPS_REPO}/actions/runs/{run_id}"
           print(f"🔗 {run_url}")
 
-          # Poll for completion
-          for attempt in range(120):
+          # Poll for completion (10 min max)
+          for attempt in range(40):
               time.sleep(15)
               run = api_request("GET",
                   f"/repos/{GITOPS_ORG}/{GITOPS_REPO}/actions/runs/{run_id}")
@@ -427,5 +427,5 @@ spec:
                       sys.exit(1)
               print(f"   Build {status}... (attempt {attempt + 1}/120)")
 
-          print("❌ Timed out waiting for build to complete (30 min)", file=sys.stderr)
+          print("❌ Timed out waiting for build to complete (10 min)", file=sys.stderr)
           sys.exit(1)
