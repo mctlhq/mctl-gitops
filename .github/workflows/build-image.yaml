@@ -129,6 +129,10 @@ jobs:
             echo "token=${{ steps.app_token.outputs.token }}" >> $GITHUB_OUTPUT
             echo "username=x-access-token" >> $GITHUB_OUTPUT
             echo "🤖 Using GitHub App token for GHCR push"
+          elif [[ -n "${{ secrets.GHCR_PAT }}" ]]; then
+            echo "token=${{ secrets.GHCR_PAT }}" >> $GITHUB_OUTPUT
+            echo "username=x-access-token" >> $GITHUB_OUTPUT
+            echo "🔐 Using GHCR_PAT for GHCR push"
           else
             echo "token=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_OUTPUT
             echo "username=${{ github.actor }}" >> $GITHUB_OUTPUT
