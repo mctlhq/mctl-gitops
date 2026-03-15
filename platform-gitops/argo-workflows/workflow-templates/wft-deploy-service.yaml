@@ -234,9 +234,6 @@ spec:
 
           case "$TEMPLATE" in
             openclaw)
-              TOKEN=$(dd if=/dev/urandom bs=16 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')
-              echo "🔑 Generated gateway token: ${TOKEN:0:8}..."
-
               cat > /tmp/configmap.yaml <<EOF
           apiVersion: v1
           kind: ConfigMap
@@ -254,8 +251,10 @@ spec:
                   "bind": "lan",
                   "port": 18789,
                   "auth": {
-                    "mode": "token",
-                    "token": "${TOKEN}"
+                    "mode": "trusted-proxy",
+                    "trustedProxy": {
+                      "userHeader": "X-Forwarded-For"
+                    }
                   },
                   "trustedProxies": [
                     "10.42.0.0/16",
@@ -275,8 +274,7 @@ spec:
 
               kubectl apply -f /tmp/configmap.yaml
               echo "✅ ConfigMap ${SERVICE}-config created in namespace ${TEAM}"
-              echo "📋 Gateway token (full): ${TOKEN}"
-              echo "🔗 Dashboard URL: https://${TEAM}-${SERVICE}.mctl.ai/#token=${TOKEN}"
+              echo "🔗 Dashboard URL: https://${TEAM}-${SERVICE}.mctl.ai/"
               ;;
             *)
               echo "⚠️ Unknown template: ${TEMPLATE}, skipping setup"
