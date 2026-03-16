@@ -186,9 +186,6 @@ spec:
           - name: contact_email
           - name: creator_user_id
       volumes:
-        - name: github-app-creds
-          secret:
-            secretName: github-app-credentials
         - name: deploy-key
           secret:
             secretName: mctl-gitops-deploy-key
@@ -200,9 +197,6 @@ spec:
           - configMapRef:
               name: mctl-platform-config
         volumeMounts:
-          - name: github-app-creds
-            mountPath: /secrets/github-app
-            readOnly: true
           - name: deploy-key
             mountPath: /secrets/deploy-key
             readOnly: true
@@ -226,40 +220,13 @@ spec:
           [ -z "$DISPLAY_NAME" ] && DISPLAY_NAME="$TENANT"
 
           # ── Setup SSH for git operations ────────────────────────────────────
-          apk add --no-cache openssl curl jq git openssh-client ca-certificates
+          apk add --no-cache openssl curl git openssh-client ca-certificates
           mkdir -p ~/.ssh
           cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           # Use port 443 (port 22 is blocked); disable strict host checking for ephemeral container
           printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  StrictHostKeyChecking no\n' > ~/.ssh/config
           chmod 600 ~/.ssh/config
-
-          # ── GitHub App token (for API calls only) ───────────────────────────
-          APP_ID=$(cat /secrets/github-app/app-id)
-          PRIVATE_KEY=$(cat /secrets/github-app/private-key)
-          INSTALLATION_ID=$(cat /secrets/github-app/installation-id)
-
-          # Generate JWT
-          NOW=$(date +%s)
-          IAT=$((NOW - 60))
-          EXP=$((NOW + 540))
-          HEADER=$(printf '{"alg":"RS256","typ":"JWT"}' | base64 | tr -d '=' | tr '/+' '_-' | tr -d '\n')
-          PAYLOAD=$(printf '{"iat":%d,"exp":%d,"iss":"%s"}' "$IAT" "$EXP" "$APP_ID" | base64 | tr -d '=' | tr '/+' '_-' | tr -d '\n')
-          SIGN_INPUT="${HEADER}.${PAYLOAD}"
-          SIGNATURE=$(printf '%s' "$SIGN_INPUT" | openssl dgst -sha256 -sign <(printf '%s' "$PRIVATE_KEY") | base64 | tr -d '=' | tr '/+' '_-' | tr -d '\n')
-          JWT="${HEADER}.${PAYLOAD}.${SIGNATURE}"
-
-          # Get installation token
-          GH_TOKEN=$(curl -sf -X POST \
-            -H "Authorization: Bearer $JWT" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens" \
-            | jq -r '.token')
-
-          if [ -z "$GH_TOKEN" ] || [ "$GH_TOKEN" = "null" ]; then
-            echo "ERROR: Failed to get GitHub App installation token"
-            exit 1
-          fi
 
           # ── Clone mctl-gitops via SSH ─────────────────────────────────────────
           git config --global user.email "argo-workflows[bot]@mctl.ai"
