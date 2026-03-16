@@ -139,9 +139,6 @@ spec:
         parameters:
           - name: tenant_name
       volumes:
-        - name: github-app-creds
-          secret:
-            secretName: github-app-credentials
         - name: deploy-key
           secret:
             secretName: mctl-gitops-deploy-key
@@ -153,9 +150,6 @@ spec:
           - configMapRef:
               name: mctl-platform-config
         volumeMounts:
-          - name: github-app-creds
-            mountPath: /secrets/github-app
-            readOnly: true
           - name: deploy-key
             mountPath: /secrets/deploy-key
             readOnly: true
