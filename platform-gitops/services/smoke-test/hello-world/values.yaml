@@ -37,3 +37,10 @@ autoscaling:
   minReplicas: 1
   maxReplicas: 3
   targetCPUUtilizationPercentage: 80
+
+dbSecret:
+  vaultPath: "teams/smoke-test/hello-world/database"
+  secretName: "smoke-test-hello-world-db-creds"
+envFrom:
+  - secretRef:
+      name: "smoke-test-hello-world-db-creds"

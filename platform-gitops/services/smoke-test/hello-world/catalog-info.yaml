@@ -4,6 +4,9 @@ metadata:
   name: hello-world
   description: "hello-world service"
   annotations:
+    platform.mctl.me/database: "true"
+    platform.mctl.me/database-team: "smoke-test"
+    platform.mctl.me/database-app: "hello-world"
     backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=smoke-test-hello-world
     backstage.io/kubernetes-namespace: smoke-test
     argocd/app-name: smoke-test-hello-world
