@@ -29,19 +29,23 @@ spec:
             default: ""
           - name: provision_database
             default: "false"
+          - name: clear_env
+            default: "false"
+          - name: clear_secrets
+            default: "false"
           - name: skip_health_check
             default: "false"
           - name: dockerfile_repo
             default: ""
           - name: service_template
             default: "default"
-      script:
-        image: alpine:3.19
-        command: [sh]
-        envFrom:
+          script:
+          image: alpine:3.19
+          command: [sh]
+          envFrom:
           - configMapRef:
               name: mctl-platform-config
-        source: |
+          source: |
           set -e
 
           TEAM="{{inputs.parameters.team_name}}"
@@ -51,8 +55,10 @@ spec:
           TAG="{{inputs.parameters.image_tag}}"
           PORT="{{inputs.parameters.port}}"
           HOST="{{inputs.parameters.host}}"
-          ENV_VARS="{{inputs.parameters.env_vars}}"
-          SECRET_VARS="{{inputs.parameters.secret_env_vars}}"
+          PROVISION_DB="{{inputs.parameters.provision_database}}"
+          CLEAR_ENV="{{inputs.parameters.clear_env}}"
+          CLEAR_SECRETS="{{inputs.parameters.clear_secrets}}"
+          TEMPLATE="{{inputs.parameters.service_template}}"
           REPO="{{inputs.parameters.dockerfile_repo}}"
           PROVISION_DB="{{inputs.parameters.provision_database}}"
           SERVICE_TEMPLATE="{{inputs.parameters.service_template}}"
