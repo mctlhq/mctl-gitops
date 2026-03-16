@@ -84,8 +84,8 @@ module "kube-hetzner" {
   # --- Agent (Worker) Nodes ---
   agent_nodepools = [
     {
-      name                 = "worker-fsn1",
-      server_type          = "cx33",
+      name                 = "worker-cx43-fsn1",
+      server_type          = "cx43",
       location             = "fsn1",
       labels               = [],
       taints               = [],
