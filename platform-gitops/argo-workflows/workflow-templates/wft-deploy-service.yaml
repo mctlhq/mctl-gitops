@@ -45,6 +45,10 @@ spec:
         # KEY=value newline-separated (stored in Vault)
       - name: provision_database
         default: "false"
+      - name: clear_env
+        default: "false"
+      - name: clear_secrets
+        default: "false"
       - name: skip_health_check
         default: "false"
       - name: dockerfile_path
@@ -168,6 +172,10 @@ spec:
                   value: "{{workflow.parameters.env_vars}}"
                 - name: secret_env_vars
                   value: "{{workflow.parameters.secret_env_vars}}"
+                - name: clear_env
+                  value: "{{workflow.parameters.clear_env}}"
+                - name: clear_secrets
+                  value: "{{workflow.parameters.clear_secrets}}"
                 - name: provision_database
                   value: "{{workflow.parameters.provision_database}}"
                 - name: skip_health_check
