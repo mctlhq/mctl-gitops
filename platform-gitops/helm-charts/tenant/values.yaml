@@ -22,13 +22,13 @@ tenant:
   # -- Resource quotas for the namespace
   quotas:
     # Aggregate CPU/memory requests across all pods
-    requests.cpu: "2"
-    requests.memory: "3Gi"
+    requests.cpu: "1"
+    requests.memory: "2Gi"
     # Aggregate CPU/memory limits across all pods
-    limits.cpu: "4"
-    limits.memory: "6Gi"
+    limits.cpu: "2"
+    limits.memory: "3Gi"
     # Maximum number of pods
-    pods: "10"
+    pods: "5"
     # Maximum number of PVCs
     persistentvolumeclaims: "5"
     # Maximum number of services

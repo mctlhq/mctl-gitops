@@ -32,15 +32,15 @@ spec:
       - name: description
         default: ""
       - name: quota_cpu_req
-        default: "2"
+        default: "1"
       - name: quota_cpu_lim
-        default: "4"
+        default: "2"
       - name: quota_memory_req
-        default: "3Gi"
+        default: "2Gi"
       - name: quota_memory_lim
-        default: "6Gi"
+        default: "3Gi"
       - name: quota_pods
-        default: "10"
+        default: "5"
       - name: allow_internet_egress
         default: "true"
       - name: contact_email

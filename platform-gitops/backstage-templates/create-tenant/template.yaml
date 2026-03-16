@@ -57,27 +57,27 @@ spec:
         quotaCpuReq:
           title: CPU Requests (total)
           type: string
-          default: "2"
+          default: "1"
           description: "Sum of CPU requests across all pods in the namespace (e.g. 1, 2, 500m)."
         quotaCpuLim:
           title: CPU Limits (total)
           type: string
-          default: "4"
+          default: "2"
           description: "Sum of CPU limits across all pods in the namespace."
         quotaMemoryReq:
           title: Memory Requests (total)
           type: string
-          default: "3Gi"
+          default: "2Gi"
           description: "Sum of memory requests (e.g. 1Gi, 2Gi)."
         quotaMemoryLim:
           title: Memory Limits (total)
           type: string
-          default: "6Gi"
+          default: "3Gi"
           description: "Sum of memory limits."
         quotaPods:
           title: Max Pods
           type: string
-          default: "10"
+          default: "5"
           description: "Maximum number of pods in the namespace."
 
     - title: Networking
@@ -102,11 +102,11 @@ spec:
           displayName: ${{ parameters.displayName }}
           description: ${{ parameters.description | default('') }}
           contactEmail: ${{ parameters.contactEmail | default('') }}
-          quotaCpuReq: ${{ parameters.quotaCpuReq | default('2') }}
-          quotaCpuLim: ${{ parameters.quotaCpuLim | default('4') }}
-          quotaMemoryReq: ${{ parameters.quotaMemoryReq | default('3Gi') }}
-          quotaMemoryLim: ${{ parameters.quotaMemoryLim | default('6Gi') }}
-          quotaPods: ${{ parameters.quotaPods | default('10') }}
+          quotaCpuReq: ${{ parameters.quotaCpuReq | default('1') }}
+          quotaCpuLim: ${{ parameters.quotaCpuLim | default('2') }}
+          quotaMemoryReq: ${{ parameters.quotaMemoryReq | default('2Gi') }}
+          quotaMemoryLim: ${{ parameters.quotaMemoryLim | default('3Gi') }}
+          quotaPods: ${{ parameters.quotaPods | default('5') }}
           allowInternetEgress: ${{ parameters.allowInternetEgress }}
           creatorUserId: ${{ user.entity.metadata.name }}
 
