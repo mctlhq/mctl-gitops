@@ -89,3 +89,14 @@ spec:
   cluster:
     name: shared-pg
   databaseReclaimPolicy: retain
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: demo-hello-world-db
+spec:
+  name: "demo-hello-world"
+  owner: "demo-hello-world"
+  cluster:
+    name: shared-pg
+  databaseReclaimPolicy: retain
