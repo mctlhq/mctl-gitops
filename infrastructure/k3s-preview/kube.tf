@@ -92,6 +92,15 @@ module "kube-hetzner" {
       count                = 3,
       longhorn_volume_size = 20
     },
+    {
+      name                 = "worker-cx43-fsn1",
+      server_type          = "cx43",
+      location             = "fsn1",
+      labels               = [],
+      taints               = [],
+      count                = 3,
+      longhorn_volume_size = 20
+    },
   ]
 
   # --- Load Balancer ---
