@@ -1,0 +1,36 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: hello-world
+  description: "hello-world service"
+  annotations:
+    backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=demo-hello-world
+    backstage.io/kubernetes-namespace: demo
+    argocd/app-name: demo-hello-world
+    github.com/source-repo: mctl-reviewer/hello-world
+    # mctl.me/auto-deploy — triggered by GitHub App webhook on tag push
+    #   "true" or "auto" — deploy immediately via scaffolder
+    #   "confirm"         — notify only, user deploys manually from UI
+    #   "false" or absent — skip
+    mctl.me/auto-deploy: "false"
+  links:
+    - url: https://ops.mctl.me/applications/argocd/demo-hello-world
+      title: ArgoCD
+      icon: dashboard
+    - url: https://github.com/mctl-reviewer/hello-world
+      title: Source Repository
+      icon: github
+    - url: https://workflows.mctl.me
+      title: Argo Workflows
+      icon: github
+    - url: https://demo-hello-world.mctl.ai
+      title: Service URL
+      icon: web
+  labels:
+    team: demo
+    env: apps
+spec:
+  type: service
+  lifecycle: production
+  owner: group:demo
+  system: team-demo
