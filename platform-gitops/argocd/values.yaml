@@ -134,6 +134,15 @@ argo-cd:
         p, role:team-mashkoffdmitry, logs, get, apps/mashkoffdmitry-*, allow
         p, role:team-mashkoffdmitry, exec, create, apps/mashkoffdmitry-*, allow
         g, mashkoffdmitry, role:team-mashkoffdmitry
+
+        # Tenant: smoke-test
+        p, role:team-smoke-test, applications, get, apps/smoke-test-*, allow
+        p, role:team-smoke-test, applications, list, apps/smoke-test-*, allow
+        p, role:team-smoke-test, applications, sync, apps/smoke-test-*, allow
+        p, role:team-smoke-test, applications, override, apps/smoke-test-*, allow
+        p, role:team-smoke-test, logs, get, apps/smoke-test-*, allow
+        p, role:team-smoke-test, exec, create, apps/smoke-test-*, allow
+        g, smoke-test, role:team-smoke-test
     secret:
       createSecret: true
 
