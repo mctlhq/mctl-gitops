@@ -21,6 +21,9 @@ env:
   APP_ENV: production
   NODE_OPTIONS: "--max-old-space-size=768"
   OPENCLAW_CONFIG_PATH: /config/openclaw.json
+  OPENAI_API_BASE: https://codex.openai.com/v1
+  OPENAI_MODEL: gpt-5.4
+  DEFAULT_MODEL: openai-codex/gpt-5.4
 probes:
   startup:
     path: /healthz
