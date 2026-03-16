@@ -68,6 +68,7 @@ spec:
       # smoke-test-svc: ephemeral — added/removed by smoke-test CWT, not managed here
       - host mashkoffdmitry-knot-mvp mashkoffdmitry-knot-mvp all scram-sha-256
       - host smoke-test-hello-world smoke-test-hello-world all scram-sha-256
+      - host demo-hello-world demo-hello-world all scram-sha-256
       - host all all 0.0.0.0/0 reject
 
   managed:
@@ -101,6 +102,12 @@ spec:
         passwordSecret:
           name: argoworkflows-db-creds
       # Team app roles
+      - name: demo-hello-world
+        login: true
+        connectionLimit: 10
+        ensure: present
+        passwordSecret:
+          name: demo-hello-world-db-creds
       - name: smoke-test-hello-world
         login: true
         connectionLimit: 10
