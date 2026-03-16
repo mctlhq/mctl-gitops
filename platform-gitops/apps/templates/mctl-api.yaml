@@ -16,7 +16,7 @@ spec:
         values: |
           image:
             repository: ghcr.io/mctlhq/mctl-api
-            tag: "4.6.1"
+            tag: "4.6.2"
 
           ingress:
             enabled: true
