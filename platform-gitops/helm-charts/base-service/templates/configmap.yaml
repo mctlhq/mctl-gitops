@@ -1,0 +1,14 @@
+{{- range $name, $cm := .Values.configMaps }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "base-service.labels" $ | nindent 4 }}
+data:
+  {{- range $key, $value := $cm }}
+  {{ $key }}: |
+    {{- $value | nindent 4 }}
+  {{- end }}
+{{- end }}

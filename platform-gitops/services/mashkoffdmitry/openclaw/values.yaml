@@ -114,6 +114,79 @@ extraExternalSecrets:
       - secretKey: OPENCLAW_TELEGRAM_TOKEN
         remoteKey: secret/data/platform/alertmanager
         property: telegram-bot-token
+  openclaw-mctl-token:
+    refreshInterval: 1h
+    targetSecret: openclaw-mctl-token
+    data:
+      - secretKey: MCTL_API_TOKEN
+        remoteKey: secret/data/teams/mashkoffdmitry/openclaw
+        property: mctl-api-token
+configMaps:
+  openclaw-config:
+    openclaw.json: |-
+      {
+        "agents": {
+          "defaults": {
+            "model": { "primary": "openai-codex/gpt-5.4" },
+            "models": { "openai-codex/gpt-5.4": {} }
+          }
+        },
+        "commands": {
+          "native": "auto",
+          "nativeSkills": "auto",
+          "restart": true,
+          "ownerDisplay": "raw"
+        },
+        "channels": {
+          "telegram": {
+            "enabled": true,
+            "botToken": "__TELEGRAM_BOT_TOKEN__",
+            "dmPolicy": "pairing",
+            "groupPolicy": "open",
+            "accounts": {
+              "default": {
+                "enabled": true,
+                "dmPolicy": "pairing",
+                "groupPolicy": "open",
+                "streaming": "partial"
+              }
+            },
+            "streaming": "partial"
+          }
+        },
+        "mcp": {
+          "servers": {
+            "mctl-platform": {
+              "url": "https://api.mctl.ai/mcp",
+              "headers": {
+                "Authorization": "Bearer __MCTL_API_TOKEN__"
+              }
+            }
+          }
+        },
+        "gateway": {
+          "port": 18789,
+          "bind": "lan",
+          "controlUi": {
+            "enabled": true,
+            "allowedOrigins": [
+              "https://mashkoffdmitry-openclaw.mctl.ai",
+              "https://mashkoffdmitry-openclaw.mctl.me"
+            ]
+          },
+          "auth": {
+            "mode": "trusted-proxy",
+            "trustedProxy": {
+              "userHeader": "X-Forwarded-For"
+            }
+          },
+          "trustedProxies": [
+            "10.42.0.0/16",
+            "10.43.0.0/16",
+            "172.16.0.0/12"
+          ]
+        }
+      }
 ingress:
   enabled: true
   hosts:
