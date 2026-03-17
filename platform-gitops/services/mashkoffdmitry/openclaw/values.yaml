@@ -22,6 +22,21 @@ env:
   APP_ENV: production
   NODE_OPTIONS: "--max-old-space-size=768"
   OPENCLAW_CONFIG_PATH: /config/openclaw.json
+initContainers:
+  - name: setup-auth
+    image: busybox:1.36
+    command: ["sh", "-c"]
+    args:
+      - |
+        mkdir -p /state/agents/main/agent
+        cp /secrets/auth-profiles.json /state/agents/main/agent/auth-profiles.json
+        chown -R 1000:1000 /state
+    volumeMounts:
+      - name: openclaw-auth-secret
+        mountPath: /secrets
+        readOnly: true
+      - name: openclaw-state
+        mountPath: /state
 probes:
   startup:
     path: /healthz
@@ -43,17 +58,18 @@ extraVolumeMounts:
   - name: openclaw-config
     mountPath: /config
     readOnly: true
-  - name: openclaw-auth
-    mountPath: /home/node/.openclaw/agents/main/agent
-    readOnly: true
+  - name: openclaw-state
+    mountPath: /home/node/.openclaw
 extraVolumes:
   - name: openclaw-config
     configMap:
       name: openclaw-config
-  - name: openclaw-auth
+  - name: openclaw-auth-secret
     secret:
       secretName: openclaw-auth
       optional: true
+  - name: openclaw-state
+    emptyDir: {}
 ingress:
   enabled: true
   hosts:
