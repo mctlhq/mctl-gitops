@@ -31,4 +31,4 @@ tenant:
   networking:
     allowIntraNamespace: true
     allowClusterEgress: true
-    allowInternetEgress: false
+    allowInternetEgress: true

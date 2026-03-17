@@ -43,10 +43,17 @@ extraVolumeMounts:
   - name: openclaw-config
     mountPath: /config
     readOnly: true
+  - name: openclaw-auth
+    mountPath: /home/node/.openclaw/agents/main/agent
+    readOnly: true
 extraVolumes:
   - name: openclaw-config
     configMap:
       name: openclaw-config
+  - name: openclaw-auth
+    secret:
+      secretName: openclaw-auth
+      optional: true
 ingress:
   enabled: true
   hosts:
