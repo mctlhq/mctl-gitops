@@ -70,6 +70,13 @@ extraVolumes:
       optional: true
   - name: openclaw-state
     emptyDir: {}
+externalSecret:
+  targetSecret: openclaw-auth
+  refreshInterval: 30m
+  data:
+    - secretKey: auth-profiles.json
+      remoteKey: secret/data/teams/mashkoffdmitry/openclaw
+      property: auth-profiles.json
 ingress:
   enabled: true
   hosts:
