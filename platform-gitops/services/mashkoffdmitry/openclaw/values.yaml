@@ -17,10 +17,10 @@ resources:
     memory: 512Mi
   limits:
     cpu: "1"
-    memory: 1Gi
+    memory: 2Gi
 env:
   APP_ENV: production
-  NODE_OPTIONS: "--max-old-space-size=768"
+  NODE_OPTIONS: "--max-old-space-size=1536"
   OPENCLAW_CONFIG_PATH: /config/openclaw.json
 envFrom:
   - secretRef:
