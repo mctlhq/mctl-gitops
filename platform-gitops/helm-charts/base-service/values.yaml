@@ -97,6 +97,13 @@ dbSecret: null
 # When enabled, adds a named 'metrics' port to the Service and Deployment,
 # and creates a ServiceMonitor CRD for Prometheus scraping.
 # Requires kube-prometheus-stack (or any Prometheus Operator) to be installed.
+# -- Optional: ConfigMaps
+# Creates ConfigMap resources. Keys are ConfigMap names, values are maps of data keys to content.
+# configMaps:
+#   my-config:
+#     config.json: '{"key": "value"}'
+configMaps: {}
+
 metrics:
   enabled: false
   port: 9090
