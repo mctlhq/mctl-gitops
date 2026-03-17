@@ -6,7 +6,7 @@
 
 image:
   repository: ghcr.io/mctlhq/openclaw
-  tag: "v2026.3.13-1"
+  tag: "main-5a2a4ab"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
@@ -37,6 +37,9 @@ initContainers:
         if [ -n "$TELEGRAM_TOKEN" ]; then
           sed -i "s|__TELEGRAM_BOT_TOKEN__|$TELEGRAM_TOKEN|g" /config-rw/openclaw.json
         fi
+        if [ -n "$MCTL_TOKEN" ]; then
+          sed -i "s|__MCTL_API_TOKEN__|$MCTL_TOKEN|g" /config-rw/openclaw.json
+        fi
         chown 1000:1000 /config-rw/openclaw.json
     env:
       - name: TELEGRAM_TOKEN
@@ -44,6 +47,12 @@ initContainers:
           secretKeyRef:
             name: openclaw-telegram-secret
             key: OPENCLAW_TELEGRAM_TOKEN
+            optional: true
+      - name: MCTL_TOKEN
+        valueFrom:
+          secretKeyRef:
+            name: openclaw-mctl-token
+            key: MCTL_API_TOKEN
             optional: true
     volumeMounts:
       - name: openclaw-auth-secret
