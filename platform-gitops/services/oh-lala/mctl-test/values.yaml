@@ -1,0 +1,33 @@
+# Service: mctl-test
+# Team: oh-lala
+
+# Chart: base-service
+
+image:
+  repository: ghcr.io/mctlhq/mctl-test
+  tag: "main"
+imagePullSecrets:
+  - name: ghcr-credentials
+service:
+  port: 8080
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+env:
+  APP_ENV: production
+ingress:
+  enabled: true
+  hosts:
+    - oh-lala-mctl-test.mctl.ai
+    - oh-lala-mctl-test.mctl.me
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls:
+    - secretName: mctl-test-tls
+      hosts:
+        - oh-lala-mctl-test.mctl.ai
+        - oh-lala-mctl-test.mctl.me
