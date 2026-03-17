@@ -157,10 +157,14 @@ configMaps:
         "mcp": {
           "servers": {
             "mctl-platform": {
-              "url": "https://api.mctl.ai/mcp",
-              "headers": {
-                "Authorization": "Bearer __MCTL_API_TOKEN__"
-              }
+              "command": "npx",
+              "args": [
+                "-y",
+                "mcp-remote",
+                "https://api.mctl.ai/mcp",
+                "--header",
+                "Authorization: Bearer __MCTL_API_TOKEN__"
+              ]
             }
           }
         },
