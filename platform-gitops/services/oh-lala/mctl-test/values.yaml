@@ -17,6 +17,18 @@ resources:
   limits:
     cpu: 500m
     memory: 512Mi
+probes:
+  liveness:
+    path: /health
+    port: http
+    initialDelaySeconds: 10
+    periodSeconds: 15
+  readiness:
+    path: /health
+    port: http
+    initialDelaySeconds: 5
+    periodSeconds: 10
+
 env:
   APP_ENV: production
 ingress:
