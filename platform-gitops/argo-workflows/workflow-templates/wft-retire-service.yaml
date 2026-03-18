@@ -55,6 +55,34 @@ spec:
                 - name: component_type
                   value: "{{workflow.parameters.component_type}}"
 
-          # Note: ArgoCD PreDelete hook (vault-cleanup.yaml already deployed in service dir)
-          # will handle Vault cleanup of in-cluster ExternalSecrets before ArgoCD removes the app.
-          # The delete-vault-secrets step above handles the Vault KV secrets directly.
+          # Step 3: Delete ArgoCD Application to ensure in-cluster cleanup
+          - name: delete-argocd-app
+            dependencies: [delete-from-git]
+            template: delete-argocd-app
+            arguments:
+              parameters:
+                - name: team_name
+                  value: "{{workflow.parameters.team_name}}"
+                - name: component_name
+                  value: "{{workflow.parameters.component_name}}"
+
+    - name: delete-argocd-app
+      inputs:
+        parameters:
+          - name: team_name
+          - name: component_name
+      script:
+        image: bitnami/kubectl:latest
+        command: [sh]
+        source: |
+          set -e
+          APP_NAME="{{inputs.parameters.team_name}}-{{inputs.parameters.component_name}}"
+          echo "🗑️ Deleting ArgoCD Application: ${APP_NAME}"
+
+          # Delete with background propagation (cascading delete)
+          kubectl delete application "${APP_NAME}" -n argocd --ignore-not-found=true --wait=false
+
+          # Patch finalizer if it gets stuck (optional but safer for retirement)
+          kubectl patch application "${APP_NAME}" -n argocd -p '{"metadata":{"finalizers":null}}' --type=merge || true
+
+          echo "✅ ArgoCD Application deletion triggered"
