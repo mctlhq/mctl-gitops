@@ -1,0 +1,20 @@
+{{- range $name, $spec := .Values.persistence }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "base-service.fullname" $ }}-{{ $name }}
+  labels:
+    {{- include "base-service.labels" $ | nindent 4 }}
+spec:
+  accessModes:
+    {{- range ($spec.accessModes | default (list "ReadWriteOnce")) }}
+    - {{ . }}
+    {{- end }}
+  resources:
+    requests:
+      storage: {{ $spec.size | default "1Gi" }}
+  {{- with $spec.storageClassName }}
+  storageClassName: {{ . }}
+  {{- end }}
+{{- end }}
