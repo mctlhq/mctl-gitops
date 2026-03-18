@@ -347,12 +347,12 @@ configMaps:
             "enabled": true,
             "botToken": "__TELEGRAM_BOT_TOKEN__",
             "dmPolicy": "pairing",
-            "groupPolicy": "pairing",
+            "groupPolicy": "allowlist",
             "accounts": {
               "default": {
                 "enabled": true,
                 "dmPolicy": "pairing",
-                "groupPolicy": "pairing",
+                "groupPolicy": "allowlist",
                 "streaming": "partial"
               }
             },
