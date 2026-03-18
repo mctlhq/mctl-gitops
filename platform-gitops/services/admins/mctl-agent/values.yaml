@@ -18,6 +18,7 @@ resources:
     cpu: 200m
     memory: 256Mi
 env:
+  PORT: "8080"
   MCTL_API_URL: "http://mctl-api.mctl-api.svc:8080"
   GITHUB_OWNER: mctlhq
   GITHUB_REPO: mctl-gitops
