@@ -174,3 +174,23 @@ argo-cd:
     env:
       - name: GOMEMLIMIT
         value: "700MiB"
+
+  # Dex server probes — auto-restart when OIDC provider is temporarily unavailable
+  # Without these, dex stays "Running" but broken after failed initialization
+  dex:
+    livenessProbe:
+      enabled: true
+      httpGet:
+        path: /healthz/live
+        port: 5558
+      initialDelaySeconds: 15
+      periodSeconds: 30
+      failureThreshold: 3
+    readinessProbe:
+      enabled: true
+      httpGet:
+        path: /healthz/ready
+        port: 5558
+      initialDelaySeconds: 10
+      periodSeconds: 10
+      failureThreshold: 3
