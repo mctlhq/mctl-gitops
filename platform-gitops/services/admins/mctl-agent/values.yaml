@@ -63,9 +63,13 @@ probes:
   readiness:
     path: /readyz
     port: http
-extraVolumes:
-  - name: data
-    emptyDir: {}
+# Recreate strategy required: pvc-data is RWO
+strategy:
+  type: Recreate
+# SQLite DB persisted across restarts — incident history and skill metrics survive pod churn
+persistence:
+  data:
+    size: 1Gi
 extraVolumeMounts:
-  - name: data
+  - name: pvc-data
     mountPath: /data
