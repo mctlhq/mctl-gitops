@@ -4,8 +4,9 @@ metadata:
   name: retire-service
   annotations:
     workflows.argoproj.io/description: |
-      Deletes a service: removes Git manifests and optionally cleans up Vault secrets.
-      ArgoCD PreDelete hook (vault-cleanup.yaml) handles in-cluster cleanup automatically.
+      Deletes a service: removes Git manifests, cleans up Vault secrets,
+      and removes any provisioned database resources (CNPG role, pg_hba, Database CRD,
+      ExternalSecret) from shared cluster config.
 
       Replaces: .github/workflows/retire-service.yml
 spec:
@@ -40,7 +41,7 @@ spec:
                 - name: component_name
                   value: "{{workflow.parameters.component_name}}"
 
-          # Step 2: remove service directory + git commit
+          # Step 2: remove service directory + DB resources from shared CNPG config + git commit
           - name: delete-from-git
             templateRef:
               name: tpl-git-commit
@@ -55,9 +56,20 @@ spec:
                 - name: component_type
                   value: "{{workflow.parameters.component_type}}"
 
+          # Step 2b: clean up database resources from shared CNPG config
+          - name: cleanup-db-resources
+            dependencies: [delete-from-git]
+            template: cleanup-db-from-gitops
+            arguments:
+              parameters:
+                - name: team_name
+                  value: "{{workflow.parameters.team_name}}"
+                - name: component_name
+                  value: "{{workflow.parameters.component_name}}"
+
           # Step 3: Delete ArgoCD Application to ensure in-cluster cleanup
           - name: delete-argocd-app
-            dependencies: [delete-from-git]
+            dependencies: [cleanup-db-resources]
             template: delete-argocd-app
             arguments:
               parameters:
@@ -86,3 +98,125 @@ spec:
           kubectl patch application "${APP_NAME}" -n argocd -p '{"metadata":{"finalizers":null}}' --type=merge || true
 
           echo "✅ ArgoCD Application deletion triggered"
+
+    # ─── Clean up DB resources from shared CNPG config ────────────────────
+    - name: cleanup-db-from-gitops
+      inputs:
+        parameters:
+          - name: team_name
+          - name: component_name
+      script:
+        image: alpine:3.19
+        command: [sh]
+        envFrom:
+          - configMapRef:
+              name: mctl-platform-config
+        source: |
+          set -e
+          apk add --no-cache git openssh-client > /dev/null 2>&1
+
+          TEAM="{{inputs.parameters.team_name}}"
+          APP="{{inputs.parameters.component_name}}"
+          DB_NAME="${TEAM}-${APP}"
+
+          # ── Set up SSH for git ────────────────────────────────────────────
+          mkdir -p ~/.ssh
+          cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  StrictHostKeyChecking no\n' > ~/.ssh/config
+          chmod 600 ~/.ssh/config
+
+          # ── Clone gitops repo ────────────────────────────────────────────
+          git clone --depth=1 "git@github.com:${GITOPS_ORG}/${GITOPS_REPO}.git" /tmp/mctl-gitops
+          cd /tmp/mctl-gitops
+          git config user.name "argo-workflows[bot]"
+          git config user.email "argo-workflows[bot]@users.noreply.github.com"
+
+          CNPG_DIR="platform-gitops/cnpg-clusters/shared"
+          CHANGED=false
+
+          # ── Remove pg_hba entry from cluster.yaml ─────────────────────────
+          if grep -q "host ${DB_NAME} ${DB_NAME}" "${CNPG_DIR}/cluster.yaml" 2>/dev/null; then
+            sed -i "/- host ${DB_NAME} ${DB_NAME} all scram-sha-256/d" "${CNPG_DIR}/cluster.yaml"
+            echo "✅ Removed pg_hba entry for ${DB_NAME}"
+            CHANGED=true
+          fi
+
+          # ── Remove managed role from cluster.yaml ─────────────────────────
+          # Role block is 5-6 lines: name, login, connectionLimit, ensure, passwordSecret, name
+          if grep -q "name: ${DB_NAME}$" "${CNPG_DIR}/cluster.yaml" 2>/dev/null; then
+            # Use awk to remove the role block (from "- name: DB_NAME" to next "- name:" or end of roles)
+            awk -v db="${DB_NAME}" '
+              /^[[:space:]]*- name: '"${DB_NAME}"'$/ { skip=1; next }
+              skip && /^[[:space:]]*- name:/ { skip=0 }
+              skip && /^[[:space:]]*[^[:space:]]/ && !/^[[:space:]]*(login|connectionLimit|ensure|passwordSecret|name:)/ { skip=0 }
+              !skip { print }
+            ' "${CNPG_DIR}/cluster.yaml" > "${CNPG_DIR}/cluster.yaml.tmp" && mv "${CNPG_DIR}/cluster.yaml.tmp" "${CNPG_DIR}/cluster.yaml"
+            echo "✅ Removed managed role for ${DB_NAME}"
+            CHANGED=true
+          fi
+
+          # ── Remove Database CRD from databases.yaml ───────────────────────
+          if grep -q "name: ${DB_NAME}-db" "${CNPG_DIR}/databases.yaml" 2>/dev/null; then
+            # Remove the full Database manifest block
+            awk -v db="${DB_NAME}-db" '
+              BEGIN { skip=0 }
+              /^---$/ { if (skip) { skip=0; next } }
+              /name: '"${DB_NAME}-db"'/ { skip=1 }
+              skip && /^---$/ { next }
+              !skip { print }
+            ' "${CNPG_DIR}/databases.yaml" > "${CNPG_DIR}/databases.yaml.tmp" && mv "${CNPG_DIR}/databases.yaml.tmp" "${CNPG_DIR}/databases.yaml"
+            echo "✅ Removed Database CRD for ${DB_NAME}"
+            CHANGED=true
+          fi
+
+          # ── Remove ExternalSecret from secrets.yaml ───────────────────────
+          if grep -q "name: ${DB_NAME}-db-creds" "${CNPG_DIR}/secrets.yaml" 2>/dev/null; then
+            # Remove the full ExternalSecret manifest block (from --- before it to next ---)
+            awk -v es="${DB_NAME}-db-creds" '
+              BEGIN { skip=0; buf="" }
+              /^---$/ {
+                if (skip) { skip=0; buf=""; next }
+                if (buf != "") print buf
+                buf="---"
+                next
+              }
+              skip { next }
+              /name: '"${DB_NAME}-db-creds"'/ {
+                skip=1; buf=""; next
+              }
+              {
+                if (buf != "") { print buf; buf="" }
+                print
+              }
+              END { if (buf != "" && !skip) print buf }
+            ' "${CNPG_DIR}/secrets.yaml" > "${CNPG_DIR}/secrets.yaml.tmp" && mv "${CNPG_DIR}/secrets.yaml.tmp" "${CNPG_DIR}/secrets.yaml"
+            echo "✅ Removed ExternalSecret for ${DB_NAME}"
+            CHANGED=true
+          fi
+
+          # ── Commit and push if anything changed ──────────────────────────
+          if [ "$CHANGED" = "true" ]; then
+            git add "${CNPG_DIR}/cluster.yaml" "${CNPG_DIR}/databases.yaml" "${CNPG_DIR}/secrets.yaml"
+            if ! git diff --cached --quiet; then
+              git commit -m "chore: cleanup database resources for ${DB_NAME}" \
+                -m "Removed CNPG role, pg_hba, Database CRD and ExternalSecret
+          for retired service ${TEAM}/${APP}."
+              for i in $(seq 1 5); do
+                if git push origin HEAD:main; then
+                  echo "✅ DB cleanup pushed"
+                  break
+                fi
+                git pull --rebase origin main
+              done
+            fi
+          else
+            echo "ℹ️  No database resources found for ${DB_NAME} — nothing to clean up"
+          fi
+        volumeMounts:
+          - name: deploy-key
+            mountPath: /secrets/deploy-key
+      volumes:
+        - name: deploy-key
+          secret:
+            secretName: mctl-gitops-deploy-key
