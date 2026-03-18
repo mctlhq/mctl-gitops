@@ -121,3 +121,14 @@ metrics:
   port: 9090
   path: /metrics
   interval: 30s
+
+# -- Optional: blue-green deployment via Argo Rollouts
+# When enabled, renders a Rollout instead of Deployment + a preview Service.
+# Requires Argo Rollouts controller to be installed in the cluster.
+# NOT compatible with RWO PersistentVolumeClaims (both slots need independent storage).
+blueGreen:
+  enabled: false
+  # autoPromotionEnabled: true means the new version is promoted automatically
+  # once the preview pod passes readiness probes. Set to false for manual promotion
+  # via `kubectl argo rollouts promote <name>` or the Argo Rollouts dashboard.
+  autoPromotionEnabled: true

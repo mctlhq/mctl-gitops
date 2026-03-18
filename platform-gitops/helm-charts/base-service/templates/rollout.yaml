@@ -1,6 +1,6 @@
-{{- if not .Values.blueGreen.enabled }}
-apiVersion: apps/v1
-kind: Deployment
+{{- if .Values.blueGreen.enabled }}
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
 metadata:
   name: {{ include "base-service.fullname" . }}
   labels:
@@ -10,10 +10,6 @@ spec:
   replicas: {{ .Values.replicaCount }}
   {{- end }}
   revisionHistoryLimit: {{ .Values.revisionHistoryLimit | default 2 }}
-  {{- with .Values.strategy }}
-  strategy:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
   selector:
     matchLabels:
       {{- include "base-service.selectorLabels" . | nindent 6 }}
@@ -122,4 +118,11 @@ spec:
             claimName: {{ include "base-service.fullname" $ }}-{{ $name }}
         {{- end }}
       {{- end }}
+  strategy:
+    blueGreen:
+      activeService: {{ include "base-service.fullname" . }}
+      previewService: {{ include "base-service.fullname" . }}-preview
+      autoPromotionEnabled: {{ .Values.blueGreen.autoPromotionEnabled }}
+      # Abort rollout automatically if preview pod fails to become ready
+      scaleDownDelaySeconds: 30
 {{- end }}
