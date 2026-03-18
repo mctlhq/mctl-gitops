@@ -78,17 +78,7 @@ spec:
   cluster:
     name: shared-pg
   databaseReclaimPolicy: retain
----
-apiVersion: postgresql.cnpg.io/v1
-kind: Database
-metadata:
-  name: smoke-test-hello-world-db
-spec:
-  name: "smoke-test-hello-world"
-  owner: "smoke-test-hello-world"
-  cluster:
-    name: shared-pg
-  databaseReclaimPolicy: retain
+
 ---
 apiVersion: postgresql.cnpg.io/v1
 kind: Database
