@@ -1,0 +1,15 @@
+apiVersion: backstage.io/v1alpha1
+kind: Resource
+metadata:
+  name: tenant-xxx
+  namespace: default
+  description: "Tenant xxx — namespace, quotas, and network policies"
+  annotations:
+    mctl.me/tenant-name: "xxx"
+    backstage.io/managed-by-location: "url:https://github.com/mctlhq/mctl-gitops/blob/main/platform-gitops/tenants/xxx/catalog-info.yaml"
+    backstage.io/managed-by-origin-location: "url:https://github.com/mctlhq/mctl-gitops/blob/main/platform-gitops/tenants/xxx/catalog-info.yaml"
+spec:
+  type: tenant
+  owner: group:default/admins
+  system: team-xxx
+  dependsOn: []
