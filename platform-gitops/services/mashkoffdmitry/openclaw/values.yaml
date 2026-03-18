@@ -35,7 +35,7 @@ initContainers:
     volumeMounts:
       - name: npm-cache
         mountPath: /npm-cache
-  # 2. Download whisper-cli binary and ggml-base model (skips if PVC already populated)
+  # 2. Build whisper-cli from source and download ggml-base model (skips if PVC already populated)
   - name: install-whisper-cli
     image: alpine:3.19
     command: ["sh", "-c"]
@@ -46,21 +46,27 @@ initContainers:
         BIN=$WHISPER_DIR/whisper-cli
         MODEL=$WHISPER_DIR/ggml-base.bin
 
-        # Skip if already installed (PVC survives restarts)
+        # Skip if already installed (PVC survives pod restarts)
         if [ -f "$BIN" ] && [ -f "$MODEL" ]; then
           echo "whisper-cli already installed, skipping"
           exit 0
         fi
 
-        apk add --no-cache curl
+        apk add --no-cache build-base cmake curl git
         mkdir -p $WHISPER_DIR
 
-        # Download prebuilt static binary from whisper.cpp releases
-        echo "Downloading whisper-cli..."
-        curl -fsSL \
-          "https://github.com/ggerganov/whisper.cpp/releases/latest/download/whisper-cli-linux-x64.tar.gz" \
-          | tar -xz -C $WHISPER_DIR
-        chmod +x $BIN
+        # Build whisper-cli from source (ggml-org/whisper.cpp, pinned tag)
+        echo "Cloning whisper.cpp v1.8.3..."
+        git clone --depth 1 --branch v1.8.3 \
+          https://github.com/ggml-org/whisper.cpp.git /tmp/whispersrc
+        cmake -B /tmp/whispersrc/build -S /tmp/whispersrc \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DWHISPER_BUILD_TESTS=OFF \
+          -DWHISPER_BUILD_EXAMPLES=ON
+        cmake --build /tmp/whispersrc/build --target whisper-cli -j$(nproc)
+        cp /tmp/whispersrc/build/bin/whisper-cli $BIN
+        rm -rf /tmp/whispersrc
+        echo "whisper-cli built: $(ls -lh $BIN)"
 
         # Download ggml-base model (~142MB, cached on PVC after first run)
         echo "Downloading ggml-base.bin (~142MB)..."
@@ -69,6 +75,13 @@ initContainers:
           -o $MODEL
 
         echo "Done: $(ls -lh $WHISPER_DIR)"
+    resources:
+      requests:
+        cpu: "1"
+        memory: 512Mi
+      limits:
+        cpu: "2"
+        memory: 1Gi
     volumeMounts:
       - name: pvc-whisper
         mountPath: /whisper-storage
