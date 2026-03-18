@@ -10,6 +10,9 @@ imagePullSecrets:
   - name: ghcr-credentials
 service:
   port: 8080
+# Container runs as app:app (UID 1000) — fsGroup ensures PVC is writable
+podSecurityContext:
+  fsGroup: 1000
 resources:
   requests:
     cpu: 50m
