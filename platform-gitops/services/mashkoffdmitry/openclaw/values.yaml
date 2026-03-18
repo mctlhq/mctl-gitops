@@ -46,7 +46,7 @@ initContainers:
         set -e
         WHISPER_DIR=/whisper-storage
         BIN=$WHISPER_DIR/whisper-cli
-        MODEL=$WHISPER_DIR/ggml-base.bin
+        MODEL=$WHISPER_DIR/ggml-small.bin
         WRAPPER=$WHISPER_DIR/run-whisper.sh
 
         # Skip heavy steps if binary + model already exist; always regenerate wrapper
@@ -85,10 +85,10 @@ initContainers:
           rm -rf /tmp/whispersrc
           echo "whisper-cli built: $(ls -lh $BIN)"
 
-          # Download ggml-base model (~142MB)
-          echo "Downloading ggml-base.bin (~142MB)..."
+          # Download ggml-small model (~466MB) — better accuracy for technical terms
+          echo "Downloading ggml-small.bin (~466MB)..."
           curl -fsSL \
-            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin" \
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin" \
             -o $MODEL
         fi
 
@@ -98,7 +98,7 @@ initContainers:
         TMP_WAV=$(mktemp /tmp/whisper_XXXXXX.wav)
         /whisper-storage/ffmpeg -i "$1" -ar 16000 -ac 1 -f wav "$TMP_WAV" -y 2>/dev/null
         /whisper-storage/whisper-cli \
-          -m /whisper-storage/ggml-base.bin \
+          -m /whisper-storage/ggml-small.bin \
           -f "$TMP_WAV" \
           --language auto \
           --no-timestamps \
@@ -193,6 +193,9 @@ extraVolumeMounts:
   - name: pvc-whisper
     mountPath: /whisper-storage
     readOnly: true
+  - name: openclaw-scripts
+    mountPath: /scripts
+    readOnly: true
 # PVC for openclaw state (Telegram pairing, agent data)
 persistence:
   state:
@@ -211,6 +214,10 @@ extraVolumes:
       optional: true
   - name: npm-cache
     emptyDir: {}
+  - name: openclaw-scripts
+    configMap:
+      name: openclaw-scripts
+      defaultMode: 0755
 externalSecret:
   targetSecret: openclaw-auth
   refreshInterval: 30m
@@ -234,6 +241,75 @@ extraExternalSecrets:
         remoteKey: secret/data/teams/mashkoffdmitry/openclaw
         property: mctl-api-token
 configMaps:
+  openclaw-scripts:
+    mcp-agent-proxy.js: |-
+      #!/usr/bin/env node
+      // stdio bridge — proxies MCP JSON-RPC to mctl-agent HTTP endpoint
+      // mctl-agent speaks plain JSON-RPC 2.0 POST; OpenClaw expects stdio subprocess.
+      const http = require('http');
+
+      process.stdin.setEncoding('utf8');
+      let buf = '';
+
+      process.stdin.on('data', chunk => {
+        buf += chunk;
+        let nl;
+        while ((nl = buf.indexOf('\n')) !== -1) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (line) handleLine(line);
+        }
+      });
+
+      function handleLine(line) {
+        let req;
+        try {
+          req = JSON.parse(line);
+        } catch (_) {
+          write({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'parse error' } });
+          return;
+        }
+        callAgent(req).then(
+          res => write(res),
+          err => write({ jsonrpc: '2.0', id: req.id != null ? req.id : null, error: { code: -32603, message: String(err) } })
+        );
+      }
+
+      function write(obj) {
+        process.stdout.write(JSON.stringify(obj) + '\n');
+      }
+
+      function callAgent(body) {
+        return new Promise((resolve, reject) => {
+          const data = JSON.stringify(body);
+          const req = http.request(
+            {
+              hostname: 'mctl-agent.admins.svc.cluster.local',
+              port: 8080,
+              path: '/mcp',
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(data),
+              },
+            },
+            res => {
+              let out = '';
+              res.on('data', c => { out += c; });
+              res.on('end', () => {
+                try {
+                  resolve(JSON.parse(out));
+                } catch (_) {
+                  reject(new Error('invalid JSON from agent: ' + out.slice(0, 80)));
+                }
+              });
+            }
+          );
+          req.on('error', reject);
+          req.write(data);
+          req.end();
+        });
+      }
   openclaw-config:
     openclaw.json: |-
       {
@@ -271,12 +347,12 @@ configMaps:
             "enabled": true,
             "botToken": "__TELEGRAM_BOT_TOKEN__",
             "dmPolicy": "pairing",
-            "groupPolicy": "open",
+            "groupPolicy": "pairing",
             "accounts": {
               "default": {
                 "enabled": true,
                 "dmPolicy": "pairing",
-                "groupPolicy": "open",
+                "groupPolicy": "pairing",
                 "streaming": "partial"
               }
             },
@@ -293,6 +369,10 @@ configMaps:
                 "--header",
                 "Authorization: Bearer __MCTL_API_TOKEN__"
               ]
+            },
+            "mctl-agent": {
+              "command": "node",
+              "args": ["/scripts/mcp-agent-proxy.js"]
             }
           }
         },
