@@ -142,16 +142,6 @@ argo-cd:
         p, role:team-demo, logs, get, apps/demo-*, allow
         p, role:team-demo, exec, create, apps/demo-*, allow
         g, demo, role:team-demo
-
-
-        # Tenant: xxx
-        p, role:team-xxx, applications, get, apps/xxx-*, allow
-        p, role:team-xxx, applications, list, apps/xxx-*, allow
-        p, role:team-xxx, applications, sync, apps/xxx-*, allow
-        p, role:team-xxx, applications, override, apps/xxx-*, allow
-        p, role:team-xxx, logs, get, apps/xxx-*, allow
-        p, role:team-xxx, exec, create, apps/xxx-*, allow
-        g, xxx, role:team-xxx
     secret:
       createSecret: true
 
