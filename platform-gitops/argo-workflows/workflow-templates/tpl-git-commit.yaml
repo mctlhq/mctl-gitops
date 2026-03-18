@@ -39,13 +39,13 @@ spec:
             default: ""
           - name: service_template
             default: "default"
-          script:
-          image: alpine:3.19
-          command: [sh]
-          envFrom:
+      script:
+        image: alpine:3.19
+        command: [sh]
+        envFrom:
           - configMapRef:
               name: mctl-platform-config
-          source: |
+        source: |
           set -e
 
           TEAM="{{inputs.parameters.team_name}}"
@@ -55,19 +55,20 @@ spec:
           TAG="{{inputs.parameters.image_tag}}"
           PORT="{{inputs.parameters.port}}"
           HOST="{{inputs.parameters.host}}"
+          ENV_VARS="{{inputs.parameters.env_vars}}"
+          SECRET_VARS="{{inputs.parameters.secret_env_vars}}"
+          REPO="{{inputs.parameters.dockerfile_repo}}"
           PROVISION_DB="{{inputs.parameters.provision_database}}"
           CLEAR_ENV="{{inputs.parameters.clear_env}}"
           CLEAR_SECRETS="{{inputs.parameters.clear_secrets}}"
-          TEMPLATE="{{inputs.parameters.service_template}}"
-          REPO="{{inputs.parameters.dockerfile_repo}}"
-          PROVISION_DB="{{inputs.parameters.provision_database}}"
           SERVICE_TEMPLATE="{{inputs.parameters.service_template}}"
 
           # Normalize sentinels (Backstage strips bare empty strings from YAML)
           [ "$HOST" = "none" ] && HOST=""
           [ "$TAG" = "auto" ] && TAG=""
-          CLEAR_ENV=false
-          CLEAR_SECRETS=false
+          # clear_env/clear_secrets: use param value, or detect __CLEAR__ sentinel
+          [ "$CLEAR_ENV" != "true" ] && CLEAR_ENV=false
+          [ "$CLEAR_SECRETS" != "true" ] && CLEAR_SECRETS=false
           [ "$ENV_VARS" = "__CLEAR__" ] && CLEAR_ENV=true && ENV_VARS=""
           [ "$SECRET_VARS" = "__CLEAR__" ] && CLEAR_SECRETS=true && SECRET_VARS=""
 
