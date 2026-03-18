@@ -21,6 +21,13 @@ spec:
   destination:
     server: {{ .Values.spec.destination.server }}
     namespace: argo-rollouts
+  # CRDs managed by installCRDs=true drift on every sync due to defaulting fields.
+  # Ignore them — the controller manages CRD lifecycle, not ArgoCD.
+  ignoreDifferences:
+    - group: apiextensions.k8s.io
+      kind: CustomResourceDefinition
+      jsonPointers:
+        - /spec/preserveUnknownFields
   syncPolicy:
     automated:
       prune: true
