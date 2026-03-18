@@ -1,0 +1,137 @@
+name: Validate Configs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'platform-gitops/services/**/openclaw/values.yaml'
+      - 'platform-gitops/helm-charts/base-service/**'
+  pull_request:
+    paths:
+      - 'platform-gitops/services/**/openclaw/values.yaml'
+      - 'platform-gitops/helm-charts/base-service/**'
+
+jobs:
+  validate-openclaw:
+    name: Validate OpenClaw Config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Find openclaw values files
+        id: find
+        run: |
+          FILES=$(find platform-gitops/services -name "values.yaml" -path "*/openclaw/*")
+          echo "files<<EOF" >> $GITHUB_OUTPUT
+          echo "$FILES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Validate openclaw JSON config templates
+        run: |
+          set -e
+          VALID_GROUP_POLICIES="open disabled allowlist"
+          VALID_DM_POLICIES="open disabled pairing"
+          ERRORS=0
+
+          find platform-gitops/services -name "values.yaml" -path "*/openclaw/*" | while read f; do
+            echo "=== Checking $f ==="
+
+            # Extract the openclaw.json content from the configMaps section
+            # The JSON is embedded as YAML literal block scalar under configMaps.openclaw-config
+            JSON=$(python3 - "$f" <<'PYEOF'
+import sys, re, json
+
+with open(sys.argv[1]) as fh:
+    content = fh.read()
+
+# Find the openclaw.json content block inside configMaps
+# It's indented under configMaps: > openclaw-config: > openclaw.json:
+match = re.search(r'openclaw\.json:\s*\|-?\n((?:[ \t]+[^\n]*\n?)+)', content)
+if not match:
+    print("SKIP: no openclaw.json block found", file=sys.stderr)
+    sys.exit(0)
+
+raw = match.group(1)
+# Strip common leading whitespace
+lines = raw.split('\n')
+if not lines:
+    sys.exit(0)
+indent = len(lines[0]) - len(lines[0].lstrip())
+stripped = '\n'.join(l[indent:] if len(l) >= indent else l for l in lines)
+
+try:
+    obj = json.loads(stripped)
+    print(stripped)
+except json.JSONDecodeError as e:
+    print(f"JSON parse error: {e}", file=sys.stderr)
+    sys.exit(1)
+PYEOF
+            )
+            if [ $? -ne 0 ]; then
+              echo "FAIL: JSON syntax error in $f"
+              ERRORS=$((ERRORS + 1))
+              continue
+            fi
+
+            if [ -z "$JSON" ]; then
+              echo "SKIP: no openclaw.json config block in $f"
+              continue
+            fi
+
+            # Validate groupPolicy values
+            python3 - <<PYEOF
+import json, sys
+config = json.loads("""$JSON""")
+errors = []
+
+tg = config.get('channels', {}).get('telegram', {})
+valid_group = {'open', 'disabled', 'allowlist'}
+valid_dm = {'open', 'disabled', 'pairing'}
+
+gp = tg.get('groupPolicy', '')
+if gp and gp not in valid_group:
+    errors.append(f"channels.telegram.groupPolicy: '{gp}' not in {sorted(valid_group)}")
+
+dp = tg.get('dmPolicy', '')
+if dp and dp not in valid_dm:
+    errors.append(f"channels.telegram.dmPolicy: '{dp}' not in {sorted(valid_dm)}")
+
+for acct, acfg in tg.get('accounts', {}).items():
+    agp = acfg.get('groupPolicy', '')
+    if agp and agp not in valid_group:
+        errors.append(f"channels.telegram.accounts.{acct}.groupPolicy: '{agp}' not in {sorted(valid_group)}")
+    adp = acfg.get('dmPolicy', '')
+    if adp and adp not in valid_dm:
+        errors.append(f"channels.telegram.accounts.{acct}.dmPolicy: '{adp}' not in {sorted(valid_dm)}")
+
+if errors:
+    for e in errors:
+        print(f"FAIL: {e}", file=sys.stderr)
+    sys.exit(1)
+
+print("OK: openclaw config is valid")
+PYEOF
+            if [ $? -ne 0 ]; then
+              ERRORS=$((ERRORS + 1))
+            fi
+          done
+
+          if [ $ERRORS -gt 0 ]; then
+            echo "::error::OpenClaw config validation failed. Fix the errors above."
+            exit 1
+          fi
+
+  validate-helm:
+    name: Lint base-service Helm Chart
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Helm lint base-service
+        run: |
+          helm lint platform-gitops/helm-charts/base-service \
+            --set image.repository=ghcr.io/example/app \
+            --set image.tag=latest
