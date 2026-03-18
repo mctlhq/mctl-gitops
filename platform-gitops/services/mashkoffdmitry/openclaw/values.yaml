@@ -149,8 +149,7 @@ configMaps:
         "agents": {
           "defaults": {
             "model": { "primary": "openai-codex/gpt-5.4" },
-            "models": { "openai-codex/gpt-5.4": {} },
-            "systemPrompt": "You are the mctl platform assistant. When users ask about alerts, incidents, errors, or platform problems, use mctl_list_incidents and mctl_get_incident tools to check current alerts and explain issues clearly. When you see an incident ID mentioned, fetch details with mctl_get_incident. Proactively mention any critical unacknowledged incidents when relevant."
+            "models": { "openai-codex/gpt-5.4": {} }
           }
         },
         "commands": {
