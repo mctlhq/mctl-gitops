@@ -49,40 +49,50 @@ initContainers:
         MODEL=$WHISPER_DIR/ggml-base.bin
         WRAPPER=$WHISPER_DIR/run-whisper.sh
 
-        # Skip if already installed (PVC survives pod restarts)
-        if [ -f "$BIN" ] && [ -f "$MODEL" ] && [ -f "$WRAPPER" ]; then
-          echo "whisper already installed, skipping"
-          exit 0
+        # Skip heavy steps if binary + model already exist; always regenerate wrapper
+        SKIP_BUILD=false
+        if [ -f "$BIN" ] && [ -f "$MODEL" ]; then
+          echo "whisper-cli + model already installed, regenerating wrapper only"
+          SKIP_BUILD=true
         fi
 
-        apt-get update -qq
-        apt-get install -y --no-install-recommends \
-          build-essential cmake git curl ca-certificates
         mkdir -p $WHISPER_DIR
 
-        # Download static ffmpeg binary (no deps required at runtime)
-        echo "Downloading static ffmpeg..."
-        curl -fsSL \
-          "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz" \
-          | tar -xJ --strip-components=1 -C $WHISPER_DIR --wildcards "*/ffmpeg"
-        chmod +x $WHISPER_DIR/ffmpeg
-        echo "ffmpeg: $($WHISPER_DIR/ffmpeg -version 2>&1 | head -1)"
+        if [ "$SKIP_BUILD" = "false" ]; then
+          apt-get update -qq
+          apt-get install -y --no-install-recommends \
+            build-essential cmake git curl ca-certificates
 
-        # Build whisper-cli from source (debian glibc, pinned tag v1.8.3)
-        echo "Cloning whisper.cpp v1.8.3..."
-        git clone --depth 1 --branch v1.8.3 \
-          https://github.com/ggml-org/whisper.cpp.git /tmp/whispersrc
-        cmake -B /tmp/whispersrc/build -S /tmp/whispersrc \
-          -DCMAKE_BUILD_TYPE=Release \
-          -DBUILD_SHARED_LIBS=OFF \
-          -DWHISPER_BUILD_TESTS=OFF \
-          -DWHISPER_BUILD_EXAMPLES=ON
-        cmake --build /tmp/whispersrc/build --target whisper-cli -j$(nproc)
-        cp /tmp/whispersrc/build/bin/whisper-cli $BIN
-        rm -rf /tmp/whispersrc
-        echo "whisper-cli built: $(ls -lh $BIN)"
+          # Download static ffmpeg binary (no deps required at runtime)
+          echo "Downloading static ffmpeg..."
+          curl -fsSL \
+            "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz" \
+            | tar -xJ --strip-components=1 -C $WHISPER_DIR --wildcards "*/ffmpeg"
+          chmod +x $WHISPER_DIR/ffmpeg
+          echo "ffmpeg: $($WHISPER_DIR/ffmpeg -version 2>&1 | head -1)"
 
-        # Create wrapper: converts OGG/Opus → 16kHz WAV, runs whisper-cli, outputs text to stdout
+          # Build whisper-cli from source (debian glibc, pinned tag v1.8.3)
+          echo "Cloning whisper.cpp v1.8.3..."
+          git clone --depth 1 --branch v1.8.3 \
+            https://github.com/ggml-org/whisper.cpp.git /tmp/whispersrc
+          cmake -B /tmp/whispersrc/build -S /tmp/whispersrc \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DWHISPER_BUILD_TESTS=OFF \
+            -DWHISPER_BUILD_EXAMPLES=ON
+          cmake --build /tmp/whispersrc/build --target whisper-cli -j$(nproc)
+          cp /tmp/whispersrc/build/bin/whisper-cli $BIN
+          rm -rf /tmp/whispersrc
+          echo "whisper-cli built: $(ls -lh $BIN)"
+
+          # Download ggml-base model (~142MB)
+          echo "Downloading ggml-base.bin (~142MB)..."
+          curl -fsSL \
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin" \
+            -o $MODEL
+        fi
+
+        # Always regenerate wrapper so language/flag changes take effect without PVC wipe
         cat > $WRAPPER << 'WEOF'
         #!/bin/sh
         TMP_WAV=$(mktemp /tmp/whisper_XXXXXX.wav)
@@ -90,6 +100,7 @@ initContainers:
         /whisper-storage/whisper-cli \
           -m /whisper-storage/ggml-base.bin \
           -f "$TMP_WAV" \
+          --language auto \
           --no-timestamps \
           2>/dev/null
         EC=$?
@@ -99,17 +110,11 @@ initContainers:
         sed -i 's/^        //' $WRAPPER
         chmod +x $WRAPPER
 
-        # Download ggml-base model (~142MB, cached on PVC after first run)
-        echo "Downloading ggml-base.bin (~142MB)..."
-        curl -fsSL \
-          "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin" \
-          -o $MODEL
-
         echo "Done: $(ls -lh $WHISPER_DIR)"
     resources:
       requests:
         cpu: "1"
-        memory: 512Mi
+        memory: 256Mi
       limits:
         cpu: "2"
         memory: 1Gi
