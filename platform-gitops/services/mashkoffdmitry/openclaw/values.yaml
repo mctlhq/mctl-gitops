@@ -18,11 +18,24 @@ resources:
   limits:
     cpu: "1"
     memory: 3Gi
+# Recreate strategy required: openclaw-state PVC is RWO
+strategy:
+  type: Recreate
 env:
   APP_ENV: production
   NODE_OPTIONS: "--max-old-space-size=2048"
   OPENCLAW_CONFIG_PATH: /config-rw/openclaw.json
 initContainers:
+  # 1. Pre-install mcp-remote so npx doesn't download it on every MCP call
+  - name: install-mcp-remote
+    image: node:22-alpine
+    command: ["sh", "-c"]
+    args:
+      - npm install --prefix /npm-cache mcp-remote
+    volumeMounts:
+      - name: npm-cache
+        mountPath: /npm-cache
+  # 2. Prepare config and state
   - name: setup
     image: busybox:1.36
     command: ["sh", "-c"]
@@ -30,9 +43,11 @@ initContainers:
       - |
         # Copy auth-profiles.json from secret to state dir
         mkdir -p /state/agents/main/agent
-        cp /secrets/auth-profiles.json /state/agents/main/agent/auth-profiles.json
+        if [ -f /secrets/auth-profiles.json ]; then
+          cp /secrets/auth-profiles.json /state/agents/main/agent/auth-profiles.json
+        fi
         chown -R 1000:1000 /state
-        # Copy config template and inject Telegram bot token
+        # Copy config template and inject tokens
         cp /config-tpl/openclaw.json /config-rw/openclaw.json
         if [ -n "$TELEGRAM_TOKEN" ]; then
           sed -i "s|__TELEGRAM_BOT_TOKEN__|$TELEGRAM_TOKEN|g" /config-rw/openclaw.json
@@ -58,7 +73,7 @@ initContainers:
       - name: openclaw-auth-secret
         mountPath: /secrets
         readOnly: true
-      - name: openclaw-state
+      - name: pvc-state
         mountPath: /state
       - name: openclaw-config-tpl
         mountPath: /config-tpl
@@ -85,8 +100,14 @@ probes:
 extraVolumeMounts:
   - name: openclaw-config-rw
     mountPath: /config-rw
-  - name: openclaw-state
+  - name: pvc-state
     mountPath: /home/node/.openclaw
+  - name: npm-cache
+    mountPath: /npm-cache
+# PVC for openclaw state (Telegram pairing, agent data)
+persistence:
+  state:
+    size: 1Gi
 extraVolumes:
   - name: openclaw-config-tpl
     configMap:
@@ -97,7 +118,7 @@ extraVolumes:
     secret:
       secretName: openclaw-auth
       optional: true
-  - name: openclaw-state
+  - name: npm-cache
     emptyDir: {}
 externalSecret:
   targetSecret: openclaw-auth
@@ -157,10 +178,9 @@ configMaps:
         "mcp": {
           "servers": {
             "mctl-platform": {
-              "command": "npx",
+              "command": "node",
               "args": [
-                "-y",
-                "mcp-remote",
+                "/npm-cache/node_modules/mcp-remote/dist/proxy.js",
                 "https://api.mctl.ai/mcp",
                 "--header",
                 "Authorization: Bearer __MCTL_API_TOKEN__"
