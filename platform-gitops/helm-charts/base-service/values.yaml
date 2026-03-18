@@ -59,6 +59,18 @@ serviceAccount:
   name: ""
   annotations: {}
 
+# -- Optional: deployment strategy (Recreate or RollingUpdate)
+strategy: {}
+
+# -- Optional: persistent volume claims
+# Creates PVC resources. Keys become PVC name suffixes.
+# persistence:
+#   data:
+#     size: 1Gi
+#     accessModes: [ReadWriteOnce]
+#     storageClassName: ""
+persistence: {}
+
 # -- Optional: extra volumes
 extraVolumes: []
 extraVolumeMounts: []
