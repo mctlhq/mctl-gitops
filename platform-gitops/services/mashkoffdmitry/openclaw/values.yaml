@@ -36,8 +36,10 @@ initContainers:
       - name: npm-cache
         mountPath: /npm-cache
   # 2. Build whisper-cli from source and download ggml-base model (skips if PVC already populated)
+  #    Uses debian:12-slim to match the runtime container (glibc), avoiding musl/glibc mismatch.
+  #    Includes static ffmpeg for OGG/Opus → WAV conversion (Telegram voice note format).
   - name: install-whisper-cli
-    image: alpine:3.19
+    image: debian:12-slim
     command: ["sh", "-c"]
     args:
       - |
@@ -45,28 +47,57 @@ initContainers:
         WHISPER_DIR=/whisper-storage
         BIN=$WHISPER_DIR/whisper-cli
         MODEL=$WHISPER_DIR/ggml-base.bin
+        WRAPPER=$WHISPER_DIR/run-whisper.sh
 
         # Skip if already installed (PVC survives pod restarts)
-        if [ -f "$BIN" ] && [ -f "$MODEL" ]; then
-          echo "whisper-cli already installed, skipping"
+        if [ -f "$BIN" ] && [ -f "$MODEL" ] && [ -f "$WRAPPER" ]; then
+          echo "whisper already installed, skipping"
           exit 0
         fi
 
-        apk add --no-cache build-base cmake curl git
+        apt-get update -qq
+        apt-get install -y --no-install-recommends \
+          build-essential cmake git curl ca-certificates
         mkdir -p $WHISPER_DIR
 
-        # Build whisper-cli from source (ggml-org/whisper.cpp, pinned tag)
+        # Download static ffmpeg binary (no deps required at runtime)
+        echo "Downloading static ffmpeg..."
+        curl -fsSL \
+          "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz" \
+          | tar -xJ --strip-components=1 -C $WHISPER_DIR --wildcards "*/ffmpeg"
+        chmod +x $WHISPER_DIR/ffmpeg
+        echo "ffmpeg: $($WHISPER_DIR/ffmpeg -version 2>&1 | head -1)"
+
+        # Build whisper-cli from source (debian glibc, pinned tag v1.8.3)
         echo "Cloning whisper.cpp v1.8.3..."
         git clone --depth 1 --branch v1.8.3 \
           https://github.com/ggml-org/whisper.cpp.git /tmp/whispersrc
         cmake -B /tmp/whispersrc/build -S /tmp/whispersrc \
           -DCMAKE_BUILD_TYPE=Release \
+          -DBUILD_SHARED_LIBS=OFF \
           -DWHISPER_BUILD_TESTS=OFF \
           -DWHISPER_BUILD_EXAMPLES=ON
         cmake --build /tmp/whispersrc/build --target whisper-cli -j$(nproc)
         cp /tmp/whispersrc/build/bin/whisper-cli $BIN
         rm -rf /tmp/whispersrc
         echo "whisper-cli built: $(ls -lh $BIN)"
+
+        # Create wrapper: converts OGG/Opus → 16kHz WAV, runs whisper-cli, outputs text to stdout
+        cat > $WRAPPER << 'WEOF'
+        #!/bin/sh
+        TMP_WAV=$(mktemp /tmp/whisper_XXXXXX.wav)
+        /whisper-storage/ffmpeg -i "$1" -ar 16000 -ac 1 -f wav "$TMP_WAV" -y 2>/dev/null
+        /whisper-storage/whisper-cli \
+          -m /whisper-storage/ggml-base.bin \
+          -f "$TMP_WAV" \
+          --no-timestamps \
+          2>/dev/null
+        EC=$?
+        rm -f "$TMP_WAV"
+        exit $EC
+        WEOF
+        sed -i 's/^        //' $WRAPPER
+        chmod +x $WRAPPER
 
         # Download ggml-base model (~142MB, cached on PVC after first run)
         echo "Downloading ggml-base.bin (~142MB)..."
@@ -222,13 +253,8 @@ configMaps:
               "models": [
                 {
                   "type": "cli",
-                  "command": "/whisper-storage/whisper-cli",
-                  "args": [
-                    "-m", "/whisper-storage/ggml-base.bin",
-                    "-f", "{{MediaPath}}",
-                    "--output-txt",
-                    "--output-file", "/tmp/wout"
-                  ],
+                  "command": "/whisper-storage/run-whisper.sh",
+                  "args": ["{{MediaPath}}"],
                   "timeoutSeconds": 120
                 }
               ]
