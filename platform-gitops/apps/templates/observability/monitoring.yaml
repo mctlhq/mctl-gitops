@@ -41,7 +41,16 @@ spec:
             serviceMonitorSelectorNilUsesHelmValues: false
             serviceMonitorNamespaceSelector: {}
             serviceMonitorSelector: {}
-            retention: 7d
+            scrapeInterval: 1m
+            evaluationInterval: 1m
+            retention: 3d
+            resources:
+              requests:
+                cpu: 100m
+                memory: 512Mi
+              limits:
+                cpu: 500m
+                memory: 2Gi
             storageSpec:
               volumeClaimTemplate:
                 spec:
