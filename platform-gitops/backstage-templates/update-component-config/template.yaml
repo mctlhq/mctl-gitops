@@ -36,6 +36,11 @@ spec:
           title: " "
           type: string
           ui:field: CurrentConfig
+        clearEnv:
+          title: Clear all existing Environment Variables
+          type: boolean
+          default: false
+          description: "Check this to remove all current plaintext variables before applying new ones."
         envVars:
           title: Environment Variables
           type: string
@@ -44,6 +49,11 @@ spec:
 
     - title: Secure Variables
       properties:
+        clearSecrets:
+          title: Clear all existing Secure Variables
+          type: boolean
+          default: false
+          description: "Check this to remove all current secrets from Vault before applying new ones."
         secretEnvVars:
           title: Secure Variables
           type: string
@@ -59,7 +69,7 @@ spec:
 
     - id: update-config
       name: Apply changes via Argo Workflows
-      if: ${{ parameters.envVars or parameters.secretEnvVars }}
+      if: ${{ parameters.envVars or parameters.secretEnvVars or parameters.clearEnv or parameters.clearSecrets }}
       action: mctl:workflow:submit
       input:
         templateName: deploy-service
@@ -70,8 +80,8 @@ spec:
           component_name: ${{ steps['fetch-service'].output.entity.metadata.name }}
           env_vars: ${{ parameters.envVars | default('') }}
           secret_env_vars: ${{ parameters.secretEnvVars | default('') }}
-          clear_env: "false"
-          clear_secrets: "false"
+          clear_env: ${{ parameters.clearEnv | string }}
+          clear_secrets: ${{ parameters.clearSecrets | string }}
           autoscaling_enabled: "false"
           min_replicas: "1"
           max_replicas: "5"
