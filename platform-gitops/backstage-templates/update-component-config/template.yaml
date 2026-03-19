@@ -70,6 +70,8 @@ spec:
           component_name: ${{ steps['fetch-service'].output.entity.metadata.name }}
           env_vars: ${{ parameters.envVars | default('') }}
           secret_env_vars: ${{ parameters.secretEnvVars | default('') }}
+          clear_env: "false"
+          clear_secrets: "false"
           autoscaling_enabled: "false"
           min_replicas: "1"
           max_replicas: "5"
