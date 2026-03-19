@@ -10,7 +10,7 @@ spec:
   source:
     repoURL: https://victoriametrics.github.io/helm-charts/
     chart: victoria-metrics-k8s-stack
-    targetRevision: "0.24.10"
+    targetRevision: "0.72.5"
     helm:
       values: |
         # Use VMSingle for single-node efficiency (replacing Prometheus operator)
