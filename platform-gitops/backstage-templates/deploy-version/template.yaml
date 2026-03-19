@@ -44,6 +44,11 @@ spec:
           title: " "
           type: string
           ui:field: CurrentConfig
+        clearEnv:
+          title: Clear all existing Environment Variables
+          type: boolean
+          default: false
+          description: "Check this to remove all current plaintext variables before applying new ones."
         envVars:
           title: Environment Variables
           type: string
@@ -52,6 +57,11 @@ spec:
 
     - title: Secure Variables
       properties:
+        clearSecrets:
+          title: Clear all existing Secure Variables
+          type: boolean
+          default: false
+          description: "Check this to remove all current secrets from Vault before applying new ones."
         secretEnvVars:
           title: Secure Variables
           type: string
@@ -86,8 +96,8 @@ spec:
           skip_health_check: "false"
           dockerfile_path: "Dockerfile"
           image_tag: "auto"
-          clear_env: "false"
-          clear_secrets: "false"
+          clear_env: ${{ parameters.clearEnv | string }}
+          clear_secrets: ${{ parameters.clearSecrets | string }}
           autoscaling_enabled: "false"
           min_replicas: "1"
           max_replicas: "5"
