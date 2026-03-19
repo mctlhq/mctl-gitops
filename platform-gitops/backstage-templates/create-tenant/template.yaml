@@ -77,7 +77,7 @@ spec:
         quotaPods:
           title: Max Pods
           type: string
-          default: "5"
+          default: "10"
           description: "Maximum number of pods in the namespace."
 
     - title: Networking
