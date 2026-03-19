@@ -38,6 +38,9 @@ ingress:
 probes:
   liveness: null
   readiness: null
+blueGreen:
+  enabled: true
+  autoPromotionEnabled: false
 externalSecret:
   targetSecret: mctl-web-secrets
   data:
