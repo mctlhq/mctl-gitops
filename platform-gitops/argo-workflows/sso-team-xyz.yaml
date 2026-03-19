@@ -1,0 +1,18 @@
+# SSO RBAC: team xyz — scoped to team namespace only
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sso-team-xyz
+  namespace: argo-workflows
+  annotations:
+    workflows.argoproj.io/rbac-rule: "'xyz' in groups"
+    workflows.argoproj.io/rbac-rule-precedence: "5"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sso-team-xyz.service-account-token
+  namespace: argo-workflows
+  annotations:
+    kubernetes.io/service-account.name: sso-team-xyz
+type: kubernetes.io/service-account-token
