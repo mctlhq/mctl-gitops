@@ -89,8 +89,7 @@ module "kube-hetzner" {
       location             = "fsn1",
       labels               = [],
       taints               = [],
-      count                = 3,
-      longhorn_volume_size = 20
+      count                = 3
     },
     {
       name                 = "worker-cx43-fsn1",
@@ -98,8 +97,7 @@ module "kube-hetzner" {
       location             = "fsn1",
       labels               = [],
       taints               = [],
-      count                = 3,
-      longhorn_volume_size = 20
+      count                = 3
     },
   ]
 
@@ -111,8 +109,7 @@ module "kube-hetzner" {
   # Matches ingress.className: traefik in helm-charts/base-service
 
   # --- Storage ---
-  enable_longhorn = true
-  longhorn_replica_count = 2  # HA: each volume on 2 of 3 nodes
+  enable_longhorn = false
 
   # --- Cert Manager ---
   # Enabled by default (enable_cert_manager = true)
