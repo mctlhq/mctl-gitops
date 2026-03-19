@@ -86,6 +86,8 @@ spec:
           skip_health_check: "false"
           dockerfile_path: "Dockerfile"
           image_tag: "auto"
+          clear_env: "false"
+          clear_secrets: "false"
           autoscaling_enabled: "false"
           min_replicas: "1"
           max_replicas: "5"
