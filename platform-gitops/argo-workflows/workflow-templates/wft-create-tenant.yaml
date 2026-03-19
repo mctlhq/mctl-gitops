@@ -28,25 +28,25 @@ spec:
       - name: tenant_name
         # Lowercase, DNS-safe slug (^[a-z0-9][a-z0-9-]{1,62}$)
       - name: display_name
-        default: ""
+        value: ""
       - name: description
-        default: ""
+        value: ""
       - name: quota_cpu_req
-        default: "1"
+        value: "1"
       - name: quota_cpu_lim
-        default: "2"
+        value: "2"
       - name: quota_memory_req
-        default: "2Gi"
+        value: "2Gi"
       - name: quota_memory_lim
-        default: "3Gi"
+        value: "3Gi"
       - name: quota_pods
-        default: "5"
+        value: "5"
       - name: allow_internet_egress
-        default: "true"
+        value: "true"
       - name: contact_email
-        default: ""
+        value: ""
       - name: creator_user_id
-        default: ""
+        value: ""
 
   templates:
     # ────────────────────────────────────────────────────────────────────────

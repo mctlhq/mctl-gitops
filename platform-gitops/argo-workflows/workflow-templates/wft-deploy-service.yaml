@@ -24,46 +24,46 @@ spec:
       - name: team_name
       - name: component_name
       - name: component_type
-        default: "base-service"
+        value: "base-service"
         # base-service | worker-service (onboard only; auto-detected for deploy/update-config)
       - name: dockerfile_repo
-        default: ""
+        value: ""
         # e.g. "myorg/my-service"
       - name: git_tag
-        default: ""
+        value: ""
         # e.g. "1.2.3"
       - name: port
-        default: "8080"
+        value: "8080"
       - name: host
-        default: ""
+        value: ""
         # e.g. "myteam-myapp.example.com"
       - name: env_vars
-        default: ""
+        value: ""
         # KEY=value newline-separated plaintext
       - name: secret_env_vars
-        default: ""
+        value: ""
         # KEY=value newline-separated (stored in Vault)
       - name: provision_database
-        default: "false"
+        value: "false"
       - name: clear_env
-        default: "false"
+        value: "false"
       - name: clear_secrets
-        default: "false"
+        value: "false"
       - name: skip_health_check
-        default: "false"
+        value: "false"
       - name: dockerfile_path
-        default: "Dockerfile"
+        value: "Dockerfile"
       - name: image_tag
-        default: ""
+        value: ""
         # explicit image tag override (empty = derived from git_tag)
       - name: autoscaling_enabled
-        default: "false"
+        value: "false"
       - name: min_replicas
-        default: "1"
+        value: "1"
       - name: max_replicas
-        default: "5"
+        value: "5"
       - name: cpu_threshold
-        default: "80"
+        value: "80"
       - name: service_template
         value: "default"
       - name: container_registry
