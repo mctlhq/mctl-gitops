@@ -13,10 +13,10 @@ service:
   port: 18789
 resources:
   requests:
-    cpu: 200m
-    memory: 512Mi
+    cpu: 500m
+    memory: 1.5Gi
   limits:
-    cpu: "1"
+    cpu: "2"
     memory: 3Gi
 # Recreate strategy required: openclaw-state PVC is RWO
 strategy:
@@ -192,7 +192,6 @@ extraVolumeMounts:
     mountPath: /npm-cache
   - name: pvc-whisper
     mountPath: /whisper-storage
-    readOnly: true
   - name: openclaw-scripts
     mountPath: /scripts
     readOnly: true
