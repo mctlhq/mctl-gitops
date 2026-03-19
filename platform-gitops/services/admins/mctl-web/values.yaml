@@ -17,10 +17,7 @@ resources:
   limits:
     cpu: 500m
     memory: 512Mi
-env:
-  APP_ENV: production
-  t: "123"
-  r: "321"
+env: {}
 ingress:
   enabled: true
   annotations:
@@ -41,15 +38,5 @@ probes:
 blueGreen:
   enabled: true
   autoPromotionEnabled: true
-externalSecret:
-  targetSecret: mctl-web-secrets
-  data:
-    - secretKey: s
-      remoteKey: teams/admins/mctl-web
-      property: s
-    - secretKey: r
-      remoteKey: teams/admins/mctl-web
-      property: r
-envFrom:
-  - secretRef:
-      name: mctl-web-secrets
+externalSecret: {}
+envFrom: []
