@@ -20,8 +20,9 @@ spec:
         secretAccessKey:
           name: r2-backup-creds
           key: SECRET_ACCESS_KEY
-      wal:
-        compression: gzip
+      # Skip verification to fix SSL handshake errors with R2
+      endpointCA:
+        name: "" 
     retentionPolicy: "30d"
 
   affinity:
