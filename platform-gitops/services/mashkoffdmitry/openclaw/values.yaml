@@ -18,7 +18,7 @@ resources:
   limits:
     cpu: "1"
     memory: 1.2Gi
-# Recreate strategy required: RWO mounts
+# Recreate strategy required
 strategy:
   type: Recreate
 env:
@@ -66,23 +66,15 @@ initContainers:
         MODEL=$WHISPER_DIR/ggml-base.bin
         WRAPPER=$WHISPER_DIR/run-whisper.sh
         mkdir -p $WHISPER_DIR
-        
-        # 1. Download static ffmpeg
         if [ ! -f $WHISPER_DIR/ffmpeg ]; then
-          echo "Downloading ffmpeg..."
           apt-get update -qq && apt-get install -y --no-install-recommends wget xz-utils ca-certificates
           wget -q "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz" -O /tmp/ffmpeg.tar.xz
           tar -xJf /tmp/ffmpeg.tar.xz -C $WHISPER_DIR --strip-components=1 --wildcards "*/ffmpeg"
           rm /tmp/ffmpeg.tar.xz
         fi
-
-        # 2. Download model
         if [ ! -f $MODEL ]; then
-          echo "Downloading ggml-base.bin (~140MB)..."
           wget -q "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin" -O $MODEL
         fi
-
-        # 3. Fast build (limited to 2 cores)
         if [ ! -f $BIN ]; then
           apt-get update -qq && apt-get install -y --no-install-recommends build-essential cmake git ca-certificates
           git clone --depth 1 --branch v1.8.3 https://github.com/ggml-org/whisper.cpp.git /tmp/whispersrc
@@ -91,8 +83,6 @@ initContainers:
           cp /tmp/whispersrc/build/bin/whisper-cli $BIN
           rm -rf /tmp/whispersrc
         fi
-
-        # 4. Create wrapper
         cat > $WRAPPER << 'WEOF'
         #!/bin/sh
         TMP_WAV=$(mktemp /tmp/whisper_XXXXXX.wav)
@@ -195,7 +185,7 @@ configMaps:
       {
         "gateway": {
           "port": 18789,
-          "bind": "0.0.0.0",
+          "bind": "lan",
           "controlUi": {
             "enabled": true,
             "allowedOrigins": ["https://mashkoffdmitry-openclaw.mctl.ai"]
@@ -208,16 +198,12 @@ configMaps:
             "enabled": true,
             "botToken": "${OPENCLAW_TELEGRAM_TOKEN}",
             "dmPolicy": "pairing",
-            "groupPolicy": "allowlist",
-            "allowlist": ["210408407"]
+            "groupPolicy": "open",
+            "allowFrom": ["210408407"]
           }
         },
         "mcp": {
           "servers": {
-            "mctl-platform": {
-              "command": "node",
-              "args": ["/npm-cache/node_modules/mcp-remote/dist/proxy.js", "https://api.mctl.ai/mcp", "--header", "Authorization: Bearer ${OPENCLAW_MCTL_TOKEN}"]
-            },
             "mctl-agent": { "command": "node", "args": ["/scripts/mcp-agent-proxy.js"] }
           }
         }
