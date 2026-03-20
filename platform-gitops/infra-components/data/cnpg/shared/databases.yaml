@@ -74,19 +74,7 @@ metadata:
   name: mashkoffdmitry-knot-mvp-db
 spec:
   name: "mashkoffdmitry-knot-mvp"
-  owner: "mashkoffdmitry-knot-mvp"
-  cluster:
-    name: shared-pg
-  databaseReclaimPolicy: retain
-
----
-apiVersion: postgresql.cnpg.io/v1
-kind: Database
-metadata:
-  name: demo-hello-world-db
-spec:
-  name: "demo-hello-world"
-  owner: "demo-hello-world"
+  owner: "mashkoffdmitry"
   cluster:
     name: shared-pg
   databaseReclaimPolicy: retain
