@@ -106,32 +106,6 @@ initContainers:
     volumeMounts:
       - name: pvc-whisper
         mountPath: /whisper-storage
-  # --- AUTO APPROVE INIT ---
-  - name: auto-approve
-    image: postgres:17-alpine
-    command: ["sh", "-c"]
-    args:
-      - |
-        # Wait for migrations to be applied by the main app (approximate)
-        echo "Waiting for main app to initialize DB..."
-        sleep 30
-        # Try to insert approval directly into PG (table 'identities' or similar)
-        # Note: We use backstage user here as it has broad permissions
-        psql $DATABASE_URL <<EOF
-        -- This is a speculative insert based on typical OpenClaw schema
-        -- If the table doesn't exist yet, it will just fail and app will proceed
-        INSERT INTO identities (provider, provider_id, status, metadata)
-        VALUES ('telegram', '210408407', 'approved', '{}')
-        ON CONFLICT (provider, provider_id) DO UPDATE SET status = 'approved';
-        EOF
-    env:
-      - name: DATABASE_URL
-        value: "postgresql://backstage:$(DB_PASSWORD)@shared-pg-rw.platform-db.svc.cluster.local:5432/mashkoffdmitry-openclaw"
-      - name: DB_PASSWORD
-        valueFrom:
-          secretKeyRef:
-            name: openclaw-db-creds
-            key: password
 
 extraVolumeMounts:
   - name: openclaw-config
