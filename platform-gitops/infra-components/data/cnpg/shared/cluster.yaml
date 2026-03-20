@@ -85,6 +85,7 @@ spec:
       - host tests-pdb-test-svc tests-pdb-test-svc all scram-sha-256
       # smoke-test-svc: ephemeral — added/removed by smoke-test CWT, not managed here
       - host mashkoffdmitry-knot-mvp mashkoffdmitry-knot-mvp all scram-sha-256
+      - host mashkoffdmitry-openclaw mashkoffdmitry-openclaw all scram-sha-256
       - host all all 0.0.0.0/0 reject
 
   managed:
@@ -130,6 +131,12 @@ spec:
         ensure: present
         passwordSecret:
           name: mashkoffdmitry-knot-mvp-db-creds
+      - name: mashkoffdmitry-openclaw
+        login: true
+        connectionLimit: 10
+        ensure: present
+        passwordSecret:
+          name: mashkoffdmitry-openclaw-db-creds
       # - name: team1_app1
       #   login: true
       #   connectionLimit: 10
