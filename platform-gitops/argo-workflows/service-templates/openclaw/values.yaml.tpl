@@ -221,6 +221,36 @@ extraExternalSecrets:
         property: mctl-api-token
 
 configMaps:
+  openclaw-scripts:
+    mcp-agent-proxy.js: |-
+      #!/usr/bin/env node
+      const http = require('http');
+      process.stdin.setEncoding('utf8');
+      let buf = '';
+      process.stdin.on('data', chunk => {
+        buf += chunk;
+        let nl;
+        while ((nl = buf.indexOf('\n')) !== -1) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (line) handleLine(line);
+        }
+      });
+      function handleLine(line) {
+        let req;
+        try { req = JSON.parse(line); } catch (_) { return; }
+        callAgent(req).then(res => write(res), err => write({ jsonrpc: '2.0', id: req.id, error: { code: -32603, message: String(err) } }));
+      }
+      function write(obj) { process.stdout.write(JSON.stringify(obj) + '\n'); }
+      function callAgent(body) {
+        return new Promise((resolve, reject) => {
+          const data = JSON.stringify(body);
+          const req = http.request({ hostname: 'mctl-agent.admins.svc.cluster.local', port: 8080, path: '/mcp', method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } }, res => {
+            let out = ''; res.on('data', c => { out += c; }); res.on('end', () => { try { resolve(JSON.parse(out)); } catch (_) { reject(new Error('invalid JSON')); } });
+          });
+          req.on('error', reject); req.write(data); req.end();
+        });
+      }
   __SERVICE_NAME__-config:
     openclaw.json: |-
       {
