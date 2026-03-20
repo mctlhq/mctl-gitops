@@ -148,7 +148,6 @@ initContainers:
           secretKeyRef:
             name: openclaw-telegram-secret
             key: OPENCLAW_TELEGRAM_TOKEN
-            optional: true
       - name: MCTL_TOKEN
         valueFrom:
           secretKeyRef:
@@ -199,8 +198,6 @@ extraVolumeMounts:
 persistence:
   state:
     size: 1Gi
-  whisper:
-    size: 1Gi
 extraVolumes:
   - name: openclaw-config-tpl
     configMap:
@@ -212,6 +209,8 @@ extraVolumes:
       secretName: openclaw-auth
       optional: true
   - name: npm-cache
+    emptyDir: {}
+  - name: pvc-whisper
     emptyDir: {}
   - name: openclaw-scripts
     configMap:
