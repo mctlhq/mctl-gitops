@@ -20,9 +20,6 @@ spec:
         secretAccessKey:
           name: r2-backup-creds
           key: SECRET_ACCESS_KEY
-      # R2 specific settings for reliability
-      region: "auto"
-      s3ForcePathStyle: true
     retentionPolicy: "30d"
 
   affinity:
