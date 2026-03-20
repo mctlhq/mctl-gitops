@@ -25,6 +25,9 @@ env:
   APP_ENV: production
   NODE_OPTIONS: "--max-old-space-size=1024"
   OPENCLAW_CONFIG_PATH: /config-rw/openclaw.json
+  # PostgreSQL Connection (credentials injected via externalSecret)
+  DATABASE_URL: "postgresql://$(DB_USER):$(DB_PASSWORD)@shared-pg-rw.platform-db.svc.cluster.local:5432/mashkoffdmitry-openclaw"
+
 initContainers:
   # 1. Pre-install mcp-remote so npx doesn't download it on every MCP call
   - name: install-mcp-remote
@@ -36,8 +39,6 @@ initContainers:
       - name: npm-cache
         mountPath: /npm-cache
   # 2. Build whisper-cli from source and download ggml-base model (skips if PVC already populated)
-  #    Uses debian:12-slim to match the runtime container (glibc), avoiding musl/glibc mismatch.
-  #    Includes static ffmpeg for OGG/Opus → WAV conversion (Telegram voice note format).
   - name: install-whisper-cli
     image: debian:12-slim
     command: ["sh", "-c"]
@@ -49,50 +50,40 @@ initContainers:
         MODEL=$WHISPER_DIR/ggml-base.bin
         WRAPPER=$WHISPER_DIR/run-whisper.sh
 
-        # Skip heavy steps if binary + model already exist; always regenerate wrapper
-        SKIP_BUILD=false
-        if [ -f "$BIN" ] && [ -f "$MODEL" ]; then
-          echo "whisper-cli + model already installed, regenerating wrapper only"
-          SKIP_BUILD=true
-        fi
-
         mkdir -p $WHISPER_DIR
 
-        if [ "$SKIP_BUILD" = "false" ]; then
-          apt-get update -qq
-          apt-get install -y --no-install-recommends \
-            build-essential cmake git curl ca-certificates
+        # Always build/download since we use ephemeral storage now
+        apt-get update -qq
+        apt-get install -y --no-install-recommends \
+          build-essential cmake git curl ca-certificates
 
-          # Download static ffmpeg binary (no deps required at runtime)
-          echo "Downloading static ffmpeg..."
-          curl -fsSL \
-            "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz" \
-            | tar -xJ --strip-components=1 -C $WHISPER_DIR --wildcards "*/ffmpeg"
-          chmod +x $WHISPER_DIR/ffmpeg
-          echo "ffmpeg: $($WHISPER_DIR/ffmpeg -version 2>&1 | head -1)"
+        # Download static ffmpeg binary (no deps required at runtime)
+        echo "Downloading static ffmpeg..."
+        curl -fsSL \
+          "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz" \
+          | tar -xJ --strip-components=1 -C $WHISPER_DIR --wildcards "*/ffmpeg"
+        chmod +x $WHISPER_DIR/ffmpeg
 
-          # Build whisper-cli from source (debian glibc, pinned tag v1.8.3)
-          echo "Cloning whisper.cpp v1.8.3..."
-          git clone --depth 1 --branch v1.8.3 \
-            https://github.com/ggml-org/whisper.cpp.git /tmp/whispersrc
-          cmake -B /tmp/whispersrc/build -S /tmp/whispersrc \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DBUILD_SHARED_LIBS=OFF \
-            -DWHISPER_BUILD_TESTS=OFF \
-            -DWHISPER_BUILD_EXAMPLES=ON
-          cmake --build /tmp/whispersrc/build --target whisper-cli -j$(nproc)
-          cp /tmp/whispersrc/build/bin/whisper-cli $BIN
-          rm -rf /tmp/whispersrc
-          echo "whisper-cli built: $(ls -lh $BIN)"
+        # Build whisper-cli from source (debian glibc, pinned tag v1.8.3)
+        echo "Cloning whisper.cpp v1.8.3..."
+        git clone --depth 1 --branch v1.8.3 \
+          https://github.com/ggml-org/whisper.cpp.git /tmp/whispersrc
+        cmake -B /tmp/whispersrc/build -S /tmp/whispersrc \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DBUILD_SHARED_LIBS=OFF \
+          -DWHISPER_BUILD_TESTS=OFF \
+          -DWHISPER_BUILD_EXAMPLES=ON
+        cmake --build /tmp/whispersrc/build --target whisper-cli -j$(nproc)
+        cp /tmp/whispersrc/build/bin/whisper-cli $BIN
+        rm -rf /tmp/whispersrc
 
-          # Download ggml-base model (~140MB) — fast and lightweight
-          echo "Downloading ggml-base.bin (~140MB)..."
-          curl -fsSL \
-            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin" \
-            -o $MODEL
-        fi
+        # Download ggml-base model (~140MB) — fast and lightweight
+        echo "Downloading ggml-base.bin (~140MB)..."
+        curl -fsSL \
+          "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin" \
+          -o $MODEL
 
-        # Always regenerate wrapper so language/flag changes take effect without PVC wipe
+        # Always regenerate wrapper so language/flag changes take effect
         cat > $WRAPPER << 'WEOF'
         #!/bin/sh
         TMP_WAV=$(mktemp /tmp/whisper_XXXXXX.wav)
@@ -109,8 +100,6 @@ initContainers:
         WEOF
         sed -i 's/^        //' $WRAPPER
         chmod +x $WRAPPER
-
-        echo "Done: $(ls -lh $WHISPER_DIR)"
     resources:
       requests:
         cpu: "1"
@@ -154,12 +143,20 @@ initContainers:
             name: openclaw-mctl-token
             key: MCTL_API_TOKEN
             optional: true
+      - name: DB_USER
+        valueFrom:
+          secretKeyRef:
+            name: openclaw-db-creds
+            key: username
+      - name: DB_PASSWORD
+        valueFrom:
+          secretKeyRef:
+            name: openclaw-db-creds
+            key: password
     volumeMounts:
       - name: openclaw-auth-secret
         mountPath: /secrets
         readOnly: true
-      - name: pvc-state
-        mountPath: /state
       - name: openclaw-config-tpl
         mountPath: /config-tpl
         readOnly: true
@@ -185,8 +182,6 @@ probes:
 extraVolumeMounts:
   - name: openclaw-config-rw
     mountPath: /config-rw
-  - name: pvc-state
-    mountPath: /home/node/.openclaw
   - name: npm-cache
     mountPath: /npm-cache
   - name: pvc-whisper
@@ -194,10 +189,10 @@ extraVolumeMounts:
   - name: openclaw-scripts
     mountPath: /scripts
     readOnly: true
-# PVC for openclaw state (Telegram pairing, agent data)
+# PVC for openclaw state (Removed - using PostgreSQL)
 persistence:
   state:
-    size: 1Gi
+    enabled: false
 extraVolumes:
   - name: openclaw-config-tpl
     configMap:
@@ -224,6 +219,16 @@ externalSecret:
       remoteKey: secret/data/teams/mashkoffdmitry/openclaw
       property: auth-profiles.json
 extraExternalSecrets:
+  openclaw-db-creds:
+    refreshInterval: 1h
+    targetSecret: openclaw-db-creds
+    data:
+      - secretKey: username
+        remoteKey: secret/data/teams/mashkoffdmitry/openclaw/database
+        property: username
+      - secretKey: password
+        remoteKey: secret/data/teams/mashkoffdmitry/openclaw/database
+        property: password
   openclaw-telegram-secret:
     refreshInterval: 1h
     targetSecret: openclaw-telegram-secret
@@ -242,13 +247,9 @@ configMaps:
   openclaw-scripts:
     mcp-agent-proxy.js: |-
       #!/usr/bin/env node
-      // stdio bridge — proxies MCP JSON-RPC to mctl-agent HTTP endpoint
-      // mctl-agent speaks plain JSON-RPC 2.0 POST; OpenClaw expects stdio subprocess.
       const http = require('http');
-
       process.stdin.setEncoding('utf8');
       let buf = '';
-
       process.stdin.on('data', chunk => {
         buf += chunk;
         let nl;
@@ -258,143 +259,50 @@ configMaps:
           if (line) handleLine(line);
         }
       });
-
       function handleLine(line) {
         let req;
-        try {
-          req = JSON.parse(line);
-        } catch (_) {
-          write({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'parse error' } });
-          return;
-        }
-        callAgent(req).then(
-          res => write(res),
-          err => write({ jsonrpc: '2.0', id: req.id != null ? req.id : null, error: { code: -32603, message: String(err) } })
-        );
+        try { req = JSON.parse(line); } catch (_) { return; }
+        callAgent(req).then(res => write(res), err => write({ jsonrpc: '2.0', id: req.id, error: { code: -32603, message: String(err) } }));
       }
-
-      function write(obj) {
-        process.stdout.write(JSON.stringify(obj) + '\n');
-      }
-
+      function write(obj) { process.stdout.write(JSON.stringify(obj) + '\n'); }
       function callAgent(body) {
         return new Promise((resolve, reject) => {
           const data = JSON.stringify(body);
-          const req = http.request(
-            {
-              hostname: 'mctl-agent.admins.svc.cluster.local',
-              port: 8080,
-              path: '/mcp',
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Content-Length': Buffer.byteLength(data),
-              },
-            },
-            res => {
-              let out = '';
-              res.on('data', c => { out += c; });
-              res.on('end', () => {
-                try {
-                  resolve(JSON.parse(out));
-                } catch (_) {
-                  reject(new Error('invalid JSON from agent: ' + out.slice(0, 80)));
-                }
-              });
-            }
-          );
-          req.on('error', reject);
-          req.write(data);
-          req.end();
+          const req = http.request({ hostname: 'mctl-agent.admins.svc.cluster.local', port: 8080, path: '/mcp', method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } }, res => {
+            let out = ''; res.on('data', c => { out += c; }); res.on('end', () => { try { resolve(JSON.parse(out)); } catch (_) { reject(new Error('invalid JSON')); } });
+          });
+          req.on('error', reject); req.write(data); req.end();
         });
       }
   openclaw-config:
     openclaw.json: |-
       {
-        "agents": {
-          "defaults": {
-            "model": { "primary": "openai-codex/gpt-5.4" },
-            "models": { "openai-codex/gpt-5.4": {} }
-          }
-        },
-        "commands": {
-          "native": "auto",
-          "nativeSkills": "auto",
-          "restart": true,
-          "ownerDisplay": "raw"
-        },
-        "tools": {
-          "media": {
-            "audio": {
-              "enabled": true,
-              "echoTranscript": true,
-              "echoFormat": "📝 {transcript}",
-              "models": [
-                {
-                  "type": "cli",
-                  "command": "/whisper-storage/run-whisper.sh",
-                  "args": ["{{MediaPath}}"],
-                  "timeoutSeconds": 120
-                }
-              ]
-            }
-          }
+        "gateway": {
+          "port": 18789,
+          "bind": "lan",
+          "controlUi": {
+            "enabled": true,
+            "allowedOrigins": ["https://mashkoffdmitry-openclaw.mctl.ai"]
+          },
+          "auth": { "mode": "trusted-proxy", "trustedProxy": { "userHeader": "X-Forwarded-For" } },
+          "trustedProxies": ["10.42.0.0/16", "10.43.0.0/16", "172.16.0.0/12"]
         },
         "channels": {
           "telegram": {
             "enabled": true,
             "botToken": "__TELEGRAM_BOT_TOKEN__",
             "dmPolicy": "pairing",
-            "groupPolicy": "allowlist",
-            "accounts": {
-              "default": {
-                "enabled": true,
-                "dmPolicy": "pairing",
-                "groupPolicy": "allowlist",
-                "streaming": "partial"
-              }
-            },
-            "streaming": "partial"
+            "groupPolicy": "allowlist"
           }
         },
         "mcp": {
           "servers": {
             "mctl-platform": {
               "command": "node",
-              "args": [
-                "/npm-cache/node_modules/mcp-remote/dist/proxy.js",
-                "https://api.mctl.ai/mcp",
-                "--header",
-                "Authorization: Bearer __MCTL_API_TOKEN__"
-              ]
+              "args": ["/npm-cache/node_modules/mcp-remote/dist/proxy.js", "https://api.mctl.ai/mcp", "--header", "Authorization: Bearer __MCTL_API_TOKEN__"]
             },
-            "mctl-agent": {
-              "command": "node",
-              "args": ["/scripts/mcp-agent-proxy.js"]
-            }
+            "mctl-agent": { "command": "node", "args": ["/scripts/mcp-agent-proxy.js"] }
           }
-        },
-        "gateway": {
-          "port": 18789,
-          "bind": "lan",
-          "controlUi": {
-            "enabled": true,
-            "allowedOrigins": [
-              "https://mashkoffdmitry-openclaw.mctl.ai",
-              "https://mashkoffdmitry-openclaw.mctl.me"
-            ]
-          },
-          "auth": {
-            "mode": "trusted-proxy",
-            "trustedProxy": {
-              "userHeader": "X-Forwarded-For"
-            }
-          },
-          "trustedProxies": [
-            "10.42.0.0/16",
-            "10.43.0.0/16",
-            "172.16.0.0/12"
-          ]
         }
       }
 ingress:
