@@ -38,7 +38,7 @@ initContainers:
       - name: npm-cache
         mountPath: /npm-cache
   - name: install-whisper-cli
-    image: debian:12-slim
+    image: alpine:3.21
     command: ["sh", "-c"]
     args:
       - |
@@ -48,14 +48,32 @@ initContainers:
         MODEL=$WHISPER_DIR/ggml-base.bin
         WRAPPER=$WHISPER_DIR/run-whisper.sh
         mkdir -p $WHISPER_DIR
-        # Fast build/download
-        apt-get update -qq && apt-get install -y --no-install-recommends build-essential cmake git curl ca-certificates
-        curl -fsSL "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz" | tar -xJ --strip-components=1 -C $WHISPER_DIR --wildcards "*/ffmpeg"
-        git clone --depth 1 --branch v1.8.3 https://github.com/ggml-org/whisper.cpp.git /tmp/whispersrc
-        cmake -B /tmp/whispersrc/build -S /tmp/whispersrc -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON
-        cmake --build /tmp/whispersrc/build --target whisper-cli -j$(nproc)
-        cp /tmp/whispersrc/build/bin/whisper-cli $BIN
-        curl -fsSL "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin" -o $MODEL
+        
+        # 1. Download static ffmpeg
+        if [ ! -f $WHISPER_DIR/ffmpeg ]; then
+          echo "Downloading ffmpeg..."
+          wget -qO- "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz" | tar -xJ --strip-components=1 -C $WHISPER_DIR --wildcards "*/ffmpeg"
+        fi
+
+        # 2. Download pre-built whisper-cli (if available) or fast-build
+        # Since we don't have a stable binary link handy, let's use a very optimized build or a small container
+        # For now, let's try to download the GGML model first which is the biggest part
+        if [ ! -f $MODEL ]; then
+          echo "Downloading ggml-base.bin (~140MB)..."
+          wget -q "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin" -O $MODEL
+        fi
+
+        # 3. Fast build (minimized)
+        if [ ! -f $BIN ]; then
+          apk add --no-cache build-essential cmake git
+          git clone --depth 1 --branch v1.8.3 https://github.com/ggml-org/whisper.cpp.git /tmp/whispersrc
+          cmake -B /tmp/whispersrc/build -S /tmp/whispersrc -DCMAKE_BUILD_TYPE=Release -DWHISPER_BUILD_EXAMPLES=ON -DWHISPER_BUILD_TESTS=OFF
+          make -C /tmp/whispersrc/build whisper-cli -j$(nproc)
+          cp /tmp/whispersrc/build/bin/whisper-cli $BIN
+          rm -rf /tmp/whispersrc
+        fi
+
+        # 4. Create wrapper
         cat > $WRAPPER << 'WEOF'
         #!/bin/sh
         TMP_WAV=$(mktemp /tmp/whisper_XXXXXX.wav)
