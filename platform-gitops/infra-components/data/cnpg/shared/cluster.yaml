@@ -11,16 +11,17 @@ spec:
   # Enable automated backups to Cloudflare R2 (S3-compatible)
   backup:
     barmanObjectStore:
-      destinationPath: s3://loki/db-backups/shared-pg
-      endpointURL: http://minio.minio.svc.cluster.local:9000
+      destinationPath: s3://mctl-db-backups/shared-pg
+      endpointURL: https://d3be4ec8216e131c866f302f272550e3.r2.cloudflarestorage.com
       s3Credentials:
         accessKeyId:
-          name: minio-root-user
-          key: MINIO_ROOT_USER
+          name: r2-backup-creds
+          key: ACCESS_KEY_ID
         secretAccessKey:
-          name: minio-root-user
-          key: MINIO_ROOT_PASSWORD
-      region: "us-east-1"
+          name: r2-backup-creds
+          key: SECRET_ACCESS_KEY
+      # R2 specific settings for reliability
+      region: "auto"
       s3ForcePathStyle: true
     retentionPolicy: "30d"
 
