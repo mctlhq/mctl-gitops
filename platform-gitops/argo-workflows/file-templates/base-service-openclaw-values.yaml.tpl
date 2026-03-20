@@ -44,7 +44,7 @@ initContainers:
         mountPath: /npm-cache
   # 2. Build whisper-cli from source and download ggml-base model (skips if PVC already populated)
   - name: install-whisper-cli
-    image: alpine:3.21
+    image: debian:12-slim
     command: ["sh", "-c"]
     args:
       - |
@@ -58,6 +58,7 @@ initContainers:
         # 1. Download static ffmpeg
         if [ ! -f $WHISPER_DIR/ffmpeg ]; then
           echo "Downloading ffmpeg..."
+          apt-get update -qq && apt-get install -y --no-install-recommends wget xz-utils
           wget -qO- "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz" | tar -xJ --strip-components=1 -C $WHISPER_DIR --wildcards "*/ffmpeg"
         fi
 
@@ -69,7 +70,7 @@ initContainers:
 
         # 3. Fast build (minimized)
         if [ ! -f $BIN ]; then
-          apk add --no-cache build-essential cmake git
+          apt-get update -qq && apt-get install -y --no-install-recommends build-essential cmake git ca-certificates
           git clone --depth 1 --branch v1.8.3 https://github.com/ggml-org/whisper.cpp.git /tmp/whispersrc
           cmake -B /tmp/whispersrc/build -S /tmp/whispersrc -DCMAKE_BUILD_TYPE=Release -DWHISPER_BUILD_EXAMPLES=ON -DWHISPER_BUILD_TESTS=OFF
           make -C /tmp/whispersrc/build whisper-cli -j$(nproc)
