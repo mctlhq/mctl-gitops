@@ -257,16 +257,16 @@ spec:
 
           # Delete ArgoCD Application (if exists)
           if kubectl get app -n argocd "tenant-${TENANT}" > /dev/null 2>&1; then
-            kubectl delete app -n argocd "tenant-${TENANT}" --wait=false
-            echo "ArgoCD app tenant-${TENANT} deletion initiated."
+            echo "Deleting ArgoCD app tenant-${TENANT}..."
+            kubectl delete app -n argocd "tenant-${TENANT}"
           else
             echo "ArgoCD app tenant-${TENANT} not found, skipping."
           fi
 
           # Delete K8s namespace (if exists)
           if kubectl get ns "${TENANT}" > /dev/null 2>&1; then
-            kubectl delete ns "${TENANT}" --wait=false
-            echo "Namespace ${TENANT} deletion initiated."
+            echo "Deleting namespace ${TENANT}..."
+            kubectl delete ns "${TENANT}"
           else
             echo "Namespace ${TENANT} not found, skipping."
           fi
