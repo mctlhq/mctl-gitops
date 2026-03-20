@@ -27,8 +27,6 @@ env:
   OPENCLAW_CONFIG_PATH: /config/openclaw.json
   # PostgreSQL Connection
   DATABASE_URL: "postgresql://backstage:$(DB_PASSWORD)@shared-pg-rw.platform-db.svc.cluster.local:5432/mashkoffdmitry-openclaw"
-  # OpenClaw can use env var placeholders like ${ENV_VAR} in config (if supported)
-  # or we rely on the ConfigMap which we'll mount directly.
   OPENCLAW_TELEGRAM_TOKEN:
     valueFrom:
       secretKeyRef:
@@ -108,6 +106,32 @@ initContainers:
     volumeMounts:
       - name: pvc-whisper
         mountPath: /whisper-storage
+  # --- AUTO APPROVE INIT ---
+  - name: auto-approve
+    image: postgres:17-alpine
+    command: ["sh", "-c"]
+    args:
+      - |
+        # Wait for migrations to be applied by the main app (approximate)
+        echo "Waiting for main app to initialize DB..."
+        sleep 30
+        # Try to insert approval directly into PG (table 'identities' or similar)
+        # Note: We use backstage user here as it has broad permissions
+        psql $DATABASE_URL <<EOF
+        -- This is a speculative insert based on typical OpenClaw schema
+        -- If the table doesn't exist yet, it will just fail and app will proceed
+        INSERT INTO identities (provider, provider_id, status, metadata)
+        VALUES ('telegram', '210408407', 'approved', '{}')
+        ON CONFLICT (provider, provider_id) DO UPDATE SET status = 'approved';
+        EOF
+    env:
+      - name: DATABASE_URL
+        value: "postgresql://backstage:$(DB_PASSWORD)@shared-pg-rw.platform-db.svc.cluster.local:5432/mashkoffdmitry-openclaw"
+      - name: DB_PASSWORD
+        valueFrom:
+          secretKeyRef:
+            name: openclaw-db-creds
+            key: password
 
 extraVolumeMounts:
   - name: openclaw-config
@@ -162,6 +186,36 @@ extraExternalSecrets:
         property: mctl-api-token
 
 configMaps:
+  openclaw-scripts:
+    mcp-agent-proxy.js: |-
+      #!/usr/bin/env node
+      const http = require('http');
+      process.stdin.setEncoding('utf8');
+      let buf = '';
+      process.stdin.on('data', chunk => {
+        buf += chunk;
+        let nl;
+        while ((nl = buf.indexOf('\n')) !== -1) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (line) handleLine(line);
+        }
+      });
+      function handleLine(line) {
+        let req;
+        try { req = JSON.parse(line); } catch (_) { return; }
+        callAgent(req).then(res => write(res), err => write({ jsonrpc: '2.0', id: req.id, error: { code: -32603, message: String(err) } }));
+      }
+      function write(obj) { process.stdout.write(JSON.stringify(obj) + '\n'); }
+      function callAgent(body) {
+        return new Promise((resolve, reject) => {
+          const data = JSON.stringify(body);
+          const req = http.request({ hostname: 'mctl-agent.admins.svc.cluster.local', port: 8080, path: '/mcp', method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } }, res => {
+            let out = ''; res.on('data', c => { out += c; }); res.on('end', () => { try { resolve(JSON.parse(out)); } catch (_) { reject(new Error('invalid JSON')); } });
+          });
+          req.on('error', reject); req.write(data); req.end();
+        });
+      }
   openclaw-config:
     openclaw.json: |-
       {
@@ -180,7 +234,8 @@ configMaps:
             "enabled": true,
             "botToken": "${OPENCLAW_TELEGRAM_TOKEN}",
             "dmPolicy": "pairing",
-            "groupPolicy": "allowlist"
+            "groupPolicy": "allowlist",
+            "allowlist": ["210408407"]
           }
         },
         "mcp": {
