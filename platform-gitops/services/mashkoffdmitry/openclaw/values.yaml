@@ -44,7 +44,7 @@ initContainers:
         cpu: 200m
         memory: 512Mi
       limits:
-        cpu: "1"
+        cpu: "2"
         memory: 1.2Gi
     command: ["sh", "-c"]
     args:
