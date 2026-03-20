@@ -222,11 +222,11 @@ spec:
   data:
     - secretKey: accessKey
       remoteRef:
-        key: teams/platform/minio
+        key: platform/minio
         property: root-user
     - secretKey: secretKey
       remoteRef:
-        key: teams/platform/minio
+        key: platform/minio
         property: root-password
 ---
 {{- end }}

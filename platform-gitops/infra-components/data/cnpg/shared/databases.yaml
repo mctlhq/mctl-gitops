@@ -102,3 +102,15 @@ spec:
   cluster:
     name: shared-pg
   databaseReclaimPolicy: retain
+
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: mctl-agent-db
+spec:
+  name: "mctl-agent"
+  owner: "mctl-agent"
+  cluster:
+    name: shared-pg
+  databaseReclaimPolicy: retain
