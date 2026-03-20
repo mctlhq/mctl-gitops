@@ -1,0 +1,97 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: admins-mctl-agent
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/mctlhq/mctl-gitops.git
+    targetRevision: main
+    path: platform-gitops/helm-charts/base-service
+    helm:
+      values: |
+        image:
+          repository: ghcr.io/mctlhq/mctl-agent
+          tag: "1.2.2"
+        imagePullSecrets:
+          - name: ghcr-credentials
+        service:
+          port: 8080
+        podSecurityContext:
+          fsGroup: 1000
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+        env:
+          PORT: "8080"
+          MCTL_API_URL: "http://mctl-api.mctl-api.svc:8080"
+          GITHUB_OWNER: mctlhq
+          GITHUB_REPO: mctl-gitops
+          POLL_INTERVAL: "5m"
+          DRY_RUN: "false"
+          DB_PATH: "/data/mctl-agent.db"
+        envFrom:
+          - secretRef:
+              name: mctl-agent-secrets
+        externalSecret:
+          targetSecret: mctl-agent-secrets
+          data:
+            - secretKey: MCTL_API_TOKEN
+              remoteKey: platform/mctl-agent/tokens
+              property: mctl-api-token
+            - secretKey: ANTHROPIC_API_KEY
+              remoteKey: platform/mctl-agent/tokens
+              property: anthropic-api-key
+            - secretKey: GITHUB_TOKEN
+              remoteKey: platform/mctl-agent/tokens
+              property: github-token
+            - secretKey: TELEGRAM_BOT_TOKEN
+              remoteKey: platform/mctl-agent/tokens
+              property: telegram-bot-token
+            - secretKey: TELEGRAM_CHAT_ID
+              remoteKey: platform/mctl-agent/tokens
+              property: telegram-chat-id
+        ingress:
+          enabled: true
+          ingressClassName: traefik
+          annotations:
+            cert-manager.io/cluster-issuer: letsencrypt-prod
+          hosts:
+            - agent.mctl.ai
+          tls:
+            - secretName: mctl-agent-tls
+              hosts:
+                - agent.mctl.ai
+        probes:
+          liveness:
+            path: /healthz
+            port: http
+          readiness:
+            path: /readyz
+            port: http
+        strategy:
+          type: Recreate
+        persistence:
+          data:
+            size: 1Gi
+        extraVolumeMounts:
+          - name: pvc-data
+            mountPath: /data
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: admins
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true
