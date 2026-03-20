@@ -13,17 +13,17 @@ service:
   port: 18789
 resources:
   requests:
-    cpu: 500m
-    memory: 1.5Gi
+    cpu: 200m
+    memory: 768Mi
   limits:
-    cpu: "2"
-    memory: 3Gi
+    cpu: "1"
+    memory: 2Gi
 # Recreate strategy required: openclaw-state PVC is RWO
 strategy:
   type: Recreate
 env:
   APP_ENV: production
-  NODE_OPTIONS: "--max-old-space-size=2048"
+  NODE_OPTIONS: "--max-old-space-size=1024"
   OPENCLAW_CONFIG_PATH: /config-rw/openclaw.json
 initContainers:
   # 1. Pre-install mcp-remote so npx doesn't download it on every MCP call
@@ -46,7 +46,7 @@ initContainers:
         set -e
         WHISPER_DIR=/whisper-storage
         BIN=$WHISPER_DIR/whisper-cli
-        MODEL=$WHISPER_DIR/ggml-small.bin
+        MODEL=$WHISPER_DIR/ggml-base.bin
         WRAPPER=$WHISPER_DIR/run-whisper.sh
 
         # Skip heavy steps if binary + model already exist; always regenerate wrapper
@@ -85,10 +85,10 @@ initContainers:
           rm -rf /tmp/whispersrc
           echo "whisper-cli built: $(ls -lh $BIN)"
 
-          # Download ggml-small model (~466MB) — better accuracy for technical terms
-          echo "Downloading ggml-small.bin (~466MB)..."
+          # Download ggml-base model (~140MB) — fast and lightweight
+          echo "Downloading ggml-base.bin (~140MB)..."
           curl -fsSL \
-            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin" \
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin" \
             -o $MODEL
         fi
 
@@ -98,7 +98,7 @@ initContainers:
         TMP_WAV=$(mktemp /tmp/whisper_XXXXXX.wav)
         /whisper-storage/ffmpeg -i "$1" -ar 16000 -ac 1 -f wav "$TMP_WAV" -y 2>/dev/null
         /whisper-storage/whisper-cli \
-          -m /whisper-storage/ggml-small.bin \
+          -m /whisper-storage/ggml-base.bin \
           -f "$TMP_WAV" \
           --language auto \
           --no-timestamps \
