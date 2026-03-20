@@ -83,6 +83,9 @@ spec:
             port: http
         strategy:
           type: Recreate
+        persistence:
+          data:
+            enabled: false
 
   destination:
     server: https://kubernetes.default.svc
