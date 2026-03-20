@@ -20,9 +20,8 @@ spec:
         secretAccessKey:
           name: r2-backup-creds
           key: SECRET_ACCESS_KEY
-      # Skip verification to fix SSL handshake errors with R2
-      endpointCA:
-        name: "" 
+      # R2 requires path-style access
+      forcePathStyle: true
     retentionPolicy: "30d"
 
   affinity:
