@@ -217,22 +217,8 @@ spec:
           if [ -f "$DB_FILE" ]; then
             if grep -q "name: ${TENANT}-" "$DB_FILE"; then
               echo "Cleaning up Database CRDs for tenant ${TENANT}..."
-              # Use yq or sed to remove the blocks. Since it's a multi-doc YAML, sed is tricky.
-              # Better to use a python helper for safe YAML manipulation.
-              python3 - <<PYEOF
-import sys
-tenant = "${TENANT}"
-f_path = "${DB_FILE}"
-with open(f_path, 'r') as f:
-    docs = f.read().split('---\n')
-new_docs = []
-for doc in docs:
-    if not doc.strip(): continue
-    if f"name: {tenant}-" not in doc:
-        new_docs.append(doc)
-with open(f_path, 'w') as f:
-    f.write('---\n'.join(new_docs))
-PYEOF
+              # Remove 8 lines before and 8 lines after the tenant name block
+              sed -i "/name: ${TENANT}-/,+8d" "$DB_FILE"
               git add "$DB_FILE"
               CHANGED=true
             fi
@@ -243,20 +229,7 @@ PYEOF
           if [ -f "$SEC_FILE" ]; then
             if grep -q "name: ${TENANT}-" "$SEC_FILE"; then
               echo "Cleaning up ExternalSecrets for tenant ${TENANT}..."
-              python3 - <<PYEOF
-import sys
-tenant = "${TENANT}"
-f_path = "${SEC_FILE}"
-with open(f_path, 'r') as f:
-    docs = f.read().split('---\n')
-new_docs = []
-for doc in docs:
-    if not doc.strip(): continue
-    if f"name: {tenant}-" not in doc:
-        new_docs.append(doc)
-with open(f_path, 'w') as f:
-    f.write('---\n'.join(new_docs))
-PYEOF
+              sed -i "/name: ${TENANT}-/,+40d" "$SEC_FILE"
               git add "$SEC_FILE"
               CHANGED=true
             fi

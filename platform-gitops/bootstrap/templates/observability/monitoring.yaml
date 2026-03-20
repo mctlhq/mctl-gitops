@@ -30,7 +30,9 @@ spec:
                 resources:
                   requests:
                     storage: 10Gi
-              # VMAgent replaces Prometheus's scrape engine          vmagent:
+
+          # VMAgent replaces Prometheus's scrape engine
+          vmagent:
             enabled: true
             spec:
               selectAllByDefault: true
