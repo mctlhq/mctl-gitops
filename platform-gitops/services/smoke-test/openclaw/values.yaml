@@ -1,5 +1,5 @@
 # Service: openclaw
-# Team: mashkoffdmitry
+# Team: smoke-test
 # Template: openclaw
 
 # Chart: base-service
@@ -25,8 +25,8 @@ env:
   APP_ENV: production
   NODE_OPTIONS: "--max-old-space-size=1024"
   OPENCLAW_CONFIG_PATH: /config-rw/openclaw.json
-  # PostgreSQL Connection (using backstage user temporarily)
-  DATABASE_URL: "postgresql://backstage:$(DB_PASSWORD)@shared-pg-rw.platform-db.svc.cluster.local:5432/mashkoffdmitry-openclaw"
+  # PostgreSQL Connection
+  DATABASE_URL: "postgresql://backstage:$(DB_PASSWORD)@shared-pg-rw.platform-db.svc.cluster.local:5432/smoke-test-openclaw"
 
 initContainers:
   - name: install-mcp-remote
@@ -39,6 +39,13 @@ initContainers:
         mountPath: /npm-cache
   - name: install-whisper-cli
     image: debian:12-slim
+    resources:
+      requests:
+        cpu: "1"
+        memory: 1Gi
+      limits:
+        cpu: "2"
+        memory: 2Gi
     command: ["sh", "-c"]
     args:
       - |
@@ -48,14 +55,33 @@ initContainers:
         MODEL=$WHISPER_DIR/ggml-base.bin
         WRAPPER=$WHISPER_DIR/run-whisper.sh
         mkdir -p $WHISPER_DIR
-        # Fast build/download
-        apt-get update -qq && apt-get install -y --no-install-recommends build-essential cmake git curl ca-certificates
-        curl -fsSL "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz" | tar -xJ --strip-components=1 -C $WHISPER_DIR --wildcards "*/ffmpeg"
-        git clone --depth 1 --branch v1.8.3 https://github.com/ggml-org/whisper.cpp.git /tmp/whispersrc
-        cmake -B /tmp/whispersrc/build -S /tmp/whispersrc -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON
-        cmake --build /tmp/whispersrc/build --target whisper-cli -j$(nproc)
-        cp /tmp/whispersrc/build/bin/whisper-cli $BIN
-        curl -fsSL "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin" -o $MODEL
+        
+        # 1. Download static ffmpeg
+        if [ ! -f $WHISPER_DIR/ffmpeg ]; then
+          echo "Downloading ffmpeg..."
+          apt-get update -qq && apt-get install -y --no-install-recommends wget xz-utils ca-certificates
+          wget -q "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz" -O /tmp/ffmpeg.tar.xz
+          tar -xJf /tmp/ffmpeg.tar.xz -C $WHISPER_DIR --strip-components=1 --wildcards "*/ffmpeg"
+          rm /tmp/ffmpeg.tar.xz
+        fi
+
+        # 2. Download model
+        if [ ! -f $MODEL ]; then
+          echo "Downloading ggml-base.bin (~140MB)..."
+          wget -q "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin" -O $MODEL
+        fi
+
+        # 3. Fast build (minimized, limited to 2 cores for stability)
+        if [ ! -f $BIN ]; then
+          apt-get update -qq && apt-get install -y --no-install-recommends build-essential cmake git ca-certificates
+          git clone --depth 1 --branch v1.8.3 https://github.com/ggml-org/whisper.cpp.git /tmp/whispersrc
+          cmake -B /tmp/whispersrc/build -S /tmp/whispersrc -DCMAKE_BUILD_TYPE=Release -DWHISPER_BUILD_EXAMPLES=ON -DWHISPER_BUILD_TESTS=OFF
+          make -C /tmp/whispersrc/build whisper-cli -j2
+          cp /tmp/whispersrc/build/bin/whisper-cli $BIN
+          rm -rf /tmp/whispersrc
+        fi
+
+        # 4. Create wrapper
         cat > $WRAPPER << 'WEOF'
         #!/bin/sh
         TMP_WAV=$(mktemp /tmp/whisper_XXXXXX.wav)
@@ -75,10 +101,8 @@ initContainers:
     args:
       - |
         mkdir -p /state/agents/main/agent
-        if [ -f /secrets/auth-profiles.json ]; then cp /secrets/auth-profiles.json /state/agents/main/agent/auth-profiles.json; fi
         cp /config-tpl/openclaw.json /config-rw/openclaw.json
         if [ -n "$TELEGRAM_TOKEN" ]; then sed -i "s|__TELEGRAM_BOT_TOKEN__|$TELEGRAM_TOKEN|g" /config-rw/openclaw.json; fi
-        if [ -n "$MCTL_TOKEN" ]; then sed -i "s|__MCTL_API_TOKEN__|$MCTL_TOKEN|g" /config-rw/openclaw.json; fi
         chown -R 1000:1000 /state /config-rw
     env:
       - name: TELEGRAM_TOKEN
@@ -86,12 +110,6 @@ initContainers:
           secretKeyRef:
             name: openclaw-telegram-secret
             key: OPENCLAW_TELEGRAM_TOKEN
-      - name: MCTL_TOKEN
-        valueFrom:
-          secretKeyRef:
-            name: openclaw-mctl-token
-            key: MCTL_API_TOKEN
-            optional: true
       - name: DB_PASSWORD
         valueFrom:
           secretKeyRef:
@@ -101,6 +119,8 @@ initContainers:
       - name: openclaw-auth-secret
         mountPath: /secrets
         readOnly: true
+      - name: pvc-state
+        mountPath: /state
       - name: openclaw-config-tpl
         mountPath: /config-tpl
         readOnly: true
@@ -141,14 +161,6 @@ extraVolumes:
       name: openclaw-scripts
       defaultMode: 0755
 
-externalSecret:
-  targetSecret: openclaw-auth
-  refreshInterval: 30m
-  data:
-    - secretKey: auth-profiles.json
-      remoteKey: secret/data/teams/mashkoffdmitry/openclaw
-      property: auth-profiles.json
-
 extraExternalSecrets:
   openclaw-db-creds:
     refreshInterval: 1h
@@ -164,13 +176,6 @@ extraExternalSecrets:
       - secretKey: OPENCLAW_TELEGRAM_TOKEN
         remoteKey: secret/data/platform/alertmanager
         property: telegram-bot-token
-  openclaw-mctl-token:
-    refreshInterval: 1h
-    targetSecret: openclaw-mctl-token
-    data:
-      - secretKey: MCTL_API_TOKEN
-        remoteKey: secret/data/teams/mashkoffdmitry/openclaw
-        property: mctl-api-token
 
 configMaps:
   openclaw-scripts:
@@ -211,7 +216,7 @@ configMaps:
           "bind": "lan",
           "controlUi": {
             "enabled": true,
-            "allowedOrigins": ["https://mashkoffdmitry-openclaw.mctl.ai"]
+            "allowedOrigins": ["https://smoke-test-openclaw.mctl.ai"]
           },
           "auth": { "mode": "trusted-proxy", "trustedProxy": { "userHeader": "X-Forwarded-For" } },
           "trustedProxies": ["10.42.0.0/16", "10.43.0.0/16", "172.16.0.0/12"]
@@ -226,10 +231,6 @@ configMaps:
         },
         "mcp": {
           "servers": {
-            "mctl-platform": {
-              "command": "node",
-              "args": ["/npm-cache/node_modules/mcp-remote/dist/proxy.js", "https://api.mctl.ai/mcp", "--header", "Authorization: Bearer __MCTL_API_TOKEN__"]
-            },
             "mctl-agent": { "command": "node", "args": ["/scripts/mcp-agent-proxy.js"] }
           }
         }
@@ -237,12 +238,10 @@ configMaps:
 ingress:
   enabled: true
   hosts:
-    - mashkoffdmitry-openclaw.mctl.ai
-    - mashkoffdmitry-openclaw.mctl.me
+    - smoke-test-openclaw.mctl.ai
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
   tls:
     - secretName: openclaw-tls
       hosts:
-        - mashkoffdmitry-openclaw.mctl.ai
-        - mashkoffdmitry-openclaw.mctl.me
+        - smoke-test-openclaw.mctl.ai
