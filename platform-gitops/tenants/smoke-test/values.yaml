@@ -1,0 +1,7 @@
+tenant:
+  name: smoke-test
+  description: "Automated smoke test workspace"
+  quota:
+    cpu: "1"
+    memory: 1.5Gi
+    pods: "10"
