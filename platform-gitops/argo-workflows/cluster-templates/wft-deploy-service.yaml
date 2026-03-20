@@ -138,16 +138,10 @@ spec:
                 - name: secret_env_vars
                   value: "{{workflow.parameters.secret_env_vars}}"
 
-          # Step 2b: template-specific setup (e.g. create ConfigMap for openclaw)
-          - name: template-setup
-            dependencies: [validate]
-            when: "\"{{workflow.parameters.service_template}}\" != \"default\" && \"{{workflow.parameters.action}}\" == \"onboard\""
-            template: setup-service-template
-
           # Step 3: generate manifests + git commit
-          # Depends on validate (always) + build-image (optional) + write-secrets (optional) + template-setup (optional).
+          # Depends on validate (always) + build-image (optional) + write-secrets (optional).
           - name: commit
-            dependencies: [validate, build-image, write-secrets, template-setup]
+            dependencies: [validate, build-image, write-secrets]
             templateRef:
               name: tpl-git-commit
               clusterScope: true
@@ -245,90 +239,6 @@ spec:
         - name: deploy-key
           secret:
             secretName: mctl-gitops-deploy-key
-
-    # ────────────────────────────────────────────────────────────────────────
-    - name: setup-service-template
-      serviceAccountName: argo-workflow-sa
-      script:
-        image: bitnami/kubectl:latest
-        command: [bash]
-        source: |
-          set -euo pipefail
-
-          TEAM="{{workflow.parameters.team_name}}"
-          SERVICE="{{workflow.parameters.component_name}}"
-          TEMPLATE="{{workflow.parameters.service_template}}"
-
-          echo "🔧 Setting up template: ${TEMPLATE} for ${TEAM}/${SERVICE}"
-
-          case "$TEMPLATE" in
-            openclaw)
-              cat > /tmp/configmap.yaml <<EOF
-          apiVersion: v1
-          kind: ConfigMap
-          metadata:
-            name: ${SERVICE}-config
-            namespace: ${TEAM}
-            labels:
-              app: ${SERVICE}
-              managed-by: mctl
-              template: openclaw
-          data:
-            openclaw.json: |
-              {
-                "gateway": {
-                  "bind": "lan",
-                  "port": 18789,
-                  "auth": {
-                    "mode": "trusted-proxy",
-                    "trustedProxy": {
-                      "userHeader": "X-Forwarded-For"
-                    }
-                  },
-                  "trustedProxies": [
-                    "10.42.0.0/16",
-                    "10.43.0.0/16",
-                    "172.16.0.0/12"
-                  ],
-                  "controlUi": {
-                    "enabled": true,
-                    "allowedOrigins": [
-                      "https://${TEAM}-${SERVICE}.mctl.ai",
-                      "https://${TEAM}-${SERVICE}.mctl.me"
-                    ]
-                  }
-                },
-                "providers": {
-                  "openai-codex": {
-                    "type": "openai-codex",
-                    "apiKey": "${OPENAI_CODEX_TOKEN:-}",
-                    "baseUrl": "https://codex.openai.com/v1",
-                    "models": {
-                      "gpt-5.4": "gpt-5.4"
-                    }
-                  },
-                  "anthropic": { "enabled": false },
-                  "openai": { "enabled": false },
-                  "google": { "enabled": false }
-                },
-                "defaultModel": "openai-codex/gpt-5.4",
-                "auth": {
-                  "oauth": {
-                    "enabled": true,
-                    "providers": ["openai-codex"]
-                  }
-                }
-              }
-          EOF
-
-              kubectl apply -f /tmp/configmap.yaml
-              echo "✅ ConfigMap ${SERVICE}-config created in namespace ${TEAM}"
-              echo "🔗 Dashboard URL: https://${TEAM}-${SERVICE}.mctl.ai/"
-              ;;
-            *)
-              echo "⚠️ Unknown template: ${TEMPLATE}, skipping setup"
-              ;;
-          esac
 
     # ────────────────────────────────────────────────────────────────────────
     - name: trigger-github-build
