@@ -118,6 +118,13 @@ spec:
         ensure: present
         passwordSecret:
           name: argoworkflows-db-creds
+      - name: mctl-agent
+        login: true
+        inherit: true
+        connectionLimit: 20
+        ensure: present
+        passwordSecret:
+          name: mctl-agent-db-creds
       # Team app roles
       - name: tests-pdb-test-svc
         login: true

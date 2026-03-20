@@ -36,10 +36,12 @@ spec:
           GITHUB_REPO: mctl-gitops
           POLL_INTERVAL: "5m"
           DRY_RUN: "false"
-          DB_PATH: "/data/mctl-agent.db"
+          DATABASE_URL: "postgresql://$(DB_USER):$(DB_PASSWORD)@shared-pg-rw.platform-db.svc:5432/mctl-agent"
         envFrom:
           - secretRef:
               name: mctl-agent-secrets
+          - secretRef:
+              name: mctl-agent-db-creds
         externalSecret:
           targetSecret: mctl-agent-secrets
           data:
@@ -58,6 +60,9 @@ spec:
             - secretKey: TELEGRAM_CHAT_ID
               remoteKey: platform/mctl-agent/tokens
               property: telegram-chat-id
+        # Note: mctl-agent-db-creds ExternalSecret is managed in cnpg/shared/secrets.yaml
+        # and synced to 'admins' namespace via cluster-wide sync or manual patch.
+        # For now, we assume it exists in the namespace.
         ingress:
           enabled: true
           ingressClassName: traefik
@@ -78,12 +83,6 @@ spec:
             port: http
         strategy:
           type: Recreate
-        persistence:
-          data:
-            size: 1Gi
-        extraVolumeMounts:
-          - name: pvc-data
-            mountPath: /data
 
   destination:
     server: https://kubernetes.default.svc
