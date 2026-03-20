@@ -272,6 +272,22 @@ extraExternalSecrets:
       - secretKey: MCTL_API_TOKEN
         remoteKey: secret/data/teams/__TEAM_NAME__/__SERVICE_NAME__
         property: mctl-api-token
+  minio-cache-creds:
+    refreshInterval: 1h
+    targetSecret: minio-cache-creds
+    data:
+      - secretKey: access-key
+        remoteKey: secret/data/teams/__TEAM_NAME__/__SERVICE_NAME__
+        property: MINIO_ACCESS_KEY
+      - secretKey: secret-key
+        remoteKey: secret/data/teams/__TEAM_NAME__/__SERVICE_NAME__
+        property: MINIO_SECRET_KEY
+      - secretKey: endpoint
+        remoteKey: secret/data/teams/__TEAM_NAME__/__SERVICE_NAME__
+        property: MINIO_ENDPOINT
+      - secretKey: bucket
+        remoteKey: secret/data/teams/__TEAM_NAME__/__SERVICE_NAME__
+        property: MINIO_BUCKET
 
 configMaps:
   openclaw-scripts:
