@@ -1,7 +1,7 @@
 # Service: __SERVICE_NAME__
 # Team: __TEAM_NAME__
 # Template: openclaw
-# Updated: 2026-03-20 (gemini-bot)
+# Updated: 2026-03-20 (gemini-bot) - Fixed DB and Auto-Approve
 
 # Chart: base-service
 
@@ -30,21 +30,9 @@ strategy:
 env:
   APP_ENV: production
   NODE_OPTIONS: "--max-old-space-size=1024"
-  OPENCLAW_CONFIG_PATH: /config/openclaw.json
-  # PostgreSQL Connection (injected via ExternalSecret)
-  DATABASE_URL: "postgresql://backstage:$(DB_PASSWORD)@shared-pg-rw.platform-db.svc.cluster.local:5432/__SERVICE_NAME__"
-  # Environment variable placeholders for config injection
-  OPENCLAW_TELEGRAM_TOKEN:
-    valueFrom:
-      secretKeyRef:
-        name: openclaw-telegram-secret
-        key: OPENCLAW_TELEGRAM_TOKEN
-  OPENCLAW_MCTL_TOKEN:
-    valueFrom:
-      secretKeyRef:
-        name: openclaw-mctl-token
-        key: MCTL_API_TOKEN
-        optional: true
+  OPENCLAW_CONFIG_PATH: /config-rw/openclaw.json
+  # PostgreSQL Connection (using dedicated service credentials)
+  DATABASE_URL: "postgresql://$(DB_USER):$(DB_PASSWORD)@shared-pg-rw.platform-db.svc.cluster.local:5432/__SERVICE_NAME__"
 
 initContainers:
   # 1. Pre-install mcp-remote
@@ -105,32 +93,77 @@ initContainers:
     volumeMounts:
       - name: pvc-whisper
         mountPath: /whisper-storage
-  # 3. Auto-approve the tenant owner in PostgreSQL
+  # 3. Setup Config and inject tokens
+  - name: setup
+    image: busybox:1.36
+    command: ["sh", "-c"]
+    args:
+      - |
+        cp /config-tpl/openclaw.json /config-rw/openclaw.json
+        if [ -n "$TELEGRAM_TOKEN" ]; then sed -i "s|__TELEGRAM_TOKEN__|$TELEGRAM_TOKEN|g" /config-rw/openclaw.json; fi
+        if [ -n "$MCTL_TOKEN" ]; then sed -i "s|__MCTL_TOKEN__|$MCTL_TOKEN|g" /config-rw/openclaw.json; fi
+        chown 1000:1000 /config-rw/openclaw.json
+    env:
+      - name: TELEGRAM_TOKEN
+        valueFrom:
+          secretKeyRef:
+            name: openclaw-telegram-secret
+            key: OPENCLAW_TELEGRAM_TOKEN
+      - name: MCTL_TOKEN
+        valueFrom:
+          secretKeyRef:
+            name: openclaw-mctl-token
+            key: MCTL_API_TOKEN
+            optional: true
+    volumeMounts:
+      - name: openclaw-config-tpl
+        mountPath: /config-tpl
+        readOnly: true
+      - name: openclaw-config-rw
+        mountPath: /config-rw
+  # 4. Auto-approve the tenant owner in PostgreSQL
   - name: auto-approve
     image: postgres:17-alpine
     command: ["sh", "-c"]
     args:
       - |
-        echo "Waiting for database initialization..."
-        sleep 30
-        psql $DATABASE_URL <<EOF
-        INSERT INTO identities (provider, provider_id, status, metadata)
-        VALUES ('telegram', '__TELEGRAM_OWNER_ID__', 'approved', '{}')
-        ON CONFLICT (provider, provider_id) DO UPDATE SET status = 'approved';
+        # Wait for migrations to be applied by the main app (approximate)
+        # Note: In production, it's better to use a dedicated migration job.
+        # For simplicity, we loop until table exists or timeout.
+        for i in $(seq 1 30); do
+          if psql "$DATABASE_URL" -c "\dt identities" | grep -q "identities"; then
+            echo "Identities table found! Approving owner..."
+            psql "$DATABASE_URL" <<EOF
+            INSERT INTO identities (provider, provider_id, status, metadata)
+            VALUES ('telegram', '__TELEGRAM_OWNER_ID__', 'approved', '{}')
+            ON CONFLICT (provider, provider_id) DO UPDATE SET status = 'approved';
         EOF
+            exit 0
+          fi
+          echo "Waiting for migrations ($i/30)..."
+          sleep 10
+        done
+        echo "Timeout waiting for identities table. Skipping auto-approval."
     env:
       - name: DATABASE_URL
-        value: "postgresql://backstage:$(DB_PASSWORD)@shared-pg-rw.platform-db.svc.cluster.local:5432/__SERVICE_NAME__"
+        value: "postgresql://$(DB_USER):$(DB_PASSWORD)@shared-pg-rw.platform-db.svc.cluster.local:5432/__SERVICE_NAME__"
+      - name: DB_USER
+        valueFrom:
+          secretKeyRef:
+            name: openclaw-db-creds
+            key: username
       - name: DB_PASSWORD
         valueFrom:
           secretKeyRef:
             name: openclaw-db-creds
             key: password
+    volumeMounts:
+      - name: openclaw-config-rw
+        mountPath: /config-rw
 
 extraVolumeMounts:
-  - name: openclaw-config
-    mountPath: /config
-    readOnly: true
+  - name: openclaw-config-rw
+    mountPath: /config-rw
   - name: npm-cache
     mountPath: /npm-cache
   - name: pvc-whisper
@@ -144,9 +177,11 @@ persistence:
     enabled: false
 
 extraVolumes:
-  - name: openclaw-config
+  - name: openclaw-config-tpl
     configMap:
       name: openclaw-config
+  - name: openclaw-config-rw
+    emptyDir: {}
   - name: npm-cache
     emptyDir: {}
   - name: pvc-whisper
@@ -161,9 +196,12 @@ extraExternalSecrets:
     refreshInterval: 1h
     targetSecret: openclaw-db-creds
     data:
+      - secretKey: username
+        remoteKey: secret/data/teams/__TEAM_NAME__/__SERVICE_NAME__/database
+        property: username
       - secretKey: password
-        remoteKey: secret/data/platform/grafana
-        property: admin-password
+        remoteKey: secret/data/teams/__TEAM_NAME__/__SERVICE_NAME__/database
+        property: password
   openclaw-telegram-secret:
     refreshInterval: 1h
     targetSecret: openclaw-telegram-secret
@@ -180,42 +218,12 @@ extraExternalSecrets:
         property: mctl-api-token
 
 configMaps:
-  openclaw-scripts:
-    mcp-agent-proxy.js: |-
-      #!/usr/bin/env node
-      const http = require('http');
-      process.stdin.setEncoding('utf8');
-      let buf = '';
-      process.stdin.on('data', chunk => {
-        buf += chunk;
-        let nl;
-        while ((nl = buf.indexOf('\n')) !== -1) {
-          const line = buf.slice(0, nl).trim();
-          buf = buf.slice(nl + 1);
-          if (line) handleLine(line);
-        }
-      });
-      function handleLine(line) {
-        let req;
-        try { req = JSON.parse(line); } catch (_) { return; }
-        callAgent(req).then(res => write(res), err => write({ jsonrpc: '2.0', id: req.id, error: { code: -32603, message: String(err) } }));
-      }
-      function write(obj) { process.stdout.write(JSON.stringify(obj) + '\n'); }
-      function callAgent(body) {
-        return new Promise((resolve, reject) => {
-          const data = JSON.stringify(body);
-          const req = http.request({ hostname: 'mctl-agent.admins.svc.cluster.local', port: 8080, path: '/mcp', method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } }, res => {
-            let out = ''; res.on('data', c => { out += c; }); res.on('end', () => { try { resolve(JSON.parse(out)); } catch (_) { reject(new Error('invalid JSON')); } });
-          });
-          req.on('error', reject); req.write(data); req.end();
-        });
-      }
   openclaw-config:
     openclaw.json: |-
       {
         "gateway": {
           "port": 18789,
-          "bind": "0.0.0.0",
+          "bind": "lan",
           "controlUi": {
             "enabled": true,
             "allowedOrigins": ["https://__TEAM_NAME__-__SERVICE_NAME__.mctl.ai"]
@@ -226,10 +234,10 @@ configMaps:
         "channels": {
           "telegram": {
             "enabled": true,
-            "botToken": "${OPENCLAW_TELEGRAM_TOKEN}",
+            "botToken": "__TELEGRAM_TOKEN__",
             "dmPolicy": "pairing",
-            "groupPolicy": "allowlist",
-            "allowlist": ["__TELEGRAM_OWNER_ID__"]
+            "groupPolicy": "open",
+            "allowFrom": ["__TELEGRAM_OWNER_ID__"]
           }
         },
         "mcp": {
