@@ -90,3 +90,15 @@ spec:
   cluster:
     name: shared-pg
   databaseReclaimPolicy: retain
+
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: smoke-test-openclaw-db
+spec:
+  name: "smoke-test-openclaw"
+  owner: "smoke-test-openclaw"
+  cluster:
+    name: shared-pg
+  databaseReclaimPolicy: retain
