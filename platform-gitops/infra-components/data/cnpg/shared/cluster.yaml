@@ -135,8 +135,8 @@ spec:
         login: true
         connectionLimit: 10
         ensure: present
-        passwordSecret:
-          name: mashkoffdmitry-openclaw-db-creds
+        # passwordSecret:
+        #   name: mashkoffdmitry-openclaw-db-creds
       # - name: team1_app1
       #   login: true
       #   connectionLimit: 10
