@@ -1,4 +1,5 @@
 {{- range $name, $spec := .Values.persistence }}
+{{- if (ne $spec.enabled false) }}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -17,4 +18,5 @@ spec:
   {{- with $spec.storageClassName }}
   storageClassName: {{ . }}
   {{- end }}
+{{- end }}
 {{- end }}
