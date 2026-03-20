@@ -1,6 +1,15 @@
-# GitOps Services
+# GitOps Platform & Services
 
-Kubernetes service manifests managed by ArgoCD.
+Source of truth for the mctl.ai Kubernetes platform.
+
+## Directory Structure
+
+*   📁 **`bootstrap/`**: ArgoCD ApplicationSets that provision the platform.
+*   📁 **`argo-workflows/`**: Automation logic (ClusterWorkflowTemplates).
+*   📁 **`backstage/`**: Developer portal configuration and templates.
+*   📁 **`infra-components/`**: Foundational services (Databases, Monitoring, Dashboards).
+*   📁 **`services/`**: User-facing microservices (organized by team).
+*   📁 **`tenants/`**: Team workspace configurations (quotas, RBAC).
 
 ## Service Deletion
 
@@ -24,8 +33,7 @@ Kubernetes service manifests managed by ArgoCD.
 #### Option 1: GitHub UI (Easiest)
 
 1. Navigate to service folder:
-   - **Services:** [`platform-gitops/services/preview/{team}/{service}/`](https://github.com/mctlhq/mctl-gitops/tree/main/platform-gitops/services/preview)
-   - **Workers:** [`platform-gitops/workers/preview/{team}/{service}/`](https://github.com/mctlhq/mctl-gitops/tree/main/platform-gitops/workers/preview)
+   - **Services:** [`platform-gitops/services/{team}/{service}/`](https://github.com/mctlhq/mctl-gitops/tree/main/platform-gitops/services)
 
 2. Click **"..."** → **"Delete directory"**
 
@@ -37,7 +45,7 @@ Kubernetes service manifests managed by ArgoCD.
 
 ```bash
 # Delete service directory
-git rm -r platform-gitops/workers/preview/{team}/{service}
+git rm -r platform-gitops/services/{team}/{service}
 
 # Commit
 git commit -m "delete: {team}/{service}"
@@ -48,19 +56,14 @@ git push origin main
 
 #### Option 3: Delete Workflow
 
-```bash
-# Manual trigger via GitHub Actions
-gh workflow run delete-service.yml \
-  -f team_name={team} \
-  -f service_name={service}
-```
+Use the **"Retire Service"** template in Backstage or trigger manually via GitHub Actions.
 
 ### What Happens Automatically
 
 ```
 1. Git: Files deleted from main branch
    ↓
-2. ArgoCD: Detects deletion (within 3 min)
+2. ArgoCD: Detects deletion (within 60s)
    ↓
 3. PreDelete Hook: vault-cleanup Job runs
    ↓
@@ -70,31 +73,5 @@ gh workflow run delete-service.yml \
    ↓
 6. Kubernetes: All resources removed
    ↓
-7. Backstage: Entity removed (after 5 min refresh)
-```
-
-### Undo Deletion
-
-```bash
-# Restore from Git history
-git revert <commit-hash>
-git push origin main
-```
-
-### Troubleshooting
-
-**Service still in Backstage after deletion?**
-- Wait 5 minutes for catalog refresh
-- Or manually unregister entity
-
-**Vault secrets not deleted?**
-```bash
-# Check PreDelete hook logs
-kubectl logs -n {team} job/vault-cleanup-{service}
-```
-
-**Need to verify Vault cleanup?**
-```bash
-# Check if secrets still exist
-vault kv list secret/teams/{team}/
+7. Backstage: Entity removed (after refresh)
 ```
