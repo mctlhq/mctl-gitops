@@ -8,18 +8,19 @@ spec:
   # CNPG operator defaults (explicitly set to prevent ArgoCD OutOfSync)
   imageName: ghcr.io/cloudnative-pg/postgresql:17.2
   
-  # Enable automated backups to Cloudflare R2 (S3-compatible)
+  # Enable automated backups to internal MinIO
   backup:
     barmanObjectStore:
-      destinationPath: s3://mctl-db-backups/shared-pg
-      endpointURL: https://d3be4ec8216e131c866f302f272550e3.r2.cloudflarestorage.com
+      destinationPath: s3://postgres-backups/shared-pg
+      endpointURL: http://minio.minio.svc.cluster.local:9000
       s3Credentials:
         accessKeyId:
-          name: r2-backup-creds
-          key: ACCESS_KEY_ID
+          name: minio-root-user
+          key: MINIO_ROOT_USER
         secretAccessKey:
-          name: r2-backup-creds
-          key: SECRET_ACCESS_KEY
+          name: minio-root-user
+          key: MINIO_ROOT_PASSWORD
+      s3ForcePathStyle: true
     retentionPolicy: "30d"
 
   affinity:
