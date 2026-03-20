@@ -1,4 +1,5 @@
 name: Retire Service
+run-name: "retire: ${{ inputs.team_name }}/${{ inputs.component_name }}"
 
 on:
   workflow_dispatch:
