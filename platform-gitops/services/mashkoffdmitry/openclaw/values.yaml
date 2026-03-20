@@ -348,3 +348,18 @@ ingress:
       hosts:
         - mashkoffdmitry-openclaw.mctl.ai
         - mashkoffdmitry-openclaw.mctl.me
+externalSecret:
+  targetSecret: openclaw-secrets
+  data:
+    - secretKey: MINIO_ACCESS_KEY
+      remoteKey: teams/mashkoffdmitry/openclaw
+      property: MINIO_ACCESS_KEY
+    - secretKey: MINIO_SECRET_KEY
+      remoteKey: teams/mashkoffdmitry/openclaw
+      property: MINIO_SECRET_KEY
+    - secretKey: MINIO_ENDPOINT
+      remoteKey: teams/mashkoffdmitry/openclaw
+      property: MINIO_ENDPOINT
+    - secretKey: MINIO_BUCKET
+      remoteKey: teams/mashkoffdmitry/openclaw
+      property: MINIO_BUCKET
