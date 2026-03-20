@@ -67,7 +67,7 @@ spec:
         quotaMemoryReq:
           title: Memory Requests (total)
           type: string
-          default: "2Gi"
+          default: "1.5Gi"
           description: "Sum of memory requests (e.g. 1Gi, 2Gi)."
         quotaMemoryLim:
           title: Memory Limits (total)
