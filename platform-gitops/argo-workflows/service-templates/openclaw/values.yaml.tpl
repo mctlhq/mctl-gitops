@@ -192,9 +192,11 @@ extraVolumes:
   - name: openclaw-config-rw
     emptyDir: {}
   - name: npm-cache
-    emptyDir: {}
+    persistentVolumeClaim:
+      claimName: __SERVICE_NAME__-npm-cache
   - name: pvc-whisper
-    emptyDir: {}
+    persistentVolumeClaim:
+      claimName: __SERVICE_NAME__-whisper
   - name: openclaw-scripts
     configMap:
       name: openclaw-scripts
