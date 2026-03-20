@@ -100,6 +100,11 @@ argo-cd:
           redirectURIs:
             - https://api.mctl.ai/oauth2/callback
           secret: "$mctl-api-sso-client-secret"
+        - id: grafana
+          name: Grafana
+          redirectURIs:
+            - https://grafana.mctl.ai/login/generic_oauth
+          secret: "$mctl-api-sso-client-secret"
 
     params:
       server.insecure: true

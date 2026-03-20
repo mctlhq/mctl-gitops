@@ -65,6 +65,25 @@ spec:
               existingSecret: grafana-admin-secret
               userKey: admin-user
               passwordKey: admin-password
+            envValueFrom:
+              GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET:
+                secretKeyRef:
+                  name: grafana-admin-secret
+                  key: oidc-client-secret
+            grafana.ini:
+              server:
+                root_url: https://grafana.mctl.ai
+              auth.generic_oauth:
+                enabled: true
+                name: mctl.ai
+                allow_sign_up: true
+                client_id: grafana
+                client_secret: "" # Provided via env var
+                scopes: openid profile email groups
+                auth_url: https://ops.mctl.ai/api/dex/auth
+                token_url: http://argocd-dex-server.argocd.svc.cluster.local:5556/api/dex/token
+                api_url: http://argocd-dex-server.argocd.svc.cluster.local:5556/api/dex/userinfo
+                role_attribute_path: "contains(groups, 'admins') && 'Admin' || 'Viewer'"
             ingress:
               enabled: true
               ingressClassName: traefik
