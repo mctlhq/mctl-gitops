@@ -1,0 +1,18 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: mctl-api
+  namespace: monitoring
+  labels:
+    release: monitoring  # Match VictoriaMetrics / Prometheus Operator selector
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mctl-api
+  namespaceSelector:
+    matchNames:
+      - mctl-api
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
