@@ -16,8 +16,8 @@ Developer / mctl CLI / GitHub Actions
    │                                │
    │  services/{team}/{app}/        │   ◄── per-service Helm values
    │  tenants/{team}/               │   ◄── per-tenant config
-   │  platform-gitops/apps/         │   ◄── ArgoCD App-of-Apps
-   │  argo-workflows/               │   ◄── ClusterWorkflowTemplates
+   │  platform-gitops/bootstrap/    │   ◄── ArgoCD App-of-Apps
+   │  platform-gitops/argo-workflows/│   ◄── ClusterWorkflowTemplates
    │  infrastructure/               │   ◄── Terraform (Hetzner k3s)
    │                                │
    └────────────┬───────────────────┘
@@ -39,10 +39,10 @@ Developer / mctl CLI / GitHub Actions
 **App-of-Apps pattern:**
 
 ```
-ArgoCD root app "apps"
-  ├── ApplicationSet: platform apps (mctl-api, mctl-web, monitoring, backstage, vault, argocd, …)
-  ├── ApplicationSet: tenant apps  (dynamic — from tenants/{team}/values.yaml)
-  └── ApplicationSet: production services
+ArgoCD root app "root-app"
+  ├── ApplicationSet: bootstrap (mctl-api, mctl-portal, monitoring, backstage, vault, argocd, …)
+  ├── ApplicationSet: tenants   (dynamic — from tenants/{team}/values.yaml)
+  └── ApplicationSet: apps      (user services from services/{team}/{app}/values.yaml)
 ```
 
 All applications are configured with `automated: { prune: true, selfHeal: true }` and a 60-second reconciliation interval.
@@ -53,15 +53,15 @@ All applications are configured with `automated: { prune: true, selfHeal: true }
 |---|---|
 | GitOps | ArgoCD, ApplicationSets, App-of-Apps pattern |
 | Orchestration | Argo Workflows (ClusterWorkflowTemplates) |
-| Charts | Helm 3 (base-service, worker-service, tenant) |
+| Charts | Helm 3 (base-service, tenant) |
 | CLI | Go 1.21+, Cobra |
 | Infrastructure | Terraform, Hetzner Cloud, k3s |
 | Secrets | HashiCorp Vault, ExternalSecrets Operator |
 | Database | CloudNativePG (PostgreSQL) |
-| Monitoring | Prometheus, Grafana, Loki |
+| Monitoring | VictoriaMetrics, Grafana, Loki |
 | Ingress/TLS | Traefik, Cert-Manager, Reflector |
-| Storage | MinIO (S3-compatible), Cloudflare R2 (Terraform state) |
-| CI/CD | GitHub Actions (6 workflows) |
+| Storage | MinIO (S3-compatible) |
+| CI/CD | GitHub Actions |
 | Catalog | Backstage (software templates + service catalog) |
 
 ## Project Structure
@@ -75,22 +75,25 @@ mctl-gitops/
 │   ├── k3s-preview/                   # Terraform — preview cluster (Hetzner)
 │   └── k3s-prod/                      # Terraform — production cluster
 ├── platform-gitops/
-│   ├── apps/                          # ArgoCD App-of-Apps (28 templates)
-│   │   └── templates/                 #   mctl-api, mctl-web, backstage, monitoring, vault, …
-│   ├── argo-workflows/                # ClusterWorkflowTemplates + platform config
-│   │   └── mctl-platform-config.yaml  #   source of truth for platform-wide variables
-│   ├── argocd/                        # ArgoCD Helm values (RBAC, Dex SSO)
-│   ├── backstage-templates/           # Backstage software templates
-│   ├── cnpg-clusters/                 # CloudNativePG PostgreSQL cluster definitions
-│   ├── grafana/                       # Grafana dashboards
+│   ├── bootstrap/                     # ArgoCD App-of-Apps (Root ApplicationSet)
+│   │   └── templates/                 #   Platform service definitions (API, Portal, Monitoring)
+│   ├── argo-workflows/                # Automation logic
+│   │   ├── cluster-templates/         #   ClusterWorkflowTemplates (deploy, retire, etc.)
+│   │   ├── file-templates/            #   .tpl files for manifest generation
+│   │   └── config/                    #   Platform-wide variables and system RBAC
+│   ├── argocd/                        # ArgoCD Helm values (SSO, Projects)
+│   ├── backstage/                     # Developer Portal configuration
+│   │   ├── templates/                 #   Backstage Scaffolder templates
+│   │   └── mcp/                       #   AI Agent instructions (SKILL.md)
+│   ├── infra-components/              # Foundation services
+│   │   ├── data/                      #   PostgreSQL (CNPG), MinIO
+│   │   └── observability/             #   Grafana dashboards, VictoriaMetrics
 │   ├── helm-charts/
-│   │   ├── base-service/              #   HTTP services with Ingress + TLS
-│   │   ├── worker-service/            #   background workers (no Ingress)
-│   │   └── tenant/                    #   team workspace (namespace + RBAC + quotas)
-│   ├── minio/                         # MinIO object storage config
-│   ├── services/{team}/{service}/     # Per-service Helm values
-│   └── tenants/{team}/                # Per-tenant configuration
-├── .github/workflows/                 # 6 GitHub Actions workflows
+│   │   ├── base-service/              #   Universal chart for all microservices
+│   │   └── tenant/                    #   Team workspace chart (namespace + RBAC + quotas)
+│   ├── services/{team}/{service}/     # Per-service deployment values
+│   └── tenants/{team}/                # Per-tenant configuration (quotas + SSO)
+├── .github/workflows/                 # CI/CD pipelines
 ├── Makefile                           # CLI build commands
 └── FORK.md                            # Self-hosting instructions
 ```
