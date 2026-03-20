@@ -8,10 +8,10 @@ tenant:
     - userId: mashkovd
       role: owner
   quotas:
-    requests.cpu: "4"
-    requests.memory: "8Gi"
-    limits.cpu: "8"
-    limits.memory: "16Gi"
+    requests.cpu: "2"
+    requests.memory: "3Gi"
+    limits.cpu: "4"
+    limits.memory: "6Gi"
     pods: "20"
     persistentvolumeclaims: "5"
     services: "10"
