@@ -29,8 +29,7 @@ spec:
                 accessModes: ["ReadWriteOnce"]
                 resources:
                   requests:
-                    storage: 5Gi
-
+                    storage: 10Gi
               # VMAgent replaces Prometheus's scrape engine          vmagent:
             enabled: true
             spec:
