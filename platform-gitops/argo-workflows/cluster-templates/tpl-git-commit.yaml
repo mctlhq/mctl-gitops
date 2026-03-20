@@ -147,17 +147,18 @@ spec:
           if [ "$ACTION" = "onboard" ]; then
             mkdir -p "$DIR"
 
-            # values.yaml from template
+            # values.yaml from template catalog
             if [ "$TYPE" = "base-service" ]; then
-              # Check for service-specific template (e.g. openclaw)
-              if [ "$SERVICE_TEMPLATE" != "default" ] && [ -f "platform-gitops/argo-workflows/file-templates/base-service-${SERVICE_TEMPLATE}-values.yaml.tpl" ]; then
-                TPL="platform-gitops/argo-workflows/file-templates/base-service-${SERVICE_TEMPLATE}-values.yaml.tpl"
-                echo "📋 Using service template: ${SERVICE_TEMPLATE}"
+              TMPL_DIR="platform-gitops/argo-workflows/service-templates/${SERVICE_TEMPLATE}"
+              if [ -d "$TMPL_DIR" ]; then
+                TPL="${TMPL_DIR}/values.yaml.tpl"
+                echo "Using service template: ${SERVICE_TEMPLATE}"
               else
-                TPL="platform-gitops/argo-workflows/file-templates/base-service-values.yaml.tpl"
+                echo "Template '${SERVICE_TEMPLATE}' not found, falling back to default"
+                TPL="platform-gitops/argo-workflows/service-templates/default/values.yaml.tpl"
               fi
             else
-              TPL="platform-gitops/argo-workflows/file-templates/worker-service-values.yaml.tpl"
+              TPL="platform-gitops/argo-workflows/service-templates/worker/values.yaml.tpl"
             fi
 
             sed \
