@@ -226,15 +226,13 @@ configMaps:
           "auth": { "mode": "trusted-proxy", "trustedProxy": { "userHeader": "X-Forwarded-For" } },
           "trustedProxies": ["10.42.0.0/16", "10.43.0.0/16", "172.16.0.0/12"]
         },
-        "agents": {
-          "providers": {
-            "openai": {
-              "type": "openai",
-              "apiKey": "__OPENAI_API_KEY__"
-            }
-          },
-          "defaultModel": "openai/gpt-4o"
+        "providers": {
+          "openai": {
+            "type": "openai",
+            "apiKey": "__OPENAI_API_KEY__"
+          }
         },
+        "defaultModel": "openai/gpt-4o",
         "channels": {
           "telegram": {
             "enabled": true,
