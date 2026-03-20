@@ -73,6 +73,10 @@ spec:
             grafana.ini:
               server:
                 root_url: https://grafana.mctl.ai
+              auth:
+                disable_login_form: true
+              auth.basic:
+                enabled: false
               auth.generic_oauth:
                 enabled: true
                 name: mctl.ai
@@ -80,8 +84,8 @@ spec:
                 client_id: grafana
                 scopes: openid profile email groups
                 auth_url: https://ops.mctl.ai/api/dex/auth
-                token_url: http://argocd-dex-server.argocd.svc.cluster.local:5556/api/dex/token
-                api_url: http://argocd-dex-server.argocd.svc.cluster.local:5556/api/dex/userinfo
+                token_url: https://ops.mctl.ai/api/dex/token
+                api_url: https://ops.mctl.ai/api/dex/userinfo
                 role_attribute_path: "contains(groups, 'admins') && 'Admin' || 'Viewer'"
             ingress:
               enabled: true
