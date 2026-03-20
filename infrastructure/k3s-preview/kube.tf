@@ -91,14 +91,6 @@ module "kube-hetzner" {
       taints               = [],
       count                = 3
     },
-    {
-      name                 = "worker-cx43-fsn1",
-      server_type          = "cx43",
-      location             = "fsn1",
-      labels               = [],
-      taints               = [],
-      count                = 3
-    },
   ]
 
   # --- Load Balancer ---
