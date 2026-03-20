@@ -1,4 +1,5 @@
 name: Provision Database
+run-name: "db: ${{ inputs.team }}/${{ inputs.app }}"
 
 on:
   workflow_dispatch:
@@ -40,7 +41,7 @@ jobs:
           DB_NAME="${TEAM}-${APP}"
           echo "DB_NAME=${DB_NAME}" >> $GITHUB_ENV
 
-          if grep -q "name: ${DB_NAME}-db" platform-gitops/cnpg-clusters/shared/databases.yaml 2>/dev/null; then
+          if grep -q "name: ${DB_NAME}-db" platform-gitops/infra-components/data/cnpg/shared/databases.yaml 2>/dev/null; then
             echo "ℹ️  Database '${DB_NAME}' already exists — skipping provisioning"
             echo "DB_EXISTS=true" >> $GITHUB_ENV
           else
@@ -94,7 +95,7 @@ jobs:
         if: env.DB_EXISTS != 'true'
         run: |
           DB_NAME="${{ env.DB_NAME }}"
-          CLUSTER_FILE="platform-gitops/cnpg-clusters/shared/cluster.yaml"
+          CLUSTER_FILE="platform-gitops/infra-components/data/cnpg/shared/cluster.yaml"
 
           # Insert pg_hba entry before the catch-all reject rule
           awk -v db="${DB_NAME}" '
@@ -125,7 +126,7 @@ jobs:
           TEAM="${{ inputs.team }}"
           APP="${{ inputs.app }}"
           DB_NAME="${{ env.DB_NAME }}"
-          DB_FILE="platform-gitops/cnpg-clusters/shared/databases.yaml"
+          DB_FILE="platform-gitops/infra-components/data/cnpg/shared/databases.yaml"
 
           printf '%s\n' \
             '---' \
@@ -148,7 +149,7 @@ jobs:
           TEAM="${{ inputs.team }}"
           APP="${{ inputs.app }}"
           DB_NAME="${{ env.DB_NAME }}"
-          SECRET_FILE="platform-gitops/cnpg-clusters/shared/secrets.yaml"
+          SECRET_FILE="platform-gitops/infra-components/data/cnpg/shared/secrets.yaml"
           VAULT_PATH="platform/teams/${TEAM}/${APP}/database"
 
           {
@@ -241,9 +242,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git add platform-gitops/cnpg-clusters/shared/cluster.yaml \
-                  platform-gitops/cnpg-clusters/shared/databases.yaml \
-                  platform-gitops/cnpg-clusters/shared/secrets.yaml
+          git add platform-gitops/infra-components/data/cnpg/shared/cluster.yaml \
+                  platform-gitops/infra-components/data/cnpg/shared/databases.yaml \
+                  platform-gitops/infra-components/data/cnpg/shared/secrets.yaml
           # Optional: catalog-info.yaml (may not exist if service not yet deployed)
           git add platform-gitops/services/${TEAM}/${APP}/catalog-info.yaml \
                   platform-gitops/workers/${TEAM}/${APP}/catalog-info.yaml \
