@@ -399,31 +399,31 @@ spec:
               locations:
                 # Backstage templates (static, no need for provider-based discovery)
                 - type: url
-                  target: https://github.com/mctlhq/mctl-gitops/blob/main/platform-gitops/backstage-templates/deploy-component/template.yaml
+                  target: https://github.com/mctlhq/mctl-gitops/blob/main/platform-gitops/backstage/templates/deploy-component/template.yaml
                   rules:
                     - allow: [Template]
                 - type: url
-                  target: https://github.com/mctlhq/mctl-gitops/blob/main/platform-gitops/backstage-templates/delete-component/template.yaml
+                  target: https://github.com/mctlhq/mctl-gitops/blob/main/platform-gitops/backstage/templates/delete-component/template.yaml
                   rules:
                     - allow: [Template]
                 - type: url
-                  target: https://github.com/mctlhq/mctl-gitops/blob/main/platform-gitops/backstage-templates/update-component-config/template.yaml
+                  target: https://github.com/mctlhq/mctl-gitops/blob/main/platform-gitops/backstage/templates/update-component-config/template.yaml
                   rules:
                     - allow: [Template]
                 - type: url
-                  target: https://github.com/mctlhq/mctl-gitops/blob/main/platform-gitops/backstage-templates/provision-database/template.yaml
+                  target: https://github.com/mctlhq/mctl-gitops/blob/main/platform-gitops/backstage/templates/provision-database/template.yaml
                   rules:
                     - allow: [Template]
                 - type: url
-                  target: https://github.com/mctlhq/mctl-gitops/blob/main/platform-gitops/backstage-templates/deploy-version/template.yaml
+                  target: https://github.com/mctlhq/mctl-gitops/blob/main/platform-gitops/backstage/templates/deploy-version/template.yaml
                   rules:
                     - allow: [Template]
                 - type: url
-                  target: https://github.com/mctlhq/mctl-gitops/blob/main/platform-gitops/backstage-templates/create-tenant/template.yaml
+                  target: https://github.com/mctlhq/mctl-gitops/blob/main/platform-gitops/backstage/templates/create-tenant/template.yaml
                   rules:
                     - allow: [Template]
                 - type: url
-                  target: https://github.com/mctlhq/mctl-gitops/blob/main/platform-gitops/backstage-templates/delete-tenant/template.yaml
+                  target: https://github.com/mctlhq/mctl-gitops/blob/main/platform-gitops/backstage/templates/delete-tenant/template.yaml
                   rules:
                     - allow: [Template]
                 # Tenant entities from the tenant-management backend
