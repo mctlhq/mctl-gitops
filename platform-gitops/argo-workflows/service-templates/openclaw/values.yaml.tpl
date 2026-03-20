@@ -46,7 +46,7 @@ initContainers:
     volumeMounts:
       - name: npm-cache
         mountPath: /npm-cache
-  # 2. Build whisper-cli (optimized)
+  # 2. Build whisper-cli (cached in MinIO platform-cache bucket)
   - name: install-whisper-cli
     image: debian:12-slim
     resources:
@@ -64,24 +64,56 @@ initContainers:
         BIN=$WHISPER_DIR/whisper-cli
         MODEL=$WHISPER_DIR/ggml-base.bin
         WRAPPER=$WHISPER_DIR/run-whisper.sh
+        CACHE_PFX=whisper
         mkdir -p $WHISPER_DIR
+
+        # Setup mc for S3 cache
+        apt-get update -qq && apt-get install -y --no-install-recommends wget ca-certificates
+        wget -q "https://dl.min.io/client/mc/release/linux-amd64/mc" -O /usr/local/bin/mc
+        chmod +x /usr/local/bin/mc
+        mc alias set cache "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY" --quiet
+
+        # ffmpeg
         if [ ! -f $WHISPER_DIR/ffmpeg ]; then
-          apt-get update -qq && apt-get install -y --no-install-recommends wget xz-utils ca-certificates
-          wget -q "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz" -O /tmp/ffmpeg.tar.xz
-          tar -xJf /tmp/ffmpeg.tar.xz -C $WHISPER_DIR --strip-components=1 --wildcards "*/ffmpeg"
-          rm /tmp/ffmpeg.tar.xz
+          if mc stat cache/$MINIO_BUCKET/$CACHE_PFX/ffmpeg > /dev/null 2>&1; then
+            echo "Restoring ffmpeg from cache..."
+            mc cp cache/$MINIO_BUCKET/$CACHE_PFX/ffmpeg $WHISPER_DIR/ffmpeg && chmod +x $WHISPER_DIR/ffmpeg
+          else
+            apt-get install -y --no-install-recommends xz-utils
+            wget -q "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz" -O /tmp/ffmpeg.tar.xz
+            tar -xJf /tmp/ffmpeg.tar.xz -C $WHISPER_DIR --strip-components=1 --wildcards "*/ffmpeg"
+            rm /tmp/ffmpeg.tar.xz
+            mc cp $WHISPER_DIR/ffmpeg cache/$MINIO_BUCKET/$CACHE_PFX/ffmpeg || true
+          fi
         fi
+
+        # whisper model
         if [ ! -f $MODEL ]; then
-          wget -q "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin" -O $MODEL
+          if mc stat cache/$MINIO_BUCKET/$CACHE_PFX/ggml-base.bin > /dev/null 2>&1; then
+            echo "Restoring whisper model from cache..."
+            mc cp cache/$MINIO_BUCKET/$CACHE_PFX/ggml-base.bin $MODEL
+          else
+            wget -q "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin" -O $MODEL
+            mc cp $MODEL cache/$MINIO_BUCKET/$CACHE_PFX/ggml-base.bin || true
+          fi
         fi
+
+        # whisper-cli binary
         if [ ! -f $BIN ]; then
-          apt-get update -qq && apt-get install -y --no-install-recommends build-essential cmake git ca-certificates
-          git clone --depth 1 --branch v1.8.3 https://github.com/ggml-org/whisper.cpp.git /tmp/whispersrc
-          cmake -B /tmp/whispersrc/build -S /tmp/whispersrc -DCMAKE_BUILD_TYPE=Release -DWHISPER_BUILD_EXAMPLES=ON -DWHISPER_BUILD_TESTS=OFF
-          make -C /tmp/whispersrc/build whisper-cli -j2
-          cp /tmp/whispersrc/build/bin/whisper-cli $BIN
-          rm -rf /tmp/whispersrc
+          if mc stat cache/$MINIO_BUCKET/$CACHE_PFX/whisper-cli > /dev/null 2>&1; then
+            echo "Restoring whisper-cli from cache..."
+            mc cp cache/$MINIO_BUCKET/$CACHE_PFX/whisper-cli $BIN && chmod +x $BIN
+          else
+            apt-get install -y --no-install-recommends build-essential cmake git
+            git clone --depth 1 --branch v1.8.3 https://github.com/ggml-org/whisper.cpp.git /tmp/whispersrc
+            cmake -B /tmp/whispersrc/build -S /tmp/whispersrc -DCMAKE_BUILD_TYPE=Release -DWHISPER_BUILD_EXAMPLES=ON -DWHISPER_BUILD_TESTS=OFF
+            make -C /tmp/whispersrc/build whisper-cli -j2
+            cp /tmp/whispersrc/build/bin/whisper-cli $BIN
+            rm -rf /tmp/whispersrc
+            mc cp $BIN cache/$MINIO_BUCKET/$CACHE_PFX/whisper-cli || true
+          fi
         fi
+
         cat > $WRAPPER << 'WEOF'
         #!/bin/sh
         TMP_WAV=$(mktemp /tmp/whisper_XXXXXX.wav)
@@ -92,6 +124,27 @@ initContainers:
         exit $EC
         WEOF
         chmod +x $WRAPPER
+    env:
+      - name: MINIO_ENDPOINT
+        valueFrom:
+          secretKeyRef:
+            name: minio-cache-creds
+            key: endpoint
+      - name: MINIO_ACCESS_KEY
+        valueFrom:
+          secretKeyRef:
+            name: minio-cache-creds
+            key: access-key
+      - name: MINIO_SECRET_KEY
+        valueFrom:
+          secretKeyRef:
+            name: minio-cache-creds
+            key: secret-key
+      - name: MINIO_BUCKET
+        valueFrom:
+          secretKeyRef:
+            name: minio-cache-creds
+            key: bucket
     volumeMounts:
       - name: pvc-whisper
         mountPath: /whisper-storage
@@ -192,11 +245,9 @@ extraVolumes:
   - name: openclaw-config-rw
     emptyDir: {}
   - name: npm-cache
-    persistentVolumeClaim:
-      claimName: __SERVICE_NAME__-npm-cache
+    emptyDir: {}
   - name: pvc-whisper
-    persistentVolumeClaim:
-      claimName: __SERVICE_NAME__-whisper
+    emptyDir: {}
   - name: openclaw-scripts
     configMap:
       name: openclaw-scripts
