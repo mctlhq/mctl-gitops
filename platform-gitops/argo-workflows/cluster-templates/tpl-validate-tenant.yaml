@@ -54,6 +54,7 @@ spec:
           TYPE="{{inputs.parameters.component_type}}"
           HOST="{{inputs.parameters.host}}"
           REPO="{{inputs.parameters.dockerfile_repo}}"
+          IMAGE_TAG="{{inputs.parameters.image_tag}}"
 
           # Normalize sentinels: "none" → empty (Backstage strips bare empty strings)
           [ "$HOST" = "none" ] && HOST=""
@@ -69,9 +70,9 @@ spec:
             exit 1
           fi
 
-          # ── 2. dockerfile_repo required for onboard/deploy ──────────────────
-          if [ "$ACTION" != "update-config" ] && [ -z "$REPO" ]; then
-            echo "❌ dockerfile_repo is required for onboard/deploy actions"
+          # ── 2. dockerfile_repo required for onboard/deploy (unless image_tag is explicit) ──
+          if [ "$ACTION" != "update-config" ] && [ -z "$REPO" ] && [ -z "$IMAGE_TAG" ]; then
+            echo "❌ dockerfile_repo is required for onboard/deploy actions (or provide image_tag to use a pre-built image)"
             exit 1
           fi
 

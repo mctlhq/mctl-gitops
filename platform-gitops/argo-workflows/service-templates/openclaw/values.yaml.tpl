@@ -31,8 +31,10 @@ env:
   APP_ENV: production
   NODE_OPTIONS: "--max-old-space-size=1024"
   OPENCLAW_CONFIG_PATH: /config-rw/openclaw.json
-  # PostgreSQL Connection (using dedicated service credentials)
-  DATABASE_URL: "postgresql://$(DB_USER):$(DB_PASSWORD)@shared-pg-rw.platform-db.svc.cluster.local:5432/__SERVICE_NAME__"
+
+envFrom:
+  - secretRef:
+      name: __TEAM_NAME__-__SERVICE_NAME__-db-creds
 
 initContainers:
   # 1. Pre-install mcp-remote
@@ -152,18 +154,18 @@ initContainers:
         done
         echo "Timeout waiting for identities table. Skipping auto-approval."
     env:
-      - name: DATABASE_URL
-        value: "postgresql://$(DB_USER):$(DB_PASSWORD)@shared-pg-rw.platform-db.svc.cluster.local:5432/__SERVICE_NAME__"
       - name: DB_USER
         valueFrom:
           secretKeyRef:
-            name: openclaw-db-creds
-            key: username
+            name: __TEAM_NAME__-__SERVICE_NAME__-db-creds
+            key: DB_USER
       - name: DB_PASSWORD
         valueFrom:
           secretKeyRef:
-            name: openclaw-db-creds
-            key: password
+            name: __TEAM_NAME__-__SERVICE_NAME__-db-creds
+            key: DB_PASSWORD
+      - name: DATABASE_URL
+        value: "postgresql://$(DB_USER):$(DB_PASSWORD)@shared-pg-rw.platform-db.svc.cluster.local:5432/__TEAM_NAME__-__SERVICE_NAME__"
     volumeMounts:
       - name: openclaw-config-rw
         mountPath: /config-rw
@@ -198,24 +200,11 @@ extraVolumes:
       name: openclaw-scripts
       defaultMode: 0755
 
+dbSecret:
+  vaultPath: teams/__TEAM_NAME__/__SERVICE_NAME__/database
+  secretName: __TEAM_NAME__-__SERVICE_NAME__-db-creds
+
 extraExternalSecrets:
-  openclaw-db-creds:
-    refreshInterval: 1h
-    targetSecret: openclaw-db-creds
-    data:
-      - secretKey: username
-        remoteKey: secret/data/teams/__TEAM_NAME__/__SERVICE_NAME__/database
-        property: username
-      - secretKey: password
-        remoteKey: secret/data/teams/__TEAM_NAME__/__SERVICE_NAME__/database
-        property: password
-  openclaw-openai-secret:
-    refreshInterval: 1h
-    targetSecret: openclaw-openai-secret
-    data:
-      - secretKey: OPENAI_API_KEY
-        remoteKey: secret/data/platform/openai
-        property: api-key
   openclaw-telegram-secret:
     refreshInterval: 1h
     targetSecret: openclaw-telegram-secret
@@ -269,7 +258,7 @@ configMaps:
           "openai": { "enabled": false },
           "google": { "enabled": false }
         },
-        "defaultModel": "openai-codex/gpt-5.4",
+        "defaultModel": "__DEFAULT_MODEL__",
         "auth": {
           "oauth": {
             "enabled": true,
