@@ -23,7 +23,7 @@ spec:
                 - from: 2024-04-01
                   store: tsdb
                   object_store: s3
-                  schema: v13
+                  schema: v11
                   index:
                     prefix: index_
                     period: 24h
