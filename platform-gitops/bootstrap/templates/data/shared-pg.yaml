@@ -10,7 +10,7 @@ spec:
   source:
     repoURL: https://github.com/mctlhq/mctl-gitops.git
     targetRevision: main
-    path: platform-gitops/cnpg-clusters/shared
+    path: platform-gitops/infra-components/data/cnpg/shared
   destination:
     server: {{ .Values.spec.destination.server }}
     namespace: platform-db
