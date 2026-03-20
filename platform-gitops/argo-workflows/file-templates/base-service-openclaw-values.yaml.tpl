@@ -58,8 +58,10 @@ initContainers:
         # 1. Download static ffmpeg
         if [ ! -f $WHISPER_DIR/ffmpeg ]; then
           echo "Downloading ffmpeg..."
-          apt-get update -qq && apt-get install -y --no-install-recommends wget xz-utils
-          wget -qO- "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz" | tar -xJ --strip-components=1 -C $WHISPER_DIR --wildcards "*/ffmpeg"
+          apt-get update -qq && apt-get install -y --no-install-recommends wget xz-utils ca-certificates
+          wget -q "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz" -O /tmp/ffmpeg.tar.xz
+          tar -xJf /tmp/ffmpeg.tar.xz -C $WHISPER_DIR --strip-components=1 --wildcards "*/ffmpeg"
+          rm /tmp/ffmpeg.tar.xz
         fi
 
         # 2. Download model
