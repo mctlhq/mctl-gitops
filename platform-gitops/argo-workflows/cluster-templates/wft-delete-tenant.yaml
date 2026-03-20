@@ -200,13 +200,79 @@ spec:
           fi
 
           # ── Remove Argo Workflows SSO RBAC file ───────────────────────────
-          SSO_FILE="platform-gitops/argo-workflows/sso-team-${TENANT}.yaml"
+          SSO_FILE="platform-gitops/tenants/${TENANT}/sso.yaml"
           if [ -f "$SSO_FILE" ]; then
             git rm "$SSO_FILE"
             echo "Removed $SSO_FILE"
             CHANGED=true
           else
             echo "WARNING: $SSO_FILE not found (already deleted). Skipping."
+          fi
+
+          # ── Remove CNPG Database resources ──────────────────────────────────
+          CNPG_DIR="platform-gitops/infra-components/data/cnpg/shared"
+          
+          # Remove Database CRDs
+          DB_FILE="${CNPG_DIR}/databases.yaml"
+          if [ -f "$DB_FILE" ]; then
+            if grep -q "name: ${TENANT}-" "$DB_FILE"; then
+              echo "Cleaning up Database CRDs for tenant ${TENANT}..."
+              # Use yq or sed to remove the blocks. Since it's a multi-doc YAML, sed is tricky.
+              # Better to use a python helper for safe YAML manipulation.
+              python3 - <<PYEOF
+import sys
+tenant = "${TENANT}"
+f_path = "${DB_FILE}"
+with open(f_path, 'r') as f:
+    docs = f.read().split('---\n')
+new_docs = []
+for doc in docs:
+    if not doc.strip(): continue
+    if f"name: {tenant}-" not in doc:
+        new_docs.append(doc)
+with open(f_path, 'w') as f:
+    f.write('---\n'.join(new_docs))
+PYEOF
+              git add "$DB_FILE"
+              CHANGED=true
+            fi
+          fi
+
+          # Remove ExternalSecrets
+          SEC_FILE="${CNPG_DIR}/secrets.yaml"
+          if [ -f "$SEC_FILE" ]; then
+            if grep -q "name: ${TENANT}-" "$SEC_FILE"; then
+              echo "Cleaning up ExternalSecrets for tenant ${TENANT}..."
+              python3 - <<PYEOF
+import sys
+tenant = "${TENANT}"
+f_path = "${SEC_FILE}"
+with open(f_path, 'r') as f:
+    docs = f.read().split('---\n')
+new_docs = []
+for doc in docs:
+    if not doc.strip(): continue
+    if f"name: {tenant}-" not in doc:
+        new_docs.append(doc)
+with open(f_path, 'w') as f:
+    f.write('---\n'.join(new_docs))
+PYEOF
+              git add "$SEC_FILE"
+              CHANGED=true
+            fi
+          fi
+
+          # Remove Cluster Role entries
+          CLUSTER_FILE="${CNPG_DIR}/cluster.yaml"
+          if [ -f "$CLUSTER_FILE" ]; then
+            if grep -q "name: ${TENANT}-" "$CLUSTER_FILE"; then
+              echo "Cleaning up Cluster roles for tenant ${TENANT}..."
+              # Remove role from managed.roles and host from pg_hba
+              sed -i "/name: ${TENANT}-/,+4d" "$CLUSTER_FILE"
+              sed -i "/host.*${TENANT}-/d" "$CLUSTER_FILE"
+              git add "$CLUSTER_FILE"
+              CHANGED=true
+            fi
           fi
 
           # ── Commit and push ────────────────────────────────────────────────
@@ -216,7 +282,7 @@ spec:
 
           - Removed platform-gitops/tenants/${TENANT}/
           - Removed ArgoCD RBAC for role:team-${TENANT}
-          - Removed Argo Workflows SSO RBAC for team-${TENANT}
+          - Removed database resources (DB CRDs, Secrets, Roles)
 
           Deleted by Argo Workflows (wft-delete-tenant)"
 
