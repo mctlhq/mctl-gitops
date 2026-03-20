@@ -45,6 +45,13 @@ initContainers:
   # 2. Build whisper-cli from source and download ggml-base model (skips if PVC already populated)
   - name: install-whisper-cli
     image: debian:12-slim
+    resources:
+      requests:
+        cpu: "1"
+        memory: 1Gi
+      limits:
+        cpu: "2"
+        memory: 2Gi
     command: ["sh", "-c"]
     args:
       - |
@@ -70,12 +77,12 @@ initContainers:
           wget -q "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin" -O $MODEL
         fi
 
-        # 3. Fast build (minimized)
+        # 3. Fast build (minimized, limited to 2 cores for stability)
         if [ ! -f $BIN ]; then
           apt-get update -qq && apt-get install -y --no-install-recommends build-essential cmake git ca-certificates
           git clone --depth 1 --branch v1.8.3 https://github.com/ggml-org/whisper.cpp.git /tmp/whispersrc
           cmake -B /tmp/whispersrc/build -S /tmp/whispersrc -DCMAKE_BUILD_TYPE=Release -DWHISPER_BUILD_EXAMPLES=ON -DWHISPER_BUILD_TESTS=OFF
-          make -C /tmp/whispersrc/build whisper-cli -j$(nproc)
+          make -C /tmp/whispersrc/build whisper-cli -j2
           cp /tmp/whispersrc/build/bin/whisper-cli $BIN
           rm -rf /tmp/whispersrc
         fi
