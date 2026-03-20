@@ -30,6 +30,50 @@ spec:
                 resources:
                   requests:
                     storage: 10Gi
+              # vmbackup sidecar — backs up to Cloudflare R2 daily
+              extraContainers:
+                - name: vmbackup
+                  image: victoriametrics/vmbackup:v1.106.1
+                  command: ["/bin/sh", "-c"]
+                  args:
+                    - |
+                      while true; do
+                        echo "[vmbackup] Starting backup to R2..."
+                        /vmbackup \
+                          -storageDataPath=/storage \
+                          -snapshotCreateURL=http://localhost:8428/snapshot/create \
+                          -snapshotDeleteURL=http://localhost:8428/snapshot/delete \
+                          -dst=s3://vault-backup/victoria-metrics \
+                          -customS3Endpoint=$S3_ENDPOINT
+                        echo "[vmbackup] Done. Next run in 24h."
+                        sleep 86400
+                      done
+                  env:
+                    - name: AWS_ACCESS_KEY_ID
+                      valueFrom:
+                        secretKeyRef:
+                          name: victoria-backup-r2
+                          key: AWS_ACCESS_KEY_ID
+                    - name: AWS_SECRET_ACCESS_KEY
+                      valueFrom:
+                        secretKeyRef:
+                          name: victoria-backup-r2
+                          key: AWS_SECRET_ACCESS_KEY
+                    - name: S3_ENDPOINT
+                      valueFrom:
+                        secretKeyRef:
+                          name: victoria-backup-r2
+                          key: S3_ENDPOINT
+                  volumeMounts:
+                    - name: data
+                      mountPath: /storage
+                  resources:
+                    requests:
+                      cpu: 10m
+                      memory: 64Mi
+                    limits:
+                      cpu: 500m
+                      memory: 256Mi
 
           # VMAgent replaces Prometheus's scrape engine
           vmagent:
