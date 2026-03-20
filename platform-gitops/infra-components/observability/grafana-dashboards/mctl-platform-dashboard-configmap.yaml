@@ -241,7 +241,7 @@ data:
       "templating": {
         "list": [
           {
-            "current": {},
+            "current": { "selected": true, "text": "VictoriaMetrics", "value": "VictoriaMetrics" },
             "hide": 0,
             "includeAll": false,
             "name": "datasource",
@@ -252,7 +252,7 @@ data:
             "label": "Prometheus"
           },
           {
-            "current": {},
+            "current": { "selected": true, "text": "Loki", "value": "Loki" },
             "hide": 0,
             "includeAll": false,
             "name": "loki_datasource",
