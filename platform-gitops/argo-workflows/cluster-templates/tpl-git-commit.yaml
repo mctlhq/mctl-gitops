@@ -39,6 +39,10 @@ spec:
             default: ""
           - name: service_template
             default: "default"
+          - name: config_patch
+            default: ""
+          - name: default_model
+            default: "openai-codex/gpt-5.4"
       script:
         image: alpine:3.19
         command: [sh]
@@ -62,6 +66,8 @@ spec:
           CLEAR_ENV="{{inputs.parameters.clear_env}}"
           CLEAR_SECRETS="{{inputs.parameters.clear_secrets}}"
           SERVICE_TEMPLATE="{{inputs.parameters.service_template}}"
+          CONFIG_PATCH="{{inputs.parameters.config_patch}}"
+          DEFAULT_MODEL="{{inputs.parameters.default_model}}"
 
           # Normalize sentinels (Backstage strips bare empty strings from YAML)
           [ "$HOST" = "none" ] && HOST=""
@@ -167,6 +173,7 @@ spec:
               -e "s|__IMAGE_TAG__|${TAG}|g" \
               -e "s|__PORT__|${PORT}|g" \
               -e "s|__HOST__|${HOST}|g" \
+              -e "s|__DEFAULT_MODEL__|${DEFAULT_MODEL}|g" \
               "$TPL" > "${DIR}/values.yaml"
 
             # Auto-add mirror domain (alternate ↔ primary) + TLS
@@ -363,6 +370,11 @@ spec:
               done << 'SECRETEOF2'
           {{inputs.parameters.secret_env_vars}}
           SECRETEOF2
+              CHANGED=true
+            fi
+
+            if [ -n "$CONFIG_PATCH" ]; then
+              yq eval -i "$CONFIG_PATCH" "${DIR}/values.yaml"
               CHANGED=true
             fi
 

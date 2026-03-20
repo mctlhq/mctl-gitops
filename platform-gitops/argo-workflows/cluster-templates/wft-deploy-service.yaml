@@ -68,6 +68,12 @@ spec:
         value: "default"
       - name: container_registry
         value: "ghcr.io/mctlhq"
+      - name: config_patch
+        value: ""
+        # yq expression to patch values.yaml (update-config only)
+        # e.g. '.configMaps["openclaw-config"]["openclaw.json"] |= (fromjson | .defaultModel = "openai-codex/gpt-5.4" | tojson)'
+      - name: default_model
+        value: "openai-codex/gpt-5.4"
 
   templates:
     # ────────────────────────────────────────────────────────────────────────
@@ -178,6 +184,10 @@ spec:
                   value: "{{workflow.parameters.dockerfile_repo}}"
                 - name: service_template
                   value: "{{workflow.parameters.service_template}}"
+                - name: config_patch
+                  value: "{{workflow.parameters.config_patch}}"
+                - name: default_model
+                  value: "{{workflow.parameters.default_model}}"
 
           # Step 4: patch autoscaling block in values.yaml (conditional)
           - name: patch-autoscaling
