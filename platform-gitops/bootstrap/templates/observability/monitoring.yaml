@@ -7,17 +7,84 @@ metadata:
     - resources-finalizer.argocd.argoproj.io
 spec:
   project: default
-  source:
-    repoURL: https://victoriametrics.github.io/helm-charts/
-    chart: victoria-metrics-k8s-stack
-    targetRevision: "0.72.5"
-    helm:
-      values: |
-        # Use VMSingle for single-node efficiency (replacing Prometheus operator)
-        vmsingle:
-          enabled: true
-          spec:
-            retentionPeriod: "3d"
+  sources:
+    - repoURL: https://victoriametrics.github.io/helm-charts/
+      chart: victoria-metrics-k8s-stack
+      targetRevision: "0.72.5"
+      helm:
+        values: |
+          # Use VMSingle for single-node efficiency (replacing Prometheus operator)
+          vmsingle:
+            enabled: true
+            spec:
+              retentionPeriod: "3d"
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 128Mi
+                limits:
+                  cpu: 200m
+                  memory: 512Mi
+              storage:
+                accessModes: ["ReadWriteOnce"]
+                resources:
+                  requests:
+                    storage: 20Gi
+
+          # VMAgent replaces Prometheus's scrape engine
+          vmagent:
+            enabled: true
+            spec:
+              selectAllByDefault: true
+              scrapeInterval: 1m
+              resources:
+                requests:
+                  cpu: 20m
+                  memory: 64Mi
+                limits:
+                  cpu: 100m
+                  memory: 256Mi
+
+          # VMAlert replaces Prometheus's alerting engine
+          vmalert:
+            enabled: true
+            spec:
+              selectAllByDefault: true
+              evaluationInterval: 1m
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 32Mi
+                limits:
+                  cpu: 50m
+                  memory: 128Mi
+
+          grafana:
+            enabled: true
+            admin:
+              existingSecret: grafana-admin-secret
+              userKey: admin-user
+              passwordKey: admin-password
+            ingress:
+              enabled: true
+              ingressClassName: traefik
+              annotations:
+                cert-manager.io/cluster-issuer: letsencrypt-prod
+              hosts:
+                - grafana.mctl.ai
+              tls:
+                - secretName: grafana-tls
+                  hosts:
+                    - grafana.mctl.ai
+            defaultDashboardsEnabled: true
+            sidecar:
+              datasources:
+                enabled: true
+              dashboards:
+                enabled: true
+                label: grafana_dashboard
+                labelValue: "1"
+                searchNamespace: ALL
             resources:
               requests:
                 cpu: 50m
@@ -25,134 +92,76 @@ spec:
               limits:
                 cpu: 200m
                 memory: 512Mi
-            storage:
-              accessModes: ["ReadWriteOnce"]
-              resources:
-                requests:
-                  storage: 20Gi
 
-        # VMAgent replaces Prometheus's scrape engine
-        vmagent:
-          enabled: true
-          spec:
-            selectAllByDefault: true
-            scrapeInterval: 1m
-            resources:
-              requests:
-                cpu: 20m
-                memory: 64Mi
-              limits:
-                cpu: 100m
-                memory: 256Mi
-
-        # VMAlert replaces Prometheus's alerting engine
-        vmalert:
-          enabled: true
-          spec:
-            selectAllByDefault: true
-            evaluationInterval: 1m
-            resources:
-              requests:
-                cpu: 10m
-                memory: 32Mi
-              limits:
-                cpu: 50m
-                memory: 128Mi
-
-        grafana:
-          enabled: true
-          admin:
-            existingSecret: grafana-admin-secret
-            userKey: admin-user
-            passwordKey: admin-password
-          ingress:
+          alertmanager:
             enabled: true
-            ingressClassName: traefik
-            annotations:
-              cert-manager.io/cluster-issuer: letsencrypt-prod
-            hosts:
-              - grafana.mctl.ai
-            tls:
-              - secretName: grafana-tls
-                hosts:
-                  - grafana.mctl.ai
-          defaultDashboardsEnabled: true
-          sidecar:
-            datasources:
-              enabled: true
-          resources:
-            requests:
-              cpu: 50m
-              memory: 128Mi
-            limits:
-              cpu: 200m
-              memory: 512Mi
+            alertmanagerSpec:
+              secrets:
+                - alertmanager-telegram-secret
+              storage:
+                volumeClaimTemplate:
+                  spec:
+                    accessModes: ["ReadWriteOnce"]
+                    resources:
+                      requests:
+                        storage: 1Gi
+            config:
+              global:
+                resolve_timeout: 5m
+                telegram_api_url: "https://api.telegram.org"
+              route:
+                receiver: telegram
+                group_by: ["alertname", "namespace"]
+                group_wait: 30s
+                group_interval: 5m
+                repeat_interval: 4h
+                routes:
+                  - receiver: "null"
+                    matchers:
+                      - alertname =~ "InfoInhibitor|Watchdog"
+                  - receiver: "null"
+                    matchers:
+                      - alertname =~ "KubeControllerManagerDown|KubeSchedulerDown|KubeProxyDown"
+                  - receiver: "null"
+                    matchers:
+                      - alertname =~ "KubePodNotReady|PodNotReady"
+                      - namespace = "argo-workflows"
+                  - receiver: mctl-agent
+                    continue: true
+                    matchers:
+                      - alertname =~ "PodCrashLooping|KubePodNotReady|PodNotReady|TenantCPUQuotaHigh|TenantMemoryQuotaHigh|ArgoWorkflowFailed|ArgoWorkflowHighFailureRate"
+              receivers:
+                - name: "null"
+                - name: mctl-agent
+                  webhook_configs:
+                    - url: "http://admins-mctl-agent.admins.svc:8081/api/v1/alerts"
+                      send_resolved: true
+                - name: telegram
+                  telegram_configs:
+                    - bot_token_file: /etc/alertmanager/secrets/alertmanager-telegram-secret/bot-token
+                      chat_id: {{ .Values.alertmanager.telegramChatId | int64 }}
+                      parse_mode: HTML
+                      message: |
+                        {{ "{{" }} range .Alerts {{ "}}" }}
+                        <b>{{ "{{" }} .Status | toUpper {{ "}}" }}: {{ "{{" }} .Labels.alertname {{ "}}" }}</b>
+                        {{ "{{" }} .Annotations.summary {{ "}}" }}
+                        <i>Namespace: {{ "{{" }} .Labels.namespace {{ "}}" }}</i>
+                        {{ "{{" }} end {{ "}}" }}
 
-        alertmanager:
-          enabled: true
-          alertmanagerSpec:
-            secrets:
-              - alertmanager-telegram-secret
-            storage:
-              volumeClaimTemplate:
-                spec:
-                  accessModes: ["ReadWriteOnce"]
-                  resources:
-                    requests:
-                      storage: 1Gi
-          config:
-            global:
-              resolve_timeout: 5m
-              telegram_api_url: "https://api.telegram.org"
-            route:
-              receiver: telegram
-              group_by: ["alertname", "namespace"]
-              group_wait: 30s
-              group_interval: 5m
-              repeat_interval: 4h
-              routes:
-                - receiver: "null"
-                  matchers:
-                    - alertname =~ "InfoInhibitor|Watchdog"
-                - receiver: "null"
-                  matchers:
-                    - alertname =~ "KubeControllerManagerDown|KubeSchedulerDown|KubeProxyDown"
-                - receiver: "null"
-                  matchers:
-                    - alertname =~ "KubePodNotReady|PodNotReady"
-                    - namespace = "argo-workflows"
-                - receiver: mctl-agent
-                  continue: true
-                  matchers:
-                    - alertname =~ "PodCrashLooping|KubePodNotReady|PodNotReady|TenantCPUQuotaHigh|TenantMemoryQuotaHigh|ArgoWorkflowFailed|ArgoWorkflowHighFailureRate"
-            receivers:
-              - name: "null"
-              - name: mctl-agent
-                webhook_configs:
-                  - url: "http://admins-mctl-agent.admins.svc:8081/api/v1/alerts"
-                    send_resolved: true
-              - name: telegram
-                telegram_configs:
-                  - bot_token_file: /etc/alertmanager/secrets/alertmanager-telegram-secret/bot-token
-                    chat_id: {{ .Values.alertmanager.telegramChatId | int64 }}
-                    parse_mode: HTML
-                    message: |
-                      {{ "{{" }} range .Alerts {{ "}}" }}
-                      <b>{{ "{{" }} .Status | toUpper {{ "}}" }}: {{ "{{" }} .Labels.alertname {{ "}}" }}</b>
-                      {{ "{{" }} .Annotations.summary {{ "}}" }}
-                      <i>Namespace: {{ "{{" }} .Labels.namespace {{ "}}" }}</i>
-                      {{ "{{" }} end {{ "}}" }}
+          # Disable Prometheus (operator components)
+          prometheus:
+            enabled: false
+          prometheusOperator:
+            enabled: true # Keep operator to manage CRDs (ServiceMonitors, VMAlerts)
 
-        # Disable Prometheus (operator components)
-        prometheus:
-          enabled: false
-        prometheusOperator:
-          enabled: true # Keep operator to manage CRDs (ServiceMonitors, VMAlerts)
+          kubeStateMetrics:
+            enabled: true
+          nodeExporter:
+            enabled: true
 
-        kubeStateMetrics:
-          enabled: true
-        nodeExporter:
-          enabled: true
+    - repoURL: https://github.com/mctlhq/mctl-gitops.git
+      targetRevision: main
+      path: platform-gitops/infra-components/observability/grafana-dashboards
 
   destination:
     server: {{ .Values.spec.destination.server }}

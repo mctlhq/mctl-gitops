@@ -51,7 +51,7 @@ spec:
 
     - repoURL: https://github.com/mctlhq/mctl-gitops.git
       targetRevision: main
-      path: platform-gitops/minio
+      path: platform-gitops/infra-components/data/minio
 
   destination:
     server: {{ .Values.spec.destination.server }}
