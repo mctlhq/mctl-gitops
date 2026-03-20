@@ -3,10 +3,27 @@ kind: Cluster
 metadata:
   name: shared-pg
 spec:
-  instances: 2  # primary + 1 replica for HA
+  instances: 1
 
   # CNPG operator defaults (explicitly set to prevent ArgoCD OutOfSync)
   imageName: ghcr.io/cloudnative-pg/postgresql:17.2
+  
+  # Enable automated backups to Cloudflare R2 (S3-compatible)
+  backup:
+    barmanObjectStore:
+      destinationPath: s3://mctl-db-backups/shared-pg
+      endpointURL: https://d3be4ec8216e131c866f302f272550e3.r2.cloudflarestorage.com
+      s3Credentials:
+        accessKeyId:
+          name: r2-backup-creds
+          key: ACCESS_KEY_ID
+        secretAccessKey:
+          name: r2-backup-creds
+          key: SECRET_ACCESS_KEY
+      wal:
+        compression: gzip
+    retentionPolicy: "30d"
+
   affinity:
     podAntiAffinityType: preferred
   enablePDB: true
@@ -33,7 +50,7 @@ spec:
 
   storage:
     storageClass: hcloud-volumes
-    size: 20Gi
+    size: 10Gi
 
   resources:
     requests:
