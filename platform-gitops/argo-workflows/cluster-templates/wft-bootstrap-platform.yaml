@@ -1,0 +1,104 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterWorkflowTemplate
+metadata:
+  name: bootstrap-platform
+  annotations:
+    workflows.argoproj.io/description: |
+      One-time platform bootstrap: generates and writes initial secrets to Vault.
+      Idempotent — skips any secret that already exists.
+
+      Secrets written:
+        secret/platform/minio          → root-user, root-password
+        secret/platform/minio          → root-user, root-password (shared key for artifact creds)
+        secret/platform/argo-workflows/database → username, password
+        secret/platform/backstage/database      → postgres-user, postgres-password
+        secret/platform/mctl-agent/database     → username, password
+
+      Run once after initial cluster setup:
+        argo submit --from clusterworkflowtemplate/bootstrap-platform -n argo-workflows
+spec:
+  templates:
+    - name: bootstrap
+      script:
+        image: alpine:3.19
+        command: [sh]
+        source: |
+          set -e
+          apk add --no-cache curl openssl python3 > /dev/null 2>&1
+
+          SA_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+          VAULT_TOKEN=$(curl -sS -X POST \
+            -H "Content-Type: application/json" \
+            -d "{\"role\":\"argo-workflow\",\"jwt\":\"${SA_TOKEN}\"}" \
+            "${VAULT_ADDR}/v1/auth/kubernetes/login" | \
+            grep '"client_token"' | sed 's/.*"client_token":"\([^"]*\)".*/\1/')
+
+          if [ -z "$VAULT_TOKEN" ]; then
+            echo "Failed to authenticate with Vault"
+            exit 1
+          fi
+          export VAULT_TOKEN
+          echo "Authenticated with Vault"
+
+          # ── Helper: write secret only if it doesn't exist ─────────────────
+          write_if_missing() {
+            PATH_="$1"
+            DATA="$2"
+            FULL="secret/data/${PATH_}"
+
+            HTTP=$(curl -sS -o /dev/null -w "%{http_code}" \
+              -H "X-Vault-Token: $VAULT_TOKEN" \
+              "${VAULT_ADDR}/v1/${FULL}")
+
+            if [ "$HTTP" = "200" ]; then
+              echo "SKIP: ${PATH_} already exists"
+              return
+            fi
+
+            HTTP_W=$(curl -sS -o /tmp/vault-w.json -w "%{http_code}" \
+              -X POST \
+              -H "X-Vault-Token: $VAULT_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"data\":${DATA}}" \
+              "${VAULT_ADDR}/v1/${FULL}")
+
+            if [ "$HTTP_W" = "200" ] || [ "$HTTP_W" = "204" ]; then
+              echo "OK: ${PATH_}"
+            else
+              echo "FAIL: ${PATH_} (HTTP $HTTP_W)"
+              cat /tmp/vault-w.json || true
+            fi
+          }
+
+          # ── Generate random passwords ──────────────────────────────────────
+          gen() { openssl rand -hex 20; }
+
+          MINIO_USER="minioadmin"
+          MINIO_PASS=$(gen)
+          ARGO_DB_USER="argo"
+          ARGO_DB_PASS=$(gen)
+          BACKSTAGE_DB_USER="backstage"
+          BACKSTAGE_DB_PASS=$(gen)
+          AGENT_DB_USER="mctl-agent"
+          AGENT_DB_PASS=$(gen)
+
+          # ── Write secrets ──────────────────────────────────────────────────
+          write_if_missing "platform/minio" \
+            "{\"root-user\":\"${MINIO_USER}\",\"root-password\":\"${MINIO_PASS}\"}"
+
+          write_if_missing "platform/argo-workflows/database" \
+            "{\"username\":\"${ARGO_DB_USER}\",\"password\":\"${ARGO_DB_PASS}\"}"
+
+          write_if_missing "platform/backstage/database" \
+            "{\"postgres-user\":\"${BACKSTAGE_DB_USER}\",\"postgres-password\":\"${BACKSTAGE_DB_PASS}\"}"
+
+          write_if_missing "platform/mctl-agent/database" \
+            "{\"username\":\"${AGENT_DB_USER}\",\"password\":\"${AGENT_DB_PASS}\"}"
+
+          echo ""
+          echo "Bootstrap complete. ExternalSecrets will refresh within 1h."
+          echo "To force refresh:"
+          echo "  kubectl annotate externalsecret -A --all force-sync=\$(date +%s) --overwrite"
+        env:
+          - name: VAULT_ADDR
+            value: "http://vault.vault.svc.cluster.local:8200"
