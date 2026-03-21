@@ -19,6 +19,17 @@ resources:
   limits:
     cpu: "2"
     memory: 4Gi
+probes:
+  liveness:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 300
+    periodSeconds: 30
+  readiness:
+    path: /readyz
+    port: http
+    initialDelaySeconds: 300
+    periodSeconds: 15
 # Recreate strategy required for clean init
 strategy:
   type: Recreate
