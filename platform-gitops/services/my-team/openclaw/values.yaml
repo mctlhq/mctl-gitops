@@ -175,6 +175,16 @@ dbSecret:
 dbInitJob:
   enabled: false
 extraExternalSecrets:
+  minio-root-credentials:
+    refreshInterval: 1h
+    targetSecret: minio-root-credentials
+    data:
+      - secretKey: rootUser
+        remoteKey: platform/minio
+        property: root-user
+      - secretKey: rootPassword
+        remoteKey: platform/minio
+        property: root-password
   openclaw-telegram-secret:
     refreshInterval: 1h
     targetSecret: openclaw-telegram-secret
