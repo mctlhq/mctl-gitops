@@ -352,24 +352,15 @@ configMaps:
             }
           }
         },
-        "models": {
-          "mode": "merge",
-          "providers": {
-            "openai": {
-              "baseUrl": "https://api.openai.com/v1",
-              "apiKey": "__OPENAI_API_KEY__",
-              "api": "openai-completions",
-              "models": [
-                {
-                  "id": "gpt-4o",
-                  "name": "GPT-4o",
-                  "contextWindow": 128000,
-                  "maxTokens": 16384,
-                  "input": ["text"],
-                  "cost": { "input": 0, "output": 0 }
-                }
-              ]
+        "auth": {
+          "profiles": {
+            "openai-codex:default": {
+              "provider": "openai-codex",
+              "mode": "oauth"
             }
+          },
+          "order": {
+            "openai-codex": ["openai-codex:default"]
           }
         },
         "channels": {
