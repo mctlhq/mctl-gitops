@@ -14,11 +14,11 @@ service:
   port: 18789
 resources:
   requests:
-    cpu: 200m
-    memory: 1Gi
+    cpu: 100m
+    memory: 512Mi
   limits:
-    cpu: "4"
-    memory: 4Gi
+    cpu: "1"
+    memory: 2Gi
 # Recreate strategy required for clean init
 strategy:
   type: Recreate
