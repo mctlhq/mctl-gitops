@@ -20,7 +20,6 @@ spec:
         secretAccessKey:
           name: minio-root-user
           key: MINIO_ROOT_PASSWORD
-      s3ForcePathStyle: true
     retentionPolicy: "30d"
 
   affinity:
@@ -70,6 +69,7 @@ spec:
       idle_in_transaction_session_timeout: "300s"
       log_min_duration_statement: "1000"  # log queries >1s
     pg_hba:
+      - host all mctl-agent all scram-sha-256
       # Backstage — access to own db + postgres db (assertDatabaseExists check)
       - host backstage backstage all scram-sha-256
       - host postgres backstage all scram-sha-256
@@ -86,6 +86,7 @@ spec:
       # smoke-test-svc: ephemeral — added/removed by smoke-test CWT, not managed here
       - host mashkoffdmitry-knot-mvp mashkoffdmitry-knot-mvp all scram-sha-256
       - host mashkoffdmitry-openclaw mashkoffdmitry-openclaw all scram-sha-256
+      - host mctl-agent mctl-agent all scram-sha-256
       - host all all 0.0.0.0/0 reject
 
   managed:
