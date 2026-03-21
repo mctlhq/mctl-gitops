@@ -20,11 +20,14 @@ spec:
               retentionPeriod: "3d"
               resources:
                 requests:
-                  cpu: 50m
-                  memory: 128Mi
+                  cpu: 100m
+                  memory: 256Mi
                 limits:
-                  cpu: 200m
-                  memory: 512Mi
+                  cpu: 1000m
+                  memory: 1024Mi
+              extraArgs:
+                search.maxConcurrentRequests: "16"
+                search.maxQueueDuration: "30s"
               storage:
                 accessModes: ["ReadWriteOnce"]
                 resources:
