@@ -1,24 +1,24 @@
 # Service: openclaw
 # Team: my-team
 # Template: openclaw
-# Updated: 2026-03-21 (gemini-bot) - Fixed Config Schema and Image Tag
+# Updated: 2026-03-21 (gemini-bot) - Balanced Resource Limits
 
 # Chart: base-service
 
 image:
   repository: ghcr.io/mctlhq/openclaw
-  tag: "main-5a2a4ab" # Fixed stable tag
+  tag: "main-5a2a4ab"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
   port: 18789
 resources:
   requests:
-    cpu: 100m
-    memory: 512Mi
+    cpu: 500m
+    memory: 1Gi
   limits:
-    cpu: "1"
-    memory: 2Gi
+    cpu: "2"
+    memory: 4Gi
 # Recreate strategy required for clean init
 strategy:
   type: Recreate
@@ -28,7 +28,7 @@ env:
   OPENCLAW_CONFIG_PATH: /config-rw/openclaw.json
 envFrom:
   - secretRef:
-      name: my-team-openclaw-base-service-db-creds # Corrected name suffix
+      name: my-team-openclaw-base-service-db-creds
 initContainers:
   # 1. Pre-install mcp-remote
   - name: install-mcp-remote
