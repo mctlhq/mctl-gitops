@@ -28,6 +28,9 @@ spec:
           - name: image_tag
             default: ""
             # explicit override; empty = derived from git_tag
+          - name: service_template
+            default: "default"
+            # when not "default", dockerfile_repo is not required
       outputs:
         parameters:
           - name: service_dir
@@ -56,6 +59,7 @@ spec:
           REPO="{{inputs.parameters.dockerfile_repo}}"
           IMAGE_TAG="{{inputs.parameters.image_tag}}"
           GIT_TAG_RAW="{{inputs.parameters.git_tag}}"
+          SERVICE_TEMPLATE="{{inputs.parameters.service_template}}"
 
           # Normalize sentinels: "none" → empty (Backstage strips bare empty strings)
           [ "$HOST" = "none" ] && HOST=""
@@ -71,9 +75,9 @@ spec:
             exit 1
           fi
 
-          # ── 2. dockerfile_repo required for onboard/deploy unless a pre-built tag is given ──
-          if [ "$ACTION" != "update-config" ] && [ -z "$REPO" ] && [ -z "$IMAGE_TAG" ] && [ -z "$GIT_TAG_RAW" ]; then
-            echo "❌ dockerfile_repo is required for onboard/deploy actions (or provide image_tag/git_tag to use a pre-built image)"
+          # ── 2. dockerfile_repo required for onboard/deploy unless a pre-built tag or service_template is given ──
+          if [ "$ACTION" != "update-config" ] && [ -z "$REPO" ] && [ -z "$IMAGE_TAG" ] && [ -z "$GIT_TAG_RAW" ] && [ "$SERVICE_TEMPLATE" = "default" ]; then
+            echo "❌ dockerfile_repo is required for onboard/deploy actions (or provide image_tag/git_tag to use a pre-built image, or specify service_template)"
             exit 1
           fi
 
