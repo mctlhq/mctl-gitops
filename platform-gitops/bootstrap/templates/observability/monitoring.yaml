@@ -144,6 +144,8 @@ spec:
                   hosts:
                     - grafana.mctl.ai
             defaultDashboardsEnabled: true
+            env:
+              GF_INSTALL_PLUGINS: victoriametrics-metrics-datasource
             sidecar:
               datasources:
                 enabled: true
