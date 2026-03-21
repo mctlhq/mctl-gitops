@@ -222,11 +222,11 @@ spec:
   data:
     - secretKey: accessKey
       remoteRef:
-        key: platform/minio
+        key: teams/platform/minio
         property: root-user
     - secretKey: secretKey
       remoteRef:
-        key: platform/minio
+        key: teams/platform/minio
         property: root-password
 ---
 # Allow argo-workflow-sa to manage ArgoCD Applications in argocd namespace (retire workflow)

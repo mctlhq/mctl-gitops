@@ -89,9 +89,9 @@ spec:
   data:
     - secretKey: accessKey
       remoteRef:
-        key: platform/minio
+        key: teams/platform/minio
         property: root-user
     - secretKey: secretKey
       remoteRef:
-        key: platform/minio
+        key: teams/platform/minio
         property: root-password
