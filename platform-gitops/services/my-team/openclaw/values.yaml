@@ -1,7 +1,7 @@
 # Service: openclaw
 # Team: my-team
 # Template: openclaw
-# Updated: 2026-03-21 (gemini-bot) - Fixed Persistence and Config Schema
+# Updated: 2026-03-21 (gemini-bot) - Zero PVC S3-backed state
 
 # Chart: base-service
 
@@ -22,7 +22,7 @@ resources:
 # Recreate strategy required for clean init
 strategy:
   type: Recreate
-# Set fsGroup=1000 so PVC is writable by node user
+# Set fsGroup=1000 so emptyDir is writable by node user
 podSecurityContext:
   fsGroup: 1000
 env:
@@ -33,7 +33,37 @@ envFrom:
   - secretRef:
       name: my-team-openclaw-base-service-db-creds
 initContainers:
-  # 1. Pre-install mcp-remote
+  # 1. Restore state from MinIO
+  - name: restore-state
+    image: minio/mc:latest
+    command: ["sh", "-c"]
+    args:
+      - |
+        mc alias set s3 "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
+        if mc ls s3/platform-state/openclaw/my-team/ > /dev/null 2>&1; then
+          echo "Restoring state from S3..."
+          mc mirror s3/platform-state/openclaw/my-team/ /home/node/.openclaw
+        else
+          echo "No existing state found in S3. Starting fresh."
+          mkdir -p /home/node/.openclaw
+        fi
+    env:
+      - name: MINIO_ENDPOINT
+        value: "http://minio.minio.svc.cluster.local:9000"
+      - name: MINIO_ACCESS_KEY
+        valueFrom:
+          secretKeyRef:
+            name: minio-root-credentials
+            key: rootUser
+      - name: MINIO_SECRET_KEY
+        valueFrom:
+          secretKeyRef:
+            name: minio-root-credentials
+            key: rootPassword
+    volumeMounts:
+      - name: state-data
+        mountPath: /home/node/.openclaw
+  # 2. Pre-install mcp-remote
   - name: install-mcp-remote
     image: node:22-alpine
     command: ["sh", "-c"]
@@ -42,12 +72,6 @@ initContainers:
     volumeMounts:
       - name: npm-cache
         mountPath: /npm-cache
-  # 2. Build whisper-cli (disabled)
-  - name: install-whisper-cli
-    image: busybox:1.36
-    command: ["sh", "-c"]
-    args:
-      - echo whisper disabled; exit 0
   # 3. Setup Config and inject tokens
   - name: setup
     image: busybox:1.36
@@ -86,21 +110,52 @@ initContainers:
         readOnly: true
       - name: openclaw-config-rw
         mountPath: /config-rw
+extraContainers:
+  # Sidecar: Sync state back to MinIO in real-time
+  - name: s3-sync
+    image: minio/mc:latest
+    command: ["sh", "-c"]
+    args:
+      - |
+        mc alias set s3 "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
+        echo "Starting real-time S3 sync..."
+        mc mirror --watch --remove --overwrite /home/node/.openclaw s3/platform-state/openclaw/my-team/
+    env:
+      - name: MINIO_ENDPOINT
+        value: "http://minio.minio.svc.cluster.local:9000"
+      - name: MINIO_ACCESS_KEY
+        valueFrom:
+          secretKeyRef:
+            name: minio-root-credentials
+            key: rootUser
+      - name: MINIO_SECRET_KEY
+        valueFrom:
+          secretKeyRef:
+            name: minio-root-credentials
+            key: rootPassword
+    volumeMounts:
+      - name: state-data
+        mountPath: /home/node/.openclaw
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        cpu: 100m
+        memory: 128Mi
 extraVolumeMounts:
   - name: openclaw-config-rw
     mountPath: /config-rw
   - name: npm-cache
     mountPath: /npm-cache
-  - name: pvc-state
+  - name: state-data
     mountPath: /home/node/.openclaw
   - name: openclaw-scripts
     mountPath: /scripts
     readOnly: true
 persistence:
   state:
-    enabled: true
-    size: 1Gi
-    mountPath: /home/node/.openclaw
+    enabled: false
 extraVolumes:
   - name: openclaw-config-tpl
     configMap:
@@ -109,6 +164,8 @@ extraVolumes:
     emptyDir: {}
   - name: npm-cache
     emptyDir: {}
+  - name: state-data
+    emptyDir: {}
   - name: openclaw-scripts
     configMap:
       name: openclaw-scripts
@@ -116,7 +173,15 @@ extraVolumes:
 dbSecret:
   vaultPath: teams/my-team/openclaw/database
 dbInitJob:
-  enabled: false # OpenClaw uses file-based storage in this version
+  enabled: false
+extraExternalSecrets:
+  openclaw-telegram-secret:
+    refreshInterval: 1h
+    targetSecret: openclaw-telegram-secret
+    data:
+      - secretKey: OPENCLAW_TELEGRAM_TOKEN
+        remoteKey: secret/data/teams/my-team/openclaw
+        property: telegram-bot-token
 configMaps:
   openclaw-scripts:
     mcp-agent-proxy.js: |-
