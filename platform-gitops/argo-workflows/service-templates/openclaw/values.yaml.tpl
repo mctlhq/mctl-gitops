@@ -243,6 +243,13 @@ extraExternalSecrets:
       - secretKey: OPENCLAW_TELEGRAM_TOKEN
         remoteKey: secret/data/teams/__TEAM_NAME__/__SERVICE_NAME__
         property: telegram-bot-token
+  openclaw-openai-secret:
+    refreshInterval: 1h
+    targetSecret: openclaw-openai-secret
+    data:
+      - secretKey: OPENAI_API_KEY
+        remoteKey: secret/data/teams/__TEAM_NAME__/__SERVICE_NAME__/openai
+        property: api-key
   minio-cache-creds:
     refreshInterval: 1h
     targetSecret: minio-cache-creds

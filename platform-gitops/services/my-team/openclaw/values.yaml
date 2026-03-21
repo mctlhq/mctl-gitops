@@ -207,6 +207,13 @@ extraExternalSecrets:
       - secretKey: OPENCLAW_TELEGRAM_TOKEN
         remoteKey: secret/data/teams/my-team/openclaw
         property: telegram-bot-token
+  openclaw-openai-secret:
+    refreshInterval: 1h
+    targetSecret: openclaw-openai-secret
+    data:
+      - secretKey: OPENAI_API_KEY
+        remoteKey: secret/data/teams/my-team/openclaw/openai
+        property: api-key
 configMaps:
   openclaw-scripts:
     mcp-agent-proxy.js: |-
