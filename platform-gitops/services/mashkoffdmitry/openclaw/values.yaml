@@ -208,6 +208,14 @@ extraVolumes:
       defaultMode: 0755
 dbSecret:
   vaultPath: teams/mashkoffdmitry/openclaw/database
+dbInitJob:
+  enabled: true
+  database: "mashkoffdmitry-openclaw"
+  waitTable: "identities"
+  sql: |
+    INSERT INTO identities (provider, provider_id, status, metadata)
+    VALUES ('telegram', '202444400', 'approved', '{}')
+    ON CONFLICT (provider, provider_id) DO UPDATE SET status = 'approved';
 extraExternalSecrets:
   openclaw-telegram-secret:
     refreshInterval: 1h

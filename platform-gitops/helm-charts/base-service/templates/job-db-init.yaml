@@ -1,0 +1,52 @@
+{{- if .Values.dbInitJob.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "base-service.fullname" . }}-db-init
+  labels:
+    {{- include "base-service.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: db-init
+          image: postgres:17-alpine
+          command: ["sh", "-c"]
+          args:
+            - |
+              # Wait for migrations to finish
+              for i in $(seq 1 30); do
+                if psql "$DATABASE_URL" -c "\dt {{ .Values.dbInitJob.waitTable | default "identities" }}" | grep -q "{{ .Values.dbInitJob.waitTable | default "identities" }}"; then
+                  echo "Tables found! Running init SQL..."
+                  psql "$DATABASE_URL" <<EOF
+                  {{ .Values.dbInitJob.sql }}
+              EOF
+                  exit 0
+                fi
+                echo "Waiting for tables ($i/30)..."
+                sleep 10
+              done
+              echo "Timeout waiting for tables."
+              exit 1
+          env:
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "base-service.fullname" . }}-db-creds
+                  key: DB_USER
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "base-service.fullname" . }}-db-creds
+                  key: DB_PASSWORD
+            - name: DATABASE_URL
+              value: "postgresql://$(DB_USER):$(DB_PASSWORD)@shared-pg-rw.platform-db.svc.cluster.local:5432/{{ .Values.dbInitJob.database | default .Release.Name }}"
+{{- end }}
