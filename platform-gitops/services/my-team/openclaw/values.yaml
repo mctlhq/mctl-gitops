@@ -17,14 +17,14 @@ resources:
     cpu: 200m
     memory: 1Gi
   limits:
-    cpu: "2"
-    memory: 2Gi
+    cpu: "4"
+    memory: 4Gi
 # Recreate strategy required for clean init
 strategy:
   type: Recreate
 env:
   APP_ENV: production
-  NODE_OPTIONS: "--max-old-space-size=1536"
+  NODE_OPTIONS: "--max-old-space-size=3072"
   OPENCLAW_CONFIG_PATH: /config-rw/openclaw.json
 envFrom:
   - secretRef:
