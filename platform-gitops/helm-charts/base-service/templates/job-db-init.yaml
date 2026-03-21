@@ -40,12 +40,12 @@ spec:
             - name: DB_USER
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "base-service.fullname" . }}-db-creds
+                  name: {{ .Values.dbSecret.secretName | default (printf "%s-db-creds" (include "base-service.fullname" .)) }}
                   key: DB_USER
             - name: DB_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "base-service.fullname" . }}-db-creds
+                  name: {{ .Values.dbSecret.secretName | default (printf "%s-db-creds" (include "base-service.fullname" .)) }}
                   key: DB_PASSWORD
             - name: DATABASE_URL
               value: "postgresql://$(DB_USER):$(DB_PASSWORD)@shared-pg-rw.platform-db.svc.cluster.local:5432/{{ .Values.dbInitJob.database | default .Release.Name }}"
