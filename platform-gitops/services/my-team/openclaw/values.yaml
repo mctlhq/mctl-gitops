@@ -1,7 +1,7 @@
 # Service: openclaw
 # Team: my-team
 # Template: openclaw
-# Updated: 2026-03-21 (gemini-bot) - Zero PVC S3-backed state
+# Updated: 2026-03-21 (gemini-bot) - Standardized Vault Paths
 
 # Chart: base-service
 
@@ -19,10 +19,8 @@ resources:
   limits:
     cpu: "2"
     memory: 4Gi
-# Recreate strategy required for clean init
 strategy:
   type: Recreate
-# Set fsGroup=1000 so emptyDir is writable by node user
 podSecurityContext:
   fsGroup: 1000
 env:
@@ -33,7 +31,6 @@ envFrom:
   - secretRef:
       name: my-team-openclaw-base-service-db-creds
 initContainers:
-  # 1. Restore state from MinIO
   - name: restore-state
     image: minio/mc:latest
     command: ["sh", "-c"]
@@ -41,29 +38,20 @@ initContainers:
       - |
         mc alias set s3 "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
         if mc ls s3/platform-state/openclaw/my-team/ > /dev/null 2>&1; then
-          echo "Restoring state from S3..."
           mc mirror s3/platform-state/openclaw/my-team/ /home/node/.openclaw
         else
-          echo "No existing state found in S3. Starting fresh."
           mkdir -p /home/node/.openclaw
         fi
     env:
       - name: MINIO_ENDPOINT
-        value: "http://minio.minio.svc.cluster.local:9000"
+        valueFrom: { secretKeyRef: { name: minio-root-credentials, key: endpoint } }
       - name: MINIO_ACCESS_KEY
-        valueFrom:
-          secretKeyRef:
-            name: minio-root-credentials
-            key: rootUser
+        valueFrom: { secretKeyRef: { name: minio-root-credentials, key: access-key } }
       - name: MINIO_SECRET_KEY
-        valueFrom:
-          secretKeyRef:
-            name: minio-root-credentials
-            key: rootPassword
+        valueFrom: { secretKeyRef: { name: minio-root-credentials, key: secret-key } }
     volumeMounts:
       - name: state-data
         mountPath: /home/node/.openclaw
-  # 2. Pre-install mcp-remote
   - name: install-mcp-remote
     image: node:22-alpine
     command: ["sh", "-c"]
@@ -72,7 +60,6 @@ initContainers:
     volumeMounts:
       - name: npm-cache
         mountPath: /npm-cache
-  # 3. Setup Config and inject tokens
   - name: setup
     image: busybox:1.36
     command: ["sh", "-c"]
@@ -84,7 +71,6 @@ initContainers:
         if [ -n "$ADMIN_IDS" ]; then sed -i "s|__ADMIN_IDS__|$ADMIN_IDS|g" /config-rw/openclaw.json; fi
         chown 1000:1000 /config-rw/openclaw.json
         
-        # Inject Codex/OpenAI auth token into state directory
         mkdir -p /home/node/.openclaw/agents/main/agent
         if [ -n "$OPENAI_API_KEY" ]; then
           cat <<EOF > /home/node/.openclaw/agents/main/agent/auth-profiles.json
@@ -99,24 +85,13 @@ initContainers:
         chown -R 1000:1000 /home/node/.openclaw
     env:
       - name: TELEGRAM_TOKEN
-        valueFrom:
-          secretKeyRef:
-            name: openclaw-telegram-secret
-            key: OPENCLAW_TELEGRAM_TOKEN
+        valueFrom: { secretKeyRef: { name: openclaw-telegram-secret, key: telegram-bot-token } }
       - name: MCTL_TOKEN
-        valueFrom:
-          secretKeyRef:
-            name: openclaw-mctl-token
-            key: MCTL_API_TOKEN
-            optional: true
+        valueFrom: { secretKeyRef: { name: openclaw-mctl-token, key: MCTL_API_TOKEN, optional: true } }
       - name: OPENAI_API_KEY
-        valueFrom:
-          secretKeyRef:
-            name: openclaw-openai-secret
-            key: OPENAI_API_KEY
-            optional: true
+        valueFrom: { secretKeyRef: { name: openclaw-openai-secret, key: api-key } }
       - name: ADMIN_IDS
-        value: "202444400" # mashkovd
+        value: "202444400"
     volumeMounts:
       - name: openclaw-config-tpl
         mountPath: /config-tpl
@@ -126,38 +101,23 @@ initContainers:
       - name: state-data
         mountPath: /home/node/.openclaw
 extraContainers:
-  # Sidecar: Sync state back to MinIO in real-time
   - name: s3-sync
     image: minio/mc:latest
     command: ["sh", "-c"]
     args:
       - |
         mc alias set s3 "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
-        echo "Starting real-time S3 sync..."
         mc mirror --watch --remove --overwrite /home/node/.openclaw s3/platform-state/openclaw/my-team/
     env:
       - name: MINIO_ENDPOINT
-        value: "http://minio.minio.svc.cluster.local:9000"
+        valueFrom: { secretKeyRef: { name: minio-root-credentials, key: endpoint } }
       - name: MINIO_ACCESS_KEY
-        valueFrom:
-          secretKeyRef:
-            name: minio-root-credentials
-            key: rootUser
+        valueFrom: { secretKeyRef: { name: minio-root-credentials, key: access-key } }
       - name: MINIO_SECRET_KEY
-        valueFrom:
-          secretKeyRef:
-            name: minio-root-credentials
-            key: rootPassword
+        valueFrom: { secretKeyRef: { name: minio-root-credentials, key: secret-key } }
     volumeMounts:
       - name: state-data
         mountPath: /home/node/.openclaw
-    resources:
-      requests:
-        cpu: 10m
-        memory: 32Mi
-      limits:
-        cpu: 100m
-        memory: 128Mi
 extraVolumeMounts:
   - name: openclaw-config-rw
     mountPath: /config-rw
@@ -187,64 +147,38 @@ extraVolumes:
       defaultMode: 0755
 dbSecret:
   vaultPath: teams/my-team/openclaw/database
-dbInitJob:
-  enabled: false
 extraExternalSecrets:
   minio-root-credentials:
     refreshInterval: 1h
     targetSecret: minio-root-credentials
     data:
-      - secretKey: rootUser
-        remoteKey: platform/minio
-        property: root-user
-      - secretKey: rootPassword
-        remoteKey: platform/minio
-        property: root-password
+      - secretKey: access-key
+        remoteKey: secret/data/teams/my-team/openclaw/minio
+        property: MINIO_ACCESS_KEY
+      - secretKey: secret-key
+        remoteKey: secret/data/teams/my-team/openclaw/minio
+        property: MINIO_SECRET_KEY
+      - secretKey: endpoint
+        remoteKey: secret/data/teams/my-team/openclaw/minio
+        property: MINIO_ENDPOINT
+      - secretKey: bucket
+        remoteKey: secret/data/teams/my-team/openclaw/minio
+        property: MINIO_BUCKET
   openclaw-telegram-secret:
     refreshInterval: 1h
     targetSecret: openclaw-telegram-secret
     data:
-      - secretKey: OPENCLAW_TELEGRAM_TOKEN
-        remoteKey: secret/data/teams/my-team/openclaw
+      - secretKey: telegram-bot-token
+        remoteKey: secret/data/teams/my-team/openclaw/telegram
         property: telegram-bot-token
   openclaw-openai-secret:
     refreshInterval: 1h
     targetSecret: openclaw-openai-secret
     data:
-      - secretKey: OPENAI_API_KEY
+      - secretKey: api-key
         remoteKey: secret/data/teams/my-team/openclaw/openai
         property: api-key
 configMaps:
-  openclaw-scripts:
-    mcp-agent-proxy.js: |-
-      #!/usr/bin/env node
-      const http = require('http');
-      process.stdin.setEncoding('utf8');
-      let buf = '';
-      process.stdin.on('data', chunk => {
-        buf += chunk;
-        let nl;
-        while ((nl = buf.indexOf('\n')) !== -1) {
-          const line = buf.slice(0, nl).trim();
-          buf = buf.slice(nl + 1);
-          if (line) handleLine(line);
-        }
-      });
-      function handleLine(line) {
-        let req;
-        try { req = JSON.parse(line); } catch (_) { return; }
-        callAgent(req).then(res => write(res), err => write({ jsonrpc: '2.0', id: req.id, error: { code: -32603, message: String(err) } }));
-      }
-      function write(obj) { process.stdout.write(JSON.stringify(obj) + '\n'); }
-      function callAgent(body) {
-        return new Promise((resolve, reject) => {
-          const data = JSON.stringify(body);
-          const req = http.request({ hostname: 'mctl-agent.admins.svc.cluster.local', port: 8080, path: '/mcp', method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } }, res => {
-            let out = ''; res.on('data', c => { out += c; }); res.on('end', () => { try { resolve(JSON.parse(out)); } catch (_) { reject(new Error('invalid JSON')); } });
-          });
-          req.on('error', reject); req.write(data); req.end();
-        });
-      }
   openclaw-config:
     openclaw.json: |-
       {
@@ -253,61 +187,29 @@ configMaps:
           "port": 18789,
           "auth": {
             "mode": "trusted-proxy",
-            "trustedProxy": {
-              "userHeader": "X-Forwarded-For"
-            }
+            "trustedProxy": { "userHeader": "X-Forwarded-For" }
           },
-          "trustedProxies": [
-            "10.42.0.0/16",
-            "10.43.0.0/16",
-            "172.16.0.0/12"
-          ],
+          "trustedProxies": ["10.42.0.0/16", "10.43.0.0/16", "172.16.0.0/12"],
           "controlUi": {
             "enabled": true,
-            "allowedOrigins": [
-              "https://my-team-openclaw.mctl.ai",
-              "https://my-team-openclaw.mctl.me"
-            ]
+            "allowedOrigins": ["https://my-team-openclaw.mctl.ai"]
           }
         },
-        "agents": {
-          "defaults": {
-            "model": {
-              "primary": "openai-codex/gpt-5.4"
-            }
-          }
-        },
+        "agents": { "defaults": { "model": { "primary": "openai-codex/gpt-5.4" } } },
         "auth": {
-          "profiles": {
-            "openai-codex:default": {
-              "provider": "openai-codex",
-              "mode": "oauth"
-            }
-          },
-          "order": {
-            "openai-codex": ["openai-codex:default"]
-          }
+          "profiles": { "openai-codex:default": { "provider": "openai-codex", "mode": "oauth" } },
+          "order": { "openai-codex": ["openai-codex:default"] }
         },
         "channels": {
           "telegram": {
-            "enabled": false,
+            "enabled": true,
             "botToken": "__TELEGRAM_TOKEN__",
             "dmPolicy": "pairing",
-            "groupPolicy": "open",
-            "allowFrom": [""]
+            "groupPolicy": "open"
           }
         },
         "mcp": {
           "servers": {
-            "mctl-platform": {
-              "command": "node",
-              "args": [
-                "/npm-cache/node_modules/mcp-remote/dist/proxy.js",
-                "https://api.mctl.ai/mcp",
-                "--transport", "sse",
-                "--callback-url", "https://my-team-openclaw.mctl.ai/oauth/callback/mctl-platform"
-              ]
-            },
             "mctl-agent": {"command": "node", "args": ["/scripts/mcp-agent-proxy.js"]}
           }
         }
@@ -316,11 +218,9 @@ ingress:
   enabled: true
   hosts:
     - my-team-openclaw.mctl.ai
-    - my-team-openclaw.mctl.me
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
   tls:
     - secretName: openclaw-tls
       hosts:
         - my-team-openclaw.mctl.ai
-        - my-team-openclaw.mctl.me
