@@ -19,9 +19,11 @@ spec:
       kind: Cluster
       jqPathExpressions:
         - .metadata.annotations
+        - .metadata.labels
         - .status
-        - .spec.resources   # CNPG normalizes CPU/memory quantities (e.g. 1000m → "1")
-        - .spec.postgresql.parameters  # CNPG populates default postgresql params at runtime
+        - .spec.resources
+        - .spec.postgresql
+        - .spec.storage
   syncPolicy:
     automated:
       prune: true
