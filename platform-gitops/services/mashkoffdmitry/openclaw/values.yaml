@@ -304,13 +304,20 @@ configMaps:
           }
         },
         "agents": {
+          "defaults": {
+            "model": {
+              "primary": "openai/gpt-4o"
+            }
+          }
+        },
+        "models": {
+          "mode": "merge",
           "providers": {
             "openai": {
-              "type": "openai",
-              "apiKey": "__OPENAI_API_KEY__"
+              "apiKey": "__OPENAI_API_KEY__",
+              "api": "openai-completions"
             }
-          },
-          "defaultModel": "openai/gpt-4o"
+          }
         },
         "channels": {
           "telegram": {
