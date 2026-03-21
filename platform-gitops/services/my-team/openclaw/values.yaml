@@ -1,7 +1,7 @@
 # Service: openclaw
 # Team: my-team
 # Template: openclaw
-# Updated: 2026-03-21 (gemini-bot) - Reverted to working config schema
+# Updated: 2026-03-21 (gemini-bot) - Fixed Persistence and Config Schema
 
 # Chart: base-service
 
@@ -22,6 +22,9 @@ resources:
 # Recreate strategy required for clean init
 strategy:
   type: Recreate
+# Set fsGroup=1000 so PVC is writable by node user
+podSecurityContext:
+  fsGroup: 1000
 env:
   APP_ENV: production
   NODE_OPTIONS: "--max-old-space-size=3072"
@@ -88,14 +91,16 @@ extraVolumeMounts:
     mountPath: /config-rw
   - name: npm-cache
     mountPath: /npm-cache
-  - name: pvc-whisper
-    mountPath: /whisper-storage
+  - name: pvc-state
+    mountPath: /home/node/.openclaw
   - name: openclaw-scripts
     mountPath: /scripts
     readOnly: true
 persistence:
   state:
-    enabled: false
+    enabled: true
+    size: 1Gi
+    mountPath: /home/node/.openclaw
 extraVolumes:
   - name: openclaw-config-tpl
     configMap:
@@ -104,8 +109,6 @@ extraVolumes:
     emptyDir: {}
   - name: npm-cache
     emptyDir: {}
-  - name: pvc-whisper
-    emptyDir: {}
   - name: openclaw-scripts
     configMap:
       name: openclaw-scripts
@@ -113,21 +116,7 @@ extraVolumes:
 dbSecret:
   vaultPath: teams/my-team/openclaw/database
 dbInitJob:
-  enabled: true
-  database: "my-team-openclaw"
-  waitTable: "identities"
-  sql: |
-    INSERT INTO identities (provider, provider_id, status, metadata)
-    VALUES ('telegram', '202444400', 'approved', '{}')
-    ON CONFLICT (provider, provider_id) DO UPDATE SET status = 'approved';
-extraExternalSecrets:
-  openclaw-telegram-secret:
-    refreshInterval: 1h
-    targetSecret: openclaw-telegram-secret
-    data:
-      - secretKey: OPENCLAW_TELEGRAM_TOKEN
-        remoteKey: secret/data/teams/my-team/openclaw
-        property: telegram-bot-token
+  enabled: false # OpenClaw uses file-based storage in this version
 configMaps:
   openclaw-scripts:
     mcp-agent-proxy.js: |-
