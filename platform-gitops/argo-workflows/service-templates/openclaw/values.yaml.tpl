@@ -161,6 +161,20 @@ initContainers:
         if [ -n "$TELEGRAM_TOKEN" ]; then sed -i "s|__TELEGRAM_TOKEN__|$TELEGRAM_TOKEN|g" /config-rw/openclaw.json; fi
         if [ -n "$OPENAI_API_KEY" ]; then sed -i "s|__OPENAI_API_KEY__|$OPENAI_API_KEY|g" /config-rw/openclaw.json; fi
         chown 1000:1000 /config-rw/openclaw.json
+        
+        # Inject Codex/OpenAI auth token into state directory
+        mkdir -p /home/node/.openclaw/agents/main/agent
+        if [ -n "$OPENAI_API_KEY" ]; then
+          cat <<EOF > /home/node/.openclaw/agents/main/agent/auth-profiles.json
+        {
+          "openai-codex:default": {
+            "provider": "openai-codex",
+            "apiKey": "$OPENAI_API_KEY"
+          }
+        }
+        EOF
+        fi
+        chown -R 1000:1000 /home/node/.openclaw
     env:
       - name: TELEGRAM_TOKEN
         valueFrom:
@@ -179,6 +193,8 @@ initContainers:
         readOnly: true
       - name: openclaw-config-rw
         mountPath: /config-rw
+      - name: pvc-state
+        mountPath: /home/node/.openclaw
 extraVolumeMounts:
   - name: openclaw-config-rw
     mountPath: /config-rw
