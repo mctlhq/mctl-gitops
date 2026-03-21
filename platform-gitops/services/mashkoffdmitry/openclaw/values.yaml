@@ -178,7 +178,7 @@ initContainers:
             key: OPENAI_API_KEY
             optional: true
       - name: ADMIN_IDS
-        value: "202444400"
+        value: "210408407"
     volumeMounts:
       - name: openclaw-config-tpl
         mountPath: /config-tpl
@@ -232,7 +232,7 @@ dbInitJob:
   waitTable: "identities"
   sql: |
     INSERT INTO identities (provider, provider_id, status, metadata)
-    VALUES ('telegram', '202444400', 'approved', '{}')
+    VALUES ('telegram', '210408407', 'approved', '{}')
     ON CONFLICT (provider, provider_id) DO UPDATE SET status = 'approved';
 extraExternalSecrets:
   openclaw-telegram-secret:
@@ -240,7 +240,7 @@ extraExternalSecrets:
     targetSecret: openclaw-telegram-secret
     data:
       - secretKey: OPENCLAW_TELEGRAM_TOKEN
-        remoteKey: secret/data/platform/alertmanager
+        remoteKey: secret/data/teams/mashkoffdmitry/openclaw
         property: telegram-bot-token
   openclaw-mctl-token:
     refreshInterval: 1h
