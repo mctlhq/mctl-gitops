@@ -11,10 +11,10 @@ tenant:
       role: owner
   quotas:
     requests.cpu: "2"
-    requests.memory: "4Gi"
+    requests.memory: "3Gi"
     limits.cpu: "4"
     limits.memory: "6Gi"
-    pods: "10"
+    pods: "20"
     persistentvolumeclaims: "5"
     services: "10"
   limitRange:
