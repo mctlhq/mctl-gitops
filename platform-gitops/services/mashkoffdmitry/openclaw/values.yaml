@@ -151,6 +151,7 @@ initContainers:
         if [ -n "$TELEGRAM_TOKEN" ]; then sed -i "s|__TELEGRAM_TOKEN__|$TELEGRAM_TOKEN|g" /config-rw/openclaw.json; fi
         if [ -n "$MCTL_TOKEN" ]; then sed -i "s|__MCTL_TOKEN__|$MCTL_TOKEN|g" /config-rw/openclaw.json; fi
         if [ -n "$OPENAI_API_KEY" ]; then sed -i "s|__OPENAI_API_KEY__|$OPENAI_API_KEY|g" /config-rw/openclaw.json; fi
+        if [ -n "$ADMIN_IDS" ]; then sed -i "s|__ADMIN_IDS__|$ADMIN_IDS|g" /config-rw/openclaw.json; fi
         chown 1000:1000 /config-rw/openclaw.json
     env:
       - name: TELEGRAM_TOKEN
@@ -170,6 +171,8 @@ initContainers:
             name: openclaw-openai-secret
             key: OPENAI_API_KEY
             optional: true
+      - name: ADMIN_IDS
+        value: "202444400"
     volumeMounts:
       - name: openclaw-config-tpl
         mountPath: /config-tpl
@@ -339,7 +342,15 @@ configMaps:
               "gpt-5.4": "gpt-5.4"
             }
           },
-          "anthropic": { "enabled": false },
+          "anthropic": {
+            "enabled": true,
+            "token": "__MCTL_TOKEN__"
+          },
+          "telegram": {
+            "enabled": true,
+            "token": "__TELEGRAM_TOKEN__",
+            "admin_ids": [__ADMIN_IDS__]
+          },
           "openai": { "enabled": false },
           "google": { "enabled": false }
         },
