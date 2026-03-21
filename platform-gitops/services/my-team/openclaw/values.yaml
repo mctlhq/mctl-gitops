@@ -215,9 +215,6 @@ configMaps:
           "profiles": { "openai-codex:default": { "provider": "openai-codex", "mode": "oauth" } },
           "order": { "openai-codex": ["openai-codex:default"] }
         },
-        "providers": {
-          "openai-codex": {}
-        },
         "channels": {
           "telegram": {
             "enabled": true,
