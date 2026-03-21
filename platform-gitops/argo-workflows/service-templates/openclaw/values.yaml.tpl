@@ -180,6 +180,8 @@ initContainers:
         readOnly: true
       - name: openclaw-config-rw
         mountPath: /config-rw
+      - name: pvc-state
+        mountPath: /home/node/.openclaw
 extraVolumeMounts:
   - name: openclaw-config-rw
     mountPath: /config-rw
