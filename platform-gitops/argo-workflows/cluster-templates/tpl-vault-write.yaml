@@ -14,6 +14,9 @@ spec:
           - name: team_name
           - name: component_name
           - name: secret_env_vars    # KEY=value newline-separated
+          - name: telegram_bot_token
+            default: ""
+            # Telegram bot token for this service — written as telegram-bot-token
       script:
         image: alpine:3.19
         command: [sh]
@@ -23,6 +26,7 @@ spec:
           TEAM="{{inputs.parameters.team_name}}"
           SERVICE="{{inputs.parameters.component_name}}"
           SECRET_TEXT="{{inputs.parameters.secret_env_vars}}"
+          TELEGRAM_BOT_TOKEN="{{inputs.parameters.telegram_bot_token}}"
           VAULT_PATH="secret/data/teams/${TEAM}/${SERVICE}"
 
           echo "🔐 Authenticating with Vault (Kubernetes auth)..."
@@ -63,6 +67,18 @@ spec:
           done << 'SECRETS_EOF'
           {{inputs.parameters.secret_env_vars}}
           SECRETS_EOF
+
+          # Append telegram_bot_token if provided
+          if [ -n "$TELEGRAM_BOT_TOKEN" ]; then
+            token_escaped=$(echo "$TELEGRAM_BOT_TOKEN" | sed 's/"/\\"/g')
+            if [ "$FIRST" = "true" ]; then
+              JSON_DATA="${JSON_DATA}\"telegram-bot-token\":\"${token_escaped}\""
+              FIRST=false
+            else
+              JSON_DATA="${JSON_DATA},\"telegram-bot-token\":\"${token_escaped}\""
+            fi
+          fi
+
           JSON_DATA="${JSON_DATA}}"
 
           # ── Merge with existing secrets ──────────────────────────────────────

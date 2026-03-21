@@ -149,28 +149,15 @@ initContainers:
       - |
         cp /config-tpl/openclaw.json /config-rw/openclaw.json
         if [ -n "$TELEGRAM_TOKEN" ]; then sed -i "s|__TELEGRAM_TOKEN__|$TELEGRAM_TOKEN|g" /config-rw/openclaw.json; fi
-        if [ -n "$MCTL_TOKEN" ]; then sed -i "s|__MCTL_TOKEN__|$MCTL_TOKEN|g" /config-rw/openclaw.json; fi
         if [ -n "$OPENAI_API_KEY" ]; then sed -i "s|__OPENAI_API_KEY__|$OPENAI_API_KEY|g" /config-rw/openclaw.json; fi
         if [ -n "$ADMIN_IDS" ]; then sed -i "s|__ADMIN_IDS__|$ADMIN_IDS|g" /config-rw/openclaw.json; fi
         chown 1000:1000 /config-rw/openclaw.json
-        # Copy auth-profiles (openai-codex OAuth tokens) into agent dir
-        mkdir -p /agent-dir
-        if [ -f /auth-profiles-secret/auth-profiles.json ]; then
-          cp /auth-profiles-secret/auth-profiles.json /agent-dir/auth-profiles.json
-          chown 1000:1000 /agent-dir/auth-profiles.json
-        fi
     env:
       - name: TELEGRAM_TOKEN
         valueFrom:
           secretKeyRef:
             name: openclaw-telegram-secret
             key: OPENCLAW_TELEGRAM_TOKEN
-      - name: MCTL_TOKEN
-        valueFrom:
-          secretKeyRef:
-            name: openclaw-mctl-token
-            key: MCTL_API_TOKEN
-            optional: true
       - name: OPENAI_API_KEY
         valueFrom:
           secretKeyRef:
@@ -185,11 +172,6 @@ initContainers:
         readOnly: true
       - name: openclaw-config-rw
         mountPath: /config-rw
-      - name: auth-profiles-secret
-        mountPath: /auth-profiles-secret
-        readOnly: true
-      - name: openclaw-agent-dir
-        mountPath: /agent-dir
 extraVolumeMounts:
   - name: openclaw-config-rw
     mountPath: /config-rw
@@ -197,8 +179,6 @@ extraVolumeMounts:
     mountPath: /npm-cache
   - name: pvc-whisper
     mountPath: /whisper-storage
-  - name: openclaw-agent-dir
-    mountPath: /home/node/.openclaw/agents/main/agent
   - name: openclaw-scripts
     mountPath: /scripts
     readOnly: true
@@ -219,11 +199,6 @@ extraVolumes:
     configMap:
       name: openclaw-scripts
       defaultMode: 0755
-  - name: auth-profiles-secret
-    secret:
-      secretName: openclaw-auth-profiles
-  - name: openclaw-agent-dir
-    emptyDir: {}
 dbSecret:
   vaultPath: teams/mashkoffdmitry/openclaw/database
 dbInitJob:
@@ -242,13 +217,6 @@ extraExternalSecrets:
       - secretKey: OPENCLAW_TELEGRAM_TOKEN
         remoteKey: secret/data/teams/mashkoffdmitry/openclaw
         property: telegram-bot-token
-  openclaw-mctl-token:
-    refreshInterval: 1h
-    targetSecret: openclaw-mctl-token
-    data:
-      - secretKey: MCTL_API_TOKEN
-        remoteKey: secret/data/teams/mashkoffdmitry/openclaw
-        property: mctl-api-token
   minio-cache-creds:
     refreshInterval: 1h
     targetSecret: minio-cache-creds
@@ -319,7 +287,14 @@ configMaps:
               "https://mashkoffdmitry-openclaw.mctl.ai",
               "https://mashkoffdmitry-openclaw.mctl.me"
             ]
-          }
+          },
+          "proxyRoutes": [
+            {
+              "path": "/oauth/callback/mctl-platform",
+              "target": "http://localhost:3334",
+              "auth": "none"
+            }
+          ]
         },
         "agents": {
           "defaults": {
@@ -352,7 +327,12 @@ configMaps:
           "servers": {
             "mctl-platform": {
               "command": "node",
-              "args": ["/npm-cache/node_modules/mcp-remote/dist/proxy.js", "https://api.mctl.ai/mcp", "--header", "Authorization: Bearer __MCTL_TOKEN__"]
+              "args": [
+                "/npm-cache/node_modules/mcp-remote/dist/proxy.js",
+                "https://api.mctl.ai/mcp",
+                "--transport", "sse",
+                "--callback-url", "https://mashkoffdmitry-openclaw.mctl.ai/oauth/callback/mctl-platform"
+              ]
             },
             "mctl-agent": {"command": "node", "args": ["/scripts/mcp-agent-proxy.js"]}
           }

@@ -43,6 +43,9 @@ spec:
             default: ""
           - name: default_model
             default: "openai-codex/gpt-5.4"
+          - name: telegram_owner_id
+            default: ""
+            # Telegram user ID of the service owner — substitutes __TELEGRAM_OWNER_ID__ in template
       script:
         image: alpine:3.19
         command: [sh]
@@ -68,6 +71,7 @@ spec:
           SERVICE_TEMPLATE="{{inputs.parameters.service_template}}"
           CONFIG_PATCH="{{inputs.parameters.config_patch}}"
           DEFAULT_MODEL="{{inputs.parameters.default_model}}"
+          TELEGRAM_OWNER_ID="{{inputs.parameters.telegram_owner_id}}"
 
           # Normalize sentinels (Backstage strips bare empty strings from YAML)
           [ "$HOST" = "none" ] && HOST=""
@@ -174,6 +178,7 @@ spec:
               -e "s|__PORT__|${PORT}|g" \
               -e "s|__HOST__|${HOST}|g" \
               -e "s|__DEFAULT_MODEL__|${DEFAULT_MODEL}|g" \
+              -e "s|__TELEGRAM_OWNER_ID__|${TELEGRAM_OWNER_ID}|g" \
               "$TPL" > "${DIR}/values.yaml"
 
             # Auto-add mirror domain (alternate ↔ primary) + TLS
