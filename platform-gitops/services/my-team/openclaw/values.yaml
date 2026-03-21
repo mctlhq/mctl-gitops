@@ -70,19 +70,6 @@ initContainers:
         if [ -n "$MCTL_TOKEN" ]; then sed -i "s|__MCTL_TOKEN__|$MCTL_TOKEN|g" /config-rw/openclaw.json; fi
         if [ -n "$ADMIN_IDS" ]; then sed -i "s|__ADMIN_IDS__|$ADMIN_IDS|g" /config-rw/openclaw.json; fi
         chown 1000:1000 /config-rw/openclaw.json
-        
-        mkdir -p /home/node/.openclaw/agents/main/agent
-        if [ -n "$OPENAI_API_KEY" ]; then
-          cat <<EOF > /home/node/.openclaw/agents/main/agent/auth-profiles.json
-        {
-          "openai-codex:default": {
-            "provider": "openai-codex",
-            "apiKey": "$OPENAI_API_KEY"
-          }
-        }
-        EOF
-        fi
-        chown -R 1000:1000 /home/node/.openclaw
     env:
       - name: TELEGRAM_TOKEN
         valueFrom: { secretKeyRef: { name: openclaw-telegram-secret, key: telegram-bot-token } }
@@ -98,8 +85,6 @@ initContainers:
         readOnly: true
       - name: openclaw-config-rw
         mountPath: /config-rw
-      - name: state-data
-        mountPath: /home/node/.openclaw
 extraContainers:
   - name: s3-sync
     image: minio/mc:latest
@@ -225,7 +210,7 @@ configMaps:
             "allowedOrigins": ["https://my-team-openclaw.mctl.ai"]
           }
         },
-        "agents": { "defaults": { "model": { "primary": "openai-codex/gpt-5.4" } } },
+        "agents": { "defaults": { "model": { "primary": "openai-codex/gpt-5.4-codex" } } },
         "auth": {
           "profiles": { "openai-codex:default": { "provider": "openai-codex", "mode": "oauth" } },
           "order": { "openai-codex": ["openai-codex:default"] }
