@@ -211,13 +211,7 @@ dbSecret:
   vaultPath: teams/my-team/openclaw/database
   secretName: my-team-openclaw-db-creds
 dbInitJob:
-  enabled: true
-  database: "my-team-openclaw"
-  waitTable: "identities"
-  sql: |
-    INSERT INTO identities (provider, provider_id, status, metadata)
-    VALUES ('telegram', '', 'approved', '{}')
-    ON CONFLICT (provider, provider_id) DO UPDATE SET status = 'approved';
+  enabled: false
 extraExternalSecrets:
   openclaw-telegram-secret:
     refreshInterval: 1h

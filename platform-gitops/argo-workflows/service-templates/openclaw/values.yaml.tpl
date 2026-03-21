@@ -211,13 +211,7 @@ dbSecret:
   secretName: __TEAM_NAME__-__SERVICE_NAME__-db-creds
 
 dbInitJob:
-  enabled: true
-  database: "__TEAM_NAME__-__SERVICE_NAME__"
-  waitTable: "identities"
-  sql: |
-    INSERT INTO identities (provider, provider_id, status, metadata)
-    VALUES ('telegram', '__TELEGRAM_OWNER_ID__', 'approved', '{}')
-    ON CONFLICT (provider, provider_id) DO UPDATE SET status = 'approved';
+  enabled: false
 
 extraExternalSecrets:
   openclaw-telegram-secret:
