@@ -352,6 +352,7 @@ configMaps:
             "allowFrom": ["210408407"]
           }
         },
+
         "mcp": {
           "servers": {
             "mctl-platform": {
