@@ -254,6 +254,12 @@ spec:
       targetRevision: main
       path: platform-gitops/infra-components/observability/secrets
 
+  ignoreDifferences:
+    - group: operator.victoriametrics.com
+      kind: VMSingle
+      jsonPointers:
+        - /spec/extraContainers
+
   destination:
     server: {{ .Values.spec.destination.server }}
     namespace: monitoring
