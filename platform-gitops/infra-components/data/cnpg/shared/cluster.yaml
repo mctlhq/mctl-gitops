@@ -73,7 +73,6 @@ spec:
       # Backstage — access to own db + postgres db (assertDatabaseExists check)
       - host backstage backstage all scram-sha-256
       - host postgres backstage all scram-sha-256
-      - host mashkoffdmitry-openclaw backstage all scram-sha-256
       - host smoke-test-openclaw backstage all scram-sha-256
       # Argo Workflows — persistence and archive
       - host argo-workflows argoworkflows all scram-sha-256
@@ -84,8 +83,6 @@ spec:
       - host test-spring-test test-spring-test all scram-sha-256
       - host tests-pdb-test-svc tests-pdb-test-svc all scram-sha-256
       # smoke-test-svc: ephemeral — added/removed by smoke-test CWT, not managed here
-      - host mashkoffdmitry-knot-mvp mashkoffdmitry-knot-mvp all scram-sha-256
-      - host mashkoffdmitry-openclaw mashkoffdmitry-openclaw all scram-sha-256
       - host mctl-agent mctl-agent all scram-sha-256
       - host all all 0.0.0.0/0 reject
 
@@ -133,22 +130,7 @@ spec:
         ensure: present
         passwordSecret:
           name: tests-pdb-test-svc-db-creds
-      - name: mashkoffdmitry-knot-mvp
-        login: true
-        connectionLimit: 10
-        ensure: present
         passwordSecret:
-          name: mashkoffdmitry-knot-mvp-db-creds
-      - name: mashkoffdmitry-openclaw
-        login: true
-        connectionLimit: 10
-        ensure: present
-        passwordSecret:
-          name: mashkoffdmitry-openclaw-base-service-db-creds
-      # - name: team1_app1
-      #   login: true
-      #   connectionLimit: 10
-      #   ensure: present
       #   passwordSecret:
       #     name: team1-app1-db-creds
 

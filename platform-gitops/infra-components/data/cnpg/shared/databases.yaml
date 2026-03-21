@@ -71,27 +71,9 @@ spec:
 apiVersion: postgresql.cnpg.io/v1
 kind: Database
 metadata:
-  name: mashkoffdmitry-knot-mvp-db
-spec:
-  name: "mashkoffdmitry-knot-mvp"
-  owner: "mashkoffdmitry"
-  cluster:
-    name: shared-pg
-  databaseReclaimPolicy: retain
-
----
 apiVersion: postgresql.cnpg.io/v1
 kind: Database
 metadata:
-  name: mashkoffdmitry-openclaw-db
-spec:
-  name: "mashkoffdmitry-openclaw"
-  owner: "mashkoffdmitry-openclaw"
-  cluster:
-    name: shared-pg
-  databaseReclaimPolicy: retain
-
----
 apiVersion: postgresql.cnpg.io/v1
 kind: Database
 metadata:
