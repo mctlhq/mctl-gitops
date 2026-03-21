@@ -13,3 +13,12 @@ path "secret/data/teams/*" {
 path "secret/metadata/teams/*" {
   capabilities = ["read", "list", "delete"]
 }
+
+# Read/write platform secrets (system components)
+path "secret/data/platform/*" {
+  capabilities = ["create", "read", "update", "delete", "list"]
+}
+
+path "secret/metadata/platform/*" {
+  capabilities = ["read", "list", "delete"]
+}
