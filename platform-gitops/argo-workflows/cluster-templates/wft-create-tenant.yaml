@@ -237,11 +237,13 @@ spec:
 
           # ── Security: check tenant doesn't already exist ────────────────────
           TENANT_DIR="platform-gitops/tenants/${TENANT}"
+          SKIP_GIT=false
           if [ -d "$TENANT_DIR" ]; then
-            echo "ERROR: Tenant directory already exists: $TENANT_DIR"
-            echo "Use the 'Update Tenant' workflow to modify an existing tenant."
-            exit 1
+            echo "INFO: Tenant directory already exists: $TENANT_DIR — skipping git commit, continuing provisioning."
+            SKIP_GIT=true
           fi
+
+          if [ "$SKIP_GIT" = "false" ]; then
 
           # ── Create tenant directory ─────────────────────────────────────────
           mkdir -p "$TENANT_DIR"
@@ -401,3 +403,5 @@ spec:
               exit 1
             fi
           done
+
+          fi # end SKIP_GIT
