@@ -298,14 +298,7 @@ configMaps:
               "https://__TEAM_NAME__-__SERVICE_NAME__.mctl.ai",
               "https://__TEAM_NAME__-__SERVICE_NAME__.mctl.me"
             ]
-          },
-          "proxyRoutes": [
-            {
-              "path": "/oauth/callback/mctl-platform",
-              "target": "http://localhost:3334",
-              "auth": "none"
-            }
-          ]
+          }
         },
         "agents": {
           "defaults": {
