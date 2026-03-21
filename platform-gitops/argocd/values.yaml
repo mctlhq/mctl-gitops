@@ -165,13 +165,13 @@ argo-cd:
   controller:
     resources:
       limits:
-        memory: 768Mi
+        memory: 1Gi
       requests:
         cpu: 100m
-        memory: 384Mi
+        memory: 512Mi
     env:
       - name: GOMEMLIMIT
-        value: "700MiB"
+        value: "900MiB"
 
   # Dex server probes — auto-restart when OIDC provider is temporarily unavailable
   # Without these, dex stays "Running" but broken after failed initialization
