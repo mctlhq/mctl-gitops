@@ -303,34 +303,31 @@ configMaps:
             ]
           }
         },
-        "capability": {
-          "llm": {
-            "defaultModel": "openai-codex/gpt-5.4"
-          },
+        "agents": {
           "providers": {
-            "openai-codex": {
-              "type": "openai-codex",
-              "baseUrl": "https://codex.openai.com/v1",
-              "models": {
-                "gpt-5.4": "gpt-5.4"
-              }
-            },
-            "anthropic": {
-              "enabled": true,
-              "token": "__MCTL_TOKEN__"
+            "openai": {
+              "type": "openai",
+              "apiKey": "__OPENAI_API_KEY__"
             }
           },
+          "defaultModel": "openai/gpt-4o"
+        },
+        "channels": {
           "telegram": {
             "enabled": true,
-            "token": "__TELEGRAM_TOKEN__",
-            "admin_ids": [__ADMIN_IDS__]
+            "botToken": "__TELEGRAM_TOKEN__",
+            "dmPolicy": "pairing",
+            "groupPolicy": "open",
+            "allowFrom": ["__ADMIN_IDS__"]
           }
         },
-        "auth": {
-          "methods": {
-            "openai-codex": {
-              "enabled": true
-            }
+        "mcp": {
+          "servers": {
+            "mctl-platform": {
+              "command": "node",
+              "args": ["/npm-cache/node_modules/mcp-remote/dist/proxy.js", "https://api.mctl.ai/mcp", "--header", "Authorization: Bearer __MCTL_TOKEN__"]
+            },
+            "mctl-agent": {"command": "node", "args": ["/scripts/mcp-agent-proxy.js"]}
           }
         }
       }
