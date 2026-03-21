@@ -186,10 +186,13 @@ extraVolumeMounts:
   - name: openclaw-scripts
     mountPath: /scripts
     readOnly: true
+  - name: pvc-state
+    mountPath: /home/node/.openclaw
 
 persistence:
   state:
-    enabled: false
+    enabled: true
+    size: 1Gi
 
 extraVolumes:
   - name: openclaw-config-tpl
