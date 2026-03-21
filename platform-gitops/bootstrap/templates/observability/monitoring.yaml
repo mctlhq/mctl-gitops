@@ -93,6 +93,8 @@ spec:
           vmagent:
             enabled: true
             spec:
+              remoteWrite:
+                - url: http://vmsingle-monitoring-victoria-metrics-k8s-stack.monitoring.svc.cluster.local:8428/api/v1/write
               selectAllByDefault: true
               scrapeInterval: 1m
               resources:
