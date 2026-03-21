@@ -110,6 +110,8 @@ spec:
                   value: "{{workflow.parameters.git_tag}}"
                 - name: image_tag
                   value: "{{workflow.parameters.image_tag}}"
+                - name: service_template
+                  value: "{{workflow.parameters.service_template}}"
 
           # Step 1b: build Docker image via GitHub Actions (skip for update-config)
           - name: build-image
