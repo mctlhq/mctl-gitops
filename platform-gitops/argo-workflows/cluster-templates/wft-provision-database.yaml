@@ -83,9 +83,9 @@ spec:
           git config user.email "argo-workflows[bot]@users.noreply.github.com"
 
           # ── Check if DB already exists ────────────────────────────────────
-          CLUSTER_FILE="platform-gitops/cnpg-clusters/shared/cluster.yaml"
+          CLUSTER_FILE="platform-gitops/infra-components/data/cnpg/shared/cluster.yaml"
           DB_EXISTS=false
-          if grep -q "name: ${DB_NAME}-db" platform-gitops/cnpg-clusters/shared/databases.yaml 2>/dev/null; then
+          if grep -q "name: ${DB_NAME}-db" platform-gitops/infra-components/data/cnpg/shared/databases.yaml 2>/dev/null; then
             echo "ℹ️  Database '${DB_NAME}' already exists — skipping DB creation"
             DB_EXISTS=true
           fi
@@ -155,7 +155,7 @@ spec:
           echo "✅ cluster.yaml updated"
 
           # ── Append to databases.yaml ──────────────────────────────────────
-          cat >> platform-gitops/cnpg-clusters/shared/databases.yaml << DBEOF
+          cat >> platform-gitops/infra-components/data/cnpg/shared/databases.yaml << DBEOF
           ---
           apiVersion: postgresql.cnpg.io/v1
           kind: Database
@@ -171,7 +171,7 @@ spec:
           echo "✅ databases.yaml updated"
 
           # ── Append ExternalSecret to secrets.yaml ─────────────────────────
-          cat >> platform-gitops/cnpg-clusters/shared/secrets.yaml << ESEOF
+          cat >> platform-gitops/infra-components/data/cnpg/shared/secrets.yaml << ESEOF
           ---
           apiVersion: external-secrets.io/v1beta1
           kind: ExternalSecret
@@ -262,9 +262,9 @@ spec:
           # ── Commit and push ────────────────────────────────────────────────
           if [ "$DB_EXISTS" = "false" ]; then
             git add \
-              platform-gitops/cnpg-clusters/shared/cluster.yaml \
-              platform-gitops/cnpg-clusters/shared/databases.yaml \
-              platform-gitops/cnpg-clusters/shared/secrets.yaml
+              platform-gitops/infra-components/data/cnpg/shared/cluster.yaml \
+              platform-gitops/infra-components/data/cnpg/shared/databases.yaml \
+              platform-gitops/infra-components/data/cnpg/shared/secrets.yaml
           fi
 
           if git diff --cached --quiet; then
