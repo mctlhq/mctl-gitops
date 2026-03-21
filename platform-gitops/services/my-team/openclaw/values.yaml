@@ -86,6 +86,8 @@ initContainers:
         readOnly: true
       - name: openclaw-config-rw
         mountPath: /config-rw
+      - name: state-data
+        mountPath: /home/node/.openclaw
 extraContainers:
   - name: s3-sync
     image: minio/mc:latest
