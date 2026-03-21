@@ -28,7 +28,7 @@ env:
   OPENCLAW_CONFIG_PATH: /config-rw/openclaw.json
 envFrom:
   - secretRef:
-      name: mashkoffdmitry-openclaw-db-creds
+      name: mashkoffdmitry-openclaw-base-service-db-creds
 initContainers:
   # 1. Pre-install mcp-remote
   - name: install-mcp-remote
@@ -203,12 +203,12 @@ initContainers:
       - name: DB_USER
         valueFrom:
           secretKeyRef:
-            name: mashkoffdmitry-openclaw-db-creds
+            name: mashkoffdmitry-openclaw-base-service-db-creds
             key: DB_USER
       - name: DB_PASSWORD
         valueFrom:
           secretKeyRef:
-            name: mashkoffdmitry-openclaw-db-creds
+            name: mashkoffdmitry-openclaw-base-service-db-creds
             key: DB_PASSWORD
       - name: DATABASE_URL
         value: "postgresql://$(DB_USER):$(DB_PASSWORD)@shared-pg-rw.platform-db.svc.cluster.local:5432/mashkoffdmitry-openclaw"
@@ -244,7 +244,6 @@ extraVolumes:
       defaultMode: 0755
 dbSecret:
   vaultPath: teams/mashkoffdmitry/openclaw/database
-  secretName: mashkoffdmitry-openclaw-db-creds
 extraExternalSecrets:
   openclaw-telegram-secret:
     refreshInterval: 1h
