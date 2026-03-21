@@ -4,6 +4,9 @@ metadata:
   name: openclaw
   description: "openclaw service"
   annotations:
+    platform.mctl.me/database: "true"
+    platform.mctl.me/database-team: "my-team"
+    platform.mctl.me/database-app: "openclaw"
     backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=my-team-openclaw
     backstage.io/kubernetes-namespace: my-team
     argocd/app-name: my-team-openclaw
