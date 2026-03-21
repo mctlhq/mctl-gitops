@@ -10,13 +10,13 @@ tenant:
     - userId: mctl-reviewer
       role: owner
   quotas:
-    requests.cpu: "4"
-    requests.memory: "8Gi"
-    limits.cpu: "8"
-    limits.memory: "16Gi"
-    pods: "20"
-    persistentvolumeclaims: "5"
-    services: "10"
+    requests.cpu: "200m"
+    requests.memory: "1Gi"
+    limits.cpu: "1.5"
+    limits.memory: "3Gi"
+    pods: "5"
+    persistentvolumeclaims: "1"
+    services: "2"
   limitRange:
     enabled: true
     default:
@@ -26,8 +26,8 @@ tenant:
       cpu: "100m"
       memory: "128Mi"
     max:
-      cpu: "8"
-      memory: "10Gi"
+      cpu: "1"
+      memory: "2Gi"
   networking:
     allowIntraNamespace: true
     allowClusterEgress: true
