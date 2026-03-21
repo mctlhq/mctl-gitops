@@ -10,10 +10,10 @@ tenant:
     - userId: mctl-reviewer
       role: owner
   quotas:
-    requests.cpu: "1"
-    requests.memory: "2Gi"
-    limits.cpu: "3"
-    limits.memory: "6Gi"
+    requests.cpu: "2"
+    requests.memory: "4Gi"
+    limits.cpu: "6"
+    limits.memory: "12Gi"
     pods: "10"
     persistentvolumeclaims: "5"
     services: "10"
