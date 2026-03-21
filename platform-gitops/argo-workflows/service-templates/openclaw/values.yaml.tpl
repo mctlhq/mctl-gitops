@@ -1,7 +1,7 @@
 # Service: __SERVICE_NAME__
 # Team: __TEAM_NAME__
 # Template: openclaw
-# Updated: 2026-03-20 (gemini-bot) - Fixed DB and Auto-Approve
+# Updated: 2026-03-21 - OAuth mode + MinIO state (no PVC)
 
 # Chart: base-service
 
@@ -40,7 +40,29 @@ envFrom:
       name: __TEAM_NAME__-__SERVICE_NAME__-db-creds
 
 initContainers:
-  # 1. Pre-install mcp-remote
+  # 1. Restore state from MinIO (no-op for new tenants, preserves OAuth credentials on restart)
+  - name: restore-state
+    image: minio/mc:latest
+    command: ["sh", "-c"]
+    args:
+      - |
+        mc alias set s3 "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
+        if mc ls s3/platform-state/openclaw/__TEAM_NAME__/ > /dev/null 2>&1; then
+          mc mirror s3/platform-state/openclaw/__TEAM_NAME__/ /home/node/.openclaw
+        else
+          mkdir -p /home/node/.openclaw
+        fi
+    env:
+      - name: MINIO_ENDPOINT
+        valueFrom: { secretKeyRef: { name: minio-cache-creds, key: endpoint } }
+      - name: MINIO_ACCESS_KEY
+        valueFrom: { secretKeyRef: { name: minio-cache-creds, key: access-key } }
+      - name: MINIO_SECRET_KEY
+        valueFrom: { secretKeyRef: { name: minio-cache-creds, key: secret-key } }
+    volumeMounts:
+      - name: state-data
+        mountPath: /home/node/.openclaw
+  # 2. Pre-install mcp-remote
   - name: install-mcp-remote
     image: node:22-alpine
     command: ["sh", "-c"]
@@ -49,7 +71,7 @@ initContainers:
     volumeMounts:
       - name: npm-cache
         mountPath: /npm-cache
-  # 2. Build whisper-cli (cached in MinIO platform-cache bucket)
+  # 3. Build whisper-cli (cached in MinIO platform-cache bucket)
   - name: install-whisper-cli
     image: debian:12-slim
     resources:
@@ -151,7 +173,7 @@ initContainers:
     volumeMounts:
       - name: pvc-whisper
         mountPath: /whisper-storage
-  # 3. Setup Config and inject tokens
+  # 4. Setup config and inject tokens
   - name: setup
     image: busybox:1.36
     command: ["sh", "-c"]
@@ -159,13 +181,7 @@ initContainers:
       - |
         cp /config-tpl/openclaw.json /config-rw/openclaw.json
         if [ -n "$TELEGRAM_TOKEN" ]; then sed -i "s|__TELEGRAM_TOKEN__|$TELEGRAM_TOKEN|g" /config-rw/openclaw.json; fi
-        if [ -n "$OPENAI_API_KEY" ]; then sed -i "s|__OPENAI_API_KEY__|$OPENAI_API_KEY|g" /config-rw/openclaw.json; fi
         chown 1000:1000 /config-rw/openclaw.json
-        if [ -n "$OPENAI_API_KEY" ]; then
-          mkdir -p /home/node/.openclaw/auth
-          printf '{"openai-codex:default":{"provider":"openai-codex","apiKey":"%s"}}\n' "$OPENAI_API_KEY" \
-            > /home/node/.openclaw/auth/auth-profiles.json
-        fi
         chown -R 1000:1000 /home/node/.openclaw
     env:
       - name: TELEGRAM_TOKEN
@@ -173,19 +189,13 @@ initContainers:
           secretKeyRef:
             name: openclaw-telegram-secret
             key: OPENCLAW_TELEGRAM_TOKEN
-      - name: OPENAI_API_KEY
-        valueFrom:
-          secretKeyRef:
-            name: openclaw-openai-secret
-            key: OPENAI_API_KEY
-            optional: true
     volumeMounts:
       - name: openclaw-config-tpl
         mountPath: /config-tpl
         readOnly: true
       - name: openclaw-config-rw
         mountPath: /config-rw
-      - name: pvc-state
+      - name: state-data
         mountPath: /home/node/.openclaw
 extraVolumeMounts:
   - name: openclaw-config-rw
@@ -197,13 +207,31 @@ extraVolumeMounts:
   - name: openclaw-scripts
     mountPath: /scripts
     readOnly: true
-  - name: pvc-state
+  - name: state-data
     mountPath: /home/node/.openclaw
+
+extraContainers:
+  - name: s3-sync
+    image: minio/mc:latest
+    command: ["sh", "-c"]
+    args:
+      - |
+        mc alias set s3 "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
+        mc mirror --watch --remove --overwrite /home/node/.openclaw s3/platform-state/openclaw/__TEAM_NAME__/
+    env:
+      - name: MINIO_ENDPOINT
+        valueFrom: { secretKeyRef: { name: minio-cache-creds, key: endpoint } }
+      - name: MINIO_ACCESS_KEY
+        valueFrom: { secretKeyRef: { name: minio-cache-creds, key: access-key } }
+      - name: MINIO_SECRET_KEY
+        valueFrom: { secretKeyRef: { name: minio-cache-creds, key: secret-key } }
+    volumeMounts:
+      - name: state-data
+        mountPath: /home/node/.openclaw
 
 persistence:
   state:
-    enabled: true
-    size: 1Gi
+    enabled: false
 
 extraVolumes:
   - name: openclaw-config-tpl
@@ -214,6 +242,8 @@ extraVolumes:
   - name: npm-cache
     emptyDir: {}
   - name: pvc-whisper
+    emptyDir: {}
+  - name: state-data
     emptyDir: {}
   - name: openclaw-scripts
     configMap:
@@ -235,13 +265,6 @@ extraExternalSecrets:
       - secretKey: OPENCLAW_TELEGRAM_TOKEN
         remoteKey: secret/data/teams/__TEAM_NAME__/__SERVICE_NAME__
         property: telegram-bot-token
-  openclaw-openai-secret:
-    refreshInterval: 1h
-    targetSecret: openclaw-openai-secret
-    data:
-      - secretKey: OPENAI_API_KEY
-        remoteKey: secret/data/teams/__TEAM_NAME__/__SERVICE_NAME__
-        property: OPENAI_API_KEY
   minio-cache-creds:
     refreshInterval: 1h
     targetSecret: minio-cache-creds
