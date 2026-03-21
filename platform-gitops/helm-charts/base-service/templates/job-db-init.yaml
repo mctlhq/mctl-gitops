@@ -26,9 +26,7 @@ spec:
               for i in $(seq 1 30); do
                 if psql "$DATABASE_URL" -c "\dt {{ .Values.dbInitJob.waitTable | default "identities" }}" | grep -q "{{ .Values.dbInitJob.waitTable | default "identities" }}"; then
                   echo "Tables found! Running init SQL..."
-                  psql "$DATABASE_URL" <<EOF
-                  {{ .Values.dbInitJob.sql }}
-              EOF
+                  printf '%s' "$INIT_SQL" | psql "$DATABASE_URL"
                   exit 0
                 fi
                 echo "Waiting for tables ($i/30)..."
@@ -37,6 +35,8 @@ spec:
               echo "Timeout waiting for tables."
               exit 1
           env:
+            - name: INIT_SQL
+              value: {{ .Values.dbInitJob.sql | quote }}
             - name: DB_USER
               valueFrom:
                 secretKeyRef:
