@@ -46,19 +46,19 @@ spec:
           targetSecret: mctl-agent-secrets
           data:
             - secretKey: MCTL_API_TOKEN
-              remoteKey: teams/platform/mctl-agent/tokens
+              remoteKey: platform/mctl-agent/tokens
               property: mctl-api-token
             - secretKey: ANTHROPIC_API_KEY
-              remoteKey: teams/platform/mctl-agent/tokens
+              remoteKey: platform/mctl-agent/tokens
               property: anthropic-api-key
             - secretKey: GITHUB_TOKEN
-              remoteKey: teams/platform/mctl-agent/tokens
+              remoteKey: platform/mctl-agent/tokens
               property: github-token
             - secretKey: TELEGRAM_BOT_TOKEN
-              remoteKey: teams/platform/mctl-agent/tokens
+              remoteKey: platform/mctl-agent/tokens
               property: telegram-bot-token
             - secretKey: TELEGRAM_CHAT_ID
-              remoteKey: teams/platform/mctl-agent/tokens
+              remoteKey: platform/mctl-agent/tokens
               property: telegram-chat-id
         # Note: mctl-agent-db-creds ExternalSecret is managed in cnpg/shared/secrets.yaml
         # and synced to 'admins' namespace via cluster-wide sync or manual patch.
