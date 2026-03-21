@@ -345,33 +345,49 @@ configMaps:
             ]
           }
         },
-        "capability": {
-          "llm": {
-            "defaultModel": "__DEFAULT_MODEL__"
-          },
-          "providers": {
-            "openai-codex": {
-              "type": "openai-codex",
-              "baseUrl": "https://codex.openai.com/v1",
-              "models": {
-                "gpt-5.4": "gpt-5.4"
-              }
-            },
-            "anthropic": {
-              "enabled": false
+        "agents": {
+          "defaults": {
+            "model": {
+              "primary": "__DEFAULT_MODEL__"
             }
-          },
-          "telegram": {
-            "enabled": false,
-            "token": "__TELEGRAM_TOKEN__",
-            "admin_ids": []
           }
         },
-        "auth": {
-          "methods": {
-            "openai-codex": {
-              "enabled": true
+        "models": {
+          "mode": "merge",
+          "providers": {
+            "openai": {
+              "baseUrl": "https://api.openai.com/v1",
+              "apiKey": "__OPENAI_API_KEY__",
+              "api": "openai-completions",
+              "models": [
+                {
+                  "id": "gpt-4o",
+                  "name": "GPT-4o",
+                  "contextWindow": 128000,
+                  "maxTokens": 16384,
+                  "input": ["text"],
+                  "cost": { "input": 0, "output": 0 }
+                }
+              ]
             }
+          }
+        },
+        "channels": {
+          "telegram": {
+            "enabled": false,
+            "botToken": "__TELEGRAM_TOKEN__",
+            "dmPolicy": "pairing",
+            "groupPolicy": "open",
+            "allowFrom": []
+          }
+        },
+        "mcp": {
+          "servers": {
+            "mctl-platform": {
+              "command": "node",
+              "args": ["/npm-cache/node_modules/mcp-remote/dist/proxy.js", "https://api.mctl.ai/mcp", "--header", "Authorization: Bearer __MCTL_TOKEN__"]
+            },
+            "mctl-agent": {"command": "node", "args": ["/scripts/mcp-agent-proxy.js"]}
           }
         }
       }
