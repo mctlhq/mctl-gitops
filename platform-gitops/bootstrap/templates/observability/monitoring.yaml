@@ -229,6 +229,10 @@ spec:
       targetRevision: main
       path: platform-gitops/infra-components/observability/grafana-dashboards
 
+    - repoURL: https://github.com/mctlhq/mctl-gitops.git
+      targetRevision: main
+      path: platform-gitops/infra-components/observability/secrets
+
   destination:
     server: {{ .Values.spec.destination.server }}
     namespace: monitoring
