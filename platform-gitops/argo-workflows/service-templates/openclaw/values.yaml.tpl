@@ -156,7 +156,6 @@ initContainers:
       - |
         cp /config-tpl/openclaw.json /config-rw/openclaw.json
         if [ -n "$TELEGRAM_TOKEN" ]; then sed -i "s|__TELEGRAM_TOKEN__|$TELEGRAM_TOKEN|g" /config-rw/openclaw.json; fi
-        if [ -n "$MCTL_TOKEN" ]; then sed -i "s|__MCTL_TOKEN__|$MCTL_TOKEN|g" /config-rw/openclaw.json; fi
         if [ -n "$OPENAI_API_KEY" ]; then sed -i "s|__OPENAI_API_KEY__|$OPENAI_API_KEY|g" /config-rw/openclaw.json; fi
         chown 1000:1000 /config-rw/openclaw.json
     env:
@@ -165,12 +164,6 @@ initContainers:
           secretKeyRef:
             name: openclaw-telegram-secret
             key: OPENCLAW_TELEGRAM_TOKEN
-      - name: MCTL_TOKEN
-        valueFrom:
-          secretKeyRef:
-            name: openclaw-mctl-token
-            key: MCTL_API_TOKEN
-            optional: true
       - name: OPENAI_API_KEY
         valueFrom:
           secretKeyRef:
@@ -183,46 +176,6 @@ initContainers:
         readOnly: true
       - name: openclaw-config-rw
         mountPath: /config-rw
-  # 4. Auto-approve the tenant owner in PostgreSQL
-  - name: auto-approve
-    image: postgres:17-alpine
-    command: ["sh", "-c"]
-    args:
-      - |
-        # Wait for migrations to be applied by the main app (approximate)
-        # Note: In production, it's better to use a dedicated migration job.
-        # For simplicity, we loop until table exists or timeout.
-        for i in $(seq 1 30); do
-          if psql "$DATABASE_URL" -c "\dt identities" | grep -q "identities"; then
-            echo "Identities table found! Approving owner..."
-            psql "$DATABASE_URL" <<EOF
-            INSERT INTO identities (provider, provider_id, status, metadata)
-            VALUES ('telegram', '__TELEGRAM_OWNER_ID__', 'approved', '{}')
-            ON CONFLICT (provider, provider_id) DO UPDATE SET status = 'approved';
-        EOF
-            exit 0
-          fi
-          echo "Waiting for migrations ($i/30)..."
-          sleep 10
-        done
-        echo "Timeout waiting for identities table. Skipping auto-approval."
-    env:
-      - name: DB_USER
-        valueFrom:
-          secretKeyRef:
-            name: __TEAM_NAME__-__SERVICE_NAME__-db-creds
-            key: DB_USER
-      - name: DB_PASSWORD
-        valueFrom:
-          secretKeyRef:
-            name: __TEAM_NAME__-__SERVICE_NAME__-db-creds
-            key: DB_PASSWORD
-      - name: DATABASE_URL
-        value: "postgresql://$(DB_USER):$(DB_PASSWORD)@shared-pg-rw.platform-db.svc.cluster.local:5432/__TEAM_NAME__-__SERVICE_NAME__"
-    volumeMounts:
-      - name: openclaw-config-rw
-        mountPath: /config-rw
-
 extraVolumeMounts:
   - name: openclaw-config-rw
     mountPath: /config-rw
@@ -257,21 +210,23 @@ dbSecret:
   vaultPath: teams/__TEAM_NAME__/__SERVICE_NAME__/database
   secretName: __TEAM_NAME__-__SERVICE_NAME__-db-creds
 
+dbInitJob:
+  enabled: true
+  database: "__TEAM_NAME__-__SERVICE_NAME__"
+  waitTable: "identities"
+  sql: |
+    INSERT INTO identities (provider, provider_id, status, metadata)
+    VALUES ('telegram', '__TELEGRAM_OWNER_ID__', 'approved', '{}')
+    ON CONFLICT (provider, provider_id) DO UPDATE SET status = 'approved';
+
 extraExternalSecrets:
   openclaw-telegram-secret:
     refreshInterval: 1h
     targetSecret: openclaw-telegram-secret
     data:
       - secretKey: OPENCLAW_TELEGRAM_TOKEN
-        remoteKey: secret/data/platform/alertmanager
-        property: telegram-bot-token
-  openclaw-mctl-token:
-    refreshInterval: 1h
-    targetSecret: openclaw-mctl-token
-    data:
-      - secretKey: MCTL_API_TOKEN
         remoteKey: secret/data/teams/__TEAM_NAME__/__SERVICE_NAME__
-        property: mctl-api-token
+        property: telegram-bot-token
   minio-cache-creds:
     refreshInterval: 1h
     targetSecret: minio-cache-creds
@@ -343,7 +298,14 @@ configMaps:
               "https://__TEAM_NAME__-__SERVICE_NAME__.mctl.ai",
               "https://__TEAM_NAME__-__SERVICE_NAME__.mctl.me"
             ]
-          }
+          },
+          "proxyRoutes": [
+            {
+              "path": "/oauth/callback/mctl-platform",
+              "target": "http://localhost:3334",
+              "auth": "none"
+            }
+          ]
         },
         "agents": {
           "defaults": {
@@ -369,14 +331,19 @@ configMaps:
             "botToken": "__TELEGRAM_TOKEN__",
             "dmPolicy": "pairing",
             "groupPolicy": "open",
-            "allowFrom": []
+            "allowFrom": ["__TELEGRAM_OWNER_ID__"]
           }
         },
         "mcp": {
           "servers": {
             "mctl-platform": {
               "command": "node",
-              "args": ["/npm-cache/node_modules/mcp-remote/dist/proxy.js", "https://api.mctl.ai/mcp", "--header", "Authorization: Bearer __MCTL_TOKEN__"]
+              "args": [
+                "/npm-cache/node_modules/mcp-remote/dist/proxy.js",
+                "https://api.mctl.ai/mcp",
+                "--transport", "sse",
+                "--callback-url", "https://__TEAM_NAME__-__SERVICE_NAME__.mctl.ai/oauth/callback/mctl-platform"
+              ]
             },
             "mctl-agent": {"command": "node", "args": ["/scripts/mcp-agent-proxy.js"]}
           }

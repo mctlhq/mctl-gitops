@@ -74,6 +74,12 @@ spec:
         # e.g. '.configMaps["openclaw-config"]["openclaw.json"] |= (fromjson | .defaultModel = "openai-codex/gpt-5.4" | tojson)'
       - name: default_model
         value: "openai-codex/gpt-5.4"
+      - name: telegram_owner_id
+        value: ""
+        # Telegram user ID of the service owner — auto-approved in identities table at deploy time
+      - name: telegram_bot_token
+        value: ""
+        # Telegram bot token — written to Vault at teams/{team}/{service} → telegram-bot-token
 
   templates:
     # ────────────────────────────────────────────────────────────────────────
@@ -130,7 +136,7 @@ spec:
           # Step 2: write Vault secrets (skip if no secrets)
           - name: write-secrets
             dependencies: [validate]
-            when: "\"{{workflow.parameters.secret_env_vars}}\" != \"\""
+            when: "\"{{workflow.parameters.secret_env_vars}}\" != \"\" || \"{{workflow.parameters.telegram_bot_token}}\" != \"\""
             templateRef:
               name: tpl-vault-write
               clusterScope: true
@@ -143,6 +149,8 @@ spec:
                   value: "{{workflow.parameters.component_name}}"
                 - name: secret_env_vars
                   value: "{{workflow.parameters.secret_env_vars}}"
+                - name: telegram_bot_token
+                  value: "{{workflow.parameters.telegram_bot_token}}"
 
           # Step 3: generate manifests + git commit
           # Depends on validate (always) + build-image (optional) + write-secrets (optional).
@@ -188,6 +196,8 @@ spec:
                   value: "{{workflow.parameters.config_patch}}"
                 - name: default_model
                   value: "{{workflow.parameters.default_model}}"
+                - name: telegram_owner_id
+                  value: "{{workflow.parameters.telegram_owner_id}}"
 
           # Step 4: patch autoscaling block in values.yaml (conditional)
           - name: patch-autoscaling
