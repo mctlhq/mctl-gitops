@@ -70,6 +70,7 @@ initContainers:
         if [ -n "$MCTL_TOKEN" ]; then sed -i "s|__MCTL_TOKEN__|$MCTL_TOKEN|g" /config-rw/openclaw.json; fi
         if [ -n "$ADMIN_IDS" ]; then sed -i "s|__ADMIN_IDS__|$ADMIN_IDS|g" /config-rw/openclaw.json; fi
         chown 1000:1000 /config-rw/openclaw.json
+        chown -R 1000:1000 /home/node/.openclaw
     env:
       - name: TELEGRAM_TOKEN
         valueFrom: { secretKeyRef: { name: openclaw-telegram-secret, key: telegram-bot-token } }
