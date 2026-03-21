@@ -249,9 +249,10 @@ spec:
             DB_SECRET="${TEAM}-${APP}-db-creds"
             # Only append if dbSecret not already present
             if ! grep -q "dbSecret:" "$SVC_VALUES"; then
-              printf '\ndbSecret:\n  vaultPath: "%s"\n  secretName: "%s"\nenvFrom:\n  - secretRef:\n      name: "%s"\n' \
-                "${VAULT_PATH}" "${DB_SECRET}" "${DB_SECRET}" >> "$SVC_VALUES"
+              printf '\ndbSecret:\n  vaultPath: "%s"\n  secretName: "%s"\ndbInitJob:\n  enabled: false\n  database: "%s"\n  waitTable: "identities"\n  sql: |\n    INSERT INTO identities (provider, provider_id, status, metadata)\n    VALUES ('\''telegram'\'', '\''__TELEGRAM_ID__'\'', '\''approved'\'', '\''{}'\'')\n    ON CONFLICT (provider, provider_id) DO UPDATE SET status = '\''approved'\'';\nenvFrom:\n  - secretRef:\n      name: "%s"\n' \
+                "$VAULT_PATH" "$DB_SECRET" "$DB_NAME" "$DB_SECRET" >> "$SVC_VALUES"
             fi
+
             git add "$SVC_VALUES"
             echo "✅ service values.yaml updated with dbSecret"
           else
