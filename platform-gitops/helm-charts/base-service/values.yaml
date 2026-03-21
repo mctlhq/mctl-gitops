@@ -105,6 +105,12 @@ probes:
 #   refreshInterval: 1h               # optional
 dbSecret: null
 
+dbInitJob:
+  enabled: false
+  database: ""
+  waitTable: "identities"
+  sql: ""
+
 # -- Optional: Prometheus metrics endpoint
 # When enabled, adds a named 'metrics' port to the Service and Deployment,
 # and creates a ServiceMonitor CRD for Prometheus scraping.
