@@ -161,6 +161,7 @@ initContainers:
         if [ -n "$TELEGRAM_TOKEN" ]; then sed -i "s|__TELEGRAM_TOKEN__|$TELEGRAM_TOKEN|g" /config-rw/openclaw.json; fi
         if [ -n "$OPENAI_API_KEY" ]; then sed -i "s|__OPENAI_API_KEY__|$OPENAI_API_KEY|g" /config-rw/openclaw.json; fi
         chown 1000:1000 /config-rw/openclaw.json
+        chown -R 1000:1000 /home/node/.openclaw
     env:
       - name: TELEGRAM_TOKEN
         valueFrom:
