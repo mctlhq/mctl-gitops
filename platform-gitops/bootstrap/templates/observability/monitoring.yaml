@@ -259,6 +259,15 @@ spec:
       kind: VMSingle
       jsonPointers:
         - /spec/extraContainers
+    # ESO admission webhook injects default fields absent in git.
+    - group: external-secrets.io
+      kind: ExternalSecret
+      jqPathExpressions:
+        - .spec.target.deletionPolicy
+        - .spec.data[].remoteRef.conversionStrategy
+        - .spec.data[].remoteRef.decodingStrategy
+        - .spec.data[].remoteRef.metadataPolicy
+        - .status
 
   destination:
     server: {{ .Values.spec.destination.server }}
@@ -271,6 +280,7 @@ spec:
       - CreateNamespace=true
       - ApplyOutOfSyncOnly=true
       - ServerSideApply=true
+      - RespectIgnoreDifferences=true
     retry:
       limit: 5
       backoff:

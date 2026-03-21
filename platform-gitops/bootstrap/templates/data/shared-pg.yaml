@@ -21,6 +21,7 @@ spec:
         - .metadata.annotations
         - .status
         - .spec.resources   # CNPG normalizes CPU/memory quantities (e.g. 1000m → "1")
+        - .spec.postgresql.parameters  # CNPG populates default postgresql params at runtime
   syncPolicy:
     automated:
       prune: true
