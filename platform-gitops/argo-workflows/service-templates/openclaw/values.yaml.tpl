@@ -182,6 +182,11 @@ initContainers:
         cp /config-tpl/openclaw.json /config-rw/openclaw.json
         if [ -n "$TELEGRAM_TOKEN" ]; then sed -i "s|__TELEGRAM_TOKEN__|$TELEGRAM_TOKEN|g" /config-rw/openclaw.json; fi
         chown 1000:1000 /config-rw/openclaw.json
+        if [ -n "$OPENAI_API_KEY" ]; then
+          mkdir -p /home/node/.openclaw/agents/main/agent
+          printf '{"openai-codex:default":{"provider":"openai-codex","apiKey":"%s"}}\n' "$OPENAI_API_KEY" \
+            > /home/node/.openclaw/agents/main/agent/auth-profiles.json
+        fi
         chown -R 1000:1000 /home/node/.openclaw
     env:
       - name: TELEGRAM_TOKEN
@@ -189,6 +194,12 @@ initContainers:
           secretKeyRef:
             name: openclaw-telegram-secret
             key: OPENCLAW_TELEGRAM_TOKEN
+      - name: OPENAI_API_KEY
+        valueFrom:
+          secretKeyRef:
+            name: openclaw-openai-secret
+            key: OPENAI_API_KEY
+            optional: true
     volumeMounts:
       - name: openclaw-config-tpl
         mountPath: /config-tpl
@@ -265,6 +276,13 @@ extraExternalSecrets:
       - secretKey: OPENCLAW_TELEGRAM_TOKEN
         remoteKey: secret/data/teams/__TEAM_NAME__/__SERVICE_NAME__
         property: telegram-bot-token
+  openclaw-openai-secret:
+    refreshInterval: 1h
+    targetSecret: openclaw-openai-secret
+    data:
+      - secretKey: OPENAI_API_KEY
+        remoteKey: secret/data/teams/__TEAM_NAME__/__SERVICE_NAME__
+        property: OPENAI_API_KEY
   minio-cache-creds:
     refreshInterval: 1h
     targetSecret: minio-cache-creds
