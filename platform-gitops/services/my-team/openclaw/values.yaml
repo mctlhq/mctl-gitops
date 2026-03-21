@@ -285,14 +285,7 @@ configMaps:
               "https://my-team-openclaw.mctl.ai",
               "https://my-team-openclaw.mctl.me"
             ]
-          },
-          "proxyRoutes": [
-            {
-              "path": "/oauth/callback/mctl-platform",
-              "target": "http://localhost:3334",
-              "auth": "none"
-            }
-          ]
+          }
         },
         "agents": {
           "defaults": {
