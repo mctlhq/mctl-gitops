@@ -75,6 +75,16 @@ spec:
                       cpu: 500m
                       memory: 256Mi
 
+          # Core components
+          defaultRules:
+            enabled: true
+          
+          node-exporter:
+            enabled: true
+          
+          kube-state-metrics:
+            enabled: true
+
           # VMAgent replaces Prometheus's scrape engine
           vmagent:
             enabled: true
