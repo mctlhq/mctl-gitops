@@ -7,7 +7,7 @@
 
 image:
   repository: ghcr.io/mctlhq/openclaw
-  tag: "main-5a2a4ab"
+  tag: "latest"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
@@ -44,11 +44,11 @@ initContainers:
         fi
     env:
       - name: MINIO_ENDPOINT
-        valueFrom: { secretKeyRef: { name: minio-root-credentials, key: endpoint } }
+        valueFrom: {secretKeyRef: {name: minio-root-credentials, key: endpoint}}
       - name: MINIO_ACCESS_KEY
-        valueFrom: { secretKeyRef: { name: minio-root-credentials, key: access-key } }
+        valueFrom: {secretKeyRef: {name: minio-root-credentials, key: access-key}}
       - name: MINIO_SECRET_KEY
-        valueFrom: { secretKeyRef: { name: minio-root-credentials, key: secret-key } }
+        valueFrom: {secretKeyRef: {name: minio-root-credentials, key: secret-key}}
     volumeMounts:
       - name: state-data
         mountPath: /home/node/.openclaw
@@ -73,11 +73,11 @@ initContainers:
         chown -R 1000:1000 /home/node/.openclaw
     env:
       - name: TELEGRAM_TOKEN
-        valueFrom: { secretKeyRef: { name: openclaw-telegram-secret, key: telegram-bot-token } }
+        valueFrom: {secretKeyRef: {name: openclaw-telegram-secret, key: telegram-bot-token}}
       - name: MCTL_TOKEN
-        valueFrom: { secretKeyRef: { name: openclaw-mctl-token, key: MCTL_API_TOKEN, optional: true } }
+        valueFrom: {secretKeyRef: {name: openclaw-mctl-token, key: MCTL_API_TOKEN, optional: true}}
       - name: OPENAI_API_KEY
-        valueFrom: { secretKeyRef: { name: openclaw-openai-secret, key: api-key } }
+        valueFrom: {secretKeyRef: {name: openclaw-openai-secret, key: api-key}}
       - name: ADMIN_IDS
         value: "210408407"
     volumeMounts:
@@ -98,11 +98,11 @@ extraContainers:
         mc mirror --watch --remove --overwrite /home/node/.openclaw s3/platform-state/openclaw/my-team/
     env:
       - name: MINIO_ENDPOINT
-        valueFrom: { secretKeyRef: { name: minio-root-credentials, key: endpoint } }
+        valueFrom: {secretKeyRef: {name: minio-root-credentials, key: endpoint}}
       - name: MINIO_ACCESS_KEY
-        valueFrom: { secretKeyRef: { name: minio-root-credentials, key: access-key } }
+        valueFrom: {secretKeyRef: {name: minio-root-credentials, key: access-key}}
       - name: MINIO_SECRET_KEY
-        valueFrom: { secretKeyRef: { name: minio-root-credentials, key: secret-key } }
+        valueFrom: {secretKeyRef: {name: minio-root-credentials, key: secret-key}}
     volumeMounts:
       - name: state-data
         mountPath: /home/node/.openclaw
