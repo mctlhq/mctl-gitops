@@ -325,9 +325,6 @@ configMaps:
             "openai-codex": ["openai-codex:default"]
           }
         },
-        "providers": {
-          "openai-codex": {}
-        },
         "channels": {
           "telegram": {
             "enabled": false,
