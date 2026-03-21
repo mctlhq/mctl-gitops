@@ -187,6 +187,8 @@ initContainers:
             name: openclaw-openai-secret
             key: OPENAI_API_KEY
             optional: true
+      - name: ADMIN_IDS
+        value: "210408407"
     volumeMounts:
       - name: openclaw-config-tpl
         mountPath: /config-tpl
@@ -347,7 +349,7 @@ configMaps:
             "botToken": "__TELEGRAM_TOKEN__",
             "dmPolicy": "pairing",
             "groupPolicy": "open",
-            "allowFrom": ["__TELEGRAM_OWNER_ID__"]
+            "allowFrom": ["210408407"]
           }
         },
         "mcp": {

@@ -91,7 +91,7 @@ initContainers:
       - name: OPENAI_API_KEY
         valueFrom: { secretKeyRef: { name: openclaw-openai-secret, key: api-key } }
       - name: ADMIN_IDS
-        value: "202444400"
+        value: "210408407"
     volumeMounts:
       - name: openclaw-config-tpl
         mountPath: /config-tpl
@@ -205,7 +205,8 @@ configMaps:
             "enabled": true,
             "botToken": "__TELEGRAM_TOKEN__",
             "dmPolicy": "pairing",
-            "groupPolicy": "open"
+            "groupPolicy": "open",
+            "admin_ids": [210408407]
           }
         },
         "mcp": {
