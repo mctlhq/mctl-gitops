@@ -236,7 +236,7 @@ configMaps:
             "botToken": "__TELEGRAM_TOKEN__",
             "dmPolicy": "pairing",
             "groupPolicy": "open",
-            "admin_ids": [210408407]
+            "allowFrom": ["210408407"]
           }
         },
         "mcp": {
