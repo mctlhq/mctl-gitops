@@ -179,45 +179,6 @@ initContainers:
         readOnly: true
       - name: openclaw-config-rw
         mountPath: /config-rw
-  # 4. Auto-approve the tenant owner in PostgreSQL
-  - name: auto-approve
-    image: postgres:17-alpine
-    command: ["sh", "-c"]
-    args:
-      - |
-        # Wait for migrations to be applied by the main app (approximate)
-        # Note: In production, it's better to use a dedicated migration job.
-        # For simplicity, we loop until table exists or timeout.
-        for i in $(seq 1 30); do
-          if psql "$DATABASE_URL" -c "\dt identities" | grep -q "identities"; then
-            echo "Identities table found! Approving owner..."
-            psql "$DATABASE_URL" <<EOF
-            INSERT INTO identities (provider, provider_id, status, metadata)
-            VALUES ('telegram', '__TELEGRAM_OWNER_ID__', 'approved', '{}')
-            ON CONFLICT (provider, provider_id) DO UPDATE SET status = 'approved';
-        EOF
-            exit 0
-          fi
-          echo "Waiting for migrations ($i/30)..."
-          sleep 10
-        done
-        echo "Timeout waiting for identities table. Skipping auto-approval."
-    env:
-      - name: DB_USER
-        valueFrom:
-          secretKeyRef:
-            name: mashkoffdmitry-openclaw-base-service-db-creds
-            key: DB_USER
-      - name: DB_PASSWORD
-        valueFrom:
-          secretKeyRef:
-            name: mashkoffdmitry-openclaw-base-service-db-creds
-            key: DB_PASSWORD
-      - name: DATABASE_URL
-        value: "postgresql://$(DB_USER):$(DB_PASSWORD)@shared-pg-rw.platform-db.svc.cluster.local:5432/mashkoffdmitry-openclaw"
-    volumeMounts:
-      - name: openclaw-config-rw
-        mountPath: /config-rw
 extraVolumeMounts:
   - name: openclaw-config-rw
     mountPath: /config-rw
