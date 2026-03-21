@@ -9,6 +9,9 @@ image:
   repository: ghcr.io/mctlhq/__SERVICE_NAME__
   tag: "__IMAGE_TAG__"
 
+podSecurityContext:
+  fsGroup: 1000
+
 imagePullSecrets:
   - name: ghcr-credentials
 
