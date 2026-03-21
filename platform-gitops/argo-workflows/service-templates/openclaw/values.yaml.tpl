@@ -345,23 +345,33 @@ configMaps:
             ]
           }
         },
-        "providers": {
-          "openai-codex": {
-            "type": "openai-codex",
-            "baseUrl": "https://codex.openai.com/v1",
-            "models": {
-              "gpt-5.4": "gpt-5.4"
+        "capability": {
+          "llm": {
+            "defaultModel": "__DEFAULT_MODEL__"
+          },
+          "providers": {
+            "openai-codex": {
+              "type": "openai-codex",
+              "baseUrl": "https://codex.openai.com/v1",
+              "models": {
+                "gpt-5.4": "gpt-5.4"
+              }
+            },
+            "anthropic": {
+              "enabled": false
             }
           },
-          "anthropic": { "enabled": false },
-          "openai": { "enabled": false },
-          "google": { "enabled": false }
+          "telegram": {
+            "enabled": false,
+            "token": "__TELEGRAM_TOKEN__",
+            "admin_ids": []
+          }
         },
-        "defaultModel": "__DEFAULT_MODEL__",
         "auth": {
-          "oauth": {
-            "enabled": true,
-            "providers": ["openai-codex"]
+          "methods": {
+            "openai-codex": {
+              "enabled": true
+            }
           }
         }
       }
