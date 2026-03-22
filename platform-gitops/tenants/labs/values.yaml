@@ -13,7 +13,7 @@ tenant:
     requests.cpu: "1"
     requests.memory: "2Gi"
     limits.cpu: "2"
-    limits.memory: "3Gi"
+    limits.memory: "4Gi"
     pods: "10"
     persistentvolumeclaims: "5"
     services: "10"
@@ -31,4 +31,4 @@ tenant:
   networking:
     allowIntraNamespace: true
     allowClusterEgress: true
-    allowInternetEgress: false
+    allowInternetEgress: true

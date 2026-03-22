@@ -1,13 +1,13 @@
 # Service: __SERVICE_NAME__
 # Team: __TEAM_NAME__
 # Template: openclaw
-# Updated: 2026-03-22 - OAuth-first model auth, no platform API key injection
+# Updated: 2026-03-22 - self-service onboarding baseline
 
 # Chart: base-service
 
 image:
   repository: ghcr.io/mctlhq/__SERVICE_NAME__
-  tag: "main-5a2a4ab"
+  tag: "2026.3.22-beta.2"
 
 imagePullSecrets:
   - name: ghcr-credentials
@@ -17,11 +17,11 @@ service:
 
 resources:
   requests:
-    cpu: 200m
-    memory: 768Mi
+    cpu: 500m
+    memory: 1Gi
   limits:
-    cpu: "1"
-    memory: 1.2Gi
+    cpu: "2"
+    memory: 4Gi
 
 # Recreate strategy required for clean init
 strategy:
@@ -29,10 +29,28 @@ strategy:
 
 env:
   APP_ENV: production
-  NODE_OPTIONS: "--max-old-space-size=1024"
+  NODE_OPTIONS: "--max-old-space-size=3072"
   OPENCLAW_CONFIG_PATH: /config-rw/openclaw.json
   # PostgreSQL Connection (using dedicated service credentials)
   DATABASE_URL: "postgresql://$(DB_USER):$(DB_PASSWORD)@shared-pg-rw.platform-db.svc.cluster.local:5432/__SERVICE_NAME__"
+
+probes:
+  startup:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    failureThreshold: 36
+  readiness:
+    path: /readyz
+    port: http
+    initialDelaySeconds: 20
+    periodSeconds: 10
+  liveness:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 60
+    periodSeconds: 20
 
 initContainers:
   # 1. Build whisper-cli (optimized)
@@ -51,7 +69,7 @@ initContainers:
         set -e
         WHISPER_DIR=/whisper-storage
         BIN=$WHISPER_DIR/whisper-cli
-        MODEL=$WHISPER_DIR/ggml-base.bin
+        MODEL=$WHISPER_DIR/ggml-tiny.bin
         WRAPPER=$WHISPER_DIR/run-whisper.sh
         mkdir -p $WHISPER_DIR
         if [ ! -f $WHISPER_DIR/ffmpeg ]; then
@@ -61,7 +79,7 @@ initContainers:
           rm /tmp/ffmpeg.tar.xz
         fi
         if [ ! -f $MODEL ]; then
-          wget -q "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin" -O $MODEL
+          wget -q "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin" -O $MODEL
         fi
         if [ ! -f $BIN ]; then
           apt-get update -qq && apt-get install -y --no-install-recommends build-essential cmake git ca-certificates
@@ -75,7 +93,7 @@ initContainers:
         #!/bin/sh
         TMP_WAV=$(mktemp /tmp/whisper_XXXXXX.wav)
         /whisper-storage/ffmpeg -i "$1" -ar 16000 -ac 1 -f wav "$TMP_WAV" -y 2>/dev/null
-        /whisper-storage/whisper-cli -m /whisper-storage/ggml-base.bin -f "$TMP_WAV" --language auto --no-timestamps 2>/dev/null
+        /whisper-storage/whisper-cli -m /whisper-storage/ggml-tiny.bin -f "$TMP_WAV" --language auto --no-timestamps 2>/dev/null
         EC=$?
         rm -f "$TMP_WAV"
         exit $EC
@@ -187,7 +205,7 @@ extraExternalSecrets:
     targetSecret: openclaw-telegram-secret
     data:
       - secretKey: OPENCLAW_TELEGRAM_TOKEN
-        remoteKey: secret/data/platform/alertmanager
+        remoteKey: secret/data/teams/__TEAM_NAME__/__SERVICE_NAME__/telegram
         property: telegram-bot-token
 configMaps:
   openclaw-scripts:
