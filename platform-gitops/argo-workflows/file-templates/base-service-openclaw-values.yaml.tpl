@@ -1,13 +1,13 @@
 # Service: __SERVICE_NAME__
 # Team: __TEAM_NAME__
 # Template: openclaw
-# Updated: 2026-03-20 (gemini-bot) - Fixed DB and Auto-Approve
+# Updated: 2026-03-22 - OAuth-first model auth, no platform API key injection
 
 # Chart: base-service
 
 image:
   repository: ghcr.io/mctlhq/__SERVICE_NAME__
-  tag: "__IMAGE_TAG__"
+  tag: "main-5a2a4ab"
 
 imagePullSecrets:
   - name: ghcr-credentials
@@ -93,7 +93,7 @@ initContainers:
     volumeMounts:
       - name: pvc-whisper
         mountPath: /whisper-storage
-  # 3. Setup Config and inject tokens
+  # 3. Setup config and inject service-scoped tokens
   - name: setup
     image: busybox:1.36
     command: ["sh", "-c"]
@@ -102,7 +102,6 @@ initContainers:
         cp /config-tpl/openclaw.json /config-rw/openclaw.json
         if [ -n "$TELEGRAM_TOKEN" ]; then sed -i "s|__TELEGRAM_TOKEN__|$TELEGRAM_TOKEN|g" /config-rw/openclaw.json; fi
         if [ -n "$MCTL_TOKEN" ]; then sed -i "s|__MCTL_TOKEN__|$MCTL_TOKEN|g" /config-rw/openclaw.json; fi
-        if [ -n "$OPENAI_API_KEY" ]; then sed -i "s|__OPENAI_API_KEY__|$OPENAI_API_KEY|g" /config-rw/openclaw.json; fi
         chown 1000:1000 /config-rw/openclaw.json
     env:
       - name: TELEGRAM_TOKEN
@@ -115,12 +114,6 @@ initContainers:
           secretKeyRef:
             name: openclaw-mctl-token
             key: MCTL_API_TOKEN
-            optional: true
-      - name: OPENAI_API_KEY
-        valueFrom:
-          secretKeyRef:
-            name: openclaw-openai-secret
-            key: OPENAI_API_KEY
             optional: true
     volumeMounts:
       - name: openclaw-config-tpl
@@ -209,13 +202,6 @@ extraExternalSecrets:
       - secretKey: password
         remoteKey: secret/data/teams/__TEAM_NAME__/__SERVICE_NAME__/database
         property: password
-  openclaw-openai-secret:
-    refreshInterval: 1h
-    targetSecret: openclaw-openai-secret
-    data:
-      - secretKey: OPENAI_API_KEY
-        remoteKey: secret/data/platform/openai
-        property: api-key
   openclaw-telegram-secret:
     refreshInterval: 1h
     targetSecret: openclaw-telegram-secret
@@ -245,13 +231,24 @@ configMaps:
           "auth": { "mode": "trusted-proxy", "trustedProxy": { "userHeader": "X-Forwarded-For" } },
           "trustedProxies": ["10.42.0.0/16", "10.43.0.0/16", "172.16.0.0/12"]
         },
-        "providers": {
-          "openai": {
-            "type": "openai",
-            "apiKey": "__OPENAI_API_KEY__"
+        "agents": {
+          "defaults": {
+            "model": {
+              "primary": "openai-codex/gpt-5.4"
+            }
           }
         },
-        "defaultModel": "openai/gpt-4o",
+        "auth": {
+          "profiles": {
+            "openai-codex:default": {
+              "provider": "openai-codex",
+              "mode": "oauth"
+            }
+          },
+          "order": {
+            "openai-codex": ["openai-codex:default"]
+          }
+        },
         "channels": {
           "telegram": {
             "enabled": true,

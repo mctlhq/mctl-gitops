@@ -150,12 +150,18 @@ type WorkflowStatus struct {
 // ExecuteOperation submits a platform operation and returns the resulting
 // workflow reference. The params map is sent directly as the JSON body.
 func (c *Client) ExecuteOperation(opName string, params map[string]string) (*SubmitResult, error) {
-	var result SubmitResult
 	path := fmt.Sprintf("/api/v1/operations/%s/execute", opName)
-	if err := c.Post(path, params, &result); err != nil {
+	var resp struct {
+		Workflow SubmitResult `json:"workflow"`
+		SubmitResult
+	}
+	if err := c.Post(path, params, &resp); err != nil {
 		return nil, err
 	}
-	return &result, nil
+	if resp.Workflow.WorkflowName != "" {
+		return &resp.Workflow, nil
+	}
+	return &resp.SubmitResult, nil
 }
 
 // PollWorkflow polls the workflow status every 5 seconds until it reaches a
@@ -173,11 +179,51 @@ func (c *Client) PollWorkflow(workflowName string, timeout time.Duration) (*Work
 			return nil, fmt.Errorf("timed out waiting for workflow %s", workflowName)
 		}
 
-		var ws WorkflowStatus
-		if err := c.Get(path, &ws); err != nil {
+		var resp struct {
+			Workflow string `json:"workflow"`
+			Live     *struct {
+				Metadata *struct {
+					Name string `json:"name"`
+				} `json:"metadata"`
+				Status *struct {
+					Phase      string `json:"phase"`
+					StartedAt  string `json:"startedAt"`
+					FinishedAt string `json:"finishedAt"`
+					Message    string `json:"message"`
+				} `json:"status"`
+			} `json:"live"`
+			WorkflowStatus
+		}
+		if err := c.Get(path, &resp); err != nil {
 			fmt.Fprintf(os.Stderr, "\r  ⏳ Workflow %s — waiting...", workflowName)
 			time.Sleep(5 * time.Second)
 			continue
+		}
+
+		ws := resp.WorkflowStatus
+		if resp.Live != nil {
+			if resp.Live.Metadata != nil && resp.Live.Metadata.Name != "" {
+				ws.Name = resp.Live.Metadata.Name
+			} else if resp.Workflow != "" {
+				ws.Name = resp.Workflow
+			}
+			if resp.Live.Status != nil {
+				if resp.Live.Status.Phase != "" {
+					ws.Phase = resp.Live.Status.Phase
+				}
+				if resp.Live.Status.StartedAt != "" {
+					ws.StartedAt = resp.Live.Status.StartedAt
+				}
+				if resp.Live.Status.FinishedAt != "" {
+					ws.FinishedAt = resp.Live.Status.FinishedAt
+				}
+				if resp.Live.Status.Message != "" {
+					ws.Message = resp.Live.Status.Message
+				}
+			}
+		}
+		if ws.Name == "" {
+			ws.Name = workflowName
 		}
 
 		fmt.Fprintf(os.Stderr, "\r  ⏳ Workflow %s — %s...", ws.Name, ws.Phase)

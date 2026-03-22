@@ -44,6 +44,21 @@ mctl deploy -t my-team -n my-api -r mctlhq/my-api -g v1.0.0 \
 mctl deploy -t my-team -n my-api -r mctlhq/my-api -g v1.0.0 --wait
 ```
 
+### Deploy OpenClaw
+
+```bash
+# Template-based onboard with auto-generated host
+mctl deploy -t my-team -n openclaw --service-template openclaw \
+  --telegram-owner-id 123456789 \
+  --telegram-bot-token 123:abc \
+  --wait
+
+# Optional: preconfigure a model API key for headless setup
+mctl deploy -t my-team -n openclaw --service-template openclaw \
+  --secret OPENAI_API_KEY=sk-xxx \
+  --wait
+```
+
 ### Update service config
 
 ```bash
