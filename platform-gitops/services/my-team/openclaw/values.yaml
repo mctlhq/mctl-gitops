@@ -76,16 +76,7 @@ initContainers:
     volumeMounts:
       - name: state-data
         mountPath: /home/node/.openclaw
-  # 2. Pre-install mcp-remote
-  - name: install-mcp-remote
-    image: node:22-alpine
-    command: ["sh", "-c"]
-    args:
-      - npm install --prefix /npm-cache mcp-remote
-    volumeMounts:
-      - name: npm-cache
-        mountPath: /npm-cache
-  # 3. Build whisper-cli (cached in MinIO platform-cache bucket)
+  # 2. Build whisper-cli (cached in MinIO platform-cache bucket)
   - name: install-whisper-cli
     image: debian:12-slim
     resources:
@@ -181,7 +172,7 @@ initContainers:
     volumeMounts:
       - name: pvc-whisper
         mountPath: /whisper-storage
-  # 4. Setup config and inject tokens
+  # 3. Setup config and inject tokens
   - name: setup
     image: busybox:1.36
     command: ["sh", "-c"]
@@ -208,8 +199,6 @@ initContainers:
 extraVolumeMounts:
   - name: openclaw-config-rw
     mountPath: /config-rw
-  - name: npm-cache
-    mountPath: /npm-cache
   - name: pvc-whisper
     mountPath: /whisper-storage
   - name: openclaw-scripts
@@ -244,8 +233,6 @@ extraVolumes:
       name: openclaw-config
   - name: openclaw-config-rw
     emptyDir: {}
-  - name: npm-cache
-    emptyDir: {}
   - name: pvc-whisper
     emptyDir: {}
   - name: state-data
@@ -265,7 +252,7 @@ extraExternalSecrets:
     targetSecret: openclaw-telegram-secret
     data:
       - secretKey: OPENCLAW_TELEGRAM_TOKEN
-        remoteKey: secret/data/teams/my-team/openclaw
+        remoteKey: secret/data/teams/my-team/openclaw/telegram
         property: telegram-bot-token
   minio-cache-creds:
     refreshInterval: 1h
@@ -307,6 +294,117 @@ configMaps:
           });
           req.on('error', reject); req.write(data); req.end();
         });
+      }
+    mctl-mcp-proxy.js: |-
+      #!/usr/bin/env node
+      const fs = require('fs');
+      const path = require('path');
+      const apiBase = (process.env.MCTL_API_URL || 'https://api.mctl.ai').replace(/\/+$/, '');
+      const authFile = process.env.MCTL_AUTH_FILE || '/home/node/.openclaw/mcp-auth/mctl/credentials.json';
+      process.stdin.setEncoding('utf8');
+      let buf = '';
+      process.stdin.on('data', chunk => {
+        buf += chunk;
+        let nl;
+        while ((nl = buf.indexOf('\n')) !== -1) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (line) handleLine(line);
+        }
+      });
+      function write(obj) { process.stdout.write(JSON.stringify(obj) + '\n'); }
+      async function handleLine(line) {
+        let req;
+        try { req = JSON.parse(line); } catch (_) { return; }
+        try {
+          const res = await callMctl(req);
+          write(res);
+        } catch (err) {
+          write({ jsonrpc: '2.0', id: req.id, error: { code: -32603, message: String(err && err.message ? err.message : err) } });
+        }
+      }
+      async function readAuth() {
+        const raw = await fs.promises.readFile(authFile, 'utf8');
+        return JSON.parse(raw);
+      }
+      async function writeAuth(auth) {
+        await fs.promises.mkdir(path.dirname(authFile), { recursive: true, mode: 0o700 });
+        const tmp = `${authFile}.tmp`;
+        await fs.promises.writeFile(tmp, JSON.stringify(auth, null, 2) + '\n', { mode: 0o600 });
+        await fs.promises.rename(tmp, authFile);
+      }
+      function isExpiring(auth) {
+        if (!auth || !auth.expiresAt) return false;
+        const ms = Date.parse(auth.expiresAt);
+        return Number.isFinite(ms) && ms <= Date.now() + 60_000;
+      }
+      async function refreshAuth(auth) {
+        if (!auth || !auth.refreshToken || !auth.clientId) {
+          throw new Error('mctl not connected');
+        }
+        const body = new URLSearchParams({
+          grant_type: 'refresh_token',
+          refresh_token: auth.refreshToken,
+          client_id: auth.clientId,
+        });
+        const res = await fetch(`${apiBase}/oauth/token`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
+          body,
+        });
+        const payload = await res.json().catch(() => ({}));
+        if (!res.ok || !payload.access_token || !payload.refresh_token) {
+          throw new Error(payload.error_description || payload.error || `mctl refresh failed (${res.status})`);
+        }
+        const expiresAt = typeof payload.expires_in === 'number' ? new Date(Date.now() + payload.expires_in * 1000).toISOString() : null;
+        const next = {
+          ...auth,
+          accessToken: String(payload.access_token),
+          refreshToken: String(payload.refresh_token),
+          scope: typeof payload.scope === 'string' ? payload.scope : (auth.scope || 'mctl'),
+          expiresAt,
+          updatedAt: new Date().toISOString(),
+        };
+        await writeAuth(next);
+        return next;
+      }
+      async function ensureAuth() {
+        const auth = await readAuth().catch(() => null);
+        if (!auth) {
+          throw new Error('mctl is not connected in Control UI');
+        }
+        if (isExpiring(auth)) {
+          return await refreshAuth(auth);
+        }
+        return auth;
+      }
+      async function post(body, token) {
+        const res = await fetch(`${apiBase}/mcp`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'Authorization': `Bearer ${token}`,
+          },
+          body: JSON.stringify(body),
+        });
+        const text = await res.text();
+        let parsed;
+        try { parsed = text ? JSON.parse(text) : {}; } catch (_) { throw new Error(`invalid JSON from mctl MCP (${res.status})`); }
+        return { status: res.status, body: parsed };
+      }
+      async function callMctl(body) {
+        let auth = await ensureAuth();
+        let res = await post(body, auth.accessToken);
+        if (res.status === 401 && auth.refreshToken) {
+          auth = await refreshAuth(auth);
+          res = await post(body, auth.accessToken);
+        }
+        if (res.status >= 400) {
+          const message = res.body && res.body.error && res.body.error.message ? res.body.error.message : `mctl MCP request failed (${res.status})`;
+          throw new Error(message);
+        }
+        return res.body;
       }
   openclaw-config:
     openclaw.json: |-
@@ -363,7 +461,15 @@ configMaps:
 
         "mcp": {
           "servers": {
-            "mctl-agent": {"command": "node", "args": ["/scripts/mcp-agent-proxy.js"]}
+            "mctl-agent": {"command": "node", "args": ["/scripts/mcp-agent-proxy.js"]},
+            "mctl": {
+              "command": "node",
+              "args": ["/scripts/mctl-mcp-proxy.js"],
+              "env": {
+                "MCTL_API_URL": "https://api.mctl.ai",
+                "MCTL_AUTH_FILE": "/home/node/.openclaw/mcp-auth/mctl/credentials.json"
+              }
+            }
           }
         }
       }

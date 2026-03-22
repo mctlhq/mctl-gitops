@@ -28,6 +28,7 @@ spec:
           SECRET_TEXT="{{inputs.parameters.secret_env_vars}}"
           TELEGRAM_BOT_TOKEN="{{inputs.parameters.telegram_bot_token}}"
           VAULT_PATH="secret/data/teams/${TEAM}/${SERVICE}"
+          TELEGRAM_VAULT_PATH="secret/data/teams/${TEAM}/${SERVICE}/telegram"
 
           echo "🔐 Authenticating with Vault (Kubernetes auth)..."
           SA_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
@@ -67,17 +68,6 @@ spec:
           done << 'SECRETS_EOF'
           {{inputs.parameters.secret_env_vars}}
           SECRETS_EOF
-
-          # Append telegram_bot_token if provided
-          if [ -n "$TELEGRAM_BOT_TOKEN" ]; then
-            token_escaped=$(echo "$TELEGRAM_BOT_TOKEN" | sed 's/"/\\"/g')
-            if [ "$FIRST" = "true" ]; then
-              JSON_DATA="${JSON_DATA}\"telegram-bot-token\":\"${token_escaped}\""
-              FIRST=false
-            else
-              JSON_DATA="${JSON_DATA},\"telegram-bot-token\":\"${token_escaped}\""
-            fi
-          fi
 
           JSON_DATA="${JSON_DATA}}"
 
@@ -120,6 +110,41 @@ spec:
           fi
 
           echo "✅ Secrets saved to Vault at ${VAULT_PATH}"
+
+          if [ -n "$TELEGRAM_BOT_TOKEN" ]; then
+            token_escaped=$(echo "$TELEGRAM_BOT_TOKEN" | sed 's/"/\\"/g')
+            TELEGRAM_JSON="{\"telegram-bot-token\":\"${token_escaped}\"}"
+
+            HTTP_GET=$(curl -sS -o /tmp/vault-telegram-get.json -w "%{http_code}" \
+              -H "X-Vault-Token: $VAULT_TOKEN" \
+              "${VAULT_ADDR}/v1/${TELEGRAM_VAULT_PATH}")
+
+            EXISTING_TELEGRAM_JSON="{}"
+            if [ "$HTTP_GET" = "200" ]; then
+              EXISTING_TELEGRAM_JSON=$(python3 -c \
+                "import json; d=json.load(open('/tmp/vault-telegram-get.json')); print(json.dumps(d.get('data',{}).get('data',{})))" \
+                2>/dev/null || echo "{}")
+            fi
+
+            MERGED_TELEGRAM_JSON=$(python3 -c \
+              "import json; e=json.loads('$EXISTING_TELEGRAM_JSON'); n=json.loads('$TELEGRAM_JSON'); e.update(n); print(json.dumps(e))" \
+              2>/dev/null || echo "$TELEGRAM_JSON")
+
+            HTTP_CODE=$(curl -sS -o /tmp/vault-telegram-write.json -w "%{http_code}" \
+              -X POST \
+              -H "X-Vault-Token: $VAULT_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"data\":${MERGED_TELEGRAM_JSON}}" \
+              "${VAULT_ADDR}/v1/${TELEGRAM_VAULT_PATH}")
+
+            if [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "204" ]; then
+              echo "❌ Failed to save telegram secret (HTTP $HTTP_CODE)"
+              cat /tmp/vault-telegram-write.json || true
+              exit 1
+            fi
+
+            echo "✅ Telegram token saved to Vault at ${TELEGRAM_VAULT_PATH}"
+          fi
         env:
           - name: VAULT_ADDR
             value: "http://vault.vault.svc.cluster.local:8200"
