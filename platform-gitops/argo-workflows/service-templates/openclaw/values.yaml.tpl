@@ -48,8 +48,14 @@ initContainers:
       - |
         mc alias set s3 "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
         # Probe the existing bucket via `mc find` instead of touching a missing prefix directly.
-        NEW_STATE_MARKER=$(mc find s3/platform-state/ --name update-check.json 2>/dev/null | grep '/__TEAM_NAME__/__SERVICE_NAME__/update-check.json$' | head -n 1 || true)
-        LEGACY_STATE_MARKER=$(mc find s3/platform-state/ --name update-check.json 2>/dev/null | grep '/__SERVICE_NAME__/__TEAM_NAME__/update-check.json$' | head -n 1 || true)
+        NEW_STATE_MARKER=""
+        LEGACY_STATE_MARKER=""
+        for marker in $(mc find s3/platform-state/ --name update-check.json 2>/dev/null); do
+          case "$marker" in
+            */__TEAM_NAME__/__SERVICE_NAME__/update-check.json) NEW_STATE_MARKER=1 ;;
+            */__SERVICE_NAME__/__TEAM_NAME__/update-check.json) LEGACY_STATE_MARKER=1 ;;
+          esac
+        done
         if [ -n "$NEW_STATE_MARKER" ]; then
           mc mirror s3/platform-state/__TEAM_NAME__/__SERVICE_NAME__/ /home/node/.openclaw
         elif [ -n "$LEGACY_STATE_MARKER" ]; then
