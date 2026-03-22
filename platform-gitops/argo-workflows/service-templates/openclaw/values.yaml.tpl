@@ -47,8 +47,10 @@ initContainers:
     args:
       - |
         mc alias set s3 "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
-        if mc ls s3/platform-state/openclaw/__TEAM_NAME__/ > /dev/null 2>&1; then
-          mc mirror s3/platform-state/openclaw/__TEAM_NAME__/ /home/node/.openclaw
+        if mc ls s3/platform-state/__TEAM_NAME__/__SERVICE_NAME__/ > /dev/null 2>&1; then
+          mc mirror s3/platform-state/__TEAM_NAME__/__SERVICE_NAME__/ /home/node/.openclaw
+        elif mc ls s3/platform-state/__SERVICE_NAME__/__TEAM_NAME__/ > /dev/null 2>&1; then
+          mc mirror s3/platform-state/__SERVICE_NAME__/__TEAM_NAME__/ /home/node/.openclaw
         else
           mkdir -p /home/node/.openclaw
         fi
@@ -211,7 +213,7 @@ extraContainers:
     args:
       - |
         mc alias set s3 "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
-        mc mirror --watch --remove --overwrite /home/node/.openclaw s3/platform-state/openclaw/__TEAM_NAME__/
+        mc mirror --watch --remove --overwrite /home/node/.openclaw s3/platform-state/__TEAM_NAME__/__SERVICE_NAME__/
     env:
       - name: MINIO_ENDPOINT
         value: "http://minio.minio.svc.cluster.local:9000"
