@@ -211,7 +211,7 @@ spec:
           image:
             registry: ghcr.io
             repository: mctlhq/mctl-portal
-            tag: 4.1.3
+            tag: 4.1.3@sha256:dc746227ffd0bcf84efd80b3cb88152fa2f01818655058ca0c81298abc590121
             pullSecrets:
               - ghcr-credentials
           extraEnvVarsSecrets:
