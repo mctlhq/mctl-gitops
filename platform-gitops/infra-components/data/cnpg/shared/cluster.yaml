@@ -87,7 +87,6 @@ spec:
       - host tests-pdb-test-svc tests-pdb-test-svc all scram-sha-256
       # smoke-test-svc: ephemeral — added/removed by smoke-test CWT, not managed here
       - host mctl-agent mctl-agent all scram-sha-256
-      - host my-team-openclaw my-team-openclaw all scram-sha-256
       - host all all 0.0.0.0/0 reject
 
   managed:
@@ -133,17 +132,7 @@ spec:
         passwordSecret:
           name: mctl-agent-db-creds
       # Team app roles
-      - name: my-team-openclaw
-        login: true
-        connectionLimit: 10
-        ensure: present
-        inherit: true
         passwordSecret:
-          name: my-team-openclaw-db-creds
-      - name: tests-pdb-test-svc
-        login: true
-        connectionLimit: 10
-        ensure: present
         inherit: true
         passwordSecret:
           name: tests-pdb-test-svc-db-creds
