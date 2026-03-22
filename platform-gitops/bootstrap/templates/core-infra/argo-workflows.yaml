@@ -77,7 +77,7 @@ spec:
                 secondsAfterSuccess: 1800
                 secondsAfterFailure: 86400
               podGC:
-                strategy: OnWorkflowSuccess
+                strategy: OnWorkflowCompletion
 
         artifactRepository:
           archiveLogs: true
