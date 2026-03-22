@@ -28,6 +28,23 @@ env:
   APP_ENV: production
   NODE_OPTIONS: "--max-old-space-size=3072"
   OPENCLAW_CONFIG_PATH: /config-rw/openclaw.json
+probes:
+  startup:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    failureThreshold: 24
+  liveness:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 120
+    periodSeconds: 20
+  readiness:
+    path: /readyz
+    port: http
+    initialDelaySeconds: 20
+    periodSeconds: 10
 envFrom:
   - secretRef:
       name: my-team-openclaw-db-creds
