@@ -54,6 +54,13 @@ The `openclaw` template pre-configures: 1Gi memory, 5min startup probe,
 gateway config (LAN bind, token auth, trusted K8s proxies), Control UI enabled.
 Deploy first, then connect a model provider in the OpenClaw UI. API keys are optional
 and should stay service-scoped under `teams/{team}/{service}` if used at all.
+The initial `auth-profiles.json` should be created by the OpenClaw OAuth flow itself and
+persisted to `platform-state/{team}/{service}/...`. During state-path migration, restore
+falls back from `platform-state/{team}/{service}/...` to the legacy
+`platform-state/{service}/{team}/...` layout.
+Known limitation: the current deployed OpenClaw image refreshes OAuth credentials in memory,
+but does not reliably persist refreshed state back to disk/S3; fixing that requires changes
+in the OpenClaw application image.
 
 ## Tool Reference
 

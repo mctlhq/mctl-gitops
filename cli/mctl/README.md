@@ -59,6 +59,15 @@ mctl deploy -t my-team -n openclaw --service-template openclaw \
   --wait
 ```
 
+OpenClaw is OAuth-first. Normal onboarding flow is:
+1. deploy the service
+2. open the Control UI
+3. connect OpenAI Codex in the UI
+
+That OAuth flow creates the initial `auth-profiles.json` for the tenant. Persisted state is
+stored in `platform-state/{team}/{service}/...`, with restore fallback from the legacy
+`platform-state/{service}/{team}/...` layout during migration.
+
 ### Update service config
 
 ```bash
