@@ -47,17 +47,12 @@ initContainers:
     args:
       - |
         mc alias set s3 "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
-        # Some mc builds exit the shell on a missing prefix even inside `if`.
-        # Probe both layouts with `set +e`, then restore from the first existing path.
-        set +e
-        mc ls s3/platform-state/__TEAM_NAME__/__SERVICE_NAME__/ > /dev/null 2>&1
-        NEW_STATE_RC=$?
-        mc ls s3/platform-state/__SERVICE_NAME__/__TEAM_NAME__/ > /dev/null 2>&1
-        LEGACY_STATE_RC=$?
-        set -e
-        if [ "$NEW_STATE_RC" -eq 0 ]; then
+        # Probe the existing bucket via `mc find` instead of touching a missing prefix directly.
+        NEW_STATE_MARKER=$(mc find s3/platform-state/ --name update-check.json 2>/dev/null | grep '/__TEAM_NAME__/__SERVICE_NAME__/update-check.json$' | head -n 1 || true)
+        LEGACY_STATE_MARKER=$(mc find s3/platform-state/ --name update-check.json 2>/dev/null | grep '/__SERVICE_NAME__/__TEAM_NAME__/update-check.json$' | head -n 1 || true)
+        if [ -n "$NEW_STATE_MARKER" ]; then
           mc mirror s3/platform-state/__TEAM_NAME__/__SERVICE_NAME__/ /home/node/.openclaw
-        elif [ "$LEGACY_STATE_RC" -eq 0 ]; then
+        elif [ -n "$LEGACY_STATE_MARKER" ]; then
           mc mirror s3/platform-state/__SERVICE_NAME__/__TEAM_NAME__/ /home/node/.openclaw
         else
           mkdir -p /home/node/.openclaw
