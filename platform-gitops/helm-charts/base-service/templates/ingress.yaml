@@ -5,7 +5,14 @@ metadata:
   name: {{ include "base-service.fullname" . }}
   labels:
     {{- include "base-service.labels" . | nindent 4 }}
+  {{- $annotations := dict }}
   {{- with .Values.ingress.annotations }}
+  {{- $annotations = merge $annotations . }}
+  {{- end }}
+  {{- if .Values.ingress.forwardAuth.enabled }}
+  {{- $_ := set $annotations "traefik.ingress.kubernetes.io/router.middlewares" (printf "%s-%s-forward-auth@kubernetescrd" .Release.Namespace (include "base-service.fullname" .)) }}
+  {{- end }}
+  {{- with $annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
   {{- end }}

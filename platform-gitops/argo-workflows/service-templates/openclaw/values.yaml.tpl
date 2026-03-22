@@ -63,13 +63,10 @@ initContainers:
         else
           mkdir -p /home/node/.openclaw
         fi
-        # During layout migration, new state may exist without the agent auth files.
-        # Backfill only the critical auth artifacts from the legacy path when missing.
+        # During layout migration, only backfill non-secret model metadata.
+        # New tenants must start without preseeded Codex OAuth credentials.
         if [ -n "$LEGACY_STATE_MARKER" ]; then
           mkdir -p /home/node/.openclaw/agents/main/agent
-          if [ ! -f /home/node/.openclaw/agents/main/agent/auth-profiles.json ]; then
-            mc cp s3/platform-state/__SERVICE_NAME__/__TEAM_NAME__/agents/main/agent/auth-profiles.json /home/node/.openclaw/agents/main/agent/auth-profiles.json 2>/dev/null || true
-          fi
           if [ ! -f /home/node/.openclaw/agents/main/agent/models.json ]; then
             mc cp s3/platform-state/__SERVICE_NAME__/__TEAM_NAME__/agents/main/agent/models.json /home/node/.openclaw/agents/main/agent/models.json 2>/dev/null || true
           fi
@@ -430,7 +427,8 @@ configMaps:
           "auth": {
             "mode": "trusted-proxy",
             "trustedProxy": {
-              "userHeader": "X-Forwarded-For"
+              "userHeader": "X-Forwarded-User",
+              "roleHeader": "X-Mctl-Team-Role"
             }
           },
           "trustedProxies": [
@@ -491,6 +489,13 @@ configMaps:
 
 ingress:
   enabled: true
+  forwardAuth:
+    enabled: true
+    address: "https://app.mctl.ai/api/oidc-provider/forward-auth?tenant=__TEAM_NAME__&service=__SERVICE_NAME__"
+    trustForwardHeader: true
+    authResponseHeaders:
+      - X-Forwarded-User
+      - X-Mctl-Team-Role
   hosts:
     - __HOST__
   annotations:
