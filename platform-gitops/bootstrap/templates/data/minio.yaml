@@ -48,6 +48,10 @@ spec:
           buckets:
             - name: argo-workflows-logs
               policy: none
+            - name: platform-cache
+              policy: none
+            - name: platform-state
+              policy: none
 
     - repoURL: https://github.com/mctlhq/mctl-gitops.git
       targetRevision: main
