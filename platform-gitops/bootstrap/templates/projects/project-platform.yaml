@@ -47,4 +47,4 @@ spec:
       kind: Ingress
 
   orphanedResources:
-    warn: true
+    warn: false
