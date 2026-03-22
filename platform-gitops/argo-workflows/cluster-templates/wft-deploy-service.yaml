@@ -79,7 +79,7 @@ spec:
         # Telegram user ID of the service owner — auto-approved in identities table at deploy time
       - name: telegram_bot_token
         value: ""
-        # Telegram bot token — written to Vault at teams/{team}/{service} → telegram-bot-token
+        # Telegram bot token — written to Vault at teams/{team}/{service}/telegram → telegram-bot-token
 
   templates:
     # ────────────────────────────────────────────────────────────────────────
