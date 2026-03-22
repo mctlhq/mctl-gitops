@@ -131,6 +131,15 @@ argo-cd:
 
         # mctl-api service account: read all applications for status checks
         p, mctl-api, applications, get, */*, allow
+
+        # Tenant: labs
+        p, role:team-labs, applications, get, apps/labs-*, allow
+        p, role:team-labs, applications, list, apps/labs-*, allow
+        p, role:team-labs, applications, sync, apps/labs-*, allow
+        p, role:team-labs, applications, override, apps/labs-*, allow
+        p, role:team-labs, logs, get, apps/labs-*, allow
+        p, role:team-labs, exec, create, apps/labs-*, allow
+        g, labs, role:team-labs
     secret:
       createSecret: true
 
