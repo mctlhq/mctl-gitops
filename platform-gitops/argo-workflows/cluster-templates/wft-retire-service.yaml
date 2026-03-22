@@ -132,7 +132,7 @@ spec:
           git config user.name "argo-workflows[bot]"
           git config user.email "argo-workflows[bot]@users.noreply.github.com"
 
-          CNPG_DIR="platform-gitops/cnpg-clusters/shared"
+          CNPG_DIR="platform-gitops/infra-components/data/cnpg/shared"
           CHANGED=false
 
           # ── Remove pg_hba entry from cluster.yaml ─────────────────────────
@@ -143,14 +143,14 @@ spec:
           fi
 
           # ── Remove managed role from cluster.yaml ─────────────────────────
-          # Role block is 5-6 lines: name, login, connectionLimit, ensure, passwordSecret, name
           if grep -q "name: ${DB_NAME}$" "${CNPG_DIR}/cluster.yaml" 2>/dev/null; then
-            # Use awk to remove the role block (from "- name: DB_NAME" to next "- name:" or end of roles)
             awk -v db="${DB_NAME}" '
-              /^[[:space:]]*- name: '"${DB_NAME}"'$/ { skip=1; next }
-              skip && /^[[:space:]]*- name:/ { skip=0 }
-              skip && /^[[:space:]]*[^[:space:]]/ && !/^[[:space:]]*(login|connectionLimit|ensure|passwordSecret|name:)/ { skip=0 }
-              !skip { print }
+              /^[[:space:]]*- name: / {
+                if ($0 ~ "^[[:space:]]*- name: " db "$") { skip=1; next }
+                if (skip) { skip=0 }
+              }
+              skip { next }
+              { print }
             ' "${CNPG_DIR}/cluster.yaml" > "${CNPG_DIR}/cluster.yaml.tmp" && mv "${CNPG_DIR}/cluster.yaml.tmp" "${CNPG_DIR}/cluster.yaml"
             echo "✅ Removed managed role for ${DB_NAME}"
             CHANGED=true
@@ -158,13 +158,24 @@ spec:
 
           # ── Remove Database CRD from databases.yaml ───────────────────────
           if grep -q "name: ${DB_NAME}-db" "${CNPG_DIR}/databases.yaml" 2>/dev/null; then
-            # Remove the full Database manifest block
             awk -v db="${DB_NAME}-db" '
-              BEGIN { skip=0 }
-              /^---$/ { if (skip) { skip=0; next } }
-              /name: '"${DB_NAME}-db"'/ { skip=1 }
-              skip && /^---$/ { next }
-              !skip { print }
+              BEGIN { keep=1; saw=0; doc="" }
+              function flush() {
+                if (doc == "") return
+                if (!saw) printf "%s", doc
+                doc=""
+                saw=0
+              }
+              /^---[[:space:]]*$/ {
+                flush()
+                doc=$0 ORS
+                next
+              }
+              {
+                doc = doc $0 ORS
+                if ($0 ~ "^[[:space:]]*name:[[:space:]]*" db "$") saw=1
+              }
+              END { flush() }
             ' "${CNPG_DIR}/databases.yaml" > "${CNPG_DIR}/databases.yaml.tmp" && mv "${CNPG_DIR}/databases.yaml.tmp" "${CNPG_DIR}/databases.yaml"
             echo "✅ Removed Database CRD for ${DB_NAME}"
             CHANGED=true
@@ -172,24 +183,24 @@ spec:
 
           # ── Remove ExternalSecret from secrets.yaml ───────────────────────
           if grep -q "name: ${DB_NAME}-db-creds" "${CNPG_DIR}/secrets.yaml" 2>/dev/null; then
-            # Remove the full ExternalSecret manifest block (from --- before it to next ---)
             awk -v es="${DB_NAME}-db-creds" '
-              BEGIN { skip=0; buf="" }
-              /^---$/ {
-                if (skip) { skip=0; buf=""; next }
-                if (buf != "") print buf
-                buf="---"
+              BEGIN { saw=0; doc="" }
+              function flush() {
+                if (doc == "") return
+                if (!saw) printf "%s", doc
+                doc=""
+                saw=0
+              }
+              /^---[[:space:]]*$/ {
+                flush()
+                doc=$0 ORS
                 next
               }
-              skip { next }
-              /name: '"${DB_NAME}-db-creds"'/ {
-                skip=1; buf=""; next
-              }
               {
-                if (buf != "") { print buf; buf="" }
-                print
+                doc = doc $0 ORS
+                if ($0 ~ "^[[:space:]]*name:[[:space:]]*" es "$") saw=1
               }
-              END { if (buf != "" && !skip) print buf }
+              END { flush() }
             ' "${CNPG_DIR}/secrets.yaml" > "${CNPG_DIR}/secrets.yaml.tmp" && mv "${CNPG_DIR}/secrets.yaml.tmp" "${CNPG_DIR}/secrets.yaml"
             echo "✅ Removed ExternalSecret for ${DB_NAME}"
             CHANGED=true
