@@ -346,7 +346,7 @@ configMaps:
         },
         "channels": {
           "telegram": {
-            "enabled": false,
+            "enabled": true,
             "botToken": "__TELEGRAM_TOKEN__",
             "dmPolicy": "pairing",
             "groupPolicy": "open",
