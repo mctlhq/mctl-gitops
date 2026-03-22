@@ -55,6 +55,17 @@ initContainers:
         else
           mkdir -p /home/node/.openclaw
         fi
+        # During layout migration, new state may exist without the agent auth files.
+        # Backfill only the critical auth artifacts from the legacy path when missing.
+        if [ -n "$LEGACY_STATE_MARKER" ]; then
+          mkdir -p /home/node/.openclaw/agents/main/agent
+          if [ ! -f /home/node/.openclaw/agents/main/agent/auth-profiles.json ]; then
+            mc cp s3/platform-state/openclaw/my-team/agents/main/agent/auth-profiles.json /home/node/.openclaw/agents/main/agent/auth-profiles.json 2>/dev/null || true
+          fi
+          if [ ! -f /home/node/.openclaw/agents/main/agent/models.json ]; then
+            mc cp s3/platform-state/openclaw/my-team/agents/main/agent/models.json /home/node/.openclaw/agents/main/agent/models.json 2>/dev/null || true
+          fi
+        fi
     env:
       - name: MINIO_ENDPOINT
         value: "http://minio.minio.svc.cluster.local:9000"
