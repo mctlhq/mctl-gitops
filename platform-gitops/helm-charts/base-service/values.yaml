@@ -45,6 +45,11 @@ ingress:
   pathType: Prefix
   annotations: {}
   tls: []
+  forwardAuth:
+    enabled: false
+    address: ""
+    trustForwardHeader: true
+    authResponseHeaders: []
 
 # -- Optional: autoscaling
 autoscaling:

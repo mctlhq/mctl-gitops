@@ -341,7 +341,7 @@ configMaps:
             "enabled": true,
             "allowedOrigins": ["https://__TEAM_NAME__-__SERVICE_NAME__.mctl.ai"]
           },
-          "auth": { "mode": "trusted-proxy", "trustedProxy": { "userHeader": "X-Forwarded-For" } },
+          "auth": { "mode": "trusted-proxy", "trustedProxy": { "userHeader": "X-Forwarded-User", "roleHeader": "X-Mctl-Team-Role" } },
           "trustedProxies": ["10.42.0.0/16", "10.43.0.0/16", "172.16.0.0/12"]
         },
         "agents": {
@@ -387,6 +387,13 @@ configMaps:
       }
 ingress:
   enabled: true
+  forwardAuth:
+    enabled: true
+    address: "https://app.mctl.ai/api/oidc-provider/forward-auth?tenant=__TEAM_NAME__&service=__SERVICE_NAME__"
+    trustForwardHeader: true
+    authResponseHeaders:
+      - X-Forwarded-User
+      - X-Mctl-Team-Role
   hosts:
     - __HOST__
   annotations:
