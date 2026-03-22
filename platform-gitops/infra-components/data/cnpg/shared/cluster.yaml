@@ -132,11 +132,6 @@ spec:
         passwordSecret:
           name: mctl-agent-db-creds
       # Team app roles
-        passwordSecret:
-        inherit: true
-        passwordSecret:
-          name: tests-pdb-test-svc-db-creds
-        passwordSecret:
       #   passwordSecret:
       #     name: team1-app1-db-creds
 
