@@ -87,6 +87,7 @@ spec:
       - host test-spring-test test-spring-test all scram-sha-256
       # smoke-test-svc: ephemeral — added/removed by smoke-test CWT, not managed here
       - host mctl-agent mctl-agent all scram-sha-256
+      - host labs-openclaw labs-openclaw all scram-sha-256
       - host all all 0.0.0.0/0 reject
 
   managed:
@@ -132,6 +133,12 @@ spec:
         passwordSecret:
           name: mctl-agent-db-creds
       # Team app roles
+      - name: labs-openclaw
+        login: true
+        connectionLimit: 10
+        ensure: present
+        passwordSecret:
+          name: labs-openclaw-db-creds
       #   passwordSecret:
       #     name: team1-app1-db-creds
 
