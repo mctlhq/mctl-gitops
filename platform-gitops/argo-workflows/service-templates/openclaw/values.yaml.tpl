@@ -7,7 +7,7 @@
 
 image:
   repository: ghcr.io/mctlhq/__SERVICE_NAME__
-  tag: "__IMAGE_TAG__"
+  tag: "main-5a2a4ab"
 
 podSecurityContext:
   fsGroup: 1000
@@ -270,16 +270,16 @@ extraExternalSecrets:
     targetSecret: minio-cache-creds
     data:
       - secretKey: access-key
-        remoteKey: secret/data/teams/__TEAM_NAME__/__SERVICE_NAME__
+        remoteKey: secret/data/platform/minio-cache
         property: MINIO_ACCESS_KEY
       - secretKey: secret-key
-        remoteKey: secret/data/teams/__TEAM_NAME__/__SERVICE_NAME__
+        remoteKey: secret/data/platform/minio-cache
         property: MINIO_SECRET_KEY
       - secretKey: endpoint
-        remoteKey: secret/data/teams/__TEAM_NAME__/__SERVICE_NAME__
+        remoteKey: secret/data/platform/minio-cache
         property: MINIO_ENDPOINT
       - secretKey: bucket
-        remoteKey: secret/data/teams/__TEAM_NAME__/__SERVICE_NAME__
+        remoteKey: secret/data/platform/minio-cache
         property: MINIO_BUCKET
 
 configMaps:

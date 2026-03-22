@@ -52,6 +52,8 @@ mctl_deploy_service(
 
 The `openclaw` template pre-configures: 1Gi memory, 5min startup probe,
 gateway config (LAN bind, token auth, trusted K8s proxies), Control UI enabled.
+Deploy first, then connect a model provider in the OpenClaw UI. API keys are optional
+and should stay service-scoped under `teams/{team}/{service}` if used at all.
 
 ## Tool Reference
 

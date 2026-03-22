@@ -1,13 +1,13 @@
 # Service: openclaw
 # Team: my-team
 # Template: openclaw
-# Updated: 2026-03-21 - OAuth mode + MinIO state (no PVC)
+# Updated: 2026-03-22 - OAuth mode, MinIO state, pinned image tag
 
 # Chart: base-service
 
 image:
   repository: ghcr.io/mctlhq/openclaw
-  tag: "latest"
+  tag: "main-5a2a4ab"
 podSecurityContext:
   fsGroup: 1000
 imagePullSecrets:
@@ -256,16 +256,16 @@ extraExternalSecrets:
     targetSecret: minio-cache-creds
     data:
       - secretKey: access-key
-        remoteKey: secret/data/teams/my-team/openclaw
+        remoteKey: secret/data/platform/minio-cache
         property: MINIO_ACCESS_KEY
       - secretKey: secret-key
-        remoteKey: secret/data/teams/my-team/openclaw
+        remoteKey: secret/data/platform/minio-cache
         property: MINIO_SECRET_KEY
       - secretKey: endpoint
-        remoteKey: secret/data/teams/my-team/openclaw
+        remoteKey: secret/data/platform/minio-cache
         property: MINIO_ENDPOINT
       - secretKey: bucket
-        remoteKey: secret/data/teams/my-team/openclaw
+        remoteKey: secret/data/platform/minio-cache
         property: MINIO_BUCKET
 configMaps:
   openclaw-scripts:
