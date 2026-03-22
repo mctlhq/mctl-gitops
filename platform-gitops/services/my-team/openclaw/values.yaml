@@ -280,7 +280,7 @@ configMaps:
       function callAgent(body) {
         return new Promise((resolve, reject) => {
           const data = JSON.stringify(body);
-          const req = http.request({ hostname: 'mctl-agent.admins.svc.cluster.local', port: 8080, path: '/mcp', method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } }, res => {
+          const req = http.request({ hostname: 'admins-mctl-agent-base-service.admins.svc.cluster.local', port: 8080, path: '/mcp', method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } }, res => {
             let out = ''; res.on('data', c => { out += c; }); res.on('end', () => { try { resolve(JSON.parse(out)); } catch (_) { reject(new Error('invalid JSON')); } });
           });
           req.on('error', reject); req.write(data); req.end();
@@ -341,15 +341,6 @@ configMaps:
 
         "mcp": {
           "servers": {
-            "mctl-platform": {
-              "command": "node",
-              "args": [
-                "/npm-cache/node_modules/mcp-remote/dist/proxy.js",
-                "https://api.mctl.ai/mcp",
-                "--transport", "sse",
-                "--callback-url", "https://my-team-openclaw.mctl.ai/oauth/callback/mctl-platform"
-              ]
-            },
             "mctl-agent": {"command": "node", "args": ["/scripts/mcp-agent-proxy.js"]}
           }
         }
