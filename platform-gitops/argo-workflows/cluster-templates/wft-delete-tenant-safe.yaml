@@ -7,11 +7,13 @@ metadata:
       Safely deletes a tenant from the platform:
         1. validate         — checks tenant exists, not reserved
         2. retire-services  — discovers and retires all services for the tenant, waiting for completion
-        3. delete-vault     — removes Vault policy + remaining secrets under teams/{name}/
-        4. delete-from-git  — removes tenant dir + ArgoCD RBAC from gitops repo
-        5. delete-k8s       — deletes ArgoCD app + K8s namespace
+        3. cleanup-shared-db — removes any remaining tenant-owned shared CNPG resources
+        4. delete-vault     — removes Vault policy + remaining secrets under teams/{name}/
+        5. delete-from-git  — removes tenant dir + ArgoCD RBAC from gitops repo
+        6. delete-k8s       — deletes ArgoCD app + K8s namespace
 
-      DB cleanup is handled asynchronously by tenant sync after the tenant is removed from Git.
+      DB cleanup in tenant state is handled before namespace deletion so shared-pg does not
+      degrade on missing tenant namespaces.
 spec:
   entrypoint: delete-tenant-safe-pipeline
   serviceAccountName: argo-workflow-sa
@@ -40,7 +42,7 @@ spec:
                   value: "{{workflow.parameters.tenant_name}}"
 
           - name: delete-vault
-            dependencies: [retire-services]
+            dependencies: [cleanup-shared-db]
             template: delete-vault-policy
             arguments:
               parameters:
@@ -48,8 +50,16 @@ spec:
                   value: "{{workflow.parameters.tenant_name}}"
 
           - name: delete-from-git
-            dependencies: [retire-services]
+            dependencies: [cleanup-shared-db]
             template: delete-tenant-from-git
+            arguments:
+              parameters:
+                - name: tenant_name
+                  value: "{{workflow.parameters.tenant_name}}"
+
+          - name: cleanup-shared-db
+            dependencies: [retire-services]
+            template: cleanup-tenant-db-from-gitops
             arguments:
               parameters:
                 - name: tenant_name
@@ -210,6 +220,129 @@ spec:
           done
 
           echo "All services retired for tenant ${TENANT}."
+
+    - name: cleanup-tenant-db-from-gitops
+      inputs:
+        parameters:
+          - name: tenant_name
+      volumes:
+        - name: deploy-key
+          secret:
+            secretName: mctl-gitops-deploy-key
+            defaultMode: 0600
+      script:
+        image: alpine:3.19
+        command: [sh]
+        envFrom:
+          - configMapRef:
+              name: mctl-platform-config
+        volumeMounts:
+          - name: deploy-key
+            mountPath: /secrets/deploy-key
+            readOnly: true
+        source: |
+          set -e
+          TENANT="{{inputs.parameters.tenant_name}}"
+          CNPG_DIR="platform-gitops/infra-components/data/cnpg/shared"
+
+          apk add --no-cache git openssh-client > /dev/null 2>&1
+
+          mkdir -p ~/.ssh
+          cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  StrictHostKeyChecking no\n' > ~/.ssh/config
+          chmod 600 ~/.ssh/config
+
+          git clone --depth=1 "git@github.com:${GITOPS_ORG}/${GITOPS_REPO}.git" /tmp/mctl-gitops > /dev/null 2>&1
+          cd /tmp/mctl-gitops
+          git config user.name "argo-workflows[bot]"
+          git config user.email "argo-workflows[bot]@users.noreply.github.com"
+
+          CHANGED=false
+
+          if grep -q "host ${TENANT}-" "${CNPG_DIR}/cluster.yaml" 2>/dev/null; then
+            sed -i "/- host ${TENANT}-.* all scram-sha-256/d" "${CNPG_DIR}/cluster.yaml"
+            echo "✅ Removed tenant pg_hba entries for ${TENANT}"
+            CHANGED=true
+          fi
+
+          if grep -q "name: ${TENANT}-" "${CNPG_DIR}/cluster.yaml" 2>/dev/null; then
+            awk -v tenant="${TENANT}-" '
+              /^[[:space:]]*- name: / {
+                if ($0 ~ "^[[:space:]]*- name: " tenant) { skip=1; next }
+                if (skip) { skip=0 }
+              }
+              skip { next }
+              { print }
+            ' "${CNPG_DIR}/cluster.yaml" > "${CNPG_DIR}/cluster.yaml.tmp" && mv "${CNPG_DIR}/cluster.yaml.tmp" "${CNPG_DIR}/cluster.yaml"
+            echo "✅ Removed tenant managed roles for ${TENANT}"
+            CHANGED=true
+          fi
+
+          if grep -q "name: ${TENANT}-.*-db" "${CNPG_DIR}/databases.yaml" 2>/dev/null; then
+            awk -v tenant="${TENANT}-" '
+              BEGIN { saw=0; doc="" }
+              function flush() {
+                if (doc == "") return
+                if (!saw) printf "%s", doc
+                doc=""
+                saw=0
+              }
+              /^---[[:space:]]*$/ {
+                flush()
+                doc=$0 ORS
+                next
+              }
+              {
+                doc = doc $0 ORS
+                if ($0 ~ "^[[:space:]]*name:[[:space:]]*" tenant ".*-db$") saw=1
+              }
+              END { flush() }
+            ' "${CNPG_DIR}/databases.yaml" > "${CNPG_DIR}/databases.yaml.tmp" && mv "${CNPG_DIR}/databases.yaml.tmp" "${CNPG_DIR}/databases.yaml"
+            echo "✅ Removed tenant Database CRDs for ${TENANT}"
+            CHANGED=true
+          fi
+
+          if grep -q "name: ${TENANT}-.*-db-creds" "${CNPG_DIR}/secrets.yaml" 2>/dev/null; then
+            awk -v tenant="${TENANT}-" '
+              BEGIN { saw=0; doc="" }
+              function flush() {
+                if (doc == "") return
+                if (!saw) printf "%s", doc
+                doc=""
+                saw=0
+              }
+              /^---[[:space:]]*$/ {
+                flush()
+                doc=$0 ORS
+                next
+              }
+              {
+                doc = doc $0 ORS
+                if ($0 ~ "^[[:space:]]*name:[[:space:]]*" tenant ".*-db-creds$") saw=1
+              }
+              END { flush() }
+            ' "${CNPG_DIR}/secrets.yaml" > "${CNPG_DIR}/secrets.yaml.tmp" && mv "${CNPG_DIR}/secrets.yaml.tmp" "${CNPG_DIR}/secrets.yaml"
+            echo "✅ Removed tenant ExternalSecrets for ${TENANT}"
+            CHANGED=true
+          fi
+
+          if [ "$CHANGED" = "true" ]; then
+            git add "${CNPG_DIR}/cluster.yaml" "${CNPG_DIR}/databases.yaml" "${CNPG_DIR}/secrets.yaml"
+            if ! git diff --cached --quiet; then
+              git commit -m "chore(db): cleanup shared CNPG resources for tenant ${TENANT}" \
+                -m "Removed remaining tenant-owned roles, pg_hba entries, Database CRDs and ExternalSecrets before namespace deletion."
+              for i in $(seq 1 5); do
+                if git push origin HEAD:main; then
+                  echo "✅ Shared DB cleanup pushed"
+                  break
+                fi
+                git pull --rebase origin main
+              done
+            fi
+          else
+            echo "ℹ️  No remaining shared DB resources found for tenant ${TENANT}"
+          fi
 
     - name: delete-vault-policy
       inputs:
