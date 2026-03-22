@@ -4,8 +4,8 @@ metadata:
   name: delete-tenant
   title: Delete Tenant
   description: |
-    Permanently delete a tenant from the mctl.ai platform.
-    Removes: K8s namespace, Vault policy, ArgoCD RBAC, DB records, and catalog entities.
+    Safely delete a tenant from the mctl.ai platform.
+    Retires all tenant services first, then removes the namespace, Vault policy, ArgoCD RBAC, DB records, and catalog entities.
     ⚠️ This action is irreversible.
 
   tags:
@@ -49,14 +49,15 @@ spec:
   output:
     text:
       - title: Status
-        content: "Tenant `${{ parameters.tenantName }}` has been deleted."
+        content: "Tenant `${{ parameters.tenantName }}` deletion has been queued."
       - title: What was removed
         content: |
-          - ✅ Database records (tenant + members)
-          - ⏳ K8s namespace `${{ parameters.tenantName }}` (deleting)
-          - ⏳ Vault policy `tenant-${{ parameters.tenantName }}` (deleting)
-          - ⏳ ArgoCD RBAC entries (syncing)
-          - ⏳ Git directory `tenants/${{ parameters.tenantName }}/` (pushed)
+          - ⏳ Tenant services under `${{ parameters.tenantName }}` will be retired first
+          - ⏳ K8s namespace `${{ parameters.tenantName }}` will be deleted after service retirement
+          - ⏳ Vault policy `tenant-${{ parameters.tenantName }}` will be deleted
+          - ⏳ ArgoCD RBAC entries will be removed
+          - ⏳ Git directory `tenants/${{ parameters.tenantName }}/` will be removed
+          - ⏳ Database records will be cleaned up by tenant sync after GitOps removal
     links:
       - title: Argo Workflows Run
         icon: dashboard
