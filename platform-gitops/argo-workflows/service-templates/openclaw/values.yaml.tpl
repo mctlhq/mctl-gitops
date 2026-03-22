@@ -1,13 +1,13 @@
 # Service: __SERVICE_NAME__
 # Team: __TEAM_NAME__
 # Template: openclaw
-# Updated: 2026-03-22 - OAuth mode + MinIO state via platform/minio
+# Updated: 2026-03-22 - self-service onboarding + Codex OAuth + MinIO state
 
 # Chart: base-service
 
 image:
   repository: ghcr.io/mctlhq/__SERVICE_NAME__
-  tag: "main-5a2a4ab"
+  tag: "2026.3.22-beta.2"
 
 podSecurityContext:
   fsGroup: 1000
@@ -20,11 +20,11 @@ service:
 
 resources:
   requests:
-    cpu: 200m
-    memory: 768Mi
+    cpu: 500m
+    memory: 1Gi
   limits:
-    cpu: "1"
-    memory: 1.2Gi
+    cpu: "2"
+    memory: 4Gi
 
 # Recreate strategy required for clean init
 strategy:
@@ -32,8 +32,26 @@ strategy:
 
 env:
   APP_ENV: production
-  NODE_OPTIONS: "--max-old-space-size=1024"
+  NODE_OPTIONS: "--max-old-space-size=3072"
   OPENCLAW_CONFIG_PATH: /config-rw/openclaw.json
+
+probes:
+  startup:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    failureThreshold: 36
+  readiness:
+    path: /readyz
+    port: http
+    initialDelaySeconds: 20
+    periodSeconds: 10
+  liveness:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 60
+    periodSeconds: 20
 
 envFrom:
   - secretRef:
@@ -97,7 +115,7 @@ initContainers:
         set -e
         WHISPER_DIR=/whisper-storage
         BIN=$WHISPER_DIR/whisper-cli
-        MODEL=$WHISPER_DIR/ggml-base.bin
+        MODEL=$WHISPER_DIR/ggml-tiny.bin
         WRAPPER=$WHISPER_DIR/run-whisper.sh
         CACHE_PFX=whisper
         mkdir -p $WHISPER_DIR
@@ -124,12 +142,12 @@ initContainers:
 
         # whisper model
         if [ ! -f $MODEL ]; then
-          if mc stat cache/$MINIO_BUCKET/$CACHE_PFX/ggml-base.bin > /dev/null 2>&1; then
+          if mc stat cache/$MINIO_BUCKET/$CACHE_PFX/ggml-tiny.bin > /dev/null 2>&1; then
             echo "Restoring whisper model from cache..."
-            mc cp cache/$MINIO_BUCKET/$CACHE_PFX/ggml-base.bin $MODEL
+            mc cp cache/$MINIO_BUCKET/$CACHE_PFX/ggml-tiny.bin $MODEL
           else
-            wget -q "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin" -O $MODEL
-            mc cp $MODEL cache/$MINIO_BUCKET/$CACHE_PFX/ggml-base.bin || true
+            wget -q "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin" -O $MODEL
+            mc cp $MODEL cache/$MINIO_BUCKET/$CACHE_PFX/ggml-tiny.bin || true
           fi
         fi
 
@@ -153,7 +171,7 @@ initContainers:
         #!/bin/sh
         TMP_WAV=$(mktemp /tmp/whisper_XXXXXX.wav)
         /whisper-storage/ffmpeg -i "$1" -ar 16000 -ac 1 -f wav "$TMP_WAV" -y 2>/dev/null
-        /whisper-storage/whisper-cli -m /whisper-storage/ggml-base.bin -f "$TMP_WAV" --language auto --no-timestamps 2>/dev/null
+        /whisper-storage/whisper-cli -m /whisper-storage/ggml-tiny.bin -f "$TMP_WAV" --language auto --no-timestamps 2>/dev/null
         EC=$?
         rm -f "$TMP_WAV"
         exit $EC
@@ -215,6 +233,13 @@ extraVolumeMounts:
 extraContainers:
   - name: s3-sync
     image: minio/mc:latest
+    resources:
+      requests:
+        cpu: 25m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
     command: ["sh", "-c"]
     args:
       - |
@@ -468,7 +493,7 @@ configMaps:
             "botToken": "__TELEGRAM_TOKEN__",
             "dmPolicy": "pairing",
             "groupPolicy": "open",
-            "allowFrom": ["210408407"]
+            "allowFrom": ["__TELEGRAM_OWNER_ID__"]
           }
         },
 

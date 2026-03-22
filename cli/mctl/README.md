@@ -47,22 +47,21 @@ mctl deploy -t my-team -n my-api -r mctlhq/my-api -g v1.0.0 --wait
 ### Deploy OpenClaw
 
 ```bash
-# Template-based onboard with auto-generated host
+# Legacy admin path: direct CLI deploy
 mctl deploy -t my-team -n openclaw --service-template openclaw \
   --telegram-owner-id 123456789 \
-  --telegram-bot-token 123:abc \
-  --wait
-
-# Optional: preconfigure a model API key for headless setup
-mctl deploy -t my-team -n openclaw --service-template openclaw \
-  --secret OPENAI_API_KEY=sk-xxx \
   --wait
 ```
 
-OpenClaw is OAuth-first. Normal onboarding flow is:
-1. deploy the service
-2. open the Control UI
-3. connect OpenAI Codex in the UI
+OpenClaw is OAuth-first. Preferred onboarding flow is:
+1. start onboarding through `mctl_deploy_openclaw` from Claude/MCP
+2. open the secure bot-token intake URL returned by the tool
+3. save the Telegram bot token directly into Vault
+4. resume with `mctl_resume_openclaw_deploy`
+5. open the Control UI
+6. connect OpenAI Codex in the UI or via `/connect codex`
+
+Do not paste Telegram bot tokens into Claude chat or generic deploy params unless you are using the legacy admin path intentionally.
 
 That OAuth flow creates the initial `auth-profiles.json` for the tenant. Persisted state is
 stored in `platform-state/{team}/{service}/...`, with restore fallback from the legacy
