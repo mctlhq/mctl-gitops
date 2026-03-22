@@ -1,7 +1,7 @@
 # Service: __SERVICE_NAME__
 # Team: __TEAM_NAME__
 # Template: openclaw
-# Updated: 2026-03-21 - OAuth mode + MinIO state (no PVC)
+# Updated: 2026-03-22 - OAuth mode + MinIO state via platform/minio
 
 # Chart: base-service
 
@@ -54,7 +54,7 @@ initContainers:
         fi
     env:
       - name: MINIO_ENDPOINT
-        valueFrom: { secretKeyRef: { name: minio-cache-creds, key: endpoint } }
+        value: "http://minio.minio.svc.cluster.local:9000"
       - name: MINIO_ACCESS_KEY
         valueFrom: { secretKeyRef: { name: minio-cache-creds, key: access-key } }
       - name: MINIO_SECRET_KEY
@@ -151,10 +151,7 @@ initContainers:
         chmod +x $WRAPPER
     env:
       - name: MINIO_ENDPOINT
-        valueFrom:
-          secretKeyRef:
-            name: minio-cache-creds
-            key: endpoint
+        value: "http://minio.minio.svc.cluster.local:9000"
       - name: MINIO_ACCESS_KEY
         valueFrom:
           secretKeyRef:
@@ -166,10 +163,7 @@ initContainers:
             name: minio-cache-creds
             key: secret-key
       - name: MINIO_BUCKET
-        valueFrom:
-          secretKeyRef:
-            name: minio-cache-creds
-            key: bucket
+        value: "platform-cache"
     volumeMounts:
       - name: pvc-whisper
         mountPath: /whisper-storage
@@ -220,7 +214,7 @@ extraContainers:
         mc mirror --watch --remove --overwrite /home/node/.openclaw s3/platform-state/openclaw/__TEAM_NAME__/
     env:
       - name: MINIO_ENDPOINT
-        valueFrom: { secretKeyRef: { name: minio-cache-creds, key: endpoint } }
+        value: "http://minio.minio.svc.cluster.local:9000"
       - name: MINIO_ACCESS_KEY
         valueFrom: { secretKeyRef: { name: minio-cache-creds, key: access-key } }
       - name: MINIO_SECRET_KEY
@@ -270,17 +264,11 @@ extraExternalSecrets:
     targetSecret: minio-cache-creds
     data:
       - secretKey: access-key
-        remoteKey: secret/data/platform/minio-cache
-        property: MINIO_ACCESS_KEY
+        remoteKey: secret/data/platform/minio
+        property: root-user
       - secretKey: secret-key
-        remoteKey: secret/data/platform/minio-cache
-        property: MINIO_SECRET_KEY
-      - secretKey: endpoint
-        remoteKey: secret/data/platform/minio-cache
-        property: MINIO_ENDPOINT
-      - secretKey: bucket
-        remoteKey: secret/data/platform/minio-cache
-        property: MINIO_BUCKET
+        remoteKey: secret/data/platform/minio
+        property: root-password
 
 configMaps:
   openclaw-scripts:
