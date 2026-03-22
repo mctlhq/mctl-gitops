@@ -53,7 +53,8 @@ spec:
       action: mctl:workflow:submit
       input:
         templateName: retire-service
-        namespace: ${{ steps['parse-service'].output.entity.metadata.labels.team or steps['parse-service'].output.entity.spec.owner | replace('group:', '') }}
+        clusterScope: true
+        namespace: argo-workflows
         parameters:
           team_name: ${{ steps['parse-service'].output.entity.metadata.labels.team or steps['parse-service'].output.entity.spec.owner | replace('group:', '') }}
           component_name: ${{ steps['parse-service'].output.entity.metadata.name }}
