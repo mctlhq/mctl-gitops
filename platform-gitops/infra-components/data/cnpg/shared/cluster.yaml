@@ -97,6 +97,7 @@ spec:
         inherit: true
         connectionLimit: 100  # 2 replicas * ~25 plugin connections during rolling deploy
         ensure: present
+        inherit: true
         passwordSecret:
           name: backstage-db-creds
       - name: test-django-test
@@ -104,6 +105,7 @@ spec:
         inherit: true
         connectionLimit: 10
         ensure: present
+        inherit: true
         passwordSecret:
           name: test-django-test-db-creds
       - name: test-spring-test
@@ -111,6 +113,7 @@ spec:
         inherit: true
         connectionLimit: 10
         ensure: present
+        inherit: true
         passwordSecret:
           name: test-spring-test-db-creds
       - name: argoworkflows
@@ -118,6 +121,7 @@ spec:
         inherit: true
         connectionLimit: 20
         ensure: present
+        inherit: true
         passwordSecret:
           name: argoworkflows-db-creds
       - name: mctl-agent
@@ -125,6 +129,7 @@ spec:
         inherit: true
         connectionLimit: 20
         ensure: present
+        inherit: true
         passwordSecret:
           name: mctl-agent-db-creds
       # Team app roles
@@ -132,12 +137,14 @@ spec:
         login: true
         connectionLimit: 10
         ensure: present
+        inherit: true
         passwordSecret:
           name: my-team-openclaw-db-creds
       - name: tests-pdb-test-svc
         login: true
         connectionLimit: 10
         ensure: present
+        inherit: true
         passwordSecret:
           name: tests-pdb-test-svc-db-creds
         passwordSecret:
