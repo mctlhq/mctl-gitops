@@ -35,6 +35,8 @@ spec:
       kind: "*"
     - group: monitoring.coreos.com
       kind: "*"
+    - group: traefik.io
+      kind: "*"
 
   orphanedResources:
     warn: true
