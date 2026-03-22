@@ -59,18 +59,6 @@ spec:
 apiVersion: postgresql.cnpg.io/v1
 kind: Database
 metadata:
-  name: tests-pdb-test-svc-db
-spec:
-  name: "tests-pdb-test-svc"
-  owner: "tests-pdb-test-svc"
-  cluster:
-    name: shared-pg
-  databaseReclaimPolicy: retain
-# tests-smoke-test-svc-db: ephemeral — created/deleted by smoke-test CWT, not managed here
----
-apiVersion: postgresql.cnpg.io/v1
-kind: Database
-metadata:
   name: smoke-test-openclaw-db
 spec:
   name: "smoke-test-openclaw"

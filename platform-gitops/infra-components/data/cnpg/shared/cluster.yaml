@@ -24,6 +24,7 @@ spec:
           name: minio-root-user
           key: MINIO_ROOT_PASSWORD
     retentionPolicy: "30d"
+    target: prefer-standby
 
   affinity:
     podAntiAffinityType: preferred
@@ -84,7 +85,6 @@ spec:
       # - host <db_name> <role_name> all scram-sha-256
       - host test-django-test test-django-test all scram-sha-256
       - host test-spring-test test-spring-test all scram-sha-256
-      - host tests-pdb-test-svc tests-pdb-test-svc all scram-sha-256
       # smoke-test-svc: ephemeral — added/removed by smoke-test CWT, not managed here
       - host mctl-agent mctl-agent all scram-sha-256
       - host all all 0.0.0.0/0 reject
