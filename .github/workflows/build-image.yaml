@@ -1,5 +1,5 @@
 name: Build Image
-run-name: "build: ${{ inputs.team_name }}/${{ inputs.component_name }} (${{ inputs.image_tag }})"
+run-name: "build-${{ inputs.build_id }}: ${{ inputs.team_name }}/${{ inputs.component_name }} (${{ inputs.image_tag }})"
 
 on:
   workflow_dispatch:
