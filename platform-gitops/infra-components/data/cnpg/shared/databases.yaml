@@ -100,10 +100,3 @@ spec:
 apiVersion: postgresql.cnpg.io/v1
 kind: Database
 metadata:
-  name: my-team-openclaw-db
-spec:
-  name: "my-team-openclaw"
-  owner: "my-team-openclaw"
-  cluster:
-    name: shared-pg
-  databaseReclaimPolicy: retain
