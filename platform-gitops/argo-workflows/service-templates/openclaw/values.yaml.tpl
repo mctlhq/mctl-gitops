@@ -47,9 +47,17 @@ initContainers:
     args:
       - |
         mc alias set s3 "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
-        if mc ls s3/platform-state/__TEAM_NAME__/__SERVICE_NAME__/ > /dev/null 2>&1; then
+        # Some mc builds exit the shell on a missing prefix even inside `if`.
+        # Probe both layouts with `set +e`, then restore from the first existing path.
+        set +e
+        mc ls s3/platform-state/__TEAM_NAME__/__SERVICE_NAME__/ > /dev/null 2>&1
+        NEW_STATE_RC=$?
+        mc ls s3/platform-state/__SERVICE_NAME__/__TEAM_NAME__/ > /dev/null 2>&1
+        LEGACY_STATE_RC=$?
+        set -e
+        if [ "$NEW_STATE_RC" -eq 0 ]; then
           mc mirror s3/platform-state/__TEAM_NAME__/__SERVICE_NAME__/ /home/node/.openclaw
-        elif mc ls s3/platform-state/__SERVICE_NAME__/__TEAM_NAME__/ > /dev/null 2>&1; then
+        elif [ "$LEGACY_STATE_RC" -eq 0 ]; then
           mc mirror s3/platform-state/__SERVICE_NAME__/__TEAM_NAME__/ /home/node/.openclaw
         else
           mkdir -p /home/node/.openclaw
