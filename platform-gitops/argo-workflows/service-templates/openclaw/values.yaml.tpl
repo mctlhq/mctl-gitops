@@ -571,6 +571,13 @@ configMaps:
             "allowFrom": ["__TELEGRAM_OWNER_ID__"]
           }
         },
+        "tools": {
+          "media": {
+            "audio": {
+              "enabled": true
+            }
+          }
+        },
 
         "mcp": {
           "servers": {

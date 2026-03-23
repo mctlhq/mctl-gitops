@@ -554,6 +554,13 @@ configMaps:
             "allowFrom": ["210408407"]
           }
         },
+        "tools": {
+          "media": {
+            "audio": {
+              "enabled": true
+            }
+          }
+        },
 
         "mcp": {
           "servers": {
