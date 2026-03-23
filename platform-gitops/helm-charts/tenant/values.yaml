@@ -25,7 +25,7 @@ tenant:
     requests.cpu: "500m"
     requests.memory: "1Gi"
     # Aggregate CPU/memory limits across all pods (sized for rolling update of 1 openclaw)
-    limits.cpu: "3"
+    limits.cpu: "4"
     limits.memory: "6Gi"
     # Maximum number of pods
     pods: "10"
@@ -44,7 +44,7 @@ tenant:
       cpu: "50m"
       memory: "128Mi"
     max:
-      cpu: "1"
+      cpu: "1500m"
       memory: "3Gi"
 
   # -- Network policies

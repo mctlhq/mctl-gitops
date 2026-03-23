@@ -20,7 +20,7 @@ resources:
     cpu: 50m
     memory: 512Mi
   limits:
-    cpu: "1"
+    cpu: "1500m"
     memory: 2560Mi
 
 # RollingUpdate is safe now that resource limits fit within tenant quota
