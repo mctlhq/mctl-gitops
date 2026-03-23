@@ -110,8 +110,6 @@ initContainers:
         set -e
         WHISPER_DIR=/whisper-storage
         BIN=$WHISPER_DIR/whisper-cli
-        LIB_WHISPER=$WHISPER_DIR/libwhisper.so.1
-        LIB_GGML=$WHISPER_DIR/libggml.so.0
         MODEL=$WHISPER_DIR/ggml-tiny.bin
         WRAPPER=$WHISPER_DIR/run-whisper.sh
         CACHE_PFX=whisper
@@ -156,24 +154,18 @@ initContainers:
         fi
 
         # whisper shared libraries
-        if [ ! -f $LIB_WHISPER ]; then
-          if mc stat cache/$MINIO_BUCKET/$CACHE_PFX/libwhisper.so.1 > /dev/null 2>&1; then
-            echo "Restoring libwhisper.so.1 from cache..."
-            mc cp cache/$MINIO_BUCKET/$CACHE_PFX/libwhisper.so.1 $LIB_WHISPER
-          else
-            echo "Cache miss: libwhisper.so.1"
-            echo libwhisper >> $MARKER
+        for asset in libwhisper.so.1 libggml.so.0 libggml-base.so libggml-cpu.so; do
+          TARGET=$WHISPER_DIR/$asset
+          if [ ! -f $TARGET ]; then
+            if mc stat cache/$MINIO_BUCKET/$CACHE_PFX/$asset > /dev/null 2>&1; then
+              echo "Restoring $asset from cache..."
+              mc cp cache/$MINIO_BUCKET/$CACHE_PFX/$asset $TARGET
+            else
+              echo "Cache miss: $asset"
+              echo $asset >> $MARKER
+            fi
           fi
-        fi
-        if [ ! -f $LIB_GGML ]; then
-          if mc stat cache/$MINIO_BUCKET/$CACHE_PFX/libggml.so.0 > /dev/null 2>&1; then
-            echo "Restoring libggml.so.0 from cache..."
-            mc cp cache/$MINIO_BUCKET/$CACHE_PFX/libggml.so.0 $LIB_GGML
-          else
-            echo "Cache miss: libggml.so.0"
-            echo libggml >> $MARKER
-          fi
-        fi
+        done
 
         cat > $WRAPPER << 'WEOF'
         #!/bin/sh
@@ -210,7 +202,7 @@ initContainers:
       - name: pvc-whisper
         mountPath: /whisper-storage
   - name: install-whisper-cli-fallback
-    image: ghcr.io/mctlhq/openclaw-whisper-builder:2026.3.23-beta.13
+    image: ghcr.io/mctlhq/openclaw-whisper-builder:2026.3.23-beta.16
     resources:
       requests:
         cpu: 50m
@@ -224,8 +216,6 @@ initContainers:
         set -e
         WHISPER_DIR=/whisper-storage
         BIN=$WHISPER_DIR/whisper-cli
-        LIB_WHISPER=$WHISPER_DIR/libwhisper.so.1
-        LIB_GGML=$WHISPER_DIR/libggml.so.0
         MODEL=$WHISPER_DIR/ggml-tiny.bin
         WRAPPER=$WHISPER_DIR/run-whisper.sh
         CACHE_PFX=whisper
@@ -256,15 +246,13 @@ initContainers:
           mc cp $BIN cache/$MINIO_BUCKET/$CACHE_PFX/whisper-cli || true
         fi
 
-        if [ ! -f $LIB_WHISPER ]; then
-          cp /opt/whisper-assets/libwhisper.so.1 $LIB_WHISPER
-          mc cp $LIB_WHISPER cache/$MINIO_BUCKET/$CACHE_PFX/libwhisper.so.1 || true
-        fi
-
-        if [ ! -f $LIB_GGML ]; then
-          cp /opt/whisper-assets/libggml.so.0 $LIB_GGML
-          mc cp $LIB_GGML cache/$MINIO_BUCKET/$CACHE_PFX/libggml.so.0 || true
-        fi
+        for asset in libwhisper.so.1 libggml.so.0 libggml-base.so libggml-cpu.so; do
+          TARGET=$WHISPER_DIR/$asset
+          if [ ! -f $TARGET ]; then
+            cp /opt/whisper-assets/$asset $TARGET
+            mc cp $TARGET cache/$MINIO_BUCKET/$CACHE_PFX/$asset || true
+          fi
+        done
 
         cp /opt/whisper-assets/run-whisper.sh $WRAPPER
         chmod +x $WRAPPER
