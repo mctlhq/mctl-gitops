@@ -33,6 +33,7 @@ strategy:
 env:
   APP_ENV: production
   PATH: "/whisper-storage:/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games"
+  WHISPER_CPP_MODEL: /whisper-storage/ggml-tiny.bin
   NODE_OPTIONS: "--max-old-space-size=1792"
   OPENCLAW_CONFIG_PATH: /config-rw/openclaw.json
   OPENCLAW_OPENAI_CODEX_PORTAL_CALLBACK_URL: "https://app.mctl.ai/api/oidc-provider/openai-codex/callback"
