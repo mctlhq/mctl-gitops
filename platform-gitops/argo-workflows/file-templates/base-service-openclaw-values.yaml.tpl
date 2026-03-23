@@ -60,7 +60,7 @@ probes:
 initContainers:
   # 1. Build whisper-cli (optimized)
   - name: install-whisper-cli
-    image: debian:12-slim
+    image: minio/mc:latest
     resources:
       requests:
         cpu: 50m
@@ -76,23 +76,36 @@ initContainers:
         BIN=$WHISPER_DIR/whisper-cli
         MODEL=$WHISPER_DIR/ggml-tiny.bin
         WRAPPER=$WHISPER_DIR/run-whisper.sh
+        CACHE_PFX=whisper
         mkdir -p $WHISPER_DIR
+        echo "Initializing whisper assets from MinIO cache..."
+        mc alias set cache "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY" --quiet
         if [ ! -f $WHISPER_DIR/ffmpeg ]; then
-          apt-get update -qq && apt-get install -y --no-install-recommends wget xz-utils ca-certificates
-          wget -q "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz" -O /tmp/ffmpeg.tar.xz
-          tar -xJf /tmp/ffmpeg.tar.xz -C $WHISPER_DIR --strip-components=1 --wildcards "*/ffmpeg"
-          rm /tmp/ffmpeg.tar.xz
+          if mc stat cache/$MINIO_BUCKET/$CACHE_PFX/ffmpeg > /dev/null 2>&1; then
+            echo "Restoring ffmpeg from cache..."
+            mc cp cache/$MINIO_BUCKET/$CACHE_PFX/ffmpeg $WHISPER_DIR/ffmpeg && chmod +x $WHISPER_DIR/ffmpeg
+          else
+            echo "ERROR: cache/$MINIO_BUCKET/$CACHE_PFX/ffmpeg is missing" >&2
+            exit 1
+          fi
         fi
         if [ ! -f $MODEL ]; then
-          wget -q "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin" -O $MODEL
+          if mc stat cache/$MINIO_BUCKET/$CACHE_PFX/ggml-tiny.bin > /dev/null 2>&1; then
+            echo "Restoring whisper model from cache..."
+            mc cp cache/$MINIO_BUCKET/$CACHE_PFX/ggml-tiny.bin $MODEL
+          else
+            echo "ERROR: cache/$MINIO_BUCKET/$CACHE_PFX/ggml-tiny.bin is missing" >&2
+            exit 1
+          fi
         fi
         if [ ! -f $BIN ]; then
-          apt-get update -qq && apt-get install -y --no-install-recommends build-essential cmake git ca-certificates
-          git clone --depth 1 --branch v1.8.3 https://github.com/ggml-org/whisper.cpp.git /tmp/whispersrc
-          cmake -B /tmp/whispersrc/build -S /tmp/whispersrc -DCMAKE_BUILD_TYPE=Release -DWHISPER_BUILD_EXAMPLES=ON -DWHISPER_BUILD_TESTS=OFF
-          make -C /tmp/whispersrc/build whisper-cli -j2
-          cp /tmp/whispersrc/build/bin/whisper-cli $BIN
-          rm -rf /tmp/whispersrc
+          if mc stat cache/$MINIO_BUCKET/$CACHE_PFX/whisper-cli > /dev/null 2>&1; then
+            echo "Restoring whisper-cli from cache..."
+            mc cp cache/$MINIO_BUCKET/$CACHE_PFX/whisper-cli $BIN && chmod +x $BIN
+          else
+            echo "ERROR: cache/$MINIO_BUCKET/$CACHE_PFX/whisper-cli is missing" >&2
+            exit 1
+          fi
         fi
         cat > $WRAPPER << 'WEOF'
         #!/bin/sh
@@ -104,6 +117,22 @@ initContainers:
         exit $EC
         WEOF
         chmod +x $WRAPPER
+        echo "Whisper assets ready."
+    env:
+      - name: MINIO_ENDPOINT
+        value: "http://minio.minio.svc.cluster.local:9000"
+      - name: MINIO_ACCESS_KEY
+        valueFrom:
+          secretKeyRef:
+            name: minio-cache-creds
+            key: access-key
+      - name: MINIO_SECRET_KEY
+        valueFrom:
+          secretKeyRef:
+            name: minio-cache-creds
+            key: secret-key
+      - name: MINIO_BUCKET
+        value: "platform-cache"
     volumeMounts:
       - name: pvc-whisper
         mountPath: /whisper-storage
@@ -113,9 +142,17 @@ initContainers:
     command: ["sh", "-c"]
     args:
       - |
+        echo "Preparing writable OpenClaw config..."
         cp /config-tpl/openclaw.json /config-rw/openclaw.json
-        if [ -n "$TELEGRAM_TOKEN" ]; then sed -i "s|__TELEGRAM_TOKEN__|$TELEGRAM_TOKEN|g" /config-rw/openclaw.json; fi
+        if [ -n "$TELEGRAM_TOKEN" ]; then
+          echo "Injecting Telegram token into runtime config..."
+          sed -i "s|__TELEGRAM_TOKEN__|$TELEGRAM_TOKEN|g" /config-rw/openclaw.json
+        else
+          echo "Telegram token is empty; leaving placeholder unchanged."
+        fi
+        echo "Fixing ownership for runtime config..."
         chown 1000:1000 /config-rw/openclaw.json
+        echo "Setup complete."
     env:
       - name: TELEGRAM_TOKEN
         valueFrom:
