@@ -7,7 +7,7 @@
 
 image:
   repository: ghcr.io/mctlhq/__SERVICE_NAME__
-  tag: "2026.3.23-beta.8"
+  tag: "2026.3.23-beta.9"
 
 imagePullSecrets:
   - name: ghcr-credentials
@@ -31,6 +31,8 @@ env:
   APP_ENV: production
   NODE_OPTIONS: "--max-old-space-size=3072"
   OPENCLAW_CONFIG_PATH: /config-rw/openclaw.json
+  OPENCLAW_OPENAI_CODEX_PORTAL_CALLBACK_URL: "https://app.mctl.ai/api/oidc-provider/openai-codex/callback"
+  OPENCLAW_OPENAI_CODEX_CLIENT_ID: ""
   # PostgreSQL Connection (using dedicated service credentials)
   DATABASE_URL: "postgresql://$(DB_USER):$(DB_PASSWORD)@shared-pg-rw.platform-db.svc.cluster.local:5432/__SERVICE_NAME__"
 
