@@ -93,7 +93,7 @@ initContainers:
         mountPath: /home/node/.openclaw
   # 2. Build whisper-cli (cached in MinIO platform-cache bucket)
   - name: install-whisper-cli
-    image: debian:12-slim
+    image: minio/mc:latest
     resources:
       requests:
         cpu: 50m
@@ -112,10 +112,7 @@ initContainers:
         CACHE_PFX=whisper
         mkdir -p $WHISPER_DIR
 
-        # Setup mc for S3 cache
-        apt-get update -qq && apt-get install -y --no-install-recommends wget ca-certificates
-        wget -q "https://dl.min.io/client/mc/release/linux-amd64/mc" -O /usr/local/bin/mc
-        chmod +x /usr/local/bin/mc
+        echo "Initializing whisper assets from MinIO cache..."
         mc alias set cache "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY" --quiet
 
         # ffmpeg
@@ -124,11 +121,8 @@ initContainers:
             echo "Restoring ffmpeg from cache..."
             mc cp cache/$MINIO_BUCKET/$CACHE_PFX/ffmpeg $WHISPER_DIR/ffmpeg && chmod +x $WHISPER_DIR/ffmpeg
           else
-            apt-get install -y --no-install-recommends xz-utils
-            wget -q "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz" -O /tmp/ffmpeg.tar.xz
-            tar -xJf /tmp/ffmpeg.tar.xz -C $WHISPER_DIR --strip-components=1 --wildcards "*/ffmpeg"
-            rm /tmp/ffmpeg.tar.xz
-            mc cp $WHISPER_DIR/ffmpeg cache/$MINIO_BUCKET/$CACHE_PFX/ffmpeg || true
+            echo "ERROR: cache/$MINIO_BUCKET/$CACHE_PFX/ffmpeg is missing" >&2
+            exit 1
           fi
         fi
 
@@ -138,8 +132,8 @@ initContainers:
             echo "Restoring whisper model from cache..."
             mc cp cache/$MINIO_BUCKET/$CACHE_PFX/ggml-tiny.bin $MODEL
           else
-            wget -q "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin" -O $MODEL
-            mc cp $MODEL cache/$MINIO_BUCKET/$CACHE_PFX/ggml-tiny.bin || true
+            echo "ERROR: cache/$MINIO_BUCKET/$CACHE_PFX/ggml-tiny.bin is missing" >&2
+            exit 1
           fi
         fi
 
@@ -149,13 +143,8 @@ initContainers:
             echo "Restoring whisper-cli from cache..."
             mc cp cache/$MINIO_BUCKET/$CACHE_PFX/whisper-cli $BIN && chmod +x $BIN
           else
-            apt-get install -y --no-install-recommends build-essential cmake git
-            git clone --depth 1 --branch v1.8.3 https://github.com/ggml-org/whisper.cpp.git /tmp/whispersrc
-            cmake -B /tmp/whispersrc/build -S /tmp/whispersrc -DCMAKE_BUILD_TYPE=Release -DWHISPER_BUILD_EXAMPLES=ON -DWHISPER_BUILD_TESTS=OFF
-            make -C /tmp/whispersrc/build whisper-cli -j2
-            cp /tmp/whispersrc/build/bin/whisper-cli $BIN
-            rm -rf /tmp/whispersrc
-            mc cp $BIN cache/$MINIO_BUCKET/$CACHE_PFX/whisper-cli || true
+            echo "ERROR: cache/$MINIO_BUCKET/$CACHE_PFX/whisper-cli is missing" >&2
+            exit 1
           fi
         fi
 
@@ -169,6 +158,7 @@ initContainers:
         exit $EC
         WEOF
         chmod +x $WRAPPER
+        echo "Whisper assets ready."
     env:
       - name: MINIO_ENDPOINT
         value: "http://minio.minio.svc.cluster.local:9000"
@@ -193,10 +183,18 @@ initContainers:
     command: ["sh", "-c"]
     args:
       - |
+        echo "Preparing writable OpenClaw config..."
         cp /config-tpl/openclaw.json /config-rw/openclaw.json
-        if [ -n "$TELEGRAM_TOKEN" ]; then sed -i "s|__TELEGRAM_TOKEN__|$TELEGRAM_TOKEN|g" /config-rw/openclaw.json; fi
+        if [ -n "$TELEGRAM_TOKEN" ]; then
+          echo "Injecting Telegram token into runtime config..."
+          sed -i "s|__TELEGRAM_TOKEN__|$TELEGRAM_TOKEN|g" /config-rw/openclaw.json
+        else
+          echo "Telegram token is empty; leaving placeholder unchanged."
+        fi
+        echo "Fixing ownership for config and restored state..."
         chown 1000:1000 /config-rw/openclaw.json
         chown -R 1000:1000 /home/node/.openclaw
+        echo "Setup complete."
     env:
       - name: TELEGRAM_TOKEN
         valueFrom:
