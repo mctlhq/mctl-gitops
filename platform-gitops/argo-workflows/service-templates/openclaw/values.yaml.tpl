@@ -20,19 +20,22 @@ service:
 
 resources:
   requests:
-    cpu: 500m
-    memory: 1Gi
+    cpu: 50m
+    memory: 512Mi
   limits:
-    cpu: "2"
-    memory: 4Gi
+    cpu: "1"
+    memory: 2560Mi
 
-# Recreate strategy required for clean init
+# RollingUpdate is safe now that resource limits fit within tenant quota
 strategy:
-  type: Recreate
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
 
 env:
   APP_ENV: production
-  NODE_OPTIONS: "--max-old-space-size=3072"
+  NODE_OPTIONS: "--max-old-space-size=2048"
   OPENCLAW_CONFIG_PATH: /config-rw/openclaw.json
   OPENCLAW_OPENAI_CODEX_PORTAL_CALLBACK_URL: "https://app.mctl.ai/api/oidc-provider/openai-codex/callback"
   OPENCLAW_OPENAI_CODEX_CLIENT_ID: ""
@@ -41,18 +44,18 @@ probes:
   startup:
     path: /healthz
     port: http
-    initialDelaySeconds: 10
-    periodSeconds: 10
-    failureThreshold: 36
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    failureThreshold: 24
   readiness:
     path: /readyz
     port: http
-    initialDelaySeconds: 20
+    initialDelaySeconds: 10
     periodSeconds: 10
   liveness:
     path: /healthz
     port: http
-    initialDelaySeconds: 60
+    initialDelaySeconds: 30
     periodSeconds: 20
 
 envFrom:
@@ -106,11 +109,11 @@ initContainers:
     image: debian:12-slim
     resources:
       requests:
-        cpu: 200m
-        memory: 512Mi
+        cpu: 50m
+        memory: 128Mi
       limits:
-        cpu: "2"
-        memory: 1.2Gi
+        cpu: 500m
+        memory: 512Mi
     command: ["sh", "-c"]
     args:
       - |
