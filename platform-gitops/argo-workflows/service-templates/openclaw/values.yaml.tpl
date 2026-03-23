@@ -7,7 +7,7 @@
 
 image:
   repository: ghcr.io/mctlhq/__SERVICE_NAME__
-  tag: "2026.3.23-beta.7"
+  tag: "2026.3.23-beta.8"
 
 podSecurityContext:
   fsGroup: 1000
