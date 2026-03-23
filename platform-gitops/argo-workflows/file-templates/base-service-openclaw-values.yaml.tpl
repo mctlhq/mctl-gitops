@@ -74,7 +74,9 @@ initContainers:
         MODEL=$WHISPER_DIR/ggml-tiny.bin
         WRAPPER=$WHISPER_DIR/run-whisper.sh
         CACHE_PFX=whisper
+        MARKER=$WHISPER_DIR/.whisper-cache-miss
         mkdir -p $WHISPER_DIR
+        rm -f $MARKER
         echo "Initializing whisper assets from MinIO cache..."
         mc alias set cache "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY" --quiet
         if [ ! -f $WHISPER_DIR/ffmpeg ]; then
@@ -82,8 +84,8 @@ initContainers:
             echo "Restoring ffmpeg from cache..."
             mc cp cache/$MINIO_BUCKET/$CACHE_PFX/ffmpeg $WHISPER_DIR/ffmpeg && chmod +x $WHISPER_DIR/ffmpeg
           else
-            echo "ERROR: cache/$MINIO_BUCKET/$CACHE_PFX/ffmpeg is missing" >&2
-            exit 1
+            echo "Cache miss: ffmpeg"
+            echo ffmpeg >> $MARKER
           fi
         fi
         if [ ! -f $MODEL ]; then
@@ -91,8 +93,8 @@ initContainers:
             echo "Restoring whisper model from cache..."
             mc cp cache/$MINIO_BUCKET/$CACHE_PFX/ggml-tiny.bin $MODEL
           else
-            echo "ERROR: cache/$MINIO_BUCKET/$CACHE_PFX/ggml-tiny.bin is missing" >&2
-            exit 1
+            echo "Cache miss: ggml-tiny.bin"
+            echo model >> $MARKER
           fi
         fi
         if [ ! -f $BIN ]; then
@@ -100,8 +102,8 @@ initContainers:
             echo "Restoring whisper-cli from cache..."
             mc cp cache/$MINIO_BUCKET/$CACHE_PFX/whisper-cli $BIN && chmod +x $BIN
           else
-            echo "ERROR: cache/$MINIO_BUCKET/$CACHE_PFX/whisper-cli is missing" >&2
-            exit 1
+            echo "Cache miss: whisper-cli"
+            echo bin >> $MARKER
           fi
         fi
         cat > $WRAPPER << 'WEOF'
@@ -113,8 +115,98 @@ initContainers:
         rm -f "$TMP_WAV"
         exit $EC
         WEOF
+        if [ ! -f "$MARKER" ]; then
+          chmod +x $WRAPPER
+          echo "Whisper assets ready from cache."
+        else
+          echo "Whisper cache incomplete; fallback build/download will run."
+        fi
+    env:
+      - name: MINIO_ENDPOINT
+        value: "http://minio.minio.svc.cluster.local:9000"
+      - name: MINIO_ACCESS_KEY
+        valueFrom:
+          secretKeyRef:
+            name: minio-cache-creds
+            key: access-key
+      - name: MINIO_SECRET_KEY
+        valueFrom:
+          secretKeyRef:
+            name: minio-cache-creds
+            key: secret-key
+      - name: MINIO_BUCKET
+        value: "platform-cache"
+    volumeMounts:
+      - name: pvc-whisper
+        mountPath: /whisper-storage
+  - name: install-whisper-cli-fallback
+    image: debian:12-slim
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+    command: ["sh", "-c"]
+    args:
+      - |
+        set -e
+        WHISPER_DIR=/whisper-storage
+        BIN=$WHISPER_DIR/whisper-cli
+        MODEL=$WHISPER_DIR/ggml-tiny.bin
+        WRAPPER=$WHISPER_DIR/run-whisper.sh
+        CACHE_PFX=whisper
+        MARKER=$WHISPER_DIR/.whisper-cache-miss
+
+        if [ ! -f "$MARKER" ]; then
+          echo "Whisper cache is complete; skipping fallback."
+          exit 0
+        fi
+
+        echo "Whisper cache miss detected; running fallback build/download path..."
+        apt-get update -qq && apt-get install -y --no-install-recommends wget ca-certificates
+        wget -q "https://dl.min.io/client/mc/release/linux-amd64/mc" -O /usr/local/bin/mc
+        chmod +x /usr/local/bin/mc
+        mc alias set cache "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY" --quiet
+
+        if [ ! -f $WHISPER_DIR/ffmpeg ]; then
+          apt-get install -y --no-install-recommends xz-utils
+          wget -q "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz" -O /tmp/ffmpeg.tar.xz
+          tar -xJf /tmp/ffmpeg.tar.xz -C $WHISPER_DIR --strip-components=1 --wildcards "*/ffmpeg"
+          rm /tmp/ffmpeg.tar.xz
+          chmod +x $WHISPER_DIR/ffmpeg
+          mc cp $WHISPER_DIR/ffmpeg cache/$MINIO_BUCKET/$CACHE_PFX/ffmpeg || true
+        fi
+
+        if [ ! -f $MODEL ]; then
+          wget -q "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin" -O $MODEL
+          mc cp $MODEL cache/$MINIO_BUCKET/$CACHE_PFX/ggml-tiny.bin || true
+        fi
+
+        if [ ! -f $BIN ]; then
+          apt-get install -y --no-install-recommends build-essential cmake git
+          git clone --depth 1 --branch v1.8.3 https://github.com/ggml-org/whisper.cpp.git /tmp/whispersrc
+          cmake -B /tmp/whispersrc/build -S /tmp/whispersrc -DCMAKE_BUILD_TYPE=Release -DWHISPER_BUILD_EXAMPLES=ON -DWHISPER_BUILD_TESTS=OFF
+          make -C /tmp/whispersrc/build whisper-cli -j2
+          cp /tmp/whispersrc/build/bin/whisper-cli $BIN
+          chmod +x $BIN
+          rm -rf /tmp/whispersrc
+          mc cp $BIN cache/$MINIO_BUCKET/$CACHE_PFX/whisper-cli || true
+        fi
+
+        cat > $WRAPPER << 'WEOF'
+        #!/bin/sh
+        TMP_WAV=$(mktemp /tmp/whisper_XXXXXX.wav)
+        /whisper-storage/ffmpeg -i "$1" -ar 16000 -ac 1 -f wav "$TMP_WAV" -y 2>/dev/null
+        /whisper-storage/whisper-cli -m /whisper-storage/ggml-tiny.bin -f "$TMP_WAV" --language auto --no-timestamps 2>/dev/null
+        EC=$?
+        rm -f "$TMP_WAV"
+        exit $EC
+        WEOF
         chmod +x $WRAPPER
-        echo "Whisper assets ready."
+        rm -f $MARKER
+        echo "Whisper fallback completed and cache refreshed."
     env:
       - name: MINIO_ENDPOINT
         value: "http://minio.minio.svc.cluster.local:9000"
