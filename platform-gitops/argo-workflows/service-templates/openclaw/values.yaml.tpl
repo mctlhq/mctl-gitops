@@ -197,11 +197,11 @@ initContainers:
     image: debian@sha256:f06537653ac770703bc45b4b113475bd402f451e85223f0f2837acbf89ab020a
     resources:
       requests:
-        cpu: 50m
-        memory: 128Mi
-      limits:
-        cpu: 500m
+        cpu: 250m
         memory: 512Mi
+      limits:
+        cpu: "2"
+        memory: 2Gi
     command: ["sh", "-c"]
     args:
       - |
@@ -241,7 +241,7 @@ initContainers:
         if [ ! -f $BIN ]; then
           apt-get install -y --no-install-recommends build-essential cmake git
           git clone --depth 1 --branch v1.8.3 https://github.com/ggml-org/whisper.cpp.git /tmp/whispersrc
-          cmake -B /tmp/whispersrc/build -S /tmp/whispersrc -DCMAKE_BUILD_TYPE=Release -DWHISPER_BUILD_EXAMPLES=ON -DWHISPER_BUILD_TESTS=OFF
+          cmake -B /tmp/whispersrc/build -S /tmp/whispersrc -DCMAKE_BUILD_TYPE=Release -DWHISPER_BUILD_EXAMPLES=ON -DWHISPER_BUILD_TESTS=OFF -DGGML_NATIVE=OFF -DGGML_AVX512=OFF -DGGML_AVX512_VBMI=OFF -DGGML_AVX512_VNNI=OFF -DGGML_AVX512_BF16=OFF
           make -C /tmp/whispersrc/build whisper-cli -j2
           cp /tmp/whispersrc/build/bin/whisper-cli $BIN
           chmod +x $BIN
