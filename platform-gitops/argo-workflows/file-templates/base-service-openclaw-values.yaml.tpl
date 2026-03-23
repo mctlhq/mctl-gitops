@@ -57,7 +57,7 @@ probes:
 initContainers:
   # 1. Build whisper-cli (optimized)
   - name: install-whisper-cli
-    image: minio/mc:latest
+    image: minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
     resources:
       requests:
         cpu: 50m
@@ -140,7 +140,7 @@ initContainers:
       - name: pvc-whisper
         mountPath: /whisper-storage
   - name: install-whisper-cli-fallback
-    image: debian:12-slim
+    image: debian@sha256:f06537653ac770703bc45b4b113475bd402f451e85223f0f2837acbf89ab020a
     resources:
       requests:
         cpu: 50m
