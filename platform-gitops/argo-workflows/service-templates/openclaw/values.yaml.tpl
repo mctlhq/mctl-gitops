@@ -33,6 +33,7 @@ strategy:
 env:
   APP_ENV: production
   PATH: "/whisper-storage:/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games"
+  LD_LIBRARY_PATH: /whisper-storage
   WHISPER_CPP_MODEL: /whisper-storage/ggml-tiny.bin
   NODE_OPTIONS: "--max-old-space-size=1792"
   OPENCLAW_CONFIG_PATH: /config-rw/openclaw.json
@@ -119,6 +120,8 @@ initContainers:
         set -e
         WHISPER_DIR=/whisper-storage
         BIN=$WHISPER_DIR/whisper-cli
+        LIB_WHISPER=$WHISPER_DIR/libwhisper.so.1
+        LIB_GGML=$WHISPER_DIR/libggml.so.0
         MODEL=$WHISPER_DIR/ggml-tiny.bin
         WRAPPER=$WHISPER_DIR/run-whisper.sh
         CACHE_PFX=whisper
@@ -162,8 +165,29 @@ initContainers:
           fi
         fi
 
+        # whisper shared libraries
+        if [ ! -f $LIB_WHISPER ]; then
+          if mc stat cache/$MINIO_BUCKET/$CACHE_PFX/libwhisper.so.1 > /dev/null 2>&1; then
+            echo "Restoring libwhisper.so.1 from cache..."
+            mc cp cache/$MINIO_BUCKET/$CACHE_PFX/libwhisper.so.1 $LIB_WHISPER
+          else
+            echo "Cache miss: libwhisper.so.1"
+            echo libwhisper >> $MARKER
+          fi
+        fi
+        if [ ! -f $LIB_GGML ]; then
+          if mc stat cache/$MINIO_BUCKET/$CACHE_PFX/libggml.so.0 > /dev/null 2>&1; then
+            echo "Restoring libggml.so.0 from cache..."
+            mc cp cache/$MINIO_BUCKET/$CACHE_PFX/libggml.so.0 $LIB_GGML
+          else
+            echo "Cache miss: libggml.so.0"
+            echo libggml >> $MARKER
+          fi
+        fi
+
         cat > $WRAPPER << 'WEOF'
         #!/bin/sh
+        export LD_LIBRARY_PATH=/whisper-storage${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
         TMP_WAV=$(mktemp /tmp/whisper_XXXXXX.wav)
         /whisper-storage/ffmpeg -i "$1" -ar 16000 -ac 1 -f wav "$TMP_WAV" -y 2>/dev/null
         /whisper-storage/whisper-cli -m /whisper-storage/ggml-tiny.bin -f "$TMP_WAV" --language auto --no-timestamps 2>/dev/null
@@ -196,7 +220,7 @@ initContainers:
       - name: pvc-whisper
         mountPath: /whisper-storage
   - name: install-whisper-cli-fallback
-    image: ghcr.io/mctlhq/openclaw-whisper-builder:2026.3.23-beta.12
+    image: ghcr.io/mctlhq/openclaw-whisper-builder:2026.3.23-beta.13
     resources:
       requests:
         cpu: 50m
@@ -210,6 +234,8 @@ initContainers:
         set -e
         WHISPER_DIR=/whisper-storage
         BIN=$WHISPER_DIR/whisper-cli
+        LIB_WHISPER=$WHISPER_DIR/libwhisper.so.1
+        LIB_GGML=$WHISPER_DIR/libggml.so.0
         MODEL=$WHISPER_DIR/ggml-tiny.bin
         WRAPPER=$WHISPER_DIR/run-whisper.sh
         CACHE_PFX=whisper
@@ -238,6 +264,16 @@ initContainers:
           cp /opt/whisper-assets/whisper-cli $BIN
           chmod +x $BIN
           mc cp $BIN cache/$MINIO_BUCKET/$CACHE_PFX/whisper-cli || true
+        fi
+
+        if [ ! -f $LIB_WHISPER ]; then
+          cp /opt/whisper-assets/libwhisper.so.1 $LIB_WHISPER
+          mc cp $LIB_WHISPER cache/$MINIO_BUCKET/$CACHE_PFX/libwhisper.so.1 || true
+        fi
+
+        if [ ! -f $LIB_GGML ]; then
+          cp /opt/whisper-assets/libggml.so.0 $LIB_GGML
+          mc cp $LIB_GGML cache/$MINIO_BUCKET/$CACHE_PFX/libggml.so.0 || true
         fi
 
         cp /opt/whisper-assets/run-whisper.sh $WRAPPER
