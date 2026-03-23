@@ -607,7 +607,15 @@ configMaps:
         "tools": {
           "media": {
             "audio": {
-              "enabled": true
+              "enabled": true,
+              "models": [
+                {
+                  "type": "cli",
+                  "command": "/whisper-storage/run-whisper.sh",
+                  "args": ["{{MediaPath}}"],
+                  "timeoutSeconds": 45
+                }
+              ]
             }
           }
         },
