@@ -17,22 +17,19 @@ service:
 
 resources:
   requests:
-    cpu: 50m
-    memory: 512Mi
+    cpu: 250m
+    memory: 768Mi
   limits:
-    cpu: "1500m"
+    cpu: "1"
     memory: 2560Mi
 
-# RollingUpdate is safe now that resource limits fit within tenant quota
+# Recreate avoids quota deadlocks for single-pod tenant deployments.
 strategy:
-  type: RollingUpdate
-  rollingUpdate:
-    maxSurge: 1
-    maxUnavailable: 0
+  type: Recreate
 
 env:
   APP_ENV: production
-  NODE_OPTIONS: "--max-old-space-size=2048"
+  NODE_OPTIONS: "--max-old-space-size=1792"
   OPENCLAW_CONFIG_PATH: /config-rw/openclaw.json
   OPENCLAW_OPENAI_CODEX_PORTAL_CALLBACK_URL: "https://app.mctl.ai/api/oidc-provider/openai-codex/callback"
   OPENCLAW_OPENAI_CODEX_CLIENT_ID: ""
