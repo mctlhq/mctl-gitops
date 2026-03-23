@@ -7,7 +7,7 @@
 
 image:
   repository: ghcr.io/mctlhq/__SERVICE_NAME__
-  tag: "2026.3.23-beta.8"
+  tag: "2026.3.23-beta.9"
 
 podSecurityContext:
   fsGroup: 1000
@@ -34,6 +34,8 @@ env:
   APP_ENV: production
   NODE_OPTIONS: "--max-old-space-size=3072"
   OPENCLAW_CONFIG_PATH: /config-rw/openclaw.json
+  OPENCLAW_OPENAI_CODEX_PORTAL_CALLBACK_URL: "https://app.mctl.ai/api/oidc-provider/openai-codex/callback"
+  OPENCLAW_OPENAI_CODEX_CLIENT_ID: ""
 
 probes:
   startup:
