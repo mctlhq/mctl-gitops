@@ -16,17 +16,17 @@ service:
   port: 18789
 resources:
   requests:
-    cpu: 50m
+    cpu: 250m
     memory: 512Mi
   limits:
-    cpu: "1500m"
-    memory: 2560Mi
+    cpu: "1"
+    memory: 2Gi
 # Recreate avoids quota deadlocks for this tenant during rollout
 strategy:
   type: Recreate
 env:
   APP_ENV: production
-  NODE_OPTIONS: "--max-old-space-size=2048"
+  NODE_OPTIONS: "--max-old-space-size=1536"
   OPENCLAW_CONFIG_PATH: /config-rw/openclaw.json
   OPENCLAW_OPENAI_CODEX_PORTAL_CALLBACK_URL: ""
 probes:
