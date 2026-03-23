@@ -164,7 +164,7 @@ initContainers:
         fi
 
         # whisper shared libraries
-        for asset in libwhisper.so.1 libggml.so.0 libggml-base.so libggml-cpu.so; do
+        for asset in libwhisper.so.1 libggml.so.0 libggml-base.so.0 libggml-cpu.so.0; do
           TARGET=$WHISPER_DIR/$asset
           if [ ! -f $TARGET ]; then
             if mc stat cache/$MINIO_BUCKET/$CACHE_PFX/$asset > /dev/null 2>&1; then
@@ -212,7 +212,7 @@ initContainers:
       - name: pvc-whisper
         mountPath: /whisper-storage
   - name: install-whisper-cli-fallback
-    image: ghcr.io/mctlhq/openclaw-whisper-builder:2026.3.23-beta.16
+    image: ghcr.io/mctlhq/openclaw-whisper-builder:2026.3.23-beta.17
     resources:
       requests:
         cpu: 50m
@@ -256,7 +256,7 @@ initContainers:
           mc cp $BIN cache/$MINIO_BUCKET/$CACHE_PFX/whisper-cli || true
         fi
 
-        for asset in libwhisper.so.1 libggml.so.0 libggml-base.so libggml-cpu.so; do
+        for asset in libwhisper.so.1 libggml.so.0 libggml-base.so.0 libggml-cpu.so.0; do
           TARGET=$WHISPER_DIR/$asset
           if [ ! -f $TARGET ]; then
             cp /opt/whisper-assets/$asset $TARGET
@@ -264,7 +264,16 @@ initContainers:
           fi
         done
 
-        cp /opt/whisper-assets/run-whisper.sh $WRAPPER
+        cat > $WRAPPER << 'WEOF'
+        #!/bin/sh
+        export LD_LIBRARY_PATH=/whisper-storage${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+        TMP_WAV=$(mktemp /tmp/whisper_XXXXXX.wav)
+        /whisper-storage/ffmpeg -i "$1" -ar 16000 -ac 1 -f wav "$TMP_WAV" -y 2>/dev/null
+        /whisper-storage/whisper-cli -m /whisper-storage/ggml-tiny.bin -f "$TMP_WAV" --language auto --no-timestamps 2>/dev/null
+        EC=$?
+        rm -f "$TMP_WAV"
+        exit $EC
+        WEOF
         chmod +x $WRAPPER
         rm -f $MARKER
         echo "Whisper fallback restored prebaked assets and refreshed cache."
