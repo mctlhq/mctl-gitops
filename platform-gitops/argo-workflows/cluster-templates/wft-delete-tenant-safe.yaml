@@ -536,6 +536,19 @@ spec:
           curl -sLO "https://dl.k8s.io/release/v1.28.0/bin/linux/amd64/kubectl"
           chmod +x kubectl && mv kubectl /usr/local/bin/
 
+          echo "Refreshing ArgoCD ApplicationSets before deleting app CRs..."
+          kubectl annotate applicationset apps -n argocd argocd.argoproj.io/refresh=hard --overwrite || true
+          kubectl annotate applicationset tenants -n argocd argocd.argoproj.io/refresh=hard --overwrite || true
+
+          SERVICE_APPS=$(kubectl get app -n argocd -l "team=${TENANT}" -o name 2>/dev/null || true)
+          if [ -n "${SERVICE_APPS}" ]; then
+            echo "Deleting service apps for tenant ${TENANT}:"
+            echo "${SERVICE_APPS}"
+            echo "${SERVICE_APPS}" | xargs -r kubectl delete -n argocd
+          else
+            echo "No service apps found for tenant ${TENANT}."
+          fi
+
           if kubectl get app -n argocd "tenant-${TENANT}" > /dev/null 2>&1; then
             echo "Deleting ArgoCD app tenant-${TENANT}..."
             kubectl delete app -n argocd "tenant-${TENANT}"
@@ -550,4 +563,20 @@ spec:
             echo "Namespace ${TENANT} not found, skipping."
           fi
 
-          echo "K8s cleanup complete for tenant ${TENANT}."
+          echo "Waiting for service apps, tenant app, and namespace to disappear..."
+          for i in $(seq 1 60); do
+            APP_COUNT=$(kubectl get app -n argocd -l "team=${TENANT}" --no-headers 2>/dev/null | wc -l | tr -d ' ')
+            kubectl get app -n argocd "tenant-${TENANT}" > /dev/null 2>&1
+            TENANT_APP_RC=$?
+            kubectl get ns "${TENANT}" > /dev/null 2>&1
+            NS_RC=$?
+            echo "  [${i}/60] serviceApps=${APP_COUNT} tenantAppRc=${TENANT_APP_RC} namespaceRc=${NS_RC}"
+            if [ "${APP_COUNT}" = "0" ] && [ "${TENANT_APP_RC}" -ne 0 ] && [ "${NS_RC}" -ne 0 ]; then
+              echo "K8s cleanup fully complete for tenant ${TENANT}."
+              exit 0
+            fi
+            sleep 5
+          done
+
+          echo "Timed out waiting for ArgoCD app CRs or namespace to disappear for tenant ${TENANT}"
+          exit 1
