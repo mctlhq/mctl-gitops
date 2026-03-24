@@ -23,7 +23,6 @@ spec:
         - .status
         - .spec.resources
         - .spec.postgresql
-        - .spec.storage
   syncPolicy:
     automated:
       prune: true
