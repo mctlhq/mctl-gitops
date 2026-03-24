@@ -7,7 +7,7 @@
 
 image:
   repository: ghcr.io/mctlhq/__SERVICE_NAME__
-  tag: "2026.3.23-beta.9"
+  tag: "2026.3.23-beta.11"
 
 podSecurityContext:
   fsGroup: 1000
@@ -23,7 +23,7 @@ resources:
     cpu: 250m
     memory: 768Mi
   limits:
-    cpu: "1"
+    cpu: 1500m
     memory: 2560Mi
 
 # Recreate avoids quota deadlocks for single-pod tenant deployments.
@@ -34,7 +34,7 @@ env:
   APP_ENV: production
   PATH: "/whisper-storage:/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games"
   LD_LIBRARY_PATH: /whisper-storage
-  WHISPER_CPP_MODEL: /whisper-storage/ggml-tiny.bin
+  WHISPER_CPP_MODEL: /whisper-storage/ggml-base.bin
   NODE_OPTIONS: "--max-old-space-size=1792"
   OPENCLAW_CONFIG_PATH: /config-rw/openclaw.json
   OPENCLAW_OPENAI_CODEX_PORTAL_CALLBACK_URL: "https://app.mctl.ai/api/oidc-provider/openai-codex/callback"
@@ -120,7 +120,7 @@ initContainers:
         set -e
         WHISPER_DIR=/whisper-storage
         BIN=$WHISPER_DIR/whisper-cli
-        MODEL=$WHISPER_DIR/ggml-tiny.bin
+        MODEL=$WHISPER_DIR/ggml-base.bin
         WRAPPER=$WHISPER_DIR/run-whisper.sh
         CACHE_PFX=whisper
         MARKER=$WHISPER_DIR/.whisper-cache-miss
@@ -143,11 +143,11 @@ initContainers:
 
         # whisper model
         if [ ! -f $MODEL ]; then
-          if mc stat cache/$MINIO_BUCKET/$CACHE_PFX/ggml-tiny.bin > /dev/null 2>&1; then
+          if mc stat cache/$MINIO_BUCKET/$CACHE_PFX/ggml-base.bin > /dev/null 2>&1; then
             echo "Restoring whisper model from cache..."
-            mc cp cache/$MINIO_BUCKET/$CACHE_PFX/ggml-tiny.bin $MODEL
+            mc cp cache/$MINIO_BUCKET/$CACHE_PFX/ggml-base.bin $MODEL
           else
-            echo "Cache miss: ggml-tiny.bin"
+            echo "Cache miss: ggml-base.bin"
             echo model >> $MARKER
           fi
         fi
@@ -182,7 +182,7 @@ initContainers:
         export LD_LIBRARY_PATH=/whisper-storage${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
         TMP_WAV=$(mktemp /tmp/whisper_XXXXXX.wav)
         /whisper-storage/ffmpeg -i "$1" -ar 16000 -ac 1 -f wav "$TMP_WAV" -y 2>/dev/null
-        /whisper-storage/whisper-cli -m /whisper-storage/ggml-tiny.bin -f "$TMP_WAV" --language auto --no-timestamps 2>/dev/null
+        /whisper-storage/whisper-cli -m /whisper-storage/ggml-base.bin -f "$TMP_WAV" --language auto --no-timestamps 2>/dev/null
         EC=$?
         rm -f "$TMP_WAV"
         exit $EC
@@ -212,7 +212,7 @@ initContainers:
       - name: pvc-whisper
         mountPath: /whisper-storage
   - name: install-whisper-cli-fallback
-    image: ghcr.io/mctlhq/openclaw-whisper-builder:2026.3.23-beta.17
+    image: ghcr.io/mctlhq/openclaw-whisper-builder:2026.3.24-beta.19
     resources:
       requests:
         cpu: 50m
@@ -226,7 +226,7 @@ initContainers:
         set -e
         WHISPER_DIR=/whisper-storage
         BIN=$WHISPER_DIR/whisper-cli
-        MODEL=$WHISPER_DIR/ggml-tiny.bin
+        MODEL=$WHISPER_DIR/ggml-base.bin
         WRAPPER=$WHISPER_DIR/run-whisper.sh
         CACHE_PFX=whisper
         MARKER=$WHISPER_DIR/.whisper-cache-miss
@@ -246,8 +246,8 @@ initContainers:
         fi
 
         if [ ! -f $MODEL ]; then
-          cp /opt/whisper-assets/ggml-tiny.bin $MODEL
-          mc cp $MODEL cache/$MINIO_BUCKET/$CACHE_PFX/ggml-tiny.bin || true
+          cp /opt/whisper-assets/ggml-base.bin $MODEL
+          mc cp $MODEL cache/$MINIO_BUCKET/$CACHE_PFX/ggml-base.bin || true
         fi
 
         if [ ! -f $BIN ]; then
@@ -269,7 +269,7 @@ initContainers:
         export LD_LIBRARY_PATH=/whisper-storage${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
         TMP_WAV=$(mktemp /tmp/whisper_XXXXXX.wav)
         /whisper-storage/ffmpeg -i "$1" -ar 16000 -ac 1 -f wav "$TMP_WAV" -y 2>/dev/null
-        /whisper-storage/whisper-cli -m /whisper-storage/ggml-tiny.bin -f "$TMP_WAV" --language auto --no-timestamps 2>/dev/null
+        /whisper-storage/whisper-cli -m /whisper-storage/ggml-base.bin -f "$TMP_WAV" --language auto --no-timestamps 2>/dev/null
         EC=$?
         rm -f "$TMP_WAV"
         exit $EC
