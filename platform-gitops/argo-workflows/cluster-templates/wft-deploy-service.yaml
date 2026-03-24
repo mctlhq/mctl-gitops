@@ -207,6 +207,10 @@ spec:
             when: "\"{{workflow.parameters.autoscaling_enabled}}\" == \"true\""
             template: patch-autoscaling-values
 
+          - name: refresh-apps-appset
+            dependencies: [commit]
+            template: refresh-apps-appset
+
     # ────────────────────────────────────────────────────────────────────────
     - name: patch-autoscaling-values
       script:
@@ -261,6 +265,17 @@ spec:
         - name: deploy-key
           secret:
             secretName: mctl-gitops-deploy-key
+
+    # ────────────────────────────────────────────────────────────────────────
+    - name: refresh-apps-appset
+      script:
+        image: bitnami/kubectl:latest
+        command: [sh]
+        source: |
+          set -e
+          echo "Triggering hard refresh for ApplicationSet apps..."
+          kubectl annotate applicationset apps -n argocd argocd.argoproj.io/refresh=hard --overwrite
+          echo "ApplicationSet apps refresh requested."
 
     # ────────────────────────────────────────────────────────────────────────
     - name: trigger-github-build
