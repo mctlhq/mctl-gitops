@@ -1,0 +1,23 @@
+# Worker: smoke-svc
+# Team: mcp-smoke-j1br6l
+# Chart: base-service (ingress disabled)
+
+image:
+  repository: ghcr.io/mctlhq/smoke-svc
+  tag: "main"
+
+imagePullSecrets:
+  - name: ghcr-credentials
+
+ingress:
+  enabled: false
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+env: {}
