@@ -1,0 +1,42 @@
+# Worker: smoke-svc
+# Team: mcp-smoke-j3k3kz
+# Chart: base-service (ingress disabled)
+
+image:
+  repository: ghcr.io/mctlhq/smoke-svc
+  tag: "main"
+imagePullSecrets:
+  - name: ghcr-credentials
+ingress:
+  enabled: false
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+probes:
+  startup:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    failureThreshold: 24
+  readiness:
+    path: /readyz
+    port: http
+    initialDelaySeconds: 15
+    periodSeconds: 5
+  liveness:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 60
+    periodSeconds: 15
+env: {}
+envFrom:
+  - secretRef:
+      name: mcp-smoke-j3k3kz-smoke-svc-db-creds
+dbSecret:
+  vaultPath: teams/mcp-smoke-j3k3kz/smoke-svc/database
+  secretName: mcp-smoke-j3k3kz-smoke-svc-db-creds
