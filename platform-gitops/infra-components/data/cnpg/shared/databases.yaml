@@ -100,3 +100,14 @@ spec:
   cluster:
     name: shared-pg
   databaseReclaimPolicy: retain
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: mcp-smoke-7trbal-smoke-svc-db
+spec:
+  name: "mcp-smoke-7trbal-smoke-svc"
+  owner: "mcp-smoke-7trbal-smoke-svc"
+  cluster:
+    name: shared-pg
+  databaseReclaimPolicy: retain
