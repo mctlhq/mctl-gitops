@@ -1,0 +1,42 @@
+# Spring worker: smoke-svc
+# Team: mcp-smoke-7trbal
+# Chart: base-service (ingress disabled)
+
+image:
+  repository: ghcr.io/mctlhq/smoke-svc
+  tag: "main"
+imagePullSecrets:
+  - name: ghcr-credentials
+ingress:
+  enabled: false
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+probes:
+  startup:
+    path: /actuator/health
+    port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    failureThreshold: 36
+  readiness:
+    path: /actuator/health
+    port: http
+    initialDelaySeconds: 15
+    periodSeconds: 5
+  liveness:
+    path: /actuator/health
+    port: http
+    initialDelaySeconds: 90
+    periodSeconds: 15
+env: {}
+envFrom:
+  - secretRef:
+      name: mcp-smoke-7trbal-smoke-svc-db-creds
+dbSecret:
+  vaultPath: teams/mcp-smoke-7trbal/smoke-svc/database
+  secretName: mcp-smoke-7trbal-smoke-svc-db-creds
