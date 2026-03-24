@@ -1,0 +1,15 @@
+apiVersion: backstage.io/v1alpha1
+kind: Resource
+metadata:
+  name: tenant-mcp-smoke-ios5z0
+  namespace: default
+  description: "Tenant MCP Smoke mcp-smoke-ios5z0 — namespace, quotas, and network policies"
+  annotations:
+    mctl.me/tenant-name: "mcp-smoke-ios5z0"
+    backstage.io/managed-by-location: "url:https://github.com/mctlhq/mctl-gitops/blob/main/platform-gitops/tenants/mcp-smoke-ios5z0/catalog-info.yaml"
+    backstage.io/managed-by-origin-location: "url:https://github.com/mctlhq/mctl-gitops/blob/main/platform-gitops/tenants/mcp-smoke-ios5z0/catalog-info.yaml"
+spec:
+  type: tenant
+  owner: group:default/admins
+  system: team-mcp-smoke-ios5z0
+  dependsOn: []
