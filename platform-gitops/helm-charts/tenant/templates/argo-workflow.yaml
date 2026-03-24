@@ -229,7 +229,8 @@ spec:
         key: platform/minio
         property: root-password
 ---
-# Allow argo-workflow-sa to manage ArgoCD Applications in argocd namespace (retire workflow)
+# Allow tenant-local argo-workflow-sa to manage ArgoCD Applications/ApplicationSets
+# in argocd namespace for deploy refresh and retire/delete workflows.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -240,7 +241,10 @@ metadata:
 rules:
   - apiGroups: ["argoproj.io"]
     resources: ["applications"]
-    verbs: ["get", "list", "delete"]
+    verbs: ["get", "list", "patch", "delete"]
+  - apiGroups: ["argoproj.io"]
+    resources: ["applicationsets"]
+    verbs: ["get", "list", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
