@@ -210,6 +210,12 @@ spec:
           - name: refresh-apps-appset
             dependencies: [commit]
             template: refresh-apps-appset
+            arguments:
+              parameters:
+                - name: team_name
+                  value: "{{workflow.parameters.team_name}}"
+                - name: component_name
+                  value: "{{workflow.parameters.component_name}}"
 
     # ────────────────────────────────────────────────────────────────────────
     - name: patch-autoscaling-values
@@ -268,14 +274,39 @@ spec:
 
     # ────────────────────────────────────────────────────────────────────────
     - name: refresh-apps-appset
+      inputs:
+        parameters:
+          - name: team_name
+          - name: component_name
       script:
         image: bitnami/kubectl:latest
         command: [sh]
         source: |
-          set -e
+          set -euo pipefail
+
+          TEAM="{{inputs.parameters.team_name}}"
+          COMPONENT="{{inputs.parameters.component_name}}"
+          APP_NAME="${TEAM}-${COMPONENT}"
+          TS="$(date +%s)"
+
           echo "Triggering hard refresh for ApplicationSet apps..."
-          kubectl annotate applicationset apps -n argocd argocd.argoproj.io/refresh=hard --overwrite
+          kubectl -n argocd patch applicationset apps --type merge -p \
+            "{\"metadata\":{\"annotations\":{\"argocd.argoproj.io/refresh\":\"hard\",\"mctl.ai/refresh-ts\":\"${TS}\"}}}"
           echo "ApplicationSet apps refresh requested."
+
+          echo "Waiting for ArgoCD app ${APP_NAME} to appear..."
+          for i in $(seq 1 30); do
+            if kubectl -n argocd get application "${APP_NAME}" >/dev/null 2>&1; then
+              echo "ArgoCD app ${APP_NAME} is present."
+              exit 0
+            fi
+            sleep 5
+          done
+
+          echo "Timed out waiting for ArgoCD app ${APP_NAME} after refresh." >&2
+          kubectl -n argocd get applicationset apps -o yaml >&2 || true
+          kubectl -n argocd get applications -l team="${TEAM}" -o wide >&2 || true
+          exit 1
 
     # ────────────────────────────────────────────────────────────────────────
     - name: trigger-github-build
