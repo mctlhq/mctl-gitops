@@ -89,6 +89,7 @@ spec:
       # smoke-test-svc: ephemeral — added/removed by smoke-test CWT, not managed here
       - host mctl-agent mctl-agent all scram-sha-256
       - host labs-openclaw labs-openclaw all scram-sha-256
+      - host mcp-smoke-dgyxv2-smoke-svc mcp-smoke-dgyxv2-smoke-svc all scram-sha-256
       - host all all 0.0.0.0/0 reject
 
   managed:
@@ -134,6 +135,12 @@ spec:
         passwordSecret:
           name: mctl-agent-db-creds
       # Team app roles
+      - name: mcp-smoke-dgyxv2-smoke-svc
+        login: true
+        connectionLimit: 10
+        ensure: present
+        passwordSecret:
+          name: mcp-smoke-dgyxv2-smoke-svc-db-creds
       - name: labs-openclaw
         login: true
         connectionLimit: 10
