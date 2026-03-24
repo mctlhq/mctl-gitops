@@ -12,6 +12,7 @@ spec:
     - git:
         repoURL: {{ .Values.spec.source.repoURL }}
         revision: {{ .Values.spec.source.targetRevision }}
+        requeueAfterSeconds: 30
         directories:
           - path: platform-gitops/services/*/*
   template:
