@@ -99,10 +99,10 @@ spec:
               scrapeInterval: 1m
               resources:
                 requests:
-                  cpu: 20m
+                  cpu: 50m
                   memory: 64Mi
                 limits:
-                  cpu: 100m
+                  cpu: 200m
                   memory: 256Mi
 
           # VMAlert replaces Prometheus's alerting engine

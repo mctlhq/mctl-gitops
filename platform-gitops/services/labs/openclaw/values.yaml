@@ -16,11 +16,11 @@ service:
   port: 18789
 resources:
   requests:
-    cpu: 250m
-    memory: 768Mi
+    cpu: 50m
+    memory: 1536Mi
   limits:
-    cpu: 1500m
-    memory: 2560Mi
+    cpu: 500m
+    memory: 2048Mi
 # Recreate avoids quota deadlocks for this tenant during rollout
 strategy:
   type: Recreate
@@ -332,11 +332,11 @@ extraContainers:
     image: minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
     resources:
       requests:
-        cpu: 25m
-        memory: 64Mi
+        cpu: 10m
+        memory: 48Mi
       limits:
-        cpu: 200m
-        memory: 256Mi
+        cpu: 100m
+        memory: 128Mi
     command: ["sh", "-c"]
     args:
       - |
