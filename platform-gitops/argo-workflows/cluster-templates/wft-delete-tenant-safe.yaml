@@ -566,10 +566,16 @@ spec:
           echo "Waiting for service apps, tenant app, and namespace to disappear..."
           for i in $(seq 1 60); do
             APP_COUNT=$(kubectl get app -n argocd -l "team=${TENANT}" --no-headers 2>/dev/null | wc -l | tr -d ' ')
-            kubectl get app -n argocd "tenant-${TENANT}" > /dev/null 2>&1
-            TENANT_APP_RC=$?
-            kubectl get ns "${TENANT}" > /dev/null 2>&1
-            NS_RC=$?
+            if kubectl get app -n argocd "tenant-${TENANT}" > /dev/null 2>&1; then
+              TENANT_APP_RC=0
+            else
+              TENANT_APP_RC=$?
+            fi
+            if kubectl get ns "${TENANT}" > /dev/null 2>&1; then
+              NS_RC=0
+            else
+              NS_RC=$?
+            fi
             echo "  [${i}/60] serviceApps=${APP_COUNT} tenantAppRc=${TENANT_APP_RC} namespaceRc=${NS_RC}"
             if [ "${APP_COUNT}" = "0" ] && [ "${TENANT_APP_RC}" -ne 0 ] && [ "${NS_RC}" -ne 0 ]; then
               echo "K8s cleanup fully complete for tenant ${TENANT}."
