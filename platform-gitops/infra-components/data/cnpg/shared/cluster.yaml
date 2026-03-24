@@ -90,6 +90,7 @@ spec:
       - host mctl-agent mctl-agent all scram-sha-256
       - host labs-openclaw labs-openclaw all scram-sha-256
       - host mcp-smoke-8sajlb-smoke-svc mcp-smoke-8sajlb-smoke-svc all scram-sha-256
+      - host mcp-smoke-7trbal-smoke-svc mcp-smoke-7trbal-smoke-svc all scram-sha-256
       - host all all 0.0.0.0/0 reject
 
   managed:
@@ -135,6 +136,12 @@ spec:
         passwordSecret:
           name: mctl-agent-db-creds
       # Team app roles
+      - name: mcp-smoke-7trbal-smoke-svc
+        login: true
+        connectionLimit: 10
+        ensure: present
+        passwordSecret:
+          name: mcp-smoke-7trbal-smoke-svc-db-creds
       - name: mcp-smoke-8sajlb-smoke-svc
         login: true
         connectionLimit: 10
