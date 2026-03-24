@@ -55,6 +55,8 @@ spec:
               policy: none
             - name: platform-state
               policy: none
+            - name: postgres-backups
+              policy: none
 
     - repoURL: https://github.com/mctlhq/mctl-gitops.git
       targetRevision: main
