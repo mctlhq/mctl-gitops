@@ -23,10 +23,10 @@ tenant:
   quotas:
     # Aggregate CPU/memory requests across all pods
     requests.cpu: "500m"
-    requests.memory: "1Gi"
-    # Aggregate CPU/memory limits across all pods (sized for rolling update of 1 openclaw)
-    limits.cpu: "4"
-    limits.memory: "6Gi"
+    requests.memory: "1280Mi"
+    # Aggregate CPU/memory limits across all pods (sized for one OpenClaw pod plus small headroom)
+    limits.cpu: "2"
+    limits.memory: "4Gi"
     # Maximum number of pods
     pods: "10"
     # Maximum number of PVCs

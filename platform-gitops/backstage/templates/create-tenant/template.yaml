@@ -57,7 +57,7 @@ spec:
         quotaCpuReq:
           title: CPU Requests (total)
           type: string
-          default: "1"
+          default: "500m"
           description: "Sum of CPU requests across all pods in the namespace (e.g. 1, 2, 500m)."
         quotaCpuLim:
           title: CPU Limits (total)
@@ -67,12 +67,12 @@ spec:
         quotaMemoryReq:
           title: Memory Requests (total)
           type: string
-          default: "1.5Gi"
+          default: "1280Mi"
           description: "Sum of memory requests (e.g. 1Gi, 2Gi)."
         quotaMemoryLim:
           title: Memory Limits (total)
           type: string
-          default: "3Gi"
+          default: "4Gi"
           description: "Sum of memory limits."
         quotaPods:
           title: Max Pods
@@ -102,10 +102,10 @@ spec:
           displayName: ${{ parameters.displayName }}
           description: ${{ parameters.description | default('') }}
           contactEmail: ${{ parameters.contactEmail | default('') }}
-          quotaCpuReq: ${{ parameters.quotaCpuReq | default('1') }}
+          quotaCpuReq: ${{ parameters.quotaCpuReq | default('500m') }}
           quotaCpuLim: ${{ parameters.quotaCpuLim | default('2') }}
-          quotaMemoryReq: ${{ parameters.quotaMemoryReq | default('2Gi') }}
-          quotaMemoryLim: ${{ parameters.quotaMemoryLim | default('3Gi') }}
+          quotaMemoryReq: ${{ parameters.quotaMemoryReq | default('1280Mi') }}
+          quotaMemoryLim: ${{ parameters.quotaMemoryLim | default('4Gi') }}
           quotaPods: ${{ parameters.quotaPods | default('5') }}
           allowInternetEgress: ${{ parameters.allowInternetEgress }}
           creatorUserId: ${{ user.entity.metadata.name }}
