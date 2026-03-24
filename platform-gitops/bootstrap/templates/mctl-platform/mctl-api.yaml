@@ -42,12 +42,13 @@ spec:
             # OAuth 2.0 for Claude.ai custom connector (PKCE, public client)
             # Secrets (OAUTH_GITHUB_CLIENT_ID, OAUTH_GITHUB_CLIENT_SECRET, OAUTH_JWT_SECRET)
             # come from mctl-api-secrets (Vault: platform/mctl-api/oauth-github)
-            OAUTH_ALLOWED_REDIRECT_URIS: "https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback,http://localhost:6274/oauth/callback,http://localhost:6274/oauth/callback/debug"
+            OAUTH_ALLOWED_REDIRECT_URIS: "https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback,http://localhost:6274/oauth/callback,http://localhost:6274/oauth/callback/debug,https://chatgpt.com/connector/oauth/*"
             # Allow git operations on emptyDir volume (owned by root, run as uid=1000)
             GIT_CONFIG_COUNT: "1"
             GIT_CONFIG_KEY_0: "safe.directory"
             GIT_CONFIG_VALUE_0: "*"
             LOKI_URL: "http://loki-stack.monitoring.svc.cluster.local:3100"
+            AUDIT_DB_URL: "postgresql://$(DB_USER):$(DB_PASSWORD)@shared-pg-rw.platform-db.svc:5432/mctl-api?sslmode=disable"
 
           envFromSecret: mctl-api-secrets
           envFromExtraSecret: mctl-api-gitops-token
