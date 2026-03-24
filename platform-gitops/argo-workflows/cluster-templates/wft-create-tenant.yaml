@@ -99,6 +99,18 @@ spec:
                 - name: creator_user_id
                   value: "{{workflow.parameters.creator_user_id}}"
 
+          - name: refresh-tenants-appset
+            dependencies: [commit-to-git]
+            template: refresh-tenants-appset
+
+          - name: wait-for-tenant-ready
+            dependencies: [refresh-tenants-appset]
+            template: wait-for-tenant-ready
+            arguments:
+              parameters:
+                - name: tenant_name
+                  value: "{{workflow.parameters.tenant_name}}"
+
     # ────────────────────────────────────────────────────────────────────────
     - name: validate-tenant-name
       inputs:
@@ -405,3 +417,49 @@ spec:
           done
 
           fi # end SKIP_GIT
+
+    # ────────────────────────────────────────────────────────────────────────
+    - name: refresh-tenants-appset
+      script:
+        image: bitnami/kubectl:latest
+        command: [sh]
+        source: |
+          set -e
+          echo "Triggering hard refresh for ApplicationSet tenants..."
+          kubectl annotate applicationset tenants -n argocd argocd.argoproj.io/refresh=hard --overwrite
+          echo "ApplicationSet tenants refresh requested."
+
+    # ────────────────────────────────────────────────────────────────────────
+    - name: wait-for-tenant-ready
+      inputs:
+        parameters:
+          - name: tenant_name
+      script:
+        image: bitnami/kubectl:latest
+        command: [sh]
+        source: |
+          set -e
+          TENANT="{{inputs.parameters.tenant_name}}"
+          APP="tenant-${TENANT}"
+
+          echo "Waiting for ArgoCD application ${APP} to become Healthy/Synced..."
+          deadline=$(( $(date +%s) + 900 ))
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            if kubectl get application "${APP}" -n argocd >/dev/null 2>&1; then
+              SYNC=$(kubectl get application "${APP}" -n argocd -o jsonpath='{.status.sync.status}' 2>/dev/null || echo "Unknown")
+              HEALTH=$(kubectl get application "${APP}" -n argocd -o jsonpath='{.status.health.status}' 2>/dev/null || echo "Unknown")
+              echo "Current tenant app status: sync=${SYNC} health=${HEALTH}"
+              if [ "${SYNC}" = "Synced" ] && [ "${HEALTH}" = "Healthy" ]; then
+                echo "Tenant ${TENANT} is ready for follow-up service workflows."
+                exit 0
+              fi
+            else
+              echo "Tenant application ${APP} not created yet."
+            fi
+            sleep 10
+          done
+
+          echo "ERROR: Tenant application ${APP} did not become Healthy/Synced in time."
+          kubectl get applicationset tenants -n argocd -o yaml | sed -n '1,160p' || true
+          kubectl get application "${APP}" -n argocd -o yaml || true
+          exit 1
