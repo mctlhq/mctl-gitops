@@ -1,0 +1,18 @@
+# SSO RBAC: team mcp-smoke-7trbal — scoped to team namespace only
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sso-team-mcp-smoke-7trbal
+  namespace: argo-workflows
+  annotations:
+    workflows.argoproj.io/rbac-rule: "'mcp-smoke-7trbal' in groups"
+    workflows.argoproj.io/rbac-rule-precedence: "5"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sso-team-mcp-smoke-7trbal.service-account-token
+  namespace: argo-workflows
+  annotations:
+    kubernetes.io/service-account.name: sso-team-mcp-smoke-7trbal
+type: kubernetes.io/service-account-token
