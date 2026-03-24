@@ -158,16 +158,15 @@ spec:
             mkdir -p "$DIR"
 
             # values.yaml from template catalog
-            if [ "$TYPE" = "base-service" ]; then
-              TMPL_DIR="platform-gitops/argo-workflows/service-templates/${SERVICE_TEMPLATE}"
-              if [ -d "$TMPL_DIR" ]; then
-                TPL="${TMPL_DIR}/values.yaml.tpl"
-                echo "Using service template: ${SERVICE_TEMPLATE}"
-              else
-                echo "Template '${SERVICE_TEMPLATE}' not found, falling back to default"
-                TPL="platform-gitops/argo-workflows/service-templates/default/values.yaml.tpl"
-              fi
+            TMPL_DIR="platform-gitops/argo-workflows/service-templates/${SERVICE_TEMPLATE}"
+            if [ -d "$TMPL_DIR" ]; then
+              TPL="${TMPL_DIR}/values.yaml.tpl"
+              echo "Using service template: ${SERVICE_TEMPLATE}"
+            elif [ "$TYPE" = "base-service" ]; then
+              echo "Template '${SERVICE_TEMPLATE}' not found, falling back to default"
+              TPL="platform-gitops/argo-workflows/service-templates/default/values.yaml.tpl"
             else
+              echo "Template '${SERVICE_TEMPLATE}' not found, falling back to worker"
               TPL="platform-gitops/argo-workflows/service-templates/worker/values.yaml.tpl"
             fi
 
