@@ -22,7 +22,6 @@ spec:
         - .metadata.labels
         - .status
         - .spec.resources
-        - .spec.postgresql
   syncPolicy:
     automated:
       prune: true
