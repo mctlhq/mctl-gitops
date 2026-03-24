@@ -75,6 +75,7 @@ spec:
       wal_keep_size: "128MB"  # prevent WAL from filling disk (CNPG default 512MB is too high for 20Gi)
     pg_hba:
       - host all mctl-agent all scram-sha-256
+      - host mctl-api mctl-api all scram-sha-256
       # Backstage — access to own db + postgres db (assertDatabaseExists check)
       - host backstage backstage all scram-sha-256
       - host postgres backstage all scram-sha-256
@@ -133,6 +134,13 @@ spec:
         inherit: true
         passwordSecret:
           name: mctl-agent-db-creds
+      - name: mctl-api
+        login: true
+        inherit: true
+        connectionLimit: 20
+        ensure: present
+        passwordSecret:
+          name: mctl-api-db-creds
       # Team app roles
       - name: labs-openclaw
         login: true
