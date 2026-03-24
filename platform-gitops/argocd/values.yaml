@@ -140,16 +140,6 @@ argo-cd:
         p, role:team-labs, logs, get, apps/labs-*, allow
         p, role:team-labs, exec, create, apps/labs-*, allow
         g, labs, role:team-labs
-
-        # Tenant: mcp-smoke-8sajlb
-        p, role:team-mcp-smoke-8sajlb, applications, get, apps/mcp-smoke-8sajlb-*, allow
-        p, role:team-mcp-smoke-8sajlb, applications, list, apps/mcp-smoke-8sajlb-*, allow
-        p, role:team-mcp-smoke-8sajlb, applications, sync, apps/mcp-smoke-8sajlb-*, allow
-        p, role:team-mcp-smoke-8sajlb, applications, override, apps/mcp-smoke-8sajlb-*, allow
-        p, role:team-mcp-smoke-8sajlb, logs, get, apps/mcp-smoke-8sajlb-*, allow
-        p, role:team-mcp-smoke-8sajlb, exec, create, apps/mcp-smoke-8sajlb-*, allow
-        g, mcp-smoke-8sajlb, role:team-mcp-smoke-8sajlb
-
     secret:
       createSecret: true
 
