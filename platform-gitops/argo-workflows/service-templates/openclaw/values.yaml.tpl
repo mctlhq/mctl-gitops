@@ -447,6 +447,7 @@ configMaps:
       const apiBase = (process.env.MCTL_API_URL || 'https://api.mctl.ai').replace(/\/+$/, '');
       const authFile = process.env.MCTL_AUTH_FILE || '/home/node/.openclaw/mcp-auth/mctl/credentials.json';
       let sessionId = '';
+      let queue = Promise.resolve();
       process.stdin.setEncoding('utf8');
       let buf = '';
       process.stdin.on('data', chunk => {
@@ -455,7 +456,9 @@ configMaps:
         while ((nl = buf.indexOf('\n')) !== -1) {
           const line = buf.slice(0, nl).trim();
           buf = buf.slice(nl + 1);
-          if (line) handleLine(line);
+          if (line) {
+            queue = queue.then(() => handleLine(line)).catch(() => {});
+          }
         }
       });
       function write(obj) { process.stdout.write(JSON.stringify(obj) + '\n'); }
