@@ -51,6 +51,9 @@ ingress:
     trustForwardHeader: true
     authResponseHeaders: []
 
+# -- Optional: additional ingress objects for the same service
+extraIngresses: []
+
 # -- Optional: autoscaling
 autoscaling:
   enabled: false

@@ -660,3 +660,17 @@ ingress:
       hosts:
         - labs-openclaw.mctl.ai
         - labs-openclaw.mctl.me
+extraIngresses:
+  - name: labs-openclaw-hooks
+    hosts:
+      - labs-openclaw.mctl.ai
+      - labs-openclaw.mctl.me
+    path: /hooks
+    pathType: Prefix
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt-prod
+    tls:
+      - secretName: openclaw-tls
+        hosts:
+          - labs-openclaw.mctl.ai
+          - labs-openclaw.mctl.me
