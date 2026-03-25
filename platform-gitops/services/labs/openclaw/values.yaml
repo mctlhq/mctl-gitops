@@ -587,6 +587,30 @@ configMaps:
             "allowFrom": ["210408407"]
           }
         },
+        "hooks": {
+          "enabled": true,
+          "path": "/hooks",
+          "token": "mctl-agent-hook-20260325",
+          "defaultSessionKey": "hook:mctl-agent:default",
+          "allowedSessionKeyPrefixes": ["hook:"],
+          "allowedAgentIds": ["main"],
+          "mappings": [
+            {
+              "id": "mctl-agent-event",
+              "match": {
+                "path": "mctl-agent"
+              },
+              "action": "agent",
+              "name": "MCTL Agent Incident",
+              "sessionKey": "hook:mctl-agent:{{payload.ticket.id}}",
+              "messageTemplate": "New incident from mctl-agent.\nEvent: {{payload.event_type}}\nTicket: {{payload.ticket.id}}\nTeam: {{payload.ticket.team}}\nService: {{payload.ticket.service}}\nSeverity: {{payload.ticket.severity}}\nSummary: {{payload.ticket.summary}}\nAnalysis: {{payload.ticket.analysis}}\nClaim URL: {{payload.delivery.claim_url}}\nResult URL: {{payload.delivery.result_url}}\nReview the incident, explain likely cause, and if platform actions are available propose the next fixing step.",
+              "deliver": false,
+              "model": "openai-codex/gpt-5.4",
+              "thinking": "medium",
+              "timeoutSeconds": 180
+            }
+          ]
+        },
         "tools": {
           "media": {
             "audio": {
