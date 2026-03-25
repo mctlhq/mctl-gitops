@@ -29,7 +29,6 @@ spec:
                 search.maxConcurrentRequests: "16"
                 search.maxQueueDuration: "30s"
                 search.cacheTimestampOffset: "12h"
-                search.maxMemoryPerQuery: "256Mi"
               storage:
                 accessModes: ["ReadWriteOnce"]
                 resources:
