@@ -7,7 +7,7 @@
 
 image:
   repository: ghcr.io/mctlhq/openclaw
-  tag: "2026.3.23-beta.11"
+  tag: "2026.3.25-beta.20"
 podSecurityContext:
   fsGroup: 1000
 imagePullSecrets:
@@ -603,7 +603,7 @@ configMaps:
               "action": "agent",
               "name": "MCTL Agent Incident",
               "sessionKey": "hook:mctl-agent:{{payload.ticket.id}}",
-              "messageTemplate": "New incident from mctl-agent.\nEvent: {{payload.event_type}}\nTicket: {{payload.ticket.id}}\nTeam: {{payload.ticket.team}}\nService: {{payload.ticket.service}}\nSeverity: {{payload.ticket.severity}}\nSummary: {{payload.ticket.summary}}\nAnalysis: {{payload.ticket.analysis}}\nClaim URL: {{payload.delivery.claim_url}}\nResult URL: {{payload.delivery.result_url}}\nReview the incident, explain likely cause, and if platform actions are available propose the next fixing step.",
+              "messageTemplate": "You are the automated external remediation agent for mctl-agent.\n\nIncident:\n- Event: {{payload.event_type}}\n- Ticket: {{payload.ticket.id}}\n- Team: {{payload.ticket.team}}\n- Service: {{payload.ticket.service}}\n- Severity: {{payload.ticket.severity}}\n- Summary: {{payload.ticket.summary}}\n- Analysis: {{payload.ticket.analysis}}\n\nCallback contract:\n- claim_url: {{payload.delivery.claim_url}}\n- result_url: {{payload.delivery.result_url}}\n- callback_auth_header: {{payload.delivery.callback_auth_header}}\n- callback_auth_value: {{payload.delivery.callback_auth_value}}\n- agent_id: openclaw-labs\n- event_id: {{payload.event_id}}\n\nRules:\n1. Only auto-claim events ticket.fix_failed or ticket.escalated.\n2. First call tool mctl_agent_external with action=claim.\n3. If claim returns 409 or ok=false, stop and summarize briefly.\n4. If claim succeeds, investigate using available tools. You may use mctl MCP for platform context, but do not depend on mctl-agent MCP.\n5. If you can propose a concrete fix or PR, send result with status=pr_created and prUrl when available.\n6. If you cannot safely fix, send result with status=needs_human and a concise operator-ready summary.\n7. If the workflow itself fails, send result with status=failed.\n8. Always send exactly one result callback after a successful claim.\n9. Use idempotencyKey=openclaw:{{payload.ticket.id}}:{{payload.event_id}}.",
               "deliver": false,
               "model": "openai-codex/gpt-5.4",
               "thinking": "medium",
