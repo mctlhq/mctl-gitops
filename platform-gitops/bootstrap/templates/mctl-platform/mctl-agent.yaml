@@ -47,10 +47,12 @@ spec:
               name: mctl-agent-db-creds
         externalSecret:
           targetSecret: mctl-agent-secrets
+          targetTemplateData:
+            TELEGRAM_CHAT_ID: "210408407"
           data:
             - secretKey: MCTL_API_TOKEN
               remoteKey: platform/mctl-agent/tokens
-              property: mctl-api-token
+              property: github-token
             - secretKey: ANTHROPIC_API_KEY
               remoteKey: platform/mctl-agent/tokens
               property: anthropic-api-key
@@ -60,9 +62,6 @@ spec:
             - secretKey: TELEGRAM_BOT_TOKEN
               remoteKey: platform/mctl-agent/tokens
               property: telegram-bot-token
-            - secretKey: TELEGRAM_CHAT_ID
-              remoteKey: platform/mctl-agent/tokens
-              property: telegram-chat-id
         # Note: mctl-agent-db-creds ExternalSecret is managed in cnpg/shared/secrets.yaml
         # and synced to 'admins' namespace via cluster-wide sync or manual patch.
         # For now, we assume it exists in the namespace.
