@@ -36,6 +36,9 @@ spec:
           GITHUB_REPO: mctl-gitops
           POLL_INTERVAL: "5m"
           DRY_RUN: "false"
+          WEBHOOK_ENABLED: "false"
+          WEBHOOK_CALLBACK_URL: "https://agent.mctl.ai"
+          WEBHOOK_DEFAULT_TTL: "15m"
           DATABASE_URL: "postgresql://$(DB_USER):$(DB_PASSWORD)@shared-pg-rw.platform-db.svc:5432/mctl-agent"
         envFrom:
           - secretRef:
