@@ -616,6 +616,30 @@ configMaps:
             "allowFrom": ["__TELEGRAM_OWNER_ID__"]
           }
         },
+        "hooks": {
+          "enabled": true,
+          "path": "/hooks",
+          "token": "mctl-agent-hook-20260325",
+          "defaultSessionKey": "hook:mctl-agent:default",
+          "allowedSessionKeyPrefixes": ["hook:"],
+          "allowedAgentIds": ["main"],
+          "mappings": [
+            {
+              "id": "mctl-agent-event",
+              "match": {
+                "path": "mctl-agent"
+              },
+              "action": "agent",
+              "name": "MCTL Agent Incident",
+              "sessionKey": "hook:mctl-agent:{{payload.ticket.id}}",
+              "messageTemplate": "You are the automated external remediation agent for mctl-agent.\n\nIncident:\n- Event: {{payload.event_type}}\n- Ticket: {{payload.ticket.id}}\n- Team: {{payload.ticket.team}}\n- Service: {{payload.ticket.service}}\n- Severity: {{payload.ticket.severity}}\n- Summary: {{payload.ticket.summary}}\n- Analysis: {{payload.ticket.analysis}}\n\nCallback contract:\n- claim_url: {{payload.delivery.claim_url}}\n- result_url: {{payload.delivery.result_url}}\n- callback_auth_header: {{payload.delivery.callback_auth_header}}\n- callback_auth_value: {{payload.delivery.callback_auth_value}}\n- agent_id: openclaw-labs\n- event_id: {{payload.event_id}}\n\nOperating mode:\n- Conservative PR-only remediation.\n- Do not perform direct destructive platform actions.\n- Do not resolve incidents directly.\n- Do not rely on any mctl-agent MCP server.\n\nRules:\n1. Only auto-claim events ticket.fix_failed or ticket.escalated. Never auto-claim ticket.created.\n2. First call tool mctl_agent_external with action=claim.\n3. If claim returns 409 or ok=false, stop and summarize briefly.\n4. After a successful claim, gather platform evidence with available mctl_* tools when possible. Start with service status/config/logs, incidents, workflows, tenant details, and resource usage.\n5. You may prepare remediation only when evidence supports a concrete low-risk config or code change. Allowed v1 outcomes are PR-oriented changes such as resource request/limit tuning, probe/path/timeouts fixes, or clear GitOps config corrections.\n6. Only send status=pr_created when a real PR has been created and you have a concrete prUrl.\n7. If evidence is incomplete, the incident is synthetic, the action would be destructive, or the safest path is operator review, send status=needs_human with a concise operator-ready summary and the next checks to perform.\n8. If the workflow itself fails after claim, send status=failed.\n9. Always send exactly one result callback after a successful claim.\n10. Use idempotencyKey=openclaw:{{payload.ticket.id}}:{{payload.event_id}}.",
+              "deliver": false,
+              "model": "__DEFAULT_MODEL__",
+              "thinking": "medium",
+              "timeoutSeconds": 180
+            }
+          ]
+        },
         "tools": {
           "media": {
             "audio": {
@@ -634,7 +658,6 @@ configMaps:
 
         "mcp": {
           "servers": {
-            "mctl-agent": {"command": "node", "args": ["/scripts/mcp-agent-proxy.js"]},
             "mctl": {
               "command": "node",
               "args": ["/scripts/mctl-mcp-proxy.js"],
