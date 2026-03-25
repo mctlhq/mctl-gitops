@@ -23,6 +23,11 @@ spec:
         secretAccessKey:
           name: minio-root-user
           key: MINIO_ROOT_PASSWORD
+      wal:
+        compression: gzip
+        maxParallel: 2
+      data:
+        compression: gzip
     retentionPolicy: "7d"
     target: prefer-standby
 
@@ -160,9 +165,6 @@ spec:
       localeCollate: C
       secret:
         name: backstage-db-creds
-
-  # backup: — deferred, not needed for preprod
-  # When needed, add barmanObjectStore config pointing to R2 or Hetzner Object Storage
 
   monitoring:
     enablePodMonitor: false  # enable when Prometheus is added
