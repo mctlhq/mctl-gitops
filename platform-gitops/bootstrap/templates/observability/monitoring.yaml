@@ -21,14 +21,15 @@ spec:
               resources:
                 requests:
                   cpu: 100m
-                  memory: 256Mi
+                  memory: 512Mi
                 limits:
                   cpu: 1000m
-                  memory: 1024Mi
+                  memory: 1536Mi
               extraArgs:
                 search.maxConcurrentRequests: "16"
                 search.maxQueueDuration: "30s"
                 search.cacheTimestampOffset: "12h"
+                search.maxMemoryPerQuery: "256Mi"
               storage:
                 accessModes: ["ReadWriteOnce"]
                 resources:
@@ -178,7 +179,7 @@ spec:
                 memory: 128Mi
               limits:
                 cpu: 200m
-                memory: 512Mi
+                memory: 768Mi
 
           alertmanager:
             enabled: true
