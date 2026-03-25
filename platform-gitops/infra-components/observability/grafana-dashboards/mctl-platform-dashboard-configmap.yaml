@@ -109,7 +109,7 @@ data:
           "collapsed": false,
           "gridPos": { "h": 1, "w": 24, "x": 0, "y": 13 },
           "id": 101,
-          "title": "Resource Usage by Namespace",
+          "title": "Cluster Health",
           "type": "row"
         },
         {
@@ -125,13 +125,13 @@ data:
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
           "id": 4,
           "options": { "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
-          "title": "CPU Usage % by Namespace",
+          "title": "Node Memory %",
           "type": "timeseries",
           "targets": [
             {
               "datasource": { "type": "prometheus", "uid": "$datasource" },
-              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=~\"$namespace\"}[5m])) by (namespace) / sum(kube_resourcequota{namespace=~\"$namespace\", resource=\"limits.cpu\", type=\"hard\"}) by (namespace) * 100",
-              "legendFormat": "{{namespace}}"
+              "expr": "(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100",
+              "legendFormat": "{{instance}}"
             }
           ]
         },
@@ -148,19 +148,61 @@ data:
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
           "id": 5,
           "options": { "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
-          "title": "Memory Usage % by Namespace",
+          "title": "Node CPU %",
           "type": "timeseries",
           "targets": [
             {
               "datasource": { "type": "prometheus", "uid": "$datasource" },
-              "expr": "sum(container_memory_working_set_bytes{namespace=~\"$namespace\"}) by (namespace) / sum(kube_resourcequota{namespace=~\"$namespace\", resource=\"limits.memory\", type=\"hard\"}) by (namespace) * 100",
-              "legendFormat": "{{namespace}}"
+              "expr": "100 - (avg by(instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
+              "legendFormat": "{{instance}}"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green" }, { "color": "yellow", "value": 5 }, { "color": "red", "value": 20 }] }
+            }
+          },
+          "gridPos": { "h": 8, "w": 4, "x": 0, "y": 22 },
+          "id": 9,
+          "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] } },
+          "title": "Pod Restarts (1h)",
+          "type": "stat",
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "$datasource" },
+              "expr": "sum(increase(kube_pod_container_status_restarts_total[1h]))",
+              "legendFormat": "Restarts"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "unit": "bytes"
+            }
+          },
+          "gridPos": { "h": 8, "w": 8, "x": 4, "y": 22 },
+          "id": 10,
+          "options": { "displayMode": "gradient", "minVizWidth": 0, "minVizHeight": 10, "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] }, "showUnfilled": true },
+          "title": "Top 10 Memory Pods",
+          "type": "bargauge",
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "$datasource" },
+              "expr": "topk(10, sum by(pod, namespace) (container_memory_working_set_bytes{container!=\"\"}))",
+              "legendFormat": "{{namespace}}/{{pod}}"
             }
           ]
         },
         {
           "collapsed": false,
-          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 },
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 30 },
           "id": 102,
           "title": "Argo Workflows",
           "type": "row"
@@ -173,7 +215,7 @@ data:
               "thresholds": { "mode": "absolute", "steps": [{ "color": "green" }, { "color": "yellow", "value": 5 }, { "color": "red", "value": 10 }] }
             }
           },
-          "gridPos": { "h": 4, "w": 4, "x": 0, "y": 23 },
+          "gridPos": { "h": 4, "w": 4, "x": 0, "y": 31 },
           "id": 6,
           "options": { "colorMode": "background", "graphMode": "area", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] } },
           "title": "Running Workflows",
@@ -194,7 +236,7 @@ data:
               "unit": "short"
             }
           },
-          "gridPos": { "h": 8, "w": 12, "x": 4, "y": 23 },
+          "gridPos": { "h": 8, "w": 12, "x": 4, "y": 31 },
           "id": 7,
           "options": { "legend": { "calcs": ["sum"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
           "title": "Workflow Completions (Succeeded / Failed)",
@@ -214,14 +256,14 @@ data:
         },
         {
           "collapsed": false,
-          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 31 },
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 39 },
           "id": 103,
           "title": "Logs",
           "type": "row"
         },
         {
           "datasource": { "type": "loki", "uid": "$loki_datasource" },
-          "gridPos": { "h": 10, "w": 24, "x": 0, "y": 32 },
+          "gridPos": { "h": 10, "w": 24, "x": 0, "y": 40 },
           "id": 8,
           "options": { "dedupStrategy": "none", "enableLogDetails": true, "prettifyLogMessage": false, "showCommonLabels": false, "showLabels": false, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": true },
           "title": "Platform Logs ($namespace)",
@@ -270,7 +312,7 @@ data:
             "includeAll": true,
             "multi": true,
             "name": "namespace",
-            "query": "label_values(kube_namespace_labels{label_mctl_me_tenant!=\"\"}, namespace)",
+            "query": "label_values(kube_namespace_labels, namespace)",
             "refresh": 2,
             "sort": 1,
             "type": "query",
@@ -291,5 +333,5 @@ data:
       "timezone": "browser",
       "title": "mctl Platform",
       "uid": "mctl-platform-v1",
-      "version": 1
+      "version": 2
     }
