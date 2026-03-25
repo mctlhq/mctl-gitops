@@ -7,7 +7,7 @@
 
 image:
   repository: ghcr.io/mctlhq/__SERVICE_NAME__
-  tag: "2026.3.25-beta.22"
+  tag: "2026.3.25-beta.23"
 
 podSecurityContext:
   fsGroup: 1000
@@ -32,6 +32,7 @@ strategy:
 
 env:
   APP_ENV: production
+  OPENCLAW_VERSION: "2026.3.25-beta.23"
   PATH: "/whisper-storage:/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games"
   LD_LIBRARY_PATH: /whisper-storage
   WHISPER_CPP_MODEL: /whisper-storage/ggml-base.bin
