@@ -429,6 +429,7 @@ configMaps:
       const path = require('path');
       const apiBase = (process.env.MCTL_API_URL || 'https://api.mctl.ai').replace(/\/+$/, '');
       const authFile = process.env.MCTL_AUTH_FILE || '/home/node/.openclaw/mcp-auth/mctl/credentials.json';
+      let sessionId = '';
       process.stdin.setEncoding('utf8');
       let buf = '';
       process.stdin.on('data', chunk => {
@@ -507,15 +508,23 @@ configMaps:
         return auth;
       }
       async function post(body, token) {
+        const headers = {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json, text/event-stream',
+          'Authorization': `Bearer ${token}`,
+        };
+        if (sessionId) {
+          headers['Mcp-Session-Id'] = sessionId;
+        }
         const res = await fetch(`${apiBase}/mcp`, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'Authorization': `Bearer ${token}`,
-          },
+          headers,
           body: JSON.stringify(body),
         });
+        const nextSessionId = res.headers.get('mcp-session-id');
+        if (nextSessionId) {
+          sessionId = nextSessionId;
+        }
         const text = await res.text();
         let parsed;
         try { parsed = text ? JSON.parse(text) : {}; } catch (_) { throw new Error(`invalid JSON from mctl MCP (${res.status})`); }
