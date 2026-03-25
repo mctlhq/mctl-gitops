@@ -52,3 +52,42 @@ spec:
                   number: {{ .Values.service.port }}
   {{- end }}
 {{- end }}
+{{- range $idx, $ing := .Values.extraIngresses }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ default (printf "%s-extra-%d" (include "base-service.fullname" $) $idx) $ing.name }}
+  labels:
+    {{- include "base-service.labels" $ | nindent 4 }}
+  {{- $annotations := dict }}
+  {{- with $ing.annotations }}
+  {{- $annotations = merge $annotations . }}
+  {{- end }}
+  {{- if and $ing.forwardAuth $ing.forwardAuth.enabled }}
+  {{- $_ := set $annotations "traefik.ingress.kubernetes.io/router.middlewares" (printf "%s-%s-forward-auth@kubernetescrd" $.Release.Namespace (include "base-service.fullname" $)) }}
+  {{- end }}
+  {{- with $annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ingressClassName: {{ default $.Values.ingress.className $ing.className }}
+  {{- if $ing.tls }}
+  tls:
+    {{- toYaml $ing.tls | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- range $host := $ing.hosts }}
+    - host: {{ $host | quote }}
+      http:
+        paths:
+          - path: {{ default "/" $ing.path }}
+            pathType: {{ default "Prefix" $ing.pathType }}
+            backend:
+              service:
+                name: {{ include "base-service.fullname" $ }}
+                port:
+                  number: {{ $.Values.service.port }}
+    {{- end }}
+{{- end }}
