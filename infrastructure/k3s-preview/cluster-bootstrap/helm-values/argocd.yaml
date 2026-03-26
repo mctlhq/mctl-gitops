@@ -146,7 +146,7 @@ extraObjects:
       source:
         repoURL: https://github.com/mctlhq/mctl-gitops.git
         targetRevision: main
-        path: platform-gitops/apps
+        path: platform-gitops/bootstrap
         helm:
           valueFiles:
             - values.yaml
