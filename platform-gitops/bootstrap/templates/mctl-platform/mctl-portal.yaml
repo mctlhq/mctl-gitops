@@ -19,6 +19,8 @@ spec:
       data:
         AUTH_GITHUB_CLIENT_ID: "{{ `{{ .client_id }}` }}"
         AUTH_GITHUB_CLIENT_SECRET: "{{ `{{ .client_secret }}` }}"
+        OIDC_CLIENT_ID: "{{ `{{ .oidc_client_id }}` }}"
+        OIDC_CLIENT_SECRET: "{{ `{{ .oidc_client_secret }}` }}"
         GITHUB_APP_ID: "{{ `{{ .app_id }}` }}"
         GITHUB_APP_CLIENT_ID: "{{ `{{ .client_id }}` }}"
         GITHUB_APP_CLIENT_SECRET: "{{ `{{ .client_secret }}` }}"
@@ -43,6 +45,14 @@ spec:
     - secretKey: client_secret
       remoteRef:
         key: platform/github-app
+        property: client-secret
+    - secretKey: oidc_client_id
+      remoteRef:
+        key: platform/backstage/github-oauth
+        property: client-id
+    - secretKey: oidc_client_secret
+      remoteRef:
+        key: platform/backstage/github-oauth
         property: client-secret
     - secretKey: app_id
       remoteRef:
