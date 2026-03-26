@@ -250,6 +250,11 @@ spec:
               -e "s|__DOCKERFILE_REPO__|${REPO}|g" \
               "platform-gitops/argo-workflows/file-templates/catalog-info.yaml.tpl" > "${DIR}/catalog-info.yaml"
 
+            if [ -z "$REPO" ]; then
+              yq eval -i 'del(.metadata.annotations."github.com/source-repo")' "${DIR}/catalog-info.yaml"
+              yq eval -i 'del(.metadata.links[] | select(.title == "Source Repository"))' "${DIR}/catalog-info.yaml"
+            fi
+
             if [ -n "$HOST" ]; then
               yq eval -i ".metadata.links += [{\"url\": \"https://${HOST}\", \"title\": \"Service URL\", \"icon\": \"web\"}]" "${DIR}/catalog-info.yaml"
             fi

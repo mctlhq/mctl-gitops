@@ -14,13 +14,13 @@ metadata:
     #   "false" or absent — skip
     mctl.me/auto-deploy: "false"
   links:
-    - url: https://ops.mctl.me/applications/argocd/__TEAM_NAME__-__SERVICE_NAME__
+    - url: https://ops.mctl.ai/applications/argocd/__TEAM_NAME__-__SERVICE_NAME__
       title: ArgoCD
       icon: dashboard
     - url: https://github.com/__DOCKERFILE_REPO__
       title: Source Repository
       icon: github
-    - url: https://workflows.mctl.me
+    - url: https://workflows.mctl.ai
       title: Argo Workflows
       icon: github
   labels:
