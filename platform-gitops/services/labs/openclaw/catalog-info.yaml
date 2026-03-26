@@ -10,20 +10,20 @@ metadata:
     backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=labs-openclaw
     backstage.io/kubernetes-namespace: labs
     argocd/app-name: labs-openclaw
-    github.com/source-repo:
+    github.com/source-repo: mctlhq/mctl-openclaw
     # mctl.me/auto-deploy — triggered by GitHub App webhook on tag push
     #   "true" or "auto" — deploy immediately via scaffolder
     #   "confirm"         — notify only, user deploys manually from UI
     #   "false" or absent — skip
     mctl.me/auto-deploy: "false"
   links:
-    - url: https://ops.mctl.me/applications/argocd/labs-openclaw
+    - url: https://ops.mctl.ai/applications/argocd/labs-openclaw
       title: ArgoCD
       icon: dashboard
-    - url: https://github.com/
+    - url: https://github.com/mctlhq/mctl-openclaw
       title: Source Repository
       icon: github
-    - url: https://workflows.mctl.me
+    - url: https://workflows.mctl.ai
       title: Argo Workflows
       icon: github
     - url: https://labs-openclaw.mctl.ai
