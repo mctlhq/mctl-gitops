@@ -82,16 +82,25 @@ spec:
           # Core components
           defaultRules:
             enabled: true
+            groups:
+              etcd:
+                create: false
+              kubeScheduler:
+                create: false
+              kubernetesSystemScheduler:
+                create: false
+              kubernetesSystemControllerManager:
+                create: false
           
           prometheus-node-exporter:
             enabled: true
             resources:
               requests:
-                cpu: 10m
-                memory: 24Mi
+                cpu: 25m
+                memory: 32Mi
               limits:
-                cpu: 100m
-                memory: 64Mi
+                cpu: 250m
+                memory: 128Mi
           
           kube-state-metrics:
             enabled: true
@@ -116,17 +125,21 @@ spec:
           vmagent:
             enabled: true
             spec:
+              extraArgs:
+                promscrape.dropOriginalLabels: "true"
+                promscrape.streamParse: "true"
+                promscrape.maxScrapeSize: "64MB"
               remoteWrite:
                 - url: http://vmsingle-monitoring-victoria-metrics-k8s-stack.monitoring.svc.cluster.local:8428/api/v1/write
               selectAllByDefault: true
               scrapeInterval: 1m
               resources:
                 requests:
-                  cpu: 50m
-                  memory: 64Mi
+                  cpu: 100m
+                  memory: 128Mi
                 limits:
-                  cpu: 200m
-                  memory: 256Mi
+                  cpu: 500m
+                  memory: 512Mi
 
           # VMAlert replaces Prometheus's alerting engine
           vmalert:
@@ -136,11 +149,11 @@ spec:
               evaluationInterval: 1m
               resources:
                 requests:
-                  cpu: 10m
-                  memory: 32Mi
-                limits:
                   cpu: 50m
-                  memory: 128Mi
+                  memory: 64Mi
+                limits:
+                  cpu: 250m
+                  memory: 256Mi
 
           grafana:
             enabled: true
@@ -224,11 +237,19 @@ spec:
                       - alertname =~ "InfoInhibitor|Watchdog"
                   - receiver: "null"
                     matchers:
+                      - alertname = "CPUThrottlingHigh"
+                      - namespace = "monitoring"
+                  - receiver: "null"
+                    matchers:
                       - alertname =~ "KubeControllerManagerDown|KubeSchedulerDown|KubeProxyDown"
                   - receiver: "null"
                     matchers:
                       - alertname =~ "KubePodNotReady|PodNotReady"
                       - namespace = "argo-workflows"
+                  - receiver: mctl-agent
+                    matchers:
+                      - alertname =~ "RecordingRulesNoData|ScrapePoolHasNoTargets|TooManyScrapeErrors|TooManyLogs"
+                      - namespace = "monitoring"
                   - receiver: mctl-agent
                     continue: true
                     matchers:
@@ -257,6 +278,12 @@ spec:
           prometheusOperator:
             enabled: true # Keep operator to manage CRDs (ServiceMonitors, VMAlerts)
 
+          kubeControllerManager:
+            enabled: false
+          kubeEtcd:
+            enabled: false
+          kubeScheduler:
+            enabled: false
           kubeStateMetrics:
             enabled: true
           nodeExporter:
