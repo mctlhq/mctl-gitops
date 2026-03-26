@@ -7,7 +7,7 @@
 
 image:
   repository: ghcr.io/mctlhq/__SERVICE_NAME__
-  tag: "2026.3.25-beta.25"
+  tag: "2026.3.25-beta.26"
 
 podSecurityContext:
   fsGroup: 1000
@@ -32,7 +32,7 @@ strategy:
 
 env:
   APP_ENV: production
-  OPENCLAW_VERSION: "2026.3.25-beta.25"
+  OPENCLAW_VERSION: "2026.3.25-beta.26"
   OPENCLAW_BUNDLED_SKILLS_DIR: /home/node/.openclaw/bundled-skills
   PATH: "/whisper-storage:/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games"
   LD_LIBRARY_PATH: /whisper-storage
