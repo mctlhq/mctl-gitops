@@ -218,7 +218,7 @@ spec:
                       send_resolved: true
                 - name: telegram
                   telegram_configs:
-                    - bot_token_file: /etc/alertmanager/secrets/alertmanager-telegram-secret/bot-token
+                    - bot_token_file: /etc/vm/secrets/alertmanager-telegram-secret/bot-token
                       chat_id: {{ .Values.alertmanager.telegramChatId | int64 }}
                       parse_mode: HTML
                       message: |
