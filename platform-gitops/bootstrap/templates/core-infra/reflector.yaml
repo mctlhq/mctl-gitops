@@ -16,6 +16,13 @@ spec:
         configuration:
           logging:
             minimumLevel: Information
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 250m
+            memory: 384Mi
 
   destination:
     server: {{ .Values.spec.destination.server }}
