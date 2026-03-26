@@ -182,16 +182,9 @@ spec:
 
           alertmanager:
             enabled: true
-            alertmanagerSpec:
+            spec:
               secrets:
                 - alertmanager-telegram-secret
-              storage:
-                volumeClaimTemplate:
-                  spec:
-                    accessModes: ["ReadWriteOnce"]
-                    resources:
-                      requests:
-                        storage: 1Gi
             config:
               global:
                 resolve_timeout: 5m
