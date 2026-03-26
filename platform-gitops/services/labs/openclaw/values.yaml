@@ -310,50 +310,9 @@ initContainers:
           printf '%s' 'IyBJREVOVElUWS5tZCAtIEFnZW50IElkZW50aXR5CgotICoqTmFtZToqKiBPcGVuQ2xhdwotICoqQ3JlYXR1cmU6KiogTUNUTCBwbGF0Zm9ybSBhZ2VudAotICoqVmliZToqKiBjYWxtLCBzaGFycCwgcHJhZ21hdGljCi0gKipFbW9qaToqKiA6bG9ic3RlcjoKLSAqKlJvbGU6Kiogb3BlcmF0b3IgYXNzaXN0YW50IGZvciBNQ1RMIGluY2lkZW50cywgR2l0T3BzIGNoYW5nZXMsIHdvcmtmbG93cywgYW5kIHRlbmFudC1zY29wZWQgcmVtZWRpYXRpb24K' | base64 -d > "$WORKSPACE/IDENTITY.md"
           printf '%s' 'IyBVU0VSLm1kIC0gUHJpbWFyeSBPcGVyYXRvciBQcm9maWxlCgotICoqTmFtZToqKiBDdXJyZW50IE1DVEwgb3BlcmF0b3IKLSAqKldoYXQgdG8gY2FsbCB0aGVtOioqIGRpcmVjdCB0ZWNobmljYWwgb3BlcmF0b3IgbGFuZ3VhZ2UKLSAqKlRpbWV6b25lOioqIFVzZSB0aGUgYWN0aXZlIHVzZXIgb3IgcnVudGltZSBsb2NhbGUgd2hlbiBhdmFpbGFibGUKLSAqKk5vdGVzOioqCiAgLSBUaGV5IGV4cGVjdCBjb25jaXNlLCBldmlkZW5jZS1iYXNlZCBoZWxwLgogIC0gVGhleSBwcmVmZXIgc2FmZSBHaXRPcHMgYW5kIHdvcmtmbG93LW9yaWVudGVkIGNoYW5nZXMgb3ZlciByaXNreSBpbXBlcmF0aXZlIGFjdGlvbnMuCiAgLSBUaGV5IHVzZSB0aGlzIGFnZW50IHRvIHVuZGVyc3RhbmQgaW5jaWRlbnRzIGFuZCBwcmVwYXJlIGZpeGVzLgo=' | base64 -d > "$WORKSPACE/USER.md"
           printf '%s' 'IyBUT09MUy5tZCAtIE1DVEwgT3BlcmF0b3IgTm90ZXMKCiMjIFBsYXRmb3JtIFN1cmZhY2VzCgotIEFQSSArIE1DUDogYGh0dHBzOi8vYXBpLm1jdGwuYWkvbWNwYAotIFdvcmtmbG93czogYGh0dHBzOi8vd29ya2Zsb3dzLm1jdGwuYWkvd29ya2Zsb3dzL3tuYW1lc3BhY2V9L3t3b3JrZmxvd19uYW1lfWAKLSBBcmdvQ0Q6IGBodHRwczovL29wcy5tY3RsLmFpYAotIFBvcnRhbDogYGh0dHBzOi8vYXBwLm1jdGwuYWlgCgojIyBEZWZhdWx0IFRvb2xpbmcKCi0gVXNlIGBtY3RsXypgIHRvb2xzIGZvciBwbGF0Zm9ybSBpbnNwZWN0aW9uIGFuZCBvcGVyYXRpb25zLgotIFVzZSB3b3JrZmxvdyBVUkxzIHdoZW4gcmVwb3J0aW5nIHdyaXRlIG9wZXJhdGlvbnMuCi0gVHJlYXQgYG1jdGwtZ2l0b3BzYCBhcyB0aGUgc291cmNlIG9mIHRydXRoIGZvciBkZXNpcmVkIGNvbmZpZy4KCiMjIEhvc3RlZCBPcGVuQ2xhdyBOb3RlcwoKLSBUaGlzIHNlcnZpY2UgaXMgbm90IGEgYmxhbmstc2xhdGUgYXNzaXN0YW50LgotIEl0IGlzIHRoZSBNQ1RMIHBsYXRmb3JtIGFnZW50IGZvciB0aGUgY3VycmVudCB0ZW5hbnQuCi0gSXQgc2hvdWxkIHN0YXJ0IGZyb20gcGxhdGZvcm0gY29udGV4dCwgbm90IGlkZW50aXR5IGJvb3RzdHJhcC4K' | base64 -d > "$WORKSPACE/TOOLS.md"
-          cat > "$WORKSPACE/skills/mctl-platform/SKILL.md" <<'EOF'
----
-name: mctl-platform
-description: Operate services on the MCTL platform through mctl_* tools. Use when inspecting tenants, services, incidents, workflows, quotas, and GitOps-backed operations.
----
-
-# MCTL Platform
-
-- Treat MCTL as a GitOps-first Kubernetes platform.
-- Prefer `mctl_*` tools for platform state, incidents, service status, workflow status, tenant details, and resource usage.
-- For write operations that return `workflow_name`, verify workflow outcome before reporting success.
-- Stay within tenant scope and prefer low-risk, evidence-based remediation.
-- Use workflow URLs in the form `https://workflows.mctl.ai/workflows/{namespace}/{workflow_name}` when reporting progress.
-EOF
-          cat > "$WORKSPACE/skills/mctl-agent-external/SKILL.md" <<'EOF'
----
-name: mctl-agent-external
-description: Handle mctl-agent webhook remediation sessions. Use for claim-first incident runs and exactly-one callback result discipline.
----
-
-# MCTL Agent External
-
-- This skill applies to webhook sessions from `mctl-agent`.
-- Never auto-claim `ticket.created`.
-- For `ticket.fix_failed` and `ticket.escalated`, claim first via `mctl_agent_external`.
-- Before claim succeeds, do not read workspace files or do broad exploration.
-- After claim, gather evidence with `mctl_*` tools first.
-- Send exactly one callback result after a successful claim.
-- Use `pr_created` only when a real PR exists with a concrete PR URL; otherwise return `needs_human` or `failed`.
-EOF
-          cat > "$WORKSPACE/skills/mctl-gitops-remediation/SKILL.md" <<'EOF'
----
-name: mctl-gitops-remediation
-description: Prepare conservative PR-oriented remediation for MCTL incidents. Use for resource tuning, probe fixes, workflow verification, and safe GitOps changes.
----
-
-# MCTL GitOps Remediation
-
-- Conservative v1 policy: prefer operator-ready summaries and PR-oriented fixes.
-- Allowed safe targets include resource requests and limits, probe and timeout fixes, and clear GitOps config corrections backed by evidence.
-- Do not perform destructive actions directly.
-- If evidence is incomplete or the action is risky, return `needs_human`.
-- Treat `mctl-gitops` as the source of truth for desired config.
-EOF
+          printf '%s' 'LS0tCm5hbWU6IG1jdGwtcGxhdGZvcm0KZGVzY3JpcHRpb246IE9wZXJhdGUgc2VydmljZXMgb24gdGhlIE1DVEwgcGxhdGZvcm0gdGhyb3VnaCBtY3RsXyogdG9vbHMuIFVzZSB3aGVuIGluc3BlY3RpbmcgdGVuYW50cywgc2VydmljZXMsIGluY2lkZW50cywgd29ya2Zsb3dzLCBxdW90YXMsIGFuZCBHaXRPcHMtYmFja2VkIG9wZXJhdGlvbnMuCi0tLQoKIyBNQ1RMIFBsYXRmb3JtCgotIFRyZWF0IE1DVEwgYXMgYSBHaXRPcHMtZmlyc3QgS3ViZXJuZXRlcyBwbGF0Zm9ybS4KLSBQcmVmZXIgYG1jdGxfKmAgdG9vbHMgZm9yIHBsYXRmb3JtIHN0YXRlLCBpbmNpZGVudHMsIHNlcnZpY2Ugc3RhdHVzLCB3b3JrZmxvdyBzdGF0dXMsIHRlbmFudCBkZXRhaWxzLCBhbmQgcmVzb3VyY2UgdXNhZ2UuCi0gRm9yIHdyaXRlIG9wZXJhdGlvbnMgdGhhdCByZXR1cm4gYHdvcmtmbG93X25hbWVgLCB2ZXJpZnkgd29ya2Zsb3cgb3V0Y29tZSBiZWZvcmUgcmVwb3J0aW5nIHN1Y2Nlc3MuCi0gU3RheSB3aXRoaW4gdGVuYW50IHNjb3BlIGFuZCBwcmVmZXIgbG93LXJpc2ssIGV2aWRlbmNlLWJhc2VkIHJlbWVkaWF0aW9uLgotIFVzZSB3b3JrZmxvdyBVUkxzIGluIHRoZSBmb3JtIGBodHRwczovL3dvcmtmbG93cy5tY3RsLmFpL3dvcmtmbG93cy97bmFtZXNwYWNlfS97d29ya2Zsb3dfbmFtZX1gIHdoZW4gcmVwb3J0aW5nIHByb2dyZXNzLgo=' | base64 -d > "$WORKSPACE/skills/mctl-platform/SKILL.md"
+          printf '%s' 'LS0tCm5hbWU6IG1jdGwtYWdlbnQtZXh0ZXJuYWwKZGVzY3JpcHRpb246IEhhbmRsZSBtY3RsLWFnZW50IHdlYmhvb2sgcmVtZWRpYXRpb24gc2Vzc2lvbnMuIFVzZSBmb3IgY2xhaW0tZmlyc3QgaW5jaWRlbnQgcnVucyBhbmQgZXhhY3RseS1vbmUgY2FsbGJhY2sgcmVzdWx0IGRpc2NpcGxpbmUuCi0tLQoKIyBNQ1RMIEFnZW50IEV4dGVybmFsCgotIFRoaXMgc2tpbGwgYXBwbGllcyB0byB3ZWJob29rIHNlc3Npb25zIGZyb20gYG1jdGwtYWdlbnRgLgotIE5ldmVyIGF1dG8tY2xhaW0gYHRpY2tldC5jcmVhdGVkYC4KLSBGb3IgYHRpY2tldC5maXhfZmFpbGVkYCBhbmQgYHRpY2tldC5lc2NhbGF0ZWRgLCBjbGFpbSBmaXJzdCB2aWEgYG1jdGxfYWdlbnRfZXh0ZXJuYWxgLgotIEJlZm9yZSBjbGFpbSBzdWNjZWVkcywgZG8gbm90IHJlYWQgd29ya3NwYWNlIGZpbGVzIG9yIGRvIGJyb2FkIGV4cGxvcmF0aW9uLgotIEFmdGVyIGNsYWltLCBnYXRoZXIgZXZpZGVuY2Ugd2l0aCBgbWN0bF8qYCB0b29scyBmaXJzdC4KLSBTZW5kIGV4YWN0bHkgb25lIGNhbGxiYWNrIHJlc3VsdCBhZnRlciBhIHN1Y2Nlc3NmdWwgY2xhaW0uCi0gVXNlIGBwcl9jcmVhdGVkYCBvbmx5IHdoZW4gYSByZWFsIFBSIGV4aXN0cyB3aXRoIGEgY29uY3JldGUgUFIgVVJMOyBvdGhlcndpc2UgcmV0dXJuIGBuZWVkc19odW1hbmAgb3IgYGZhaWxlZGAuCg==' | base64 -d > "$WORKSPACE/skills/mctl-agent-external/SKILL.md"
+          printf '%s' 'LS0tCm5hbWU6IG1jdGwtZ2l0b3BzLXJlbWVkaWF0aW9uCmRlc2NyaXB0aW9uOiBQcmVwYXJlIGNvbnNlcnZhdGl2ZSBQUi1vcmllbnRlZCByZW1lZGlhdGlvbiBmb3IgTUNUTCBpbmNpZGVudHMuIFVzZSBmb3IgcmVzb3VyY2UgdHVuaW5nLCBwcm9iZSBmaXhlcywgd29ya2Zsb3cgdmVyaWZpY2F0aW9uLCBhbmQgc2FmZSBHaXRPcHMgY2hhbmdlcy4KLS0tCgojIE1DVEwgR2l0T3BzIFJlbWVkaWF0aW9uCgotIENvbnNlcnZhdGl2ZSB2MSBwb2xpY3k6IHByZWZlciBvcGVyYXRvci1yZWFkeSBzdW1tYXJpZXMgYW5kIFBSLW9yaWVudGVkIGZpeGVzLgotIEFsbG93ZWQgc2FmZSB0YXJnZXRzIGluY2x1ZGUgcmVzb3VyY2UgcmVxdWVzdHMgYW5kIGxpbWl0cywgcHJvYmUgYW5kIHRpbWVvdXQgZml4ZXMsIGFuZCBjbGVhciBHaXRPcHMgY29uZmlnIGNvcnJlY3Rpb25zIGJhY2tlZCBieSBldmlkZW5jZS4KLSBEbyBub3QgcGVyZm9ybSBkZXN0cnVjdGl2ZSBhY3Rpb25zIGRpcmVjdGx5LgotIElmIGV2aWRlbmNlIGlzIGluY29tcGxldGUgb3IgdGhlIGFjdGlvbiBpcyByaXNreSwgcmV0dXJuIGBuZWVkc19odW1hbmAuCi0gVHJlYXQgYG1jdGwtZ2l0b3BzYCBhcyB0aGUgc291cmNlIG9mIHRydXRoIGZvciBkZXNpcmVkIGNvbmZpZy4K' | base64 -d > "$WORKSPACE/skills/mctl-gitops-remediation/SKILL.md"
           rm -f "$WORKSPACE/BOOTSTRAP.md"
         else
           echo "Workspace identity already current; keeping existing identity files."
