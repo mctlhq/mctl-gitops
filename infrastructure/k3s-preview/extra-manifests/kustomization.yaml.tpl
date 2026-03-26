@@ -4,3 +4,6 @@ kind: Kustomization
 resources:
   - letsencrypt-prod.yaml
   - letsencrypt-staging.yaml
+  - cert-manager-helmchartconfig.yaml
+  - kured.yaml
+  - metrics-server-resources-patch.yaml
