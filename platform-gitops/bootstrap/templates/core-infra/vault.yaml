@@ -42,6 +42,14 @@ spec:
             size: 1Gi
             storageClass: hcloud-volumes
 
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+
           ingress:
             enabled: true
             ingressClassName: traefik

@@ -85,9 +85,32 @@ spec:
           
           node-exporter:
             enabled: true
+            resources:
+              requests:
+                cpu: 10m
+                memory: 24Mi
+              limits:
+                cpu: 100m
+                memory: 64Mi
           
           kube-state-metrics:
             enabled: true
+            resources:
+              requests:
+                cpu: 50m
+                memory: 64Mi
+              limits:
+                cpu: 250m
+                memory: 192Mi
+
+          victoria-metrics-operator:
+            resources:
+              requests:
+                cpu: 50m
+                memory: 96Mi
+              limits:
+                cpu: 250m
+                memory: 256Mi
 
           # VMAgent replaces Prometheus's scrape engine
           vmagent:

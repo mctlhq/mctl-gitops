@@ -224,6 +224,13 @@ spec:
             tag: 4.5.5
             pullSecrets:
               - ghcr-credentials
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 768Mi
           extraEnvVarsSecrets:
             - backstage-secrets
           startupProbe:
