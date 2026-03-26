@@ -83,7 +83,7 @@ spec:
           defaultRules:
             enabled: true
           
-          node-exporter:
+          prometheus-node-exporter:
             enabled: true
             resources:
               requests:
