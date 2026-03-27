@@ -13,6 +13,9 @@ imagePullSecrets:
 service:
   port: __PORT__
 
+backstage:
+  kubernetesId: __SERVICE_NAME__
+
 resources:
   requests:
     cpu: 200m

@@ -5,6 +5,7 @@ metadata:
   description: "__SERVICE_NAME__ service"
   annotations:
     backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=__TEAM_NAME__-__SERVICE_NAME__
+    backstage.io/kubernetes-id: __SERVICE_NAME__
     backstage.io/kubernetes-namespace: __TEAM_NAME__
     argocd/app-name: __TEAM_NAME__-__SERVICE_NAME__
     github.com/source-repo: __DOCKERFILE_REPO__
