@@ -892,10 +892,13 @@ configMaps:
                 "MCTL_AUTH_FILE": "/home/node/.openclaw/mcp-auth/mctl/credentials.json"
               }
             },
-            "github": {
-              "command": "node",
-              "args": ["/scripts/github-pr-mcp.js"]
-            }
+      "github": {
+        "command": "node",
+        "args": ["/scripts/github-pr-mcp.js"],
+        "env": {
+          "GITHUB_TOKEN": "${GITHUB_TOKEN}"
+        }
+      }
           }
         }
       }
