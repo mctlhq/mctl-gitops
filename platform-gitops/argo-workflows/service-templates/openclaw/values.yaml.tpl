@@ -666,7 +666,8 @@ configMaps:
           await gh('GET', `/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(branch)}`);
           return;
         } catch (err) {
-          if (!String(err && err.message ? err.message : err).includes('Reference does not exist')) throw err;
+          const msg = String(err && err.message ? err.message : err);
+          if (!msg.includes('Reference does not exist') && !msg.includes('Not Found')) throw err;
         }
         const baseSha = await getRefSha(repoFull, base);
         await gh('POST', `/repos/${owner}/${repo}/git/refs`, {
