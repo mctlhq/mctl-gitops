@@ -606,9 +606,9 @@ configMaps:
     github-pr-mcp.js: |-
       #!/usr/bin/env node
       const { Buffer } = require('buffer');
-      const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
-      const { StdioServerTransport } = require('@modelcontextprotocol/sdk/server/stdio.js');
-      const { z } = require('zod');
+      const { McpServer } = require('/app/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/mcp.js');
+      const { StdioServerTransport } = require('/app/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/stdio.js');
+      const { z } = require('/app/node_modules/zod/index.cjs');
       const apiBase = 'https://api.github.com';
       function text(value) {
         return { content: [{ type: 'text', text: JSON.stringify(value, null, 2) }] };
