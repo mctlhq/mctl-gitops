@@ -1,6 +1,25 @@
 apiVersion: external-secrets.io/v1beta1
 kind: ExternalSecret
 metadata:
+  name: vault-backup-token
+  namespace: vault
+spec:
+  refreshInterval: 24h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: vault-backend
+  target:
+    name: vault-backup-token
+    creationPolicy: Owner
+  data:
+    - secretKey: VAULT_TOKEN
+      remoteRef:
+        key: platform/vault/backup-token
+        property: VAULT_TOKEN
+---
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
   name: vault-backup-r2
   namespace: vault
 spec:
