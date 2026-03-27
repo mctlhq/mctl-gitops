@@ -414,6 +414,16 @@ dbInitJob:
   enabled: false
 
 extraExternalSecrets:
+  ghcr-credentials:
+    refreshInterval: 24h
+    targetSecret: ghcr-credentials
+    targetTemplateType: kubernetes.io/dockerconfigjson
+    targetTemplateMetadataAnnotations:
+      argocd.argoproj.io/compare-options: IgnoreExtraneous
+    data:
+      - secretKey: .dockerconfigjson
+        remoteKey: platform/backstage/ghcr-credentials
+        property: dockerconfigjson
   openclaw-github-secret:
     refreshInterval: 1h
     targetSecret: openclaw-github-secret
