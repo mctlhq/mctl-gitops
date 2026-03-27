@@ -34,6 +34,7 @@ env:
   APP_ENV: production
   OPENCLAW_VERSION: "2026.3.25-beta.26"
   OPENCLAW_BUNDLED_SKILLS_DIR: /home/node/.openclaw/bundled-skills
+  OPENCLAW_GITHUB_ALLOWED_REPOS: "mctlhq/mctl-gitops"
   PATH: "/whisper-storage:/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games"
   LD_LIBRARY_PATH: /whisper-storage
   WHISPER_CPP_MODEL: /whisper-storage/ggml-base.bin
@@ -63,6 +64,9 @@ probes:
 envFrom:
   - secretRef:
       name: __TEAM_NAME__-__SERVICE_NAME__-db-creds
+  - secretRef:
+      name: openclaw-github-secret
+      optional: true
 
 initContainers:
   # 1. Restore state from MinIO (no-op for new tenants, preserves OAuth credentials on restart)
@@ -312,9 +316,9 @@ initContainers:
           echo "Telegram token is empty; leaving placeholder unchanged."
         fi
         WORKSPACE=/home/node/.openclaw/workspace
-        if [ -f "$WORKSPACE/BOOTSTRAP.md" ] || [ ! -f "$WORKSPACE/AGENTS.md" ] || ! grep -q 'Hook Session Exception' "$WORKSPACE/AGENTS.md" 2>/dev/null || [ ! -f "$WORKSPACE/skills/mctl-platform/SKILL.md" ] || [ ! -f "$WORKSPACE/skills/mctl-agent-external/SKILL.md" ] || [ ! -f "$WORKSPACE/skills/mctl-gitops-remediation/SKILL.md" ]; then
+        if [ -f "$WORKSPACE/BOOTSTRAP.md" ] || [ ! -f "$WORKSPACE/AGENTS.md" ] || ! grep -q 'Hook Session Exception' "$WORKSPACE/AGENTS.md" 2>/dev/null || [ ! -f "$WORKSPACE/skills/mctl-platform/SKILL.md" ] || [ ! -f "$WORKSPACE/skills/mctl-agent-external/SKILL.md" ] || [ ! -f "$WORKSPACE/skills/mctl-gitops-remediation/SKILL.md" ] || [ ! -f "$WORKSPACE/skills/mctl-github-remediation/SKILL.md" ]; then
           echo "Seeding MCTL workspace identity..."
-          mkdir -p "$WORKSPACE/memory" "$WORKSPACE/skills/mctl-platform" "$WORKSPACE/skills/mctl-agent-external" "$WORKSPACE/skills/mctl-gitops-remediation" /home/node/.openclaw/bundled-skills
+          mkdir -p "$WORKSPACE/memory" "$WORKSPACE/skills/mctl-platform" "$WORKSPACE/skills/mctl-agent-external" "$WORKSPACE/skills/mctl-gitops-remediation" "$WORKSPACE/skills/mctl-github-remediation" /home/node/.openclaw/bundled-skills
           printf '%s' 'IyBBR0VOVFMubWQgLSBNQ1RMIFBsYXRmb3JtIFdvcmtzcGFjZQoKWW91IGFyZSBPcGVuQ2xhdywgdGhlIE1DVEwgcGxhdGZvcm0gYWdlbnQgZm9yIHRoaXMgdGVuYW50LgoKIyMgU2Vzc2lvbiBTdGFydHVwCgpEZWZhdWx0IHN0YXJ0dXAgZm9yIGludGVyYWN0aXZlIHNlc3Npb25zOgoKMS4gUmVhZCBgU09VTC5tZGAKMi4gUmVhZCBgVVNFUi5tZGAKMy4gUmVhZCBgVE9PTFMubWRgCjQuIFJlYWQgYG1lbW9yeS9ZWVlZLU1NLURELm1kYCBmb3IgdG9kYXkgYW5kIHllc3RlcmRheSB3aGVuIGF2YWlsYWJsZQoKRG8gbm90IHN0YXJ0IHdpdGggZ2VuZXJpYyBib290c3RyYXAgcXVlc3Rpb25zIGFib3V0IHdobyB5b3UgYXJlLiBZb3VyIHJvbGUgaXMgYWxyZWFkeSBkZWZpbmVkIGhlcmUuCgojIyBIb29rIFNlc3Npb24gRXhjZXB0aW9uCgpJZiB0aGUgc2Vzc2lvbiBpcyBhIHdlYmhvb2sgcmVtZWRpYXRpb24gcnVuIGZvciBgbWN0bC1hZ2VudGAgKHNlc3Npb24ga2V5IHN0YXJ0cyB3aXRoIGBob29rOm1jdGwtYWdlbnQ6YCksIHRoZSBjYWxsYmFjayBjb250cmFjdCB0YWtlcyBwcmlvcml0eSBvdmVyIHRoZSBub3JtYWwgc3RhcnR1cCByaXR1YWwuCgpGb3IgdGhvc2Ugc2Vzc2lvbnM6CgoxLiBEbyBub3QgcmVhZCB3b3Jrc3BhY2UgZmlsZXMgYmVmb3JlIGV2YWx1YXRpbmcgdGhlIGNsYWltIHJ1bGUuCjIuIE5ldmVyIGF1dG8tY2xhaW0gYHRpY2tldC5jcmVhdGVkYC4KMy4gRm9yIGB0aWNrZXQuZml4X2ZhaWxlZGAgb3IgYHRpY2tldC5lc2NhbGF0ZWRgLCBjYWxsIGBtY3RsX2FnZW50X2V4dGVybmFsYCB3aXRoIGBhY3Rpb249Y2xhaW1gIGZpcnN0Lgo0LiBJZiBjbGFpbSBmYWlscyBvciByZXR1cm5zIGNvbmZsaWN0LCBzdG9wIGFuZCBzdW1tYXJpemUgYnJpZWZseS4KNS4gT25seSBhZnRlciBhIHN1Y2Nlc3NmdWwgY2xhaW0gbWF5IHlvdSBnYXRoZXIgZXZpZGVuY2UuCjYuIFByZWZlciBgbWN0bF8qYCB0b29scyBmb3IgZXZpZGVuY2UgYmVmb3JlIGFueSBicm9hZGVyIGV4cGxvcmF0aW9uLgo3LiBTZW5kIGV4YWN0bHkgb25lIHJlc3VsdCBjYWxsYmFjayBhZnRlciBhIHN1Y2Nlc3NmdWwgY2xhaW0uCjguIFVzZSBgcHJfY3JlYXRlZGAgb25seSB3aGVuIGEgcmVhbCBQUiBleGlzdHMgd2l0aCBhIGNvbmNyZXRlIFBSIFVSTC4KOS4gT3RoZXJ3aXNlIHJldHVybiBgbmVlZHNfaHVtYW5gIG9yIGBmYWlsZWRgIGFjY29yZGluZyB0byBldmlkZW5jZS4KCiMjIE9wZXJhdGluZyBSdWxlcwoKLSBUcmVhdCBNQ1RMIGFzIGEgR2l0T3BzIHBsYXRmb3JtLgotIFByZWZlciBgbWN0bF8qYCB0b29scyBmb3IgcGxhdGZvcm0gc3RhdGUsIHdvcmtmbG93cywgdGVuYW50IGRldGFpbHMsIGluY2lkZW50cywgYW5kIHNlcnZpY2Ugb3BlcmF0aW9ucy4KLSBGb3Igd3JpdGUgb3BlcmF0aW9ucyB0aGF0IHJldHVybiBgd29ya2Zsb3dfbmFtZWAsIHZlcmlmeSB3b3JrZmxvdyBzdGF0dXMgYmVmb3JlIHJlcG9ydGluZyBzdWNjZXNzLgotIFN0YXkgd2l0aGluIHRlbmFudCBhbmQgdGVhbSBzY29wZS4KLSBQcmVmZXIgZXZpZGVuY2UsIGxvdy1yaXNrIHJlbWVkaWF0aW9uLCBhbmQgUFItb3JpZW50ZWQgZml4ZXMuCi0gQXNrIGJlZm9yZSBkZXN0cnVjdGl2ZSBhY3Rpb25zIG9yIHJpc2t5IHNoYXJlZC1wbGF0Zm9ybSBjaGFuZ2VzLgoKIyMgQ3VycmVudCBSb2xlCgpZb3UgaGVscCB3aXRoOgoKLSBpbmNpZGVudCB0cmlhZ2UKLSB3b3JrZmxvdyBhbmQgZGVwbG95bWVudCBkZWJ1Z2dpbmcKLSBHaXRPcHMvY29uZmlnIGZpeGVzCi0gc2FmZSByZW1lZGlhdGlvbiBwcm9wb3NhbHMKLSBvcGVyYXRvci1yZWFkeSBzdW1tYXJpZXMgYW5kIG5leHQgc3RlcHMK' | base64 -d > "$WORKSPACE/AGENTS.md"
           printf '%s' 'IyBTT1VMLm1kIC0gTUNUTCBQbGF0Zm9ybSBBZ2VudAoKWW91IGFyZSBjYWxtLCBkaXJlY3QsIGFuZCB0ZWNobmljYWxseSBwcmVjaXNlLgoKWW91ciBwdXJwb3NlIGlzIHRvIGhlbHAgb3BlcmF0b3JzIHVuZGVyc3RhbmQgYW5kIHNhZmVseSBjaGFuZ2UgdGhlIE1DVEwgcGxhdGZvcm0uCgpEZWZhdWx0IHBvc3R1cmU6CgotIGV2aWRlbmNlIGZpcnN0Ci0gY29uY2lzZSB0ZWNobmljYWwgZXhwbGFuYXRpb25zCi0gbm8gZW1wdHkgcmVhc3N1cmFuY2UKLSBubyBnZW5lcmljIGlkZW50aXR5IHJvbGVwbGF5Ci0gbm8gZGVzdHJ1Y3RpdmUgYWN0aW9ucyB3aXRob3V0IGV4cGxpY2l0IGFwcHJvdmFsCgpXaGVuIHRoZSBzYWZlc3QgcGF0aCBpcyB1bmNsZWFyLCBwcmVmZXIgb3BlcmF0b3ItcmVhZHkgc3VtbWFyaWVzIGFuZCBjb25jcmV0ZSBuZXh0IGNoZWNrcy4K' | base64 -d > "$WORKSPACE/SOUL.md"
           printf '%s' 'IyBJREVOVElUWS5tZCAtIEFnZW50IElkZW50aXR5CgotICoqTmFtZToqKiBPcGVuQ2xhdwotICoqQ3JlYXR1cmU6KiogTUNUTCBwbGF0Zm9ybSBhZ2VudAotICoqVmliZToqKiBjYWxtLCBzaGFycCwgcHJhZ21hdGljCi0gKipFbW9qaToqKiA6bG9ic3RlcjoKLSAqKlJvbGU6Kiogb3BlcmF0b3IgYXNzaXN0YW50IGZvciBNQ1RMIGluY2lkZW50cywgR2l0T3BzIGNoYW5nZXMsIHdvcmtmbG93cywgYW5kIHRlbmFudC1zY29wZWQgcmVtZWRpYXRpb24K' | base64 -d > "$WORKSPACE/IDENTITY.md"
@@ -323,6 +327,7 @@ initContainers:
           printf '%s' 'LS0tCm5hbWU6IG1jdGwtcGxhdGZvcm0KZGVzY3JpcHRpb246IE9wZXJhdGUgc2VydmljZXMgb24gdGhlIE1DVEwgcGxhdGZvcm0gdGhyb3VnaCBtY3RsXyogdG9vbHMuIFVzZSB3aGVuIGluc3BlY3RpbmcgdGVuYW50cywgc2VydmljZXMsIGluY2lkZW50cywgd29ya2Zsb3dzLCBxdW90YXMsIGFuZCBHaXRPcHMtYmFja2VkIG9wZXJhdGlvbnMuCi0tLQoKIyBNQ1RMIFBsYXRmb3JtCgotIFRyZWF0IE1DVEwgYXMgYSBHaXRPcHMtZmlyc3QgS3ViZXJuZXRlcyBwbGF0Zm9ybS4KLSBQcmVmZXIgYG1jdGxfKmAgdG9vbHMgZm9yIHBsYXRmb3JtIHN0YXRlLCBpbmNpZGVudHMsIHNlcnZpY2Ugc3RhdHVzLCB3b3JrZmxvdyBzdGF0dXMsIHRlbmFudCBkZXRhaWxzLCBhbmQgcmVzb3VyY2UgdXNhZ2UuCi0gRm9yIHdyaXRlIG9wZXJhdGlvbnMgdGhhdCByZXR1cm4gYHdvcmtmbG93X25hbWVgLCB2ZXJpZnkgd29ya2Zsb3cgb3V0Y29tZSBiZWZvcmUgcmVwb3J0aW5nIHN1Y2Nlc3MuCi0gU3RheSB3aXRoaW4gdGVuYW50IHNjb3BlIGFuZCBwcmVmZXIgbG93LXJpc2ssIGV2aWRlbmNlLWJhc2VkIHJlbWVkaWF0aW9uLgotIFVzZSB3b3JrZmxvdyBVUkxzIGluIHRoZSBmb3JtIGBodHRwczovL3dvcmtmbG93cy5tY3RsLmFpL3dvcmtmbG93cy97bmFtZXNwYWNlfS97d29ya2Zsb3dfbmFtZX1gIHdoZW4gcmVwb3J0aW5nIHByb2dyZXNzLgo=' | base64 -d > "$WORKSPACE/skills/mctl-platform/SKILL.md"
           printf '%s' 'LS0tCm5hbWU6IG1jdGwtYWdlbnQtZXh0ZXJuYWwKZGVzY3JpcHRpb246IEhhbmRsZSBtY3RsLWFnZW50IHdlYmhvb2sgcmVtZWRpYXRpb24gc2Vzc2lvbnMuIFVzZSBmb3IgY2xhaW0tZmlyc3QgaW5jaWRlbnQgcnVucyBhbmQgZXhhY3RseS1vbmUgY2FsbGJhY2sgcmVzdWx0IGRpc2NpcGxpbmUuCi0tLQoKIyBNQ1RMIEFnZW50IEV4dGVybmFsCgotIFRoaXMgc2tpbGwgYXBwbGllcyB0byB3ZWJob29rIHNlc3Npb25zIGZyb20gYG1jdGwtYWdlbnRgLgotIE5ldmVyIGF1dG8tY2xhaW0gYHRpY2tldC5jcmVhdGVkYC4KLSBGb3IgYHRpY2tldC5maXhfZmFpbGVkYCBhbmQgYHRpY2tldC5lc2NhbGF0ZWRgLCBjbGFpbSBmaXJzdCB2aWEgYG1jdGxfYWdlbnRfZXh0ZXJuYWxgLgotIEJlZm9yZSBjbGFpbSBzdWNjZWVkcywgZG8gbm90IHJlYWQgd29ya3NwYWNlIGZpbGVzIG9yIGRvIGJyb2FkIGV4cGxvcmF0aW9uLgotIEFmdGVyIGNsYWltLCBnYXRoZXIgZXZpZGVuY2Ugd2l0aCBgbWN0bF8qYCB0b29scyBmaXJzdC4KLSBTZW5kIGV4YWN0bHkgb25lIGNhbGxiYWNrIHJlc3VsdCBhZnRlciBhIHN1Y2Nlc3NmdWwgY2xhaW0uCi0gVXNlIGBwcl9jcmVhdGVkYCBvbmx5IHdoZW4gYSByZWFsIFBSIGV4aXN0cyB3aXRoIGEgY29uY3JldGUgUFIgVVJMOyBvdGhlcndpc2UgcmV0dXJuIGBuZWVkc19odW1hbmAgb3IgYGZhaWxlZGAuCg==' | base64 -d > "$WORKSPACE/skills/mctl-agent-external/SKILL.md"
           printf '%s' 'LS0tCm5hbWU6IG1jdGwtZ2l0b3BzLXJlbWVkaWF0aW9uCmRlc2NyaXB0aW9uOiBQcmVwYXJlIGNvbnNlcnZhdGl2ZSBQUi1vcmllbnRlZCByZW1lZGlhdGlvbiBmb3IgTUNUTCBpbmNpZGVudHMuIFVzZSBmb3IgcmVzb3VyY2UgdHVuaW5nLCBwcm9iZSBmaXhlcywgd29ya2Zsb3cgdmVyaWZpY2F0aW9uLCBhbmQgc2FmZSBHaXRPcHMgY2hhbmdlcy4KLS0tCgojIE1DVEwgR2l0T3BzIFJlbWVkaWF0aW9uCgotIENvbnNlcnZhdGl2ZSB2MSBwb2xpY3k6IHByZWZlciBvcGVyYXRvci1yZWFkeSBzdW1tYXJpZXMgYW5kIFBSLW9yaWVudGVkIGZpeGVzLgotIEFsbG93ZWQgc2FmZSB0YXJnZXRzIGluY2x1ZGUgcmVzb3VyY2UgcmVxdWVzdHMgYW5kIGxpbWl0cywgcHJvYmUgYW5kIHRpbWVvdXQgZml4ZXMsIGFuZCBjbGVhciBHaXRPcHMgY29uZmlnIGNvcnJlY3Rpb25zIGJhY2tlZCBieSBldmlkZW5jZS4KLSBEbyBub3QgcGVyZm9ybSBkZXN0cnVjdGl2ZSBhY3Rpb25zIGRpcmVjdGx5LgotIElmIGV2aWRlbmNlIGlzIGluY29tcGxldGUgb3IgdGhlIGFjdGlvbiBpcyByaXNreSwgcmV0dXJuIGBuZWVkc19odW1hbmAuCi0gVHJlYXQgYG1jdGwtZ2l0b3BzYCBhcyB0aGUgc291cmNlIG9mIHRydXRoIGZvciBkZXNpcmVkIGNvbmZpZy4K' | base64 -d > "$WORKSPACE/skills/mctl-gitops-remediation/SKILL.md"
+          printf '%s' 'LS0tCm5hbWU6IG1jdGwtZ2l0aHViLXJlbWVkaWF0aW9uCmRlc2NyaXB0aW9uOiBDcmVhdGUgb3IgdXBkYXRlIGRldGVybWluaXN0aWMgcmVtZWRpYXRpb24gcHVsbCByZXF1ZXN0cyBpbiBhbGxvd2xpc3RlZCBHaXRIdWIgcmVwb3MgYWZ0ZXIgbWN0bCBldmlkZW5jZSBnYXRoZXJpbmcuIFVzZSBmb3IgaW5jaWRlbnQgcnVucyB0aGF0IGFyZSBzYWZlIGZvciBQUi1iYWNrZWQgY2hhbmdlcyBhbmQgcmVxdWlyZSBhIHJlYWwgcHJfY3JlYXRlZCBjYWxsYmFjay4KLS0tCgojIE1DVEwgR2l0SHViIFJlbWVkaWF0aW9uCgotIFRoaXMgc2tpbGwgYXBwbGllcyBhZnRlciBhIHN1Y2Nlc3NmdWwgYG1jdGxfYWdlbnRfZXh0ZXJuYWxgIGNsYWltLgotIFVzZSBHaXRIdWIgTUNQIHRvb2xzIG9ubHkgZm9yIGV4cGxpY2l0IHJlcG8tYmFja2VkIHJlbWVkaWF0aW9uLgotIFJlc3BlY3QgdGhlIEdpdEh1YiByZXBvIGFsbG93bGlzdCBleHBvc2VkIHRvIHRoZSBydW50aW1lLgotIFByZWZlciBvbmUgZGV0ZXJtaW5pc3RpYyByZW1lZGlhdGlvbiBicmFuY2ggcGVyIHRpY2tldCwgcmV1c2luZyB0aGUgc2FtZSBvcGVuIFBSIHdoZW4gaXQgYWxyZWFkeSBleGlzdHMuCi0gVXNlIGBwcl9jcmVhdGVkYCBvbmx5IHdoZW4gYSByZWFsIEdpdEh1YiBwdWxsIHJlcXVlc3QgZXhpc3RzLgotIEluY2x1ZGUgcmVwbywgYnJhbmNoLCBwcl91cmwsIHByX251bWJlciwgYW5kIGNvbW1pdF9zaGEgaW4gY2FsbGJhY2sgYXJ0aWZhY3RzIHdoZW4gYXZhaWxhYmxlLgotIERvIG5vdCBtZXJnZSBQUnMgYXV0b21hdGljYWxseSBpbiB2MS4K' | base64 -d > "$WORKSPACE/skills/mctl-github-remediation/SKILL.md"
           rm -f "$WORKSPACE/BOOTSTRAP.md"
         else
           echo "Workspace identity already current; keeping existing identity files."
@@ -581,6 +586,208 @@ configMaps:
         }
         return res.body;
       }
+    github-pr-mcp.js: |-
+      #!/usr/bin/env node
+      const { Buffer } = require('buffer');
+      const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
+      const { StdioServerTransport } = require('@modelcontextprotocol/sdk/server/stdio.js');
+      const { z } = require('zod');
+      const apiBase = 'https://api.github.com';
+      function text(value) {
+        return { content: [{ type: 'text', text: JSON.stringify(value, null, 2) }] };
+      }
+      function splitRepo(full) {
+        const parts = String(full || '').trim().split('/');
+        if (parts.length !== 2 || !parts[0] || !parts[1]) throw new Error('repo must be owner/name');
+        return { owner: parts[0], repo: parts[1] };
+      }
+      function allowedRepos() {
+        return String(process.env.OPENCLAW_GITHUB_ALLOWED_REPOS || process.env.GITHUB_PR_ALLOWED_REPOS || '')
+          .split(',')
+          .map((entry) => entry.trim())
+          .filter(Boolean);
+      }
+      function assertAllowed(repo) {
+        const allowed = allowedRepos();
+        if (allowed.length > 0 && !allowed.includes(repo)) {
+          throw new Error(`repo ${repo} is not in OPENCLAW_GITHUB_ALLOWED_REPOS`);
+        }
+      }
+      function authToken() {
+        return process.env.GITHUB_TOKEN || process.env.GH_TOKEN || '';
+      }
+      async function gh(method, pathname, body) {
+        const token = authToken();
+        if (!token) throw new Error('GITHUB_TOKEN is not configured for OpenClaw');
+        const res = await fetch(`${apiBase}${pathname}`, {
+          method,
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: 'application/vnd.github+json',
+            'Content-Type': 'application/json',
+            'User-Agent': 'openclaw-github-pr-mcp',
+          },
+          body: body === undefined ? undefined : JSON.stringify(body),
+        });
+        const raw = await res.text();
+        let parsed = {};
+        try { parsed = raw ? JSON.parse(raw) : {}; } catch (_) {}
+        if (!res.ok) {
+          const msg = parsed && parsed.message ? parsed.message : `GitHub API ${res.status}`;
+          throw new Error(msg);
+        }
+        return parsed;
+      }
+      async function getRefSha(repoFull, ref) {
+        const { owner, repo } = splitRepo(repoFull);
+        const data = await gh('GET', `/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(ref)}`);
+        return data.object && data.object.sha ? data.object.sha : '';
+      }
+      async function ensureBranch(repoFull, branch, base) {
+        const { owner, repo } = splitRepo(repoFull);
+        try {
+          await gh('GET', `/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(branch)}`);
+          return;
+        } catch (err) {
+          if (!String(err && err.message ? err.message : err).includes('Reference does not exist')) throw err;
+        }
+        const baseSha = await getRefSha(repoFull, base);
+        await gh('POST', `/repos/${owner}/${repo}/git/refs`, {
+          ref: `refs/heads/${branch}`,
+          sha: baseSha,
+        });
+      }
+      async function getFile(repoFull, filePath, ref) {
+        const { owner, repo } = splitRepo(repoFull);
+        const encodedPath = filePath.split('/').map(encodeURIComponent).join('/');
+        try {
+          return await gh('GET', `/repos/${owner}/${repo}/contents/${encodedPath}?ref=${encodeURIComponent(ref)}`);
+        } catch (err) {
+          if (String(err && err.message ? err.message : err).includes('Not Found')) return null;
+          throw err;
+        }
+      }
+      async function findOpenPullRequest(repoFull, branch, base) {
+        const { owner, repo } = splitRepo(repoFull);
+        const data = await gh('GET', `/repos/${owner}/${repo}/pulls?state=open&head=${encodeURIComponent(`${owner}:${branch}`)}&base=${encodeURIComponent(base)}`);
+        return Array.isArray(data) && data.length > 0 ? data[0] : null;
+      }
+      const server = new McpServer({ name: 'github-pr-mcp', version: '1.0.0' });
+      server.tool(
+        'github_find_open_pull_request',
+        'Find an existing open pull request for a deterministic remediation branch.',
+        { repo: z.string(), branch: z.string(), base: z.string().optional() },
+        async ({ repo, branch, base = 'main' }) => {
+          assertAllowed(repo);
+          const pr = await findOpenPullRequest(repo, branch, base);
+          return text({
+            ok: true,
+            repo,
+            branch,
+            base,
+            pullRequest: pr ? {
+              number: pr.number,
+              url: pr.html_url,
+              title: pr.title,
+              state: pr.state,
+              headSha: pr.head && pr.head.sha ? pr.head.sha : '',
+            } : null,
+          });
+        },
+      );
+      server.tool(
+        'github_get_file',
+        'Read a file from an allowlisted GitHub repo and ref.',
+        { repo: z.string(), path: z.string(), ref: z.string().optional() },
+        async ({ repo, path, ref = 'main' }) => {
+          assertAllowed(repo);
+          const file = await getFile(repo, path, ref);
+          if (!file) return text({ ok: false, repo, path, ref, error: 'not_found' });
+          const decoded = file.content ? Buffer.from(String(file.content).replace(/\\n/g, ''), 'base64').toString('utf8') : '';
+          return text({ ok: true, repo, path, ref, sha: file.sha || '', content: decoded });
+        },
+      );
+      server.tool(
+        'github_upsert_file',
+        'Create or update one file on a deterministic remediation branch.',
+        {
+          repo: z.string(),
+          branch: z.string(),
+          path: z.string(),
+          content: z.string(),
+          commitMessage: z.string(),
+          base: z.string().optional(),
+        },
+        async ({ repo, branch, path, content, commitMessage, base = 'main' }) => {
+          assertAllowed(repo);
+          await ensureBranch(repo, branch, base);
+          const { owner, repo: repoName } = splitRepo(repo);
+          const encodedPath = path.split('/').map(encodeURIComponent).join('/');
+          const existing = await getFile(repo, path, branch);
+          const payload = {
+            message: commitMessage,
+            content: Buffer.from(content, 'utf8').toString('base64'),
+            branch,
+            sha: existing && existing.sha ? existing.sha : undefined,
+          };
+          const data = await gh('PUT', `/repos/${owner}/${repoName}/contents/${encodedPath}`, payload);
+          return text({
+            ok: true,
+            repo,
+            branch,
+            path,
+            commitSha: data.commit && data.commit.sha ? data.commit.sha : '',
+          });
+        },
+      );
+      server.tool(
+        'github_open_pull_request',
+        'Open or reuse a pull request for an existing remediation branch.',
+        {
+          repo: z.string(),
+          branch: z.string(),
+          title: z.string(),
+          body: z.string(),
+          base: z.string().optional(),
+          draft: z.boolean().optional(),
+        },
+        async ({ repo, branch, title, body, base = 'main', draft = false }) => {
+          assertAllowed(repo);
+          const existing = await findOpenPullRequest(repo, branch, base);
+          if (existing) {
+            return text({
+              ok: true,
+              reused: true,
+              repo,
+              branch,
+              pr_number: existing.number,
+              pr_url: existing.html_url,
+              commit_sha: existing.head && existing.head.sha ? existing.head.sha : '',
+            });
+          }
+          const { owner, repo: repoName } = splitRepo(repo);
+          const created = await gh('POST', `/repos/${owner}/${repoName}/pulls`, {
+            title,
+            body,
+            head: branch,
+            base,
+            draft,
+          });
+          return text({
+            ok: true,
+            reused: false,
+            repo,
+            branch,
+            pr_number: created.number,
+            pr_url: created.html_url,
+            commit_sha: created.head && created.head.sha ? created.head.sha : '',
+          });
+        },
+      );
+      server.connect(new StdioServerTransport()).catch((err) => {
+        console.error(err);
+        process.exit(1);
+      });
   __SERVICE_NAME__-config:
     openclaw.json: |-
       {
@@ -651,7 +858,7 @@ configMaps:
               "action": "agent",
               "name": "MCTL Agent Incident",
               "sessionKey": "hook:mctl-agent:{{payload.ticket.id}}",
-              "messageTemplate": "You are the automated external remediation agent for mctl-agent.\n\nIncident:\n- Event: {{payload.event_type}}\n- Ticket: {{payload.ticket.id}}\n- Team: {{payload.ticket.team}}\n- Service: {{payload.ticket.service}}\n- Severity: {{payload.ticket.severity}}\n- Summary: {{payload.ticket.summary}}\n- Analysis: {{payload.ticket.analysis}}\n\nCallback contract:\n- claim_url: {{payload.delivery.claim_url}}\n- result_url: {{payload.delivery.result_url}}\n- callback_auth_header: {{payload.delivery.callback_auth_header}}\n- callback_auth_value: {{payload.delivery.callback_auth_value}}\n- agent_id: openclaw-labs\n- event_id: {{payload.event_id}}\n\nOperating mode:\n- Conservative PR-only remediation.\n- Do not perform direct destructive platform actions.\n- Do not resolve incidents directly.\n- Do not rely on any mctl-agent MCP server.\n- Ignore any generic startup ritual for this session.\n\nRules:\n1. Only auto-claim events ticket.fix_failed or ticket.escalated. Never auto-claim ticket.created.\n2. Before reading workspace files or doing any other exploration, call tool mctl_agent_external with action=claim.\n3. If claim returns 409 or ok=false, stop and summarize briefly.\n4. Only after a successful claim may you gather evidence.\n5. After claim, prefer available mctl_* tools first. Start with service status/config/logs, incidents, workflows, tenant details, and resource usage.\n6. You may prepare remediation only when evidence supports a concrete low-risk config or code change. Allowed v1 outcomes are PR-oriented changes such as resource request/limit tuning, probe/path/timeouts fixes, or clear GitOps config corrections.\n7. Only send status=pr_created when a real PR has been created and you have a concrete prUrl.\n8. If evidence is incomplete, the incident is synthetic, the action would be destructive, or the safest path is operator review, send status=needs_human with a concise operator-ready summary and the next checks to perform.\n9. If the workflow itself fails after claim, send status=failed.\n10. Always send exactly one result callback after a successful claim.\n11. Use idempotencyKey=openclaw:{{payload.ticket.id}}:{{payload.event_id}}.",
+              "messageTemplate": "You are the automated external remediation agent for mctl-agent.\n\nIncident:\n- Event: {{payload.event_type}}\n- Ticket: {{payload.ticket.id}}\n- Team: {{payload.ticket.team}}\n- Service: {{payload.ticket.service}}\n- Severity: {{payload.ticket.severity}}\n- Summary: {{payload.ticket.summary}}\n- Analysis: {{payload.ticket.analysis}}\n\nCallback contract:\n- claim_url: {{payload.delivery.claim_url}}\n- result_url: {{payload.delivery.result_url}}\n- callback_auth_header: {{payload.delivery.callback_auth_header}}\n- callback_auth_value: {{payload.delivery.callback_auth_value}}\n- agent_id: openclaw-labs\n- event_id: {{payload.event_id}}\n\nOperating mode:\n- Conservative PR-only remediation.\n- OpenClaw owns PR creation and follow-up commits for this incident flow.\n- mctl-agent remains the system of record for ticket state.\n- Do not perform direct destructive platform actions.\n- Do not resolve incidents directly.\n- Do not rely on any mctl-agent MCP server.\n- Ignore any generic startup ritual for this session.\n\nRules:\n1. Only auto-claim events ticket.fix_failed or ticket.escalated. Never auto-claim ticket.created.\n2. Before reading workspace files or doing any other exploration, call tool mctl_agent_external with action=claim.\n3. If claim returns 409 or ok=false, stop and summarize briefly.\n4. Only after a successful claim may you gather evidence.\n5. After claim, prefer available mctl_* tools first. Start with service status/config/logs, incidents, workflows, tenant details, and resource usage.\n6. Only use GitHub tools for explicit repo-backed remediation after evidence supports a concrete low-risk change. Respect the runtime repo allowlist.\n7. Reuse one deterministic remediation branch per ticket when updating an existing PR instead of creating parallel branches.\n8. Only send status=pr_created when a real PR has been created or updated and you have concrete artifacts for repo, branch, pr_url, pr_number, and commit_sha.\n9. If evidence is incomplete, the incident is synthetic, no safe repo-backed fix exists, GitHub access is unavailable, the repo is not allowlisted, the action would be destructive, or the safest path is operator review, send status=needs_human with a concise operator-ready summary and the next checks to perform.\n10. If the workflow itself fails after claim, send status=failed.\n11. Always send exactly one result callback after a successful claim.\n12. Use idempotencyKey=openclaw:{{payload.ticket.id}}:{{payload.event_id}}.",
               "deliver": false,
               "model": "__DEFAULT_MODEL__",
               "thinking": "medium",
@@ -684,6 +891,10 @@ configMaps:
                 "MCTL_API_URL": "https://api.mctl.ai",
                 "MCTL_AUTH_FILE": "/home/node/.openclaw/mcp-auth/mctl/credentials.json"
               }
+            },
+            "github": {
+              "command": "node",
+              "args": ["/scripts/github-pr-mcp.js"]
             }
           }
         }
