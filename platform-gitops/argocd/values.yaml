@@ -17,7 +17,7 @@ argo-cd:
   configs:
     cm:
       url: https://ops.mctl.ai
-      admin.enabled: false
+      admin.enabled: true
       timeout.reconciliation: 60s
       accounts.mctl-api: apiKey
 
