@@ -5,6 +5,7 @@ metadata:
   name: {{ include "base-service.fullname" . }}
   labels:
     {{- include "base-service.labels" . | nindent 4 }}
+    {{- include "base-service.extraLabels" . | nindent 4 }}
   {{- $annotations := dict }}
   {{- with .Values.ingress.annotations }}
   {{- $annotations = merge $annotations . }}
@@ -60,6 +61,7 @@ metadata:
   name: {{ default (printf "%s-extra-%d" (include "base-service.fullname" $) $idx) $ing.name }}
   labels:
     {{- include "base-service.labels" $ | nindent 4 }}
+    {{- include "base-service.extraLabels" $ | nindent 4 }}
   {{- $annotations := dict }}
   {{- with $ing.annotations }}
   {{- $annotations = merge $annotations . }}
