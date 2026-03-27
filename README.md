@@ -201,6 +201,17 @@ Located at `platform-gitops/tenants/{team}/values.yaml`. Consumed by the `tenant
 | `quota.memory` | Memory request quota |
 | `quota.pods` | Maximum pod count |
 
+#### Quota Review Guidance
+
+When a tenant approaches quota limits, review both tenant quota settings and aggregate service requests before raising limits:
+
+1. Inspect `platform-gitops/tenants/{team}/values.yaml` for the current `quota.cpu`, `quota.memory`, and `quota.pods` values.
+2. Compare those limits with the combined `resources.requests` declared across `platform-gitops/services/{team}/*/values.yaml`.
+3. Prefer reducing over-requested CPU or memory on individual services when the requested resources are materially above observed need.
+4. If a quota increase is still required, keep the change minimal and review the tenant quota update together with the affected service values in the same PR.
+
+This keeps capacity changes explicit, reviewable, and aligned with the GitOps source of truth.
+
 ## CLI (mctl)
 
 The `mctl` CLI is a Go/Cobra tool for platform operations. It lives in `cli/mctl/` and communicates with the mctl-api REST endpoint.
