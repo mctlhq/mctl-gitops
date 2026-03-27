@@ -414,6 +414,13 @@ dbInitJob:
   enabled: false
 
 extraExternalSecrets:
+  openclaw-github-secret:
+    refreshInterval: 1h
+    targetSecret: openclaw-github-secret
+    data:
+      - secretKey: GITHUB_TOKEN
+        remoteKey: secret/data/teams/__TEAM_NAME__/__SERVICE_NAME__/github
+        property: github-token
   openclaw-telegram-secret:
     refreshInterval: 1h
     targetSecret: openclaw-telegram-secret
