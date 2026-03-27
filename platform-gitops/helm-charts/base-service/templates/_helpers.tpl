@@ -36,6 +36,13 @@ Selector labels
 {{- define "base-service.selectorLabels" -}}
 app.kubernetes.io/name: {{ include "base-service.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
+
+{{/*
+Optional non-selector labels for Backstage/Kubernetes binding.
+Do not use these in immutable workload selectors.
+*/}}
+{{- define "base-service.extraLabels" -}}
 {{- with .Values.backstage.kubernetesId }}
 backstage.io/kubernetes-id: {{ . | quote }}
 {{- end }}
