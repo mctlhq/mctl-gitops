@@ -375,7 +375,13 @@ extraContainers:
     args:
       - |
         mc alias set s3 "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
-        mc mirror --watch --remove --overwrite /home/node/.openclaw s3/platform-state/__TEAM_NAME__/__SERVICE_NAME__/
+        while true; do
+          mc mirror --remove --overwrite \
+            --exclude '*.lock' \
+            --exclude '*.tmp' \
+            /home/node/.openclaw s3/platform-state/__TEAM_NAME__/__SERVICE_NAME__/ || true
+          sleep 10
+        done
     env:
       - name: MINIO_ENDPOINT
         value: "http://minio.minio.svc.cluster.local:9000"
