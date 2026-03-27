@@ -14,6 +14,8 @@ imagePullSecrets:
   - name: ghcr-credentials
 service:
   port: 18789
+backstage:
+  kubernetesId: openclaw
 resources:
   requests:
     cpu: 50m

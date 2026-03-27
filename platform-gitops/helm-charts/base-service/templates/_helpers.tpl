@@ -36,6 +36,9 @@ Selector labels
 {{- define "base-service.selectorLabels" -}}
 app.kubernetes.io/name: {{ include "base-service.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
+{{- with .Values.backstage.kubernetesId }}
+backstage.io/kubernetes-id: {{ . | quote }}
+{{- end }}
 {{- end }}
 
 {{/*

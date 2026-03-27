@@ -8,6 +8,7 @@ metadata:
     platform.mctl.me/database-team: "labs"
     platform.mctl.me/database-app: "openclaw"
     backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=labs-openclaw
+    backstage.io/kubernetes-id: openclaw
     backstage.io/kubernetes-namespace: labs
     argocd/app-name: labs-openclaw
     github.com/source-repo: mctlhq/mctl-openclaw
