@@ -140,16 +140,6 @@ argo-cd:
         p, role:team-labs, logs, get, apps/labs-*, allow
         p, role:team-labs, exec, create, apps/labs-*, allow
         g, labs, role:team-labs
-
-
-        # Tenant: qwerty
-        p, role:team-qwerty, applications, get, apps/qwerty-*, allow
-        p, role:team-qwerty, applications, list, apps/qwerty-*, allow
-        p, role:team-qwerty, applications, sync, apps/qwerty-*, allow
-        p, role:team-qwerty, applications, override, apps/qwerty-*, allow
-        p, role:team-qwerty, logs, get, apps/qwerty-*, allow
-        p, role:team-qwerty, exec, create, apps/qwerty-*, allow
-        g, qwerty, role:team-qwerty
     secret:
       createSecret: true
 
