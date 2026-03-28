@@ -13,7 +13,7 @@ metadata:
     #   "true" or "auto" — deploy immediately via scaffolder
     #   "confirm"         — notify only, user deploys manually from UI
     #   "false" or absent — skip
-    mctl.me/auto-deploy: "false"
+    mctl.me/auto-deploy: "confirm"
   links:
     - url: https://ops.mctl.ai/applications/argocd/admins-mctl-docs
       title: ArgoCD
