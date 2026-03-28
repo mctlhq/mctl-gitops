@@ -1,0 +1,35 @@
+# Service: mctl-docs
+# Team: admins
+
+# Chart: base-service
+
+image:
+  repository: ghcr.io/mctlhq/mctl-docs
+  tag: "0.1.1"
+imagePullSecrets:
+  - name: ghcr-credentials
+service:
+  port: 80
+backstage:
+  kubernetesId: mctl-docs
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+env:
+  APP_ENV: production
+ingress:
+  enabled: true
+  hosts:
+    - admins-mctl-docs.mctl.ai
+    - admins-mctl-docs.mctl.me
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls:
+    - secretName: mctl-docs-tls
+      hosts:
+        - admins-mctl-docs.mctl.ai
+        - admins-mctl-docs.mctl.me
