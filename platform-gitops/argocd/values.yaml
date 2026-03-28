@@ -140,6 +140,15 @@ argo-cd:
         p, role:team-labs, logs, get, apps/labs-*, allow
         p, role:team-labs, exec, create, apps/labs-*, allow
         g, labs, role:team-labs
+
+        # Tenant: viewer
+        p, role:team-viewer, applications, get, apps/viewer-*, allow
+        p, role:team-viewer, applications, list, apps/viewer-*, allow
+        p, role:team-viewer, applications, sync, apps/viewer-*, allow
+        p, role:team-viewer, applications, override, apps/viewer-*, allow
+        p, role:team-viewer, logs, get, apps/viewer-*, allow
+        p, role:team-viewer, exec, create, apps/viewer-*, allow
+        g, viewer, role:team-viewer
     secret:
       createSecret: true
 
