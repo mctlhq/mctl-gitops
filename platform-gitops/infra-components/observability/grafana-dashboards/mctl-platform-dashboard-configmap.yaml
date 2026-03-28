@@ -263,16 +263,115 @@ data:
         },
         {
           "datasource": { "type": "loki", "uid": "$loki_datasource" },
-          "gridPos": { "h": 10, "w": 24, "x": 0, "y": 40 },
+          "gridPos": { "h": 10, "w": 16, "x": 0, "y": 40 },
           "id": 8,
           "options": { "dedupStrategy": "none", "enableLogDetails": true, "prettifyLogMessage": false, "showCommonLabels": false, "showLabels": false, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": true },
-          "title": "Platform Logs ($namespace)",
+          "title": "Service Logs",
           "type": "logs",
           "targets": [
             {
               "datasource": { "type": "loki", "uid": "$loki_datasource" },
-              "expr": "{namespace=~\"$namespace\"} |= \"$search\"",
+              "expr": "{namespace=~\"$namespace\",instance=~\"$instance\",pod=~\"$pod\",container=~\"$container\"} |= \"$search\"",
               "legendFormat": ""
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "loki", "uid": "$loki_datasource" },
+          "gridPos": { "h": 10, "w": 8, "x": 16, "y": 40 },
+          "id": 11,
+          "options": { "dedupStrategy": "none", "enableLogDetails": true, "prettifyLogMessage": false, "showCommonLabels": false, "showLabels": true, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": true },
+          "title": "Recent Error Logs",
+          "type": "logs",
+          "targets": [
+            {
+              "datasource": { "type": "loki", "uid": "$loki_datasource" },
+              "expr": "{namespace=~\"$namespace\",instance=~\"$instance\",pod=~\"$pod\",container=~\"$container\"} |~ \"(?i)(error|exception|panic|fatal|oom|crash)\"",
+              "legendFormat": ""
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green" }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 5 }] }
+            }
+          },
+          "gridPos": { "h": 4, "w": 6, "x": 0, "y": 50 },
+          "id": 12,
+          "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] } },
+          "title": "Container Restarts (1h)",
+          "type": "stat",
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "$datasource" },
+              "expr": "sum(increase(kube_pod_container_status_restarts_total{namespace=~\"$namespace\",pod=~\"$pod\"}[1h]))",
+              "legendFormat": "Restarts"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green" }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 3 }] }
+            }
+          },
+          "gridPos": { "h": 4, "w": 6, "x": 6, "y": 50 },
+          "id": 13,
+          "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] } },
+          "title": "CrashLoop Pods",
+          "type": "stat",
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "$datasource" },
+              "expr": "sum(kube_pod_container_status_waiting_reason{namespace=~\"$namespace\",pod=~\"$pod\",reason=\"CrashLoopBackOff\"} > 0)",
+              "legendFormat": "CrashLoop"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green" }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 3 }] }
+            }
+          },
+          "gridPos": { "h": 4, "w": 6, "x": 12, "y": 50 },
+          "id": 14,
+          "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] } },
+          "title": "OOMKilled Containers",
+          "type": "stat",
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "$datasource" },
+              "expr": "sum(max by (namespace,pod,container) (kube_pod_container_status_last_terminated_reason{namespace=~\"$namespace\",pod=~\"$pod\",reason=\"OOMKilled\"}) > 0)",
+              "legendFormat": "OOMKilled"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green" }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 3 }] }
+            }
+          },
+          "gridPos": { "h": 4, "w": 6, "x": 18, "y": 50 },
+          "id": 15,
+          "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] } },
+          "title": "Failed Jobs",
+          "type": "stat",
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "$datasource" },
+              "expr": "sum(kube_job_status_failed{namespace=~\"$namespace\"} > 0)",
+              "legendFormat": "Failed Jobs"
             }
           ]
         }
@@ -305,18 +404,64 @@ data:
             "label": "Loki"
           },
           {
-            "current": { "selected": true, "text": "All", "value": "$__all" },
+            "allValue": ".+",
+            "current": { "selected": true, "text": "All", "value": ".+" },
             "datasource": { "type": "prometheus", "uid": "$datasource" },
             "definition": "label_values(kube_namespace_labels, namespace)",
             "hide": 0,
             "includeAll": true,
-            "multi": true,
+            "multi": false,
             "name": "namespace",
             "query": "label_values(kube_namespace_labels, namespace)",
             "refresh": 2,
             "sort": 1,
             "type": "query",
             "label": "Namespace"
+          },
+          {
+            "allValue": ".+",
+            "current": { "selected": true, "text": "All", "value": ".+" },
+            "datasource": { "type": "loki", "uid": "$loki_datasource" },
+            "definition": "label_values({namespace=~\"$namespace\"}, instance)",
+            "hide": 0,
+            "includeAll": true,
+            "multi": false,
+            "name": "instance",
+            "query": "label_values({namespace=~\"$namespace\"}, instance)",
+            "refresh": 2,
+            "sort": 1,
+            "type": "query",
+            "label": "Service"
+          },
+          {
+            "allValue": ".+",
+            "current": { "selected": true, "text": "All", "value": ".+" },
+            "datasource": { "type": "loki", "uid": "$loki_datasource" },
+            "definition": "label_values({namespace=~\"$namespace\",instance=~\"$instance\"}, pod)",
+            "hide": 0,
+            "includeAll": true,
+            "multi": false,
+            "name": "pod",
+            "query": "label_values({namespace=~\"$namespace\",instance=~\"$instance\"}, pod)",
+            "refresh": 2,
+            "sort": 1,
+            "type": "query",
+            "label": "Pod"
+          },
+          {
+            "allValue": ".+",
+            "current": { "selected": true, "text": "All", "value": ".+" },
+            "datasource": { "type": "loki", "uid": "$loki_datasource" },
+            "definition": "label_values({namespace=~\"$namespace\",instance=~\"$instance\",pod=~\"$pod\"}, container)",
+            "hide": 0,
+            "includeAll": true,
+            "multi": false,
+            "name": "container",
+            "query": "label_values({namespace=~\"$namespace\",instance=~\"$instance\",pod=~\"$pod\"}, container)",
+            "refresh": 2,
+            "sort": 1,
+            "type": "query",
+            "label": "Container"
           },
           {
             "current": { "selected": false, "text": "", "value": "" },
@@ -333,5 +478,5 @@ data:
       "timezone": "browser",
       "title": "mctl Platform",
       "uid": "mctl-platform-v1",
-      "version": 2
+      "version": 3
     }
