@@ -1,0 +1,38 @@
+# Service: mctl-docs
+# Team: admins
+# Environment: production
+# Chart: base-service
+
+image:
+  repository: ghcr.io/mctlhq/mctl-docs
+  tag: "0.1.0"
+imagePullSecrets:
+  - name: ghcr-credentials
+service:
+  port: 80
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+env: {}
+ingress:
+  enabled: true
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    - docs.mctl.ai
+  tls:
+    - secretName: mctl-docs-tls
+      hosts:
+        - docs.mctl.ai
+probes:
+  liveness: null
+  readiness: null
+blueGreen:
+  enabled: true
+  autoPromotionEnabled: true
+externalSecret: {}
+envFrom: []

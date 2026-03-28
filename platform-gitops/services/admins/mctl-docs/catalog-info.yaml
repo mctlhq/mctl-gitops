@@ -1,0 +1,29 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: mctl-docs
+  description: "mctl-docs documentation portal"
+  annotations:
+    backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=admins-mctl-docs
+    backstage.io/kubernetes-namespace: admins
+    argocd/app-name: admins-mctl-docs
+    github.com/source-repo: mctlhq/mctl-docs
+    mctl.me/auto-deploy: "confirm"
+  links:
+    - url: https://ops.mctl.ai/applications/argocd/admins-mctl-docs
+      title: ArgoCD
+      icon: dashboard
+    - url: https://github.com/mctlhq/mctl-docs
+      title: Source Repository
+      icon: github
+    - url: https://docs.mctl.ai
+      title: Service URL
+      icon: web
+  labels:
+    team: admins
+    env: apps
+spec:
+  type: service
+  lifecycle: production
+  owner: group:admins
+  system: team-admins

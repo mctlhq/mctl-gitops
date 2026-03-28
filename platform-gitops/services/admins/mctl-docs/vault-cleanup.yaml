@@ -1,0 +1,44 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: vault-cleanup-mctl-docs
+  annotations:
+    argocd.argoproj.io/hook: PreDelete
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded
+spec:
+  ttlSecondsAfterFinished: 300
+  backoffLimit: 3
+  template:
+    metadata:
+      name: vault-cleanup
+    spec:
+      serviceAccountName: vault-cleanup
+      restartPolicy: Never
+      containers:
+      - name: cleanup
+        image: hashicorp/vault:1.15
+        env:
+        - name: VAULT_ADDR
+          value: "https://secrets.mctl.ai"
+        - name: TEAM
+          value: "admins"
+        - name: SERVICE
+          value: "mctl-docs"
+        command:
+        - sh
+        - -c
+        - |
+          set -e
+          SA_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+          VAULT_TOKEN=$(vault write -field=token auth/kubernetes/login \
+            role=vault-cleanup \
+            jwt="$SA_TOKEN")
+          if [ -z "$VAULT_TOKEN" ]; then
+            echo "Failed to authenticate with Vault"
+            exit 1
+          fi
+          export VAULT_TOKEN
+          echo "Cleaning up Vault secrets for ${TEAM}/${SERVICE}"
+          vault kv metadata delete secret/teams/${TEAM}/${SERVICE} 2>/dev/null || true
+          vault kv metadata delete secret/teams/${TEAM}/${SERVICE}/repo-pat 2>/dev/null || true
+          echo "Vault cleanup completed for ${TEAM}/${SERVICE}"
