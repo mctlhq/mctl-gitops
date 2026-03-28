@@ -237,6 +237,14 @@ spec:
                       - alertname =~ "InfoInhibitor|Watchdog"
                   - receiver: "null"
                     matchers:
+                      - alertname = "KubeContainerWaiting"
+                      - namespace = "vault"
+                  - receiver: "null"
+                    matchers:
+                      - alertname = "KubeJobFailed"
+                      - namespace = "vault"
+                  - receiver: "null"
+                    matchers:
                       - alertname = "CPUThrottlingHigh"
                       - namespace = "monitoring"
                   - receiver: "null"
