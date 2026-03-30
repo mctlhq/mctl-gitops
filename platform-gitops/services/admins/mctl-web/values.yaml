@@ -5,7 +5,7 @@
 
 image:
   repository: ghcr.io/mctlhq/mctl-web
-  tag: "4.4.7"
+  tag: "4.4.8"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
@@ -17,7 +17,9 @@ resources:
   limits:
     cpu: 500m
     memory: 512Mi
-env: {}
+env:
+  NUXT_PUBLIC_FRONT_BASE: https://mctl.ai
+  NUXT_VUE_DEVTOOLS: "true"
 ingress:
   enabled: true
   annotations:
