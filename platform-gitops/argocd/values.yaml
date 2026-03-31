@@ -1,6 +1,7 @@
 ## ArgoCD configuration for mctl.ai
 ## Managed by argocd-self-managed Application (GitOps)
 ## Changes here are auto-synced to the cluster
+## Do not patch argocd-cm manually; change argo-cd.configs.cm in Git instead.
 
 argo-cd:
   nameOverride: argocd
@@ -17,8 +18,9 @@ argo-cd:
   configs:
     cm:
       url: https://ops.mctl.ai
-      admin.enabled: false
-      timeout.reconciliation: 60s
+      admin.enabled: true
+      timeout.reconciliation: 180s
+      accounts.developers: apiKey, login, sync, application, admin
       accounts.mctl-api: apiKey
 
       # Health check for ExternalSecrets
