@@ -1,6 +1,7 @@
 ## Argo CD bootstrap configuration for mctl.me preview
 ## Minimal config — full configuration managed by argocd-self-managed via GitOps
 ## See: platform-gitops/argocd/values.yaml
+## Do not patch argocd-cm manually; change configs.cm here or in the self-managed values.
 
 nameOverride: argocd
 
@@ -10,8 +11,9 @@ global:
 configs:
   cm:
     url: https://ops.mctl.ai
-    admin.enabled: false
+    admin.enabled: true
     timeout.reconciliation: 180s
+    accounts.developers: apiKey, login, sync, application, admin
 
     # Dex connector for GitHub OAuth
     dex.config: |
