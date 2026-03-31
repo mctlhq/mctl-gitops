@@ -175,15 +175,12 @@ argo-cd:
     ingress:
       enabled: true
       ingressClassName: traefik
+      hostname: ops.mctl.ai
       annotations:
         cert-manager.io/cluster-issuer: letsencrypt-prod
       tls: true
-      extraHosts:
-        - name: ops.mctl.ai
-          path: /
       extraTls:
         - hosts:
-            - ops.mctl.ai
             - ops.mctl.ai
           secretName: argocd-tls
     resources:
