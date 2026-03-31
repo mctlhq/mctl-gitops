@@ -261,7 +261,7 @@ spec:
                   - receiver: mctl-agent
                     continue: true
                     matchers:
-                      - alertname =~ "PodCrashLooping|KubePodNotReady|PodNotReady|TenantCPUQuotaHigh|TenantMemoryQuotaHigh|ArgoWorkflowFailed|ArgoWorkflowHighFailureRate"
+                      - alertname =~ "PodCrashLooping|KubePodCrashLooping|KubePodNotReady|PodNotReady|TenantCPUQuotaHigh|TenantMemoryQuotaHigh|ArgoWorkflowFailed|ArgoWorkflowHighFailureRate|CPUThrottlingHigh|KubeJobNotCompleted|KubePersistentVolumeFillingUp|KubeStatefulSetReplicasMismatch"
               receivers:
                 - name: "null"
                 - name: mctl-agent
