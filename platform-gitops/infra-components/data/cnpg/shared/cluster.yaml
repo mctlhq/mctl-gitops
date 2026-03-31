@@ -28,7 +28,7 @@ spec:
         maxParallel: 2
       data:
         compression: gzip
-    retentionPolicy: "7d"
+    retentionPolicy: "3d"
     target: prefer-standby
 
   affinity:
@@ -69,6 +69,7 @@ spec:
 
   postgresql:
     parameters:
+      archive_timeout: "15min"
       max_connections: "200"
       shared_buffers: "256MB"
       work_mem: "4MB"
