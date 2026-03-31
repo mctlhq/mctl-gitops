@@ -3,7 +3,7 @@ kind: ScheduledBackup
 metadata:
   name: shared-pg-daily
 spec:
-  schedule: "0 2 * * *"  # daily at 02:00 UTC
+  schedule: "0 0 2 * * *"  # daily at 02:00 UTC (CNPG expects seconds first)
   backupOwnerReference: self
   cluster:
     name: shared-pg
