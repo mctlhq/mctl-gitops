@@ -10,10 +10,8 @@ global:
 
 configs:
   cm:
-    url: https://ops.mctl.ai
-    admin.enabled: true
+    admin.enabled: false
     timeout.reconciliation: 180s
-    accounts.developers: apiKey, login, sync, application, admin
 
     # Dex connector for GitHub OAuth
     dex.config: |
