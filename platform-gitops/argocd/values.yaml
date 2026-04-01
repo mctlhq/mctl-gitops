@@ -151,16 +151,6 @@ argo-cd:
         p, role:team-viewer, logs, get, apps/viewer-*, allow
         p, role:team-viewer, exec, create, apps/viewer-*, allow
         g, viewer, role:team-viewer
-
-        # Tenant: xxx
-        p, role:team-xxx, applications, get, apps/xxx-*, allow
-        p, role:team-xxx, applications, list, apps/xxx-*, allow
-        p, role:team-xxx, applications, sync, apps/xxx-*, allow
-        p, role:team-xxx, applications, override, apps/xxx-*, allow
-        p, role:team-xxx, logs, get, apps/xxx-*, allow
-        p, role:team-xxx, exec, create, apps/xxx-*, allow
-        g, xxx, role:team-xxx
-
         # Tenant: yyy
         p, role:team-yyy, applications, get, apps/yyy-*, allow
         p, role:team-yyy, applications, list, apps/yyy-*, allow
@@ -170,7 +160,6 @@ argo-cd:
         p, role:team-yyy, exec, create, apps/yyy-*, allow
         g, yyy, role:team-yyy
 
-        # Tenant: xxxx
         p, role:team-xxxx, applications, get, apps/xxxx-*, allow
         p, role:team-xxxx, applications, list, apps/xxxx-*, allow
         p, role:team-xxxx, applications, sync, apps/xxxx-*, allow
