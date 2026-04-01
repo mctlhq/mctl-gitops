@@ -16,6 +16,9 @@ metadata:
 spec:
   entrypoint: delete-tenant-pipeline
   serviceAccountName: argo-workflow-sa
+  synchronization:
+    mutex:
+      name: mctl-gitops-main-writes
 
   arguments:
     parameters:
@@ -168,88 +171,82 @@ spec:
           # ── Clone mctl-gitops ────────────────────────────────────────────────
           git config --global user.email "argo-workflows[bot]@mctl.ai"
           git config --global user.name "Argo Workflows Bot"
-          git clone --depth=1 "git@github.com:${GITOPS_ORG}/${GITOPS_REPO}.git" /tmp/mctl-gitops
-          cd /tmp/mctl-gitops
+          apply_changes() {
+            CHANGED=false
 
-          CHANGED=false
+            TENANT_DIR="platform-gitops/tenants/${TENANT}"
+            if [ -d "$TENANT_DIR" ]; then
+              git rm -rf "$TENANT_DIR"
+              echo "Removed $TENANT_DIR"
+              CHANGED=true
+            else
+              echo "WARNING: $TENANT_DIR not found, skipping."
+            fi
 
-          # ── Remove tenant directory ────────────────────────────────────────
-          TENANT_DIR="platform-gitops/tenants/${TENANT}"
-          if [ -d "$TENANT_DIR" ]; then
-            git rm -rf "$TENANT_DIR"
-            echo "Removed $TENANT_DIR"
-            CHANGED=true
-          else
-            echo "WARNING: $TENANT_DIR not found, skipping."
-          fi
+            ARGOCD_VALUES="platform-gitops/argocd/values.yaml"
+            if grep -q "role:team-${TENANT}," "$ARGOCD_VALUES"; then
+              sed -i "/# Tenant: ${TENANT}/d" "$ARGOCD_VALUES"
+              sed -i "/role:team-${TENANT},/d" "$ARGOCD_VALUES"
+              sed -i "/g, ${TENANT}, role:team-${TENANT}/d" "$ARGOCD_VALUES"
+              sed -i '/^$/N;/^\n$/d' "$ARGOCD_VALUES"
+              git add "$ARGOCD_VALUES"
+              echo "Removed ArgoCD RBAC for tenant: ${TENANT}"
+              CHANGED=true
+            else
+              echo "WARNING: No ArgoCD RBAC found for tenant ${TENANT}, skipping."
+            fi
 
-          # ── Remove ArgoCD RBAC entries ─────────────────────────────────────
-          ARGOCD_VALUES="platform-gitops/argocd/values.yaml"
-          if grep -q "role:team-${TENANT}," "$ARGOCD_VALUES"; then
-            # Remove the comment line and all RBAC lines for this tenant
-            sed -i "/# Tenant: ${TENANT}/d" "$ARGOCD_VALUES"
-            sed -i "/role:team-${TENANT},/d" "$ARGOCD_VALUES"
-            sed -i "/g, ${TENANT}, role:team-${TENANT}/d" "$ARGOCD_VALUES"
-            # Clean up any resulting double blank lines
-            sed -i '/^$/N;/^\n$/d' "$ARGOCD_VALUES"
-            git add "$ARGOCD_VALUES"
-            echo "Removed ArgoCD RBAC for tenant: ${TENANT}"
-            CHANGED=true
-          else
-            echo "WARNING: No ArgoCD RBAC found for tenant ${TENANT}, skipping."
-          fi
+            SSO_FILE="platform-gitops/tenants/${TENANT}/sso.yaml"
+            if [ -f "$SSO_FILE" ]; then
+              git rm "$SSO_FILE"
+              echo "Removed $SSO_FILE"
+              CHANGED=true
+            else
+              echo "WARNING: $SSO_FILE not found (already deleted). Skipping."
+            fi
 
-          # ── Remove Argo Workflows SSO RBAC file ───────────────────────────
-          SSO_FILE="platform-gitops/tenants/${TENANT}/sso.yaml"
-          if [ -f "$SSO_FILE" ]; then
-            git rm "$SSO_FILE"
-            echo "Removed $SSO_FILE"
-            CHANGED=true
-          else
-            echo "WARNING: $SSO_FILE not found (already deleted). Skipping."
-          fi
+            CNPG_DIR="platform-gitops/infra-components/data/cnpg/shared"
 
-          # ── Remove CNPG Database resources ──────────────────────────────────
-          CNPG_DIR="platform-gitops/infra-components/data/cnpg/shared"
-          
-          # Remove Database CRDs
-          DB_FILE="${CNPG_DIR}/databases.yaml"
-          if [ -f "$DB_FILE" ]; then
-            if grep -q "name: ${TENANT}-" "$DB_FILE"; then
+            DB_FILE="${CNPG_DIR}/databases.yaml"
+            if [ -f "$DB_FILE" ] && grep -q "name: ${TENANT}-" "$DB_FILE"; then
               echo "Cleaning up Database CRDs for tenant ${TENANT}..."
-              # Remove 8 lines before and 8 lines after the tenant name block
               sed -i "/name: ${TENANT}-/,+8d" "$DB_FILE"
               git add "$DB_FILE"
               CHANGED=true
             fi
-          fi
 
-          # Remove ExternalSecrets
-          SEC_FILE="${CNPG_DIR}/secrets.yaml"
-          if [ -f "$SEC_FILE" ]; then
-            if grep -q "name: ${TENANT}-" "$SEC_FILE"; then
+            SEC_FILE="${CNPG_DIR}/secrets.yaml"
+            if [ -f "$SEC_FILE" ] && grep -q "name: ${TENANT}-" "$SEC_FILE"; then
               echo "Cleaning up ExternalSecrets for tenant ${TENANT}..."
               sed -i "/name: ${TENANT}-/,+40d" "$SEC_FILE"
               git add "$SEC_FILE"
               CHANGED=true
             fi
-          fi
 
-          # Remove Cluster Role entries
-          CLUSTER_FILE="${CNPG_DIR}/cluster.yaml"
-          if [ -f "$CLUSTER_FILE" ]; then
-            if grep -q "name: ${TENANT}-" "$CLUSTER_FILE"; then
+            CLUSTER_FILE="${CNPG_DIR}/cluster.yaml"
+            if [ -f "$CLUSTER_FILE" ] && grep -q "name: ${TENANT}-" "$CLUSTER_FILE"; then
               echo "Cleaning up Cluster roles for tenant ${TENANT}..."
-              # Remove role from managed.roles and host from pg_hba
               sed -i "/name: ${TENANT}-/,+4d" "$CLUSTER_FILE"
               sed -i "/host.*${TENANT}-/d" "$CLUSTER_FILE"
               git add "$CLUSTER_FILE"
               CHANGED=true
             fi
-          fi
 
-          # ── Commit and push ────────────────────────────────────────────────
-          if [ "$CHANGED" = "true" ]; then
+            [ "$CHANGED" = "true" ]
+          }
+
+          MAX_ATTEMPTS=5
+          for attempt in $(seq 1 $MAX_ATTEMPTS); do
+            echo "Git mutation attempt $attempt/$MAX_ATTEMPTS..."
+            rm -rf /tmp/mctl-gitops
+            git clone --depth=1 "git@github.com:${GITOPS_ORG}/${GITOPS_REPO}.git" /tmp/mctl-gitops
+            cd /tmp/mctl-gitops
+
+            if ! apply_changes; then
+              echo "No git changes needed."
+              exit 0
+            fi
+
             git status
             git commit -m "chore(tenant): delete tenant ${TENANT}
 
@@ -259,23 +256,19 @@ spec:
 
           Deleted by Argo Workflows (wft-delete-tenant)"
 
-            MAX_ATTEMPTS=5
-            for attempt in $(seq 1 $MAX_ATTEMPTS); do
-              echo "Push attempt $attempt/$MAX_ATTEMPTS..."
-              if git push origin HEAD:main; then
-                echo "Successfully pushed deletion of tenant ${TENANT}!"
-                break
-              elif [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
-                echo "Push failed (attempt $attempt). Rebasing..."
-                git pull --rebase origin main
-              else
-                echo "ERROR: Push failed after $MAX_ATTEMPTS attempts"
-                exit 1
-              fi
-            done
-          else
-            echo "No git changes needed."
-          fi
+            if git push origin HEAD:main; then
+              echo "Successfully pushed deletion of tenant ${TENANT}!"
+              exit 0
+            fi
+
+            if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
+              echo "Push failed due to concurrent update; retrying from fresh main..."
+              sleep $((attempt * 2))
+            else
+              echo "ERROR: Push failed after $MAX_ATTEMPTS attempts"
+              exit 1
+            fi
+          done
 
     # ────────────────────────────────────────────────────────────────────────
     - name: delete-k8s-resources
