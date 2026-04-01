@@ -36,6 +36,7 @@ spec:
       name: argocd-secret
       jsonPointers:
         - /data
+        - /metadata/annotations
     - group: external-secrets.io
       kind: ExternalSecret
       jqPathExpressions:
