@@ -169,6 +169,15 @@ argo-cd:
         p, role:team-team-spirt, logs, get, apps/team-spirt-*, allow
         p, role:team-team-spirt, exec, create, apps/team-spirt-*, allow
         g, team-spirt, role:team-team-spirt
+
+        # Tenant: test
+        p, role:team-test, applications, get, apps/test-*, allow
+        p, role:team-test, applications, list, apps/test-*, allow
+        p, role:team-test, applications, sync, apps/test-*, allow
+        p, role:team-test, applications, override, apps/test-*, allow
+        p, role:team-test, logs, get, apps/test-*, allow
+        p, role:team-test, exec, create, apps/test-*, allow
+        g, test, role:team-test
     secret:
       createSecret: true
 
