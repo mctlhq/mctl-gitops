@@ -266,7 +266,7 @@ spec:
                 - name: "null"
                 - name: mctl-agent
                   webhook_configs:
-                    - url: "http://admins-mctl-agent.admins.svc:8081/api/v1/alerts"
+                    - url: "http://admins-mctl-agent-base-service.admins.svc.cluster.local:8080/api/v1/alerts"
                       send_resolved: true
                 - name: telegram
                   telegram_configs:

@@ -20,6 +20,26 @@ spec:
           - name: ghcr-credentials
         service:
           port: 8080
+        extraObjects:
+          - apiVersion: networking.k8s.io/v1
+            kind: NetworkPolicy
+            metadata:
+              name: allow-monitoring-to-mctl-agent
+            spec:
+              podSelector:
+                matchLabels:
+                  app.kubernetes.io/instance: admins-mctl-agent
+                  app.kubernetes.io/name: base-service
+              policyTypes:
+                - Ingress
+              ingress:
+                - from:
+                    - namespaceSelector:
+                        matchLabels:
+                          kubernetes.io/metadata.name: monitoring
+                  ports:
+                    - protocol: TCP
+                      port: 8080
         podSecurityContext:
           fsGroup: 1000
         resources:

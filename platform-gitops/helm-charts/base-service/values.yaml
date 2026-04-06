@@ -54,6 +54,9 @@ ingress:
 # -- Optional: additional ingress objects for the same service
 extraIngresses: []
 
+# -- Optional: extra Kubernetes objects rendered in the release namespace
+extraObjects: []
+
 # -- Optional: autoscaling
 autoscaling:
   enabled: false
