@@ -37,28 +37,6 @@ spec:
 apiVersion: postgresql.cnpg.io/v1
 kind: Database
 metadata:
-  name: test-django-test-db
-spec:
-  name: "test-django-test"
-  owner: "test-django-test"
-  cluster:
-    name: shared-pg
-  databaseReclaimPolicy: retain
----
-apiVersion: postgresql.cnpg.io/v1
-kind: Database
-metadata:
-  name: test-spring-test-db
-spec:
-  name: "test-spring-test"
-  owner: "test-spring-test"
-  cluster:
-    name: shared-pg
-  databaseReclaimPolicy: retain
----
-apiVersion: postgresql.cnpg.io/v1
-kind: Database
-metadata:
   name: smoke-test-openclaw-db
 spec:
   name: "smoke-test-openclaw"

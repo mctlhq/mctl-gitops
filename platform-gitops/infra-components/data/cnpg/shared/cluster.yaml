@@ -91,8 +91,6 @@ spec:
       # Team apps — each role only its own database
       # Add new entries when onboarding a new app:
       # - host <db_name> <role_name> all scram-sha-256
-      - host test-django-test test-django-test all scram-sha-256
-      - host test-spring-test test-spring-test all scram-sha-256
       # smoke-test-svc: ephemeral — added/removed by smoke-test CWT, not managed here
       - host mctl-agent mctl-agent all scram-sha-256
       - host labs-openclaw labs-openclaw all scram-sha-256
@@ -108,22 +106,6 @@ spec:
         inherit: true
         passwordSecret:
           name: backstage-db-creds
-      - name: test-django-test
-        login: true
-        inherit: true
-        connectionLimit: 10
-        ensure: present
-        inherit: true
-        passwordSecret:
-          name: test-django-test-db-creds
-      - name: test-spring-test
-        login: true
-        inherit: true
-        connectionLimit: 10
-        ensure: present
-        inherit: true
-        passwordSecret:
-          name: test-spring-test-db-creds
       - name: argoworkflows
         login: true
         inherit: true
