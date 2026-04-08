@@ -1,0 +1,36 @@
+# Service: upwork-mcp
+# Team: admins
+
+# Chart: base-service
+
+image:
+  repository: ghcr.io/mctlhq/upwork-mcp
+  tag: "0.2.0"
+imagePullSecrets:
+  - name: ghcr-credentials
+service:
+  port: 8080
+backstage:
+  kubernetesId: upwork-mcp
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+env:
+  APP_ENV: production
+  UPWORK_MCP_CHROME_PATH: /usr/bin/chromium
+ingress:
+  enabled: true
+  hosts:
+    - admins-upwork-mcp.mctl.ai
+    - admins-upwork-mcp.mctl.me
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls:
+    - secretName: upwork-mcp-tls
+      hosts:
+        - admins-upwork-mcp.mctl.ai
+        - admins-upwork-mcp.mctl.me
