@@ -5,7 +5,7 @@
 
 image:
   repository: ghcr.io/mctlhq/upwork-mcp
-  tag: "0.2.3"
+  tag: "0.2.4"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
