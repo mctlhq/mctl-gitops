@@ -15,10 +15,10 @@ backstage:
 resources:
   requests:
     cpu: 200m
-    memory: 256Mi
-  limits:
-    cpu: 500m
     memory: 512Mi
+  limits:
+    cpu: "1"
+    memory: 1536Mi
 env:
   APP_ENV: production
   UPWORK_MCP_CHROME_PATH: /usr/bin/chromium
