@@ -41,6 +41,7 @@ spec:
               tsdb_shipper:
                 active_index_directory: /data/loki/index
                 cache_location: /data/loki/index_cache
+                shared_store: s3
               aws:
                 s3: s3://minio.minio.svc.cluster.local:9000/loki
                 s3forcepathstyle: true
@@ -51,7 +52,15 @@ spec:
             chunk_store_config:
               max_look_back_period: 168h
             table_manager:
+              retention_deletes_enabled: true
               retention_period: 168h
+            compactor:
+              working_directory: /data/loki/compactor
+              shared_store: s3
+              compaction_interval: 10m
+              retention_enabled: true
+              retention_delete_delay: 2h
+              retention_delete_worker_count: 150
 
         promtail:
           enabled: true
