@@ -160,6 +160,15 @@ argo-cd:
         p, role:team-xxxx, exec, create, apps/xxxx-*, allow
         g, xxxx, role:team-xxxx
 
+
+        # Tenant: ovk
+        p, role:team-ovk, applications, get, apps/ovk-*, allow
+        p, role:team-ovk, applications, list, apps/ovk-*, allow
+        p, role:team-ovk, applications, sync, apps/ovk-*, allow
+        p, role:team-ovk, applications, override, apps/ovk-*, allow
+        p, role:team-ovk, logs, get, apps/ovk-*, allow
+        p, role:team-ovk, exec, create, apps/ovk-*, allow
+        g, ovk, role:team-ovk
     secret:
       createSecret: true
 
