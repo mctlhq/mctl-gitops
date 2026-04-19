@@ -38,7 +38,7 @@ spec:
       - name: quota_memory_req
         value: "2Gi"
       - name: quota_memory_lim
-        value: "3Gi"
+        value: "4Gi"
       - name: quota_pods
         value: "5"
       - name: allow_internet_egress
