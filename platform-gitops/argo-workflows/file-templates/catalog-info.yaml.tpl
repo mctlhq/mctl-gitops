@@ -2,6 +2,7 @@ apiVersion: backstage.io/v1alpha1
 kind: Component
 metadata:
   name: __SERVICE_NAME__
+  namespace: __TEAM_NAME__
   description: "__SERVICE_NAME__ service"
   annotations:
     backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=__TEAM_NAME__-__SERVICE_NAME__
@@ -30,5 +31,5 @@ metadata:
 spec:
   type: __COMPONENT_TYPE__
   lifecycle: production
-  owner: group:__TEAM_NAME__
-  system: team-__TEAM_NAME__
+  owner: group:default/__TEAM_NAME__
+  system: system:default/team-__TEAM_NAME__

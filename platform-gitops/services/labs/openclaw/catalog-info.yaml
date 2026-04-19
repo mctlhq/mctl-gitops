@@ -2,6 +2,7 @@ apiVersion: backstage.io/v1alpha1
 kind: Component
 metadata:
   name: openclaw
+  namespace: labs
   description: "openclaw service"
   annotations:
     platform.mctl.me/database: "true"
@@ -36,5 +37,5 @@ metadata:
 spec:
   type: service
   lifecycle: production
-  owner: group:labs
-  system: team-labs
+  owner: group:default/labs
+  system: system:default/team-labs
