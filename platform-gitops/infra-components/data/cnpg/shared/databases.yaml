@@ -78,3 +78,14 @@ spec:
   cluster:
     name: shared-pg
   databaseReclaimPolicy: retain
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: ovk-openclaw-db
+spec:
+  name: "ovk-openclaw"
+  owner: "ovk-openclaw"
+  cluster:
+    name: shared-pg
+  databaseReclaimPolicy: retain
