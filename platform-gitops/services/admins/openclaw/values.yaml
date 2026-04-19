@@ -1,0 +1,931 @@
+# Service: openclaw
+# Team: admins
+# Template: openclaw
+# Updated: 2026-03-22 - self-service onboarding + Codex OAuth + MinIO state
+
+# Chart: base-service
+
+image:
+  repository: ghcr.io/mctlhq/openclaw
+  tag: "2026.3.25-beta.26"
+podSecurityContext:
+  fsGroup: 1000
+imagePullSecrets:
+  - name: ghcr-credentials
+service:
+  port: 18789
+resources:
+  requests:
+    cpu: 250m
+    memory: 768Mi
+  limits:
+    cpu: 1500m
+    memory: 2560Mi
+# Recreate avoids quota deadlocks for single-pod tenant deployments.
+strategy:
+  type: Recreate
+env:
+  APP_ENV: production
+  OPENCLAW_VERSION: "2026.3.25-beta.26"
+  OPENCLAW_BUNDLED_SKILLS_DIR: /home/node/.openclaw/bundled-skills
+  OPENCLAW_GITHUB_ALLOWED_REPOS: "mctlhq/mctl-gitops"
+  PATH: "/whisper-storage:/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games"
+  LD_LIBRARY_PATH: /whisper-storage
+  WHISPER_CPP_MODEL: /whisper-storage/ggml-base.bin
+  NODE_OPTIONS: "--max-old-space-size=1792"
+  OPENCLAW_CONFIG_PATH: /config-rw/openclaw.json
+  OPENCLAW_OPENAI_CODEX_PORTAL_CALLBACK_URL: "https://app.mctl.ai/api/oidc-provider/openai-codex/callback"
+  OPENCLAW_OPENAI_CODEX_CLIENT_ID: ""
+probes:
+  startup:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    failureThreshold: 24
+  readiness:
+    path: /readyz
+    port: http
+    initialDelaySeconds: 10
+    periodSeconds: 10
+  liveness:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 30
+    periodSeconds: 20
+envFrom:
+  - secretRef:
+      name: admins-openclaw-db-creds
+  - secretRef:
+      name: openclaw-github-secret
+      optional: true
+initContainers:
+  # 1. Restore state from MinIO (no-op for new tenants, preserves OAuth credentials on restart)
+  - name: restore-state
+    image: minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+    command: ["sh", "-c"]
+    args:
+      - |
+        mc alias set s3 "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
+        # Probe the existing bucket via `mc find` instead of touching a missing prefix directly.
+        NEW_STATE_MARKER=""
+        LEGACY_STATE_MARKER=""
+        for marker in $(mc find s3/platform-state/ --name update-check.json 2>/dev/null); do
+          case "$marker" in
+            */admins/openclaw/update-check.json) NEW_STATE_MARKER=1 ;;
+            */openclaw/admins/update-check.json) LEGACY_STATE_MARKER=1 ;;
+          esac
+        done
+        if [ -n "$NEW_STATE_MARKER" ]; then
+          mc mirror s3/platform-state/admins/openclaw/ /home/node/.openclaw
+        elif [ -n "$LEGACY_STATE_MARKER" ]; then
+          mc mirror s3/platform-state/openclaw/admins/ /home/node/.openclaw
+        else
+          mkdir -p /home/node/.openclaw
+        fi
+        # During layout migration, only backfill non-secret model metadata.
+        # New tenants must start without preseeded Codex OAuth credentials.
+        if [ -n "$LEGACY_STATE_MARKER" ]; then
+          mkdir -p /home/node/.openclaw/agents/main/agent
+          if [ ! -f /home/node/.openclaw/agents/main/agent/models.json ]; then
+            mc cp s3/platform-state/openclaw/admins/agents/main/agent/models.json /home/node/.openclaw/agents/main/agent/models.json 2>/dev/null || true
+          fi
+        fi
+    env:
+      - name: MINIO_ENDPOINT
+        value: "http://minio.minio.svc.cluster.local:9000"
+      - name: MINIO_ACCESS_KEY
+        valueFrom: {secretKeyRef: {name: minio-cache-creds, key: access-key}}
+      - name: MINIO_SECRET_KEY
+        valueFrom: {secretKeyRef: {name: minio-cache-creds, key: secret-key}}
+    volumeMounts:
+      - name: state-data
+        mountPath: /home/node/.openclaw
+  # 2. Build whisper-cli (cached in MinIO platform-cache bucket)
+  - name: install-whisper-cli
+    image: minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+    command: ["sh", "-c"]
+    args:
+      - |
+        set -e
+        WHISPER_DIR=/whisper-storage
+        BIN=$WHISPER_DIR/whisper-cli
+        MODEL=$WHISPER_DIR/ggml-base.bin
+        WRAPPER=$WHISPER_DIR/run-whisper.sh
+        CACHE_PFX=whisper
+        MARKER=$WHISPER_DIR/.whisper-cache-miss
+        mkdir -p $WHISPER_DIR
+        rm -f $MARKER
+
+        echo "Initializing whisper assets from MinIO cache..."
+        mc alias set cache "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY" --quiet
+
+        # ffmpeg
+        if [ ! -f $WHISPER_DIR/ffmpeg ]; then
+          if mc stat cache/$MINIO_BUCKET/$CACHE_PFX/ffmpeg > /dev/null 2>&1; then
+            echo "Restoring ffmpeg from cache..."
+            mc cp cache/$MINIO_BUCKET/$CACHE_PFX/ffmpeg $WHISPER_DIR/ffmpeg && chmod +x $WHISPER_DIR/ffmpeg
+          else
+            echo "Cache miss: ffmpeg"
+            echo ffmpeg >> $MARKER
+          fi
+        fi
+
+        # whisper model
+        if [ ! -f $MODEL ]; then
+          if mc stat cache/$MINIO_BUCKET/$CACHE_PFX/ggml-base.bin > /dev/null 2>&1; then
+            echo "Restoring whisper model from cache..."
+            mc cp cache/$MINIO_BUCKET/$CACHE_PFX/ggml-base.bin $MODEL
+          else
+            echo "Cache miss: ggml-base.bin"
+            echo model >> $MARKER
+          fi
+        fi
+
+        # whisper-cli binary
+        if [ ! -f $BIN ]; then
+          if mc stat cache/$MINIO_BUCKET/$CACHE_PFX/whisper-cli > /dev/null 2>&1; then
+            echo "Restoring whisper-cli from cache..."
+            mc cp cache/$MINIO_BUCKET/$CACHE_PFX/whisper-cli $BIN && chmod +x $BIN
+          else
+            echo "Cache miss: whisper-cli"
+            echo bin >> $MARKER
+          fi
+        fi
+
+        # whisper shared libraries
+        for asset in libwhisper.so.1 libggml.so.0 libggml-base.so.0 libggml-cpu.so.0; do
+          TARGET=$WHISPER_DIR/$asset
+          if [ ! -f $TARGET ]; then
+            if mc stat cache/$MINIO_BUCKET/$CACHE_PFX/$asset > /dev/null 2>&1; then
+              echo "Restoring $asset from cache..."
+              mc cp cache/$MINIO_BUCKET/$CACHE_PFX/$asset $TARGET
+            else
+              echo "Cache miss: $asset"
+              echo $asset >> $MARKER
+            fi
+          fi
+        done
+
+        cat > $WRAPPER << 'WEOF'
+        #!/bin/sh
+        export LD_LIBRARY_PATH=/whisper-storage${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+        TMP_WAV=$(mktemp /tmp/whisper_XXXXXX.wav)
+        /whisper-storage/ffmpeg -i "$1" -ar 16000 -ac 1 -f wav "$TMP_WAV" -y 2>/dev/null
+        /whisper-storage/whisper-cli -m /whisper-storage/ggml-base.bin -f "$TMP_WAV" --language auto --no-timestamps 2>/dev/null
+        EC=$?
+        rm -f "$TMP_WAV"
+        exit $EC
+        WEOF
+        if [ ! -f "$MARKER" ]; then
+          chmod +x $WRAPPER
+          echo "Whisper assets ready from cache."
+        else
+          echo "Whisper cache incomplete; fallback build/download will run."
+        fi
+    env:
+      - name: MINIO_ENDPOINT
+        value: "http://minio.minio.svc.cluster.local:9000"
+      - name: MINIO_ACCESS_KEY
+        valueFrom:
+          secretKeyRef:
+            name: minio-cache-creds
+            key: access-key
+      - name: MINIO_SECRET_KEY
+        valueFrom:
+          secretKeyRef:
+            name: minio-cache-creds
+            key: secret-key
+      - name: MINIO_BUCKET
+        value: "platform-cache"
+    volumeMounts:
+      - name: pvc-whisper
+        mountPath: /whisper-storage
+  - name: install-whisper-cli-fallback
+    image: ghcr.io/mctlhq/openclaw-whisper-builder:2026.3.24-beta.19
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+    command: ["sh", "-c"]
+    args:
+      - |
+        set -e
+        WHISPER_DIR=/whisper-storage
+        BIN=$WHISPER_DIR/whisper-cli
+        MODEL=$WHISPER_DIR/ggml-base.bin
+        WRAPPER=$WHISPER_DIR/run-whisper.sh
+        CACHE_PFX=whisper
+        MARKER=$WHISPER_DIR/.whisper-cache-miss
+
+        if [ ! -f "$MARKER" ]; then
+          echo "Whisper cache is complete; skipping fallback."
+          exit 0
+        fi
+
+        echo "Whisper cache miss detected; restoring prebaked assets from builder image..."
+        mc alias set cache "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY" --quiet
+
+        if [ ! -f $WHISPER_DIR/ffmpeg ]; then
+          cp /opt/whisper-assets/ffmpeg $WHISPER_DIR/ffmpeg
+          chmod +x $WHISPER_DIR/ffmpeg
+          mc cp $WHISPER_DIR/ffmpeg cache/$MINIO_BUCKET/$CACHE_PFX/ffmpeg || true
+        fi
+
+        if [ ! -f $MODEL ]; then
+          cp /opt/whisper-assets/ggml-base.bin $MODEL
+          mc cp $MODEL cache/$MINIO_BUCKET/$CACHE_PFX/ggml-base.bin || true
+        fi
+
+        if [ ! -f $BIN ]; then
+          cp /opt/whisper-assets/whisper-cli $BIN
+          chmod +x $BIN
+          mc cp $BIN cache/$MINIO_BUCKET/$CACHE_PFX/whisper-cli || true
+        fi
+
+        for asset in libwhisper.so.1 libggml.so.0 libggml-base.so.0 libggml-cpu.so.0; do
+          TARGET=$WHISPER_DIR/$asset
+          if [ ! -f $TARGET ]; then
+            cp /opt/whisper-assets/$asset $TARGET
+            mc cp $TARGET cache/$MINIO_BUCKET/$CACHE_PFX/$asset || true
+          fi
+        done
+
+        cat > $WRAPPER << 'WEOF'
+        #!/bin/sh
+        export LD_LIBRARY_PATH=/whisper-storage${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+        TMP_WAV=$(mktemp /tmp/whisper_XXXXXX.wav)
+        /whisper-storage/ffmpeg -i "$1" -ar 16000 -ac 1 -f wav "$TMP_WAV" -y 2>/dev/null
+        /whisper-storage/whisper-cli -m /whisper-storage/ggml-base.bin -f "$TMP_WAV" --language auto --no-timestamps 2>/dev/null
+        EC=$?
+        rm -f "$TMP_WAV"
+        exit $EC
+        WEOF
+        chmod +x $WRAPPER
+        rm -f $MARKER
+        echo "Whisper fallback restored prebaked assets and refreshed cache."
+    env:
+      - name: MINIO_ENDPOINT
+        value: "http://minio.minio.svc.cluster.local:9000"
+      - name: MINIO_ACCESS_KEY
+        valueFrom:
+          secretKeyRef:
+            name: minio-cache-creds
+            key: access-key
+      - name: MINIO_SECRET_KEY
+        valueFrom:
+          secretKeyRef:
+            name: minio-cache-creds
+            key: secret-key
+      - name: MINIO_BUCKET
+        value: "platform-cache"
+    volumeMounts:
+      - name: pvc-whisper
+        mountPath: /whisper-storage
+  # 3. Setup config and inject tokens
+  - name: setup
+    image: busybox:1.36
+    command: ["sh", "-c"]
+    args:
+      - |
+        echo "Preparing writable OpenClaw config..."
+        cp /config-tpl/openclaw.json /config-rw/openclaw.json
+        if [ -n "$TELEGRAM_TOKEN" ]; then
+          echo "Injecting Telegram token into runtime config..."
+          sed -i "s|__TELEGRAM_TOKEN__|$TELEGRAM_TOKEN|g" /config-rw/openclaw.json
+        else
+          echo "Telegram token is empty; leaving placeholder unchanged."
+        fi
+        WORKSPACE=/home/node/.openclaw/workspace
+        if [ -f "$WORKSPACE/BOOTSTRAP.md" ] || [ ! -f "$WORKSPACE/AGENTS.md" ] || ! grep -q 'Hook Session Exception' "$WORKSPACE/AGENTS.md" 2>/dev/null || [ ! -f "$WORKSPACE/skills/mctl-platform/SKILL.md" ] || [ ! -f "$WORKSPACE/skills/mctl-agent-external/SKILL.md" ] || [ ! -f "$WORKSPACE/skills/mctl-gitops-remediation/SKILL.md" ] || [ ! -f "$WORKSPACE/skills/mctl-github-remediation/SKILL.md" ]; then
+          echo "Seeding MCTL workspace identity..."
+          mkdir -p "$WORKSPACE/memory" "$WORKSPACE/skills/mctl-platform" "$WORKSPACE/skills/mctl-agent-external" "$WORKSPACE/skills/mctl-gitops-remediation" "$WORKSPACE/skills/mctl-github-remediation" /home/node/.openclaw/bundled-skills
+          printf '%s' 'IyBBR0VOVFMubWQgLSBNQ1RMIFBsYXRmb3JtIFdvcmtzcGFjZQoKWW91IGFyZSBPcGVuQ2xhdywgdGhlIE1DVEwgcGxhdGZvcm0gYWdlbnQgZm9yIHRoaXMgdGVuYW50LgoKIyMgU2Vzc2lvbiBTdGFydHVwCgpEZWZhdWx0IHN0YXJ0dXAgZm9yIGludGVyYWN0aXZlIHNlc3Npb25zOgoKMS4gUmVhZCBgU09VTC5tZGAKMi4gUmVhZCBgVVNFUi5tZGAKMy4gUmVhZCBgVE9PTFMubWRgCjQuIFJlYWQgYG1lbW9yeS9ZWVlZLU1NLURELm1kYCBmb3IgdG9kYXkgYW5kIHllc3RlcmRheSB3aGVuIGF2YWlsYWJsZQoKRG8gbm90IHN0YXJ0IHdpdGggZ2VuZXJpYyBib290c3RyYXAgcXVlc3Rpb25zIGFib3V0IHdobyB5b3UgYXJlLiBZb3VyIHJvbGUgaXMgYWxyZWFkeSBkZWZpbmVkIGhlcmUuCgojIyBIb29rIFNlc3Npb24gRXhjZXB0aW9uCgpJZiB0aGUgc2Vzc2lvbiBpcyBhIHdlYmhvb2sgcmVtZWRpYXRpb24gcnVuIGZvciBgbWN0bC1hZ2VudGAgKHNlc3Npb24ga2V5IHN0YXJ0cyB3aXRoIGBob29rOm1jdGwtYWdlbnQ6YCksIHRoZSBjYWxsYmFjayBjb250cmFjdCB0YWtlcyBwcmlvcml0eSBvdmVyIHRoZSBub3JtYWwgc3RhcnR1cCByaXR1YWwuCgpGb3IgdGhvc2Ugc2Vzc2lvbnM6CgoxLiBEbyBub3QgcmVhZCB3b3Jrc3BhY2UgZmlsZXMgYmVmb3JlIGV2YWx1YXRpbmcgdGhlIGNsYWltIHJ1bGUuCjIuIE5ldmVyIGF1dG8tY2xhaW0gYHRpY2tldC5jcmVhdGVkYC4KMy4gRm9yIGB0aWNrZXQuZml4X2ZhaWxlZGAgb3IgYHRpY2tldC5lc2NhbGF0ZWRgLCBjYWxsIGBtY3RsX2FnZW50X2V4dGVybmFsYCB3aXRoIGBhY3Rpb249Y2xhaW1gIGZpcnN0Lgo0LiBJZiBjbGFpbSBmYWlscyBvciByZXR1cm5zIGNvbmZsaWN0LCBzdG9wIGFuZCBzdW1tYXJpemUgYnJpZWZseS4KNS4gT25seSBhZnRlciBhIHN1Y2Nlc3NmdWwgY2xhaW0gbWF5IHlvdSBnYXRoZXIgZXZpZGVuY2UuCjYuIFByZWZlciBgbWN0bF8qYCB0b29scyBmb3IgZXZpZGVuY2UgYmVmb3JlIGFueSBicm9hZGVyIGV4cGxvcmF0aW9uLgo3LiBTZW5kIGV4YWN0bHkgb25lIHJlc3VsdCBjYWxsYmFjayBhZnRlciBhIHN1Y2Nlc3NmdWwgY2xhaW0uCjguIFVzZSBgcHJfY3JlYXRlZGAgb25seSB3aGVuIGEgcmVhbCBQUiBleGlzdHMgd2l0aCBhIGNvbmNyZXRlIFBSIFVSTC4KOS4gT3RoZXJ3aXNlIHJldHVybiBgbmVlZHNfaHVtYW5gIG9yIGBmYWlsZWRgIGFjY29yZGluZyB0byBldmlkZW5jZS4KCiMjIE9wZXJhdGluZyBSdWxlcwoKLSBUcmVhdCBNQ1RMIGFzIGEgR2l0T3BzIHBsYXRmb3JtLgotIFByZWZlciBgbWN0bF8qYCB0b29scyBmb3IgcGxhdGZvcm0gc3RhdGUsIHdvcmtmbG93cywgdGVuYW50IGRldGFpbHMsIGluY2lkZW50cywgYW5kIHNlcnZpY2Ugb3BlcmF0aW9ucy4KLSBGb3Igd3JpdGUgb3BlcmF0aW9ucyB0aGF0IHJldHVybiBgd29ya2Zsb3dfbmFtZWAsIHZlcmlmeSB3b3JrZmxvdyBzdGF0dXMgYmVmb3JlIHJlcG9ydGluZyBzdWNjZXNzLgotIFN0YXkgd2l0aGluIHRlbmFudCBhbmQgdGVhbSBzY29wZS4KLSBQcmVmZXIgZXZpZGVuY2UsIGxvdy1yaXNrIHJlbWVkaWF0aW9uLCBhbmQgUFItb3JpZW50ZWQgZml4ZXMuCi0gQXNrIGJlZm9yZSBkZXN0cnVjdGl2ZSBhY3Rpb25zIG9yIHJpc2t5IHNoYXJlZC1wbGF0Zm9ybSBjaGFuZ2VzLgoKIyMgQ3VycmVudCBSb2xlCgpZb3UgaGVscCB3aXRoOgoKLSBpbmNpZGVudCB0cmlhZ2UKLSB3b3JrZmxvdyBhbmQgZGVwbG95bWVudCBkZWJ1Z2dpbmcKLSBHaXRPcHMvY29uZmlnIGZpeGVzCi0gc2FmZSByZW1lZGlhdGlvbiBwcm9wb3NhbHMKLSBvcGVyYXRvci1yZWFkeSBzdW1tYXJpZXMgYW5kIG5leHQgc3RlcHMK' | base64 -d > "$WORKSPACE/AGENTS.md"
+          printf '%s' 'IyBTT1VMLm1kIC0gTUNUTCBQbGF0Zm9ybSBBZ2VudAoKWW91IGFyZSBjYWxtLCBkaXJlY3QsIGFuZCB0ZWNobmljYWxseSBwcmVjaXNlLgoKWW91ciBwdXJwb3NlIGlzIHRvIGhlbHAgb3BlcmF0b3JzIHVuZGVyc3RhbmQgYW5kIHNhZmVseSBjaGFuZ2UgdGhlIE1DVEwgcGxhdGZvcm0uCgpEZWZhdWx0IHBvc3R1cmU6CgotIGV2aWRlbmNlIGZpcnN0Ci0gY29uY2lzZSB0ZWNobmljYWwgZXhwbGFuYXRpb25zCi0gbm8gZW1wdHkgcmVhc3N1cmFuY2UKLSBubyBnZW5lcmljIGlkZW50aXR5IHJvbGVwbGF5Ci0gbm8gZGVzdHJ1Y3RpdmUgYWN0aW9ucyB3aXRob3V0IGV4cGxpY2l0IGFwcHJvdmFsCgpXaGVuIHRoZSBzYWZlc3QgcGF0aCBpcyB1bmNsZWFyLCBwcmVmZXIgb3BlcmF0b3ItcmVhZHkgc3VtbWFyaWVzIGFuZCBjb25jcmV0ZSBuZXh0IGNoZWNrcy4K' | base64 -d > "$WORKSPACE/SOUL.md"
+          printf '%s' 'IyBJREVOVElUWS5tZCAtIEFnZW50IElkZW50aXR5CgotICoqTmFtZToqKiBPcGVuQ2xhdwotICoqQ3JlYXR1cmU6KiogTUNUTCBwbGF0Zm9ybSBhZ2VudAotICoqVmliZToqKiBjYWxtLCBzaGFycCwgcHJhZ21hdGljCi0gKipFbW9qaToqKiA6bG9ic3RlcjoKLSAqKlJvbGU6Kiogb3BlcmF0b3IgYXNzaXN0YW50IGZvciBNQ1RMIGluY2lkZW50cywgR2l0T3BzIGNoYW5nZXMsIHdvcmtmbG93cywgYW5kIHRlbmFudC1zY29wZWQgcmVtZWRpYXRpb24K' | base64 -d > "$WORKSPACE/IDENTITY.md"
+          printf '%s' 'IyBVU0VSLm1kIC0gUHJpbWFyeSBPcGVyYXRvciBQcm9maWxlCgotICoqTmFtZToqKiBDdXJyZW50IE1DVEwgb3BlcmF0b3IKLSAqKldoYXQgdG8gY2FsbCB0aGVtOioqIGRpcmVjdCB0ZWNobmljYWwgb3BlcmF0b3IgbGFuZ3VhZ2UKLSAqKlRpbWV6b25lOioqIFVzZSB0aGUgYWN0aXZlIHVzZXIgb3IgcnVudGltZSBsb2NhbGUgd2hlbiBhdmFpbGFibGUKLSAqKk5vdGVzOioqCiAgLSBUaGV5IGV4cGVjdCBjb25jaXNlLCBldmlkZW5jZS1iYXNlZCBoZWxwLgogIC0gVGhleSBwcmVmZXIgc2FmZSBHaXRPcHMgYW5kIHdvcmtmbG93LW9yaWVudGVkIGNoYW5nZXMgb3ZlciByaXNreSBpbXBlcmF0aXZlIGFjdGlvbnMuCiAgLSBUaGV5IHVzZSB0aGlzIGFnZW50IHRvIHVuZGVyc3RhbmQgaW5jaWRlbnRzIGFuZCBwcmVwYXJlIGZpeGVzLgo=' | base64 -d > "$WORKSPACE/USER.md"
+          printf '%s' 'IyBUT09MUy5tZCAtIE1DVEwgT3BlcmF0b3IgTm90ZXMKCiMjIFBsYXRmb3JtIFN1cmZhY2VzCgotIEFQSSArIE1DUDogYGh0dHBzOi8vYXBpLm1jdGwuYWkvbWNwYAotIFdvcmtmbG93czogYGh0dHBzOi8vd29ya2Zsb3dzLm1jdGwuYWkvd29ya2Zsb3dzL3tuYW1lc3BhY2V9L3t3b3JrZmxvd19uYW1lfWAKLSBBcmdvQ0Q6IGBodHRwczovL29wcy5tY3RsLmFpYAotIFBvcnRhbDogYGh0dHBzOi8vYXBwLm1jdGwuYWlgCgojIyBEZWZhdWx0IFRvb2xpbmcKCi0gVXNlIGBtY3RsXypgIHRvb2xzIGZvciBwbGF0Zm9ybSBpbnNwZWN0aW9uIGFuZCBvcGVyYXRpb25zLgotIFVzZSB3b3JrZmxvdyBVUkxzIHdoZW4gcmVwb3J0aW5nIHdyaXRlIG9wZXJhdGlvbnMuCi0gVHJlYXQgYG1jdGwtZ2l0b3BzYCBhcyB0aGUgc291cmNlIG9mIHRydXRoIGZvciBkZXNpcmVkIGNvbmZpZy4KCiMjIEhvc3RlZCBPcGVuQ2xhdyBOb3RlcwoKLSBUaGlzIHNlcnZpY2UgaXMgbm90IGEgYmxhbmstc2xhdGUgYXNzaXN0YW50LgotIEl0IGlzIHRoZSBNQ1RMIHBsYXRmb3JtIGFnZW50IGZvciB0aGUgY3VycmVudCB0ZW5hbnQuCi0gSXQgc2hvdWxkIHN0YXJ0IGZyb20gcGxhdGZvcm0gY29udGV4dCwgbm90IGlkZW50aXR5IGJvb3RzdHJhcC4K' | base64 -d > "$WORKSPACE/TOOLS.md"
+          printf '%s' 'LS0tCm5hbWU6IG1jdGwtcGxhdGZvcm0KZGVzY3JpcHRpb246IE9wZXJhdGUgc2VydmljZXMgb24gdGhlIE1DVEwgcGxhdGZvcm0gdGhyb3VnaCBtY3RsXyogdG9vbHMuIFVzZSB3aGVuIGluc3BlY3RpbmcgdGVuYW50cywgc2VydmljZXMsIGluY2lkZW50cywgd29ya2Zsb3dzLCBxdW90YXMsIGFuZCBHaXRPcHMtYmFja2VkIG9wZXJhdGlvbnMuCi0tLQoKIyBNQ1RMIFBsYXRmb3JtCgotIFRyZWF0IE1DVEwgYXMgYSBHaXRPcHMtZmlyc3QgS3ViZXJuZXRlcyBwbGF0Zm9ybS4KLSBQcmVmZXIgYG1jdGxfKmAgdG9vbHMgZm9yIHBsYXRmb3JtIHN0YXRlLCBpbmNpZGVudHMsIHNlcnZpY2Ugc3RhdHVzLCB3b3JrZmxvdyBzdGF0dXMsIHRlbmFudCBkZXRhaWxzLCBhbmQgcmVzb3VyY2UgdXNhZ2UuCi0gRm9yIHdyaXRlIG9wZXJhdGlvbnMgdGhhdCByZXR1cm4gYHdvcmtmbG93X25hbWVgLCB2ZXJpZnkgd29ya2Zsb3cgb3V0Y29tZSBiZWZvcmUgcmVwb3J0aW5nIHN1Y2Nlc3MuCi0gU3RheSB3aXRoaW4gdGVuYW50IHNjb3BlIGFuZCBwcmVmZXIgbG93LXJpc2ssIGV2aWRlbmNlLWJhc2VkIHJlbWVkaWF0aW9uLgotIFVzZSB3b3JrZmxvdyBVUkxzIGluIHRoZSBmb3JtIGBodHRwczovL3dvcmtmbG93cy5tY3RsLmFpL3dvcmtmbG93cy97bmFtZXNwYWNlfS97d29ya2Zsb3dfbmFtZX1gIHdoZW4gcmVwb3J0aW5nIHByb2dyZXNzLgo=' | base64 -d > "$WORKSPACE/skills/mctl-platform/SKILL.md"
+          printf '%s' 'LS0tCm5hbWU6IG1jdGwtYWdlbnQtZXh0ZXJuYWwKZGVzY3JpcHRpb246IEhhbmRsZSBtY3RsLWFnZW50IHdlYmhvb2sgcmVtZWRpYXRpb24gc2Vzc2lvbnMuIFVzZSBmb3IgY2xhaW0tZmlyc3QgaW5jaWRlbnQgcnVucyBhbmQgZXhhY3RseS1vbmUgY2FsbGJhY2sgcmVzdWx0IGRpc2NpcGxpbmUuCi0tLQoKIyBNQ1RMIEFnZW50IEV4dGVybmFsCgotIFRoaXMgc2tpbGwgYXBwbGllcyB0byB3ZWJob29rIHNlc3Npb25zIGZyb20gYG1jdGwtYWdlbnRgLgotIE5ldmVyIGF1dG8tY2xhaW0gYHRpY2tldC5jcmVhdGVkYC4KLSBGb3IgYHRpY2tldC5maXhfZmFpbGVkYCBhbmQgYHRpY2tldC5lc2NhbGF0ZWRgLCBjbGFpbSBmaXJzdCB2aWEgYG1jdGxfYWdlbnRfZXh0ZXJuYWxgLgotIEJlZm9yZSBjbGFpbSBzdWNjZWVkcywgZG8gbm90IHJlYWQgd29ya3NwYWNlIGZpbGVzIG9yIGRvIGJyb2FkIGV4cGxvcmF0aW9uLgotIEFmdGVyIGNsYWltLCBnYXRoZXIgZXZpZGVuY2Ugd2l0aCBgbWN0bF8qYCB0b29scyBmaXJzdC4KLSBTZW5kIGV4YWN0bHkgb25lIGNhbGxiYWNrIHJlc3VsdCBhZnRlciBhIHN1Y2Nlc3NmdWwgY2xhaW0uCi0gVXNlIGBwcl9jcmVhdGVkYCBvbmx5IHdoZW4gYSByZWFsIFBSIGV4aXN0cyB3aXRoIGEgY29uY3JldGUgUFIgVVJMOyBvdGhlcndpc2UgcmV0dXJuIGBuZWVkc19odW1hbmAgb3IgYGZhaWxlZGAuCg==' | base64 -d > "$WORKSPACE/skills/mctl-agent-external/SKILL.md"
+          printf '%s' 'LS0tCm5hbWU6IG1jdGwtZ2l0b3BzLXJlbWVkaWF0aW9uCmRlc2NyaXB0aW9uOiBQcmVwYXJlIGNvbnNlcnZhdGl2ZSBQUi1vcmllbnRlZCByZW1lZGlhdGlvbiBmb3IgTUNUTCBpbmNpZGVudHMuIFVzZSBmb3IgcmVzb3VyY2UgdHVuaW5nLCBwcm9iZSBmaXhlcywgd29ya2Zsb3cgdmVyaWZpY2F0aW9uLCBhbmQgc2FmZSBHaXRPcHMgY2hhbmdlcy4KLS0tCgojIE1DVEwgR2l0T3BzIFJlbWVkaWF0aW9uCgotIENvbnNlcnZhdGl2ZSB2MSBwb2xpY3k6IHByZWZlciBvcGVyYXRvci1yZWFkeSBzdW1tYXJpZXMgYW5kIFBSLW9yaWVudGVkIGZpeGVzLgotIEFsbG93ZWQgc2FmZSB0YXJnZXRzIGluY2x1ZGUgcmVzb3VyY2UgcmVxdWVzdHMgYW5kIGxpbWl0cywgcHJvYmUgYW5kIHRpbWVvdXQgZml4ZXMsIGFuZCBjbGVhciBHaXRPcHMgY29uZmlnIGNvcnJlY3Rpb25zIGJhY2tlZCBieSBldmlkZW5jZS4KLSBEbyBub3QgcGVyZm9ybSBkZXN0cnVjdGl2ZSBhY3Rpb25zIGRpcmVjdGx5LgotIElmIGV2aWRlbmNlIGlzIGluY29tcGxldGUgb3IgdGhlIGFjdGlvbiBpcyByaXNreSwgcmV0dXJuIGBuZWVkc19odW1hbmAuCi0gVHJlYXQgYG1jdGwtZ2l0b3BzYCBhcyB0aGUgc291cmNlIG9mIHRydXRoIGZvciBkZXNpcmVkIGNvbmZpZy4K' | base64 -d > "$WORKSPACE/skills/mctl-gitops-remediation/SKILL.md"
+          printf '%s' 'LS0tCm5hbWU6IG1jdGwtZ2l0aHViLXJlbWVkaWF0aW9uCmRlc2NyaXB0aW9uOiBDcmVhdGUgb3IgdXBkYXRlIGRldGVybWluaXN0aWMgcmVtZWRpYXRpb24gcHVsbCByZXF1ZXN0cyBpbiBhbGxvd2xpc3RlZCBHaXRIdWIgcmVwb3MgYWZ0ZXIgbWN0bCBldmlkZW5jZSBnYXRoZXJpbmcuIFVzZSBmb3IgaW5jaWRlbnQgcnVucyB0aGF0IGFyZSBzYWZlIGZvciBQUi1iYWNrZWQgY2hhbmdlcyBhbmQgcmVxdWlyZSBhIHJlYWwgcHJfY3JlYXRlZCBjYWxsYmFjay4KLS0tCgojIE1DVEwgR2l0SHViIFJlbWVkaWF0aW9uCgotIFRoaXMgc2tpbGwgYXBwbGllcyBhZnRlciBhIHN1Y2Nlc3NmdWwgYG1jdGxfYWdlbnRfZXh0ZXJuYWxgIGNsYWltLgotIFVzZSBHaXRIdWIgTUNQIHRvb2xzIG9ubHkgZm9yIGV4cGxpY2l0IHJlcG8tYmFja2VkIHJlbWVkaWF0aW9uLgotIFJlc3BlY3QgdGhlIEdpdEh1YiByZXBvIGFsbG93bGlzdCBleHBvc2VkIHRvIHRoZSBydW50aW1lLgotIFByZWZlciBvbmUgZGV0ZXJtaW5pc3RpYyByZW1lZGlhdGlvbiBicmFuY2ggcGVyIHRpY2tldCwgcmV1c2luZyB0aGUgc2FtZSBvcGVuIFBSIHdoZW4gaXQgYWxyZWFkeSBleGlzdHMuCi0gVXNlIGBwcl9jcmVhdGVkYCBvbmx5IHdoZW4gYSByZWFsIEdpdEh1YiBwdWxsIHJlcXVlc3QgZXhpc3RzLgotIEluY2x1ZGUgcmVwbywgYnJhbmNoLCBwcl91cmwsIHByX251bWJlciwgYW5kIGNvbW1pdF9zaGEgaW4gY2FsbGJhY2sgYXJ0aWZhY3RzIHdoZW4gYXZhaWxhYmxlLgotIERvIG5vdCBtZXJnZSBQUnMgYXV0b21hdGljYWxseSBpbiB2MS4K' | base64 -d > "$WORKSPACE/skills/mctl-github-remediation/SKILL.md"
+          rm -f "$WORKSPACE/BOOTSTRAP.md"
+        else
+          echo "Workspace identity already current; keeping existing identity files."
+        fi
+        echo "Fixing ownership for config and restored state..."
+        chown 1000:1000 /config-rw/openclaw.json
+        chown -R 1000:1000 /home/node/.openclaw
+        echo "Setup complete."
+    env:
+      - name: TELEGRAM_TOKEN
+        valueFrom:
+          secretKeyRef:
+            name: openclaw-telegram-secret
+            key: OPENCLAW_TELEGRAM_TOKEN
+    volumeMounts:
+      - name: openclaw-config-tpl
+        mountPath: /config-tpl
+        readOnly: true
+      - name: openclaw-config-rw
+        mountPath: /config-rw
+      - name: state-data
+        mountPath: /home/node/.openclaw
+extraVolumeMounts:
+  - name: openclaw-config-rw
+    mountPath: /config-rw
+  - name: pvc-whisper
+    mountPath: /whisper-storage
+  - name: openclaw-scripts
+    mountPath: /scripts
+    readOnly: true
+  - name: state-data
+    mountPath: /home/node/.openclaw
+extraContainers:
+  - name: s3-sync
+    image: minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+    resources:
+      requests:
+        cpu: 25m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+    command: ["sh", "-c"]
+    args:
+      - |
+        mc alias set s3 "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
+        while true; do
+          mc mirror --remove --overwrite \
+            --exclude '*.lock' \
+            --exclude '*.tmp' \
+            /home/node/.openclaw s3/platform-state/admins/openclaw/ || true
+          sleep 10
+        done
+    env:
+      - name: MINIO_ENDPOINT
+        value: "http://minio.minio.svc.cluster.local:9000"
+      - name: MINIO_ACCESS_KEY
+        valueFrom: {secretKeyRef: {name: minio-cache-creds, key: access-key}}
+      - name: MINIO_SECRET_KEY
+        valueFrom: {secretKeyRef: {name: minio-cache-creds, key: secret-key}}
+    volumeMounts:
+      - name: state-data
+        mountPath: /home/node/.openclaw
+persistence:
+  state:
+    enabled: false
+extraVolumes:
+  - name: openclaw-config-tpl
+    configMap:
+      name: openclaw-config
+  - name: openclaw-config-rw
+    emptyDir: {}
+  - name: pvc-whisper
+    emptyDir: {}
+  - name: state-data
+    emptyDir: {}
+  - name: openclaw-scripts
+    configMap:
+      name: openclaw-scripts
+      defaultMode: 0755
+dbSecret:
+  vaultPath: teams/admins/openclaw/database
+  secretName: admins-openclaw-db-creds
+dbInitJob:
+  enabled: false
+extraExternalSecrets:
+  ghcr-credentials:
+    refreshInterval: 24h
+    targetSecret: ghcr-credentials
+    targetTemplateType: kubernetes.io/dockerconfigjson
+    targetTemplateMetadataAnnotations:
+      argocd.argoproj.io/compare-options: IgnoreExtraneous
+    data:
+      - secretKey: .dockerconfigjson
+        remoteKey: platform/backstage/ghcr-credentials
+        property: dockerconfigjson
+  openclaw-github-secret:
+    refreshInterval: 1h
+    targetSecret: openclaw-github-secret
+    data:
+      - secretKey: GITHUB_TOKEN
+        remoteKey: secret/data/teams/admins/openclaw/github
+        property: github-token
+  openclaw-telegram-secret:
+    refreshInterval: 1h
+    targetSecret: openclaw-telegram-secret
+    data:
+      - secretKey: OPENCLAW_TELEGRAM_TOKEN
+        remoteKey: secret/data/teams/admins/openclaw/telegram
+        property: telegram-bot-token
+  minio-cache-creds:
+    refreshInterval: 1h
+    targetSecret: minio-cache-creds
+    data:
+      - secretKey: access-key
+        remoteKey: secret/data/platform/minio
+        property: root-user
+      - secretKey: secret-key
+        remoteKey: secret/data/platform/minio
+        property: root-password
+configMaps:
+  openclaw-scripts:
+    mcp-agent-proxy.js: |-
+      #!/usr/bin/env node
+      const http = require('http');
+      process.stdin.setEncoding('utf8');
+      let buf = '';
+      process.stdin.on('data', chunk => {
+        buf += chunk;
+        let nl;
+        while ((nl = buf.indexOf('\n')) !== -1) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (line) handleLine(line);
+        }
+      });
+      function handleLine(line) {
+        let req;
+        try { req = JSON.parse(line); } catch (_) { return; }
+        callAgent(req).then(res => write(res), err => write({ jsonrpc: '2.0', id: req.id, error: { code: -32603, message: String(err) } }));
+      }
+      function write(obj) { process.stdout.write(JSON.stringify(obj) + '\n'); }
+      function callAgent(body) {
+        return new Promise((resolve, reject) => {
+          const data = JSON.stringify(body);
+          const req = http.request({ hostname: 'admins-mctl-agent-base-service.admins.svc.cluster.local', port: 8080, path: '/mcp', method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } }, res => {
+            let out = ''; res.on('data', c => { out += c; }); res.on('end', () => { try { resolve(JSON.parse(out)); } catch (_) { reject(new Error('invalid JSON')); } });
+          });
+          req.on('error', reject); req.write(data); req.end();
+        });
+      }
+    mctl-mcp-proxy.js: |-
+      #!/usr/bin/env node
+      const fs = require('fs');
+      const path = require('path');
+      const apiBase = (process.env.MCTL_API_URL || 'https://api.mctl.ai').replace(/\/+$/, '');
+      const authFile = process.env.MCTL_AUTH_FILE || '/home/node/.openclaw/mcp-auth/mctl/credentials.json';
+      let sessionId = '';
+      let queue = Promise.resolve();
+      process.stdin.setEncoding('utf8');
+      let buf = '';
+      process.stdin.on('data', chunk => {
+        buf += chunk;
+        let nl;
+        while ((nl = buf.indexOf('\n')) !== -1) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (line) {
+            queue = queue.then(() => handleLine(line)).catch(() => {});
+          }
+        }
+      });
+      function write(obj) { process.stdout.write(JSON.stringify(obj) + '\n'); }
+      async function handleLine(line) {
+        let req;
+        try { req = JSON.parse(line); } catch (_) { return; }
+        try {
+          const res = await callMctl(req);
+          write(res);
+        } catch (err) {
+          write({ jsonrpc: '2.0', id: req.id, error: { code: -32603, message: String(err && err.message ? err.message : err) } });
+        }
+      }
+      async function readAuth() {
+        const raw = await fs.promises.readFile(authFile, 'utf8');
+        return JSON.parse(raw);
+      }
+      async function writeAuth(auth) {
+        await fs.promises.mkdir(path.dirname(authFile), { recursive: true, mode: 0o700 });
+        const tmp = `${authFile}.tmp`;
+        await fs.promises.writeFile(tmp, JSON.stringify(auth, null, 2) + '\n', { mode: 0o600 });
+        await fs.promises.rename(tmp, authFile);
+      }
+      function isExpiring(auth) {
+        if (!auth || !auth.expiresAt) return false;
+        const ms = Date.parse(auth.expiresAt);
+        return Number.isFinite(ms) && ms <= Date.now() + 60_000;
+      }
+      async function refreshAuth(auth) {
+        if (!auth || !auth.refreshToken || !auth.clientId) {
+          throw new Error('mctl not connected');
+        }
+        const body = new URLSearchParams({
+          grant_type: 'refresh_token',
+          refresh_token: auth.refreshToken,
+          client_id: auth.clientId,
+        });
+        const res = await fetch(`${apiBase}/oauth/token`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
+          body,
+        });
+        const payload = await res.json().catch(() => ({}));
+        if (!res.ok || !payload.access_token || !payload.refresh_token) {
+          throw new Error(payload.error_description || payload.error || `mctl refresh failed (${res.status})`);
+        }
+        const expiresAt = typeof payload.expires_in === 'number' ? new Date(Date.now() + payload.expires_in * 1000).toISOString() : null;
+        const next = {
+          ...auth,
+          accessToken: String(payload.access_token),
+          refreshToken: String(payload.refresh_token),
+          scope: typeof payload.scope === 'string' ? payload.scope : (auth.scope || 'mctl'),
+          expiresAt,
+          updatedAt: new Date().toISOString(),
+        };
+        await writeAuth(next);
+        return next;
+      }
+      async function ensureAuth() {
+        const auth = await readAuth().catch(() => null);
+        if (!auth) {
+          throw new Error('mctl is not connected in Control UI');
+        }
+        if (isExpiring(auth)) {
+          return await refreshAuth(auth);
+        }
+        return auth;
+      }
+      async function post(body, token) {
+        const headers = {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json, text/event-stream',
+          'Authorization': `Bearer ${token}`,
+        };
+        if (sessionId) {
+          headers['Mcp-Session-Id'] = sessionId;
+        }
+        const res = await fetch(`${apiBase}/mcp`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(body),
+        });
+        const nextSessionId = res.headers.get('mcp-session-id');
+        if (nextSessionId) {
+          sessionId = nextSessionId;
+        }
+        const text = await res.text();
+        let parsed;
+        try { parsed = text ? JSON.parse(text) : {}; } catch (_) { throw new Error(`invalid JSON from mctl MCP (${res.status})`); }
+        return { status: res.status, body: parsed };
+      }
+      async function callMctl(body) {
+        let auth = await ensureAuth();
+        let res = await post(body, auth.accessToken);
+        if (res.status === 401 && auth.refreshToken) {
+          auth = await refreshAuth(auth);
+          res = await post(body, auth.accessToken);
+        }
+        if (res.status >= 400) {
+          const message = res.body && res.body.error && res.body.error.message ? res.body.error.message : `mctl MCP request failed (${res.status})`;
+          throw new Error(message);
+        }
+        return res.body;
+      }
+    github-pr-mcp.js: |-
+      #!/usr/bin/env node
+      const { Buffer } = require('buffer');
+      const { McpServer } = require('/app/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/mcp.js');
+      const { StdioServerTransport } = require('/app/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/stdio.js');
+      const { z } = require('/app/node_modules/zod/index.cjs');
+      const apiBase = 'https://api.github.com';
+      function text(value) {
+        return { content: [{ type: 'text', text: JSON.stringify(value, null, 2) }] };
+      }
+      function splitRepo(full) {
+        const parts = String(full || '').trim().split('/');
+        if (parts.length !== 2 || !parts[0] || !parts[1]) throw new Error('repo must be owner/name');
+        return { owner: parts[0], repo: parts[1] };
+      }
+      function allowedRepos() {
+        return String(process.env.OPENCLAW_GITHUB_ALLOWED_REPOS || process.env.GITHUB_PR_ALLOWED_REPOS || '')
+          .split(',')
+          .map((entry) => entry.trim())
+          .filter(Boolean);
+      }
+      function assertAllowed(repo) {
+        const allowed = allowedRepos();
+        if (allowed.length > 0 && !allowed.includes(repo)) {
+          throw new Error(`repo ${repo} is not in OPENCLAW_GITHUB_ALLOWED_REPOS`);
+        }
+      }
+      function authToken() {
+        return process.env.GITHUB_TOKEN || process.env.GH_TOKEN || '';
+      }
+      async function gh(method, pathname, body) {
+        const token = authToken();
+        if (!token) throw new Error('GITHUB_TOKEN is not configured for OpenClaw');
+        const res = await fetch(`${apiBase}${pathname}`, {
+          method,
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: 'application/vnd.github+json',
+            'Content-Type': 'application/json',
+            'User-Agent': 'openclaw-github-pr-mcp',
+          },
+          body: body === undefined ? undefined : JSON.stringify(body),
+        });
+        const raw = await res.text();
+        let parsed = {};
+        try { parsed = raw ? JSON.parse(raw) : {}; } catch (_) {}
+        if (!res.ok) {
+          const msg = parsed && parsed.message ? parsed.message : `GitHub API ${res.status}`;
+          throw new Error(msg);
+        }
+        return parsed;
+      }
+      async function getRefSha(repoFull, ref) {
+        const { owner, repo } = splitRepo(repoFull);
+        const data = await gh('GET', `/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(ref)}`);
+        return data.object && data.object.sha ? data.object.sha : '';
+      }
+      async function ensureBranch(repoFull, branch, base) {
+        const { owner, repo } = splitRepo(repoFull);
+        try {
+          await gh('GET', `/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(branch)}`);
+          return;
+        } catch (err) {
+          const msg = String(err && err.message ? err.message : err);
+          if (!msg.includes('Reference does not exist') && !msg.includes('Not Found')) throw err;
+        }
+        const baseSha = await getRefSha(repoFull, base);
+        await gh('POST', `/repos/${owner}/${repo}/git/refs`, {
+          ref: `refs/heads/${branch}`,
+          sha: baseSha,
+        });
+      }
+      async function getFile(repoFull, filePath, ref) {
+        const { owner, repo } = splitRepo(repoFull);
+        const encodedPath = filePath.split('/').map(encodeURIComponent).join('/');
+        try {
+          return await gh('GET', `/repos/${owner}/${repo}/contents/${encodedPath}?ref=${encodeURIComponent(ref)}`);
+        } catch (err) {
+          if (String(err && err.message ? err.message : err).includes('Not Found')) return null;
+          throw err;
+        }
+      }
+      async function findOpenPullRequest(repoFull, branch, base) {
+        const { owner, repo } = splitRepo(repoFull);
+        const data = await gh('GET', `/repos/${owner}/${repo}/pulls?state=open&head=${encodeURIComponent(`${owner}:${branch}`)}&base=${encodeURIComponent(base)}`);
+        return Array.isArray(data) && data.length > 0 ? data[0] : null;
+      }
+      const server = new McpServer({ name: 'github-pr-mcp', version: '1.0.0' });
+      server.tool(
+        'github_find_open_pull_request',
+        'Find an existing open pull request for a deterministic remediation branch.',
+        { repo: z.string(), branch: z.string(), base: z.string().optional() },
+        async ({ repo, branch, base = 'main' }) => {
+          assertAllowed(repo);
+          const pr = await findOpenPullRequest(repo, branch, base);
+          return text({
+            ok: true,
+            repo,
+            branch,
+            base,
+            pullRequest: pr ? {
+              number: pr.number,
+              url: pr.html_url,
+              title: pr.title,
+              state: pr.state,
+              headSha: pr.head && pr.head.sha ? pr.head.sha : '',
+            } : null,
+          });
+        },
+      );
+      server.tool(
+        'github_get_file',
+        'Read a file from an allowlisted GitHub repo and ref.',
+        { repo: z.string(), path: z.string(), ref: z.string().optional() },
+        async ({ repo, path, ref = 'main' }) => {
+          assertAllowed(repo);
+          const file = await getFile(repo, path, ref);
+          if (!file) return text({ ok: false, repo, path, ref, error: 'not_found' });
+          const decoded = file.content ? Buffer.from(String(file.content).replace(/\\n/g, ''), 'base64').toString('utf8') : '';
+          return text({ ok: true, repo, path, ref, sha: file.sha || '', content: decoded });
+        },
+      );
+      server.tool(
+        'github_upsert_file',
+        'Create or update one file on a deterministic remediation branch.',
+        {
+          repo: z.string(),
+          branch: z.string(),
+          path: z.string(),
+          content: z.string(),
+          commitMessage: z.string(),
+          base: z.string().optional(),
+        },
+        async ({ repo, branch, path, content, commitMessage, base = 'main' }) => {
+          assertAllowed(repo);
+          await ensureBranch(repo, branch, base);
+          const { owner, repo: repoName } = splitRepo(repo);
+          const encodedPath = path.split('/').map(encodeURIComponent).join('/');
+          const existing = await getFile(repo, path, branch);
+          const payload = {
+            message: commitMessage,
+            content: Buffer.from(content, 'utf8').toString('base64'),
+            branch,
+            sha: existing && existing.sha ? existing.sha : undefined,
+          };
+          const data = await gh('PUT', `/repos/${owner}/${repoName}/contents/${encodedPath}`, payload);
+          return text({
+            ok: true,
+            repo,
+            branch,
+            path,
+            commitSha: data.commit && data.commit.sha ? data.commit.sha : '',
+          });
+        },
+      );
+      server.tool(
+        'github_open_pull_request',
+        'Open or reuse a pull request for an existing remediation branch.',
+        {
+          repo: z.string(),
+          branch: z.string(),
+          title: z.string(),
+          body: z.string(),
+          base: z.string().optional(),
+          draft: z.boolean().optional(),
+        },
+        async ({ repo, branch, title, body, base = 'main', draft = false }) => {
+          assertAllowed(repo);
+          const existing = await findOpenPullRequest(repo, branch, base);
+          if (existing) {
+            return text({
+              ok: true,
+              reused: true,
+              repo,
+              branch,
+              pr_number: existing.number,
+              pr_url: existing.html_url,
+              commit_sha: existing.head && existing.head.sha ? existing.head.sha : '',
+            });
+          }
+          const { owner, repo: repoName } = splitRepo(repo);
+          const created = await gh('POST', `/repos/${owner}/${repoName}/pulls`, {
+            title,
+            body,
+            head: branch,
+            base,
+            draft,
+          });
+          return text({
+            ok: true,
+            reused: false,
+            repo,
+            branch,
+            pr_number: created.number,
+            pr_url: created.html_url,
+            commit_sha: created.head && created.head.sha ? created.head.sha : '',
+          });
+        },
+      );
+      server.connect(new StdioServerTransport()).catch((err) => {
+        console.error(err);
+        process.exit(1);
+      });
+  openclaw-config:
+    openclaw.json: |-
+      {
+        "gateway": {
+          "bind": "lan",
+          "port": 18789,
+          "auth": {
+            "mode": "trusted-proxy",
+            "trustedProxy": {
+              "userHeader": "X-Forwarded-User",
+              "roleHeader": "X-Mctl-Team-Role"
+            }
+          },
+          "trustedProxies": [
+            "10.42.0.0/16",
+            "10.43.0.0/16",
+            "172.16.0.0/12"
+          ],
+          "controlUi": {
+            "enabled": true,
+            "allowedOrigins": [
+              "https://admins-openclaw.mctl.ai",
+              "https://admins-openclaw.mctl.me"
+            ]
+          }
+        },
+        "agents": {
+          "defaults": {
+            "skipBootstrap": true,
+            "model": {
+              "primary": "openai-codex/gpt-5.4"
+            }
+          }
+        },
+        "auth": {
+          "profiles": {
+            "openai-codex:default": {
+              "provider": "openai-codex",
+              "mode": "oauth"
+            }
+          },
+          "order": {
+            "openai-codex": ["openai-codex:default"]
+          }
+        },
+        "channels": {
+          "telegram": {
+            "enabled": true,
+            "botToken": "__TELEGRAM_TOKEN__",
+            "dmPolicy": "pairing",
+            "groupPolicy": "open",
+            "allowFrom": ["210408407"]
+          }
+        },
+        "hooks": {
+          "enabled": true,
+          "path": "/hooks",
+          "token": "mctl-agent-hook-20260325",
+          "defaultSessionKey": "hook:mctl-agent:default",
+          "allowedSessionKeyPrefixes": ["hook:"],
+          "allowedAgentIds": ["main"],
+          "mappings": [
+            {
+              "id": "mctl-agent-event",
+              "match": {
+                "path": "mctl-agent"
+              },
+              "action": "agent",
+              "name": "MCTL Agent Incident",
+              "sessionKey": "hook:mctl-agent:{{payload.ticket.id}}",
+              "messageTemplate": "You are the automated external remediation agent for mctl-agent.\n\nIncident:\n- Event: {{payload.event_type}}\n- Ticket: {{payload.ticket.id}}\n- Team: {{payload.ticket.team}}\n- Service: {{payload.ticket.service}}\n- Severity: {{payload.ticket.severity}}\n- Summary: {{payload.ticket.summary}}\n- Analysis: {{payload.ticket.analysis}}\n\nCallback contract:\n- claim_url: {{payload.delivery.claim_url}}\n- result_url: {{payload.delivery.result_url}}\n- callback_auth_header: {{payload.delivery.callback_auth_header}}\n- callback_auth_value: {{payload.delivery.callback_auth_value}}\n- agent_id: openclaw-labs\n- event_id: {{payload.event_id}}\n\nOperating mode:\n- Conservative PR-only remediation.\n- OpenClaw owns PR creation and follow-up commits for this incident flow.\n- mctl-agent remains the system of record for ticket state.\n- Do not perform direct destructive platform actions.\n- Do not resolve incidents directly.\n- Do not rely on any mctl-agent MCP server.\n- Ignore any generic startup ritual for this session.\n\nRules:\n1. Only auto-claim events ticket.fix_failed or ticket.escalated. Never auto-claim ticket.created.\n2. Before reading workspace files or doing any other exploration, call tool mctl_agent_external with action=claim.\n3. If claim returns 409 or ok=false, stop and summarize briefly.\n4. Only after a successful claim may you gather evidence.\n5. After claim, prefer available mctl_* tools first. Start with service status/config/logs, incidents, workflows, tenant details, and resource usage.\n6. Only use GitHub tools for explicit repo-backed remediation after evidence supports a concrete low-risk change. Respect the runtime repo allowlist.\n7. Reuse one deterministic remediation branch per ticket when updating an existing PR instead of creating parallel branches.\n8. Only send status=pr_created when a real PR has been created or updated and you have concrete artifacts for repo, branch, pr_url, pr_number, and commit_sha.\n9. If evidence is incomplete, the incident is synthetic, no safe repo-backed fix exists, GitHub access is unavailable, the repo is not allowlisted, the action would be destructive, or the safest path is operator review, send status=needs_human with a concise operator-ready summary and the next checks to perform.\n10. If the workflow itself fails after claim, send status=failed.\n11. Always send exactly one result callback after a successful claim.\n12. Use idempotencyKey=openclaw:{{payload.ticket.id}}:{{payload.event_id}}.",
+              "deliver": false,
+              "model": "openai-codex/gpt-5.4",
+              "thinking": "medium",
+              "timeoutSeconds": 180
+            }
+          ]
+        },
+        "tools": {
+          "media": {
+            "audio": {
+              "enabled": true,
+              "models": [
+                {
+                  "type": "cli",
+                  "command": "/whisper-storage/run-whisper.sh",
+                  "args": ["{{MediaPath}}"],
+                  "timeoutSeconds": 45
+                }
+              ]
+            }
+          }
+        },
+
+        "mcp": {
+          "servers": {
+            "mctl": {
+              "command": "node",
+              "args": ["/scripts/mctl-mcp-proxy.js"],
+              "env": {
+                "MCTL_API_URL": "https://api.mctl.ai",
+                "MCTL_AUTH_FILE": "/home/node/.openclaw/mcp-auth/mctl/credentials.json"
+              }
+            },
+      "github": {
+        "command": "node",
+        "args": ["/scripts/github-pr-mcp.js"],
+        "env": {
+          "GITHUB_TOKEN": "${GITHUB_TOKEN}"
+        }
+      }
+          }
+        }
+      }
+ingress:
+  enabled: true
+  forwardAuth:
+    enabled: true
+    address: "https://app.mctl.ai/api/oidc-provider/forward-auth?tenant=admins&service=openclaw"
+    trustForwardHeader: true
+    authResponseHeaders:
+      - X-Forwarded-User
+      - X-Mctl-Team-Role
+  hosts:
+    - admins-openclaw.mctl.ai
+    - admins-openclaw.mctl.me
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls:
+    - secretName: openclaw-tls
+      hosts:
+        - admins-openclaw.mctl.ai
+        - admins-openclaw.mctl.me
