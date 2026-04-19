@@ -34,5 +34,5 @@ metadata:
 spec:
   type: service
   lifecycle: production
-  owner: group:ovk
-  system: team-ovk
+  owner: group:default/ovk
+  system: system:default/team-ovk

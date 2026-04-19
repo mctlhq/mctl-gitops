@@ -37,5 +37,5 @@ metadata:
 spec:
   type: service
   lifecycle: production
-  owner: group:labs
-  system: team-labs
+  owner: group:default/labs
+  system: system:default/team-labs

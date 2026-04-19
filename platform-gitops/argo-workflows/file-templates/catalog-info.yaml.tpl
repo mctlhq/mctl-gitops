@@ -31,5 +31,5 @@ metadata:
 spec:
   type: __COMPONENT_TYPE__
   lifecycle: production
-  owner: group:__TEAM_NAME__
-  system: team-__TEAM_NAME__
+  owner: group:default/__TEAM_NAME__
+  system: system:default/team-__TEAM_NAME__
