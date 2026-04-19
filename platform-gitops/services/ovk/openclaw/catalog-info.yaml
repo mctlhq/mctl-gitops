@@ -2,6 +2,7 @@ apiVersion: backstage.io/v1alpha1
 kind: Component
 metadata:
   name: openclaw
+  namespace: ovk
   description: "openclaw service"
   annotations:
     backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=ovk-openclaw
@@ -33,5 +34,5 @@ metadata:
 spec:
   type: service
   lifecycle: production
-  owner: group:ovk
-  system: team-ovk
+  owner: group:default/ovk
+  system: system:default/team-ovk
