@@ -28,7 +28,7 @@ Neither layer auto-syncs to the other. The operator chooses when to save / resto
 
 ## Rules
 
-- `skill_name` must be kebab-case: lowercase letters, digits, hyphens; starts and ends with alphanumeric; 1–64 chars. Must match `^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$`.
+- `skill_name` must be kebab-case: lowercase letters, digits, hyphens; starts and ends with alphanumeric; 2–64 chars. Must match `^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$`.
 - Skill content must be valid Markdown with a YAML frontmatter block whose `name:` matches the file name, and a `description:` field so other agents can find it.
 - Only a tenant owner can save or delete in gitops. Non-owners get a 403. Do not retry on auth failures.
 - Gitops writes return a `workflow_name`. Verify the workflow succeeds at `https://workflows.mctl.ai/workflows/{team}/{workflow_name}` before reporting success to the operator.
