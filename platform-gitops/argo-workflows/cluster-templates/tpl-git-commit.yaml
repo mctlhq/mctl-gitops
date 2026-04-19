@@ -45,7 +45,13 @@ spec:
             default: "openai-codex/gpt-5.4"
           - name: telegram_owner_id
             default: ""
-            # Telegram user ID of the service owner — substitutes __TELEGRAM_OWNER_ID__ in template
+            # Single Telegram user ID. Deprecated: prefer telegram_owner_ids_json.
+            # Kept for backward-compat with callers that pre-date multi-owner support.
+          - name: telegram_owner_ids_json
+            default: ""
+            # JSON array of Telegram user IDs — substitutes __TELEGRAM_OWNER_IDS_JSON__
+            # in the service template. If empty, the script falls back to wrapping
+            # telegram_owner_id in a single-element array.
       script:
         image: alpine:3.19
         command: [sh]
@@ -72,6 +78,18 @@ spec:
           CONFIG_PATCH="{{inputs.parameters.config_patch}}"
           DEFAULT_MODEL="{{inputs.parameters.default_model}}"
           TELEGRAM_OWNER_ID="{{inputs.parameters.telegram_owner_id}}"
+          TELEGRAM_OWNER_IDS_JSON="{{inputs.parameters.telegram_owner_ids_json}}"
+
+          # Compute final JSON array for __TELEGRAM_OWNER_IDS_JSON__.
+          # Prefer the explicit JSON array when provided; otherwise wrap the
+          # legacy single ID. Empty → empty array (no owner).
+          if [ -n "$TELEGRAM_OWNER_IDS_JSON" ]; then
+            TELEGRAM_OWNER_IDS_EFFECTIVE="$TELEGRAM_OWNER_IDS_JSON"
+          elif [ -n "$TELEGRAM_OWNER_ID" ]; then
+            TELEGRAM_OWNER_IDS_EFFECTIVE="[\"$TELEGRAM_OWNER_ID\"]"
+          else
+            TELEGRAM_OWNER_IDS_EFFECTIVE="[]"
+          fi
 
           # Normalize sentinels (Backstage strips bare empty strings from YAML)
           [ "$HOST" = "none" ] && HOST=""
@@ -178,6 +196,7 @@ spec:
               -e "s|__HOST__|${HOST}|g" \
               -e "s|__DEFAULT_MODEL__|${DEFAULT_MODEL}|g" \
               -e "s|__TELEGRAM_OWNER_ID__|${TELEGRAM_OWNER_ID}|g" \
+              -e "s|__TELEGRAM_OWNER_IDS_JSON__|${TELEGRAM_OWNER_IDS_EFFECTIVE}|g" \
               "$TPL" > "${DIR}/values.yaml"
 
             # Auto-add mirror domain (alternate ↔ primary) + TLS

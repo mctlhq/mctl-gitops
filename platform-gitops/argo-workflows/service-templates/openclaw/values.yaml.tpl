@@ -849,7 +849,7 @@ configMaps:
             "botToken": "__TELEGRAM_TOKEN__",
             "dmPolicy": "pairing",
             "groupPolicy": "open",
-            "allowFrom": ["__TELEGRAM_OWNER_ID__"]
+            "allowFrom": __TELEGRAM_OWNER_IDS_JSON__
           }
         },
         "hooks": {
