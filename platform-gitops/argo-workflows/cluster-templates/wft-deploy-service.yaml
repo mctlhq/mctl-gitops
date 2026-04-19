@@ -76,7 +76,12 @@ spec:
         value: "openai-codex/gpt-5.4"
       - name: telegram_owner_id
         value: ""
-        # Telegram user ID of the service owner — auto-approved in identities table at deploy time
+        # Deprecated single-ID field. Prefer telegram_owner_ids_json.
+      - name: telegram_owner_ids_json
+        value: ""
+        # JSON array string with one or more Telegram user IDs authorized to
+        # talk to the bot, e.g. '["210408407","317748297"]'. If empty the
+        # commit template falls back to wrapping telegram_owner_id.
       - name: telegram_bot_token
         value: ""
         # Telegram bot token — written to Vault at teams/{team}/{service}/telegram → telegram-bot-token
@@ -200,6 +205,8 @@ spec:
                   value: "{{workflow.parameters.default_model}}"
                 - name: telegram_owner_id
                   value: "{{workflow.parameters.telegram_owner_id}}"
+                - name: telegram_owner_ids_json
+                  value: "{{workflow.parameters.telegram_owner_ids_json}}"
 
           # Step 4: patch autoscaling block in values.yaml (conditional)
           - name: patch-autoscaling
