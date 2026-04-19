@@ -1,8 +1,8 @@
 apiVersion: backstage.io/v1alpha1
 kind: Component
 metadata:
-  name: openclaw
-  description: "openclaw service"
+  name: labs-openclaw
+  description: "labs/openclaw service"
   annotations:
     platform.mctl.me/database: "true"
     platform.mctl.me/database-team: "labs"
