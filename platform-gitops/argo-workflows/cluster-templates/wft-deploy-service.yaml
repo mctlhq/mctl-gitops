@@ -349,7 +349,7 @@ spec:
           component_name = "{{inputs.parameters.component_name}}"
           build_id = "{{workflow.name}}"
 
-          git_ref = git_tag if git_tag else "HEAD"
+          git_ref = git_tag if git_tag else "main"
 
           headers = {
               "Authorization": f"Bearer {PAT}",
