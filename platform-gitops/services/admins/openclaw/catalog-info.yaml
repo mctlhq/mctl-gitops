@@ -34,5 +34,5 @@ metadata:
 spec:
   type: service
   lifecycle: production
-  owner: group:admins
-  system: team-admins
+  owner: group:default/admins
+  system: system:default/team-admins
