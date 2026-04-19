@@ -95,6 +95,7 @@ spec:
       - host mctl-agent mctl-agent all scram-sha-256
       - host labs-openclaw labs-openclaw all scram-sha-256
       - host admins-openclaw admins-openclaw all scram-sha-256
+      - host ovk-openclaw ovk-openclaw all scram-sha-256
       - host all all 0.0.0.0/0 reject
 
   managed:
@@ -131,6 +132,12 @@ spec:
         passwordSecret:
           name: mctl-api-db-creds
       # Team app roles
+      - name: ovk-openclaw
+        login: true
+        connectionLimit: 10
+        ensure: present
+        passwordSecret:
+          name: ovk-openclaw-db-creds
       - name: admins-openclaw
         login: true
         connectionLimit: 10
