@@ -1,8 +1,9 @@
 apiVersion: backstage.io/v1alpha1
 kind: Component
 metadata:
-  name: admins-openclaw
-  description: "admins/openclaw service"
+  name: openclaw
+  namespace: admins
+  description: "openclaw service"
   annotations:
     backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=admins-openclaw
     backstage.io/kubernetes-id: openclaw
