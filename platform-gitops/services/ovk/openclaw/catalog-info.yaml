@@ -1,0 +1,37 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: openclaw
+  description: "openclaw service"
+  annotations:
+    backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=ovk-openclaw
+    backstage.io/kubernetes-id: openclaw
+    backstage.io/kubernetes-namespace: ovk
+    argocd/app-name: ovk-openclaw
+    github.com/source-repo: mctlhq/mctl-openclaw
+    # mctl.me/auto-deploy — triggered by GitHub App webhook on tag push
+    #   "true" or "auto" — deploy immediately via scaffolder
+    #   "confirm"         — notify only, user deploys manually from UI
+    #   "false" or absent — skip
+    mctl.me/auto-deploy: "false"
+  links:
+    - url: https://ops.mctl.ai/applications/argocd/ovk-openclaw
+      title: ArgoCD
+      icon: dashboard
+    - url: https://github.com/mctlhq/mctl-openclaw
+      title: Source Repository
+      icon: github
+    - url: https://workflows.mctl.ai
+      title: Argo Workflows
+      icon: github
+    - url: https://ovk-openclaw.mctl.ai
+      title: Service URL
+      icon: web
+  labels:
+    team: ovk
+    env: apps
+spec:
+  type: service
+  lifecycle: production
+  owner: group:ovk
+  system: team-ovk
