@@ -46,7 +46,17 @@ spec:
         source: |
           set -e
 
-          if ! printf '%s' "$TEAM" | grep -Eq '^[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$'; then
+          # Atomic character-set check rejects embedded newlines / control
+          # chars (otherwise `grep -Eq '^…$'` would pass if ANY line matched).
+          if [ -n "$(printf '%s' "$TEAM" | tr -d 'a-z0-9-')" ]; then
+            echo "❌ Invalid team name: contains disallowed characters"
+            exit 1
+          fi
+          if [ -n "$(printf '%s' "$SKILL" | tr -d 'a-z0-9-')" ]; then
+            echo "❌ Invalid skill name: contains disallowed characters"
+            exit 1
+          fi
+          if ! printf '%s' "$TEAM" | grep -Eq '^[a-z0-9][a-z0-9-]{0,62}$'; then
             echo "❌ Invalid team name: $TEAM"
             exit 1
           fi

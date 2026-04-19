@@ -56,7 +56,20 @@ spec:
           set -e
 
           # ── Validate names (defense-in-depth; mctl-api validates first) ────
-          if ! printf '%s' "$TEAM" | grep -Eq '^[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$'; then
+          # Reject embedded newlines / control chars / any byte outside the
+          # allowed kebab-case alphabet atomically — otherwise `grep -Eq '^…$'`
+          # below would succeed when ANY single line of a multi-line input
+          # matches, letting callers sneak `/` or nested paths past validation.
+          if [ -n "$(printf '%s' "$TEAM" | tr -d 'a-z0-9-')" ]; then
+            echo "❌ Invalid team name: contains disallowed characters"
+            exit 1
+          fi
+          if [ -n "$(printf '%s' "$SKILL" | tr -d 'a-z0-9-')" ]; then
+            echo "❌ Invalid skill name: contains disallowed characters"
+            exit 1
+          fi
+          # Length / boundary check, aligned with tpl-validate-tenant.yaml.
+          if ! printf '%s' "$TEAM" | grep -Eq '^[a-z0-9][a-z0-9-]{0,62}$'; then
             echo "❌ Invalid team name: $TEAM"
             exit 1
           fi
