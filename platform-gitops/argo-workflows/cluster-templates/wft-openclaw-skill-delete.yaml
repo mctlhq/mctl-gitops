@@ -30,17 +30,23 @@ spec:
       script:
         image: alpine:3.19
         command: [sh]
+        # Parameters passed as env vars so the container runtime injects
+        # them opaquely; avoids shell parsing of $(…)/``…`` in params
+        # before our regex validation runs.
+        env:
+          - name: TEAM
+            value: "{{inputs.parameters.team_name}}"
+          - name: SKILL
+            value: "{{inputs.parameters.skill_name}}"
+          - name: ACTOR
+            value: "{{inputs.parameters.actor}}"
         envFrom:
           - configMapRef:
               name: mctl-platform-config
         source: |
           set -e
 
-          TEAM="{{inputs.parameters.team_name}}"
-          SKILL="{{inputs.parameters.skill_name}}"
-          ACTOR="{{inputs.parameters.actor}}"
-
-          if ! printf '%s' "$TEAM" | grep -Eq '^[a-z0-9][a-z0-9-]{0,30}$'; then
+          if ! printf '%s' "$TEAM" | grep -Eq '^[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$'; then
             echo "❌ Invalid team name: $TEAM"
             exit 1
           fi
@@ -48,6 +54,9 @@ spec:
             echo "❌ Invalid skill name: $SKILL"
             exit 1
           fi
+
+          SAFE_ACTOR=$(printf '%s' "$ACTOR" | tr -d '\r\n' | tr -d '[:cntrl:]')
+          [ -z "$SAFE_ACTOR" ] && SAFE_ACTOR="unknown"
 
           apk add --no-cache git openssh-client ca-certificates > /dev/null
 
@@ -86,7 +95,7 @@ spec:
           git rm "$FILE"
           git commit \
             -m "chore(${TEAM}/openclaw): remove skill ${SKILL}" \
-            -m "Triggered by: ${ACTOR}"
+            -m "Triggered by: ${SAFE_ACTOR}"
 
           for i in 1 2 3 4 5; do
             if git push origin HEAD:main; then
