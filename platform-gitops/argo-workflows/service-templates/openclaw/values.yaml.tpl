@@ -64,9 +64,6 @@ probes:
 envFrom:
   - secretRef:
       name: __TEAM_NAME__-__SERVICE_NAME__-db-creds
-  - secretRef:
-      name: openclaw-github-secret
-      optional: true
 
 initContainers:
   # 1. Restore state from MinIO (no-op for new tenants, preserves OAuth credentials on restart)
@@ -430,13 +427,6 @@ extraExternalSecrets:
       - secretKey: .dockerconfigjson
         remoteKey: platform/backstage/ghcr-credentials
         property: dockerconfigjson
-  openclaw-github-secret:
-    refreshInterval: 1h
-    targetSecret: openclaw-github-secret
-    data:
-      - secretKey: GITHUB_TOKEN
-        remoteKey: secret/data/teams/__TEAM_NAME__/__SERVICE_NAME__/github
-        property: github-token
   openclaw-telegram-secret:
     refreshInterval: 1h
     targetSecret: openclaw-telegram-secret
@@ -915,14 +905,7 @@ configMaps:
                 "MCTL_API_URL": "https://api.mctl.ai",
                 "MCTL_AUTH_FILE": "/home/node/.openclaw/mcp-auth/mctl/credentials.json"
               }
-            },
-      "github": {
-        "command": "node",
-        "args": ["/scripts/github-pr-mcp.js"],
-        "env": {
-          "GITHUB_TOKEN": "${GITHUB_TOKEN}"
-        }
-      }
+            }
           }
         }
       }
