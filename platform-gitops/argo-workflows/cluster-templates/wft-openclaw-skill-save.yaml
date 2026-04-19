@@ -36,6 +36,16 @@ spec:
       script:
         image: alpine:3.19
         command: [sh]
+        # Small resource envelope so this workflow fits alongside the tenant's
+        # OpenClaw pod inside the namespace CPU quota — the work is just a git
+        # clone / single-file write / push, it does not need a full core.
+        resources:
+          requests:
+            cpu: "50m"
+            memory: "64Mi"
+          limits:
+            cpu: "200m"
+            memory: "256Mi"
         # Parameters are passed as env vars so the container runtime injects
         # them as opaque values, instead of substituting them into the shell
         # source where shell parsing could execute $(…), ``…``, or escape
