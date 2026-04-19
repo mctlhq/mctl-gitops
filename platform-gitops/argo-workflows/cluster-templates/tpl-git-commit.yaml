@@ -55,6 +55,17 @@ spec:
       script:
         image: alpine:3.19
         command: [sh]
+        # telegram_owner_ids_json carries a JSON string with embedded double
+        # quotes (e.g. ["a","b"]), which the shell parser would otherwise
+        # consume when substituted inline. Pass it (and the legacy single-ID
+        # sibling) as env vars so the container runtime injects the values
+        # opaquely. Other params stay interpolated because their values are
+        # kebab-case / numeric and don't contain shell metacharacters.
+        env:
+          - name: TELEGRAM_OWNER_ID
+            value: "{{inputs.parameters.telegram_owner_id}}"
+          - name: TELEGRAM_OWNER_IDS_JSON
+            value: "{{inputs.parameters.telegram_owner_ids_json}}"
         envFrom:
           - configMapRef:
               name: mctl-platform-config
@@ -77,8 +88,7 @@ spec:
           SERVICE_TEMPLATE="{{inputs.parameters.service_template}}"
           CONFIG_PATCH="{{inputs.parameters.config_patch}}"
           DEFAULT_MODEL="{{inputs.parameters.default_model}}"
-          TELEGRAM_OWNER_ID="{{inputs.parameters.telegram_owner_id}}"
-          TELEGRAM_OWNER_IDS_JSON="{{inputs.parameters.telegram_owner_ids_json}}"
+          # TELEGRAM_OWNER_ID / TELEGRAM_OWNER_IDS_JSON arrive via env: above.
 
           # Compute final JSON array for __TELEGRAM_OWNER_IDS_JSON__.
           # Prefer the explicit JSON array when provided; otherwise wrap the
