@@ -31,6 +31,6 @@ Neither layer auto-syncs to the other. The operator chooses when to save / resto
 - `skill_name` must be kebab-case: lowercase letters, digits, hyphens; starts and ends with alphanumeric; 2–64 chars. Must match `^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$`.
 - Skill content must be valid Markdown with a YAML frontmatter block whose `name:` matches the file name, and a `description:` field so other agents can find it.
 - Only a tenant owner can save or delete in gitops. Non-owners get a 403. Do not retry on auth failures.
-- Gitops writes return a `workflow_name`. Verify the workflow succeeds at `https://workflows.mctl.ai/workflows/{team}/{workflow_name}` before reporting success to the operator.
+- Gitops writes return a `workflow_name`. Verify the workflow succeeds at `https://workflows.mctl.ai/workflows/{namespace}/{workflow_name}` (namespace usually equals the team name) before reporting success to the operator.
 - Never `rm -rf skills/*` in bulk without confirming with the operator first.
 - Do not attempt to write to gitops paths outside `platform-gitops/services/{team}/openclaw/skills/`.
