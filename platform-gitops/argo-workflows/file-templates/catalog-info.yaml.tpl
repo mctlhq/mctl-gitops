@@ -1,8 +1,9 @@
 apiVersion: backstage.io/v1alpha1
 kind: Component
 metadata:
-  name: __TEAM_NAME__-__SERVICE_NAME__
-  description: "__TEAM_NAME__/__SERVICE_NAME__ service"
+  name: __SERVICE_NAME__
+  namespace: __TEAM_NAME__
+  description: "__SERVICE_NAME__ service"
   annotations:
     backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=__TEAM_NAME__-__SERVICE_NAME__
     backstage.io/kubernetes-id: __SERVICE_NAME__
