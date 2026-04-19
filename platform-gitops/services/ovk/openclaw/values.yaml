@@ -847,7 +847,7 @@ configMaps:
             "botToken": "__TELEGRAM_TOKEN__",
             "dmPolicy": "pairing",
             "groupPolicy": "open",
-            "allowFrom": ["210408407"]
+            "allowFrom": ["210408407", "317748297"]
           }
         },
         "hooks": {
