@@ -5,12 +5,17 @@ metadata:
   namespace: argo-workflows
   annotations:
     workflows.argoproj.io/description: |
-      Rotates the GitHub App installation token for mctl-agent every 45 minutes.
+      Rotates the GitHub App installation token for mctl-agent every 30 minutes.
       Reads the GitHub App private key from Vault, generates a new installation token,
       writes it back to Vault, and triggers ExternalSecret re-sync so the mctl-agent
       pod picks up the fresh token without a restart.
+
+      Installation tokens expire after 60 minutes, so a 30-minute cadence leaves a
+      safe 30-minute buffer. The previous "*/45" schedule was a cron-syntax bug
+      that fired at :00 and :45 (a 45/15 minute alternating pattern), not a steady
+      45-minute interval.
 spec:
-  schedule: "*/45 * * * *"
+  schedule: "*/30 * * * *"
   timezone: "UTC"
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 120
