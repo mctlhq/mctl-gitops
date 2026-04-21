@@ -61,10 +61,10 @@ spec:
         controller:
           resources:
             requests:
-              cpu: 100m
+              cpu: 250m
               memory: 128Mi
             limits:
-              cpu: 500m
+              cpu: 1500m
               memory: 512Mi
           metricsConfig:
             enabled: true

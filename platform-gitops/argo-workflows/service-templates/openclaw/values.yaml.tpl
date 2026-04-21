@@ -362,7 +362,8 @@ extraContainers:
         cpu: 25m
         memory: 64Mi
       limits:
-        cpu: 200m
+        # CPU limit intentionally omitted: `mc mirror` bursts briefly every 10s;
+        # a CPU limit causes CFS throttling without bounding real work.
         memory: 256Mi
     command: ["sh", "-c"]
     args:
