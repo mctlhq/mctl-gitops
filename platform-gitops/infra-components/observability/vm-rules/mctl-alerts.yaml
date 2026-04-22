@@ -1,0 +1,96 @@
+# Custom alert rules consumed by mctl-agent.
+#
+# Each alert name maps to a ticket type via
+# mctl-agent/internal/monitor/alerthandler.go::classifyAlert. Keep the
+# alert names in sync with that switch.
+#
+# The routing into mctl-agent is configured in
+# platform-gitops/bootstrap/templates/observability/monitoring.yaml
+# (see the alertmanager route matching these alertnames).
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: mctl-custom-alerts
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: mctl-platform
+spec:
+  groups:
+    - name: mctl.tenant-quotas
+      rules:
+        - alert: TenantCPUQuotaHigh
+          expr: |
+            sum by (namespace) (
+              rate(container_cpu_usage_seconds_total{container!=""}[5m])
+            )
+            /
+            sum by (namespace) (
+              kube_resourcequota{type="hard", resource="limits.cpu"}
+            ) > 0.85
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: >-
+              Namespace {{ $labels.namespace }} CPU usage is at
+              {{ $value | humanizePercentage }} of quota
+
+        - alert: TenantMemoryQuotaHigh
+          expr: |
+            sum by (namespace) (
+              container_memory_working_set_bytes{container!=""}
+            )
+            /
+            sum by (namespace) (
+              kube_resourcequota{type="hard", resource="limits.memory"}
+            ) > 0.85
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: >-
+              Namespace {{ $labels.namespace }} memory usage is at
+              {{ $value | humanizePercentage }} of quota
+
+    - name: mctl.node-health
+      rules:
+        - alert: NodeHighCPU
+          expr: |
+            1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) > 0.9
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: >-
+              Node {{ $labels.instance }} CPU usage above 90% for 15 minutes
+
+        - alert: NodeHighMemory
+          expr: |
+            1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) > 0.9
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: >-
+              Node {{ $labels.instance }} memory usage above 90% for 15 minutes
+
+        - alert: NodeDiskPressure
+          expr: |
+            kube_node_status_condition{condition="DiskPressure", status="true"} == 1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: >-
+              Node {{ $labels.node }} has disk pressure
+
+    - name: mctl.vault
+      rules:
+        - alert: VaultSealed
+          expr: |
+            vault_core_unsealed == 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: Vault instance {{ $labels.instance }} is sealed
