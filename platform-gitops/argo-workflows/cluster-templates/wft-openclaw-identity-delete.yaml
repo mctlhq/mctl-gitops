@@ -112,15 +112,13 @@ spec:
               ;;
           esac
 
-          if [ ! -f "$TARGET" ]; then
-            echo "ℹ️  $TARGET does not exist — nothing to delete"
-            exit 0
-          fi
-
           # ── Regenerate consolidated values file for openclaw-skills chart ─
           # Rebuild from whatever remains in skills/ + identity/ after the
           # deletion so the openclaw-skills ConfigMaps stay in sync. If the
           # last identity override was removed, this produces `identity: {}`.
+          # Run even when $TARGET is already absent so manual-edit drift
+          # between source files and the generated values file is corrected,
+          # rather than silently left to the next save/delete.
           GEN_DIR="platform-gitops/services/${TEAM}/openclaw/generated"
           GEN_FILE="${GEN_DIR}/skills-values.yaml"
 

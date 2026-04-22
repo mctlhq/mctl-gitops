@@ -106,15 +106,13 @@ spec:
               ;;
           esac
 
-          if [ ! -f "$FILE" ]; then
-            echo "ℹ️  $FILE does not exist — nothing to delete"
-            exit 0
-          fi
-
           # ── Regenerate consolidated values file for openclaw-skills chart ─
           # Rebuild from whatever remains in skills/ + identity/ after the
           # deletion so the openclaw-skills ConfigMaps stay in sync. If the
-          # last skill was removed, this produces `skills: {}`.
+          # last skill was removed, this produces `skills: {}`. Run even
+          # when $FILE is already absent so manual-edit drift between source
+          # files and the generated values file is corrected, rather than
+          # silently left to the next save/delete.
           GEN_DIR="platform-gitops/services/${TEAM}/openclaw/generated"
           GEN_FILE="${GEN_DIR}/skills-values.yaml"
 
