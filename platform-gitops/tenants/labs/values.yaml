@@ -12,7 +12,7 @@ tenant:
   quotas:
     requests.cpu: "500m"
     requests.memory: "1280Mi"
-    limits.cpu: "2"
+    limits.cpu: "3"
     limits.memory: "4Gi"
     pods: "10"
     persistentvolumeclaims: "5"
