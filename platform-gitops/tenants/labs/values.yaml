@@ -9,6 +9,8 @@ tenant:
   members:
     - userId: mashkoffdmitry
       role: owner
+    - userId: "103413580"
+      role: owner
   quotas:
     requests.cpu: "500m"
     requests.memory: "1280Mi"
