@@ -25,7 +25,7 @@ tenant:
     requests.cpu: "500m"
     requests.memory: "1280Mi"
     # Aggregate CPU/memory limits across all pods (sized for one OpenClaw pod plus small headroom)
-    limits.cpu: "2"
+    limits.cpu: "3"
     limits.memory: "4Gi"
     # Maximum number of pods
     pods: "10"
