@@ -1,36 +1,38 @@
 apiVersion: argoproj.io/v1alpha1
 kind: ClusterWorkflowTemplate
 metadata:
-  name: openclaw-skill-save
+  name: openclaw-identity-save
   annotations:
     workflows.argoproj.io/description: |
-      Save a single OpenClaw SKILL.md file to the gitops repo as a durable backup.
+      Save a single OpenClaw identity override file (AGENTS.md / SOUL.md /
+      IDENTITY.md / USER.md / TOOLS.md) to the gitops repo.
 
-      Writes to platform-gitops/services/{team}/openclaw/skills/{skill_name}.md.
-      Overwrites an existing file if present. Commits as argo-workflows[bot] with
-      the triggering user's ID recorded in the commit message (actor).
+      Writes to platform-gitops/services/{team}/openclaw/identity/{file_name}.
+      Overwrites an existing file if present. Commits as argo-workflows[bot]
+      with the triggering user's ID recorded in the commit message (actor).
 
-      Input validation of team/skill_name and content size is performed in
-      mctl-api before this workflow is submitted; the workflow re-validates
-      the path as a defense-in-depth check.
+      Input validation of team/file_name/content is performed in mctl-api
+      before this workflow is submitted; the workflow re-validates the
+      file name against the fixed identity allowlist and the path as a
+      defense-in-depth check.
 spec:
-  entrypoint: save-skill
+  entrypoint: save-identity
   serviceAccountName: argo-workflow-sa
 
   arguments:
     parameters:
       - name: team_name
-      - name: skill_name
+      - name: file_name
       - name: content_b64
       - name: actor
         value: "unknown"
 
   templates:
-    - name: save-skill
+    - name: save-identity
       inputs:
         parameters:
           - name: team_name
-          - name: skill_name
+          - name: file_name
           - name: content_b64
           - name: actor
       script:
@@ -53,8 +55,8 @@ spec:
         env:
           - name: TEAM
             value: "{{inputs.parameters.team_name}}"
-          - name: SKILL
-            value: "{{inputs.parameters.skill_name}}"
+          - name: FILE
+            value: "{{inputs.parameters.file_name}}"
           - name: CONTENT_B64
             value: "{{inputs.parameters.content_b64}}"
           - name: ACTOR
@@ -65,28 +67,26 @@ spec:
         source: |
           set -e
 
-          # ── Validate names (defense-in-depth; mctl-api validates first) ────
-          # Reject embedded newlines / control chars / any byte outside the
-          # allowed kebab-case alphabet atomically — otherwise `grep -Eq '^…$'`
-          # below would succeed when ANY single line of a multi-line input
-          # matches, letting callers sneak `/` or nested paths past validation.
+          # ── Validate team name (kebab-case) ───────────────────────────────
           if [ -n "$(printf '%s' "$TEAM" | tr -d 'a-z0-9-')" ]; then
             echo "❌ Invalid team name: contains disallowed characters"
             exit 1
           fi
-          if [ -n "$(printf '%s' "$SKILL" | tr -d 'a-z0-9-')" ]; then
-            echo "❌ Invalid skill name: contains disallowed characters"
-            exit 1
-          fi
-          # Length / boundary check, aligned with tpl-validate-tenant.yaml.
           if ! printf '%s' "$TEAM" | grep -Eq '^[a-z0-9][a-z0-9-]{0,62}$'; then
             echo "❌ Invalid team name: $TEAM"
             exit 1
           fi
-          if ! printf '%s' "$SKILL" | grep -Eq '^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$'; then
-            echo "❌ Invalid skill name: $SKILL"
-            exit 1
-          fi
+
+          # ── Validate file_name against fixed identity allowlist ──────────
+          # mctl-api enforces the same allowlist; we re-check here so the
+          # workflow is safe even if invoked directly (defense-in-depth).
+          case "$FILE" in
+            AGENTS.md|SOUL.md|IDENTITY.md|USER.md|TOOLS.md) : ;;
+            *)
+              echo "❌ Invalid identity file name: $FILE (must be AGENTS.md | SOUL.md | IDENTITY.md | USER.md | TOOLS.md)"
+              exit 1
+              ;;
+          esac
 
           # Strip newlines / control chars from actor so the commit trailer
           # can't be forged with extra lines.
@@ -108,20 +108,24 @@ spec:
           git config user.name "argo-workflows[bot]"
           git config user.email "argo-workflows[bot]@users.noreply.github.com"
 
-          DIR="platform-gitops/services/${TEAM}/openclaw/skills"
-          FILE="${DIR}/${SKILL}.md"
+          DIR="platform-gitops/services/${TEAM}/openclaw/identity"
+          TARGET="${DIR}/${FILE}"
 
           # ── Path containment check ───────────────────────────────────────
-          case "$FILE" in
-            platform-gitops/services/${TEAM}/openclaw/skills/*.md) : ;;
+          case "$TARGET" in
+            platform-gitops/services/${TEAM}/openclaw/identity/AGENTS.md) : ;;
+            platform-gitops/services/${TEAM}/openclaw/identity/SOUL.md) : ;;
+            platform-gitops/services/${TEAM}/openclaw/identity/IDENTITY.md) : ;;
+            platform-gitops/services/${TEAM}/openclaw/identity/USER.md) : ;;
+            platform-gitops/services/${TEAM}/openclaw/identity/TOOLS.md) : ;;
             *)
-              echo "❌ Security: computed path $FILE is outside the allowed scope"
+              echo "❌ Security: computed path $TARGET is outside the allowed scope"
               exit 1
               ;;
           esac
-          case "$FILE" in
+          case "$TARGET" in
             *..*)
-              echo "❌ Security: path traversal detected in $FILE"
+              echo "❌ Security: path traversal detected in $TARGET"
               exit 1
               ;;
           esac
@@ -133,9 +137,9 @@ spec:
             echo "❌ Empty content_b64"
             exit 1
           fi
-          printf '%s' "$CONTENT_B64" | base64 -d > "$FILE"
-          SIZE=$(wc -c < "$FILE")
-          echo "✅ Wrote $FILE ($SIZE bytes)"
+          printf '%s' "$CONTENT_B64" | base64 -d > "$TARGET"
+          SIZE=$(wc -c < "$TARGET")
+          echo "✅ Wrote $TARGET ($SIZE bytes)"
 
           # ── Regenerate consolidated values file for openclaw-skills chart ─
           # The openclaw-skills ApplicationSet reads services/{team}/openclaw/
@@ -165,9 +169,6 @@ spec:
               for k, v in mp.items():
                   key = key_transform(k)
                   out += f"  {key}: |-\n"
-                  # Normalize line endings and emit each line with 4-space indent.
-                  # splitlines() already strips the final newline; the |- block
-                  # literal also strips the trailing newline, so round-trip is safe.
                   for line in v.splitlines():
                       out += f"    {line}\n"
               return out
@@ -176,26 +177,26 @@ spec:
           body = emit_map("skills", skills, lambda k: k[:-3]) + emit_map("identity", identity, lambda k: k)
           os.makedirs(f"{base}/generated", exist_ok=True)
           with open(f"{base}/generated/skills-values.yaml", "w", encoding="utf-8") as f:
-              f.write("# Auto-generated by openclaw-skill-save / openclaw-identity-* workflows.\n")
+              f.write("# Auto-generated by openclaw-skill-* / openclaw-identity-* workflows.\n")
               f.write("# Do not edit manually — changes will be overwritten on the next save/delete.\n")
               f.write(body)
           PY
           echo "✅ Regenerated $GEN_FILE"
 
           # ── Commit ───────────────────────────────────────────────────────
-          git add "$FILE" "$GEN_FILE"
+          git add "$TARGET" "$GEN_FILE"
           if git diff --cached --quiet; then
             echo "ℹ️  No changes — file unchanged on main"
             exit 0
           fi
           git commit \
-            -m "feat(${TEAM}/openclaw): save skill ${SKILL}" \
+            -m "feat(${TEAM}/openclaw): save identity ${FILE}" \
             -m "Triggered by: ${SAFE_ACTOR}"
 
           # ── Push with rebase retry ───────────────────────────────────────
           for i in 1 2 3 4 5; do
             if git push origin HEAD:main; then
-              echo "✅ Pushed skill ${SKILL} for ${TEAM}"
+              echo "✅ Pushed identity ${FILE} for ${TEAM}"
               break
             fi
             if [ "$i" -lt 5 ]; then

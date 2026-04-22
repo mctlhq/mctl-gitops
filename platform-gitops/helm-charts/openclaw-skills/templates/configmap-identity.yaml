@@ -1,0 +1,27 @@
+{{- /*
+Layer-3 identity overrides ConfigMap.
+Keys: allowed identity filenames (AGENTS.md, SOUL.md, IDENTITY.md, USER.md,
+TOOLS.md), values: raw file content. Validation of allowed filenames is
+enforced at the MCP boundary in mctl-api — this chart renders whatever
+map is provided.
+When .Values.identity is empty, a `.placeholder` key keeps the ConfigMap
+non-empty so the fan-out sidecar always has a stable mount point.
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "openclaw-skills.identityName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "openclaw-skills.commonLabels" . | nindent 4 }}
+data:
+  {{- if .Values.identity }}
+  {{- range $name, $content := .Values.identity }}
+  {{ $name }}: |-
+    {{- $content | nindent 4 }}
+  {{- end }}
+  {{- else }}
+  # Placeholder key — tenant has no Layer-3 identity overrides. Fan-out
+  # sidecar ignores keys that start with a dot.
+  .placeholder: ""
+  {{- end }}

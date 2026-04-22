@@ -1,0 +1,77 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: openclaw-skills
+  namespace: argocd
+  annotations:
+    argocd/description: |
+      Creates one ArgoCD Application per tenant that has an openclaw service dir.
+      Each Application renders two ConfigMaps in the tenant namespace:
+        {team}-openclaw-skills   — Layer-3 skill markdown (workspace fan-out)
+        {team}-openclaw-identity — Layer-3 identity overrides
+      Values are consumed from the per-tenant file
+        services/{team}/openclaw/generated/skills-values.yaml
+      which is regenerated on every skill/identity save or delete by the
+      wft-openclaw-skill-save / wft-openclaw-identity-save workflows.
+      `ignoreMissingValueFiles: true` keeps the Application healthy on day 1
+      for tenants that have not yet saved any skill or identity override.
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  syncPolicy:
+    preserveResourcesOnDeletion: false
+  generators:
+    - git:
+        repoURL: {{ .Values.spec.source.repoURL }}
+        revision: {{ .Values.spec.source.targetRevision }}
+        requeueAfterSeconds: 30
+        directories:
+          # Each services/*/openclaw dir = one tenant. Tenants that do not run
+          # openclaw simply do not have this subdir, and thus get no Application.
+          - path: platform-gitops/services/*/openclaw
+  template:
+    metadata:
+      name: '{{`{{ index .path.segments 2 }}-openclaw-skills`}}'
+      labels:
+        env: apps
+        team: '{{`{{ index .path.segments 2 }}`}}'
+        backstage.io/kubernetes-id: '{{`{{ index .path.segments 2 }}-openclaw-skills`}}'
+      annotations:
+        argocd/app-name: '{{`{{ index .path.segments 2 }}-openclaw-skills`}}'
+    spec:
+      project: apps
+      sources:
+        # Chart (logic).
+        - repoURL: {{ .Values.spec.source.repoURL }}
+          targetRevision: {{ .Values.spec.source.targetRevision }}
+          path: platform-gitops/helm-charts/openclaw-skills
+          helm:
+            # Skip the generated values file gracefully until the first skill
+            # or identity save creates it. Supported since ArgoCD 2.6.
+            ignoreMissingValueFiles: true
+            valueFiles:
+              - $values/{{ `{{ .path.path }}` }}/generated/skills-values.yaml
+            parameters:
+              - name: team
+                value: '{{`{{ index .path.segments 2 }}`}}'
+        # Values (data) — points at this same repo so valueFiles above resolves.
+        - repoURL: {{ .Values.spec.source.repoURL }}
+          targetRevision: {{ .Values.spec.source.targetRevision }}
+          ref: values
+      destination:
+        server: {{ .Values.spec.destination.server }}
+        # Tenant namespace == team name (same convention as applicationset-apps).
+        namespace: '{{`{{ index .path.segments 2 }}`}}'
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=false
+          - ApplyOutOfSyncOnly=true
+        retry:
+          limit: 5
+          backoff:
+            duration: 5s
+            factor: 2
+            maxDuration: 3m

@@ -1,31 +1,33 @@
 apiVersion: argoproj.io/v1alpha1
 kind: ClusterWorkflowTemplate
 metadata:
-  name: openclaw-skill-delete
+  name: openclaw-identity-delete
   annotations:
     workflows.argoproj.io/description: |
-      Remove a single OpenClaw SKILL.md file from the gitops repo.
+      Remove a single OpenClaw identity override file from the gitops repo.
 
-      Deletes platform-gitops/services/{team}/openclaw/skills/{skill_name}.md.
-      No-op (success) if the file does not exist. Commits as argo-workflows[bot]
-      with the triggering user's ID recorded in the commit message (actor).
+      Deletes platform-gitops/services/{team}/openclaw/identity/{file_name}.
+      file_name must be one of AGENTS.md / SOUL.md / IDENTITY.md / USER.md /
+      TOOLS.md. No-op (success) if the file does not exist. Commits as
+      argo-workflows[bot] with the triggering user's ID recorded in the
+      commit message (actor).
 spec:
-  entrypoint: delete-skill
+  entrypoint: delete-identity
   serviceAccountName: argo-workflow-sa
 
   arguments:
     parameters:
       - name: team_name
-      - name: skill_name
+      - name: file_name
       - name: actor
         value: "unknown"
 
   templates:
-    - name: delete-skill
+    - name: delete-identity
       inputs:
         parameters:
           - name: team_name
-          - name: skill_name
+          - name: file_name
           - name: actor
       script:
         image: alpine:3.19
@@ -45,8 +47,8 @@ spec:
         env:
           - name: TEAM
             value: "{{inputs.parameters.team_name}}"
-          - name: SKILL
-            value: "{{inputs.parameters.skill_name}}"
+          - name: FILE
+            value: "{{inputs.parameters.file_name}}"
           - name: ACTOR
             value: "{{inputs.parameters.actor}}"
         envFrom:
@@ -55,24 +57,24 @@ spec:
         source: |
           set -e
 
-          # Atomic character-set check rejects embedded newlines / control
-          # chars (otherwise `grep -Eq '^…$'` would pass if ANY line matched).
           if [ -n "$(printf '%s' "$TEAM" | tr -d 'a-z0-9-')" ]; then
             echo "❌ Invalid team name: contains disallowed characters"
-            exit 1
-          fi
-          if [ -n "$(printf '%s' "$SKILL" | tr -d 'a-z0-9-')" ]; then
-            echo "❌ Invalid skill name: contains disallowed characters"
             exit 1
           fi
           if ! printf '%s' "$TEAM" | grep -Eq '^[a-z0-9][a-z0-9-]{0,62}$'; then
             echo "❌ Invalid team name: $TEAM"
             exit 1
           fi
-          if ! printf '%s' "$SKILL" | grep -Eq '^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$'; then
-            echo "❌ Invalid skill name: $SKILL"
-            exit 1
-          fi
+
+          # Re-validate file_name against the fixed identity allowlist
+          # (defense-in-depth; mctl-api enforces it first).
+          case "$FILE" in
+            AGENTS.md|SOUL.md|IDENTITY.md|USER.md|TOOLS.md) : ;;
+            *)
+              echo "❌ Invalid identity file name: $FILE (must be AGENTS.md | SOUL.md | IDENTITY.md | USER.md | TOOLS.md)"
+              exit 1
+              ;;
+          esac
 
           SAFE_ACTOR=$(printf '%s' "$ACTOR" | tr -d '\r\n' | tr -d '[:cntrl:]')
           [ -z "$SAFE_ACTOR" ] && SAFE_ACTOR="unknown"
@@ -90,33 +92,37 @@ spec:
           git config user.name "argo-workflows[bot]"
           git config user.email "argo-workflows[bot]@users.noreply.github.com"
 
-          FILE="platform-gitops/services/${TEAM}/openclaw/skills/${SKILL}.md"
+          TARGET="platform-gitops/services/${TEAM}/openclaw/identity/${FILE}"
 
-          case "$FILE" in
-            platform-gitops/services/${TEAM}/openclaw/skills/*.md) : ;;
+          case "$TARGET" in
+            platform-gitops/services/${TEAM}/openclaw/identity/AGENTS.md) : ;;
+            platform-gitops/services/${TEAM}/openclaw/identity/SOUL.md) : ;;
+            platform-gitops/services/${TEAM}/openclaw/identity/IDENTITY.md) : ;;
+            platform-gitops/services/${TEAM}/openclaw/identity/USER.md) : ;;
+            platform-gitops/services/${TEAM}/openclaw/identity/TOOLS.md) : ;;
             *)
-              echo "❌ Security: computed path $FILE is outside the allowed scope"
+              echo "❌ Security: computed path $TARGET is outside the allowed scope"
               exit 1
               ;;
           esac
-          case "$FILE" in
+          case "$TARGET" in
             *..*)
-              echo "❌ Security: path traversal detected in $FILE"
+              echo "❌ Security: path traversal detected in $TARGET"
               exit 1
               ;;
           esac
 
-          if [ ! -f "$FILE" ]; then
-            echo "ℹ️  $FILE does not exist — nothing to delete"
+          if [ ! -f "$TARGET" ]; then
+            echo "ℹ️  $TARGET does not exist — nothing to delete"
             exit 0
           fi
 
-          git rm "$FILE"
+          git rm "$TARGET"
 
           # ── Regenerate consolidated values file for openclaw-skills chart ─
           # Rebuild from whatever remains in skills/ + identity/ after the
           # deletion so the openclaw-skills ConfigMaps stay in sync. If the
-          # last skill was removed, this produces `skills: {}`.
+          # last identity override was removed, this produces `identity: {}`.
           GEN_DIR="platform-gitops/services/${TEAM}/openclaw/generated"
           GEN_FILE="${GEN_DIR}/skills-values.yaml"
           mkdir -p "$GEN_DIR"
@@ -156,12 +162,12 @@ spec:
           echo "✅ Regenerated $GEN_FILE"
 
           git commit \
-            -m "chore(${TEAM}/openclaw): remove skill ${SKILL}" \
+            -m "chore(${TEAM}/openclaw): remove identity ${FILE}" \
             -m "Triggered by: ${SAFE_ACTOR}"
 
           for i in 1 2 3 4 5; do
             if git push origin HEAD:main; then
-              echo "✅ Deleted skill ${SKILL} for ${TEAM}"
+              echo "✅ Deleted identity ${FILE} for ${TEAM}"
               break
             fi
             if [ "$i" -lt 5 ]; then
