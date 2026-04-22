@@ -6,7 +6,7 @@
 #
 # The real values are produced by the openclaw-skill-save / openclaw-identity-save
 # Argo workflows into:
-#   services/{team}/openclaw/generated/skills-values.yaml
+#   platform-gitops/services/{team}/openclaw/generated/skills-values.yaml
 # That file is then consumed by the ApplicationSet via a multi-source
 # `$values/{{ .path.path }}/generated/skills-values.yaml` reference.
 #
