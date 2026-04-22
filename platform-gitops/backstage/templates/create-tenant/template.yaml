@@ -66,7 +66,7 @@ spec:
         quotaCpuLim:
           title: CPU Limits (total)
           type: string
-          default: "2"
+          default: "3"
           description: "Default OpenClaw-capable profile: total CPU limits across the namespace."
         quotaMemoryReq:
           title: Memory Requests (total)
@@ -107,7 +107,7 @@ spec:
           description: ${{ parameters.description | default('') }}
           contactEmail: ${{ parameters.contactEmail | default('') }}
           quotaCpuReq: ${{ parameters.quotaCpuReq | default('500m') }}
-          quotaCpuLim: ${{ parameters.quotaCpuLim | default('2') }}
+          quotaCpuLim: ${{ parameters.quotaCpuLim | default('3') }}
           quotaMemoryReq: ${{ parameters.quotaMemoryReq | default('1280Mi') }}
           quotaMemoryLim: ${{ parameters.quotaMemoryLim | default('4Gi') }}
           quotaPods: ${{ parameters.quotaPods | default('5') }}

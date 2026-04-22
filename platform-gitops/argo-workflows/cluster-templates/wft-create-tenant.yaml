@@ -34,7 +34,7 @@ spec:
       - name: quota_cpu_req
         value: "1"
       - name: quota_cpu_lim
-        value: "2"
+        value: "3"
       - name: quota_memory_req
         value: "2Gi"
       - name: quota_memory_lim

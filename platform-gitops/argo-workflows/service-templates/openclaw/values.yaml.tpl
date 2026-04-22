@@ -362,7 +362,10 @@ extraContainers:
         cpu: 25m
         memory: 64Mi
       limits:
-        cpu: 200m
+        # Explicit 1000m overrides the tenant LimitRange default (500m).
+        # `mc mirror` runs ~2s bursts every 10s and spikes past 500m; 1000m
+        # sits within every tenant's LimitRange max (1500m/2) with headroom.
+        cpu: 1000m
         memory: 256Mi
     command: ["sh", "-c"]
     args:
