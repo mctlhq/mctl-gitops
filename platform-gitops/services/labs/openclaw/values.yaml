@@ -354,11 +354,14 @@ extraContainers:
     image: minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
     resources:
       requests:
-        cpu: 10m
-        memory: 48Mi
+        cpu: 25m
+        memory: 64Mi
       limits:
-        cpu: 100m
-        memory: 128Mi
+        # Explicit 1000m overrides the tenant LimitRange default (500m).
+        # `mc mirror` runs ~2s bursts every 10s and spikes past 500m; 1000m
+        # sits within the labs LimitRange max (1500m) with headroom.
+        cpu: 1000m
+        memory: 256Mi
     command: ["sh", "-c"]
     args:
       - |
