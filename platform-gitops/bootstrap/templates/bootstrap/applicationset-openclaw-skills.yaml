@@ -10,7 +10,7 @@ metadata:
         {team}-openclaw-skills   — Layer-3 skill markdown (workspace fan-out)
         {team}-openclaw-identity — Layer-3 identity overrides
       Values are consumed from the per-tenant file
-        services/{team}/openclaw/generated/skills-values.yaml
+        platform-gitops/services/{team}/openclaw/generated/skills-values.yaml
       which is regenerated on every skill/identity save or delete by the
       wft-openclaw-skill-save / wft-openclaw-identity-save workflows.
       `ignoreMissingValueFiles: true` keeps the Application healthy on day 1
