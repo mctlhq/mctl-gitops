@@ -442,8 +442,21 @@ extraContainers:
           # dir while the ConfigMap is still being rendered or has been
           # transiently deleted — treat that the same as "no mount" and
           # skip pruning, otherwise the prune loop would drop every
-          # Layer-3 skill whenever ArgoCD blinks.
-          if [ -d "$SRC" ] && [ -n "$(ls -A "$SRC" 2>/dev/null)" ]; then
+          # Layer-3 skill whenever ArgoCD blinks. Detect a real mount by
+          # the presence of skill keys (*.md) or the chart-rendered empty
+          # marker (.placeholder) — ignore k8s projected-volume metadata
+          # such as `..data` / `..YYYY_MM_DD_...` which `ls -A` would
+          # otherwise count as content.
+          has_cm=0
+          [ -f "$SRC/.placeholder" ] && has_cm=1
+          if [ "$has_cm" = 0 ] && [ -d "$SRC" ]; then
+            for _probe in "$SRC"/*.md; do
+              [ -e "$_probe" ] || break
+              has_cm=1
+              break
+            done
+          fi
+          if [ "$has_cm" = 1 ]; then
             for f in "$SRC"/*.md; do
               [ -e "$f" ] || continue
               base="${f##*/}"
