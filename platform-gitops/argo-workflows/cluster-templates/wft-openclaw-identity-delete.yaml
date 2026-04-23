@@ -1,44 +1,39 @@
 apiVersion: argoproj.io/v1alpha1
 kind: ClusterWorkflowTemplate
 metadata:
-  name: openclaw-skill-save
+  name: openclaw-identity-delete
   annotations:
     workflows.argoproj.io/description: |
-      Save a single OpenClaw SKILL.md file to the gitops repo as a durable backup.
+      Remove a single OpenClaw identity override file from the gitops repo.
 
-      Writes to platform-gitops/services/{team}/openclaw/skills/{skill_name}.md.
-      Overwrites an existing file if present. Commits as argo-workflows[bot] with
-      the triggering user's ID recorded in the commit message (actor).
-
-      Input validation of team/skill_name and content size is performed in
-      mctl-api before this workflow is submitted; the workflow re-validates
-      the path as a defense-in-depth check.
+      Deletes platform-gitops/services/{team}/openclaw/identity/{file_name}.
+      file_name must be one of AGENTS.md / SOUL.md / IDENTITY.md / USER.md /
+      TOOLS.md. No-op (success) if the file does not exist. Commits as
+      argo-workflows[bot] with the triggering user's ID recorded in the
+      commit message (actor).
 spec:
-  entrypoint: save-skill
+  entrypoint: delete-identity
   serviceAccountName: argo-workflow-sa
 
   arguments:
     parameters:
       - name: team_name
-      - name: skill_name
-      - name: content_b64
+      - name: file_name
       - name: actor
         value: "unknown"
 
   templates:
-    - name: save-skill
+    - name: delete-identity
       inputs:
         parameters:
           - name: team_name
-          - name: skill_name
-          - name: content_b64
+          - name: file_name
           - name: actor
       script:
         image: alpine:3.19
         command: [sh]
-        # Small resource envelope so this workflow fits alongside the tenant's
-        # OpenClaw pod inside the namespace CPU quota — the work is just a git
-        # clone / single-file write / push, it does not need a full core.
+        # Small resource envelope — the workflow runs in the tenant namespace
+        # alongside the OpenClaw pod and must fit within the tenant CPU quota.
         resources:
           requests:
             cpu: "50m"
@@ -46,17 +41,14 @@ spec:
           limits:
             cpu: "200m"
             memory: "256Mi"
-        # Parameters are passed as env vars so the container runtime injects
-        # them as opaque values, instead of substituting them into the shell
-        # source where shell parsing could execute $(…), ``…``, or escape
-        # quotes before our regex validation runs.
+        # Parameters passed as env vars so the container runtime injects
+        # them opaquely; avoids shell parsing of $(…)/``…`` in params
+        # before our regex validation runs.
         env:
           - name: TEAM
             value: "{{inputs.parameters.team_name}}"
-          - name: SKILL
-            value: "{{inputs.parameters.skill_name}}"
-          - name: CONTENT_B64
-            value: "{{inputs.parameters.content_b64}}"
+          - name: FILE
+            value: "{{inputs.parameters.file_name}}"
           - name: ACTOR
             value: "{{inputs.parameters.actor}}"
         envFrom:
@@ -65,96 +57,79 @@ spec:
         source: |
           set -e
 
-          # ── Validate names (defense-in-depth; mctl-api validates first) ────
-          # Reject embedded newlines / control chars / any byte outside the
-          # allowed kebab-case alphabet atomically — otherwise `grep -Eq '^…$'`
-          # below would succeed when ANY single line of a multi-line input
-          # matches, letting callers sneak `/` or nested paths past validation.
           if [ -n "$(printf '%s' "$TEAM" | tr -d 'a-z0-9-')" ]; then
             echo "❌ Invalid team name: contains disallowed characters"
             exit 1
           fi
-          if [ -n "$(printf '%s' "$SKILL" | tr -d 'a-z0-9-')" ]; then
-            echo "❌ Invalid skill name: contains disallowed characters"
-            exit 1
-          fi
-          # Length / boundary check, aligned with tpl-validate-tenant.yaml.
           if ! printf '%s' "$TEAM" | grep -Eq '^[a-z0-9][a-z0-9-]{0,62}$'; then
             echo "❌ Invalid team name: $TEAM"
             exit 1
           fi
-          if ! printf '%s' "$SKILL" | grep -Eq '^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$'; then
-            echo "❌ Invalid skill name: $SKILL"
-            exit 1
-          fi
 
-          # Strip newlines / control chars from actor so the commit trailer
-          # can't be forged with extra lines.
+          # Re-validate file_name against the fixed identity allowlist
+          # (defense-in-depth; mctl-api enforces it first).
+          case "$FILE" in
+            AGENTS.md|SOUL.md|IDENTITY.md|USER.md|TOOLS.md) : ;;
+            *)
+              echo "❌ Invalid identity file name: $FILE (must be AGENTS.md | SOUL.md | IDENTITY.md | USER.md | TOOLS.md)"
+              exit 1
+              ;;
+          esac
+
           SAFE_ACTOR=$(printf '%s' "$ACTOR" | tr -d '\r\n' | tr -d '[:cntrl:]')
           [ -z "$SAFE_ACTOR" ] && SAFE_ACTOR="unknown"
 
           apk add --no-cache git openssh-client ca-certificates python3 py3-yaml > /dev/null
 
-          # ── Set up SSH ────────────────────────────────────────────────────
           mkdir -p ~/.ssh
           cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  StrictHostKeyChecking no\n' > ~/.ssh/config
           chmod 600 ~/.ssh/config
 
-          # ── Clone gitops repo ─────────────────────────────────────────────
           git clone --depth=1 "git@github.com:${GITOPS_ORG}/${GITOPS_REPO}.git" /tmp/mctl-gitops
           cd /tmp/mctl-gitops
           git config user.name "argo-workflows[bot]"
           git config user.email "argo-workflows[bot]@users.noreply.github.com"
 
-          DIR="platform-gitops/services/${TEAM}/openclaw/skills"
-          FILE="${DIR}/${SKILL}.md"
+          TARGET="platform-gitops/services/${TEAM}/openclaw/identity/${FILE}"
 
-          # ── Path containment check ───────────────────────────────────────
-          case "$FILE" in
-            platform-gitops/services/${TEAM}/openclaw/skills/*.md) : ;;
+          case "$TARGET" in
+            platform-gitops/services/${TEAM}/openclaw/identity/AGENTS.md) : ;;
+            platform-gitops/services/${TEAM}/openclaw/identity/SOUL.md) : ;;
+            platform-gitops/services/${TEAM}/openclaw/identity/IDENTITY.md) : ;;
+            platform-gitops/services/${TEAM}/openclaw/identity/USER.md) : ;;
+            platform-gitops/services/${TEAM}/openclaw/identity/TOOLS.md) : ;;
             *)
-              echo "❌ Security: computed path $FILE is outside the allowed scope"
+              echo "❌ Security: computed path $TARGET is outside the allowed scope"
               exit 1
               ;;
           esac
-          case "$FILE" in
+          case "$TARGET" in
             *..*)
-              echo "❌ Security: path traversal detected in $FILE"
+              echo "❌ Security: path traversal detected in $TARGET"
               exit 1
               ;;
           esac
-
-          mkdir -p "$DIR"
-
-          # ── Decode content and write file ────────────────────────────────
-          if [ -z "$CONTENT_B64" ]; then
-            echo "❌ Empty content_b64"
-            exit 1
-          fi
-          printf '%s' "$CONTENT_B64" | base64 -d > "$FILE"
-          SIZE=$(wc -c < "$FILE")
-          echo "✅ Wrote $FILE ($SIZE bytes)"
 
           # ── Regenerate consolidated values file for openclaw-skills chart ─
-          # The openclaw-skills ApplicationSet reads
-          # platform-gitops/services/{team}/openclaw/generated/skills-values.yaml
-          # via Helm valueFiles. We rebuild it from the full contents of
-          # skills/ + identity/ on every save so the ConfigMaps stay in
-          # lock-step with the per-file markdown sources.
+          # Rebuild from whatever remains in skills/ + identity/ after the
+          # deletion so the openclaw-skills ConfigMaps stay in sync. If the
+          # last identity override was removed, this produces `identity: {}`.
+          # Run even when $TARGET is already absent so manual-edit drift
+          # between source files and the generated values file is corrected,
+          # rather than silently left to the next save/delete.
           GEN_DIR="platform-gitops/services/${TEAM}/openclaw/generated"
           GEN_FILE="${GEN_DIR}/skills-values.yaml"
 
-          # ── Helper: write source file + regenerate consolidated values + stage ─
+          # ── Helper: remove identity file + regenerate consolidated values + stage ─
           # Called once initially and again after each conflict-driven reset,
           # so the same code path produces the commit whether we start from a
           # clean clone or from `origin/main` after a concurrent push.
           apply_change_and_stage() {
-            mkdir -p "$DIR"
-            printf '%s' "$CONTENT_B64" | base64 -d > "$FILE"
-            SIZE=$(wc -c < "$FILE")
-            echo "✅ Wrote $FILE ($SIZE bytes)"
+            if [ -f "$TARGET" ]; then
+              git rm "$TARGET"
+            fi
             mkdir -p "$GEN_DIR"
             TEAM="$TEAM" python3 <<'PY'
           import os, glob, yaml
@@ -186,31 +161,27 @@ spec:
               yaml.safe_dump(out, f, allow_unicode=True, default_style="|", sort_keys=False, width=4096)
           PY
             echo "✅ Regenerated $GEN_FILE"
-            git add "$FILE" "$GEN_FILE"
+            git add "$GEN_FILE"
           }
 
           apply_change_and_stage
 
-          # ── Commit ───────────────────────────────────────────────────────
           if git diff --cached --quiet; then
-            echo "ℹ️  No changes — file unchanged on main"
+            echo "ℹ️  $TARGET already deleted on main — nothing to commit"
             exit 0
           fi
           git commit \
-            -m "feat(${TEAM}/openclaw): save skill ${SKILL}" \
+            -m "chore(${TEAM}/openclaw): remove identity ${FILE}" \
             -m "Triggered by: ${SAFE_ACTOR}"
 
           # ── Push with reset-and-retry on conflict ────────────────────────
-          # Concurrent save/delete workflows for the same team rewrite the
-          # same generated/skills-values.yaml. A plain `git pull --rebase`
-          # would conflict on that file and leave the retry loop in a half-
-          # baked rebase state under `set -e`. Instead, on a failed push we
-          # reset to the latest main and re-apply our change on top; the
-          # regenerator then produces a values file that reflects both the
-          # concurrent change and ours.
+          # See wft-openclaw-skill-save.yaml for rationale — `git pull
+          # --rebase` would conflict on the shared generated/skills-values
+          # file, so on a failed push we reset to the latest main and
+          # re-apply our change on top.
           for i in 1 2 3 4 5; do
             if git push origin HEAD:main; then
-              echo "✅ Pushed skill ${SKILL} for ${TEAM}"
+              echo "✅ Deleted identity ${FILE} for ${TEAM}"
               exit 0
             fi
             if [ "$i" -eq 5 ]; then
@@ -222,11 +193,11 @@ spec:
             git reset --hard origin/main
             apply_change_and_stage
             if git diff --cached --quiet; then
-              echo "ℹ️  Identical change already on main — nothing to commit"
+              echo "ℹ️  $TARGET already removed — nothing to commit"
               exit 0
             fi
             git commit \
-              -m "feat(${TEAM}/openclaw): save skill ${SKILL}" \
+              -m "chore(${TEAM}/openclaw): remove identity ${FILE}" \
               -m "Triggered by: ${SAFE_ACTOR}"
           done
         volumeMounts:

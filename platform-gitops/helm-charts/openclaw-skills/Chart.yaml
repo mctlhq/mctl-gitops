@@ -1,0 +1,6 @@
+apiVersion: v2
+name: openclaw-skills
+description: Per-tenant ConfigMaps for OpenClaw Layer-3 custom skills and identity overrides.
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
