@@ -6,7 +6,7 @@
 # Chart: base-service
 
 image:
-  repository: ghcr.io/mctlhq/openclaw
+  repository: ghcr.io/mctlhq/mctl-openclaw
   tag: "2026.4.23-beta.1"
 podSecurityContext:
   fsGroup: 1000

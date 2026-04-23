@@ -6,8 +6,13 @@
 # Chart: base-service
 
 image:
-  repository: ghcr.io/mctlhq/openclaw
+<<<<<<< HEAD
+  repository: ghcr.io/mctlhq/mctl-openclaw
   tag: "2026.4.23-beta.1"
+=======
+  repository: ghcr.io/mctlhq/mctl-openclaw
+  tag: "2026.4.23-beta.1"
+>>>>>>> d058627 (hotfix(openclaw): correct image repository to mctl-openclaw)
 podSecurityContext:
   fsGroup: 1000
 imagePullSecrets:
