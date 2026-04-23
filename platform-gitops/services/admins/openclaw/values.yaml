@@ -332,18 +332,13 @@ initContainers:
         # image-shipped overlay or base64 seed) from Layer-3 (owned by the
         # tenant ConfigMap). Runs on fresh pods AND on upgrade pods whose
         # workspace was already seeded on a prior boot.
-        if [ -d "$WORKSPACE/skills" ]; then
-          for d in "$WORKSPACE/skills"/*/; do
-            [ -d "$d" ] || continue
-            # Respect sidecar-managed Layer-3 dirs — a dir carrying .layer3
-            # was created (or restored via S3) by the fan-out sidecar and
-            # must stay mutable/prunable from its perspective. Marking it
-            # .layer2 would lock the sidecar out and freeze the Layer-3
-            # skill forever.
-            [ -f "$d/.layer3" ] && continue
-            : > "$d/.layer2"
-          done
-        fi
+        # Stamp .layer2 only on the four skill dirs this base64 init owns.
+        # Any other dir under $WORKSPACE/skills — including Layer-3 dirs
+        # restored from S3 — stays unmarked so the fan-out sidecar can
+        # take ownership on its next reconcile.
+        for name in mctl-platform mctl-agent-external mctl-gitops-remediation mctl-github-remediation; do
+          [ -d "$WORKSPACE/skills/$name" ] && : > "$WORKSPACE/skills/$name/.layer2"
+        done
         echo "Fixing ownership for config and restored state..."
         chown 1000:1000 /config-rw/openclaw.json
         chown -R 1000:1000 /home/node/.openclaw
