@@ -21,7 +21,13 @@ spec:
 
           persistence:
             enabled: true
-            size: 10Gi
+            # Bumped from 10Gi to 20Gi to give Loki headroom while the compactor
+            # catches up on retention. `hcloud-volumes` supports online expansion;
+            # the StatefulSet's volumeClaimTemplates is immutable so after ArgoCD
+            # syncs, the existing PVC may need a manual
+            # `kubectl patch pvc minio -n minio --type=merge \
+            #   -p '{"spec":{"resources":{"requests":{"storage":"20Gi"}}}}'`.
+            size: 20Gi
 
           deploymentUpdate:
             type: Recreate
