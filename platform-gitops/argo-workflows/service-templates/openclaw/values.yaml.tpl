@@ -329,6 +329,11 @@ initContainers:
         else
           echo "Workspace already initialized; skipping identity seed. Skills are tenant-managed."
         fi
+        if [ -d "$WORKSPACE/skills" ]; then
+          for d in "$WORKSPACE/skills"/*/; do
+            [ -d "$d" ] && : > "$d/.layer2"
+          done
+        fi
         echo "Fixing ownership for config and restored state..."
         chown 1000:1000 /config-rw/openclaw.json
         chown -R 1000:1000 /home/node/.openclaw
