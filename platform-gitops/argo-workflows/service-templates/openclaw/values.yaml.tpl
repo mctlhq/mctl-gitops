@@ -329,16 +329,17 @@ initContainers:
         else
           echo "Workspace already initialized; skipping identity seed. Skills are tenant-managed."
         fi
-        if [ -d "$WORKSPACE/skills" ]; then
-          for d in "$WORKSPACE/skills"/*/; do
-            [ -d "$d" ] || continue
-            # Respect sidecar-managed Layer-3 dirs — a dir carrying .layer3
-            # was created (or restored via S3) by the fan-out sidecar and
-            # must stay mutable/prunable from its perspective. Marking it
-            # .layer2 would lock the sidecar out and freeze the Layer-3
-            # skill forever.
-            [ -f "$d/.layer3" ] && continue
-            : > "$d/.layer2"
+        # Stamp .layer2 only on dirs whose name matches an entry in the
+        # image-shipped overlay (/app/mctl-skills) — those are the ones
+        # the setup init owns. S3-restored Layer-3 dirs (or anything else
+        # pre-existing in the workspace) stay unmarked so the fan-out
+        # sidecar can pick them up on its next reconcile.
+        if [ -d /app/mctl-skills ]; then
+          for src in /app/mctl-skills/*/; do
+            [ -d "$src" ] || continue
+            name="${src%/}"
+            name="${name##*/}"
+            [ -d "$WORKSPACE/skills/$name" ] && : > "$WORKSPACE/skills/$name/.layer2"
           done
         fi
         echo "Fixing ownership for config and restored state..."
