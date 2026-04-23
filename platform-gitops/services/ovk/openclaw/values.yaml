@@ -329,19 +329,16 @@ initContainers:
         # image-shipped overlay or base64 seed) from Layer-3 (owned by the
         # tenant ConfigMap). Runs on fresh pods AND on upgrade pods whose
         # workspace was already seeded on a prior boot.
-        # Stamp .layer2 only on dirs whose name matches an entry in the
-        # image-shipped overlay (/app/mctl-skills) — those are the ones
-        # the setup init owns. S3-restored Layer-3 dirs (or anything else
-        # pre-existing in the workspace) stay unmarked so the fan-out
-        # sidecar can pick them up on its next reconcile.
-        if [ -d /app/mctl-skills ]; then
-          for src in /app/mctl-skills/*/; do
-            [ -d "$src" ] || continue
-            name="${src%/}"
-            name="${name##*/}"
-            [ -d "$WORKSPACE/skills/$name" ] && : > "$WORKSPACE/skills/$name/.layer2"
-          done
-        fi
+        # Stamp .layer2 only on the skill names the setup init owns.
+        # This list covers both the legacy base64 seed set and the
+        # /app/mctl-skills image overlay (which currently ships only
+        # mctl-platform). Names that don't have a matching dir — e.g.
+        # after the base64 seeds are dropped from this values file —
+        # are silently skipped. S3-restored Layer-3 dirs stay unmarked
+        # so the fan-out sidecar picks them up on its next reconcile.
+        for name in mctl-platform mctl-agent-external mctl-gitops-remediation mctl-github-remediation; do
+          [ -d "$WORKSPACE/skills/$name" ] && : > "$WORKSPACE/skills/$name/.layer2"
+        done
         echo "Fixing ownership for config and restored state..."
         chown 1000:1000 /config-rw/openclaw.json
         chown -R 1000:1000 /home/node/.openclaw
