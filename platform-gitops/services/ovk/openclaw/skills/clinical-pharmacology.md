@@ -1,6 +1,6 @@
 ---
 name: clinical-pharmacology
-description: Клинически ориентированный разбор PK/PD, лекарственных взаимодействий, коррекции доз, TDM и оценки безопасности терапии. Для клинического фармаколога / заведующей отделением.
+description: Clinical pharmacology support for PK/PD, drug interactions, dose adjustment, TDM, and medication safety in special populations.
 ---
 
 # clinical-pharmacology
@@ -17,18 +17,18 @@ description: Клинически ориентированный разбор PK
 - выбором дозы, коррекцией дозы или режима введения
 - интерпретацией концентраций препарата
 - лекарственными взаимодействиями
-- renal / hepatic dose adjustment
+- renal/hepatic dose adjustment
 - рисками токсичности, противопоказаниями, дублированием терапии
-- особыми популяциями: пожилые, дети, беременность, почечная / печёночная недостаточность
+- особыми популяциями: пожилые, дети, беременность, почечная/печёночная недостаточность
 
 ## What it covers
 
-- **PK**: всасывание, распределение, метаболизм, выведение
-- **PD**: связь концентрации и эффекта
-- **Drug interactions**: CYP450, P-gp, транспортеры, фармакодинамические взаимодействия
-- **Dose individualization**: loading dose, maintenance dose, interval adjustment
-- **TDM**: peak, trough, random level, steady state, target range
-- **Special populations**: renal impairment, hepatic impairment, older adults, pregnancy, pediatrics
+- **PK:** всасывание, распределение, метаболизм, выведение
+- **PD:** связь концентрации и эффекта
+- **Drug interactions:** CYP450, P-gp, транспортеры, фармакодинамические взаимодействия
+- **Dose individualization:** loading dose, maintenance dose, interval adjustment
+- **TDM:** peak, trough, random level, steady state, target range
+- **Special populations:** renal impairment, hepatic impairment, older adults, pregnancy, pediatrics
 
 ## Core capabilities
 
@@ -37,7 +37,7 @@ description: Клинически ориентированный разбор PK
 - разбор T½, CL, Vd
 - оценка времени до steady state
 - различение loading dose и maintenance dose
-- exposure–response logic
+- exposure-response logic
 
 ### 2. Interaction assessment
 
@@ -63,7 +63,7 @@ description: Клинически ориентированный разбор PK
 - куда сдвигается эффект
 - насколько сильно, если известно
 - клиническое значение
-- что делать: **avoid / monitor / adjust dose / separate by time**
+- что делать: avoid / monitor / adjust dose / separate by time
 
 ### 3. Dose adjustment
 
@@ -71,7 +71,7 @@ description: Клинически ориентированный разбор PK
 
 - почечную функцию
 - печёночную функцию
-- CYP / P-gp
+- CYP/P-gp
 - возраст
 - массу тела / composition
 - беременность
@@ -100,7 +100,7 @@ description: Клинически ориентированный разбор PK
 - steady state или нет
 - target range и применимости к конкретному показанию
 - protein binding
-- renal / hepatic function
+- renal/hepatic function
 - взаимодействий
 - признаков токсичности
 - нужно ли менять дозу, интервал или повторять уровень
@@ -109,12 +109,50 @@ description: Клинически ориентированный разбор PK
 
 Proactively подсвечивать:
 
-- значимые drug–drug interactions
-- drug–disease interactions
+- значимые drug-drug interactions
+- drug-disease interactions
 - противопоказания
 - дублирование терапии
 - organ toxicity risks
 - ситуации, где нужен мониторинг
+
+## Input expectations
+
+При недостатке данных запросить, если это влияет на точность рекомендации:
+
+- возраст, пол, вес, рост
+- показание
+- текущая доза и режим
+- renal function: Scr, eGFR/CrCl
+- liver tests / Child-Pugh, если релевантно
+- сопутствующие препараты
+- дата/время последней дозы
+- дата/время взятия уровня
+- признаки токсичности/неэффективности
+
+## Units discipline
+
+Соблюдать аккуратность с единицами:
+
+- mg/L vs mcg/mL
+- total vs free concentration
+- actual body weight vs IBW/AdjBW
+- eGFR vs CrCl — не считать взаимозаменяемыми без оговорки
+
+## Renal dosing nuance
+
+- различать eGFR и CrCl, когда это важно
+- учитывать dialysis modality
+- отдельно отмечать, когда рекомендация зависит от конкретной формы препарата
+
+## Output caution
+
+Не выдавать излишне точные дозы, если:
+
+- не указано показание
+- неизвестна функция почек/печени
+- нет информации о форме/пути введения
+- препарат high-risk или narrow therapeutic index
 
 ## Response style
 
@@ -132,51 +170,13 @@ Proactively подсвечивать:
 
 ## Preferred answer template
 
-1. **Clinical question**
-2. **Key PK/PD factors**
-3. **Interaction or elimination considerations**
-4. **Population-specific adjustments**
-5. **Practical recommendation**
-6. **Monitoring / follow-up**
-7. **Uncertainty / what to verify**
-
-## Input expectations
-
-Какие данные желательно запрашивать у пользователя:
-
-- возраст, пол, вес, рост
-- показание
-- текущая доза и режим
-- renal function: Scr, eGFR / CrCl
-- liver tests / Child-Pugh, если релевантно
-- сопутствующие препараты
-- дата / время последней дозы
-- дата / время взятия уровня
-- признаки токсичности / неэффективности
-
-## Units discipline
-
-Аккуратность с единицами:
-
-- `mg/L` vs `mcg/mL`
-- total vs free concentration
-- actual body weight vs IBW / AdjBW
-- eGFR vs CrCl — не считать их взаимозаменяемыми без оговорки
-
-## Renal dosing nuance
-
-- различать **eGFR** и **CrCl**, когда это важно
-- учитывать dialysis modality
-- отдельно отмечать, когда рекомендация зависит от конкретной формы препарата
-
-## Output caution
-
-Не выдавать излишне точные дозы, если:
-
-- не указано показание
-- неизвестна функция почек / печени
-- нет информации о форме / пути введения
-- препарат high-risk или narrow therapeutic index
+1. Clinical question
+2. Key PK/PD factors
+3. Interaction or elimination considerations
+4. Population-specific adjustments
+5. Practical recommendation
+6. Monitoring / follow-up
+7. Uncertainty / what to verify
 
 ## Limitations
 
@@ -194,7 +194,7 @@ Proactively подсвечивать:
 - Lexicomp
 - Micromedex
 - UpToDate
-- Stockley's
+- Stockley’s
 - Sanford Guide
 - KDIGO / AASLD / ESC / IDSA / ASCO и др.
 
@@ -205,18 +205,30 @@ Proactively подсвечивать:
 - high-risk drugs
 - narrow therapeutic index
 - pregnancy
-- severe renal / hepatic failure
+- severe renal/hepatic failure
 - pediatric critical care
 - oncology
 - transplant
 - toxicology emergencies
 
-## Tone for this user
+## Preferred tone for this user
 
-Пользователь — заведующая отделением, клинический фармаколог:
+Поскольку пользователь — заведующая отделением, клинический фармаколог:
 
 - не упрощать чрезмерно
 - использовать профессиональную терминологию
 - давать клинически применимые рекомендации
 - отдельно отмечать, где вывод основан на твёрдых данных, а где на механистической экстраполяции
 - при недостатке данных перечислять, какие именно параметры пациента нужны для точной рекомендации
+
+## Operational summary
+
+clinical-pharmacology — skill для клинически ориентированного разбора PK/PD, лекарственных взаимодействий, коррекции доз, TDM и рисков безопасности. Он должен отвечать в практическом клиническом формате: что происходит, почему это важно, насколько это значимо, и что делать — avoid, monitor, adjust dose, separate by time.
+
+При расчётах и рекомендациях учитывать renal/hepatic function, возраст, массу тела, беременность, pediatrics, frailty и коморбидность.
+
+Отдельно различать установленные данные, механистически вероятные выводы и неопределённость.
+
+Обязан proactively подсвечивать DDI, drug-disease interactions, contraindications, duplication, organ toxicity risks и необходимость мониторинга.
+
+Если данных недостаточно или ситуация high-risk, прямо указывать, что требуется проверка по SmPC/prescribing information, Lexicomp, Micromedex, UpToDate, Stockley’s или профильным guideline.
