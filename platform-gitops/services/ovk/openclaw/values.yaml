@@ -404,6 +404,60 @@ extraContainers:
     volumeMounts:
       - name: state-data
         mountPath: /home/node/.openclaw
+  # Layer-3 skills fan-out: watch the tenant-scoped <team>-openclaw-skills
+  # ConfigMap (rendered by platform-gitops/helm-charts/openclaw-skills from
+  # generated/skills-values.yaml, which itself is rewritten on every
+  # mctl_save_openclaw_skill / mctl_delete_openclaw_skill workflow) and
+  # mirror each <name>.md key into /home/node/.openclaw/workspace/skills/
+  # <name>/SKILL.md. Layer-2 skills shipped in /app/mctl-skills are left
+  # alone — only Layer-3 entries that disappear from the CM are pruned.
+  - name: skills-fanout
+    image: busybox:1.36
+    command: ["sh", "-c"]
+    args:
+      - |
+        SRC=/mctl-layer3-skills
+        DST=/home/node/.openclaw/workspace/skills
+        mkdir -p "$DST"
+        echo "layer3-skills fan-out started; source=$SRC dest=$DST"
+        while true; do
+          if [ -d "$SRC" ]; then
+            for f in "$SRC"/*.md; do
+              [ -e "$f" ] || continue
+              base="${f##*/}"
+              base="${base%.md}"
+              [ "$base" = ".placeholder" ] && continue
+              mkdir -p "$DST/$base"
+              if ! cmp -s "$f" "$DST/$base/SKILL.md" 2>/dev/null; then
+                cp "$f" "$DST/$base/SKILL.md"
+                echo "synced: $base"
+              fi
+            done
+            for d in "$DST"/*/; do
+              [ -d "$d" ] || continue
+              name="${d%/}"
+              name="${name##*/}"
+              [ -f "$SRC/$name.md" ] && continue
+              [ -d "/app/mctl-skills/$name" ] && continue
+              rm -rf "$d"
+              echo "removed: $name"
+            done
+          fi
+          sleep 10
+        done
+    resources:
+      requests:
+        cpu: 10m
+        memory: 16Mi
+      limits:
+        cpu: 100m
+        memory: 64Mi
+    volumeMounts:
+      - name: layer3-skills-cm
+        mountPath: /mctl-layer3-skills
+        readOnly: true
+      - name: state-data
+        mountPath: /home/node/.openclaw
 persistence:
   state:
     enabled: false
@@ -417,6 +471,10 @@ extraVolumes:
     emptyDir: {}
   - name: state-data
     emptyDir: {}
+  - name: layer3-skills-cm
+    configMap:
+      name: ovk-openclaw-skills
+      optional: true
   - name: openclaw-scripts
     configMap:
       name: openclaw-scripts
