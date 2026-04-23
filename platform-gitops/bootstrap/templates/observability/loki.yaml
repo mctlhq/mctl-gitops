@@ -24,7 +24,15 @@ spec:
             repository: grafana/loki
             tag: 2.9.17
           persistence:
-            enabled: false # Switched to MinIO (S3); /data is backed by emptyDir
+            # Minimal PVC (2Gi) specifically for Loki's /data — the
+            # compactor working_directory lives there and must survive pod
+            # restarts, otherwise pending deletion markers are lost on
+            # every restart and some chunks never get deleted from S3.
+            # Bulk data (chunks + index) still lives in MinIO via
+            # storage_config.aws.s3 / tsdb_shipper.shared_store: s3.
+            enabled: true
+            size: 2Gi
+            storageClassName: hcloud-volumes
           resources:
             requests:
               cpu: 100m
