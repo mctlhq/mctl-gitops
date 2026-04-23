@@ -29,6 +29,10 @@ resources:
 # Recreate avoids quota deadlocks for single-pod tenant deployments.
 strategy:
   type: Recreate
+# Give the s3-sync sidecar's preStop hook room to complete a synchronous
+# `mc mirror` before SIGKILL. The default 30s is not enough when state is
+# large; 60s leaves a comfortable margin for every current tenant.
+terminationGracePeriodSeconds: 60
 
 env:
   APP_ENV: production
@@ -378,6 +382,24 @@ extraContainers:
             /home/node/.openclaw s3/platform-state/__TEAM_NAME__/__SERVICE_NAME__/ || true
           sleep 10
         done
+    lifecycle:
+      # Flush tenant state (auth-profiles.json, sessions, memory) to S3
+      # synchronously before SIGTERM. Without this, the ongoing 10s mirror
+      # loop often misses the last few writes, the Recreate rollout brings
+      # up a fresh emptyDir, and restore-state pulls a stale snapshot from
+      # S3 — auth connections and session history disappear. `mc alias set`
+      # runs at container start and persists to ~/.mc/config.json, so the
+      # `s3/...` path here is already resolved when preStop fires.
+      preStop:
+        exec:
+          command:
+            - sh
+            - -c
+            - |
+              mc mirror --remove --overwrite \
+                --exclude '*.lock' \
+                --exclude '*.tmp' \
+                /home/node/.openclaw s3/platform-state/__TEAM_NAME__/__SERVICE_NAME__/ || true
     env:
       - name: MINIO_ENDPOINT
         value: "http://minio.minio.svc.cluster.local:9000"
