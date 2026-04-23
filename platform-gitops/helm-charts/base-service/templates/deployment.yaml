@@ -116,6 +116,14 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- if ne (.Values.terminationGracePeriodSeconds | toString) "<nil>" }}
+      # Tenants that run a state-mirror sidecar (e.g. openclaw/s3-sync) need
+      # more than the 30s default so the preStop mc mirror can flush the
+      # full state directory before SIGKILL arrives. Use a nil-check instead
+      # of `with` so 0 (valid Kubernetes "terminate immediately") still
+      # applies cleanly.
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      {{- end }}
       {{- if or .Values.extraVolumes .Values.persistence }}
       volumes:
         {{- with .Values.extraVolumes }}
