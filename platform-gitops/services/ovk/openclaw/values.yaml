@@ -439,7 +439,12 @@ extraContainers:
         mkdir -p "$DST"
         echo "layer3-skills fan-out started; source=$SRC dest=$DST"
         while true; do
-          if [ -d "$SRC" ]; then
+          # `optional: true` on the CM volume means $SRC may be an empty
+          # dir while the ConfigMap is still being rendered or has been
+          # transiently deleted — treat that the same as "no mount" and
+          # skip pruning, otherwise the prune loop would drop every
+          # Layer-3 skill whenever ArgoCD blinks.
+          if [ -d "$SRC" ] && [ -n "$(ls -A "$SRC" 2>/dev/null)" ]; then
             for f in "$SRC"/*.md; do
               [ -e "$f" ] || continue
               base="${f##*/}"
