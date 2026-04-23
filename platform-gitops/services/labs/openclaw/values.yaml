@@ -332,7 +332,14 @@ initContainers:
         # workspace was already seeded on a prior boot.
         if [ -d "$WORKSPACE/skills" ]; then
           for d in "$WORKSPACE/skills"/*/; do
-            [ -d "$d" ] && : > "$d/.layer2"
+            [ -d "$d" ] || continue
+            # Respect sidecar-managed Layer-3 dirs — a dir carrying .layer3
+            # was created (or restored via S3) by the fan-out sidecar and
+            # must stay mutable/prunable from its perspective. Marking it
+            # .layer2 would lock the sidecar out and freeze the Layer-3
+            # skill forever.
+            [ -f "$d/.layer3" ] && continue
+            : > "$d/.layer2"
           done
         fi
         echo "Fixing ownership for config and restored state..."
