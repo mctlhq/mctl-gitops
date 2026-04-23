@@ -323,6 +323,12 @@ initContainers:
           printf '%s' 'LS0tCm5hbWU6IG1jdGwtYWdlbnQtZXh0ZXJuYWwKZGVzY3JpcHRpb246IEhhbmRsZSBtY3RsLWFnZW50IHdlYmhvb2sgcmVtZWRpYXRpb24gc2Vzc2lvbnMuIFVzZSBmb3IgY2xhaW0tZmlyc3QgaW5jaWRlbnQgcnVucyBhbmQgZXhhY3RseS1vbmUgY2FsbGJhY2sgcmVzdWx0IGRpc2NpcGxpbmUuCi0tLQoKIyBNQ1RMIEFnZW50IEV4dGVybmFsCgotIFRoaXMgc2tpbGwgYXBwbGllcyB0byB3ZWJob29rIHNlc3Npb25zIGZyb20gYG1jdGwtYWdlbnRgLgotIE5ldmVyIGF1dG8tY2xhaW0gYHRpY2tldC5jcmVhdGVkYC4KLSBGb3IgYHRpY2tldC5maXhfZmFpbGVkYCBhbmQgYHRpY2tldC5lc2NhbGF0ZWRgLCBjbGFpbSBmaXJzdCB2aWEgYG1jdGxfYWdlbnRfZXh0ZXJuYWxgLgotIEJlZm9yZSBjbGFpbSBzdWNjZWVkcywgZG8gbm90IHJlYWQgd29ya3NwYWNlIGZpbGVzIG9yIGRvIGJyb2FkIGV4cGxvcmF0aW9uLgotIEFmdGVyIGNsYWltLCBnYXRoZXIgZXZpZGVuY2Ugd2l0aCBgbWN0bF8qYCB0b29scyBmaXJzdC4KLSBTZW5kIGV4YWN0bHkgb25lIGNhbGxiYWNrIHJlc3VsdCBhZnRlciBhIHN1Y2Nlc3NmdWwgY2xhaW0uCi0gVXNlIGBwcl9jcmVhdGVkYCBvbmx5IHdoZW4gYSByZWFsIFBSIGV4aXN0cyB3aXRoIGEgY29uY3JldGUgUFIgVVJMOyBvdGhlcndpc2UgcmV0dXJuIGBuZWVkc19odW1hbmAgb3IgYGZhaWxlZGAuCg==' | base64 -d > "$WORKSPACE/skills/mctl-agent-external/SKILL.md"
           printf '%s' 'LS0tCm5hbWU6IG1jdGwtZ2l0b3BzLXJlbWVkaWF0aW9uCmRlc2NyaXB0aW9uOiBQcmVwYXJlIGNvbnNlcnZhdGl2ZSBQUi1vcmllbnRlZCByZW1lZGlhdGlvbiBmb3IgTUNUTCBpbmNpZGVudHMuIFVzZSBmb3IgcmVzb3VyY2UgdHVuaW5nLCBwcm9iZSBmaXhlcywgd29ya2Zsb3cgdmVyaWZpY2F0aW9uLCBhbmQgc2FmZSBHaXRPcHMgY2hhbmdlcy4KLS0tCgojIE1DVEwgR2l0T3BzIFJlbWVkaWF0aW9uCgotIENvbnNlcnZhdGl2ZSB2MSBwb2xpY3k6IHByZWZlciBvcGVyYXRvci1yZWFkeSBzdW1tYXJpZXMgYW5kIFBSLW9yaWVudGVkIGZpeGVzLgotIEFsbG93ZWQgc2FmZSB0YXJnZXRzIGluY2x1ZGUgcmVzb3VyY2UgcmVxdWVzdHMgYW5kIGxpbWl0cywgcHJvYmUgYW5kIHRpbWVvdXQgZml4ZXMsIGFuZCBjbGVhciBHaXRPcHMgY29uZmlnIGNvcnJlY3Rpb25zIGJhY2tlZCBieSBldmlkZW5jZS4KLSBEbyBub3QgcGVyZm9ybSBkZXN0cnVjdGl2ZSBhY3Rpb25zIGRpcmVjdGx5LgotIElmIGV2aWRlbmNlIGlzIGluY29tcGxldGUgb3IgdGhlIGFjdGlvbiBpcyByaXNreSwgcmV0dXJuIGBuZWVkc19odW1hbmAuCi0gVHJlYXQgYG1jdGwtZ2l0b3BzYCBhcyB0aGUgc291cmNlIG9mIHRydXRoIGZvciBkZXNpcmVkIGNvbmZpZy4K' | base64 -d > "$WORKSPACE/skills/mctl-gitops-remediation/SKILL.md"
           printf '%s' 'LS0tCm5hbWU6IG1jdGwtZ2l0aHViLXJlbWVkaWF0aW9uCmRlc2NyaXB0aW9uOiBDcmVhdGUgb3IgdXBkYXRlIGRldGVybWluaXN0aWMgcmVtZWRpYXRpb24gcHVsbCByZXF1ZXN0cyBpbiBhbGxvd2xpc3RlZCBHaXRIdWIgcmVwb3MgYWZ0ZXIgbWN0bCBldmlkZW5jZSBnYXRoZXJpbmcuIFVzZSBmb3IgaW5jaWRlbnQgcnVucyB0aGF0IGFyZSBzYWZlIGZvciBQUi1iYWNrZWQgY2hhbmdlcyBhbmQgcmVxdWlyZSBhIHJlYWwgcHJfY3JlYXRlZCBjYWxsYmFjay4KLS0tCgojIE1DVEwgR2l0SHViIFJlbWVkaWF0aW9uCgotIFRoaXMgc2tpbGwgYXBwbGllcyBhZnRlciBhIHN1Y2Nlc3NmdWwgYG1jdGxfYWdlbnRfZXh0ZXJuYWxgIGNsYWltLgotIFVzZSBHaXRIdWIgTUNQIHRvb2xzIG9ubHkgZm9yIGV4cGxpY2l0IHJlcG8tYmFja2VkIHJlbWVkaWF0aW9uLgotIFJlc3BlY3QgdGhlIEdpdEh1YiByZXBvIGFsbG93bGlzdCBleHBvc2VkIHRvIHRoZSBydW50aW1lLgotIFByZWZlciBvbmUgZGV0ZXJtaW5pc3RpYyByZW1lZGlhdGlvbiBicmFuY2ggcGVyIHRpY2tldCwgcmV1c2luZyB0aGUgc2FtZSBvcGVuIFBSIHdoZW4gaXQgYWxyZWFkeSBleGlzdHMuCi0gVXNlIGBwcl9jcmVhdGVkYCBvbmx5IHdoZW4gYSByZWFsIEdpdEh1YiBwdWxsIHJlcXVlc3QgZXhpc3RzLgotIEluY2x1ZGUgcmVwbywgYnJhbmNoLCBwcl91cmwsIHByX251bWJlciwgYW5kIGNvbW1pdF9zaGEgaW4gY2FsbGJhY2sgYXJ0aWZhY3RzIHdoZW4gYXZhaWxhYmxlLgotIERvIG5vdCBtZXJnZSBQUnMgYXV0b21hdGljYWxseSBpbiB2MS4K' | base64 -d > "$WORKSPACE/skills/mctl-github-remediation/SKILL.md"
+          # Mark every base64-seeded skill dir as Layer-2 so the fan-out
+          # sidecar never overwrites or prunes them if a same-named Layer-3
+          # key appears in the tenant ConfigMap.
+          for d in "$WORKSPACE/skills"/*/; do
+            [ -d "$d" ] && : > "$d/.layer2"
+          done
           rm -f "$WORKSPACE/BOOTSTRAP.md"
         else
           echo "Workspace identity already current; keeping existing identity files."
@@ -431,6 +437,13 @@ extraContainers:
               base="${f##*/}"
               base="${base%.md}"
               [ "$base" = ".placeholder" ] && continue
+              # A dir marked as Layer-2 (setup init seeded it from an image
+              # overlay or from the legacy base64 blobs) is read-only from
+              # the fan-out sidecar's perspective — never overwrite or
+              # prune it, a Layer-3 skill with a name collision is a bug.
+              if [ -f "$DST/$base/.layer2" ]; then
+                continue
+              fi
               mkdir -p "$DST/$base"
               if ! cmp -s "$f" "$DST/$base/SKILL.md" 2>/dev/null; then
                 cp "$f" "$DST/$base/SKILL.md"

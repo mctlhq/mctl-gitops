@@ -435,6 +435,13 @@ extraContainers:
               base="${f##*/}"
               base="${base%.md}"
               [ "$base" = ".placeholder" ] && continue
+              # A dir marked as Layer-2 (setup init seeded it from an image
+              # overlay or from the legacy base64 blobs) is read-only from
+              # the fan-out sidecar's perspective — never overwrite or
+              # prune it, a Layer-3 skill with a name collision is a bug.
+              if [ -f "$DST/$base/.layer2" ]; then
+                continue
+              fi
               mkdir -p "$DST/$base"
               if ! cmp -s "$f" "$DST/$base/SKILL.md" 2>/dev/null; then
                 cp "$f" "$DST/$base/SKILL.md"
