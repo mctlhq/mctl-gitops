@@ -1,0 +1,24 @@
+{{- /*
+Layer-3 custom skills ConfigMap.
+Keys: `<skill-name>.md`, values: raw SKILL.md content.
+When .Values.skills is empty, a `.placeholder` key keeps the ConfigMap
+non-empty so the fan-out sidecar always has a stable mount point.
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "openclaw-skills.skillsName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "openclaw-skills.commonLabels" . | nindent 4 }}
+data:
+  {{- if .Values.skills }}
+  {{- range $name, $content := .Values.skills }}
+  {{ $name }}.md: |-
+    {{- $content | nindent 4 }}
+  {{- end }}
+  {{- else }}
+  # Placeholder key — tenant has no Layer-3 skills yet. Fan-out sidecar
+  # ignores keys that start with a dot.
+  .placeholder: ""
+  {{- end }}
