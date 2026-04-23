@@ -325,6 +325,16 @@ initContainers:
         else
           echo "Workspace identity already current; keeping existing identity files."
         fi
+        # Always (re)stamp .layer2 markers on every existing skill dir so the
+        # fan-out sidecar can tell Layer-2 (owned by this setup init —
+        # image-shipped overlay or base64 seed) from Layer-3 (owned by the
+        # tenant ConfigMap). Runs on fresh pods AND on upgrade pods whose
+        # workspace was already seeded on a prior boot.
+        if [ -d "$WORKSPACE/skills" ]; then
+          for d in "$WORKSPACE/skills"/*/; do
+            [ -d "$d" ] && : > "$d/.layer2"
+          done
+        fi
         echo "Fixing ownership for config and restored state..."
         chown 1000:1000 /config-rw/openclaw.json
         chown -R 1000:1000 /home/node/.openclaw
