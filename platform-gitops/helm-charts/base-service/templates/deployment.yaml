@@ -116,6 +116,12 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- with .Values.terminationGracePeriodSeconds }}
+      # Tenants that run a state-mirror sidecar (e.g. openclaw/s3-sync) need
+      # more than the 30s default so the preStop mc mirror can flush the
+      # full state directory before SIGKILL arrives.
+      terminationGracePeriodSeconds: {{ . }}
+      {{- end }}
       {{- if or .Values.extraVolumes .Values.persistence }}
       volumes:
         {{- with .Values.extraVolumes }}

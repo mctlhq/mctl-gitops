@@ -94,6 +94,12 @@ nodeSelector: {}
 tolerations: []
 affinity: {}
 
+# -- Optional: override the Kubernetes default (30s) terminationGracePeriodSeconds.
+# Bump this when the pod runs a preStop hook that needs more time to flush
+# state (e.g. the openclaw s3-sync sidecar running `mc mirror` on SIGTERM).
+# Leave unset to inherit the Kubernetes default.
+terminationGracePeriodSeconds: ~
+
 # -- Health checks
 probes:
   liveness:
