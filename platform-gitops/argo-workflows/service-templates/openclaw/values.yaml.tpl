@@ -304,6 +304,12 @@ initContainers:
         mountPath: /whisper-storage
   # 3. Setup config and inject tokens
   - name: setup
+    # Run as root so the chown -R at the end can correct ownership of
+    # /home/node/.openclaw — the openclaw image bakes USER=node (UID 1000)
+    # which doesn't have permission to chown root-owned restore-state output.
+    securityContext:
+      runAsUser: 0
+      runAsGroup: 0
     image: "ghcr.io/mctlhq/mctl-openclaw:__IMAGE_TAG__"
     command: ["sh", "-c"]
     args:
