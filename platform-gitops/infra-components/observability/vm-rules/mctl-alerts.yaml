@@ -94,3 +94,38 @@ spec:
             severity: critical
           annotations:
             summary: Vault instance {{ $labels.instance }} is sealed
+
+    # MinIO PVC disk-usage alerts. The default
+    # KubePersistentVolumeFillingUp alert (kube-prometheus-stack) only fires
+    # at 97% over 1h or 87% over 4h, which is too late given the Loki write
+    # rate against the 20Gi MinIO PVC. On 2026-04-23 the PVC went transiently
+    # full, broke five workflows, and recovered without any alert firing.
+    # 75% gives ~5Gi of headroom for the Loki compactor to catch up;
+    # 90% escalates well before MinIO starts returning write errors.
+    - name: minio.disk-usage
+      rules:
+        - alert: MinioBucketUsageHigh
+          expr: |
+            (kubelet_volume_stats_used_bytes{namespace="minio",persistentvolumeclaim="minio"}
+             / kubelet_volume_stats_capacity_bytes{namespace="minio",persistentvolumeclaim="minio"}) > 0.75
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: MinIO PVC at {{ $value | humanizePercentage }} of 20Gi
+            description: >-
+              MinIO is approaching capacity. Loki bucket retention may need
+              tightening.
+
+        - alert: MinioBucketUsageCritical
+          expr: |
+            (kubelet_volume_stats_used_bytes{namespace="minio",persistentvolumeclaim="minio"}
+             / kubelet_volume_stats_capacity_bytes{namespace="minio",persistentvolumeclaim="minio"}) > 0.90
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: MinIO PVC critically full at {{ $value | humanizePercentage }}
+            description: >-
+              MinIO write errors imminent. Free space immediately or expand
+              PVC.
