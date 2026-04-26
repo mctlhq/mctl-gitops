@@ -83,10 +83,12 @@ initContainers:
         # closes the loop on the init side.
         NEW_STATE_MARKER=""
         LEGACY_STATE_MARKER=""
-        if mc ls --recursive s3/platform-state/admins/openclaw/ 2>/dev/null | head -1 | grep -q .; then
+        # `grep` is not present in the minio/mc image — use shell `[ -n
+        # "$(...)" ]` instead to detect whether the prefix has any object.
+        if [ -n "$(mc ls --recursive s3/platform-state/admins/openclaw/ 2>/dev/null | head -1)" ]; then
           NEW_STATE_MARKER=1
         fi
-        if mc ls --recursive s3/platform-state/openclaw/admins/ 2>/dev/null | head -1 | grep -q .; then
+        if [ -n "$(mc ls --recursive s3/platform-state/openclaw/admins/ 2>/dev/null | head -1)" ]; then
           LEGACY_STATE_MARKER=1
         fi
         if [ -n "$NEW_STATE_MARKER" ]; then
