@@ -45,6 +45,16 @@ spec:
         source: |
           set -euo pipefail
 
+          # alpine/git is minimal — install yq for the openclaw setup-init
+          # image patch below.
+          apk add --no-cache --quiet curl ca-certificates
+          if ! command -v yq >/dev/null 2>&1; then
+            curl -fsSL --retry 5 --retry-delay 3 --retry-max-time 60 \
+              -o /usr/local/bin/yq \
+              https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+            chmod +x /usr/local/bin/yq
+          fi
+
           # Configure SSH for git push
           mkdir -p ~/.ssh
           cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
@@ -68,6 +78,20 @@ spec:
 
           # Patch image.tag using sed (safe for simple tag strings)
           sed -i "s|^\( *tag: *\).*|\1\"${TAG}\"|" "${VALUES}"
+          # Keep any openclaw setup init container pinned to the same
+          # image tag so the Layer-2 overlay bootstrap runs from the
+          # same release the main container serves. noop on services
+          # that don't define a setup init in .initContainers.
+          REPO=$(yq eval '.image.repository' "${VALUES}")
+          # Only touch setup init image on openclaw-style overlay tenants
+          # (setup already uses the same repo as main). Legacy busybox
+          # bootstrap setups are left alone.
+          CURRENT_SETUP=$(yq eval '(.initContainers[]? | select(.name == "setup") | .image) // ""' "${VALUES}")
+          case "$CURRENT_SETUP" in
+            "${REPO}:"*)
+              yq eval -i "(.initContainers[]? | select(.name == \"setup\") | .image) = \"${REPO}:${TAG}\"" "${VALUES}"
+              ;;
+          esac
 
           git config user.email "ci@mctl.ai"
           git config user.name "mctl-rollback"
