@@ -315,6 +315,24 @@ spec:
 
           elif [ "$ACTION" = "deploy" ]; then
             yq eval -i ".image.tag = \"${TAG}\"" "${DIR}/values.yaml"
+            # Keep any openclaw setup init container pinned to the same
+            # image tag so the Layer-2 overlay copy (/app/mctl-skills +
+            # /app/mctl-identity) runs from the same code the main
+            # container serves. noop on services that don't define a
+            # setup init in .initContainers.
+            REPO=$(yq eval '.image.repository' "${DIR}/values.yaml")
+            # Only sync the setup init image when it already uses the
+            # same repository as the main container (openclaw Layer-2
+            # overlay tenants). A legacy setup init using busybox or
+            # any other image is left alone — its bootstrap script is
+            # written for that runtime and replacing the image could
+            # break it.
+            CURRENT_SETUP=$(yq eval '(.initContainers[]? | select(.name == "setup") | .image) // ""' "${DIR}/values.yaml")
+            case "$CURRENT_SETUP" in
+              "${REPO}:"*)
+                yq eval -i "(.initContainers[]? | select(.name == \"setup\") | .image) = \"${REPO}:${TAG}\"" "${DIR}/values.yaml"
+                ;;
+            esac
 
             # Clear env vars if sentinel __CLEAR__ was set
             if [ "$CLEAR_ENV" = "true" ]; then
