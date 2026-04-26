@@ -617,16 +617,14 @@ dbSecret:
 dbInitJob:
   enabled: false
 extraExternalSecrets:
-  ghcr-credentials:
-    refreshInterval: 24h
-    targetSecret: ghcr-credentials
-    targetTemplateType: kubernetes.io/dockerconfigjson
-    targetTemplateMetadataAnnotations:
-      argocd.argoproj.io/compare-options: IgnoreExtraneous
-    data:
-      - secretKey: .dockerconfigjson
-        remoteKey: platform/backstage/ghcr-credentials
-        property: dockerconfigjson
+  # ghcr-credentials is provided by the platform-level mctl-agent-ghcr
+  # ExternalSecret (bootstrap/templates/mctl-platform/mctl-agent-secrets.yaml)
+  # which exists only in the admins namespace because that's where the
+  # mctl-agent service runs. Both ESes targeted the same Secret with the
+  # same Vault key, so this chart's copy fought the bootstrap copy 684
+  # times over 7 days for ownership and held the admins-openclaw
+  # Application in Degraded health. ovk and labs keep their own ES
+  # because they don't have the platform-level one.
   openclaw-github-secret:
     refreshInterval: 1h
     targetSecret: openclaw-github-secret
