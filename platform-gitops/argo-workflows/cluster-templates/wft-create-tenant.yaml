@@ -20,6 +20,17 @@ metadata:
         3. commit-to-git      — tenant files + ArgoCD RBAC pushed to mctl-gitops
 
 spec:
+  # TTL is declared on the template itself (not relied on via controller
+  # workflowDefaults) because workflows submitted with `kubectl create -f`
+  # against a `templateRef` do NOT inherit workflowDefaults from the
+  # controller config in v3.7.x — the merge happens too late in the
+  # template-resolution path. Without this block, completed workflows
+  # accumulate forever in the cluster (observed: 64 stale workflows on
+  # 2026-04-26 audit, 49 of them lacking any ttlStrategy).
+  ttlStrategy:
+    secondsAfterSuccess: 1800
+    secondsAfterFailure: 86400
+    secondsAfterCompletion: 3600
   entrypoint: create-tenant-pipeline
   serviceAccountName: argo-workflow-sa
 

@@ -10,6 +10,13 @@ metadata:
       No-op (success) if the file does not exist. Commits as argo-workflows[bot]
       with the triggering user's ID recorded in the commit message (actor).
 spec:
+  # See wft-create-tenant.yaml: workflowDefaults from the controller
+  # config does not merge into workflows launched via templateRef, so
+  # ttlStrategy must be declared inline on each ClusterWorkflowTemplate.
+  ttlStrategy:
+    secondsAfterSuccess: 1800
+    secondsAfterFailure: 86400
+    secondsAfterCompletion: 3600
   entrypoint: delete-skill
   serviceAccountName: argo-workflow-sa
 
