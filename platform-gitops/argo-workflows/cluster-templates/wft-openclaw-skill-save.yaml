@@ -14,6 +14,13 @@ metadata:
       mctl-api before this workflow is submitted; the workflow re-validates
       the path as a defense-in-depth check.
 spec:
+  # See wft-create-tenant.yaml: workflowDefaults from the controller
+  # config does not merge into workflows launched via templateRef, so
+  # ttlStrategy must be declared inline on each ClusterWorkflowTemplate.
+  ttlStrategy:
+    secondsAfterSuccess: 1800
+    secondsAfterFailure: 86400
+    secondsAfterCompletion: 3600
   entrypoint: save-skill
   serviceAccountName: argo-workflow-sa
 
