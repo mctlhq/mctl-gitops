@@ -7,6 +7,10 @@ nameOverride: argocd
 
 global:
   domain: ops.mctl.ai
+  # Argo CD images are public (quay.io/argoproj, ghcr.io/dexidp, public ECR
+  # for redis). No imagePullSecret is required; clear it explicitly so the
+  # field cannot inherit a stale ghcr-registry value from a prior release.
+  imagePullSecrets: []
 
 configs:
   cm:
