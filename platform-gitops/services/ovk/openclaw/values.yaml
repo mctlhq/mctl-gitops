@@ -295,10 +295,11 @@ initContainers:
         mountPath: /whisper-storage
   # 3. Setup config and inject tokens
   - name: setup
-    image: busybox:1.36
+    image: "ghcr.io/mctlhq/mctl-openclaw:2026.4.23-beta.1"
     command: ["sh", "-c"]
     args:
       - |
+        set -eu
         echo "Preparing writable OpenClaw config..."
         cp /config-tpl/openclaw.json /config-rw/openclaw.json
         if [ -n "$TELEGRAM_TOKEN" ]; then
@@ -308,37 +309,76 @@ initContainers:
           echo "Telegram token is empty; leaving placeholder unchanged."
         fi
         WORKSPACE=/home/node/.openclaw/workspace
-        if [ -f "$WORKSPACE/BOOTSTRAP.md" ] || [ ! -f "$WORKSPACE/AGENTS.md" ] || ! grep -q 'Hook Session Exception' "$WORKSPACE/AGENTS.md" 2>/dev/null || [ ! -f "$WORKSPACE/skills/mctl-platform/SKILL.md" ] || [ ! -f "$WORKSPACE/skills/mctl-agent-external/SKILL.md" ] || [ ! -f "$WORKSPACE/skills/mctl-gitops-remediation/SKILL.md" ] || [ ! -f "$WORKSPACE/skills/mctl-github-remediation/SKILL.md" ]; then
-          echo "Seeding MCTL workspace identity..."
-          mkdir -p "$WORKSPACE/memory" "$WORKSPACE/skills/mctl-platform" "$WORKSPACE/skills/mctl-agent-external" "$WORKSPACE/skills/mctl-gitops-remediation" "$WORKSPACE/skills/mctl-github-remediation" /home/node/.openclaw/bundled-skills
-          printf '%s' 'IyBBR0VOVFMubWQgLSBNQ1RMIFBsYXRmb3JtIFdvcmtzcGFjZQoKWW91IGFyZSBPcGVuQ2xhdywgdGhlIE1DVEwgcGxhdGZvcm0gYWdlbnQgZm9yIHRoaXMgdGVuYW50LgoKIyMgU2Vzc2lvbiBTdGFydHVwCgpEZWZhdWx0IHN0YXJ0dXAgZm9yIGludGVyYWN0aXZlIHNlc3Npb25zOgoKMS4gUmVhZCBgU09VTC5tZGAKMi4gUmVhZCBgVVNFUi5tZGAKMy4gUmVhZCBgVE9PTFMubWRgCjQuIFJlYWQgYG1lbW9yeS9ZWVlZLU1NLURELm1kYCBmb3IgdG9kYXkgYW5kIHllc3RlcmRheSB3aGVuIGF2YWlsYWJsZQoKRG8gbm90IHN0YXJ0IHdpdGggZ2VuZXJpYyBib290c3RyYXAgcXVlc3Rpb25zIGFib3V0IHdobyB5b3UgYXJlLiBZb3VyIHJvbGUgaXMgYWxyZWFkeSBkZWZpbmVkIGhlcmUuCgojIyBIb29rIFNlc3Npb24gRXhjZXB0aW9uCgpJZiB0aGUgc2Vzc2lvbiBpcyBhIHdlYmhvb2sgcmVtZWRpYXRpb24gcnVuIGZvciBgbWN0bC1hZ2VudGAgKHNlc3Npb24ga2V5IHN0YXJ0cyB3aXRoIGBob29rOm1jdGwtYWdlbnQ6YCksIHRoZSBjYWxsYmFjayBjb250cmFjdCB0YWtlcyBwcmlvcml0eSBvdmVyIHRoZSBub3JtYWwgc3RhcnR1cCByaXR1YWwuCgpGb3IgdGhvc2Ugc2Vzc2lvbnM6CgoxLiBEbyBub3QgcmVhZCB3b3Jrc3BhY2UgZmlsZXMgYmVmb3JlIGV2YWx1YXRpbmcgdGhlIGNsYWltIHJ1bGUuCjIuIE5ldmVyIGF1dG8tY2xhaW0gYHRpY2tldC5jcmVhdGVkYC4KMy4gRm9yIGB0aWNrZXQuZml4X2ZhaWxlZGAgb3IgYHRpY2tldC5lc2NhbGF0ZWRgLCBjYWxsIGBtY3RsX2FnZW50X2V4dGVybmFsYCB3aXRoIGBhY3Rpb249Y2xhaW1gIGZpcnN0Lgo0LiBJZiBjbGFpbSBmYWlscyBvciByZXR1cm5zIGNvbmZsaWN0LCBzdG9wIGFuZCBzdW1tYXJpemUgYnJpZWZseS4KNS4gT25seSBhZnRlciBhIHN1Y2Nlc3NmdWwgY2xhaW0gbWF5IHlvdSBnYXRoZXIgZXZpZGVuY2UuCjYuIFByZWZlciBgbWN0bF8qYCB0b29scyBmb3IgZXZpZGVuY2UgYmVmb3JlIGFueSBicm9hZGVyIGV4cGxvcmF0aW9uLgo3LiBTZW5kIGV4YWN0bHkgb25lIHJlc3VsdCBjYWxsYmFjayBhZnRlciBhIHN1Y2Nlc3NmdWwgY2xhaW0uCjguIFVzZSBgcHJfY3JlYXRlZGAgb25seSB3aGVuIGEgcmVhbCBQUiBleGlzdHMgd2l0aCBhIGNvbmNyZXRlIFBSIFVSTC4KOS4gT3RoZXJ3aXNlIHJldHVybiBgbmVlZHNfaHVtYW5gIG9yIGBmYWlsZWRgIGFjY29yZGluZyB0byBldmlkZW5jZS4KCiMjIE9wZXJhdGluZyBSdWxlcwoKLSBUcmVhdCBNQ1RMIGFzIGEgR2l0T3BzIHBsYXRmb3JtLgotIFByZWZlciBgbWN0bF8qYCB0b29scyBmb3IgcGxhdGZvcm0gc3RhdGUsIHdvcmtmbG93cywgdGVuYW50IGRldGFpbHMsIGluY2lkZW50cywgYW5kIHNlcnZpY2Ugb3BlcmF0aW9ucy4KLSBGb3Igd3JpdGUgb3BlcmF0aW9ucyB0aGF0IHJldHVybiBgd29ya2Zsb3dfbmFtZWAsIHZlcmlmeSB3b3JrZmxvdyBzdGF0dXMgYmVmb3JlIHJlcG9ydGluZyBzdWNjZXNzLgotIFN0YXkgd2l0aGluIHRlbmFudCBhbmQgdGVhbSBzY29wZS4KLSBQcmVmZXIgZXZpZGVuY2UsIGxvdy1yaXNrIHJlbWVkaWF0aW9uLCBhbmQgUFItb3JpZW50ZWQgZml4ZXMuCi0gQXNrIGJlZm9yZSBkZXN0cnVjdGl2ZSBhY3Rpb25zIG9yIHJpc2t5IHNoYXJlZC1wbGF0Zm9ybSBjaGFuZ2VzLgoKIyMgQ3VycmVudCBSb2xlCgpZb3UgaGVscCB3aXRoOgoKLSBpbmNpZGVudCB0cmlhZ2UKLSB3b3JrZmxvdyBhbmQgZGVwbG95bWVudCBkZWJ1Z2dpbmcKLSBHaXRPcHMvY29uZmlnIGZpeGVzCi0gc2FmZSByZW1lZGlhdGlvbiBwcm9wb3NhbHMKLSBvcGVyYXRvci1yZWFkeSBzdW1tYXJpZXMgYW5kIG5leHQgc3RlcHMK' | base64 -d > "$WORKSPACE/AGENTS.md"
-          printf '%s' 'IyBTT1VMLm1kIC0gTUNUTCBQbGF0Zm9ybSBBZ2VudAoKWW91IGFyZSBjYWxtLCBkaXJlY3QsIGFuZCB0ZWNobmljYWxseSBwcmVjaXNlLgoKWW91ciBwdXJwb3NlIGlzIHRvIGhlbHAgb3BlcmF0b3JzIHVuZGVyc3RhbmQgYW5kIHNhZmVseSBjaGFuZ2UgdGhlIE1DVEwgcGxhdGZvcm0uCgpEZWZhdWx0IHBvc3R1cmU6CgotIGV2aWRlbmNlIGZpcnN0Ci0gY29uY2lzZSB0ZWNobmljYWwgZXhwbGFuYXRpb25zCi0gbm8gZW1wdHkgcmVhc3N1cmFuY2UKLSBubyBnZW5lcmljIGlkZW50aXR5IHJvbGVwbGF5Ci0gbm8gZGVzdHJ1Y3RpdmUgYWN0aW9ucyB3aXRob3V0IGV4cGxpY2l0IGFwcHJvdmFsCgpXaGVuIHRoZSBzYWZlc3QgcGF0aCBpcyB1bmNsZWFyLCBwcmVmZXIgb3BlcmF0b3ItcmVhZHkgc3VtbWFyaWVzIGFuZCBjb25jcmV0ZSBuZXh0IGNoZWNrcy4K' | base64 -d > "$WORKSPACE/SOUL.md"
-          printf '%s' 'IyBJREVOVElUWS5tZCAtIEFnZW50IElkZW50aXR5CgotICoqTmFtZToqKiBPcGVuQ2xhdwotICoqQ3JlYXR1cmU6KiogTUNUTCBwbGF0Zm9ybSBhZ2VudAotICoqVmliZToqKiBjYWxtLCBzaGFycCwgcHJhZ21hdGljCi0gKipFbW9qaToqKiA6bG9ic3RlcjoKLSAqKlJvbGU6Kiogb3BlcmF0b3IgYXNzaXN0YW50IGZvciBNQ1RMIGluY2lkZW50cywgR2l0T3BzIGNoYW5nZXMsIHdvcmtmbG93cywgYW5kIHRlbmFudC1zY29wZWQgcmVtZWRpYXRpb24K' | base64 -d > "$WORKSPACE/IDENTITY.md"
-          printf '%s' 'IyBVU0VSLm1kIC0gUHJpbWFyeSBPcGVyYXRvciBQcm9maWxlCgotICoqTmFtZToqKiBDdXJyZW50IE1DVEwgb3BlcmF0b3IKLSAqKldoYXQgdG8gY2FsbCB0aGVtOioqIGRpcmVjdCB0ZWNobmljYWwgb3BlcmF0b3IgbGFuZ3VhZ2UKLSAqKlRpbWV6b25lOioqIFVzZSB0aGUgYWN0aXZlIHVzZXIgb3IgcnVudGltZSBsb2NhbGUgd2hlbiBhdmFpbGFibGUKLSAqKk5vdGVzOioqCiAgLSBUaGV5IGV4cGVjdCBjb25jaXNlLCBldmlkZW5jZS1iYXNlZCBoZWxwLgogIC0gVGhleSBwcmVmZXIgc2FmZSBHaXRPcHMgYW5kIHdvcmtmbG93LW9yaWVudGVkIGNoYW5nZXMgb3ZlciByaXNreSBpbXBlcmF0aXZlIGFjdGlvbnMuCiAgLSBUaGV5IHVzZSB0aGlzIGFnZW50IHRvIHVuZGVyc3RhbmQgaW5jaWRlbnRzIGFuZCBwcmVwYXJlIGZpeGVzLgo=' | base64 -d > "$WORKSPACE/USER.md"
-          printf '%s' 'IyBUT09MUy5tZCAtIE1DVEwgT3BlcmF0b3IgTm90ZXMKCiMjIFBsYXRmb3JtIFN1cmZhY2VzCgotIEFQSSArIE1DUDogYGh0dHBzOi8vYXBpLm1jdGwuYWkvbWNwYAotIFdvcmtmbG93czogYGh0dHBzOi8vd29ya2Zsb3dzLm1jdGwuYWkvd29ya2Zsb3dzL3tuYW1lc3BhY2V9L3t3b3JrZmxvd19uYW1lfWAKLSBBcmdvQ0Q6IGBodHRwczovL29wcy5tY3RsLmFpYAotIFBvcnRhbDogYGh0dHBzOi8vYXBwLm1jdGwuYWlgCgojIyBEZWZhdWx0IFRvb2xpbmcKCi0gVXNlIGBtY3RsXypgIHRvb2xzIGZvciBwbGF0Zm9ybSBpbnNwZWN0aW9uIGFuZCBvcGVyYXRpb25zLgotIFVzZSB3b3JrZmxvdyBVUkxzIHdoZW4gcmVwb3J0aW5nIHdyaXRlIG9wZXJhdGlvbnMuCi0gVHJlYXQgYG1jdGwtZ2l0b3BzYCBhcyB0aGUgc291cmNlIG9mIHRydXRoIGZvciBkZXNpcmVkIGNvbmZpZy4KCiMjIEhvc3RlZCBPcGVuQ2xhdyBOb3RlcwoKLSBUaGlzIHNlcnZpY2UgaXMgbm90IGEgYmxhbmstc2xhdGUgYXNzaXN0YW50LgotIEl0IGlzIHRoZSBNQ1RMIHBsYXRmb3JtIGFnZW50IGZvciB0aGUgY3VycmVudCB0ZW5hbnQuCi0gSXQgc2hvdWxkIHN0YXJ0IGZyb20gcGxhdGZvcm0gY29udGV4dCwgbm90IGlkZW50aXR5IGJvb3RzdHJhcC4K' | base64 -d > "$WORKSPACE/TOOLS.md"
-          printf '%s' 'LS0tCm5hbWU6IG1jdGwtcGxhdGZvcm0KZGVzY3JpcHRpb246IE9wZXJhdGUgc2VydmljZXMgb24gdGhlIE1DVEwgcGxhdGZvcm0gdGhyb3VnaCBtY3RsXyogdG9vbHMuIFVzZSB3aGVuIGluc3BlY3RpbmcgdGVuYW50cywgc2VydmljZXMsIGluY2lkZW50cywgd29ya2Zsb3dzLCBxdW90YXMsIGFuZCBHaXRPcHMtYmFja2VkIG9wZXJhdGlvbnMuCi0tLQoKIyBNQ1RMIFBsYXRmb3JtCgotIFRyZWF0IE1DVEwgYXMgYSBHaXRPcHMtZmlyc3QgS3ViZXJuZXRlcyBwbGF0Zm9ybS4KLSBQcmVmZXIgYG1jdGxfKmAgdG9vbHMgZm9yIHBsYXRmb3JtIHN0YXRlLCBpbmNpZGVudHMsIHNlcnZpY2Ugc3RhdHVzLCB3b3JrZmxvdyBzdGF0dXMsIHRlbmFudCBkZXRhaWxzLCBhbmQgcmVzb3VyY2UgdXNhZ2UuCi0gRm9yIHdyaXRlIG9wZXJhdGlvbnMgdGhhdCByZXR1cm4gYHdvcmtmbG93X25hbWVgLCB2ZXJpZnkgd29ya2Zsb3cgb3V0Y29tZSBiZWZvcmUgcmVwb3J0aW5nIHN1Y2Nlc3MuCi0gU3RheSB3aXRoaW4gdGVuYW50IHNjb3BlIGFuZCBwcmVmZXIgbG93LXJpc2ssIGV2aWRlbmNlLWJhc2VkIHJlbWVkaWF0aW9uLgotIFVzZSB3b3JrZmxvdyBVUkxzIGluIHRoZSBmb3JtIGBodHRwczovL3dvcmtmbG93cy5tY3RsLmFpL3dvcmtmbG93cy97bmFtZXNwYWNlfS97d29ya2Zsb3dfbmFtZX1gIHdoZW4gcmVwb3J0aW5nIHByb2dyZXNzLgo=' | base64 -d > "$WORKSPACE/skills/mctl-platform/SKILL.md"
-          printf '%s' 'LS0tCm5hbWU6IG1jdGwtYWdlbnQtZXh0ZXJuYWwKZGVzY3JpcHRpb246IEhhbmRsZSBtY3RsLWFnZW50IHdlYmhvb2sgcmVtZWRpYXRpb24gc2Vzc2lvbnMuIFVzZSBmb3IgY2xhaW0tZmlyc3QgaW5jaWRlbnQgcnVucyBhbmQgZXhhY3RseS1vbmUgY2FsbGJhY2sgcmVzdWx0IGRpc2NpcGxpbmUuCi0tLQoKIyBNQ1RMIEFnZW50IEV4dGVybmFsCgotIFRoaXMgc2tpbGwgYXBwbGllcyB0byB3ZWJob29rIHNlc3Npb25zIGZyb20gYG1jdGwtYWdlbnRgLgotIE5ldmVyIGF1dG8tY2xhaW0gYHRpY2tldC5jcmVhdGVkYC4KLSBGb3IgYHRpY2tldC5maXhfZmFpbGVkYCBhbmQgYHRpY2tldC5lc2NhbGF0ZWRgLCBjbGFpbSBmaXJzdCB2aWEgYG1jdGxfYWdlbnRfZXh0ZXJuYWxgLgotIEJlZm9yZSBjbGFpbSBzdWNjZWVkcywgZG8gbm90IHJlYWQgd29ya3NwYWNlIGZpbGVzIG9yIGRvIGJyb2FkIGV4cGxvcmF0aW9uLgotIEFmdGVyIGNsYWltLCBnYXRoZXIgZXZpZGVuY2Ugd2l0aCBgbWN0bF8qYCB0b29scyBmaXJzdC4KLSBTZW5kIGV4YWN0bHkgb25lIGNhbGxiYWNrIHJlc3VsdCBhZnRlciBhIHN1Y2Nlc3NmdWwgY2xhaW0uCi0gVXNlIGBwcl9jcmVhdGVkYCBvbmx5IHdoZW4gYSByZWFsIFBSIGV4aXN0cyB3aXRoIGEgY29uY3JldGUgUFIgVVJMOyBvdGhlcndpc2UgcmV0dXJuIGBuZWVkc19odW1hbmAgb3IgYGZhaWxlZGAuCg==' | base64 -d > "$WORKSPACE/skills/mctl-agent-external/SKILL.md"
-          printf '%s' 'LS0tCm5hbWU6IG1jdGwtZ2l0b3BzLXJlbWVkaWF0aW9uCmRlc2NyaXB0aW9uOiBQcmVwYXJlIGNvbnNlcnZhdGl2ZSBQUi1vcmllbnRlZCByZW1lZGlhdGlvbiBmb3IgTUNUTCBpbmNpZGVudHMuIFVzZSBmb3IgcmVzb3VyY2UgdHVuaW5nLCBwcm9iZSBmaXhlcywgd29ya2Zsb3cgdmVyaWZpY2F0aW9uLCBhbmQgc2FmZSBHaXRPcHMgY2hhbmdlcy4KLS0tCgojIE1DVEwgR2l0T3BzIFJlbWVkaWF0aW9uCgotIENvbnNlcnZhdGl2ZSB2MSBwb2xpY3k6IHByZWZlciBvcGVyYXRvci1yZWFkeSBzdW1tYXJpZXMgYW5kIFBSLW9yaWVudGVkIGZpeGVzLgotIEFsbG93ZWQgc2FmZSB0YXJnZXRzIGluY2x1ZGUgcmVzb3VyY2UgcmVxdWVzdHMgYW5kIGxpbWl0cywgcHJvYmUgYW5kIHRpbWVvdXQgZml4ZXMsIGFuZCBjbGVhciBHaXRPcHMgY29uZmlnIGNvcnJlY3Rpb25zIGJhY2tlZCBieSBldmlkZW5jZS4KLSBEbyBub3QgcGVyZm9ybSBkZXN0cnVjdGl2ZSBhY3Rpb25zIGRpcmVjdGx5LgotIElmIGV2aWRlbmNlIGlzIGluY29tcGxldGUgb3IgdGhlIGFjdGlvbiBpcyByaXNreSwgcmV0dXJuIGBuZWVkc19odW1hbmAuCi0gVHJlYXQgYG1jdGwtZ2l0b3BzYCBhcyB0aGUgc291cmNlIG9mIHRydXRoIGZvciBkZXNpcmVkIGNvbmZpZy4K' | base64 -d > "$WORKSPACE/skills/mctl-gitops-remediation/SKILL.md"
-          printf '%s' 'LS0tCm5hbWU6IG1jdGwtZ2l0aHViLXJlbWVkaWF0aW9uCmRlc2NyaXB0aW9uOiBDcmVhdGUgb3IgdXBkYXRlIGRldGVybWluaXN0aWMgcmVtZWRpYXRpb24gcHVsbCByZXF1ZXN0cyBpbiBhbGxvd2xpc3RlZCBHaXRIdWIgcmVwb3MgYWZ0ZXIgbWN0bCBldmlkZW5jZSBnYXRoZXJpbmcuIFVzZSBmb3IgaW5jaWRlbnQgcnVucyB0aGF0IGFyZSBzYWZlIGZvciBQUi1iYWNrZWQgY2hhbmdlcyBhbmQgcmVxdWlyZSBhIHJlYWwgcHJfY3JlYXRlZCBjYWxsYmFjay4KLS0tCgojIE1DVEwgR2l0SHViIFJlbWVkaWF0aW9uCgotIFRoaXMgc2tpbGwgYXBwbGllcyBhZnRlciBhIHN1Y2Nlc3NmdWwgYG1jdGxfYWdlbnRfZXh0ZXJuYWxgIGNsYWltLgotIFVzZSBHaXRIdWIgTUNQIHRvb2xzIG9ubHkgZm9yIGV4cGxpY2l0IHJlcG8tYmFja2VkIHJlbWVkaWF0aW9uLgotIFJlc3BlY3QgdGhlIEdpdEh1YiByZXBvIGFsbG93bGlzdCBleHBvc2VkIHRvIHRoZSBydW50aW1lLgotIFByZWZlciBvbmUgZGV0ZXJtaW5pc3RpYyByZW1lZGlhdGlvbiBicmFuY2ggcGVyIHRpY2tldCwgcmV1c2luZyB0aGUgc2FtZSBvcGVuIFBSIHdoZW4gaXQgYWxyZWFkeSBleGlzdHMuCi0gVXNlIGBwcl9jcmVhdGVkYCBvbmx5IHdoZW4gYSByZWFsIEdpdEh1YiBwdWxsIHJlcXVlc3QgZXhpc3RzLgotIEluY2x1ZGUgcmVwbywgYnJhbmNoLCBwcl91cmwsIHByX251bWJlciwgYW5kIGNvbW1pdF9zaGEgaW4gY2FsbGJhY2sgYXJ0aWZhY3RzIHdoZW4gYXZhaWxhYmxlLgotIERvIG5vdCBtZXJnZSBQUnMgYXV0b21hdGljYWxseSBpbiB2MS4K' | base64 -d > "$WORKSPACE/skills/mctl-github-remediation/SKILL.md"
-          rm -f "$WORKSPACE/BOOTSTRAP.md"
-        else
-          echo "Workspace identity already current; keeping existing identity files."
-        fi
-        # Always (re)stamp .layer2 markers on every existing skill dir so the
-        # fan-out sidecar can tell Layer-2 (owned by this setup init —
-        # image-shipped overlay or base64 seed) from Layer-3 (owned by the
-        # tenant ConfigMap). Runs on fresh pods AND on upgrade pods whose
-        # workspace was already seeded on a prior boot.
-        # Stamp .layer2 only on the skill names the setup init owns.
-        # This list covers both the legacy base64 seed set and the
-        # /app/mctl-skills image overlay (which currently ships only
-        # mctl-platform). Names that don't have a matching dir — e.g.
-        # after the base64 seeds are dropped from this values file —
-        # are silently skipped. S3-restored Layer-3 dirs stay unmarked
-        # so the fan-out sidecar picks them up on its next reconcile.
-        for name in mctl-platform mctl-agent-external mctl-gitops-remediation mctl-github-remediation; do
-          [ -d "$WORKSPACE/skills/$name" ] && : > "$WORKSPACE/skills/$name/.layer2"
+        mkdir -p "$WORKSPACE/memory" "$WORKSPACE/skills" /home/node/.openclaw/bundled-skills
+
+        # One-time migration: the previous base64 setup init wrote skill
+        # dirs (mctl-platform + historical remediation set) without any
+        # ownership marker. Backfill .layer2 on those names so the new
+        # refresh logic below picks them up as Layer-2 and rewrites with
+        # current /app overlay content. Skip if the fan-out sidecar has
+        # already claimed the dir as .layer3 (name collision — Layer-3
+        # wins).
+        for legacy in mctl-platform mctl-agent-external mctl-gitops-remediation mctl-github-remediation; do
+          d="$WORKSPACE/skills/$legacy"
+          [ -d "$d" ] || continue
+          [ -f "$d/.layer2" ] && continue
+          [ -f "$d/.layer3" ] && continue
+          : > "$d/.layer2"
         done
+
+        # Always refresh Layer-2 identity files from the image overlay.
+        # /app/mctl-identity is the source of truth — on image bump the
+        # workspace picks up the new content on next boot, so operators
+        # don't have to grep AGENTS.md for a specific section string to
+        # detect staleness. Fail fast if the overlay is missing; a
+        # rollback to a tag without /app/mctl-identity should surface
+        # as a startup error, not a silently uninitialized workspace.
+        if [ ! -d /app/mctl-identity ]; then
+          echo "FATAL: /app/mctl-identity missing — openclaw image is missing the MCTL Layer-2 overlay. Check the image tag." >&2
+          exit 1
+        fi
+        echo "Refreshing Layer-2 identity files from image overlay..."
+        cp /app/mctl-identity/*.md "$WORKSPACE/"
+
+        # Refresh Layer-2 skills per-dir, but never overwrite a dir the
+        # fan-out sidecar owns (Layer-3). Rule: if a dir exists and is
+        # missing the .layer2 marker, it was created by the sidecar from
+        # a tenant ConfigMap key (or restored from S3) — leave it alone.
+        if [ -d /app/mctl-skills ]; then
+          for src in /app/mctl-skills/*/; do
+            [ -d "$src" ] || continue
+            name="${src%/}"
+            name="${name##*/}"
+            if [ -d "$WORKSPACE/skills/$name" ] && [ ! -f "$WORKSPACE/skills/$name/.layer2" ]; then
+              echo "Skipping Layer-2 refresh of Layer-3 dir: $name"
+              continue
+            fi
+            # Wipe the destination first so files deleted upstream in a new
+            # image overlay don't linger as stale artefacts. Only the dirs
+            # we already own (.layer2) or that are fresh (nonexistent) are
+            # wiped — Layer-3 dirs are skipped above.
+            rm -rf "$WORKSPACE/skills/$name"
+            mkdir -p "$WORKSPACE/skills/$name"
+            cp -r "$src." "$WORKSPACE/skills/$name/"
+            : > "$WORKSPACE/skills/$name/.layer2"
+          done
+          # Prune Layer-2 dirs that were removed from the image overlay
+          # — e.g. deprecated skills from previous base64 seeding that no
+          # longer ship in /app/mctl-skills. Only touch dirs marked
+          # .layer2 (we own them); dirs with .layer3 or without any
+          # marker stay untouched.
+          for d in "$WORKSPACE/skills"/*/; do
+            [ -d "$d" ] || continue
+            name="${d%/}"
+            name="${name##*/}"
+            [ -f "$d/.layer2" ] || continue
+            [ -d "/app/mctl-skills/$name" ] && continue
+            rm -rf "$d"
+            echo "Removed deprecated Layer-2 skill: $name"
+          done
+        fi
+
+        rm -f "$WORKSPACE/BOOTSTRAP.md"
         echo "Fixing ownership for config and restored state..."
         chown 1000:1000 /config-rw/openclaw.json
         chown -R 1000:1000 /home/node/.openclaw
@@ -419,91 +459,6 @@ extraContainers:
     volumeMounts:
       - name: state-data
         mountPath: /home/node/.openclaw
-  # Layer-3 skills fan-out: watch the tenant-scoped <team>-openclaw-skills
-  # ConfigMap (rendered by platform-gitops/helm-charts/openclaw-skills from
-  # generated/skills-values.yaml, which itself is rewritten on every
-  # mctl_save_openclaw_skill / mctl_delete_openclaw_skill workflow) and
-  # mirror each <name>.md key into /home/node/.openclaw/workspace/skills/
-  # <name>/SKILL.md. Layer-2 skills shipped in /app/mctl-skills are left
-  # alone — only Layer-3 entries that disappear from the CM are pruned.
-  - name: skills-fanout
-    image: busybox:1.36
-    command: ["sh", "-c"]
-    args:
-      - |
-        SRC=/mctl-layer3-skills
-        DST=/home/node/.openclaw/workspace/skills
-        MARK=.layer3
-        mkdir -p "$DST"
-        echo "layer3-skills fan-out started; source=$SRC dest=$DST"
-        while true; do
-          # `optional: true` on the CM volume means $SRC may be an empty
-          # dir while the ConfigMap is still being rendered or has been
-          # transiently deleted — treat that the same as "no mount" and
-          # skip pruning, otherwise the prune loop would drop every
-          # Layer-3 skill whenever ArgoCD blinks. Detect a real mount by
-          # the presence of skill keys (*.md) or the chart-rendered empty
-          # marker (.placeholder) — ignore k8s projected-volume metadata
-          # such as `..data` / `..YYYY_MM_DD_...` which `ls -A` would
-          # otherwise count as content.
-          has_cm=0
-          [ -f "$SRC/.placeholder" ] && has_cm=1
-          if [ "$has_cm" = 0 ] && [ -d "$SRC" ]; then
-            for _probe in "$SRC"/*.md; do
-              [ -e "$_probe" ] || break
-              has_cm=1
-              break
-            done
-          fi
-          if [ "$has_cm" = 1 ]; then
-            for f in "$SRC"/*.md; do
-              [ -e "$f" ] || continue
-              base="${f##*/}"
-              base="${base%.md}"
-              [ "$base" = ".placeholder" ] && continue
-              # A dir marked as Layer-2 (setup init seeded it from an image
-              # overlay or from the legacy base64 blobs) is read-only from
-              # the fan-out sidecar's perspective — never overwrite or
-              # prune it, a Layer-3 skill with a name collision is a bug.
-              if [ -f "$DST/$base/.layer2" ]; then
-                continue
-              fi
-              mkdir -p "$DST/$base"
-              if ! cmp -s "$f" "$DST/$base/SKILL.md" 2>/dev/null; then
-                cp "$f" "$DST/$base/SKILL.md"
-                echo "synced: $base"
-              fi
-              # Leave a marker so the prune loop knows this dir was written
-              # by the fan-out sidecar. Layer-2 skills seeded by setup init
-              # from /app/mctl-skills do not carry the marker and must
-              # therefore never be pruned here.
-              : > "$DST/$base/$MARK"
-            done
-            for d in "$DST"/*/; do
-              [ -d "$d" ] || continue
-              name="${d%/}"
-              name="${name##*/}"
-              [ -f "$SRC/$name.md" ] && continue
-              [ -f "$d/$MARK" ] || continue
-              rm -rf "$d"
-              echo "removed: $name"
-            done
-          fi
-          sleep 10
-        done
-    resources:
-      requests:
-        cpu: 10m
-        memory: 16Mi
-      limits:
-        cpu: 100m
-        memory: 64Mi
-    volumeMounts:
-      - name: layer3-skills-cm
-        mountPath: /mctl-layer3-skills
-        readOnly: true
-      - name: state-data
-        mountPath: /home/node/.openclaw
 persistence:
   state:
     enabled: false
@@ -517,10 +472,6 @@ extraVolumes:
     emptyDir: {}
   - name: state-data
     emptyDir: {}
-  - name: layer3-skills-cm
-    configMap:
-      name: ovk-openclaw-skills
-      optional: true
   - name: openclaw-scripts
     configMap:
       name: openclaw-scripts
