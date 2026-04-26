@@ -15,6 +15,13 @@ metadata:
       DB cleanup in tenant state is handled before namespace deletion so shared-pg does not
       degrade on missing tenant namespaces.
 spec:
+  # See wft-create-tenant.yaml: workflowDefaults from the controller
+  # config does not merge into workflows launched via templateRef, so
+  # ttlStrategy must be declared inline on each ClusterWorkflowTemplate.
+  ttlStrategy:
+    secondsAfterSuccess: 1800
+    secondsAfterFailure: 86400
+    secondsAfterCompletion: 3600
   entrypoint: delete-tenant-safe-pipeline
   serviceAccountName: argo-workflow-sa
   synchronization:

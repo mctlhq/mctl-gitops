@@ -12,6 +12,13 @@ metadata:
       Replaces: .github/workflows/provision-db.yml
       Note: This workflow runs in-cluster with direct Vault access (no self-hosted runner needed).
 spec:
+  # See wft-create-tenant.yaml: workflowDefaults from the controller
+  # config does not merge into workflows launched via templateRef, so
+  # ttlStrategy must be declared inline on each ClusterWorkflowTemplate.
+  ttlStrategy:
+    secondsAfterSuccess: 1800
+    secondsAfterFailure: 86400
+    secondsAfterCompletion: 3600
   entrypoint: provision-pipeline
   serviceAccountName: argo-workflow-sa
 
