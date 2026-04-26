@@ -68,15 +68,24 @@ initContainers:
     args:
       - |
         mc alias set s3 "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
-        # Probe the existing bucket via `mc find` instead of touching a missing prefix directly.
+        # Detect existing tenant state by probing for ANY object under each
+        # candidate prefix, not by a specific marker file. The previous
+        # logic relied on `mc find ... --name update-check.json`, which is
+        # a runtime artifact written periodically by openclaw — tenants
+        # where the process had not yet (or no longer) written the marker
+        # silently fell through to `mkdir -p` even when the rest of the
+        # state (auth-profiles.json, sessions, workspace) was sitting in
+        # S3 waiting to be restored. ovk hit this exact mode during the
+        # rollout of PR #36; the canary guard there saved S3, this PR
+        # closes the loop on the init side.
         NEW_STATE_MARKER=""
         LEGACY_STATE_MARKER=""
-        for marker in $(mc find s3/platform-state/ --name update-check.json 2>/dev/null); do
-          case "$marker" in
-            */ovk/openclaw/update-check.json) NEW_STATE_MARKER=1 ;;
-            */openclaw/ovk/update-check.json) LEGACY_STATE_MARKER=1 ;;
-          esac
-        done
+        if mc ls --recursive s3/platform-state/ovk/openclaw/ 2>/dev/null | head -1 | grep -q .; then
+          NEW_STATE_MARKER=1
+        fi
+        if mc ls --recursive s3/platform-state/openclaw/ovk/ 2>/dev/null | head -1 | grep -q .; then
+          LEGACY_STATE_MARKER=1
+        fi
         if [ -n "$NEW_STATE_MARKER" ]; then
           mc mirror s3/platform-state/ovk/openclaw/ /home/node/.openclaw
         elif [ -n "$LEGACY_STATE_MARKER" ]; then
