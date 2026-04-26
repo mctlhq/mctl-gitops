@@ -7,7 +7,7 @@
 
 image:
   repository: ghcr.io/mctlhq/mctl-openclaw
-  tag: "2026.4.23-beta.1"
+  tag: "2026.4.26-beta.1"
 podSecurityContext:
   fsGroup: 1000
 imagePullSecrets:
@@ -315,7 +315,7 @@ initContainers:
     securityContext:
       runAsUser: 0
       runAsGroup: 0
-    image: "ghcr.io/mctlhq/mctl-openclaw:2026.4.23-beta.1"
+    image: "ghcr.io/mctlhq/mctl-openclaw:2026.4.26-beta.1"
     command: ["sh", "-c"]
     args:
       - |
@@ -402,6 +402,13 @@ initContainers:
         fi
 
         rm -f "$WORKSPACE/BOOTSTRAP.md"
+
+        # Pre-create the Claude Code state dir so the symlink at
+        # /home/node/.claude (baked in the image, target on the emptyDir
+        # mount) resolves cleanly on first claude invocation. The final
+        # chown -R below applies node ownership recursively.
+        mkdir -p /home/node/.openclaw/.claude
+
         echo "Fixing ownership for config and restored state..."
         chown 1000:1000 /config-rw/openclaw.json
         chown -R 1000:1000 /home/node/.openclaw
@@ -1036,7 +1043,7 @@ configMaps:
           "defaults": {
             "skipBootstrap": true,
             "model": {
-              "primary": "openai-codex/gpt-5.4"
+              "primary": "claude-cli/claude-opus-4-7"
             }
           }
         },
@@ -1045,10 +1052,15 @@ configMaps:
             "openai-codex:default": {
               "provider": "openai-codex",
               "mode": "oauth"
+            },
+            "claude-cli:default": {
+              "provider": "claude-cli",
+              "mode": "oauth"
             }
           },
           "order": {
-            "openai-codex": ["openai-codex:default"]
+            "openai-codex": ["openai-codex:default"],
+            "claude-cli": ["claude-cli:default"]
           }
         },
         "channels": {
