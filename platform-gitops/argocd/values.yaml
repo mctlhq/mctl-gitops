@@ -14,6 +14,13 @@ argo-cd:
 
   global:
     domain: ops.mctl.ai
+    # Argo CD images are public (quay.io/argoproj, ghcr.io/dexidp, public ECR
+    # for redis). No imagePullSecret is required. Set explicitly to [] so the
+    # value never picks up a stale ghcr-registry secret from a prior release —
+    # without this override the cluster ended up with a non-existent
+    # ghcr-registry pullSecret on every argocd workload, generating
+    # FailedToRetrieveImagePullSecret events on every pod restart.
+    imagePullSecrets: []
 
   configs:
     cm:
