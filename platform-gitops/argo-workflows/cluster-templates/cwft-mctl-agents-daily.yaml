@@ -1,0 +1,148 @@
+apiVersion: argoproj.io/v1alpha1
+kind: CronWorkflow
+metadata:
+  name: mctl-agents-daily
+  namespace: argo-workflows
+  annotations:
+    workflows.argoproj.io/description: |
+      Daily run of mctl-agents (researcher → analyst → spec-writer per service)
+      followed by the mentor weekly digest aggregation.
+
+      State (inbox/, proposals/, _mentor/digest/) lives in this gitops repo
+      under platform-gitops/agents-state/. The workflow:
+        1. SSH-clones mctl-gitops via the shared deploy key
+        2. Runs ghcr.io/mctlhq/mctl-agents:<tag> with STATE_DIR pointing at
+           the cloned agents-state/ — entrypoint.sh symlinks state into the
+           baked-in /app/agents/ tree
+        3. Commits and pushes the diff back to main with rebase-on-conflict
+
+      Schedule: 06:00 UTC daily. Mentor weekly aggregation re-uses the same
+      run — it just reads any new proposals and writes the YYYY-WNN digest.
+spec:
+  schedule: "0 6 * * *"
+  timezone: "UTC"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  workflowSpec:
+    serviceAccountName: argo-workflow-sa
+    ttlStrategy:
+      secondsAfterCompletion: 86400
+    activeDeadlineSeconds: 3600
+    entrypoint: run-agents
+    volumes:
+      - name: workdir
+        emptyDir: {}
+      - name: deploy-key
+        secret:
+          secretName: mctl-gitops-deploy-key
+          defaultMode: 0600
+    templates:
+      - name: run-agents
+        steps:
+          - - name: clone
+              template: clone-gitops
+          - - name: run
+              template: run-orchestrator
+          - - name: commit
+              template: commit-and-push
+
+      # ── 1. SSH-clone mctl-gitops into shared volume ───────────────────────
+      - name: clone-gitops
+        script:
+          image: alpine/git:2.43.0
+          command: [sh]
+          source: |
+            set -e
+            apk add --no-cache openssh-client ca-certificates
+            mkdir -p ~/.ssh
+            cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
+            chmod 600 ~/.ssh/id_ed25519
+            printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  StrictHostKeyChecking no\n' > ~/.ssh/config
+            chmod 600 ~/.ssh/config
+            git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops
+            mkdir -p /workdir/mctl-gitops/platform-gitops/agents-state
+            echo "✓ gitops cloned"
+          volumeMounts:
+            - name: workdir
+              mountPath: /workdir
+            - name: deploy-key
+              mountPath: /secrets/deploy-key
+
+      # ── 2. Run mctl-agents orchestrator with state mounted ────────────────
+      - name: run-orchestrator
+        container:
+          image: ghcr.io/mctlhq/mctl-agents:1.0.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: STATE_DIR
+              value: /workdir/mctl-gitops/platform-gitops/agents-state
+            # Auth: OAuth (Claude Pro/Max). NOT API key — runs within
+            # owner's subscription. Do NOT add ANTHROPIC_API_KEY here in
+            # parallel — Claude CLI would prefer it and break OAuth flow.
+            - name: CLAUDE_CODE_OAUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: mctl-agents-secrets
+                  key: claude-code-oauth-token
+            - name: MCTL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: mctl-agents-secrets
+                  key: mctl-token
+            - name: SERVICE_AGENT_BUDGET_USD
+              value: "1.50"
+            - name: MENTOR_BUDGET_USD
+              value: "2.00"
+          resources:
+            requests: { cpu: 200m, memory: 512Mi }
+            limits:   { cpu: 2000m, memory: 2Gi }
+          volumeMounts:
+            - name: workdir
+              mountPath: /workdir
+
+      # ── 3. Commit & push back to mctl-gitops ──────────────────────────────
+      - name: commit-and-push
+        script:
+          image: alpine/git:2.43.0
+          command: [sh]
+          source: |
+            set -e
+            apk add --no-cache openssh-client ca-certificates
+            mkdir -p ~/.ssh
+            cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
+            chmod 600 ~/.ssh/id_ed25519
+            printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  StrictHostKeyChecking no\n' > ~/.ssh/config
+            chmod 600 ~/.ssh/config
+
+            cd /workdir/mctl-gitops
+            git config user.name "mctl-agents[bot]"
+            git config user.email "mctl-agents[bot]@users.noreply.github.com"
+
+            # Stage only agents-state (paranoia: nothing else)
+            git add platform-gitops/agents-state/
+
+            if git diff --cached --quiet; then
+              echo "ℹ️  No new proposals or digest changes — nothing to commit."
+              exit 0
+            fi
+
+            DATE=$(date -u +%Y-%m-%d)
+            git commit -m "chore(agents): daily run ${DATE}"
+
+            for i in 1 2 3 4 5; do
+              if git push origin HEAD:main; then
+                echo "✅ Pushed agents-state changes"
+                exit 0
+              fi
+              echo "⚠️  Push failed (attempt ${i}), rebasing..."
+              git pull --rebase origin main
+            done
+            echo "❌ Push failed after 5 attempts"
+            exit 1
+          volumeMounts:
+            - name: workdir
+              mountPath: /workdir
+            - name: deploy-key
+              mountPath: /secrets/deploy-key
