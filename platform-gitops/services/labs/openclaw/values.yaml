@@ -61,6 +61,12 @@ probes:
 envFrom:
   - secretRef:
       name: labs-openclaw-db-creds
+  # CLAUDE_CODE_OAUTH_TOKEN — required by the bundled claude-cli backend
+  # (provider claude-cli/claude-opus-4-7). Pod fails every agent turn with
+  # "Not logged in" if missing. Sourced from owner's Pro/Max subscription
+  # via shared platform secret — see externalSecrets.openclaw-claude-oauth.
+  - secretRef:
+      name: openclaw-claude-oauth
 initContainers:
   # 1. Restore state from MinIO (no-op for new tenants, preserves OAuth credentials on restart)
   - name: restore-state
@@ -636,6 +642,18 @@ extraExternalSecrets:
       - secretKey: OPENCLAW_TELEGRAM_TOKEN
         remoteKey: secret/data/teams/labs/openclaw/telegram
         property: telegram-bot-token
+  # Claude Code OAuth token (Pro/Max subscription). Shared across all
+  # openclaw tenants from a single platform-level Vault path so the owner
+  # rotates one secret on session invalidation. Same source as
+  # mctl-agents CronWorkflow — keeps billing inside subscription quotas
+  # instead of pay-per-token Console API.
+  openclaw-claude-oauth:
+    refreshInterval: 1h
+    targetSecret: openclaw-claude-oauth
+    data:
+      - secretKey: CLAUDE_CODE_OAUTH_TOKEN
+        remoteKey: secret/data/platform/mctl-agents
+        property: claude-code-oauth-token
   minio-cache-creds:
     refreshInterval: 1h
     targetSecret: minio-cache-creds
