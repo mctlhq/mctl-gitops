@@ -27,6 +27,11 @@ spec:
   failedJobsHistoryLimit: 3
   workflowSpec:
     serviceAccountName: argo-workflow-sa
+    # GHCR creds for the private mctlhq/mctl-agents image. The k8s Secret
+    # `ghcr-credentials` lives in argo-workflows ns and is provisioned by
+    # the ExternalSecret in argo-workflows/secrets/mctl-agents-ghcr.yaml.
+    imagePullSecrets:
+      - name: ghcr-credentials
     ttlStrategy:
       secondsAfterCompletion: 86400
     activeDeadlineSeconds: 3600
@@ -85,6 +90,12 @@ spec:
         container:
           image: ghcr.io/mctlhq/mctl-agents:1.0.0
           imagePullPolicy: IfNotPresent
+          # Explicit command + args so Argo's emissary executor doesn't
+          # need to introspect the registry for ENTRYPOINT/CMD. Mirrors
+          # the image's Dockerfile (ENTRYPOINT ["/entrypoint.sh"], CMD
+          # ["python","-m","orchestrator.run_all"]).
+          command: ["/entrypoint.sh"]
+          args: ["python", "-m", "orchestrator.run_all"]
           env:
             - name: STATE_DIR
               value: /workdir/mctl-gitops/platform-gitops/agents-state
