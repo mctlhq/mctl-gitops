@@ -5,19 +5,17 @@ metadata:
   namespace: argo-workflows
   annotations:
     workflows.argoproj.io/description: |
-      Daily run of mctl-agents (researcher → analyst → spec-writer per service)
-      followed by the mentor weekly digest aggregation.
+      Daily 06:00 UTC trigger for the full mctl-agents pipeline.
 
-      State (inbox/, proposals/, _mentor/digest/) lives in this gitops repo
-      under platform-gitops/agents-state/. The workflow:
-        1. SSH-clones mctl-gitops via the shared deploy key
-        2. Runs ghcr.io/mctlhq/mctl-agents:<tag> with STATE_DIR pointing at
-           the cloned agents-state/ — entrypoint.sh symlinks state into the
-           baked-in /app/agents/ tree
-        3. Commits and pushes the diff back to main with rebase-on-conflict
+      All workflow logic now lives in ClusterWorkflowTemplate
+      `mctl-agents-run` (cwft-mctl-agents-run.yaml). This CronWorkflow is
+      a thin wrapper that submits a Workflow with mode=full once per day.
 
-      Schedule: 06:00 UTC daily. Mentor weekly aggregation re-uses the same
-      run — it just reads any new proposals and writes the YYYY-WNN digest.
+      Other entry points reference the same template with different
+      parameters:
+        - mctl-api MCP tool mctl_trigger_mentor_only      → mode=mentor-only
+        - mctl-api MCP tool mctl_trigger_single_service   → mode=single-service, service=<name>
+        - mctl-api MCP tool mctl_trigger_agents_run       → mode=full (same as this cron, on demand)
 spec:
   schedule: "0 6 * * *"
   timezone: "UTC"
@@ -26,148 +24,12 @@ spec:
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
   workflowSpec:
-    serviceAccountName: argo-workflow-sa
-    # GHCR creds for the private mctlhq/mctl-agents image. The k8s Secret
-    # `ghcr-credentials` lives in argo-workflows ns and is provisioned by
-    # the ExternalSecret in argo-workflows/secrets/mctl-agents-ghcr.yaml.
-    imagePullSecrets:
-      - name: ghcr-credentials
-    ttlStrategy:
-      secondsAfterCompletion: 86400
-    activeDeadlineSeconds: 3600
-    entrypoint: run-agents
-    # PVC lives the lifetime of the workflow and is shared across the
-    # clone → run → commit pods. emptyDir would NOT work — Argo `steps`
-    # spins each step in its own pod, so an emptyDir would be empty in
-    # the run/commit pods (issue caught by codex on PR#45).
-    volumeClaimTemplates:
-      - metadata:
-          name: workdir
-        spec:
-          accessModes: ["ReadWriteOnce"]
-          resources:
-            requests:
-              storage: 1Gi
-    volumes:
-      - name: deploy-key
-        secret:
-          secretName: mctl-gitops-deploy-key
-          defaultMode: 0600
-    templates:
-      - name: run-agents
-        steps:
-          - - name: clone
-              template: clone-gitops
-          - - name: run
-              template: run-orchestrator
-          - - name: commit
-              template: commit-and-push
-
-      # ── 1. SSH-clone mctl-gitops into shared volume ───────────────────────
-      - name: clone-gitops
-        script:
-          image: alpine/git:2.43.0
-          command: [sh]
-          source: |
-            set -e
-            apk add --no-cache openssh-client ca-certificates
-            mkdir -p ~/.ssh
-            cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
-            chmod 600 ~/.ssh/id_ed25519
-            printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  StrictHostKeyChecking no\n' > ~/.ssh/config
-            chmod 600 ~/.ssh/config
-            git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops
-            mkdir -p /workdir/mctl-gitops/platform-gitops/agents-state
-            echo "✓ gitops cloned"
-          volumeMounts:
-            - name: workdir
-              mountPath: /workdir
-            - name: deploy-key
-              mountPath: /secrets/deploy-key
-
-      # ── 2. Run mctl-agents orchestrator with state mounted ────────────────
-      - name: run-orchestrator
-        container:
-          image: ghcr.io/mctlhq/mctl-agents:1.0.0
-          imagePullPolicy: IfNotPresent
-          # Explicit command + args so Argo's emissary executor doesn't
-          # need to introspect the registry for ENTRYPOINT/CMD. Mirrors
-          # the image's Dockerfile (ENTRYPOINT ["/entrypoint.sh"], CMD
-          # ["python","-m","orchestrator.run_all"]).
-          command: ["/entrypoint.sh"]
-          args: ["python", "-m", "orchestrator.run_all"]
-          env:
-            - name: STATE_DIR
-              value: /workdir/mctl-gitops/platform-gitops/agents-state
-            # Auth: OAuth (Claude Pro/Max). NOT API key — runs within
-            # owner's subscription. Do NOT add ANTHROPIC_API_KEY here in
-            # parallel — Claude CLI would prefer it and break OAuth flow.
-            - name: CLAUDE_CODE_OAUTH_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: mctl-agents-secrets
-                  key: claude-code-oauth-token
-            # Optional — agents degrade gracefully (no mcp__mctl__* tools)
-            # if Vault doesn't have mctl-token yet. Add via:
-            #   vault kv patch secret/platform/mctl-agents mctl-token=...
-            - name: MCTL_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: mctl-agents-secrets
-                  key: mctl-token
-                  optional: true
-            - name: SERVICE_AGENT_BUDGET_USD
-              value: "1.50"
-            - name: MENTOR_BUDGET_USD
-              value: "2.00"
-          resources:
-            requests: { cpu: 200m, memory: 512Mi }
-            limits:   { cpu: 2000m, memory: 2Gi }
-          volumeMounts:
-            - name: workdir
-              mountPath: /workdir
-
-      # ── 3. Commit & push back to mctl-gitops ──────────────────────────────
-      - name: commit-and-push
-        script:
-          image: alpine/git:2.43.0
-          command: [sh]
-          source: |
-            set -e
-            apk add --no-cache openssh-client ca-certificates
-            mkdir -p ~/.ssh
-            cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
-            chmod 600 ~/.ssh/id_ed25519
-            printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  StrictHostKeyChecking no\n' > ~/.ssh/config
-            chmod 600 ~/.ssh/config
-
-            cd /workdir/mctl-gitops
-            git config user.name "mctl-agents[bot]"
-            git config user.email "mctl-agents[bot]@users.noreply.github.com"
-
-            # Stage only agents-state (paranoia: nothing else)
-            git add platform-gitops/agents-state/
-
-            if git diff --cached --quiet; then
-              echo "ℹ️  No new proposals or digest changes — nothing to commit."
-              exit 0
-            fi
-
-            DATE=$(date -u +%Y-%m-%d)
-            git commit -m "chore(agents): daily run ${DATE}"
-
-            for i in 1 2 3 4 5; do
-              if git push origin HEAD:main; then
-                echo "✅ Pushed agents-state changes"
-                exit 0
-              fi
-              echo "⚠️  Push failed (attempt ${i}), rebasing..."
-              git pull --rebase origin main
-            done
-            echo "❌ Push failed after 5 attempts"
-            exit 1
-          volumeMounts:
-            - name: workdir
-              mountPath: /workdir
-            - name: deploy-key
-              mountPath: /secrets/deploy-key
+    workflowTemplateRef:
+      name: mctl-agents-run
+      clusterScope: true
+    arguments:
+      parameters:
+        - name: mode
+          value: "full"
+        - name: service
+          value: ""
