@@ -31,9 +31,19 @@ spec:
       secondsAfterCompletion: 86400
     activeDeadlineSeconds: 3600
     entrypoint: run-agents
+    # PVC lives the lifetime of the workflow and is shared across the
+    # clone → run → commit pods. emptyDir would NOT work — Argo `steps`
+    # spins each step in its own pod, so an emptyDir would be empty in
+    # the run/commit pods (issue caught by codex on PR#45).
+    volumeClaimTemplates:
+      - metadata:
+          name: workdir
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 1Gi
     volumes:
-      - name: workdir
-        emptyDir: {}
       - name: deploy-key
         secret:
           secretName: mctl-gitops-deploy-key
