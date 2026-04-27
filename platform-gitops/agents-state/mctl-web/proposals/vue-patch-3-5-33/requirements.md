@@ -1,21 +1,25 @@
-# Патч-обновление Vue 3.5.30 → 3.5.33
+# Обновление Vue до 3.5.33
 
 ## Контекст
-Vue 3.5.33 — последний patch-релиз ветки 3.5.x на момент 2026-04-27. mctl-web использует Vue 3.5.30. Патч-версии в семантическом версионировании содержат только bugfix'ы и не вносят breaking changes, поэтому обновление безрисково и является стандартной гигиеной зависимостей.
 
-Выполнение этого обновления перед обновлением Nuxt до 4.4.2 (предложение `nuxt-upgrade-4-4-2`) обеспечивает чистую базовую линию: если при обновлении Nuxt возникнут проблемы, они не будут смешаны с изменениями в Vue.
+Продакшн использует Vue 3.5.30, выпущен в феврале 2025. Актуальная версия — Vue 3.5.33 (выпущена 22 апреля 2026). Это патч-релиз в рамках ветки v3.5.x, без объявленных breaking changes. Патч-версии Vue обычно содержат исправления регрессий, улучшения типизации и минорные performance-фиксы.
+
+Обновление до 3.5.33 является обязательной гигиеной зависимостей и рекомендуется сделать до более крупного обновления Nuxt/vue-router, чтобы изолировать потенциальные источники проблем.
 
 ## User stories
-- AS a developer I WANT Vue updated to the latest patch version SO THAT known bugs fixed in 3.5.31–3.5.33 are resolved and the dependency is current.
-- AS a developer I WANT Vue updated before the Nuxt upgrade SO THAT debugging the Nuxt upgrade involves fewer simultaneous variables.
+
+- AS a developer I WANT Vue to be on the latest patch version SO THAT known bugs and regressions are fixed without any API changes.
+- AS a platform operator I WANT dependencies to be kept current within minor/patch bounds SO THAT security fixes in patch releases are not missed.
 
 ## Acceptance criteria (EARS)
-- WHEN `npm install` runs after the change THE SYSTEM SHALL install Vue 3.5.33 (or newer patch in 3.5.x).
-- WHEN `nuxt build` runs after the update THE SYSTEM SHALL complete without errors or new warnings.
-- WHILE Vue version is 3.5.33 THE SYSTEM SHALL produce identical prerender output for `/`, `/docs`, `/privacy` compared to Vue 3.5.30.
-- IF a breaking change is detected during build or tests THE SYSTEM SHALL block the PR and require investigation (this should not occur for a patch update).
+
+- WHEN `nuxt build` runs after the update THE SYSTEM SHALL complete without errors.
+- WHEN the application is loaded in a browser THE SYSTEM SHALL produce no Vue-related console errors or hydration warnings.
+- WHILE Vue 3.5.33 is active THE SYSTEM SHALL maintain all existing functionality of pages `/`, `/docs`, `/privacy` and the tenant form.
+- IF Vue 3.5.34 or later is released THE SYSTEM SHALL be updated in the next daily cycle as part of regular dependency maintenance.
 
 ## Out of scope
-- Обновление Nuxt, vue-router, vee-validate или любых других зависимостей в рамках этого предложения.
-- Изменение конфигурации Nuxt или Cloudflare Worker.
-- Добавление новых функциональностей.
+
+- Использование новых Vue 3.5.x API, появившихся между .30 и .33.
+- Изменение компонентной архитектуры.
+- Обновление vueuse/core или vue-router (отдельные задачи).
