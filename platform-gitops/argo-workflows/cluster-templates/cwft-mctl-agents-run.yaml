@@ -133,6 +133,17 @@ spec:
                 name: mctl-agents-secrets
                 key: mctl-token
                 optional: true
+          # Optional — used by mctl-docs scan-sibling-commits skill when
+          # sibling-repo clones aren't on disk (always the case in cluster:
+          # only mctl-gitops is cloned by the previous step). Fine-grained
+          # PAT with Contents:read on mctlhq/* org repos. Without it the
+          # skill degrades to "no signal: <repo> path missing".
+          - name: GITHUB_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: github-token
+                optional: true
           - name: SERVICE_AGENT_BUDGET_USD
             value: "1.50"
           - name: MENTOR_BUDGET_USD
