@@ -1,25 +1,23 @@
 # Tasks: nuxt-upgrade-4-4-2
 
-- [ ] 1. Применить Vue 3.5.33 patch (предложение `vue-patch-3-5-33`) — DoD: `vue` в `package.json` = `^3.5.33`, `nuxt build` проходит без ошибок.
-- [ ] 2. Аудит прямых импортов из `vue-router` в кодовой базе — DoD: составлен список файлов с `import ... from 'vue-router'`; для каждого определено, есть ли breaking change в v5 (по официальному migration guide vue-router v5).
-- [ ] 3. Обновить `nuxt` до `^4.4.2` и `vue-router` до `^5.0.0` в `package.json` — DoD: `npm install` завершается без ошибок; `package-lock.json` содержит nuxt >= 4.4.2 и vue-router >= 5.0.0.
-- [ ] 4. Устранить breaking changes из аудита (зависит от 2, 3) — DoD: все файлы с прямыми импортами vue-router скомпилированы без ошибок TypeScript/Vite.
-- [ ] 5. Запустить `nuxt build` и исправить ошибки сборки — DoD: `nuxt build` завершается с кодом 0; директория `dist/` содержит все prerender-страницы (`index.html`, `docs/index.html`, `privacy/index.html`).
-- [ ] 6. Проверить совместимость vee-validate с новым стеком — DoD: форма заявки на тенант рендерится без ошибок в браузере; валидация полей работает корректно (зависит от 5).
-- [ ] 7. Обновить CI (deploy.yml) при необходимости — DoD: `npm ci && nuxt build` успешно проходит в GitHub Actions; деплой на Cloudflare Pages завершается без ошибок (зависит от 5).
-- [ ] 8. Открыть PR, пройти code review и смёрджить — DoD: PR одобрен, все CI-checks зелёные, production-деплой успешен (зависит от 7).
+- [ ] 1. Прочитать официальный migration guide Nuxt 4.3→4.4 и vue-router v4→v5 changelog, зафиксировать список breaking changes применимых к mctl-web. — DoD: список breaking changes задокументирован в PR description.
+- [ ] 2. Обновить `nuxt` до `"^4.4.2"` и `vue-router` до `"^5.0.6"` в `package.json`; запустить `npm install` / `pnpm install`. — DoD: lockfile зафиксирован на Nuxt 4.4.x и vue-router 5.x, нет конфликтов peer-зависимостей.
+- [ ] 3. Проверить и исправить прямые импорты из `vue-router` во всех `.vue`-файлах и composables (`app/pages/`, `app/components/`, `app/composables/`). — DoD: нет прямых `import ... from 'vue-router'` кроме типов; всё переведено на Nuxt-обёртки или vue-router v5 API.
+- [ ] 4. Проверить `nuxt.config.ts` на deprecated опции v4.3 → v4.4; применить необходимые изменения. — DoD: `nuxt build` не выдаёт deprecated-предупреждений.
+- [ ] 5. Запустить `nuxt typecheck` — убедиться в отсутствии TypeScript-ошибок. — DoD: exit code 0.
+- [ ] 6. Запустить `nuxt generate` — убедиться, что prerender генерирует HTML для `/`, `/docs`, `/privacy`. — DoD: три HTML-файла присутствуют в `dist/`, без ошибок в консоли.
+- [ ] 7. Smoke-тест в staging: навигация по всем трём страницам, отправка формы тенанта (вызов `/api/submit`). — DoD: нет консольных ошибок, форма отправляется корректно.
+- [ ] 8. Создать и смержить PR; задеплоить через `deploy.yml`. — DoD: prod возвращает корректный HTML для `mctl.ai`, `mctl.ai/docs`, `mctl.ai/privacy`.
 
 ## Тесты
 
-- [ ] T1. `nuxt build` завершается с кодом 0 без предупреждений об устаревшем API vue-router.
-- [ ] T2. Prerender: файлы `dist/index.html`, `dist/docs/index.html`, `dist/privacy/index.html` существуют и содержат ожидаемый HTML (не пустые, нет тегов `<nuxt-error>`).
-- [ ] T3. Браузерный smoke-тест: навигация `/` → `/docs` → `/privacy` → `/` не вызывает ошибок в консоли браузера.
-- [ ] T4. Форма заявки на тенант: заполнение и отправка формы не вызывает JS-ошибок; вee-validate отображает ошибки валидации корректно.
-- [ ] T5. Worker endpoints не регрессировали: `GET /api/github/login` возвращает redirect, `POST /api/submit` возвращает 200/422/429 (не 500).
-- [ ] T6. `npm audit --audit-level=high` не выводит новых уязвимостей относительно baseline до обновления.
+- [ ] T1. `nuxt build` завершается с exit code 0.
+- [ ] T2. `nuxt typecheck` завершается с exit code 0.
+- [ ] T3. `nuxt generate` создаёт HTML для `/`, `/docs`, `/privacy` (проверяется `ls dist/`).
+- [ ] T4. В браузере DevTools — нет Vue hydration warnings на всех трёх страницах.
+- [ ] T5. `curl https://mctl.ai` возвращает HTTP 200 с корректным HTML после деплоя.
+- [ ] T6. `curl https://mctl.ai/docs` и `https://mctl.ai/privacy` — HTTP 200.
 
 ## Откат
-1. Вернуть `package.json` к версиям `nuxt: 4.3.1`, `vue-router: 4.6.4`, `vue: 3.5.30`.
-2. Запустить `npm install` для восстановления lock-файла.
-3. Если изменения уже задеплоены на Cloudflare Pages — использовать Cloudflare Dashboard → Pages → Deployments → выбрать предыдущий deployment → "Rollback to this deployment".
-4. Смёрджить hotfix-ветку в main для восстановления CI-пайплайна.
+
+Восстановить предыдущие версии `nuxt` и `vue-router` в `package.json`, перегенерировать lockfile, пересобрать и задеплоить через `deploy.yml`. Cloudflare Worker не затронут — откат только фронтенда.
