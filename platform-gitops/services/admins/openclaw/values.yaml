@@ -1061,7 +1061,7 @@ configMaps:
           "defaults": {
             "skipBootstrap": true,
             "model": {
-              "primary": "claude-cli/claude-sonnet-4-6"
+              "primary": "openai-codex/gpt-5.4"
             }
           }
         },
