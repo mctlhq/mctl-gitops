@@ -27,6 +27,14 @@ spec:
     secondsAfterCompletion: 86400
   activeDeadlineSeconds: 3600
   entrypoint: run-agents
+  # Serialize with every other workflow that pushes to mctl-gitops main
+  # (wft-delete-tenant et al.). Without this, cron + on-demand MCP triggers
+  # could race the commit-and-push step — `git pull --rebase` retries do
+  # eventually win but waste agent-runtime PVC time and produce noisy logs.
+  # Same mutex name as wft-delete-tenant.yaml so we share the lock.
+  synchronization:
+    mutex:
+      name: mctl-gitops-main-writes
 
   arguments:
     parameters:
