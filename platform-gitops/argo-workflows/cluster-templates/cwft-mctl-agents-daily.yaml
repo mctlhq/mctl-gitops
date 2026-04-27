@@ -96,11 +96,15 @@ spec:
                 secretKeyRef:
                   name: mctl-agents-secrets
                   key: claude-code-oauth-token
+            # Optional — agents degrade gracefully (no mcp__mctl__* tools)
+            # if Vault doesn't have mctl-token yet. Add via:
+            #   vault kv patch secret/platform/mctl-agents mctl-token=...
             - name: MCTL_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: mctl-agents-secrets
                   key: mctl-token
+                  optional: true
             - name: SERVICE_AGENT_BUDGET_USD
               value: "1.50"
             - name: MENTOR_BUDGET_USD
