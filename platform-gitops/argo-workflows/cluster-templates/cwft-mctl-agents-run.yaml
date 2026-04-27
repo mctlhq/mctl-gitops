@@ -1,0 +1,192 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterWorkflowTemplate
+metadata:
+  name: mctl-agents-run
+  annotations:
+    workflows.argoproj.io/description: |
+      Cluster-wide template for the mctl-agents pipeline. Three steps run
+      sequentially through a 1Gi PVC `workdir`:
+        1. clone-gitops — SSH-clone mctl-gitops via the shared deploy key
+        2. run-orchestrator — ghcr.io/mctlhq/mctl-agents:<tag> with
+           STATE_DIR pointing at agents-state/. RUN_MODE / RUN_SERVICE env
+           vars (from workflow parameters) tell the Python orchestrator
+           whether to do full / mentor-only / single-service.
+        3. commit-and-push — commit any agents-state diff, push to main
+           with rebase-on-conflict (5 retries).
+
+      Triggered by:
+        - cron via CronWorkflow `mctl-agents-daily` (mode=full, daily 06:00 UTC)
+        - mctl-api MCP tools mctl_trigger_{agents_run,mentor_only,single_service}
+          (each submits a Workflow that references this template via
+          workflowTemplateRef + clusterScope:true with appropriate parameters)
+spec:
+  serviceAccountName: argo-workflow-sa
+  imagePullSecrets:
+    - name: ghcr-credentials
+  ttlStrategy:
+    secondsAfterCompletion: 86400
+  activeDeadlineSeconds: 3600
+  entrypoint: run-agents
+  # Serialize with every other workflow that pushes to mctl-gitops main
+  # (wft-delete-tenant et al.). Without this, cron + on-demand MCP triggers
+  # could race the commit-and-push step — `git pull --rebase` retries do
+  # eventually win but waste agent-runtime PVC time and produce noisy logs.
+  # Same mutex name as wft-delete-tenant.yaml so we share the lock.
+  synchronization:
+    mutex:
+      name: mctl-gitops-main-writes
+
+  arguments:
+    parameters:
+      - name: mode
+        value: "full"
+        # full | mentor-only | single-service
+      - name: service
+        value: ""
+        # Required only when mode=single-service. Validated by the Python
+        # orchestrator against config/settings.py SERVICES (exit 1 on mismatch).
+
+  volumeClaimTemplates:
+    - metadata:
+        name: workdir
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
+  volumes:
+    - name: deploy-key
+      secret:
+        secretName: mctl-gitops-deploy-key
+        defaultMode: 0600
+
+  templates:
+    - name: run-agents
+      steps:
+        - - name: clone
+            template: clone-gitops
+        - - name: run
+            template: run-orchestrator
+        - - name: commit
+            template: commit-and-push
+
+    # ── 1. SSH-clone mctl-gitops into shared volume ───────────────────────
+    - name: clone-gitops
+      script:
+        image: alpine/git:2.43.0
+        command: [sh]
+        source: |
+          set -e
+          apk add --no-cache openssh-client ca-certificates
+          mkdir -p ~/.ssh
+          cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  StrictHostKeyChecking no\n' > ~/.ssh/config
+          chmod 600 ~/.ssh/config
+          git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops
+          mkdir -p /workdir/mctl-gitops/platform-gitops/agents-state
+          echo "✓ gitops cloned"
+        volumeMounts:
+          - name: workdir
+            mountPath: /workdir
+          - name: deploy-key
+            mountPath: /secrets/deploy-key
+
+    # ── 2. Run mctl-agents orchestrator with state mounted ────────────────
+    - name: run-orchestrator
+      container:
+        image: ghcr.io/mctlhq/mctl-agents:1.1.0
+        imagePullPolicy: IfNotPresent
+        # Explicit command + args so Argo's emissary executor doesn't need
+        # to introspect the registry for ENTRYPOINT/CMD.
+        command: ["/entrypoint.sh"]
+        args: ["python", "-m", "orchestrator.run_all"]
+        env:
+          - name: STATE_DIR
+            value: /workdir/mctl-gitops/platform-gitops/agents-state
+          # Run-mode dispatch (Phase 2 of plan logical-floating-lemon §Phase 2).
+          # Python orchestrator reads these and branches:
+          #   full           → all service-agents in parallel + mentor
+          #   mentor-only    → mentor only (cheap re-aggregation)
+          #   single-service → one service-agent named in RUN_SERVICE; no mentor
+          - name: RUN_MODE
+            value: "{{workflow.parameters.mode}}"
+          - name: RUN_SERVICE
+            value: "{{workflow.parameters.service}}"
+          # Auth: OAuth (Claude Pro/Max). NOT API key — runs within owner's
+          # subscription. Do NOT add ANTHROPIC_API_KEY in parallel.
+          - name: CLAUDE_CODE_OAUTH_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: claude-code-oauth-token
+          # Optional — agents degrade gracefully (no mcp__mctl__* tools)
+          # if Vault doesn't have mctl-token yet.
+          - name: MCTL_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: mctl-token
+                optional: true
+          - name: SERVICE_AGENT_BUDGET_USD
+            value: "1.50"
+          - name: MENTOR_BUDGET_USD
+            value: "2.00"
+        resources:
+          requests: { cpu: 200m, memory: 512Mi }
+          limits:   { cpu: 2000m, memory: 2Gi }
+        volumeMounts:
+          - name: workdir
+            mountPath: /workdir
+
+    # ── 3. Commit & push back to mctl-gitops ──────────────────────────────
+    - name: commit-and-push
+      script:
+        image: alpine/git:2.43.0
+        command: [sh]
+        source: |
+          set -e
+          apk add --no-cache openssh-client ca-certificates
+          mkdir -p ~/.ssh
+          cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  StrictHostKeyChecking no\n' > ~/.ssh/config
+          chmod 600 ~/.ssh/config
+
+          cd /workdir/mctl-gitops
+          git config user.name "mctl-agents[bot]"
+          git config user.email "mctl-agents[bot]@users.noreply.github.com"
+
+          # Stage only agents-state (paranoia: nothing else)
+          git add platform-gitops/agents-state/
+
+          if git diff --cached --quiet; then
+            echo "ℹ️  No new proposals or digest changes — nothing to commit."
+            exit 0
+          fi
+
+          MODE="{{workflow.parameters.mode}}"
+          SERVICE="{{workflow.parameters.service}}"
+          DATE=$(date -u +%Y-%m-%d)
+          if [ "$MODE" = "single-service" ] && [ -n "$SERVICE" ]; then
+            MSG="chore(agents): ${MODE} ${SERVICE} ${DATE}"
+          else
+            MSG="chore(agents): ${MODE} run ${DATE}"
+          fi
+          git commit -m "$MSG"
+
+          for i in 1 2 3 4 5; do
+            if git push origin HEAD:main; then
+              echo "✅ Pushed agents-state changes"
+              exit 0
+            fi
+            echo "⚠️  Push failed (attempt ${i}), rebasing..."
+            git pull --rebase origin main
+          done
+          echo "❌ Push failed after 5 attempts"
+          exit 1
+        volumeMounts:
+          - name: workdir
+            mountPath: /workdir
+          - name: deploy-key
+            mountPath: /secrets/deploy-key
