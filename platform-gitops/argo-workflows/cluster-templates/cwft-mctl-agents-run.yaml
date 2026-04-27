@@ -27,6 +27,11 @@ spec:
     secondsAfterCompletion: 86400
   activeDeadlineSeconds: 3600
   entrypoint: run-agents
+  # onExit always fires after the entrypoint completes — Succeeded, Failed,
+  # or Errored. Posts a one-line Telegram summary to the admins chat so the
+  # operator doesn't have to poll mctl_list_recent_agent_runs after each
+  # mctl_trigger_*.
+  onExit: notify-telegram
   # Serialize with every other workflow that pushes to mctl-gitops main
   # (wft-delete-tenant et al.). Without this, cron + on-demand MCP triggers
   # could race the commit-and-push step — `git pull --rebase` retries do
@@ -190,3 +195,58 @@ spec:
             mountPath: /workdir
           - name: deploy-key
             mountPath: /secrets/deploy-key
+
+    # ── 4. Telegram notification (onExit handler — always fires) ──────────
+    # Posts a one-line summary to admins chat with mode, status, duration,
+    # and a link to the workflow UI. Best-effort: failures don't fail the
+    # workflow itself (we already finished the real work by this point).
+    - name: notify-telegram
+      script:
+        image: alpine:3.19
+        command: [sh]
+        env:
+          - name: TG_BOT_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: telegram-bot-token
+                optional: true
+          - name: TG_CHAT_ID
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: telegram-chat-id
+                optional: true
+        source: |
+          set +e
+          if [ -z "$TG_BOT_TOKEN" ] || [ -z "$TG_CHAT_ID" ]; then
+            echo "ℹ️  TG_BOT_TOKEN or TG_CHAT_ID not set; skipping notification."
+            exit 0
+          fi
+          apk add --no-cache curl ca-certificates >/dev/null 2>&1
+
+          STATUS="{{workflow.status}}"
+          MODE="{{workflow.parameters.mode}}"
+          SERVICE="{{workflow.parameters.service}}"
+          WF="{{workflow.name}}"
+          DUR="{{workflow.duration}}"
+          case "$STATUS" in
+            Succeeded) ICON="✅" ;;
+            Failed)    ICON="❌" ;;
+            Errored)   ICON="⚠️" ;;
+            *)         ICON="⏳" ;;
+          esac
+          if [ "$MODE" = "single-service" ] && [ -n "$SERVICE" ]; then
+            SUBJECT="${MODE} ${SERVICE}"
+          else
+            SUBJECT="${MODE}"
+          fi
+          UI_URL="https://workflows.mctl.ai/workflows/argo-workflows/${WF}"
+          TEXT="${ICON} mctl-agents: ${SUBJECT} — ${STATUS} (${DUR}s)\n${UI_URL}"
+
+          curl -s -o /dev/null -w 'telegram http=%{http_code}\n' \
+            -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "{\"chat_id\":\"${TG_CHAT_ID}\",\"text\":\"${TEXT}\",\"disable_web_page_preview\":true}"
+          # Non-zero curl exit shouldn't fail this onExit step.
+          exit 0

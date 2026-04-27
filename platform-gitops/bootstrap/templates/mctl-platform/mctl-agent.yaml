@@ -15,7 +15,7 @@ spec:
       values: |
         image:
           repository: ghcr.io/mctlhq/mctl-agent
-          tag: "1.5.0"
+          tag: "1.6.0"
         imagePullSecrets:
           - name: ghcr-credentials
         service:
@@ -69,6 +69,10 @@ spec:
           targetSecret: mctl-agent-secrets
           targetTemplateData:
             TELEGRAM_CHAT_ID: "210408407"
+            # Per-tenant Telegram routing — fmt: "tenant=chat_id,tenant=chat_id".
+            # Empty string disables routing (everything falls back to TELEGRAM_CHAT_ID).
+            # Seed via: vault kv patch secret/platform/mctl-agent/tokens telegram-tenant-chat-ids="admins=...,labs=...,ovk=..."
+            TELEGRAM_TENANT_CHAT_IDS: "{{ .telegramTenantChatIds }}"
           data:
             - secretKey: MCTL_API_TOKEN
               remoteKey: platform/mctl-agent/tokens
@@ -82,6 +86,14 @@ spec:
             - secretKey: TELEGRAM_BOT_TOKEN
               remoteKey: platform/mctl-agent/tokens
               property: telegram-bot-token
+            # Per-tenant chat routing (tenant=chat_id,tenant=chat_id).
+            # Seed via: vault kv patch secret/platform/mctl-agent/tokens \
+            #   telegram-tenant-chat-ids="admins=...,labs=...,ovk=..."
+            # Optional — without it the agent falls back to TELEGRAM_CHAT_ID
+            # for everything (previous behaviour).
+            - secretKey: telegramTenantChatIds
+              remoteKey: platform/mctl-agent/tokens
+              property: telegram-tenant-chat-ids
         # Note: mctl-agent-db-creds ExternalSecret is managed in cnpg/shared/secrets.yaml
         # and synced to 'admins' namespace via cluster-wide sync or manual patch.
         # For now, we assume it exists in the namespace.
