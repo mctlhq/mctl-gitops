@@ -1061,7 +1061,7 @@ configMaps:
           "defaults": {
             "skipBootstrap": true,
             "model": {
-              "primary": "claude-cli/claude-opus-4-7"
+              "primary": "claude-cli/claude-sonnet-4-6"
             }
           }
         },
