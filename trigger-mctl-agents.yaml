@@ -8,10 +8,12 @@ metadata:
     manual-trigger: 'true'
   annotations:
     workflows.argoproj.io/description: 'Manual one-shot trigger derived from cronwf/mctl-agents-daily.
-      Apply with: kubectl apply -f trigger-mctl-agents.yaml'
+      Apply with: kubectl create -f trigger-mctl-agents.yaml'
 spec:
   activeDeadlineSeconds: 3600
   entrypoint: run-agents
+  imagePullSecrets:
+  - name: ghcr-credentials
   serviceAccountName: argo-workflow-sa
   templates:
   - name: run-agents
@@ -40,6 +42,12 @@ spec:
       - mountPath: /secrets/deploy-key
         name: deploy-key
   - container:
+      args:
+      - python
+      - -m
+      - orchestrator.run_all
+      command:
+      - /entrypoint.sh
       env:
       - name: STATE_DIR
         value: /workdir/mctl-gitops/platform-gitops/agents-state
