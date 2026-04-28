@@ -1,9 +1,9 @@
-# Обновление chi/v5 до v5.2.5 (security fix RedirectSlashes)
+# Upgrade chi/v5 to v5.2.5 (RedirectSlashes security fix)
 
-## Контекст
-chi/v5 v5.2.5 (выпущен 2025-02-05) содержит security fix в middleware `RedirectSlashes`, а также исправление двойного вызова обработчика в `RouteHeaders`. mctl-api использует chi/v5 5.2.1 в качестве HTTP-роутера для всех REST- и MCP-эндпоинтов, включая публичный `https://api.mctl.ai`. Отставание составляет 4 patch-версии при наличии явного security fix.
+## Context
+chi/v5 v5.2.5 (released 2025-02-05) contains a security fix in the `RedirectSlashes` middleware as well as a fix for double handler invocation in `RouteHeaders`. mctl-api uses chi/v5 5.2.1 as the HTTP router for all REST and MCP endpoints, including the public `https://api.mctl.ai`. The lag is 4 patch versions while an explicit security fix exists.
 
-Уязвимость в `RedirectSlashes` middleware потенциально позволяет манипулировать путями запроса через некорректный redirect, что при определённых конфигурациях может использоваться для обхода маршрутизации или auth-middleware. Обновление — patch-bump без breaking changes в API chi/v5, минимальный effort при непосредственном security-эффекте.
+The vulnerability in the `RedirectSlashes` middleware potentially allows manipulation of request paths via an incorrect redirect, which under certain configurations may be used to bypass routing or auth middleware. The upgrade is a patch bump without breaking changes in the chi/v5 API, minimal effort with a direct security effect.
 
 ## User stories
 - AS a platform security engineer I WANT chi/v5 upgraded to v5.2.5 SO THAT the known security vulnerability in RedirectSlashes middleware is remediated on the public API endpoint.
@@ -17,7 +17,7 @@ chi/v5 v5.2.5 (выпущен 2025-02-05) содержит security fix в middl
 - WHEN the updated binary is deployed to the `admins` tenant THE SYSTEM SHALL return correct HTTP status codes for all routes covered by existing integration tests.
 
 ## Out of scope
-- Изменение конфигурации middleware chi (добавление или удаление `RedirectSlashes` — отдельное решение).
-- Обновление зависимостей chi (httprate и т.д.) сверх транзитивных требований v5.2.5.
-- Оценка замены chi на другой роутер.
-- Изменение логики маршрутизации или auth-middleware.
+- Changing chi middleware configuration (adding or removing `RedirectSlashes` — a separate decision).
+- Updating chi-related dependencies (httprate etc.) beyond the transitive requirements of v5.2.5.
+- Evaluating a replacement of chi with another router.
+- Changing routing or auth-middleware logic.

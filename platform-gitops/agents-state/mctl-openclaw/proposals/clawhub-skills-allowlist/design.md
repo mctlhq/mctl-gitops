@@ -1,71 +1,71 @@
 # Design: clawhub-skills-allowlist
 
-## Текущее состояние
-Согласно `context/architecture.md`, платформа использует 3-layer skills архитектуру:
-- Layer 1: Built-in skills (compiled в core)
-- Layer 2: YAML skills (hot-reload из `skills/custom/`)
-- Layer 3: Remote skills (HTTP-delegated, регистрация через REST API)
+## Current state
+According to `context/architecture.md`, the platform uses a 3-layer skills architecture:
+- Layer 1: Built-in skills (compiled into the core)
+- Layer 2: YAML skills (hot-reload from `skills/custom/`)
+- Layer 3: Remote skills (HTTP-delegated, registered via REST API)
 
-Layer 3 skills регистрируются через REST API openclaw — любой клиент с доступом к API может зарегистрировать skill с произвольным remote endpoint. В текущих gitops-манифестах нет поля, ограничивающего список допустимых источников. CI-пайплайн не проверяет появление новых skill-источников. Деплой: Docker → mctl-gitops → ArgoCD, конфигурация тенантов в Helm values.
+Layer 3 skills are registered via the openclaw REST API — any client with API access can register a skill against an arbitrary remote endpoint. The current GitOps manifests have no field constraining the list of permitted sources. The CI pipeline does not check for new skill sources appearing. Deploy: Docker → mctl-gitops → ArgoCD, tenant configuration in Helm values.
 
-## Предлагаемое решение
+## Proposed solution
 
-**Часть 1: allowlist в Helm values (gitops)**
+**Part 1: allowlist in Helm values (gitops)**
 
-Добавить в Helm values каждого тенанта поле `skills.remoteAllowlist` — список допустимых URL-префиксов (или origins) для Layer 3 skills:
+Add a field `skills.remoteAllowlist` to each tenant's Helm values — a list of permitted URL prefixes (or origins) for Layer 3 skills:
 
 ```yaml
 # mctl-gitops/tenants/<tenant>/values.yaml
 skills:
   remoteAllowlist:
     - "https://skills.mctlhq.internal/"
-    # пустой список = deny-all (fail-closed)
+    # empty list = deny-all (fail-closed)
 ```
 
-Если поле отсутствует или пусто — применяется deny-all по умолчанию. Это fail-closed семантика: нет явного разрешения → нет доступа.
+If the field is missing or empty — deny-all applies by default. Fail-closed semantics: no explicit grant → no access.
 
-**Часть 2: enforcement в openclaw config**
+**Part 2: enforcement in openclaw config**
 
-openclaw поддерживает конфигурацию через YAML config file (Layer 2 hot-reload механизм). Добавить в `skills/custom/` (tenant-specific overlay через gitops) конфигурационный skill или использовать существующий config-механизм openclaw для задания `allowRemoteSkillSources`. При регистрации Layer 3 skill через REST API openclaw проверяет origin против allowlist и возвращает 403 при несовпадении.
+openclaw supports configuration via a YAML config file (the Layer 2 hot-reload mechanism). Add a configuration skill in `skills/custom/` (a tenant-specific overlay through gitops) or use the existing openclaw config mechanism to set `allowRemoteSkillSources`. When a Layer 3 skill is registered via REST API, openclaw checks the origin against the allowlist and returns 403 on mismatch.
 
-Если openclaw не поддерживает нативный allowlist — реализовать через nginx/ingress middleware (admission webhook или Lua-скрипт) перед API endpoint, который фильтрует запросы на регистрацию skills по origin header. Это более инвазивный подход, но не требует upstream патча.
+If openclaw does not support a native allowlist — implement it via nginx/ingress middleware (an admission webhook or Lua script) in front of the API endpoint, filtering registration requests by Origin header. This is a more invasive approach but does not require an upstream patch.
 
-**Часть 3: CI-проверка**
+**Part 3: CI check**
 
-Добавить шаг в CI-пайплайн mctl-gitops:
-- Скрипт сканирует diff PR на изменения в `skills/` директориях и манифестах, связанных с Layer 3 skills
-- Если обнаружен новый URL/origin, не входящий в allowlist текущего тенанта — CI падает с сообщением: "New remote skill source detected: <url>. Update allowlist in values.yaml and get security review."
-- Шаг реализуется как простой bash/Python скрипт без дополнительных зависимостей
+Add a step to the mctl-gitops CI pipeline:
+- A script scans the PR diff for changes in `skills/` directories and manifests related to Layer 3 skills.
+- If a new URL/origin not in the current tenant's allowlist is detected — CI fails with: "New remote skill source detected: <url>. Update allowlist in values.yaml and get security review."
+- The step is a simple bash/Python script with no extra dependencies.
 
-**Почему именно так:**
-Конфигурационный подход (Helm values + CI) — минимальный effort, нулевой RAM impact, не требует изменений в upstream. Fail-closed семантика по умолчанию защищает тенантов, которые забыли явно задать allowlist. CI-проверка предотвращает случайное добавление неодобренных источников через gitops.
+**Why this approach:**
+A configuration-based approach (Helm values + CI) — minimal effort, zero RAM impact, no upstream changes required. Fail-closed semantics by default protect tenants who forget to set an allowlist explicitly. The CI check prevents accidental addition of unapproved sources via gitops.
 
-## Альтернативы
+## Alternatives
 
-**Альтернатива 1: NetworkPolicy — блокировка ClawHub на сетевом уровне**
-Kubernetes NetworkPolicy можно настроить так, чтобы поды openclaw не могли обращаться к IP-диапазонам ClawHub. Отброшено: требует поддержания актуального списка IP ClawHub (меняются), не защищает от skills, хостящихся на других доменах, и не решает проблему для skills, уже зарегистрированных в системе. Более широкая мера, не заменяет allowlist.
+**Alternative 1: NetworkPolicy — block ClawHub at the network layer**
+Kubernetes NetworkPolicy can be configured so openclaw pods cannot reach ClawHub IP ranges. Dropped: requires keeping a current ClawHub IP list (changes), does not protect against skills hosted on other domains, and does not address skills already registered. A broader measure that does not replace the allowlist.
 
-**Альтернатива 2: Upstream feature request — allowlist в openclaw core**
-Запросить в upstream openclaw добавление нативного allowlist для remote skills. Отброшено: слишком долго (кампания активна сейчас); не гарантирует включение в ближайший релиз; решение нужно немедленно. Можно сделать параллельно как долгосрочную меру.
+**Alternative 2: Upstream feature request — allowlist in openclaw core**
+Request that upstream openclaw add a native allowlist for remote skills. Dropped: too slow (campaign is active now); no guarantee of inclusion in the next release; the solution is needed immediately. Can be done in parallel as a long-term measure.
 
-**Альтернатива 3: Полное отключение Layer 3 skills на всех тенантах**
-Самый быстрый способ закрыть вектор — выключить remote skills регистрацию. Отброшено: возможно, легитимные Layer 3 skills уже используются в ovk или admins; отключение без инвентаризации может сломать продуктивный функционал. Allowlist с явно разрешёнными источниками — более точный и управляемый подход.
+**Alternative 3: Disable Layer 3 skills entirely on all tenants**
+The fastest way to close the vector is to turn off remote skill registration. Dropped: legitimate Layer 3 skills may already be in use in ovk or admins; turning them off without inventory may break production functionality. An allowlist with explicitly approved sources is a more precise and controllable approach.
 
-## Влияние на платформу
+## Platform impact
 
-**Migration/миграции**
-Перед включением deny-all политики необходимо провести инвентаризацию текущих зарегистрированных Layer 3 skills на каждом тенанте и добавить их источники в allowlist. Иначе легитимные skills перестанут работать.
+**Migration**
+Before enabling the deny-all policy, take inventory of currently registered Layer 3 skills on each tenant and add their sources to the allowlist. Otherwise legitimate skills will stop working.
 
 **Backward compatibility**
-Изменение затрагивает поведение REST API openclaw для Layer 3 skills. Существующие skills, зарегистрированные до введения allowlist, не затрагиваются (они уже в системе), но попытки повторной регистрации или обновления будут проверяться по allowlist. Необходимо документировать процесс обновления allowlist для операторов.
+The change affects the openclaw REST API behaviour for Layer 3 skills. Existing skills registered before the allowlist was introduced are unaffected (they are already in the system), but re-registration or update attempts will be checked against the allowlist. Document the allowlist update process for operators.
 
 **Resource impact**
-- labs: NO IMPACT. Изменение только конфигурационное (Helm values + CI), без прироста RAM.
+- labs: NO IMPACT. Configuration-only change (Helm values + CI), no RAM increase.
 - admins: NO IMPACT.
 - ovk: NO IMPACT.
 
-**Риски и митигации**
-- Легитимные Layer 3 skills заблокированы при неполном allowlist → провести инвентаризацию skills перед включением политики; начать с admins (минимальный blast radius), затем labs, затем ovk
-- Оператор обходит CI-проверку через прямой коммит в main → защитить ветку main branch protection rule с обязательным CI
-- allowlist задан слишком широко (например, `https://clawhub.io/`) → документировать политику: только явные проверенные origins, не wildcard домены ClawHub
-- hot-reload конфига не применяется без рестарта → проверить поведение openclaw при изменении config через YAML; при необходимости предусмотреть graceful reload или rolling restart
+**Risks and mitigations**
+- Legitimate Layer 3 skills are blocked by an incomplete allowlist → take inventory of skills before enabling the policy; start with admins (minimum blast radius), then labs, then ovk.
+- An operator bypasses the CI check via a direct commit to main → protect main with a branch protection rule requiring CI.
+- The allowlist is set too broadly (e.g. `https://clawhub.io/`) → document the policy: only explicit verified origins, no wildcard ClawHub domains.
+- Hot-reload of the config does not apply without a restart → verify openclaw behaviour when config changes via YAML; if needed, plan a graceful reload or rolling restart.

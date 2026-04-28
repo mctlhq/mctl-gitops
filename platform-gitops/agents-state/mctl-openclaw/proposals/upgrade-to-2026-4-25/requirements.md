@@ -1,28 +1,28 @@
-# Обновление openclaw до 2026.4.25 (закрытие 5 незакрытых CVE)
+# Upgrade openclaw to 2026.4.25 (close 5 unpatched CVEs)
 
-## Контекст
-Текущая версия openclaw 2026.3.14 содержит 5 незакрытых уязвимостей, зафиксированных в inbox/2026-04-27.md. Наиболее критична CVE-2026-41349 (CVSS 8.8): LLM-агент может тихо отключить execution approval через `config.patch`, что в agentic-среде openclaw означает неконтролируемое выполнение действий без согласования с пользователем. Помимо неё открыты CVE-2026-41361 (SSRF через IPv6 special-use диапазоны), CVE-2026-41359 (privilege escalation через Telegram send endpoint), CVE-2026-41353 (allowProfiles bypass через persistent profile mutation) и CVE-2026-41348 (Discord slash command / autocomplete auth bypass, CVSS 5.4).
+## Context
+The current openclaw version 2026.3.14 carries 5 unpatched vulnerabilities recorded in inbox/2026-04-27.md. The most critical is CVE-2026-41349 (CVSS 8.8): an LLM agent can silently disable execution approval via `config.patch`, which in the openclaw agentic environment means uncontrolled action execution without user consent. Alongside it are open CVE-2026-41361 (SSRF via IPv6 special-use ranges), CVE-2026-41359 (privilege escalation through the Telegram send endpoint), CVE-2026-41353 (allowProfiles bypass via persistent profile mutation) and CVE-2026-41348 (Discord slash command / autocomplete auth bypass, CVSS 5.4).
 
-Upstream-релиз 2026.4.25 закрывает все пять уязвимостей и содержит 200+ изменений, включая TTS upgrade, plugin registry на cold persisted storage, расширение OpenTelemetry и browser automation hardening. Обновление идёт по накатанному маршруту labs → admins → ovk согласно ADR 0001; перед накатом на labs необходимо проверить delta RAM, так как тенант labs близок к лимиту памяти.
+The upstream 2026.4.25 release closes all five and contains 200+ changes, including a TTS upgrade, a plugin registry on cold-persisted storage, OpenTelemetry expansion, and browser automation hardening. The upgrade follows the established route labs → admins → ovk per ADR 0001; before the labs rollout we must measure the RAM delta because the labs tenant is close to the memory limit.
 
 ## User stories
-- AS a platform operator I WANT openclaw обновлён до 2026.4.25 SO THAT пять открытых CVE закрыты до их потенциальной эксплуатации
-- AS a security engineer I WANT подтверждение что все три тенанта работают на patched-версии SO THAT могу закрыть security findings в трекере
-- AS a labs tenant operator I WANT предварительную проверку RAM-footprint нового релиза SO THAT обновление не приведёт к OOM в labs
-- AS an ovk production operator I WANT rollout с проверкой restore-state probe и s3-sync canary SO THAT WhatsApp/Telegram сессии не потеряются при обновлении
+- AS a platform operator I WANT openclaw upgraded to 2026.4.25 SO THAT the five open CVEs are closed before potential exploitation
+- AS a security engineer I WANT confirmation that all three tenants run on the patched version SO THAT I can close the security findings in the tracker
+- AS a labs tenant operator I WANT a pre-flight check of the new release's RAM footprint SO THAT the upgrade does not lead to OOM in labs
+- AS an ovk production operator I WANT a rollout that exercises the restore-state probe and the s3-sync canary SO THAT WhatsApp/Telegram sessions are not lost during the upgrade
 
 ## Acceptance criteria (EARS)
-- WHEN докер-образ openclaw 2026.4.25 задеплоен в тенант labs THEN THE SYSTEM SHALL пройти readiness probe restore-state до перехода ArgoCD в статус Healthy
-- WHEN rollout в labs завершён THE SYSTEM SHALL зафиксировать фактическое потребление RAM пода и сравнить с текущим лимитом labs; если delta > 50MB — заблокировать rollout в admins до решения
-- WHILE rollout выполняется в любом тенанте THE SYSTEM SHALL держать s3-sync canary остановленным и перезапустить его с задержкой после успешного завершения rollout
-- WHEN rollout в labs и admins прошёл без регрессий THE SYSTEM SHALL разрешить продвижение в ovk согласно rollout-маршруту labs → admins → ovk
-- IF restore-state probe не проходит за отведённый timeout в любом тенанте THEN THE SYSTEM SHALL автоматически откатить деплой к предыдущей версии (2026.3.14)
-- IF фактическое потребление RAM в labs после обновления превышает текущий лимит THEN THE SYSTEM SHALL не продвигать образ в admins и ovk без явного решения о поднятии лимита
-- WHEN openclaw 2026.4.25 запущен на всех трёх тенантах THE SYSTEM SHALL не иметь активных CVE-2026-41349, CVE-2026-41361, CVE-2026-41359, CVE-2026-41353, CVE-2026-41348
+- WHEN the openclaw 2026.4.25 Docker image is deployed to the labs tenant THEN THE SYSTEM SHALL pass the restore-state readiness probe before ArgoCD transitions to Healthy
+- WHEN the labs rollout finishes THE SYSTEM SHALL record the actual pod RAM consumption and compare it to the current labs limit; if the delta exceeds 50MB — block the admins rollout pending a decision
+- WHILE rollout is in progress in any tenant THE SYSTEM SHALL keep the s3-sync canary suspended and resume it with a delay after a successful rollout
+- WHEN the labs and admins rollouts have completed without regressions THE SYSTEM SHALL allow promotion to ovk per the rollout route labs → admins → ovk
+- IF the restore-state probe fails to pass within the allotted timeout in any tenant THEN THE SYSTEM SHALL automatically roll back the deploy to the previous version (2026.3.14)
+- IF the actual RAM consumption in labs after the upgrade exceeds the current limit THEN THE SYSTEM SHALL not promote the image to admins and ovk without an explicit decision to raise the limit
+- WHEN openclaw 2026.4.25 is running in all three tenants THE SYSTEM SHALL no longer have active CVE-2026-41349, CVE-2026-41361, CVE-2026-41359, CVE-2026-41353, CVE-2026-41348
 
 ## Out of scope
-- Обновление Node.js runtime (нет срочного security-триггера)
-- Обновление TypeScript до 6.x (нет security CVE)
-- Миграция plugin registry на cold persisted storage (фича нового релиза, отдельное предложение при необходимости)
-- Обновление зависимостей Baileys, discord.js, node-slack-sdk (покрыто отдельными proposals)
-- Изменения в конфигурации каналов или skills
+- Node.js runtime upgrade (no urgent security trigger)
+- TypeScript upgrade to 6.x (no security CVE)
+- Migration of the plugin registry to cold-persisted storage (a feature of the new release; separate proposal if needed)
+- Updates to Baileys, discord.js, node-slack-sdk dependencies (covered by separate proposals)
+- Changes to channel or skill configuration

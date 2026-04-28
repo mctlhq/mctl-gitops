@@ -1,32 +1,32 @@
 # Tasks: mermaid-diagrams-guide
 
-- [ ] 1. Создать `docs/reference/diagrams.md` с содержимым из `proposed-content.md`. —
-      DoD: файл присутствует, `vitepress build docs` зелёный.
-- [ ] 2. Обновить `.vitepress/config.{js,ts,mts}` — добавить sidebar entry под "Reference":
+- [ ] 1. Create `docs/reference/diagrams.md` with the content from `proposed-content.md`. —
+      DoD: the file is present, `vitepress build docs` is green.
+- [ ] 2. Update `.vitepress/config.{js,ts,mts}` — add a sidebar entry under "Reference":
       `{ text: 'Diagram Types', link: '/reference/diagrams' }`. —
-      DoD: страница `/reference/diagrams` появляется в левом nav под "Reference".
-- [ ] 3. Локально проверить `npm run dev` → открыть `/reference/diagrams` —
-      DoD: все mermaid-блоки рендерятся (flowchart, sequence, Wardley Map, etc.),
-      beta callouts видны, страница читаема.
-- [ ] 4. Cross-link: добавить ссылку на `/reference/diagrams` со страницы `docs/reference/faq.md`
-      в секцию о documentation site (или contributing). —
-      DoD: ссылка добавлена, резолвится.
-- [ ] 5. Аудит существующих `.md` в `docs/` на наличие `htmlLabels` — если найдены, создать
-      отдельный fix-PR для их удаления. —
-      DoD: либо `htmlLabels` не найдено (OK), либо создан tracking issue/PR.
-- [ ] 6. Открыть PR в `mctlhq/mctl-docs`, codex review, мердж. —
-      DoD: задеплоено на docs.mctl.ai, `/reference/diagrams` доступна.
+      DoD: the page `/reference/diagrams` appears in the left nav under "Reference".
+- [ ] 3. Locally verify `npm run dev` → open `/reference/diagrams` —
+      DoD: all mermaid blocks render (flowchart, sequence, Wardley Map, etc.),
+      beta callouts are visible, the page is readable.
+- [ ] 4. Cross-link: add a link to `/reference/diagrams` from `docs/reference/faq.md`
+      in the documentation-site (or contributing) section. —
+      DoD: link added and resolves.
+- [ ] 5. Audit existing `.md` files in `docs/` for `htmlLabels` — if found, create a separate
+      fix-PR to remove them. —
+      DoD: either no `htmlLabels` is found (OK) or a tracking issue/PR is created.
+- [ ] 6. Open a PR in `mctlhq/mctl-docs`, codex review, merge. —
+      DoD: deployed to docs.mctl.ai, `/reference/diagrams` is reachable.
 
-## Тесты
+## Tests
 
-- [ ] T1. `vitepress build docs` без ошибок и warnings.
-- [ ] T2. Все ссылки в `docs/reference/diagrams.md` резолвятся (нет 404).
-- [ ] T3. Каждый mermaid-блок на странице корректно рендерится в браузере (flowchart, sequence,
-      architecture; beta-типы — визуально проверить, они могут иметь rendering quirks).
-- [ ] T4. `grep -r "htmlLabels" docs/` не возвращает результатов в production-ветке.
+- [ ] T1. `vitepress build docs` finishes without errors or warnings.
+- [ ] T2. All links in `docs/reference/diagrams.md` resolve (no 404).
+- [ ] T3. Each mermaid block on the page renders correctly in a browser (flowchart, sequence,
+      architecture; beta types — verify visually, they may have rendering quirks).
+- [ ] T4. `grep -r "htmlLabels" docs/` returns no results in the production branch.
 
-## Откат
+## Rollback
 
-- Удалить `docs/reference/diagrams.md` и убрать sidebar entry через revert PR.
-- Убрать cross-link из FAQ.
-- Низкий риск — только markdown + конфиг строка.
+- Remove `docs/reference/diagrams.md` and drop the sidebar entry via a revert PR.
+- Remove the cross-link from the FAQ.
+- Low risk — only markdown + a config line.

@@ -1,9 +1,9 @@
-# Обновление Go с 1.24 на актуальную поддерживаемую ветку (1.26)
+# Upgrade Go from 1.24 to a current supported branch (1.26)
 
-## Контекст
-Go придерживается политики поддержки двух последних major-веток. Ветка Go 1.24 получила последний security-патч (1.24.13) в феврале 2026 и с тех пор не получает исправлений. Security-патчи для `crypto/tls`, `crypto/x509`, `archive/tar`, `html/template`, `os` и компилятора выходят только в ветках 1.25 и 1.26 (релизы 1.25.9 и 1.26.2 от 2026-04-07).
+## Context
+Go follows a policy of supporting the two latest major branches. The Go 1.24 branch received its last security patch (1.24.13) in February 2026 and no longer receives fixes. Security patches for `crypto/tls`, `crypto/x509`, `archive/tar`, `html/template`, `os` and the compiler ship only in branches 1.25 and 1.26 (releases 1.25.9 and 1.26.2 dated 2026-04-07).
 
-mctl-api реализует три типа bearer-аутентификации (GitHub PAT, Dex JWT, OAuth JWT) и устанавливает TLS-соединения с Vault, ArgoCD, Argo Workflows и Backstage. Уязвимости в `crypto/tls` и `crypto/x509` напрямую угрожают конфиденциальности и целостности этих соединений. Актуальная стабильная ветка — 1.26 (последний патч 1.26.2).
+mctl-api implements three types of bearer authentication (GitHub PAT, Dex JWT, OAuth JWT) and opens TLS connections to Vault, ArgoCD, Argo Workflows, and Backstage. Vulnerabilities in `crypto/tls` and `crypto/x509` directly threaten the confidentiality and integrity of these connections. The current stable branch is 1.26 (latest patch 1.26.2).
 
 ## User stories
 - AS a platform security engineer I WANT mctl-api built with Go 1.26 SO THAT all TLS/PKI security patches are applied and the runtime is on a supported release branch.
@@ -18,7 +18,7 @@ mctl-api реализует три типа bearer-аутентификации 
 - IF any direct dependency requires a minimum Go version higher than 1.26 THE SYSTEM SHALL surface a build error and the dependency shall be pinned to a compatible version before merging.
 
 ## Out of scope
-- Миграция на Go 1.27+ или переход на go toolchain директиву автоматического обновления.
-- Обновление зависимостей, не требующих изменений для совместимости с Go 1.26.
-- Рефакторинг кода для использования новых языковых возможностей Go 1.25/1.26 (range-over func, improved type inference и т.д.) — отдельная задача после апгрейда.
-- Обновление базовых Docker-образов и CI-раннеров (сопутствующая инфра-задача, не в scope mctl-api repo).
+- Migration to Go 1.27+ or switching to the auto-updating Go toolchain directive.
+- Updating dependencies that do not require changes for Go 1.26 compatibility.
+- Refactoring code to use new language features from Go 1.25/1.26 (range-over func, improved type inference, etc.) — a separate task after the upgrade.
+- Updating base Docker images and CI runners (a related infra task, outside the mctl-api repo scope).

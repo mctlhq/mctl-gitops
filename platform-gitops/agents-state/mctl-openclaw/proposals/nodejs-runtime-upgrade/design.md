@@ -1,54 +1,55 @@
 # Design: nodejs-runtime-upgrade
 
-## Текущее состояние
+## Current state
 
-Согласно `context/architecture.md`, openclaw использует Node.js + TypeScript, Docker образы
-собираются и деплоятся через mctl-gitops → ArgoCD в три namespace: `ovk`, `labs`, `admins`.
-Текущая версия openclaw: 2026.3.14 (см. `context/current-version.md`).
+According to `context/architecture.md`, openclaw uses Node.js + TypeScript, Docker images are
+built and deployed via mctl-gitops → ArgoCD into three namespaces: `ovk`, `labs`, `admins`.
+The current openclaw version is 2026.3.14 (see `context/current-version.md`).
 
-Конкретная версия Node.js в базовом Docker образе не зафиксирована в context (нет явного
-указания в `architecture.md`), однако Node.js January 2026 Security Release опубликован
-13 января 2026: если base image не обновлялся с момента сборки 2026.3.14, вероятно
-используется версия ниже безопасных порогов (v20.20.0 / v22.22.0 / v24.13.0). Это делает
-три High CVE (CVE-2025-55131, CVE-2025-55130, CVE-2025-59465) потенциально активными.
+The exact Node.js version in the base Docker image is not captured in context (no explicit
+mention in `architecture.md`); however, the Node.js January 2026 Security Release was
+published on 13 January 2026: if the base image has not been updated since the 2026.3.14
+build, it most likely uses a version below the safe thresholds (v20.20.0 / v22.22.0 /
+v24.13.0). This makes three High CVEs (CVE-2025-55131, CVE-2025-55130, CVE-2025-59465)
+potentially active.
 
-Текущий CI pipeline статус `npm audit` и проверка на malicious пакеты не зафиксированы
-в context — предполагается что они отсутствуют или не блокируют сборку.
+The current CI pipeline status of `npm audit` and the malicious-packages check is not
+captured in context — assumed to be absent or non-blocking.
 
-## Предлагаемое решение
+## Proposed solution
 
-### 1. Base image bump в Dockerfile
+### 1. Base image bump in Dockerfile
 
-Изменить строку `FROM node:XX` в Dockerfile openclaw (или в fork-специфичном Dockerfile
-mctl-gitops) на Node.js v22.22.0-alpine (или эквивалентный slim образ).
+Change the line `FROM node:XX` in the openclaw Dockerfile (or the fork-specific Dockerfile
+in mctl-gitops) to Node.js v22.22.0-alpine (or an equivalent slim image).
 
-Выбор v22 (LTS "Jod") обоснован:
-- Это текущая Active LTS линейка на момент выхода security release (апрель 2026).
-- v24.13.0 ("Krypton") выпущен 15 апреля 2026 — ещё не завершил stabilization period, хотя
-  помечен LTS; для production предпочтительна проверенная линейка.
-- v20.20.2 ("Iron") — Security Maintenance (только security fixes, feature-freeze).
+The choice of v22 (LTS "Jod") is motivated by:
+- It is the current Active LTS line at the time of the security release (April 2026).
+- v24.13.0 ("Krypton") was released on 15 April 2026 — has not finished its stabilization
+  period yet, although marked LTS; the proven line is preferable for production.
+- v20.20.2 ("Iron") is in Security Maintenance (security fixes only, feature-frozen).
 
-Если текущий Dockerfile уже использует v22.x < 22.22.0 — достаточно patch тега.
-Если v20.x — bump до v22.22.0 с валидацией совместимости в labs (см. задачи).
+If the current Dockerfile already uses v22.x < 22.22.0 — a patch tag bump suffices.
+If on v20.x — bump to v22.22.0 with compatibility validation in labs (see tasks).
 
-Alpine/slim вариант не влияет на RAM относительно текущего базового образа — замена
-происходит в рамках той же size-категории.
+The Alpine/slim variant does not affect RAM relative to the current base image — the
+replacement happens within the same size category.
 
-### 2. CI шаг: npm audit
+### 2. CI step: npm audit
 
-Добавить в CI pipeline (GitHub Actions / Argo Workflows / аналог) шаг после `npm ci`:
+Add a step to the CI pipeline (GitHub Actions / Argo Workflows / equivalent) after `npm ci`:
 
 ```
 npm audit --audit-level=high --production
 ```
 
-- `--audit-level=high`: блокирует только High и Critical уязвимости (medium/low — предупреждение).
-- `--production`: игнорирует devDependencies в runtime audit (devDeps не попадают в Docker образ).
-- Шаг выполняется до `docker build` — fast-fail до дорогостоящей сборки образа.
+- `--audit-level=high`: blocks only High and Critical vulnerabilities (medium/low — warning).
+- `--production`: ignores devDependencies in the runtime audit (devDeps don't make it into the Docker image).
+- The step runs before `docker build` — fast-fail before the expensive image build.
 
-### 3. CI шаг: grep на malicious пакеты
+### 3. CI step: grep for malicious packages
 
-Добавить shellscript-шаг в CI:
+Add a shell-script step in CI:
 
 ```bash
 #!/bin/sh
@@ -63,78 +64,78 @@ done
 echo "Malicious package check passed."
 ```
 
-Шаг выполняется перед `npm ci` — до установки зависимостей.
+The step runs before `npm ci` — before any dependencies are installed.
 
-Список `BLOCKED` расширяется по мере появления новых raскрытий (поддерживается как
-конфигурационный файл `.malicious-packages` в корне репозитория — одно имя пакета на строку).
+The `BLOCKED` list grows as new disclosures appear (maintained as a config file
+`.malicious-packages` at the repository root — one package name per line).
 
 ### Rollout
 
-Изменения в Dockerfile и CI не требуют отдельного rollout по тенантам — они применяются
-на уровне сборки образа. Однако новый образ деплоится согласно ADR 0001: labs → admins → ovk.
+The Dockerfile and CI changes do not require a tenant-by-tenant rollout — they are applied
+at image-build time. However, the new image is deployed per ADR 0001: labs → admins → ovk.
 
-Для `labs`: перед деплоем нового образа зафиксировать baseline RAM (kubectl top pod),
-после деплоя — сравнить. Minor Node.js bump не должен давать значимого роста RAM;
-если delta > 20MB — расследовать до продвижения в admins.
+For `labs`: before deploying the new image record the baseline RAM (kubectl top pod), and
+after deploy compare. A minor Node.js bump should not bring noticeable RAM growth;
+if the delta exceeds 20MB — investigate before promoting to admins.
 
-Restore-state probe (ADR 0002) и s3-sync canary применяются штатно при деплое нового образа.
+The restore-state probe (ADR 0002) and the s3-sync canary apply normally on the new image deploy.
 
-## Альтернативы
+## Alternatives
 
-### 1. Обновление до Node.js v24 LTS ("Krypton")
+### 1. Upgrade to Node.js v24 LTS ("Krypton")
 
-v24.15.0 выпущен 15 апреля 2026 и уже помечен LTS. Закрывает те же CVE + содержит новые
-API (SQLite RC, улучшенный crypto).
-- Риск: major bump (v22 → v24) может вскрыть breaking changes в зависимостях openclaw
-  (в особенности native addons, если есть).
-- Требует более тщательной валидации в labs.
-- Отброшено для первой итерации: достаточно v22.22.0 для закрытия CVE; v24 — отдельный
-  proposal при необходимости.
+v24.15.0 was released on 15 April 2026 and is already LTS. Closes the same CVEs and provides
+new APIs (SQLite RC, improved crypto).
+- Risk: a major bump (v22 → v24) can surface breaking changes in openclaw dependencies
+  (especially native addons, if any).
+- Requires deeper validation in labs.
+- Dropped for the first iteration: v22.22.0 suffices to close the CVEs; v24 is a separate
+  proposal if needed.
 
-### 2. Dependabot / Renovate для автоматического обновления base image
+### 2. Dependabot / Renovate for automatic base-image updates
 
-Автоматический PR при выходе нового Node.js образа — устраняет ручной труд.
-- Требует настройки Renovate/Dependabot в gitops репозитории.
-- Выходит за рамки данного proposal (отдельная операционная задача).
-- Не закрывает уже активные CVE здесь и сейчас.
-Отброшено как out-of-scope; может быть добавлен как follow-up.
+An automatic PR when a new Node.js image is released — removes the manual toil.
+- Requires configuring Renovate/Dependabot in the gitops repository.
+- Out of scope of this proposal (separate operational task).
+- Does not close active CVEs here and now.
+Dropped as out-of-scope; can be added as a follow-up.
 
-### 3. Использовать только `npm audit` без grep на конкретные пакеты
+### 3. Use only `npm audit` without grepping for specific packages
 
-`npm audit` покрывает известные уязвимости в реестре npm advisories. Проблема: `lotusbail`
-и `discord.js-user` — malicious пакеты, их advisory может отсутствовать в npm registry
-(Koi Security раскрыла в декабре 2025, статус регистрации в npm advisory database неизвестен).
-Явный grep по имени пакета является надёжным и не зависит от обновлённости advisory базы.
-Отброшено: используем оба подхода параллельно.
+`npm audit` covers known vulnerabilities in the npm advisories registry. The problem:
+`lotusbail` and `discord.js-user` are malicious packages, and their advisory may not be
+in the npm registry (Koi Security disclosed them in December 2025; their npm advisory
+database status is unknown). An explicit grep on the package name is reliable and does not
+depend on the advisory database being up to date. Dropped: we use both approaches together.
 
-## Влияние на платформу
+## Platform impact
 
-### Migration / миграции
+### Migration
 
-Нет миграции данных или state. Изменение ограничено:
-- Dockerfile (одна строка `FROM`)
-- CI pipeline конфигурация (два дополнительных шага)
+No data or state migration. The change is limited to:
+- Dockerfile (a single `FROM` line)
+- CI pipeline configuration (two extra steps)
 
 ### Backward compatibility
 
-Node.js v22.22.0 совместима с большинством npm пакетов, поддерживающих Node.js >= 18.
-Если текущий базовый образ использует v20.x — minor breaking changes маловероятны, но
-требуют валидации в labs (TypeScript compilation, native addons, test suite).
+Node.js v22.22.0 is compatible with most npm packages supporting Node.js >= 18.
+If the current base image is on v20.x — minor breaking changes are unlikely but require
+validation in labs (TypeScript compilation, native addons, test suite).
 
-`npm audit --production` не влияет на runtime поведение — только блокирует CI при обнаружении.
+`npm audit --production` does not affect runtime behaviour — it only blocks CI on detection.
 
 ### Resource impact
 
-- **RAM**: минимальное изменение (patch/minor bump Node.js, не major). Delta < 5MB ожидается.
-  Для `labs` — **не risky**.
-- **CPU**: без изменений.
-- **Время сборки CI**: +30–60 секунд на `npm audit` шаг (сетевой запрос к registry).
+- **RAM**: minimal change (patch/minor Node.js bump, not major). Delta < 5MB expected.
+  For `labs` — **not risky**.
+- **CPU**: unchanged.
+- **CI build time**: +30–60 seconds for the `npm audit` step (network call to the registry).
 
-### Риски и митигации
+### Risks and mitigations
 
-| Риск | Вероятность | Митигация |
-|------|-------------|-----------|
-| Node.js bump ломает native addon | Низкая | Валидация в labs: полный тест-прогон перед admins/ovk |
-| `npm audit` выдаёт ложные срабатывания (false positives в devDeps) | Средняя | Флаг `--production` исключает devDeps; спорные findings — через `npm audit --json` разбор |
-| grep не покрывает scoped-версии malicious пакетов | Низкая | Расширить regex: `lotusbail` + `@*/lotusbail` при необходимости |
-| Новый образ не восстанавливает S3 state (breaking change в Node.js crypto) | Очень низкая | restore-state probe (ADR 0002) поймает до трафика в prod; откат к предыдущему образу |
+| Risk | Likelihood | Mitigation |
+|------|------------|------------|
+| Node.js bump breaks a native addon | Low | Validation in labs: full test run before admins/ovk |
+| `npm audit` produces false positives (in devDeps) | Medium | The `--production` flag excludes devDeps; debatable findings — parse `npm audit --json` |
+| grep does not cover scoped versions of malicious packages | Low | Extend the regex: `lotusbail` + `@*/lotusbail` if needed |
+| New image fails to restore S3 state (breaking change in Node.js crypto) | Very low | The restore-state probe (ADR 0002) catches it before prod traffic; rollback to the previous image |

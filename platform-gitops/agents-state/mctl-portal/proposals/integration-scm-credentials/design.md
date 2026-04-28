@@ -1,97 +1,93 @@
 # Design: integration-scm-credentials
 
-## Текущее состояние
-Согласно `context/architecture.md`, mctl-portal работает на Backstage версии, указанной
-в root `package.json` как `1.0.1`. Пакет `@backstage/integration` в этой версии содержит
-уязвимость CVE-2026-29185: при формировании запросов к SCM API URL передаётся без
-декодирования и нормализации path-traversal последовательностей. Это позволяет
-аутентифицированному пользователю через catalog-import форму, scaffolder git action или
-github-actions plugin подставить URL вида
-`https://api.github.com/repos/org/repo%2F..%2F..%2F../evil-org/evil-repo`, который
-резолвится в произвольный GitHub API endpoint с серверным GitHub App token.
+## Current state
+According to `context/architecture.md`, mctl-portal runs on the Backstage version pinned in
+the root `package.json` as `1.0.1`. The `@backstage/integration` package in this version
+contains CVE-2026-29185: when constructing requests to SCM APIs, the URL is forwarded
+without decoding and normalising path-traversal sequences. This allows an authenticated
+user, via the catalog-import form, a scaffolder git action, or the github-actions plugin,
+to supply a URL such as
+`https://api.github.com/repos/org/repo%2F..%2F..%2F../evil-org/evil-repo`, which resolves
+to an arbitrary GitHub API endpoint with the server-side GitHub App token.
 
-Затронутые точки:
-- `catalog-import` — форма регистрации нового сервиса принимает URL репозитория.
-- Scaffolder git actions (`fetch:plain`, `publish:github`, и др.) — принимают `repoUrl`
-  от пользователя.
-- `github-actions` plugin — подставляет `repoUrl` из каталога.
+Affected entry points:
+- `catalog-import` — the new-service registration form accepts a repository URL.
+- Scaffolder git actions (`fetch:plain`, `publish:github`, etc.) — accept user-supplied `repoUrl`.
+- The `github-actions` plugin — substitutes `repoUrl` from the catalog.
 
-## Предлагаемое решение
+## Proposed solution
 
-### Обновление Backstage до v1.50.3
-Фикс CVE-2026-29185 входит в `@backstage/integration` v1.20.1, которая является частью
-Backstage v1.50.3. Подход — мажорное обновление Backstage через стандартный backstage-cli
+### Upgrade Backstage to v1.50.3
+The CVE-2026-29185 fix is in `@backstage/integration` v1.20.1, which is part of Backstage
+v1.50.3. The approach is a major Backstage upgrade through the standard backstage-cli
 upgrade process:
 
 ```bash
 yarn backstage-cli versions:bump --release 1.50.3
 ```
 
-Команда обновляет все `@backstage/*` пакеты до версий, задекларированных в манифесте
-релиза 1.50.3, включая `@backstage/integration` v1.20.1.
+The command updates every `@backstage/*` package to the versions declared in the 1.50.3
+release manifest, including `@backstage/integration` v1.20.1.
 
-После обновления:
-1. Запустить `yarn backstage-cli versions:check` — убедиться в отсутствии peer-конфликтов.
-2. Выполнить `yarn backstage-cli repo build` — проверить TypeScript-совместимость.
-3. Запустить playwright smoke-тесты: catalog-import, scaffolder onboarding, github-actions
-   panel.
-4. Собрать Docker-образ; ArgoCD sync в тенанте `admins`.
+After the upgrade:
+1. Run `yarn backstage-cli versions:check` — confirm there are no peer conflicts.
+2. Run `yarn backstage-cli repo build` — verify TypeScript compatibility.
+3. Run playwright smoke tests: catalog-import, scaffolder onboarding, github-actions panel.
+4. Build the Docker image; ArgoCD sync in the `admins` tenant.
 
-Апстрим-фикс в `@backstage/integration` v1.20.1 добавляет нормализацию URL перед
-добавлением auth-заголовков: `decodeURIComponent` + `URL` constructor с проверкой
-hostname против списка сконфигурированных SCM-интеграций. Запросы к хостам вне списка
-не получают credentials.
+The upstream fix in `@backstage/integration` v1.20.1 adds URL normalisation before
+attaching auth headers: `decodeURIComponent` + `URL` constructor with hostname checks
+against the configured SCM-integration list. Requests to hosts outside the list do not
+receive credentials.
 
-### Связь с другими предложениями
-`scaffolder-path-traversal` и `scaffolder-secret-leak` обновляют
-`plugin-scaffolder-backend` до 3.1.1+. Backstage v1.50.3 совместим с этой версией
-(3.1.1 входит в линейку v1.50.x). Все три предложения могут быть выполнены в одном
-большом PR или в двух последовательных:
-- PR 1: `backend-defaults` 0.12.2 + `plugin-scaffolder-backend` 3.1.1 (быстрый, Effort:2).
-- PR 2: Backstage 1.50.3 (более широкий апгрейд, требует дополнительного тестирования).
+### Relation to other proposals
+`scaffolder-path-traversal` and `scaffolder-secret-leak` upgrade `plugin-scaffolder-backend`
+to 3.1.1+. Backstage v1.50.3 is compatible with that version (3.1.1 lives in the v1.50.x
+line). All three proposals can be carried in a single large PR or in two sequential ones:
+- PR 1: `backend-defaults` 0.12.2 + `plugin-scaffolder-backend` 3.1.1 (fast, Effort:2).
+- PR 2: Backstage 1.50.3 (a wider upgrade requiring extra testing).
 
-Рекомендуется именно такой порядок: сначала закрыть два scaffolder CVE (меньший риск
-регрессии), затем поднять Backstage целиком.
+This order is recommended: close the two scaffolder CVEs first (lower regression risk),
+then bring up Backstage as a whole.
 
-## Альтернативы
+## Alternatives
 
-**A. Точечно обновить только `@backstage/integration` до 1.20.1 без апгрейда всего
-Backstage**
-Теоретически возможно через `yarn up @backstage/integration@^1.20.1`. Однако пакеты
-Backstage сильно взаимозависимы по peer-версиям; рассинхронизация версий пакетов
-создаёт риск скрытых несовместимостей. Backstage рекомендует обновлять все пакеты
-консистентно через `versions:bump`. Отклонено.
+**A. Update only `@backstage/integration` to 1.20.1 without upgrading all of Backstage**
+Theoretically possible via `yarn up @backstage/integration@^1.20.1`. However, Backstage
+packages are tightly coupled by peer versions; mismatched package versions create a risk
+of hidden incompatibilities. Backstage recommends upgrading every package consistently
+through `versions:bump`. Rejected.
 
-**B. Добавить собственную валидацию URL в middleware перед передачей в `@backstage/integration`**
-Потребует поддержки кастомного кода для обработки всех точек входа (catalog-import API,
-scaffolder actions, github-actions plugin). Высокий риск пропустить один из путей.
-Апстрим-патч надёжнее. Отклонено.
+**B. Add a custom URL validation middleware before passing into `@backstage/integration`**
+Requires maintaining custom code to handle every entry point (catalog-import API,
+scaffolder actions, github-actions plugin). High risk of missing one path. The upstream
+patch is more reliable. Rejected.
 
-**C. Ограничить доступ к catalog-import и scaffolder для всех пользователей до патча**
-Нарушает core-функциональность портала. Приемлемо как краткосрочная митигация, но не
-как основное решение. Отклонено как единственная мера.
+**C. Restrict access to catalog-import and scaffolder for all users until the patch lands**
+Breaks core portal functionality. Acceptable as a short-term mitigation but not as the
+main solution. Rejected as the sole measure.
 
-## Влияние на платформу
+## Platform impact
 
-### Migration/миграции
-Backstage 1.50.3 — minor/patch обновление в рамках semver-политики backstage. Ломающих
-изменений в публичном API не ожидается. Необходимо проверить CHANGELOG backstage на
-предмет deprecated API, используемых в кастомном observability-плагине.
+### Migration
+Backstage 1.50.3 is a minor/patch update within Backstage's semver policy. No breaking
+changes in the public API are expected. The Backstage CHANGELOG must be reviewed for
+deprecated APIs used by the custom observability plugin.
 
 ### Backward compatibility
-Все стандартные плагины (`catalog`, `scaffolder`, `kubernetes`, `techdocs`, `search`,
-`github-actions`) совместимы с v1.50.3 согласно backstage release notes. Кастомный
-observability-плагин требует проверки на TypeScript-совместимость (задача 2).
+All standard plugins (`catalog`, `scaffolder`, `kubernetes`, `techdocs`, `search`,
+`github-actions`) are compatible with v1.50.3 per the Backstage release notes. The custom
+observability plugin requires a TypeScript-compatibility check (task 2).
 
 ### Resource impact
-Обновление Backstage не добавляет новых сервисов или значительных зависимостей.
-Потребление памяти backend-pod не должно существенно измениться. Тенант `labs` не затронут
-(Backstage развёрнут только в `admins`).
+Upgrading Backstage adds no new services or significant dependencies. Backend pod memory
+consumption should not change materially. The `labs` tenant is not affected (Backstage is
+deployed only in `admins`).
 
-### Риски и митигации
-| Риск | Вероятность | Митигация |
-|------|-------------|-----------|
-| GitHub App token уже скомпрометирован до патча | Неизвестна | Ротировать GitHub App credentials после деплоя; проверить GitHub audit log на подозрительные API-вызовы |
-| Регрессия в кастомном observability-плагине | Средняя | TypeScript build + playwright smoke-тест до merge |
-| Backstage 1.50.3 несовместим с community-plugins (kubernetes, techdocs) | Низкая | Проверить backstage/community-plugins compatibility matrix перед деплоем |
-| ArgoCD sync race с параллельными изменениями | Низкая | Деплоить в maintenance window |
+### Risks and mitigations
+| Risk | Likelihood | Mitigation |
+|------|------------|------------|
+| The GitHub App token is already compromised before the patch | Unknown | Rotate GitHub App credentials after the deploy; review the GitHub audit log for suspicious API calls |
+| Regression in the custom observability plugin | Medium | TypeScript build + playwright smoke test before merge |
+| Backstage 1.50.3 incompatible with community-plugins (kubernetes, techdocs) | Low | Check the backstage/community-plugins compatibility matrix before deploy |
+| ArgoCD sync race with parallel changes | Low | Deploy in a maintenance window |
