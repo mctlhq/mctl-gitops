@@ -1,40 +1,40 @@
 # Design: nuxt-upgrade-4-4-2
 
-## Текущее состояние
+## Current state
 
-Согласно `context/architecture.md` и `context/current-version.md`:
+According to `context/architecture.md` and `context/current-version.md`:
 - Nuxt **4.3.1** (SSR=true, prerender `/`, `/privacy`, `/docs`)
 - Vue **3.5.30**
-- vue-router **4.6.4** (EOL — финальная версия ветки v4)
-- Три страницы: `app/pages/index.vue`, `app/pages/docs/index.vue`, `app/pages/privacy/index.vue`
+- vue-router **4.6.4** (EOL — final release of the v4 branch)
+- Three pages: `app/pages/index.vue`, `app/pages/docs/index.vue`, `app/pages/privacy/index.vue`
 
-vue-router v4.x больше не получает обновлений. Nuxt 4.4.2 включает `unrouting` (ускорение роутинга до 28x) и требует vue-router v5, который включает `unplugin-vue-router` в ядро.
+vue-router v4.x no longer receives updates. Nuxt 4.4.2 ships `unrouting` (routing speed-up up to 28x) and requires vue-router v5, which folds `unplugin-vue-router` into the core.
 
-## Предлагаемое решение
+## Proposed solution
 
-**Поэтапный bump зависимостей:**
+**Staged dependency bump:**
 
-1. Обновить `nuxt` до `"^4.4.2"` в `package.json`.
-2. Убрать явный `vue-router` из `dependencies`/`devDependencies` — Nuxt 4.4.2 транзитивно подтянет vue-router v5; либо явно указать `"vue-router": "^5.0.6"`.
-3. Проверить использование vue-router API в страницах и composables:
-   - `useRoute()`, `useRouter()`, `navigateTo()` — совместимы с v5 через Nuxt-обёртки.
-   - Прямые импорты из `vue-router` (например, `import { RouterLink } from 'vue-router'`) могут потребовать замены на Nuxt-компоненты (`<NuxtLink>`).
-4. Обновить `nuxt.config.ts` при наличии deprecated опций (проверить по migration guide Nuxt 4.4).
-5. Запустить `nuxt build` и `nuxt generate` для валидации prerender-а.
+1. Update `nuxt` to `"^4.4.2"` in `package.json`.
+2. Drop the explicit `vue-router` from `dependencies`/`devDependencies` — Nuxt 4.4.2 will pull vue-router v5 transitively; alternatively pin `"vue-router": "^5.0.6"`.
+3. Inspect vue-router API usage in pages and composables:
+   - `useRoute()`, `useRouter()`, `navigateTo()` — compatible with v5 via the Nuxt wrappers.
+   - Direct imports from `vue-router` (e.g. `import { RouterLink } from 'vue-router'`) may need to be replaced with Nuxt components (`<NuxtLink>`).
+4. Update `nuxt.config.ts` for any deprecated options (verify per the Nuxt 4.4 migration guide).
+5. Run `nuxt build` and `nuxt generate` to validate prerendering.
 
-**Nuxt 4.4.2 новые возможности (опциональные для использования):**
-- `useAnnouncer()` — улучшение a11y для SPA-навигации.
-- Typed layout props — можно включить постепенно.
+**Optional Nuxt 4.4.2 features:**
+- `useAnnouncer()` — improves a11y for SPA navigation.
+- Typed layout props — can be enabled gradually.
 
-## Альтернативы
+## Alternatives
 
-1. **Оставаться на Nuxt 4.3.1 + vue-router 4.6.4** — EOL, без security-патчей для router. Отброшено: технический долг будет только расти.
-2. **Перейти сразу на Nuxt 5 (если существует)** — излишне, Nuxt 4.4.x активно поддерживается и является текущим стабильным. Отброшено: избыточный риск без выгоды.
-3. **Использовать `@vitejs/plugin-vue-router` вместо встроенного** — добавляет сложность без необходимости, unplugin-vue-router уже входит в Nuxt 4.4. Отброшено.
+1. **Stay on Nuxt 4.3.1 + vue-router 4.6.4** — EOL, no security patches for the router. Dropped: tech debt only grows.
+2. **Move directly to Nuxt 5 (if it exists)** — overshooting; Nuxt 4.4.x is actively supported and is the current stable. Dropped: extra risk without benefit.
+3. **Use `@vitejs/plugin-vue-router` instead of the built-in** — adds complexity unnecessarily, unplugin-vue-router is already part of Nuxt 4.4. Dropped.
 
-## Влияние на платформу
+## Platform impact
 
-- **Migration/миграции:** изменения только в `app/` (фронтенд), Worker не затронут. Prerender-пути не меняются.
-- **Backward compatibility:** vue-router v5 содержит breaking changes в части прямых импортов; Nuxt-обёртки (`useRoute`, `useRouter`, `NuxtLink`) обратно совместимы. Нужна проверка страниц на прямые импорты из `vue-router`.
-- **Resource impact:** нулевой для тенантов `labs` и `admins` — это статический фронтенд и Worker, не подовые workloads в k8s.
-- **Риски и митигации:** основной риск — breaking change в vue-router v5 API. Митигация: запуск `nuxt typecheck` + тест prerender'а в staging. Бундл может незначительно измениться в размере из-за нового `unrouting` модуля — это приемлемо.
+- **Migration:** changes are limited to `app/` (frontend), the Worker is untouched. Prerender paths do not change.
+- **Backward compatibility:** vue-router v5 has breaking changes around direct imports; Nuxt wrappers (`useRoute`, `useRouter`, `NuxtLink`) are backward compatible. Pages need to be checked for direct imports from `vue-router`.
+- **Resource impact:** zero for the `labs` and `admins` tenants — this is a static frontend and a Worker, not pod workloads in k8s.
+- **Risks and mitigations:** the main risk is a breaking change in the vue-router v5 API. Mitigation: run `nuxt typecheck` + a prerender test in staging. The bundle may change in size slightly due to the new `unrouting` module — this is acceptable.

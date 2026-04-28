@@ -1,37 +1,38 @@
 # Tasks: go-upgrade-1-26
 
-- [ ] 1. Обновить директиву в `go.mod` с `go 1.24` на `go 1.26.2` —
-  DoD: `go.mod` содержит строку `go 1.26.2`, `go mod verify` проходит без ошибок.
+- [ ] 1. Update the directive in `go.mod` from `go 1.24` to `go 1.26.2` —
+  DoD: `go.mod` contains the line `go 1.26.2`, `go mod verify` passes without errors.
 
-- [ ] 2. Обновить базовый образ в `Dockerfile` (зависит от 1) —
-  DoD: `FROM golang:1.26.2-alpine` (или аналог) в build-stage; образ собирается локально командой
-  `docker build .` без ошибок.
+- [ ] 2. Update the base image in `Dockerfile` (depends on 1) —
+  DoD: `FROM golang:1.26.2-alpine` (or equivalent) in the build stage; the image builds
+  locally with `docker build .` without errors.
 
-- [ ] 3. Обновить CI workflow (если Go-версия пинится явно) (зависит от 1) —
-  DoD: все ссылки на `go-version: '1.24'` или аналоги заменены на `'1.26.2'`; pipeline
-  запускается и проходит зелёным.
+- [ ] 3. Update CI workflow (if the Go version is pinned explicitly) (depends on 1) —
+  DoD: all references to `go-version: '1.24'` or equivalents are replaced with `'1.26.2'`;
+  the pipeline runs and goes green.
 
-- [ ] 4. Запустить `go mod tidy` и зафиксировать изменения (зависит от 1) —
-  DoD: `go.sum` актуален, нет неиспользуемых зависимостей, нет ошибок совместимости.
+- [ ] 4. Run `go mod tidy` and commit the changes (depends on 1) —
+  DoD: `go.sum` is up to date, no unused dependencies, no compatibility errors.
 
-- [ ] 5. Запустить полный тест-сьют (зависит от 2, 4) —
-  DoD: `go test ./...` проходит без падений и race-детектор (`-race`) не обнаруживает новых гонок.
+- [ ] 5. Run the full test suite (depends on 2, 4) —
+  DoD: `go test ./...` passes without failures and the race detector (`-race`) does not
+  surface new races.
 
-- [ ] 6. Собрать и проверить бинарь (зависит от 5) —
-  DoD: `go build ./...` завершается успешно; `./mctl-agent --version` выводит корректную версию;
-  `/healthz` отвечает 200 в локальном Docker-запуске.
+- [ ] 6. Build and verify the binary (depends on 5) —
+  DoD: `go build ./...` succeeds; `./mctl-agent --version` prints the correct version;
+  `/healthz` answers 200 in a local Docker run.
 
-## Тесты
+## Tests
 
-- [ ] T1. Unit-тесты Go skills: `go test ./internal/skill/... -v -race` — все проходят.
-- [ ] T2. Тест HTTP-слоя: `go test ./internal/... -run TestAlert` — webhook handler принимает
-  тестовый AlertManager payload без изменений поведения.
-- [ ] T3. Smoke-тест в staging: задеплоить образ с Go 1.26.2 в admins/staging-слот,
-  отправить тестовый алёрт, убедиться что ticket создаётся и PR открывается.
-- [ ] T4. GC baseline: снять `runtime.MemStats` до и после — убедиться, что `PauseTotalNs`
-  не вырос по сравнению с Go 1.24 baseline.
+- [ ] T1. Unit tests of Go skills: `go test ./internal/skill/... -v -race` — all pass.
+- [ ] T2. HTTP layer test: `go test ./internal/... -run TestAlert` — the webhook handler
+  accepts a test AlertManager payload without behavioural changes.
+- [ ] T3. Smoke test in staging: deploy the image with Go 1.26.2 to the admins/staging
+  slot, send a test alert, confirm a ticket is created and a PR is opened.
+- [ ] T4. GC baseline: capture `runtime.MemStats` before and after — confirm `PauseTotalNs`
+  has not grown compared to the Go 1.24 baseline.
 
-## Откат
+## Rollback
 
-Revert коммита с изменениями go.mod и Dockerfile → пересобрать образ → обновить тег
-в GitOps-манифесте admins-тенанта. ArgoCD синхронизирует откат автоматически.
+Revert the commit with go.mod and Dockerfile changes → rebuild the image → update the
+tag in the admins-tenant GitOps manifest. ArgoCD reconciles the rollback automatically.

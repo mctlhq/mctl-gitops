@@ -1,52 +1,51 @@
 # Design: egress-network-policy
 
-## Текущее состояние
+## Current state
 
-Согласно `context/architecture.md`, openclaw деплоится в три Kubernetes namespaces: `ovk`, `labs`,
-`admins`. Каждый namespace содержит независимый deployment openclaw с отдельным S3 bucket для
-state (ADR 0002). Деплой управляется через mctl-gitops → ArgoCD.
+According to `context/architecture.md`, openclaw is deployed in three Kubernetes namespaces: `ovk`, `labs`,
+`admins`. Each namespace contains an independent openclaw deployment with its own S3 bucket for
+state (ADR 0002). Deployment is managed via mctl-gitops → ArgoCD.
 
-В настоящее время ни один из трёх namespaces не имеет Kubernetes NetworkPolicy. Это означает
-что pods openclaw имеют unrestricted egress: они могут инициировать TCP/UDP соединения к любому
-IP-адресу — как внутри кластера (другие namespace, control plane), так и вовне (произвольные
-внешние хосты). CVE-2026-41297 (SSRF в marketplace) наглядно показал как этот gap позволяет
-злоумышленнику управлять исходящими запросами pod'а.
+Currently, none of the three namespaces has a Kubernetes NetworkPolicy. This means openclaw pods
+have unrestricted egress: they can initiate TCP/UDP connections to any IP — both inside the cluster
+(other namespaces, control plane) and outside (arbitrary external hosts). CVE-2026-41297 (SSRF in
+marketplace) is a clear demonstration of how this gap lets an attacker steer the pod's outbound requests.
 
-## Предлагаемое решение
+## Proposed solution
 
-Создать по одному манифесту `NetworkPolicy` для каждого из трёх namespaces. Манифесты
-добавляются в mctl-gitops репозиторий и применяются через ArgoCD sync — без изменений в коде
-openclaw, без изменения Docker образов, без влияния на RAM.
+Create one `NetworkPolicy` manifest per namespace. The manifests are added to the mctl-gitops
+repository and applied via ArgoCD sync — no openclaw code changes, no Docker image changes, no RAM
+impact.
 
-### Структура манифеста
+### Manifest structure
 
-Каждый NetworkPolicy манифест содержит:
+Each NetworkPolicy manifest contains:
 
-1. **Default deny egress** — базовое правило: весь egress заблокирован, если явно не разрешён.
-2. **Allow DNS** — UDP/TCP port 53 к kube-dns (namespace `kube-system`, label
-   `k8s-app: kube-dns`). Без DNS pod не может резолвить ни один hostname.
-3. **Allow S3** — HTTPS (TCP 443) к S3 endpoint тенанта. Конкретные CIDR или FQDN
-   зависят от провайдера (AWS S3, Minio и т.п.) — указываются в overlay тенанта.
-4. **Allow channel APIs** — HTTPS (TCP 443) к API endpoints каналов:
+1. **Default deny egress** — base rule: all egress is blocked unless explicitly allowed.
+2. **Allow DNS** — UDP/TCP port 53 to kube-dns (namespace `kube-system`, label
+   `k8s-app: kube-dns`). Without DNS the pod cannot resolve any hostname.
+3. **Allow S3** — HTTPS (TCP 443) to the tenant's S3 endpoint. The exact CIDR or FQDN
+   depends on the provider (AWS S3, Minio, etc.) — set in the tenant overlay.
+4. **Allow channel APIs** — HTTPS (TCP 443) to channel API endpoints:
    - Telegram: `api.telegram.org`
    - Discord: `discord.com`, `gateway.discord.gg`
    - Slack: `slack.com`, `wss-primary.slack.com`
    - WhatsApp (Baileys): `web.whatsapp.com`, `*.whatsapp.net`
-   - Остальные каналы по аналогии (полный список в манифесте по архитектуре)
-5. **Allow upstream marketplace** — HTTPS к `api.clawhub.io` (или актуальному marketplace
-   endpoint upstream openclaw).
-6. **Allow mctl-api MCP** — HTTPS к `api.mctl.ai` для MCP-интеграции.
+   - Other channels by analogy (full list in the manifest based on the architecture)
+5. **Allow upstream marketplace** — HTTPS to `api.clawhub.io` (or the current marketplace
+   endpoint of upstream openclaw).
+6. **Allow mctl-api MCP** — HTTPS to `api.mctl.ai` for MCP integration.
 
-### Раздельные overlays на тенант
+### Per-tenant overlays
 
-Поскольку тенанты могут использовать разные S3 регионы или иметь специфические каналы,
-NetworkPolicy оформляются как Kustomize overlays в mctl-gitops:
+Because tenants may use different S3 regions or have specific channels, NetworkPolicies are
+expressed as Kustomize overlays in mctl-gitops:
 
 ```
 gitops/
   base/
     network-policy/
-      egress-network-policy.yaml   # базовый шаблон с общими правилами
+      egress-network-policy.yaml   # base template with shared rules
   overlays/
     labs/
       network-policy/
@@ -59,78 +58,78 @@ gitops/
         patch-s3-cidr.yaml
 ```
 
-### Порядок применения
+### Application order
 
-Rollout следует ADR 0001: labs → admins → ovk. NetworkPolicy применяются последовательно с
-периодом наблюдения:
-1. Применить в `labs`, наблюдать N дней — убедиться что ни один нужный запрос не заблокирован
-   (смотреть в логи openclaw на connection errors).
-2. Применить в `admins`.
-3. Применить в `ovk`.
+Rollout follows ADR 0001: labs → admins → ovk. NetworkPolicies are applied sequentially with
+an observation window:
+1. Apply in `labs`, observe for N days — confirm no required request is blocked
+   (watch openclaw logs for connection errors).
+2. Apply in `admins`.
+3. Apply in `ovk`.
 
-NetworkPolicy не требует остановки s3-sync canary и не влияет на restore-state probe (ADR 0002),
-поскольку S3 endpoint явно разрешён в whitelist.
+NetworkPolicy does not require stopping the s3-sync canary and does not affect the restore-state
+probe (ADR 0002), since the S3 endpoint is explicitly allowed in the whitelist.
 
-### Важно: labs RAM
+### Important: labs RAM
 
-Kubernetes NetworkPolicy реализована на уровне kube-proxy/iptables (или CNI plugin). Она
-не добавляет sidecar-контейнер и не увеличивает RAM openclaw pod. Для `labs` тенанта (близкого
-к лимиту памяти) это ключевое свойство решения.
+Kubernetes NetworkPolicy is implemented at the kube-proxy/iptables (or CNI plugin) level. It
+does not add a sidecar container and does not increase the openclaw pod's RAM. For the `labs`
+tenant (close to the memory limit) this is the key property of the solution.
 
-## Альтернативы
+## Alternatives
 
 ### 1. Service mesh (Istio / Linkerd)
 
-Обеспечивает L7-контроль egress, mTLS, детальный audit log. Однако:
-- Требует внедрения sidecar (Envoy proxy) в каждый pod → существенный рост RAM, критично для `labs`.
-- Значительная операционная сложность (CRD, certificates rotation, control plane).
-- Избыточно для текущей задачи — нам нужна L4 whitelist, не L7 inspection.
+Provides L7 egress control, mTLS, detailed audit logs. However:
+- Requires injecting a sidecar (Envoy proxy) into every pod → significant RAM growth, critical for `labs`.
+- Substantial operational complexity (CRDs, certificate rotation, control plane).
+- Overkill for the task at hand — we need an L4 whitelist, not L7 inspection.
 
-Отброшено как несоразмерное по complexity/RAM impact.
+Dropped as disproportionate in complexity/RAM impact.
 
-### 2. Внешний egress gateway (Squid, Envoy как отдельный pod)
+### 2. External egress gateway (Squid, Envoy as a separate pod)
 
-Весь трафик openclaw pods направляется через egress proxy, который фильтрует по FQDN.
-- Даёт FQDN-level filtering вместо IP/CIDR (полезно для cloud-hosted channel APIs с динамическими IP).
-- Добавляет отдельный pod → дополнительный RAM на уровне кластера, latency, SPOF.
-- Сложнее в конфигурировании и rollback.
+All openclaw pod traffic is routed through an egress proxy that filters by FQDN.
+- Provides FQDN-level filtering instead of IP/CIDR (useful for cloud-hosted channel APIs with dynamic IPs).
+- Adds a separate pod → extra cluster-level RAM, latency, SPOF.
+- More complex to configure and to roll back.
 
-Отброшено: выгода (FQDN resolution) не перевешивает сложность для текущего threat model.
-Может быть рассмотрено в будущем как отдельный proposal если IP ranges channel APIs окажутся нестабильными.
+Dropped: the upside (FQDN resolution) does not outweigh the complexity for the current threat model.
+May be revisited as a separate proposal if channel API IP ranges turn out to be unstable.
 
-### 3. Ничего не делать (закрыть SSRF только через обновление openclaw)
+### 3. Do nothing (close SSRF only via openclaw upgrade)
 
-CVE-2026-41297 закрыт в 2026.3.31+. Однако:
-- Будущие SSRF в openclaw или его плагинах останутся незакрытыми на уровне сети.
-- Defense-in-depth требует сетевой изоляции независимо от версии приложения.
-- Effort крайне низкий (манифест без кодовых изменений).
+CVE-2026-41297 is fixed in 2026.3.31+. However:
+- Future SSRF in openclaw or its plugins remains unaddressed at the network layer.
+- Defense-in-depth requires network isolation regardless of the application version.
+- Effort is extremely low (manifest only, no code changes).
 
-Отброшено как недостаточное.
+Dropped as insufficient.
 
-## Влияние на платформу
+## Platform impact
 
-### Migration / миграции
+### Migration
 
-Нет миграции данных. Изменение — только добавление NetworkPolicy манифестов в gitops.
+No data migration. The change is only the addition of NetworkPolicy manifests to gitops.
 
 ### Backward compatibility
 
-Kubernetes NetworkPolicy является аддитивной операцией: пока правила egress не применены,
-поведение не меняется. После применения блокируются только соединения вне whitelist.
-Риск ложной блокировки легитимного трафика — основной операционный риск; митигируется
-поэтапным rollout через labs.
+Kubernetes NetworkPolicy is additive: until egress rules are applied, behaviour does not change.
+After they are applied, only connections outside the whitelist are blocked.
+The risk of a false block on legitimate traffic is the main operational risk; mitigated
+by the staged rollout through labs.
 
 ### Resource impact
 
-- RAM openclaw pods: **без изменений** (NetworkPolicy — iptables rules, не sidecar).
-- CPU: минимальный overhead iptables на пакет, незначимый для текущей нагрузки.
-- `labs` тенант: **не затронут с точки зрения памяти** — не risky.
+- openclaw pod RAM: **unchanged** (NetworkPolicy — iptables rules, not a sidecar).
+- CPU: minimal per-packet iptables overhead, negligible at current load.
+- `labs` tenant: **memory-wise unaffected** — not risky.
 
-### Риски и митигации
+### Risks and mitigations
 
-| Риск | Вероятность | Митигация |
-|------|-------------|-----------|
-| Блокировка нужного channel API (неполный whitelist) | Средняя | Rollout через labs с наблюдением; логи openclaw; easy rollback удалением манифеста |
-| S3 endpoint CIDR меняется (cloud провайдер) | Низкая | Использовать FQDN-based egress rules если CNI поддерживает (Calico NetworkPolicy), или мониторинг S3 connectivity |
-| CNI плагин кластера не поддерживает NetworkPolicy | Низкая | Проверить на labs до rollout в production namespaces |
-| Блокировка mctl MCP интеграции | Низкая | `api.mctl.ai` явно включён в whitelist; проверяется в T3 |
+| Risk | Likelihood | Mitigation |
+|------|------------|------------|
+| Block of a needed channel API (incomplete whitelist) | Medium | Rollout through labs with observation; openclaw logs; easy rollback by removing the manifest |
+| S3 endpoint CIDR changes (cloud provider) | Low | Use FQDN-based egress rules if the CNI supports them (Calico NetworkPolicy), or monitor S3 connectivity |
+| Cluster CNI plugin does not support NetworkPolicy | Low | Verify on labs before rollout to production namespaces |
+| Block of mctl MCP integration | Low | `api.mctl.ai` is explicitly in the whitelist; verified in T3 |

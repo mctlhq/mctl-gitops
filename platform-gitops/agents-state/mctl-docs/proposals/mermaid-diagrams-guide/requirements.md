@@ -1,18 +1,18 @@
 # Mermaid Diagram Types Guide for mctl Docs Contributors
 
-## Контекст
+## Context
 
-mctl-docs использует mermaid 11.x для рендеринга диаграмм в VitePress. За последние два месяца
-(mermaid@11.13.0 — 2025-03-09, mermaid@11.14.0 — 2025-04-01) были добавлены новые типы диаграмм:
-Wardley Maps (beta), TreeView, Venn (beta), Ishikawa/fishbone (beta), а также обновлён default
-стиль ("Neo look"). Одновременно был deprecated параметр `htmlLabels` для flowchart — потенциально
-ломая существующие диаграммы.
+mctl-docs uses mermaid 11.x to render diagrams in VitePress. Over the last two months
+(mermaid@11.13.0 — 2025-03-09, mermaid@11.14.0 — 2025-04-01) new diagram types were added:
+Wardley Maps (beta), TreeView, Venn (beta), Ishikawa/fishbone (beta), and the default style
+("Neo look") was updated. At the same time the `htmlLabels` parameter for flowchart was
+deprecated — potentially breaking existing diagrams.
 
-В docs.mctl.ai нет страницы для авторов документации, описывающей доступные типы диаграмм,
-синтаксис, и best practices. Это затрудняет onboarding новых contributors и мешает органично
-использовать новые возможности mermaid для обогащения платформенной документации.
+docs.mctl.ai has no page for documentation authors describing the available diagram types,
+syntax and best practices. This complicates onboarding for new contributors and makes it
+harder to organically use the new mermaid capabilities to enrich platform documentation.
 
-Источник: mermaid@11.14.0 (2025-04-01), mermaid@11.13.0 (2025-03-09).
+Source: mermaid@11.14.0 (2025-04-01), mermaid@11.13.0 (2025-03-09).
 
 ## User stories
 

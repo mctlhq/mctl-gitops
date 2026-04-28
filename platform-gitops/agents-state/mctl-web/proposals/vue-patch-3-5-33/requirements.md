@@ -1,10 +1,10 @@
-# Обновление Vue до 3.5.33
+# Upgrade Vue to 3.5.33
 
-## Контекст
+## Context
 
-Продакшн использует Vue 3.5.30, выпущен в феврале 2025. Актуальная версия — Vue 3.5.33 (выпущена 22 апреля 2026). Это патч-релиз в рамках ветки v3.5.x, без объявленных breaking changes. Патч-версии Vue обычно содержат исправления регрессий, улучшения типизации и минорные performance-фиксы.
+Production runs Vue 3.5.30, released in February 2025. The current version is Vue 3.5.33 (released 22 April 2026). It is a patch release within the v3.5.x branch with no declared breaking changes. Vue patch versions typically contain regression fixes, typing improvements, and minor performance fixes.
 
-Обновление до 3.5.33 является обязательной гигиеной зависимостей и рекомендуется сделать до более крупного обновления Nuxt/vue-router, чтобы изолировать потенциальные источники проблем.
+Updating to 3.5.33 is mandatory dependency hygiene and is recommended before the larger Nuxt/vue-router update so as to isolate potential sources of issues.
 
 ## User stories
 
@@ -20,6 +20,6 @@
 
 ## Out of scope
 
-- Использование новых Vue 3.5.x API, появившихся между .30 и .33.
-- Изменение компонентной архитектуры.
-- Обновление vueuse/core или vue-router (отдельные задачи).
+- Using new Vue 3.5.x APIs introduced between .30 and .33.
+- Component architecture changes.
+- Updating vueuse/core or vue-router (separate tasks).

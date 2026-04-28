@@ -1,75 +1,74 @@
 # Design: scaffolder-path-traversal
 
-## Текущее состояние
-Согласно `context/architecture.md`, mctl-portal работает на Backstage latest (root
-`package.json` фиксирует `1.0.1`). Scaffolder — плагин `plugin-scaffolder-backend`,
-который монтирует actions из `@backstage/backend-defaults`. Backend-pod запущен в тенанте
-`admins`; секреты Vault смонтированы через ExternalSecret как переменные среды и файлы.
-Действующая версия `plugin-scaffolder-backend` ниже 3.1.1 и `@backstage/backend-defaults`
-ниже 0.12.2, то есть уязвима к CVE-2026-24046.
+## Current state
+According to `context/architecture.md`, mctl-portal runs on Backstage latest (the root
+`package.json` pins `1.0.1`). The scaffolder is the `plugin-scaffolder-backend` plugin,
+which mounts actions from `@backstage/backend-defaults`. The backend pod runs in the
+`admins` tenant; Vault secrets are mounted via ExternalSecret as environment variables and
+files. The current `plugin-scaffolder-backend` version is below 3.1.1 and
+`@backstage/backend-defaults` is below 0.12.2 — i.e. vulnerable to CVE-2026-24046.
 
-Symlink-guard отсутствует: при вызове `fs:delete` или при распаковке архива движок
-scaffolder разрешает путь без проверки выхода за границу рабочего каталога задачи
-(`/tmp/scaffolder-<uuid>/`).
+There is no symlink guard: when calling `fs:delete` or extracting an archive, the
+scaffolder engine resolves the path without checking that it stays within the task
+workspace (`/tmp/scaffolder-<uuid>/`).
 
-## Предлагаемое решение
-Обновить два пакета до исправленных версий в рамках одного PR:
+## Proposed solution
+Upgrade two packages to fixed versions in a single PR:
 
 ```
 @backstage/backend-defaults  ^0.12.2
 plugin-scaffolder-backend    ^3.1.1
 ```
 
-Апстрим-фикс внедряет `realpath`-проверку после разрешения каждого пути внутри actions:
-если результирующий абсолютный путь не начинается с корня workspace — операция прерывается
-с ошибкой. Symlink-ы внутри архивов полностью отклоняются.
+The upstream fix introduces a `realpath` check after each path resolution within actions:
+if the resulting absolute path does not start with the workspace root — the operation is
+aborted with an error. Symlinks inside archives are rejected outright.
 
-Шаги обновления:
-1. `yarn up @backstage/backend-defaults@^0.12.2 plugin-scaffolder-backend@^3.1.1` в корне
-   монорепо.
-2. Проверить, что `yarn.lock` не подтянул транзитивные зависимости с несовместимыми
-   peer-версиями (backstage-cli и platform версии должны совпадать).
-3. Запустить `yarn backstage-cli repo build` и playwright smoke-тест шаблона создания
-   сервиса.
-4. Обновить Docker-образ; ArgoCD-sync в `admins` применит новый манифест.
+Upgrade steps:
+1. `yarn up @backstage/backend-defaults@^0.12.2 plugin-scaffolder-backend@^3.1.1` at the
+   monorepo root.
+2. Verify that `yarn.lock` did not pull transitive dependencies with incompatible peer
+   versions (backstage-cli and platform versions must match).
+3. Run `yarn backstage-cli repo build` and a playwright smoke test for the create-service template.
+4. Update the Docker image; ArgoCD sync in `admins` applies the new manifest.
 
-Поскольку `plugin-scaffolder-backend` 3.1.1 закрывает также CVE-2026-32237
-(scaffolder-secret-leak), оба CVE закрываются одним PR — детальное обоснование
-в `proposals/scaffolder-secret-leak/design.md`.
+Because `plugin-scaffolder-backend` 3.1.1 also closes CVE-2026-32237
+(scaffolder-secret-leak), both CVEs are closed in a single PR — detailed rationale in
+`proposals/scaffolder-secret-leak/design.md`.
 
-## Альтернативы
+## Alternatives
 
-**A. WAF/network policy блокировка path-traversal запросов**
-Потребует разбора тела HTTP-ответа scaffolder; не применимо к внутренним file-system
-вызовам (уязвимость живёт на уровне Node.js fs, а не HTTP). Отклонено.
+**A. WAF/network policy blocking path-traversal requests**
+Would require parsing the scaffolder HTTP response body; not applicable to internal
+file-system calls (the vulnerability lives at Node.js fs layer, not HTTP). Rejected.
 
-**B. Запуск каждой scaffolder-задачи в отдельном ephemeral container**
-Изолирует файловую систему на уровне ОС. Устраняет уязвимость независимо от версии
-пакетов. Однако требует значительной архитектурной переработки (Job/Pod per task,
-отдельный SA, передача артефактов), несоразмерной с Effort:2 данного CVE. Отклонено
-как over-engineering; может быть рассмотрено в отдельном предложении.
+**B. Run each scaffolder task in a separate ephemeral container**
+Isolates the file system at the OS level. Eliminates the vulnerability regardless of
+package version. However, it requires significant architectural rework (Job/Pod per task,
+separate SA, artefact transfer), disproportionate to the Effort:2 of this CVE. Rejected
+as over-engineering; can be considered in a separate proposal.
 
-**C. Запретить загрузку шаблонов с внешних URL и проверять все symlink вручную
-в custom middleware**
-Не закрывает уязвимость в built-in actions (`debug:log`, `fs:delete`). Отклонено.
+**C. Forbid loading templates from external URLs and check every symlink manually
+in custom middleware**
+Does not close the vulnerability in built-in actions (`debug:log`, `fs:delete`). Rejected.
 
-## Влияние на платформу
+## Platform impact
 
-### Migration/миграции
-Нет миграций схемы или данных. Изменения ограничены `yarn.lock` и `package.json`.
+### Migration
+No schema or data migrations. Changes are limited to `yarn.lock` and `package.json`.
 
 ### Backward compatibility
-`@backstage/backend-defaults` 0.12.2 и `plugin-scaffolder-backend` 3.1.1 выходят
-как patch-релизы; публичный API не меняется. Существующие шаблоны, не использующие
-path-traversal, продолжают работать без изменений.
+`@backstage/backend-defaults` 0.12.2 and `plugin-scaffolder-backend` 3.1.1 are released as
+patch versions; the public API does not change. Existing templates not relying on path
+traversal continue to work unchanged.
 
 ### Resource impact
-Патч не вносит новых зависимостей с высоким потреблением памяти. Тенант `labs`
-не затронут (Backstage развёрнут только в `admins`).
+The patch does not introduce new high-memory dependencies. The `labs` tenant is not
+affected (Backstage is deployed only in `admins`).
 
-### Риски и митигации
-| Риск | Вероятность | Митигация |
-|------|-------------|-----------|
-| Peer-dependency конфликт с другими backstage-пакетами при `yarn up` | Средняя | Запустить `yarn backstage-cli versions:check` до merge; при конфликте — точечно поднять транзитивные пакеты |
-| Регрессия в scaffolder-шаблонах | Низкая | Playwright smoke-тест шаблона onboarding перед merge |
-| ArgoCD sync race при одновременном деплое другого изменения | Низкая | Деплоить в maintenance window; ArgoCD sync с `--prune` |
+### Risks and mitigations
+| Risk | Likelihood | Mitigation |
+|------|------------|------------|
+| Peer-dependency conflict with other backstage packages on `yarn up` | Medium | Run `yarn backstage-cli versions:check` before merge; on conflict — bump the transitive packages explicitly |
+| Regression in scaffolder templates | Low | Playwright smoke test of the onboarding template before merge |
+| ArgoCD sync race with another simultaneous change | Low | Deploy in a maintenance window; ArgoCD sync with `--prune` |

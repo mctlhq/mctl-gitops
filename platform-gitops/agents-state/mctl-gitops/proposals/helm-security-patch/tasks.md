@@ -1,24 +1,24 @@
 # Tasks: helm-security-patch
 
-- [ ] 1. Инвентаризация всех точек использования Helm в платформе — DoD: составлен список (ArgoCD image, ClusterWorkflowTemplate image refs, Backstage scaffolder actions) с текущими версиями Helm в каждой.
-- [ ] 2. Определить версию ArgoCD, содержащую Helm v4.1.4 (проверить официальный changelog ArgoCD) — DoD: зафиксирован минимальный тег образа ArgoCD с Helm >= v4.1.4.
-- [ ] 3. Обновить тег образа ArgoCD в `platform-gitops/apps/` (зависит от 2) — DoD: image tag обновлён, PR содержит только изменение версии.
-- [ ] 4. Обновить image references в ClusterWorkflowTemplate файлах в `platform-gitops/argo-workflows/cluster-templates/` для всех steps, использующих helm CLI (зависит от 1) — DoD: все helm-использующие steps указывают на образ с Helm v4.1.4.
-- [ ] 5. Проверить и обновить Backstage scaffolder templates если helm используется в actions (зависит от 1) — DoD: либо подтверждено отсутствие helm в scaffolder, либо обновлён соответствующий image/version.
-- [ ] 6. Создать единый PR с изменениями из шагов 3–5 — DoD: PR создан, diff содержит только обновления версий, CI зелёный.
-- [ ] 7. После merge выполнить ArgoCD sync и проверить состояние Applications (зависит от 6) — DoD: все затронутые ArgoCD Applications в состоянии `Synced` + `Healthy`.
-- [ ] 8. Верифицировать версию Helm в задеплоенных компонентах (зависит от 7) — DoD: `helm version` в ArgoCD pod и в workflow executor pod возвращает v4.1.4 или новее.
+- [ ] 1. Inventory all Helm usage points across the platform — DoD: a list (ArgoCD image, ClusterWorkflowTemplate image refs, Backstage scaffolder actions) with the current Helm versions in each is compiled.
+- [ ] 2. Determine the ArgoCD version that contains Helm v4.1.4 (check the official ArgoCD changelog) — DoD: the minimum ArgoCD image tag with Helm >= v4.1.4 is captured.
+- [ ] 3. Update the ArgoCD image tag in `platform-gitops/apps/` (depends on 2) — DoD: image tag updated, the PR contains only a version change.
+- [ ] 4. Update image references in ClusterWorkflowTemplate files in `platform-gitops/argo-workflows/cluster-templates/` for all steps using the helm CLI (depends on 1) — DoD: every helm-using step points at an image with Helm v4.1.4.
+- [ ] 5. Inspect and update Backstage scaffolder templates if helm is used in actions (depends on 1) — DoD: either the absence of helm in the scaffolder is confirmed, or the relevant image/version is updated.
+- [ ] 6. Create a single PR with the changes from steps 3–5 — DoD: PR created, diff contains only version updates, CI is green.
+- [ ] 7. After merge run ArgoCD sync and verify Application states (depends on 6) — DoD: every affected ArgoCD Application is `Synced` + `Healthy`.
+- [ ] 8. Verify the Helm version in deployed components (depends on 7) — DoD: `helm version` in the ArgoCD pod and in the workflow executor pod returns v4.1.4 or newer.
 
-## Тесты
-- [ ] T1. Проверить версию Helm в ArgoCD: `kubectl exec -n argocd <argocd-server-pod> -- helm version` — ожидается v4.1.4+.
-- [ ] T2. Выполнить ArgoCD dry-run sync для нескольких ключевых Applications (включая `base-service` для тенанта `admins`) — ожидается успешный рендеринг без ошибок.
-- [ ] T3. Запустить тестовый Workflow, использующий helm CLI step (если такой есть в `cluster-templates/`) — ожидается статус `Succeeded`.
-- [ ] T4. Убедиться, что все ArgoCD Applications остаются `Synced` + `Healthy` через 15 минут после обновления ArgoCD.
-- [ ] T5. Проверить отсутствие ошибок в логах ArgoCD repo-server, связанных с Helm rendering: `kubectl logs -n argocd -l app.kubernetes.io/component=repo-server --since=15m | grep -i "helm\|error"`.
+## Tests
+- [ ] T1. Verify the Helm version in ArgoCD: `kubectl exec -n argocd <argocd-server-pod> -- helm version` — expected v4.1.4+.
+- [ ] T2. Run an ArgoCD dry-run sync for several key Applications (including `base-service` for the `admins` tenant) — expected: rendering succeeds without errors.
+- [ ] T3. Run a test Workflow that uses a helm CLI step (if present in `cluster-templates/`) — expected status `Succeeded`.
+- [ ] T4. Confirm all ArgoCD Applications stay `Synced` + `Healthy` 15 minutes after the ArgoCD upgrade.
+- [ ] T5. Confirm there are no Helm-rendering-related errors in the ArgoCD repo-server logs: `kubectl logs -n argocd -l app.kubernetes.io/component=repo-server --since=15m | grep -i "helm\|error"`.
 
-## Откат
-1. Выполнить `git revert <commit-sha>` коммита с обновлением image tags в mctl-gitops.
-2. Смержить revert-коммит.
-3. ArgoCD автоматически откатит образы к предыдущим версиям через App-of-Apps sync.
-4. Если ArgoCD сам обновился — проверить, что после revert его образ также вернулся к предыдущему тегу.
-5. Верифицировать откат: повторить T1 с ожидаемой старой версией Helm.
+## Rollback
+1. Run `git revert <commit-sha>` against the image-tag bump commit in mctl-gitops.
+2. Merge the revert commit.
+3. ArgoCD automatically rolls images back to previous versions via App-of-Apps sync.
+4. If ArgoCD itself was updated — verify that after revert its image also returned to the previous tag.
+5. Verify the rollback: re-run T1 with the expected old Helm version.

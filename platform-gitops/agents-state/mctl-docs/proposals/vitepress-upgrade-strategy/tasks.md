@@ -1,26 +1,26 @@
 # Tasks: vitepress-upgrade-strategy
 
-- [ ] 1. Создать `context/decisions/0003-vitepress-2-upgrade-strategy.md` по шаблону ADR.
-      Контент — из `proposed-content.md` (секция ADR). — DoD: файл присутствует, содержит
-      критерии перехода и checklist.
-- [ ] 2. Обновить `docs/reference/faq.md` — добавить Q&A секцию о версии VitePress.
-      Контент — из `proposed-content.md` (секция FAQ patch). — DoD: вопрос и ответ присутствуют,
-      ссылка на ADR резолвится.
-- [ ] 3. Локально проверить `npm run dev` → открыть `/reference/faq` — DoD: рендерится, новый
-      блок Q&A виден, mermaid-блоки (если есть) рендерятся корректно.
-- [ ] 4. Cross-link: убедиться, что `context/decisions/0001-vitepress-stack.md` ссылается на
-      новый ADR 0003 как "See also". — DoD: cross-reference добавлен.
-- [ ] 5. Открыть PR в `mctlhq/mctl-docs`, codex review, мердж. — DoD: задеплоено на docs.mctl.ai.
+- [ ] 1. Create `context/decisions/0003-vitepress-2-upgrade-strategy.md` from the ADR template.
+      Content — from `proposed-content.md` (ADR section). — DoD: file is present, contains
+      transition criteria and a checklist.
+- [ ] 2. Update `docs/reference/faq.md` — add a Q&A section about the VitePress version.
+      Content — from `proposed-content.md` (FAQ patch section). — DoD: question and answer
+      are present, the link to the ADR resolves.
+- [ ] 3. Locally verify `npm run dev` → open `/reference/faq` — DoD: renders, the new Q&A
+      block is visible, mermaid blocks (if any) render correctly.
+- [ ] 4. Cross-link: ensure `context/decisions/0001-vitepress-stack.md` references the new
+      ADR 0003 as "See also". — DoD: cross-reference added.
+- [ ] 5. Open a PR in `mctlhq/mctl-docs`, codex review, merge. — DoD: deployed to docs.mctl.ai.
 
-## Тесты
+## Tests
 
-- [ ] T1. `vitepress build docs` без ошибок и warnings.
-- [ ] T2. Ссылка `/reference/faq#vitepress-version` резолвится (якорь существует).
-- [ ] T3. Ссылка из FAQ на ADR `context/decisions/0003-…` корректна (или даёт понятную ошибку
-      если ADR не публикуется в публичном docs).
+- [ ] T1. `vitepress build docs` finishes without errors or warnings.
+- [ ] T2. The link `/reference/faq#vitepress-version` resolves (the anchor exists).
+- [ ] T3. The link from the FAQ to the ADR `context/decisions/0003-…` is correct (or yields a
+      clear error if the ADR is not published in public docs).
 
-## Откат
+## Rollback
 
-- Удалить `context/decisions/0003-...md` и reverт FAQ изменений через revert PR.
-- Убрать cross-link из ADR 0001.
-- Нулевой риск — только markdown.
+- Remove `context/decisions/0003-...md` and revert the FAQ changes via a revert PR.
+- Remove the cross-link from ADR 0001.
+- Zero risk — only markdown.

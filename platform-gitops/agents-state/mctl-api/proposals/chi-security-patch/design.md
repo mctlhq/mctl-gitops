@@ -1,42 +1,42 @@
 # Design: chi-security-patch
 
-## Текущее состояние
-Согласно `context/architecture.md`, mctl-api использует `chi/v5 5.2.1` в качестве HTTP-роутера для всех endpoint'ов: REST API, MCP endpoint (`/mcp`, Streamable HTTP POST+GET) и `/metrics`. Роутер обрабатывает входящие запросы на публичном адресе `https://api.mctl.ai`. Версия 5.2.1 отстаёт от latest (5.2.5) на 4 patch-версии; в промежуточных релизах присутствует security fix в middleware `RedirectSlashes` и bugfix двойного вызова обработчика в `RouteHeaders`.
+## Current state
+According to `context/architecture.md`, mctl-api uses `chi/v5 5.2.1` as the HTTP router for all endpoints: REST API, the MCP endpoint (`/mcp`, Streamable HTTP POST+GET) and `/metrics`. The router handles inbound requests on the public address `https://api.mctl.ai`. Version 5.2.1 lags the latest (5.2.5) by 4 patch versions; the intermediate releases include a security fix in the `RedirectSlashes` middleware and a bugfix for double handler invocation in `RouteHeaders`.
 
-## Предлагаемое решение
-Точечный bump зависимости `github.com/go-chi/chi/v5` с `v5.2.1` до `v5.2.5` в `go.mod`.
+## Proposed solution
+Targeted bump of the `github.com/go-chi/chi/v5` dependency from `v5.2.1` to `v5.2.5` in `go.mod`.
 
-Почему именно так:
-- v5.2.5 — latest stable с минимальными Go требованиями (Go 1.22, мы на 1.24 — совместимо).
-- Patch-версии chi/v5 не содержат breaking changes в публичном Router API — код mctl-api не требует правок.
-- Security fix изолирован в middleware `RedirectSlashes`; если middleware не используется явно, fix всё равно применяется как защитная мера при возможном будущем включении.
-- Bugfix двойного вызова в `RouteHeaders` устраняет потенциальный источник неожиданного поведения при использовании условной маршрутизации.
+Why exactly this:
+- v5.2.5 is the latest stable with the minimum Go requirement (Go 1.22, we are on 1.24 — compatible).
+- chi/v5 patch versions contain no breaking changes in the public Router API — the mctl-api code requires no edits.
+- The security fix is isolated in the `RedirectSlashes` middleware; if the middleware is not used explicitly, the fix still applies as a defensive measure for any future enablement.
+- The double-call bugfix in `RouteHeaders` removes a potential source of unexpected behaviour when conditional routing is used.
 
-Шаги:
+Steps:
 1. `go get github.com/go-chi/chi/v5@v5.2.5`
 2. `go mod tidy`
-3. Прогон unit + integration тестов для всех маршрутов.
-4. Деплой через ArgoCD в тенант `admins`.
+3. Run unit + integration tests for all routes.
+4. Deploy via ArgoCD to the `admins` tenant.
 
-## Альтернативы
+## Alternatives
 
-**A. Обновиться до v5.2.2, v5.2.3 или v5.2.4 вместо v5.2.5.**
-Все промежуточные версии включены в v5.2.5. Нет оснований останавливаться на промежуточном патче, когда доступен финальный latest. Отброшено.
+**A. Upgrade to v5.2.2, v5.2.3 or v5.2.4 instead of v5.2.5.**
+All intermediate versions are subsumed by v5.2.5. There is no reason to stop on an intermediate patch when the final latest is available. Dropped.
 
-**B. Явно отключить или не использовать RedirectSlashes middleware и остаться на v5.2.1.**
-Не устраняет уязвимость как таковую — при случайном включении или в будущем код снова окажется уязвимым. Отброшено как неполное решение.
+**B. Explicitly disable or avoid the RedirectSlashes middleware and stay on v5.2.1.**
+Does not eliminate the vulnerability as such — on accidental enablement or in the future, the code is vulnerable again. Dropped as an incomplete solution.
 
-**C. Заменить chi на другой роутер (gin, echo, httprouter).**
-Прямо запрещено принципами из `context/architecture.md` без сильного benchmark'а. Effort несравнимо выше (полная переработка middleware stack), нет обоснования для такого изменения. Отброшено.
+**C. Replace chi with another router (gin, echo, httprouter).**
+Explicitly forbidden by the principles in `context/architecture.md` without strong benchmarks. Effort is incomparably higher (full rework of the middleware stack), and there is no justification for such a change. Dropped.
 
-## Влияние на платформу
+## Platform impact
 
-**Migration/миграции:** Не требуются. Схема роутинга, middleware stack и API контракты не меняются.
+**Migration:** Not required. The routing scheme, the middleware stack and the API contracts do not change.
 
-**Backward compatibility:** chi/v5 patch-версии полностью обратно совместимы. Весь код, использующий chi v5.2.1 Router, Middleware и Context API, работает без изменений в v5.2.5.
+**Backward compatibility:** chi/v5 patch versions are fully backward compatible. All code using chi v5.2.1 Router, Middleware, and Context API runs unchanged on v5.2.5.
 
-**Resource impact:** Изменение касается только логики роутера и middleware. Потребление памяти и CPU не изменяется. Тенант `labs` не затронут — mctl-api работает в `admins`.
+**Resource impact:** The change concerns only router and middleware logic. Memory and CPU consumption do not change. The `labs` tenant is not affected — mctl-api runs in `admins`.
 
-**Риски и митигации:**
-- Риск: изменение поведения `RedirectSlashes` в v5.2.5 может повлиять на клиентов, которые полагаются на текущий (потенциально уязвимый) redirect. Митигация: интеграционные тесты покрывают маршрутизацию; проверить, что slash-redirect тесты проходят корректно.
-- Риск: bugfix `RouteHeaders` изменяет количество вызовов обработчика с 2 до 1, что может раскрыть скрытые side-effect'ы в существующих обработчиках. Митигация: code review diff маршрутов, использующих `RouteHeaders`; тесты с assertion на однократный вызов.
+**Risks and mitigations:**
+- Risk: a behavioural change of `RedirectSlashes` in v5.2.5 could affect clients relying on the current (potentially vulnerable) redirect. Mitigation: integration tests cover routing; verify that slash-redirect tests pass correctly.
+- Risk: the `RouteHeaders` bugfix changes the handler invocation count from 2 to 1, which may surface hidden side effects in existing handlers. Mitigation: code-review the diff of routes using `RouteHeaders`; tests with an assertion on a single invocation.

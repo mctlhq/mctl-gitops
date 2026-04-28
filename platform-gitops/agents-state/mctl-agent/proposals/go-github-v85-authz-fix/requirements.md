@@ -1,18 +1,18 @@
-# Обновление google/go-github до v85 (Authorization header leak prevention)
+# Upgrade google/go-github to v85 (Authorization header leak prevention)
 
-## Контекст
-mctl-agent использует `google/go-github` **v68** для создания fix-PR в репозитории
-`mctlhq/mctl-gitops`. Клиент аутентифицируется через GitHub App installation token,
-ротируемый каждые 30 минут.
+## Context
+mctl-agent uses `google/go-github` **v68** to create fix-PRs in the `mctlhq/mctl-gitops`
+repository. The client authenticates via a GitHub App installation token rotated every
+30 minutes.
 
-В версии v85.0.0 (2026-04-20) добавлен **cross-host redirect rejection**: при HTTP-редиректе
-на хост, отличающийся от оригинального, клиент теперь отказывается передавать заголовок
-`Authorization` стороннему серверу. В v68 эта защита отсутствует — если GitHub API
-(или любой настроенный endpoint) вернёт редирект на внешний хост, installation token
-будет передан третьей стороне. Installation token даёт права на запись в `mctl-gitops`,
-что означает потенциальный supply-chain compromise.
+In version v85.0.0 (2026-04-20), **cross-host redirect rejection** was added: on an HTTP
+redirect to a host different from the original, the client now refuses to forward the
+`Authorization` header to a third-party server. In v68 this protection is absent — if the
+GitHub API (or any configured endpoint) returns a redirect to an external host, the
+installation token is passed to the third party. The installation token grants write
+access to `mctl-gitops`, which means a potential supply-chain compromise.
 
-Разрыв: v68 → v85 = 17 мажорных версий; есть breaking changes, требующие адаптации кода.
+Gap: v68 → v85 = 17 major versions; there are breaking changes that require code adaptation.
 
 ## User stories
 
@@ -34,7 +34,7 @@ mctl-agent использует `google/go-github` **v68** для создани
 
 ## Out of scope
 
-- Изменения в логике создания PR или обработки алёртов.
-- Ротация или хранение GitHub App secrets (покрывается cwft-rotate-github-token).
-- Апгрейд других зависимостей (go, chi, sqlite) — отдельные proposals.
-- Добавление новых GitHub API вызовов (beyond текущего функционала PR-creation).
+- Changes to PR-creation logic or alert handling.
+- Rotation or storage of GitHub App secrets (covered by cwft-rotate-github-token).
+- Upgrade of other dependencies (go, chi, sqlite) — separate proposals.
+- Adding new GitHub API calls (beyond the current PR-creation functionality).

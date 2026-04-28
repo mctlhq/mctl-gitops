@@ -1,45 +1,45 @@
 # Design: go-upgrade
 
-## Текущее состояние
-Согласно `context/architecture.md`, mctl-api собирается на **Go 1.24**. Ветка 1.24 получила последний security-патч в феврале 2026 (v1.24.13) и с тех пор вышла из активной поддержки. Критические security-патчи в `crypto/tls`, `crypto/x509`, `archive/tar`, `html/template`, `os` (релизы 1.25.9 / 1.26.2 от 2026-04-07) не распространяются на ветку 1.24.
+## Current state
+According to `context/architecture.md`, mctl-api is built on **Go 1.24**. The 1.24 branch received its last security patch in February 2026 (v1.24.13) and has since left active support. Critical security patches in `crypto/tls`, `crypto/x509`, `archive/tar`, `html/template`, `os` (releases 1.25.9 / 1.26.2 dated 2026-04-07) are not backported to the 1.24 branch.
 
-mctl-api устанавливает TLS-соединения с Vault (`secrets.mctl.ai`), ArgoCD, Argo Workflows, Backstage и Kubernetes API — все через стандартный `crypto/tls`. Auth flow (Dex JWT через JWKS, OAuth JWT) использует `crypto/x509` для проверки цепочки сертификатов. Уязвимость в этих пакетах напрямую угрожает конфиденциальности токенов и integrity auth-проверок.
+mctl-api opens TLS connections to Vault (`secrets.mctl.ai`), ArgoCD, Argo Workflows, Backstage, and the Kubernetes API — all via the standard `crypto/tls`. The auth flow (Dex JWT via JWKS, OAuth JWT) uses `crypto/x509` for certificate-chain verification. A vulnerability in these packages directly threatens the confidentiality of tokens and the integrity of auth checks.
 
-## Предлагаемое решение
-Обновить директиву `go` в `go.mod` с `1.24` до `1.26` и обновить toolchain в CI/CD pipeline и Dockerfile до Go 1.26.2 (последний стабильный патч на момент 2026-04-27).
+## Proposed solution
+Update the `go` directive in `go.mod` from `1.24` to `1.26` and update the toolchain in the CI/CD pipeline and Dockerfile to Go 1.26.2 (the latest stable patch as of 2026-04-27).
 
-Архитектурное обоснование выбора 1.26 (а не 1.25):
-- Go поддерживает две последние ветки; 1.26 — текущая актуальная, 1.25 — предыдущая. Переход сразу на 1.26 даёт максимальный runway до следующего обязательного апгрейда.
-- Все security-патчи из 1.25.9 включены в 1.26.2 — нет смысла останавливаться на 1.25.
+Architectural rationale for choosing 1.26 (not 1.25):
+- Go supports the two latest branches; 1.26 is the current branch, 1.25 is the previous one. Moving directly to 1.26 maximises the runway until the next mandatory upgrade.
+- All security patches from 1.25.9 are included in 1.26.2 — there is no reason to stop on 1.25.
 
-Шаги:
-1. Обновить `go.mod`: `go 1.26`.
-2. Обновить `Dockerfile` / `.tool-versions` / CI workflow — `golang:1.26.2-alpine` (или аналог).
-3. `go mod tidy` — убедиться, что прямые зависимости совместимы с Go 1.26 (проверить `go.mod` каждой зависимости на `go N.N` директиву).
-4. Сборка и прогон тестов: `go test ./...`.
-5. `govulncheck ./...` — проверка отсутствия std-lib findings.
-6. Деплой через ArgoCD в `admins`.
+Steps:
+1. Update `go.mod`: `go 1.26`.
+2. Update `Dockerfile` / `.tool-versions` / CI workflow — `golang:1.26.2-alpine` (or equivalent).
+3. `go mod tidy` — confirm direct dependencies are compatible with Go 1.26 (check the `go N.N` directive in each dependency's `go.mod`).
+4. Build and run tests: `go test ./...`.
+5. `govulncheck ./...` — confirm there are no stdlib findings.
+6. Deploy via ArgoCD to `admins`.
 
-## Альтернативы
+## Alternatives
 
-**A. Обновиться до Go 1.25 вместо 1.26.**
-Закрывает те же CVE, но ветка 1.25 станет unsupported при выходе Go 1.27 (ожидается ~август 2026). Потребует повторного апгрейда через несколько месяцев. Отброшено в пользу 1.26.
+**A. Upgrade to Go 1.25 instead of 1.26.**
+Closes the same CVEs, but the 1.25 branch will become unsupported when Go 1.27 is released (expected ~August 2026). Will require another upgrade in a few months. Dropped in favour of 1.26.
 
-**B. Остаться на Go 1.24 и вручную бэкпортировать патчи.**
-Невозможно в рамках стандартного Go-модульного workflow — Go не поддерживает вендорный бэкпорт stdlib patches. Отброшено.
+**B. Stay on Go 1.24 and backport patches manually.**
+Not feasible within the standard Go module workflow — Go does not support vendored backports of stdlib patches. Dropped.
 
-**C. Использовать go toolchain автоматического обновления (`toolchain go1.26`) в go.mod.**
-Позволяет автоматически подтягивать патчи. Отброшено на данном этапе: непредсказуемый toolchain drift усложняет reproducible builds; решение требует отдельного ADR и согласования политики обновлений.
+**C. Use the auto-updating Go toolchain directive (`toolchain go1.26`) in go.mod.**
+Allows automatic patch pickup. Dropped at this stage: unpredictable toolchain drift complicates reproducible builds; this decision requires a separate ADR and an agreed update policy.
 
-## Влияние на платформу
+## Platform impact
 
-**Migration/миграции:** Нет изменений схемы БД. Изменяется toolchain в Dockerfile и CI — требует координации с ops-командой (обновление базового образа).
+**Migration:** No DB schema changes. The toolchain in the Dockerfile and CI changes — coordinate with the ops team (base image refresh).
 
-**Backward compatibility:** Go гарантирует обратную совместимость кода между minor-версиями в рамках одной major версии. Код mctl-api, написанный для Go 1.24, компилируется без изменений в Go 1.26. Необходимо проверить, что все прямые зависимости (chi, pgx, mcp-go, client-go, go-oidc) декларируют `go` директиву не выше 1.26 — если выше, потребуется их обновление.
+**Backward compatibility:** Go guarantees source compatibility between minor versions within the same major. mctl-api code written for Go 1.24 compiles unchanged on Go 1.26. We must verify that all direct dependencies (chi, pgx, mcp-go, client-go, go-oidc) declare a `go` directive no higher than 1.26 — if higher, those will need updating.
 
-**Resource impact:** Смена toolchain не влияет на runtime-потребление памяти или CPU. Тенант `labs` не затронут напрямую, но если `labs` использует тот же CI-раннер, обновление Go версии в CI может повлиять на их сборки — требует уточнения с ops.
+**Resource impact:** A toolchain switch does not affect runtime memory or CPU usage. The `labs` tenant is not affected directly, but if `labs` uses the same CI runner, updating the Go version in CI could affect its builds — clarify with ops.
 
-**Риски и митигации:**
-- Риск: breaking change в поведении `crypto/tls` (изменение cipher suite defaults в 1.25+) может повлиять на TLS handshake с Vault/ArgoCD. Митигация: интеграционные тесты покрывают все внешние TLS-соединения; staging-прогон до prod-деплоя.
-- Риск: зависимость с минимальной Go версией выше 1.26 потребует дополнительного bump. Митигация: явная проверка `go mod graph` на шаге 3.
-- Риск: изменение дефолтного поведения `GODEBUG` в новых версиях Go. Митигация: проверить release notes Go 1.25 и 1.26 на изменения `GODEBUG` defaults; добавить явные `//go:build` флаги при необходимости.
+**Risks and mitigations:**
+- Risk: a breaking change in `crypto/tls` behaviour (cipher-suite default changes in 1.25+) may affect TLS handshakes with Vault/ArgoCD. Mitigation: integration tests cover all outbound TLS connections; staging run before prod deploy.
+- Risk: a dependency with a minimum Go version above 1.26 will require an additional bump. Mitigation: explicit check via `go mod graph` at step 3.
+- Risk: `GODEBUG` default behaviour change in newer Go versions. Mitigation: review the Go 1.25 and 1.26 release notes for `GODEBUG` default changes; add explicit `//go:build` flags if needed.

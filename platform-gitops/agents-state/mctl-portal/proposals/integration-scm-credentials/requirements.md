@@ -1,17 +1,17 @@
-# Закрыть CVE-2026-29185: path traversal в SCM URLs утечка GitHub App token
+# Close CVE-2026-29185: path traversal in SCM URLs leaking the GitHub App token
 
-## Контекст
-CVE-2026-29185 описывает уязвимость в `@backstage/integration`: закодированные
-path-traversal последовательности (например, `%2F..%2F`, `%252F`) в user-supplied SCM
-URL позволяют перенаправить запросы к произвольным SCM API-эндпоинтам с серверными
-credentials — в первую очередь с GitHub App token. Уязвимость затрагивает catalog-import,
-scaffolder git actions и github-actions plugin.
+## Context
+CVE-2026-29185 describes a vulnerability in `@backstage/integration`: encoded
+path-traversal sequences (e.g. `%2F..%2F`, `%252F`) in user-supplied SCM URLs allow
+redirection of requests to arbitrary SCM API endpoints with server-side credentials —
+chiefly the GitHub App token. The vulnerability affects catalog-import, scaffolder git
+actions, and the github-actions plugin.
 
-В mctl-portal все три точки поражения активно используются: catalog-import применяется
-для регистрации сервисов, scaffolder git actions — для коммитов в mctl-gitops, а
-github-actions plugin — для отображения статуса CI. GitHub App token, используемый
-платформой, предоставляет широкие права на чтение и запись в организации. Фикс доступен
-в `@backstage/integration` v1.20.1, входящей в Backstage v1.50.3.
+In mctl-portal all three affected points are heavily used: catalog-import is used for
+registering services, scaffolder git actions for commits to mctl-gitops, and the
+github-actions plugin for surfacing CI status. The GitHub App token used by the platform
+grants broad read/write access in the organisation. The fix is available in
+`@backstage/integration` v1.20.1, included in Backstage v1.50.3.
 
 ## User stories
 - AS a platform engineer I WANT all SCM URLs provided by users to be validated and
@@ -41,9 +41,8 @@ github-actions plugin — для отображения статуса CI. GitHu
   SHALL return an error and not attach authentication headers to the request.
 
 ## Out of scope
-- Обновление Backstage до версии выше 1.50.3 (только закрытие конкретного CVE).
-- Изменения в тенанте `labs`.
-- Ограничение списка разрешённых SCM-хостов через allowlist (может быть отдельным
-  предложением).
-- Аудит кастомных плагинов на предмет аналогичных URL-validation уязвимостей.
-- Замена GitHub App на другой механизм аутентификации.
+- Upgrading Backstage beyond version 1.50.3 (only this CVE is targeted).
+- Changes in the `labs` tenant.
+- Restricting the SCM-host allowlist (may be a separate proposal).
+- Audit of custom plugins for similar URL-validation vulnerabilities.
+- Replacing the GitHub App with another authentication mechanism.

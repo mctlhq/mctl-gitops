@@ -1,17 +1,18 @@
 # VitePress 1.6 → 2.x Upgrade Strategy Documentation
 
-## Контекст
+## Context
 
-mctl-docs принял VitePress 1.6 как стек (ADR 0001, 2026-03-28). К апрелю 2026 VitePress 2.x
-прошёл итерацию alpha.17 (2025-03-19) и движется к stable release. Текущий ADR фиксирует
-выбор 1.6, но не содержит плана перехода на следующий major — создавая риск: когда VitePress 2
-выйдет stable, платформа окажется без roadmap и накопит tech debt на миграцию в сжатые сроки.
+mctl-docs adopted VitePress 1.6 as its stack (ADR 0001, 2026-03-28). By April 2026 VitePress 2.x
+has reached the alpha.17 iteration (2025-03-19) and is moving toward a stable release. The
+existing ADR captures the choice of 1.6 but does not contain a plan for moving to the next
+major — creating a risk: when VitePress 2 reaches stable, the platform will be without a
+roadmap and accumulate tech debt around a rushed migration.
 
-Нужно ADR с явной upgrade strategy (точки принятия решения, критерии перехода) и краткая
-публичная заметка в FAQ о текущем выборе версии — для прозрачности перед tenants и
-contributors.
+We need an ADR with an explicit upgrade strategy (decision points, transition criteria) and
+a short public note in the FAQ about the current version choice — for transparency to
+tenants and contributors.
 
-Источник: GitHub releases vuejs/vitepress — v2.0.0-alpha.16 (2025-01-31), v2.0.0-alpha.17 (2025-03-19).
+Source: GitHub releases vuejs/vitepress — v2.0.0-alpha.16 (2025-01-31), v2.0.0-alpha.17 (2025-03-19).
 
 ## User stories
 
