@@ -1,29 +1,29 @@
 # Design: npm-supply-chain-audit
 
-## Текущее состояние
-Согласно `context/architecture.md`, openclaw использует Node.js + TypeScript workspace. WhatsApp-канал реализован через `@whiskeysockets/baileys`, Discord — через `discordjs/discord.js`. Зависимости управляются через `package.json` / `package-lock.json`. Деплой: Docker → mctl-gitops → ArgoCD. Текущий CI-пайплайн не содержит явной проверки resolved URLs пакетов или запрещённых имён. Факт использования корректных пакетов сейчас не верифицирован автоматически.
+## Current state
+According to `context/architecture.md`, openclaw uses a Node.js + TypeScript workspace. The WhatsApp channel is built on `@whiskeysockets/baileys`, Discord on `discordjs/discord.js`. Dependencies are managed via `package.json` / `package-lock.json`. Deploy: Docker → mctl-gitops → ArgoCD. The current CI pipeline contains no explicit check for resolved package URLs or for forbidden names. The fact that correct packages are in use is not currently verified automatically.
 
-Зафиксированные угрозы (inbox/2026-04-27.md):
-- Poisoned Baileys-форк (2025-12): перехват WhatsApp auth, сообщений, контактов, медиа через WebSocket wrapper
-- `discord.js-user` (GHSA-69r6-7h4f-9p7q, CVSS 9.8): слив Discord-токенов
+Identified threats (inbox/2026-04-27.md):
+- Poisoned Baileys fork (2025-12): intercepts WhatsApp auth, messages, contacts, media via a WebSocket wrapper
+- `discord.js-user` (GHSA-69r6-7h4f-9p7q, CVSS 9.8): leaks Discord tokens
 
-## Предлагаемое решение
+## Proposed solution
 
-**Часть 1: Одноразовый аудит (немедленно)**
+**Part 1: One-off audit (immediate)**
 
-Выполнить `grep`-аудит `package-lock.json` и `package.json` на предмет:
-1. Запрещённых имён: `baileys` (без namespace), `discord.js-user`, и любых других известных poisoned форков
-2. resolved URLs для `@whiskeysockets/baileys` и `discord.js` — должны указывать на `https://registry.npmjs.org/`
-3. Запустить `npm audit --audit-level=high` и зафиксировать результат
+Run a `grep` audit of `package-lock.json` and `package.json` for:
+1. Forbidden names: `baileys` (without namespace), `discord.js-user`, and any other known poisoned forks
+2. Resolved URLs for `@whiskeysockets/baileys` and `discord.js` — must point to `https://registry.npmjs.org/`
+3. Run `npm audit --audit-level=high` and capture the result
 
-Результат аудита документируется: либо "всё чисто + подтверждено", либо список проблем для немедленного исправления.
+The audit result is documented: either "clean and confirmed" or a list of issues for immediate fix.
 
-**Часть 2: CI-шаг (постоянный)**
+**Part 2: CI step (permanent)**
 
-Добавить в CI-пайплайн скрипт `scripts/check-npm-supply-chain.sh` (или аналогичный в Python/Node):
+Add the script `scripts/check-npm-supply-chain.sh` (or a Python/Node equivalent) to the CI pipeline:
 
 ```bash
-# Проверка запрещённых имён пакетов
+# Forbidden package name check
 FORBIDDEN="baileys discord.js-user"
 for pkg in $FORBIDDEN; do
   if grep -q "\"$pkg\"" package-lock.json; then
@@ -32,7 +32,7 @@ for pkg in $FORBIDDEN; do
   fi
 done
 
-# Проверка resolved URL для monitored пакетов
+# Resolved URL check for monitored packages
 MONITORED="@whiskeysockets/baileys discord.js"
 for pkg in $MONITORED; do
   urls=$(jq -r ".. | objects | select(.name? == \"$pkg\") | .resolved" package-lock.json 2>/dev/null)
@@ -45,41 +45,41 @@ for pkg in $MONITORED; do
 done
 ```
 
-Скрипт запускается при каждом изменении `package.json` или `package-lock.json` в PR. Дополнительно: `npm audit --audit-level=high` для пакетов из списка мониторинга.
+The script runs on every PR change to `package.json` or `package-lock.json`. Additionally: `npm audit --audit-level=high` for the monitored package list.
 
-**Почему именно так:**
-Минимальный и точечный подход — проверяем только конкретные known-bad пакеты и их resolved URLs. Не требует внешних SCA-инструментов, работает с тем что есть в CI. Одноразовый аудит закрывает вопрос о текущем состоянии; постоянный CI-шаг предотвращает регрессию.
+**Why this approach:**
+A minimal, targeted approach — we check only specific known-bad packages and their resolved URLs. No external SCA tooling is required, it works with what is in CI. The one-off audit closes the question of current state; the persistent CI step prevents regressions.
 
-## Альтернативы
+## Alternatives
 
-**Альтернатива 1: Полный SCA-инструмент (например, Snyk, Socket Security)**
-Socket Security специализируется именно на supply chain атаках через npm и умеет детектировать poisoned форки на уровне поведенческого анализа. Отброшено для данного предложения: требует внешней интеграции, licensing, настройки — значительно больший effort при том что известные угрозы конкретны и покрываются простым скриптом. Можно добавить позже как дополнительный слой.
+**Alternative 1: A full SCA tool (e.g. Snyk, Socket Security)**
+Socket Security specialises specifically in supply-chain attacks via npm and can detect poisoned forks via behavioural analysis. Dropped for this proposal: requires an external integration, licensing, configuration — significantly higher effort while the known threats are concrete and covered by a simple script. It can be added later as an additional layer.
 
-**Альтернатива 2: npm `overrides` / `resolutions` для пиннинга пакетов**
-В `package.json` можно использовать `overrides` (npm 8+) чтобы форсировать конкретные версии и исключить форки:
+**Alternative 2: npm `overrides` / `resolutions` for pinning packages**
+You can use `overrides` (npm 8+) in `package.json` to force specific versions and exclude forks:
 ```json
 "overrides": { "baileys": "npm:@whiskeysockets/baileys@latest" }
 ```
-Отброшено как основной механизм: это защищает от transitive dependency подмены, но не детектирует случай когда кто-то явно добавил запрещённый пакет в `dependencies`. CI-проверка более явна и аудируема. `overrides` можно добавить дополнительно.
+Dropped as the primary mechanism: this protects against transitive dependency substitution but does not detect a case where someone explicitly added a forbidden package to `dependencies`. The CI check is more explicit and auditable. `overrides` can be added in addition.
 
-**Альтернатива 3: Lockfile integrity check через `npm ci` в Docker build**
-`npm ci` использует `package-lock.json` и отказывается если lock не соответствует `package.json`. Отброшено как достаточная мера: `npm ci` не проверяет имена пакетов на запрещённые — если `package-lock.json` уже содержит poisoned пакет, `npm ci` спокойно его установит. CI-скрипт нужен поверх.
+**Alternative 3: Lockfile integrity check via `npm ci` in Docker build**
+`npm ci` uses `package-lock.json` and refuses if the lock does not match `package.json`. Dropped as a sufficient measure: `npm ci` does not check package names against a forbidden list — if `package-lock.json` already contains a poisoned package, `npm ci` will install it without complaint. The CI script is required on top.
 
-## Влияние на платформу
+## Platform impact
 
-**Migration/миграции**
-Нет миграций. Одноразовый аудит + добавление CI-скрипта и конфига в репозиторий.
+**Migration**
+No migrations. A one-off audit + adding the CI script and config to the repository.
 
 **Backward compatibility**
-CI-шаг не затрагивает runtime. Если текущие пакеты корректны (ожидаемо) — CI будет просто проходить. Если обнаружена проблема — требует немедленного исправления `package.json`/`package-lock.json`.
+The CI step does not affect the runtime. If the current packages are correct (as expected), CI will simply pass. If a problem is found — it requires an immediate fix in `package.json`/`package-lock.json`.
 
 **Resource impact**
-- labs: NO IMPACT. Изменения только в CI, не в деплое.
+- labs: NO IMPACT. Changes are CI-only, not in the deploy.
 - admins: NO IMPACT.
 - ovk: NO IMPACT.
 
-**Риски и митигации**
-- Аудит обнаружит poisoned пакет в текущем `package-lock.json` → немедленно заменить пакет, пересобрать lock, провести emergency redeploy всех тенантов; WhatsApp/Discord credentials считать скомпрометированными (ротация токенов)
-- Скрипт даёт false positive из-за зеркальных реестров (например, корпоративный Verdaccio) → добавить в allowlist корпоративные registry prefix'ы при необходимости
-- Скрипт не покрывает новые poisoned пакеты, появившиеся после его написания → периодически (раз в квартал) пересматривать список `FORBIDDEN` и `MONITORED` пакетов
-- Разработчик использует `--ignore-scripts` или другой обход → CI шаг обязателен (branch protection), не может быть пропущен без явного approval security engineer'а
+**Risks and mitigations**
+- The audit detects a poisoned package in the current `package-lock.json` → immediately replace the package, rebuild the lock, run an emergency redeploy across all tenants; treat WhatsApp/Discord credentials as compromised (token rotation)
+- The script reports a false positive due to mirror registries (e.g. a corporate Verdaccio) → add corporate registry prefixes to the allowlist as needed
+- The script does not cover new poisoned packages that appear after it was written → periodically (quarterly) revisit the `FORBIDDEN` and `MONITORED` package lists
+- A developer uses `--ignore-scripts` or another bypass → the CI step is mandatory (branch protection), it cannot be skipped without an explicit security-engineer approval

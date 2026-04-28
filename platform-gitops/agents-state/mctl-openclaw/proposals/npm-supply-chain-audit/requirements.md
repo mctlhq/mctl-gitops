@@ -1,25 +1,25 @@
-# Аудит и пиннинг официальных npm-пакетов (Baileys, discord.js)
+# Audit and pinning of official npm packages (Baileys, discord.js)
 
-## Контекст
-Зафиксированы активно распространяемые poisoned npm-форки двух ключевых зависимостей openclaw (inbox/2026-04-27.md). Поддельный Baileys-форк перехватывает WhatsApp auth-токены, сообщения, контакты и медиафайлы через WebSocket wrapper. Пакет `discord.js-user` (CVSS 9.8, GHSA-69r6-7h4f-9p7q) сливает Discord-токены на удалённый сервер. Официальные пакеты — `@whiskeysockets/baileys` и `discordjs/discord.js` — не затронуты напрямую.
+## Context
+Active distribution of poisoned npm forks of two key openclaw dependencies has been recorded (inbox/2026-04-27.md). The fake Baileys fork intercepts WhatsApp auth tokens, messages, contacts, and media files via a WebSocket wrapper. The `discord.js-user` package (CVSS 9.8, GHSA-69r6-7h4f-9p7q) leaks Discord tokens to a remote server. The official packages — `@whiskeysockets/baileys` and `discordjs/discord.js` — are not directly affected.
 
-Угроза реализуется через случайную подмену: если в `package.json` или `package-lock.json` закреплён неверный пакет (например, `baileys` вместо `@whiskeysockets/baileys`, или `discord.js-user` вместо `discord.js`), openclaw будет отправлять auth-токены всех WhatsApp/Discord-аккаунтов на серверы атакующих. Даже если сейчас зависимости корректны, без явной CI-проверки риск случайной подмены при будущих обновлениях остаётся открытым. Effort минимальный: одноразовый аудит плюс постоянный CI-шаг.
+The threat materialises as accidental substitution: if `package.json` or `package-lock.json` pins the wrong package (for example `baileys` instead of `@whiskeysockets/baileys`, or `discord.js-user` instead of `discord.js`), openclaw will send auth tokens of every WhatsApp/Discord account to attacker servers. Even if the dependencies are correct now, without an explicit CI check the risk of accidental substitution on future updates remains open. Effort is minimal: a one-off audit plus a permanent CI step.
 
 ## User stories
-- AS a security engineer I WANT однократный аудит `package-lock.json` для подтверждения что используются только официальные пакеты SO THAT текущее состояние верифицировано и задокументировано
-- AS a platform operator I WANT CI-проверку resolved URLs в `package-lock.json` против allowlist официальных пакетов SO THAT случайная подмена на poisoned форк выявляется в PR до деплоя
-- AS a developer I WANT понятный список запрещённых имён пакетов (например, `baileys`, `discord.js-user`) SO THAT я не добавлю их случайно при обновлении зависимостей
+- AS a security engineer I WANT a one-off audit of `package-lock.json` to confirm only official packages are in use SO THAT the current state is verified and documented
+- AS a platform operator I WANT a CI check of resolved URLs in `package-lock.json` against an allowlist of official packages SO THAT accidental substitution with a poisoned fork is caught in the PR before deploy
+- AS a developer I WANT a clear list of forbidden package names (e.g. `baileys`, `discord.js-user`) SO THAT I do not add them by accident when updating dependencies
 
 ## Acceptance criteria (EARS)
-- WHEN CI-пайплайн выполняется для PR, затрагивающего `package.json` или `package-lock.json` THEN THE SYSTEM SHALL проверить resolved URLs всех Baileys- и discord.js-связанных пакетов против allowlist официальных реестров
-- IF `package-lock.json` содержит resolved URL, не соответствующий официальному реестру (`registry.npmjs.org`) для пакетов из списка мониторинга THEN THE SYSTEM SHALL провалить CI-шаг с указанием конкретного пакета и найденного URL
-- IF `package.json` или `package-lock.json` содержит имя пакета из списка запрещённых (`baileys`, `discord.js-user` и аналоги) THEN THE SYSTEM SHALL провалить CI-шаг с объяснением правильного пакета
-- WHEN `npm audit` выполняется в CI THEN THE SYSTEM SHALL завершиться с ненулевым кодом возврата при обнаружении advisory с severity >= high для пакетов из списка мониторинга
-- WHILE CI-проверка активна THE SYSTEM SHALL выполнять её для каждого PR, затрагивающего зависимости, без возможности пропустить без явного override с обоснованием
+- WHEN the CI pipeline runs for a PR that touches `package.json` or `package-lock.json` THEN THE SYSTEM SHALL check the resolved URLs of all Baileys- and discord.js-related packages against the allowlist of official registries
+- IF `package-lock.json` contains a resolved URL that does not match the official registry (`registry.npmjs.org`) for monitored packages THEN THE SYSTEM SHALL fail the CI step indicating the specific package and offending URL
+- IF `package.json` or `package-lock.json` contains a name from the forbidden list (`baileys`, `discord.js-user` and equivalents) THEN THE SYSTEM SHALL fail the CI step explaining the correct package
+- WHEN `npm audit` runs in CI THEN THE SYSTEM SHALL exit with a non-zero code on advisories with severity >= high for monitored packages
+- WHILE the CI check is active THE SYSTEM SHALL run it on every PR that touches dependencies, with no opt-out without an explicit, justified override
 
 ## Out of scope
-- Аудит всех npm-зависимостей проекта (scope ограничен Baileys, discord.js и явно известными poisoned пакетами)
-- Обновление версий Baileys или discord.js (отдельное решение; Baileys 7.0.0 ещё в rc)
-- Сканирование содержимого пакетов на вредоносный код (SAST/SCA выходит за рамки данного предложения)
-- Изменения в runtime openclaw
-- Аудит других каналов (Slack, Telegram, Signal и т.д.) — нет зафиксированных poisoned форков
+- Audit of every npm dependency in the project (scope limited to Baileys, discord.js, and explicitly known poisoned packages)
+- Updates to Baileys or discord.js versions (separate decision; Baileys 7.0.0 is still rc)
+- Scanning package contents for malicious code (SAST/SCA is outside the scope of this proposal)
+- Changes in the openclaw runtime
+- Audit of other channels (Slack, Telegram, Signal etc.) — no recorded poisoned forks

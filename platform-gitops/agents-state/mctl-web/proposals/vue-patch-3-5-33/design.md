@@ -1,30 +1,30 @@
 # Design: vue-patch-3-5-33
 
-## Текущее состояние
+## Current state
 
-Согласно `context/architecture.md`, используется **Vue 3.5.30**. Vue является транзитивной зависимостью — устанавливается как peer-зависимость Nuxt. В `package.json` mctl-web Vue может быть указан явно или разрешаться через Nuxt.
+According to `context/architecture.md`, **Vue 3.5.30** is in use. Vue is a transitive dependency — installed as a peer dependency of Nuxt. In the mctl-web `package.json`, Vue may be specified explicitly or resolved through Nuxt.
 
-## Предлагаемое решение
+## Proposed solution
 
-**Точечный bump Vue до 3.5.33:**
+**Targeted Vue bump to 3.5.33:**
 
-1. Если `vue` явно указан в `package.json` (в `dependencies` или `devDependencies`) — обновить до `"^3.5.33"`.
-2. Если `vue` разрешается транзитивно через Nuxt — обновить lockfile принудительно (`npm update vue` / `pnpm update vue`), убедившись что версия 3.5.33 зафиксирована.
-3. Запустить `nuxt build` для валидации.
+1. If `vue` is listed explicitly in `package.json` (in `dependencies` or `devDependencies`) — update to `"^3.5.33"`.
+2. If `vue` is resolved transitively through Nuxt — force a lockfile update (`npm update vue` / `pnpm update vue`), confirming version 3.5.33 is pinned.
+3. Run `nuxt build` for validation.
 
-Изменение носит строго патч-характер: Vue следует semver, и патч-версии не содержат breaking changes.
+The change is strictly a patch: Vue follows semver, and patch versions contain no breaking changes.
 
-Данное обновление рекомендуется выполнить **до** обновления Nuxt до 4.4.2 (задача `nuxt-upgrade-4-4-2`) для упрощения отладки: так легче изолировать источник проблем, если они возникнут.
+This update is recommended **before** the Nuxt 4.4.2 upgrade (task `nuxt-upgrade-4-4-2`) to ease debugging: it makes the source of any issues easier to isolate.
 
-## Альтернативы
+## Alternatives
 
-1. **Дождаться Vue 3.6.0** — нет смысла откладывать патч-обновление ради будущей минорной версии. Отброшено.
-2. **Не обновлять, включить в bundle Nuxt-обновления** — возможно, но если Nuxt 4.4.2 уже включает Vue 3.5.33 транзитивно, то отдельный PR на Nuxt решит обе задачи. В этом случае данный proposal можно закрыть как поглощённый `nuxt-upgrade-4-4-2`. Отброшено как вторичный план: выгоднее сделать изолированный быстрый bump сейчас.
-3. **Pinning к 3.5.33** без `^` — излишне жёстко для патч-релизов. Отброшено.
+1. **Wait for Vue 3.6.0** — there is no reason to delay a patch update for a future minor. Dropped.
+2. **Skip the update, fold it into Nuxt updates** — possible, but if Nuxt 4.4.2 already pulls Vue 3.5.33 transitively, then a single Nuxt PR resolves both. In that case this proposal can be closed as subsumed by `nuxt-upgrade-4-4-2`. Dropped as a backup plan: the isolated quick bump now is preferable.
+3. **Pin to 3.5.33** without `^` — overly strict for patch releases. Dropped.
 
-## Влияние на платформу
+## Platform impact
 
-- **Migration/миграции:** отсутствуют — патч-релиз в рамках 3.5.x.
-- **Backward compatibility:** полная — semver гарантирует отсутствие breaking changes в патч-версиях.
-- **Resource impact:** нулевой — размер бандла практически не меняется между патч-версиями.
-- **Риски и митигации:** крайне низкий риск регрессии. Митигация: `nuxt build` + smoke-тест в staging.
+- **Migration:** none — patch release within 3.5.x.
+- **Backward compatibility:** full — semver guarantees no breaking changes in patch versions.
+- **Resource impact:** zero — the bundle size barely changes between patch versions.
+- **Risks and mitigations:** very low regression risk. Mitigation: `nuxt build` + a smoke test in staging.

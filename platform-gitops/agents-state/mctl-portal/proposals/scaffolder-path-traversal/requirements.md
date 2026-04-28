@@ -1,17 +1,16 @@
-# Закрыть CVE-2026-24046: symlink path traversal в scaffolder
+# Close CVE-2026-24046: symlink path traversal in scaffolder
 
-## Контекст
-CVE-2026-24046 описывает уязвимость symlink-based path traversal в scaffolder actions
-(`debug:log`, `fs:delete`, archive extraction) пакетов `@backstage/backend-defaults` и
-`plugin-scaffolder-backend`. Аутентифицированный пользователь, имеющий право запускать
-шаблоны, способен через специально сформированные symlink-конструкции читать, записывать
-и удалять произвольные файлы на сервере — в том числе секреты Vault, смонтированные
-через ExternalSecret как файлы в backend-pod.
+## Context
+CVE-2026-24046 describes a symlink-based path traversal vulnerability in scaffolder actions
+(`debug:log`, `fs:delete`, archive extraction) of the `@backstage/backend-defaults` and
+`plugin-scaffolder-backend` packages. An authenticated user with the right to run templates
+can, via specially crafted symlink constructs, read, write and delete arbitrary files on
+the server — including Vault secrets mounted via ExternalSecret as files in the backend pod.
 
-В mctl-portal scaffolder является центральным инструментом онбординга; Vault-секреты
-(Vault token, Postgres DSN, GitHub App credentials) смонтированы в том же pod, что делает
-поверхность атаки критически широкой. Backstage развёрнут в тенанте `admins` под ArgoCD;
-изменение затрагивает только этот тенант и не влияет на тенант `labs`.
+In mctl-portal the scaffolder is the central onboarding tool; Vault secrets (Vault token,
+Postgres DSN, GitHub App credentials) are mounted in the same pod, making the attack
+surface critically broad. Backstage is deployed in the `admins` tenant under ArgoCD; the
+change affects only this tenant and does not impact the `labs` tenant.
 
 ## User stories
 - AS a platform engineer I WANT the scaffolder backend to reject any file operation that
@@ -38,7 +37,7 @@ CVE-2026-24046 описывает уязвимость symlink-based path traver
   critical or high CVEs related to CVE-2026-24046 or CVE-2026-32237.
 
 ## Out of scope
-- Ограничение прав пользователей на запуск шаблонов (RBAC) — отдельная тема.
-- Обновление самого Backstage до v1.50.3 (покрывается в `integration-scm-credentials`).
-- Изменения в тенанте `labs`.
-- Аудит кастомных scaffolder-плагинов на наличие собственных path-traversal уязвимостей.
+- Restricting user permissions to run templates (RBAC) — separate topic.
+- Upgrading Backstage itself to v1.50.3 (covered in `integration-scm-credentials`).
+- Changes in the `labs` tenant.
+- Audit of custom scaffolder plugins for their own path-traversal vulnerabilities.

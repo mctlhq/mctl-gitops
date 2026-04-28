@@ -6,37 +6,37 @@
 - CVE-2026-2950: lodash-es vulnerability (version-status: unverified, see advisory published ~2026-04)
 - Reference: https://security.snyk.io/package/npm/mermaid
 
-## Текущее состояние документации
-- `docs/security/authentication.md` — покрывает auth/JWT/OAuth платформы; не затрагивает зависимости docs-сайта.
-- `docs/security/authorization.md` — RBAC платформы; аналогично не релевантно.
-- `docs/reference/troubleshooting.md` — существует, но нет секции о known dependency advisories.
-- `context/decisions/` — есть только 0001-vitepress-stack.md; явного ADR о безопасности зависимостей нет.
-- **Вывод:** страница отсутствует; решение по CVE не задокументировано нигде.
+## Current documentation state
+- `docs/security/authentication.md` — covers platform auth/JWT/OAuth; does not concern docs-site dependencies.
+- `docs/security/authorization.md` — platform RBAC; likewise not relevant.
+- `docs/reference/troubleshooting.md` — exists, but has no section on known dependency advisories.
+- `context/decisions/` — only 0001-vitepress-stack.md is present; no explicit ADR on dependency security.
+- **Conclusion:** the page is missing; the CVE decision is not documented anywhere.
 
-## Предлагаемое решение
+## Proposed solution
 
-Два артефакта:
+Two artefacts:
 
-### A. Новый ADR: `context/decisions/0002-mermaid-dep-security.md`
-Внутренний (read-only) ADR, фиксирующий:
-- Описание CVE-2026-4800 и CVE-2026-2950 в lodash-es.
-- Оценку attack surface (static site, no user input → low real-world risk).
-- Решение: upgrade mermaid до версии ≥ 11.15.0 (или той, что зафиксирует lodash-es ≥ 4.18.1)
-  как только выйдет, либо pin lodash-es через `overrides` в package.json.
-- Дату решения и ответственного.
+### A. New ADR: `context/decisions/0002-mermaid-dep-security.md`
+An internal (read-only) ADR capturing:
+- Description of CVE-2026-4800 and CVE-2026-2950 in lodash-es.
+- Attack-surface assessment (static site, no user input → low real-world risk).
+- Decision: upgrade mermaid to a version ≥ 11.15.0 (or whichever pins lodash-es ≥ 4.18.1)
+  as soon as it ships, or pin lodash-es via `overrides` in package.json.
+- Decision date and owner.
 
-### B. Добавить секцию в `docs/reference/troubleshooting.md`
-Публичная заметка "Known dependency advisories" для transparency — короткая таблица CVE + status + link to ADR.
+### B. Add a section to `docs/reference/troubleshooting.md`
+A public note "Known dependency advisories" for transparency — a short table of CVE + status + link to ADR.
 
-### Связанные изменения конфига VitePress
-Нет (чисто markdown изменения).
+### Related VitePress config changes
+None (purely markdown changes).
 
-## Альтернативы
+## Alternatives
 
-1. **Только ADR, без публичной записи** — скрывает информацию от tenant-аудиторов; отклонено: прозрачность важна.
-2. **Заменить mermaid на другой рендерер** — нарушает ADR 0001 (высокая стоимость миграции); отклонено.
+1. **ADR only, no public note** — hides information from tenant auditors; rejected: transparency matters.
+2. **Replace mermaid with a different renderer** — violates ADR 0001 (high migration cost); rejected.
 
-## Влияние
-- VitePress sidebar / nav config: не затрагивает (troubleshooting.md уже в nav).
-- Mermaid диаграммы: не нужны.
-- Versioning: нет concept of versioning в mctl-docs — ADR + troubleshooting update применяется к текущей ветке.
+## Impact
+- VitePress sidebar / nav config: not affected (troubleshooting.md is already in the nav).
+- Mermaid diagrams: not needed.
+- Versioning: no concept of versioning in mctl-docs — the ADR + troubleshooting update apply to the current branch.

@@ -1,15 +1,16 @@
 # Mermaid Dependency Security Advisory Documentation
 
-## Контекст
+## Context
 
-Mermaid 11.x (используется в docs.mctl.ai через VitePress) транзитивно зависит от lodash-es,
-в котором обнаружены уязвимости CVE-2026-4800 и CVE-2026-2950. Исправленная версия lodash-es
-4.18.1 существует, однако на дату прогона (2026-04-27) mermaid не обновил зависимость.
-docs.mctl.ai в production бандлит mermaid, следовательно — содержит уязвимый код.
+Mermaid 11.x (used in docs.mctl.ai via VitePress) transitively depends on lodash-es,
+in which vulnerabilities CVE-2026-4800 and CVE-2026-2950 have been disclosed. A fixed
+version lodash-es 4.18.1 exists, however as of the run date (2026-04-27) mermaid has not
+updated the dependency. docs.mctl.ai bundles mermaid in production and therefore contains
+vulnerable code.
 
-Хотя вектор атаки ограничен (статический сайт без user-supplied mermaid input), платформа обязана
-принять явное решение (patch / pin / accept risk) и задокументировать его для прозрачности.
-Источник: CVE-2026-4800, CVE-2026-2950 (публичные advisory на 2026-04-27).
+Although the attack vector is limited (a static site without user-supplied mermaid input),
+the platform must take an explicit decision (patch / pin / accept risk) and document it
+for transparency. Source: CVE-2026-4800, CVE-2026-2950 (public advisories as of 2026-04-27).
 
 ## User stories
 

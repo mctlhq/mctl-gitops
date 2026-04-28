@@ -1,65 +1,64 @@
 # Design: go-github-v85-authz-fix
 
-## Текущее состояние
+## Current state
 
-`go.mod` содержит `github.com/google/go-github/v68 v68.x.x`. Все файлы, работающие с
-GitHub API, импортируют `github.com/google/go-github/v68/github`. Клиент используется
-в `internal/skill/builtin/` (как минимум PR-creation skill) и в HTTP-обработчике
-токен-инициализации. Согласно `context/architecture.md`, используется **Google/go-github v68**
-для открытия PR с фиксами в `mctlhq/mctl-gitops`.
+`go.mod` contains `github.com/google/go-github/v68 v68.x.x`. All files dealing with the
+GitHub API import `github.com/google/go-github/v68/github`. The client is used in
+`internal/skill/builtin/` (at minimum the PR-creation skill) and in the token-init HTTP
+handler. According to `context/architecture.md`, **Google/go-github v68** is used to open
+PRs with fixes in `mctlhq/mctl-gitops`.
 
-## Предлагаемое решение
+## Proposed solution
 
-Апгрейд в три фазы:
+A three-phase upgrade:
 
-### Фаза 1 — Обновить go.mod
+### Phase 1 — Update go.mod
 ```diff
 -require github.com/google/go-github/v68 v68.x.x
 +require github.com/google/go-github/v85 v85.0.0
 ```
-Запустить `go mod tidy`.
+Run `go mod tidy`.
 
-### Фаза 2 — Переписать импорты
-Все строки вида:
+### Phase 2 — Rewrite imports
+All lines of the form:
 ```go
 import "github.com/google/go-github/v68/github"
 ```
-заменить на:
+are replaced with:
 ```go
 import "github.com/google/go-github/v85/github"
 ```
-Выполняется автоматически командой:
+Done automatically with the command:
 ```bash
 find . -name '*.go' | xargs sed -i 's|go-github/v68|go-github/v85|g'
 ```
 
-### Фаза 3 — Устранить breaking changes
-Задокументированные breaking changes между v68 и v85:
-- `MarkThreadDone` — возвращаемый тип изменён; если используется — адаптировать.
-- Custom Organization Role API — изменились типы; проверить `Audit` на использование.
-- Прочие breaking changes — выявляются через `go build ./...` на шаге компиляции.
+### Phase 3 — Address breaking changes
+Documented breaking changes between v68 and v85:
+- `MarkThreadDone` — return type changed; if used, adapt.
+- Custom Organization Role API — types changed; check `Audit` for usage.
+- Other breaking changes — surfaced via `go build ./...` at the compile step.
 
-Cross-host redirect rejection активируется автоматически в v85 — дополнительного кода
-не требуется. Можно добавить тест на поведение при редиректе (см. tasks.md T2).
+Cross-host redirect rejection is enabled automatically in v85 — no extra code required.
+A test for redirect behaviour can be added (see tasks.md T2).
 
-## Альтернативы
+## Alternatives
 
-| Вариант | Почему отброшен |
+| Option | Why dropped |
 |---|---|
-| Остаться на v68, вручную настроить `http.Client` с кастомной `CheckRedirect` | Высокий maintenance overhead; при следующем апгрейде конфликт конфигураций; не получаем будущие security-патчи go-github. |
-| Поэтапный апгрейд через промежуточные версии (v68 → v75 → v85) | Go modules поддерживают прямой переход; промежуточные версии только увеличивают риск. |
-| Переключиться на прямые GitHub REST API вызовы без библиотеки | Полная потеря типизации и будущих security-патчей; высокий Effort; противоречит существующей архитектуре. |
+| Stay on v68 and configure `http.Client` with a custom `CheckRedirect` manually | High maintenance overhead; conflict of configurations on the next upgrade; misses future go-github security patches. |
+| Stepwise upgrade through intermediate versions (v68 → v75 → v85) | Go modules support a direct jump; intermediate versions only add risk. |
+| Switch to direct GitHub REST API calls without a library | Total loss of typing and future security patches; high effort; conflicts with the existing architecture. |
 
-## Влияние на платформу
+## Platform impact
 
-- **Migration**: изменения в go.mod и импортах — чисто в коде mctl-agent, ничего
-  в GitOps манифестах или CRD.
-- **Backward compatibility**: runtime поведение PR-creation не меняется; меняется только
-  поведение при аномальном cross-host redirect (теперь возвращает ошибку вместо следования).
-- **Resource impact**: библиотека client-side, нет роста потребления памяти. Нейтрально
-  для `labs`.
-- **Риски и митигации**:
-  - *Риск*: неизвестные breaking changes между v68 и v85 (17 мажорных версий).
-  - *Митигация*: `go build ./...` на CI выявит все compile-time ошибки; полный `go test ./...`
-    выявит runtime-регрессии. Сделать feature-ветку, пройти все тесты до merge.
-  - *Откат*: revert коммита в git → пересборка образа → обновление тега в GitOps.
+- **Migration**: changes are confined to go.mod and imports — purely in mctl-agent code,
+  nothing in GitOps manifests or CRDs.
+- **Backward compatibility**: runtime PR-creation behaviour does not change; only the
+  behaviour on an anomalous cross-host redirect changes (now returns an error instead of following).
+- **Resource impact**: client-side library, no memory growth. Neutral for `labs`.
+- **Risks and mitigations**:
+  - *Risk*: unknown breaking changes between v68 and v85 (17 major versions).
+  - *Mitigation*: `go build ./...` in CI surfaces all compile-time errors; a full
+    `go test ./...` surfaces runtime regressions. Use a feature branch and pass all tests before merge.
+  - *Rollback*: revert the commit in git → rebuild the image → update the tag in GitOps.

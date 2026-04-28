@@ -1,12 +1,13 @@
-# Обновление Go toolchain до 1.26.2
+# Upgrade Go toolchain to 1.26.2
 
-## Контекст
-mctl-agent собирается на Go 1.24. Релиз Go 1.26.2 (2026-04-07) содержит security-фиксы
-в `crypto/tls`, `crypto/x509`, `html/template` и пакете `os`. Каждое исходящее соединение
-агента с GitHub API и Anthropic API проходит через TLS — уязвимости в crypto/tls напрямую
-затрагивают основной operational path. Текущий toolchain отстаёт на два minor-релиза, что
-накапливает CVE-долг в стандартной библиотеке. Дополнительно Go 1.26.0 включил Green Tea GC
-по умолчанию, снижающий GC overhead на 10–40% без роста потребления памяти.
+## Context
+mctl-agent is built on Go 1.24. The Go 1.26.2 release (2026-04-07) contains security
+fixes in `crypto/tls`, `crypto/x509`, `html/template`, and the `os` package. Every
+outbound connection from the agent to the GitHub API and the Anthropic API goes through
+TLS — vulnerabilities in crypto/tls directly affect the main operational path. The
+current toolchain is two minor releases behind, accumulating CVE debt in the standard
+library. Additionally, Go 1.26.0 enabled Green Tea GC by default, reducing GC overhead by
+10–40% without an increase in memory consumption.
 
 ## User stories
 
@@ -27,6 +28,6 @@ mctl-agent собирается на Go 1.24. Релиз Go 1.26.2 (2026-04-07) 
 
 ## Out of scope
 
-- Изменения в Go-коде приложения (только тулчейн).
-- Апгрейд сторонних Go-зависимостей (chi, go-github и др.) — отдельные proposals.
-- Изменения в CRD или GitOps-манифестах.
+- Application code changes (toolchain only).
+- Upgrade of third-party Go dependencies (chi, go-github etc.) — separate proposals.
+- Changes to CRDs or GitOps manifests.

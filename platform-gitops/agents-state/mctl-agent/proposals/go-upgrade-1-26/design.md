@@ -1,42 +1,42 @@
 # Design: go-upgrade-1-26
 
-## Текущее состояние
+## Current state
 
-Согласно `context/architecture.md` и `context/current-version.md`, mctl-agent v1.5.0 собирается
-на **Go 1.24**. В `go.mod` директива `go 1.24`, Dockerfile использует базовый образ
-`golang:1.24`. Go является single-binary приложением без CGO (pure-Go SQLite через modernc.org).
-Актуальный стабильный релиз — **Go 1.26.2** (2026-04-07).
+According to `context/architecture.md` and `context/current-version.md`, mctl-agent v1.5.0
+is built with **Go 1.24**. In `go.mod` the directive `go 1.24` is set, the Dockerfile uses
+the base image `golang:1.24`. Go is a single-binary application without CGO (pure-Go
+SQLite via modernc.org). The current stable release is **Go 1.26.2** (2026-04-07).
 
-## Предлагаемое решение
+## Proposed solution
 
-Минимальные изменения в трёх местах:
+Minimal changes in three places:
 
-1. **`go.mod`**: изменить директиву `go 1.24` → `go 1.26.2`.
-2. **`Dockerfile`** (build stage): заменить `FROM golang:1.24` → `FROM golang:1.26.2-alpine`
-   (или `-bookworm` если используется Debian).
-3. **CI workflow** (если версия Go пинится явно, например в `.github/workflows/*.yml` или
-   ArgoCD ApplicationSet): обновить поле `go-version`.
+1. **`go.mod`**: change the directive `go 1.24` → `go 1.26.2`.
+2. **`Dockerfile`** (build stage): replace `FROM golang:1.24` → `FROM golang:1.26.2-alpine`
+   (or `-bookworm` if Debian is used).
+3. **CI workflow** (if the Go version is pinned explicitly, e.g. in `.github/workflows/*.yml`
+   or in an ArgoCD ApplicationSet): update the `go-version` field.
 
-Запустить `go mod tidy` — убедиться, что нет несовместимостей с зависимостями.
-Запустить полный `go test ./...`.
+Run `go mod tidy` — confirm there are no incompatibilities with dependencies.
+Run a full `go test ./...`.
 
-Go гарантирует backwards compatibility для кода, поэтому изменений в логике приложения
-не ожидается. Green Tea GC включается автоматически — никаких env-переменных не требуется.
+Go guarantees backward compatibility for code, so no application-logic changes are expected.
+Green Tea GC is enabled automatically — no env variables needed.
 
-## Альтернативы
+## Alternatives
 
-| Вариант | Почему отброшен |
+| Option | Why dropped |
 |---|---|
-| Остаться на Go 1.24 патч-серии | Go не предоставляет LTS-патчи для устаревших minor-версий; security-фиксы backport'ятся только в текущую minor. 1.24.x больше не получает обновлений безопасности. |
-| Обновиться до Go 1.25 | Пропущена, т.к. 1.25 уже не актуальна. 1.26.2 является текущим стабильным. Дополнительная попытка нет смысла. |
-| Обновить только CI, не Dockerfile | Сборочный образ в production останется уязвимым; нужна единая версия везде. |
+| Stay on the Go 1.24 patch series | Go does not provide LTS patches for retired minor versions; security fixes are backported only to the current minor. 1.24.x no longer receives security updates. |
+| Upgrade to Go 1.25 | Skipped because 1.25 is no longer current. 1.26.2 is the current stable. There is no point in an extra hop. |
+| Update only CI, not the Dockerfile | The build image in production stays vulnerable; a single version is needed everywhere. |
 
-## Влияние на платформу
+## Platform impact
 
-- **Migration**: только файлы конфигурации сборки (go.mod, Dockerfile, CI YAML).
-  Код приложения не меняется.
-- **Backward compatibility**: Go 1 compatibility promise гарантирует полную совместимость.
-- **Resource impact**: Green Tea GC снижает GC overhead на 10–40% — потребление памяти
-  не растёт. Нейтрально для тенанта `labs` (близкого к memory limit).
-- **Риски и митигации**: минимальные. Риск — редкое изменение в toolchain, нарушающее
-  build. Митигация — `go test ./...` в CI перед merge. Откат — revert go.mod + Dockerfile.
+- **Migration**: only build configuration files (go.mod, Dockerfile, CI YAML).
+  Application code is unchanged.
+- **Backward compatibility**: the Go 1 compatibility promise guarantees full compatibility.
+- **Resource impact**: Green Tea GC reduces GC overhead by 10–40% — memory consumption
+  does not grow. Neutral for the `labs` tenant (close to its memory limit).
+- **Risks and mitigations**: minimal. Risk — a rare toolchain change breaks the build.
+  Mitigation — `go test ./...` in CI before merge. Rollback — revert go.mod + Dockerfile.

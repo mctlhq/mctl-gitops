@@ -1,20 +1,20 @@
 # Tasks: vue-patch-3-5-33
 
-- [ ] 1. Проверить, указан ли `vue` явно в `package.json` или разрешается транзитивно через Nuxt. — DoD: зафиксирован способ управления версией vue.
-- [ ] 2. Обновить `vue` до `"^3.5.33"` явно (или через `npm update vue` / `pnpm update vue`) и пересобрать lockfile. — DoD: lockfile содержит vue@3.5.33, нет конфликтов peer-зависимостей.
-- [ ] 3. Запустить `nuxt build` и проверить отсутствие ошибок. — DoD: exit code 0, нет новых предупреждений Vue.
-- [ ] 4. Создать PR, смержить, задеплоить. — DoD: prod работает корректно.
+- [ ] 1. Determine whether `vue` is specified explicitly in `package.json` or resolved transitively through Nuxt. — DoD: the version-management approach for vue is captured.
+- [ ] 2. Update `vue` to `"^3.5.33"` explicitly (or via `npm update vue` / `pnpm update vue`) and regenerate the lockfile. — DoD: the lockfile contains vue@3.5.33, no peer-dependency conflicts.
+- [ ] 3. Run `nuxt build` and confirm there are no errors. — DoD: exit code 0, no new Vue warnings.
+- [ ] 4. Open a PR, merge, deploy. — DoD: prod works correctly.
 
-## Тесты
+## Tests
 
-- [ ] T1. `nuxt build` завершается с exit code 0.
-- [ ] T2. В браузере на `mctl.ai` — нет Vue-предупреждений в DevTools Console.
-- [ ] T3. Форма регистрации тенанта (`/`) корректно валидируется (vee-validate + yup не сломались).
+- [ ] T1. `nuxt build` finishes with exit code 0.
+- [ ] T2. In a browser at `mctl.ai` — no Vue warnings in DevTools Console.
+- [ ] T3. The tenant registration form (`/`) validates correctly (vee-validate + yup are not broken).
 
-## Откат
+## Rollback
 
-Вернуть предыдущую версию `vue` в `package.json`, перегенерировать lockfile, пересобрать и задеплоить. Занимает менее 5 минут — изолированный патч.
+Restore the previous `vue` version in `package.json`, regenerate the lockfile, rebuild and deploy. Takes under 5 minutes — isolated patch.
 
-## Примечание
+## Note
 
-Если обновление Nuxt до 4.4.2 (proposal `nuxt-upgrade-4-4-2`) уже включает Vue 3.5.33 как транзитивную зависимость, данный proposal можно считать поглощённым и закрыть без отдельного PR.
+If the Nuxt upgrade to 4.4.2 (proposal `nuxt-upgrade-4-4-2`) already includes Vue 3.5.33 as a transitive dependency, this proposal can be considered subsumed and closed without a separate PR.
