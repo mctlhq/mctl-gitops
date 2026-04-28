@@ -79,6 +79,16 @@ spec:
             template: clone-gitops
         - - name: implement
             template: run-implementer
+            # run_implementer.py writes .status.yaml updates (in-progress →
+            # implemented/error) to the worktree BEFORE any failure that may
+            # crash the step. Without continueOn, Argo would skip commit-and-push
+            # on non-zero exit, those updates would never persist back to
+            # mctl-gitops main, and the next run would reprocess the same
+            # proposal — duplicate PR attempts. Letting commit run unconditionally
+            # makes the status durable; commit-and-push already handles the
+            # "no diff" case via `git diff --cached --quiet`.
+            continueOn:
+              failed: true
         - - name: commit
             template: commit-and-push
 
