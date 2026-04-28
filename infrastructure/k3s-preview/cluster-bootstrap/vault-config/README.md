@@ -35,6 +35,28 @@ vault token create \
 vault kv put secret/platform/backstage/vault-token token="<TOKEN>"
 ```
 
+### vault-backup
+Used by the `vault-backup` CronJob (namespace `vault`) to take a raft snapshot.
+No long-lived token: the CronJob authenticates via Kubernetes auth using the
+projected SA token of the `vault-backup` ServiceAccount.
+
+```bash
+# 1. Policy
+vault policy write vault-backup vault-policy-vault-backup.hcl
+
+# 2. Kubernetes auth role binding the vault-backup SA to the policy.
+#    Short TTL is fine — the CronJob only needs the token for one snapshot.
+vault write auth/kubernetes/role/vault-backup \
+  bound_service_account_names=vault-backup \
+  bound_service_account_namespaces=vault \
+  policies=vault-backup \
+  ttl=10m
+```
+
+After both commands run, the CronJob is self-sufficient and rotates auth on
+every run. The legacy static token at `secret/platform/vault/backup-token`
+can be deleted once the next scheduled run succeeds.
+
 ## Vault Secret Structure
 
 ```
