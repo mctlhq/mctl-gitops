@@ -14,12 +14,19 @@ imagePullSecrets:
   - name: ghcr-credentials
 service:
   port: 18789
+# beta.2 startup is CPU-bound: observed 1396m / 1500m saturation during
+# channel/sidecar bring-up, which throttles the Node event loop hard
+# enough that /healthz times out > 15s and kubelet kills the container
+# on startup probe. Bumping the CPU ceiling so the burst fits.
+# Capped at 2000m by the admins tenant LimitRange max (see
+# tenants/admins/values.yaml:27). Raising the LimitRange would also
+# require lifting the namespace ResourceQuota (used 4300m / 5000m).
 resources:
   requests:
     cpu: 250m
     memory: 768Mi
   limits:
-    cpu: 1500m
+    cpu: 2000m
     memory: 2560Mi
 # Recreate avoids quota deadlocks for single-pod tenant deployments.
 strategy:
@@ -51,8 +58,8 @@ probes:
     port: http
     initialDelaySeconds: 5
     periodSeconds: 5
-    timeoutSeconds: 3
-    failureThreshold: 36           # 5 + 36*5 = 185s — 2.4× current ~78s startup
+    timeoutSeconds: 10            # beta.2 stalls /healthz past 3s during channel init
+    failureThreshold: 60           # 5 + 60*5 = 305s; ~78s plugin install + ~120s post-ready stabilization headroom
   readiness:
     path: /readyz
     port: http
