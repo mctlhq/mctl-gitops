@@ -100,7 +100,7 @@ spec:
     # ── 2. Run mctl-agents orchestrator with state mounted ────────────────
     - name: run-orchestrator
       container:
-        image: ghcr.io/mctlhq/mctl-agents:1.2.0
+        image: ghcr.io/mctlhq/mctl-agents:1.3.0
         imagePullPolicy: IfNotPresent
         # Explicit command + args so Argo's emissary executor doesn't need
         # to introspect the registry for ENTRYPOINT/CMD.
@@ -134,7 +134,7 @@ spec:
                 key: mctl-token
                 optional: true
           - name: SERVICE_AGENT_BUDGET_USD
-            value: "1.50"
+            value: "5.00"
           - name: MENTOR_BUDGET_USD
             value: "2.00"
         resources:
