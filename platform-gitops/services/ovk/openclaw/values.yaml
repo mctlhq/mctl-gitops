@@ -40,23 +40,32 @@ env:
   OPENCLAW_CONFIG_PATH: /config-rw/openclaw.json
   OPENCLAW_OPENAI_CODEX_PORTAL_CALLBACK_URL: "https://app.mctl.ai/api/oidc-provider/openai-codex/callback"
   OPENCLAW_OPENAI_CODEX_CLIENT_ID: ""
+# Probe tuning — k8s defaults (timeoutSeconds=1, failureThreshold=3) are too
+# tight for this image: gateway plugin install + first /healthz response can
+# stall the Node event loop past 1s. Explicit timeoutSeconds + failureThreshold
+# here. Synced with admins/labs openclaw values.
 probes:
   startup:
     path: /healthz
     port: http
     initialDelaySeconds: 5
     periodSeconds: 5
-    failureThreshold: 24
+    timeoutSeconds: 3
+    failureThreshold: 36
   readiness:
     path: /readyz
     port: http
     initialDelaySeconds: 10
     periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
   liveness:
     path: /healthz
     port: http
-    initialDelaySeconds: 30
-    periodSeconds: 20
+    initialDelaySeconds: 60
+    periodSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 5
 envFrom:
   - secretRef:
       name: ovk-openclaw-db-creds
