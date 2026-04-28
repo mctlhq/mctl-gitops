@@ -1,16 +1,16 @@
-# Закрыть CVE-2026-32237: утечка серверных env-переменных через dry-run endpoint
+# Close CVE-2026-32237: server env-variable leak via the dry-run endpoint
 
-## Контекст
-CVE-2026-32237 затрагивает `plugin-scaffolder-backend` версий 3.1.0–3.1.4 (исключая
-3.1.1+). Аутентифицированный пользователь с правом на dry-run шаблонов получает в ответе
-endpoint'а полные значения серверных переменных среды (Vault token, Postgres DSN, GitHub
-App credentials) из-за неполной редакции вложенных JSON-объектов. В mctl-portal эти
-секреты смонтированы через ExternalSecret и критически важны для безопасности платформы.
+## Context
+CVE-2026-32237 affects `plugin-scaffolder-backend` versions 3.1.0–3.1.4 (excluding 3.1.1+).
+An authenticated user with template dry-run permission receives the full values of
+server-side environment variables in the endpoint response (Vault token, Postgres DSN,
+GitHub App credentials) due to incomplete redaction of nested JSON objects. In mctl-portal
+those secrets are mounted via ExternalSecret and are critical for platform security.
 
-Примечательно, что патч для CVE-2026-32237 входит в тот же релиз `plugin-scaffolder-backend`
-3.1.1+, что закрывает CVE-2026-24046 (scaffolder-path-traversal). Оба CVE могут и должны
-быть закрыты одним PR, что снижает операционную нагрузку и минимизирует количество
-production-деплоев.
+Notably, the patch for CVE-2026-32237 is in the same `plugin-scaffolder-backend` 3.1.1+
+release that closes CVE-2026-24046 (scaffolder-path-traversal). Both CVEs can and should
+be closed by a single PR, reducing operational load and minimising the number of
+production deploys.
 
 ## User stories
 - AS a platform engineer I WANT the scaffolder dry-run endpoint to redact all server-side
@@ -37,8 +37,8 @@ production-деплоев.
   variables (non-secret).
 
 ## Out of scope
-- Ограничение прав на вызов dry-run endpoint (RBAC) — отдельная тема.
-- Ротация уже скомпрометированных секретов (если утечка произошла до патча) — за рамками
-  данного предложения; требует отдельного incident response.
-- Изменения в тенанте `labs`.
-- Аудит кастомных плагинов на предмет похожих редакционных уязвимостей.
+- Restricting permissions to call the dry-run endpoint (RBAC) — separate topic.
+- Rotation of already-compromised secrets (if the leak occurred before the patch) — out
+  of scope for this proposal; requires a separate incident response.
+- Changes in the `labs` tenant.
+- Audit of custom plugins for similar redaction vulnerabilities.

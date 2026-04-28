@@ -1,74 +1,76 @@
 # Design: helm-security-patch
 
-## Текущее состояние
-Согласно `context/architecture.md`, платформа использует Helm charts (base-service, openclaw,
-custom), ArgoCD ApplicationSet для генерации Apps и `helm-charts/base-service` как generic chart.
-Helm бинарный файл присутствует в нескольких местах:
-1. Внутри образа ArgoCD (используется для рендеринга Helm-based Applications).
-2. В CI/CD пайплайнах (Argo Workflow steps, Backstage scaffolder).
-3. Локально у platform engineers (вне scope этого предложения — мануальное обновление).
+## Current state
+According to `context/architecture.md`, the platform uses Helm charts (base-service, openclaw,
+custom), an ArgoCD ApplicationSet for App generation, and `helm-charts/base-service` as the
+generic chart. The Helm binary lives in several places:
+1. Inside the ArgoCD image (used to render Helm-based Applications).
+2. In CI/CD pipelines (Argo Workflow steps, Backstage scaffolder).
+3. Locally on platform engineers' machines (out of scope for this proposal — manual updates).
 
-Текущие версии v4.0.0–v4.1.3 подвержены GHSA-vmx8-mqv2-9gmg, GHSA-hr2v-4r36-88hr,
+Current versions v4.0.0–v4.1.3 are exposed to GHSA-vmx8-mqv2-9gmg, GHSA-hr2v-4r36-88hr,
 GHSA-q5jf-9vfq-h4h7.
 
-## Предлагаемое решение
-Обновление Helm до v4.1.4 во всех платформенных точках использования.
+## Proposed solution
+Update Helm to v4.1.4 across all platform usage points.
 
-**Шаг 1: ArgoCD**
-ArgoCD включает Helm как часть своего официального образа. Необходимо проверить, какая версия
-ArgoCD содержит Helm v4.1.4, и обновить тег образа ArgoCD в `platform-gitops/apps/`. Если
-текущая версия ArgoCD уже выпустила patch с Helm v4.1.4 — достаточно обновить тег. Если нет —
-ждать upstream ArgoCD patch или использовать custom init-container с патченым Helm (нежелательно).
+**Step 1: ArgoCD**
+ArgoCD bundles Helm as part of its official image. Determine which ArgoCD version contains
+Helm v4.1.4 and update the ArgoCD image tag in `platform-gitops/apps/`. If the current
+ArgoCD version has already shipped a patch with Helm v4.1.4 — updating the tag suffices. If
+not — wait for the upstream ArgoCD patch or use a custom init-container with patched Helm
+(undesirable).
 
-**Шаг 2: Argo Workflow steps**
-Workflow steps, которые вызывают `helm` CLI (например build/package steps), должны использовать
-образ с Helm v4.1.4. Обновить image reference в соответствующих ClusterWorkflowTemplate в
+**Step 2: Argo Workflow steps**
+Workflow steps that invoke the `helm` CLI (e.g. build/package steps) must use an image with
+Helm v4.1.4. Update the image references in the corresponding ClusterWorkflowTemplate in
 `platform-gitops/argo-workflows/cluster-templates/`.
 
-**Шаг 3: Backstage scaffolder templates**
-Если scaffolder использует helm CLI в skeleton actions — обновить образ или pinned version в
+**Step 3: Backstage scaffolder templates**
+If the scaffolder uses helm CLI in skeleton actions — update the image or pinned version in
 `platform-gitops/backstage-templates/`.
 
-Все изменения оформляются как git commit в mctl-gitops; ArgoCD применяет через App-of-Apps.
-ADR-0001 (App-of-Apps pattern) не нарушается.
+All changes are captured as a git commit in mctl-gitops; ArgoCD applies via App-of-Apps.
+ADR-0001 (App-of-Apps pattern) is preserved.
 
-## Альтернативы
+## Alternatives
 
-### 1. Блокировать chart extraction через OPA/Gatekeeper admission webhook
-Ввести политику, которая проверяет имена chart'ов перед применением. Не закрывает уязвимость
-в самом Helm (extraction происходит до admission), не закрывает plugin уязвимости.
-Отброшено: неполное покрытие.
+### 1. Block chart extraction via OPA/Gatekeeper admission webhook
+Introduce a policy that validates chart names before applying. Does not close the vulnerability
+in Helm itself (extraction happens before admission), does not close the plugin vulnerabilities.
+Dropped: incomplete coverage.
 
-### 2. Отключить плагины Helm на уровне конфигурации
-Отключить возможность установки Helm плагинов в CI и ArgoCD окружении. Частично снижает риск
-GHSA-vmx8-mqv2-9gmg и GHSA-q5jf-9vfq-h4h7, но не закрывает path traversal при chart extraction.
-Отброшено: не является полным исправлением, плагины могут понадобиться.
+### 2. Disable Helm plugins at the configuration level
+Disable plugin installation in CI and the ArgoCD environment. Partially reduces the risk of
+GHSA-vmx8-mqv2-9gmg and GHSA-q5jf-9vfq-h4h7, but does not close path traversal in chart
+extraction. Dropped: not a complete fix, plugins may be needed.
 
-### 3. Обновить только ArgoCD, пропустить CI образы
-Минимизировать scope — обновить Helm только в ArgoCD. Path traversal при chart extraction
-остаётся возможным в CI workflow steps. Отброшено: неполное покрытие attack surface.
+### 3. Update only ArgoCD, skip the CI images
+Minimise scope — update Helm only in ArgoCD. Path traversal during chart extraction stays
+possible in CI workflow steps. Dropped: incomplete attack-surface coverage.
 
-## Влияние на платформу
+## Platform impact
 
 ### Migration
-Нет миграции данных. Patch release (v4.1.4) декларирован без breaking changes. Существующие
-`values.yaml` и chart структуры остаются неизменными.
+No data migration. The patch release (v4.1.4) is declared as having no breaking changes.
+Existing `values.yaml` files and chart structures remain unchanged.
 
 ### Backward compatibility
-v4.1.4 полностью обратно совместим с v4.1.x. Все существующие Helm charts (`base-service` и
-кастомные) продолжат рендериться без изменений.
+v4.1.4 is fully backward compatible with v4.1.x. All existing Helm charts (`base-service`
+and custom ones) continue to render unchanged.
 
 ### Resource impact
-Обновление бинарного файла Helm не влияет на потребление CPU/памяти в runtime. Образы ArgoCD
-и workflow steps могут незначительно изменить размер. Тенант `labs` не затронут напрямую:
-ArgoCD и Argo Workflows работают в тенанте `admins`. Деплои в тенант `labs` через ArgoCD
-продолжатся штатно.
+Updating the Helm binary does not affect runtime CPU/memory consumption. ArgoCD and workflow
+step images may change in size slightly. The `labs` tenant is not affected directly:
+ArgoCD and Argo Workflows run in the `admins` tenant. Deploys into the `labs` tenant via
+ArgoCD continue normally.
 
-### Риски и митигации
-- **Риск:** Версия ArgoCD, задеплоенная на платформе, ещё не выпустила patch с Helm v4.1.4.
-  **Митигация:** Проверить матрицу совместимости ArgoCD ↔ Helm; при необходимости дождаться
-  ближайшего ArgoCD patch release или использовать временный workaround с кастомным образом.
-- **Риск:** Workflow steps используют pinned образы, не управляемые через central values.
-  **Митигация:** Провести grep по `cluster-templates/` на предмет всех image references с Helm.
-- **Риск:** Регрессия в рендеринге Helm chart'ов после обновления.
-  **Митигация:** ArgoCD dry-run sync перед применением; наличие отката через git revert.
+### Risks and mitigations
+- **Risk:** The ArgoCD version deployed on the platform has not yet shipped a patch with
+  Helm v4.1.4.
+  **Mitigation:** Check the ArgoCD ↔ Helm compatibility matrix; if necessary, wait for the
+  next ArgoCD patch release or use a temporary workaround with a custom image.
+- **Risk:** Workflow steps use pinned images not managed via central values.
+  **Mitigation:** Grep `cluster-templates/` for all Helm-related image references.
+- **Risk:** Regression in Helm chart rendering after the upgrade.
+  **Mitigation:** ArgoCD dry-run sync before applying; rollback available via git revert.

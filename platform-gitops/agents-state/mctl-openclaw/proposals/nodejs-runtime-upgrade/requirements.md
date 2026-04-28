@@ -1,60 +1,61 @@
-# Обновление Node.js runtime до безопасной версии + аудит lockfile на malicious packages
+# Upgrade Node.js runtime to a safe version + audit lockfile for malicious packages
 
-## Контекст
+## Context
 
-Node.js January 2026 Security Release закрыл восемь CVE, из которых три имеют рейтинг High:
-CVE-2025-55131 (buffer non-zerofilled — утечка heap-данных через uninitialised buffers),
-CVE-2025-55130 (symlink bypass — обход symlink restrictions при file I/O операциях),
-CVE-2025-59465 (HTTP/2 DoS — resource exhaustion через crafted HTTP/2 запросы). Безопасные
-версии: v20.20.0+, v22.22.0+, v24.13.0+. Если базовый Docker образ openclaw использует
-Node.js ниже этих версий — все три вектора активны в production.
+The Node.js January 2026 Security Release closed eight CVEs, three of them rated High:
+CVE-2025-55131 (buffer non-zerofilled — heap data leak via uninitialised buffers),
+CVE-2025-55130 (symlink bypass — circumvents symlink restrictions during file I/O),
+CVE-2025-59465 (HTTP/2 DoS — resource exhaustion via crafted HTTP/2 requests). Safe versions:
+v20.20.0+, v22.22.0+, v24.13.0+. If the openclaw base Docker image uses Node.js below these
+versions — all three vectors are active in production.
 
-Параллельно в конце 2025 года раскрыты два malicious npm пакета: `lotusbail` (Baileys-форк,
-крадёт WhatsApp auth tokens, перехватывает сообщения, 56k+ downloads) и `discord.js-user`
-(GHSA-69r6-7h4f-9p7q, CVSS 9.8, эксфильтрирует Discord token). Оба могут присутствовать
-в транзитивных зависимостях через ошибочные package.json или typosquatting. Фокус данного
-proposal отличается от `npm-supply-chain-audit` (тот про poisoned пакеты как класс): здесь
-scope ограничен конкретными двумя известными пакетами + Node.js runtime bump в Dockerfile.
+In parallel, two malicious npm packages were disclosed in late 2025: `lotusbail` (a Baileys
+fork that steals WhatsApp auth tokens, intercepts messages, 56k+ downloads) and
+`discord.js-user` (GHSA-69r6-7h4f-9p7q, CVSS 9.8, exfiltrates the Discord token). Both can
+be present in transitive dependencies due to wrong package.json entries or typosquatting.
+The focus of this proposal differs from `npm-supply-chain-audit` (which is about poisoned
+packages as a class): here the scope is limited to those two specific known packages plus
+a Node.js runtime bump in the Dockerfile.
 
 ## User stories
 
-- AS a platform security engineer I WANT Docker базовый образ openclaw обновлён до Node.js
-  версии >= v22.22.0 SO THAT три High CVE из январского security release не активны
-  в production runtime
-- AS a platform operator I WANT CI-шаг `npm audit --audit-level=high` в pipeline образа
-  openclaw SO THAT новые High/Critical уязвимости в зависимостях блокируют сборку до
-  попадания в деплой
-- AS a security engineer I WANT автоматическую проверку lockfile на присутствие пакетов
-  `lotusbail` и `discord.js-user` SO THAT malicious supply-chain пакеты обнаруживаются
-  до деплоя в любой тенант
-- AS a labs tenant operator I WANT обновление Node.js runtime не увеличивало RAM потребление
-  SO THAT labs тенант не приближается к OOM после base image bump
+- AS a platform security engineer I WANT the openclaw Docker base image upgraded to a Node.js
+  version >= v22.22.0 SO THAT three High CVEs from the January security release are not
+  active in the production runtime
+- AS a platform operator I WANT the CI step `npm audit --audit-level=high` in the openclaw
+  image pipeline SO THAT new High/Critical dependency vulnerabilities block the build before
+  reaching deploy
+- AS a security engineer I WANT an automatic check of the lockfile for the presence of
+  `lotusbail` and `discord.js-user` SO THAT malicious supply-chain packages are caught before
+  a deploy to any tenant
+- AS a labs tenant operator I WANT the Node.js runtime upgrade not to increase RAM consumption
+  SO THAT the labs tenant does not approach OOM after the base image bump
 
 ## Acceptance criteria (EARS)
 
-- WHEN Docker образ openclaw собирается в CI THE SYSTEM SHALL использовать базовый образ
-  Node.js не ниже v22.22.0 LTS (или v20.20.0 / v24.13.0 в зависимости от выбранной LTS линейки)
-- WHEN CI собирает образ openclaw THE SYSTEM SHALL выполнять `npm audit --audit-level=high`
-  и завершать сборку с ошибкой если обнаружены уязвимости уровня High или Critical
-- WHEN CI собирает образ openclaw THE SYSTEM SHALL проверять `package-lock.json` на
-  присутствие имён `lotusbail` и `discord.js-user` (прямые и транзитивные зависимости)
-  и завершать сборку с ошибкой при обнаружении
-- IF обновление Node.js runtime вызывает несовместимость с кодом openclaw или его плагинами
-  THEN THE SYSTEM SHALL не продвигать образ в admins и ovk до устранения несовместимости
-- WHILE новый образ деплоится в labs THE SYSTEM SHALL не увеличивать потребление RAM пода
-  openclaw более чем на 20MB относительно baseline (Node.js minor bump, не major)
-- WHEN образ с обновлённым Node.js runtime задеплоен в labs THE SYSTEM SHALL пройти
-  restore-state probe в рамках штатного timeout (ADR 0002)
-- WHEN `npm audit` или grep на malicious пакеты обнаруживают проблему в CI THE SYSTEM SHALL
-  уведомлять команду через alert-канал и блокировать merge/deploy
+- WHEN the openclaw Docker image is built in CI THE SYSTEM SHALL use a Node.js base image
+  no older than v22.22.0 LTS (or v20.20.0 / v24.13.0 depending on the chosen LTS line)
+- WHEN CI builds the openclaw image THE SYSTEM SHALL run `npm audit --audit-level=high`
+  and fail the build if High or Critical vulnerabilities are found
+- WHEN CI builds the openclaw image THE SYSTEM SHALL inspect `package-lock.json` for the
+  presence of the names `lotusbail` and `discord.js-user` (direct and transitive dependencies)
+  and fail the build on detection
+- IF the Node.js runtime upgrade causes incompatibility with openclaw code or its plugins
+  THEN THE SYSTEM SHALL not promote the image to admins and ovk until the incompatibility is fixed
+- WHILE a new image is deployed in labs THE SYSTEM SHALL not increase the openclaw pod's RAM
+  consumption by more than 20MB compared to the baseline (Node.js minor bump, not major)
+- WHEN an image with the updated Node.js runtime is deployed in labs THE SYSTEM SHALL pass
+  the restore-state probe within the standard timeout (ADR 0002)
+- WHEN `npm audit` or the malicious-package grep detect an issue in CI THE SYSTEM SHALL
+  notify the team via the alert channel and block merge/deploy
 
 ## Out of scope
 
-- Обновление Node.js до major версии (v22 → v24) — требует отдельной валидации совместимости;
-  достаточно patch до безопасного minor в текущей LTS линейке
-- Широкий аудит всего supply chain (все потенциально malicious пакеты) — покрыто отдельным
-  proposal `npm-supply-chain-audit`
-- Обновление TypeScript до 6.x (нет security CVE, нет срочности)
-- Обновление Baileys, discord.js, node-slack-sdk (отдельные proposals по необходимости)
-- Изменения в конфигурации openclaw или skills
-- Изменение resource limits pods (если RAM-delta в норме)
+- Upgrading Node.js to a major version (v22 → v24) — requires a separate compatibility
+  validation; a patch to a safe minor on the current LTS line suffices
+- Wide audit of the entire supply chain (every potentially malicious package) — covered by the
+  separate `npm-supply-chain-audit` proposal
+- Upgrading TypeScript to 6.x (no security CVE, no urgency)
+- Upgrading Baileys, discord.js, node-slack-sdk (separate proposals as needed)
+- Changes to openclaw configuration or skills
+- Changes to pod resource limits (if the RAM delta is within bounds)

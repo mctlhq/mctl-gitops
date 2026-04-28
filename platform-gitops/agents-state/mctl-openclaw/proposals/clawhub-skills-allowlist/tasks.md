@@ -1,26 +1,26 @@
 # Tasks: clawhub-skills-allowlist
 
-- [ ] 1. Инвентаризация текущих Layer 3 (remote) skills на всех трёх тенантах (ovk, labs, admins) — DoD: список всех зарегистрированных remote skill origins/URLs зафиксирован, легитимные origins определены и подтверждены operators'ами каждого тенанта
-- [ ] 2. Определить механизм enforcement allowlist в openclaw: нативный config vs ingress middleware (зависит от 1) — DoD: проверен upstream changelog и конфигурация openclaw на наличие встроенного allowlist-механизма для remote skills; выбран подход (config-based или middleware), зафиксировано решение
-- [ ] 3. Добавить поле `skills.remoteAllowlist` в Helm values schema и шаблон для каждого тенанта (зависит от 2) — DoD: поле добавлено в values schema с документацией; fail-closed дефолт (пустой список = deny-all) задан явно в шаблоне
-- [ ] 4. Реализовать enforcement allowlist в openclaw config или ingress middleware (зависит от 3) — DoD: при попытке зарегистрировать Layer 3 skill с origin не из allowlist API возвращает 403; при пустом allowlist все регистрации блокируются
-- [ ] 5. Заполнить allowlist для admins подтверждёнными origins из инвентаризации и задеплоить (зависит от 4) — DoD: manifests обновлены в mctl-gitops, PR прошёл review, ArgoCD применил конфиг, легитимные skills в admins работают
-- [ ] 6. Заполнить allowlist для labs подтверждёнными origins и задеплоить (зависит от 5) — DoD: аналогично admins; RAM не изменился (конфигурационное изменение)
-- [ ] 7. Заполнить allowlist для ovk подтверждёнными origins и задеплоить (зависит от 6) — DoD: аналогично; production клиент подтвердил работу всех используемых Layer 3 skills
-- [ ] 8. Добавить CI-шаг в mctl-gitops: проверка новых remote skill sources в PR diff (зависит от 3) — DoD: CI-скрипт добавлен, тест показывает блокировку PR с новым неодобренным origin и прохождение PR с origin, уже присутствующим в allowlist
-- [ ] 9. Задокументировать процесс одобрения нового skill-источника (allowlist update workflow) (зависит от 8) — DoD: инструкция для операторов добавлена в README или runbook; процесс включает security review и обновление allowlist в values.yaml
+- [ ] 1. Inventory the current Layer 3 (remote) skills in all three tenants (ovk, labs, admins) — DoD: a list of all registered remote skill origins/URLs is captured, legitimate origins are identified and confirmed by each tenant's operator
+- [ ] 2. Decide the allowlist enforcement mechanism in openclaw: native config vs ingress middleware (depends on 1) — DoD: the upstream changelog and openclaw configuration are reviewed for a built-in remote-skill allowlist; an approach (config-based or middleware) is chosen and the decision is captured
+- [ ] 3. Add the field `skills.remoteAllowlist` to the Helm values schema and template for each tenant (depends on 2) — DoD: the field is added to the values schema with documentation; the fail-closed default (empty list = deny-all) is set explicitly in the template
+- [ ] 4. Implement allowlist enforcement in the openclaw config or ingress middleware (depends on 3) — DoD: when registering a Layer 3 skill with an origin outside the allowlist the API returns 403; on an empty allowlist all registrations are blocked
+- [ ] 5. Populate the allowlist for admins with origins confirmed by inventory and deploy (depends on 4) — DoD: manifests are updated in mctl-gitops, the PR passes review, ArgoCD applies the config, legitimate skills in admins work
+- [ ] 6. Populate the allowlist for labs with confirmed origins and deploy (depends on 5) — DoD: same as admins; RAM is unchanged (configuration-only change)
+- [ ] 7. Populate the allowlist for ovk with confirmed origins and deploy (depends on 6) — DoD: same; the production client confirms all used Layer 3 skills work
+- [ ] 8. Add a CI step to mctl-gitops: detect new remote skill sources in the PR diff (depends on 3) — DoD: the CI script is added, a test demonstrates blocking a PR with a new unapproved origin and passing a PR with an origin already in the allowlist
+- [ ] 9. Document the new skill source approval process (allowlist update workflow) (depends on 8) — DoD: an operator-facing instruction is added to the README or runbook; the process includes a security review and an allowlist update in values.yaml
 
-## Тесты
-- [ ] T1. Попытаться зарегистрировать тестовый Layer 3 skill с произвольным URL `https://evil.example.com/skill` на каждом тенанте — ожидаемый результат: 403, skill не зарегистрирован
-- [ ] T2. Зарегистрировать тестовый Layer 3 skill с URL из allowlist тенанта — ожидаемый результат: 200, skill зарегистрирован и работает
-- [ ] T3. Проверить fail-closed: удалить allowlist из values тенанта (или задать пустой список) — ожидаемый результат: все попытки регистрации Layer 3 skills блокируются
-- [ ] T4. CI-тест: создать PR с новым origin в skill-манифесте, не добавив его в allowlist — ожидаемый результат: CI шаг падает с информативным сообщением
-- [ ] T5. CI-тест: создать PR с origin, уже присутствующим в allowlist — ожидаемый результат: CI шаг проходит
-- [ ] T6. Проверить что существующие легитимные Layer 3 skills на всех тенантах продолжают работать после включения allowlist
+## Tests
+- [ ] T1. Attempt to register a test Layer 3 skill with an arbitrary URL `https://evil.example.com/skill` on each tenant — expected: 403, the skill is not registered
+- [ ] T2. Register a test Layer 3 skill with a URL from the tenant's allowlist — expected: 200, the skill is registered and works
+- [ ] T3. Verify fail-closed: remove the allowlist from the tenant's values (or set it to an empty list) — expected: all Layer 3 skill registration attempts are blocked
+- [ ] T4. CI test: open a PR with a new origin in a skill manifest without adding it to the allowlist — expected: the CI step fails with an informative message
+- [ ] T5. CI test: open a PR with an origin already in the allowlist — expected: the CI step passes
+- [ ] T6. Verify that existing legitimate Layer 3 skills on all tenants continue to work after enabling the allowlist
 
-## Откат
-Если allowlist вызвал неожиданную блокировку легитимных skills в production (ovk):
-1. Временно расширить allowlist: добавить заблокированный origin в `values.yaml` ovk и задеплоить через gitops — изменение применяется без рестарта (hot-reload)
-2. Если hot-reload не сработал: выполнить rolling restart пода ovk (restore-state probe обеспечит восстановление сессий из S3)
-3. Провести инвентаризацию и добавить пропущенный origin в allowlist permanently
-4. Если enforcement механизм сломан и нужно полностью отключить allowlist: удалить поле `skills.remoteAllowlist` из values или выставить `null` — возврат к поведению до внедрения (без ограничений)
+## Rollback
+If the allowlist causes an unexpected block of legitimate skills in production (ovk):
+1. Temporarily widen the allowlist: add the blocked origin to ovk's `values.yaml` and deploy via gitops — the change applies without a restart (hot-reload)
+2. If hot-reload does not take effect: perform a rolling restart of the ovk pod (the restore-state probe will recover sessions from S3)
+3. Inventory and add the missing origin to the allowlist permanently
+4. If the enforcement mechanism is broken and the allowlist must be fully disabled: remove the `skills.remoteAllowlist` field from values or set it to `null` — returns to pre-introduction behaviour (no restrictions)

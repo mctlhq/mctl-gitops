@@ -1,17 +1,18 @@
-# Helm Security Patch: обновление до v4.1.4
+# Helm Security Patch: upgrade to v4.1.4
 
-## Контекст
-В Helm выявлено три уязвимости в версиях v4.0.0–v4.1.3. GHSA-vmx8-mqv2-9gmg допускает запись
-произвольных файлов за пределами директории плагина при установке плагина. GHSA-hr2v-4r36-88hr
-позволяет выполнить path traversal при распаковке chart'а через специально подготовленное поле
-`name` в `Chart.yaml` с dot-segment (например `../`). GHSA-q5jf-9vfq-h4h7 позволяет обойти
-проверку подписи плагина — плагины устанавливаются без `.prov` файла даже при включённой
-верификации.
+## Context
+Three vulnerabilities have been disclosed against Helm in versions v4.0.0–v4.1.3.
+GHSA-vmx8-mqv2-9gmg permits arbitrary file writes outside the plugin directory during plugin
+installation. GHSA-hr2v-4r36-88hr enables path traversal during chart extraction via a
+specially crafted `name` field in `Chart.yaml` containing a dot-segment (e.g. `../`).
+GHSA-q5jf-9vfq-h4h7 permits bypassing the plugin signature check — plugins are installed
+without a `.prov` file even when verification is enabled.
 
-Платформа использует Helm для `base-service` chart и ApplicationSet-based деплоев. Helm CLI также
-задействован в ArgoCD и в процессах scaffolding. Уязвимость path traversal при chart extraction
-особенно критична в контексте GitOps: вредоносный chart в репозитории может привести к записи
-файлов на узел. Исправление выпущено в v4.1.4 (patch release, no breaking changes).
+The platform uses Helm for the `base-service` chart and ApplicationSet-based deploys. The
+Helm CLI is also involved in ArgoCD and scaffolding processes. The path traversal during
+chart extraction is especially critical in a GitOps context: a malicious chart in the
+repository can lead to arbitrary file writes on the node. The fix is shipped in v4.1.4
+(patch release, no breaking changes).
 
 ## User stories
 - AS a platform engineer I WANT Helm upgraded to v4.1.4 SO THAT chart extraction cannot be exploited for path traversal attacks against cluster nodes or the ArgoCD server filesystem.
@@ -27,7 +28,7 @@
 - IF the Helm binary version in the ArgoCD image is older than v4.1.4 THEN THE SYSTEM SHALL not be used for chart rendering until the image is updated.
 
 ## Out of scope
-- Обновление Helm мажорной версии (v4.x → v5.x).
-- Изменение структуры `base-service` chart или values.yaml тенантов.
-- Аудит существующих chart'ов на предмет подозрительных имён в Chart.yaml (отдельная задача).
-- Обновление ArgoCD до новой мажорной версии ради получения нового Helm (Helm обновляется в рамках существующей ArgoCD версии или патч-версии ArgoCD с новым Helm).
+- Helm major version upgrade (v4.x → v5.x).
+- Changes to the `base-service` chart structure or tenant `values.yaml`.
+- Audit of existing charts for suspicious names in Chart.yaml (separate task).
+- Upgrade of ArgoCD to a new major version solely to obtain the new Helm (Helm is upgraded within the existing ArgoCD version or an ArgoCD patch release that ships the new Helm).

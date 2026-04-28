@@ -1,50 +1,51 @@
 # Tasks: go-github-v85-authz-fix
 
-- [ ] 1. Аудит использования go-github в codebase —
-  DoD: список всех `.go`-файлов, импортирующих `go-github/v68`, и всех вызовов API
-  (`github.Client` методов), зафиксирован в комментарии к PR. Особо отмечены вызовы
-  `MarkThreadDone` и Custom Org Role API (known breaking changes).
+- [ ] 1. Audit go-github usage across the codebase —
+  DoD: a list of all `.go` files importing `go-github/v68` and all API calls
+  (`github.Client` methods) is captured in the PR description. Calls to `MarkThreadDone`
+  and the Custom Org Role API (known breaking changes) are explicitly flagged.
 
-- [ ] 2. Обновить `go.mod` (зависит от 1) —
-  DoD: `go.mod` содержит `github.com/google/go-github/v85`; `go mod tidy` завершается
-  без ошибок; `go.sum` обновлён.
+- [ ] 2. Update `go.mod` (depends on 1) —
+  DoD: `go.mod` contains `github.com/google/go-github/v85`; `go mod tidy` finishes without
+  errors; `go.sum` is updated.
 
-- [ ] 3. Заменить все импорты `v68` → `v85` (зависит от 2) —
-  DoD: `grep -r "go-github/v68" .` возвращает пустой результат в .go-файлах;
-  все импорты переключены на v85.
+- [ ] 3. Replace all `v68` → `v85` imports (depends on 2) —
+  DoD: `grep -r "go-github/v68" .` returns no results in .go files; all imports are
+  switched to v85.
 
-- [ ] 4. Устранить breaking changes (зависит от 3) —
-  DoD: `go build ./...` завершается без ошибок; все изменения типов/сигнатур задокументированы
-  в commit message.
+- [ ] 4. Address breaking changes (depends on 3) —
+  DoD: `go build ./...` finishes without errors; all type/signature changes are documented
+  in the commit message.
 
-- [ ] 5. Запустить тест-сьют (зависит от 4) —
-  DoD: `go test ./... -race` — все тесты зелёные; нет новых race conditions.
+- [ ] 5. Run the test suite (depends on 4) —
+  DoD: `go test ./... -race` — all tests green; no new race conditions.
 
-- [ ] 6. Добавить тест на cross-host redirect rejection (зависит от 4) —
-  DoD: тест создаёт мок-сервер, который возвращает redirect на другой хост; убеждается,
-  что `github.Client` возвращает ошибку и NOT выполняет запрос к redirect-URL.
+- [ ] 6. Add a test for cross-host redirect rejection (depends on 4) —
+  DoD: the test creates a mock server that returns a redirect to a different host and
+  asserts that `github.Client` returns an error and does NOT issue the request to the
+  redirect URL.
 
-- [ ] 7. Интеграционный smoke-тест PR-creation (зависит от 5) —
-  DoD: тестовый алёрт `PodCrashLooping` проходит через полный pipeline → PR открывается
-  в mctl-gitops с корректным содержимым; никаких 401/403 от GitHub API.
+- [ ] 7. Integration smoke test for PR creation (depends on 5) —
+  DoD: a test alert `PodCrashLooping` flows through the full pipeline → a PR is opened in
+  mctl-gitops with the correct content; no 401/403 responses from the GitHub API.
 
-## Тесты
+## Tests
 
-- [ ] T1. `go test ./internal/skill/builtin/... -v` — все builtin skills компилируются
-  и тесты проходят с новой версией go-github.
-- [ ] T2. Cross-host redirect test (создаётся в задаче 6) — `go test ./... -run TestCrossHostRedirect`.
-- [ ] T3. `go vet ./...` — нет новых предупреждений.
-- [ ] T4. Staging deploy: образ с v85 задеплоен в admins/staging; в течение одного цикла
-  ротации токена (30 мин) проверить, что GitHub API вызовы успешны.
+- [ ] T1. `go test ./internal/skill/builtin/... -v` — all builtin skills compile and tests
+  pass with the new go-github version.
+- [ ] T2. Cross-host redirect test (created in task 6) — `go test ./... -run TestCrossHostRedirect`.
+- [ ] T3. `go vet ./...` — no new warnings.
+- [ ] T4. Staging deploy: image with v85 deployed in admins/staging; over one token
+  rotation cycle (30 min) verify GitHub API calls succeed.
 
-## Откат
+## Rollback
 
 ```bash
-# В репозитории mctl-agent:
+# In the mctl-agent repository:
 git revert <commit-sha-upgrade>
-# Пересобрать образ с v68
-# Обновить тег образа в GitOps манифесте admins-тенанта
+# Rebuild the image with v68
+# Update the image tag in the GitOps manifest of the admins tenant
 ```
 
-ArgoCD синхронизирует откат автоматически. GitHub token не затрагивается — ротация
-продолжается независимо от версии go-github.
+ArgoCD reconciles the rollback automatically. The GitHub token is unaffected — rotation
+continues independently of the go-github version.

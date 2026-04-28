@@ -1,26 +1,26 @@
-# Политика allowlist для external skills из ClawHub
+# Allowlist policy for external ClawHub skills
 
-## Контекст
-Активная кампания ClawHavoc разместила 341+ вредоносных skills в официальном ClawHub marketplace (зафиксировано в inbox/2026-04-27.md, источник: armosec.io). CVE пока не назначен, кампания продолжается. Платформа mctl-openclaw использует 3-layer skills архитектуру, где Layer 3 (remote/HTTP-delegated skills) регистрируется через REST API без ограничений на источник. Если хотя бы один тенант (ovk, labs, admins) устанавливал skills с ClawHub без верификации источника, вектор атаки уже открыт.
+## Context
+The active ClawHavoc campaign placed 341+ malicious skills in the official ClawHub marketplace (recorded in inbox/2026-04-27.md, source: armosec.io). No CVE has been assigned yet, the campaign is ongoing. The mctl-openclaw platform uses a 3-layer skills architecture, where Layer 3 (remote/HTTP-delegated skills) is registered via REST API without any restriction on source. If even one tenant (ovk, labs, admins) installed skills from ClawHub without source verification, the attack vector is already open.
 
-На данный момент в gitops-конфиге нет механизма, фиксирующего список разрешённых источников skills. Отсутствует и CI-проверка, которая детектировала бы появление новых неодобренных skill-источников при изменениях в манифестах. Это конфигурационное изменение с низким effort: не затрагивает RAM, не требует апстрим-патча, реализуется через Helm values + CI-шаг.
+At present, there is no mechanism in the gitops config that fixes the list of permitted skill sources. There is also no CI check that would detect new unapproved skill sources appearing in manifest changes. This is a low-effort configuration change: no RAM impact, no upstream patch needed, implemented via Helm values + a CI step.
 
 ## User stories
-- AS a platform operator I WANT фиксированный allowlist разрешённых источников Layer 3 skills в gitops-конфиге каждого тенанта SO THAT вредоносные skills из ClawHub не могут быть зарегистрированы без явного одобрения
-- AS a security engineer I WANT CI-проверку, которая блокирует PR при появлении нового неодобренного skill-источника SO THAT случайная или несанкционированная регистрация вредоносных skills выявляется до деплоя
-- AS a tenant operator I WANT понятный процесс одобрения нового skill-источника (allowlist update) SO THAT легитимные skills можно добавить без обхода защиты
+- AS a platform operator I WANT a fixed allowlist of permitted Layer 3 skill sources in each tenant's gitops config SO THAT malicious skills from ClawHub cannot be registered without explicit approval
+- AS a security engineer I WANT a CI check that blocks PRs introducing new unapproved skill sources SO THAT accidental or unauthorised registration of malicious skills is caught before deploy
+- AS a tenant operator I WANT a clear approval process for new skill sources (allowlist update) SO THAT legitimate skills can be added without bypassing protection
 
 ## Acceptance criteria (EARS)
-- WHEN Layer 3 skill регистрируется через REST API с источником (URL/origin), не входящим в allowlist тенанта THEN THE SYSTEM SHALL отклонить регистрацию с кодом 403 и сообщением об ограничении политики
-- WHILE allowlist для тенанта задан в Helm values THE SYSTEM SHALL применять его ко всем входящим запросам на регистрацию remote skills, включая restart пода и hot-reload
-- IF CI-пайплайн обнаруживает в PR изменение, добавляющее новый skill-источник в манифест без соответствующего обновления allowlist THEN THE SYSTEM SHALL провалить CI-шаг с явным сообщением о необходимости review
-- WHEN allowlist задан как пустой список THEN THE SYSTEM SHALL блокировать регистрацию всех Layer 3 skills (fail-closed семантика)
-- IF тенант не имеет явно заданного allowlist в Helm values THEN THE SYSTEM SHALL применять deny-all политику по умолчанию для Layer 3 skills
-- WHEN allowlist обновляется через gitops-манифест THEN THE SYSTEM SHALL применить новую политику без рестарта пода (hot-reload через YAML skill config)
+- WHEN a Layer 3 skill is registered via REST API with a source (URL/origin) not in the tenant's allowlist THEN THE SYSTEM SHALL reject registration with a 403 status and a policy-restriction message
+- WHILE an allowlist is set in a tenant's Helm values THE SYSTEM SHALL apply it to every incoming remote skill registration request, including pod restart and hot-reload
+- IF the CI pipeline detects a PR change adding a new skill source to a manifest without a corresponding allowlist update THEN THE SYSTEM SHALL fail the CI step with an explicit message requesting review
+- WHEN the allowlist is set as an empty list THEN THE SYSTEM SHALL block registration of all Layer 3 skills (fail-closed semantics)
+- IF a tenant has no explicitly set allowlist in Helm values THEN THE SYSTEM SHALL apply a default deny-all policy for Layer 3 skills
+- WHEN the allowlist is updated through a gitops manifest THEN THE SYSTEM SHALL apply the new policy without a pod restart (hot-reload via the YAML skill config)
 
 ## Out of scope
-- Аудит уже установленных Layer 3 skills (отдельная задача инвентаризации)
-- Изменения в Layer 1 (built-in) и Layer 2 (YAML hot-reload) skills — они не регистрируются через REST API из внешних источников
-- Блокировка ClawHub на сетевом уровне (NetworkPolicy) — это более широкая мера, отдельное предложение
-- Сканирование содержимого skills на вредоносный код — выходит за рамки allowlist-контроля
-- Изменения в upstream openclaw API
+- Audit of already installed Layer 3 skills (separate inventory task)
+- Changes in Layer 1 (built-in) and Layer 2 (YAML hot-reload) skills — they are not registered via REST API from external sources
+- Blocking ClawHub at the network layer (NetworkPolicy) — a broader measure, separate proposal
+- Scanning skill content for malicious code — out of scope for allowlist control
+- Changes in the upstream openclaw API

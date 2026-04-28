@@ -1,10 +1,10 @@
-# Обновление Nuxt до 4.4.2 и миграция на vue-router v5
+# Upgrade Nuxt to 4.4.2 and migrate to vue-router v5
 
-## Контекст
+## Context
 
-Текущий стек использует Nuxt 4.3.1 + vue-router 4.6.4. Nuxt 4.4.2 выпущен 12 марта 2026 и требует vue-router v5; ветка vue-router v4.x объявлена EOL (v4.6.4 — финальный релиз). Откладывание перехода накапливает технический долг: безопасностные патчи и новые фичи Nuxt 4.4+ будут выходить только под vue-router v5.
+The current stack uses Nuxt 4.3.1 + vue-router 4.6.4. Nuxt 4.4.2 was released on 12 March 2026 and requires vue-router v5; the vue-router v4.x branch is declared EOL (v4.6.4 is the final release). Deferring the migration accumulates technical debt: security patches and new features in Nuxt 4.4+ will ship only against vue-router v5.
 
-Для mctl-web с тремя страницами (`/`, `/docs`, `/privacy`) объём необходимых изменений роутинговой конфигурации минимален. Переход также даёт ускорение маршрутизации до 28x (через `unrouting`), типизированные layout props и новый composable `useAnnouncer` для a11y.
+For mctl-web with three pages (`/`, `/docs`, `/privacy`), the volume of routing-config changes required is minimal. The migration also delivers up to 28x faster routing (via `unrouting`), typed layout props, and the new `useAnnouncer` composable for a11y.
 
 ## User stories
 
@@ -23,7 +23,7 @@
 
 ## Out of scope
 
-- Добавление новых страниц или маршрутов.
-- Замена vee-validate или yup (запрещено ADR 0001 без конкретного bug/perf-обоснования).
-- Изменение Cloudflare Worker (`cloudflare-worker/`) — он не импортирует vue-router.
-- Обновление @vueuse/core или sass (уже на актуальных версиях).
+- Adding new pages or routes.
+- Replacing vee-validate or yup (forbidden by ADR 0001 without a specific bug/perf justification).
+- Changes to the Cloudflare Worker (`cloudflare-worker/`) — it does not import vue-router.
+- Updating @vueuse/core or sass (already on current versions).

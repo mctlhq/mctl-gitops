@@ -1,48 +1,48 @@
 # Tasks: scaffolder-secret-leak
 
-Примечание: задачи 1–5 полностью совпадают с задачами `scaffolder-path-traversal`,
-так как оба CVE закрываются одним PR. Если предложение `scaffolder-path-traversal`
-уже реализовано, задачи 1–5 считаются выполненными для данного proposal тоже.
+Note: tasks 1–5 fully overlap with `scaffolder-path-traversal` because both CVEs are closed
+by the same PR. If `scaffolder-path-traversal` has already been implemented, tasks 1–5 are
+considered done for this proposal as well.
 
-- [ ] 1. Обновить `@backstage/backend-defaults` до ^0.12.2 и `plugin-scaffolder-backend`
-  до ^3.1.1 в `packages/backend/package.json` и корневом `package.json` (единый PR с
-  `scaffolder-path-traversal`) — DoD: `yarn install` завершается без ошибок; в `yarn.lock`
-  зафиксированы версии >= 0.12.2 и >= 3.1.1; `yarn backstage-cli versions:check` без
-  peer-конфликтов.
+- [ ] 1. Update `@backstage/backend-defaults` to ^0.12.2 and `plugin-scaffolder-backend`
+  to ^3.1.1 in `packages/backend/package.json` and the root `package.json` (single PR with
+  `scaffolder-path-traversal`) — DoD: `yarn install` finishes without errors; `yarn.lock`
+  records versions >= 0.12.2 and >= 3.1.1; `yarn backstage-cli versions:check` reports no
+  peer conflicts.
 
-- [ ] 2. Выполнить `yarn backstage-cli repo build` (зависит от 1) — DoD: сборка
-  завершается без TypeScript-ошибок.
+- [ ] 2. Run `yarn backstage-cli repo build` (depends on 1) — DoD: the build finishes
+  without TypeScript errors.
 
-- [ ] 3. Запустить playwright smoke-тест шаблона создания сервиса в staging (зависит от
-  2) — DoD: тест проходит; onboarding-форма работает корректно.
+- [ ] 3. Run a playwright smoke test of the create-service template in staging (depends on
+  2) — DoD: the test passes; the onboarding form works correctly.
 
-- [ ] 4. Собрать Docker-образ и обновить тег в ArgoCD-манифесте тенанта `admins` (зависит
-  от 3) — DoD: ArgoCD статус `Synced` и `Healthy`.
+- [ ] 4. Build a Docker image and update the tag in the ArgoCD manifest of the `admins`
+  tenant (depends on 3) — DoD: ArgoCD status `Synced` and `Healthy`.
 
-- [ ] 5. Запустить `yarn audit --level high` (зависит от 4) — DoD: нет high/critical CVE
-  по CVE-2026-32237 и CVE-2026-24046.
+- [ ] 5. Run `yarn audit --level high` (depends on 4) — DoD: no high/critical CVEs related
+  to CVE-2026-32237 or CVE-2026-24046.
 
-- [ ] 6. Инициировать ротацию всех секретов, смонтированных в backend-pod через
-  ExternalSecret (зависит от 4) — DoD: новые значения Vault token, Postgres DSN, GitHub
-  App credentials записаны в Vault; ExternalSecret обновил Kubernetes Secret; pod
-  перезапущен с новыми секретами; old credentials отозваны.
+- [ ] 6. Trigger rotation of every secret mounted in the backend pod via ExternalSecret
+  (depends on 4) — DoD: new values for the Vault token, Postgres DSN, GitHub App credentials
+  are written to Vault; ExternalSecret has updated the Kubernetes Secret; the pod has
+  restarted with the new secrets; old credentials are revoked.
 
-## Тесты
+## Tests
 
-- [ ] T1. Интеграционный тест: вызвать dry-run endpoint с шаблоном, который явно
-  обращается к `process.env.VAULT_TOKEN` — убедиться, что в ответе значение заменено на
-  `[REDACTED]`, а не возвращено в открытом виде.
-- [ ] T2. Интеграционный тест: dry-run ответ с вложенным JSON-объектом, содержащим ключ
-  `credentials` с чувствительным значением — убедиться в рекурсивной редакции.
-- [ ] T3. Smoke-тест: dry-run легитимного шаблона (без обращения к секретам) возвращает
-  корректный preview без `[REDACTED]` в несекретных полях.
-- [ ] T4. `yarn audit` в CI должен фейлить билд при severity >= high.
+- [ ] T1. Integration test: call the dry-run endpoint with a template that explicitly
+  references `process.env.VAULT_TOKEN` — confirm the response replaces the value with
+  `[REDACTED]` rather than returning it in clear.
+- [ ] T2. Integration test: dry-run response with a nested JSON object containing a
+  `credentials` key with a sensitive value — confirm recursive redaction.
+- [ ] T3. Smoke test: dry-run of a legitimate template (no secret references) returns the
+  correct preview without `[REDACTED]` in non-secret fields.
+- [ ] T4. `yarn audit` in CI must fail the build on severity >= high.
 
-## Откат
-1. Восстановить предыдущий тег Docker-образа в ArgoCD-манифесте тенанта `admins`.
-2. Выполнить `argocd app sync mctl-portal --prune`.
-3. Уязвимость CVE-2026-32237 возвращается; как временная митигация — отключить dry-run
-   endpoint через Backstage permission framework (запретить действие
-   `scaffolder.template.parameter.read` для всех групп).
-4. Если ротация секретов (задача 6) уже выполнена — откат её не требуется; новые
-   credentials остаются в силе.
+## Rollback
+1. Restore the previous Docker image tag in the ArgoCD manifest of the `admins` tenant.
+2. Run `argocd app sync mctl-portal --prune`.
+3. The CVE-2026-32237 vulnerability returns; as a temporary mitigation — disable the
+   dry-run endpoint via the Backstage permission framework (deny the action
+   `scaffolder.template.parameter.read` for every group).
+4. If secret rotation (task 6) has already been performed — no rollback is needed for it;
+   the new credentials remain in force.
