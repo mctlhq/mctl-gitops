@@ -68,8 +68,15 @@ this lands and a new mctl-agents tag is published.
   merged (e.g. human merged it out of band).
 - [ ] T5. `decide()` returns `flip-to-rejected` when the PR is closed
   unmerged.
-- [ ] T6. `decide()` returns `review-stuck` after 3 unsuccessful
-  followup attempts on the same PR.
+- [ ] T6. The **outer state machine** (NOT `decide()`) flips a
+  proposal's `.status.yaml` to `status: review-stuck` after 3
+  unsuccessful followup attempts on the same PR. `decide()` itself
+  stays pure (`pr` + `codex_review` only); the attempt counter
+  lives on the proposal as `review_attempts:` in `.status.yaml` and
+  is read/incremented by the loop that calls `decide()`. Test the
+  cap by driving the outer loop with three consecutive
+  `address-review` results from `decide()` and asserting the
+  fourth tick transitions the proposal to `review-stuck`.
 - [ ] T7. End-to-end state-machine test: implemented → review-fixing
   → implemented → merged with fixture data driving each tick.
 
