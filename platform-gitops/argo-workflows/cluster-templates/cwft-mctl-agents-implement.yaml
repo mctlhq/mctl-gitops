@@ -113,6 +113,13 @@ spec:
           chmod 600 ~/.ssh/config
           git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops
           mkdir -p /workdir/mctl-gitops/platform-gitops/agents-state
+          # Pre-create a PVC-backed scratch dir for run_implementer's
+          # `gh repo clone` targets. The orchestrator picks up
+          # `tempfile.gettempdir()` which honors TMPDIR — see run-implementer
+          # env below. Without this, clones would land on the pod's
+          # ephemeral storage and the 8Gi PVC sizing in this template would
+          # be ineffective for multi-repo runs (codex P2 finding).
+          mkdir -p /workdir/clones
           echo "✓ gitops cloned"
         volumeMounts:
           - name: workdir
@@ -166,6 +173,13 @@ spec:
           # so the SDK sees them, and run_implementer reads them directly.
           - name: STATE_DIR
             value: /workdir/mctl-gitops/platform-gitops/agents-state
+          # Redirect Python's `tempfile.gettempdir()` (used by
+          # run_implementer._clone_target) onto the PVC so each
+          # `gh repo clone` lands in PVC-backed storage — not the pod's
+          # ephemeral filesystem. clone-gitops creates this dir; if it
+          # doesn't exist Python's mkstemp / mkdtemp will error.
+          - name: TMPDIR
+            value: /workdir/clones
           # Auth: OAuth (Claude Pro/Max). Same secret as the run pipeline.
           - name: CLAUDE_CODE_OAUTH_TOKEN
             valueFrom:
