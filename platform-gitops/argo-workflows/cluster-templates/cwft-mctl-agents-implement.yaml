@@ -87,8 +87,14 @@ spec:
             # proposal — duplicate PR attempts. Letting commit run unconditionally
             # makes the status durable; commit-and-push already handles the
             # "no diff" case via `git diff --cached --quiet`.
+            #
+            # Both failed AND error: Argo distinguishes app-level non-zero
+            # exits (Failed) from pod-level errors like OOMKilled / deadline /
+            # controller errors (Error). Both can leave partial .status.yaml
+            # writes, so commit-and-push must run in either case.
             continueOn:
               failed: true
+              error: true
         - - name: commit
             template: commit-and-push
 
@@ -127,19 +133,34 @@ spec:
           - "-c"
           - |
             set -e
-            CMD="python -m orchestrator.run_implementer"
-            if [ -n "{{workflow.parameters.service}}" ]; then
-              CMD="$CMD --service {{workflow.parameters.service}}"
+            # Read params from env, NOT inline `{{workflow.parameters.*}}`
+            # interpolation: a value like `; rm -rf /` would otherwise be
+            # spliced straight into the shell command. Build argv via `set --`
+            # so each flag/value pair is a separate, properly quoted token.
+            set -- python -m orchestrator.run_implementer
+            if [ -n "$WORKFLOW_SERVICE" ]; then
+              set -- "$@" --service "$WORKFLOW_SERVICE"
             fi
-            if [ -n "{{workflow.parameters.slug}}" ]; then
-              CMD="$CMD --slug {{workflow.parameters.slug}}"
+            if [ -n "$WORKFLOW_SLUG" ]; then
+              set -- "$@" --slug "$WORKFLOW_SLUG"
             fi
-            if [ "{{workflow.parameters.force}}" = "true" ]; then
-              CMD="$CMD --force"
+            if [ "$WORKFLOW_FORCE" = "true" ]; then
+              set -- "$@" --force
             fi
-            echo "→ $CMD"
-            exec $CMD
+            printf '→'
+            printf ' %s' "$@"
+            printf '\n'
+            exec "$@"
         env:
+          # Workflow params injected as env vars so the shell layer can quote
+          # them safely. Direct `{{workflow.parameters.*}}` interpolation in
+          # the script body is a shell-injection vector.
+          - name: WORKFLOW_SERVICE
+            value: "{{workflow.parameters.service}}"
+          - name: WORKFLOW_SLUG
+            value: "{{workflow.parameters.slug}}"
+          - name: WORKFLOW_FORCE
+            value: "{{workflow.parameters.force}}"
           # Same STATE_DIR layout as cwft-mctl-agents-run — entrypoint.sh
           # symlinks <state>/<svc>/proposals onto /app/agents/<svc>/proposals/
           # so the SDK sees them, and run_implementer reads them directly.
@@ -201,8 +222,18 @@ spec:
           git config user.name "mctl-agents[bot]"
           git config user.email "mctl-agents[bot]@users.noreply.github.com"
 
-          # Stage only agents-state status updates.
-          git add platform-gitops/agents-state/
+          # Stage only .status.yaml updates under agents-state. Anything
+          # else changed there (proposal bodies, digests, ad-hoc files left
+          # by a crashed implementer) is NOT what this workflow should be
+          # pushing back to gitops main — fail loudly instead of silently
+          # broadening the commit scope.
+          NON_STATUS_CHANGES="$(git status --porcelain -- 'platform-gitops/agents-state/' ':(exclude,glob)platform-gitops/agents-state/**/.status.yaml')"
+          if [ -n "$NON_STATUS_CHANGES" ]; then
+            echo "❌ Refusing to commit non-.status.yaml changes under platform-gitops/agents-state/:"
+            printf '%s\n' "$NON_STATUS_CHANGES"
+            exit 1
+          fi
+          git add -- ':(glob)platform-gitops/agents-state/**/.status.yaml'
 
           if git diff --cached --quiet; then
             echo "ℹ️  No status updates — nothing to commit."
