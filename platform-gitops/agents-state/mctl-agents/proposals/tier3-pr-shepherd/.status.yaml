@@ -1,0 +1,4 @@
+status: proposed
+updated_at: 2026-04-29T15:55:00Z
+updated_by: mashkovd
+notes: First Tier 3 proposal. Flip to `accepted` once mctl-agents PR adding `mctl-agents` to SERVICES is merged and a fresh image tag is built; otherwise the implementer will reject `--service mctl-agents`.
