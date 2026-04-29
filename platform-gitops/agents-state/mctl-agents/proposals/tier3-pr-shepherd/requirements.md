@@ -47,10 +47,17 @@ out of scope here so the first version stays small.
   `implemented` only would strand any proposal that the previous
   tick moved to `review-fixing`, because the next tick would never
   look at it again to detect that the followup commit has landed.
-- WHEN the decision is `merge` THE SYSTEM SHALL invoke `gh pr merge --merge
-  --delete-branch` with the PR's identifier, then update the proposal's
-  `.status.yaml` to `status: merged` with `merged_at:` and `merge_commit:`
-  set.
+- WHEN the decision is `merge` THE SYSTEM SHALL invoke
+  `gh pr merge --merge --delete-branch --match-head-commit <SHA>`
+  with the PR's identifier AND the head SHA that was used during
+  the `decide()` evaluation, so a push that lands between review
+  and merge cannot smuggle unreviewed code through the gate
+  (codex's review is anchored to a specific commit; the merge call
+  must be too). On HEAD-SHA mismatch `gh pr merge` exits non-zero;
+  the shepherd SHALL treat that as a transient `wait` (the next
+  tick re-evaluates the new head). Then update the proposal's
+  `.status.yaml` to `status: merged` with `merged_at:` and
+  `merge_commit:` set.
 - WHEN the decision is `address-review` THE SYSTEM SHALL invoke the
   Tier 2 implementer with the same `service` / `slug` and the codex
   feedback attached as additional context, expecting a follow-up commit

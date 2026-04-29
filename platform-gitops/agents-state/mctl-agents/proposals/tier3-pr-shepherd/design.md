@@ -95,13 +95,26 @@ Notes:
   shepherd will not loop the implementer for them. Humans can still
   push fixes manually if they care.
 - The 3-attempt cap on follow-up loops lives in the **outer state
-  machine**, not in `decide()`. The state-machine reads
-  `review_attempts` from the proposal's `.status.yaml`, increments
-  it before invoking the implementer, and transitions the proposal
-  to `status: review-stuck` (terminal pending human triage) when
-  the count reaches 3. `decide(pr, codex_review)` stays pure —
-  no global state, no per-proposal counters — so it remains
-  trivially testable with hand-built fixtures.
+  machine**, not in `decide()`. Order on each tick that lands on
+  `decision == address-review`:
+  1. Read `review_attempts` from `.status.yaml` (default 0 if
+     absent).
+  2. If `review_attempts >= 3` → flip to `status: review-stuck`,
+     do NOT call the implementer, return.
+  3. Otherwise: call the implementer, then increment
+     `review_attempts` to `review_attempts + 1` and write back
+     to `.status.yaml`.
+  Concrete tick-by-tick (assuming `address-review` every tick):
+  - tick 1: counter=0 → call implementer (attempt 1) → counter=1
+  - tick 2: counter=1 → call implementer (attempt 2) → counter=2
+  - tick 3: counter=2 → call implementer (attempt 3) → counter=3
+  - tick 4: counter=3 → flip to `review-stuck`, no call
+  Total attempts before giving up: **3**. `decide(pr, codex_review)`
+  stays pure — no global state, no per-proposal counters — so it
+  remains trivially testable with hand-built fixtures. T6
+  exercises exactly this: drive the loop with three consecutive
+  `address-review` returns; assert the fourth tick transitions to
+  `review-stuck` without invoking the implementer.
 - `checks_green` requires the `mergeStateStatus` to be in
   `{CLEAN, HAS_HOOKS, UNSTABLE}` and all *required* checks `SUCCESS`.
   Rationale per state:
