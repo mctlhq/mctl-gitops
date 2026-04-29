@@ -303,7 +303,7 @@ spec:
           case "$STATUS" in
             Succeeded) ICON="✅" ;;
             Failed)    ICON="❌" ;;
-            Errored)   ICON="⚠️" ;;
+            Error)     ICON="⚠️" ;;
             *)         ICON="⏳" ;;
           esac
           if [ -n "$SLUG" ]; then
