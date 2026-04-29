@@ -1,0 +1,369 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterWorkflowTemplate
+metadata:
+  name: mctl-agents-implement
+  annotations:
+    workflows.argoproj.io/description: |
+      Tier 2 — implementer.
+
+      Takes accepted proposals from platform-gitops/agents-state/<svc>/proposals/
+      (those with .status.yaml status=accepted) and opens PRs in the matching
+      sibling repos under mctlhq/. Runs:
+
+        1. clone-gitops — SSH-clone mctl-gitops via the shared deploy key.
+        2. run-implementer — orchestrator/run_implementer.py inside
+           ghcr.io/mctlhq/mctl-agents:<tag>. The Python script gh-clones the
+           target sibling repo into /tmp, runs the Claude Agent SDK with the
+           per-service implementer.md sub-agent, pushes the branch, opens a PR.
+        3. commit-and-push — commits .status.yaml updates back to gitops main.
+
+      Triggered by:
+        - mctl-api MCP tool mctl_trigger_implementer (admin-only)
+        - operator submitting a Workflow that references this CWFT
+
+      NOT cron-triggered. NOT auto-triggered on .status.yaml change (would
+      require an Argo Events Sensor — out of scope for v1).
+spec:
+  serviceAccountName: argo-workflow-sa
+  imagePullSecrets:
+    - name: ghcr-credentials
+  ttlStrategy:
+    secondsAfterCompletion: 86400
+  # Implementer pipeline can be slow: clone two repos + Claude SDK + push + PR.
+  # Bump above the cron run's 1h budget.
+  activeDeadlineSeconds: 7200
+  entrypoint: implement-proposals
+  onExit: notify-telegram
+  # Same shared mutex as cwft-mctl-agents-run — both push to mctl-gitops main.
+  synchronization:
+    mutex:
+      name: mctl-gitops-main-writes
+
+  arguments:
+    parameters:
+      - name: service
+        value: ""
+        # Optional. When set, only proposals under that service's dir are
+        # considered. Validated by run_implementer.py against config/settings.py
+        # SERVICES (exit 1 on mismatch).
+      - name: slug
+        value: ""
+        # Optional. When set, only that slug is implemented (across services
+        # if `service` is empty too).
+      - name: force
+        value: "false"
+        # When "true", a proposal stuck in `in-progress` (previous attempt
+        # crashed mid-run) is retried. Default: skip such proposals.
+
+  volumeClaimTemplates:
+    - metadata:
+        name: workdir
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            # Bigger than cwft-mctl-agents-run because the implementer also
+            # gh-clones each target sibling repo into /tmp inside the same pod.
+            # Worst case: ~10 sibling clones × ~500 MB = 5 GiB.
+            storage: 8Gi
+  volumes:
+    - name: deploy-key
+      secret:
+        secretName: mctl-gitops-deploy-key
+        defaultMode: 0600
+
+  templates:
+    - name: implement-proposals
+      steps:
+        - - name: clone
+            template: clone-gitops
+        - - name: implement
+            template: run-implementer
+            # run_implementer.py writes .status.yaml updates (in-progress →
+            # implemented/error) to the worktree BEFORE any failure that may
+            # crash the step. Without continueOn, Argo would skip commit-and-push
+            # on non-zero exit, those updates would never persist back to
+            # mctl-gitops main, and the next run would reprocess the same
+            # proposal — duplicate PR attempts. Letting commit run unconditionally
+            # makes the status durable; commit-and-push already handles the
+            # "no diff" case via `git diff --cached --quiet`.
+            #
+            # Both failed AND error: Argo distinguishes app-level non-zero
+            # exits (Failed) from pod-level errors like OOMKilled / deadline /
+            # controller errors (Error). Both can leave partial .status.yaml
+            # writes, so commit-and-push must run in either case.
+            continueOn:
+              failed: true
+              error: true
+        - - name: commit
+            template: commit-and-push
+
+    # ── 1. SSH-clone mctl-gitops into shared volume ───────────────────────
+    - name: clone-gitops
+      script:
+        image: alpine/git:2.43.0
+        command: [sh]
+        source: |
+          set -e
+          apk add --no-cache openssh-client ca-certificates
+          mkdir -p ~/.ssh
+          cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  StrictHostKeyChecking no\n' > ~/.ssh/config
+          chmod 600 ~/.ssh/config
+          git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops
+          mkdir -p /workdir/mctl-gitops/platform-gitops/agents-state
+          # Pre-create a PVC-backed scratch dir for run_implementer's
+          # `gh repo clone` targets. The orchestrator picks up
+          # `tempfile.gettempdir()` which honors TMPDIR — see run-implementer
+          # env below. Without this, clones would land on the pod's
+          # ephemeral storage and the 8Gi PVC sizing in this template would
+          # be ineffective for multi-repo runs (codex P2 finding).
+          mkdir -p /workdir/clones
+          echo "✓ gitops cloned"
+        volumeMounts:
+          - name: workdir
+            mountPath: /workdir
+          - name: deploy-key
+            mountPath: /secrets/deploy-key
+
+    # ── 2. Run implementer orchestrator ───────────────────────────────────
+    # NB: ghcr.io/mctlhq/mctl-agents:1.2.0 is the first tag with `gh` CLI baked in.
+    # Earlier 1.1.0 lacks gh and would fail at clone-target step.
+    - name: run-implementer
+      container:
+        image: ghcr.io/mctlhq/mctl-agents:1.2.0
+        imagePullPolicy: IfNotPresent
+        command: ["/entrypoint.sh"]
+        args:
+          - "sh"
+          - "-c"
+          - |
+            set -e
+            # Read params from env, NOT inline `{{workflow.parameters.*}}`
+            # interpolation: a value like `; rm -rf /` would otherwise be
+            # spliced straight into the shell command. Build argv via `set --`
+            # so each flag/value pair is a separate, properly quoted token.
+            set -- python -m orchestrator.run_implementer
+            if [ -n "$WORKFLOW_SERVICE" ]; then
+              set -- "$@" --service "$WORKFLOW_SERVICE"
+            fi
+            if [ -n "$WORKFLOW_SLUG" ]; then
+              set -- "$@" --slug "$WORKFLOW_SLUG"
+            fi
+            if [ "$WORKFLOW_FORCE" = "true" ]; then
+              set -- "$@" --force
+            fi
+            printf '→'
+            printf ' %s' "$@"
+            printf '\n'
+            exec "$@"
+        env:
+          # Workflow params injected as env vars so the shell layer can quote
+          # them safely. Direct `{{workflow.parameters.*}}` interpolation in
+          # the script body is a shell-injection vector.
+          - name: WORKFLOW_SERVICE
+            value: "{{workflow.parameters.service}}"
+          - name: WORKFLOW_SLUG
+            value: "{{workflow.parameters.slug}}"
+          - name: WORKFLOW_FORCE
+            value: "{{workflow.parameters.force}}"
+          # Same STATE_DIR layout as cwft-mctl-agents-run — entrypoint.sh
+          # symlinks <state>/<svc>/proposals onto /app/agents/<svc>/proposals/
+          # so the SDK sees them, and run_implementer reads them directly.
+          - name: STATE_DIR
+            value: /workdir/mctl-gitops/platform-gitops/agents-state
+          # Redirect Python's `tempfile.gettempdir()` (used by
+          # run_implementer._clone_target) onto the PVC so each
+          # `gh repo clone` lands in PVC-backed storage — not the pod's
+          # ephemeral filesystem. clone-gitops creates this dir; if it
+          # doesn't exist Python's mkstemp / mkdtemp will error.
+          - name: TMPDIR
+            value: /workdir/clones
+          # Auth: OAuth (Claude Pro/Max). Same secret as the run pipeline.
+          - name: CLAUDE_CODE_OAUTH_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: claude-code-oauth-token
+          # GitHub PAT for `gh repo clone` + `gh pr create`. PAT must have
+          # repo write scope on mctlhq/*. Sub-plan B introduces this key in
+          # the shared secret (same Vault path) — uses `dataFrom: extract`,
+          # so no manifest change is needed once Vault has it. If the key
+          # is absent, gh CLI falls through to interactive login and the
+          # implementer fails fast at clone-target step. Marked optional:
+          # local smoke runs without GITHUB_TOKEN can still exercise the
+          # discovery path (--dry-run).
+          - name: GITHUB_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: github-token
+                optional: true
+          # Optional MCP token, same convention as run pipeline.
+          - name: MCTL_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: mctl-token
+                optional: true
+          - name: IMPLEMENTER_BUDGET_USD
+            value: "3.00"
+        resources:
+          requests: { cpu: 200m, memory: 512Mi }
+          limits:   { cpu: 2000m, memory: 4Gi }
+        volumeMounts:
+          - name: workdir
+            mountPath: /workdir
+
+    # ── 3. Commit & push back to mctl-gitops ──────────────────────────────
+    # Only .status.yaml files should change in agents-state/ (run_implementer
+    # writes them after each proposal). Defensive: stage only that subtree.
+    - name: commit-and-push
+      script:
+        image: alpine/git:2.43.0
+        command: [sh]
+        env:
+          # Workflow params injected as env vars so the shell layer can quote
+          # them safely. Direct `{{workflow.parameters.*}}` interpolation in
+          # the script body is a shell-injection vector — and this pod has
+          # the gitops deploy key + push access to main, so a crafted
+          # `service` / `slug` value could escalate from a malformed param
+          # into arbitrary git operations against mctl-gitops.
+          - name: WORKFLOW_SERVICE
+            value: "{{workflow.parameters.service}}"
+          - name: WORKFLOW_SLUG
+            value: "{{workflow.parameters.slug}}"
+        source: |
+          set -e
+          apk add --no-cache openssh-client ca-certificates
+          mkdir -p ~/.ssh
+          cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  StrictHostKeyChecking no\n' > ~/.ssh/config
+          chmod 600 ~/.ssh/config
+
+          cd /workdir/mctl-gitops
+          git config user.name "mctl-agents[bot]"
+          git config user.email "mctl-agents[bot]@users.noreply.github.com"
+
+          # Stage only .status.yaml updates under agents-state. Anything
+          # else changed there (proposal bodies, digests, ad-hoc files left
+          # by a crashed implementer) is NOT what this workflow should be
+          # pushing back to gitops main — fail loudly instead of silently
+          # broadening the commit scope.
+          NON_STATUS_CHANGES="$(git status --porcelain -- 'platform-gitops/agents-state/' ':(exclude,glob)platform-gitops/agents-state/**/.status.yaml')"
+          if [ -n "$NON_STATUS_CHANGES" ]; then
+            echo "❌ Refusing to commit non-.status.yaml changes under platform-gitops/agents-state/:"
+            printf '%s\n' "$NON_STATUS_CHANGES"
+            exit 1
+          fi
+
+          # Short-circuit BEFORE `git add`: with `set -e`, a glob pathspec
+          # that matches zero files (`fatal: pathspec ... did not match any
+          # files`) would otherwise crash the workflow instead of becoming
+          # a no-op. Happens on the very first run (no .status.yaml exist
+          # yet) and on runs where zero proposals were accepted.
+          STATUS_CHANGES="$(git status --porcelain -- ':(glob)platform-gitops/agents-state/**/.status.yaml')"
+          if [ -z "$STATUS_CHANGES" ]; then
+            echo "ℹ️  No .status.yaml updates — nothing to commit."
+            exit 0
+          fi
+          git add -- ':(glob)platform-gitops/agents-state/**/.status.yaml'
+
+          if git diff --cached --quiet; then
+            # Defensive: STATUS_CHANGES already proved there are matches,
+            # but keep this guard in case `git add` ever ends up staging
+            # an empty diff (e.g. a permissions-only change git ignores).
+            echo "ℹ️  No status updates after staging — nothing to commit."
+            exit 0
+          fi
+
+          DATE=$(date -u +%Y-%m-%d)
+          if [ -n "$WORKFLOW_SLUG" ]; then
+            MSG="chore(agents): implement ${WORKFLOW_SLUG} ${DATE}"
+          elif [ -n "$WORKFLOW_SERVICE" ]; then
+            MSG="chore(agents): implement ${WORKFLOW_SERVICE} ${DATE}"
+          else
+            MSG="chore(agents): implement run ${DATE}"
+          fi
+          git commit -m "$MSG"
+
+          for i in 1 2 3 4 5; do
+            if git push origin HEAD:main; then
+              echo "✅ Pushed status updates"
+              exit 0
+            fi
+            echo "⚠️  Push failed (attempt ${i}), rebasing..."
+            git pull --rebase origin main
+          done
+          echo "❌ Push failed after 5 attempts"
+          exit 1
+        volumeMounts:
+          - name: workdir
+            mountPath: /workdir
+          - name: deploy-key
+            mountPath: /secrets/deploy-key
+
+    # ── 4. Telegram notification (onExit) ──────────────────────────────────
+    # Same pattern as cwft-mctl-agents-run.
+    - name: notify-telegram
+      script:
+        image: alpine:3.19
+        command: [sh]
+        env:
+          - name: TG_BOT_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: telegram-bot-token
+                optional: true
+          - name: TG_CHAT_ID
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: telegram-chat-id
+                optional: true
+          # Workflow params + status injected as env vars so the shell layer
+          # can quote them safely. Even though this is just a notification
+          # step, raw `{{workflow.parameters.*}}` interpolation is still
+          # arbitrary command execution in a workflow pod.
+          - name: WORKFLOW_STATUS
+            value: "{{workflow.status}}"
+          - name: WORKFLOW_SERVICE
+            value: "{{workflow.parameters.service}}"
+          - name: WORKFLOW_SLUG
+            value: "{{workflow.parameters.slug}}"
+          - name: WORKFLOW_NAME
+            value: "{{workflow.name}}"
+          - name: WORKFLOW_DURATION
+            value: "{{workflow.duration}}"
+        source: |
+          set +e
+          if [ -z "$TG_BOT_TOKEN" ] || [ -z "$TG_CHAT_ID" ]; then
+            echo "ℹ️  TG_BOT_TOKEN or TG_CHAT_ID not set; skipping notification."
+            exit 0
+          fi
+          apk add --no-cache curl ca-certificates >/dev/null 2>&1
+
+          case "$WORKFLOW_STATUS" in
+            Succeeded) ICON="✅" ;;
+            Failed)    ICON="❌" ;;
+            Error)     ICON="⚠️" ;;
+            *)         ICON="⏳" ;;
+          esac
+          if [ -n "$WORKFLOW_SLUG" ]; then
+            SUBJECT="implement ${WORKFLOW_SLUG}"
+          elif [ -n "$WORKFLOW_SERVICE" ]; then
+            SUBJECT="implement ${WORKFLOW_SERVICE}"
+          else
+            SUBJECT="implement (all accepted)"
+          fi
+          UI_URL="https://workflows.mctl.ai/workflows/argo-workflows/${WORKFLOW_NAME}"
+          TEXT="${ICON} mctl-agents: ${SUBJECT} — ${WORKFLOW_STATUS} (${WORKFLOW_DURATION}s)\n${UI_URL}"
+
+          curl -s -o /dev/null -w 'telegram http=%{http_code}\n' \
+            -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "{\"chat_id\":\"${TG_CHAT_ID}\",\"text\":\"${TEXT}\",\"disable_web_page_preview\":true}"
+          exit 0
