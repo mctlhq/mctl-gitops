@@ -140,8 +140,20 @@ spec:
           - "-c"
           - |
             set -e
-            # Read params from env, NOT inline `workflow.parameters.*` (Argo template syntax)
-            # interpolation: a value like `; rm -rf /` would otherwise be
+            # Wire git's HTTPS credential helper to the same GITHUB_TOKEN
+            # gh CLI uses. Without this, `gh repo clone` succeeds (it speaks
+            # to the API directly) but the implementer's later `git push -u
+            # origin <branch>` falls through to interactive auth and fails
+            # with "could not read Username for 'https://github.com'".
+            # `gh auth setup-git` installs `gh auth git-credential` as the
+            # credential helper, which reads GITHUB_TOKEN from the env at
+            # push time. Skip silently if no token (fail-closed at gh clone
+            # already; this just keeps the path clean for offline smoke).
+            if [ -n "$GITHUB_TOKEN" ]; then
+              gh auth setup-git
+            fi
+            # Read params from env, NOT inline workflow.parameters interpolation
+            # (Argo template syntax): a value like `; rm -rf /` would otherwise be
             # spliced straight into the shell command. Build argv via `set --`
             # so each flag/value pair is a separate, properly quoted token.
             set -- python -m orchestrator.run_implementer
