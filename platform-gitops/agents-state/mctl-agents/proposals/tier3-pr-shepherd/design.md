@@ -82,9 +82,26 @@ Notes:
   or codex reacted `+1` to the trigger comment. (The codex-watch
   shell skill already encodes this; the shepherd reuses the GitHub
   API queries.)
+- **Codex is the only gating signal.** Copilot's review is observed
+  for context (and can be displayed in the shepherd's per-tick log
+  line for the operator) but does NOT block a merge. Project policy
+  is documented in memory as
+  `feedback_pr_codex_review.md` (codex review gates every PR) and
+  `reference_copilot_review_quirks_mctl_openclaw.md` (Copilot is
+  best-effort, not gating; codex is the load-bearing review). The
+  shepherd inherits that contract: if codex says clean, merge;
+  Copilot's findings, if any, ride along to the operator log.
 - P3 findings are intentionally ignored — they are nits and the
   shepherd will not loop the implementer for them. Humans can still
   push fixes manually if they care.
+- The 3-attempt cap on follow-up loops lives in the **outer state
+  machine**, not in `decide()`. The state-machine reads
+  `review_attempts` from the proposal's `.status.yaml`, increments
+  it before invoking the implementer, and transitions the proposal
+  to `status: review-stuck` (terminal pending human triage) when
+  the count reaches 3. `decide(pr, codex_review)` stays pure —
+  no global state, no per-proposal counters — so it remains
+  trivially testable with hand-built fixtures.
 - `checks_green` requires the `mergeStateStatus` to be in
   `{CLEAN, HAS_HOOKS, UNSTABLE}` and all *required* checks `SUCCESS`.
   Rationale per state:
