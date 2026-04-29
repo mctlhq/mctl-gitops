@@ -133,6 +133,20 @@ spec:
                 name: mctl-agents-secrets
                 key: mctl-token
                 optional: true
+          # GitHub PAT for the researcher's sibling-repo scan.
+          # Without it the researcher falls through to the unauthenticated
+          # GitHub API (60 req/h, no private-repo access) and reports
+          # "no signal: <repo> — 404 (private repo, GITHUB_TOKEN not set)"
+          # for every private mctlhq/* repo, producing single-repo-only
+          # proposals. Same secret + key as the Tier 2 implementer.
+          # Marked optional so the cron run still works (degraded) if
+          # Vault hasn't been seeded yet.
+          - name: GITHUB_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: github-token
+                optional: true
           - name: SERVICE_AGENT_BUDGET_USD
             value: "5.00"
           - name: MENTOR_BUDGET_USD
