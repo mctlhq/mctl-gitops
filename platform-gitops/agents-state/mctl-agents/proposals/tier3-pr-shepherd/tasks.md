@@ -14,7 +14,11 @@ this lands and a new mctl-agents tag is published.
     Python already does).
 - [ ] 2. Add `orchestrator/run_shepherd.py` — main module.
   - DoD: `python -m orchestrator.run_shepherd --help` prints
-    `--service`, `--slug`, `--review-feedback`, `--budget` options.
+    `--service`, `--slug`, `--budget` options. **Note:**
+    `--review-feedback` is on the implementer CLI (task 3 below),
+    not the shepherd — the shepherd builds the bundle in-memory and
+    passes it to a `subprocess.run([... 'run_implementer', ...,
+    '--review-feedback', path])` call.
   - DoD: implements the `decide()` function and the state-machine
     described in design.md.
   - DoD: implements `find_pr_for_proposal()`, `read_codex_review()`,
@@ -53,7 +57,11 @@ this lands and a new mctl-agents tag is published.
   has reacted +1 (or posted "no major issues"), and all checks are
   green.
 - [ ] T2. `decide()` returns `address-review` when codex has posted a
-  P1 review comment with a body matching `**.*P1 Badge.***`.
+  P1 review comment whose body contains the literal substring
+  `![P1 Badge]` (codex prefixes findings with a Markdown badge image
+  whose alt text is exactly `P1 Badge`, `P2 Badge`, etc.). Match
+  with `"![P1 Badge]" in body` — no regex needed; if regex is
+  preferred, use `re.search(r"!\[P[0-9] Badge\]", body)`.
 - [ ] T3. `decide()` returns `wait` when codex has not yet responded
   (no review, no comment, no reaction on the latest commit).
 - [ ] T4. `decide()` returns `flip-to-merged` when the PR is already
@@ -69,8 +77,13 @@ this lands and a new mctl-agents tag is published.
 1. The shepherd has no destructive output beyond `.status.yaml`
    transitions and merging open PRs. Rollback = revert this commit
    in mctl-agents and re-tag.
-2. In-flight `review-fixing` states will be left dangling — a manual
-   `vault kv patch` to flip them back to `implemented` (or close the
-   PR by hand) clears them.
+2. In-flight `review-fixing` states will be left dangling — they
+   live in `platform-gitops/agents-state/<svc>/proposals/<slug>/.status.yaml`
+   (committed to gitops main), NOT in Vault. Clear them with a
+   one-line PR to mctl-gitops that flips the affected files back to
+   `status: implemented` so the next operator decides what to do
+   manually. Alternatively, close the dangling PR on GitHub — the
+   shepherd's next non-rolled-back run will observe `closed_unmerged`
+   and flip the proposal to `rejected` on its own.
 3. The companion gitops CWFT/cron are NOT in this PR; they ship in a
    follow-up that can be reverted independently if needed.
