@@ -233,10 +233,24 @@ spec:
             printf '%s\n' "$NON_STATUS_CHANGES"
             exit 1
           fi
+
+          # Short-circuit BEFORE `git add`: with `set -e`, a glob pathspec
+          # that matches zero files (`fatal: pathspec ... did not match any
+          # files`) would otherwise crash the workflow instead of becoming
+          # a no-op. Happens on the very first run (no .status.yaml exist
+          # yet) and on runs where zero proposals were accepted.
+          STATUS_CHANGES="$(git status --porcelain -- ':(glob)platform-gitops/agents-state/**/.status.yaml')"
+          if [ -z "$STATUS_CHANGES" ]; then
+            echo "ℹ️  No .status.yaml updates — nothing to commit."
+            exit 0
+          fi
           git add -- ':(glob)platform-gitops/agents-state/**/.status.yaml'
 
           if git diff --cached --quiet; then
-            echo "ℹ️  No status updates — nothing to commit."
+            # Defensive: STATUS_CHANGES already proved there are matches,
+            # but keep this guard in case `git add` ever ends up staging
+            # an empty diff (e.g. a permissions-only change git ignores).
+            echo "ℹ️  No status updates after staging — nothing to commit."
             exit 0
           fi
 
