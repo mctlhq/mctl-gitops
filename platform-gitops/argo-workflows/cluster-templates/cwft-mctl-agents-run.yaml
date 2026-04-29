@@ -28,7 +28,7 @@ spec:
   activeDeadlineSeconds: 3600
   entrypoint: run-agents
   # onExit always fires after the entrypoint completes — Succeeded, Failed,
-  # or Errored. Posts a one-line Telegram summary to the admins chat so the
+  # or Error. Posts a one-line Telegram summary to the admins chat so the
   # operator doesn't have to poll mctl_list_recent_agent_runs after each
   # mctl_trigger_*.
   onExit: notify-telegram
@@ -233,7 +233,7 @@ spec:
           case "$STATUS" in
             Succeeded) ICON="✅" ;;
             Failed)    ICON="❌" ;;
-            Errored)   ICON="⚠️" ;;
+            Error)     ICON="⚠️" ;;
             *)         ICON="⏳" ;;
           esac
           if [ "$MODE" = "single-service" ] && [ -n "$SERVICE" ]; then
