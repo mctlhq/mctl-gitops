@@ -76,12 +76,27 @@ return ("merge", None)
 ```
 
 Notes:
-- `codex_review.has_responded` is true if either a review with state
-  `COMMENTED` exists for the latest commit, or codex has posted a
-  top-level issue comment matching `Didn't find any major issues`,
-  or codex reacted `+1` to the trigger comment. (The codex-watch
-  shell skill already encodes this; the shepherd reuses the GitHub
-  API queries.)
+- `codex_review.has_responded` is **anchored to the current PR head
+  SHA**. A historical "no major issues" comment or +1 reaction from
+  before the latest push is NOT a green light — codex must have
+  reviewed the head that the shepherd is about to merge, otherwise
+  a follow-up push could ride on a stale review signal and merge
+  unreviewed code. Concretely, the function returns true iff one
+  of:
+  - A review by `chatgpt-codex-connector[bot]` exists whose
+    `commit_id` equals `pr.head_sha` (regardless of review state).
+  - A line-anchored review comment by codex on `pr.head_sha` exists.
+  - A top-level issue comment by codex matching `Didn't find any
+    major issues` whose `created_at > pr.head_pushed_at`.
+  - A `+1` reaction by codex on the most recent `@codex review`
+    trigger comment, AND that trigger comment's `created_at >
+    pr.head_pushed_at`.
+  Any signal predating the head push is ignored (treated as `wait`
+  so codex re-reviews the new commit). The codex-watch shell skill
+  already encodes most of this with its "trigger_ts" baseline; the
+  shepherd reuses the GitHub API queries but anchors on
+  `head_pushed_at` (a stricter check than the skill's trigger
+  comment) for safety.
 - **Codex is the only gating signal.** Copilot's review is observed
   for context (and can be displayed in the shepherd's per-tick log
   line for the operator) but does NOT block a merge. Project policy
