@@ -1,4 +1,4 @@
-status: accepted
-updated_at: 2026-04-29T16:15:00Z
-updated_by: mashkovd
-notes: User-confirmed broken-link case. mctl.ai/mcp returns the homepage HTML for every path due to Cloudflare Worker SPA fallback (verified by curl — same 2309-byte body as / and /foo123). Authored manually because the latest service-agent run did not surface this gap (it ran in Mode B, no GITHUB_TOKEN at the time).
+status: implemented
+updated_at: '2026-04-29T18:21:40Z'
+updated_by: mctl-agents[bot]
+pr: https://github.com/mctlhq/mctl-docs/pull/6
