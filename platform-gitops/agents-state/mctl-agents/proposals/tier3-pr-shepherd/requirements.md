@@ -38,10 +38,15 @@ out of scope here so the first version stays small.
   pipeline is observable from `git log` of mctl-gitops main.
 
 ## Acceptance criteria (EARS)
-- WHEN the cron fires AND a proposal exists with `.status.yaml status=implemented`
-  AND its `pr:` URL points to an open PR THE SYSTEM SHALL evaluate the PR
-  and decide one of: `wait` (codex still pending), `address-review` (P1/P2
-  findings exist), or `merge` (clean review + green CI).
+- WHEN the cron fires AND a proposal exists with `.status.yaml`
+  `status` in `{implemented, review-fixing}` AND its `pr:` URL points
+  to an open PR THE SYSTEM SHALL evaluate the PR and decide one of:
+  `wait` (codex still pending, OR the followup commit hasn't landed
+  yet), `address-review` (P1/P2 findings exist), or `merge` (clean
+  review + green CI). Both states are non-terminal; filtering to
+  `implemented` only would strand any proposal that the previous
+  tick moved to `review-fixing`, because the next tick would never
+  look at it again to detect that the followup commit has landed.
 - WHEN the decision is `merge` THE SYSTEM SHALL invoke `gh pr merge --merge
   --delete-branch` with the PR's identifier, then update the proposal's
   `.status.yaml` to `status: merged` with `merged_at:` and `merge_commit:`

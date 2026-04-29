@@ -7,7 +7,12 @@ shape of `orchestrator/run_implementer.py`:
 - Plain Python entrypoint, runnable as `python -m orchestrator.run_shepherd`.
 - Reads `STATE_DIR` (the workflow PVC mounts the gitops worktree there).
 - Iterates proposals under `<state>/<svc>/proposals/<slug>/.status.yaml`,
-  filters to `status == implemented`.
+  filters to `status in {"implemented", "review-fixing"}`. Both states
+  are non-terminal and need a tick to advance; the state-machine below
+  decides what to do per-status. Filtering to `implemented` only would
+  strand any proposal that the previous tick moved to `review-fixing`,
+  because the next tick would never look at it again to detect that
+  the followup commit has landed.
 - For each, fetches PR metadata via `gh api` and runs the decision
   state-machine (see below).
 - Writes new state back to the SAME `.status.yaml` on the worktree;
