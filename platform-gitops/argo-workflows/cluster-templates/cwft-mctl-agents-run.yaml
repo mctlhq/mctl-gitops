@@ -151,7 +151,7 @@ spec:
         command: [sh]
         env:
           # Workflow params injected as env vars so the shell layer can quote
-          # them safely. Direct `{{workflow.parameters.*}}` interpolation is
+          # them safely. Direct `workflow.parameters.*` (Argo template syntax) interpolation is
           # a shell-injection vector — and this pod has the gitops deploy key
           # + push access to main.
           - name: WORKFLOW_MODE
@@ -225,7 +225,7 @@ spec:
                 key: telegram-chat-id
                 optional: true
           # Workflow params + status injected as env vars so the shell layer
-          # can quote them safely. Avoid raw `{{workflow.parameters.*}}`
+          # can quote them safely. Avoid raw `workflow.parameters.*` (Argo template syntax)
           # interpolation in the script body.
           - name: WORKFLOW_STATUS
             value: "{{workflow.status}}"

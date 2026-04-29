@@ -140,7 +140,7 @@ spec:
           - "-c"
           - |
             set -e
-            # Read params from env, NOT inline `{{workflow.parameters.*}}`
+            # Read params from env, NOT inline `workflow.parameters.*` (Argo template syntax)
             # interpolation: a value like `; rm -rf /` would otherwise be
             # spliced straight into the shell command. Build argv via `set --`
             # so each flag/value pair is a separate, properly quoted token.
@@ -160,7 +160,7 @@ spec:
             exec "$@"
         env:
           # Workflow params injected as env vars so the shell layer can quote
-          # them safely. Direct `{{workflow.parameters.*}}` interpolation in
+          # them safely. Direct `workflow.parameters.*` (Argo template syntax) interpolation in
           # the script body is a shell-injection vector.
           - name: WORKFLOW_SERVICE
             value: "{{workflow.parameters.service}}"
@@ -225,7 +225,7 @@ spec:
         command: [sh]
         env:
           # Workflow params injected as env vars so the shell layer can quote
-          # them safely. Direct `{{workflow.parameters.*}}` interpolation in
+          # them safely. Direct `workflow.parameters.*` (Argo template syntax) interpolation in
           # the script body is a shell-injection vector — and this pod has
           # the gitops deploy key + push access to main, so a crafted
           # `service` / `slug` value could escalate from a malformed param
@@ -326,7 +326,7 @@ spec:
                 optional: true
           # Workflow params + status injected as env vars so the shell layer
           # can quote them safely. Even though this is just a notification
-          # step, raw `{{workflow.parameters.*}}` interpolation is still
+          # step, raw `workflow.parameters.*` (Argo template syntax) interpolation is still
           # arbitrary command execution in a workflow pod.
           - name: WORKFLOW_STATUS
             value: "{{workflow.status}}"
