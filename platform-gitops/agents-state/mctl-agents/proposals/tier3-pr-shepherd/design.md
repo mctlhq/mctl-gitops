@@ -85,8 +85,24 @@ Notes:
 - P3 findings are intentionally ignored — they are nits and the
   shepherd will not loop the implementer for them. Humans can still
   push fixes manually if they care.
-- `checks_green` requires the `mergeStateStatus == CLEAN` and all
-  required checks `SUCCESS`.
+- `checks_green` requires the `mergeStateStatus` to be in
+  `{CLEAN, HAS_HOOKS, UNSTABLE}` and all *required* checks `SUCCESS`.
+  Rationale per state:
+  - `CLEAN` — nothing in the way; merge.
+  - `HAS_HOOKS` — repo has pre-receive hooks (org-level branch
+    protection, secret scanning, etc.); GitHub still considers the
+    PR mergeable if checks pass, just routes through the hooks. The
+    shepherd MUST treat this as mergeable, otherwise hook-enabled
+    repos (i.e. all of mctlhq/*) stall forever.
+  - `UNSTABLE` — non-required CI checks are failing but required
+    ones pass; user policy on mctl-gitops merges these. Treat as
+    mergeable.
+  States that always force `wait`: `BLOCKED` (required check
+  failing, missing review, or branch protection), `BEHIND` (PR
+  branch trails main; the shepherd does not auto-rebase in v1),
+  `DIRTY` (merge conflicts), `UNKNOWN` (GitHub still computing —
+  retry next tick), `DRAFT` (PR not ready for merge by author
+  intent).
 
 ## Address-review followup
 When findings exist, the shepherd:
