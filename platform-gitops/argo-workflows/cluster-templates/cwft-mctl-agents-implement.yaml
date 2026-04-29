@@ -209,6 +209,17 @@ spec:
       script:
         image: alpine/git:2.43.0
         command: [sh]
+        env:
+          # Workflow params injected as env vars so the shell layer can quote
+          # them safely. Direct `{{workflow.parameters.*}}` interpolation in
+          # the script body is a shell-injection vector — and this pod has
+          # the gitops deploy key + push access to main, so a crafted
+          # `service` / `slug` value could escalate from a malformed param
+          # into arbitrary git operations against mctl-gitops.
+          - name: WORKFLOW_SERVICE
+            value: "{{workflow.parameters.service}}"
+          - name: WORKFLOW_SLUG
+            value: "{{workflow.parameters.slug}}"
         source: |
           set -e
           apk add --no-cache openssh-client ca-certificates
@@ -254,13 +265,11 @@ spec:
             exit 0
           fi
 
-          SERVICE="{{workflow.parameters.service}}"
-          SLUG="{{workflow.parameters.slug}}"
           DATE=$(date -u +%Y-%m-%d)
-          if [ -n "$SLUG" ]; then
-            MSG="chore(agents): implement ${SLUG} ${DATE}"
-          elif [ -n "$SERVICE" ]; then
-            MSG="chore(agents): implement ${SERVICE} ${DATE}"
+          if [ -n "$WORKFLOW_SLUG" ]; then
+            MSG="chore(agents): implement ${WORKFLOW_SLUG} ${DATE}"
+          elif [ -n "$WORKFLOW_SERVICE" ]; then
+            MSG="chore(agents): implement ${WORKFLOW_SERVICE} ${DATE}"
           else
             MSG="chore(agents): implement run ${DATE}"
           fi
@@ -301,6 +310,20 @@ spec:
                 name: mctl-agents-secrets
                 key: telegram-chat-id
                 optional: true
+          # Workflow params + status injected as env vars so the shell layer
+          # can quote them safely. Even though this is just a notification
+          # step, raw `{{workflow.parameters.*}}` interpolation is still
+          # arbitrary command execution in a workflow pod.
+          - name: WORKFLOW_STATUS
+            value: "{{workflow.status}}"
+          - name: WORKFLOW_SERVICE
+            value: "{{workflow.parameters.service}}"
+          - name: WORKFLOW_SLUG
+            value: "{{workflow.parameters.slug}}"
+          - name: WORKFLOW_NAME
+            value: "{{workflow.name}}"
+          - name: WORKFLOW_DURATION
+            value: "{{workflow.duration}}"
         source: |
           set +e
           if [ -z "$TG_BOT_TOKEN" ] || [ -z "$TG_CHAT_ID" ]; then
@@ -309,26 +332,21 @@ spec:
           fi
           apk add --no-cache curl ca-certificates >/dev/null 2>&1
 
-          STATUS="{{workflow.status}}"
-          SERVICE="{{workflow.parameters.service}}"
-          SLUG="{{workflow.parameters.slug}}"
-          WF="{{workflow.name}}"
-          DUR="{{workflow.duration}}"
-          case "$STATUS" in
+          case "$WORKFLOW_STATUS" in
             Succeeded) ICON="✅" ;;
             Failed)    ICON="❌" ;;
             Error)     ICON="⚠️" ;;
             *)         ICON="⏳" ;;
           esac
-          if [ -n "$SLUG" ]; then
-            SUBJECT="implement ${SLUG}"
-          elif [ -n "$SERVICE" ]; then
-            SUBJECT="implement ${SERVICE}"
+          if [ -n "$WORKFLOW_SLUG" ]; then
+            SUBJECT="implement ${WORKFLOW_SLUG}"
+          elif [ -n "$WORKFLOW_SERVICE" ]; then
+            SUBJECT="implement ${WORKFLOW_SERVICE}"
           else
             SUBJECT="implement (all accepted)"
           fi
-          UI_URL="https://workflows.mctl.ai/workflows/argo-workflows/${WF}"
-          TEXT="${ICON} mctl-agents: ${SUBJECT} — ${STATUS} (${DUR}s)\n${UI_URL}"
+          UI_URL="https://workflows.mctl.ai/workflows/argo-workflows/${WORKFLOW_NAME}"
+          TEXT="${ICON} mctl-agents: ${SUBJECT} — ${WORKFLOW_STATUS} (${WORKFLOW_DURATION}s)\n${UI_URL}"
 
           curl -s -o /dev/null -w 'telegram http=%{http_code}\n' \
             -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
