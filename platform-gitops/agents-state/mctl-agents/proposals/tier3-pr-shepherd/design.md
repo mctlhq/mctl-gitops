@@ -67,7 +67,7 @@ if pr.closed_unmerged:
     return ("flip-to-rejected", pr.close_comment_or_default)
 if not codex_review.has_responded:
     return ("wait", None)            # codex still parsing the PR
-findings = codex_review.findings_p1_p2()
+findings = codex_review.findings_p1_p2(at=pr.head_sha)
 if findings:
     return ("address-review", findings)
 if not pr.checks_green:
@@ -97,6 +97,16 @@ Notes:
   shepherd reuses the GitHub API queries but anchors on
   `head_pushed_at` (a stricter check than the skill's trigger
   comment) for safety.
+- `codex_review.findings_p1_p2(at=pr.head_sha)` is **also anchored
+  to the current PR head SHA**. It only returns P1/P2 review
+  comments whose `commit_id` equals `pr.head_sha` (or, for top-level
+  issue comments, whose `created_at > pr.head_pushed_at`). Without
+  this anchor, a P1 finding from an earlier commit that the
+  follow-up already fixed would still surface and the loop would
+  spin on `address-review` forever, never reaching `merge`. With
+  the anchor, once the implementer pushes a follow-up that codex
+  re-reviews clean, `findings_p1_p2()` returns an empty list on the
+  next tick and the shepherd progresses to `merge`.
 - **Codex is the only gating signal.** Copilot's review is observed
   for context (and can be displayed in the shepherd's per-tick log
   line for the operator) but does NOT block a merge. Project policy

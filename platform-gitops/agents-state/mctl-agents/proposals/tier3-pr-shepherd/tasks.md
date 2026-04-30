@@ -22,7 +22,10 @@ this lands and a new mctl-agents tag is published.
   - DoD: implements the `decide()` function and the state-machine
     described in design.md.
   - DoD: implements `find_pr_for_proposal()`, `read_codex_review()`,
-    `apply_followup()`, `merge_pr()`, `update_status()` helpers.
+    `read_copilot_review()` (observed only, never gates a merge —
+    its findings ride along to the per-tick operator log per
+    design.md), `apply_followup()`, `merge_pr()`, `update_status()`
+    helpers.
   - DoD: respects `SHEPHERD_BUDGET_USD` env (default 1.00); exits with
     a warning when the cap is crossed.
   - DoD: writes `<service>/<slug>: <decision>` for every processed
@@ -38,7 +41,9 @@ this lands and a new mctl-agents tag is published.
     fixture worktree and a mocked GitHub API.
 - [ ] 4. Add `tests/test_run_shepherd.py` — unit tests.
   - DoD: covers each branch of `decide()` (wait, address-review,
-    merge, flip-to-merged, flip-to-rejected, give-up-after-3).
+    merge, flip-to-merged, flip-to-rejected). The `give-up-after-3`
+    cap lives in the outer state machine, not in `decide()` —
+    covered separately by T6.
   - DoD: full state-machine test on a temp worktree fixture passing
     both the happy path (clean review → merge) and the loop path
     (P1 finding → followup → re-evaluate).
