@@ -21,13 +21,19 @@ spec:
 
           persistence:
             enabled: true
-            # Bumped from 10Gi to 20Gi to give Loki headroom while the compactor
-            # catches up on retention. `hcloud-volumes` supports online expansion;
-            # the StatefulSet's volumeClaimTemplates is immutable so after ArgoCD
-            # syncs, the existing PVC may need a manual
+            # Bumped from 20Gi to 40Gi after the volume hit 99.9% used and Argo
+            # workflows started failing with "Storage backend has reached its
+            # minimum free drive threshold" on artifact upload (see
+            # mctl-agents-implement-702897ce, 2026-04-30).
+            # `hcloud-volumes` supports online expansion; the StatefulSet's
+            # volumeClaimTemplates is immutable so after ArgoCD syncs, the
+            # existing PVC may need a manual
             # `kubectl patch pvc minio -n minio --type=merge \
-            #   -p '{"spec":{"resources":{"requests":{"storage":"20Gi"}}}}'`.
-            size: 20Gi
+            #   -p '{"spec":{"resources":{"requests":{"storage":"40Gi"}}}}'`.
+            # Follow-up: add a bucket lifecycle rule on argo-workflows-logs to
+            # auto-expire archived logs older than 30 days so this doesn't
+            # recur on the next bump.
+            size: 40Gi
 
           deploymentUpdate:
             type: Recreate
