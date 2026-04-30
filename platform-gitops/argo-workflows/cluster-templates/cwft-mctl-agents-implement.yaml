@@ -34,10 +34,16 @@ spec:
   activeDeadlineSeconds: 7200
   entrypoint: implement-proposals
   onExit: notify-telegram
-  # Same shared mutex as cwft-mctl-agents-run — both push to mctl-gitops main.
-  synchronization:
-    mutex:
-      name: mctl-gitops-main-writes
+  # NOTE: the shared `mctl-gitops-main-writes` mutex is no longer at
+  # workflow-level here. It would serialise the entire implement run —
+  # including the long clone + run-implementer steps that don't write
+  # to gitops main — against every other implement run AND against
+  # cwft-mctl-agents-run. We move it to the `commit-and-push` template
+  # only (see below): clone + run-implementer can run truly parallel
+  # across multiple implement workflows, and only the gitops-main push
+  # step serialises on the shared mutex. This unblocks parallel batches
+  # of mctl_trigger_implementer (one workflow per slug) without
+  # weakening the push-conflict guard the mutex was added for.
 
   arguments:
     parameters:
@@ -232,6 +238,14 @@ spec:
     # Only .status.yaml files should change in agents-state/ (run_implementer
     # writes them after each proposal). Defensive: stage only that subtree.
     - name: commit-and-push
+      # Template-level mutex: only this step holds the shared gitops-main
+      # write lock. Multiple implement workflows can clone + run-implementer
+      # in parallel; their commit-and-push steps queue on this mutex one at
+      # a time, same name as cwft-mctl-agents-run uses, so cron + on-demand
+      # implementer batches still serialise their pushes to mctl-gitops main.
+      synchronization:
+        mutex:
+          name: mctl-gitops-main-writes
       script:
         image: alpine/git:2.43.0
         command: [sh]
