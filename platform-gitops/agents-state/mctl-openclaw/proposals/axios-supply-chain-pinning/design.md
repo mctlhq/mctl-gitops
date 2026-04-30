@@ -2,93 +2,76 @@
 
 ## Current state
 
-The mctl-openclaw repo is a Node.js + TypeScript workspace (see
-`context/architecture.md`). Dependencies include `node-slack-sdk`, which has been
-confirmed to resolve `axios@1.15.0` (safe). However, no systematic audit has been
-run across all workspace packages. Other workspace packages — including those under
-`extensions/*` for channels such as WhatsApp, Telegram, Discord, and others — may
-have their own direct or transitive `axios` dependencies that could resolve to
-`axios@1.14.1` or `axios@0.30.4`.
+The mctl-openclaw workspace is an npm workspace (TypeScript + Node.js) with multiple packages: core openclaw, extensions per channel, and plugin-sdk consumers. `axios` appears as a transitive dependency via several packages:
 
-The WAVESHAPER.V2 backdoor is activated on `require`/`import` of the compromised
-package. Because openclaw runs with access to S3 credentials, channel OAuth tokens,
-and API keys in the process environment, a single resolved backdoored dependency is
-sufficient for a full credential exfiltration.
+- `@slack/web-api` and `@slack/webhook` explicitly pin `axios >= 1.15.0` (safe; done in their April 2025 releases).
+- openclaw core and channel extensions may pull in older axios versions through other transitive paths (e.g. CLI tooling, test harnesses, or bundled provider packages).
 
-The existing `npm-supply-chain-audit` proposal covers `lotusbail` and
-`discord.js-user` but does NOT cover this Axios vector. That proposal and this one
-are independent and complementary.
+The WAVESHAPER.V2 backdoor is present in `axios@1.14.1` and `axios@0.30.4`. It activates silently on `require('axios')` and exfiltrates credentials. The threat is real: the mctl-openclaw workspace holds S3 credentials (per-tenant), channel OAuth refresh tokens, GitHub deploy keys, and npm publish tokens — exactly the secrets WAVESHAPER.V2 targets.
+
+No workspace-wide `overrides` or `resolutions` block is currently in place to enforce a minimum safe axios version.
+
+See `context/architecture.md` §"Dependencies for researcher" for the full tracked dependency list.
 
 ## Proposed solution
 
-**Run a full dependency-tree audit and, if needed, add npm `overrides` to pin Axios
-to a safe version.**
+**Three-phase approach: audit → pin → automate.**
 
-Steps:
-1. From the monorepo root, run `npm ls axios --all` (or the workspace equivalent)
-   to enumerate every path in the dependency tree that resolves an `axios` version.
-2. Inspect the output for any occurrence of `1.14.1` or `0.30.4`.
-3. If found: add an `overrides` block to the affected workspace's `package.json`
-   (or to the root `package.json` for a global override) pinning `axios` to the
-   nearest safe version in the same semver range (e.g., `>=1.15.0` for the 1.x
-   line, any non-backdoored 0.x release for the 0.x line).
-4. Regenerate the lockfile (`npm install`) and verify `npm ls axios` no longer
-   reports the backdoored versions.
-5. Commit the lockfile and `package.json` changes; CI must pass.
-6. If no backdoored versions are found: record the audit date and result as a
-   comment in the repo's security log (or a dated note in `context/`) and close
-   the proposal as "clean — no change required."
+### Phase 1: Audit (immediate — Day 1)
 
-Why npm `overrides` rather than bumping the direct dependency:
-- In many cases `axios` is not a direct dependency of our code but is pulled in
-  transitively. A direct-dependency bump would require forking the upstream package
-  or patching its `package.json`, which is not maintainable. npm `overrides`
-  (supported since npm 8) is the canonical mechanism for forcing a safe resolution
-  across the entire tree without changing upstream packages.
-- No new packages are introduced; only the resolved version of an already-present
-  package is changed. Memory footprint is unaffected.
+Run `npm ls axios --all` across the workspace and compare the installed versions of `axios` in each of the three tenant Docker images (via `docker run --rm <image> npm ls axios --all`). Document every version found.
+
+If `1.14.1` or `0.30.4` is present in any tenant image:
+1. Treat as a critical incident.
+2. Rotate all secrets accessible from that tenant (S3 creds, OAuth tokens, GitHub keys, npm tokens).
+3. Rebuild the image with the pin in place (Phase 2) before re-deploying.
+
+### Phase 2: Pin (immediate — Day 1–2)
+
+Add a workspace-wide `overrides` block to the **root** `package.json`:
+
+```json
+{
+  "overrides": {
+    "axios": ">=1.15.0"
+  }
+}
+```
+
+Regenerate `package-lock.json` (`npm install --package-lock-only`), verify with `npm ls axios`, and confirm no entry for `1.14.1` or `0.30.4` appears in the lock file. Rebuild all Docker images from the updated lockfile.
+
+For yarn workspaces: use the `resolutions` field instead.
+
+### Phase 3: Automate (Day 2–5)
+
+Add `npm audit --audit-level=high` to the CI pipeline (GitHub Actions / the existing mctl-gitops pipeline). Any PR that introduces a high-severity advisory fails the build. This prevents future supply-chain compromises from reaching a tenant without an explicit bypass.
+
+Optionally, add `socket.dev` or `Snyk` scanning as a secondary check for known-malicious packages (as distinct from CVE advisories, which `npm audit` may lag).
 
 ## Alternatives
 
-**Option A — Upgrade every direct dependency that pulls in Axios to a version that
-no longer uses the backdoored release.**
-Rejected: requires identifying which version of each upstream package has moved off
-`axios@1.14.1` or `0.30.4`, and may not be possible if no such version exists yet.
-npm `overrides` achieves the same outcome immediately.
+**A. Manual image inspection only (no pin)** — Rejected. Without an enforced pin, the next `npm install` could silently re-introduce the backdoored version if a transitive dependency relaxes its own constraints.
 
-**Option B — Remove all packages that transitively depend on Axios.**
-Rejected: `node-slack-sdk` and likely other channel integrations require Axios.
-Removing them would break Slack and other channel support, which is out of scope
-and disproportionate.
+**B. Remove axios from the dependency tree entirely** — Rejected. Axios is a transitive dep of node-slack-sdk and potentially other packages. Replacing it would require forking or patching those packages, which is disproportionate effort for a version-pinning fix.
 
-**Option C — Wait for upstream openclaw to upgrade its own dependencies.**
-Rejected: the threat is active now. The time between a backdoored package existing
-in the dependency tree and an exfiltration event is not bounded by upstream release
-cycles. We must act within our own fork.
+**C. Audit only the running images, skip lock file enforcement** — Rejected. Auditing running images is necessary but not sufficient; the lock file must be fixed to protect future builds.
 
 ## Platform impact
 
-**Migrations**
-- None. The lockfile regeneration is a build-time change only. No runtime
-  migrations are needed.
+### Migrations
+Root `package.json` gains an `overrides` block; `package-lock.json` is regenerated. All tenant images must be rebuilt from the updated lockfile. No runtime behavior changes.
 
-**Backward compatibility**
-- npm `overrides` does not change the public API of any package; it changes only
-  the resolved version. If the safe Axios version has an interface change, CI tests
-  will catch it.
-- All channel integrations using Axios remain functional; only the resolved version
-  changes (and only if the current resolution points to the backdoored versions).
+### Backward compatibility
+`axios >= 1.15.0` is fully API-compatible with 1.14.x (the backdoor was injected without API changes). No application code changes required.
 
-**Resource impact — `labs`**
-- No new packages are added. If the pinned version is already in the lockfile
-  (e.g., `1.15.0` is already resolved elsewhere in the tree), npm deduplicates it.
-  Memory impact is zero. The `labs` memory constraint is not affected.
+### Resource impact (especially for `labs`)
+Zero memory or CPU impact. This is a lockfile-level constraint with no runtime footprint.
 
-**Risks and mitigations**
+### Risks and mitigations
 
-| Risk | Likelihood | Mitigation |
-|------|-----------|------------|
-| Backdoored version already present and credentials exfiltrated | Medium if found | Open a separate incident immediately; rotate all S3 credentials, channel OAuth tokens, and API keys |
-| Safe Axios version has a breaking API change | Low | CI test suite catches breakage before deployment |
-| npm `overrides` silently breaks a nested dependency | Very low | `npm ls` re-run after lockfile regeneration confirms consistent resolution |
-| False-clean audit (tool reports safe but lockfile contains backdoored version) | Very low | Cross-check `grep` on the lockfile for the version strings `1.14.1` and `0.30.4` as a secondary check |
+| Risk | Mitigation |
+|------|------------|
+| Backdoored version was present in a deployed image | Immediate credential rotation per the Phase 1 incident procedure |
+| CI `npm audit` produces false positives from other low-severity advisories | Set `--audit-level=high` to gate only on HIGH and CRITICAL; review and suppress known-safe findings with `.nsprc` or `npm audit --omit` |
+| Lock file regeneration pulls in unintended dependency upgrades | Review `npm install --dry-run` diff before committing; scope the change to axios resolution only |
+| Some package requires axios < 1.15.0 and cannot be upgraded | Evaluate whether that package is still maintained; if not, consider replacing it |
