@@ -1,13 +1,4 @@
-status: accepted
-updated_at: 2026-04-30T20:42:00Z
-updated_by: mashkovd
-notes: |
-  W18 mentor digest Top-5 #3 (lead of 5-CVE Backstage 1.50.3 bundle).
-  Impact/Effort 5/3 combined; this slug alone is 4/2.
-  CVE-2026-24046 — symlink escape in scaffolder tasks (read/write/delete on
-  pod filesystem). Underlying bump: @backstage/plugin-scaffolder-backend ≥ 3.1.1.
-  Bundle companions left as proposed for now (will batch after this lead PR
-  proves implementer mechanics): scaffolder-secret-leak, integration-scm-credentials,
-  techdocs-path-traversal-fix, integration-credential-leak-fix, nodejs-security-patch.
-  Mentor's recommendation is to ship all 5 in one Backstage 1.50.3 PR — this
-  lead implementation may need manual extension to that bundle scope.
+status: implemented
+updated_at: '2026-04-30T22:01:23Z'
+updated_by: mctl-agents[bot]
+pr: https://github.com/mctlhq/mctl-portal/pull/10
