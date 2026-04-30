@@ -39,14 +39,23 @@ out of scope here so the first version stays small.
 
 ## Acceptance criteria (EARS)
 - WHEN the cron fires AND a proposal exists with `.status.yaml`
-  `status` in `{implemented, review-fixing}` AND its `pr:` URL points
-  to an open PR THE SYSTEM SHALL evaluate the PR and decide one of:
-  `wait` (codex still pending, OR the followup commit hasn't landed
-  yet), `address-review` (P1/P2 findings exist), or `merge` (clean
-  review + green CI). Both states are non-terminal; filtering to
-  `implemented` only would strand any proposal that the previous
-  tick moved to `review-fixing`, because the next tick would never
-  look at it again to detect that the followup commit has landed.
+  `status` in `{implemented, review-fixing}` AND it has a `pr:` URL
+  THE SYSTEM SHALL evaluate that PR (regardless of whether it is
+  open, closed, or merged) and decide one of: `wait` (codex still
+  pending, OR the followup commit hasn't landed yet), `address-review`
+  (P1/P2 findings exist on the head SHA), `merge` (clean review +
+  green CI), `flip-to-merged` (PR was already merged out of band, so
+  the proposal's terminal state is `merged`), or `flip-to-rejected`
+  (PR was closed without merging, so the proposal's terminal state
+  is `rejected`). Both `implemented` and `review-fixing` are
+  non-terminal status values; filtering to `implemented` only would
+  strand any proposal that the previous tick moved to `review-fixing`,
+  because the next tick would never look at it again to detect that
+  the followup commit has landed. Likewise, filtering the PR to
+  `state=open` only would strand any proposal whose PR was just
+  merged or closed by a human between ticks — the shepherd must
+  observe the closed/merged PR state at least once to flip the
+  proposal's `.status.yaml` to its terminal value.
 - WHEN the decision is `merge` THE SYSTEM SHALL invoke
   `gh pr merge --merge --delete-branch --match-head-commit <SHA>`
   with the PR's identifier AND the head SHA that was used during
