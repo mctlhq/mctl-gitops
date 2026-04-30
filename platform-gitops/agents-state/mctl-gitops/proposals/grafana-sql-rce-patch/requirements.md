@@ -1,58 +1,47 @@
-# Grafana RCE via SQL Expressions (CVE-2026-27876)
+# Grafana RCE via SQL Expressions and Plugin Chaining (CVE-2026-27876)
 
 ## Context
-CVE-2026-27876 (Critical, CVSS 9.1) affects Grafana v11.6.0 through v12.4.1. When the
-`sqlExpressions` feature toggle is enabled, a user with Viewer-level permissions can
-overwrite a Sqlyze driver or AWS data source configuration to achieve remote code execution
-with SSH-level access on the Grafana host. This is an unauthenticated-adjacent attack
-surface: Viewer accounts are commonly granted to broad audiences (developers, on-call
-engineers, external stakeholders) and are not considered privileged. Fixed versions are
-v12.1.10, v12.2.8, v12.3.6, v12.4.2, and v13.0.0 and later.
 
-Per `context/architecture.md`, Grafana is listed as a dependency "if templated" —
-indicating it may be deployed via the platform's templated Helm charts rather than being
-a confirmed, always-present service. Regardless of deployment status, a CVSS 9.1 RCE
-warrants a pre-emptive proposal. If Grafana is deployed with cluster-level credentials
-(as is typical when deployed via `helm-charts/base-service`), host RCE becomes a stepping
-stone to broader cluster compromise. The remediation is a version upgrade to a patched
-release, or disabling the `sqlExpressions` feature toggle as an interim mitigation that
-does not require a full upgrade.
+CVE-2026-27876 (CVSS 9.1 Critical) is a remote code execution vulnerability in Grafana versions
+v11.6.0–v12.4.1. An attacker with only Viewer-level permissions, when the `sqlExpressions`
+feature toggle is enabled, can overwrite a Sqlyze driver or AWS data source configuration to
+achieve remote code execution with SSH-level access to the Grafana host. Fixed in v12.1.10,
+v12.2.8, v12.3.6, v12.4.2, and v13.0.0+.
+
+The mctl platform's `context/architecture.md` lists Grafana/Loki as "if templated" — meaning
+Grafana may be deployed as a service via the `base-service` Helm chart under
+`platform-gitops/services/<tenant>/grafana/`. If deployed, it runs with cluster-level credentials
+in a shared Kubernetes cluster. Host RCE on such a pod is a direct path to cluster-wide
+compromise. This proposal must be executed conditionally: first confirm deployment, then remediate.
 
 ## User stories
-- AS a platform operator I WANT Grafana to be upgraded to a patched version or to have
-  `sqlExpressions` disabled SO THAT a Viewer-level account cannot achieve RCE on the
-  Grafana host.
-- AS a security engineer I WANT confirmation that the `sqlExpressions` feature toggle is
-  disabled or that Grafana is running a fixed version SO THAT CVE-2026-27876 is closed
-  with evidence.
-- AS a platform user with Viewer access I WANT assurance that my Viewer credentials cannot
-  be exploited to escalate to host-level access SO THAT the principle of least privilege
-  is enforced.
+
+- AS a platform operator I WANT to confirm whether Grafana is deployed via this repo SO THAT the
+  scope of CVE-2026-27876 exposure is known before taking action.
+- AS a security engineer I WANT the `sqlExpressions` feature toggle disabled immediately SO THAT
+  the RCE attack vector is closed without waiting for a full version upgrade.
+- AS a platform operator I WANT Grafana upgraded to a patched release (≥v12.1.10) SO THAT the
+  underlying vulnerability is eliminated and the toggle restriction can be lifted if needed.
 
 ## Acceptance criteria (EARS)
-- WHEN Grafana is confirmed as deployed on the platform THE SYSTEM SHALL be running a
-  version that includes the CVE-2026-27876 fix (v12.1.10+, v12.2.8+, v12.3.6+, v12.4.2+,
-  or v13.0.0+) OR have the `sqlExpressions` feature toggle explicitly set to `false`.
-- WHEN the `sqlExpressions` feature toggle is disabled THE SYSTEM SHALL return an error
-  to any request that attempts to use SQL Expression queries, preventing the exploit
-  precondition from being met.
-- WHILE Grafana is running the patched version THE SYSTEM SHALL reject attempts by
-  Viewer-level accounts to overwrite data source driver configurations via the SQL
-  Expressions path.
-- IF Grafana is not deployed (the "if templated" condition is false) THEN THE SYSTEM SHALL
-  have a documented confirmation of non-deployment committed to the decisions log, and this
-  proposal's tasks SHALL be marked as resolved via that confirmation.
-- IF Grafana is deployed via the templated Helm chart THEN THE SYSTEM SHALL have the
-  Grafana image version pinned to a patched release in the values file under
-  `platform-gitops/services/<tenant>/grafana/`.
-- WHEN the Grafana upgrade or toggle change is applied via an ArgoCD sync THE SYSTEM SHALL
-  complete reconciliation without sync errors or Grafana Pod crash-loops.
+
+- WHEN this proposal is actioned, THE SYSTEM SHALL first confirm whether a Grafana deployment
+  exists under `platform-gitops/services/` in this repository.
+- IF no Grafana deployment is found in the repository, THE SYSTEM SHALL close this proposal as
+  not applicable and document the finding in the PR description.
+- IF a Grafana deployment is found and the image version is in the range v11.6.0–v12.4.1, THE
+  SYSTEM SHALL apply `sqlExpressions = false` in `grafana.ini` as an interim mitigation within
+  one deploy cycle.
+- WHEN the `sqlExpressions` toggle is set to false, THE SYSTEM SHALL confirm that existing
+  dashboards that do not use SQL Expressions continue to render correctly.
+- WHEN the Grafana image is upgraded to a patched release (≥v12.1.10), THE SYSTEM SHALL confirm
+  that the ArgoCD Application shows `Healthy` and `Synced` post-rollout.
+- WHILE Grafana is running a patched version, THE SYSTEM SHALL not require `sqlExpressions`
+  to remain disabled unless operationally necessary.
 
 ## Out of scope
-- CVE-2026-21726 (Loki path traversal) — separate CVE, separate proposal if prioritized.
-- Changes to Grafana data source configurations beyond disabling the `sqlExpressions` toggle.
-- Grafana alerting, dashboard content, or RBAC role definitions beyond what is needed to
-  close the CVE.
-- Any Loki, Prometheus, or other observability stack components — only the Grafana server
-  process is in scope.
-- Grafana Enterprise features or Grafana Cloud deployments.
+
+- Changes to Grafana Loki datasource configuration or log retention policies.
+- Changes to existing dashboard definitions or alert rules.
+- Grafana RBAC restructuring beyond what is required to close this CVE.
+- Any Grafana instance not managed by this repository (e.g., external SaaS Grafana Cloud).

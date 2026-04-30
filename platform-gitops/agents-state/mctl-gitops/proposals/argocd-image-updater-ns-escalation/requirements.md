@@ -1,49 +1,45 @@
 # ArgoCD Image Updater Cross-Namespace Privilege Escalation (CVE-2026-6388)
 
 ## Context
-CVE-2026-6388 (Critical, CVSS 9.1) affects ArgoCD Image Updater. The component does not
-validate that an ImageUpdater resource is restricted to the namespace of the owning tenant.
-An authenticated user who has write access to ImageUpdater resources in their own namespace
-(e.g., `labs`) can craft a resource that triggers unauthorized image updates on applications
-managed by a different tenant (e.g., `admins`). This breaks the hard tenant-isolation
-boundary that the platform relies on at the GitOps control plane layer.
 
-The platform runs two tenants, `admins` and `labs`, with separate namespaces. ArgoCD
-manages all application state via the App-of-Apps pattern. A cross-namespace privilege
-escalation at the Image Updater level allows a `labs` actor to silently mutate images in
-`admins`-owned workloads — an unacceptable blast radius. The fix is either an upgrade to
-a patched ArgoCD Image Updater release or disabling the component entirely if it is not
-actively in use.
+CVE-2026-6388 (CVSS 9.1 Critical) is a privilege escalation vulnerability in ArgoCD Image Updater
+where insufficient namespace validation allows an authenticated user who can create or modify an
+ImageUpdater resource to bypass tenant namespace boundaries and trigger unauthorized image updates
+on applications owned by other tenants.
+
+The mctl platform hosts two tenants — `admins` and `labs` — sharing the same ArgoCD control plane
+at `ops.mctl.ai`. Any cross-namespace escalation at the GitOps layer undermines the fundamental
+isolation guarantee between tenants and could allow a `labs` user to trigger image rollouts in
+`admins` (or vice versa), corrupting production workloads.
 
 ## User stories
-- AS a platform operator I WANT ArgoCD Image Updater to be patched or disabled SO THAT
-  a tenant cannot trigger image updates on applications they do not own.
-- AS a security engineer I WANT evidence that the cross-namespace vector is closed SO THAT
-  the platform passes its next security audit without an open Critical CVE.
-- AS a `labs` tenant I WANT my namespace operations to be confined to my own applications
-  SO THAT I cannot accidentally or maliciously affect `admins` workloads.
+
+- AS a platform operator I WANT argocd-image-updater to be restricted to its own namespace SO THAT
+  no user can weaponize it to update applications outside their tenant boundary.
+- AS a security engineer I WANT the patched or disabled image-updater configuration committed to
+  this repo SO THAT the remediation is auditable via git history and re-applied on every ArgoCD sync.
+- AS a tenant in `labs` I WANT assurance that another tenant cannot trigger a rollout into my
+  namespace SO THAT my workloads are not disrupted by unauthorized image updates.
 
 ## Acceptance criteria (EARS)
-- WHEN an ImageUpdater resource is created or modified in the `labs` namespace THE SYSTEM
-  SHALL restrict the scope of any triggered image update to applications that reside in the
-  `labs` namespace only.
-- WHEN an ImageUpdater resource targets an application outside its own namespace THE SYSTEM
-  SHALL reject or ignore the update and emit an audit-level log entry.
-- WHILE ArgoCD Image Updater is running THE SYSTEM SHALL enforce namespace-scoped RBAC so
-  that the Image Updater service account cannot write to Application resources in namespaces
-  it does not own.
-- IF ArgoCD Image Updater is confirmed to be inactive or undeployed THEN THE SYSTEM SHALL
-  have the component removed from the bootstrap chart and all related RBAC manifests deleted.
-- IF the patched Image Updater version is deployed THEN THE SYSTEM SHALL produce a passing
-  integration test demonstrating that a cross-namespace update attempt is rejected.
-- WHEN the upgrade or removal is applied via an ArgoCD sync THE SYSTEM SHALL complete
-  reconciliation without sync errors or health degradation in either tenant.
+
+- WHEN a user creates or modifies an ImageUpdater resource in any namespace, THE SYSTEM SHALL
+  enforce that the resource's `argocd-image-updater.argoproj.io/app-name` annotation references
+  only applications within the same tenant namespace.
+- WHEN argocd-image-updater is deployed, THE SYSTEM SHALL run with a scoped ClusterRole or
+  namespaced Role that denies write access to ArgoCD Application resources outside its designated
+  namespace.
+- IF the installed argocd-image-updater version is earlier than the release that patches
+  CVE-2026-6388, THE SYSTEM SHALL either upgrade to the patched version or have the component
+  disabled in the ArgoCD Application manifest.
+- WHEN argocd-image-updater is disabled or upgraded, THE SYSTEM SHALL confirm that all existing
+  ArgoCD Applications continue to sync and reconcile without errors.
+- WHILE argocd-image-updater is absent or at the patched version, THE SYSTEM SHALL not expose any
+  endpoint that allows cross-namespace Application write operations.
 
 ## Out of scope
-- Changes to ArgoCD core (server, application-controller, repo-server) — only Image Updater
-  is in scope.
-- Modifications to ApplicationSet definitions or the App-of-Apps bootstrap chart beyond
-  removing Image Updater references.
-- Broader RBAC hardening of ArgoCD beyond namespace scoping for Image Updater.
-- Remediation of any other CVE in the ArgoCD ecosystem (e.g., those covered by
-  `argocd-informer-cache-patch`).
+
+- Changes to the ArgoCD ApplicationSet templates or the bootstrap App-of-Apps chart.
+- Changes to the `base-service` Helm chart used by tenant workloads.
+- Broader ArgoCD RBAC overhaul beyond the Image Updater component.
+- Rotation of ArgoCD admin credentials or deploy keys.

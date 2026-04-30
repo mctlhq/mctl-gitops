@@ -1,49 +1,46 @@
 # Vault KVv2 Secret Deletion Policy Bypass (CVE-2026-3605)
 
 ## Context
-CVE-2026-3605 affects HashiCorp Vault's KVv2 secrets engine. An authenticated user who
-holds any glob-based KVv2 policy (e.g., `secret/data/labs/*`) can invoke the metadata or
-delete endpoint for paths they are not permitted to read, permanently destroying secrets
-they have no read authorization over. This is a targeted denial-of-service vector via
-secret destruction rather than data exfiltration.
 
-Vault at `secrets.mctl.ai` is the single secret store for all tenants on the platform.
-The `vault-backend` ClusterSecretStore is used by External Secrets Operator to materialize
-secrets into both the `admins` and `labs` namespaces. If a tenant with glob-based KVv2
-access deletes secrets belonging to another tenant or platform service, ExternalSecrets
-will fail to refresh those secrets, causing workload disruption across the platform. This
-CVE is a separate attack surface from CVE-2026-5052 (SSRF/ACME), which is already tracked
-by the `vault-ssrf-acme-patch` proposal.
+CVE-2026-3605 is a policy bypass vulnerability in HashiCorp Vault: an authenticated user whose
+KVv2 policy contains a glob path (e.g., `secret/data/labs/*`) can delete secrets at those paths
+even when the policy grants no `read` or `list` capabilities. The deletion is silent — the secret
+disappears without triggering an explicit access-denied event on the read path.
+
+On the mctl platform, Vault (`secrets.mctl.ai`) is the single secret store for every tenant.
+All secrets flow through the `vault-backend` ClusterSecretStore (External Secrets Operator) into
+Kubernetes ExternalSecret objects. If a tenant's secrets are unexpectedly deleted, their
+ExternalSecrets will fail to refresh, pods will crash on restart due to missing environment
+variables or mounted secrets, and workloads across the affected tenant will stop. Because `labs`
+is near its memory limit, a cascading crash-restart loop there is especially risky.
 
 ## User stories
-- AS a platform operator I WANT Vault to enforce that a user cannot delete secrets outside
-  their authorized read scope SO THAT a tenant cannot destroy another tenant's secrets.
-- AS a security engineer I WANT all KVv2 glob-based policies to be audited and tightened
-  SO THAT the blast radius of any compromised token is limited to the paths it can read.
-- AS a `labs` tenant I WANT assurance that my secrets cannot be deleted by an `admins`
-  user (or vice versa) SO THAT my workloads remain stable regardless of other tenants'
-  actions.
+
+- AS a platform operator I WANT all KVv2 glob policies replaced with explicit path policies SO
+  THAT no authenticated user can delete secrets outside their authorized scope.
+- AS a security engineer I WANT Vault upgraded to the release that patches CVE-2026-3605 SO THAT
+  the underlying enforcement defect is eliminated, not just mitigated by policy rewrites.
+- AS a `labs` tenant I WANT my secrets protected against deletion by other tenants SO THAT my
+  workloads remain stable even if another tenant's credentials are compromised.
 
 ## Acceptance criteria (EARS)
-- WHEN an authenticated user with a glob-based KVv2 policy attempts to delete a secret at
-  a path they are not authorized to read THE SYSTEM SHALL deny the delete operation and
-  return a 403 response.
-- WHEN a KVv2 delete or metadata destroy request is made THE SYSTEM SHALL evaluate the
-  caller's policy against the specific secret path before executing the operation.
-- WHILE Vault is running with the patched version THE SYSTEM SHALL enforce path-level
-  authorization for all KVv2 delete, metadata-delete, and destroy operations.
-- IF a KVv2 policy uses glob patterns THE SYSTEM SHALL scope delete and destroy permissions
-  only to paths explicitly granted, not to paths matched solely by the glob on other
-  operations.
-- WHEN the Vault upgrade is applied THE SYSTEM SHALL complete the upgrade without
-  disrupting ExternalSecrets synchronization for either tenant.
-- IF upgrading Vault is not immediately feasible THEN THE SYSTEM SHALL have all glob-based
-  KVv2 policies tightened to remove delete/destroy capabilities from paths not owned by
-  the token holder as an interim mitigation.
+
+- WHEN a Vault token with a glob-based KVv2 policy attempts to delete a secret path not explicitly
+  granted in its policy, THE SYSTEM SHALL return a 403 Forbidden response.
+- WHEN the policy audit is complete, THE SYSTEM SHALL have no KVv2 policy that grants `delete` or
+  `destroy` capabilities via a glob pattern without a corresponding explicit `read` grant.
+- IF the Vault server version is earlier than the release that patches CVE-2026-3605, THE SYSTEM
+  SHALL have Phase 1 policy tightening applied as an interim mitigation before the upgrade window.
+- WHEN Vault is upgraded to the patched release, THE SYSTEM SHALL pass all existing ESO
+  ExternalSecret sync checks within 5 minutes of the upgrade completing.
+- WHILE Phase 1 policy tightening is in effect, THE SYSTEM SHALL not break any existing
+  ExternalSecret that legitimately reads secrets under a glob-matched path.
+- WHEN the remediation is complete, THE SYSTEM SHALL record the updated policy files and the Vault
+  version bump in a git commit in this repository.
 
 ## Out of scope
-- CVE-2026-5052 (Vault SSRF/ACME) — already tracked by `vault-ssrf-acme-patch`.
-- Changes to the External Secrets Operator deployment or ClusterSecretStore configuration
-  (unless a policy change makes a SecretStore update necessary).
-- Vault PKI engine, auth backends, or non-KVv2 secrets engines.
-- Vault infrastructure changes (HA configuration, storage backend, TLS certs).
+
+- CVE-2026-5052 (Vault PKI ACME SSRF) — tracked separately in `vault-ssrf-acme-patch`.
+- Changes to the External Secrets Operator itself.
+- Migration away from Vault to a different secret store.
+- Rotation of existing tenant secrets (separate operational task, not gated on this proposal).
