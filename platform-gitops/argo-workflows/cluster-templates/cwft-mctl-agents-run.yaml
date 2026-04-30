@@ -150,7 +150,7 @@ spec:
           - name: SERVICE_AGENT_BUDGET_USD
             value: "5.00"
           - name: MENTOR_BUDGET_USD
-            value: "2.00"
+            value: "10.00"
         resources:
           requests: { cpu: 200m, memory: 512Mi }
           limits:   { cpu: 2000m, memory: 2Gi }
