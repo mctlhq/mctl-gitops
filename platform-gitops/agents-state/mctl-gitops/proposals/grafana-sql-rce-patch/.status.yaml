@@ -1,0 +1,8 @@
+status: accepted
+updated_at: 2026-05-01T00:30:00Z
+updated_by: mashkovd
+notes: |
+  W18 Group A. Impact/Effort 4/2.
+  Grafana SQL RCE patch. Sits behind Auth Proxy on admins, but should
+  ride the W18 cluster security release. Refined in mentor digest run
+  2026-04-30 22:52 — current version of the proposal is the one to ship.
