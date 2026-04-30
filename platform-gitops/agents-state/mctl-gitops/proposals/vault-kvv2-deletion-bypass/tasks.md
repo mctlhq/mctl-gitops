@@ -1,72 +1,59 @@
 # Tasks: vault-kvv2-deletion-bypass
 
-- [ ] 1. Confirm the running Vault version and identify the patched release for
-         CVE-2026-3605 — DoD: version string from the running Vault Pod recorded in the
-         ADR; upstream advisory confirms the minimum fixed version; coordination note
-         added if this upgrade overlaps with `vault-ssrf-acme-patch`.
+## Phase 1 — Policy tightening (interim mitigation)
 
-- [ ] 2. Audit all KVv2 Vault policies for glob patterns that include `delete`, `destroy`,
-         or metadata write capabilities — DoD: a documented list of affected policies with
-         specific capability lines highlighted, committed to `context/decisions/` as part
-         of the ADR for this proposal.
+- [ ] 1. Enumerate all Vault policies — run `vault policy list` and pull each policy's HCL.
+  DoD: full list of policies with glob paths documented.
 
-- [ ] 3. (Interim mitigation — depends on 2) Produce revised policy HCL files that remove
-         delete/destroy capabilities from glob-matched paths and restrict them to explicit
-         paths only where genuinely required — DoD: revised HCL files reviewed, approved,
-         and applied via `vault policy write`; ESO ClusterSecretStore remains `Ready`;
-         no ExternalSecret sync errors in either namespace.
+- [ ] 2. Identify policies that grant `delete` or `destroy` under a glob path (depends on 1).
+  DoD: list of policy names and the offending capability lines.
 
-- [ ] 4. Identify and update any internal tooling that calls Vault via non-canonical URL
-         paths (double slashes, trailing slashes) — DoD: grep across `platform-gitops/`
-         and `cli/mctl/` finds no non-canonical Vault URL constructions, or all found
-         instances are fixed and merged.
+- [ ] 3. Rewrite each identified policy to remove `delete`/`destroy` from glob rules; add
+  explicit non-glob delete paths only where operationally required (depends on 2).
+  DoD: updated HCL files committed to `infrastructure/` (or the relevant Terraform module);
+  `vault policy read <name>` output matches the new HCL.
 
-- [ ] 5. (depends on 1, 4) Upgrade Vault to the patched release in the relevant manifest
-         under `platform-gitops/services/admins/vault/` (or bootstrap equivalent) —
-         DoD: Vault Pod Running with the new version; `vault status` healthy; ArgoCD sync
-         reports `Synced` and `Healthy`.
+- [ ] 4. Apply updated policies to the production Vault instance (depends on 3).
+  DoD: policies applied; `vault policy read <name>` confirms no glob `delete`/`destroy`.
 
-- [ ] 6. (depends on 5) Verify that authenticated endpoints previously unauthenticated in
-         pre-2.0 Vault (e.g., health-check probes, Prometheus scrape targets) are updated
-         to work with Vault v2.0.0 auth requirements — DoD: Prometheus Vault metrics
-         scrape returns data; all health-check probes pass; no 401 errors in Vault audit
-         log.
+- [ ] 5. Validate ESO ExternalSecret sync across both tenants after policy change (depends on 4).
+  DoD: all ExternalSecrets in `admins` and `labs` show `Ready=True` within 5 minutes.
 
-- [ ] 7. (depends on 5) Update `context/current-version.md` or the relevant service
-         manifest to reflect the new Vault version — DoD: file updated, committed, and
-         merged.
+## Phase 2 — Vault upgrade to patched release
+
+- [ ] 6. Review Vault v2.0.0 release notes for breaking changes affecting ESO ClusterSecretStore,
+  ArgoCD Vault plugin, and any other Vault-dependent service (depends on Phase 1 complete).
+  DoD: compatibility matrix document or PR description listing each breaking change and its
+  mctl-specific impact.
+
+- [ ] 7. Execute Vault v2.0.0 upgrade in staging and run full ESO + ArgoCD smoke tests
+  (depends on 6). DoD: staging environment healthy; no ExternalSecret sync errors.
+
+- [ ] 8. Schedule and execute production Vault upgrade (depends on 7).
+  DoD: `vault status` shows v2.0.0; all ExternalSecrets `Ready=True`; ArgoCD Applications
+  `Healthy` and `Synced`.
+
+- [ ] 9. Update `context/current-version.md` (read-only in agent context — flag for human
+  operator) to record the Vault version upgrade.
 
 ## Tests
 
-- [ ] T1. (Interim mitigation) Using a test token with a `labs` glob policy, attempt to
-          call the KVv2 metadata-delete endpoint on an `admins`-namespaced path; verify a
-          403 response is returned — DoD: curl or Vault CLI output shows `permission
-          denied`; no secret deleted.
-
-- [ ] T2. (Post-upgrade) Repeat T1 against the patched Vault version to confirm the fix is
-          effective at the engine level — DoD: same 403 result; Vault audit log shows the
-          denied request.
-
-- [ ] T3. ESO ExternalSecret sync test: verify all ExternalSecrets in both `admins` and
-          `labs` namespaces show `SecretSynced` condition after the upgrade — DoD:
-          `kubectl get externalsecrets -A` shows no `SecretSyncError` conditions.
-
-- [ ] T4. Verify that a legitimate read operation by an ESO token on an authorized KVv2
-          path still succeeds after policy tightening — DoD: `vault kv get` with the ESO
-          service token returns the expected secret value.
-
-- [ ] T5. Vault health check: `vault status` returns `sealed: false`, `initialized: true`,
-          and the active node is confirmed — DoD: command output matches expected state;
-          no errors in Vault server logs.
+- [ ] T1. Attempt to delete a secret using a glob-policy token that has no explicit delete grant —
+  expect 403 Forbidden.
+- [ ] T2. Confirm ExternalSecrets for `admins` tenant read secrets correctly after Phase 1
+  policy change.
+- [ ] T3. Confirm ExternalSecrets for `labs` tenant read secrets correctly after Phase 1
+  policy change.
+- [ ] T4. After Phase 2 upgrade, confirm `vault kv get secret/data/admins/<any-svc>` succeeds
+  with the ESO service token.
+- [ ] T5. Confirm ArgoCD Vault plugin (if in use) authenticates successfully after v2.0.0 upgrade.
 
 ## Rollback
-- **Policy tightening rollback:** re-apply the previous policy HCL using
-  `vault policy write <name> <old-file.hcl>`. The pre-tightening HCL files must be saved
-  before any `vault policy write` call in task 3.
-- **Vault upgrade rollback:** revert the image tag commit in `mctl-gitops`; ArgoCD will
-  sync the StatefulSet back to the previous version. Note: Vault storage format changes
-  between major versions may require a snapshot restore if the upgrade involved a storage
-  migration. Confirm whether a Vault snapshot is taken before upgrading (recommended as
-  a pre-upgrade step in task 5's DoD).
-- If both the upgrade and policy tightening were applied, roll back the upgrade first, then
-  assess whether the policy rollback is also needed.
+
+**Phase 1 rollback:** Restore the previous policy HCL from git and re-apply via `vault policy write`.
+ESO will resume using the previous (wider) policies within one sync cycle.
+
+**Phase 2 rollback:** Restore the previous Vault version from the snapshot taken before the upgrade.
+Vault snapshot procedure: `vault operator raft snapshot save pre-upgrade.snap` before upgrade.
+Re-deploy the previous Vault container image; restore snapshot if data was written during the
+failed upgrade window.

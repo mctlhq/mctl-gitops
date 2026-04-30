@@ -1,76 +1,55 @@
 # Tasks: grafana-sql-rce-patch
 
-- [ ] 1. Confirm Grafana deployment status on the platform — DoD: search
-         `platform-gitops/apps/` and `platform-gitops/services/` for a Grafana Application
-         definition; document result (deployed / not deployed) and the running version if
-         deployed, committed as an ADR entry in `context/decisions/`; if not deployed,
-         mark all remaining tasks as N/A and close the proposal.
+## Step 0 — Confirm scope
 
-- [ ] 2. (depends on 1, Grafana is deployed) Audit all existing Grafana dashboards for use
-         of SQL Expression query types — DoD: list of dashboards using SQL Expressions
-         committed to the ADR; if none found, interim mitigation can proceed without user
-         impact; if found, dashboard owners notified before the toggle is disabled.
+- [ ] 1. Search the repository for Grafana image references under `platform-gitops/services/` and
+  `platform-gitops/helm-charts/` — run `grep -r "grafana" platform-gitops/services/ --include="*.yaml" -l`.
+  DoD: either (a) a Grafana values file is found and its path is recorded, OR (b) no Grafana
+  deployment is found and this proposal is closed as N/A with a comment in the PR.
 
-- [ ] 3. (Interim mitigation — depends on 2) Add `feature_toggles.sqlExpressions: false`
-         to the Grafana Helm values file under `platform-gitops/services/<tenant>/grafana/`
-         — DoD: PR merged; ArgoCD sync completes; Grafana Pod restarts cleanly; a test
-         SQL Expression query returns an error response to a Viewer-level account.
+## Phase 1 — Interim mitigation (depends on 1, outcome a)
 
-- [ ] 4. (depends on 1) Determine the appropriate patched Grafana version for the current
-         minor line (v12.1.10, v12.2.8, v12.3.6, v12.4.2, or v13.0.0+) — DoD: target
-         version recorded in the ADR; Grafana changelog for that release reviewed for
-         breaking changes; any deprecated configuration keys identified and migration steps
-         noted.
+- [ ] 2. Identify the current Grafana image tag in the values file found in task 1.
+  DoD: image tag recorded (e.g., `12.3.5`).
 
-- [ ] 5. (depends on 3, 4) Update the Grafana image tag in the Helm values file to the
-         patched version — DoD: PR merged; ArgoCD sync completes; Grafana Pod `Running`
-         with the new image digest; no crash-loop observed; `GET /api/health` returns HTTP
-         200.
+- [ ] 3. Add `sqlExpressions: "false"` to the `grafana.ini.feature_toggles` section of the
+  values file (depends on 2). DoD: git diff shows the toggle line; Helm lint passes.
 
-- [ ] 6. (depends on 5) Check Grafana Pod memory usage post-upgrade and compare against
-         `labs` namespace memory headroom if Grafana runs in `labs` — DoD: memory metrics
-         confirmed below the `labs` namespace limit; if headroom is insufficient, a memory
-         limit is added to the values file and the platform team is alerted.
+- [ ] 4. Commit the change to a branch and open a PR; ArgoCD syncs after merge (depends on 3).
+  DoD: ArgoCD Application shows `Synced`; Grafana pod logs confirm the toggle is inactive.
 
-- [ ] 7. (depends on 5) Update `context/current-version.md` or the relevant service
-         manifest to reflect the new Grafana version — DoD: file updated, committed,
-         and merged.
+## Phase 2 — Version upgrade (depends on 4)
+
+- [ ] 5. Select the patched image tag for the current Grafana minor line (see design.md mapping).
+  DoD: target tag identified and noted in the PR description.
+
+- [ ] 6. Update `image.tag` in the values file to the patched release; if Grafana is deployed
+  in `labs`, verify available memory headroom before proceeding (depends on 5).
+  DoD: image tag updated in git; if `labs` memory headroom is < 256 Mi, flag in PR and defer
+  the `labs` upgrade.
+
+- [ ] 7. Merge and monitor the ArgoCD rolling restart; validate datasources and dashboards
+  post-upgrade (depends on 6).
+  DoD: ArgoCD Application `Healthy`; at least one dashboard renders data correctly;
+  Grafana `/api/health` returns `{"database":"ok"}`.
 
 ## Tests
 
-- [ ] T1. (Post-toggle-disable or post-upgrade) As a Viewer-level Grafana account, attempt
-          to submit a SQL Expression query via the Grafana API (`POST /api/ds/query` with
-          type `sql`); verify the response is an error (feature disabled) or the request
-          does not trigger the vulnerable code path in the patched version — DoD: response
-          is not a successful data query execution; Grafana server logs show no SQL
-          Expression driver invocation.
-
-- [ ] T2. (Post-upgrade) Verify that all existing dashboards load without errors for a
-          Viewer-level account — DoD: spot-check of the five most-used dashboards shows
-          no query errors or broken panels in the Grafana UI.
-
-- [ ] T3. Grafana health endpoint check: `GET https://<grafana-host>/api/health` returns
-          `{"database":"ok","version":"<patched-version>"}` — DoD: response body confirms
-          the patched version string; database status is `ok`.
-
-- [ ] T4. ArgoCD sync check: the Grafana Application in ArgoCD shows `Healthy` and
-          `Synced` after the upgrade — DoD: ArgoCD UI / CLI confirms status; no out-of-sync
-          resources.
-
-- [ ] T5. (If Grafana runs in `labs`) Verify `labs` namespace total memory usage remains
-          below the namespace limit after the upgrade — DoD: `kubectl top pods -n labs`
-          or equivalent shows no OOMKilled events; namespace ResourceQuota usage is below
-          the limit.
+- [ ] T1. As a Viewer-level user, attempt to use a SQL Expression in a panel — expect an error
+  or the feature to be absent from the UI (Phase 1 validation).
+- [ ] T2. Spot-check three existing dashboards for correct data rendering after Phase 1 config
+  change.
+- [ ] T3. After Phase 2 upgrade, confirm `curl -s https://<grafana-host>/api/health` returns
+  `{"database":"ok","version":"12.x.x"}` where x.x is the patched release.
+- [ ] T4. Confirm ArgoCD Application for Grafana shows `Healthy` and `Synced` after each phase.
+- [ ] T5. If deployed in `labs`, confirm `kubectl top pods -n labs` shows memory usage within
+  acceptable limits after the Phase 2 upgrade.
 
 ## Rollback
-- **Toggle disable rollback:** remove or set `feature_toggles.sqlExpressions: true` in the
-  Helm values file; merge and push; ArgoCD syncs the ConfigMap change and restarts Grafana.
-  This re-enables the vulnerable feature toggle and should only be done if the toggle
-  disable caused a critical dashboard regression, with the upgrade then accelerated.
-- **Version upgrade rollback:** revert the image tag commit in `mctl-gitops`; ArgoCD will
-  sync the Grafana Deployment back to the previous image on the next sync cycle. Grafana
-  persistent data (dashboards stored in the database) is unaffected by a Pod image
-  rollback. If the upgrade included a database schema migration, consult the Grafana
-  downgrade guide before rolling back.
-- In both cases, the toggle disable (task 3) should remain in place as a mitigation while
-  the root cause of the regression is investigated.
+
+**Phase 1 rollback:** Revert the `grafana.ini` feature toggle commit; ArgoCD syncs back. This
+re-enables `sqlExpressions` — apply only if dashboards are broken and the risk is accepted.
+
+**Phase 2 rollback:** Revert the image tag commit; ArgoCD syncs to the previous image. If a
+database schema migration ran, restore the Grafana database from the snapshot taken before the
+upgrade. Snapshot command (SQLite): `kubectl exec -n admins <grafana-pod> -- sqlite3 /var/lib/grafana/grafana.db ".backup /tmp/grafana-pre-upgrade.db"` then `kubectl cp`.
