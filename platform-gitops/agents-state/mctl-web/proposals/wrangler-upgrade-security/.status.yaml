@@ -1,0 +1,10 @@
+status: accepted
+updated_at: 2026-04-30T20:42:00Z
+updated_by: mashkovd
+notes: |
+  W18 mentor digest Top-5 #1. Impact/Effort 5/1.
+  Pin wrangler 4.87.0 to close CVE-2026-0933 (CVSS 9.9 cmd-injection in
+  GitHub Actions deploy runner) and ship workerd v1.20260430.1 use-after-free
+  fix in one bump.
+  Closes mctl-web/wrangler-cve-0933, wrangler-full-upgrade, workerd-runtime-upgrade
+  as superseded once this lands.
