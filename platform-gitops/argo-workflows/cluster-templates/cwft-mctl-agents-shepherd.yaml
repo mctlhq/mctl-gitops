@@ -1,0 +1,436 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterWorkflowTemplate
+metadata:
+  name: mctl-agents-shepherd
+  annotations:
+    workflows.argoproj.io/description: |
+      Tier 3 — PR shepherd.
+
+      Drives implementer-opened PRs through to merge. Picks up every
+      proposal under platform-gitops/agents-state/<svc>/proposals/
+      whose .status.yaml is in {implemented, review-fixing} and has a
+      `pr:` URL, then runs the deterministic decide() state machine
+      from orchestrator/run_shepherd.py:
+
+        - wait              codex still pending or follow-up not landed
+        - address-review    codex P1/P2 findings exist on the head SHA;
+                            shepherd subprocess-invokes the Tier 2
+                            implementer with --review-feedback to push
+                            a follow-up commit on the existing branch
+                            (no new branch, no new PR), then flips
+                            .status.yaml to `review-fixing`
+        - merge             clean review + green CI; calls
+                            `gh pr merge --merge --delete-branch
+                            --match-head-commit <SHA>` and flips
+                            .status.yaml to `merged`
+        - flip-to-merged    PR was merged out of band by a human
+        - flip-to-rejected  PR was closed unmerged
+
+      Steps:
+        1. clone-gitops — SSH-clone mctl-gitops via the shared deploy
+           key. Same shape as cwft-mctl-agents-implement.yaml,
+           including the /workdir/clones scratch dir for sibling-repo
+           clones triggered by the implementer subprocess.
+        2. run-shepherd — orchestrator/run_shepherd inside
+           ghcr.io/mctlhq/mctl-agents:1.9.0. Reads STATE_DIR + GitHub
+           PAT, may invoke run_implementer as a subprocess for
+           address-review followups.
+        3. commit-and-push — commits any .status.yaml transitions back
+           to gitops main (implemented → review-fixing, review-fixing
+           → implemented after followup, → merged on successful merge,
+           → rejected on closed-unmerged). Same `:(glob)` filter as
+           the implementer template.
+
+      Triggered by:
+        - cron via CronWorkflow `mctl-agents-shepherd`
+          (every 30 min; suspended at install — operator un-suspends
+          after the first one-shot success)
+        - one-shot Workflow that references this CWFT via
+          workflowTemplateRef + clusterScope:true
+
+      NOT auto-triggered on .status.yaml changes (would require an
+      Argo Events Sensor — out of scope for v1).
+spec:
+  serviceAccountName: argo-workflow-sa
+  imagePullSecrets:
+    - name: ghcr-credentials
+  ttlStrategy:
+    secondsAfterCompletion: 86400
+  # Same 2h budget as the implementer: a single tick may invoke the
+  # implementer subprocess (clone sibling repo + Claude SDK + push) for
+  # every proposal that has unresolved P1/P2 findings.
+  activeDeadlineSeconds: 7200
+  entrypoint: shepherd-proposals
+  onExit: notify-telegram
+  # Same shared mutex as cwft-mctl-agents-run / cwft-mctl-agents-implement
+  # — all three push to mctl-gitops main. Migration to a per-proposal
+  # claim mechanism is tracked separately (mctl-agents PR #84 design).
+  synchronization:
+    mutex:
+      name: mctl-gitops-main-writes
+
+  arguments:
+    parameters:
+      - name: service
+        value: ""
+        # Optional. When set, only proposals under that service's dir
+        # are evaluated. Validated by run_shepherd.py against
+        # config/settings.py SERVICES (exit 1 on mismatch).
+      - name: slug
+        value: ""
+        # Optional. When set, only that slug is evaluated (across
+        # services if `service` is empty too).
+      - name: dry_run
+        value: "false"
+        # When "true", run_shepherd evaluates decide() and prints the
+        # would-be transitions but does NOT invoke the implementer
+        # subprocess and does NOT call `gh pr merge`. Useful for
+        # operator dry runs and local smoke tests.
+
+  volumeClaimTemplates:
+    - metadata:
+        name: workdir
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            # Same 8Gi as the implementer: address-review followups
+            # subprocess-invoke run_implementer which gh-clones each
+            # target sibling repo into TMPDIR=/workdir/clones inside
+            # the same pod.
+            storage: 8Gi
+  volumes:
+    - name: deploy-key
+      secret:
+        secretName: mctl-gitops-deploy-key
+        defaultMode: 0600
+
+  templates:
+    - name: shepherd-proposals
+      steps:
+        - - name: clone
+            template: clone-gitops
+        - - name: shepherd
+            template: run-shepherd
+            # run_shepherd writes .status.yaml updates (implemented →
+            # review-fixing, → merged, → rejected, → review-stuck)
+            # to the worktree BEFORE any failure that may crash the
+            # step. Without continueOn, Argo would skip commit-and-push
+            # on non-zero exit, those updates would never persist back
+            # to mctl-gitops main, and the next tick would reprocess
+            # the same proposal — duplicate merge attempts or repeated
+            # implementer subprocess calls. Letting commit run
+            # unconditionally makes the status durable; commit-and-push
+            # already handles the "no diff" case via
+            # `git diff --cached --quiet`.
+            #
+            # Both failed AND error: Argo distinguishes app-level
+            # non-zero exits (Failed) from pod-level errors like
+            # OOMKilled / deadline / controller errors (Error). Both
+            # can leave partial .status.yaml writes, so commit-and-push
+            # must run in either case.
+            continueOn:
+              failed: true
+              error: true
+        - - name: commit
+            template: commit-and-push
+
+    # ── 1. SSH-clone mctl-gitops into shared volume ───────────────────────
+    - name: clone-gitops
+      script:
+        image: alpine/git:2.43.0
+        command: [sh]
+        source: |
+          set -e
+          apk add --no-cache openssh-client ca-certificates
+          mkdir -p ~/.ssh
+          cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  StrictHostKeyChecking no\n' > ~/.ssh/config
+          chmod 600 ~/.ssh/config
+          git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops
+          mkdir -p /workdir/mctl-gitops/platform-gitops/agents-state
+          # Pre-create a PVC-backed scratch dir for the implementer
+          # subprocess's `gh repo clone` targets (address-review path).
+          # The orchestrator picks up `tempfile.gettempdir()` which
+          # honors TMPDIR — see run-shepherd env below. Without this,
+          # clones would land on the pod's ephemeral storage and the
+          # 8Gi PVC sizing would be ineffective for multi-repo runs.
+          mkdir -p /workdir/clones
+          echo "✓ gitops cloned"
+        volumeMounts:
+          - name: workdir
+            mountPath: /workdir
+          - name: deploy-key
+            mountPath: /secrets/deploy-key
+
+    # ── 2. Run shepherd orchestrator ──────────────────────────────────────
+    # NB: ghcr.io/mctlhq/mctl-agents:1.9.0 is the first tag with
+    # orchestrator/run_shepherd baked in (added in mctl-agents PR #12).
+    # Until 1.9.0 is published, this step will ImagePullBackOff — that
+    # is intentional; the CWFT lands first so ArgoCD can sync it the
+    # moment the tag drops.
+    - name: run-shepherd
+      container:
+        image: ghcr.io/mctlhq/mctl-agents:1.9.0
+        imagePullPolicy: IfNotPresent
+        command: ["/entrypoint.sh"]
+        args:
+          - "sh"
+          - "-c"
+          - |
+            set -e
+            # Wire git's HTTPS credential helper to the same
+            # GITHUB_TOKEN gh CLI uses. Without this, `gh repo clone`
+            # succeeds (it speaks to the API directly) but the
+            # implementer subprocess's later `git push -u origin
+            # <branch>` falls through to interactive auth and fails
+            # with "could not read Username for 'https://github.com'".
+            # `gh auth setup-git` installs `gh auth git-credential` as
+            # the credential helper, which reads GITHUB_TOKEN from the
+            # env at push time. Skip silently if no token.
+            if [ -n "$GITHUB_TOKEN" ]; then
+              gh auth setup-git
+            fi
+            # Read params from env, NOT inline workflow.parameters
+            # (Argo template syntax) interpolation: a value like
+            # `; rm -rf /` would otherwise be spliced straight into
+            # the shell command. Build argv via `set --` so each flag
+            # / value pair is a separate, properly quoted token.
+            set -- python -m orchestrator.run_shepherd
+            if [ -n "$WORKFLOW_SERVICE" ]; then
+              set -- "$@" --service "$WORKFLOW_SERVICE"
+            fi
+            if [ -n "$WORKFLOW_SLUG" ]; then
+              set -- "$@" --slug "$WORKFLOW_SLUG"
+            fi
+            if [ "$WORKFLOW_DRY_RUN" = "true" ]; then
+              set -- "$@" --dry-run
+            fi
+            printf '→'
+            printf ' %s' "$@"
+            printf '\n'
+            exec "$@"
+        env:
+          # Workflow params injected as env vars so the shell layer
+          # can quote them safely. Direct `workflow.parameters.*`
+          # (Argo template syntax) interpolation in the script body
+          # is a shell-injection vector.
+          - name: WORKFLOW_SERVICE
+            value: "{{workflow.parameters.service}}"
+          - name: WORKFLOW_SLUG
+            value: "{{workflow.parameters.slug}}"
+          - name: WORKFLOW_DRY_RUN
+            value: "{{workflow.parameters.dry_run}}"
+          # Same STATE_DIR layout as cwft-mctl-agents-run /
+          # cwft-mctl-agents-implement — entrypoint.sh symlinks
+          # <state>/<svc>/proposals onto /app/agents/<svc>/proposals/
+          # so the SDK sees them, and run_shepherd reads them
+          # directly.
+          - name: STATE_DIR
+            value: /workdir/mctl-gitops/platform-gitops/agents-state
+          # Redirect Python's `tempfile.gettempdir()` (used by the
+          # implementer subprocess for `gh repo clone` targets) onto
+          # the PVC so each clone lands in PVC-backed storage — not
+          # the pod's ephemeral filesystem. clone-gitops creates this
+          # dir; if it doesn't exist Python's mkstemp / mkdtemp will
+          # error.
+          - name: TMPDIR
+            value: /workdir/clones
+          # Auth: OAuth (Claude Pro/Max). Same secret as the run +
+          # implement pipelines.
+          - name: CLAUDE_CODE_OAUTH_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: claude-code-oauth-token
+          # GitHub PAT for `gh api`, `gh pr merge`, and the
+          # implementer subprocess's `gh repo clone` + `gh pr create`
+          # calls. PAT must have repo write scope on mctlhq/*.
+          # Marked optional: a local smoke run without GITHUB_TOKEN
+          # can still exercise the discovery path (--dry-run).
+          - name: GITHUB_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: github-token
+                optional: true
+          # Optional MCP token, same convention as the run + implement
+          # pipelines.
+          - name: MCTL_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: mctl-token
+                optional: true
+          # Per-tick budget cap. Tier 3 spec sets the default to
+          # $1.00 per tick; we bump to $5.00 here to absorb worst-case
+          # ticks that drive multiple proposals through the
+          # address-review subprocess in the same run. Every-30-min
+          # cadence (48 ticks/day) caps daily cost at $240 worst case;
+          # in practice most ticks find nothing to do and exit free.
+          - name: SHEPHERD_BUDGET_USD
+            value: "5.00"
+        resources:
+          requests: { cpu: 200m, memory: 512Mi }
+          limits:   { cpu: 2000m, memory: 4Gi }
+        volumeMounts:
+          - name: workdir
+            mountPath: /workdir
+
+    # ── 3. Commit & push back to mctl-gitops ──────────────────────────────
+    # Only .status.yaml files should change in agents-state/
+    # (run_shepherd writes them after each proposal transition).
+    # Defensive: stage only that subtree.
+    - name: commit-and-push
+      script:
+        image: alpine/git:2.43.0
+        command: [sh]
+        env:
+          # Workflow params injected as env vars so the shell layer
+          # can quote them safely. Direct `workflow.parameters.*`
+          # (Argo template syntax) interpolation in the script body
+          # is a shell-injection vector — and this pod has the gitops
+          # deploy key + push access to main, so a crafted
+          # `service` / `slug` value could escalate from a malformed
+          # param into arbitrary git operations against mctl-gitops.
+          - name: WORKFLOW_SERVICE
+            value: "{{workflow.parameters.service}}"
+          - name: WORKFLOW_SLUG
+            value: "{{workflow.parameters.slug}}"
+        source: |
+          set -e
+          apk add --no-cache openssh-client ca-certificates
+          mkdir -p ~/.ssh
+          cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  StrictHostKeyChecking no\n' > ~/.ssh/config
+          chmod 600 ~/.ssh/config
+
+          cd /workdir/mctl-gitops
+          git config user.name "mctl-agents[bot]"
+          git config user.email "mctl-agents[bot]@users.noreply.github.com"
+
+          # Stage only .status.yaml updates under agents-state.
+          # Anything else changed there (proposal bodies, digests,
+          # ad-hoc files left by a crashed shepherd) is NOT what this
+          # workflow should be pushing back to gitops main — fail
+          # loudly instead of silently broadening the commit scope.
+          NON_STATUS_CHANGES="$(git status --porcelain -- 'platform-gitops/agents-state/' ':(exclude,glob)platform-gitops/agents-state/**/.status.yaml')"
+          if [ -n "$NON_STATUS_CHANGES" ]; then
+            echo "❌ Refusing to commit non-.status.yaml changes under platform-gitops/agents-state/:"
+            printf '%s\n' "$NON_STATUS_CHANGES"
+            exit 1
+          fi
+
+          # Short-circuit BEFORE `git add`: with `set -e`, a glob
+          # pathspec that matches zero files (`fatal: pathspec ...
+          # did not match any files`) would otherwise crash the
+          # workflow instead of becoming a no-op. Happens on ticks
+          # where no proposal transitioned (cron heartbeat with
+          # nothing to do).
+          STATUS_CHANGES="$(git status --porcelain -- ':(glob)platform-gitops/agents-state/**/.status.yaml')"
+          if [ -z "$STATUS_CHANGES" ]; then
+            echo "ℹ️  No .status.yaml updates — nothing to commit."
+            exit 0
+          fi
+          git add -- ':(glob)platform-gitops/agents-state/**/.status.yaml'
+
+          if git diff --cached --quiet; then
+            # Defensive: STATUS_CHANGES already proved there are
+            # matches, but keep this guard in case `git add` ever
+            # ends up staging an empty diff (e.g. a permissions-only
+            # change git ignores).
+            echo "ℹ️  No status updates after staging — nothing to commit."
+            exit 0
+          fi
+
+          DATE=$(date -u +%Y-%m-%d)
+          if [ -n "$WORKFLOW_SLUG" ]; then
+            MSG="chore(agents): shepherd ${WORKFLOW_SLUG} ${DATE}"
+          elif [ -n "$WORKFLOW_SERVICE" ]; then
+            MSG="chore(agents): shepherd ${WORKFLOW_SERVICE} ${DATE}"
+          else
+            MSG="chore(agents): shepherd run ${DATE}"
+          fi
+          git commit -m "$MSG"
+
+          for i in 1 2 3 4 5; do
+            if git push origin HEAD:main; then
+              echo "✅ Pushed status updates"
+              exit 0
+            fi
+            echo "⚠️  Push failed (attempt ${i}), rebasing..."
+            git pull --rebase origin main
+          done
+          echo "❌ Push failed after 5 attempts"
+          exit 1
+        volumeMounts:
+          - name: workdir
+            mountPath: /workdir
+          - name: deploy-key
+            mountPath: /secrets/deploy-key
+
+    # ── 4. Telegram notification (onExit) ──────────────────────────────────
+    # Same pattern as cwft-mctl-agents-run / cwft-mctl-agents-implement.
+    - name: notify-telegram
+      script:
+        image: alpine:3.19
+        command: [sh]
+        env:
+          - name: TG_BOT_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: telegram-bot-token
+                optional: true
+          - name: TG_CHAT_ID
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: telegram-chat-id
+                optional: true
+          # Workflow params + status injected as env vars so the
+          # shell layer can quote them safely. Even though this is
+          # just a notification step, raw `workflow.parameters.*`
+          # (Argo template syntax) interpolation is still arbitrary
+          # command execution in a workflow pod.
+          - name: WORKFLOW_STATUS
+            value: "{{workflow.status}}"
+          - name: WORKFLOW_SERVICE
+            value: "{{workflow.parameters.service}}"
+          - name: WORKFLOW_SLUG
+            value: "{{workflow.parameters.slug}}"
+          - name: WORKFLOW_NAME
+            value: "{{workflow.name}}"
+          - name: WORKFLOW_DURATION
+            value: "{{workflow.duration}}"
+        source: |
+          set +e
+          if [ -z "$TG_BOT_TOKEN" ] || [ -z "$TG_CHAT_ID" ]; then
+            echo "ℹ️  TG_BOT_TOKEN or TG_CHAT_ID not set; skipping notification."
+            exit 0
+          fi
+          apk add --no-cache curl ca-certificates >/dev/null 2>&1
+
+          case "$WORKFLOW_STATUS" in
+            Succeeded) ICON="✅" ;;
+            Failed)    ICON="❌" ;;
+            Error)     ICON="⚠️" ;;
+            *)         ICON="⏳" ;;
+          esac
+          if [ -n "$WORKFLOW_SLUG" ]; then
+            SUBJECT="shepherd ${WORKFLOW_SLUG}"
+          elif [ -n "$WORKFLOW_SERVICE" ]; then
+            SUBJECT="shepherd ${WORKFLOW_SERVICE}"
+          else
+            SUBJECT="shepherd (all open PRs)"
+          fi
+          UI_URL="https://workflows.mctl.ai/workflows/argo-workflows/${WORKFLOW_NAME}"
+          TEXT="${ICON} mctl-agents: ${SUBJECT} — ${WORKFLOW_STATUS} (${WORKFLOW_DURATION}s)\n${UI_URL}"
+
+          curl -s -o /dev/null -w 'telegram http=%{http_code}\n' \
+            -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "{\"chat_id\":\"${TG_CHAT_ID}\",\"text\":\"${TEXT}\",\"disable_web_page_preview\":true}"
+          exit 0
