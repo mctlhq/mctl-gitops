@@ -1,0 +1,14 @@
+status: accepted
+updated_at: 2026-05-01T00:30:00Z
+updated_by: mashkovd
+notes: |
+  W18 Group B (bundle companion to Top-5 #3 scaffolder-path-traversal,
+  was open as mctl-portal#10 — closed 2026-04-30 because existing
+  Backstage 0.17/3.4 already covers the CVE-fix minimum). Impact/Effort 4/2.
+  CVE-2026-32237 — scaffolder dry-run endpoint leaks Vault secrets via
+  non-recursive redaction in nested JSON. Underlying bump:
+  @backstage/plugin-scaffolder-backend ≥ 3.1.5 (NOT 3.1.1 — the GitHub
+  advisory pins the fix at 3.1.5; 3.1.1–3.1.4 remain vulnerable).
+  Implementer should verify project's existing version satisfies ≥ 3.1.5
+  — current ^3.4.0 caret on main does, so this likely closes as no-op
+  (same lesson as #10). If existing is < 3.1.5, push proper bump.
