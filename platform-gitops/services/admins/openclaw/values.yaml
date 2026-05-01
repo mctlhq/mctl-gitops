@@ -521,9 +521,13 @@ extraContainers:
         # storage and ~5min of cold-start restore for zero recovery value.
         # mc's `--exclude` glob can't prune a whole subtree (single `*` does
         # not cross `/`), so we iterate top-level entries and skip by name.
+        # `ls -A` covers dotfile dirs (e.g. `.claude` is created by setup at
+        # /home/node/.openclaw/.claude — without -A we silently drop it from
+        # the mirror).
         sync_state() {
           mirror_args="$1"
-          for entry in $(ls "$STATE_ROOT" 2>/dev/null); do
+          reconcile_extras="$2"  # "1" only when canary is healthy (paired with --remove)
+          for entry in $(ls -A "$STATE_ROOT" 2>/dev/null); do
             case "$entry" in
               plugin-runtime-deps) continue ;;
             esac
@@ -539,12 +543,31 @@ extraContainers:
               mc cp --quiet "$src" "$dst" || true
             fi
           done
+          # Per-subdir `mc mirror --remove` reconciles deletes WITHIN each
+          # mirrored subtree. The previous root-scope `mc mirror --remove`
+          # also reconciled deletes of WHOLE top-level entries (e.g. an
+          # entire workspace/ subdir or a top-level *.json file disappearing
+          # locally). Re-implement that pass explicitly: enumerate S3
+          # top-level, drop anything not present locally and not in the
+          # skip-list. Gated by canary (caller passes "1") so non-canary
+          # iterations never propagate deletes.
+          if [ "$reconcile_extras" = "1" ]; then
+            mc ls "$S3_ROOT/" 2>/dev/null | awk '{print $NF}' | sed 's:/$::' | while IFS= read -r s3_entry; do
+              [ -z "$s3_entry" ] && continue
+              case "$s3_entry" in
+                plugin-runtime-deps) continue ;;
+              esac
+              if [ ! -e "$STATE_ROOT/$s3_entry" ]; then
+                mc rm --recursive --force --quiet "$S3_ROOT/$s3_entry" 2>/dev/null || true
+              fi
+            done
+          fi
         }
         while true; do
           if [ -d "$AGENT_DIR" ] && [ -n "$(ls -A "$AGENT_DIR" 2>/dev/null)" ]; then
-            sync_state "--remove --overwrite"
+            sync_state "--remove --overwrite" "1"
           else
-            sync_state "--overwrite"
+            sync_state "--overwrite" ""
           fi
           sleep 10
         done
@@ -566,12 +589,14 @@ extraContainers:
               AGENT_DIR=/home/node/.openclaw/agents/main/agent
               STATE_ROOT=/home/node/.openclaw
               S3_ROOT=s3/platform-state/admins/openclaw
-              # Same skip-list semantics as the main sync loop — see comment
-              # in s3-sync args. plugin-runtime-deps is rebuilt from image on
-              # every boot; never mirror it.
+              # Same skip-list / hidden-entry / delete-reconciliation
+              # semantics as the main sync loop — see comment in s3-sync
+              # args. plugin-runtime-deps is rebuilt from image on every
+              # boot; never mirror it.
               sync_state() {
                 mirror_args="$1"
-                for entry in $(ls "$STATE_ROOT" 2>/dev/null); do
+                reconcile_extras="$2"
+                for entry in $(ls -A "$STATE_ROOT" 2>/dev/null); do
                   case "$entry" in
                     plugin-runtime-deps) continue ;;
                   esac
@@ -587,11 +612,22 @@ extraContainers:
                     mc cp --quiet "$src" "$dst" || true
                   fi
                 done
+                if [ "$reconcile_extras" = "1" ]; then
+                  mc ls "$S3_ROOT/" 2>/dev/null | awk '{print $NF}' | sed 's:/$::' | while IFS= read -r s3_entry; do
+                    [ -z "$s3_entry" ] && continue
+                    case "$s3_entry" in
+                      plugin-runtime-deps) continue ;;
+                    esac
+                    if [ ! -e "$STATE_ROOT/$s3_entry" ]; then
+                      mc rm --recursive --force --quiet "$S3_ROOT/$s3_entry" 2>/dev/null || true
+                    fi
+                  done
+                fi
               }
               if [ -d "$AGENT_DIR" ] && [ -n "$(ls -A "$AGENT_DIR" 2>/dev/null)" ]; then
-                sync_state "--remove --overwrite"
+                sync_state "--remove --overwrite" "1"
               else
-                sync_state "--overwrite"
+                sync_state "--overwrite" ""
               fi
     env:
       - name: MINIO_ENDPOINT
