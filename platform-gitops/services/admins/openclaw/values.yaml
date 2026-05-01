@@ -59,7 +59,14 @@ probes:
     initialDelaySeconds: 5
     periodSeconds: 5
     timeoutSeconds: 10            # beta.2 stalls /healthz past 3s during channel init
-    failureThreshold: 60           # 5 + 60*5 = 305s; ~78s plugin install + ~120s post-ready stabilization headroom
+    # Defensive bump from 60 → 90 (305s → 455s budget) paired with the
+    # plugin-runtime-deps S3 cleanup in this PR. base-service now has to run
+    # `mirrorBundledPluginRuntimeRoot` from the RO image layer to emptyDir on
+    # every pod recreate (previously the deps were already in emptyDir after
+    # restore-state). Estimated 30–90s; 305s budget left only 5s of slack
+    # against the 300s lock-acquire timeout. 455s gives ~155s of slack so a
+    # single slow boot doesn't re-trigger the same wedge we hit on 2026-05-01.
+    failureThreshold: 90           # 5 + 90*5 = 455s
   readiness:
     path: /readyz
     port: http
