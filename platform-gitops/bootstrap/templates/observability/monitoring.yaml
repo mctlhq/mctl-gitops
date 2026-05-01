@@ -157,6 +157,9 @@ spec:
 
           grafana:
             enabled: true
+            # Pin to patched release; CVE-2026-27876 fixed in v12.4.2
+            image:
+              tag: "12.4.2"
             admin:
               existingSecret: grafana-admin-secret
               userKey: admin-user
@@ -184,6 +187,9 @@ spec:
                 token_url: https://ops.mctl.ai/api/dex/token
                 api_url: https://ops.mctl.ai/api/dex/userinfo
                 role_attribute_path: "contains(groups, 'admins') && 'Admin' || 'Viewer'"
+              feature_toggles:
+                # CVE-2026-27876: disable SQL Expressions RCE attack vector
+                sqlExpressions: "false"
             ingress:
               enabled: true
               ingressClassName: traefik
