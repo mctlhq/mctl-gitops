@@ -1,0 +1,51 @@
+apiVersion: argoproj.io/v1alpha1
+kind: CronWorkflow
+metadata:
+  name: mctl-agents-shepherd
+  namespace: argo-workflows
+  annotations:
+    workflows.argoproj.io/description: |
+      Every-30-minute trigger for the Tier 3 PR shepherd.
+
+      All workflow logic lives in ClusterWorkflowTemplate
+      `mctl-agents-shepherd` (cwft-mctl-agents-shepherd.yaml). This
+      CronWorkflow is a thin wrapper that submits a Workflow with no
+      service / slug filter, so the shepherd processes every proposal
+      whose .status.yaml is in {implemented, review-fixing}.
+
+      Other entry points reference the same template with different
+      parameters:
+        - operator submitting a one-shot Workflow that references this
+          CWFT (manual triage, dry-run, single-proposal sweep)
+
+      Suspended at install time. The operator un-suspends after the
+      first successful one-shot run against a real proposal:
+        kubectl -n argo-workflows patch cronworkflow mctl-agents-shepherd \
+          --type=merge -p '{"spec":{"suspend":false}}'
+spec:
+  schedule: "*/30 * * * *"
+  timezone: "UTC"
+  # Forbid: never overlap two shepherd ticks. They all contend on the
+  # same `mctl-gitops-main-writes` mutex anyway, and a queued tick
+  # would only delay the next genuine cron-driven one. Drop overlaps
+  # cleanly instead.
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  # Suspended at install time. Flip to `false` (or delete this line)
+  # after the first one-shot run against a real proposal succeeds.
+  # See annotation above for the un-suspend kubectl one-liner.
+  suspend: true
+  workflowSpec:
+    workflowTemplateRef:
+      name: mctl-agents-shepherd
+      clusterScope: true
+    arguments:
+      parameters:
+        - name: service
+          value: ""
+        - name: slug
+          value: ""
+        - name: dry_run
+          value: "false"
