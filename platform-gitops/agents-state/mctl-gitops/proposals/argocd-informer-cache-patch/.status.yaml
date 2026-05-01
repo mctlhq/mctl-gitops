@@ -1,10 +1,4 @@
-status: accepted
-updated_at: 2026-05-01T00:30:00Z
-updated_by: mashkovd
-notes: |
-  W18 Group B (bundle companion to Top-5 #4 argo-workflows-cve-patch-v2,
-  which merged as mctl-gitops#85). Impact/Effort 5/2.
-  ArgoCD → v3.3.8: fixes stale informer cache that triggers spurious
-  rollbacks across all tenant apps via the App-of-Apps topology, plus
-  the core-mode missing-secret crash and the autosync event regression.
-  Pairs cleanly with #85 (already merged) — same maintenance window.
+status: implemented
+updated_at: '2026-05-01T08:16:43Z'
+updated_by: mctl-agents[bot]
+pr: https://github.com/mctlhq/mctl-gitops/pull/90
