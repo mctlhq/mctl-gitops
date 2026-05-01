@@ -18,10 +18,10 @@ metadata:
         - operator submitting a one-shot Workflow that references this
           CWFT (manual triage, dry-run, single-proposal sweep)
 
-      Suspended at install time. The operator un-suspends after the
-      first successful one-shot run against a real proposal:
-        kubectl -n argo-workflows patch cronworkflow mctl-agents-shepherd \
-          --type=merge -p '{"spec":{"suspend":false}}'
+      Active. Un-suspended via gitops on 2026-05-01 after the first
+      one-shot real run (mctl-agents-shepherd-712b9f8e) successfully
+      flipped 11 proposals (9 to `merged`, 2 to `rejected`) with no
+      false positives.
 spec:
   schedule: "*/30 * * * *"
   timezone: "UTC"
@@ -33,10 +33,12 @@ spec:
   startingDeadlineSeconds: 600
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
-  # Suspended at install time. Flip to `false` (or delete this line)
-  # after the first one-shot run against a real proposal succeeds.
-  # See annotation above for the un-suspend kubectl one-liner.
-  suspend: true
+  # Active — un-suspended after the smoke test (one-shot real run on
+  # 2026-05-01 flipped 11 proposals correctly). Schedule fires every
+  # 30 min UTC and the workflow contends on the shared
+  # `mctl-gitops-main-writes` mutex with the implementer / agents-run
+  # workflows, so back-pressure is bounded.
+  suspend: false
   workflowSpec:
     workflowTemplateRef:
       name: mctl-agents-shepherd
