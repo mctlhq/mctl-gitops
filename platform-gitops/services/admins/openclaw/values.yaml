@@ -114,6 +114,15 @@ initContainers:
         if [ -n "$(mc ls --recursive s3/platform-state/openclaw/admins/ 2>/dev/null | head -1)" ]; then
           LEGACY_STATE_MARKER=1
         fi
+        # One-time idempotent cleanup of legacy plugin-runtime-deps mirror in
+        # S3. The directory is recreated by openclaw on every pod boot from
+        # /app/dist/extensions/ (RO image layer) — mirroring it to S3 cost
+        # ~1.5GiB of storage + ~5min of restore time on cold start, with zero
+        # recovery value. mc's `--exclude` glob doesn't cross `/` so we can't
+        # filter the subtree out of `mc mirror`; deleting the prefix in S3 is
+        # the simplest sufficient fix on the download side. s3-sync upload is
+        # gated separately (see sidecar args).
+        mc rm --recursive --force --quiet s3/platform-state/admins/openclaw/plugin-runtime-deps 2>/dev/null || true
         if [ -n "$NEW_STATE_MARKER" ]; then
           mc mirror s3/platform-state/admins/openclaw/ /home/node/.openclaw
         elif [ -n "$LEGACY_STATE_MARKER" ]; then
@@ -496,19 +505,39 @@ extraContainers:
         # — see incident write-up in references/k8s.md). In both cases we
         # mirror WITHOUT --remove so deletions can never propagate to S3.
         AGENT_DIR=/home/node/.openclaw/agents/main/agent
+        STATE_ROOT=/home/node/.openclaw
+        S3_ROOT=s3/platform-state/admins/openclaw
+        # Top-level entries we never mirror — they are reproducible from the
+        # RO image layer on every pod boot (openclaw runs
+        # `mirrorBundledPluginRuntimeRoot` to recreate plugin-runtime-deps
+        # from /app/dist/extensions/). Mirroring them costs ~1.5GiB of S3
+        # storage and ~5min of cold-start restore for zero recovery value.
+        # mc's `--exclude` glob can't prune a whole subtree (single `*` does
+        # not cross `/`), so we iterate top-level entries and skip by name.
+        sync_state() {
+          mirror_args="$1"
+          for entry in $(ls "$STATE_ROOT" 2>/dev/null); do
+            case "$entry" in
+              plugin-runtime-deps) continue ;;
+            esac
+            src="$STATE_ROOT/$entry"
+            dst="$S3_ROOT/$entry"
+            if [ -d "$src" ]; then
+              mc mirror $mirror_args \
+                --exclude '*.lock' \
+                --exclude '*.lock/*' \
+                --exclude '*.tmp' \
+                "$src" "$dst" || true
+            elif [ -f "$src" ]; then
+              mc cp --quiet "$src" "$dst" || true
+            fi
+          done
+        }
         while true; do
           if [ -d "$AGENT_DIR" ] && [ -n "$(ls -A "$AGENT_DIR" 2>/dev/null)" ]; then
-            mc mirror --remove --overwrite \
-              --exclude '*.lock' \
-              --exclude '*.lock/*' \
-              --exclude '*.tmp' \
-              /home/node/.openclaw s3/platform-state/admins/openclaw/ || true
+            sync_state "--remove --overwrite"
           else
-            mc mirror --overwrite \
-              --exclude '*.lock' \
-              --exclude '*.lock/*' \
-              --exclude '*.tmp' \
-              /home/node/.openclaw s3/platform-state/admins/openclaw/ || true
+            sync_state "--overwrite"
           fi
           sleep 10
         done
@@ -528,18 +557,34 @@ extraContainers:
             - -c
             - |
               AGENT_DIR=/home/node/.openclaw/agents/main/agent
+              STATE_ROOT=/home/node/.openclaw
+              S3_ROOT=s3/platform-state/admins/openclaw
+              # Same skip-list semantics as the main sync loop — see comment
+              # in s3-sync args. plugin-runtime-deps is rebuilt from image on
+              # every boot; never mirror it.
+              sync_state() {
+                mirror_args="$1"
+                for entry in $(ls "$STATE_ROOT" 2>/dev/null); do
+                  case "$entry" in
+                    plugin-runtime-deps) continue ;;
+                  esac
+                  src="$STATE_ROOT/$entry"
+                  dst="$S3_ROOT/$entry"
+                  if [ -d "$src" ]; then
+                    mc mirror $mirror_args \
+                      --exclude '*.lock' \
+                      --exclude '*.lock/*' \
+                      --exclude '*.tmp' \
+                      "$src" "$dst" || true
+                  elif [ -f "$src" ]; then
+                    mc cp --quiet "$src" "$dst" || true
+                  fi
+                done
+              }
               if [ -d "$AGENT_DIR" ] && [ -n "$(ls -A "$AGENT_DIR" 2>/dev/null)" ]; then
-                mc mirror --remove --overwrite \
-                  --exclude '*.lock' \
-                  --exclude '*.lock/*' \
-                  --exclude '*.tmp' \
-                  /home/node/.openclaw s3/platform-state/admins/openclaw/ || true
+                sync_state "--remove --overwrite"
               else
-                mc mirror --overwrite \
-                  --exclude '*.lock' \
-                  --exclude '*.lock/*' \
-                  --exclude '*.tmp' \
-                  /home/node/.openclaw s3/platform-state/admins/openclaw/ || true
+                sync_state "--overwrite"
               fi
     env:
       - name: MINIO_ENDPOINT
