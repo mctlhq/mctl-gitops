@@ -55,10 +55,13 @@ spec:
           resources:
             requests:
               cpu: 100m
-              memory: 256Mi
+              memory: 512Mi
             limits:
               cpu: 500m
-              memory: 512Mi
+              # Working set hit 99% of 512Mi limit during normal artifact-store
+              # traffic (mctl-agents runs + openclaw S3-state writes); near-OOM
+              # without warning. 1Gi gives a 2x cushion before next review.
+              memory: 1Gi
 
           buckets:
             - name: argo-workflows-logs
