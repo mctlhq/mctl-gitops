@@ -23,6 +23,19 @@ resources:
     cpu: 500m
     memory: 256Mi
 
+# -- Optional: override container ENTRYPOINT (image default is used when unset).
+# Useful when the service needs a per-tenant pre-start step (e.g. cleaning up
+# state from a previous container restart inside the same pod) before exec'ing
+# the image's normal entrypoint. Unset by default — services that don't need
+# wrapping just inherit the image's CMD/ENTRYPOINT.
+command: []
+
+# -- Optional: override container CMD (image default is used when unset). Pairs
+# with `command:` above. When `command` is set but `args` is empty the
+# container will run only what's in `command`; when both are set Kubernetes
+# uses `args` as the parameter list to `command`.
+args: []
+
 # -- Required: environment variables (flat key-value)
 env: {}
 
