@@ -84,10 +84,13 @@ spec:
           resources:
             requests:
               cpu: 50m
-              memory: 48Mi
+              memory: 96Mi
             limits:
               cpu: 500m
-              memory: 128Mi
+              # 1h peak working set hit 94% of 128Mi across multiple nodes;
+              # log volume grew with mctl-agents proposals + openclaw sessions.
+              # 256Mi gives 2x cushion; cluster-wide cost is +384Mi (3 nodes).
+              memory: 256Mi
           config:
             clients:
               - url: http://loki-stack:3100/loki/api/v1/push
