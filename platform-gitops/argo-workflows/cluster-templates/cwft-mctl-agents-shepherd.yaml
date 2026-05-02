@@ -32,7 +32,7 @@ metadata:
            including the /workdir/clones scratch dir for sibling-repo
            clones triggered by the implementer subprocess.
         2. run-shepherd — orchestrator/run_shepherd inside
-           ghcr.io/mctlhq/mctl-agents:1.9.0. Reads STATE_DIR + GitHub
+           ghcr.io/mctlhq/mctl-agents:1.10.0. Reads STATE_DIR + GitHub
            PAT, may invoke run_implementer as a subprocess for
            address-review followups.
         3. commit-and-push — commits any .status.yaml transitions back
@@ -165,14 +165,17 @@ spec:
             mountPath: /secrets/deploy-key
 
     # ── 2. Run shepherd orchestrator ──────────────────────────────────────
-    # NB: ghcr.io/mctlhq/mctl-agents:1.9.0 is the first tag with
-    # orchestrator/run_shepherd baked in (added in mctl-agents PR #12).
-    # Until 1.9.0 is published, this step will ImagePullBackOff — that
-    # is intentional; the CWFT lands first so ArgoCD can sync it the
-    # moment the tag drops.
+    # NB: ghcr.io/mctlhq/mctl-agents:1.10.0 ships the dead-letter
+    # `in-progress` recovery (mctl-agents PR #13). The discovery scope
+    # now includes `in-progress` proposals; process_one gates on PR
+    # shape so Tier 2 mid-flight is never raced — only CLOSED-unmerged
+    # PRs trigger the existing flip-to-rejected path. Reference
+    # incident: mctl-openclaw/upgrade-to-2026-4-27 closed 2026-04-30
+    # (manually reconciled via mctl-gitops PR #97 before the fix
+    # landed). 1.9.0 was the first tag with the orchestrator baked in.
     - name: run-shepherd
       container:
-        image: ghcr.io/mctlhq/mctl-agents:1.9.0
+        image: ghcr.io/mctlhq/mctl-agents:1.10.0
         imagePullPolicy: IfNotPresent
         command: ["/entrypoint.sh"]
         args:
