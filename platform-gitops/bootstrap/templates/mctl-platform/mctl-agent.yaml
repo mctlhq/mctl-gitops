@@ -68,7 +68,11 @@ spec:
         externalSecret:
           targetSecret: mctl-agent-secrets
           targetTemplateData:
-            TELEGRAM_CHAT_ID: "210408407"
+            # Global fallback chat — used for tickets whose Tenant doesn't
+            # match an entry in TELEGRAM_TENANT_CHAT_IDS (e.g. platform-wide
+            # alerts with no tenant label). Set to admins-openclaw so
+            # cross-tenant noise lands with the operators, not in labs.
+            TELEGRAM_CHAT_ID: "8568443430"
             # Per-tenant Telegram routing — fmt: "tenant=chat_id,tenant=chat_id".
             # Empty string disables routing (everything falls back to TELEGRAM_CHAT_ID).
             # Seed via: vault kv patch secret/platform/mctl-agent/tokens telegram-tenant-chat-ids="admins=...,labs=...,ovk=..."
