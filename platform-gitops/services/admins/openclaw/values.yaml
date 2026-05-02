@@ -1223,7 +1223,6 @@ configMaps:
         "plugins": {
           "entries": {
             "bonjour": {
-              "_comment": "mDNS service-discovery — useless inside a k8s pod (gateway is reached via Service DNS, not mDNS announce) and the bundled @ciao library throws an unhandled `CIAO ANNOUNCEMENT CANCELLED` rejection when its announcer is restarted after a long event-loop stall, crashing the Node process with exitCode=1. Disabled for admins on 2026-05-02 after observing repeated crash-loop with this exact stack trace during plugin-install heavy phase.",
               "enabled": false
             }
           }
