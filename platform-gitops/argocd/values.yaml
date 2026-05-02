@@ -204,13 +204,17 @@ argo-cd:
   controller:
     resources:
       limits:
-        memory: 1Gi
+        # 1h peak working set hit 96% of 1Gi during normal sync activity
+        # (Application count grew with mctl-agents proposals). 2Gi gives 2x
+        # cushion. GOMEMLIMIT must move with the limit, otherwise the runtime
+        # GCs aggressively against the old soft cap and never uses the headroom.
+        memory: 2Gi
       requests:
         cpu: 100m
         memory: 512Mi
     env:
       - name: GOMEMLIMIT
-        value: "900MiB"
+        value: "1800MiB"
 
   # Dex server probes — auto-restart when OIDC provider is temporarily unavailable
   # Without these, dex stays "Running" but broken after failed initialization
