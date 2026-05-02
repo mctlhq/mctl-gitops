@@ -1,3 +1,11 @@
-status: in-progress
-updated_at: '2026-04-30T22:24:39Z'
-updated_by: mctl-agents[bot]
+status: rejected
+updated_at: '2026-05-02T09:10:00Z'
+updated_by: operator
+note: |
+  PR mctlhq/mctl-openclaw#15 was opened by the implementer on 2026-04-30T21:53Z
+  and closed without merge on 2026-04-30T23:13:56Z after a P2 codex finding
+  ("Correct rollout timestamps"). The proposal status was never flipped from
+  `in-progress` — manual cleanup. Shepherd should ideally detect
+  `pr.state == CLOSED && !pr.merged` and flip to `rejected` automatically;
+  follow-up improvement separately.
+pr: https://github.com/mctlhq/mctl-openclaw/pull/15
