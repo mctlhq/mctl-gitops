@@ -14,6 +14,26 @@ imagePullSecrets:
   - name: ghcr-credentials
 service:
   port: 18789
+# Wrap the openclaw entrypoint with a lock-cleanup pre-step. The
+# `restore-state` initContainer runs ONCE per pod, so it can't help when
+# base-service container restarts inside the same pod and the emptyDir
+# `state-data` survives the restart with an orphaned
+# `.openclaw-runtime-mirror.lock/` directory left over from an incomplete
+# previous run. openclaw's `withBundledRuntimeDepsFilesystemLock` then sees
+# `pid=1 alive=true` (PID 1 is always alive in containers), waits 5 min for
+# the imaginary owner, and the startup probe kills the container — repeat
+# forever (admins-openclaw 2026-05-01: 239 container restarts in 22h on the
+# same pod, all on the same lock from the first failed boot).
+#
+# Solution: scrub stale `*.lock/` dirs on every container start, then exec
+# the image's normal CMD. Idempotent — does nothing on a clean emptyDir.
+command:
+  - sh
+  - -c
+args:
+  - |
+    find /home/node/.openclaw -type d -name '*.lock' -exec rm -rf {} + 2>/dev/null || true
+    exec node openclaw.mjs gateway --allow-unconfigured
 # beta.2 startup is CPU-bound: observed 1396m / 1500m saturation during
 # channel/sidecar bring-up, which throttles the Node event loop hard
 # enough that /healthz times out > 15s and kubelet kills the container
