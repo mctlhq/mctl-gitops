@@ -92,15 +92,29 @@ probes:
     port: http
     initialDelaySeconds: 10
     periodSeconds: 10
-    timeoutSeconds: 3
-    failureThreshold: 3
+    # beta.2 plugin-install bursts (3-5s npm install per extension,
+    # observed ~30 extensions sequential during cold boot) block the
+    # Node event loop long enough that /readyz times out at 3s and the
+    # pod cycles out of service. Bumped 3→10s and threshold 3→5 so a
+    # single slow plugin install doesn't 503 the pod.
+    timeoutSeconds: 10
+    failureThreshold: 5
   liveness:
     path: /healthz
     port: http
     initialDelaySeconds: 60
     periodSeconds: 30
-    timeoutSeconds: 5
-    failureThreshold: 5            # 5 * 30s = 150s tolerance for transient stalls
+    # Same Node-event-loop stall as the readiness probe: /healthz
+    # blocks past 5s when an extension's npm install runs synchronously
+    # in the background (admins-openclaw 2026-05-02: container killed
+    # mid-startup at exitCode 137 after the bundled-runtime install
+    # phase blocked /healthz for 5+ probe periods, even though the WS
+    # gateway was answering live device.pair / mctl.connect / codex.connect
+    # requests just fine). Bumped to 15s timeout + 10 thresh = 300s
+    # (5 min) tolerance — long enough for the longest single extension
+    # install observed (web-readability ~5s + other in-flight work).
+    timeoutSeconds: 15
+    failureThreshold: 10
 envFrom:
   - secretRef:
       name: admins-openclaw-db-creds
