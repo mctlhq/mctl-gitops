@@ -5,7 +5,7 @@ metadata:
   namespace: argo-workflows
   annotations:
     workflows.argoproj.io/description: |
-      Every-30-minute trigger for the Tier 3 PR shepherd.
+      Every-2-hour (HH:30) trigger for the Tier 3 PR shepherd.
 
       All workflow logic lives in ClusterWorkflowTemplate
       `mctl-agents-shepherd` (cwft-mctl-agents-shepherd.yaml). This
@@ -23,7 +23,16 @@ metadata:
       flipped 11 proposals (9 to `merged`, 2 to `rejected`) with no
       false positives.
 spec:
-  schedule: "*/30 * * * *"
+  # `30 */2 * * *` — fires at HH:30 every 2 hours (12 ticks/day).
+  # Was `*/30 * * * *` (48 ticks/day); reduced 2026-05-02 after a day of
+  # operation showed all 3 cron-fired ticks were no-ops (pipeline empty
+  # / proposals already in terminal states). Codex review on a fresh
+  # implementer-PR is typically 5–15 min, so a 2-hour shepherd cadence
+  # bounds the worst-case PR-sit-time at ~2h while cutting cron
+  # pressure by 4×. The :30 offset stays clear of `mctl-agents-daily`
+  # at 06:00 UTC and `rotate-mctl-agent-github-token` at HH:00, so
+  # contention on the `mctl-gitops-main-writes` mutex is rare.
+  schedule: "30 */2 * * *"
   timezone: "UTC"
   # Forbid: never overlap two shepherd ticks. They all contend on the
   # same `mctl-gitops-main-writes` mutex anyway, and a queued tick
@@ -35,7 +44,7 @@ spec:
   failedJobsHistoryLimit: 3
   # Active — un-suspended after the smoke test (one-shot real run on
   # 2026-05-01 flipped 11 proposals correctly). Schedule fires every
-  # 30 min UTC and the workflow contends on the shared
+  # 2 hours UTC and the workflow contends on the shared
   # `mctl-gitops-main-writes` mutex with the implementer / agents-run
   # workflows, so back-pressure is bounded.
   suspend: false
