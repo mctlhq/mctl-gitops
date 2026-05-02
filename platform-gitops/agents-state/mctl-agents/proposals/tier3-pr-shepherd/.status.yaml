@@ -1,4 +1,20 @@
-status: proposed
-updated_at: 2026-04-29T15:55:00Z
+status: merged
+updated_at: 2026-05-02T09:03:54Z
 updated_by: mashkovd
-notes: First Tier 3 proposal. Flip to `accepted` once mctl-agents PR adding `mctl-agents` to SERVICES is merged and a fresh image tag is built; otherwise the implementer will reject `--service mctl-agents`.
+pr: https://github.com/mctlhq/mctl-agents/pull/12
+merge_commit: 0780af4
+merged_at: 2026-05-01T10:18:15Z
+notes: |
+  Self-implementing proposal — Tier 3 PR shepherd shipped before this
+  proposal got promoted through the normal accepted -> implemented ->
+  merged pipeline. Tracked across:
+    - mctl-agents PR #11 (mctl-agents -> SERVICES)
+    - mctl-agents PR #12 (run_shepherd.py + tests + 1.9.0 tag)
+    - mctl-gitops PR #88 (CWFT + suspended CronWorkflow)
+    - mctl-gitops PR #93 (un-suspend cron)
+  The shepherd cron has been running every 2h since 2026-05-01 and already
+  flipped 11 other proposals correctly (smoke run on 2026-05-01: 9 -> merged,
+  2 -> rejected). Promoting this proposal straight to `merged` because
+  there is nothing for the implementer to do (no diff vs. main) and the
+  shepherd does not scan `proposed` proposals (filter is
+  {implemented, review-fixing} per orchestrator/run_shepherd.py:82).
