@@ -1097,7 +1097,23 @@ configMaps:
             "botToken": "__TELEGRAM_TOKEN__",
             "dmPolicy": "pairing",
             "groupPolicy": "open",
-            "allowFrom": ["210408407", "103413580"]
+            "allowFrom": ["210408407", "103413580"],
+            "commands": {
+              "native": false,
+              "nativeSkills": false
+            },
+            "customCommands": [
+              { "command": "eth", "description": "ETH snapshot via eth-trading-intel skill" },
+              { "command": "btc", "description": "BTC snapshot via eth-trading-intel skill" },
+              { "command": "sol", "description": "SOL snapshot via eth-trading-intel skill" },
+              { "command": "scan", "description": "Scan watchlist (BTC/ETH/SOL) by score threshold" },
+              { "command": "risk", "description": "Risk-only report. Usage: /risk SYMBOL" },
+              { "command": "why", "description": "Explain last trading signal" },
+              { "command": "watch", "description": "Add symbol to watchlist. Usage: /watch SYMBOL" },
+              { "command": "unwatch", "description": "Remove symbol from watchlist. Usage: /unwatch SYMBOL" },
+              { "command": "settings", "description": "Show trading-intel watchlist + threshold" },
+              { "command": "set_threshold", "description": "Set scan threshold 50-95. Usage: /set_threshold N" }
+            ]
           }
         },
         "hooks": {
