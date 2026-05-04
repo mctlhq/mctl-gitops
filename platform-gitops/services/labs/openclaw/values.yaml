@@ -843,6 +843,50 @@ configMaps:
         }
         return res.body;
       }
+    # CoinGlass MCP stdio bridge — required because the claude-cli backend's
+    # bundle-mcp step accepts only stdio MCP servers (it silently skips
+    # streamable-http/sse with "[bundle-mcp] skipped server because only stdio
+    # MCP servers are supported right now"). Bridge converts stdio JSON-RPC
+    # to POST against the upstream streamable-HTTP endpoint, injecting
+    # CG-API-KEY directly from process.env (envFrom -> labs-openclaw-coinglass).
+    coinglass-mcp-proxy.js: |-
+      #!/usr/bin/env node
+      const url = 'https://api-mcp.coinglass.com/mcp';
+      const apiKey = process.env.COINGLASS_API_KEY;
+      process.stdin.setEncoding('utf8');
+      let buf = '';
+      let queue = Promise.resolve();
+      process.stdin.on('data', chunk => {
+        buf += chunk;
+        let nl;
+        while ((nl = buf.indexOf('\n')) !== -1) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (line) queue = queue.then(() => handle(line)).catch(() => {});
+        }
+      });
+      async function handle(line) {
+        let req;
+        try { req = JSON.parse(line); } catch (_) { return; }
+        try {
+          const res = await fetch(url, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json, text/event-stream',
+              'CG-API-KEY': apiKey || '',
+            },
+            body: line,
+          });
+          const body = await res.text();
+          process.stdout.write(body.endsWith('\n') ? body : body + '\n');
+        } catch (err) {
+          process.stdout.write(JSON.stringify({
+            jsonrpc: '2.0', id: req && req.id != null ? req.id : null,
+            error: { code: -32603, message: String(err && err.message ? err.message : err) },
+          }) + '\n');
+        }
+      }
     github-pr-mcp.js: |-
       #!/usr/bin/env node
       const { Buffer } = require('buffer');
@@ -1167,11 +1211,8 @@ configMaps:
               }
             },
             "coinglass": {
-              "transport": "streamable-http",
-              "url": "https://api-mcp.coinglass.com/mcp",
-              "headers": {
-                "CG-API-KEY": "${COINGLASS_API_KEY}"
-              }
+              "command": "node",
+              "args": ["/scripts/coinglass-mcp-proxy.js"]
             }
           }
         }
