@@ -68,15 +68,11 @@ spec:
         externalSecret:
           targetSecret: mctl-agent-secrets
           targetTemplateData:
-            # Global fallback chat — used for tickets whose Tenant doesn't
-            # match an entry in TELEGRAM_TENANT_CHAT_IDS (e.g. platform-wide
-            # alerts with no tenant label). Set to admins-openclaw so
-            # cross-tenant noise lands with the operators, not in labs.
+            # Sole Telegram chat. Per-tenant routing intentionally disabled —
+            # all mctl-agent notifications land in admins-openclaw. Re-enable
+            # by adding TELEGRAM_TENANT_CHAT_IDS here + a matching data entry
+            # below (see git history of this file for the previous shape).
             TELEGRAM_CHAT_ID: "8568443430"
-            # Per-tenant Telegram routing — fmt: "tenant=chat_id,tenant=chat_id".
-            # Empty string disables routing (everything falls back to TELEGRAM_CHAT_ID).
-            # Seed via: vault kv patch secret/platform/mctl-agent/tokens telegram-tenant-chat-ids="admins=...,labs=...,ovk=..."
-            TELEGRAM_TENANT_CHAT_IDS: "{{ .telegramTenantChatIds }}"
           data:
             - secretKey: MCTL_API_TOKEN
               remoteKey: platform/mctl-agent/tokens
@@ -90,14 +86,6 @@ spec:
             - secretKey: TELEGRAM_BOT_TOKEN
               remoteKey: platform/mctl-agent/tokens
               property: telegram-bot-token
-            # Per-tenant chat routing (tenant=chat_id,tenant=chat_id).
-            # Seed via: vault kv patch secret/platform/mctl-agent/tokens \
-            #   telegram-tenant-chat-ids="admins=...,labs=...,ovk=..."
-            # Optional — without it the agent falls back to TELEGRAM_CHAT_ID
-            # for everything (previous behaviour).
-            - secretKey: telegramTenantChatIds
-              remoteKey: platform/mctl-agent/tokens
-              property: telegram-tenant-chat-ids
         # Note: mctl-agent-db-creds ExternalSecret is managed in cnpg/shared/secrets.yaml
         # and synced to 'admins' namespace via cluster-wide sync or manual patch.
         # For now, we assume it exists in the namespace.
