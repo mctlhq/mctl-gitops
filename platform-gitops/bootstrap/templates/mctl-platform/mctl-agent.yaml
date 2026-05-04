@@ -74,10 +74,14 @@ spec:
           targetSecret: mctl-agent-secrets
           targetTemplateData:
             # Sole Telegram chat. Per-tenant routing intentionally disabled —
-            # all mctl-agent notifications land in admins-openclaw. Re-enable
-            # by adding TELEGRAM_TENANT_CHAT_IDS here + a matching data entry
-            # below (see git history of this file for the previous shape).
-            TELEGRAM_CHAT_ID: "8568443430"
+            # all mctl-agent notifications land in the operator's private
+            # chat with @MCTL_AI_bot (mctl_admins). The chat_id is the
+            # operator's Telegram user ID, not the bot's: in 1:1 bot chats
+            # Telegram identifies the chat by the human participant.
+            # Re-enable per-tenant by adding TELEGRAM_TENANT_CHAT_IDS here
+            # + a matching data entry below (see git history of this file
+            # for the previous shape).
+            TELEGRAM_CHAT_ID: "210408407"
           data:
             - secretKey: MCTL_API_TOKEN
               remoteKey: platform/mctl-agent/tokens
