@@ -198,7 +198,10 @@ Validation:
 - `+10` long-position liquidations > short × 1.5 за 24h (squeeze setup) — _только если данные есть_
 - `+10` retail account ratio < 1.2 AND top position ratio > 1 (контр-retail; "smart money long")
 - `+10` CVD net buyers за 24h
-- `+10` ETH ETF flow positive (>$0 ?last 7d) — bonus
+- `+10` **symbol-matched** ETF net inflow positive за last 7d — bonus. Tool gating:
+  - `BTC` → `get_bitcoin_etf_flow_history({limit: 7})`, sum positive ⇒ +10
+  - `ETH` → `get_ethereum_etf_flow_history({limit: 7})`, sum positive ⇒ +10
+  - `SOL` (или любой другой symbol без ETF tool в `tools/list`) — компонент пропускается, добавляется `missing_data: ["<symbol>_etf_flow_unavailable"]`, **никаких penalty** (это bonus, не основа). Никогда не применять ETH ETF flow к BTC/SOL и наоборот.
 
 **Short score components** (sum, cap 100):
 
@@ -210,7 +213,7 @@ Validation:
 - `+10` short liquidations > long × 1.5 за 24h
 - `+10` retail account ratio > 1.5 AND top position ratio < 1 (counter-retail short)
 - `+10` CVD net sellers за 24h
-- `+10` ETH ETF flow negative за 7d — bonus
+- `+10` **symbol-matched** ETF net outflow за last 7d — bonus, та же gating-таблица что и для long-bonus выше (BTC→bitcoin_etf, ETH→ethereum_etf, SOL→skip+missing_data). Кросс-применение запрещено.
 
 **Penalties (apply к более сильному score):**
 
@@ -231,11 +234,17 @@ Validation:
 - `medium` — gap ∈ [15, 30)
 - `low` — gap < 15 OR regime = transition
 
-**Bias mapping:**
+**Bias mapping (exhaustive — every (long_score, short_score) pair maps deterministically):**
 
-- `long_score >= threshold AND short_score < threshold-15` → "Long Watch"
-- `short_score >= threshold AND long_score < threshold-15` → "Short Watch"
-- оба score >= threshold OR оба < threshold-30 → "Mixed" / "No edge"
+Apply правила в этом порядке, первое совпадение выигрывает:
+
+1. **Both ≥ threshold AND `abs(long - short) ≥ 15`** → доминирующая сторона: "Long Watch (contested)" если `long > short`, иначе "Short Watch (contested)". Обе стороны имеют материальные сигналы — не игнорировать противоположный.
+2. **Both ≥ threshold AND `abs(long - short) < 15`** → "Mixed (both elevated)". Сильные противоречивые сигналы — manual review required, никаких setup hints.
+3. **`long_score ≥ threshold` only** (i.e. `short_score < threshold`) → "Long Watch"
+4. **`short_score ≥ threshold` only** → "Short Watch"
+5. **`max(long_score, short_score) < threshold`** → "No edge" — independent of насколько ниже. Не разделять на "Mixed" vs "No edge" по `< threshold-30` cutoff (создавало неопределённый средний диапазон).
+
+Catch-all `else` не нужен — правила 1-5 покрывают всё пространство `(long ∈ [0,100], short ∈ [0,100], threshold ∈ [50,95])`.
 
 ### Output format
 
