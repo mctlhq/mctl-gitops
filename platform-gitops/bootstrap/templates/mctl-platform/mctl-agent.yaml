@@ -59,6 +59,11 @@ spec:
           WEBHOOK_ENABLED: "true"
           WEBHOOK_CALLBACK_URL: "https://agent.mctl.ai"
           WEBHOOK_DEFAULT_TTL: "15m"
+          # Bot username for the "Ask OpenClaw" deeplink button on
+          # Telegram notifications. Must match the bot reachable in
+          # admins-openclaw chat — TELEGRAM_BOT_TOKEN in Vault has the
+          # corresponding token.
+          OPENCLAW_BOT_USERNAME: "@MCTL_AI_bot"
           DATABASE_URL: "postgresql://$(DB_USER):$(DB_PASSWORD)@shared-pg-rw.platform-db.svc:5432/mctl-agent"
         envFrom:
           - secretRef:
