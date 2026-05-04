@@ -76,6 +76,12 @@ envFrom:
   # via shared platform secret — see externalSecrets.openclaw-claude-oauth.
   - secretRef:
       name: openclaw-claude-oauth
+  # COINGLASS_API_KEY — used by the `coinglass` MCP server registration
+  # below. Header CG-API-KEY is interpolated from this env var (Path A).
+  # If openclaw runtime does not interpolate ${...} in mcp.servers headers,
+  # the fallback is a node bridge script that reads process.env directly.
+  - secretRef:
+      name: labs-openclaw-coinglass
 initContainers:
   # 1. Restore state from MinIO (no-op for new tenants, preserves OAuth credentials on restart)
   - name: restore-state
@@ -673,6 +679,16 @@ extraExternalSecrets:
       - secretKey: secret-key
         remoteKey: secret/data/platform/minio
         property: root-password
+  # CoinGlass MCP Beta API key. Mounted into the base-service container via
+  # envFrom above and consumed by the `coinglass` mcp.servers entry below.
+  # Vault path: secret/teams/labs/openclaw/coinglass with field `api_key`.
+  labs-openclaw-coinglass:
+    refreshInterval: 1h
+    targetSecret: labs-openclaw-coinglass
+    data:
+      - secretKey: COINGLASS_API_KEY
+        remoteKey: secret/data/teams/labs/openclaw/coinglass
+        property: api_key
 configMaps:
   openclaw-scripts:
     mcp-agent-proxy.js: |-
@@ -1132,6 +1148,13 @@ configMaps:
               "env": {
                 "MCTL_API_URL": "https://api.mctl.ai",
                 "MCTL_AUTH_FILE": "/home/node/.openclaw/mcp-auth/mctl/credentials.json"
+              }
+            },
+            "coinglass": {
+              "transport": "streamable-http",
+              "url": "https://api-mcp.coinglass.com/mcp",
+              "headers": {
+                "CG-API-KEY": "${COINGLASS_API_KEY}"
               }
             }
           }
