@@ -851,11 +851,26 @@ configMaps:
     # CG-API-KEY directly from process.env (envFrom -> labs-openclaw-coinglass).
     coinglass-mcp-proxy.js: |-
       #!/usr/bin/env node
+      // Two MCP-spec invariants codex flagged on the v1 bridge that this
+      // version handles:
+      //
+      // 1. Session/protocol headers must persist across requests after the
+      //    `initialize` handshake. Captures `mcp-session-id` from the first
+      //    server response and resends it on every subsequent POST. Captures
+      //    the negotiated `protocolVersion` from the initialize result and
+      //    sends it as `Mcp-Protocol-Version` per spec.
+      //
+      // 2. Streamable-HTTP servers may return `text/event-stream` instead of
+      //    `application/json`. Raw passthrough breaks stdio JSON-RPC framing,
+      //    so SSE responses are parsed: each `data:` line is decoded and
+      //    written as its own newline-delimited stdio JSON-RPC message.
       const url = 'https://api-mcp.coinglass.com/mcp';
       const apiKey = process.env.COINGLASS_API_KEY;
+      let sessionId = '';
+      let protocolVersion = '';
+      let queue = Promise.resolve();
       process.stdin.setEncoding('utf8');
       let buf = '';
-      let queue = Promise.resolve();
       process.stdin.on('data', chunk => {
         buf += chunk;
         let nl;
@@ -865,26 +880,69 @@ configMaps:
           if (line) queue = queue.then(() => handle(line)).catch(() => {});
         }
       });
+      function writeLine(obj) { process.stdout.write(JSON.stringify(obj) + '\n'); }
+      function captureProtocolVersion(message) {
+        if (
+          message &&
+          message.result &&
+          typeof message.result.protocolVersion === 'string' &&
+          message.result.protocolVersion
+        ) {
+          protocolVersion = message.result.protocolVersion;
+        }
+      }
+      function emit(message) {
+        captureProtocolVersion(message);
+        writeLine(message);
+      }
+      function parseSse(text) {
+        const messages = [];
+        for (const block of text.split(/\r?\n\r?\n/)) {
+          if (!block.trim()) continue;
+          const dataLines = [];
+          for (const rawLine of block.split(/\r?\n/)) {
+            if (rawLine.startsWith('data:')) dataLines.push(rawLine.slice(5).replace(/^ /, ''));
+          }
+          if (dataLines.length === 0) continue;
+          const payload = dataLines.join('\n');
+          try { messages.push(JSON.parse(payload)); } catch (_) { /* skip non-JSON keepalives */ }
+        }
+        return messages;
+      }
       async function handle(line) {
         let req;
         try { req = JSON.parse(line); } catch (_) { return; }
         try {
-          const res = await fetch(url, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Accept': 'application/json, text/event-stream',
-              'CG-API-KEY': apiKey || '',
-            },
-            body: line,
-          });
+          const headers = {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json, text/event-stream',
+            'CG-API-KEY': apiKey || '',
+          };
+          if (sessionId) headers['Mcp-Session-Id'] = sessionId;
+          if (protocolVersion) headers['Mcp-Protocol-Version'] = protocolVersion;
+          const res = await fetch(url, { method: 'POST', headers, body: line });
+          const nextSession = res.headers.get('mcp-session-id');
+          if (nextSession) sessionId = nextSession;
+          const ctype = (res.headers.get('content-type') || '').toLowerCase();
           const body = await res.text();
-          process.stdout.write(body.endsWith('\n') ? body : body + '\n');
+          if (ctype.includes('text/event-stream')) {
+            for (const message of parseSse(body)) emit(message);
+          } else {
+            const trimmed = body.trim();
+            if (!trimmed) return;
+            try { emit(JSON.parse(trimmed)); }
+            catch (_) {
+              writeLine({
+                jsonrpc: '2.0', id: req && req.id != null ? req.id : null,
+                error: { code: -32603, message: `non-JSON response from coinglass MCP (${res.status})` },
+              });
+            }
+          }
         } catch (err) {
-          process.stdout.write(JSON.stringify({
+          writeLine({
             jsonrpc: '2.0', id: req && req.id != null ? req.id : null,
             error: { code: -32603, message: String(err && err.message ? err.message : err) },
-          }) + '\n');
+          });
         }
       }
     github-pr-mcp.js: |-
