@@ -116,8 +116,12 @@ Validation:
 8. `get_futures_rsi_list({sort_by: "rsi_4h", limit: 200})` — найти ETH в результате (или повторить с разными sort_by)
 9. `get_futures_macd_list({sort_by: "macd_4h", limit: 200})` — то же
 10. `get_futures_aggregated_cvd_history({symbol: "ETH", exchange_list: "Binance,OKX,Bybit", interval: "1h", limit: 24, unit: "usd"})` — taker imbalance
+11. **Symbol-gated ETF flow call** — feeds the ETF bonus in scoring. Routing:
+    - `BTC` → `get_bitcoin_etf_flow_history({limit: 7})`
+    - `ETH` → `get_ethereum_etf_flow_history({limit: 7})`
+    - any other symbol (SOL etc.) → **skip the call**, append `<symbol>_etf_flow_unavailable` to `missing_data`. No penalty (this is a bonus, not a base signal).
 
-(8 и 9 неэффективны если нужен только ETH; альтернативно — индикаторы из price_history + ручной TA. Для Phase 1 использовать `_list` versions, optimize later.)
+(8 и 9 неэффективны если нужен только ETH; альтернативно — индикаторы из price_history + ручной TA. Для Phase 1 использовать `_list` versions, optimize later. Call 11 опционален в smoke-режиме, но обязателен когда формируется bias — иначе `+10` ETF-component в rubric никогда не сработает.)
 
 Дальше — normalize + score + format.
 
@@ -164,6 +168,12 @@ Validation:
   "cvd_24h": {
     "net_usd": 8500000,
     "direction": "buyers_dominant | sellers_dominant | balanced"
+  },
+  "etf_flow_7d": {
+    "available": true,
+    "net_usd": 125000000,
+    "direction": "inflow | outflow | flat",
+    "source_tool": "get_ethereum_etf_flow_history"
   },
   "missing_data": [],
   "raw_sources": {}
@@ -312,7 +322,7 @@ Scan results (threshold 70):
 
 ## Risk-only report (`/risk SYMBOL`)
 
-Полный pipeline БЕЗ scoring. Просто структурированный risk-разбор:
+**Tool calls**: тот же 11-step snapshot pipeline что и `/eth` (с symbol-gated ETF на step 11). Отличие — пропустить блок scoring; собрать только структурированный risk-разбор:
 
 ```
 Risk report for ETH (2026-05-05 12:34 UTC)
