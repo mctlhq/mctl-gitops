@@ -1369,7 +1369,10 @@ configMaps:
             },
             "coinglass": {
               "command": "node",
-              "args": ["/scripts/coinglass-mcp-proxy.js"]
+              "args": ["/scripts/coinglass-mcp-proxy.js"],
+              "env": {
+                "COINGLASS_API_KEY": "${COINGLASS_API_KEY}"
+              }
             }
           }
         }
