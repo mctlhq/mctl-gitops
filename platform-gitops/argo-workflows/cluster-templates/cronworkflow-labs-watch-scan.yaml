@@ -244,18 +244,56 @@ spec:
                     return None, f"CoinGlass error code {payload.get('code')}: {payload.get('msg', '')}"
                 return payload.get("data") if isinstance(payload, dict) else payload, None
 
-            # MCP initialize handshake — bridge supports synthetic init, but direct API needs real init
+            def mcp_notify(method, params=None):
+                """Fire-and-forget JSON-RPC notification (no id field, no response parsing).
+
+                Required by MCP lifecycle: after initialize, the client must send
+                notifications/initialized before any normal request, or strict servers
+                may refuse tools/call (and silently miss alerts).
+                """
+                body = json.dumps({
+                    "jsonrpc": "2.0",
+                    "method": method,
+                    "params": params or {},
+                }).encode()
+                headers = {
+                    "Content-Type": "application/json",
+                    "Accept": "application/json, text/event-stream",
+                    "CG-API-KEY": cg_api_key,
+                }
+                if mcp_session_id:
+                    headers["Mcp-Session-Id"] = mcp_session_id
+                    headers["Mcp-Protocol-Version"] = mcp_protocol
+                req = urllib.request.Request(COINGLASS_MCP_URL, data=body, headers=headers, method="POST")
+                try:
+                    # Notifications return 202 Accepted with no body; consume and discard.
+                    urllib.request.urlopen(req, timeout=15).read()
+                except urllib.error.HTTPError as e:
+                    # 4xx on a notification is non-fatal (server may not require it),
+                    # but log so spec-strictness regressions are visible.
+                    print(f"⚠️  notification {method} returned HTTP {e.code}; continuing")
+
+            # MCP initialize handshake. Three steps per spec:
+            #   1. Client → request initialize
+            #   2. Server → response with capabilities
+            #   3. Client → notifications/initialized (fire-and-forget, no id)
+            # Strict servers (and the MCP spec) require step 3 before tools/call.
+            # The CoinGlass server has historically been lenient about steps 1-2
+            # (initialize occasionally 401s while tools/call with the same header
+            # succeeds), but step 3 is cheap insurance and matches the lifecycle
+            # the openclaw bundle-mcp client performs through the stdio bridge.
             init_resp = mcp_request("initialize", {
                 "protocolVersion": mcp_protocol,
                 "capabilities": {},
                 "clientInfo": {"name": "labs-watch-scan", "version": "1.0.0"},
             })
             if "result" not in init_resp and "_http_error" not in init_resp:
-                # CoinGlass server has historically returned 401 on initialize — that's fine
-                # because tools/call works directly with the same header. Tolerate.
                 print(f"⚠️  initialize response: {json.dumps(init_resp)[:200]}")
             else:
                 print("✅ MCP initialized")
+
+            mcp_notify("notifications/initialized")
+            print("✅ initialized notification sent")
 
             # ── Scoring: 4 binary signals × 25 (HOBBYIST-friendly) ────────────
             # Inputs (4h interval throughout):
