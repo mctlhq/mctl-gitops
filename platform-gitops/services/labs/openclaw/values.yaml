@@ -378,6 +378,19 @@ initContainers:
         else
           echo "Telegram token is empty; leaving placeholder unchanged."
         fi
+        # CoinGlass MCP API key needs runtime injection because the
+        # claude-cli backend's bundle-mcp adapter copies mcp.servers.<name>.env
+        # values verbatim into the spawned bridge process's environment —
+        # there's no `${VAR}` interpolation on this code path
+        # (decodeHeaderEnvPlaceholder is only used by Codex/Gemini bundles).
+        # Same `__TELEGRAM_TOKEN__` sed-substitution pattern keeps the actual
+        # secret out of the rendered ConfigMap and the gitops repo.
+        if [ -n "${COINGLASS_API_KEY:-}" ]; then
+          echo "Injecting CoinGlass API key into runtime config..."
+          sed -i "s|__COINGLASS_API_KEY__|$COINGLASS_API_KEY|g" /config-rw/openclaw.json
+        else
+          echo "COINGLASS_API_KEY is empty; leaving placeholder unchanged."
+        fi
         WORKSPACE=/home/node/.openclaw/workspace
         mkdir -p "$WORKSPACE/memory" "$WORKSPACE/skills" /home/node/.openclaw/bundled-skills
 
@@ -466,6 +479,11 @@ initContainers:
           secretKeyRef:
             name: openclaw-telegram-secret
             key: OPENCLAW_TELEGRAM_TOKEN
+      - name: COINGLASS_API_KEY
+        valueFrom:
+          secretKeyRef:
+            name: labs-openclaw-coinglass
+            key: COINGLASS_API_KEY
     volumeMounts:
       - name: openclaw-config-tpl
         mountPath: /config-tpl
@@ -1371,7 +1389,7 @@ configMaps:
               "command": "node",
               "args": ["/scripts/coinglass-mcp-proxy.js"],
               "env": {
-                "COINGLASS_API_KEY": "${COINGLASS_API_KEY}"
+                "COINGLASS_API_KEY": "__COINGLASS_API_KEY__"
               }
             }
           }
