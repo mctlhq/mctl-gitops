@@ -272,6 +272,11 @@ spec:
                     # 4xx on a notification is non-fatal (server may not require it),
                     # but log so spec-strictness regressions are visible.
                     print(f"⚠️  notification {method} returned HTTP {e.code}; continuing")
+                except urllib.error.URLError as e:
+                    # Network blip on a fire-and-forget notification must not abort
+                    # the whole cron run — later tools/call requests may still succeed
+                    # (or be handled per-symbol). Log and proceed.
+                    print(f"⚠️  notification {method} URLError: {e.reason}; continuing")
 
             # MCP initialize handshake. Three steps per spec:
             #   1. Client → request initialize
@@ -525,10 +530,22 @@ spec:
                         headers={"Content-Type": "application/json"},
                         method="POST",
                     )
-                    urllib.request.urlopen(tg_req, timeout=15)
-                    last_alert_at[sym] = now_iso
-                    sent_alerts.append(sym)
-                    print(f"    ✅ alert sent for {sym}")
+                    tg_resp = urllib.request.urlopen(tg_req, timeout=15)
+                    # Telegram Bot API can return HTTP 200 with {"ok": false, "description": "..."}
+                    # on non-network failures (invalid chat_id, bot blocked, message too long, etc.).
+                    # Updating dedup state on those false-success cases would suppress retries
+                    # for 4 hours and silently drop alerts. Require ok == true.
+                    try:
+                        tg_payload = json.loads(tg_resp.read().decode("utf-8", "replace"))
+                    except json.JSONDecodeError:
+                        tg_payload = {}
+                    if not tg_payload.get("ok"):
+                        desc = tg_payload.get("description", "no description")
+                        print(f"    ⚠️  Telegram returned ok=false for {sym}: {desc}; not updating dedup")
+                    else:
+                        last_alert_at[sym] = now_iso
+                        sent_alerts.append(sym)
+                        print(f"    ✅ alert sent for {sym}")
                 except urllib.error.HTTPError as e:
                     err_body = e.read().decode("utf-8", "replace")[:300]
                     print(f"    ⚠️  Telegram POST failed: HTTP {e.code} {err_body}")
