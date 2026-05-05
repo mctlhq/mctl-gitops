@@ -94,7 +94,13 @@ spec:
             COINGLASS_MCP_URL = "https://api-mcp.coinglass.com/mcp"
             TELEGRAM_API = "https://api.telegram.org"
             DEDUP_HOURS = 4
-            ALERT_CHAT_ID = "210408407"  # operator DM with @MCTL_AI_bot
+            # Telegram chat IDs to receive cron alerts. Must mirror the openclaw
+            # tenant's `channels.telegram.allowFrom` list in
+            # platform-gitops/services/labs/openclaw/values.yaml — these are the
+            # only operators trusted to chat with the bot, so they are also the
+            # ones who should see autonomous alerts. If allowFrom changes there,
+            # update this list too.
+            ALERT_CHAT_IDS = ["210408407", "103413580"]
 
             def vault_token():
                 with open("/var/run/secrets/kubernetes.io/serviceaccount/token") as f:
@@ -556,39 +562,58 @@ spec:
                     f"This is observation, not financial advice."
                 )
 
+                # Send alert to every operator chat in ALERT_CHAT_IDS. Update
+                # dedup state if at least one delivery returned ok=true: the
+                # operator group has seen this signal at least once, so the
+                # 4h suppression window is the right behavior. If every chat
+                # fails (network down, bot kicked from all chats), leave
+                # last_alert_at unchanged so the next tick can retry.
                 tg_url = f"{TELEGRAM_API}/bot{tg_token}/sendMessage"
-                tg_body = json.dumps({
-                    "chat_id": ALERT_CHAT_ID,
-                    "text": msg,
-                }).encode()
-                try:
-                    tg_req = urllib.request.Request(
-                        tg_url,
-                        data=tg_body,
-                        headers={"Content-Type": "application/json"},
-                        method="POST",
-                    )
-                    tg_resp = urllib.request.urlopen(tg_req, timeout=15)
-                    # Telegram Bot API can return HTTP 200 with {"ok": false, "description": "..."}
-                    # on non-network failures (invalid chat_id, bot blocked, message too long, etc.).
-                    # Updating dedup state on those false-success cases would suppress retries
-                    # for 4 hours and silently drop alerts. Require ok == true.
+                any_delivered = False
+                delivery_summary = []
+                for chat_id in ALERT_CHAT_IDS:
+                    tg_body = json.dumps({
+                        "chat_id": chat_id,
+                        "text": msg,
+                    }).encode()
                     try:
-                        tg_payload = json.loads(tg_resp.read().decode("utf-8", "replace"))
-                    except json.JSONDecodeError:
-                        tg_payload = {}
-                    if not tg_payload.get("ok"):
-                        desc = tg_payload.get("description", "no description")
-                        print(f"    ⚠️  Telegram returned ok=false for {sym}: {desc}; not updating dedup")
-                    else:
-                        last_alert_at[sym] = now_iso
-                        sent_alerts.append(sym)
-                        print(f"    ✅ alert sent for {sym}")
-                except urllib.error.HTTPError as e:
-                    err_body = e.read().decode("utf-8", "replace")[:300]
-                    print(f"    ⚠️  Telegram POST failed: HTTP {e.code} {err_body}")
-                except urllib.error.URLError as e:
-                    print(f"    ⚠️  Telegram POST network error: {e.reason}")
+                        tg_req = urllib.request.Request(
+                            tg_url,
+                            data=tg_body,
+                            headers={"Content-Type": "application/json"},
+                            method="POST",
+                        )
+                        tg_resp = urllib.request.urlopen(tg_req, timeout=15)
+                        # Telegram Bot API can return HTTP 200 with {"ok": false, "description": "..."}
+                        # on non-network failures (invalid chat_id, bot blocked, message too long, etc.).
+                        try:
+                            tg_payload = json.loads(tg_resp.read().decode("utf-8", "replace"))
+                        except json.JSONDecodeError:
+                            tg_payload = {}
+                        if not tg_payload.get("ok"):
+                            desc = tg_payload.get("description", "no description")
+                            print(f"    ⚠️  Telegram ok=false for {sym} → chat {chat_id}: {desc}")
+                            delivery_summary.append(f"{chat_id}=ok_false")
+                        else:
+                            any_delivered = True
+                            delivery_summary.append(f"{chat_id}=ok")
+                    except urllib.error.HTTPError as e:
+                        err_body = e.read().decode("utf-8", "replace")[:200]
+                        print(f"    ⚠️  Telegram POST {sym}→{chat_id} failed: HTTP {e.code} {err_body}")
+                        delivery_summary.append(f"{chat_id}=http_{e.code}")
+                    except urllib.error.URLError as e:
+                        print(f"    ⚠️  Telegram POST {sym}→{chat_id} network error: {e.reason}")
+                        delivery_summary.append(f"{chat_id}=urlerror")
+
+                if any_delivered:
+                    last_alert_at[sym] = now_iso
+                    sent_alerts.append(sym)
+                    print(f"    ✅ alert {sym} delivered: [{', '.join(delivery_summary)}]")
+                else:
+                    print(
+                        f"    ❌ alert {sym} failed to all chats: [{', '.join(delivery_summary)}]; "
+                        f"keeping last_alert_at unchanged for retry next tick"
+                    )
 
             # ── Persist alerts state ──────────────────────────────────────────
             alerts_state["last_alert_at"] = last_alert_at
@@ -644,11 +669,18 @@ spec:
               exit 0
             fi
             MSG="🚨 labs-watch-scan failed: workflow={{workflow.name}} status={{workflow.status}}. Check workflows.mctl.ai/workflows/argo-workflows/{{workflow.name}}"
-            curl -s --max-time 10 -X POST \
-              "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
-              -H "Content-Type: application/json" \
-              -d "$(jq -n --arg c "210408407" --arg t "$MSG" '{chat_id:$c,text:$t}')" \
-              || echo "telegram POST failed; not blocking workflow"
+            # Notify every operator chat — must mirror ALERT_CHAT_IDS in the
+            # main scan step and channels.telegram.allowFrom in the openclaw
+            # tenant values.yaml. Loop is best-effort: a failure to reach one
+            # chat does not block the others or fail the workflow.
+            for CHAT_ID in 210408407 103413580; do
+              curl -s --max-time 10 -X POST \
+                "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+                -H "Content-Type: application/json" \
+                -d "$(jq -n --arg c "$CHAT_ID" --arg t "$MSG" '{chat_id:$c,text:$t}')" \
+                > /dev/null 2>&1 \
+                || echo "telegram POST to $CHAT_ID failed; continuing"
+            done
             exit 0
           env:
             - name: VAULT_ADDR
