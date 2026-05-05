@@ -1328,10 +1328,16 @@ configMaps:
               { "command": "scan", "description": "Scan watchlist (BTC/ETH/SOL) by score threshold" },
               { "command": "risk", "description": "Risk-only report. Usage: /risk SYMBOL" },
               { "command": "why", "description": "Explain last trading signal" },
-              { "command": "watch", "description": "Add symbol to watchlist. Usage: /watch SYMBOL" },
+              { "command": "watch", "description": "Watch SYMBOL. Usage: /watch SYMBOL [N] [long|short|both]" },
               { "command": "unwatch", "description": "Remove symbol from watchlist. Usage: /unwatch SYMBOL" },
               { "command": "settings", "description": "Show trading-intel watchlist + threshold" },
-              { "command": "set_threshold", "description": "Set scan threshold 50-95. Usage: /set_threshold N" }
+              { "command": "set_threshold", "description": "Set scan threshold 50-95. Usage: /set_threshold N" },
+              { "command": "help", "description": "List all eth-trading-intel commands" },
+              { "command": "last", "description": "Recall last trading signal from memory" },
+              { "command": "funding", "description": "Funding rate snapshot. Usage: /funding SYMBOL" },
+              { "command": "oi", "description": "Open interest snapshot. Usage: /oi SYMBOL" },
+              { "command": "etf", "description": "BTC/ETH ETF flow deep-dive. Usage: /etf BTC" },
+              { "command": "pulse", "description": "Compact: price, funding, OI, RSI. Usage: /pulse SYMBOL" }
             ]
           }
         },
