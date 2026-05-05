@@ -912,6 +912,18 @@ configMaps:
       async function handle(line) {
         let req;
         try { req = JSON.parse(line); } catch (_) { return; }
+        // JSON-RPC notifications (no `id` key) are one-way; the spec
+        // forbids responses, including errors. Track presence vs. value
+        // because `id: null` is a valid request id and must still get a
+        // reply, while a missing `id` field must not.
+        const isNotification = !req || !Object.prototype.hasOwnProperty.call(req, 'id');
+        const errorReply = (message) => {
+          if (isNotification) return;
+          writeLine({
+            jsonrpc: '2.0', id: req.id,
+            error: { code: -32603, message: String(message) },
+          });
+        };
         try {
           const headers = {
             'Content-Type': 'application/json',
@@ -923,6 +935,14 @@ configMaps:
           const res = await fetch(url, { method: 'POST', headers, body: line });
           const nextSession = res.headers.get('mcp-session-id');
           if (nextSession) sessionId = nextSession;
+          // 404 with an attached Mcp-Session-Id means the upstream rejected
+          // the session (expired/unknown). Clear local state so the next
+          // request enters a fresh initialize flow instead of looping with
+          // a stale session id forever.
+          if (res.status === 404 && headers['Mcp-Session-Id']) {
+            sessionId = '';
+            protocolVersion = '';
+          }
           const ctype = (res.headers.get('content-type') || '').toLowerCase();
           const body = await res.text();
           if (ctype.includes('text/event-stream')) {
@@ -932,17 +952,11 @@ configMaps:
             if (!trimmed) return;
             try { emit(JSON.parse(trimmed)); }
             catch (_) {
-              writeLine({
-                jsonrpc: '2.0', id: req && req.id != null ? req.id : null,
-                error: { code: -32603, message: `non-JSON response from coinglass MCP (${res.status})` },
-              });
+              errorReply(`non-JSON response from coinglass MCP (${res.status})`);
             }
           }
         } catch (err) {
-          writeLine({
-            jsonrpc: '2.0', id: req && req.id != null ? req.id : null,
-            error: { code: -32603, message: String(err && err.message ? err.message : err) },
-          });
+          errorReply(err && err.message ? err.message : err);
         }
       }
     github-pr-mcp.js: |-
