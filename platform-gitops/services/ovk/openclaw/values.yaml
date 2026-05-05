@@ -14,6 +14,18 @@ imagePullSecrets:
   - name: ghcr-credentials
 service:
   port: 18789
+# Wrap the openclaw entrypoint with a lock-cleanup pre-step. Backported from
+# admins (PR #96 series): scrub stale `*.lock/` dirs in the state-data
+# emptyDir on every container start, then exec the image's normal CMD.
+# Without this, an orphaned `.openclaw-runtime-mirror.lock/` left from a
+# previous incomplete run blocks startup for 5 min and crash-loops the pod.
+command:
+  - sh
+  - -c
+args:
+  - |
+    find /home/node/.openclaw -type d -name '*.lock' -exec rm -rf {} + 2>/dev/null || true
+    exec node openclaw.mjs gateway --allow-unconfigured
 resources:
   requests:
     cpu: 250m
@@ -50,22 +62,29 @@ probes:
     port: http
     initialDelaySeconds: 5
     periodSeconds: 5
-    timeoutSeconds: 3
-    failureThreshold: 36
+    # C: probe budgets backported from admins (PR #101). Wider tolerance
+    # for Node event-loop stalls during channel/sidecar bring-up and bundled
+    # plugin install bursts. ovk CPU ceiling (1500m) lower than admins
+    # (2000m) → ovk more susceptible to probe-timeouts, not less, so we
+    # need at least the same budget.
+    timeoutSeconds: 10            # was 3
+    failureThreshold: 90          # was 36 → startup budget 5 + 90*5 = 455s
   readiness:
     path: /readyz
     port: http
     initialDelaySeconds: 10
     periodSeconds: 10
-    timeoutSeconds: 3
-    failureThreshold: 3
+    timeoutSeconds: 10            # was 3 — plugin-install bursts block event loop > 3s
+    failureThreshold: 5           # was 3 — single slow plugin install shouldn't 503 the pod
   liveness:
     path: /healthz
     port: http
     initialDelaySeconds: 60
     periodSeconds: 30
-    timeoutSeconds: 5
-    failureThreshold: 5
+    # D: liveness budget backported from admins. /healthz can block 5+ probe
+    # periods during bundled-runtime install bursts even on healthy pods.
+    timeoutSeconds: 15            # was 5
+    failureThreshold: 10          # was 5 → ~5min tolerance vs ~150s
 envFrom:
   - secretRef:
       name: ovk-openclaw-db-creds
@@ -103,6 +122,11 @@ initContainers:
         if [ -n "$(mc ls --recursive s3/platform-state/openclaw/ovk/ 2>/dev/null | head -1)" ]; then
           LEGACY_STATE_MARKER=1
         fi
+        # B1: Idempotent purge of the legacy plugin-runtime-deps mirror in S3.
+        # The directory is recreated on every pod boot from /app/dist/extensions/
+        # (RO image layer) — mirroring it to S3 cost ~1.5GiB + ~5min restore
+        # on cold start with zero recovery value. Backported from admins.
+        mc rm --recursive --force --quiet s3/platform-state/ovk/openclaw/plugin-runtime-deps 2>/dev/null || true
         if [ -n "$NEW_STATE_MARKER" ]; then
           mc mirror s3/platform-state/ovk/openclaw/ /home/node/.openclaw
         elif [ -n "$LEGACY_STATE_MARKER" ]; then
@@ -110,6 +134,13 @@ initContainers:
         else
           mkdir -p /home/node/.openclaw
         fi
+        # B2: Defensive prune of stale `*.lock/` dirs after restore. Pre-fix
+        # versions of the s3-sync sidecar uploaded `owner.json` inside
+        # `.openclaw-runtime-mirror.lock/`, which `mc mirror` rehydrates on
+        # next pod boot, making the runtime mirror logic see a held lock and
+        # wait 5 min for an imaginary owner. Self-heals on first restore.
+        # Backported from admins.
+        find /home/node/.openclaw -type d -name '*.lock' -exec rm -rf {} + 2>/dev/null || true
         # During layout migration, only backfill non-secret model metadata.
         # New tenants must start without preseeded Codex OAuth credentials.
         if [ -n "$LEGACY_STATE_MARKER" ]; then
@@ -1060,6 +1091,13 @@ configMaps:
             "skipBootstrap": true,
             "model": {
               "primary": "openai-codex/gpt-5.4"
+            }
+          }
+        },
+        "plugins": {
+          "entries": {
+            "bonjour": {
+              "enabled": false
             }
           }
         },
