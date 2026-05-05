@@ -874,6 +874,122 @@ configMaps:
         }
         return res.body;
       }
+    # CoinGlass MCP stdio bridge — required because the claude-cli backend's
+    # bundle-mcp step accepts only stdio MCP servers (it silently skips
+    # streamable-http/sse with "[bundle-mcp] skipped server because only stdio
+    # MCP servers are supported right now"). Bridge converts stdio JSON-RPC
+    # to POST against the upstream streamable-HTTP endpoint, injecting
+    # CG-API-KEY directly from process.env (envFrom -> labs-openclaw-coinglass).
+    coinglass-mcp-proxy.js: |-
+      #!/usr/bin/env node
+      // Two MCP-spec invariants codex flagged on the v1 bridge that this
+      // version handles:
+      //
+      // 1. Session/protocol headers must persist across requests after the
+      //    `initialize` handshake. Captures `mcp-session-id` from the first
+      //    server response and resends it on every subsequent POST. Captures
+      //    the negotiated `protocolVersion` from the initialize result and
+      //    sends it as `Mcp-Protocol-Version` per spec.
+      //
+      // 2. Streamable-HTTP servers may return `text/event-stream` instead of
+      //    `application/json`. Raw passthrough breaks stdio JSON-RPC framing,
+      //    so SSE responses are parsed: each `data:` line is decoded and
+      //    written as its own newline-delimited stdio JSON-RPC message.
+      const url = 'https://api-mcp.coinglass.com/mcp';
+      const apiKey = process.env.COINGLASS_API_KEY;
+      let sessionId = '';
+      let protocolVersion = '';
+      let queue = Promise.resolve();
+      process.stdin.setEncoding('utf8');
+      let buf = '';
+      process.stdin.on('data', chunk => {
+        buf += chunk;
+        let nl;
+        while ((nl = buf.indexOf('\n')) !== -1) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (line) queue = queue.then(() => handle(line)).catch(() => {});
+        }
+      });
+      function writeLine(obj) { process.stdout.write(JSON.stringify(obj) + '\n'); }
+      function captureProtocolVersion(message) {
+        if (
+          message &&
+          message.result &&
+          typeof message.result.protocolVersion === 'string' &&
+          message.result.protocolVersion
+        ) {
+          protocolVersion = message.result.protocolVersion;
+        }
+      }
+      function emit(message) {
+        captureProtocolVersion(message);
+        writeLine(message);
+      }
+      function parseSse(text) {
+        const messages = [];
+        for (const block of text.split(/\r?\n\r?\n/)) {
+          if (!block.trim()) continue;
+          const dataLines = [];
+          for (const rawLine of block.split(/\r?\n/)) {
+            if (rawLine.startsWith('data:')) dataLines.push(rawLine.slice(5).replace(/^ /, ''));
+          }
+          if (dataLines.length === 0) continue;
+          const payload = dataLines.join('\n');
+          try { messages.push(JSON.parse(payload)); } catch (_) { /* skip non-JSON keepalives */ }
+        }
+        return messages;
+      }
+      async function handle(line) {
+        let req;
+        try { req = JSON.parse(line); } catch (_) { return; }
+        // JSON-RPC notifications (no `id` key) are one-way; the spec
+        // forbids responses, including errors. Track presence vs. value
+        // because `id: null` is a valid request id and must still get a
+        // reply, while a missing `id` field must not.
+        const isNotification = !req || !Object.prototype.hasOwnProperty.call(req, 'id');
+        const errorReply = (message) => {
+          if (isNotification) return;
+          writeLine({
+            jsonrpc: '2.0', id: req.id,
+            error: { code: -32603, message: String(message) },
+          });
+        };
+        try {
+          const headers = {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json, text/event-stream',
+            'CG-API-KEY': apiKey || '',
+          };
+          if (sessionId) headers['Mcp-Session-Id'] = sessionId;
+          if (protocolVersion) headers['Mcp-Protocol-Version'] = protocolVersion;
+          const res = await fetch(url, { method: 'POST', headers, body: line });
+          const nextSession = res.headers.get('mcp-session-id');
+          if (nextSession) sessionId = nextSession;
+          // 404 with an attached Mcp-Session-Id means the upstream rejected
+          // the session (expired/unknown). Clear local state so the next
+          // request enters a fresh initialize flow instead of looping with
+          // a stale session id forever.
+          if (res.status === 404 && headers['Mcp-Session-Id']) {
+            sessionId = '';
+            protocolVersion = '';
+          }
+          const ctype = (res.headers.get('content-type') || '').toLowerCase();
+          const body = await res.text();
+          if (ctype.includes('text/event-stream')) {
+            for (const message of parseSse(body)) emit(message);
+          } else {
+            const trimmed = body.trim();
+            if (!trimmed) return;
+            try { emit(JSON.parse(trimmed)); }
+            catch (_) {
+              errorReply(`non-JSON response from coinglass MCP (${res.status})`);
+            }
+          }
+        } catch (err) {
+          errorReply(err && err.message ? err.message : err);
+        }
+      }
     github-pr-mcp.js: |-
       #!/usr/bin/env node
       const { Buffer } = require('buffer');
@@ -1205,11 +1321,8 @@ configMaps:
               }
             },
             "coinglass": {
-              "transport": "streamable-http",
-              "url": "https://api-mcp.coinglass.com/mcp",
-              "headers": {
-                "CG-API-KEY": "${COINGLASS_API_KEY}"
-              }
+              "command": "node",
+              "args": ["/scripts/coinglass-mcp-proxy.js"]
             }
           }
         }
