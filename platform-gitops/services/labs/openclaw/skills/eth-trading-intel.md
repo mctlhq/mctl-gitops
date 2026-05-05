@@ -546,7 +546,7 @@ Pasive monitoring через **Argo CronWorkflow `labs-watch-scan`** (см. `pla
 2. Для каждой entry дёргает CoinGlass MCP curl (упрощённый scoring: funding direction + price 24h + OI delta — 4 binary signals, scaled to 0..100)
 3. Сравнивает с `entry.threshold` + `entry.direction` filter
 4. Если crossed AND `last_alert_at[symbol]` ≥ 4h ago → POST Telegram Bot API sendMessage с alert-сообщением. Recommends "Run /eth SYMBOL for full analysis."
-5. Updates dedup state в `s3://platform-state/labs/openclaw/workspace/state/eth-trading-intel-alerts.json` (отдельный файл от chat-state, не модифицирует watchlist)
+5. Updates dedup state в `s3://platform-state/labs/cron/eth-trading-intel-alerts.json` (отдельный файл от chat-state, не модифицирует watchlist; намеренно вне `labs/openclaw/` mirror-prefix — чтобы s3-sync sidecar не стирал файл каждые 10с)
 
 **Cron simple_score умышленно проще** chat-skill полного scoring rubric. Cron — это pre-filter "стоит проснуться и посмотреть", не финальный сигнал. Chat skill сохраняет полную сложность для interactive deep-dive.
 
