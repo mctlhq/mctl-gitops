@@ -27,10 +27,17 @@ metadata:
       source of truth for full directional rubric.
 
       State separation:
-        - eth-trading-intel.json (chat-driven, written by skill via
-          Bash) — READ-ONLY for cron
-        - eth-trading-intel-alerts.json (cron-only, dedup state)
-          — written by cron only
+        - s3://platform-state/labs/openclaw/workspace/state/eth-trading-intel.json
+          (chat-driven, written by skill via Bash) — READ-ONLY for cron.
+          Lives inside the s3-sync mirror prefix (labs/openclaw/...).
+        - s3://platform-state/labs/cron/eth-trading-intel-alerts.json
+          (cron-only, dedup state) — written by cron only.
+          Lives OUTSIDE the s3-sync mirror prefix on purpose: the
+          openclaw s3-sync sidecar runs `mc mirror --remove --overwrite
+          /home/node/.openclaw s3/platform-state/labs/openclaw/` every
+          10s, which would clobber any cron-written file inside that
+          prefix because it's not in the pod's local .openclaw mirror.
+          A sibling labs/cron/ prefix is untouched by that mirror.
 
       Concurrency: per-tenant mutex prevents two overlapping ticks
       double-firing alerts. Cron does NOT contend on
@@ -79,7 +86,11 @@ spec:
             MINIO_ENDPOINT = os.environ["MINIO_ENDPOINT"]
             MINIO_BUCKET = "platform-state"
             STATE_KEY = "labs/openclaw/workspace/state/eth-trading-intel.json"
-            ALERTS_KEY = "labs/openclaw/workspace/state/eth-trading-intel-alerts.json"
+            # Outside the openclaw s3-sync mirror prefix (labs/openclaw/...)
+            # to survive the every-10s `mc mirror --remove --overwrite` sweep
+            # done by the s3-sync sidecar. See workflow-level annotation for
+            # the full rationale and the empirical bug that surfaced this.
+            ALERTS_KEY = "labs/cron/eth-trading-intel-alerts.json"
             COINGLASS_MCP_URL = "https://api-mcp.coinglass.com/mcp"
             TELEGRAM_API = "https://api.telegram.org"
             DEDUP_HOURS = 4
