@@ -173,7 +173,6 @@ Validation для new entries (`/watch SYMBOL [N] [direction]`):
   "price": 3450.12,
   "open_interest": {
     "current_usd": 12500000000,
-    "change_1h_pct": 0.4,
     "change_4h_pct": 1.2,
     "change_24h_pct": 3.1,
     "trend": "rising | flat | falling"
