@@ -181,8 +181,20 @@ spec:
             mcp_session_id = None
             mcp_protocol = "2025-06-18"
 
-            def mcp_request(method, params=None, request_id=1):
+            # Monotonic JSON-RPC request id. JSON-RPC + the MCP spec require
+            # ids to be unique within a session — strict servers reject or
+            # mis-correlate calls that reuse `id`. Counter wraps via plain
+            # int increment; one cron tick issues at most ~3 calls per
+            # symbol × N symbols, well under any practical bound.
+            _mcp_id_counter = [0]
+
+            def _next_request_id():
+                _mcp_id_counter[0] += 1
+                return _mcp_id_counter[0]
+
+            def mcp_request(method, params=None):
                 global mcp_session_id
+                request_id = _next_request_id()
                 body = json.dumps({
                     "jsonrpc": "2.0",
                     "id": request_id,
@@ -211,15 +223,30 @@ spec:
                 ct = resp.headers.get("Content-Type", "")
                 raw = resp.read().decode("utf-8", "replace")
                 if "text/event-stream" in ct:
-                    # SSE frames: data: {...}\n\n
+                    # MCP streamable-HTTP servers may emit server-initiated
+                    # notifications/requests in SSE frames *before* the
+                    # response to our request. Iterate every data: frame,
+                    # parse JSON, and return the first one whose id matches
+                    # our request_id. If we exhaust the stream without a
+                    # matching id, return the last parseable frame as a
+                    # fallback (still better than silently dropping all
+                    # frames), or _sse_empty if nothing parsed.
+                    last_parsed = None
                     for line in raw.splitlines():
-                        if line.startswith("data:"):
-                            payload = line[len("data:"):].strip()
-                            if payload:
-                                try:
-                                    return json.loads(payload)
-                                except json.JSONDecodeError:
-                                    continue
+                        if not line.startswith("data:"):
+                            continue
+                        payload = line[len("data:"):].strip()
+                        if not payload:
+                            continue
+                        try:
+                            frame = json.loads(payload)
+                        except json.JSONDecodeError:
+                            continue
+                        last_parsed = frame
+                        if isinstance(frame, dict) and frame.get("id") == request_id:
+                            return frame
+                    if last_parsed is not None:
+                        return last_parsed
                     return {"_sse_empty": True, "_body": raw}
                 if not raw.strip():
                     return {"_empty": True}
