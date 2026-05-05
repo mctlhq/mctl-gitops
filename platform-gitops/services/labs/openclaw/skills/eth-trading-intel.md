@@ -229,7 +229,7 @@ Validation для new entries (`/watch SYMBOL [N] [direction]`):
 }
 ```
 
-**Long score components** (sum, cap 100). Все на 4h (HOBBYIST):
+**Long score components** (sum, then `min(sum, 100)` cap). Components below total to 110 if all fire — explicit clamp keeps `long_score ∈ [0, 100]`. Все на 4h (HOBBYIST):
 
 - `+20` MACD 4h positive AND `macd_4h > previous_4h_macd` (rising)
 - `+15` RSI 4h ∈ [40, 65] — room to run, not overbought
@@ -243,7 +243,7 @@ Validation для new entries (`/watch SYMBOL [N] [direction]`):
   - `ETH` → `get_ethereum_etf_flow_history({limit: 7})`, sum positive ⇒ +10
   - `SOL` (или любой другой) — компонент пропускается, `missing_data: ["<symbol>_etf_flow_unavailable"]`, **никаких penalty** (bonus, не основа). Никогда не применять ETH ETF flow к BTC/SOL.
 
-**Short score components** (sum, cap 100):
+**Short score components** (sum, then `min(sum, 100)` cap; same rationale as long):
 
 - `+20` MACD 4h negative AND `macd_4h < previous_4h_macd` (falling)
 - `+15` RSI 4h ∈ [35, 60] — room to fall, not oversold

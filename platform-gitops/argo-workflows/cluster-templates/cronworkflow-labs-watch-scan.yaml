@@ -301,16 +301,20 @@ spec:
             #   2. price_24h direction (long_proxy: up; short_proxy: down)
             #   3. OI 24h delta (long_proxy: rising while price up; short_proxy: rising while price down)
             #   4. funding extreme (long_proxy: funding ≤ -0.02; short_proxy: funding ≥ 0.05)
+            # 7 candles × 4h = 24h window (first vs last close compares t-24h to t-0).
+            # Earlier limit=6 spanned only 5 intervals = 20h, off by one.
+            HISTORY_BARS = 7
+
             def score_symbol(symbol):
                 # 1. Funding (4h, OI-weighted)
                 fr_data, fr_err = mcp_tool_call(
                     "get_futures_funding_rate_oi_weight_history",
-                    {"symbol": symbol, "interval": "4h", "limit": 6},
+                    {"symbol": symbol, "interval": "4h", "limit": HISTORY_BARS},
                 )
                 # 2. OI 4h aggregated
                 oi_data, oi_err = mcp_tool_call(
                     "get_futures_aggregated_open_interest_history",
-                    {"symbol": symbol, "interval": "4h", "limit": 6},
+                    {"symbol": symbol, "interval": "4h", "limit": HISTORY_BARS},
                 )
                 # 3. Price (use one major exchange pair for direction)
                 px_data, px_err = mcp_tool_call(
@@ -319,7 +323,7 @@ spec:
                         "exchange": "Binance",
                         "symbol": f"{symbol}USDT",
                         "interval": "4h",
-                        "limit": 6,
+                        "limit": HISTORY_BARS,
                     },
                 )
 
