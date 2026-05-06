@@ -42,3 +42,18 @@ ingress:
       hosts:
         - labs-kuptsi-app.mctl.ai
         - labs-kuptsi-app.mctl.me
+externalSecret:
+  targetSecret: kuptsi-app-secrets
+  data:
+    - secretKey: LOGFIRE_READ_TOKEN
+      remoteKey: teams/labs/kuptsi-app
+      property: LOGFIRE_READ_TOKEN
+    - secretKey: LOGFIRE_TOKEN
+      remoteKey: teams/labs/kuptsi-app
+      property: LOGFIRE_TOKEN
+    - secretKey: TELEGRAM_TOKEN
+      remoteKey: teams/labs/kuptsi-app
+      property: TELEGRAM_TOKEN
+    - secretKey: YANDEX_DISK_TOKEN
+      remoteKey: teams/labs/kuptsi-app
+      property: YANDEX_DISK_TOKEN
