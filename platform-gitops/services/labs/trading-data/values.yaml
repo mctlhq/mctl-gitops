@@ -13,7 +13,7 @@
 
 image:
   repository: ghcr.io/mctlhq/mctl-trading-data
-  tag: "0.2.3"
+  tag: "0.2.4"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
