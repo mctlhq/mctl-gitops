@@ -105,7 +105,8 @@
     - **OKX V5 taker-volume (CVD leg #2, Phase 2 Hook A):** `GET https://www.okx.com/api/v5/rubik/stat/taker-volume-contract?instId=<COIN>-USDT-SWAP&period=4H`
       - Возвращает 100 баров `[ts, buyVol, sellVol]`. Объёмы — в **контрактах**, не в base asset.
       - Контрактный размер забрать через `GET https://www.okx.com/api/v5/public/instruments?instType=SWAP&instId=<COIN>-USDT-SWAP` — поле `data[0].ctVal` (для ETH-USDT-SWAP сейчас `0.1` ETH; кэшировать в state на длительный срок — меняется крайне редко). `ctValCcy` обязан быть равен base coin (защитный assert).
-      - Per-bar delta_usd ≈ `(buyVol − sellVol) * ctVal * close_price` (close цена берётся из уже полученного Bybit 4h kline — последний бар oldest-first). Сумма по 6 свежим барам = 24h OKX CVD.
+      - **Per-bar pricing rule (важно):** для каждого OKX бара брать **свою** 4h close-цену с матчингом по timestamp с Binance kline (step 12 уже отдаёт 6 баров `[open_ts, ..., close, ...]` для того же 24h окна, оба источника UTC-aligned 4h). Per-bar delta_usd = `(buyVol − sellVol) * ctVal * close_at_that_bar`. Не использовать одну "последнюю" close-цену для всех 6 баров — в mixed-flow окне с дрифтом цены это может flip-нуть знак финального `cvd_24h.net_usd`.
+      - Если кол-во баров OKX и Binance не совпадает (rubik отдал меньше 6 свежих баров или timestamps смещены): сматчить по `floor(ts / 14_400_000) * 14_400_000`, взять только пары с обоих источников; недостающие OKX-бары пропустить (накопится меньшая, но честная сумма). Сумма по сматченным парам = 24h OKX CVD.
       - Pair-format: `<COIN>-USDT-SWAP` (отличается от Bybit/Binance `<COIN>USDT`).
       - No auth, no rate-limit gate на этом endpoint в публичной версии.
 
@@ -118,7 +119,19 @@
 
     **Cross-check rule:** если CoinGlass отдал валидный ответ от `get_futures_rsi_list` / `get_futures_macd_list` И local расчёт расходится >5 пунктов (RSI) / >15% (MACD) — append `risks: ["rsi_4h source disagreement: local 54, coinglass 61"]`. Это страхует от тихих багов в локальной формуле; но score считается по local значениям.
 
-    **CVD source-agreement rule (Phase 2 Hook A):** если знаки `binance` и `okx` дельт совпадают → `cvd_24h.agreement = "aligned"` (sign-aligned), увереннее CVD-сигнал. Если знаки противоположны → `agreement = "split"` И append `risks: ["cvd source split: binance <sign>$<X>M, okx <sign>$<Y>M — directional pressure не подтверждается между биржами"]`. Score-компоненты CVD остаются на агрегированном `net_usd`, но split-warning даёт оператору сигнал что между биржами происходит арбитраж/decoupling.
+    **CVD source-agreement rule (Phase 2 Hook A) — exhaustive enum:**
+
+    `cvd_24h.agreement` всегда обязан присутствовать в snapshot output. Правила (применять в порядке, первое совпадение выигрывает):
+
+    1. `binance == null` (unreachable) AND `okx != null` → `agreement = "okx_only"`
+    2. `okx == null` AND `binance != null` → `agreement = "binance_only"`
+    3. `binance == null` AND `okx == null` → `cvd_24h = null` целиком, `missing_data: ["cvd_unreachable"]`, дальше скип секции
+    4. `binance == 0` AND `okx == 0` → `agreement = "both_zero"`, `direction = "balanced"`
+    5. `binance == 0` XOR `okx == 0` (ровно одна сторона ноль, другая non-zero) → `agreement = "partial_zero"`, направление от non-zero стороны (`direction = sign(non_zero) > 0 ? "buyers_dominant" : "sellers_dominant"`)
+    6. `sign(binance) == sign(okx)` (оба non-zero, знаки совпадают) → `agreement = "aligned"`, увереннее CVD-сигнал
+    7. `sign(binance) != sign(okx)` (оба non-zero, противоположные знаки) → `agreement = "split"` И append `risks: ["cvd source split: binance <sign>$<X>M, okx <sign>$<Y>M — directional pressure не подтверждается между биржами"]`
+
+    Каскад покрывает всё пространство `(binance ∈ {null, <0, 0, >0}) × (okx ∈ {null, <0, 0, >0}) = 16` сочетаний. Score-компоненты CVD остаются на агрегированном `net_usd`, но split/zero-warnings дают оператору сигнал что между биржами происходит арбитраж/decoupling/пустой период.
 
     **Multi-exchange CVD aggregation status:**
     - ✅ **Binance** (Phase 1.6) — kline taker_buy_base в индексе 9.
@@ -220,8 +233,8 @@
     13. **CVD 24h leg #2 — OKX (Phase 2 Hook A)** для same coin → два параллельных GET:
         - `https://www.okx.com/api/v5/rubik/stat/taker-volume-contract?instId=<COIN>-USDT-SWAP&period=4H` → 100 баров `[ts, buyVol, sellVol]`, взять последние 6 для 24h окна.
         - `https://www.okx.com/api/v5/public/instruments?instType=SWAP&instId=<COIN>-USDT-SWAP` → `data[0].ctVal` (контрактный размер в base coin; для ETH-USDT-SWAP сейчас `0.1`). Кэшировать на длительный срок — меняется крайне редко.
-        - Per-bar delta_usd = `(buyVol − sellVol) * ctVal * close` (close из oldest-first Bybit 4h kline last bar). Sum 6 баров = 24h OKX CVD.
-    14. **CVD aggregation (Phase 2 Hook A):** `cvd_24h.net_usd = binance_24h + okx_24h`. Build `cvd_24h.per_exchange = { binance: <usd>, okx: <usd> }`. Determine `cvd_24h.agreement`: `"aligned"` если sign(binance) == sign(okx) И обе non-zero; `"split"` если знаки противоположны; `"binance_only"` / `"okx_only"` если один из источников `null`. На `"split"` — append `risks: ["cvd source split: binance <sign>$<X>M, okx <sign>$<Y>M"]`. Source string: `"binance_taker_buy_24h+okx_rubik_taker_volume_24h"`.
+        - **Per-bar pricing:** для каждого OKX бара взять matching Binance close по timestamp (оба источника UTC-aligned 4h, step 12 уже отдал 6 баров `[ts, ..., close, ...]`). Per-bar delta_usd = `(buyVol − sellVol) * ctVal * close_at_that_bar`. Сматчить по `bucket_ts = floor(ts / 14_400_000) * 14_400_000`; пары без матча в Binance — пропустить (см. detailed pricing rule в `### Local indicators` секции выше). Sum сматченных пар = 24h OKX CVD.
+    14. **CVD aggregation (Phase 2 Hook A):** `cvd_24h.net_usd = (binance_24h or 0) + (okx_24h or 0)`. Build `cvd_24h.per_exchange = { binance: <usd or null>, okx: <usd or null> }`. Determine `cvd_24h.agreement` через 7-правильный каскад из `### Local indicators` (CVD source-agreement rule выше — covers null, zero, aligned, split). На `"split"` — append `risks: ["cvd source split: binance <sign>$<X>M, okx <sign>$<Y>M"]`. На `"both_zero"` — append `risks: ["cvd both zero: ни одна биржа не показала чистого taker-имбаланса за 24h"]` (редкое для liquid pairs, но возможно для тонких символов в спокойные часы). Source string: `"binance_taker_buy_24h+okx_rubik_taker_volume_24h"`.
 
     Если Bybit/Binance unreachable → append `bybit_kline_unreachable` / `binance_kline_unreachable` к `missing_data`, индикаторы помечаются `null`. Если OKX unreachable → `okx_taker_volume_unreachable` в `missing_data`, `cvd_24h.per_exchange.okx = null`, `agreement = "binance_only"` — pipeline продолжается, CVD фоллбэчится на single-exchange Binance (как в Phase 1.6). Score деградирует gracefully на любом из источников. CoinGlass `get_futures_rsi_list` / `get_futures_macd_list` (steps 8-9) — secondary; используются для cross-check warning, не для scoring.
 
@@ -278,7 +291,7 @@
       "cvd_24h": {
         "net_usd": 8500000,
         "per_exchange": { "binance": 5500000, "okx": 3000000 },
-        "agreement": "aligned | split | binance_only | okx_only",
+        "agreement": "aligned | split | partial_zero | both_zero | binance_only | okx_only",
         "direction": "buyers_dominant | sellers_dominant | balanced",
         "source": "binance_taker_buy_24h+okx_rubik_taker_volume_24h"
       },
