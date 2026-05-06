@@ -1098,14 +1098,49 @@ configMaps:
         }
       });
       function writeLine(obj) { process.stdout.write(JSON.stringify(obj) + '\n'); }
-      function rpcError(id, message) {
-        writeLine({ jsonrpc: '2.0', id: id ?? null, error: { code: -32603, message: String(message) } });
+      function isNotification(req) {
+        // JSON-RPC 2.0: a notification is a request object with no `id`
+        // member at all (e.g. `notifications/initialized`). It expects no
+        // response. We must NOT emit unsolicited error frames for these
+        // -- a stdio MCP client tracking ids would treat them as orphan
+        // replies (codex P2 round 2 on PR #137).
+        return !req || !Object.prototype.hasOwnProperty.call(req, 'id');
+      }
+      function rpcError(req, message) {
+        if (isNotification(req)) return;
+        writeLine({ jsonrpc: '2.0', id: req.id, error: { code: -32603, message: String(message) } });
+      }
+      // Parse a streamable-HTTP / SSE body into the JSON payloads of each
+      // event block. SSE allows one event to span multiple `data:` lines
+      // that the spec requires concatenating with `\n` before parsing;
+      // splitting per-line and JSON.parsing each fragment incorrectly
+      // discards every multi-line event (codex P2 round 2 on PR #137).
+      // Event blocks are separated by blank lines (one or more CRLF/LF).
+      function parseSseEvents(text) {
+        const out = [];
+        for (const block of text.split(/\r?\n\r?\n/)) {
+          if (!block.trim()) continue;
+          const dataLines = [];
+          for (const raw of block.split(/\r?\n/)) {
+            // Per spec: a leading single SP after the colon is part of
+            // formatting, not data. Strip exactly one leading space.
+            if (!raw.startsWith('data:')) continue;
+            const value = raw.slice(5);
+            dataLines.push(value.startsWith(' ') ? value.slice(1) : value);
+          }
+          if (!dataLines.length) continue;
+          const payload = dataLines.join('\n');
+          if (!payload.trim()) continue;
+          try { JSON.parse(payload); } catch (_) { continue; }
+          out.push(payload);
+        }
+        return out;
       }
       async function handle(line) {
         let req;
         try { req = JSON.parse(line); } catch (_) { return; }
         if (!url || !token) {
-          rpcError(req.id, 'trading-data proxy not configured (TRADING_DATA_URL/TOKEN missing)');
+          rpcError(req, 'trading-data proxy not configured (TRADING_DATA_URL/TOKEN missing)');
           return;
         }
         try {
@@ -1120,22 +1155,11 @@ configMaps:
           });
           const text = await res.text();
           const contentType = (res.headers.get('content-type') || '').toLowerCase();
-          // Streamable-HTTP servers may return SSE; parse data: frames and
-          // emit each as a stdio JSON-RPC line. Validate JSON per frame so
-          // a malformed payload never breaks the framing on the agent side.
           if (contentType.includes('text/event-stream')) {
-            let emitted = 0;
-            for (const part of text.split(/\r?\n/)) {
-              const t = part.trim();
-              if (!t.startsWith('data:')) continue;
-              const payload = t.slice(5).trim();
-              if (!payload) continue;
-              try { JSON.parse(payload); } catch (_) { continue; }
-              process.stdout.write(payload + '\n');
-              emitted++;
-            }
-            if (emitted === 0) {
-              rpcError(req.id, `trading-data returned no parseable SSE payload (status ${res.status})`);
+            const payloads = parseSseEvents(text);
+            for (const p of payloads) process.stdout.write(p + '\n');
+            if (payloads.length === 0) {
+              rpcError(req, `trading-data returned no parseable SSE payload (status ${res.status})`);
             }
             return;
           }
@@ -1143,20 +1167,24 @@ configMaps:
           // before passing through. Empty bodies, gateway HTML error
           // pages, or upstream timeouts must surface as structured
           // JSON-RPC errors so the agent retries cleanly instead of
-          // hitting a stdio framing exception (codex P2 on PR #137).
+          // hitting a stdio framing exception (codex P2 round 1).
           if (!text.trim()) {
-            rpcError(req.id, `trading-data returned empty body (status ${res.status})`);
+            // 202 Accepted with no body is the canonical reply to a
+            // notification. Skip silently in that case.
+            if (!isNotification(req)) {
+              rpcError(req, `trading-data returned empty body (status ${res.status})`);
+            }
             return;
           }
           let parsed;
           try { parsed = JSON.parse(text); } catch (_) {
             const preview = text.length > 80 ? text.slice(0, 80) + '...' : text;
-            rpcError(req.id, `trading-data returned non-JSON body (status ${res.status}, content-type=${contentType || 'unknown'}, body=${preview})`);
+            rpcError(req, `trading-data returned non-JSON body (status ${res.status}, content-type=${contentType || 'unknown'}, body=${preview})`);
             return;
           }
           process.stdout.write(JSON.stringify(parsed) + '\n');
         } catch (err) {
-          rpcError(req.id, err && err.message ? err.message : err);
+          rpcError(req, err && err.message ? err.message : err);
         }
       }
     github-pr-mcp.js: |-
