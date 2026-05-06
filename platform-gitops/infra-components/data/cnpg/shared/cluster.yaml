@@ -96,6 +96,7 @@ spec:
       - host labs-openclaw labs-openclaw all scram-sha-256
       - host admins-openclaw admins-openclaw all scram-sha-256
       - host ovk-openclaw ovk-openclaw all scram-sha-256
+      - host labs-kuptsi-app labs-kuptsi-app all scram-sha-256
       - host all all 0.0.0.0/0 reject
 
   managed:
@@ -132,6 +133,12 @@ spec:
         passwordSecret:
           name: mctl-api-db-creds
       # Team app roles
+      - name: labs-kuptsi-app
+        login: true
+        connectionLimit: 10
+        ensure: present
+        passwordSecret:
+          name: labs-kuptsi-app-db-creds
       - name: ovk-openclaw
         login: true
         connectionLimit: 10
