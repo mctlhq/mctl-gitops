@@ -479,7 +479,9 @@
     ## Why command (`/why`)
 
     1. Read `state.last_signal`.
-    2. Если `null` — `Сигналов в памяти нет. Сначала запусти /eth, /btc, /sol или /scan.`
+    2. Если `null` — fixed message (на языке запроса):
+       - RU: `Сигналов в памяти нет. Сначала запусти /eth, /btc, /sol или /scan.`
+       - EN: `No signal in memory yet. Run /eth, /btc, /sol, or /scan first.`
     3. Если есть — расписать:
        - Bias decision: какое правило bias-mapping сработало (1-5)
        - Long score breakdown: какие компоненты дали `+N` и почему (referencing `state.last_signal.snapshot` data)
