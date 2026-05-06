@@ -71,7 +71,11 @@ probes:
 # the two halves of the service synchronised on tag bumps.
 extraContainers:
   - name: temporal-worker
-    image: ghcr.io/mctlhq/kuptsi-app:0.1.16
+    # NOTE: keep this tag in sync with `image.tag` above; both containers must
+    # ride the same kuptsi-v2 build. mctl_deploy_service action=deploy only
+    # bumps `image.tag` in this file — bump here manually after each release
+    # (or accept lag if you intentionally want to canary).
+    image: ghcr.io/mctlhq/kuptsi-app:0.1.17
     imagePullPolicy: IfNotPresent
     command: ["python", "-m", "src.temporal.worker"]
     env:
