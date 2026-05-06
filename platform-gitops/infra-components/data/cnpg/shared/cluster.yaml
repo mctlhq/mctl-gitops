@@ -97,6 +97,9 @@ spec:
       - host admins-openclaw admins-openclaw all scram-sha-256
       - host ovk-openclaw ovk-openclaw all scram-sha-256
       - host labs-kuptsi-app labs-kuptsi-app all scram-sha-256
+      # Temporal — server (history/matching/visibility) and admintools schema setup
+      - host temporal temporal all scram-sha-256
+      - host temporal_visibility temporal all scram-sha-256
       - host all all 0.0.0.0/0 reject
 
   managed:
@@ -157,6 +160,15 @@ spec:
         ensure: present
         passwordSecret:
           name: labs-openclaw-db-creds
+      # Temporal server connects from the temporal namespace via shared-pg-rw.
+      # Owns both the temporal (history+matching) and temporal_visibility databases.
+      - name: temporal
+        login: true
+        inherit: true
+        connectionLimit: 50
+        ensure: present
+        passwordSecret:
+          name: temporal-db-creds
       #   passwordSecret:
       #     name: team1-app1-db-creds
 

@@ -1,0 +1,86 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: temporal-web
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    # Reuse the platform's base-service chart — gives us the standard
+    # ingress + traefik forward-auth Middleware (backed by Backstage) used
+    # by every other public service. The container image is the upstream
+    # Temporal UI; everything else is configured via env.
+    repoURL: https://github.com/mctlhq/mctl-gitops.git
+    targetRevision: main
+    path: platform-gitops/helm-charts/base-service
+    helm:
+      values: |
+        image:
+          repository: temporalio/ui
+          # Latest stable Temporal UI (released 2026-04-22). Stays
+          # API-compatible with server 1.31.0 from temporal.yaml.
+          tag: "2.49.1"
+        service:
+          port: 8080
+        env:
+          TEMPORAL_ADDRESS: temporal-frontend.temporal.svc.cluster.local:7233
+          TEMPORAL_UI_PORT: "8080"
+          TEMPORAL_DEFAULT_NAMESPACE: kuptsi
+          # We sit behind traefik with TLS termination — relax the UI's
+          # CSRF cookie secure flag so the session cookie is delivered.
+          TEMPORAL_CSRF_COOKIE_INSECURE: "true"
+        probes:
+          liveness:
+            path: /
+            port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readiness:
+            path: /
+            port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+        ingress:
+          enabled: true
+          className: traefik
+          hosts:
+            - temporal.mctl.ai
+          annotations:
+            cert-manager.io/cluster-issuer: letsencrypt-prod
+          tls:
+            - secretName: temporal-web-tls
+              hosts:
+                - temporal.mctl.ai
+          forwardAuth:
+            enabled: true
+            # Backstage-hosted OIDC forward-auth used across the platform
+            # (see services/<tenant>/openclaw/values.yaml for the same
+            # provider). Tenant=admins because Temporal UI is platform-level.
+            address: "https://app.mctl.ai/api/oidc-provider/forward-auth?tenant=admins&service=temporal-web"
+            trustForwardHeader: true
+
+  destination:
+    server: {{ .Values.spec.destination.server }}
+    namespace: temporal
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

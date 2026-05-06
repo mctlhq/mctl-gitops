@@ -1,0 +1,61 @@
+# One-shot Job that registers Temporal namespaces consumed by tenant services.
+# Idempotent: temporal CLI returns success when the namespace already exists,
+# we swallow "already exists" errors and exit 0 so subsequent ArgoCD syncs are no-ops.
+#
+# Add a new line for each tenant namespace required by deployments. The Temporal
+# concept of "namespace" is independent of the Kubernetes namespace — it is the
+# isolation boundary inside the Temporal cluster (workflows/queues/schedules).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: temporal-namespaces-bootstrap
+  namespace: temporal
+  annotations:
+    # Run after each ArgoCD sync. HookSucceeded keeps the cluster clean once the
+    # job has registered the namespaces — no leftover Pod objects.
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded
+spec:
+  ttlSecondsAfterFinished: 300
+  backoffLimit: 5
+  template:
+    metadata:
+      name: temporal-namespaces-bootstrap
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: register
+          image: temporalio/admin-tools:1.31.0
+          env:
+            - name: TEMPORAL_ADDRESS
+              value: temporal-frontend.temporal.svc.cluster.local:7233
+          command:
+            - sh
+            - -ceu
+            - |
+              register_ns() {
+                local ns="$1"
+                local retention_days="$2"
+                if temporal operator namespace describe --namespace "$ns" >/dev/null 2>&1; then
+                  echo "Namespace $ns already exists — skipping"
+                  return 0
+                fi
+                echo "Registering Temporal namespace $ns with ${retention_days}d retention"
+                temporal operator namespace create \
+                  --namespace "$ns" \
+                  --retention "${retention_days}d" \
+                  --description "Bootstrapped by ArgoCD PostSync hook"
+              }
+
+              # Wait until frontend is reachable before issuing commands —
+              # ArgoCD sync may run this hook before the frontend pod is Ready.
+              for i in $(seq 1 30); do
+                if temporal operator cluster health >/dev/null 2>&1; then
+                  break
+                fi
+                echo "Waiting for temporal-frontend to come up... ($i/30)"
+                sleep 10
+              done
+
+              # ── Tenant namespaces ─────────────────────────────────────────
+              register_ns kuptsi 7

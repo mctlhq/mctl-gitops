@@ -100,3 +100,27 @@ spec:
   cluster:
     name: shared-pg
   databaseReclaimPolicy: retain
+---
+# Temporal server primary database (history + matching).
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: temporal-db
+spec:
+  name: "temporal"
+  owner: "temporal"
+  cluster:
+    name: shared-pg
+  databaseReclaimPolicy: retain
+---
+# Temporal visibility (Postgres advanced visibility — no Elasticsearch).
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: temporal-visibility-db
+spec:
+  name: "temporal_visibility"
+  owner: "temporal"
+  cluster:
+    name: shared-pg
+  databaseReclaimPolicy: retain

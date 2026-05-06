@@ -1,0 +1,141 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: temporal
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  sources:
+    # Official Temporal Helm chart — pinned to 1.2.0 (server appVersion 1.31.0,
+    # released 2026-04-29). Chart 1.x removed the bundled Cassandra/MySQL/PG/ES
+    # sub-charts; persistence is now declared inline under
+    # server.config.persistence.datastores. We point both default + visibility
+    # stores at the platform shared-pg cluster. The Web UI lives in a separate
+    # base-service release (bootstrap/templates/data/temporal-web.yaml) so we
+    # inherit the platform's standard forward-auth Middleware.
+    - repoURL: https://go.temporal.io/helm-charts
+      chart: temporal
+      targetRevision: 1.2.0
+      helm:
+        values: |
+          server:
+            replicaCount: 1
+            config:
+              persistence:
+                defaultStore: default
+                visibilityStore: visibility
+                # numHistoryShards is fixed at create time — never change after
+                # the schema is set up. 512 is the chart default.
+                numHistoryShards: 512
+                datastores:
+                  default:
+                    sql:
+                      pluginName: postgres12
+                      databaseName: temporal
+                      connectAddr: shared-pg-rw.platform-db.svc.cluster.local:5432
+                      connectProtocol: tcp
+                      user: temporal
+                      # Helm-specific keys; chart strips them from the rendered
+                      # server config and reads `password` out of the Secret.
+                      existingSecret: temporal-server-db-creds
+                      secretKey: password
+                      maxConns: 20
+                      maxIdleConns: 20
+                      maxConnLifetime: "1h"
+                  visibility:
+                    sql:
+                      pluginName: postgres12
+                      databaseName: temporal_visibility
+                      connectAddr: shared-pg-rw.platform-db.svc.cluster.local:5432
+                      connectProtocol: tcp
+                      user: temporal
+                      existingSecret: temporal-server-db-creds
+                      secretKey: password
+                      maxConns: 10
+                      maxIdleConns: 10
+                      maxConnLifetime: "1h"
+
+            # Tight resource envelope for k3s-preview. Revisit once smoke-test
+            # workloads (kuptsi-app + future tenants) shape real demand.
+            frontend:
+              service:
+                type: ClusterIP
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+            history:
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+            matching:
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+            worker:
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+
+          # Bundled Web UI is shipped through base-service instead — see
+          # bootstrap/templates/data/temporal-web.yaml.
+          web:
+            enabled: false
+
+          admintools:
+            enabled: true
+            image:
+              repository: temporalio/admin-tools
+              tag: "1.31.0"
+            resources:
+              requests:
+                cpu: 50m
+                memory: 64Mi
+              limits:
+                cpu: 200m
+                memory: 256Mi
+
+          # Schema setup runs as Helm hooks; chart default already enables it.
+          schema:
+            useHelmHooks: true
+
+    # In-repo manifests: ExternalSecret for DB creds + Job that registers
+    # tenant Temporal namespaces (kuptsi, …) once the frontend is healthy.
+    - repoURL: https://github.com/mctlhq/mctl-gitops.git
+      targetRevision: main
+      path: platform-gitops/infra-components/data/temporal
+
+  destination:
+    server: {{ .Values.spec.destination.server }}
+    namespace: temporal
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true
+      - ServerSideApply=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
