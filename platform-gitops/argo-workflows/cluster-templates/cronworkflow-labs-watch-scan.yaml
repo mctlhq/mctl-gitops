@@ -344,14 +344,110 @@ spec:
             mcp_notify("notifications/initialized")
             print("✅ initialized notification sent")
 
-            # ── Scoring: 4 binary signals × 25 (HOBBYIST-friendly) ────────────
-            # Inputs (4h interval throughout):
+            # ── Local indicators (Bybit V5 + Binance public REST) ────────────
+            # Public, no auth, no CoinGlass tier gate. Used to add the 5th
+            # scoring signal (RSI extreme) and to populate cvd_24h in the
+            # snapshot — both were "tier-locked" on HOBBYIST.
+            #
+            # Each helper returns (value, err_str). On any HTTP/parse error
+            # the caller appends to `missing` and the scoring rule guarded
+            # by that input simply does not fire (fail-soft, never abort).
+            BYBIT_BASE = "https://api.bybit.com"
+            BINANCE_BASE = "https://api.binance.com"
+
+            def public_get_json(url, timeout=10):
+                req = urllib.request.Request(
+                    url,
+                    headers={"User-Agent": "labs-watch-scan/1.0"},
+                )
+                try:
+                    resp = urllib.request.urlopen(req, timeout=timeout)
+                except urllib.error.HTTPError as e:
+                    return None, f"HTTP {e.code}"
+                except urllib.error.URLError as e:
+                    return None, f"URLError: {e.reason}"
+                try:
+                    return json.loads(resp.read().decode("utf-8", "replace")), None
+                except json.JSONDecodeError as e:
+                    return None, f"JSON decode: {e}"
+
+            def bybit_kline_closes(symbol_pair, interval, limit=200):
+                """Bybit V5 linear kline → list of close prices, oldest-first.
+                interval values: "15", "60", "240", "720", "D"."""
+                url = (
+                    f"{BYBIT_BASE}/v5/market/kline"
+                    f"?category=linear&symbol={symbol_pair}"
+                    f"&interval={interval}&limit={limit}"
+                )
+                data, err = public_get_json(url)
+                if err:
+                    return None, err
+                rows = data.get("result", {}).get("list") or []
+                if not rows:
+                    return None, "empty kline"
+                # Bybit returns newest-first; reverse to oldest-first
+                try:
+                    return [float(r[4]) for r in rows[::-1]], None
+                except (TypeError, ValueError, IndexError) as e:
+                    return None, f"parse: {e}"
+
+            def binance_taker_buy_24h(symbol_pair):
+                """6 × 4h klines = 24h taker_buy delta in quote (≈ USD).
+                Binance kline indices: 4=close, 5=volume_base, 9=taker_buy_base.
+                Per candle: delta_quote ≈ (2*taker_buy - volume) * close.
+                Returns (delta_usd, err) — sign indicates net buyers vs sellers."""
+                url = (
+                    f"{BINANCE_BASE}/api/v3/klines"
+                    f"?symbol={symbol_pair}&interval=4h&limit=6"
+                )
+                data, err = public_get_json(url)
+                if err:
+                    return None, err
+                if not isinstance(data, list) or not data:
+                    return None, "empty klines"
+                try:
+                    total = 0.0
+                    for r in data:
+                        close = float(r[4])
+                        vol_base = float(r[5])
+                        tb_base = float(r[9])
+                        total += (2.0 * tb_base - vol_base) * close
+                    return total, None
+                except (TypeError, ValueError, IndexError) as e:
+                    return None, f"parse: {e}"
+
+            def rsi_wilder(closes, period=14):
+                """Last RSI value using Wilder's smoothing. Needs ≥ period+1 closes."""
+                if not closes or len(closes) < period + 1:
+                    return None
+                gains = []
+                losses = []
+                for i in range(1, len(closes)):
+                    diff = closes[i] - closes[i - 1]
+                    gains.append(max(diff, 0.0))
+                    losses.append(max(-diff, 0.0))
+                avg_g = sum(gains[:period]) / period
+                avg_l = sum(losses[:period]) / period
+                for i in range(period, len(gains)):
+                    avg_g = (avg_g * (period - 1) + gains[i]) / period
+                    avg_l = (avg_l * (period - 1) + losses[i]) / period
+                if avg_l == 0:
+                    return 100.0
+                rs = avg_g / avg_l
+                return 100.0 - (100.0 / (1.0 + rs))
+
+            # ── Scoring: 5 binary signals × 20 (HOBBYIST-friendly) ────────────
+            # Inputs (4h interval throughout, signals 1–4 from CoinGlass MCP,
+            # signal 5 from public Bybit kline):
             #   1. funding direction (long_proxy: funding < 0; short_proxy: funding > 0.03)
             #   2. price_24h direction (long_proxy: up; short_proxy: down)
             #   3. OI 24h delta (long_proxy: rising while price up; short_proxy: rising while price down)
             #   4. funding extreme (long_proxy: funding ≤ -0.02; short_proxy: funding ≥ 0.05)
+            #   5. RSI 4h extreme (long_proxy: rsi < 35 oversold; short_proxy: rsi > 70 overbought)
             # 7 candles × 4h = 24h window (first vs last close compares t-24h to t-0).
             # Earlier limit=6 spanned only 5 intervals = 20h, off by one.
+            # Signal weight rebalanced from 4×25 to 5×20 so max score stays 100
+            # and the RSI signal carries the same weight as the others.
             HISTORY_BARS = 7
 
             def score_symbol(symbol):
@@ -461,8 +557,31 @@ spec:
                     if funding_now >= 0.05:
                         short_signals += 1
 
-                long_score = long_signals * 25
-                short_score = short_signals * 25
+                # Signal 5: RSI 4h extreme (local Bybit, no CoinGlass tier dep).
+                # Pair format on Bybit linear is the standard "<COIN>USDT" perp;
+                # matches the CoinGlass `<symbol>USDT` pair used for price above.
+                # 200 candles × 4h = ~33d, gives RSI plenty of warmup.
+                rsi_pair = f"{symbol}USDT"
+                bybit_closes, bybit_err = bybit_kline_closes(rsi_pair, "240", 200)
+                rsi_4h = None
+                if bybit_err:
+                    missing.append(f"bybit_kline ({bybit_err[:60]})")
+                else:
+                    rsi_4h = rsi_wilder(bybit_closes, 14)
+                    if rsi_4h is None:
+                        missing.append("rsi_4h_compute")
+
+                if rsi_4h is not None:
+                    if rsi_4h < 35:
+                        long_signals += 1
+                    if rsi_4h > 70:
+                        short_signals += 1
+
+                # 5 binary signals × 20 = max 100 (was 4 × 25; rebalanced
+                # so the new RSI signal carries equal weight to the others
+                # without changing the operator-facing 0–100 score range).
+                long_score = long_signals * 20
+                short_score = short_signals * 20
                 return {
                     "symbol": symbol,
                     "long_score": long_score,
@@ -475,6 +594,7 @@ spec:
                         else None
                     ),
                     "oi_rising": oi_rising,
+                    "rsi_4h": rsi_4h,
                     "missing": missing,
                 }
 
@@ -549,6 +669,9 @@ spec:
                 funding_str = (
                     f"{sc['funding']*100:+.4f}%" if sc["funding"] is not None else "?"
                 )
+                rsi_str = (
+                    f"{sc['rsi_4h']:.1f}" if sc.get("rsi_4h") is not None else "?"
+                )
                 # Russian-language alert. Telegram chats are operator DMs in Russian;
                 # English-only messages were unintuitive at a glance. Trader slang
                 # (long → лонг, short → шорт, funding/OI) stays in its widely used
@@ -564,6 +687,7 @@ spec:
                     f"Цена: {price_str} (Δ за 24ч: {price_chg})\n"
                     f"Funding 4h: {funding_str}\n"
                     f"OI растёт: {oi_ru}\n"
+                    f"RSI 4h: {rsi_str}\n"
                     f"\n"
                     f"Запустите /eth {sym.lower()} или /{sym.lower()} для полного анализа в чат-скилле.\n"
                     f"Это наблюдение, не финансовая рекомендация."
