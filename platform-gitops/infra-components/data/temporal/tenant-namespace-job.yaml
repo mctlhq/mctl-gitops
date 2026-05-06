@@ -11,10 +11,13 @@ metadata:
   name: temporal-namespaces-bootstrap
   namespace: temporal
   annotations:
-    # Run after each ArgoCD sync. HookSucceeded keeps the cluster clean once the
-    # job has registered the namespaces — no leftover Pod objects.
+    # Run after each ArgoCD sync. `BeforeHookCreation` makes Argo recreate the
+    # Job on the next sync even when a prior run failed — without it, a single
+    # failure (e.g. frontend still unreachable past the inner retry loop) leaves
+    # the named Job lying around and namespace bootstrap permanently stuck.
+    # `HookSucceeded` then sweeps the Job once it eventually wins.
     argocd.argoproj.io/hook: PostSync
-    argocd.argoproj.io/hook-delete-policy: HookSucceeded
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
 spec:
   ttlSecondsAfterFinished: 300
   backoffLimit: 5
