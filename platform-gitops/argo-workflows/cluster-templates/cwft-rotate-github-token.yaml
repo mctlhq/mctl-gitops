@@ -19,8 +19,13 @@ spec:
   timezone: "UTC"
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 120
-  successfulJobsHistoryLimit: 3
-  failedJobsHistoryLimit: 3
+  # 14d / 7d retention — same rationale as
+  # cronworkflow-mctl-agents-shepherd.yaml. With a 30-min cron the
+  # default of 3 covered only the last 90 minutes — masked the
+  # 2026-04-30 MinIO-full failure once recovery rolled it out of
+  # history.
+  successfulJobsHistoryLimit: 14
+  failedJobsHistoryLimit: 7
   workflowSpec:
     serviceAccountName: argo-workflow-sa
     ttlStrategy:
