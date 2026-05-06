@@ -50,6 +50,39 @@ spec:
                   --description "Bootstrapped by ArgoCD PostSync hook"
               }
 
+              # Idempotent custom search-attribute registration. Temporal SDK
+              # workflows that pass `search_attributes=...` (e.g. kuptsi-app
+              # tagging workflows by LeadId) require the attribute to be
+              # registered against the namespace beforehand, otherwise
+              # `start_workflow` hangs and the gunicorn worker eventually
+              # times out with HTTP 500.
+              register_sa() {
+                local ns="$1"
+                local name="$2"
+                local type="$3"
+                # `search-attribute list` prints rows like "<name>  <type>"; capture both
+                # so we don't silently skip when the existing attribute has a different
+                # type. Temporal CLI would also error on type mismatch in `create`, but
+                # bailing out early here keeps the script's idempotency contract honest.
+                local existing
+                existing=$(temporal operator search-attribute list --namespace "$ns" 2>/dev/null \
+                            | awk -v n="$name" '$1 == n {print $2; exit}')
+                if [ -n "$existing" ]; then
+                  if [ "$existing" = "$type" ]; then
+                    echo "Search attribute $name ($type) already registered on $ns — skipping"
+                    return 0
+                  fi
+                  echo "❌ search attribute $name on $ns has type $existing, expected $type" >&2
+                  echo "   Resolve manually: 'temporal operator search-attribute remove --namespace $ns --name $name'" >&2
+                  return 1
+                fi
+                echo "Registering search attribute $name ($type) on namespace $ns"
+                temporal operator search-attribute create \
+                  --namespace "$ns" \
+                  --name "$name" \
+                  --type "$type"
+              }
+
               # Wait until frontend is reachable before issuing commands —
               # ArgoCD sync may run this hook before the frontend pod is Ready.
               for i in $(seq 1 30); do
@@ -62,3 +95,10 @@ spec:
 
               # ── Tenant namespaces ─────────────────────────────────────────
               register_ns kuptsi 7
+
+              # ── Tenant search attributes ──────────────────────────────────
+              # Add new entries when a tenant workflow needs to be queryable
+              # by a custom attribute (Temporal-side equivalent of an index).
+              # kuptsi-app tags TelegramAlbumWorkflow with LeadId for ops-time
+              # filtering in Temporal Web UI and the failed-workflow monitor.
+              register_sa kuptsi LeadId Keyword
