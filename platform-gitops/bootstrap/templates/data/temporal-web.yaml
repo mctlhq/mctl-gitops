@@ -52,14 +52,21 @@ spec:
         ingress:
           enabled: true
           className: traefik
+          # Backstage's OIDC forward-auth builds the post-login `returnTo`
+          # from `<tenant>-<service>.<platformDomain>` regardless of which
+          # host the user came in on. We expose both: the friendly canonical
+          # `temporal.mctl.ai` for users + the Backstage-canonical
+          # `admins-temporal-web.mctl.ai` so the post-login redirect lands.
           hosts:
             - temporal.mctl.ai
+            - admins-temporal-web.mctl.ai
           annotations:
             cert-manager.io/cluster-issuer: letsencrypt-prod
           tls:
             - secretName: temporal-web-tls
               hosts:
                 - temporal.mctl.ai
+                - admins-temporal-web.mctl.ai
           forwardAuth:
             enabled: true
             # Backstage-hosted OIDC forward-auth used across the platform
