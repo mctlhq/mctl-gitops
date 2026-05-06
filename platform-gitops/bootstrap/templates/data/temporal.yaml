@@ -6,7 +6,7 @@ metadata:
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
-  project: default
+  project: platform
   sources:
     # Official Temporal Helm chart — pinned to 1.2.0 (server appVersion 1.31.0,
     # released 2026-04-29). Chart 1.x removed the bundled Cassandra/MySQL/PG/ES
