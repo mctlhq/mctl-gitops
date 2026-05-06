@@ -86,7 +86,10 @@ spec:
               cpu: 50m
               memory: 96Mi
             limits:
-              cpu: 500m
+              # 24h peak observed 28m on the busiest node (workflow log bursts);
+              # 150m gives ~5x cushion. Previously 500m, which was helm chart
+              # default and unjustified — released ~1.4c of cluster headroom.
+              cpu: 150m
               # 1h peak working set hit 94% of 128Mi across multiple nodes;
               # log volume grew with mctl-agents proposals + openclaw sessions.
               # 256Mi gives 2x cushion; cluster-wide cost is +384Mi (3 nodes).
