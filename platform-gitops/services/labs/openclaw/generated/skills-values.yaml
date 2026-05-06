@@ -11,7 +11,13 @@
 
     ## Purpose
 
-    Превратить данные CoinGlass MCP в structured trading snapshot для ETH/BTC/SOL. Только observation. Никогда не торговать. Цель — отфильтровать шум: возвращать "no edge detected" честно, когда сигнала нет, вместо натягивания нарратива.
+    Превратить данные CoinGlass MCP + локального индикаторного движка (Bybit/Binance, Phase 1.6) в structured trading snapshot для ETH/BTC/SOL. Только observation. Никогда не торговать. Цель — отфильтровать шум: возвращать "Нет преимущества" честно, когда сигнала нет, вместо натягивания нарратива.
+
+    ## Output language — русский по умолчанию
+
+    **Все** outputs (snapshot, risk, scan, single-dimension queries, индикаторы, heatmap, help) рендерятся **на русском**, кроме случая когда пользователь явно написал запрос на английском (тогда отвечаем на английском). Cron-алерты уже на русском с PR #125; chat-skill синхронизирован. Trader-slang (лонг, шорт, funding, OI, RSI, MACD, CVD, ETF) пишем кириллицей или латиницей как принято в трейдер-сообществе — главное держать единый стиль внутри одного output.
+
+    См. таблицу bias/regime/conviction в `### Output format` ниже для канонических русских лейблов.
 
     ## When to use
 
@@ -358,50 +364,74 @@
 
     ### Output format
 
-    ```
-    ETH Snapshot (2026-05-05 12:34 UTC)
-    Bias: Long Watch
-    Long score: 78 / Short score: 22
-    Conviction: medium  Regime: trend
+    **Язык по умолчанию — русский.** Все snapshot/risk/scan/single-dimension outputs рендерятся на русском (operator chats — русскоязычные, cron-алерты тоже на русском с PR #125; чат-skill теперь синхронизирован). На английском — только если пользователь явно написал запрос на английском.
 
-    Reasons (long):
-    1. OI rises across 4h and 12h, +1.2%/+3.1%
-    2. MACD 4h positive and rising
-    3. CVD: buyers dominant, +$8.5M last 24h
-    4. Long-position liquidations $45M vs short $22M — squeeze setup
-    5. Top traders position ratio 1.10 vs retail 1.85 — smart money long-leaning
+    Bias mapping → русские значения (используются в строке `Bias:` snapshot output):
 
-    Risks:
-    1. RSI 4h = 58, mid-range; momentum room limited
-    2. Funding 0.012% — neutral, but rising
+    | Внутренний код        | Русский лейбл                             |
+    |-----------------------|-------------------------------------------|
+    | `Long Watch`          | `Лонг (наблюдение)`                       |
+    | `Short Watch`         | `Шорт (наблюдение)`                       |
+    | `Long Watch (contested)` | `Лонг (наблюдение, оспаривается)`     |
+    | `Short Watch (contested)`| `Шорт (наблюдение, оспаривается)`     |
+    | `Mixed (both elevated)` | `Смешанные сигналы (оба повышены)`     |
+    | `No edge`             | `Нет преимущества`                        |
 
-    Missing data:
-    - None
+    Regime: `trend` → `тренд`, `range` → `флэт`, `transition` → `переход`.
 
-    Action:
-    Watch long setup; manual review only. This is observation, not financial advice.
-    ```
-
-    Если bias = "No edge":
+    Conviction: `low` → `низкая`, `medium` → `средняя`, `high` → `высокая`.
 
     ```
-    ETH Snapshot (2026-05-05 12:34 UTC)
-    Bias: No edge
-    Long score: 38 / Short score: 41
-    Conviction: low  Regime: range
+    ETH снапшот (2026-05-05 12:34 UTC)
+    Bias: Лонг (наблюдение)
+    Лонг скор: 78 / Шорт скор: 22
+    Уверенность: средняя  Режим: тренд
 
-    No actionable setup. Market in range, indicators mixed.
-    Reasons:
+    Сильные стороны лонга:
+    1. OI растёт на 4h и 12h, +1.2%/+3.1%
+    2. MACD 4h положительный и растёт
+    3. CVD: байеры доминируют, +$8.5M за 24h
+    4. Ликвидации лонгов $45M vs шортов $22M — сетап на шорт-сквиз
+    5. Top traders position ratio 1.10 vs retail 1.85 — крупняк на стороне лонга
+
+    Риски:
+    1. RSI 4h = 58, средний диапазон; запас импульса ограничен
+    2. Funding 0.012% — нейтральный, но растёт
+
+    Действие:
+    Наблюдение за лонг-сетапом; только ручной разбор. Это наблюдение, не финансовая рекомендация. Без автоматических сделок.
+    ```
+
+    **Missing data block — рендерить ТОЛЬКО если `missing_data` непустой массив.** Если все источники отдали данные — секцию не показывать вообще (старая практика "Missing data: None" — это шум). Когда есть пропуски:
+
+    ```
+    Пропущенные данные:
+    - liquidation_map_tier_locked
+    - bybit_kline_unreachable
+    ```
+
+    Если bias = "Нет преимущества":
+
+    ```
+    ETH снапшот (2026-05-05 12:34 UTC)
+    Bias: Нет преимущества
+    Лонг скор: 38 / Шорт скор: 41
+    Уверенность: низкая  Режим: флэт
+
+    Нет актуального сетапа. Рынок во флэте, индикаторы смешанные.
+    Причины:
     - ...
     ```
 
     ### Phrasing guardrails
 
-    **ЗАПРЕЩЕНО**: "BUY NOW", "SELL NOW", "open long immediately", "open short immediately", "go long", "go short", обещания цены/направления, советы про размер позиции/leverage, "guaranteed", "100%", "сейчас отличный вход".
+    **ЗАПРЕЩЕНО** (на любом языке): "BUY NOW", "SELL NOW", "open long immediately", "open short immediately", "go long", "go short", "ПОКУПАЙ", "ПРОДАВАЙ", "открой лонг сейчас", "открой шорт сейчас", "вставай в лонг", "вставай в шорт", обещания цены/направления, советы про размер позиции/плечо, "guaranteed"/"гарантированно", "100%", "сейчас отличный вход".
 
-    **РАЗРЕШЕНО**: "watch long setup", "watch short setup", "possible squeeze", "manual review required", "wait for retest", "avoid chasing", "no edge detected", "monitor for confirmation".
+    **РАЗРЕШЕНО** (русский, default): "наблюдение за лонг-сетапом", "наблюдение за шорт-сетапом", "возможный сквиз", "требуется ручной разбор", "ждать ретест", "не догонять", "преимущества нет", "ждать подтверждение", "крупняк/смарт мани на стороне лонга/шорта", "флэт без направления".
 
-    Каждый snapshot завершается дисклеймером: "This is observation, not financial advice. No automated trading."
+    **РАЗРЕШЕНО** (английский, только если запрос пользователя на английском): "watch long setup", "watch short setup", "possible squeeze", "manual review required", "wait for retest", "avoid chasing", "no edge detected", "monitor for confirmation".
+
+    Каждый snapshot завершается дисклеймером (на языке вывода): "Это наблюдение, не финансовая рекомендация. Без автоматических сделок." / "This is observation, not financial advice. No automated trading."
 
     ## Multi-symbol scan (`/scan`)
 
@@ -415,31 +445,31 @@
 
     ```
     Scan results:
-    - ETH (≥70 long): Long Watch, 78/22, conviction medium  → /eth для деталей  ✓ crossed
-    - BTC (≥75 both): No edge, 41/38, conviction low  · below threshold
-    - SOL (≥70 both): Short Watch, 18/72, conviction high  → /sol для деталей  ✓ crossed
+    - ETH (≥70 long): Лонг (наблюдение), 78/22, уверенность средняя  → /eth для деталей  ✓ crossed
+    - BTC (≥75 both): Нет преимущества, 41/38, уверенность низкая  · ниже порога
+    - SOL (≥70 both): Шорт (наблюдение), 18/72, уверенность высокая  → /sol для деталей  ✓ crossed
     ```
 
-    Если ничего не прошло — "No symbols crossed their thresholds. Lower with /watch SYMBOL N or /set_threshold."
+    Если ничего не прошло — "Ни один символ не пересёк порог. Понизь через /watch SYMBOL N или /set_threshold."
 
     ## Risk-only report (`/risk SYMBOL`)
 
     **Tool calls**: тот же 10-step snapshot pipeline что и `/eth` (с symbol-gated ETF на step 10). Отличие — пропустить блок scoring; собрать только структурированный risk-разбор:
 
     ```
-    Risk report for ETH (2026-05-05 12:34 UTC)
-    - Price: $3,450.12 (24h range from price_history: $3,402 — $3,512, ±1.6%)
-    - Open interest: $12.5B agg, +3.1% over 24h, rising on 4h+12h
-    - Funding (OI-weighted): 0.012%, rising trajectory, status neutral
-    - Long/short retail (Binance ETHUSDT 4h): account ratio 1.85
-    - Long/short top traders (Binance ETHUSDT 4h): position ratio 1.10
-    - Liquidations 24h: long $45M / short $22M (long-dominant; bear pressure on longs)
-    - RSI: 4h 54 / 12h 52 / 24h 50 — mid-range
-    - MACD 4h: +8.1 — positive
-    - CVD 24h: +$8.5M (buyers dominant)
-    - ETF flows (last 7d): +$X net inflow [BTC/ETH only — symbol-gated]
+    Risk-разбор ETH (2026-05-05 12:34 UTC)
+    - Цена: $3,450.12 (24h диапазон из price_history: $3,402 — $3,512, ±1.6%)
+    - OI: $12.5B агрегат, +3.1% за 24h, рост на 4h+12h
+    - Funding (OI-weighted): 0.012%, траектория растёт, статус нейтральный
+    - Long/short ритейл (Binance ETHUSDT 4h): account ratio 1.85
+    - Long/short крупняк (Binance ETHUSDT 4h): position ratio 1.10
+    - Ликвидации 24h: лонги $45M / шорты $22M (доминируют лонги; давление на лонг-стороне)
+    - RSI: 4h 54 / 12h 52 / 24h 50 — средний диапазон
+    - MACD 4h: +8.1 — положительный
+    - CVD 24h: +$8.5M (байеры доминируют)
+    - ETF flows (7d): +$X чистый приток [только BTC/ETH — symbol-gated]
 
-    Volatility window (24h OHLC range): 1.6% — normal.
+    Окно волатильности (24h OHLC range): 1.6% — нормально.
     ```
 
     Note: max-pain clusters и Hyperliquid whales отсутствуют в risk-отчёте на HOBBYIST tier (locked). Не упоминать.
@@ -447,7 +477,7 @@
     ## Why command (`/why`)
 
     1. Read `state.last_signal`.
-    2. Если `null` — `No signal in memory yet. Run /eth, /btc, /sol, or /scan first.`
+    2. Если `null` — `Сигналов в памяти нет. Сначала запусти /eth, /btc, /sol или /scan.`
     3. Если есть — расписать:
        - Bias decision: какое правило bias-mapping сработало (1-5)
        - Long score breakdown: какие компоненты дали `+N` и почему (referencing `state.last_signal.snapshot` data)
@@ -519,8 +549,8 @@
     ### `/last`
 
     1. Read `state.last_signal`.
-    2. Если `null` — `No signal in memory yet. Run /eth, /btc, /sol, or /scan first.`
-    3. Если есть — render `state.last_signal.rendered` напрямую (text-блок). Plus header: `Last signal recorded at <state.last_signal.at>.`
+    2. Если `null` — вывод: `Сигналов в памяти нет. Сначала запусти /eth, /btc, /sol или /scan.`
+    3. Если есть — render `state.last_signal.rendered` напрямую (text-блок). Plus header: `Последний сигнал зафиксирован <state.last_signal.at>.`
     4. Никаких CoinGlass calls.
 
     ### `/funding SYMBOL`
@@ -532,9 +562,9 @@
     3. Output:
        ```
        ETH funding (4h, OI-weighted)
-       Current: 0.012% · Status: neutral
-       Trajectory (last 24h, 6 bars): 0.008 → 0.011 → 0.012 → 0.014 → 0.012 → 0.012 (rising flat)
-       Rank: #34 of 200 by current funding (mid-pack)
+       Текущий: 0.012% · Статус: нейтральный
+       Траектория (24h, 6 баров): 0.008 → 0.011 → 0.012 → 0.014 → 0.012 → 0.012 (рост → плато)
+       Ранг: #34 из 200 по текущему funding (середина)
        ```
 
     ### `/oi SYMBOL`
@@ -546,8 +576,8 @@
     3. Output:
        ```
        ETH open interest (4h)
-       Aggregated: $12.5B · 4h Δ: +0.4% · 12h Δ: +1.2% · 24h Δ: +3.1%  → rising
-       Per-exchange (24h Δ):
+       Агрегат: $12.5B · 4h Δ: +0.4% · 12h Δ: +1.2% · 24h Δ: +3.1% → растёт
+       По биржам (24h Δ):
          - Binance: $4.8B (+2.8%)
          - OKX: $2.1B (+4.5%)
          - Bybit: $3.2B (+1.9%)
@@ -558,22 +588,22 @@
     Symbol-gated:
     - `BTC` → `get_bitcoin_etf_flow_history({limit: 30})`
     - `ETH` → `get_ethereum_etf_flow_history({limit: 30})`
-    - любой другой symbol → `ETF flow data only available for BTC and ETH on CoinGlass MCP. /etf SOL is not supported.`
+    - любой другой symbol → `ETF-данные на CoinGlass MCP доступны только для BTC и ETH. /etf SOL не поддерживается.`
 
     Output (BTC example):
     ```
-    BTC ETF flows (last 30 days)
-    Total net: +$1.2B
-    Last 7 days: +$245M (5 inflow days, 2 outflow days)
-    Latest day (2026-05-04): +$32M
-    Top inflow: 2026-04-28 ($95M)
-    Top outflow: 2026-04-21 (-$18M)
-    Trend: net inflow regime
+    BTC ETF flows (последние 30 дней)
+    Чистый итог: +$1.2B
+    Последние 7 дней: +$245M (5 дней притока, 2 дня оттока)
+    Свежий день (2026-05-04): +$32M
+    Топ приток: 2026-04-28 ($95M)
+    Топ отток: 2026-04-21 (-$18M)
+    Режим: чистый приток
     ```
 
     ### `/pulse SYMBOL`
 
-    Compact 4-line output. Минимально: 3-4 tool calls (price, OI, funding, RSI):
+    Компактный 4-строчный output. Минимально: 3-4 tool calls (price, OI, funding, RSI):
     1. `get_futures_price_history({exchange:"Binance", symbol:"<S>USDT", interval:"4h", limit:6})` — current price + 24h delta
     2. `get_futures_aggregated_open_interest_history({symbol:"<S>", interval:"4h", limit:6})` — 24h OI delta
     3. `get_futures_funding_rate_oi_weight_history({symbol:"<S>", interval:"4h", limit:1})` — current funding
@@ -582,10 +612,10 @@
     Output:
     ```
     ETH pulse (2026-05-05 12:34 UTC)
-    Price: $3,450 (4h Δ +0.4%)
-    OI: $12.5B (24h Δ +3.1% rising)
-    Funding 4h: 0.012% (neutral)
-    RSI 4h: 54 (mid-range)
+    Цена: $3,450 (4h Δ +0.4%)
+    OI: $12.5B (24h Δ +3.1%, растёт)
+    Funding 4h: 0.012% (нейтральный)
+    RSI 4h: 54 (средний диапазон)
     ```
 
     Никакого scoring. Никакого `last_signal`. Чистый snapshot одной строкой.
@@ -601,16 +631,16 @@
     5. Output (default `all`):
        ```
        ETH RSI (Wilder 14, source: bybit kline)
-       TF     RSI    Bucket
-       15m    62.2   neutral
-       1h     66.1   bullish
-       4h     66.0   bullish
-       12h    64.7   neutral
-       1d     61.9   neutral
+       TF     RSI    Зона
+       15m    62.2   нейтрально
+       1h     66.1   бычий уклон
+       4h     66.0   бычий уклон
+       12h    64.7   нейтрально
+       1d     61.9   нейтрально
 
        Confluence: 1h/4h/12h все ≥ 60 → bullish lean (Phase 1.6 bonus +5 в /eth scoring если совпадает с long bias)
        ```
-       Buckets: `<30` extreme oversold, `30–40` oversold, `40–60` neutral, `60–70` bullish, `>70` extreme overbought.
+       Зоны: `<30` экстремальная перепроданность, `30–40` перепроданность, `40–60` нейтрально, `60–70` бычий уклон, `>70` экстремальная перекупленность.
 
     ### `/macd SYMBOL [tf]` — Phase 1.6
 
@@ -619,11 +649,11 @@
     3. Compute EMA(12), EMA(26), MACD = ema12−ema26, Signal = EMA(9) of MACD, Hist = MACD−Signal.
     4. Output:
        ```
-       ETH MACD (12, 26, 9) on 4h (source: bybit kline)
+       ETH MACD (12, 26, 9) на 4h (source: bybit kline)
        MACD:    +21.60
        Signal:  +18.98
-       Hist:    +2.62  (rising — last 3 bars +1.84, +2.31, +2.62)
-       Cross:   bullish (MACD > Signal, last cross-up ≈ 18 bars ago)
+       Hist:    +2.62  (растёт — последние 3 бара +1.84, +2.31, +2.62)
+       Cross:   бычий (MACD > Signal, последний cross-up ≈ 18 баров назад)
        ```
 
     ### `/bb SYMBOL [tf]` — Phase 1.6
@@ -632,15 +662,15 @@
     2. Bybit V5 kline → Bollinger(20, 2σ).
     3. Output:
        ```
-       ETH Bollinger Bands (20, 2σ) on 4h (source: bybit kline)
-       Upper:    $2,413.72
-       Mid:      $2,362.36
-       Lower:    $2,311.00
-       Price:    $2,408.69
-       %B:       0.951  (price near upper band — overheated)
-       Width:    4.35%  (normal vol regime)
+       ETH Bollinger Bands (20, 2σ) на 4h (source: bybit kline)
+       Верхняя:  $2,413.72
+       Средняя:  $2,362.36
+       Нижняя:   $2,311.00
+       Цена:     $2,408.69
+       %B:       0.951  (цена у верхней полосы — перегрев)
+       Width:    4.35%  (нормальная волатильность)
        ```
-       Squeeze warning если `width < 2.5%`: добавить строку `Squeeze: ⚠️ width <2.5% — break-out likely soon`.
+       Squeeze warning если `width < 2.5%`: добавить строку `Squeeze: ⚠️ width <2.5% — пробой скорее всего близко`.
 
     ### `/adx SYMBOL` — Phase 1.6
 
@@ -650,13 +680,13 @@
     2. Wilder ADX(14): TR, +DM, -DM → smoothed → +DI/-DI/DX → ADX.
     3. Output:
        ```
-       ETH ADX (14) on 4h (source: bybit kline)
-       ADX:      32.6  (strong trend)
+       ETH ADX (14) на 4h (source: bybit kline)
+       ADX:      32.6  (сильный тренд)
        +DI:      26.3
        -DI:      9.0
-       Bias:     +DI > -DI by 17.3 → directional move is up
+       Направление: +DI > -DI на 17.3 → движение вверх
        ```
-       Buckets: `<20` weak/no trend, `20–40` moderate, `>40` strong.
+       Зоны: `<20` слабый / без тренда, `20–40` средний, `>40` сильный.
 
     ### `/heatmap [tf]` — Phase 1.6
 
@@ -669,11 +699,11 @@
        ```
        RSI heatmap (Wilder 14, 4h, source: bybit kline)
 
-       SYMBOL    RSI    Bucket
-       SOL       28.4   extreme oversold ⚠️
-       BTC       45.2   neutral
-       ETH       66.0   bullish
-       ARB       72.5   extreme overbought ⚠️
+       SYMBOL    RSI    Зона
+       SOL       28.4   экстремальная перепроданность ⚠️
+       BTC       45.2   нейтрально
+       ETH       66.0   бычий уклон
+       ARB       72.5   экстремальная перекупленность ⚠️
        ```
        Если symbol на Bybit отсутствует — append `(not on bybit)` в строке, RSI пропускается.
 
@@ -683,10 +713,16 @@
 
     - Записать в `missing_data: ["<tool_name>"]`
     - Применить `-5` penalty к scoring sub-input, который от него зависел (если основа сигнала — `-10`)
-    - В output показать `missing_data` строку прозрачно: "Missing data: liquidation_order (tier-gated)"
+    - **В output блок "Пропущенные данные:" показывать ТОЛЬКО когда `missing_data` непустой** — пустой `[]` означает что секцию рендерить не нужно вообще, никаких "None" / "—" заглушек. Старая практика "Missing data: None" — шум; убираем.
+    - Когда есть пропуски: рендерить русскими лейблами, по строке на ключ:
+      ```
+      Пропущенные данные:
+      - liquidation_order (tier-gated)
+      - bybit_kline_unreachable
+      ```
     - Никогда не падать; никогда не выдумывать значения
 
-    Если **все** core tools (markets, OI, funding) недоступны — единственный output: "CoinGlass MCP unreachable or unauthorized. Try later or escalate to operator."
+    Если **все** core tools (markets, OI, funding) недоступны — единственный output: "CoinGlass MCP недоступен или не авторизован. Повторите позже или эскалируйте оператору."
 
     ## Anti-patterns
 
