@@ -58,7 +58,9 @@ spec:
               cpu: 100m
               memory: 128Mi
             limits:
-              cpu: 500m
+              # Steady-state ~11m; 250m gives 22x cushion. Trimmed 500m→250m
+              # on 2026-05-07 (CPU-limits cluster headroom).
+              cpu: 250m
               memory: 256Mi
 
   destination:
