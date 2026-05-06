@@ -101,6 +101,11 @@ envFrom:
   # the fallback is a node bridge script that reads process.env directly.
   - secretRef:
       name: labs-openclaw-coinglass
+  # TRADING_DATA_TOKEN — bearer for the labs-trading-data MCP service
+  # (Bybit/Bitget WS taker + CryptoPanic/Etherscan REST). Read from
+  # process.env by /scripts/trading-data-mcp-proxy.js below.
+  - secretRef:
+      name: labs-trading-data-client
 initContainers:
   # 1. Restore state from MinIO (no-op for new tenants, preserves OAuth credentials on restart)
   - name: restore-state
@@ -738,6 +743,17 @@ extraExternalSecrets:
       - secretKey: COINGLASS_API_KEY
         remoteKey: secret/data/teams/labs/openclaw/coinglass
         property: api_key
+  # Bearer for the in-cluster labs-trading-data MCP service. Same Vault path
+  # is consumed server-side by services/labs/trading-data/values.yaml — the
+  # two ExternalSecrets read the same `bearer_token` field so client and
+  # server agree on the token without manual rotation across two repos.
+  labs-trading-data-client:
+    refreshInterval: 1h
+    targetSecret: labs-trading-data-client
+    data:
+      - secretKey: TRADING_DATA_TOKEN
+        remoteKey: secret/data/teams/labs/trading-data/client-token
+        property: bearer_token
 configMaps:
   openclaw-scripts:
     mcp-agent-proxy.js: |-
@@ -1053,6 +1069,69 @@ configMaps:
           }
         } catch (err) {
           errorReply(err && err.message ? err.message : err);
+        }
+      }
+    # stdio -> HTTP+Bearer bridge for the in-cluster labs-trading-data MCP
+    # service. The claude-cli backend's `bundle-mcp` step accepts only stdio
+    # MCP servers (it silently skips streamable-HTTP / SSE), so this
+    # ~40-line proxy converts stdio JSON-RPC into Bearer-auth POSTs against
+    # the FastAPI streamable-HTTP endpoint. The trading-data service is
+    # stateless from the client side (no session-id, no protocol-version
+    # exchange beyond initialize) so this bridge is much simpler than the
+    # coinglass one — no auth refresh, no SSE re-framing, no env-var header
+    # interpolation. URL + token come from process.env (envFrom ->
+    # labs-trading-data-client + openclaw.json env passthrough below).
+    trading-data-mcp-proxy.js: |-
+      #!/usr/bin/env node
+      const url = process.env.TRADING_DATA_URL;
+      const token = process.env.TRADING_DATA_TOKEN;
+      let queue = Promise.resolve();
+      process.stdin.setEncoding('utf8');
+      let buf = '';
+      process.stdin.on('data', chunk => {
+        buf += chunk;
+        let nl;
+        while ((nl = buf.indexOf('\n')) !== -1) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (line) queue = queue.then(() => handle(line)).catch(() => {});
+        }
+      });
+      function writeLine(obj) { process.stdout.write(JSON.stringify(obj) + '\n'); }
+      async function handle(line) {
+        let req;
+        try { req = JSON.parse(line); } catch (_) { return; }
+        if (!url || !token) {
+          writeLine({ jsonrpc: '2.0', id: req.id, error: { code: -32603, message: 'trading-data proxy not configured (TRADING_DATA_URL/TOKEN missing)' } });
+          return;
+        }
+        try {
+          const res = await fetch(url, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json, text/event-stream',
+              'Authorization': `Bearer ${token}`,
+            },
+            body: line,
+          });
+          const text = await res.text();
+          // Streamable-HTTP servers may return SSE; pass through line-framed
+          // payloads. Single-event responses are the common path here, since
+          // we never call streaming methods (only tools/list + tools/call).
+          if ((res.headers.get('content-type') || '').includes('text/event-stream')) {
+            for (const part of text.split(/\r?\n/)) {
+              const t = part.trim();
+              if (t.startsWith('data:')) {
+                const payload = t.slice(5).trim();
+                if (payload) process.stdout.write(payload + '\n');
+              }
+            }
+            return;
+          }
+          process.stdout.write(text.endsWith('\n') ? text : text + '\n');
+        } catch (err) {
+          writeLine({ jsonrpc: '2.0', id: req.id, error: { code: -32603, message: String(err && err.message ? err.message : err) } });
         }
       }
     github-pr-mcp.js: |-
@@ -1401,6 +1480,13 @@ configMaps:
               "args": ["/scripts/coinglass-mcp-proxy.js"],
               "env": {
                 "COINGLASS_API_KEY": "__COINGLASS_API_KEY__"
+              }
+            },
+            "trading-data": {
+              "command": "node",
+              "args": ["/scripts/trading-data-mcp-proxy.js"],
+              "env": {
+                "TRADING_DATA_URL": "http://labs-trading-data.labs.svc.cluster.local:8080/mcp"
               }
             }
           }
