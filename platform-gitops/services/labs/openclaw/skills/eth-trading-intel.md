@@ -9,9 +9,11 @@ description: Read-only crypto trading intelligence for ETH/BTC/SOL via the CoinG
 
 Превратить данные CoinGlass MCP + локального индикаторного движка (Bybit/Binance, Phase 1.6) в structured trading snapshot для ETH/BTC/SOL. Только observation. Никогда не торговать. Цель — отфильтровать шум: возвращать "Нет преимущества" честно, когда сигнала нет, вместо натягивания нарратива.
 
-## Output language — русский по умолчанию
+## Output language — русский (single-language contract)
 
-**Все** outputs (snapshot, risk, scan, single-dimension queries, индикаторы, heatmap, help) рендерятся **на русском**, кроме случая когда пользователь явно написал запрос на английском (тогда отвечаем на английском). Cron-алерты уже на русском с PR #125; chat-skill синхронизирован. Trader-slang (лонг, шорт, funding, OI, RSI, MACD, CVD, ETF) пишем кириллицей или латиницей как принято в трейдер-сообществе — главное держать единый стиль внутри одного output.
+**Все command-level outputs** (snapshot, risk, scan, /funding, /oi, /etf, /pulse, /rsi, /macd, /bb, /adx, /heatmap, /help, /settings, /watch confirmations) рендерятся **только на русском**. Cron-алерты уже на русском с PR #125; chat-skill синхронизирован. Trader-slang (лонг, шорт, funding, OI, RSI, MACD, CVD, ETF) пишем кириллицей или латиницей как принято в трейдер-сообществе — главное держать единый стиль внутри одного output.
+
+**Узкое исключение — fixed-message branches** (`/why` empty-state, `/last` empty-state, `/etf SOL` reject, core-tools-unavailable, `/scan` no-cross). У них перечислены оба варианта `RU:` / `EN:` потому что это короткие строки одного состояния и оператор может ожидать ответ на языке запроса. **Только эти 5 точек** имеют EN-вариант — остальные команды русско-только; если пользователь пишет на английском, всё равно отвечаем по-русски.
 
 См. таблицу bias/regime/conviction в `### Output format` ниже для канонических русских лейблов.
 
@@ -427,7 +429,7 @@ Bias: Нет преимущества
 
 **РАЗРЕШЕНО** (английский, только если запрос пользователя на английском): "watch long setup", "watch short setup", "possible squeeze", "manual review required", "wait for retest", "avoid chasing", "no edge detected", "monitor for confirmation".
 
-Каждый snapshot завершается дисклеймером (на языке вывода): "Это наблюдение, не финансовая рекомендация. Без автоматических сделок." / "This is observation, not financial advice. No automated trading."
+Каждый snapshot завершается дисклеймером: `Это наблюдение, не финансовая рекомендация. Без автоматических сделок.`
 
 ## Multi-symbol scan (`/scan`)
 
@@ -552,9 +554,7 @@ Static text. Список всех 21 команд (16 base + 5 Phase 1.6 indica
 2. Если `null` — вывод (на языке запроса):
    - RU: `Сигналов в памяти нет. Сначала запусти /eth, /btc, /sol или /scan.`
    - EN: `No signal in memory yet. Run /eth, /btc, /sol, or /scan first.`
-3. Если есть — render `state.last_signal.rendered` напрямую (text-блок). Plus header (на языке запроса):
-   - RU: `Последний сигнал зафиксирован <state.last_signal.at>.`
-   - EN: `Last signal recorded at <state.last_signal.at>.`
+3. Если есть — render `state.last_signal.rendered` напрямую (text-блок). Plus header (русский, как и сам rendered): `Последний сигнал зафиксирован <state.last_signal.at>.`
 4. Никаких CoinGlass calls.
 
 ### `/funding SYMBOL`
