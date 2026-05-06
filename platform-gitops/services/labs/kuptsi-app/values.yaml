@@ -48,7 +48,7 @@ envFrom:
   - secretRef:
       name: labs-kuptsi-app-base-service-db-creds
   - secretRef:
-      name: labs-kuptsi-app-base-service-secrets
+      name: kuptsi-app-secrets
       optional: true
 
 # kuptsi FastAPI exposes /health (see src/app.py); base-service defaults aim
@@ -93,7 +93,7 @@ extraContainers:
       # User-managed runtime secrets (Telegram/Logfire/Yandex) added later via
       # Backstage UI → mctl-api update-config will land in this secret.
       - secretRef:
-          name: labs-kuptsi-app-base-service-secrets
+          name: kuptsi-app-secrets
           optional: true
     resources:
       requests:
