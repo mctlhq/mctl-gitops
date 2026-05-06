@@ -117,28 +117,30 @@
     - MACD(12, 26, 9) — `macd`, `signal`, `hist`, `rising` — TFs: 1h, 4h, 1d
     - Bollinger(20, 2σ) — `upper`, `mid`, `lower`, `percent_b`, `width_pct` — TFs: 1h, 4h
     - ADX(14) — Wilder's — `adx`, `plus_di`, `minus_di`, `trend_strength` bucket — TF: 4h
-    - CVD 24h (Phase 2 Hook A — multi-exchange): `cvd_24h.net_usd` = sum(per-exchange deltas) для **Binance + OKX**. Per-exchange разбивка хранится в `cvd_24h.per_exchange`. Source: `binance_taker_buy_24h+okx_rubik_taker_volume_24h`. Bybit и Bitget — в Phase 2 Hook B.
+    - CVD 24h (Phase 2 Hook B — до 4 venues): `cvd_24h.net_usd` = sum(per-exchange deltas) по **usable** подмножеству из {Binance, OKX, Bybit, Bitget} (full стек ~95% global perp ETH). Per-exchange разбивка хранится в `cvd_24h.per_exchange` и всегда содержит все 4 ключа (`null` если leg unreachable). Source string собирается **динамически** из usable legs (joined по `+`) — на full happy path: `"binance_taker_buy_24h+okx_rubik_taker_volume_24h+bybit_publictrade_ws+bitget_publictrade_ws"`; при выпавшем leg или `window_incomplete` соответствующая строка пропадает из `cvd_24h.source` и leg добавляется в `missing_data` (`<venue>_unreachable` / `<venue>_window_incomplete`). НЕ хардкодить full 4-venue string — это ломает contract `missing_data` transparency. Binance + OKX считаются inline (public REST, no auth). Bybit + Bitget берутся из in-cluster `trading-data` MCP (`trading-data__bybit_taker_24h`, `trading-data__bitget_taker_24h`) — stateful WS-агрегация в `labs-trading-data` pod-е. Cold-start: первый час после рестарта pod-а у обоих ws-leg-ов будет `meta.window_incomplete=true`; в это время эти leg-и игнорируются в N-leg cascade и не добавляются в total. Score-компоненты CVD остаются на агрегированном `net_usd` без отдельных венчурных весов.
 
     **Cross-check rule:** если CoinGlass отдал валидный ответ от `get_futures_rsi_list` / `get_futures_macd_list` И local расчёт расходится >5 пунктов (RSI) / >15% (MACD) — append `risks: ["rsi_4h source disagreement: local 54, coinglass 61"]`. Это страхует от тихих багов в локальной формуле; но score считается по local значениям.
 
-    **CVD source-agreement rule (Phase 2 Hook A) — exhaustive enum:**
+    **CVD source-agreement rule (Phase 2 Hook B) — N-leg generalization:**
 
-    `cvd_24h.agreement` всегда обязан присутствовать в snapshot output. Правила (применять в порядке, первое совпадение выигрывает):
+    `cvd_24h.agreement` всегда обязан присутствовать в snapshot output. Каскад работает на множестве **usable** legs — leg попадает в множество если он не `null` И его источник вернул валидное число. Для leg-ов из `trading-data` MCP (Bybit, Bitget) дополнительно требуется `meta.window_incomplete == false` (первый час после рестарта pod-а WS-buckets неполные); incomplete leg добавляется в `missing_data` как `<venue>_window_incomplete` и НЕ участвует в каскаде.
 
-    1. `binance == null` (unreachable) AND `okx != null` → `agreement = "okx_only"`
-    2. `okx == null` AND `binance != null` → `agreement = "binance_only"`
-    3. `binance == null` AND `okx == null` → `cvd_24h = null` целиком, `missing_data: ["cvd_unreachable"]`, дальше скип секции
-    4. `binance == 0` AND `okx == 0` → `agreement = "both_zero"`, `direction = "balanced"`
-    5. `binance == 0` XOR `okx == 0` (ровно одна сторона ноль, другая non-zero) → `agreement = "partial_zero"`, направление от non-zero стороны (`direction = sign(non_zero) > 0 ? "buyers_dominant" : "sellers_dominant"`)
-    6. `sign(binance) == sign(okx)` (оба non-zero, знаки совпадают) → `agreement = "aligned"`, увереннее CVD-сигнал
-    7. `sign(binance) != sign(okx)` (оба non-zero, противоположные знаки) → `agreement = "split"` И append `risks: ["cvd source split: binance <sign>$<X>M, okx <sign>$<Y>M — directional pressure не подтверждается между биржами"]`
+    Правила (применять в порядке, первое совпадение выигрывает):
 
-    Каскад покрывает всё пространство `(binance ∈ {null, <0, 0, >0}) × (okx ∈ {null, <0, 0, >0}) = 16` сочетаний. Score-компоненты CVD остаются на агрегированном `net_usd`, но split/zero-warnings дают оператору сигнал что между биржами происходит арбитраж/decoupling/пустой период.
+    1. **All legs null/incomplete** (`|usable| == 0`) → `cvd_24h = null` целиком, `missing_data: ["cvd_unreachable"]`, дальше скип секции
+    2. **Exactly one usable leg** → `agreement = "<venue>_only"` (например `"binance_only"`, `"okx_only"`, `"bybit_only"`, `"bitget_only"`); direction от знака этого leg-а
+    3. **Все usable legs == 0** → `agreement = "all_zero"`, `direction = "balanced"`, append `risks: ["cvd all zero: ни одна биржа не показала чистого taker-имбаланса за 24h"]`
+    4. **Часть usable legs == 0, часть non-zero** → `agreement = "partial_zero"`, направление по знакам non-zero подмножества (если все non-zero одного знака → consistent direction; если разнятся — fall through к правилу 6)
+    5. **Все usable non-zero legs одного знака** → `agreement = "aligned"`, `direction` от общего знака — увереннее CVD-сигнал, потому что 2-4 venues подтверждают одно и то же
+    6. **Знаки usable non-zero legs разнятся** → `agreement = "split"` И append `risks: ["cvd source split: <perl-сep breakdown по venue с знаком и $M>"]`. Direction берётся от leg-а с наибольшим `|net_usd|`, но score должен dempen-ить bonus (сплит — слабый сигнал).
+
+    Каскад покрывает все 5^4 = 625 сочетаний (`venue ∈ {null, incomplete, <0, 0, >0}` × 4) с deterministic resolution: enumerate legs → derive usable set → apply rules. Score-компоненты CVD остаются на агрегированном `net_usd`, но split/zero/single-venue warnings дают оператору сигнал что между биржами происходит арбитраж/decoupling/пустой период.
 
     **Multi-exchange CVD aggregation status:**
-    - ✅ **Binance** (Phase 1.6) — kline taker_buy_base в индексе 9.
-    - ✅ **OKX** (Phase 2 Hook A, ~75% global perp ETH вместе с Binance) — `rubik/stat/taker-volume-contract` + `public/instruments` для ctVal.
-    - ⏳ **Bybit + Bitget** — Phase 2 Hook B (`labs-trading-data` сервис со stateful WS-стрим). Bybit V5 не отдаёт `taker_buy_volume` в kline и публичного historical-trade endpoint нет; recent-trade покрывает только последние ~минуты. Bitget V2 не имеет публичного taker-volume endpoint вообще (probed 5 candidates, все 404 — см. memory `reference_multi_exchange_taker_endpoints.md`).
+    - ✅ **Binance** (Phase 1.6) — kline taker_buy_base в индексе 9. Inline public REST.
+    - ✅ **OKX** (Phase 2 Hook A) — `rubik/stat/taker-volume-contract` + `public/instruments` для ctVal + own market/candles для per-bar pricing. Inline public REST.
+    - ✅ **Bybit** (Phase 2 Hook B) — `trading-data__bybit_taker_24h` через in-cluster MCP (Bybit V5 publicTrade WS aggregation). Кэшировать ничего не нужно — service сам агрегирует rolling 24h в memory.
+    - ✅ **Bitget** (Phase 2 Hook B) — `trading-data__bitget_taker_24h` через тот же MCP (Bitget V2 trade-channel WS, USDT-FUTURES productType).
 
     ### НЕ доступны на HOBBYIST — НЕ вызывать
 
@@ -238,9 +240,16 @@
         - `https://www.okx.com/api/v5/market/candles?instId=<COIN>-USDT-SWAP&bar=4H&limit=100` → 4h klines с close-ценой (поле index 4). **OKX-родной price source — независим от Binance.** Это даёт `okx_only` ветке агрегата (Binance unreachable) реально вычислимый USD delta.
         - **Per-bar pricing:** для каждого OKX taker-volume бара взять matching close из **OKX market/candles** по timestamp (`bucket_ts = floor(ts / 14_400_000) * 14_400_000`). Per-bar delta_usd = `(buyVol − sellVol) * ctVal * okx_close_at_that_bar`. Sum сматченных пар = 24h OKX CVD.
         - **Cross-venue price sanity (опционально, опираясь на step 12):** если Binance close доступен на том же ts и расходится с OKX close >2% → append `risks: ["okx/binance price spread >2% at <ts>: $<okx>, $<binance>"]`. Это сигнал dislocation/stale data. Сам OKX delta всё равно считается через OKX close (consistent self-source).
-    14. **CVD aggregation (Phase 2 Hook A):** `cvd_24h.net_usd = (binance_24h or 0) + (okx_24h or 0)`. Build `cvd_24h.per_exchange = { binance: <usd or null>, okx: <usd or null> }`. Determine `cvd_24h.agreement` через 7-правильный каскад из `### Local indicators` (CVD source-agreement rule выше — covers null, zero, aligned, split). На `"split"` — append `risks: ["cvd source split: binance <sign>$<X>M, okx <sign>$<Y>M"]`. На `"both_zero"` — append `risks: ["cvd both zero: ни одна биржа не показала чистого taker-имбаланса за 24h"]` (редкое для liquid pairs, но возможно для тонких символов в спокойные часы). Source string: `"binance_taker_buy_24h+okx_rubik_taker_volume_24h"`.
+    14. **CVD 24h legs #3+#4 — Bybit + Bitget (Phase 2 Hook B)** через in-cluster `trading-data` MCP. Параллельно с шагами 12-13 (один round trip):
+        - `trading-data__bybit_taker_24h({symbol: "<COIN>USDT"})` → `{data: {buy_vol_quote, sell_vol_quote, net_quote, last_close_price, ...}, meta: {window_age_sec, window_incomplete, source: "bybit_v5_publictrade_ws"}}`. Если `meta.window_incomplete == true` (первый час после рестарта pod-а) — leg помечается incomplete и не идёт в N-leg cascade; append `bybit_window_incomplete` в `missing_data`. Если tool возвращает `error` — leg в `null`, append `bybit_taker_unreachable`.
+        - `trading-data__bitget_taker_24h({symbol: "<COIN>USDT", productType: "USDT-FUTURES"})` → аналогичная shape; те же window_incomplete / null правила, code `bitget_window_incomplete` / `bitget_taker_unreachable`.
+        - Денежная единица `net_quote` — USDT (для USDT-perp пар), эквивалент USD; кладём напрямую в `cvd_24h.per_exchange.{bybit, bitget}` без дополнительного перевода.
+    15. **News sentiment (Phase 2 Hook B)** — `trading-data__news_recent({categories: ["<COIN>"], hours_back: 2, max: 10})` через in-cluster `trading-data` MCP (CryptoCompare News v2 free-tier, 5-минутный TTL cache в сервисе, ~100K calls/мес). Источник: `cryptocompare_news_v2`. **Только для ETH/BTC** (для SOL и других категорий CryptoCompare часто пуст; skip и append `<symbol>_news_unavailable` в `missing_data`, **без penalty** — bonus signal).
+        - Для каждого `item` LLM оценивает impact 1-10 на основе `title` + `body_excerpt` + `categories`/`tags`: ETF/SEC/SEC-action/hardfork/Fed-rate = 8-10; major exchange listing/upgrade = 6-7; alt-news/aggregated price commentary = 3-5; promo/sponsored = 1-2 (фильтр уже на стороне сервиса через default `excludeCategories=["Sponsored"]`). Aggregate в `news.score = max(impact)`, `news.high_impact_count = sum(impact ≥ 7)`, `news.top_titles = top-3 by impact`.
+        - Если `news.score >= 8` И direction (bullish/bearish) ясно из контента — append соответствующий `+5` бонус long-side или short-side score (см. scoring rubric). На split direction (равноценные bull+bear новости) или ambiguous content — без бонуса, only `risks: ["news mixed: <top headline>"]`.
+    16. **CVD aggregation (Phase 2 Hook B):** строим `cvd_24h.per_exchange = { binance: <usd|null>, okx: <usd|null>, bybit: <usd|null>, bitget: <usd|null> }`. Определяем set usable legs (см. N-leg cascade в `### Local indicators`). `cvd_24h.net_usd = sum(usable legs)`. Применяем cascade для `agreement` + `direction`. На `"split"` — append `risks: ["cvd source split: <breakdown по venue>"]`. На `"all_zero"` — append `risks: ["cvd all zero: ..."]`. Source string собирается из usable legs: `"binance_taker_buy_24h+okx_rubik_taker_volume_24h+bybit_publictrade_ws+bitget_publictrade_ws"` (joined по `+`, только usable).
 
-    Если Bybit/Binance unreachable → append `bybit_kline_unreachable` / `binance_kline_unreachable` к `missing_data`, индикаторы помечаются `null`. Если **только Binance** unreachable И OKX все три endpoint-а отвечают → `cvd_24h.per_exchange.binance = null`, `agreement = "okx_only"`, OKX delta считается через OKX-родной close (не зависит от Binance). Если OKX любой из трёх endpoints unreachable → `okx_taker_volume_unreachable` в `missing_data`, `cvd_24h.per_exchange.okx = null`, `agreement = "binance_only"` — pipeline продолжается, CVD фоллбэчится на single-exchange Binance (как в Phase 1.6). Если оба источника недоступны → `cvd_24h = null`, `missing_data: ["cvd_unreachable"]`. Score деградирует gracefully на любом из источников. CoinGlass `get_futures_rsi_list` / `get_futures_macd_list` (steps 8-9) — secondary; используются для cross-check warning, не для scoring.
+    Если Bybit/Binance kline unreachable (steps 11-12) → append `bybit_kline_unreachable` / `binance_kline_unreachable` к `missing_data`, индикаторы помечаются `null`. Если `trading-data` MCP вообще недоступен (e.g. pod down, network policy) → оба `bybit_taker_unreachable` + `bitget_taker_unreachable` в `missing_data`, `cvd_24h.per_exchange.{bybit,bitget}=null`, и `news_unavailable` если step 15 тоже отвалится — pipeline продолжается на Binance + OKX legs (graceful degradation на 2 venues, что было статусом Hook A). Если все 4 CVD legs недоступны → `cvd_24h = null`, `missing_data: ["cvd_unreachable"]`. CoinGlass `get_futures_rsi_list` / `get_futures_macd_list` (steps 8-9) — secondary; используются для cross-check warning, не для scoring.
 
     **Удалены из pipeline (HOBBYIST tier-locked):**
     - `get_futures_coins_markets` — заменён на `get_futures_price_history` step 1
@@ -294,10 +303,26 @@
       },
       "cvd_24h": {
         "net_usd": 8500000,
-        "per_exchange": { "binance": 5500000, "okx": 3000000 },
-        "agreement": "aligned | split | partial_zero | both_zero | binance_only | okx_only",
+        "per_exchange": {
+          "binance": 5500000,
+          "okx": 3000000,
+          "bybit": 1200000,
+          "bitget": -200000
+        },
+        "agreement": "aligned | split | partial_zero | all_zero | binance_only | okx_only | bybit_only | bitget_only",
         "direction": "buyers_dominant | sellers_dominant | balanced",
-        "source": "binance_taker_buy_24h+okx_rubik_taker_volume_24h"
+        "source": "binance_taker_buy_24h+okx_rubik_taker_volume_24h+bybit_publictrade_ws+bitget_publictrade_ws"
+      },
+      "news": {
+        "available": true,
+        "score": 9,
+        "high_impact_count": 2,
+        "top_titles": [
+          "SEC approves ETH ETF in-kind redemptions",
+          "Fed signals 25bp cut at next FOMC"
+        ],
+        "direction": "bullish | bearish | mixed | neutral",
+        "source": "cryptocompare_news_v2"
       },
       "etf_flow_7d": {
         "available": true,
@@ -343,6 +368,7 @@
       - `SOL` (или любой другой) — компонент пропускается, `missing_data: ["<symbol>_etf_flow_unavailable"]`, **никаких penalty** (bonus, не основа). Никогда не применять ETH ETF flow к BTC/SOL.
     - `+5` **multi-TF RSI confluence (Phase 1.6 bonus)** — `rsi.1h < 40` AND `rsi.4h < 40` AND `rsi.12h < 40`. Источник: заметка в `Индикаторы для робота` про "RSI 15m/1h/4h <30 = extreme oversold, 90% rebound probability". Bonus, missing → no penalty.
     - `+5` **MACD multi-TF alignment (Phase 1.6 bonus)** — `macd_1h.rising` AND `macd_4h.rising`. Bonus, missing → no penalty.
+    - `+5` **bullish news catalyst (Phase 2 Hook B bonus)** — `news.score >= 8` AND `news.direction == "bullish"`. Источник: pipeline step 15 (`trading-data__news_recent`). Bonus, missing → no penalty (например для SOL новостной leg отключён).
 
     **Short score components** (sum, then `min(sum, 100)` cap; same rationale as long):
 
@@ -356,6 +382,7 @@
     - `+10` **symbol-matched** ETF net outflow за last 7d — bonus, та же gating-таблица.
     - `+5` **multi-TF RSI confluence (Phase 1.6 bonus)** — `rsi.1h > 60` AND `rsi.4h > 60` AND `rsi.12h > 60`. Bonus, missing → no penalty.
     - `+5` **MACD multi-TF alignment (Phase 1.6 bonus)** — `macd_1h.rising == false` AND `macd_4h.rising == false` (обе falling). Bonus, missing → no penalty.
+    - `+5` **bearish news catalyst (Phase 2 Hook B bonus)** — `news.score >= 8` AND `news.direction == "bearish"`. Источник: pipeline step 15. Bonus, missing → no penalty.
 
     **Penalties (apply к более сильному score):**
 
@@ -781,7 +808,7 @@
     - **Не давать** entry/stop/TP цены без явной просьбы пользователя; и даже тогда — только educational ATR-based ranges, никогда конкретные orders
     - **Не повторять** snapshot pipeline в loop внутри одного chat-сообщения — pipeline стоит ~10 tool calls; для periodic monitoring используется внешний Argo CronWorkflow `labs-watch-scan` (см. Phase 1.5 / cron alerts ниже)
     - **Не использовать** CoinGlass `get_futures_rsi_list` / `get_futures_macd_list` как primary source для RSI/MACD — они tier-нестабильны на HOBBYIST (часто `No content`/401). Local Bybit kline = source of truth (Phase 1.6). CoinGlass RSI/MACD lists остаются только для cross-check warning, не для scoring.
-    - **CVD source attribution обязателен.** На Phase 2 Hook A — `cvd_24h.source = "binance_taker_buy_24h+okx_rubik_taker_volume_24h"` и `cvd_24h.per_exchange = {binance, okx}` всегда присутствуют в snapshot (значения могут быть `null` при unreachable). Bybit/Bitget legs — Phase 2 Hook B (см. `reference_multi_exchange_taker_endpoints.md`); до их появления НЕ называть текущий aggregate "all 4 majors" — это Binance + OKX, ~75% perp volume.
+    - **CVD source attribution обязателен.** На Phase 2 Hook B — `cvd_24h.source` склеивается из usable legs (joined по `+`) и `cvd_24h.per_exchange = {binance, okx, bybit, bitget}` всегда присутствует в snapshot (значения могут быть `null` при unreachable, либо leg может быть исключён через `<venue>_window_incomplete` в `missing_data` на cold-start). На full-stack happy path: `"binance_taker_buy_24h+okx_rubik_taker_volume_24h+bybit_publictrade_ws+bitget_publictrade_ws"`, ~95% global perp ETH. **Никогда** не возвращаться к 2-venue ("Binance + OKX, ~75%") как к baseline — Hook B сделал 4 venues статусом по умолчанию; деградация до 2 venues — fallback path, не норма, и обязана сопровождаться `<venue>_unreachable` / `<venue>_window_incomplete` в `missing_data` чтобы было видно почему.
     - **OKX ctVal — read once, cache long.** `data[0].ctVal` из `/api/v5/public/instruments` меняется крайне редко (history shows ~раз в годы). Не хитать каждый snapshot — кэшировать в state на сутки минимум; в крайнем случае — захардкодить `0.1` для ETH-USDT-SWAP с явным комментарием что это контрактный размер на дату скилла. ctValCcy обязан совпадать с base coin (assert; иначе abort OKX leg, помечать `okx_ctval_mismatch`).
 
     ## Cron alerts (Phase 1.5)
@@ -824,4 +851,3 @@
     - **OKX V5 rubik / public** (Phase 2 Hook A CVD leg #2) — `https://www.okx.com/docs-v5/en/#trading-statistics-rest-api-get-taker-volume-for-derivatives` (`taker-volume-contract`) + `https://www.okx.com/docs-v5/en/#public-data-rest-api-get-instruments` (для `ctVal`). No auth. Контрактный размер захардкожен в response под `data[0].ctVal`.
     - **Multi-exchange taker endpoint matrix** — memory `reference_multi_exchange_taker_endpoints.md` (probed 2026-05-06): Binance + OKX публично доступны, Bybit + Bitget — Phase 2 Hook B work.
     - **Phase 1.6 source spreadsheet** — `Индикаторы для робота_upd.numbers` (root of mctlhq workspace). Multi-TF матрица RSI/MACD/Bollinger/ADX + Liquidation Map / Heatmap (последние требуют CoinGlass STANDARD-tier upgrade и помечены Blocked).
-"identity": {}
