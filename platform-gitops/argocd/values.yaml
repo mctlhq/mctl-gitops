@@ -249,7 +249,10 @@ argo-cd:
         cpu: 100m
         memory: 128Mi
       limits:
-        cpu: 500m
+        # Steady-state observed <50m; the controller is the hot path during
+        # reconciliation, not repo-server (mostly cached git fetch + helm
+        # template). 250m gives 5x headroom; trimmed 500m→250m on 2026-05-07.
+        cpu: 250m
         memory: 256Mi
 
   applicationSet:

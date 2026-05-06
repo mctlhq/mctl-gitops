@@ -66,8 +66,11 @@ spec:
                       maxIdleConns: 10
                       maxConnLifetime: "1h"
 
-            # Tight resource envelope for k3s-preview. Revisit once smoke-test
-            # workloads (kuptsi-app + future tenants) shape real demand.
+            # Resource envelope for k3s-preview. Limits trimmed 500m→250m on
+            # 2026-05-07 after observing 12-53m steady-state across all four
+            # services (kuptsi-app + mctl-agents shepherd workflows). 250m
+            # still gives 5-20x headroom for bursts; saves 1c of cluster
+            # CPU-limits headroom.
             frontend:
               service:
                 type: ClusterIP
@@ -76,7 +79,7 @@ spec:
                   cpu: 100m
                   memory: 256Mi
                 limits:
-                  cpu: 500m
+                  cpu: 250m
                   memory: 512Mi
             history:
               resources:
@@ -84,7 +87,7 @@ spec:
                   cpu: 100m
                   memory: 256Mi
                 limits:
-                  cpu: 500m
+                  cpu: 250m
                   memory: 512Mi
             matching:
               resources:
@@ -92,7 +95,7 @@ spec:
                   cpu: 100m
                   memory: 256Mi
                 limits:
-                  cpu: 500m
+                  cpu: 250m
                   memory: 512Mi
             worker:
               resources:
@@ -100,7 +103,7 @@ spec:
                   cpu: 100m
                   memory: 256Mi
                 limits:
-                  cpu: 500m
+                  cpu: 250m
                   memory: 512Mi
 
           # Bundled Web UI is shipped through base-service instead — see
