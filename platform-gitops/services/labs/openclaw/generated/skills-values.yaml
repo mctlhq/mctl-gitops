@@ -4,7 +4,7 @@
   "eth-trading-intel": |
     ---
     name: eth-trading-intel
-    description: Read-only crypto trading intelligence for ETH/BTC/SOL via the CoinGlass MCP server. Use when the user types /eth /btc /sol /scan /risk /why /watch /unwatch /settings /set_threshold /help /last /funding /oi /etf /pulse, or asks for an open-interest, funding, long/short, liquidation, RSI/MACD, max-pain, ETF-flow, or whale-positions snapshot. Observation-only. Never executes trades. Output is a directional snapshot (long_score, short_score, regime, conviction) plus reasons, risks, and explicit missing_data.
+    description: Read-only crypto trading intelligence for ETH/BTC/SOL via the CoinGlass MCP server plus a local Bybit/Binance indicator engine (Phase 1.6). Use when the user types /eth /btc /sol /scan /risk /why /watch /unwatch /settings /set_threshold /help /last /funding /oi /etf /pulse /rsi /macd /bb /adx /heatmap, or asks for an open-interest, funding, long/short, liquidation, RSI/MACD/Bollinger/ADX, multi-timeframe heatmap, max-pain, ETF-flow, or whale-positions snapshot. Observation-only. Never executes trades. Output is a directional snapshot (long_score, short_score, regime, conviction) plus reasons, risks, and explicit missing_data.
     ---
 
     # eth-trading-intel
@@ -31,8 +31,13 @@
     - `/oi SYMBOL` — single-dimension snapshot: open interest
     - `/etf SYMBOL` — ETF flow deep-dive (только BTC и ETH; SOL/прочие → reject)
     - `/pulse SYMBOL` — компакт: price + funding direction + OI delta + RSI bucket
+    - `/rsi SYMBOL [tf]` — multi-TF RSI (15m/1h/4h/12h/1d), source: local Bybit kline (Phase 1.6)
+    - `/macd SYMBOL [tf]` — MACD(12,26,9), `tf` ∈ {1h,4h,1d}; source: local Bybit kline
+    - `/bb SYMBOL [tf]` — Bollinger(20, 2σ), `tf` ∈ {1h,4h}; source: local Bybit kline
+    - `/adx SYMBOL` — ADX(14) 4h trend strength; source: local Bybit kline
+    - `/heatmap [tf]` — multi-symbol RSI table по watchlist на одном TF; source: local Bybit kline
 
-    Также активироваться на свободные формулировки: "разбор по ETH", "что там с фандингом", "open interest snapshot", "посмотри ликвидации", "max pain", "rsi на coinglass", "etf flows".
+    Также активироваться на свободные формулировки: "разбор по ETH", "что там с фандингом", "open interest snapshot", "посмотри ликвидации", "max pain", "rsi на coinglass", "etf flows", "rsi heatmap", "Bollinger squeeze", "adx тренд".
 
     ## CoinGlass tier — HOBBYIST (confirmed 2026-05-05, renewal 2026-06-05)
 
@@ -77,6 +82,29 @@
 
     **ETF flows (BTC и ETH only):**
     - `get_bitcoin_etf_flow_history`, `get_ethereum_etf_flow_history` — daily net flows
+
+    ### Local indicators (Bybit V5 + Binance public REST) — Phase 1.6
+
+    Public, без auth, без CoinGlass tier-gate. Приоритет — local; CoinGlass `get_futures_rsi_list` / `get_futures_macd_list` остаются как cross-check, не как источник истины. Это закрывает Missing data ("RSI 4h", "MACD 4h", "aggregated CVD"), которые на HOBBYIST приходили `tier-locked`/`No content`.
+
+    **Endpoints (никаких ключей, GET, JSON):**
+    - Bybit V5 kline: `GET https://api.bybit.com/v5/market/kline?category=linear&symbol=<PAIR>&interval=<I>&limit=200`
+      - `interval`: `15` (15m), `60` (1h), `240` (4h), `720` (12h), `D` (1d). Возвращает массив (newest-first; всегда reverse в oldest-first перед расчётом).
+      - Pair format: `<COIN>USDT` (например `ETHUSDT`, `BTCUSDT`, `SOLUSDT`).
+      - Rate limit: 600 req / 5 sec на IP.
+    - Binance kline (для CVD): `GET https://api.binance.com/api/v3/klines?symbol=<PAIR>&interval=4h&limit=6`
+      - Индекс 9 в каждой строке = `taker_buy_base_asset_volume`. Per-candle delta_quote ≈ `(2 * taker_buy_base − volume_base) * close`. Сумма по 6 свечам = 24h CVD.
+
+    **Computed fields:**
+    - RSI(14) — Wilder's smoothing — TFs: 15m, 1h, 4h, 12h, 1d
+    - MACD(12, 26, 9) — `macd`, `signal`, `hist`, `rising` — TFs: 1h, 4h, 1d
+    - Bollinger(20, 2σ) — `upper`, `mid`, `lower`, `percent_b`, `width_pct` — TFs: 1h, 4h
+    - ADX(14) — Wilder's — `adx`, `plus_di`, `minus_di`, `trend_strength` bucket — TF: 4h
+    - CVD 24h (single-exchange): `cvd_24h.net_usd` из Binance taker_buy. Source: `binance_taker_buy_24h`.
+
+    **Cross-check rule:** если CoinGlass отдал валидный ответ от `get_futures_rsi_list` / `get_futures_macd_list` И local расчёт расходится >5 пунктов (RSI) / >15% (MACD) — append `risks: ["rsi_4h source disagreement: local 54, coinglass 61"]`. Это страхует от тихих багов в локальной формуле; но score считается по local значениям.
+
+    **Multi-exchange CVD aggregation** — Phase 2. Bybit V5 не отдаёт `taker_buy_volume` в kline и публичного historical-trade endpoint нет; recent-trade покрывает только последние ~минуты. Aggregation требует stateful WS-сервиса (`labs-trading-data`, `smooth-soaring-candy.md`) или CoinGlass STANDARD-tier upgrade. Текущий Phase 1.6 — Binance-only, явно помечен в `cvd_24h.source`.
 
     ### НЕ доступны на HOBBYIST — НЕ вызывать
 
@@ -161,6 +189,18 @@
         - `ETH` → `get_ethereum_etf_flow_history({limit: 7})`
         - any other symbol (SOL etc.) → **skip the call**, append `<symbol>_etf_flow_unavailable` to `missing_data`. No penalty (bonus, не основа).
 
+    **Steps 11–12 — local indicator engine (Phase 1.6, public REST, no CoinGlass dep):**
+
+    11. **Bybit kline × 5 TF** для symbol pair `<SYMBOL>USDT`. Параллельно (5 GET-запросов на api.bybit.com), 200 свечей каждый:
+        - `interval=15` → RSI(14) 15m
+        - `interval=60` → RSI(14) 1h, MACD(12,26,9) 1h, Bollinger(20,2) 1h
+        - `interval=240` → RSI(14) 4h, MACD(12,26,9) 4h, Bollinger(20,2) 4h, ADX(14) 4h
+        - `interval=720` → RSI(14) 12h
+        - `interval=D` → RSI(14) 1d, MACD(12,26,9) 1d
+    12. **Binance kline `interval=4h&limit=6`** для same pair → 24h CVD из `taker_buy_base_asset_volume`. Single-exchange aggregate; `source: "binance_taker_buy_24h"`.
+
+    Если Bybit/Binance unreachable → append `bybit_kline_unreachable` / `binance_kline_unreachable` к `missing_data`, индикаторы помечаются `null`. Score деградирует (мульти-TF bonuses не сработают), но pipeline никогда не падает на этих шагах. CoinGlass `get_futures_rsi_list` / `get_futures_macd_list` (steps 8-9) — secondary; используются для cross-check warning, не для scoring.
+
     **Удалены из pipeline (HOBBYIST tier-locked):**
     - `get_futures_coins_markets` — заменён на `get_futures_price_history` step 1
     - `get_futures_liquidation_max_pain` — max-pain cluster scoring component удалён; его заменяет `liquidation_history` analysis (см. Long score components)
@@ -197,12 +237,24 @@
         "imbalance": "long_dominant | balanced | short_dominant"
       },
       "indicators": {
-        "rsi_4h": 54, "rsi_12h": 52, "rsi_24h": 50,
-        "macd_4h": 8.1
+        "rsi": { "15m": 48, "1h": 52, "4h": 54, "12h": 51, "1d": 50 },
+        "macd_1h": { "macd": 4.2, "signal": 3.8, "hist": 0.4, "rising": true },
+        "macd_4h": { "macd": 8.1, "signal": 6.4, "hist": 1.7, "rising": true },
+        "macd_1d": { "macd": 18.5, "signal": 14.2, "hist": 4.3, "rising": true },
+        "bb_1h": { "upper": 3490, "mid": 3450, "lower": 3410, "percent_b": 0.62, "width_pct": 2.3 },
+        "bb_4h": { "upper": 3520, "mid": 3450, "lower": 3380, "percent_b": 0.62, "width_pct": 4.1 },
+        "adx_4h": { "adx": 22, "plus_di": 18, "minus_di": 14, "trend_strength": "weak | moderate | strong" },
+        "source": {
+          "rsi": "bybit_kline",
+          "macd": "bybit_kline",
+          "bollinger": "bybit_kline",
+          "adx": "bybit_kline"
+        }
       },
       "cvd_24h": {
         "net_usd": 8500000,
-        "direction": "buyers_dominant | sellers_dominant | balanced"
+        "direction": "buyers_dominant | sellers_dominant | balanced",
+        "source": "binance_taker_buy_24h"
       },
       "etf_flow_7d": {
         "available": true,
@@ -246,6 +298,8 @@
       - `BTC` → `get_bitcoin_etf_flow_history({limit: 7})`, sum positive ⇒ +10
       - `ETH` → `get_ethereum_etf_flow_history({limit: 7})`, sum positive ⇒ +10
       - `SOL` (или любой другой) — компонент пропускается, `missing_data: ["<symbol>_etf_flow_unavailable"]`, **никаких penalty** (bonus, не основа). Никогда не применять ETH ETF flow к BTC/SOL.
+    - `+5` **multi-TF RSI confluence (Phase 1.6 bonus)** — `rsi.1h < 40` AND `rsi.4h < 40` AND `rsi.12h < 40`. Источник: заметка в `Индикаторы для робота` про "RSI 15m/1h/4h <30 = extreme oversold, 90% rebound probability". Bonus, missing → no penalty.
+    - `+5` **MACD multi-TF alignment (Phase 1.6 bonus)** — `macd_1h.rising` AND `macd_4h.rising`. Bonus, missing → no penalty.
 
     **Short score components** (sum, then `min(sum, 100)` cap; same rationale as long):
 
@@ -257,6 +311,8 @@
     - `+10` retail account ratio > 1.5 AND top position ratio < 1 (counter-retail short)
     - `+15` CVD net sellers за 24h (`cvd_24h.net_usd < 0`)
     - `+10` **symbol-matched** ETF net outflow за last 7d — bonus, та же gating-таблица.
+    - `+5` **multi-TF RSI confluence (Phase 1.6 bonus)** — `rsi.1h > 60` AND `rsi.4h > 60` AND `rsi.12h > 60`. Bonus, missing → no penalty.
+    - `+5` **MACD multi-TF alignment (Phase 1.6 bonus)** — `macd_1h.rising == false` AND `macd_4h.rising == false` (обе falling). Bonus, missing → no penalty.
 
     **Penalties (apply к более сильному score):**
 
@@ -264,11 +320,23 @@
     - `-15` если RSI 4h противоречит MACD 4h direction (mixed signals: RSI > 60 но MACD falling, или RSI < 40 но MACD rising)
     - `-10` если price stale (latest OHLC bar timestamp >30 min ago относительно tool-call time — на 4h interval бары обновляются каждые 4h, но отставание > 30 min на свежем баре редко и сигнализирует stale data)
 
-    **Regime:**
+    **Regime (Phase 1.6 — ADX gate primary, MACD/RSI fallback):**
 
-    - `range` — RSI 4h ∈ [45, 55] AND ATR-эквивалент через max-min OHLC за 24h < 2% от price
-    - `trend` — abs(macd_4h) above some threshold AND OI direction совпадает с price direction
-    - `transition` — иначе
+    Применять правила в порядке; первое совпадение выигрывает:
+
+    1. `adx_4h.adx ≥ 25` AND OI direction совпадает с price direction → `trend` (strong directional move, ADX подтверждает)
+    2. `adx_4h.adx < 20` → `range` (no trend strength, mean-reversion preferred)
+    3. `adx_4h.adx ∈ [20, 25)` AND `rsi.4h ∈ [45, 55]` AND ATR-эквивалент за 24h < 2% от price → `range`
+    4. `adx_4h.adx ∈ [20, 25)` AND `abs(macd_4h.macd)` above noise threshold AND OI direction совпадает с price → `trend`
+    5. Иначе → `transition`
+
+    Если `adx_4h` отсутствует (`bybit_kline_unreachable`) — fall back на старый rule: `range` если RSI 4h ∈ [45,55] AND 24h volatility < 2%; `trend` если `abs(macd_4h)` above threshold AND OI direction matches price; иначе `transition`.
+
+    `adx_4h.trend_strength` bucket для prose-output: `weak` (< 20), `moderate` (20–40), `strong` (≥ 40).
+
+    **Bollinger squeeze flag (Phase 1.6):**
+
+    Если `bb_4h.width_pct < 2.5%` → append к `risks: ["bb 4h squeeze (width 2.1%) — vol expansion likely"]`. Не входит в scoring, но операторская подсказка о подготовке к break-out.
 
     **Conviction:**
 
@@ -442,8 +510,9 @@
 
     ### `/help`
 
-    Static text. Список всех 16 команд с usage и one-line описанием. Никаких CoinGlass calls. Should включать:
+    Static text. Список всех 21 команд (16 base + 5 Phase 1.6 indicator commands) с usage и one-line описанием. Никаких CoinGlass calls. Should включать:
     - Trading: /eth, /btc, /sol, /scan, /risk, /pulse, /funding, /oi, /etf, /why, /last
+    - Indicators (Phase 1.6, local Bybit kline): /rsi, /macd, /bb, /adx, /heatmap
     - Watchlist: /watch, /unwatch, /settings, /set_threshold
     - Meta: /help
 
@@ -521,6 +590,93 @@
 
     Никакого scoring. Никакого `last_signal`. Чистый snapshot одной строкой.
 
+    ### `/rsi SYMBOL [tf]` — Phase 1.6
+
+    Multi-TF RSI snapshot. Source: local Bybit V5 kline (no CoinGlass dep).
+
+    1. Validate symbol через cached `get_futures_supported_coins`.
+    2. `tf` argument: один из `15m`, `1h`, `4h`, `12h`, `1d` или `all` (default `all` → таблица по всем 5 TF).
+    3. Один параллельный fan-out из 5 GET-запросов к `https://api.bybit.com/v5/market/kline?category=linear&symbol=<SYMBOL>USDT&interval=<I>&limit=200`.
+    4. Compute Wilder RSI(14) на closes oldest-first.
+    5. Output (default `all`):
+       ```
+       ETH RSI (Wilder 14, source: bybit kline)
+       TF     RSI    Bucket
+       15m    62.2   neutral
+       1h     66.1   bullish
+       4h     66.0   bullish
+       12h    64.7   neutral
+       1d     61.9   neutral
+
+       Confluence: 1h/4h/12h все ≥ 60 → bullish lean (Phase 1.6 bonus +5 в /eth scoring если совпадает с long bias)
+       ```
+       Buckets: `<30` extreme oversold, `30–40` oversold, `40–60` neutral, `60–70` bullish, `>70` extreme overbought.
+
+    ### `/macd SYMBOL [tf]` — Phase 1.6
+
+    1. Default `tf=4h`. Allowed: `1h`, `4h`, `1d`.
+    2. GET Bybit V5 kline `interval=<I>&limit=200`.
+    3. Compute EMA(12), EMA(26), MACD = ema12−ema26, Signal = EMA(9) of MACD, Hist = MACD−Signal.
+    4. Output:
+       ```
+       ETH MACD (12, 26, 9) on 4h (source: bybit kline)
+       MACD:    +21.60
+       Signal:  +18.98
+       Hist:    +2.62  (rising — last 3 bars +1.84, +2.31, +2.62)
+       Cross:   bullish (MACD > Signal, last cross-up ≈ 18 bars ago)
+       ```
+
+    ### `/bb SYMBOL [tf]` — Phase 1.6
+
+    1. Default `tf=4h`. Allowed: `1h`, `4h`.
+    2. Bybit V5 kline → Bollinger(20, 2σ).
+    3. Output:
+       ```
+       ETH Bollinger Bands (20, 2σ) on 4h (source: bybit kline)
+       Upper:    $2,413.72
+       Mid:      $2,362.36
+       Lower:    $2,311.00
+       Price:    $2,408.69
+       %B:       0.951  (price near upper band — overheated)
+       Width:    4.35%  (normal vol regime)
+       ```
+       Squeeze warning если `width < 2.5%`: добавить строку `Squeeze: ⚠️ width <2.5% — break-out likely soon`.
+
+    ### `/adx SYMBOL` — Phase 1.6
+
+    Только `tf=4h` (single bucket as в spreadsheet). 200 свечей × 4h = ~33d, достаточно warmup для ADX(14).
+
+    1. Bybit V5 kline 4h → highs, lows, closes oldest-first.
+    2. Wilder ADX(14): TR, +DM, -DM → smoothed → +DI/-DI/DX → ADX.
+    3. Output:
+       ```
+       ETH ADX (14) on 4h (source: bybit kline)
+       ADX:      32.6  (strong trend)
+       +DI:      26.3
+       -DI:      9.0
+       Bias:     +DI > -DI by 17.3 → directional move is up
+       ```
+       Buckets: `<20` weak/no trend, `20–40` moderate, `>40` strong.
+
+    ### `/heatmap [tf]` — Phase 1.6
+
+    Multi-symbol RSI table по всему watchlist. Заменяет CoinGlass `RsiHeatMap` (UI-only, не в API).
+
+    1. Default `tf=4h`. Allowed: `15m`, `1h`, `4h`, `1d`.
+    2. Read `state.watchlist`. Для каждого entry → Bybit V5 kline `<SYMBOL>USDT interval=<I> limit=200`.
+    3. Compute RSI(14) per symbol in parallel.
+    4. Output (sorted ascending by RSI — oversold first):
+       ```
+       RSI heatmap (Wilder 14, 4h, source: bybit kline)
+
+       SYMBOL    RSI    Bucket
+       SOL       28.4   extreme oversold ⚠️
+       BTC       45.2   neutral
+       ETH       66.0   bullish
+       ARB       72.5   extreme overbought ⚠️
+       ```
+       Если symbol на Bybit отсутствует — append `(not on bybit)` в строке, RSI пропускается.
+
     ## Missing data handling
 
     Если tool отсутствует в `tools/list` ИЛИ возвращает 4xx/`not-available-on-plan`:
@@ -537,20 +693,22 @@
     - **Не использовать** REST endpoint matrix CoinGlass для inference (что доступно где) — derive at runtime из tools/list + tool-call errors
     - **Не вызывать** все 30 tools на каждый /eth — pipeline выше использует 10, остальное только по явному запросу
     - **Не вызывать** STANDARD-tier-locked tools (`get_futures_coins_markets`, `get_futures_liquidation_max_pain`, `get_hyperliquid_whale_positions`, `get_futures_liquidation_heatmap_*`) — на HOBBYIST они вернут 401 "Upgrade plan"; их места в pipeline уже заменены или удалены
-    - **Не использовать** `interval` менее `4h` (1m, 5m, 15m, 30m, 1h) — на HOBBYIST 403
+    - **Не использовать** `interval` менее `4h` (1m, 5m, 15m, 30m, 1h) **в CoinGlass MCP-вызовах** — на HOBBYIST 403. Local Bybit kline на любом TF разрешён (Phase 1.6 — 15m/1h/4h/12h/1d через api.bybit.com).
     - **Не агрегировать** scoring до scalar 0-100 — сохранять directional split (long_score, short_score)
     - **Не давать** entry/stop/TP цены без явной просьбы пользователя; и даже тогда — только educational ATR-based ranges, никогда конкретные orders
     - **Не повторять** snapshot pipeline в loop внутри одного chat-сообщения — pipeline стоит ~10 tool calls; для periodic monitoring используется внешний Argo CronWorkflow `labs-watch-scan` (см. Phase 1.5 / cron alerts ниже)
+    - **Не использовать** CoinGlass `get_futures_rsi_list` / `get_futures_macd_list` как primary source для RSI/MACD — они tier-нестабильны на HOBBYIST (часто `No content`/401). Local Bybit kline = source of truth (Phase 1.6). CoinGlass RSI/MACD lists остаются только для cross-check warning, не для scoring.
+    - **Не объявлять** local CVD как "aggregated" — текущий Phase 1.6 — single-exchange Binance taker_buy. Source string `binance_taker_buy_24h` обязателен в snapshot. Multi-exchange aggregation = Phase 2.
 
     ## Cron alerts (Phase 1.5)
 
     Pasive monitoring через **Argo CronWorkflow `labs-watch-scan`** (см. `platform-gitops/argo-workflows/cluster-templates/cronworkflow-labs-watch-scan.yaml`). Cluster-owned cron каждые 30 мин:
 
     1. Читает watchlist из S3 (`s3://platform-state/labs/openclaw/workspace/state/eth-trading-intel.json`) read-only
-    2. Для каждой entry дёргает CoinGlass MCP curl (упрощённый scoring: funding direction + price 24h + OI delta — 4 binary signals, scaled to 0..100)
+    2. Для каждой entry дёргает CoinGlass MCP + local Bybit kline (Phase 1.6 — 5 binary signals × 20 = max 100): funding direction, price 24h, OI delta, funding extreme, RSI 4h extreme.
     3. Сравнивает с `entry.threshold` + `entry.direction` filter
     4. Если crossed AND `last_alert_at[symbol]` ≥ 4h ago → POST Telegram Bot API sendMessage с alert-сообщением. Recommends "Run /eth SYMBOL for full analysis."
-    5. Updates dedup state в `s3://platform-state/labs/openclaw/workspace/state/eth-trading-intel-alerts.json` (отдельный файл от chat-state, не модифицирует watchlist)
+    5. Updates dedup state в `s3://platform-state/labs/cron/eth-trading-intel-alerts.json` (отдельный файл от chat-state, не модифицирует watchlist; намеренно вне `labs/openclaw/` mirror-prefix — чтобы s3-sync sidecar не стирал файл каждые 10с)
 
     **Cron simple_score умышленно проще** chat-skill полного scoring rubric. Cron — это pre-filter "стоит проснуться и посмотреть", не финальный сигнал. Chat skill сохраняет полную сложность для interactive deep-dive.
 
@@ -577,4 +735,7 @@
       - **other**: financial-calendar (FOMC), news
       Если такие данные нужны — найти в `tools/list` ближайший по namespace tool (e.g. `get_bitcoin_etf_flow_history` для ETF) и вызвать напрямую через MCP. REST-skill из upstream **не клонировать в наш репо**.
     - **Phase 2 architecture** — `~/.claude/plans/smooth-soaring-candy.md` (own `labs-trading-data` service с Bybit + CryptoPanic + Etherscan + pandas-ta).
+    - **Bybit V5 public REST** (Phase 1.6 local indicator engine) — `https://bybit-exchange.github.io/docs/v5/market/kline`, `https://bybit-exchange.github.io/docs/v5/rate-limit` (600 req / 5 sec на IP, no auth).
+    - **Binance public klines** (Phase 1.6 CVD) — `https://developers.binance.com/docs/binance-spot-api-docs/rest-api/market-data-endpoints#kline-candlestick-data`. Index 9 = `taker_buy_base_asset_volume`.
+    - **Phase 1.6 source spreadsheet** — `Индикаторы для робота_upd.numbers` (root of mctlhq workspace). Multi-TF матрица RSI/MACD/Bollinger/ADX + Liquidation Map / Heatmap (последние требуют CoinGlass STANDARD-tier upgrade и помечены Blocked).
 "identity": {}
