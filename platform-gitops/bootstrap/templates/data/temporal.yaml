@@ -112,9 +112,15 @@ spec:
                 cpu: 200m
                 memory: 256Mi
 
-          # Schema setup runs as Helm hooks; chart default already enables it.
+          # Disable Helm hooks for the schema-setup Job. With Argo CD, Helm
+          # `pre-install,pre-upgrade` hooks become PreSync resources that run
+          # before normal manifests; that would race the ExternalSecret
+          # `temporal-server-db-creds` from the second source (applied during
+          # the normal sync phase) and fail an initial sync with missing creds.
+          # Run schema setup as a regular Job instead — server pods will retry
+          # until the schema is ready, and ArgoCD tracks the Job to Healthy.
           schema:
-            useHelmHooks: true
+            useHelmHooks: false
 
     # In-repo manifests: ExternalSecret for DB creds + Job that registers
     # tenant Temporal namespaces (kuptsi, …) once the frontend is healthy.
