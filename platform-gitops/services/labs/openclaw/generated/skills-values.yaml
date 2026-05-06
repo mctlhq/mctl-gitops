@@ -511,32 +511,32 @@
     3. Build entry: `{symbol, threshold: <parsed-or-default>, direction: <parsed-or-"both">, added_at: <ISO-now>}`.
     4. Dedup: если symbol уже в watchlist — заменить existing entry, не добавлять второй.
     5. Write state.
-    6. Confirmation: `Added ETH (threshold 75, direction long). Watchlist: BTC (75 both), ETH (75 long), SOL (70 both).`
+    6. Confirmation (русский, single-language contract): `Добавлено ETH (порог 75, направление long). Список наблюдения: BTC (75 both), ETH (75 long), SOL (70 both).`
 
     `/unwatch SYMBOL`:
     1. Read state, remove entry с matching symbol (любая direction/threshold).
     2. Write.
-    3. `Removed ETH. Watchlist: BTC (75 both), SOL (70 both).`
+    3. Confirmation (русский): `Удалено ETH. Список наблюдения: BTC (75 both), SOL (70 both).`
 
     ## Settings commands
 
     `/settings`:
 
     ```
-    Watchlist:
-    - BTC: threshold 75, direction both
-    - ETH: threshold 75, direction long
-    - SOL: threshold 70, direction both
-    Global threshold: 70
+    Список наблюдения:
+    - BTC: порог 75, направление both
+    - ETH: порог 75, направление long
+    - SOL: порог 70, направление both
+    Глобальный порог: 70
 
-    Last signal: ETH Long Watch 78/22 at 2026-05-05 12:34 UTC
+    Последний сигнал: ETH Лонг (наблюдение) 78/22 в 2026-05-05 12:34 UTC
     ```
 
     `/set_threshold 75`:
-    1. Validate 50 ≤ N ≤ 95. Reject with explanation otherwise.
+    1. Validate 50 ≤ N ≤ 95. Reject (русский): `Порог должен быть в диапазоне [50, 95]. Получено: <N>.`
     2. Read state, update **global** `state.threshold` (НЕ модифицирует per-symbol overrides в watchlist[]).
     3. Write.
-    4. `Global threshold updated to 75. Per-symbol overrides preserved: BTC 75, ETH 75, SOL 70.`
+    4. Confirmation (русский): `Глобальный порог обновлён на 75. Per-symbol overrides сохранены: BTC 75, ETH 75, SOL 70.`
 
     Note: чтобы изменить per-symbol threshold — `/watch SYMBOL N [direction]` (replace existing entry).
 
@@ -546,11 +546,11 @@
 
     ### `/help`
 
-    Static text. Список всех 21 команд (16 base + 5 Phase 1.6 indicator commands) с usage и one-line описанием. Никаких CoinGlass calls. Should включать:
-    - Trading: /eth, /btc, /sol, /scan, /risk, /pulse, /funding, /oi, /etf, /why, /last
-    - Indicators (Phase 1.6, local Bybit kline): /rsi, /macd, /bb, /adx, /heatmap
-    - Watchlist: /watch, /unwatch, /settings, /set_threshold
-    - Meta: /help
+    Static text. Список всех 21 команд (16 base + 5 Phase 1.6 indicator commands) с usage и one-line описанием. Никаких CoinGlass calls. Категории и команды (на русском, single-language contract):
+    - Торговля: /eth, /btc, /sol, /scan, /risk, /pulse, /funding, /oi, /etf, /why, /last
+    - Индикаторы (Phase 1.6, local Bybit kline): /rsi, /macd, /bb, /adx, /heatmap
+    - Список наблюдения: /watch, /unwatch, /settings, /set_threshold
+    - Прочее: /help
 
     ### `/last`
 
