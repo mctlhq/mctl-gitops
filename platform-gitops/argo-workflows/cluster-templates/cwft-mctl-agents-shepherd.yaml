@@ -463,11 +463,17 @@ spec:
           # hiccups. After 3 failures, treat as persistent and fail the
           # step — silently bypassing on missing RBAC / CRD / broken
           # auth would defeat the safeguard.
+          #
+          # Scope is `-n argocd`, NOT `-A`: argo-workflow-sa is bound
+          # via a namespaced RoleBinding in the `argocd` namespace
+          # (platform-gitops/argo-workflows/config/sa-and-rbac.yaml,
+          # lines 73-100). A cluster-wide list would 403 on every
+          # retry. All ArgoCD Applications live in `argocd` anyway.
           RAW=""
           RC=1
           for attempt in 1 2 3; do
             set +e
-            RAW=$(kubectl get applications.argoproj.io -A -o json 2>/dev/null)
+            RAW=$(kubectl get applications.argoproj.io -n argocd -o json 2>/dev/null)
             RC=$?
             set -e
             if [ "$RC" -eq 0 ] && [ -n "$RAW" ]; then
