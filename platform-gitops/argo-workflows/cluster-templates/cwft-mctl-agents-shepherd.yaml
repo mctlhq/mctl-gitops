@@ -40,6 +40,15 @@ metadata:
            → implemented after followup, → merged on successful merge,
            → rejected on closed-unmerged). Same `:(glob)` filter as
            the implementer template.
+        4. post-deploy-verify — sleeps 300s, then lists ArgoCD
+           Applications that flipped to Health=Degraded since the run
+           started. A non-empty result fails the workflow, which
+           triggers the existing notify-telegram onExit handler with
+           the affected app names. Closes the gap exposed by the
+           external-secrets incident 2026-05-01 → 2026-05-07: the
+           shepherd would happily merge a PR that broke a downstream
+           Application and the merge would only surface 6 days later
+           when an operator noticed manually.
 
       Triggered by:
         - cron via CronWorkflow `mctl-agents-shepherd`
@@ -62,12 +71,15 @@ spec:
   activeDeadlineSeconds: 7200
   entrypoint: shepherd-proposals
   onExit: notify-telegram
-  # Same shared mutex as cwft-mctl-agents-run / cwft-mctl-agents-implement
-  # — all three push to mctl-gitops main. Migration to a per-proposal
-  # claim mechanism is tracked separately (mctl-agents PR #84 design).
-  synchronization:
-    mutex:
-      name: mctl-gitops-main-writes
+  # NB: the mctl-gitops-main-writes mutex used to live at workflow
+  # spec-level (per feedback_argo_shared_mutex.md) so the entire
+  # shepherd run held the lock from clone → push. After post-deploy-
+  # verify was added, that meant the 5-min reconcile sleep also held
+  # the global write lock and blocked unrelated `run`/`implement`
+  # workflows for no reason. Mutex now lives on the commit-and-push
+  # template only — that's the only step that actually writes to
+  # gitops main. Race-against-other-writers is still handled there
+  # by the existing 5×retry-with-rebase loop.
 
   arguments:
     parameters:
@@ -107,6 +119,17 @@ spec:
 
   templates:
     - name: shepherd-proposals
+      outputs:
+        parameters:
+          # Surface the verify step's degraded-app list as a workflow-
+          # level output so the onExit notify-telegram template can
+          # include it in the alert. `default: ""` because the verify
+          # step might never run (e.g. clone-gitops crashed) — onExit
+          # still needs the parameter to resolve to *something*.
+          - name: degraded_apps
+            valueFrom:
+              parameter: "{{steps.verify.outputs.parameters.degraded_apps}}"
+              default: ""
       steps:
         - - name: clone
             template: clone-gitops
@@ -134,6 +157,15 @@ spec:
               error: true
         - - name: commit
             template: commit-and-push
+        - - name: verify
+            template: post-deploy-verify
+            arguments:
+              parameters:
+                - name: started_at
+                  # Workflow start timestamp — anything newer than this
+                  # crossed into Degraded *during* this shepherd run, so
+                  # is plausibly caused by a merge in step 3.
+                  value: "{{workflow.creationTimestamp}}"
 
     # ── 1. SSH-clone mctl-gitops into shared volume ───────────────────────
     - name: clone-gitops
@@ -286,6 +318,16 @@ spec:
     # (run_shepherd writes them after each proposal transition).
     # Defensive: stage only that subtree.
     - name: commit-and-push
+      # mctl-gitops-main-writes was hoisted to template-level here
+      # (down from spec-level) so the rest of the shepherd run —
+      # clone, run-shepherd, the 5-min post-deploy-verify sleep —
+      # no longer holds the global write lock. Other workflows that
+      # share this mutex (cwft-mctl-agents-run, -implement) only
+      # contend during the actual `git push` window, not for the
+      # entire 1-2 minutes a shepherd tick may take.
+      synchronization:
+        mutex:
+          name: mctl-gitops-main-writes
       script:
         image: alpine/git:2.43.0
         command: [sh]
@@ -374,7 +416,116 @@ spec:
           - name: deploy-key
             mountPath: /secrets/deploy-key
 
-    # ── 4. Telegram notification (onExit) ──────────────────────────────────
+    # ── 4. Post-deploy verify ──────────────────────────────────────────────
+    # Run AFTER commit-and-push has flushed every .status.yaml transition
+    # to gitops main. Sleeps the ArgoCD reconcile budget, then asks the
+    # API for any Application that crossed into Health=Degraded after
+    # this workflow started. A non-empty list = the shepherd plausibly
+    # merged a PR that broke a downstream app — fail the workflow so
+    # notify-telegram fires with the bad-app names. No auto-revert in v1
+    # (operator looks at the alert and decides; auto-revert is a v2
+    # follow-up that needs commit-SHA → owning-app correlation).
+    #
+    # kubectl retry policy: 3 attempts × 5s backoff. A single transient
+    # API-server hiccup is absorbed; persistent failures (missing RBAC,
+    # missing CRD, broken auth) escalate to exit 1 so the operator
+    # notices that the safeguard itself is broken — silently bypassing
+    # would defeat the entire purpose of this step.
+    #
+    # The degraded app list is also written to /tmp/degraded.txt and
+    # exposed as a workflow-level output parameter so the onExit
+    # notify-telegram template can include the names in its alert.
+    - name: post-deploy-verify
+      inputs:
+        parameters:
+          - name: started_at
+      outputs:
+        parameters:
+          - name: degraded_apps
+            valueFrom:
+              path: /tmp/degraded.txt
+              # The verify step always writes this file (empty on
+              # success, app list on failure, "kubectl-failed" on
+              # persistent kubectl errors). `default` keeps the output
+              # parameter resolvable even if the step exits before the
+              # write — onExit must always be able to read it.
+              default: ""
+      script:
+        image: bitnami/kubectl:latest
+        command: [bash]
+        env:
+          - name: STARTED_AT
+            value: "{{inputs.parameters.started_at}}"
+        source: |
+          set -uo pipefail
+
+          # Always create the output file first so the workflow-level
+          # output parameter resolves even on early-exit paths.
+          : > /tmp/degraded.txt
+
+          # 5-min sleep ≈ ArgoCD's default app reconcile interval (180s)
+          # plus a buffer for the per-resource health re-evaluation pass
+          # that runs on the next tick after a sync.
+          echo "Sleeping 300s for ArgoCD to reconcile post-merge…"
+          sleep 300
+
+          THRESHOLD="${STARTED_AT}"
+          echo "Listing applications that became Degraded after ${THRESHOLD}…"
+
+          # Retry kubectl up to 3× to ride out transient API-server
+          # hiccups. After 3 failures, treat as persistent and fail the
+          # step — silently bypassing on missing RBAC / CRD / broken
+          # auth would defeat the safeguard.
+          #
+          # Scope is `-n argocd`, NOT `-A`: argo-workflow-sa is bound
+          # via a namespaced RoleBinding in the `argocd` namespace
+          # (platform-gitops/argo-workflows/config/sa-and-rbac.yaml,
+          # lines 73-100). A cluster-wide list would 403 on every
+          # retry. All ArgoCD Applications live in `argocd` anyway.
+          RAW=""
+          RC=1
+          for attempt in 1 2 3; do
+            set +e
+            RAW=$(kubectl get applications.argoproj.io -n argocd -o json 2>/dev/null)
+            RC=$?
+            set -e
+            if [ "$RC" -eq 0 ] && [ -n "$RAW" ]; then
+              break
+            fi
+            echo "⚠️  kubectl get applications attempt ${attempt}/3 failed (rc=$RC)"
+            [ "$attempt" -lt 3 ] && sleep 5
+          done
+          if [ "$RC" -ne 0 ] || [ -z "$RAW" ]; then
+            echo "❌ kubectl get applications failed 3× — persistent failure, not absorbing."
+            echo "kubectl-failed (rc=$RC)" > /tmp/degraded.txt
+            exit 1
+          fi
+
+          # Compare timestamps as epoch seconds, not strings.
+          # Lexical RFC3339 comparison breaks on fractional-second
+          # boundaries: "2026-05-06T23:14:30.5Z" sorts BEFORE
+          # "2026-05-06T23:14:30Z" because "." (0x2E) < "Z" (0x5A) in
+          # bytewise order. fromdateiso8601 truncates to integer
+          # epoch seconds — same precision on both sides. Empty / null
+          # lastTransitionTime defaults to 0 so unparsed apps never
+          # match the threshold (treated as "before workflow start").
+          BAD=$(printf '%s' "$RAW" | jq -r --arg ts "$THRESHOLD" '
+            ($ts | fromdateiso8601) as $threshold
+            | .items[]
+            | select(.status.health.status == "Degraded")
+            | select(((.status.health.lastTransitionTime // "1970-01-01T00:00:00Z") | fromdateiso8601) > $threshold)
+            | "\(.metadata.namespace)/\(.metadata.name)"
+          ' | tr '\n' ' ')
+
+          if [ -n "$BAD" ]; then
+            echo "❌ Newly Degraded ArgoCD apps after shepherd run: $BAD"
+            echo "Threshold (workflow.creationTimestamp): $THRESHOLD"
+            printf '%s' "$BAD" > /tmp/degraded.txt
+            exit 1
+          fi
+          echo "✓ No newly-Degraded apps detected after shepherd run."
+
+    # ── 5. Telegram notification (onExit) ──────────────────────────────────
     # Same pattern as cwft-mctl-agents-run / cwft-mctl-agents-implement.
     - name: notify-telegram
       script:
@@ -408,6 +559,13 @@ spec:
             value: "{{workflow.name}}"
           - name: WORKFLOW_DURATION
             value: "{{workflow.duration}}"
+          # Degraded app list from the post-deploy-verify step (empty
+          # string when verify ran clean OR didn't run at all). When
+          # non-empty the alert calls out the offending apps so the
+          # operator can jump straight to argocd UI without re-deriving
+          # the list from workflow logs.
+          - name: WORKFLOW_DEGRADED_APPS
+            value: "{{workflow.outputs.parameters.degraded_apps}}"
         source: |
           set +e
           if [ -z "$TG_BOT_TOKEN" ] || [ -z "$TG_CHAT_ID" ]; then
@@ -431,6 +589,12 @@ spec:
           fi
           UI_URL="https://workflows.mctl.ai/workflows/argo-workflows/${WORKFLOW_NAME}"
           TEXT="${ICON} mctl-agents: ${SUBJECT} — ${WORKFLOW_STATUS} (${WORKFLOW_DURATION}s)\n${UI_URL}"
+          if [ -n "$WORKFLOW_DEGRADED_APPS" ]; then
+            # The verify step writes either "kubectl-failed (rc=N)" or
+            # the space-separated list of namespace/name pairs. Both
+            # cases are operator-relevant — surface verbatim.
+            TEXT="${TEXT}\n⚠️ post-deploy-verify flagged: ${WORKFLOW_DEGRADED_APPS}"
+          fi
 
           curl -s -o /dev/null -w 'telegram http=%{http_code}\n' \
             -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
