@@ -9,6 +9,9 @@ spec:
   sourceRepos:
     - {{ .Values.spec.source.repoURL }}
     - https://github.com/mctlhq/mctl-api.git
+    # Platform-level external Helm repos (infra services that ship as upstream
+    # charts: Temporal server, etc.). Add new entries as platform infra grows.
+    - https://go.temporal.io/helm-charts
 
   destinations:
     - server: {{ .Values.spec.destination.server }}
@@ -35,6 +38,14 @@ spec:
       kind: Service
     - group: ""
       kind: ConfigMap
+    # Pod is needed for Helm test resources (e.g. temporal chart's
+    # test-cluster-health pod) that ship inside upstream platform charts.
+    - group: ""
+      kind: Pod
+    # Secret is needed when ESO templates render kubernetes.io/basic-auth or
+    # Opaque secrets for platform services (e.g. temporal-server-db-creds).
+    - group: ""
+      kind: Secret
     - group: rbac.authorization.k8s.io
       kind: Role
     - group: rbac.authorization.k8s.io
@@ -45,6 +56,13 @@ spec:
       kind: Deployment
     - group: networking.k8s.io
       kind: Ingress
+    # Job — schema-setup hooks for Temporal and similar platform services.
+    - group: batch
+      kind: Job
+    # Middleware — traefik forward-auth wiring used by Backstage-fronted
+    # platform UIs (Temporal Web, mctl-api docs, etc.).
+    - group: traefik.io
+      kind: Middleware
 
   orphanedResources:
     warn: false
