@@ -71,12 +71,15 @@ spec:
   activeDeadlineSeconds: 7200
   entrypoint: shepherd-proposals
   onExit: notify-telegram
-  # Same shared mutex as cwft-mctl-agents-run / cwft-mctl-agents-implement
-  # — all three push to mctl-gitops main. Migration to a per-proposal
-  # claim mechanism is tracked separately (mctl-agents PR #84 design).
-  synchronization:
-    mutex:
-      name: mctl-gitops-main-writes
+  # NB: the mctl-gitops-main-writes mutex used to live at workflow
+  # spec-level (per feedback_argo_shared_mutex.md) so the entire
+  # shepherd run held the lock from clone → push. After post-deploy-
+  # verify was added, that meant the 5-min reconcile sleep also held
+  # the global write lock and blocked unrelated `run`/`implement`
+  # workflows for no reason. Mutex now lives on the commit-and-push
+  # template only — that's the only step that actually writes to
+  # gitops main. Race-against-other-writers is still handled there
+  # by the existing 5×retry-with-rebase loop.
 
   arguments:
     parameters:
@@ -315,6 +318,16 @@ spec:
     # (run_shepherd writes them after each proposal transition).
     # Defensive: stage only that subtree.
     - name: commit-and-push
+      # mctl-gitops-main-writes was hoisted to template-level here
+      # (down from spec-level) so the rest of the shepherd run —
+      # clone, run-shepherd, the 5-min post-deploy-verify sleep —
+      # no longer holds the global write lock. Other workflows that
+      # share this mutex (cwft-mctl-agents-run, -implement) only
+      # contend during the actual `git push` window, not for the
+      # entire 1-2 minutes a shepherd tick may take.
+      synchronization:
+        mutex:
+          name: mctl-gitops-main-writes
       script:
         image: alpine/git:2.43.0
         command: [sh]
@@ -488,10 +501,19 @@ spec:
             exit 1
           fi
 
+          # Compare timestamps as epoch seconds, not strings.
+          # Lexical RFC3339 comparison breaks on fractional-second
+          # boundaries: "2026-05-06T23:14:30.5Z" sorts BEFORE
+          # "2026-05-06T23:14:30Z" because "." (0x2E) < "Z" (0x5A) in
+          # bytewise order. fromdateiso8601 truncates to integer
+          # epoch seconds — same precision on both sides. Empty / null
+          # lastTransitionTime defaults to 0 so unparsed apps never
+          # match the threshold (treated as "before workflow start").
           BAD=$(printf '%s' "$RAW" | jq -r --arg ts "$THRESHOLD" '
-            .items[]
+            ($ts | fromdateiso8601) as $threshold
+            | .items[]
             | select(.status.health.status == "Degraded")
-            | select((.status.health.lastTransitionTime // "") > $ts)
+            | select(((.status.health.lastTransitionTime // "1970-01-01T00:00:00Z") | fromdateiso8601) > $threshold)
             | "\(.metadata.namespace)/\(.metadata.name)"
           ' | tr '\n' ' ')
 
