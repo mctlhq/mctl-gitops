@@ -199,6 +199,15 @@ argo-cd:
       limits:
         cpu: 250m
         memory: 192Mi
+    metrics:
+      enabled: true
+      serviceMonitor:
+        enabled: true
+        # VictoriaMetrics operator converts these to VMServiceScrape automatically
+        # (operator default selector matches all ServiceMonitors). Mirrors the
+        # pattern used by argo-workflows in
+        # platform-gitops/argo-workflows/config/servicemonitor.yaml.
+        interval: 30s
 
   # Controller resource optimization
   controller:
@@ -215,6 +224,19 @@ argo-cd:
     env:
       - name: GOMEMLIMIT
         value: "1800MiB"
+    # Expose controller metrics so VictoriaMetrics can scrape Application
+    # health/sync state. Without this the cluster has no signal for
+    # ArgoCDApplicationDegraded — see incident 2026-05-01..05-07 where
+    # external-secrets stayed Degraded for 6 days unnoticed.
+    metrics:
+      enabled: true
+      serviceMonitor:
+        enabled: true
+        # VictoriaMetrics operator converts these to VMServiceScrape automatically
+        # (operator default selector matches all ServiceMonitors). Mirrors the
+        # pattern used by argo-workflows in
+        # platform-gitops/argo-workflows/config/servicemonitor.yaml.
+        interval: 30s
 
   # Dex server probes — auto-restart when OIDC provider is temporarily unavailable
   # Without these, dex stays "Running" but broken after failed initialization
@@ -254,6 +276,15 @@ argo-cd:
         # template). 250m gives 5x headroom; trimmed 500m→250m on 2026-05-07.
         cpu: 250m
         memory: 256Mi
+    metrics:
+      enabled: true
+      serviceMonitor:
+        enabled: true
+        # VictoriaMetrics operator converts these to VMServiceScrape automatically
+        # (operator default selector matches all ServiceMonitors). Mirrors the
+        # pattern used by argo-workflows in
+        # platform-gitops/argo-workflows/config/servicemonitor.yaml.
+        interval: 30s
 
   applicationSet:
     resources:
