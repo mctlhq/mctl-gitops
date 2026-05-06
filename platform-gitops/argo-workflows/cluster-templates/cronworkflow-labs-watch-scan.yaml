@@ -549,17 +549,24 @@ spec:
                 funding_str = (
                     f"{sc['funding']*100:+.4f}%" if sc["funding"] is not None else "?"
                 )
-                missing_str = "; ".join(sc["missing"]) if sc["missing"] else "none"
+                # Russian-language alert. Telegram chats are operator DMs in Russian;
+                # English-only messages were unintuitive at a glance. Trader slang
+                # (long → лонг, short → шорт, funding/OI) stays in its widely used
+                # form. Emoji + score line stay structurally identical so the older
+                # cron-alerts archive still reads the same shape.
+                side_ru = {"long": "лонг", "short": "шорт"}.get(side, side)
+                direction_ru = {"long": "лонг", "short": "шорт", "both": "оба"}.get(direction, direction)
+                oi_ru = "да" if sc["oi_rising"] else "нет"
                 msg = (
-                    f"⚠️ {sym} {side.upper()} watch crossed (cron pre-filter)\n"
+                    f"⚠️ {sym} {side_ru} — сработал watch (cron pre-filter)\n"
                     f"\n"
-                    f"Score (cron simple): {score}/100 (threshold {thr}, direction {direction})\n"
-                    f"Price: {price_str} (24h Δ {price_chg})\n"
+                    f"Скор: {score}/100 (порог {thr}, направление {direction_ru})\n"
+                    f"Цена: {price_str} (Δ за 24ч: {price_chg})\n"
                     f"Funding 4h: {funding_str}\n"
-                    f"OI rising: {sc['oi_rising']}\n"
+                    f"OI растёт: {oi_ru}\n"
                     f"\n"
-                    f"Run /eth {sym.lower()} or /{sym.lower()} for full chat-skill analysis.\n"
-                    f"This is observation, not financial advice."
+                    f"Запустите /eth {sym.lower()} или /{sym.lower()} для полного анализа в чат-скилле.\n"
+                    f"Это наблюдение, не финансовая рекомендация."
                 )
 
                 # Send alert to every operator chat in ALERT_CHAT_IDS. Update
@@ -668,7 +675,7 @@ spec:
               echo "telegram token not in vault; skipping notification"
               exit 0
             fi
-            MSG="🚨 labs-watch-scan failed: workflow={{workflow.name}} status={{workflow.status}}. Check workflows.mctl.ai/workflows/argo-workflows/{{workflow.name}}"
+            MSG="🚨 labs-watch-scan упал: workflow={{workflow.name}} status={{workflow.status}}. Проверьте workflows.mctl.ai/workflows/argo-workflows/{{workflow.name}}"
             # Notify every operator chat — must mirror ALERT_CHAT_IDS in the
             # main scan step and channels.telegram.allowFrom in the openclaw
             # tenant values.yaml. Loop is best-effort: a failure to reach one
