@@ -446,7 +446,9 @@ Scan results:
 - SOL (≥70 both): Шорт (наблюдение), 18/72, уверенность высокая  → /sol для деталей  ✓ crossed
 ```
 
-Если ничего не прошло — "Ни один символ не пересёк порог. Понизь через /watch SYMBOL N или /set_threshold."
+Если ничего не прошло — fixed message (на языке запроса):
+- RU: `Ни один символ не пересёк порог. Понизь через /watch SYMBOL N или /set_threshold.`
+- EN: `No symbols crossed their thresholds. Lower with /watch SYMBOL N or /set_threshold.`
 
 ## Risk-only report (`/risk SYMBOL`)
 
@@ -545,8 +547,12 @@ Static text. Список всех 21 команд (16 base + 5 Phase 1.6 indica
 ### `/last`
 
 1. Read `state.last_signal`.
-2. Если `null` — вывод: `Сигналов в памяти нет. Сначала запусти /eth, /btc, /sol или /scan.`
-3. Если есть — render `state.last_signal.rendered` напрямую (text-блок). Plus header: `Последний сигнал зафиксирован <state.last_signal.at>.`
+2. Если `null` — вывод (на языке запроса):
+   - RU: `Сигналов в памяти нет. Сначала запусти /eth, /btc, /sol или /scan.`
+   - EN: `No signal in memory yet. Run /eth, /btc, /sol, or /scan first.`
+3. Если есть — render `state.last_signal.rendered` напрямую (text-блок). Plus header (на языке запроса):
+   - RU: `Последний сигнал зафиксирован <state.last_signal.at>.`
+   - EN: `Last signal recorded at <state.last_signal.at>.`
 4. Никаких CoinGlass calls.
 
 ### `/funding SYMBOL`
@@ -584,7 +590,9 @@ Static text. Список всех 21 команд (16 base + 5 Phase 1.6 indica
 Symbol-gated:
 - `BTC` → `get_bitcoin_etf_flow_history({limit: 30})`
 - `ETH` → `get_ethereum_etf_flow_history({limit: 30})`
-- любой другой symbol → `ETF-данные на CoinGlass MCP доступны только для BTC и ETH. /etf SOL не поддерживается.`
+- любой другой symbol → reject (на языке запроса):
+  - RU: `ETF-данные на CoinGlass MCP доступны только для BTC и ETH. /etf SOL не поддерживается.`
+  - EN: `ETF flow data only available for BTC and ETH on CoinGlass MCP. /etf SOL is not supported.`
 
 Output (BTC example):
 ```
@@ -718,7 +726,9 @@ Multi-symbol RSI table по всему watchlist. Заменяет CoinGlass `Rs
   ```
 - Никогда не падать; никогда не выдумывать значения
 
-Если **все** core tools (markets, OI, funding) недоступны — единственный output: "CoinGlass MCP недоступен или не авторизован. Повторите позже или эскалируйте оператору."
+Если **все** core tools (markets, OI, funding) недоступны — единственный output (на языке запроса):
+- RU: `CoinGlass MCP недоступен или не авторизован. Повторите позже или эскалируйте оператору.`
+- EN: `CoinGlass MCP unreachable or unauthorized. Try later or escalate to operator.`
 
 ## Anti-patterns
 
