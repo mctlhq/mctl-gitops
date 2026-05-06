@@ -1,13 +1,4 @@
-status: accepted
-updated_at: '2026-05-06T19:45:00Z'
-updated_by: mashkovd
-notes: |
-  Operator-seeded proposal (skipping mentor digest). Phase 1 of a
-  three-phase incident auto-cleanup track triggered by 2026-05-06 triage
-  finding six incidents stuck in `analyzing` despite their underlying
-  alerts being long gone (four synthetic Telegram-routing tests, one
-  post-rollback openclaw, one transient CPU throttle).
-
-  Phase 2 (active AlertManager reconciliation) and Phase 3 (orphan
-  service pruning) will be filed as separate proposals after Phase 1
-  lands and validates the GC mechanics in production.
+status: implemented
+updated_at: '2026-05-06T20:11:43Z'
+updated_by: mctl-agents[bot]
+pr: https://github.com/mctlhq/mctl-agent/pull/11
