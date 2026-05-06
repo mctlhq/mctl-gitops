@@ -10,13 +10,17 @@ tenant:
     - userId: mashkoffdmitry
       role: owner
   quotas:
-    requests.cpu: "500m"
-    requests.memory: "1280Mi"
-    limits.cpu: "3"
-    limits.memory: "4Gi"
-    pods: "10"
+    # Bumped 2026-05-06 to fit kuptsi-app (FastAPI + Temporal worker side
+    # container) alongside labs-openclaw and transient provision/build pods.
+    # Previous limits were saturated by labs-openclaw (2600m CPU / 1104Mi req),
+    # blocking provision-database workflow with `exceeded quota`.
+    requests.cpu: "1500m"
+    requests.memory: "3Gi"
+    limits.cpu: "6"
+    limits.memory: "7Gi"
+    pods: "15"
     persistentvolumeclaims: "5"
-    services: "10"
+    services: "15"
   limitRange:
     enabled: true
     default:
