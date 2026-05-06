@@ -40,6 +40,15 @@ metadata:
            → implemented after followup, → merged on successful merge,
            → rejected on closed-unmerged). Same `:(glob)` filter as
            the implementer template.
+        4. post-deploy-verify — sleeps 300s, then lists ArgoCD
+           Applications that flipped to Health=Degraded since the run
+           started. A non-empty result fails the workflow, which
+           triggers the existing notify-telegram onExit handler with
+           the affected app names. Closes the gap exposed by the
+           external-secrets incident 2026-05-01 → 2026-05-07: the
+           shepherd would happily merge a PR that broke a downstream
+           Application and the merge would only surface 6 days later
+           when an operator noticed manually.
 
       Triggered by:
         - cron via CronWorkflow `mctl-agents-shepherd`
@@ -134,6 +143,15 @@ spec:
               error: true
         - - name: commit
             template: commit-and-push
+        - - name: verify
+            template: post-deploy-verify
+            arguments:
+              parameters:
+                - name: started_at
+                  # Workflow start timestamp — anything newer than this
+                  # crossed into Degraded *during* this shepherd run, so
+                  # is plausibly caused by a merge in step 3.
+                  value: "{{workflow.creationTimestamp}}"
 
     # ── 1. SSH-clone mctl-gitops into shared volume ───────────────────────
     - name: clone-gitops
@@ -374,7 +392,65 @@ spec:
           - name: deploy-key
             mountPath: /secrets/deploy-key
 
-    # ── 4. Telegram notification (onExit) ──────────────────────────────────
+    # ── 4. Post-deploy verify ──────────────────────────────────────────────
+    # Run AFTER commit-and-push has flushed every .status.yaml transition
+    # to gitops main. Sleeps the ArgoCD reconcile budget, then asks the
+    # API for any Application that crossed into Health=Degraded after
+    # this workflow started. A non-empty list = the shepherd plausibly
+    # merged a PR that broke a downstream app — fail the workflow so
+    # notify-telegram fires with the bad-app names. No auto-revert in v1
+    # (operator looks at the alert and decides; auto-revert is a v2
+    # follow-up that needs commit-SHA → owning-app correlation).
+    #
+    # `set +e` on the kubectl call: a transient API-server hiccup must
+    # not flip a healthy run to Failed. Only a non-empty parsed result
+    # triggers exit 1.
+    - name: post-deploy-verify
+      inputs:
+        parameters:
+          - name: started_at
+      script:
+        image: bitnami/kubectl:latest
+        command: [bash]
+        env:
+          - name: STARTED_AT
+            value: "{{inputs.parameters.started_at}}"
+        source: |
+          set -uo pipefail
+
+          # 5-min sleep ≈ ArgoCD's default app reconcile interval (180s)
+          # plus a buffer for the per-resource health re-evaluation pass
+          # that runs on the next tick after a sync.
+          echo "Sleeping 300s for ArgoCD to reconcile post-merge…"
+          sleep 300
+
+          THRESHOLD="${STARTED_AT}"
+          echo "Listing applications that became Degraded after ${THRESHOLD}…"
+
+          set +e
+          RAW=$(kubectl get applications.argoproj.io -A -o json 2>/dev/null)
+          RC=$?
+          set -e
+          if [ "$RC" -ne 0 ] || [ -z "$RAW" ]; then
+            echo "⚠️  kubectl get applications failed (rc=$RC); skipping verify rather than failing run."
+            exit 0
+          fi
+
+          BAD=$(printf '%s' "$RAW" | jq -r --arg ts "$THRESHOLD" '
+            .items[]
+            | select(.status.health.status == "Degraded")
+            | select((.status.health.lastTransitionTime // "") > $ts)
+            | "\(.metadata.namespace)/\(.metadata.name)"
+          ' | tr '\n' ' ')
+
+          if [ -n "$BAD" ]; then
+            echo "❌ Newly Degraded ArgoCD apps after shepherd run: $BAD"
+            echo "Threshold (workflow.creationTimestamp): $THRESHOLD"
+            exit 1
+          fi
+          echo "✓ No newly-Degraded apps detected after shepherd run."
+
+    # ── 5. Telegram notification (onExit) ──────────────────────────────────
     # Same pattern as cwft-mctl-agents-run / cwft-mctl-agents-implement.
     - name: notify-telegram
       script:
