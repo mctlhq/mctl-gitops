@@ -1,15 +1,4 @@
-status: accepted
-updated_at: '2026-05-06T20:45:00Z'
-updated_by: mashkovd
-notes: |
-  Operator-seeded proposal (skipping mentor digest). Phase 3 of the
-  incident auto-cleanup track. Phase 1 shipped in mctl-agent 1.8.0
-  (PR #11). Phase 3 covers the synthetic / orphaned alert case
-  (services that do not exist in the platform inventory) with a 1h
-  grace period — much faster than the Phase 1 48h analyzing TTL.
-
-  Reuses the `ListServices()` call already made by `pollDegraded()`
-  every cycle — no new HTTP roundtrip, no new dependencies.
-
-  Phase 2 (active AlertManager reconciliation by fingerprint) remains
-  a separate proposal.
+status: implemented
+updated_at: '2026-05-06T21:39:54Z'
+updated_by: mctl-agents[bot]
+pr: https://github.com/mctlhq/mctl-agent/pull/12
