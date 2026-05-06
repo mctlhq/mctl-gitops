@@ -50,6 +50,28 @@ spec:
                   --description "Bootstrapped by ArgoCD PostSync hook"
               }
 
+              # Idempotent custom search-attribute registration. Temporal SDK
+              # workflows that pass `search_attributes=...` (e.g. kuptsi-app
+              # tagging workflows by LeadId) require the attribute to be
+              # registered against the namespace beforehand, otherwise
+              # `start_workflow` hangs and the gunicorn worker eventually
+              # times out with HTTP 500.
+              register_sa() {
+                local ns="$1"
+                local name="$2"
+                local type="$3"
+                if temporal operator search-attribute list --namespace "$ns" 2>/dev/null \
+                    | awk '{print $1}' | grep -qx "$name"; then
+                  echo "Search attribute $name already registered on $ns — skipping"
+                  return 0
+                fi
+                echo "Registering search attribute $name ($type) on namespace $ns"
+                temporal operator search-attribute create \
+                  --namespace "$ns" \
+                  --name "$name" \
+                  --type "$type"
+              }
+
               # Wait until frontend is reachable before issuing commands —
               # ArgoCD sync may run this hook before the frontend pod is Ready.
               for i in $(seq 1 30); do
@@ -62,3 +84,10 @@ spec:
 
               # ── Tenant namespaces ─────────────────────────────────────────
               register_ns kuptsi 7
+
+              # ── Tenant search attributes ──────────────────────────────────
+              # Add new entries when a tenant workflow needs to be queryable
+              # by a custom attribute (Temporal-side equivalent of an index).
+              # kuptsi-app tags TelegramAlbumWorkflow with LeadId for ops-time
+              # filtering in Temporal Web UI and the failed-workflow monitor.
+              register_sa kuptsi LeadId Keyword
