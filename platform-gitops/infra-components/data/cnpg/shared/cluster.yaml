@@ -162,10 +162,13 @@ spec:
           name: labs-openclaw-db-creds
       # Temporal server connects from the temporal namespace via shared-pg-rw.
       # Owns both the temporal (history+matching) and temporal_visibility databases.
+      # Connection budget: 4 server roles (frontend/history/matching/worker)
+      # × 20 default + 10 visibility = 120 steady-state, plus admintools spikes
+      # during schema-setup hooks. 200 keeps a comfortable head-room.
       - name: temporal
         login: true
         inherit: true
-        connectionLimit: 50
+        connectionLimit: 200
         ensure: present
         passwordSecret:
           name: temporal-db-creds
