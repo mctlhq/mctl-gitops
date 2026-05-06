@@ -95,6 +95,56 @@ spec:
           annotations:
             summary: Vault instance {{ $labels.instance }} is sealed
 
+    # ArgoCD Application health/sync drift alerts.
+    # Without these the platform can stay broken indefinitely without firing
+    # any alert — exactly what happened to the `external-secrets` Application
+    # 2026-05-01 → 2026-05-07 (Health=Degraded for 6 days, no incident raised,
+    # GitOps loop wedged across 11 child apps). See
+    # ~/.claude/projects/-Users-dmitriimashkov-PycharmProjects-mctlhq/memory/
+    # reference_eso_storedversion_recovery.md for the recovery drill.
+    - name: mctl.argocd
+      rules:
+        - alert: ArgoCDApplicationDegraded
+          expr: |
+            argocd_app_info{health_status="Degraded"} == 1
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: >-
+              ArgoCD application {{ $labels.name }} has been Degraded for 30m
+            description: >-
+              {{ $labels.dest_namespace }}/{{ $labels.name }} (project
+              {{ $labels.project }}) on
+              {{ $labels.dest_server }} is reporting Health=Degraded. Check
+              `argocd app get {{ $labels.name }}` for stuck resources.
+
+        # NB: this alert tracks prolonged OutOfSync state, not a Sync
+        # operation failure per se. ArgoCD doesn't expose a clean
+        # "sync_failed" gauge in argocd_app_info; the sync_status label
+        # only distinguishes Synced / OutOfSync / Unknown. An app can
+        # legitimately stay OutOfSync without any sync error (operator
+        # left a manual change in place, ignored-difference rule etc.),
+        # so the name reflects "long-drift" rather than implying a
+        # specific failure mode. Use the controller log / latest sync
+        # operationState for the actual error reason.
+        - alert: ArgoCDApplicationOutOfSyncLong
+          expr: |
+            argocd_app_info{sync_status="OutOfSync"} == 1
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: >-
+              ArgoCD application {{ $labels.name }} OutOfSync for 1h
+            description: >-
+              {{ $labels.dest_namespace }}/{{ $labels.name }} has been
+              OutOfSync for 1h. Either auto-sync has exhausted retries
+              and the latest operation failed, or the app legitimately
+              has unsynced manual changes / ignored differences. Check
+              `argocd app get {{ $labels.name }}` and the latest sync
+              operationState for the actual cause.
+
     # MinIO PVC disk-usage alerts. The default
     # KubePersistentVolumeFillingUp alert (kube-prometheus-stack) only fires
     # at 97% over 1h or 87% over 4h, which is too late given the Loki write
