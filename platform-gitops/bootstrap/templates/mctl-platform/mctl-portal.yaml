@@ -237,7 +237,9 @@ spec:
               cpu: 100m
               memory: 256Mi
             limits:
-              cpu: 500m
+              # Steady-state ~26m; 300m gives 11x cushion. Trimmed 500m→300m
+              # on 2026-05-07 (CPU-limits cluster headroom).
+              cpu: 300m
               memory: 768Mi
           extraEnvVarsSecrets:
             - backstage-secrets
