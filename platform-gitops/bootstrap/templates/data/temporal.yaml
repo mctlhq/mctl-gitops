@@ -121,7 +121,9 @@ spec:
                 cpu: 50m
                 memory: 64Mi
               limits:
-                cpu: 200m
+                # Idle CLI sidecar — steady-state 2m; 100m is plenty.
+                # Trimmed 200m→100m on 2026-05-07.
+                cpu: 100m
                 memory: 256Mi
 
           # The schema Job needs special handling under Argo CD:

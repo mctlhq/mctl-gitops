@@ -138,7 +138,9 @@ spec:
                   cpu: 100m
                   memory: 128Mi
                 limits:
-                  cpu: 500m
+                  # Steady-state ~123m; 250m gives 2x peak cushion. Trimmed
+                  # 500m→250m on 2026-05-07 (CPU-limits cluster headroom).
+                  cpu: 250m
                   memory: 512Mi
 
           # VMAlert replaces Prometheus's alerting engine
