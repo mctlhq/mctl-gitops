@@ -431,6 +431,12 @@ spec:
                 for i in range(period, len(gains)):
                     avg_g = (avg_g * (period - 1) + gains[i]) / period
                     avg_l = (avg_l * (period - 1) + losses[i]) / period
+                # Flat window (no up- or down-moves) is neutral, not extreme.
+                # Returning 100 here would let the cron's RSI > 70 short
+                # branch fire on a low-volatility symbol with all closes
+                # equal. Order matters: check both-zero before only-loss-zero.
+                if avg_g == 0 and avg_l == 0:
+                    return 50.0
                 if avg_l == 0:
                     return 100.0
                 rs = avg_g / avg_l
