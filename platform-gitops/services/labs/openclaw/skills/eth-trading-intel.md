@@ -96,19 +96,30 @@ Public, без auth, без CoinGlass tier-gate. Приоритет — local; C
   - `interval`: `15` (15m), `60` (1h), `240` (4h), `720` (12h), `D` (1d). Возвращает массив (newest-first; всегда reverse в oldest-first перед расчётом).
   - Pair format: `<COIN>USDT` (например `ETHUSDT`, `BTCUSDT`, `SOLUSDT`).
   - Rate limit: 600 req / 5 sec на IP.
-- Binance kline (для CVD): `GET https://api.binance.com/api/v3/klines?symbol=<PAIR>&interval=4h&limit=6`
+- Binance kline (CVD leg #1, 50%+ глобального ETH-perp объёма): `GET https://api.binance.com/api/v3/klines?symbol=<PAIR>&interval=4h&limit=6`
   - Индекс 9 в каждой строке = `taker_buy_base_asset_volume`. Per-candle delta_quote ≈ `(2 * taker_buy_base − volume_base) * close`. Сумма по 6 свечам = 24h CVD.
+- **OKX V5 taker-volume (CVD leg #2, Phase 2 Hook A):** `GET https://www.okx.com/api/v5/rubik/stat/taker-volume-contract?instId=<COIN>-USDT-SWAP&period=4H`
+  - Возвращает 100 баров `[ts, buyVol, sellVol]`. Объёмы — в **контрактах**, не в base asset.
+  - Контрактный размер забрать через `GET https://www.okx.com/api/v5/public/instruments?instType=SWAP&instId=<COIN>-USDT-SWAP` — поле `data[0].ctVal` (для ETH-USDT-SWAP сейчас `0.1` ETH; кэшировать в state на длительный срок — меняется крайне редко). `ctValCcy` обязан быть равен base coin (защитный assert).
+  - Per-bar delta_usd ≈ `(buyVol − sellVol) * ctVal * close_price` (close цена берётся из уже полученного Bybit 4h kline — последний бар oldest-first). Сумма по 6 свежим барам = 24h OKX CVD.
+  - Pair-format: `<COIN>-USDT-SWAP` (отличается от Bybit/Binance `<COIN>USDT`).
+  - No auth, no rate-limit gate на этом endpoint в публичной версии.
 
 **Computed fields:**
 - RSI(14) — Wilder's smoothing — TFs: 15m, 1h, 4h, 12h, 1d
 - MACD(12, 26, 9) — `macd`, `signal`, `hist`, `rising` — TFs: 1h, 4h, 1d
 - Bollinger(20, 2σ) — `upper`, `mid`, `lower`, `percent_b`, `width_pct` — TFs: 1h, 4h
 - ADX(14) — Wilder's — `adx`, `plus_di`, `minus_di`, `trend_strength` bucket — TF: 4h
-- CVD 24h (single-exchange): `cvd_24h.net_usd` из Binance taker_buy. Source: `binance_taker_buy_24h`.
+- CVD 24h (Phase 2 Hook A — multi-exchange): `cvd_24h.net_usd` = sum(per-exchange deltas) для **Binance + OKX**. Per-exchange разбивка хранится в `cvd_24h.per_exchange`. Source: `binance_taker_buy_24h+okx_rubik_taker_volume_24h`. Bybit и Bitget — в Phase 2 Hook B.
 
 **Cross-check rule:** если CoinGlass отдал валидный ответ от `get_futures_rsi_list` / `get_futures_macd_list` И local расчёт расходится >5 пунктов (RSI) / >15% (MACD) — append `risks: ["rsi_4h source disagreement: local 54, coinglass 61"]`. Это страхует от тихих багов в локальной формуле; но score считается по local значениям.
 
-**Multi-exchange CVD aggregation** — Phase 2. Bybit V5 не отдаёт `taker_buy_volume` в kline и публичного historical-trade endpoint нет; recent-trade покрывает только последние ~минуты. Aggregation требует stateful WS-сервиса (`labs-trading-data`, `smooth-soaring-candy.md`) или CoinGlass STANDARD-tier upgrade. Текущий Phase 1.6 — Binance-only, явно помечен в `cvd_24h.source`.
+**CVD source-agreement rule (Phase 2 Hook A):** если знаки `binance` и `okx` дельт совпадают → `cvd_24h.agreement = "aligned"` (sign-aligned), увереннее CVD-сигнал. Если знаки противоположны → `agreement = "split"` И append `risks: ["cvd source split: binance <sign>$<X>M, okx <sign>$<Y>M — directional pressure не подтверждается между биржами"]`. Score-компоненты CVD остаются на агрегированном `net_usd`, но split-warning даёт оператору сигнал что между биржами происходит арбитраж/decoupling.
+
+**Multi-exchange CVD aggregation status:**
+- ✅ **Binance** (Phase 1.6) — kline taker_buy_base в индексе 9.
+- ✅ **OKX** (Phase 2 Hook A, ~75% global perp ETH вместе с Binance) — `rubik/stat/taker-volume-contract` + `public/instruments` для ctVal.
+- ⏳ **Bybit + Bitget** — Phase 2 Hook B (`labs-trading-data` сервис со stateful WS-стрим). Bybit V5 не отдаёт `taker_buy_volume` в kline и публичного historical-trade endpoint нет; recent-trade покрывает только последние ~минуты. Bitget V2 не имеет публичного taker-volume endpoint вообще (probed 5 candidates, все 404 — см. memory `reference_multi_exchange_taker_endpoints.md`).
 
 ### НЕ доступны на HOBBYIST — НЕ вызывать
 
@@ -201,9 +212,14 @@ Validation для new entries (`/watch SYMBOL [N] [direction]`):
     - `interval=240` → RSI(14) 4h, MACD(12,26,9) 4h, Bollinger(20,2) 4h, ADX(14) 4h
     - `interval=720` → RSI(14) 12h
     - `interval=D` → RSI(14) 1d, MACD(12,26,9) 1d
-12. **Binance kline `interval=4h&limit=6`** для same pair → 24h CVD из `taker_buy_base_asset_volume`. Single-exchange aggregate; `source: "binance_taker_buy_24h"`.
+12. **CVD 24h leg #1 — Binance kline** `interval=4h&limit=6` для same `<COIN>USDT` pair → per-candle delta_quote = `(2 * taker_buy_base − volume_base) * close`; sum по 6 свечам = 24h Binance CVD.
+13. **CVD 24h leg #2 — OKX (Phase 2 Hook A)** для same coin → два параллельных GET:
+    - `https://www.okx.com/api/v5/rubik/stat/taker-volume-contract?instId=<COIN>-USDT-SWAP&period=4H` → 100 баров `[ts, buyVol, sellVol]`, взять последние 6 для 24h окна.
+    - `https://www.okx.com/api/v5/public/instruments?instType=SWAP&instId=<COIN>-USDT-SWAP` → `data[0].ctVal` (контрактный размер в base coin; для ETH-USDT-SWAP сейчас `0.1`). Кэшировать на длительный срок — меняется крайне редко.
+    - Per-bar delta_usd = `(buyVol − sellVol) * ctVal * close` (close из oldest-first Bybit 4h kline last bar). Sum 6 баров = 24h OKX CVD.
+14. **CVD aggregation (Phase 2 Hook A):** `cvd_24h.net_usd = binance_24h + okx_24h`. Build `cvd_24h.per_exchange = { binance: <usd>, okx: <usd> }`. Determine `cvd_24h.agreement`: `"aligned"` если sign(binance) == sign(okx) И обе non-zero; `"split"` если знаки противоположны; `"binance_only"` / `"okx_only"` если один из источников `null`. На `"split"` — append `risks: ["cvd source split: binance <sign>$<X>M, okx <sign>$<Y>M"]`. Source string: `"binance_taker_buy_24h+okx_rubik_taker_volume_24h"`.
 
-Если Bybit/Binance unreachable → append `bybit_kline_unreachable` / `binance_kline_unreachable` к `missing_data`, индикаторы помечаются `null`. Score деградирует (мульти-TF bonuses не сработают), но pipeline никогда не падает на этих шагах. CoinGlass `get_futures_rsi_list` / `get_futures_macd_list` (steps 8-9) — secondary; используются для cross-check warning, не для scoring.
+Если Bybit/Binance unreachable → append `bybit_kline_unreachable` / `binance_kline_unreachable` к `missing_data`, индикаторы помечаются `null`. Если OKX unreachable → `okx_taker_volume_unreachable` в `missing_data`, `cvd_24h.per_exchange.okx = null`, `agreement = "binance_only"` — pipeline продолжается, CVD фоллбэчится на single-exchange Binance (как в Phase 1.6). Score деградирует gracefully на любом из источников. CoinGlass `get_futures_rsi_list` / `get_futures_macd_list` (steps 8-9) — secondary; используются для cross-check warning, не для scoring.
 
 **Удалены из pipeline (HOBBYIST tier-locked):**
 - `get_futures_coins_markets` — заменён на `get_futures_price_history` step 1
@@ -257,8 +273,10 @@ Validation для new entries (`/watch SYMBOL [N] [direction]`):
   },
   "cvd_24h": {
     "net_usd": 8500000,
+    "per_exchange": { "binance": 5500000, "okx": 3000000 },
+    "agreement": "aligned | split | binance_only | okx_only",
     "direction": "buyers_dominant | sellers_dominant | balanced",
-    "source": "binance_taker_buy_24h"
+    "source": "binance_taker_buy_24h+okx_rubik_taker_volume_24h"
   },
   "etf_flow_7d": {
     "available": true,
@@ -742,7 +760,8 @@ Multi-symbol RSI table по всему watchlist. Заменяет CoinGlass `Rs
 - **Не давать** entry/stop/TP цены без явной просьбы пользователя; и даже тогда — только educational ATR-based ranges, никогда конкретные orders
 - **Не повторять** snapshot pipeline в loop внутри одного chat-сообщения — pipeline стоит ~10 tool calls; для periodic monitoring используется внешний Argo CronWorkflow `labs-watch-scan` (см. Phase 1.5 / cron alerts ниже)
 - **Не использовать** CoinGlass `get_futures_rsi_list` / `get_futures_macd_list` как primary source для RSI/MACD — они tier-нестабильны на HOBBYIST (часто `No content`/401). Local Bybit kline = source of truth (Phase 1.6). CoinGlass RSI/MACD lists остаются только для cross-check warning, не для scoring.
-- **Не объявлять** local CVD как "aggregated" — текущий Phase 1.6 — single-exchange Binance taker_buy. Source string `binance_taker_buy_24h` обязателен в snapshot. Multi-exchange aggregation = Phase 2.
+- **CVD source attribution обязателен.** На Phase 2 Hook A — `cvd_24h.source = "binance_taker_buy_24h+okx_rubik_taker_volume_24h"` и `cvd_24h.per_exchange = {binance, okx}` всегда присутствуют в snapshot (значения могут быть `null` при unreachable). Bybit/Bitget legs — Phase 2 Hook B (см. `reference_multi_exchange_taker_endpoints.md`); до их появления НЕ называть текущий aggregate "all 4 majors" — это Binance + OKX, ~75% perp volume.
+- **OKX ctVal — read once, cache long.** `data[0].ctVal` из `/api/v5/public/instruments` меняется крайне редко (history shows ~раз в годы). Не хитать каждый snapshot — кэшировать в state на сутки минимум; в крайнем случае — захардкодить `0.1` для ETH-USDT-SWAP с явным комментарием что это контрактный размер на дату скилла. ctValCcy обязан совпадать с base coin (assert; иначе abort OKX leg, помечать `okx_ctval_mismatch`).
 
 ## Cron alerts (Phase 1.5)
 
@@ -780,5 +799,7 @@ Pasive monitoring через **Argo CronWorkflow `labs-watch-scan`** (см. `pla
   Если такие данные нужны — найти в `tools/list` ближайший по namespace tool (e.g. `get_bitcoin_etf_flow_history` для ETF) и вызвать напрямую через MCP. REST-skill из upstream **не клонировать в наш репо**.
 - **Phase 2 architecture** — `~/.claude/plans/smooth-soaring-candy.md` (own `labs-trading-data` service с Bybit + CryptoPanic + Etherscan + pandas-ta).
 - **Bybit V5 public REST** (Phase 1.6 local indicator engine) — `https://bybit-exchange.github.io/docs/v5/market/kline`, `https://bybit-exchange.github.io/docs/v5/rate-limit` (600 req / 5 sec на IP, no auth).
-- **Binance public klines** (Phase 1.6 CVD) — `https://developers.binance.com/docs/binance-spot-api-docs/rest-api/market-data-endpoints#kline-candlestick-data`. Index 9 = `taker_buy_base_asset_volume`.
+- **Binance public klines** (Phase 1.6 CVD leg #1) — `https://developers.binance.com/docs/binance-spot-api-docs/rest-api/market-data-endpoints#kline-candlestick-data`. Index 9 = `taker_buy_base_asset_volume`.
+- **OKX V5 rubik / public** (Phase 2 Hook A CVD leg #2) — `https://www.okx.com/docs-v5/en/#trading-statistics-rest-api-get-taker-volume-for-derivatives` (`taker-volume-contract`) + `https://www.okx.com/docs-v5/en/#public-data-rest-api-get-instruments` (для `ctVal`). No auth. Контрактный размер захардкожен в response под `data[0].ctVal`.
+- **Multi-exchange taker endpoint matrix** — memory `reference_multi_exchange_taker_endpoints.md` (probed 2026-05-06): Binance + OKX публично доступны, Bybit + Bitget — Phase 2 Hook B work.
 - **Phase 1.6 source spreadsheet** — `Индикаторы для робота_upd.numbers` (root of mctlhq workspace). Multi-TF матрица RSI/MACD/Bollinger/ADX + Liquidation Map / Heatmap (последние требуют CoinGlass STANDARD-tier upgrade и помечены Blocked).
