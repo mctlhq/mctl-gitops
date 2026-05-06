@@ -75,7 +75,7 @@
 - **Источник watchlist**: тот же `state.watchlist` что и `/scan` — общий между chat и cron
 - **Scoring**: упрощённый, 4 бинарных сигнала × 25 (диапазон 0/25/50/75/100). Грубее чем full skill, поэтому работает как pre-filter
 - **Dedup**: 4 часа на символ. Если BTC alert ушёл, следующий BTC-alert возможен только через 4 часа после успешной доставки хотя бы в один operator-chat
-- **Получатели**: оба operator-chat (`210408407` + `103413580`) одновременно — автоматически синхронизировано с `channels.telegram.allowFrom`
+- **Получатели**: оба operator-chat (`210408407` + `103413580`) одновременно. Список **захардкожен** в cron-workflow в `ALERT_CHAT_IDS` и ДОЛЖЕН обновляться синхронно с `channels.telegram.allowFrom` в `services/labs/openclaw/values.yaml` (см. секцию "Изменение списка получателей" ниже)
 - **Формат alert**: русский, шаблон:
   ```
   ⚠️ BTC лонг — сработал watch (cron pre-filter)
@@ -109,7 +109,16 @@
 
 ## Native команды openclaw (не относятся к trading)
 
-`/help`, `/commands`, `/new`, `/reset`, `/compact`, `/stop`, `/think`, `/model`, `/fast`, `/verbose`, `/status`, `/whoami`, `/context`, `/skill` — встроены в openclaw runtime, перехватываются раньше чем skill. Это session/options/status-управление, к торговому боту прямого отношения не имеют. `/help` показывает meta-список команд.
+`/commands`, `/new`, `/reset`, `/compact`, `/stop`, `/think`, `/model`, `/fast`, `/verbose`, `/status`, `/whoami`, `/context`, `/skill` — встроены в openclaw runtime. Это session/options/status-управление, к торговому боту прямого отношения не имеют.
+
+### Известный quirk: `/help`
+
+`/help` зарегистрирован в `customCommands` (skill) и определён в `eth-trading-intel.md` как команда, выводящая список 16 trading-команд. Однако на практике openclaw runtime может перехватывать `/help` и возвращать native-меню (Session/Options/Status/Skills/Skill/Commands) **даже при `commands.native: false`** — это эмпирически наблюдалось 2026-05-05. Если ты видишь native-меню вместо trading-списка:
+
+- список trading-команд → эта памятка (`USER-GUIDE.md`) или `eth-trading-intel.md` секция `When to use`
+- native список → `/commands` (full list openclaw-runtime)
+
+Follow-up план: переименовать skill-команду `/help` → `/cmds` чтобы избежать collision с native router.
 
 ## Где искать что-то странное
 
