@@ -89,3 +89,14 @@ spec:
   cluster:
     name: shared-pg
   databaseReclaimPolicy: retain
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: labs-kuptsi-app-db
+spec:
+  name: "labs-kuptsi-app"
+  owner: "labs-kuptsi-app"
+  cluster:
+    name: shared-pg
+  databaseReclaimPolicy: retain
