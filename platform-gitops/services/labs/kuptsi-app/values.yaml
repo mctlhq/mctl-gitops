@@ -36,11 +36,20 @@ env:
   DATABASE_URL: "postgresql+asyncpg://$(DB_USER):$(DB_PASSWORD)@shared-pg-rw.platform-db.svc.cluster.local:5432/labs-kuptsi-app"
 
 # Inject DB_USER / DB_PASSWORD from Vault (provisioned by mctl_provision_database).
-# The base-service chart materialises a kubernetes.io/basic-auth Secret named
-# {fullname}-db-creds and adds it to envFrom, so $(DB_USER)/$(DB_PASSWORD) above
-# is resolved at pod startup.
+# The base-service chart's `dbSecret:` block creates the ExternalSecret +
+# Kubernetes Secret only — it does NOT auto-add the Secret to envFrom. We
+# wire it explicitly below alongside the user-managed `*-secrets` (filled in
+# via Backstage UI / mctl_deploy_service update-config), so $(DB_USER) and
+# $(DB_PASSWORD) inside the `DATABASE_URL` template resolve at pod startup.
 dbSecret:
   vaultPath: teams/labs/kuptsi-app/database
+
+envFrom:
+  - secretRef:
+      name: labs-kuptsi-app-base-service-db-creds
+  - secretRef:
+      name: kuptsi-app-secrets
+      optional: true
 
 # kuptsi FastAPI exposes /health (see src/app.py); base-service defaults aim
 # at /healthz + /readyz which would never become Ready.
@@ -84,7 +93,7 @@ extraContainers:
       # User-managed runtime secrets (Telegram/Logfire/Yandex) added later via
       # Backstage UI → mctl-api update-config will land in this secret.
       - secretRef:
-          name: labs-kuptsi-app-base-service-secrets
+          name: kuptsi-app-secrets
           optional: true
     resources:
       requests:
