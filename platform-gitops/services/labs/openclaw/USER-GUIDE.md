@@ -17,6 +17,11 @@
 | | `/oi SYMBOL` | Open interest snapshot + per-exchange split (Binance/OKX/Bybit) |
 | | `/etf SYMBOL` | ETF-потоки за 30 дней (только `/etf BTC` и `/etf ETH`) |
 | | `/pulse SYMBOL` | Компакт-3 строки: price + funding + OI + RSI 4h |
+| **Indicators (Phase 1.6)** | `/rsi SYMBOL [tf]` | Multi-TF RSI (15m/1h/4h/12h/1d) — local Bybit kline |
+| | `/macd SYMBOL [tf]` | MACD(12,26,9) на `1h`/`4h`/`1d` (default `4h`) — local Bybit kline |
+| | `/bb SYMBOL [tf]` | Bollinger Bands(20, 2σ) на `1h`/`4h` (default `4h`) — local Bybit kline |
+| | `/adx SYMBOL` | ADX(14) 4h — trend strength + +DI/-DI — local Bybit kline |
+| | `/heatmap [tf]` | RSI heatmap по всему watchlist (default `4h`) — local Bybit kline |
 | **Watchlist** | `/watch SYMBOL [N] [dir]` | Добавить или обновить symbol в watchlist (см. ниже) |
 | | `/unwatch SYMBOL` | Убрать symbol из watchlist |
 | | `/settings` | Показать watchlist + global threshold + last signal |
@@ -69,11 +74,23 @@
 /etf BTC               ← ETF-потоки за 30 дней
 ```
 
+**Технические индикаторы (Phase 1.6, local Bybit kline, без CoinGlass tier-gate):**
+```
+/rsi ETH               ← RSI(14) на 5 TF одной таблицей (15m/1h/4h/12h/1d)
+/rsi ETH 4h            ← один TF
+/macd ETH              ← MACD(12,26,9) 4h, default
+/macd BTC 1h           ← MACD на 1h
+/bb ETH                ← Bollinger(20,2σ) на 4h, %B + width
+/adx ETH               ← ADX(14) 4h, trend strength bucket
+/heatmap               ← RSI всех символов watchlist на 4h
+/heatmap 1h            ← RSI heatmap на 1h
+```
+
 ## Автономный мониторинг (Argo CronWorkflow `labs-watch-scan`)
 
 - **Расписание**: каждые 30 минут UTC (`:00` и `:30`)
 - **Источник watchlist**: тот же `state.watchlist` что и `/scan` — общий между chat и cron
-- **Scoring**: упрощённый, 4 бинарных сигнала × 25 (диапазон 0/25/50/75/100). Грубее чем full skill, поэтому работает как pre-filter
+- **Scoring**: упрощённый, 5 бинарных сигнала × 20 (диапазон 0/20/40/60/80/100). Грубее чем full skill, поэтому работает как pre-filter. С Phase 1.6 5-й сигнал — RSI 4h extreme (Bybit kline, без CoinGlass tier-gate)
 - **Dedup**: 4 часа на символ. Если BTC alert ушёл, следующий BTC-alert возможен только через 4 часа после успешной доставки хотя бы в один operator-chat
 - **Получатели**: оба operator-chat (`210408407` + `103413580`) одновременно. Список **захардкожен** в cron-workflow в `ALERT_CHAT_IDS` и ДОЛЖЕН обновляться синхронно с `channels.telegram.allowFrom` в `services/labs/openclaw/values.yaml` (см. секцию "Изменение списка получателей" ниже)
 - **Формат alert**: русский, шаблон:
@@ -84,6 +101,7 @@
   Цена: $XXXXX.XX (Δ за 24ч: +X.XX%)
   Funding 4h: -0.0094%
   OI растёт: да
+  RSI 4h: 28.4
 
   Запустите /eth btc или /btc для полного анализа в чат-скилле.
   Это наблюдение, не финансовая рекомендация.
@@ -92,13 +110,14 @@
 
 ## Ограничения CoinGlass HOBBYIST tier
 
-- Все CoinGlass-запросы на интервалах `4h+` (1h, 30m, 15m, 5m, 1m → HTTP 403 на этом плане)
-- **Не доступны вообще**: `/heatmap`, `/whales`, max-pain clusters, hyperliquid whale positions, `coins_markets` snapshot
-- ETF-потоки — только `BTC` и `ETH` (отдельные tools); `/etf SOL` отклоняется с понятным сообщением
+- Все **CoinGlass**-запросы на интервалах `≥ 4h` (1h, 30m, 15m, 5m, 1m → HTTP 403 на этом плане). На local Bybit kline ограничения нет — Phase 1.6 индикаторы (`/rsi /macd /bb /adx /heatmap`) считают на любом TF без tier-gate.
+- **Заблокировано на CoinGlass HOBBYIST (требует Standard или выше)**: liquidation map (1d/7d/30d), Hyperliquid liquidation map, max-pain clusters, hyperliquid whale positions, `coins_markets` snapshot. В `/eth /risk` они помечены `Missing data: liquidation_map_tier_locked` и т.п.
+- ETF-потоки — только `BTC` и `ETH` (отдельные CoinGlass tools); `/etf SOL` отклоняется с понятным сообщением.
 - Если когда-то поднимем CoinGlass до Standard — нужно будет:
-  - Переключить `DEFAULT_INTERVAL` в skill markdown с `4h` на `1h` (более свежие сигналы)
-  - Зарегистрировать `/heatmap` и `/whales` в `customCommands`
-  - Добавить max-pain и whales в snapshot pipeline
+  - Переключить `DEFAULT_INTERVAL` в skill markdown с `4h` на `1h` для CoinGlass-зависимых полей (OI/funding/L-S ratios — local Bybit RSI/MACD/BB/ADX уже на нужных TF)
+  - Подключить `liquidation_aggregated_heatmap` в `/eth` snapshot и `/risk` (сейчас стоит как Phase 2 hook)
+  - Подключить hyperliquid whale-positions в `/risk`
+  - Подключить max-pain в long/short scoring components
 
 ## Что бот **не** делает
 
@@ -113,7 +132,7 @@
 
 ### Известный quirk: `/help`
 
-`/help` зарегистрирован в `customCommands` (skill) и определён в `eth-trading-intel.md` как команда, выводящая список 16 trading-команд. Однако на практике openclaw runtime может перехватывать `/help` и возвращать native-меню (Session/Options/Status/Skills/Skill/Commands) **даже при `commands.native: false`** — это эмпирически наблюдалось 2026-05-05. Если ты видишь native-меню вместо trading-списка:
+`/help` зарегистрирован в `customCommands` (skill) и определён в `eth-trading-intel.md` как команда, выводящая список 21 trading-команд (16 base + 5 indicator из Phase 1.6). Однако на практике openclaw runtime может перехватывать `/help` и возвращать native-меню (Session/Options/Status/Skills/Skill/Commands) **даже при `commands.native: false`** — это эмпирически наблюдалось 2026-05-05. Если ты видишь native-меню вместо trading-списка:
 
 - список trading-команд → эта памятка (`USER-GUIDE.md`) или `eth-trading-intel.md` секция `When to use`
 - native список → `/commands` (full list openclaw-runtime)

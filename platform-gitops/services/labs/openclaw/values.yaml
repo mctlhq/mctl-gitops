@@ -1337,7 +1337,12 @@ configMaps:
               { "command": "funding", "description": "Funding rate snapshot. Usage: /funding SYMBOL" },
               { "command": "oi", "description": "Open interest snapshot. Usage: /oi SYMBOL" },
               { "command": "etf", "description": "BTC/ETH ETF flow deep-dive. Usage: /etf BTC" },
-              { "command": "pulse", "description": "Compact: price, funding, OI, RSI. Usage: /pulse SYMBOL" }
+              { "command": "pulse", "description": "Compact: price, funding, OI, RSI. Usage: /pulse SYMBOL" },
+              { "command": "rsi", "description": "Multi-TF RSI 15m/1h/4h/12h/1d (Bybit). Usage: /rsi SYMBOL [tf|all]" },
+              { "command": "macd", "description": "MACD(12,26,9) on 1h/4h/1d (Bybit). Usage: /macd SYMBOL [tf]" },
+              { "command": "bb", "description": "Bollinger(20,2σ) on 1h/4h (Bybit). Usage: /bb SYMBOL [tf]" },
+              { "command": "adx", "description": "ADX(14) 4h trend strength (Bybit). Usage: /adx SYMBOL" },
+              { "command": "heatmap", "description": "Multi-symbol RSI heatmap by watchlist. Usage: /heatmap [tf]" }
             ]
           }
         },
