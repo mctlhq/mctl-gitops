@@ -30,6 +30,74 @@ env:
   UVICORN_RELOAD: "0"
   GROUP_DELAY: "10"
   MAX_ACTIVITY_WORKERS: "20"
+  # asyncpg DSN built from $(DB_USER)/$(DB_PASSWORD) injected by dbSecret below.
+  # The pydantic settings field name is `database_url` and the lifespan
+  # alembic step + Temporal worker both depend on it.
+  DATABASE_URL: "postgresql+asyncpg://$(DB_USER):$(DB_PASSWORD)@shared-pg-rw.platform-db.svc.cluster.local:5432/labs-kuptsi-app"
+
+# Inject DB_USER / DB_PASSWORD from Vault (provisioned by mctl_provision_database).
+# The base-service chart materialises a kubernetes.io/basic-auth Secret named
+# {fullname}-db-creds and adds it to envFrom, so $(DB_USER)/$(DB_PASSWORD) above
+# is resolved at pod startup.
+dbSecret:
+  vaultPath: teams/labs/kuptsi-app/database
+
+# kuptsi FastAPI exposes /health (see src/app.py); base-service defaults aim
+# at /healthz + /readyz which would never become Ready.
+probes:
+  liveness:
+    path: /health
+    port: http
+    initialDelaySeconds: 30
+    periodSeconds: 30
+  readiness:
+    path: /health
+    port: http
+    initialDelaySeconds: 10
+    periodSeconds: 10
+
+# Temporal worker rides the same image as the FastAPI service via a sibling
+# container. Same env (DB + Temporal address + secrets the user adds via
+# Backstage), only the entrypoint differs. Saves a second build and keeps
+# the two halves of the service synchronised on tag bumps.
+extraContainers:
+  - name: temporal-worker
+    image: ghcr.io/mctlhq/kuptsi-app:0.1.16
+    imagePullPolicy: IfNotPresent
+    command: ["python", "-m", "src.temporal.worker"]
+    env:
+      - name: TEMPORAL_ADDRESS
+        value: temporal-frontend.temporal.svc.cluster.local:7233
+      - name: TEMPORAL_NAMESPACE
+        value: kuptsi
+      - name: LOG_LEVEL
+        value: info
+      - name: MAX_ACTIVITY_WORKERS
+        value: "20"
+      - name: DATABASE_URL
+        value: "postgresql+asyncpg://$(DB_USER):$(DB_PASSWORD)@shared-pg-rw.platform-db.svc.cluster.local:5432/labs-kuptsi-app"
+    envFrom:
+      # Same DB creds as the main container — base-service standardises the
+      # secret name on `<release>-db-creds`.
+      - secretRef:
+          name: labs-kuptsi-app-base-service-db-creds
+      # User-managed runtime secrets (Telegram/Logfire/Yandex) added later via
+      # Backstage UI → mctl-api update-config will land in this secret.
+      - secretRef:
+          name: labs-kuptsi-app-base-service-secrets
+          optional: true
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+    livenessProbe:
+      exec:
+        command: ["sh", "-c", "kill -0 1"]
+      initialDelaySeconds: 30
+      periodSeconds: 30
 ingress:
   enabled: true
   hosts:
