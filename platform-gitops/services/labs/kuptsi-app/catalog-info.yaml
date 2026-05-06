@@ -1,0 +1,38 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: kuptsi-app
+  namespace: labs
+  description: "kuptsi-app service"
+  annotations:
+    backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=labs-kuptsi-app
+    backstage.io/kubernetes-id: kuptsi-app
+    backstage.io/kubernetes-namespace: labs
+    argocd/app-name: labs-kuptsi-app
+    github.com/source-repo: upwork-dmitriimashkov/kuptsi-v2
+    # mctl.me/auto-deploy — triggered by GitHub App webhook on tag push
+    #   "true" or "auto" — deploy immediately via scaffolder
+    #   "confirm"         — notify only, user deploys manually from UI
+    #   "false" or absent — skip
+    mctl.me/auto-deploy: "false"
+  links:
+    - url: https://ops.mctl.ai/applications/argocd/labs-kuptsi-app
+      title: ArgoCD
+      icon: dashboard
+    - url: https://github.com/upwork-dmitriimashkov/kuptsi-v2
+      title: Source Repository
+      icon: github
+    - url: https://workflows.mctl.ai
+      title: Argo Workflows
+      icon: github
+    - url: https://labs-kuptsi-app.mctl.ai
+      title: Service URL
+      icon: web
+  labels:
+    team: labs
+    env: apps
+spec:
+  type: service
+  lifecycle: production
+  owner: group:default/labs
+  system: system:default/team-labs
