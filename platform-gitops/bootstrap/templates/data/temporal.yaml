@@ -121,15 +121,24 @@ spec:
                 cpu: 200m
                 memory: 256Mi
 
-          # Disable Helm hooks for the schema-setup Job. With Argo CD, Helm
-          # `pre-install,pre-upgrade` hooks become PreSync resources that run
-          # before normal manifests; that would race the ExternalSecret
-          # `temporal-server-db-creds` from the second source (applied during
-          # the normal sync phase) and fail an initial sync with missing creds.
-          # Run schema setup as a regular Job instead — server pods will retry
-          # until the schema is ready, and ArgoCD tracks the Job to Healthy.
+          # The schema Job needs special handling under Argo CD:
+          #   - useHelmHooks: true → Helm pre-install hook becomes PreSync,
+          #     which runs before the ExternalSecret in the second source is
+          #     applied — first sync fails on missing credentials.
+          #   - useHelmHooks: false (raw Job) → ttlSecondsAfterFinished cleans
+          #     up after 24h; selfHeal then sees the Job missing in cluster and
+          #     keeps recreating it, churning idempotent setup-schema runs.
+          # Solution: keep useHelmHooks off, but turn the Job into an Argo CD
+          # Sync hook (jobAnnotations). Sync hooks live in the Sync phase
+          # alongside ExternalSecret, sync-wave: "5" guarantees the Secret
+          # exists first, and hook resources are not drift-tracked, so TTL
+          # deletion no longer triggers the selfHeal loop.
           schema:
             useHelmHooks: false
+            jobAnnotations:
+              argocd.argoproj.io/hook: Sync
+              argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+              argocd.argoproj.io/sync-wave: "5"
 
     # In-repo manifests: ExternalSecret for DB creds + Job that registers
     # tenant Temporal namespaces (kuptsi, …) once the frontend is healthy.
