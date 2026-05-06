@@ -40,8 +40,15 @@ spec:
   # cleanly instead.
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 600
-  successfulJobsHistoryLimit: 3
-  failedJobsHistoryLimit: 3
+  # 14 days of successful runs + 7 days of failures kept on-cluster.
+  # The default of 3 was too aggressive — during the ESO incident
+  # 2026-05-01 → 2026-05-07 the operator could not retroactively
+  # tell whether the cron had fired on specific days because Argo
+  # had already pruned the older successful runs. Argo also exports
+  # the kept set as workflow_count metrics, so wider retention
+  # gives Grafana / VMSingle a better cron-cadence view.
+  successfulJobsHistoryLimit: 14
+  failedJobsHistoryLimit: 7
   # Active — un-suspended after the smoke test (one-shot real run on
   # 2026-05-01 flipped 11 proposals correctly). Schedule fires every
   # 2 hours UTC and the workflow contends on the shared
