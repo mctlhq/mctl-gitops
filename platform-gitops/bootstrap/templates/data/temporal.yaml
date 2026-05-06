@@ -32,6 +32,14 @@ spec:
                 datastores:
                   default:
                     sql:
+                      # The chart defaults createDatabase to true and runs
+                      # `temporal-sql-tool create-database` before schema setup.
+                      # Our `temporal` role is a regular CNPG login role
+                      # without CREATEDB, and the temporal/temporal_visibility
+                      # databases are already provisioned by Database CRDs in
+                      # cnpg/shared/databases.yaml — leave creation to CNPG and
+                      # let the schema Job only run setup/update-schema.
+                      createDatabase: false
                       pluginName: postgres12
                       databaseName: temporal
                       connectAddr: shared-pg-rw.platform-db.svc.cluster.local:5432
@@ -46,6 +54,7 @@ spec:
                       maxConnLifetime: "1h"
                   visibility:
                     sql:
+                      createDatabase: false
                       pluginName: postgres12
                       databaseName: temporal_visibility
                       connectAddr: shared-pg-rw.platform-db.svc.cluster.local:5432
