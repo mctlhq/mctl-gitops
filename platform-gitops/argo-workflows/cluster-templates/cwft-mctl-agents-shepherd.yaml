@@ -116,6 +116,17 @@ spec:
 
   templates:
     - name: shepherd-proposals
+      outputs:
+        parameters:
+          # Surface the verify step's degraded-app list as a workflow-
+          # level output so the onExit notify-telegram template can
+          # include it in the alert. `default: ""` because the verify
+          # step might never run (e.g. clone-gitops crashed) — onExit
+          # still needs the parameter to resolve to *something*.
+          - name: degraded_apps
+            valueFrom:
+              parameter: "{{steps.verify.outputs.parameters.degraded_apps}}"
+              default: ""
       steps:
         - - name: clone
             template: clone-gitops
@@ -402,13 +413,30 @@ spec:
     # (operator looks at the alert and decides; auto-revert is a v2
     # follow-up that needs commit-SHA → owning-app correlation).
     #
-    # `set +e` on the kubectl call: a transient API-server hiccup must
-    # not flip a healthy run to Failed. Only a non-empty parsed result
-    # triggers exit 1.
+    # kubectl retry policy: 3 attempts × 5s backoff. A single transient
+    # API-server hiccup is absorbed; persistent failures (missing RBAC,
+    # missing CRD, broken auth) escalate to exit 1 so the operator
+    # notices that the safeguard itself is broken — silently bypassing
+    # would defeat the entire purpose of this step.
+    #
+    # The degraded app list is also written to /tmp/degraded.txt and
+    # exposed as a workflow-level output parameter so the onExit
+    # notify-telegram template can include the names in its alert.
     - name: post-deploy-verify
       inputs:
         parameters:
           - name: started_at
+      outputs:
+        parameters:
+          - name: degraded_apps
+            valueFrom:
+              path: /tmp/degraded.txt
+              # The verify step always writes this file (empty on
+              # success, app list on failure, "kubectl-failed" on
+              # persistent kubectl errors). `default` keeps the output
+              # parameter resolvable even if the step exits before the
+              # write — onExit must always be able to read it.
+              default: ""
       script:
         image: bitnami/kubectl:latest
         command: [bash]
@@ -417,6 +445,10 @@ spec:
             value: "{{inputs.parameters.started_at}}"
         source: |
           set -uo pipefail
+
+          # Always create the output file first so the workflow-level
+          # output parameter resolves even on early-exit paths.
+          : > /tmp/degraded.txt
 
           # 5-min sleep ≈ ArgoCD's default app reconcile interval (180s)
           # plus a buffer for the per-resource health re-evaluation pass
@@ -427,13 +459,27 @@ spec:
           THRESHOLD="${STARTED_AT}"
           echo "Listing applications that became Degraded after ${THRESHOLD}…"
 
-          set +e
-          RAW=$(kubectl get applications.argoproj.io -A -o json 2>/dev/null)
-          RC=$?
-          set -e
+          # Retry kubectl up to 3× to ride out transient API-server
+          # hiccups. After 3 failures, treat as persistent and fail the
+          # step — silently bypassing on missing RBAC / CRD / broken
+          # auth would defeat the safeguard.
+          RAW=""
+          RC=1
+          for attempt in 1 2 3; do
+            set +e
+            RAW=$(kubectl get applications.argoproj.io -A -o json 2>/dev/null)
+            RC=$?
+            set -e
+            if [ "$RC" -eq 0 ] && [ -n "$RAW" ]; then
+              break
+            fi
+            echo "⚠️  kubectl get applications attempt ${attempt}/3 failed (rc=$RC)"
+            [ "$attempt" -lt 3 ] && sleep 5
+          done
           if [ "$RC" -ne 0 ] || [ -z "$RAW" ]; then
-            echo "⚠️  kubectl get applications failed (rc=$RC); skipping verify rather than failing run."
-            exit 0
+            echo "❌ kubectl get applications failed 3× — persistent failure, not absorbing."
+            echo "kubectl-failed (rc=$RC)" > /tmp/degraded.txt
+            exit 1
           fi
 
           BAD=$(printf '%s' "$RAW" | jq -r --arg ts "$THRESHOLD" '
@@ -446,6 +492,7 @@ spec:
           if [ -n "$BAD" ]; then
             echo "❌ Newly Degraded ArgoCD apps after shepherd run: $BAD"
             echo "Threshold (workflow.creationTimestamp): $THRESHOLD"
+            printf '%s' "$BAD" > /tmp/degraded.txt
             exit 1
           fi
           echo "✓ No newly-Degraded apps detected after shepherd run."
@@ -484,6 +531,13 @@ spec:
             value: "{{workflow.name}}"
           - name: WORKFLOW_DURATION
             value: "{{workflow.duration}}"
+          # Degraded app list from the post-deploy-verify step (empty
+          # string when verify ran clean OR didn't run at all). When
+          # non-empty the alert calls out the offending apps so the
+          # operator can jump straight to argocd UI without re-deriving
+          # the list from workflow logs.
+          - name: WORKFLOW_DEGRADED_APPS
+            value: "{{workflow.outputs.parameters.degraded_apps}}"
         source: |
           set +e
           if [ -z "$TG_BOT_TOKEN" ] || [ -z "$TG_CHAT_ID" ]; then
@@ -507,6 +561,12 @@ spec:
           fi
           UI_URL="https://workflows.mctl.ai/workflows/argo-workflows/${WORKFLOW_NAME}"
           TEXT="${ICON} mctl-agents: ${SUBJECT} — ${WORKFLOW_STATUS} (${WORKFLOW_DURATION}s)\n${UI_URL}"
+          if [ -n "$WORKFLOW_DEGRADED_APPS" ]; then
+            # The verify step writes either "kubectl-failed (rc=N)" or
+            # the space-separated list of namespace/name pairs. Both
+            # cases are operator-relevant — surface verbatim.
+            TEXT="${TEXT}\n⚠️ post-deploy-verify flagged: ${WORKFLOW_DEGRADED_APPS}"
+          fi
 
           curl -s -o /dev/null -w 'telegram http=%{http_code}\n' \
             -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
