@@ -1,22 +1,4 @@
-status: accepted
-updated_at: '2026-05-07T00:30:00Z'
-updated_by: mashkovd
-notes: |
-  Operator-seeded proposal (skipping mentor digest). Phase 2 of the
-  incident auto-cleanup track. Phase 1 shipped in mctl-agent 1.8.0
-  (PR #11), Phase 3 in 1.9.0 (PR #12). Phase 2 closes the
-  legitimate-service-but-no-resolved-webhook gap by actively
-  reconciling tickets against AlertManager's /api/v2/alerts endpoint
-  by fingerprint, with a 15-minute age gate to bridge transient
-  flap windows.
-
-  Cluster validated 2026-05-06: AM is prom/alertmanager:v0.28.1
-  under VictoriaMetrics k8s-stack at
-  `vmalertmanager-monitoring-victoria-metrics-k8s-stack.monitoring.svc:9093`,
-  no auth needed in-cluster, /api/v2/alerts returns valid JSON
-  carrying `fingerprint` and `status.state` per alert.
-
-  Includes in-code DB migration (alert_fingerprint TEXT + index
-  via ensureColumn pattern from store.go), new HTTP client
-  (alertmanager_client.go), and four new env vars with verified
-  defaults.
+status: implemented
+updated_at: '2026-05-06T22:37:15Z'
+updated_by: mctl-agents[bot]
+pr: https://github.com/mctlhq/mctl-agent/pull/13
