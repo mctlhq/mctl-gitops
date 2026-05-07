@@ -19,7 +19,22 @@ resources:
   limits:
     cpu: 500m
     memory: 512Mi
-env: {}
+# NOTE: do NOT let mctl_deploy_service stomp this block on tag bump — the
+# uvicorn entrypoint in kuptsi-app needs HOST/PORT/WEB_CONCURRENCY or it
+# silently exits 0 on startup (regression seen 2026-05-07 when 0.1.17 → 0.2.0
+# auto-deploy reset env to {} and the new pod CrashLoopBackOff'd while the
+# rolling-update surge ate ~93% of the labs CPU quota).
+env:
+  APP_ENV: production
+  TEMPORAL_ADDRESS: temporal-frontend.temporal.svc.cluster.local:7233
+  TEMPORAL_NAMESPACE: kuptsi
+  HOST: 0.0.0.0
+  PORT: "5000"
+  WEB_CONCURRENCY: "2"
+  LOG_LEVEL: info
+  UVICORN_RELOAD: "0"
+  GROUP_DELAY: "10"
+  MAX_ACTIVITY_WORKERS: "20"
 # DATABASE_URL with asyncpg scheme is assembled from Vault DB creds via
 # ExternalSecret templating below (`externalSecret.targetTemplateData`)
 # rather than the previous `env: DATABASE_URL: "...$(DB_USER):$(DB_PASSWORD)..."`
