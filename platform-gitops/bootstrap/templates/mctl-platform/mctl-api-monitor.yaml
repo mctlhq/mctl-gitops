@@ -1,10 +1,10 @@
-apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMServiceScrape
 metadata:
   name: mctl-api
   namespace: monitoring
   labels:
-    release: monitoring  # Match VictoriaMetrics / Prometheus Operator selector
+    release: monitoring
 spec:
   selector:
     matchLabels:
