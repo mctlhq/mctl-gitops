@@ -51,12 +51,12 @@ spec:
   # let it complete cleanly before the next one.
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 300
-  # 14d / 7d retention — same rationale as
-  # cronworkflow-mctl-agents-shepherd.yaml. With a 30-min cron the
-  # default of 3 covered only the last 90 minutes of history, which
-  # is useless for any retroactive triage.
-  successfulJobsHistoryLimit: 14
-  failedJobsHistoryLimit: 7
+  # Counts, NOT days. With a `*/30` cron (48 ticks/day) 144 ≈ 3 days
+  # of triage history and 72 ≈ 1.5 days of failures. Default 3
+  # covered only 90 min, useless for any retroactive look. Same
+  # cadence math as cronworkflow-mctl-agents-shepherd.yaml.
+  successfulJobsHistoryLimit: 144
+  failedJobsHistoryLimit: 72
   # Active. Monitoring threshold cadence is 30 min; dedup window 4h
   # per symbol prevents alert spam.
   suspend: false
