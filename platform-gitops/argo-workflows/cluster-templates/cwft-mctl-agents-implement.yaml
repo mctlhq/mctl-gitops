@@ -358,7 +358,7 @@ spec:
             value: "{{workflow.duration}}"
         source: |
           set +e
-          apk add --no-cache curl ca-certificates >/dev/null 2>&1
+          apk add --no-cache curl ca-certificates jq >/dev/null 2>&1
 
           case "$WORKFLOW_STATUS" in
             Succeeded) ICON="✅" ;;
@@ -391,8 +391,18 @@ spec:
           if { [ "$WORKFLOW_STATUS" = "Failed" ] || [ "$WORKFLOW_STATUS" = "Error" ]; } && [ -n "$MCTL_TOKEN" ]; then
             INCIDENT_ID="argo-${WORKFLOW_NAME}"
             SUMMARY="implement ${SUBJECT} ${WORKFLOW_STATUS} after ${WORKFLOW_DURATION}s — ${UI_URL}"
-            BODY=$(printf '{"id":"%s","source":"argo-workflows","type":"workflow_failed","tenant":"admins","service":"mctl-agents","summary":"%s","severity":"warning","status":"open"}' \
-              "$INCIDENT_ID" "$SUMMARY")
+            # JSON-encode via jq so quotes / newlines / backslashes in
+            # WORKFLOW_SLUG / WORKFLOW_SERVICE cannot break the body.
+            BODY=$(jq -nc --arg id "$INCIDENT_ID" --arg summary "$SUMMARY" '{
+              id: $id,
+              source: "argo-workflows",
+              type: "workflow_failed",
+              tenant: "admins",
+              service: "mctl-agents",
+              summary: $summary,
+              severity: "warning",
+              status: "open"
+            }')
             curl -s -o /dev/null -w 'incident http=%{http_code}\n' \
               -X POST "https://api.mctl.ai/api/v1/incidents" \
               -H "Content-Type: application/json" \
