@@ -389,7 +389,10 @@ spec:
           # Incident leg — only on terminal failure. See B6 G3 in
           # ~/.claude/plans/mctl-agents-daily-cron-visibility.md.
           if { [ "$WORKFLOW_STATUS" = "Failed" ] || [ "$WORKFLOW_STATUS" = "Error" ]; } && [ -n "$MCTL_TOKEN" ]; then
-            INCIDENT_ID="argo-${WORKFLOW_NAME}"
+            # Suffix the id with epoch-second so `argo retry <wf>`
+            # produces a fresh incident — workflow names/UIDs stay
+            # stable across retries (Codex P2 on PR #149).
+            INCIDENT_ID="argo-${WORKFLOW_NAME}-$(date +%s)"
             SUMMARY="implement ${SUBJECT} ${WORKFLOW_STATUS} after ${WORKFLOW_DURATION}s — ${UI_URL}"
             # JSON-encode via jq so quotes / newlines / backslashes in
             # WORKFLOW_SLUG / WORKFLOW_SERVICE cannot break the body.

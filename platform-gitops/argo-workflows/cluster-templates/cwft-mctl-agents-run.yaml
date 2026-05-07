@@ -302,7 +302,13 @@ spec:
           if { [ "$WORKFLOW_STATUS" = "Failed" ] || [ "$WORKFLOW_STATUS" = "Error" ]; } && [ -n "$MCTL_TOKEN" ]; then
             # Workflow name is the natural dedup key — a single Workflow
             # only finishes once, so the same id never collides on retry.
-            INCIDENT_ID="argo-${WORKFLOW_NAME}"
+            # Suffix the id with the onExit-run epoch second so each
+            # `argo retry <wf>` produces a fresh incident. Argo retries
+            # reuse the same Workflow object/name and a stable
+            # `workflow.uid`, so without this suffix a retry that
+            # fails again would POST a duplicate id and the alert
+            # store would dedup-reject it (Codex P2 on PR #149).
+            INCIDENT_ID="argo-${WORKFLOW_NAME}-$(date +%s)"
             SUMMARY="mctl-agents-run ${SUBJECT} ${WORKFLOW_STATUS} after ${WORKFLOW_DURATION}s — ${UI_URL}"
             # JSON-encode dynamic fields via jq so a quote / newline /
             # backslash in WORKFLOW_SERVICE / WORKFLOW_SLUG cannot break

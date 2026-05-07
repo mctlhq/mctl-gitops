@@ -616,7 +616,10 @@ spec:
           # ~/.claude/plans/mctl-agents-daily-cron-visibility.md for why
           # cron-driven failures need to land in mctl_list_incidents.
           if { [ "$WORKFLOW_STATUS" = "Failed" ] || [ "$WORKFLOW_STATUS" = "Error" ]; } && [ -n "$MCTL_TOKEN" ]; then
-            INCIDENT_ID="argo-${WORKFLOW_NAME}"
+            # Suffix the id with epoch-second so `argo retry <wf>`
+            # produces a fresh incident — workflow names/UIDs stay
+            # stable across retries (Codex P2 on PR #149).
+            INCIDENT_ID="argo-${WORKFLOW_NAME}-$(date +%s)"
             SUMMARY="shepherd ${SUBJECT} ${WORKFLOW_STATUS} after ${WORKFLOW_DURATION}s — ${UI_URL}"
             if [ -n "$WORKFLOW_DEGRADED_APPS" ]; then
               SUMMARY="${SUMMARY} | post-deploy-verify flagged: ${WORKFLOW_DEGRADED_APPS}"
