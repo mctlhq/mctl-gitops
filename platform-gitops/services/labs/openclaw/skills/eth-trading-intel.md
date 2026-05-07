@@ -244,8 +244,10 @@ Validation для new entries (`/watch SYMBOL [N] [direction]`):
     - Для каждого `item` LLM оценивает impact 1-10 на основе `title` + `body_excerpt` + `categories`/`tags`: ETF/SEC/SEC-action/hardfork/Fed-rate = 8-10; major exchange listing/upgrade = 6-7; alt-news/aggregated price commentary = 3-5; promo/sponsored = 1-2 (фильтр уже на стороне сервиса через default `excludeCategories=["Sponsored"]`). Aggregate в `news.score = max(impact)`, `news.high_impact_count = sum(impact ≥ 7)`, `news.top_titles = top-3 by impact`.
     - Если `news.score >= 8` И direction (bullish/bearish) ясно из контента — append соответствующий `+5` бонус long-side или short-side score (см. scoring rubric). На split direction (равноценные bull+bear новости) или ambiguous content — без бонуса, only `risks: ["news mixed: <top headline>"]`.
 16. **CVD aggregation (Phase 2 Hook B):** строим `cvd_24h.per_exchange = { binance: <usd|null>, okx: <usd|null>, bybit: <usd|null>, bitget: <usd|null> }`. Определяем set usable legs (см. N-leg cascade в `### Local indicators`). `cvd_24h.net_usd = sum(usable legs)`. Применяем cascade для `agreement` + `direction`. На `"split"` — append `risks: ["cvd source split: <breakdown по venue>"]`. На `"all_zero"` — append `risks: ["cvd all zero: ..."]`. Source string собирается из usable legs: `"binance_taker_buy_24h+okx_rubik_taker_volume_24h+bybit_publictrade_ws+bitget_publictrade_ws"` (joined по `+`, только usable).
+17. **Onchain gas snapshot (Phase 2 Hook B follow-up)** — `trading-data__etherscan_gas_snapshot()` через in-cluster `trading-data` MCP (Etherscan V2 multichain `gastracker.gasoracle` free-tier, 15s TTL cache в сервисе, ~100K calls/day). Возвращает `{safe_gwei, standard_gwei, fast_gwei, suggest_base_fee_gwei, gas_used_ratio}` (последний — comma-separated string из 5 ratios последних блоков). **Symbol-agnostic** — gas одинаковый для всех символов (это ETH mainnet network state), но семантически релевантен только для **`/eth`**, потому что только ETH-перпы реагируют на L1 congestion. Для `/btc` и `/sol` step skip — append `<symbol>_gas_irrelevant` в `missing_data` (no penalty; gas не модель price-action на L1-агностичных активах).
+    - Для ETH bonus используется `standard_gwei` (середина oracle). Если tool возвращает `error` (Etherscan rate limit / NOTOK) → leg `null`, append `etherscan_gas_unreachable` в `missing_data` без penalty (bonus, не основа).
 
-Если Bybit/Binance kline unreachable (steps 11-12) → append `bybit_kline_unreachable` / `binance_kline_unreachable` к `missing_data`, индикаторы помечаются `null`. Если `trading-data` MCP вообще недоступен (e.g. pod down, network policy) → оба `bybit_taker_unreachable` + `bitget_taker_unreachable` в `missing_data`, `cvd_24h.per_exchange.{bybit,bitget}=null`, и `news_unavailable` если step 15 тоже отвалится — pipeline продолжается на Binance + OKX legs (graceful degradation на 2 venues, что было статусом Hook A). Если все 4 CVD legs недоступны → `cvd_24h = null`, `missing_data: ["cvd_unreachable"]`. CoinGlass `get_futures_rsi_list` / `get_futures_macd_list` (steps 8-9) — secondary; используются для cross-check warning, не для scoring.
+Если Bybit/Binance kline unreachable (steps 11-12) → append `bybit_kline_unreachable` / `binance_kline_unreachable` к `missing_data`, индикаторы помечаются `null`. Если `trading-data` MCP вообще недоступен (e.g. pod down, network policy) → оба `bybit_taker_unreachable` + `bitget_taker_unreachable` в `missing_data`, `cvd_24h.per_exchange.{bybit,bitget}=null`, `news_unavailable` если step 15 тоже отвалится, и `etherscan_gas_unreachable` для step 17 — pipeline продолжается на Binance + OKX legs (graceful degradation на 2 venues, что было статусом Hook A). Если все 4 CVD legs недоступны → `cvd_24h = null`, `missing_data: ["cvd_unreachable"]`. CoinGlass `get_futures_rsi_list` / `get_futures_macd_list` (steps 8-9) — secondary; используются для cross-check warning, не для scoring.
 
 **Удалены из pipeline (HOBBYIST tier-locked):**
 - `get_futures_coins_markets` — заменён на `get_futures_price_history` step 1
@@ -326,10 +328,28 @@ Validation для new entries (`/watch SYMBOL [N] [direction]`):
     "direction": "inflow | outflow | flat",
     "source_tool": "get_ethereum_etf_flow_history"
   },
+  "gas": {
+    "available": true,
+    "safe_gwei": 0.13,
+    "standard_gwei": 0.14,
+    "fast_gwei": 0.15,
+    "suggest_base_fee_gwei": 0.13,
+    "bucket": "ultra_low | low | normal | elevated | congested",
+    "source": "etherscan_v2_gastracker_gasoracle"
+  },
   "missing_data": [],
   "raw_sources": {}
 }
 ```
+
+**Gas bucket mapping** (используется в scoring и в risks):
+- `standard_gwei < 5` → `"ultra_low"` — типичная нейтральная ситуация L1 затихания, no bias
+- `5 <= standard_gwei < 15` → `"low"` — нормальный пост-rollup активный режим, no bias
+- `15 <= standard_gwei < 30` → `"normal"` — средний фон, no bias
+- `30 <= standard_gwei < 60` → `"elevated"` — растущий on-chain demand, **+5 short_score bonus** (см. scoring rubric); risks: `["gas elevated: standard_gwei=<X>"]`
+- `standard_gwei >= 60` → `"congested"` — сильный stress на L1, **+10 short_score bonus** (заменяет +5 при elevated); risks: `["gas congested: standard_gwei=<X> — historical correlate с capitulation/forced unwinds"]`
+
+Логика: высокий gas коррелирует с активным forced movement on-chain (whales moving to exchanges, MEV-активная среда, liquidation cascades) — это исторически бычий сигнал для шортов в коротком таймфрейме. Эффект слабее для BTC/SOL (другие L1), поэтому bonus применяется ТОЛЬКО для ETH symbol.
 
 ### Directional scoring (НЕ scalar 0-100)
 
@@ -379,6 +399,7 @@ Validation для new entries (`/watch SYMBOL [N] [direction]`):
 - `+5` **multi-TF RSI confluence (Phase 1.6 bonus)** — `rsi.1h > 60` AND `rsi.4h > 60` AND `rsi.12h > 60`. Bonus, missing → no penalty.
 - `+5` **MACD multi-TF alignment (Phase 1.6 bonus)** — `macd_1h.rising == false` AND `macd_4h.rising == false` (обе falling). Bonus, missing → no penalty.
 - `+5` **bearish news catalyst (Phase 2 Hook B bonus)** — `news.score >= 8` AND `news.direction == "bearish"`. Источник: pipeline step 15. Bonus, missing → no penalty.
+- `+5` / `+10` **L1 gas stress (Phase 2 Hook B follow-up bonus, ETH only)** — `+5` если `gas.bucket == "elevated"` (`30 <= standard_gwei < 60`); `+10` если `gas.bucket == "congested"` (`standard_gwei >= 60`). Применяется ТОЛЬКО для ETH (для BTC/SOL gas — другая сеть, irrelevant; для них компонент пропускается без penalty). Источник: pipeline step 17 (`trading-data__etherscan_gas_snapshot`). Логика: высокий gas коррелирует с forced on-chain movement → исторический bias на short в краткосрочной перспективе. Bonus, missing → no penalty.
 
 **Penalties (apply к более сильному score):**
 
