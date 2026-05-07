@@ -1,6 +1,10 @@
 ---
 name: eth-trading-intel
+<<<<<<< HEAD
 description: Read-only crypto trading intelligence for ETH/BTC/SOL via the CoinGlass MCP server plus a local Bybit/Binance indicator engine (Phase 1.6). Use when the user types /eth /btc /sol /scan /risk /why /watch /unwatch /settings /set_threshold /help /last /funding /oi /etf /pulse /rsi /macd /bb /adx /heatmap, or asks for an open-interest, funding, long/short, liquidation, RSI/MACD/Bollinger/ADX, multi-timeframe heatmap, ETF-flow, or whale-positions snapshot. Observation-only. Never executes trades. Output is a directional snapshot (long_score, short_score, regime, conviction) plus reasons, risks, and explicit missing_data.
+=======
+description: Read-only crypto trading intelligence for ETH/BTC/SOL via the CoinGlass MCP server plus a local Bybit/Binance indicator engine (Phase 1.6). Use when the user types /eth /btc /sol /scan /risk /why /watch /unwatch /settings /set_threshold /help /last /funding /oi /etf /pulse /rsi /macd /bb /adx /heatmap, or asks for an open-interest, funding, long/short, liquidation, RSI/MACD/ADX, multi-timeframe heatmap, max-pain, ETF-flow, or whale-positions snapshot. Observation-only. Never executes trades. Output is a directional snapshot (long_score, short_score, regime, conviction) plus reasons, risks, and explicit missing_data.
+>>>>>>> 5b65971 (fix(labs-skill): drop Bollinger from /eth pipeline (keep on-demand /bb))
 ---
 
 # eth-trading-intel
@@ -41,7 +45,7 @@ description: Read-only crypto trading intelligence for ETH/BTC/SOL via the CoinG
 - `/adx SYMBOL` — ADX(14) 4h trend strength; source: local Bybit kline
 - `/heatmap [tf]` — multi-symbol RSI table по watchlist на одном TF; source: local Bybit kline
 
-Также активироваться на свободные формулировки: "разбор по ETH", "что там с фандингом", "open interest snapshot", "посмотри ликвидации", "rsi на coinglass", "etf flows", "rsi heatmap", "Bollinger squeeze", "adx тренд".
+Также активироваться на свободные формулировки: "разбор по ETH", "что там с фандингом", "open interest snapshot", "посмотри ликвидации", "rsi на coinglass", "etf flows", "rsi heatmap", "adx тренд".
 
 ## CoinGlass tier — HOBBYIST (confirmed 2026-05-05, renewal 2026-06-05)
 
@@ -111,7 +115,6 @@ Public, без auth, без CoinGlass tier-gate. Приоритет — local; C
 **Computed fields:**
 - RSI(14) — Wilder's smoothing — TFs: 15m, 1h, 4h, 12h, 1d
 - MACD(12, 26, 9) — `macd`, `signal`, `hist`, `rising` — TFs: 1h, 4h, 1d
-- Bollinger(20, 2σ) — `upper`, `mid`, `lower`, `percent_b`, `width_pct` — TFs: 1h, 4h
 - ADX(14) — Wilder's — `adx`, `plus_di`, `minus_di`, `trend_strength` bucket — TF: 4h
 - CVD 24h (Phase 2 Hook B — до 4 venues): `cvd_24h.net_usd` = sum(per-exchange deltas) по **usable** подмножеству из {Binance, OKX, Bybit, Bitget} (full стек ~95% global perp ETH). Per-exchange разбивка хранится в `cvd_24h.per_exchange` и всегда содержит все 4 ключа (`null` если leg unreachable). Source string собирается **динамически** из usable legs (joined по `+`) — на full happy path: `"binance_taker_buy_24h+okx_rubik_taker_volume_24h+bybit_publictrade_ws+bitget_publictrade_ws"`; при выпавшем leg или `window_incomplete` соответствующая строка пропадает из `cvd_24h.source` и leg добавляется в `missing_data` (`<venue>_unreachable` / `<venue>_window_incomplete`). НЕ хардкодить full 4-venue string — это ломает contract `missing_data` transparency. Binance + OKX считаются inline (public REST, no auth). Bybit + Bitget берутся из in-cluster `trading-data` MCP (`trading-data__bybit_taker_24h`, `trading-data__bitget_taker_24h`) — stateful WS-агрегация в `labs-trading-data` pod-е. Cold-start: первый час после рестарта pod-а у обоих ws-leg-ов будет `meta.window_incomplete=true`; в это время эти leg-и игнорируются в N-leg cascade и не добавляются в total. Score-компоненты CVD остаются на агрегированном `net_usd` без отдельных венчурных весов.
 
@@ -225,8 +228,8 @@ Validation для new entries (`/watch SYMBOL [N] [direction]`):
 
 11. **Bybit kline × 5 TF** для symbol pair `<SYMBOL>USDT`. Параллельно (5 GET-запросов на api.bybit.com), 200 свечей каждый:
     - `interval=15` → RSI(14) 15m
-    - `interval=60` → RSI(14) 1h, MACD(12,26,9) 1h, Bollinger(20,2) 1h
-    - `interval=240` → RSI(14) 4h, MACD(12,26,9) 4h, Bollinger(20,2) 4h, ADX(14) 4h
+    - `interval=60` → RSI(14) 1h, MACD(12,26,9) 1h
+    - `interval=240` → RSI(14) 4h, MACD(12,26,9) 4h, ADX(14) 4h
     - `interval=720` → RSI(14) 12h
     - `interval=D` → RSI(14) 1d, MACD(12,26,9) 1d
 12. **CVD 24h leg #1 — Binance kline** `interval=4h&limit=6` для same `<COIN>USDT` pair → per-candle delta_quote = `(2 * taker_buy_base − volume_base) * close`; sum по 6 свечам = 24h Binance CVD.
@@ -289,13 +292,10 @@ Validation для new entries (`/watch SYMBOL [N] [direction]`):
     "macd_1h": { "macd": 4.2, "signal": 3.8, "hist": 0.4, "rising": true },
     "macd_4h": { "macd": 8.1, "signal": 6.4, "hist": 1.7, "rising": true },
     "macd_1d": { "macd": 18.5, "signal": 14.2, "hist": 4.3, "rising": true },
-    "bb_1h": { "upper": 3490, "mid": 3450, "lower": 3410, "percent_b": 0.62, "width_pct": 2.3 },
-    "bb_4h": { "upper": 3520, "mid": 3450, "lower": 3380, "percent_b": 0.62, "width_pct": 4.1 },
     "adx_4h": { "adx": 22, "plus_di": 18, "minus_di": 14, "trend_strength": "weak | moderate | strong" },
     "source": {
       "rsi": "bybit_kline",
       "macd": "bybit_kline",
-      "bollinger": "bybit_kline",
       "adx": "bybit_kline"
     }
   },
@@ -420,10 +420,6 @@ Validation для new entries (`/watch SYMBOL [N] [direction]`):
 Если `adx_4h` отсутствует (`bybit_kline_unreachable`) — fall back на старый rule: `range` если RSI 4h ∈ [45,55] AND 24h volatility < 2%; `trend` если `abs(macd_4h)` above threshold AND OI direction matches price; иначе `transition`.
 
 `adx_4h.trend_strength` bucket для prose-output: `weak` (< 20), `moderate` (20–40), `strong` (≥ 40).
-
-**Bollinger squeeze flag (Phase 1.6):**
-
-Если `bb_4h.width_pct < 2.5%` → append к `risks: ["bb 4h squeeze (width 2.1%) — vol expansion likely"]`. Не входит в scoring, но операторская подсказка о подготовке к break-out.
 
 **Conviction:**
 
@@ -867,4 +863,4 @@ Pasive monitoring через **Argo CronWorkflow `labs-watch-scan`** (см. `pla
 - **Binance public klines** (Phase 1.6 CVD leg #1) — `https://developers.binance.com/docs/binance-spot-api-docs/rest-api/market-data-endpoints#kline-candlestick-data`. Index 9 = `taker_buy_base_asset_volume`.
 - **OKX V5 rubik / public** (Phase 2 Hook A CVD leg #2) — `https://www.okx.com/docs-v5/en/#trading-statistics-rest-api-get-taker-volume-for-derivatives` (`taker-volume-contract`) + `https://www.okx.com/docs-v5/en/#public-data-rest-api-get-instruments` (для `ctVal`). No auth. Контрактный размер захардкожен в response под `data[0].ctVal`.
 - **Multi-exchange taker endpoint matrix** — memory `reference_multi_exchange_taker_endpoints.md` (probed 2026-05-06): Binance + OKX публично доступны, Bybit + Bitget — Phase 2 Hook B work.
-- **Phase 1.6 source spreadsheet** — `Индикаторы для робота_upd.numbers` (root of mctlhq workspace). Multi-TF матрица RSI/MACD/Bollinger/ADX + Liquidation Map / Heatmap (последние требуют CoinGlass STANDARD-tier upgrade и помечены Blocked).
+- **Phase 1.6 source spreadsheet** — `Индикаторы для робота_upd.numbers` (root of mctlhq workspace). Multi-TF матрица RSI/MACD/ADX + Liquidation Map / Heatmap (последние требуют CoinGlass STANDARD-tier upgrade и помечены Blocked). Bollinger snapshot вынесен в on-demand `/bb` команду — не считается в /eth pipeline.
