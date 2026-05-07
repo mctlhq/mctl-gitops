@@ -1,0 +1,140 @@
+# Alerts on the incident-auto-cleanup track in mctl-agent.
+#
+# All metrics emitted by mctl-agent (Phases 1/2/3 cleanup, Phase 4 metrics
+# wiring) are scraped via the standalone ServiceMonitor at
+# bootstrap/templates/mctl-platform/mctl-agent-monitor.yaml.
+#
+# These rules fire to AlertManager which routes back into mctl-agent via
+# the same path as TenantCPUQuotaHigh etc. — i.e. they would create
+# tickets that mctl-agent then attempts to self-heal. To prevent the
+# self-loop these rules use severity=info plus the `mctl_agent_self`
+# label which the AlertManager route at
+# bootstrap/templates/observability/monitoring.yaml drops (or routes to a
+# dedicated channel — see TODO at the bottom of this file).
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: mctl-agent-cleanup-alerts
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: mctl-platform
+spec:
+  groups:
+    - name: mctl-agent.cleanup-rates
+      rules:
+        # Empty service-inventory guard tripping on every poll cycle is a
+        # signal that pollDegraded's mctlclient.ListServices() is broken
+        # (auth, network, schema drift) — Phase 3 orphan pruning becomes
+        # a no-op. The 5m baseline of "fired at least 5 times in 5m" is
+        # safely above noise (poll interval is 5m → ~1 fire/cycle is
+        # normal during transients).
+        - alert: MctlAgentOrphanPruneInventoryEmptyPersistent
+          expr: |
+            rate(mctl_agent_cleanup_skipped_total{reason="empty_inventory"}[15m]) * 60 > 1
+          for: 30m
+          labels:
+            severity: warning
+            mctl_agent_self: "true"
+          annotations:
+            summary: mctl-agent's orphan-prune is short-circuiting on empty inventory >1/min for 30m
+            description: |
+              Phase 3 pruneOrphans() guards against acting on a presumed-empty
+              service inventory. Sustained activation typically means
+              mctlclient.ListServices() is failing or returning empty —
+              recently caused by the json tag mismatch fixed in
+              mctl-agent 1.10.1 (Service.App was decoded from "app" instead
+              of "name"). Investigate pollDegraded errors in mctl-agent logs.
+
+        # AM reconcile fetch errors mean Phase 2 is silently disabled. AM
+        # being briefly unreachable is normal; sustained 30m of errors is
+        # not.
+        - alert: MctlAgentAMReconcileFetchFailing
+          expr: |
+            rate(mctl_agent_cleanup_skipped_total{reason="am_fetch_error"}[15m]) * 60 > 0.5
+          for: 30m
+          labels:
+            severity: warning
+            mctl_agent_self: "true"
+          annotations:
+            summary: mctl-agent cannot reach AlertManager >30m
+            description: |
+              Phase 2's AM reconciliation skipped due to fetch errors at
+              {{ $value | humanize }} per minute over the last 30m.
+              Verify ALERTMANAGER_URL points at a reachable VMAlertmanager
+              service and that the in-cluster network policy permits the
+              call. Phase 1 stale-TTL GC continues to work; only the
+              fingerprint-based pass is degraded.
+
+        # AM call p95 above 5s is suspicious — under default
+        # AM_RECONCILE_TIMEOUT (10s) we still complete, but slowness is a
+        # leading indicator of upcoming timeouts.
+        - alert: MctlAgentAMReconcileSlow
+          expr: |
+            histogram_quantile(0.95,
+              sum by (le, outcome) (
+                rate(mctl_agent_am_request_duration_seconds_bucket{outcome="success"}[15m])
+              )
+            ) > 5
+          for: 30m
+          labels:
+            severity: info
+            mctl_agent_self: "true"
+          annotations:
+            summary: mctl-agent AM /api/v2/alerts p95 latency >5s for 30m
+            description: |
+              p95 = {{ $value | humanizeDuration }}. Investigate AM
+              cardinality / scrape load. Phase 2 reconciliation will start
+              missing cycles once p95 approaches AM_RECONCILE_TIMEOUT
+              (default 10s).
+
+    - name: mctl-agent.open-tickets
+      rules:
+        # Open tickets in `analyzing` status climbing without resolutions is
+        # the canonical "self-healing pipeline is wedged" symptom — exactly
+        # the case Phase 1+2+3 were built to mitigate.
+        - alert: MctlAgentAnalyzingTicketsClimbing
+          expr: |
+            (
+              max_over_time(mctl_agent_open_tickets{status="analyzing"}[1h])
+              - min_over_time(mctl_agent_open_tickets{status="analyzing"}[1h])
+            ) > 5
+            and
+            rate(mctl_agent_stale_ttl_resolved_total{status="analyzing"}[1h]) == 0
+          for: 1h
+          labels:
+            severity: warning
+            mctl_agent_self: "true"
+          annotations:
+            summary: mctl-agent has >5 unresolved analyzing tickets growing for 1h
+            description: |
+              Open `analyzing` tickets grew by {{ $value }} over 1h with no
+              stale-TTL resolutions. The skill pipeline likely cannot
+              progress these tickets. Review recent skill runs in
+              mctl-agent logs and consider lowering
+              AUTO_RESOLVE_ANALYZING_AFTER (default 48h) if the analyzing
+              backlog has truly stalled.
+
+        # Phase 4 metric wiring health-check — the gauge family must be
+        # present after the first poll cycle. Absence ≈ /metrics endpoint
+        # broken or scraper not picking up the agent.
+        - alert: MctlAgentMetricsAbsent
+          expr: |
+            absent(mctl_agent_open_tickets) == 1
+          for: 30m
+          labels:
+            severity: warning
+            mctl_agent_self: "true"
+          annotations:
+            summary: mctl_agent_open_tickets gauge series missing for 30m
+            description: |
+              Either the mctl-agent ServiceMonitor is mis-targeted, the
+              /metrics endpoint is unreachable, or the OpenTickets gauge
+              update in `(*Poller).poll()` is failing (check for
+              "poller: open-ticket breakdown failed" log lines). Without
+              this metric the cleanup-track dashboard is blind.
+
+# TODO once the `mctl_agent_self: "true"` AlertManager route is wired in
+# bootstrap/templates/observability/monitoring.yaml: these alerts should
+# bypass the route that fires `POST /api/v1/alerts` back to mctl-agent,
+# either dropping them entirely (since they are about mctl-agent itself)
+# or routing them to a separate Telegram channel for the operator.
