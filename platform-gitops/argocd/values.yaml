@@ -120,7 +120,18 @@ argo-cd:
       controller.status.processors: "5"
       controller.operation.processors: "3"
       controller.repo.server.timeout.seconds: "60"
-      
+
+      # Enable server-side dry-run diff cluster-wide. Per-app
+      # `ServerSideDiff=true` syncOption is honoured by the apply path
+      # (resource sync result is Synced) but not by the controller's
+      # OutOfSync comparator in v3.3.x — observed on the vault chart
+      # 0.28.1 StatefulSet, which renders fields the API server normalises
+      # away (`spec.template.metadata.annotations: null`,
+      # `spec.template.spec.hostNetwork: false`). Cluster-wide flag forces
+      # the comparator to use server-side dry-run diff so the OutOfSync
+      # judgment matches the actual SSA-applied state.
+      controller.diff.server.side: "true"
+
       # Disable server-side apply for CRDs to avoid annotation size issues
       # See: https://github.com/argoproj/argo-cd/issues/9476
       application.resourceTrackingMethod: annotation
