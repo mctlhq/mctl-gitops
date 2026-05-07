@@ -344,6 +344,15 @@ spec:
       - ApplyOutOfSyncOnly=true
       - ServerSideApply=true
       - RespectIgnoreDifferences=true
+      # VictoriaMetrics operator CRDs (VMSingle, VMAlert, ...) declare an
+      # incomplete schema that omits some pass-through fields like
+      # `VMSingle.spec.extraContainers`. Once cluster-wide
+      # `controller.diff.server.side: "true"` is set, ArgoCD's SSA
+      # dry-run rejects the diff with `failed to create typed patch
+      # object: .spec.extraContainers: field not declared in schema` and
+      # the app stays Sync=Unknown. Opt this app out so it falls back to
+      # the legacy client-side diff.
+      - ServerSideDiff=false
     retry:
       limit: 5
       backoff:
