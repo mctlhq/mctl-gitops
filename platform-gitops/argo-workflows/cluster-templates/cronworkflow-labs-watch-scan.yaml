@@ -63,9 +63,13 @@ spec:
   workflowSpec:
     serviceAccountName: argo-workflow-sa
     ttlStrategy:
-      # 24h retention — explicit value avoids the Argo v3.7.10
-      # archive-worker NULL-nodes wedge (ref: reference_argo_archive_bug).
-      secondsAfterCompletion: 86400
+      # 3d retention — must outlive the successfulJobsHistoryLimit (144)
+      # at the `*/30` cadence (48 ticks/d). Explicit value also avoids
+      # the Argo v3.7.10 archive-worker NULL-nodes wedge
+      # (ref: reference_argo_archive_bug). Bumped from 86400 to 259200
+      # for Codex P1 on PR #147 — without this the 3-day history goal
+      # was unreachable because Argo would prune at 24h regardless.
+      secondsAfterCompletion: 259200
     # Per-tenant mutex on the alerts state file. Not the shared
     # mctl-gitops-main-writes because we don't push to gitops.
     synchronization:
