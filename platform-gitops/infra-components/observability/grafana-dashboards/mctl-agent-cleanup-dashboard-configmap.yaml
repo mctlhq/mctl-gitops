@@ -1,0 +1,247 @@
+# Grafana dashboard for the mctl-agent incident-auto-cleanup track
+# (Phases 1/2/3 + Phase 4 metrics wiring).
+#
+# Sidecar in the monitoring/grafana deployment auto-discovers ConfigMaps
+# with label `grafana_dashboard: "1"` and mounts them into Grafana — same
+# pattern as the existing mctl-platform-dashboard-configmap.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mctl-agent-cleanup-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  mctl-agent-cleanup.json: |
+    {
+      "title": "mctl-agent — Incident Auto-Cleanup",
+      "description": "Phase 1/2/3 cleanup activity, Phase 4 metrics surface.",
+      "uid": "mctl-agent-cleanup",
+      "tags": ["mctl-agent", "cleanup", "incidents"],
+      "schemaVersion": 39,
+      "version": 1,
+      "editable": true,
+      "graphTooltip": 1,
+      "timezone": "browser",
+      "time": { "from": "now-6h", "to": "now" },
+      "refresh": "30s",
+      "templating": {
+        "list": [
+          {
+            "name": "datasource",
+            "type": "datasource",
+            "query": "prometheus",
+            "current": { "text": "VictoriaMetrics", "value": "VictoriaMetrics" }
+          }
+        ]
+      },
+      "panels": [
+        {
+          "type": "row",
+          "id": 100,
+          "title": "Open tickets (current state)",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+        },
+        {
+          "type": "stat",
+          "id": 1,
+          "title": "Open tickets — total",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 5, "w": 6, "x": 0, "y": 1 },
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "colorMode": "value",
+            "graphMode": "area"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 10 },
+                  { "color": "red", "value": 30 }
+                ]
+              }
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum(mctl_agent_open_tickets)"
+            }
+          ]
+        },
+        {
+          "type": "barchart",
+          "id": 2,
+          "title": "Open tickets by status",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 5, "w": 9, "x": 6, "y": 1 },
+          "options": { "stacking": "normal", "orientation": "horizontal", "legend": { "displayMode": "list", "placement": "right" } },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (status) (mctl_agent_open_tickets)",
+              "legendFormat": "{{status}}"
+            }
+          ]
+        },
+        {
+          "type": "barchart",
+          "id": 3,
+          "title": "Open tickets by source",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 5, "w": 9, "x": 15, "y": 1 },
+          "options": { "stacking": "normal", "orientation": "horizontal", "legend": { "displayMode": "list", "placement": "right" } },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (source) (mctl_agent_open_tickets)",
+              "legendFormat": "{{source}}"
+            }
+          ]
+        },
+        {
+          "type": "row",
+          "id": 200,
+          "title": "Resolution activity",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 6 }
+        },
+        {
+          "type": "timeseries",
+          "id": 4,
+          "title": "Phase 1 — stale-TTL resolutions per minute (by previous status)",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 7, "w": 12, "x": 0, "y": 7 },
+          "fieldConfig": {
+            "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 50, "stacking": { "mode": "normal" } }, "unit": "short" }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (status) (rate(mctl_agent_stale_ttl_resolved_total[5m])) * 60",
+              "legendFormat": "{{status}}"
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "id": 5,
+          "title": "Phase 2/3 — orphan + AM-reconcile resolutions per minute",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 7, "w": 12, "x": 12, "y": 7 },
+          "fieldConfig": {
+            "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 50, "stacking": { "mode": "normal" } }, "unit": "short" }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "rate(mctl_agent_orphan_pruned_total[5m]) * 60",
+              "legendFormat": "orphan-pruned"
+            },
+            {
+              "refId": "B",
+              "expr": "rate(mctl_agent_am_reconcile_resolved_total[5m]) * 60",
+              "legendFormat": "am-reconcile"
+            }
+          ]
+        },
+        {
+          "type": "row",
+          "id": 300,
+          "title": "Guard activations & AM client health",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 }
+        },
+        {
+          "type": "timeseries",
+          "id": 6,
+          "title": "Cleanup pass short-circuits per minute (by reason)",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 7, "w": 12, "x": 0, "y": 15 },
+          "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10 }, "unit": "short" } },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (reason) (rate(mctl_agent_cleanup_skipped_total[5m])) * 60",
+              "legendFormat": "{{reason}}"
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "id": 7,
+          "title": "AM /api/v2/alerts p50 / p95 / p99 latency",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 7, "w": 12, "x": 12, "y": 15 },
+          "fieldConfig": { "defaults": { "unit": "s" } },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "histogram_quantile(0.5, sum by (le) (rate(mctl_agent_am_request_duration_seconds_bucket{outcome=\"success\"}[5m])))",
+              "legendFormat": "p50 (success)"
+            },
+            {
+              "refId": "B",
+              "expr": "histogram_quantile(0.95, sum by (le) (rate(mctl_agent_am_request_duration_seconds_bucket{outcome=\"success\"}[5m])))",
+              "legendFormat": "p95 (success)"
+            },
+            {
+              "refId": "C",
+              "expr": "histogram_quantile(0.99, sum by (le) (rate(mctl_agent_am_request_duration_seconds_bucket{outcome=\"success\"}[5m])))",
+              "legendFormat": "p99 (success)"
+            }
+          ]
+        },
+        {
+          "type": "row",
+          "id": 400,
+          "title": "Cumulative totals (since last restart)",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 }
+        },
+        {
+          "type": "stat",
+          "id": 8,
+          "title": "Stale-TTL resolved total",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 4, "w": 6, "x": 0, "y": 23 },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+          "targets": [
+            { "refId": "A", "expr": "sum(mctl_agent_stale_ttl_resolved_total)" }
+          ]
+        },
+        {
+          "type": "stat",
+          "id": 9,
+          "title": "Orphan-pruned total",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 4, "w": 6, "x": 6, "y": 23 },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+          "targets": [
+            { "refId": "A", "expr": "sum(mctl_agent_orphan_pruned_total)" }
+          ]
+        },
+        {
+          "type": "stat",
+          "id": 10,
+          "title": "AM-reconcile resolved total",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 4, "w": 6, "x": 12, "y": 23 },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+          "targets": [
+            { "refId": "A", "expr": "sum(mctl_agent_am_reconcile_resolved_total)" }
+          ]
+        },
+        {
+          "type": "stat",
+          "id": 11,
+          "title": "Cleanup skipped total",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 4, "w": 6, "x": 18, "y": 23 },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+          "targets": [
+            { "refId": "A", "expr": "sum(mctl_agent_cleanup_skipped_total)" }
+          ]
+        }
+      ]
+    }
