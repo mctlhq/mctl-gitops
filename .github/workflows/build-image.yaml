@@ -37,6 +37,33 @@ on:
         description: "Unique build ID for correlation with Argo workflow"
         required: true
         type: string
+  workflow_call:
+    inputs:
+      repo:
+        required: true
+        type: string
+      git_ref:
+        required: true
+        type: string
+      image_name:
+        required: true
+        type: string
+      image_tag:
+        required: true
+        type: string
+      dockerfile_path:
+        required: false
+        default: "Dockerfile"
+        type: string
+      team_name:
+        required: true
+        type: string
+      component_name:
+        required: true
+        type: string
+      build_id:
+        required: true
+        type: string
 
 env:
   REGISTRY: ghcr.io
