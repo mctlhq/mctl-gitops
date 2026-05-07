@@ -1,19 +1,4 @@
-status: accepted
-updated_at: '2026-05-07T00:35:00Z'
-updated_by: mashkovd
-notes: |
-  Operator-seeded proposal (skipping mentor digest). First half of a
-  deliberate split of the original incident-auto-cleanup-phase4-metrics
-  proposal, which exhausted the implementer's $3 per-proposal budget
-  cap mid-flight (build clean, tests not yet written when budget hit).
-
-  Phase 4a is intentionally minimal: prometheus/client_golang
-  dependency, single counter (StaleTTLResolved by status), /metrics
-  HTTP endpoint, audit-middleware exemption, ServiceMonitor in gitops.
-  ONE existing Phase 1 test extended with counter assertion. No
-  PreRegister, no other counters/gauges/histogram, no OpenTickets
-  breakdown, no AM-pass increments. All deferred to Phase 4b.
-
-  Sized to fit comfortably in the $3 implementer budget by reference
-  to Phase 1 (PR #11) and Phase 3 (PR #12), each of which landed 4-5
-  files within budget.
+status: implemented
+updated_at: '2026-05-07T06:58:05Z'
+updated_by: mctl-agents[bot]
+pr: https://github.com/mctlhq/mctl-agent/pull/16
