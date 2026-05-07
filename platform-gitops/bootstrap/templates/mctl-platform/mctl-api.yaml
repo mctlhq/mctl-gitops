@@ -63,6 +63,20 @@ spec:
               cpu: 250m
               memory: 256Mi
 
+  ignoreDifferences:
+    # ESO admission webhook injects defaults absent in git, plus legacy
+    # last-applied-configuration annotations can pin stale apiVersion across
+    # chart churn. Mirror the tenants ApplicationSet pattern.
+    - group: external-secrets.io
+      kind: ExternalSecret
+      jqPathExpressions:
+        - .metadata.annotations
+        - .metadata.managedFields
+        - .spec.target.deletionPolicy
+        - .spec.data[].remoteRef.conversionStrategy
+        - .spec.data[].remoteRef.decodingStrategy
+        - .spec.data[].remoteRef.metadataPolicy
+        - .status
   destination:
     server: {{ .Values.spec.destination.server }}
     namespace: mctl-api
@@ -73,6 +87,8 @@ spec:
     syncOptions:
       - CreateNamespace=true
       - ApplyOutOfSyncOnly=true
+      - ServerSideApply=true
+      - RespectIgnoreDifferences=true
     retry:
       limit: 5
       backoff:

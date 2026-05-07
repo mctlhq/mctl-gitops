@@ -13,6 +13,21 @@ spec:
     path: platform-gitops/argo-workflows
     directory:
       recurse: true
+  ignoreDifferences:
+    # ESO admission webhook injects defaults absent in git, plus the legacy
+    # client-side `kubectl.kubernetes.io/last-applied-configuration` annotation
+    # has historically pinned a stale apiVersion/resourceVersion across chart
+    # version churn. Mirror the tenants ApplicationSet pattern.
+    - group: external-secrets.io
+      kind: ExternalSecret
+      jqPathExpressions:
+        - .metadata.annotations
+        - .metadata.managedFields
+        - .spec.target.deletionPolicy
+        - .spec.data[].remoteRef.conversionStrategy
+        - .spec.data[].remoteRef.decodingStrategy
+        - .spec.data[].remoteRef.metadataPolicy
+        - .status
   destination:
     server: {{ .Values.spec.destination.server }}
     namespace: argo-workflows
@@ -23,6 +38,8 @@ spec:
     syncOptions:
       - CreateNamespace=true
       - ApplyOutOfSyncOnly=true
+      - ServerSideApply=true
+      - RespectIgnoreDifferences=true
     retry:
       limit: 5
       backoff:
