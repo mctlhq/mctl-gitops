@@ -87,22 +87,51 @@ spec:
         - .spec.dataFrom[].extract.decodingStrategy
         - .spec.dataFrom[].extract.metadataPolicy
         - .status
-    # Hashicorp vault chart 0.28.1 renders the StatefulSet pod template
-    # with `metadata.annotations: null` (helper template emits an
-    # `annotations:` line with no body when neither `server.annotations`
-    # nor `server.includeConfigAnnotation` is set) and `spec.hostNetwork:
-    # false`; the API server normalises both away. The controller would
-    # otherwise flag the StatefulSet OutOfSync indefinitely even though
-    # the SSA-applied state matches git intent.
-    # `spec.volumeClaimTemplates[].metadata.creationTimestamp` is the
-    # standard kube emits-`null` quirk on PVC templates.
+    # Hashicorp vault chart 0.28.1 renders fields that the API server
+    # normalises away — without ServerSideDiff the controller would
+    # otherwise flag the StatefulSet OutOfSync indefinitely. Two classes:
+    #
+    # 1) Chart-emitted nulls/explicit-false the API strips:
+    #    - `spec.template.metadata.annotations` (helper renders an
+    #      `annotations:` line with no body when neither
+    #      `server.annotations` nor `server.includeConfigAnnotation` is
+    #      set; YAML parses as null, API drops)
+    #    - `spec.template.spec.hostNetwork: false` (chart explicit, API
+    #      drops the false default)
+    #    - `spec.volumeClaimTemplates[].metadata.creationTimestamp: null`
+    #
+    # 2) Kube-injected defaults the chart never set:
+    #    - `spec.persistentVolumeClaimRetentionPolicy` (k8s 1.27+ default
+    #      `{Retain, Retain}`)
+    #    - `spec.revisionHistoryLimit: 10`
+    #    - `spec.template.spec.{dnsPolicy,restartPolicy,schedulerName,serviceAccount}`
+    #    - `spec.template.spec.containers[].env[].valueFrom.fieldRef.apiVersion: v1`
+    #    - `spec.template.spec.containers[].ports[].protocol: TCP`
+    #    - `spec.template.spec.containers[].terminationMessage{Path,Policy}`
+    #    - `spec.template.spec.volumes[].configMap.defaultMode: 420`
+    #    - `spec.volumeClaimTemplates[].{apiVersion,kind,spec.volumeMode,status}`
     - group: apps
       kind: StatefulSet
       name: vault
       jqPathExpressions:
         - .spec.template.metadata.annotations
         - .spec.template.spec.hostNetwork
+        - .spec.persistentVolumeClaimRetentionPolicy
+        - .spec.revisionHistoryLimit
+        - .spec.template.spec.dnsPolicy
+        - .spec.template.spec.restartPolicy
+        - .spec.template.spec.schedulerName
+        - .spec.template.spec.serviceAccount
+        - .spec.template.spec.containers[].env[].valueFrom.fieldRef.apiVersion
+        - .spec.template.spec.containers[].ports[].protocol
+        - .spec.template.spec.containers[].terminationMessagePath
+        - .spec.template.spec.containers[].terminationMessagePolicy
+        - .spec.template.spec.volumes[].configMap.defaultMode
+        - .spec.volumeClaimTemplates[].apiVersion
+        - .spec.volumeClaimTemplates[].kind
         - .spec.volumeClaimTemplates[].metadata.creationTimestamp
+        - .spec.volumeClaimTemplates[].spec.volumeMode
+        - .spec.volumeClaimTemplates[].status
   destination:
     server: {{ .Values.spec.destination.server }}
     namespace: vault
@@ -114,7 +143,6 @@ spec:
       - CreateNamespace=true
       - ApplyOutOfSyncOnly=true
       - ServerSideApply=true
-      - ServerSideDiff=true
       - RespectIgnoreDifferences=true
     retry:
       limit: 5
