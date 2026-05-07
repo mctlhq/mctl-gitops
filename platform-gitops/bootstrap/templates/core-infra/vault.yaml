@@ -87,6 +87,22 @@ spec:
         - .spec.dataFrom[].extract.decodingStrategy
         - .spec.dataFrom[].extract.metadataPolicy
         - .status
+    # Hashicorp vault chart 0.28.1 renders the StatefulSet pod template
+    # with `metadata.annotations: null` (helper template emits an
+    # `annotations:` line with no body when neither `server.annotations`
+    # nor `server.includeConfigAnnotation` is set) and `spec.hostNetwork:
+    # false`; the API server normalises both away. The controller would
+    # otherwise flag the StatefulSet OutOfSync indefinitely even though
+    # the SSA-applied state matches git intent.
+    # `spec.volumeClaimTemplates[].metadata.creationTimestamp` is the
+    # standard kube emits-`null` quirk on PVC templates.
+    - group: apps
+      kind: StatefulSet
+      name: vault
+      jqPathExpressions:
+        - .spec.template.metadata.annotations
+        - .spec.template.spec.hostNetwork
+        - .spec.volumeClaimTemplates[].metadata.creationTimestamp
   destination:
     server: {{ .Values.spec.destination.server }}
     namespace: vault
