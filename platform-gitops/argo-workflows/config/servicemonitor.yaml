@@ -1,7 +1,8 @@
-# ServiceMonitor for Argo Workflows controller metrics
-# Prometheus discovers this automatically (serviceMonitorSelectorNilUsesHelmValues: false)
-apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
+# VMServiceScrape for Argo Workflows controller metrics.
+# Native VMOperator kind (instead of monitoring.coreos.com/ServiceMonitor)
+# avoids ArgoCD drift from operator auto-conversion.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMServiceScrape
 metadata:
   name: argo-workflows-controller
   namespace: argo-workflows
