@@ -63,8 +63,12 @@ spec:
   serviceAccountName: argo-workflow-sa
   imagePullSecrets:
     - name: ghcr-credentials
+  # 3d TTL — must outlive the new successfulJobsHistoryLimit (36) on
+  # cronworkflow-mctl-agents-shepherd at the `30 */2` cadence (12 ticks/d).
+  # Default 1d would prune workflows before the 3-day kept-window
+  # could fill (Codex P1 on PR #147).
   ttlStrategy:
-    secondsAfterCompletion: 86400
+    secondsAfterCompletion: 259200
   # Same 2h budget as the implementer: a single tick may invoke the
   # implementer subprocess (clone sibling repo + Claude SDK + push) for
   # every proposal that has unresolved P1/P2 findings.

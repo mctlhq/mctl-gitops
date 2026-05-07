@@ -23,8 +23,13 @@ spec:
   serviceAccountName: argo-workflow-sa
   imagePullSecrets:
     - name: ghcr-credentials
+  # 14d TTL — must outlive the new successfulJobsHistoryLimit (14) on
+  # cwft-mctl-agents-daily. Argo deletes a completed Workflow once
+  # secondsAfterCompletion elapses, REGARDLESS of how the parent
+  # CronWorkflow's history caps are set. With the default 1d here the
+  # daily cron's 14-success cap was unreachable (Codex P1 on PR #147).
   ttlStrategy:
-    secondsAfterCompletion: 86400
+    secondsAfterCompletion: 1209600
   activeDeadlineSeconds: 3600
   entrypoint: run-agents
   # onExit always fires after the entrypoint completes — Succeeded, Failed,
