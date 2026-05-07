@@ -5,7 +5,7 @@
 
 image:
   repository: ghcr.io/mctlhq/kuptsi-app
-  tag: "0.1.17"
+  tag: "0.2.0"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
@@ -19,17 +19,7 @@ resources:
   limits:
     cpu: 500m
     memory: 512Mi
-env:
-  APP_ENV: production
-  TEMPORAL_ADDRESS: temporal-frontend.temporal.svc.cluster.local:7233
-  TEMPORAL_NAMESPACE: kuptsi
-  HOST: 0.0.0.0
-  PORT: "5000"
-  WEB_CONCURRENCY: "2"
-  LOG_LEVEL: info
-  UVICORN_RELOAD: "0"
-  GROUP_DELAY: "10"
-  MAX_ACTIVITY_WORKERS: "20"
+env: {}
 # DATABASE_URL with asyncpg scheme is assembled from Vault DB creds via
 # ExternalSecret templating below (`externalSecret.targetTemplateData`)
 # rather than the previous `env: DATABASE_URL: "...$(DB_USER):$(DB_PASSWORD)..."`
@@ -47,10 +37,7 @@ dbSecret:
   vaultPath: teams/labs/kuptsi-app/database
 envFrom:
   - secretRef:
-      name: labs-kuptsi-app-base-service-db-creds
-  - secretRef:
       name: kuptsi-app-secrets
-      optional: true
 # kuptsi FastAPI exposes /health (see src/app.py); base-service defaults aim
 # at /healthz + /readyz which would never become Ready.
 probes:
