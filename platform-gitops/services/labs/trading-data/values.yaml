@@ -33,7 +33,16 @@ resources:
 env:
   APP_ENV: production
   LOG_LEVEL: info
-  WATCH_SYMBOLS: "ETHUSDT"
+  # Comma-separated list of perp pairs the WS workers subscribe to on Bybit
+  # V5 (publicTrade.<sym>) and Bitget V2 (USDT-FUTURES trade channel,
+  # instId=<sym>). Each symbol gets its own per-venue rolling 24x1h taker
+  # bucket map in process memory; widening the list grows steady-state RSS
+  # roughly linearly per symbol.
+  #
+  # ETH coverage shipped first in Hook B; BTC/SOL added so /btc and /sol
+  # snapshots get the same 4-leg cvd_24h.per_exchange treatment instead of
+  # `<venue>_taker_unreachable` for these pairs.
+  WATCH_SYMBOLS: "ETHUSDT,BTCUSDT,SOLUSDT"
 envFrom:
   # CryptoCompare News + Etherscan free-tier API keys; sourced from Vault at
   # secret/data/teams/labs/trading-data/{cryptocompare,etherscan}. CryptoPanic
