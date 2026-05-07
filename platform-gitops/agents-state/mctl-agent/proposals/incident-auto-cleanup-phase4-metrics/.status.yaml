@@ -1,14 +1,3 @@
-status: accepted
-updated_at: '2026-05-07T00:00:00Z'
-updated_by: mashkovd
-notes: |
-  Operator-seeded proposal (skipping mentor digest). Phase 4 of the
-  incident auto-cleanup track. Phases 1/2/3 shipped in 1.8.0/1.9.0/
-  1.10.0; Phase 4 wires Prometheus metrics so the cleanup activity is
-  visible in Grafana and alertable. Mirrors the mctl-api standalone
-  ServiceMonitor pattern (port http, path /metrics) — does not
-  require base-service chart changes.
-
-  Cardinality kept low (status / source / reason / outcome only — no
-  tenant or service labels) so the time series count stays bounded
-  with cluster scale.
+status: in-progress
+updated_at: '2026-05-06T23:47:10Z'
+updated_by: mctl-agents[bot]
