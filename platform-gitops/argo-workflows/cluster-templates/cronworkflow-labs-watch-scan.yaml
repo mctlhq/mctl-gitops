@@ -51,17 +51,25 @@ spec:
   # let it complete cleanly before the next one.
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 300
-  successfulJobsHistoryLimit: 3
-  failedJobsHistoryLimit: 3
+  # Counts, NOT days. With a `*/30` cron (48 ticks/day) 144 ≈ 3 days
+  # of triage history and 72 ≈ 1.5 days of failures. Default 3
+  # covered only 90 min, useless for any retroactive look. Same
+  # cadence math as cronworkflow-mctl-agents-shepherd.yaml.
+  successfulJobsHistoryLimit: 144
+  failedJobsHistoryLimit: 72
   # Active. Monitoring threshold cadence is 30 min; dedup window 4h
   # per symbol prevents alert spam.
   suspend: false
   workflowSpec:
     serviceAccountName: argo-workflow-sa
     ttlStrategy:
-      # 24h retention — explicit value avoids the Argo v3.7.10
-      # archive-worker NULL-nodes wedge (ref: reference_argo_archive_bug).
-      secondsAfterCompletion: 86400
+      # 3d retention — must outlive the successfulJobsHistoryLimit (144)
+      # at the `*/30` cadence (48 ticks/d). Explicit value also avoids
+      # the Argo v3.7.10 archive-worker NULL-nodes wedge
+      # (ref: reference_argo_archive_bug). Bumped from 86400 to 259200
+      # for Codex P1 on PR #147 — without this the 3-day history goal
+      # was unreachable because Argo would prune at 24h regardless.
+      secondsAfterCompletion: 259200
     # Per-tenant mutex on the alerts state file. Not the shared
     # mctl-gitops-main-writes because we don't push to gitops.
     synchronization:

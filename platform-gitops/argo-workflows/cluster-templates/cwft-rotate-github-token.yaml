@@ -19,12 +19,22 @@ spec:
   timezone: "UTC"
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 120
-  successfulJobsHistoryLimit: 3
-  failedJobsHistoryLimit: 3
+  # Counts, NOT days. With a `*/30` cron (48 ticks/day) 144 ≈ 3 days
+  # of triage history. Default 3 covered only 90 min — masked the
+  # 2026-04-30 MinIO-full failure once recovery rolled it out of
+  # history.
+  successfulJobsHistoryLimit: 144
+  failedJobsHistoryLimit: 72
   workflowSpec:
     serviceAccountName: argo-workflow-sa
+    # 3d TTL — must outlive successfulJobsHistoryLimit (144) at the
+    # `*/30` cadence (48 ticks/d). Default 1h pruned everything inside
+    # an hour, making the kept-history goal of 144 successful runs
+    # unreachable (Codex P1 on PR #147). The 3600 value was harmless
+    # for the rotation primary purpose (only the latest token matters)
+    # but defeated the new triage-history requirement.
     ttlStrategy:
-      secondsAfterCompletion: 3600
+      secondsAfterCompletion: 259200
     entrypoint: rotate
     templates:
       - name: rotate
