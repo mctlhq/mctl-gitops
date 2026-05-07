@@ -113,16 +113,10 @@ extraObjects:
             - protocol: TCP
               port: 443
 extraExternalSecrets:
-  ghcr-credentials:
-    refreshInterval: 24h
-    targetSecret: ghcr-credentials
-    targetTemplateType: kubernetes.io/dockerconfigjson
-    targetTemplateMetadataAnnotations:
-      argocd.argoproj.io/compare-options: IgnoreExtraneous
-    data:
-      - secretKey: .dockerconfigjson
-        remoteKey: platform/backstage/ghcr-credentials
-        property: dockerconfigjson
+  # ghcr-credentials ExternalSecret is owned by labs-openclaw (also referenced
+  # by labs-kuptsi-app as imagePullSecret). Defining it here too produced an
+  # ArgoCD SharedResourceWarning. The Secret is namespace-wide; one owner is
+  # enough.
   # Free-tier upstream API keys. Operator provisions these in Vault at
   # secret/data/teams/labs/trading-data/{cryptocompare,etherscan} (field
   # `api_key`). NEWS_API_KEY is consumed by mctl-trading-data's news.py
