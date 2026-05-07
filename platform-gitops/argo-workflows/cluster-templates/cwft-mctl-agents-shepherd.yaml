@@ -548,6 +548,12 @@ spec:
                 name: mctl-agents-secrets
                 key: telegram-chat-id
                 optional: true
+          - name: MCTL_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: mctl-token
+                optional: true
           # Workflow params + status injected as env vars so the
           # shell layer can quote them safely. Even though this is
           # just a notification step, raw `workflow.parameters.*`
@@ -572,11 +578,7 @@ spec:
             value: "{{workflow.outputs.parameters.degraded_apps}}"
         source: |
           set +e
-          if [ -z "$TG_BOT_TOKEN" ] || [ -z "$TG_CHAT_ID" ]; then
-            echo "ℹ️  TG_BOT_TOKEN or TG_CHAT_ID not set; skipping notification."
-            exit 0
-          fi
-          apk add --no-cache curl ca-certificates >/dev/null 2>&1
+          apk add --no-cache curl ca-certificates jq >/dev/null 2>&1
 
           case "$WORKFLOW_STATUS" in
             Succeeded) ICON="✅" ;;
@@ -600,8 +602,46 @@ spec:
             TEXT="${TEXT}\n⚠️ post-deploy-verify flagged: ${WORKFLOW_DEGRADED_APPS}"
           fi
 
-          curl -s -o /dev/null -w 'telegram http=%{http_code}\n' \
-            -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
-            -H "Content-Type: application/json" \
-            -d "{\"chat_id\":\"${TG_CHAT_ID}\",\"text\":\"${TEXT}\",\"disable_web_page_preview\":true}"
+          # Telegram leg.
+          if [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
+            curl -s -o /dev/null -w 'telegram http=%{http_code}\n' \
+              -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+              -H "Content-Type: application/json" \
+              -d "{\"chat_id\":\"${TG_CHAT_ID}\",\"text\":\"${TEXT}\",\"disable_web_page_preview\":true}"
+          else
+            echo "ℹ️  TG_BOT_TOKEN or TG_CHAT_ID not set; skipping Telegram leg."
+          fi
+
+          # Incident leg — only on terminal failure. See B6 G3 in
+          # ~/.claude/plans/mctl-agents-daily-cron-visibility.md for why
+          # cron-driven failures need to land in mctl_list_incidents.
+          if { [ "$WORKFLOW_STATUS" = "Failed" ] || [ "$WORKFLOW_STATUS" = "Error" ]; } && [ -n "$MCTL_TOKEN" ]; then
+            # Suffix the id with epoch-second so `argo retry <wf>`
+            # produces a fresh incident — workflow names/UIDs stay
+            # stable across retries (Codex P2 on PR #149).
+            INCIDENT_ID="argo-${WORKFLOW_NAME}-$(date +%s)"
+            SUMMARY="shepherd ${SUBJECT} ${WORKFLOW_STATUS} after ${WORKFLOW_DURATION}s — ${UI_URL}"
+            if [ -n "$WORKFLOW_DEGRADED_APPS" ]; then
+              SUMMARY="${SUMMARY} | post-deploy-verify flagged: ${WORKFLOW_DEGRADED_APPS}"
+            fi
+            # JSON-encode via jq so quotes / newlines / backslashes in
+            # WORKFLOW_SLUG / WORKFLOW_SERVICE cannot break the body.
+            BODY=$(jq -nc --arg id "$INCIDENT_ID" --arg summary "$SUMMARY" '{
+              id: $id,
+              source: "argo-workflows",
+              type: "workflow_failed",
+              tenant: "admins",
+              service: "mctl-agents",
+              summary: $summary,
+              severity: "warning",
+              status: "open"
+            }')
+            curl -s -o /dev/null -w 'incident http=%{http_code}\n' \
+              -X POST "https://api.mctl.ai/api/v1/incidents" \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer ${MCTL_TOKEN}" \
+              -d "$BODY"
+          else
+            echo "ℹ️  Workflow ${WORKFLOW_STATUS} or MCTL_TOKEN missing; skipping incident leg."
+          fi
           exit 0
