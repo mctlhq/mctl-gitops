@@ -1,0 +1,121 @@
+name: Release & Deploy
+run-name: "release-deploy ${{ inputs.team_name }}/${{ inputs.component_name }} ${{ inputs.image_tag }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: "Source repo (e.g. mctlhq/mctl-docs)"
+        required: true
+        type: string
+      git_ref:
+        description: "Git ref to build (typically the new release tag)"
+        required: true
+        type: string
+      image_name:
+        description: "Full image name (e.g. ghcr.io/mctlhq/mctl-docs)"
+        required: true
+        type: string
+      image_tag:
+        description: "Image tag (typically the version, e.g. 0.1.18)"
+        required: true
+        type: string
+      dockerfile_path:
+        description: "Path to Dockerfile in source repo"
+        required: false
+        default: "Dockerfile"
+        type: string
+      team_name:
+        description: "Team owning the service (matches platform-gitops/services/<team>/)"
+        required: true
+        type: string
+      component_name:
+        description: "Service name (matches the directory under platform-gitops/services/<team>/)"
+        required: true
+        type: string
+
+jobs:
+  build:
+    uses: ./.github/workflows/build-image.yaml
+    with:
+      repo: ${{ inputs.repo }}
+      git_ref: ${{ inputs.git_ref }}
+      image_name: ${{ inputs.image_name }}
+      image_tag: ${{ inputs.image_tag }}
+      dockerfile_path: ${{ inputs.dockerfile_path }}
+      team_name: ${{ inputs.team_name }}
+      component_name: ${{ inputs.component_name }}
+      build_id: rd-${{ github.run_id }}
+    secrets: inherit
+
+  bump:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Bump image.tag in values.yaml
+        env:
+          TEAM: ${{ inputs.team_name }}
+          SERVICE: ${{ inputs.component_name }}
+          IMAGE_NAME: ${{ inputs.image_name }}
+          NEW_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+          F="platform-gitops/services/${TEAM}/${SERVICE}/values.yaml"
+          if [[ ! -f "$F" ]]; then
+            echo "::error::values.yaml not found at $F"
+            exit 1
+          fi
+          python3 <<'PYEOF'
+          import os, re, sys
+          path = f"platform-gitops/services/{os.environ['TEAM']}/{os.environ['SERVICE']}/values.yaml"
+          image_name = os.environ['IMAGE_NAME']
+          new_tag = os.environ['NEW_TAG']
+          with open(path) as fp:
+              content = fp.read()
+          pattern = re.compile(
+              r'(repository:\s*' + re.escape(image_name) + r'\n\s+tag:)[^\n]+'
+          )
+          new_content, n = pattern.subn(r'\1 "' + new_tag + '"', content)
+          if n == 0:
+              print(f"ERROR: could not find 'repository: {image_name}' + tag pattern in {path}", file=sys.stderr)
+              sys.exit(2)
+          with open(path, 'w') as fp:
+              fp.write(new_content)
+          print(f"OK: bumped {n} occurrence(s) in {path}")
+          PYEOF
+
+      - name: Commit and push
+        env:
+          TEAM: ${{ inputs.team_name }}
+          SERVICE: ${{ inputs.component_name }}
+          NEW_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+          git config user.email "ci@mctl.ai"
+          git config user.name "mctl-ci"
+          F="platform-gitops/services/${TEAM}/${SERVICE}/values.yaml"
+          git add "$F"
+          if git diff --staged --quiet; then
+            echo "::notice::No tag change in $F (already at ${NEW_TAG})"
+            exit 0
+          fi
+          git commit -m "chore: bump ${TEAM}/${SERVICE} to ${NEW_TAG}"
+          git push
+
+      - name: Summary
+        run: |
+          {
+            echo "## Released ${{ inputs.team_name }}/${{ inputs.component_name }}"
+            echo ""
+            echo "| Field | Value |"
+            echo "|-------|-------|"
+            echo "| **Image** | \`${{ inputs.image_name }}:${{ inputs.image_tag }}\` |"
+            echo "| **Git ref** | \`${{ inputs.git_ref }}\` |"
+            echo "| **Gitops file** | \`platform-gitops/services/${{ inputs.team_name }}/${{ inputs.component_name }}/values.yaml\` |"
+          } >> $GITHUB_STEP_SUMMARY
