@@ -53,6 +53,13 @@ env:
   NODE_OPTIONS: "--max-old-space-size=1792"
   OPENCLAW_CONFIG_PATH: /config-rw/openclaw.json
   OPENCLAW_OPENAI_CODEX_PORTAL_CALLBACK_URL: ""
+  # Resolved by openclaw bundle-mcp from the `__TRADING_DATA_URL__`
+  # placeholder in mcp.servers.trading-data.env (literal values in
+  # mcp.servers.<x>.env are not propagated to the spawned bridge process —
+  # only `__VAR__` placeholder substitution from pod env works). Service
+  # name has the `-base-service` suffix that the base-service chart adds
+  # by default.
+  TRADING_DATA_URL: "http://labs-trading-data-base-service.labs.svc.cluster.local:8080/mcp"
 # Probe tuning — k8s defaults (timeoutSeconds=1, failureThreshold=3) are too
 # tight for this image: gateway plugin install + first /healthz response can
 # stall the Node event loop past 1s. Explicit timeoutSeconds + failureThreshold
@@ -1539,7 +1546,8 @@ configMaps:
               "command": "node",
               "args": ["/scripts/trading-data-mcp-proxy.js"],
               "env": {
-                "TRADING_DATA_URL": "http://labs-trading-data.labs.svc.cluster.local:8080/mcp"
+                "TRADING_DATA_URL": "__TRADING_DATA_URL__",
+                "TRADING_DATA_TOKEN": "__TRADING_DATA_TOKEN__"
               }
             }
           }
