@@ -30,16 +30,19 @@ env:
   UVICORN_RELOAD: "0"
   GROUP_DELAY: "10"
   MAX_ACTIVITY_WORKERS: "20"
-  # asyncpg DSN built from $(DB_USER)/$(DB_PASSWORD) injected by dbSecret below.
-  # The pydantic settings field name is `database_url` and the lifespan
-  # alembic step + Temporal worker both depend on it.
-  DATABASE_URL: "postgresql+asyncpg://$(DB_USER):$(DB_PASSWORD)@shared-pg-rw.platform-db.svc.cluster.local:5432/labs-kuptsi-app"
-# Inject DB_USER / DB_PASSWORD from Vault (provisioned by mctl_provision_database).
-# The base-service chart's `dbSecret:` block creates the ExternalSecret +
-# Kubernetes Secret only — it does NOT auto-add the Secret to envFrom. We
-# wire it explicitly below alongside the user-managed `*-secrets` (filled in
-# via Backstage UI / mctl_deploy_service update-config), so $(DB_USER) and
-# $(DB_PASSWORD) inside the `DATABASE_URL` template resolve at pod startup.
+# DATABASE_URL with asyncpg scheme is assembled from Vault DB creds via
+# ExternalSecret templating below (`externalSecret.targetTemplateData`)
+# rather than the previous `env: DATABASE_URL: "...$(DB_USER):$(DB_PASSWORD)..."`
+# pattern. Two reasons:
+#   1) The `$(...)` shell metacharacters in env_vars caused tpl-git-commit
+#      (clusterworkflowtemplate) to fail at the inline assignment step
+#      `ENV_VARS="{{inputs.parameters.env_vars}}"` — shell expanded $(DB_USER)
+#      as command substitution, exit 127, set -e killed the workflow.
+#   2) ESO target.template lets us keep the placeholder pattern at rest in
+#      gitops while ESO renders the final URL into the synced Secret.
+# DB creds still come from `dbSecret:` below for the temporal-worker container
+# (which has its own env block referencing $(DB_USER)/$(DB_PASSWORD) — that
+# path uses K8s native env-var substitution at pod startup, not shell).
 dbSecret:
   vaultPath: teams/labs/kuptsi-app/database
 envFrom:
@@ -121,7 +124,22 @@ ingress:
         - labs-kuptsi-app.mctl.me
 externalSecret:
   targetSecret: kuptsi-app-secrets
+  # ESO templating renders the asyncpg-scheme DATABASE_URL into the
+  # synced Secret using DB_USER + DB_PASSWORD pulled from the same
+  # Vault path that backs `dbSecret:` above. The base-service chart
+  # wires this through `target.template.data` with `mergePolicy: Merge`,
+  # so the rest of the data list still appears in the Secret as-is.
+  # Auto-rotates with the DB password — no separate Vault key to
+  # maintain alongside teams/labs/kuptsi-app/database.
+  targetTemplateData:
+    DATABASE_URL: "postgresql+asyncpg://{{ .DB_USER }}:{{ .DB_PASSWORD }}@shared-pg-rw.platform-db.svc.cluster.local:5432/labs-kuptsi-app"
   data:
+    - secretKey: DB_USER
+      remoteKey: teams/labs/kuptsi-app/database
+      property: username
+    - secretKey: DB_PASSWORD
+      remoteKey: teams/labs/kuptsi-app/database
+      property: password
     - secretKey: LOGFIRE_READ_TOKEN
       remoteKey: teams/labs/kuptsi-app
       property: LOGFIRE_READ_TOKEN
