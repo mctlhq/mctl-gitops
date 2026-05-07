@@ -15,7 +15,7 @@ metadata:
            with rebase-on-conflict (5 retries).
 
       Triggered by:
-        - cron via CronWorkflow `mctl-agents-daily` (mode=full, daily 06:00 UTC)
+        - cron via CronWorkflow `mctl-agents-daily` (mode=full, weekly Sat 00:00 UTC)
         - mctl-api MCP tools mctl_trigger_{agents_run,mentor_only,single_service}
           (each submits a Workflow that references this template via
           workflowTemplateRef + clusterScope:true with appropriate parameters)
