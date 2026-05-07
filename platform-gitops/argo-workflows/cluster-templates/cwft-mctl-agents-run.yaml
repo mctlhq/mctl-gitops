@@ -222,10 +222,18 @@ spec:
           - name: deploy-key
             mountPath: /secrets/deploy-key
 
-    # ── 4. Telegram notification (onExit handler — always fires) ──────────
+    # ── 4. Telegram + incident notification (onExit handler — always fires) ─
     # Posts a one-line summary to admins chat with mode, status, duration,
     # and a link to the workflow UI. Best-effort: failures don't fail the
     # workflow itself (we already finished the real work by this point).
+    #
+    # On Failed / Error also POSTs to mctl-api `/api/v1/incidents` so the
+    # cron-driven failure becomes a tracked incident in mctl_list_incidents
+    # rather than a Telegram-only one-shot. Without this, scheduled cron
+    # failures (mctl-agents-daily firing on a broken day) had no record in
+    # the alert store and so never showed up in the incident dashboard —
+    # exposed during the 2026-05-07 ESO triage. See plan
+    # ~/.claude/plans/mctl-agents-daily-cron-visibility.md (G3).
     - name: notify-telegram
       script:
         image: alpine:3.19
@@ -243,6 +251,12 @@ spec:
                 name: mctl-agents-secrets
                 key: telegram-chat-id
                 optional: true
+          - name: MCTL_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: mctl-token
+                optional: true
           # Workflow params + status injected as env vars so the shell layer
           # can quote them safely. Avoid raw `workflow.parameters.*` (Argo template syntax)
           # interpolation in the script body.
@@ -258,11 +272,7 @@ spec:
             value: "{{workflow.duration}}"
         source: |
           set +e
-          if [ -z "$TG_BOT_TOKEN" ] || [ -z "$TG_CHAT_ID" ]; then
-            echo "ℹ️  TG_BOT_TOKEN or TG_CHAT_ID not set; skipping notification."
-            exit 0
-          fi
-          apk add --no-cache curl ca-certificates >/dev/null 2>&1
+          apk add --no-cache curl ca-certificates jq >/dev/null 2>&1
 
           case "$WORKFLOW_STATUS" in
             Succeeded) ICON="✅" ;;
@@ -278,9 +288,50 @@ spec:
           UI_URL="https://workflows.mctl.ai/workflows/argo-workflows/${WORKFLOW_NAME}"
           TEXT="${ICON} mctl-agents: ${SUBJECT} — ${WORKFLOW_STATUS} (${WORKFLOW_DURATION}s)\n${UI_URL}"
 
-          curl -s -o /dev/null -w 'telegram http=%{http_code}\n' \
-            -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
-            -H "Content-Type: application/json" \
-            -d "{\"chat_id\":\"${TG_CHAT_ID}\",\"text\":\"${TEXT}\",\"disable_web_page_preview\":true}"
+          # Telegram leg.
+          if [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
+            curl -s -o /dev/null -w 'telegram http=%{http_code}\n' \
+              -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+              -H "Content-Type: application/json" \
+              -d "{\"chat_id\":\"${TG_CHAT_ID}\",\"text\":\"${TEXT}\",\"disable_web_page_preview\":true}"
+          else
+            echo "ℹ️  TG_BOT_TOKEN or TG_CHAT_ID not set; skipping Telegram leg."
+          fi
+
+          # Incident leg — only on terminal failure.
+          if { [ "$WORKFLOW_STATUS" = "Failed" ] || [ "$WORKFLOW_STATUS" = "Error" ]; } && [ -n "$MCTL_TOKEN" ]; then
+            # Workflow name is the natural dedup key — a single Workflow
+            # only finishes once, so the same id never collides on retry.
+            # Suffix the id with the onExit-run epoch second so each
+            # `argo retry <wf>` produces a fresh incident. Argo retries
+            # reuse the same Workflow object/name and a stable
+            # `workflow.uid`, so without this suffix a retry that
+            # fails again would POST a duplicate id and the alert
+            # store would dedup-reject it (Codex P2 on PR #149).
+            INCIDENT_ID="argo-${WORKFLOW_NAME}-$(date +%s)"
+            SUMMARY="mctl-agents-run ${SUBJECT} ${WORKFLOW_STATUS} after ${WORKFLOW_DURATION}s — ${UI_URL}"
+            # JSON-encode dynamic fields via jq so a quote / newline /
+            # backslash in WORKFLOW_SERVICE / WORKFLOW_SLUG cannot break
+            # the request body. printf-style construction would let a
+            # crafted slug like `; rm` / `\"` reject the POST silently
+            # and the failure-incident would never reach the alert store.
+            BODY=$(jq -nc --arg id "$INCIDENT_ID" --arg summary "$SUMMARY" '{
+              id: $id,
+              source: "argo-workflows",
+              type: "workflow_failed",
+              tenant: "admins",
+              service: "mctl-agents",
+              summary: $summary,
+              severity: "warning",
+              status: "open"
+            }')
+            curl -s -o /dev/null -w 'incident http=%{http_code}\n' \
+              -X POST "https://api.mctl.ai/api/v1/incidents" \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer ${MCTL_TOKEN}" \
+              -d "$BODY"
+          else
+            echo "ℹ️  Workflow ${WORKFLOW_STATUS} or MCTL_TOKEN missing; skipping incident leg."
+          fi
           # Non-zero curl exit shouldn't fail this onExit step.
           exit 0
