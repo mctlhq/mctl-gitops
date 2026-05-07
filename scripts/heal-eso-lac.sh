@@ -72,17 +72,13 @@ done < <(
     .items[]
     | . as $o
     | ($o.metadata.annotations["kubectl.kubernetes.io/last-applied-configuration"] // "") as $lac
-    | if $lac == "" then
-        empty
-      else
-        ($lac | fromjson? // {}) as $j
-        | [
-            $o.metadata.namespace,
-            $o.metadata.name,
-            (($j.apiVersion // "") == "external-secrets.io/v1"),
-            ($j.metadata.resourceVersion != null)
-          ] | @tsv
-      end
+    | (if $lac == "" then {} else ($lac | fromjson? // {}) end) as $j
+    | [
+        $o.metadata.namespace,
+        $o.metadata.name,
+        (($j.apiVersion // "") == "external-secrets.io/v1"),
+        ($j.metadata.resourceVersion != null)
+      ] | @tsv
   '
 )
 
