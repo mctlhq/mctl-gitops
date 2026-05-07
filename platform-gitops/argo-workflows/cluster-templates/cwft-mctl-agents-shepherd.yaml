@@ -121,6 +121,18 @@ spec:
         secretName: mctl-gitops-deploy-key
         defaultMode: 0600
 
+  # Workflow-level output declaration so the onExit handler's reference
+  # to `{{workflow.outputs.parameters.degraded_apps}}` passes Argo's
+  # static validator. Without this, the CronWorkflow stays in
+  # `SpecError` state and never schedules (observed 2026-05-06 21:00 →
+  # 2026-05-07).
+  outputs:
+    parameters:
+      - name: degraded_apps
+        valueFrom:
+          parameter: "{{steps.verify.outputs.parameters.degraded_apps}}"
+          default: ""
+
   templates:
     - name: shepherd-proposals
       outputs:
@@ -446,6 +458,7 @@ spec:
       outputs:
         parameters:
           - name: degraded_apps
+            globalName: degraded_apps
             valueFrom:
               path: /tmp/degraded.txt
               # The verify step always writes this file (empty on
