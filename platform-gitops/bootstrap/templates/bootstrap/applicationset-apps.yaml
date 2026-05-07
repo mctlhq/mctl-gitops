@@ -53,6 +53,8 @@ spec:
         syncOptions:
           - CreateNamespace=false
           - ApplyOutOfSyncOnly=true
+          - ServerSideApply=true
+          - RespectIgnoreDifferences=true
         retry:
           limit: 5
           backoff:
@@ -64,3 +66,18 @@ spec:
           name: ghcr-credentials
           jqPathExpressions:
             - .data
+        # Mirror applicationset-tenants.yaml — ESO admission webhook injects
+        # defaults absent in git, plus the legacy
+        # `kubectl.kubernetes.io/last-applied-configuration` annotation can
+        # pin a stale apiVersion across chart-version churn (2026-05-07
+        # 0.10.x↔2.x roundtrip wedged ArgoCD on 41 ESs).
+        - group: external-secrets.io
+          kind: ExternalSecret
+          jqPathExpressions:
+            - .metadata.annotations
+            - .metadata.managedFields
+            - .spec.target.deletionPolicy
+            - .spec.data[].remoteRef.conversionStrategy
+            - .spec.data[].remoteRef.decodingStrategy
+            - .spec.data[].remoteRef.metadataPolicy
+            - .status
