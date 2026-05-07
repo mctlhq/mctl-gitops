@@ -1,3 +1,23 @@
-status: in-progress
-updated_at: '2026-05-07T00:12:44Z'
-updated_by: mctl-agents[bot]
+status: rejected
+updated_at: '2026-05-07T00:35:00Z'
+updated_by: mashkovd
+notes: |
+  Superseded by a 2-PR split: incident-auto-cleanup-phase4a-metrics-wiring
+  + incident-auto-cleanup-phase4b-metrics-full.
+
+  The original single-PR proposal exhausted the implementer's $3
+  per-proposal budget cap on two consecutive runs:
+    - mctl-agents-implement-2807d03b: failed at TestMetricsRegistered
+      / TestMetricsEndpoint (test isolation issue).
+    - mctl-agents-implement-735d5f3e (force=true retry): build clean
+      but ran out of budget at `go vet ./...`, branch never pushed.
+
+  Scope was too large for one $3 implementer run: 6 metrics + 4
+  files modified + new package + new ServiceMonitor + 8 tests.
+  Empirical reference: Phase 1 (PR #11), Phase 2 (PR #13), Phase 3
+  (PR #12) all fit, but Phase 4 was 600+ LoC with new dep + new
+  test patterns.
+
+  4a covers the bare minimum (one counter + /metrics endpoint +
+  ServiceMonitor); 4b layers the remaining five metrics + helpers
+  on top.
