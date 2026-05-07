@@ -1546,8 +1546,8 @@ configMaps:
               "command": "node",
               "args": ["/scripts/trading-data-mcp-proxy.js"],
               "env": {
-                "TRADING_DATA_URL": "__TRADING_DATA_URL__",
-                "TRADING_DATA_TOKEN": "__TRADING_DATA_TOKEN__"
+                "TRADING_DATA_URL": "${TRADING_DATA_URL}",
+                "TRADING_DATA_TOKEN": "${TRADING_DATA_TOKEN}"
               }
             }
           }
