@@ -21,8 +21,13 @@ spec:
   timezone: "UTC"
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 600
-  successfulJobsHistoryLimit: 3
-  failedJobsHistoryLimit: 3
+  # Counts, NOT days. The cron is once-per-day (`0 6 * * *`), so 14
+  # successes ≈ 14 days and 7 failures ≈ 7 days — exactly the
+  # retroactive-triage window we wanted. Default 3 was 3 days,
+  # which masked the firing pattern during the 2026-05-07 ESO
+  # triage (~/.claude/plans/mctl-agents-daily-cron-visibility.md).
+  successfulJobsHistoryLimit: 14
+  failedJobsHistoryLimit: 7
   workflowSpec:
     workflowTemplateRef:
       name: mctl-agents-run
