@@ -5,18 +5,7 @@
 
 image:
   repository: ghcr.io/mctlhq/kuptsi-app
-  tag: "0.2.0"
-# Workaround: kuptsi-app:0.2.0 Dockerfile lost its default CMD when commit
-# `786786c revert` (kuptsi-v2 master, 2026-05-07) reverted the gunicorn CMD
-# added in `b285c3d feat(docker): default CMD = gunicorn HTTP for k8s deploys`.
-# Without a CMD the base image (python:3.12-slim) exits 0 on startup and the
-# pod CrashLoopBackOff'd silently. Override the command here until 0.2.1 ships
-# with the CMD restored. Drop this block once kuptsi-app image carries it
-# again.
-command:
-  - sh
-  - -c
-  - exec gunicorn -k uvicorn.workers.UvicornWorker src.app:app --bind 0.0.0.0:${PORT} --workers ${WEB_CONCURRENCY}
+  tag: "0.2.1"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
@@ -87,7 +76,7 @@ extraContainers:
     # ride the same kuptsi-v2 build. mctl_deploy_service action=deploy only
     # bumps `image.tag` in this file — bump here manually after each release
     # (or accept lag if you intentionally want to canary).
-    image: ghcr.io/mctlhq/kuptsi-app:0.2.0
+    image: ghcr.io/mctlhq/kuptsi-app:0.2.1
     imagePullPolicy: IfNotPresent
     command: ["python", "-m", "src.temporal.worker"]
     env:
