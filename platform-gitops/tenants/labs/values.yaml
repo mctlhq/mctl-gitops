@@ -10,13 +10,20 @@ tenant:
     - userId: mashkoffdmitry
       role: owner
   quotas:
-    # Bumped 2026-05-06 to fit kuptsi-app (FastAPI + Temporal worker side
-    # container) alongside labs-openclaw and transient provision/build pods.
-    # Previous limits were saturated by labs-openclaw (2600m CPU / 1104Mi req),
-    # blocking provision-database workflow with `exceeded quota`.
-    requests.cpu: "1500m"
+    # Bumped 2026-05-08: 4 baseline service pods (kuptsi-app, openclaw,
+    # trading-data, pelican-proxy) settle at ~5100m used → only 900m headroom
+    # under the previous limits.cpu=6, which is below the 1000m a single
+    # deploy-service workflow scaffold pod (validate / build-image / commit /
+    # refresh-apps-appset) requests. CI/CD auto-deploys from
+    # mashkoffdmitry/pelican-libertex-social were stuck Pending indefinitely.
+    # Bump limits.cpu 6 → 8 (one extra workflow slot + buffer for a future 5th
+    # service); requests.cpu 1500m → 2 keeps reserve symmetric.
+    #
+    # Earlier history (2026-05-06): bumped to fit kuptsi-app FastAPI +
+    # Temporal worker alongside labs-openclaw (2600m / 1104Mi req).
+    requests.cpu: "2"
     requests.memory: "3Gi"
-    limits.cpu: "6"
+    limits.cpu: "8"
     limits.memory: "7Gi"
     pods: "15"
     persistentvolumeclaims: "5"
