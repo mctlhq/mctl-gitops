@@ -1,0 +1,50 @@
+# Service: pelican-proxy
+# Team: labs
+
+# Chart: base-service
+
+image:
+  repository: ghcr.io/mctlhq/pelican-proxy
+  tag: "0.2.0"
+imagePullSecrets:
+  - name: ghcr-credentials
+service:
+  port: 8787
+backstage:
+  kubernetesId: pelican-proxy
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+env:
+  APP_ENV: production
+ingress:
+  enabled: true
+  hosts:
+    - labs-pelican-proxy.mctl.ai
+    - labs-pelican-proxy.mctl.me
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls:
+    - secretName: pelican-proxy-tls
+      hosts:
+        - labs-pelican-proxy.mctl.ai
+        - labs-pelican-proxy.mctl.me
+externalSecret:
+  targetSecret: pelican-proxy-secrets
+  data:
+    - secretKey: LIBERTEX_EMAIL
+      remoteKey: teams/labs/pelican-proxy
+      property: LIBERTEX_EMAIL
+    - secretKey: LIBERTEX_PASSWORD
+      remoteKey: teams/labs/pelican-proxy
+      property: LIBERTEX_PASSWORD
+    - secretKey: INGEST_SECRET
+      remoteKey: teams/labs/pelican-proxy
+      property: INGEST_SECRET
+envFrom:
+  - secretRef:
+      name: pelican-proxy-secrets
