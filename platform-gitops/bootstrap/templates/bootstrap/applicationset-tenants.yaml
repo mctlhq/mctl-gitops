@@ -67,11 +67,13 @@ spec:
         # ESO admission webhook injects default fields into .spec that are absent in git.
         # These are structural defaults (not set by external-secrets manager in managedFields),
         # so jqPathExpressions is used to explicitly ignore each injected path.
+        # Note: .metadata.managedFields must NOT be listed here — with RespectIgnoreDifferences=true
+        # + ServerSideApply, ArgoCD would inject stale cached managedFields into SSA requests,
+        # causing "metadata.managedFields must be nil" rejections when an ES is deleted and recreated.
         - group: external-secrets.io
           kind: ExternalSecret
           jqPathExpressions:
             - .metadata.annotations
-            - .metadata.managedFields
             - .spec.target.deletionPolicy
             - .spec.data[].remoteRef.conversionStrategy
             - .spec.data[].remoteRef.decodingStrategy
