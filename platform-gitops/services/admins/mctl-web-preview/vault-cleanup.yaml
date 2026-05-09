@@ -21,7 +21,7 @@ spec:
         - name: VAULT_ADDR
           value: "https://secrets.mctl.me"
         - name: TEAM
-          value: "labs"
+          value: "admins"
         - name: SERVICE
           value: "mctl-web-preview"
         command:
