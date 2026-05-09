@@ -1,9 +1,9 @@
 # Service: mctl-web-preview
-# Team: labs
+# Team: admins
 # Chart: base-service
 
 image:
-  repository: ghcr.io/mctlhq/mctl-web
+  repository: ghcr.io/mctlhq/mctl-web-preview
   tag: "0.0.3-preview"
 imagePullSecrets:
   - name: ghcr-credentials
