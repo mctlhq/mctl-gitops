@@ -3,6 +3,8 @@
 
 # Chart: base-service
 
+replicaCount: 0
+
 image:
   repository: ghcr.io/mctlhq/kuptsi-app
   tag: "0.2.4"
