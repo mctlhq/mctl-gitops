@@ -1,0 +1,28 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: mctl-web-preview
+  namespace: labs
+  description: "mctl-web feat/redesign preview"
+  annotations:
+    backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=labs-mctl-web-preview
+    backstage.io/kubernetes-id: mctl-web-preview
+    backstage.io/kubernetes-namespace: labs
+    argocd/app-name: labs-mctl-web-preview
+    github.com/source-repo: mctlhq/mctl-web
+    mctl.me/auto-deploy: "false"
+  links:
+    - url: https://ops.mctl.ai/applications/argocd/labs-mctl-web-preview
+      title: ArgoCD
+      icon: dashboard
+    - url: https://mctl-web-preview.mctl.ai
+      title: Preview URL
+      icon: web
+  labels:
+    team: labs
+    env: preview
+spec:
+  type: service
+  lifecycle: experimental
+  owner: group:default/labs
+  system: system:default/team-labs
