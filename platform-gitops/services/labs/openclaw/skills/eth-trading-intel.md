@@ -1,6 +1,6 @@
 ---
 name: eth-trading-intel
-description: Read-only crypto trading intelligence for ETH/BTC/SOL via the CoinGlass MCP server plus a local Bybit/Binance indicator engine (Phase 1.6). Use when the user types /eth /btc /sol /scan /risk /why /watch /unwatch /settings /set_threshold /help /last /funding /oi /etf /pulse /rsi /macd /bb /adx /heatmap, or asks for an open-interest, funding, long/short, liquidation, RSI/MACD/Bollinger/ADX, multi-timeframe heatmap, max-pain, ETF-flow, or whale-positions snapshot. Observation-only. Never executes trades. Output is a directional snapshot (long_score, short_score, regime, conviction) plus reasons, risks, and explicit missing_data.
+description: Read-only crypto trading intelligence for ETH/BTC/SOL via the CoinGlass MCP server plus a local Bybit/Binance indicator engine (Phase 1.6). Use when the user types /eth /btc /sol /scan /risk /why /watch /unwatch /settings /set_threshold /help /last /funding /oi /etf /pulse /rsi /macd /bb /adx /heatmap, or asks for an open-interest, funding, long/short, liquidation, RSI/MACD/Bollinger/ADX, multi-timeframe heatmap, ETF-flow, or whale-positions snapshot. Observation-only. Never executes trades. Output is a directional snapshot (long_score, short_score, regime, conviction) plus reasons, risks, and explicit missing_data.
 ---
 
 # eth-trading-intel
@@ -41,7 +41,7 @@ description: Read-only crypto trading intelligence for ETH/BTC/SOL via the CoinG
 - `/adx SYMBOL` — ADX(14) 4h trend strength; source: local Bybit kline
 - `/heatmap [tf]` — multi-symbol RSI table по watchlist на одном TF; source: local Bybit kline
 
-Также активироваться на свободные формулировки: "разбор по ETH", "что там с фандингом", "open interest snapshot", "посмотри ликвидации", "max pain", "rsi на coinglass", "etf flows", "rsi heatmap", "Bollinger squeeze", "adx тренд".
+Также активироваться на свободные формулировки: "разбор по ETH", "что там с фандингом", "open interest snapshot", "посмотри ликвидации", "rsi на coinglass", "etf flows", "rsi heatmap", "Bollinger squeeze", "adx тренд".
 
 ## CoinGlass tier — HOBBYIST (confirmed 2026-05-05, renewal 2026-06-05)
 
