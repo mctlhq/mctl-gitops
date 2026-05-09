@@ -9,7 +9,7 @@ image:
 imagePullSecrets:
   - name: ghcr-credentials
 service:
-  port: 80
+  port: 8080
 resources:
   requests:
     cpu: 100m
@@ -37,9 +37,6 @@ ingress:
         - mctl.me
         - mctl.ru
         - mctl.ai
-probes:
-  liveness: null
-  readiness: null
 blueGreen:
   enabled: true
   autoPromotionEnabled: true
