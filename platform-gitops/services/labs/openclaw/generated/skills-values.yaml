@@ -4,7 +4,7 @@
   "eth-trading-intel": |
     ---
     name: eth-trading-intel
-    description: Read-only crypto trading intelligence for ETH/BTC/SOL via the CoinGlass MCP server plus a local Bybit/Binance indicator engine (Phase 1.6). Use when the user types /eth /btc /sol /scan /risk /why /watch /unwatch /settings /set_threshold /help /last /funding /oi /etf /pulse /rsi /macd /bb /adx /heatmap, or asks for an open-interest, funding, long/short, liquidation, RSI/MACD/Bollinger/ADX, multi-timeframe heatmap, max-pain, ETF-flow, or whale-positions snapshot. Observation-only. Never executes trades. Output is a directional snapshot (long_score, short_score, regime, conviction) plus reasons, risks, and explicit missing_data.
+    description: Read-only crypto trading intelligence for ETH/BTC/SOL via the CoinGlass MCP server plus a local Bybit/Binance indicator engine (Phase 1.6). Use when the user types /eth /btc /sol /scan /risk /why /watch /unwatch /settings /set_threshold /help /last /funding /oi /etf /pulse /rsi /macd /bb /adx /heatmap, or asks for an open-interest, funding, long/short, liquidation, RSI/MACD/ADX, multi-timeframe heatmap, ETF-flow, or whale-positions snapshot. Observation-only. Never executes trades. Output is a directional snapshot (long_score, short_score, regime, conviction) plus reasons, risks, and explicit missing_data.
     ---
 
     # eth-trading-intel
@@ -45,7 +45,7 @@
     - `/adx SYMBOL` — ADX(14) 4h trend strength; source: local Bybit kline
     - `/heatmap [tf]` — multi-symbol RSI table по watchlist на одном TF; source: local Bybit kline
 
-    Также активироваться на свободные формулировки: "разбор по ETH", "что там с фандингом", "open interest snapshot", "посмотри ликвидации", "max pain", "rsi на coinglass", "etf flows", "rsi heatmap", "Bollinger squeeze", "adx тренд".
+    Также активироваться на свободные формулировки: "разбор по ETH", "что там с фандингом", "open interest snapshot", "посмотри ликвидации", "rsi на coinglass", "etf flows", "rsi heatmap", "adx тренд".
 
     ## CoinGlass tier — HOBBYIST (confirmed 2026-05-05, renewal 2026-06-05)
 
@@ -53,59 +53,13 @@
 
     `DEFAULT_INTERVAL = "4h"` — использовать везде в snapshot pipeline и single-dimension queries. Никаких `1h` calls.
 
-    ### Available на HOBBYIST (используем)
+    ### Available на HOBBYIST (кратко)
 
-    **Discovery:**
-    - `get_futures_supported_coins`, `get_futures_supported_exchanges`, `get_futures_supported_exchange_pairs`
+    Используем: `get_futures_aggregated_open_interest_history`, `get_futures_funding_rate_oi_weight_history`, `get_futures_global_long_short_account_ratio_history`, `get_futures_top_long_short_account_ratio_history`, `get_futures_aggregated_liquidation_history`, `get_futures_price_history`, `get_futures_aggregated_cvd_history`, `get_bitcoin_etf_flow_history`, `get_ethereum_etf_flow_history`. Не использовать: `rsi_1h`, `rsi_30m`, `rsi_15m`, `macd_1h` (за HOBBYIST plan).
 
-    **Open Interest:**
-    - `get_futures_aggregated_open_interest_history` — agg OHLC, params: `symbol`, `interval` (≥4h), `limit`
-    - `get_futures_open_interest_history` — single pair single exchange
+    ### Local indicators (Phase 1.6)
 
-    **Funding:**
-    - `get_futures_funding_rate_oi_weight_history` — OI-weighted средняя funding (preferred)
-    - `get_futures_funding_rate_history` — single pair OHLC funding
-    - `get_futures_funding_rate_exchange_list` — current funding spot
-    - `get_futures_funding_rate_rank` — top/bottom 20 funding
-
-    **Long/Short:**
-    - `get_futures_global_long_short_account_ratio_history` — global retail (params: `exchange`+`symbol` pair)
-    - `get_futures_top_long_short_account_ratio_history` — top traders accounts
-    - `get_futures_top_long_short_position_ratio_history` — top traders position size
-
-    **Liquidations:**
-    - `get_futures_aggregated_liquidation_history` — agg liq bars (interval ≥4h)
-    - `get_futures_liquidation_exchange_list` — breakdown spot
-
-    **Indicators:**
-    - `get_futures_rsi_list` — sort_by `rsi_4h`/`rsi_12h`/`rsi_24h`. **Не использовать `rsi_1h`/`rsi_30m`/`rsi_15m`** — за HOBBYIST plan.
-    - `get_futures_macd_list` — sort_by `macd_4h`. Аналогично, не `macd_1h`.
-
-    **Price:**
-    - `get_futures_price_history` — OHLCV time series
-    - `get_futures_coins_price_change` — % change
-
-    **Volume:**
-    - `get_futures_aggregated_cvd_history` — taker imbalance (interval ≥4h)
-
-    **ETF flows (BTC и ETH only):**
-    - `get_bitcoin_etf_flow_history`, `get_ethereum_etf_flow_history` — daily net flows
-
-    ### Local indicators (Bybit V5 + Binance public REST) — Phase 1.6
-
-    Public, без auth, без CoinGlass tier-gate. Приоритет — local; CoinGlass `get_futures_rsi_list` / `get_futures_macd_list` остаются как cross-check, не как источник истины. Это закрывает Missing data ("RSI 4h", "MACD 4h", "aggregated CVD"), которые на HOBBYIST приходили `tier-locked`/`No content`.
-
-    **Endpoints (никаких ключей, GET, JSON):**
-    - Bybit V5 kline: `GET https://api.bybit.com/v5/market/kline?category=linear&symbol=<PAIR>&interval=<I>&limit=200`
-      - `interval`: `15` (15m), `60` (1h), `240` (4h), `720` (12h), `D` (1d). Возвращает массив (newest-first; всегда reverse в oldest-first перед расчётом).
-      - Pair format: `<COIN>USDT` (например `ETHUSDT`, `BTCUSDT`, `SOLUSDT`).
-      - Rate limit: 600 req / 5 sec на IP.
-    - Binance kline (CVD leg #1, 50%+ глобального ETH-perp объёма): `GET https://api.binance.com/api/v3/klines?symbol=<PAIR>&interval=4h&limit=6`
-      - Индекс 9 в каждой строке = `taker_buy_base_asset_volume`. Per-candle delta_quote ≈ `(2 * taker_buy_base − volume_base) * close`. Сумма по 6 свечам = 24h CVD.
-    - **OKX V5 taker-volume (CVD leg #2, Phase 2 Hook A):** три параллельных GET (все public, no auth, no rate-limit gate):
-      - `https://www.okx.com/api/v5/rubik/stat/taker-volume-contract?instId=<COIN>-USDT-SWAP&period=4H` → 100 баров `[ts, buyVol, sellVol]`. Объёмы — в **контрактах**, не в base asset.
-      - `https://www.okx.com/api/v5/public/instruments?instType=SWAP&instId=<COIN>-USDT-SWAP` → `data[0].ctVal` (контрактный размер в base coin; для ETH-USDT-SWAP сейчас `0.1` ETH; кэшировать на длительный срок — меняется крайне редко). `ctValCcy` обязан быть равен base coin (защитный assert).
-      - `https://www.okx.com/api/v5/market/candles?instId=<COIN>-USDT-SWAP&bar=4H&limit=100` → 4h klines с close-ценой (поле `[4]`). **OKX-родной price source — независим от Binance.** Это даёт `okx_only` ветке (см. agreement cascade ниже) реально вычислимый USD delta когда Binance unreachable.
+    Bybit V5 + Binance + OKX public klines (no auth). Источники истины для RSI/MACD/ADX; CoinGlass — cross-check only. Interval: 15/60/240/720/D для Bybit; 4h для Binance/OKX. Limit: 200 для Bybit, 6 для Binance, 100 для OKX.
       - **Per-bar pricing rule (важно):** для каждого OKX taker-volume бара брать matching close из **OKX market/candles** по timestamp bucket (`floor(ts / 14_400_000) * 14_400_000`, оба endpoints UTC-aligned 4h). Per-bar delta_usd = `(buyVol − sellVol) * ctVal * okx_close_at_that_bar`. Это и решает codex-finding "single close vs per-bar drift" (sign может flip при дрифте цены), и оставляет `okx_only` достижимым когда Binance leg падает.
       - **Cross-venue price sanity check:** если OKX close vs Binance close на одном и том же ts расходятся >2% → append `risks: ["okx/binance price spread >2% at <ts>: $<okx>, $<binance>"]`. Реальный price spread на perp ETH между биржами обычно <0.1%; >2% означает либо stale data на одной из бирж, либо аутентичный venue dislocation (важный сигнал для оператора).
       - Если кол-во баров OKX taker-volume и OKX candles не совпадает (rubik отдал меньше 6 свежих или timestamps смещены): сматчить по той же `bucket_ts` формуле, пары без обоих источников пропустить.
@@ -115,7 +69,6 @@
     **Computed fields:**
     - RSI(14) — Wilder's smoothing — TFs: 15m, 1h, 4h, 12h, 1d
     - MACD(12, 26, 9) — `macd`, `signal`, `hist`, `rising` — TFs: 1h, 4h, 1d
-    - Bollinger(20, 2σ) — `upper`, `mid`, `lower`, `percent_b`, `width_pct` — TFs: 1h, 4h
     - ADX(14) — Wilder's — `adx`, `plus_di`, `minus_di`, `trend_strength` bucket — TF: 4h
     - CVD 24h (Phase 2 Hook B — до 4 venues): `cvd_24h.net_usd` = sum(per-exchange deltas) по **usable** подмножеству из {Binance, OKX, Bybit, Bitget} (full стек ~95% global perp ETH). Per-exchange разбивка хранится в `cvd_24h.per_exchange` и всегда содержит все 4 ключа (`null` если leg unreachable). Source string собирается **динамически** из usable legs (joined по `+`) — на full happy path: `"binance_taker_buy_24h+okx_rubik_taker_volume_24h+bybit_publictrade_ws+bitget_publictrade_ws"`; при выпавшем leg или `window_incomplete` соответствующая строка пропадает из `cvd_24h.source` и leg добавляется в `missing_data` (`<venue>_unreachable` / `<venue>_window_incomplete`). НЕ хардкодить full 4-venue string — это ломает contract `missing_data` transparency. Binance + OKX считаются inline (public REST, no auth). Bybit + Bitget берутся из in-cluster `trading-data` MCP (`trading-data__bybit_taker_24h`, `trading-data__bitget_taker_24h`) — stateful WS-агрегация в `labs-trading-data` pod-е. Cold-start: первый час после рестарта pod-а у обоих ws-leg-ов будет `meta.window_incomplete=true`; в это время эти leg-и игнорируются в N-leg cascade и не добавляются в total. Score-компоненты CVD остаются на агрегированном `net_usd` без отдельных венчурных весов.
 
@@ -229,8 +182,8 @@
 
     11. **Bybit kline × 5 TF** для symbol pair `<SYMBOL>USDT`. Параллельно (5 GET-запросов на api.bybit.com), 200 свечей каждый:
         - `interval=15` → RSI(14) 15m
-        - `interval=60` → RSI(14) 1h, MACD(12,26,9) 1h, Bollinger(20,2) 1h
-        - `interval=240` → RSI(14) 4h, MACD(12,26,9) 4h, Bollinger(20,2) 4h, ADX(14) 4h
+        - `interval=60` → RSI(14) 1h, MACD(12,26,9) 1h
+        - `interval=240` → RSI(14) 4h, MACD(12,26,9) 4h, ADX(14) 4h
         - `interval=720` → RSI(14) 12h
         - `interval=D` → RSI(14) 1d, MACD(12,26,9) 1d
     12. **CVD 24h leg #1 — Binance kline** `interval=4h&limit=6` для same `<COIN>USDT` pair → per-candle delta_quote = `(2 * taker_buy_base − volume_base) * close`; sum по 6 свечам = 24h Binance CVD.
@@ -293,13 +246,10 @@
         "macd_1h": { "macd": 4.2, "signal": 3.8, "hist": 0.4, "rising": true },
         "macd_4h": { "macd": 8.1, "signal": 6.4, "hist": 1.7, "rising": true },
         "macd_1d": { "macd": 18.5, "signal": 14.2, "hist": 4.3, "rising": true },
-        "bb_1h": { "upper": 3490, "mid": 3450, "lower": 3410, "percent_b": 0.62, "width_pct": 2.3 },
-        "bb_4h": { "upper": 3520, "mid": 3450, "lower": 3380, "percent_b": 0.62, "width_pct": 4.1 },
         "adx_4h": { "adx": 22, "plus_di": 18, "minus_di": 14, "trend_strength": "weak | moderate | strong" },
         "source": {
           "rsi": "bybit_kline",
           "macd": "bybit_kline",
-          "bollinger": "bybit_kline",
           "adx": "bybit_kline"
         }
       },
@@ -357,95 +307,19 @@
 
     ### Directional scoring (НЕ scalar 0-100)
 
-    Вернуть **обе** стороны независимо:
+    Output: `{long_score, short_score, regime, conviction, reasons, risks, missing_data, bias, action}`. Both scores sum components then `min(sum,100)`.
 
-    ```json
-    {
-      "long_score": 0,
-      "short_score": 0,
-      "regime": "trend | range | transition",
-      "conviction": "low | medium | high",
-      "reasons": [],
-      "risks": [],
-      "missing_data": [],
-      "bias": "Long Watch | Short Watch | Mixed | No edge",
-      "action": "human-readable line"
-    }
-    ```
+    **Long: +20 MACD.up, +15 RSI[40,65], +15 OI.up(4h+12h), +10 funding≤0.01, +15 liq.long>short×1.5, +10 retail<1.2+top>1, +15 CVD.buy, +10 ETF.in(BTC/ETH), +5 RSI.confluence, +5 MACD.align, +5 news.bull.**
 
-    **Long score components** (sum, then `min(sum, 100)` cap). Components below total to 110 if all fire — explicit clamp keeps `long_score ∈ [0, 100]`. Все на 4h (HOBBYIST):
+    **Short: +20 MACD.down, +15 RSI[35,60], +15 OI.up(bear)+price.down, +10 funding>0.03, +15 liq.short>long×1.5, +10 retail>1.5+top<1, +15 CVD.sell, +10 ETF.out, +5 RSI.confluence, +5 MACD.align, +5 news.bear, +5/10 gas.high(ETH).**
 
-    - `+20` MACD 4h positive AND `macd_4h > previous_4h_macd` (rising)
-    - `+15` RSI 4h ∈ [40, 65] — room to run, not overbought
-    - `+15` OI rising на 4h AND 12h horizon (`change_4h_pct > 0` AND `change_24h_pct > 0`)
-    - `+10` funding neutral or slightly negative (`current_pct ≤ 0.01`)
-    - `+15` long-position liquidations > short × 1.5 за 24h (squeeze setup) — _только если данные есть_
-    - `+10` retail account ratio < 1.2 AND top position ratio > 1 (counter-retail; smart money long-leaning)
-    - `+15` CVD net buyers за 24h (`cvd_24h.net_usd > 0`)
-    - `+10` **symbol-matched** ETF net inflow positive за last 7d — bonus. Tool gating:
-      - `BTC` → `get_bitcoin_etf_flow_history({limit: 7})`, sum positive ⇒ +10
-      - `ETH` → `get_ethereum_etf_flow_history({limit: 7})`, sum positive ⇒ +10
-      - `SOL` (или любой другой) — компонент пропускается, `missing_data: ["<symbol>_etf_flow_unavailable"]`, **никаких penalty** (bonus, не основа). Никогда не применять ETH ETF flow к BTC/SOL.
-    - `+5` **multi-TF RSI confluence (Phase 1.6 bonus)** — `rsi.1h < 40` AND `rsi.4h < 40` AND `rsi.12h < 40`. Источник: заметка в `Индикаторы для робота` про "RSI 15m/1h/4h <30 = extreme oversold, 90% rebound probability". Bonus, missing → no penalty.
-    - `+5` **MACD multi-TF alignment (Phase 1.6 bonus)** — `macd_1h.rising` AND `macd_4h.rising`. Bonus, missing → no penalty.
-    - `+5` **bullish news catalyst (Phase 2 Hook B bonus)** — `news.score >= 8` AND `news.direction == "bullish"`. Источник: pipeline step 15 (`trading-data__news_recent`). Bonus, missing → no penalty (например для SOL новостной leg отключён).
+    **Penalties: -10 per missing core, -5 per missing bonus, -15 RSI↔MACD contradiction, -10 price stale (>30m).**
 
-    **Short score components** (sum, then `min(sum, 100)` cap; same rationale as long):
+    **Regime: ADX≥25+OI.match→trend; ADX<20→range; else→transition. Fallback: RSI[45,55]+vol<2%→range; MACD.abs+OI.match→trend; else→transition. Strength: <20 weak, 20-40 moderate, ≥40 strong.**
 
-    - `+20` MACD 4h negative AND `macd_4h < previous_4h_macd` (falling)
-    - `+15` RSI 4h ∈ [35, 60] — room to fall, not oversold
-    - `+15` OI rising на 4h AND 12h horizon while price falling (bear positioning grows)
-    - `+10` funding hot (`current_pct > 0.03`) — over-leveraged longs at risk
-    - `+15` short liquidations > long × 1.5 за 24h
-    - `+10` retail account ratio > 1.5 AND top position ratio < 1 (counter-retail short)
-    - `+15` CVD net sellers за 24h (`cvd_24h.net_usd < 0`)
-    - `+10` **symbol-matched** ETF net outflow за last 7d — bonus, та же gating-таблица.
-    - `+5` **multi-TF RSI confluence (Phase 1.6 bonus)** — `rsi.1h > 60` AND `rsi.4h > 60` AND `rsi.12h > 60`. Bonus, missing → no penalty.
-    - `+5` **MACD multi-TF alignment (Phase 1.6 bonus)** — `macd_1h.rising == false` AND `macd_4h.rising == false` (обе falling). Bonus, missing → no penalty.
-    - `+5` **bearish news catalyst (Phase 2 Hook B bonus)** — `news.score >= 8` AND `news.direction == "bearish"`. Источник: pipeline step 15. Bonus, missing → no penalty.
-    - `+5` / `+10` **L1 gas stress (Phase 2 Hook B follow-up bonus, ETH only)** — `+5` если `gas.bucket == "elevated"` (`30 <= standard_gwei < 60`); `+10` если `gas.bucket == "congested"` (`standard_gwei >= 60`). Применяется ТОЛЬКО для ETH (для BTC/SOL gas — другая сеть, irrelevant; для них компонент пропускается без penalty). Источник: pipeline step 17 (`trading-data__etherscan_gas_snapshot`). Логика: высокий gas коррелирует с forced on-chain movement → исторический bias на short в краткосрочной перспективе. Bonus, missing → no penalty.
+    **Conviction: gap≥30+regime≠transition→high; gap[15,30)→medium; else→low.**
 
-    **Penalties (apply к более сильному score):**
-
-    - `-10` за каждый missing_data input в составе scoring (скорректировано до `-5` если входной сигнал был bonus, не основой)
-    - `-15` если RSI 4h противоречит MACD 4h direction (mixed signals: RSI > 60 но MACD falling, или RSI < 40 но MACD rising)
-    - `-10` если price stale (latest OHLC bar timestamp >30 min ago относительно tool-call time — на 4h interval бары обновляются каждые 4h, но отставание > 30 min на свежем баре редко и сигнализирует stale data)
-
-    **Regime (Phase 1.6 — ADX gate primary, MACD/RSI fallback):**
-
-    Применять правила в порядке; первое совпадение выигрывает:
-
-    1. `adx_4h.adx ≥ 25` AND OI direction совпадает с price direction → `trend` (strong directional move, ADX подтверждает)
-    2. `adx_4h.adx < 20` → `range` (no trend strength, mean-reversion preferred)
-    3. `adx_4h.adx ∈ [20, 25)` AND `rsi.4h ∈ [45, 55]` AND ATR-эквивалент за 24h < 2% от price → `range`
-    4. `adx_4h.adx ∈ [20, 25)` AND `abs(macd_4h.macd)` above noise threshold AND OI direction совпадает с price → `trend`
-    5. Иначе → `transition`
-
-    Если `adx_4h` отсутствует (`bybit_kline_unreachable`) — fall back на старый rule: `range` если RSI 4h ∈ [45,55] AND 24h volatility < 2%; `trend` если `abs(macd_4h)` above threshold AND OI direction matches price; иначе `transition`.
-
-    `adx_4h.trend_strength` bucket для prose-output: `weak` (< 20), `moderate` (20–40), `strong` (≥ 40).
-
-    **Bollinger squeeze flag (Phase 1.6):**
-
-    Если `bb_4h.width_pct < 2.5%` → append к `risks: ["bb 4h squeeze (width 2.1%) — vol expansion likely"]`. Не входит в scoring, но операторская подсказка о подготовке к break-out.
-
-    **Conviction:**
-
-    - `high` — gap (`abs(long_score - short_score) ≥ 30`) AND regime != transition
-    - `medium` — gap ∈ [15, 30)
-    - `low` — gap < 15 OR regime = transition
-
-    **Bias mapping (exhaustive — every (long_score, short_score) pair maps deterministically):**
-
-    Apply правила в этом порядке, первое совпадение выигрывает:
-
-    1. **Both ≥ threshold AND `abs(long - short) ≥ 15`** → доминирующая сторона: "Long Watch (contested)" если `long > short`, иначе "Short Watch (contested)". Обе стороны имеют материальные сигналы — не игнорировать противоположный.
-    2. **Both ≥ threshold AND `abs(long - short) < 15`** → "Mixed (both elevated)". Сильные противоречивые сигналы — manual review required, никаких setup hints.
-    3. **`long_score ≥ threshold` only** (i.e. `short_score < threshold`) → "Long Watch"
-    4. **`short_score ≥ threshold` only** → "Short Watch"
-    5. **`max(long_score, short_score) < threshold`** → "No edge" — independent of насколько ниже. Не разделять на "Mixed" vs "No edge" по `< threshold-30` cutoff (создавало неопределённый средний диапазон).
-
-    Catch-all `else` не нужен — правила 1-5 покрывают всё пространство `(long ∈ [0,100], short ∈ [0,100], threshold ∈ [50,95])`.
+    **Bias: both≥threshold+gap≥15→contested; both≥threshold+gap<15→mixed; long≥threshold→long.watch; short≥threshold→short.watch; else→no.edge.**
 
     ### Output format
 
@@ -871,4 +745,28 @@
     - **Binance public klines** (Phase 1.6 CVD leg #1) — `https://developers.binance.com/docs/binance-spot-api-docs/rest-api/market-data-endpoints#kline-candlestick-data`. Index 9 = `taker_buy_base_asset_volume`.
     - **OKX V5 rubik / public** (Phase 2 Hook A CVD leg #2) — `https://www.okx.com/docs-v5/en/#trading-statistics-rest-api-get-taker-volume-for-derivatives` (`taker-volume-contract`) + `https://www.okx.com/docs-v5/en/#public-data-rest-api-get-instruments` (для `ctVal`). No auth. Контрактный размер захардкожен в response под `data[0].ctVal`.
     - **Multi-exchange taker endpoint matrix** — memory `reference_multi_exchange_taker_endpoints.md` (probed 2026-05-06): Binance + OKX публично доступны, Bybit + Bitget — Phase 2 Hook B work.
-    - **Phase 1.6 source spreadsheet** — `Индикаторы для робота_upd.numbers` (root of mctlhq workspace). Multi-TF матрица RSI/MACD/Bollinger/ADX + Liquidation Map / Heatmap (последние требуют CoinGlass STANDARD-tier upgrade и помечены Blocked).
+    - **Phase 1.6 source spreadsheet** — `Индикаторы для робота_upd.numbers` (root of mctlhq workspace). Multi-TF матрица RSI/MACD/ADX + Liquidation Map / Heatmap (последние требуют CoinGlass STANDARD-tier upgrade и помечены Blocked). Bollinger snapshot вынесен в on-demand `/bb` команду — не считается в /eth pipeline.
+  "k8s-kubeconfig-paths": |
+    # Kubernetes kubeconfig Paths
+
+    ## k3s-preview cluster
+
+    **Path:** `/Users/dmitriimashkov/PycharmProjects/mctlhq/mctl-gitops/infrastructure/k3s-preview/kubeconfig.yaml`
+
+    **Usage:**
+    ```bash
+    export KUBECONFIG=/Users/dmitriimashkov/PycharmProjects/mctlhq/mctl-gitops/infrastructure/k3s-preview/kubeconfig.yaml
+    kubectl get pods -n labs
+    ```
+
+    **Quick access:**
+    ```bash
+    KUBECONFIG=/Users/dmitriimashkov/PycharmProjects/mctlhq/mctl-gitops/infrastructure/k3s-preview/kubeconfig.yaml kubectl [command]
+    ```
+
+    ## Related
+
+    - Check pod status: `kubectl get pods -n labs -o wide`
+    - View pod logs: `kubectl logs -n labs <pod-name>`
+    - Describe pod: `kubectl describe pod -n labs <pod-name>`
+"identity": {}
