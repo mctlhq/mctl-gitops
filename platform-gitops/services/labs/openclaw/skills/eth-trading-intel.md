@@ -1,10 +1,6 @@
 ---
 name: eth-trading-intel
-<<<<<<< HEAD
-description: Read-only crypto trading intelligence for ETH/BTC/SOL via the CoinGlass MCP server plus a local Bybit/Binance indicator engine (Phase 1.6). Use when the user types /eth /btc /sol /scan /risk /why /watch /unwatch /settings /set_threshold /help /last /funding /oi /etf /pulse /rsi /macd /bb /adx /heatmap, or asks for an open-interest, funding, long/short, liquidation, RSI/MACD/Bollinger/ADX, multi-timeframe heatmap, ETF-flow, or whale-positions snapshot. Observation-only. Never executes trades. Output is a directional snapshot (long_score, short_score, regime, conviction) plus reasons, risks, and explicit missing_data.
-=======
-description: Read-only crypto trading intelligence for ETH/BTC/SOL via the CoinGlass MCP server plus a local Bybit/Binance indicator engine (Phase 1.6). Use when the user types /eth /btc /sol /scan /risk /why /watch /unwatch /settings /set_threshold /help /last /funding /oi /etf /pulse /rsi /macd /bb /adx /heatmap, or asks for an open-interest, funding, long/short, liquidation, RSI/MACD/ADX, multi-timeframe heatmap, max-pain, ETF-flow, or whale-positions snapshot. Observation-only. Never executes trades. Output is a directional snapshot (long_score, short_score, regime, conviction) plus reasons, risks, and explicit missing_data.
->>>>>>> 5b65971 (fix(labs-skill): drop Bollinger from /eth pipeline (keep on-demand /bb))
+description: Read-only crypto trading intelligence for ETH/BTC/SOL via the CoinGlass MCP server plus a local Bybit/Binance indicator engine (Phase 1.6). Use when the user types /eth /btc /sol /scan /risk /why /watch /unwatch /settings /set_threshold /help /last /funding /oi /etf /pulse /rsi /macd /bb /adx /heatmap, or asks for an open-interest, funding, long/short, liquidation, RSI/MACD/ADX, multi-timeframe heatmap, ETF-flow, or whale-positions snapshot. Observation-only. Never executes trades. Output is a directional snapshot (long_score, short_score, regime, conviction) plus reasons, risks, and explicit missing_data.
 ---
 
 # eth-trading-intel
@@ -53,59 +49,13 @@ description: Read-only crypto trading intelligence for ETH/BTC/SOL via the CoinG
 
 `DEFAULT_INTERVAL = "4h"` — использовать везде в snapshot pipeline и single-dimension queries. Никаких `1h` calls.
 
-### Available на HOBBYIST (используем)
+### Available на HOBBYIST (кратко)
 
-**Discovery:**
-- `get_futures_supported_coins`, `get_futures_supported_exchanges`, `get_futures_supported_exchange_pairs`
+Используем: `get_futures_aggregated_open_interest_history`, `get_futures_funding_rate_oi_weight_history`, `get_futures_global_long_short_account_ratio_history`, `get_futures_top_long_short_account_ratio_history`, `get_futures_aggregated_liquidation_history`, `get_futures_price_history`, `get_futures_aggregated_cvd_history`, `get_bitcoin_etf_flow_history`, `get_ethereum_etf_flow_history`. Не использовать: `rsi_1h`, `rsi_30m`, `rsi_15m`, `macd_1h` (за HOBBYIST plan).
 
-**Open Interest:**
-- `get_futures_aggregated_open_interest_history` — agg OHLC, params: `symbol`, `interval` (≥4h), `limit`
-- `get_futures_open_interest_history` — single pair single exchange
+### Local indicators (Phase 1.6)
 
-**Funding:**
-- `get_futures_funding_rate_oi_weight_history` — OI-weighted средняя funding (preferred)
-- `get_futures_funding_rate_history` — single pair OHLC funding
-- `get_futures_funding_rate_exchange_list` — current funding spot
-- `get_futures_funding_rate_rank` — top/bottom 20 funding
-
-**Long/Short:**
-- `get_futures_global_long_short_account_ratio_history` — global retail (params: `exchange`+`symbol` pair)
-- `get_futures_top_long_short_account_ratio_history` — top traders accounts
-- `get_futures_top_long_short_position_ratio_history` — top traders position size
-
-**Liquidations:**
-- `get_futures_aggregated_liquidation_history` — agg liq bars (interval ≥4h)
-- `get_futures_liquidation_exchange_list` — breakdown spot
-
-**Indicators:**
-- `get_futures_rsi_list` — sort_by `rsi_4h`/`rsi_12h`/`rsi_24h`. **Не использовать `rsi_1h`/`rsi_30m`/`rsi_15m`** — за HOBBYIST plan.
-- `get_futures_macd_list` — sort_by `macd_4h`. Аналогично, не `macd_1h`.
-
-**Price:**
-- `get_futures_price_history` — OHLCV time series
-- `get_futures_coins_price_change` — % change
-
-**Volume:**
-- `get_futures_aggregated_cvd_history` — taker imbalance (interval ≥4h)
-
-**ETF flows (BTC и ETH only):**
-- `get_bitcoin_etf_flow_history`, `get_ethereum_etf_flow_history` — daily net flows
-
-### Local indicators (Bybit V5 + Binance public REST) — Phase 1.6
-
-Public, без auth, без CoinGlass tier-gate. Приоритет — local; CoinGlass `get_futures_rsi_list` / `get_futures_macd_list` остаются как cross-check, не как источник истины. Это закрывает Missing data ("RSI 4h", "MACD 4h", "aggregated CVD"), которые на HOBBYIST приходили `tier-locked`/`No content`.
-
-**Endpoints (никаких ключей, GET, JSON):**
-- Bybit V5 kline: `GET https://api.bybit.com/v5/market/kline?category=linear&symbol=<PAIR>&interval=<I>&limit=200`
-  - `interval`: `15` (15m), `60` (1h), `240` (4h), `720` (12h), `D` (1d). Возвращает массив (newest-first; всегда reverse в oldest-first перед расчётом).
-  - Pair format: `<COIN>USDT` (например `ETHUSDT`, `BTCUSDT`, `SOLUSDT`).
-  - Rate limit: 600 req / 5 sec на IP.
-- Binance kline (CVD leg #1, 50%+ глобального ETH-perp объёма): `GET https://api.binance.com/api/v3/klines?symbol=<PAIR>&interval=4h&limit=6`
-  - Индекс 9 в каждой строке = `taker_buy_base_asset_volume`. Per-candle delta_quote ≈ `(2 * taker_buy_base − volume_base) * close`. Сумма по 6 свечам = 24h CVD.
-- **OKX V5 taker-volume (CVD leg #2, Phase 2 Hook A):** три параллельных GET (все public, no auth, no rate-limit gate):
-  - `https://www.okx.com/api/v5/rubik/stat/taker-volume-contract?instId=<COIN>-USDT-SWAP&period=4H` → 100 баров `[ts, buyVol, sellVol]`. Объёмы — в **контрактах**, не в base asset.
-  - `https://www.okx.com/api/v5/public/instruments?instType=SWAP&instId=<COIN>-USDT-SWAP` → `data[0].ctVal` (контрактный размер в base coin; для ETH-USDT-SWAP сейчас `0.1` ETH; кэшировать на длительный срок — меняется крайне редко). `ctValCcy` обязан быть равен base coin (защитный assert).
-  - `https://www.okx.com/api/v5/market/candles?instId=<COIN>-USDT-SWAP&bar=4H&limit=100` → 4h klines с close-ценой (поле `[4]`). **OKX-родной price source — независим от Binance.** Это даёт `okx_only` ветке (см. agreement cascade ниже) реально вычислимый USD delta когда Binance unreachable.
+Bybit V5 + Binance + OKX public klines (no auth). Источники истины для RSI/MACD/ADX; CoinGlass — cross-check only. Interval: 15/60/240/720/D для Bybit; 4h для Binance/OKX. Limit: 200 для Bybit, 6 для Binance, 100 для OKX.
   - **Per-bar pricing rule (важно):** для каждого OKX taker-volume бара брать matching close из **OKX market/candles** по timestamp bucket (`floor(ts / 14_400_000) * 14_400_000`, оба endpoints UTC-aligned 4h). Per-bar delta_usd = `(buyVol − sellVol) * ctVal * okx_close_at_that_bar`. Это и решает codex-finding "single close vs per-bar drift" (sign может flip при дрифте цены), и оставляет `okx_only` достижимым когда Binance leg падает.
   - **Cross-venue price sanity check:** если OKX close vs Binance close на одном и том же ts расходятся >2% → append `risks: ["okx/binance price spread >2% at <ts>: $<okx>, $<binance>"]`. Реальный price spread на perp ETH между биржами обычно <0.1%; >2% означает либо stale data на одной из бирж, либо аутентичный venue dislocation (важный сигнал для оператора).
   - Если кол-во баров OKX taker-volume и OKX candles не совпадает (rubik отдал меньше 6 свежих или timestamps смещены): сматчить по той же `bucket_ts` формуле, пары без обоих источников пропустить.
