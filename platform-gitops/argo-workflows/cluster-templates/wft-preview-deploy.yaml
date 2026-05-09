@@ -6,7 +6,7 @@ metadata:
     workflows.argoproj.io/description: |
       Deploy an ephemeral preview environment for a service using an existing image tag.
       Deploys as a separate Helm release (preview-{app}-{id}) in the team's own namespace.
-      Accessible at {app}-{id}-preview.{PLATFORM_DOMAIN} (covered by *.{PLATFORM_DOMAIN} wildcard).
+      Accessible at {app}-{id}.{PLATFORM_DOMAIN} (covered by *.{PLATFORM_DOMAIN} wildcard).
       Inherits imagePullSecrets, service.port, envFrom, and resources from the service's values.yaml.
       Only image.tag and ingress host are overridden — no separate ExternalSecret is created,
       the preview reuses the existing secret already in the namespace.
@@ -73,8 +73,7 @@ spec:
           # Generate a short preview ID from the workflow name
           PREVIEW_ID=$(echo "${ARGO_WORKFLOW_NAME}" | tr -cd 'a-z0-9' | tail -c 6)
           RELEASE="preview-${COMPONENT}-${PREVIEW_ID}"
-          # Use {app}-{id}-preview.{domain} pattern — covered by *.{PLATFORM_DOMAIN} wildcard
-          HOST="${COMPONENT}-${PREVIEW_ID}-preview.${PLATFORM_DOMAIN}"
+          HOST="${COMPONENT}-${PREVIEW_ID}.${PLATFORM_DOMAIN}"
 
           echo "${PREVIEW_ID}" > /tmp/preview_id
           echo "https://${HOST}" > /tmp/preview_url
