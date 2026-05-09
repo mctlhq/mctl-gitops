@@ -303,91 +303,19 @@ Validation для new entries (`/watch SYMBOL [N] [direction]`):
 
 ### Directional scoring (НЕ scalar 0-100)
 
-Вернуть **обе** стороны независимо:
+Output: `{long_score, short_score, regime, conviction, reasons, risks, missing_data, bias, action}`. Both scores sum components then `min(sum,100)`.
 
-```json
-{
-  "long_score": 0,
-  "short_score": 0,
-  "regime": "trend | range | transition",
-  "conviction": "low | medium | high",
-  "reasons": [],
-  "risks": [],
-  "missing_data": [],
-  "bias": "Long Watch | Short Watch | Mixed | No edge",
-  "action": "human-readable line"
-}
-```
+**Long: +20 MACD.up, +15 RSI[40,65], +15 OI.up(4h+12h), +10 funding≤0.01, +15 liq.long>short×1.5, +10 retail<1.2+top>1, +15 CVD.buy, +10 ETF.in(BTC/ETH), +5 RSI.confluence, +5 MACD.align, +5 news.bull.**
 
-**Long score components** (sum, then `min(sum, 100)` cap). Components below total to 110 if all fire — explicit clamp keeps `long_score ∈ [0, 100]`. Все на 4h (HOBBYIST):
+**Short: +20 MACD.down, +15 RSI[35,60], +15 OI.up(bear)+price.down, +10 funding>0.03, +15 liq.short>long×1.5, +10 retail>1.5+top<1, +15 CVD.sell, +10 ETF.out, +5 RSI.confluence, +5 MACD.align, +5 news.bear, +5/10 gas.high(ETH).**
 
-- `+20` MACD 4h positive AND `macd_4h > previous_4h_macd` (rising)
-- `+15` RSI 4h ∈ [40, 65] — room to run, not overbought
-- `+15` OI rising на 4h AND 12h horizon (`change_4h_pct > 0` AND `change_24h_pct > 0`)
-- `+10` funding neutral or slightly negative (`current_pct ≤ 0.01`)
-- `+15` long-position liquidations > short × 1.5 за 24h (squeeze setup) — _только если данные есть_
-- `+10` retail account ratio < 1.2 AND top position ratio > 1 (counter-retail; smart money long-leaning)
-- `+15` CVD net buyers за 24h (`cvd_24h.net_usd > 0`)
-- `+10` **symbol-matched** ETF net inflow positive за last 7d — bonus. Tool gating:
-  - `BTC` → `get_bitcoin_etf_flow_history({limit: 7})`, sum positive ⇒ +10
-  - `ETH` → `get_ethereum_etf_flow_history({limit: 7})`, sum positive ⇒ +10
-  - `SOL` (или любой другой) — компонент пропускается, `missing_data: ["<symbol>_etf_flow_unavailable"]`, **никаких penalty** (bonus, не основа). Никогда не применять ETH ETF flow к BTC/SOL.
-- `+5` **multi-TF RSI confluence (Phase 1.6 bonus)** — `rsi.1h < 40` AND `rsi.4h < 40` AND `rsi.12h < 40`. Источник: заметка в `Индикаторы для робота` про "RSI 15m/1h/4h <30 = extreme oversold, 90% rebound probability". Bonus, missing → no penalty.
-- `+5` **MACD multi-TF alignment (Phase 1.6 bonus)** — `macd_1h.rising` AND `macd_4h.rising`. Bonus, missing → no penalty.
-- `+5` **bullish news catalyst (Phase 2 Hook B bonus)** — `news.score >= 8` AND `news.direction == "bullish"`. Источник: pipeline step 15 (`trading-data__news_recent`). Bonus, missing → no penalty (например для SOL новостной leg отключён).
+**Penalties: -10 per missing core, -5 per missing bonus, -15 RSI↔MACD contradiction, -10 price stale (>30m).**
 
-**Short score components** (sum, then `min(sum, 100)` cap; same rationale as long):
+**Regime: ADX≥25+OI.match→trend; ADX<20→range; else→transition. Fallback: RSI[45,55]+vol<2%→range; MACD.abs+OI.match→trend; else→transition. Strength: <20 weak, 20-40 moderate, ≥40 strong.**
 
-- `+20` MACD 4h negative AND `macd_4h < previous_4h_macd` (falling)
-- `+15` RSI 4h ∈ [35, 60] — room to fall, not oversold
-- `+15` OI rising на 4h AND 12h horizon while price falling (bear positioning grows)
-- `+10` funding hot (`current_pct > 0.03`) — over-leveraged longs at risk
-- `+15` short liquidations > long × 1.5 за 24h
-- `+10` retail account ratio > 1.5 AND top position ratio < 1 (counter-retail short)
-- `+15` CVD net sellers за 24h (`cvd_24h.net_usd < 0`)
-- `+10` **symbol-matched** ETF net outflow за last 7d — bonus, та же gating-таблица.
-- `+5` **multi-TF RSI confluence (Phase 1.6 bonus)** — `rsi.1h > 60` AND `rsi.4h > 60` AND `rsi.12h > 60`. Bonus, missing → no penalty.
-- `+5` **MACD multi-TF alignment (Phase 1.6 bonus)** — `macd_1h.rising == false` AND `macd_4h.rising == false` (обе falling). Bonus, missing → no penalty.
-- `+5` **bearish news catalyst (Phase 2 Hook B bonus)** — `news.score >= 8` AND `news.direction == "bearish"`. Источник: pipeline step 15. Bonus, missing → no penalty.
-- `+5` / `+10` **L1 gas stress (Phase 2 Hook B follow-up bonus, ETH only)** — `+5` если `gas.bucket == "elevated"` (`30 <= standard_gwei < 60`); `+10` если `gas.bucket == "congested"` (`standard_gwei >= 60`). Применяется ТОЛЬКО для ETH (для BTC/SOL gas — другая сеть, irrelevant; для них компонент пропускается без penalty). Источник: pipeline step 17 (`trading-data__etherscan_gas_snapshot`). Логика: высокий gas коррелирует с forced on-chain movement → исторический bias на short в краткосрочной перспективе. Bonus, missing → no penalty.
+**Conviction: gap≥30+regime≠transition→high; gap[15,30)→medium; else→low.**
 
-**Penalties (apply к более сильному score):**
-
-- `-10` за каждый missing_data input в составе scoring (скорректировано до `-5` если входной сигнал был bonus, не основой)
-- `-15` если RSI 4h противоречит MACD 4h direction (mixed signals: RSI > 60 но MACD falling, или RSI < 40 но MACD rising)
-- `-10` если price stale (latest OHLC bar timestamp >30 min ago относительно tool-call time — на 4h interval бары обновляются каждые 4h, но отставание > 30 min на свежем баре редко и сигнализирует stale data)
-
-**Regime (Phase 1.6 — ADX gate primary, MACD/RSI fallback):**
-
-Применять правила в порядке; первое совпадение выигрывает:
-
-1. `adx_4h.adx ≥ 25` AND OI direction совпадает с price direction → `trend` (strong directional move, ADX подтверждает)
-2. `adx_4h.adx < 20` → `range` (no trend strength, mean-reversion preferred)
-3. `adx_4h.adx ∈ [20, 25)` AND `rsi.4h ∈ [45, 55]` AND ATR-эквивалент за 24h < 2% от price → `range`
-4. `adx_4h.adx ∈ [20, 25)` AND `abs(macd_4h.macd)` above noise threshold AND OI direction совпадает с price → `trend`
-5. Иначе → `transition`
-
-Если `adx_4h` отсутствует (`bybit_kline_unreachable`) — fall back на старый rule: `range` если RSI 4h ∈ [45,55] AND 24h volatility < 2%; `trend` если `abs(macd_4h)` above threshold AND OI direction matches price; иначе `transition`.
-
-`adx_4h.trend_strength` bucket для prose-output: `weak` (< 20), `moderate` (20–40), `strong` (≥ 40).
-
-**Conviction:**
-
-- `high` — gap (`abs(long_score - short_score) ≥ 30`) AND regime != transition
-- `medium` — gap ∈ [15, 30)
-- `low` — gap < 15 OR regime = transition
-
-**Bias mapping (exhaustive — every (long_score, short_score) pair maps deterministically):**
-
-Apply правила в этом порядке, первое совпадение выигрывает:
-
-1. **Both ≥ threshold AND `abs(long - short) ≥ 15`** → доминирующая сторона: "Long Watch (contested)" если `long > short`, иначе "Short Watch (contested)". Обе стороны имеют материальные сигналы — не игнорировать противоположный.
-2. **Both ≥ threshold AND `abs(long - short) < 15`** → "Mixed (both elevated)". Сильные противоречивые сигналы — manual review required, никаких setup hints.
-3. **`long_score ≥ threshold` only** (i.e. `short_score < threshold`) → "Long Watch"
-4. **`short_score ≥ threshold` only** → "Short Watch"
-5. **`max(long_score, short_score) < threshold`** → "No edge" — independent of насколько ниже. Не разделять на "Mixed" vs "No edge" по `< threshold-30` cutoff (создавало неопределённый средний диапазон).
-
-Catch-all `else` не нужен — правила 1-5 покрывают всё пространство `(long ∈ [0,100], short ∈ [0,100], threshold ∈ [50,95])`.
+**Bias: both≥threshold+gap≥15→contested; both≥threshold+gap<15→mixed; long≥threshold→long.watch; short≥threshold→short.watch; else→no.edge.**
 
 ### Output format
 
