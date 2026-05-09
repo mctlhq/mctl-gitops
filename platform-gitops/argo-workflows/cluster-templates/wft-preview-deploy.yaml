@@ -6,7 +6,10 @@ metadata:
     workflows.argoproj.io/description: |
       Deploy an ephemeral preview environment for a service using an existing image tag.
       Deploys as a separate Helm release (preview-{app}-{id}) in the team's own namespace.
-      Accessible at {app}-{id}.preview.{PLATFORM_DOMAIN}.
+      Accessible at {app}-{id}-preview.{PLATFORM_DOMAIN} (covered by *.{PLATFORM_DOMAIN} wildcard).
+      Inherits imagePullSecrets, service.port, envFrom, and resources from the service's values.yaml.
+      Only image.tag and ingress host are overridden — no separate ExternalSecret is created,
+      the preview reuses the existing secret already in the namespace.
       Cleanup via preview-delete workflow (helm uninstall).
 spec:
   entrypoint: preview-pipeline
@@ -70,12 +73,13 @@ spec:
           # Generate a short preview ID from the workflow name
           PREVIEW_ID=$(echo "${ARGO_WORKFLOW_NAME}" | tr -cd 'a-z0-9' | tail -c 6)
           RELEASE="preview-${COMPONENT}-${PREVIEW_ID}"
-          HOST="${COMPONENT}-${PREVIEW_ID}.preview.${PLATFORM_DOMAIN}"
+          # Use {app}-{id}-preview.{domain} pattern — covered by *.{PLATFORM_DOMAIN} wildcard
+          HOST="${COMPONENT}-${PREVIEW_ID}-preview.${PLATFORM_DOMAIN}"
 
           echo "${PREVIEW_ID}" > /tmp/preview_id
           echo "https://${HOST}" > /tmp/preview_url
 
-          # Clone gitops repo to get Helm chart
+          # Clone gitops repo to get Helm chart and service values
           apk add --no-cache git openssh-client > /dev/null 2>&1
           mkdir -p ~/.ssh
           cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
@@ -85,16 +89,22 @@ spec:
           git clone --depth=1 "https://github.com/${GITOPS_ORG}/${GITOPS_REPO}.git" /tmp/mctl-gitops
 
           CHART_PATH="/tmp/mctl-gitops/platform-gitops/helm-charts/base-service"
+          SERVICE_VALUES="/tmp/mctl-gitops/platform-gitops/services/${TEAM}/${COMPONENT}/values.yaml"
 
-          # Deploy as a separate Helm release in the team's own namespace
+          # Deploy: use service values.yaml as base to inherit imagePullSecrets, service.port,
+          # envFrom, resources. Override only image.tag, ingress host, and TLS secret name.
+          # externalSecret is not re-created — preview reuses the existing secret in the namespace.
           helm upgrade --install "${RELEASE}" "${CHART_PATH}" \
             --namespace "${TEAM}" \
-            --set image.repository="${CONTAINER_REGISTRY}/${COMPONENT}" \
+            --values "${SERVICE_VALUES}" \
             --set image.tag="${TAG}" \
-            --set host="${HOST}" \
             --set ingress.enabled=true \
             --set ingress.className=traefik \
             --set "ingress.annotations.cert-manager\\.io/cluster-issuer=letsencrypt-prod" \
+            --set "ingress.hosts[0]=${HOST}" \
+            --set "ingress.tls[0].secretName=${RELEASE}-tls" \
+            --set "ingress.tls[0].hosts[0]=${HOST}" \
+            --set externalSecret=null \
             --set-string "podLabels.mctl\\.ai/preview=true" \
             --set-string "podLabels.mctl\\.ai/preview-id=${PREVIEW_ID}" \
             --wait --timeout=5m
