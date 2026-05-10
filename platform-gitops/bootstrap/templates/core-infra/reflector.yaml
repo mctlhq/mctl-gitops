@@ -19,7 +19,9 @@ spec:
         resources:
           requests:
             cpu: 50m
-            memory: 128Mi
+            # Observed RSS ~269Mi; 300Mi gives 12% buffer. Raised 128Mi→300Mi
+            # on 2026-05-10 (RAM real>requests gap on Global RAM dashboard).
+            memory: 300Mi
           limits:
             cpu: 250m
             memory: 384Mi

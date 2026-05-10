@@ -30,7 +30,9 @@ spec:
               cpu: 100m
               memory: 1536Mi
             limits:
-              cpu: 500m
+              # Steady-state ~16m; 200m gives 12x cushion for compaction bursts.
+              # Trimmed 500m→200m on 2026-05-10 (CPU-limits cluster headroom).
+              cpu: 200m
               memory: 2048Mi
           extraEnvFrom:
             - secretRef:

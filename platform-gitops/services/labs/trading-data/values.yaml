@@ -28,7 +28,9 @@ resources:
     cpu: 200m
     memory: 384Mi
   limits:
-    cpu: 1000m
+    # Steady-state ~7m; 500m gives 70x burst cushion for WS reconnects.
+    # Trimmed 1000m→500m on 2026-05-10 (CPU-limits cluster headroom).
+    cpu: 500m
     memory: 768Mi
 env:
   APP_ENV: production
