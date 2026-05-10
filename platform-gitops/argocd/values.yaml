@@ -269,7 +269,9 @@ argo-cd:
     resources:
       requests:
         cpu: 100m
-        memory: 128Mi
+        # Observed RSS ~171Mi; 192Mi gives 12% buffer. Raised 128Mi→192Mi
+        # on 2026-05-10 (RAM real>requests gap on Global RAM dashboard).
+        memory: 192Mi
       limits:
         # Steady-state observed <50m; the controller is the hot path during
         # reconciliation, not repo-server (mostly cached git fetch + helm
