@@ -1457,6 +1457,13 @@ configMaps:
             "model": {
               "primary": "openai-codex/gpt-5.4",
               "fallbacks": ["anthropic/claude-haiku-4-5"]
+            },
+            "compaction": {
+              "enabled": true,
+              "keepRecentTokens": 20000,
+              "notifyUser": false,
+              "model": "claude-haiku-4-5",
+              "provider": "anthropic"
             }
           }
         },
@@ -1516,7 +1523,11 @@ configMaps:
               { "command": "bb", "description": "Bollinger(20,2σ) on 1h/4h (Bybit). Usage: /bb SYMBOL [tf]" },
               { "command": "adx", "description": "ADX(14) 4h trend strength (Bybit). Usage: /adx SYMBOL" },
               { "command": "heatmap", "description": "Multi-symbol RSI heatmap by watchlist. Usage: /heatmap [tf]" }
-            ]
+            ],
+            "threadBindings": {
+              "idleHours": 4,
+              "maxAgeHours": 24
+            }
           }
         },
         "hooks": {
