@@ -39,7 +39,7 @@ tenant:
     limits.cpu: "12"
     limits.memory: "11Gi"
     pods: "15"
-    persistentvolumeclaims: "5"
+    persistentvolumeclaims: "2"
     services: "15"
   limitRange:
     enabled: true
