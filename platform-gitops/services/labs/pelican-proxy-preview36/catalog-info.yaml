@@ -1,0 +1,18 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: pelican-proxy-preview36
+  namespace: labs
+  description: "pelican-proxy preview.36 — theme redesign preview"
+  annotations:
+    argocd/app-name: labs-pelican-proxy-preview36
+    github.com/source-repo: mashkoffdmitry/pelican-libertex-social
+    mctl.me/auto-deploy: "false"
+  labels:
+    team: labs
+    env: preview
+spec:
+  type: service
+  lifecycle: experimental
+  owner: group:default/labs
+  system: system:default/team-labs

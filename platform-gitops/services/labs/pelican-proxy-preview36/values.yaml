@@ -1,0 +1,45 @@
+image:
+  repository: ghcr.io/mctlhq/pelican-proxy
+  tag: "preview.36"
+imagePullSecrets:
+  - name: ghcr-credentials
+service:
+  port: 8787
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+env:
+  APP_ENV: preview
+  CATALOG_INGEST_URL: https://pelican-catalog-worker.pelican-libertex.workers.dev/__ingest
+ingress:
+  enabled: true
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    - pelican-proxy-preview36.mctl.ai
+  tls:
+    - secretName: pelican-proxy-preview36-tls
+      hosts:
+        - pelican-proxy-preview36.mctl.ai
+externalSecret:
+  targetSecret: pelican-proxy-preview36-secrets
+  data:
+    - secretKey: LIBERTEX_EMAIL
+      remoteKey: teams/labs/pelican-proxy
+      property: LIBERTEX_EMAIL
+    - secretKey: LIBERTEX_PASSWORD
+      remoteKey: teams/labs/pelican-proxy
+      property: LIBERTEX_PASSWORD
+    - secretKey: INGEST_SECRET
+      remoteKey: teams/labs/pelican-proxy
+      property: INGEST_SECRET
+    - secretKey: CATALOG_INGEST_SECRET
+      remoteKey: teams/labs/pelican-proxy
+      property: CATALOG_INGEST_SECRET
+envFrom:
+  - secretRef:
+      name: pelican-proxy-preview36-secrets
