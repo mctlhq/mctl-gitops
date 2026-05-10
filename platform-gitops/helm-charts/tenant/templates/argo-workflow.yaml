@@ -203,6 +203,25 @@ roleRef:
   name: argo-workflow-helm-deploy
   apiGroup: rbac.authorization.k8s.io
 ---
+# Bind CENTRAL workflow SA (argo-workflows ns) to helm-deploy Role for preview workflows.
+# The tenant-local binding above targets the per-namespace SA; this one targets the SA
+# that actually runs workflow pods (which live in the argo-workflows namespace).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argo-workflow-helm-deploy-central
+  namespace: {{ $ns }}
+  labels:
+    {{- include "tenant.labels" $ | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: argo-workflow-sa
+    namespace: argo-workflows
+roleRef:
+  kind: Role
+  name: argo-workflow-helm-deploy
+  apiGroup: rbac.authorization.k8s.io
+---
 # MinIO artifact credentials — required by Argo Workflows argoexec init container
 apiVersion: external-secrets.io/v1beta1
 kind: ExternalSecret
