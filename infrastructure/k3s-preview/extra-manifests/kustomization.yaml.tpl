@@ -5,5 +5,6 @@ resources:
   - letsencrypt-prod.yaml
   - letsencrypt-staging.yaml
   - cert-manager-helmchartconfig.yaml
+  - traefik-helmchartconfig.yaml
   - kured.yaml
   - metrics-server-resources-patch.yaml
