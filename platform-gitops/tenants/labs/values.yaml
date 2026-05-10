@@ -10,6 +10,10 @@ tenant:
     - userId: mashkoffdmitry
       role: owner
   quotas:
+    # Bumped 2026-05-10: pelican-proxy preview env + workflow pods need headroom
+    # beyond the 3Gi limit (used: 2896Mi, workflow pods request 256-384Mi each).
+    # requests.memory 3Gi → 4Gi gives ~1Gi free for concurrent workflow + preview.
+    #
     # Bumped 2026-05-08: 4 baseline service pods (kuptsi-app, openclaw,
     # trading-data, pelican-proxy) settle at ~5100m used → only 900m headroom
     # under the previous limits.cpu=6, which is below the 1000m a single
@@ -22,7 +26,7 @@ tenant:
     # Earlier history (2026-05-06): bumped to fit kuptsi-app FastAPI +
     # Temporal worker alongside labs-openclaw (2600m / 1104Mi req).
     requests.cpu: "2"
-    requests.memory: "3Gi"
+    requests.memory: "4Gi"
     limits.cpu: "8"
     limits.memory: "7Gi"
     pods: "15"
