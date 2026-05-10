@@ -1538,12 +1538,6 @@ configMaps:
           }
         },
 
-        "features": {
-          "trading-intel": {
-            "news_sentiment_score": true
-          }
-        },
-
         "mcp": {
           "servers": {
             "mctl": {
