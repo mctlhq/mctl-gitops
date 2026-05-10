@@ -4,14 +4,23 @@ metadata:
   name: preview-deploy
   annotations:
     workflows.argoproj.io/description: |
-      Deploy an ephemeral preview environment for a service using an existing image tag.
-      Deploys as a separate Helm release (preview-{app}-{id}) in the team's own namespace.
+      Deploy an ephemeral preview environment for a service.
+
+      Two modes:
+        1. Existing image (git_ref=""):  deploys image_tag directly.
+        2. Build from branch (git_ref set): triggers build-image.yaml in mctl-gitops,
+           waits for the image to be pushed to GHCR, then deploys.
+
+      The preview Helm release (preview-{app}-{id}) runs in the team's own namespace.
       Accessible at {app}-{id}.{PLATFORM_DOMAIN} (covered by *.{PLATFORM_DOMAIN} wildcard).
-      Inherits imagePullSecrets, service.port, envFrom, and resources from the service's values.yaml.
-      Only image.tag and ingress host are overridden — no separate ExternalSecret is created,
-      the preview reuses the existing secret already in the namespace.
+      Inherits imagePullSecrets, service.port, envFrom, and resources from the service values.yaml.
+      Reuses the existing ExternalSecret-provisioned secret — no new secret is created.
       Cleanup via preview-delete workflow (helm uninstall).
 spec:
+  ttlStrategy:
+    secondsAfterSuccess: 1800
+    secondsAfterFailure: 86400
+    secondsAfterCompletion: 3600
   entrypoint: preview-pipeline
   serviceAccountName: argo-workflow-sa
 
@@ -20,16 +29,177 @@ spec:
       - name: team_name
       - name: component_name
       - name: image_tag
+        # Required when git_ref="". When git_ref is set the MCP layer pre-generates the tag.
       - name: ttl_hours
         default: "24"
+      - name: git_ref
+        default: ""
+        # Branch, SHA, or tag to build from. Leave empty to deploy an existing image_tag.
+      - name: dockerfile_repo
+        default: ""
+        # Source repo in "org/repo" format. Required when git_ref is set.
+      - name: dockerfile_path
+        default: "Dockerfile"
 
   templates:
     - name: preview-pipeline
       dag:
         tasks:
+          - name: build-image
+            template: trigger-github-build
+            when: "\"{{workflow.parameters.git_ref}}\" != \"\""
+            arguments:
+              parameters:
+                - name: dockerfile_repo
+                  value: "{{workflow.parameters.dockerfile_repo}}"
+                - name: git_ref
+                  value: "{{workflow.parameters.git_ref}}"
+                - name: image_tag
+                  value: "{{workflow.parameters.image_tag}}"
+                - name: dockerfile_path
+                  value: "{{workflow.parameters.dockerfile_path}}"
+                - name: team_name
+                  value: "{{workflow.parameters.team_name}}"
+                - name: component_name
+                  value: "{{workflow.parameters.component_name}}"
+
           - name: deploy-preview
             template: deploy
+            dependencies: [build-image]
+            arguments:
+              parameters:
+                - name: team_name
+                  value: "{{workflow.parameters.team_name}}"
+                - name: component_name
+                  value: "{{workflow.parameters.component_name}}"
+                - name: image_tag
+                  value: "{{workflow.parameters.image_tag}}"
+                - name: ttl_hours
+                  value: "{{workflow.parameters.ttl_hours}}"
 
+    # ── Build: trigger build-image.yaml in mctl-gitops, poll until done ─────────
+    - name: trigger-github-build
+      inputs:
+        parameters:
+          - name: dockerfile_repo
+          - name: git_ref
+          - name: image_tag
+          - name: dockerfile_path
+            default: "Dockerfile"
+          - name: team_name
+          - name: component_name
+      script:
+        image: python:3.12-alpine
+        command: [python3]
+        envFrom:
+          - configMapRef:
+              name: mctl-platform-config
+        env:
+          - name: GITHUB_PAT
+            valueFrom:
+              secretKeyRef:
+                name: github-actions-pat
+                key: token
+        source: |
+          import os, json, time, urllib.request, urllib.error, sys
+
+          PAT = os.environ["GITHUB_PAT"]
+          GITOPS_ORG = os.environ["GITOPS_ORG"]
+          GITOPS_REPO = os.environ["GITOPS_REPO"]
+          API = "https://api.github.com"
+
+          dockerfile_repo = "{{inputs.parameters.dockerfile_repo}}"
+          git_ref         = "{{inputs.parameters.git_ref}}"
+          image_tag       = "{{inputs.parameters.image_tag}}"
+          dockerfile_path = "{{inputs.parameters.dockerfile_path}}"
+          team_name       = "{{inputs.parameters.team_name}}"
+          component_name  = "{{inputs.parameters.component_name}}"
+          build_id        = "{{workflow.name}}"
+
+          # Image name derived from org + component — consistent with deploy-service
+          image_name = f"ghcr.io/{GITOPS_ORG}/{component_name}"
+
+          headers = {
+              "Authorization": f"Bearer {PAT}",
+              "Accept": "application/vnd.github+json",
+              "X-GitHub-Api-Version": "2022-11-28",
+              "Content-Type": "application/json",
+          }
+
+          def api_request(method, path, data=None):
+              url = f"{API}{path}"
+              body = json.dumps(data).encode() if data else None
+              req = urllib.request.Request(url, data=body, headers=headers, method=method)
+              try:
+                  with urllib.request.urlopen(req) as resp:
+                      if resp.status == 204:
+                          return None
+                      return json.loads(resp.read())
+              except urllib.error.HTTPError as e:
+                  body_text = e.read().decode()
+                  print(f"HTTP {e.code}: {body_text}", file=sys.stderr)
+                  raise
+
+          print(f"Building: {dockerfile_repo}@{git_ref} -> {image_name}:{image_tag}")
+          dispatch_path = f"/repos/{GITOPS_ORG}/{GITOPS_REPO}/actions/workflows/build-image.yaml/dispatches"
+          api_request("POST", dispatch_path, {
+              "ref": "main",
+              "inputs": {
+                  "repo":            dockerfile_repo,
+                  "git_ref":         git_ref,
+                  "image_name":      image_name,
+                  "image_tag":       image_tag,
+                  "dockerfile_path": dockerfile_path,
+                  "team_name":       team_name,
+                  "component_name":  component_name,
+                  "build_id":        build_id,
+              }
+          })
+          print("Workflow dispatched, waiting for run...")
+
+          run_name = f"build-{build_id}"
+          run_id = None
+          for attempt in range(30):
+              time.sleep(10)
+              runs = api_request("GET",
+                  f"/repos/{GITOPS_ORG}/{GITOPS_REPO}/actions/workflows/build-image.yaml/runs?per_page=5")
+              for run in runs.get("workflow_runs", []):
+                  if run.get("name", "") == run_name or build_id in run.get("name", ""):
+                      run_id = run["id"]
+                      break
+              if run_id:
+                  break
+              print(f"  Waiting for run... ({attempt + 1}/30)")
+
+          if not run_id:
+              print("Timed out waiting for workflow run", file=sys.stderr)
+              sys.exit(1)
+
+          run_url = f"https://github.com/{GITOPS_ORG}/{GITOPS_REPO}/actions/runs/{run_id}"
+          print(f"Run: {run_url}")
+
+          for attempt in range(40):
+              time.sleep(15)
+              run = api_request("GET", f"/repos/{GITOPS_ORG}/{GITOPS_REPO}/actions/runs/{run_id}")
+              status = run["status"]
+              conclusion = run.get("conclusion")
+              if status == "completed":
+                  if conclusion == "success":
+                      print(f"Build succeeded: {image_name}:{image_tag}")
+                      sys.exit(0)
+                  else:
+                      print(f"Build failed: {conclusion} — {run_url}", file=sys.stderr)
+                      sys.exit(1)
+              print(f"  Build {status}... ({attempt + 1}/40)")
+
+          print("Timed out waiting for build (10 min)", file=sys.stderr)
+          sys.exit(1)
+        resources:
+          requests:
+            memory: 128Mi
+            cpu: 50m
+
+    # ── Deploy: Helm install/upgrade into team namespace ─────────────────────────
     - name: deploy
       inputs:
         parameters:
@@ -70,7 +240,6 @@ spec:
           TAG="{{inputs.parameters.image_tag}}"
           TTL_HOURS="{{inputs.parameters.ttl_hours}}"
 
-          # Generate a short preview ID from the workflow name
           PREVIEW_ID=$(echo "${ARGO_WORKFLOW_NAME}" | tr -cd 'a-z0-9' | tail -c 6)
           RELEASE="preview-${COMPONENT}-${PREVIEW_ID}"
           HOST="${COMPONENT}-${PREVIEW_ID}.${PLATFORM_DOMAIN}"
@@ -78,7 +247,6 @@ spec:
           echo "${PREVIEW_ID}" > /tmp/preview_id
           echo "https://${HOST}" > /tmp/preview_url
 
-          # Clone gitops repo to get Helm chart and service values
           apk add --no-cache git openssh-client > /dev/null 2>&1
           mkdir -p ~/.ssh
           cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
@@ -90,9 +258,6 @@ spec:
           CHART_PATH="/tmp/mctl-gitops/platform-gitops/helm-charts/base-service"
           SERVICE_VALUES="/tmp/mctl-gitops/platform-gitops/services/${TEAM}/${COMPONENT}/values.yaml"
 
-          # Deploy: use service values.yaml as base to inherit imagePullSecrets, service.port,
-          # envFrom, resources. Override only image.tag, ingress host, and TLS secret name.
-          # externalSecret is not re-created — preview reuses the existing secret in the namespace.
           helm upgrade --install "${RELEASE}" "${CHART_PATH}" \
             --namespace "${TEAM}" \
             --values "${SERVICE_VALUES}" \
@@ -108,7 +273,7 @@ spec:
             --set-string "podLabels.mctl\\.ai/preview-id=${PREVIEW_ID}" \
             --wait --timeout=5m
 
-          echo "Preview deployed: https://${HOST} (release: ${RELEASE}, namespace: ${TEAM}, ttl: ${TTL_HOURS}h)"
+          echo "Preview deployed: https://${HOST} (release: ${RELEASE}, ttl: ${TTL_HOURS}h)"
         resources:
           requests:
             memory: 256Mi
