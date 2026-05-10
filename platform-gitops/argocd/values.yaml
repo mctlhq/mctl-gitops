@@ -220,7 +220,7 @@ argo-cd:
         memory: 2Gi
       requests:
         cpu: 100m
-        memory: 512Mi
+        memory: 768Mi
     env:
       - name: GOMEMLIMIT
         value: "1800MiB"
