@@ -55,7 +55,9 @@ spec:
           resources:
             requests:
               cpu: 100m
-              memory: 512Mi
+              # Observed RSS ~784Mi; 900Mi gives 15% buffer. Raised 512Mi→900Mi
+              # on 2026-05-10 (RAM real>requests gap on Global RAM dashboard).
+              memory: 900Mi
             limits:
               cpu: 500m
               # Working set hit 99% of 512Mi limit during normal artifact-store

@@ -47,7 +47,9 @@ spec:
               cpu: 100m
               memory: 256Mi
             limits:
-              cpu: 500m
+              # Steady-state ~48m; 200m gives 4x cushion for unseal/auth bursts.
+              # Trimmed 500m→200m on 2026-05-10 (CPU-limits cluster headroom).
+              cpu: 200m
               memory: 1Gi
 
           ingress:
