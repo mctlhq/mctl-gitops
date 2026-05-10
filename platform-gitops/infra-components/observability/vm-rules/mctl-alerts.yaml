@@ -74,6 +74,16 @@ spec:
             summary: >-
               Node {{ $labels.instance }} memory usage above 90% for 15 minutes
 
+        - alert: NodeLowMemoryAvailable
+          expr: |
+            node_memory_MemAvailable_bytes < 1073741824
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: >-
+              Node {{ $labels.instance }} has less than 1Gi memory available ({{ $value | humanize1024 }}B free)
+
         - alert: NodeDiskPressure
           expr: |
             kube_node_status_condition{condition="DiskPressure", status="true"} == 1
