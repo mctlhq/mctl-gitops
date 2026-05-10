@@ -928,6 +928,21 @@ configMaps:
         }
         return res.body;
       }
+      // Proactive token refresh: keep credentials alive without waiting for
+      // an incoming message. Checks every 30 min; refreshes when the access
+      // token has less than 45 min left. Prevents the refresh token from
+      // expiring during long idle periods (bug: on-demand-only refresh died
+      // if no message arrived before the refresh token TTL elapsed).
+      setInterval(async () => {
+        try {
+          const auth = await readAuth().catch(() => null);
+          if (!auth || !auth.expiresAt) return;
+          const ms = Date.parse(auth.expiresAt);
+          if (Number.isFinite(ms) && ms <= Date.now() + 45 * 60_000) {
+            await refreshAuth(auth);
+          }
+        } catch (_) {}
+      }, 30 * 60 * 1000);
     # CoinGlass MCP stdio bridge — required because the claude-cli backend's
     # bundle-mcp step accepts only stdio MCP servers (it silently skips
     # streamable-http/sse with "[bundle-mcp] skipped server because only stdio
