@@ -1460,7 +1460,7 @@ configMaps:
             },
             "compaction": {
               "enabled": true,
-              "keepRecentTokens": 20000,
+              "keepRecentTokens": 35000,
               "notifyUser": false,
               "model": "claude-haiku-4-5",
               "provider": "anthropic"
