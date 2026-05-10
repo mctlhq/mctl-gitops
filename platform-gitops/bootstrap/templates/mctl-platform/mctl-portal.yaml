@@ -235,7 +235,9 @@ spec:
           resources:
             requests:
               cpu: 100m
-              memory: 256Mi
+              # Observed RSS ~368Mi; 384Mi gives 4% buffer. Raised 256Mi→384Mi
+              # on 2026-05-10 (RAM real>requests gap on Global RAM dashboard).
+              memory: 384Mi
             limits:
               # Steady-state ~26m; 300m gives 11x cushion. Trimmed 500m→300m
               # on 2026-05-07 (CPU-limits cluster headroom).
