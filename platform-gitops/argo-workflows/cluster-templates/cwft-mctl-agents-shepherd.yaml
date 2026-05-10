@@ -535,12 +535,28 @@ spec:
           ' | tr '\n' ' ')
 
           if [ -n "$BAD" ]; then
-            echo "❌ Newly Degraded ArgoCD apps after shepherd run: $BAD"
-            echo "Threshold (workflow.creationTimestamp): $THRESHOLD"
-            printf '%s' "$BAD" > /tmp/degraded.txt
-            exit 1
+            echo "⚠️  Newly Degraded apps detected: $BAD — waiting 120s to confirm (rolling-update grace)…"
+            sleep 120
+            RAW2=$(kubectl get applications.argoproj.io -n argocd -o json 2>/dev/null) || RAW2=""
+            BAD2=""
+            if [ -n "$RAW2" ]; then
+              BAD2=$(printf '%s' "$RAW2" | jq -r --arg ts "$THRESHOLD" '
+                ($ts | fromdateiso8601) as $threshold
+                | .items[]
+                | select(.status.health.status == "Degraded")
+                | select(((.status.health.lastTransitionTime // "1970-01-01T00:00:00Z") | fromdateiso8601) > $threshold)
+                | "\(.metadata.namespace)/\(.metadata.name)"
+              ' | tr '\n' ' ')
+            fi
+            if [ -n "$BAD2" ]; then
+              echo "❌ Still Degraded after 120s grace: $BAD2"
+              echo "Threshold (workflow.creationTimestamp): $THRESHOLD"
+              printf '%s' "$BAD2" > /tmp/degraded.txt
+              exit 1
+            fi
+            echo "✓ Apps recovered within grace period (transient rolling-update): $BAD"
           fi
-          echo "✓ No newly-Degraded apps detected after shepherd run."
+          echo "✓ No persistent Degraded apps detected after shepherd run."
 
     # ── 5. Telegram notification (onExit) ──────────────────────────────────
     # Same pattern as cwft-mctl-agents-run / cwft-mctl-agents-implement.
