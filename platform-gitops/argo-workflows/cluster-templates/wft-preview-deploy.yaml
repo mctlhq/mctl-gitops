@@ -269,6 +269,7 @@ spec:
             --set "ingress.tls[0].secretName=${RELEASE}-tls" \
             --set "ingress.tls[0].hosts[0]=${HOST}" \
             --set externalSecret=null \
+            --set blueGreen.enabled=false \
             --set-string "podLabels.mctl\\.ai/preview=true" \
             --set-string "podLabels.mctl\\.ai/preview-id=${PREVIEW_ID}" \
             --wait --timeout=5m
