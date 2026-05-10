@@ -1120,6 +1120,13 @@ configMaps:
             "model": {
               "primary": "openai-codex/gpt-5.4",
               "fallbacks": ["anthropic/claude-haiku-4-5"]
+            },
+            "compaction": {
+              "enabled": true,
+              "keepRecentTokens": 20000,
+              "notifyUser": false,
+              "model": "claude-haiku-4-5",
+              "provider": "anthropic"
             }
           }
         },
@@ -1152,7 +1159,11 @@ configMaps:
             "botToken": "__TELEGRAM_TOKEN__",
             "dmPolicy": "pairing",
             "groupPolicy": "open",
-            "allowFrom": ["210408407", "317748297"]
+            "allowFrom": ["210408407", "317748297"],
+            "threadBindings": {
+              "idleHours": 4,
+              "maxAgeHours": 24
+            }
           }
         },
         "hooks": {
