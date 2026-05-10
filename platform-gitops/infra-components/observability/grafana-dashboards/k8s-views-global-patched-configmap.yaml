@@ -1,12 +1,12 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: z-mctl-k8s-views-global
+  name: mctl-k8s-views-global
   namespace: monitoring
   labels:
     grafana_dashboard: "1"
 data:
-  z-k8s-views-global.json: |
+  kubernetes-views-global.json: |
     {
       "__elements": {},
       "__inputs": [
