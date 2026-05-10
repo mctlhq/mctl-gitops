@@ -27,8 +27,8 @@ tenant:
     # Temporal worker alongside labs-openclaw (2600m / 1104Mi req).
     requests.cpu: "2"
     requests.memory: "4Gi"
-    limits.cpu: "8"
-    limits.memory: "7Gi"
+    limits.cpu: "10"
+    limits.memory: "9Gi"
     pods: "15"
     persistentvolumeclaims: "5"
     services: "15"
