@@ -23,14 +23,14 @@ tenant:
   quotas:
     # Aggregate CPU/memory requests across all pods
     requests.cpu: "500m"
-    requests.memory: "1280Mi"
-    # Aggregate CPU/memory limits across all pods (sized for one OpenClaw pod plus small headroom)
-    limits.cpu: "3"
-    limits.memory: "4Gi"
+    requests.memory: "2Gi"
+    # Aggregate CPU/memory limits across all pods (sized for one OpenClaw pod + one service + deploy workflow)
+    limits.cpu: "4"
+    limits.memory: "6Gi"
     # Maximum number of pods
     pods: "10"
     # Maximum number of PVCs
-    persistentvolumeclaims: "5"
+    persistentvolumeclaims: "2"
     # Maximum number of services
     services: "10"
 
