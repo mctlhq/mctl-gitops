@@ -5,7 +5,7 @@
 
 image:
   repository: ghcr.io/mctlhq/pelican-proxy
-  tag: "preview.37"
+  tag: "0.2.21"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
