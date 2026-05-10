@@ -79,6 +79,14 @@ spec:
                       cpu: 200m
                       memory: 256Mi
 
+          # Disable bundled k8s-views-global so our patched ConfigMap
+          # (z-mctl-k8s-views-global) is the sole provider of UID k8s_views_global.
+          # Duplicate UIDs cause Grafana provisioner lockout in v12.
+          defaultDashboards:
+            dashboards:
+              kubernetes-views-global:
+                enabled: false
+
           # Core components
           defaultRules:
             enabled: true
