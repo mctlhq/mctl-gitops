@@ -40,6 +40,10 @@ spec:
         # Source repo in "org/repo" format. Required when git_ref is set.
       - name: dockerfile_path
         default: "Dockerfile"
+      - name: port
+        default: ""
+        # Container port override. Leave empty to use the value from the service values.yaml.
+        # Use when the image being previewed listens on a different port than production.
 
   templates:
     - name: preview-pipeline
@@ -76,6 +80,8 @@ spec:
                   value: "{{workflow.parameters.image_tag}}"
                 - name: ttl_hours
                   value: "{{workflow.parameters.ttl_hours}}"
+                - name: port
+                  value: "{{workflow.parameters.port}}"
 
     # ── Build: trigger build-image.yaml in mctl-gitops, poll until done ─────────
     - name: trigger-github-build
@@ -211,6 +217,8 @@ spec:
             value: "{{workflow.parameters.image_tag}}"
           - name: ttl_hours
             value: "{{workflow.parameters.ttl_hours}}"
+          - name: port
+            value: "{{workflow.parameters.port}}"
       outputs:
         parameters:
           - name: preview_id
@@ -239,6 +247,7 @@ spec:
           COMPONENT="{{inputs.parameters.component_name}}"
           TAG="{{inputs.parameters.image_tag}}"
           TTL_HOURS="{{inputs.parameters.ttl_hours}}"
+          PORT="{{inputs.parameters.port}}"
 
           PREVIEW_ID=$(echo "${ARGO_WORKFLOW_NAME}" | tr -cd 'a-z0-9' | tail -c 6)
           RELEASE="preview-${COMPONENT}-${PREVIEW_ID}"
@@ -270,6 +279,7 @@ spec:
             --set "ingress.tls[0].hosts[0]=${HOST}" \
             --set externalSecret=null \
             --set blueGreen.enabled=false \
+            ${PORT:+--set service.port="${PORT}"} \
             --set-string "podLabels.mctl\\.ai/preview=true" \
             --set-string "podLabels.mctl\\.ai/preview-id=${PREVIEW_ID}" \
             --wait --timeout=5m
