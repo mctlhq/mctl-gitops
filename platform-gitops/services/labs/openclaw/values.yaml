@@ -1459,7 +1459,6 @@ configMaps:
               "fallbacks": ["anthropic/claude-haiku-4-5"]
             },
             "compaction": {
-              "enabled": true,
               "keepRecentTokens": 35000,
               "notifyUser": false,
               "model": "claude-haiku-4-5",
