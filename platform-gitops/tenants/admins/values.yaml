@@ -8,12 +8,12 @@ tenant:
     - userId: mashkovd
       role: owner
   quotas:
-    requests.cpu: "2"
+    requests.cpu: "1"
     requests.memory: "3Gi"
     limits.cpu: "5"
     limits.memory: "6Gi"
-    pods: "20"
-    persistentvolumeclaims: "5"
+    pods: "12"
+    persistentvolumeclaims: "2"
     services: "10"
   limitRange:
     enabled: true
@@ -21,7 +21,7 @@ tenant:
       cpu: "500m"
       memory: "256Mi"
     defaultRequest:
-      cpu: "100m"
+      cpu: "50m"
       memory: "128Mi"
     max:
       cpu: "2"
