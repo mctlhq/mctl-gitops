@@ -20,13 +20,13 @@ ingress:
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
   hosts:
-    - pelican-proxy-preview36.mctl.ai
+    - pelican-proxy-pr-36.mctl.ai
   tls:
-    - secretName: pelican-proxy-preview36-tls
+    - secretName: pelican-proxy-pr-36-tls
       hosts:
-        - pelican-proxy-preview36.mctl.ai
+        - pelican-proxy-pr-36.mctl.ai
 externalSecret:
-  targetSecret: pelican-proxy-preview36-secrets
+  targetSecret: pelican-proxy-pr-36-secrets
   data:
     - secretKey: LIBERTEX_EMAIL
       remoteKey: teams/labs/pelican-proxy
@@ -42,4 +42,4 @@ externalSecret:
       property: CATALOG_INGEST_SECRET
 envFrom:
   - secretRef:
-      name: pelican-proxy-preview36-secrets
+      name: pelican-proxy-pr-36-secrets
