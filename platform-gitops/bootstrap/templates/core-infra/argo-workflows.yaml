@@ -71,7 +71,11 @@ spec:
             port: 9090
           persistence:
             archive: true
-            nodeStatusOffLoad: false
+            # Offload workflow node tree to PostgreSQL instead of etcd.
+            # Reduces kube-apiserver watch-cache RAM by ~300-600Mi at 500+
+            # workflow objects (each workflow node stored as ~5KB instead of
+            # 36-107KB in etcd). Requires archive: true + PG already configured.
+            nodeStatusOffLoad: true
             postgresql:
               host: shared-pg-rw.platform-db.svc
               port: 5432
