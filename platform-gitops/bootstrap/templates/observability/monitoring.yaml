@@ -242,7 +242,7 @@ spec:
                 resolve_timeout: 5m
                 telegram_api_url: "https://api.telegram.org"
               route:
-                receiver: telegram
+                receiver: mctl-agent
                 group_by: ["alertname", "namespace"]
                 group_wait: 30s
                 group_interval: 5m
@@ -275,7 +275,6 @@ spec:
                       - alertname =~ "RecordingRulesNoData|ScrapePoolHasNoTargets|TooManyScrapeErrors|TooManyLogs"
                       - namespace = "monitoring"
                   - receiver: mctl-agent
-                    continue: true
                     matchers:
                       - alertname =~ "PodCrashLooping|KubePodCrashLooping|KubePodNotReady|PodNotReady|TenantCPUQuotaHigh|TenantMemoryQuotaHigh|ArgoWorkflowFailed|ArgoWorkflowHighFailureRate|CPUThrottlingHigh|KubeJobNotCompleted|KubePersistentVolumeFillingUp|KubeStatefulSetReplicasMismatch|NodeHighCPU|NodeHighMemory|NodeLowMemoryAvailable|NodeDiskPressure|VaultSealed|MinioBucketUsageHigh|MinioBucketUsageCritical|ArgoCDApplicationDegraded|ArgoCDApplicationOutOfSyncLong"
               receivers:
