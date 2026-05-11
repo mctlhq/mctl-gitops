@@ -49,3 +49,13 @@ spec:
         kind: Workflow
       - kind: Secret
       - kind: ConfigMap
+      - kind: ServiceAccount
+      - group: networking.k8s.io
+        kind: NetworkPolicy
+      - group: acme.cert-manager.io
+        kind: Challenge
+      - group: acme.cert-manager.io
+        kind: Order
+      - kind: Endpoints
+      - group: discovery.k8s.io
+        kind: EndpointSlice
