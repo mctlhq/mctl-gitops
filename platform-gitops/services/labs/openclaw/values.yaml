@@ -1120,6 +1120,7 @@ configMaps:
       #!/usr/bin/env node
       const url = process.env.TRADING_DATA_URL;
       const token = process.env.TRADING_DATA_TOKEN;
+      let sessionId = '';
       let queue = Promise.resolve();
       process.stdin.setEncoding('utf8');
       let buf = '';
@@ -1179,15 +1180,18 @@ configMaps:
           return;
         }
         try {
-          const res = await fetch(url, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Accept': 'application/json, text/event-stream',
-              'Authorization': `Bearer ${token}`,
-            },
-            body: line,
-          });
+          const headers = {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json, text/event-stream',
+            'Authorization': `Bearer ${token}`,
+          };
+          if (sessionId) headers['Mcp-Session-Id'] = sessionId;
+          const res = await fetch(url, { method: 'POST', headers, body: line });
+          const nextSession = res.headers.get('mcp-session-id');
+          if (nextSession) sessionId = nextSession;
+          if (res.status === 404 && headers['Mcp-Session-Id']) {
+            sessionId = '';
+          }
           const text = await res.text();
           const contentType = (res.headers.get('content-type') || '').toLowerCase();
           if (contentType.includes('text/event-stream')) {
