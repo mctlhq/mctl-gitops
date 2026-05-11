@@ -78,16 +78,18 @@ jobs:
           new_tag = os.environ['NEW_TAG']
           with open(path) as fp:
               content = fp.read()
-          pattern = re.compile(
-              r'(repository:\s*' + re.escape(image_name) + r'\n\s+tag:)[^\n]+'
-          )
-          new_content, n = pattern.subn(r'\1 "' + new_tag + '"', content)
-          if n == 0:
-              print(f"ERROR: could not find 'repository: {image_name}' + tag pattern in {path}", file=sys.stderr)
+          # Top-level image block: repository: <image>\n  tag: <old>
+          p1 = re.compile(r'(repository:\s*' + re.escape(image_name) + r'\n\s+tag:)[^\n]+')
+          new_content, n1 = p1.subn(r'\1 "' + new_tag + '"', content)
+          # extraContainers / any inline image: <image>:<old>
+          p2 = re.compile(r'(image:\s*' + re.escape(image_name) + r'):[\w.\-]+')
+          new_content, n2 = p2.subn(r'\1:' + new_tag, new_content)
+          if n1 == 0 and n2 == 0:
+              print(f"ERROR: could not find any image tag pattern for {image_name} in {path}", file=sys.stderr)
               sys.exit(2)
           with open(path, 'w') as fp:
               fp.write(new_content)
-          print(f"OK: bumped {n} occurrence(s) in {path}")
+          print(f"OK: bumped {n1} repository/tag + {n2} inline image occurrence(s) in {path}")
           PYEOF
 
       - name: Commit and push
