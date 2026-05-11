@@ -62,3 +62,9 @@ spec:
       - kind: Event
       - group: events.k8s.io
         kind: Event
+      - group: rbac.authorization.k8s.io
+        kind: Role
+      - group: rbac.authorization.k8s.io
+        kind: RoleBinding
+      - kind: ResourceQuota
+      - kind: LimitRange
