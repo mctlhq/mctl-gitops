@@ -50,7 +50,7 @@ tenant:
       cpu: "50m"
       memory: "128Mi"
     max:
-      cpu: "1500m"
+      cpu: "3"
       memory: "3Gi"
   networking:
     allowIntraNamespace: true
