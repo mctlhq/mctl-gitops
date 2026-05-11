@@ -30,7 +30,7 @@ args:
     exec node openclaw.mjs gateway --allow-unconfigured
 resources:
   requests:
-    cpu: 50m
+    cpu: 500m
     memory: 1024Mi
   limits:
     cpu: 1500m
