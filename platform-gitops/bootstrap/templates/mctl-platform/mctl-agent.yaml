@@ -55,6 +55,12 @@ spec:
           GITHUB_OWNER: mctlhq
           GITHUB_REPO: mctl-gitops
           POLL_INTERVAL: "5m"
+          # Flapping CPU throttling alerts (openclaw, etc.) oscillate every
+          # 30m-4h, generating duplicate tickets each cycle. Default 10m
+          # cooldown was too short — see 129 stale resource_limit tickets
+          # on 2026-05-12. Widen to 4h so re-fires within a quarter-day
+          # window touch the existing ticket instead of creating a new one.
+          ALERT_FLAP_COOLDOWN: "4h"
           DRY_RUN: "false"
           WEBHOOK_ENABLED: "true"
           WEBHOOK_CALLBACK_URL: "https://agent.mctl.ai"
