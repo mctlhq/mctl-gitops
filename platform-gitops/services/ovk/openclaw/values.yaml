@@ -31,7 +31,7 @@ resources:
     cpu: 250m
     memory: 768Mi
   limits:
-    cpu: 1500m
+    cpu: 3000m
     memory: 2560Mi
 # Recreate avoids quota deadlocks for single-pod tenant deployments.
 strategy:

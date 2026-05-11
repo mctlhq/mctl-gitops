@@ -33,7 +33,7 @@ resources:
     cpu: 500m
     memory: 1024Mi
   limits:
-    cpu: 1500m
+    cpu: 3000m
     memory: 2560Mi
 # Recreate avoids quota deadlocks for this tenant during rollout
 strategy:
