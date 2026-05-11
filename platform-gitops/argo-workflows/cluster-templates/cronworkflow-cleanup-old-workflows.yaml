@@ -64,7 +64,7 @@ spec:
     templates:
       - name: cleanup
         script:
-          image: bitnami/kubectl:1.33
+          image: bitnami/kubectl:1.32.3
           command: [python3]
           resources:
             requests:
