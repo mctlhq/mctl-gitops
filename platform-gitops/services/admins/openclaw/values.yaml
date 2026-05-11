@@ -40,13 +40,13 @@ args:
 # on startup probe. Bumping the CPU ceiling so the burst fits.
 # Capped at 2000m by the admins tenant LimitRange max (see
 # tenants/admins/values.yaml:27). Raising the LimitRange would also
-# require lifting the namespace ResourceQuota (used 4300m / 5000m).
+# require lifting the namespace ResourceQuota (used 5800m / 7000m).
 resources:
   requests:
     cpu: 250m
     memory: 768Mi
   limits:
-    cpu: 2000m
+    cpu: 4000m
     memory: 2560Mi
 # Recreate avoids quota deadlocks for single-pod tenant deployments.
 strategy:
