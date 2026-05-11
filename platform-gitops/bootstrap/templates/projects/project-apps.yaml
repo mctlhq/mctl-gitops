@@ -40,3 +40,12 @@ spec:
 
   orphanedResources:
     warn: true
+    # Downstream artifacts of resources ArgoCD already manages — they appear in
+    # tenant namespaces without an app.kubernetes.io/instance label and would
+    # otherwise be flagged as orphans (e.g. ESO-rendered Secrets, Helm release
+    # storage, dynamic Workflow runs from CI/CD).
+    ignore:
+      - group: argoproj.io
+        kind: Workflow
+      - kind: Secret
+      - kind: ConfigMap
