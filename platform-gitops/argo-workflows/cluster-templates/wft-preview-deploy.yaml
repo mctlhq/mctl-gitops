@@ -274,9 +274,9 @@ spec:
             --set ingress.enabled=true \
             --set ingress.className=traefik \
             --set "ingress.annotations.cert-manager\\.io/cluster-issuer=letsencrypt-prod" \
-            --set "ingress.hosts[0]=${HOST}" \
+            --set "ingress.hosts={${HOST}}" \
             --set "ingress.tls[0].secretName=${RELEASE}-tls" \
-            --set "ingress.tls[0].hosts[0]=${HOST}" \
+            --set "ingress.tls[0].hosts={${HOST}}" \
             --set externalSecret=null \
             --set blueGreen.enabled=false \
             ${PORT:+--set service.port="${PORT}"} \
