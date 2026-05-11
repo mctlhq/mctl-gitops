@@ -5,11 +5,11 @@
 
 image:
   repository: ghcr.io/mctlhq/mctl-web
-  tag: "4.7.2"
+  tag: "4.7.0"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
-  port: 8080
+  port: 80
 resources:
   requests:
     cpu: 100m
