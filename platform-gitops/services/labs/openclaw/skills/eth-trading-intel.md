@@ -1,6 +1,6 @@
 ---
 name: eth-trading-intel
-description: Read-only crypto trading intel for ETH/BTC/SOL via CoinGlass MCP + local Bybit/Binance indicator engine. Use for /eth /btc /sol /scan /risk /why /watch /unwatch /settings /set_threshold /help /last /funding /oi /etf /pulse /rsi /macd /bb /adx /heatmap or any open-interest, funding, long/short, liquidation, RSI/MACD/ADX, heatmap, ETF-flow request. Observation-only, never trades. Output: directional snapshot (long_score, short_score, regime, conviction) + reasons, risks, missing_data.
+description: Read-only crypto trading intel for ETH/BTC/SOL via CoinGlass MCP + local Bybit/Binance indicator engine. Use for /eth /btc /sol /scan /risk /why /watch /unwatch /settings /set_threshold /help /last /funding /oi /etf /pulse /rsi /macd /bb /adx /heatmap or any open-interest, funding, long/short, liquidation, RSI/MACD/ADX, heatmap, ETF-flow request. Observation-only, never trades. Output — directional snapshot (long_score, short_score, regime, conviction) + reasons, risks, missing_data.
 ---
 
 # eth-trading-intel
