@@ -1,0 +1,73 @@
+# Alerts on openclaw codex token throughput. Tied to the
+# /metrics counters wired in mctlhq/mctl-openclaw#19 and scraped
+# via the labs-openclaw-codex-metrics VMServiceScrape (gitops #201).
+#
+# The codex backend rides the operator's ChatGPT Plus quota, so
+# the throughput spike alert is the leading indicator before the
+# account-level rate limit kicks in and causes the well-known
+# "hit your ChatGPT usage limit" wedge (memory:
+# feedback_openclaw_codex_usage_limits.md). The 5m sustained
+# threshold is intentionally below known Plus-tier headroom to
+# give the operator a chance to throttle before the cliff.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: openclaw-codex-alerts
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: mctl-platform
+spec:
+  groups:
+    - name: openclaw.codex-throughput
+      rules:
+        - alert: OpenclawCodexPromptTokenSpike
+          expr: |
+            sum by (pod) (rate(openclaw_codex_prompt_tokens_total[5m])) * 60 > 25000
+          for: 5m
+          labels:
+            severity: warning
+            component: openclaw
+          annotations:
+            summary: openclaw codex prompt tokens >25k/min for 5m on {{ $labels.pod }}
+            description: |
+              Sustained prompt-token throughput is {{ $value | humanize }} tokens/min
+              on pod {{ $labels.pod }}. ChatGPT Plus rate-limit window typically
+              starts pushing back near 30k tokens/min. Likely causes:
+              - Burst of /scan or /heatmap (loops over watchlist symbols)
+              - Telegram chat thread without throttle
+              - Looping skill / runaway agent
+              Inspect the per-command bargauge on the "openclaw — Codex Token
+              Usage" dashboard to identify the offending /command, and consider
+              `/set_threshold` or transient `/unwatch` to throttle.
+
+        - alert: OpenclawCodexRequestSpike
+          expr: |
+            sum by (pod) (rate(openclaw_codex_requests_total[5m])) * 60 > 20
+          for: 5m
+          labels:
+            severity: warning
+            component: openclaw
+          annotations:
+            summary: openclaw codex requests >20/min for 5m on {{ $labels.pod }}
+            description: |
+              Request rate is {{ $value | humanize }} req/min on
+              {{ $labels.pod }}. Steady-state is typically <5/min for
+              interactive chat plus the scan cron. Likely a stuck loop or
+              an unintentional burst — check `kubectl -n labs logs
+              {{ $labels.pod }} -c base-service | grep codex_usage | tail`.
+
+        - alert: OpenclawCodexMetricsAbsent
+          expr: |
+            absent(openclaw_codex_requests_total) == 1
+          for: 30m
+          labels:
+            severity: info
+            component: openclaw
+          annotations:
+            summary: openclaw_codex_* metric series missing for 30m
+            description: |
+              Either the labs-openclaw pod has crashed, the /metrics
+              endpoint regressed, the ServiceMonitor lost its target,
+              or the tenant NetworkPolicy reverted (see
+              feedback_tenant_monitoring_scrape_networkpolicy.md). The
+              codex-token dashboard goes blind without this series.
