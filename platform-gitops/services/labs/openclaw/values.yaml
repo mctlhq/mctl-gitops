@@ -1515,7 +1515,7 @@ configMaps:
               { "command": "unwatch", "description": "Remove symbol from watchlist. Usage: /unwatch SYMBOL" },
               { "command": "settings", "description": "Show trading-intel watchlist + threshold" },
               { "command": "set_threshold", "description": "Set scan threshold 50-95. Usage: /set_threshold N" },
-              { "command": "help", "description": "List all eth-trading-intel commands" },
+              { "command": "cmds", "description": "List all eth-trading-intel commands (renamed from /help to avoid native-router collision)" },
               { "command": "last", "description": "Recall last trading signal from memory" },
               { "command": "funding", "description": "Funding rate snapshot. Usage: /funding SYMBOL" },
               { "command": "oi", "description": "Open interest snapshot. Usage: /oi SYMBOL" },
