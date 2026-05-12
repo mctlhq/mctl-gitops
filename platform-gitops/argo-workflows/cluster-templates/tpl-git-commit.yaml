@@ -334,6 +334,20 @@ spec:
                 ;;
             esac
 
+            # Sync any extraContainers riding the same image repo to the
+            # new tag — kuptsi-app and similar services run a sibling
+            # worker (e.g. temporal-worker) off the same build, so both
+            # halves must move in lockstep on every release. Only touches
+            # containers already pointing at ${REPO}:… — sidecars on a
+            # different image (log shippers, busybox, etc.) are left
+            # alone. Mirrors the release-deploy.yaml GH Action fix
+            # (e579cf4) so mctl_deploy_service action=deploy and the
+            # release-deploy GH workflow stay equivalent.
+            # yq v4 lacks startswith(); use test() with `.` escaped so a
+            # repo like ghcr.io/... doesn't accidentally match ghcr_io/...
+            REPO_RE="${REPO//./\\.}"
+            yq eval -i "(.extraContainers[]? | select(.image // \"\" | test(\"^${REPO_RE}:\")) | .image) = \"${REPO}:${TAG}\"" "${DIR}/values.yaml"
+
             # Clear env vars if sentinel __CLEAR__ was set
             if [ "$CLEAR_ENV" = "true" ]; then
               yq eval -i '.env = {}' "${DIR}/values.yaml"
