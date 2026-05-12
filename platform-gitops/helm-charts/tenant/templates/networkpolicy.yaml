@@ -161,4 +161,28 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: traefik
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 7. Allow ingress from the monitoring namespace so vmagent can scrape
+#    Prometheus /metrics endpoints exposed via ServiceMonitor / VMServiceScrape.
+#    Without this rule, the tenant-default `default-deny-all` blocks vmagent
+#    and scrape targets stay permanently in `down` state.
+# ─────────────────────────────────────────────────────────────────────────────
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-from-monitoring
+  namespace: {{ $ns }}
+  labels:
+    {{- include "tenant.labels" $ | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
 {{- end }}
