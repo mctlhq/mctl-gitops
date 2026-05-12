@@ -66,5 +66,7 @@ spec:
         kind: Role
       - group: rbac.authorization.k8s.io
         kind: RoleBinding
-      - kind: ResourceQuota
-      - kind: LimitRange
+      - group: ""
+        kind: ResourceQuota
+      - group: ""
+        kind: LimitRange
