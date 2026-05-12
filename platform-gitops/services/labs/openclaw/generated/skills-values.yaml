@@ -4,7 +4,7 @@
   "eth-trading-intel": |
     ---
     name: eth-trading-intel
-    description: Read-only crypto trading intel for ETH/BTC/SOL via CoinGlass MCP + local Bybit/Binance indicator engine. Use for /eth /btc /sol /scan /risk /why /watch /unwatch /settings /set_threshold /help /last /funding /oi /etf /pulse /rsi /macd /bb /adx /heatmap or any open-interest, funding, long/short, liquidation, RSI/MACD/ADX, heatmap, ETF-flow request. Observation-only, never trades. Output — directional snapshot (long_score, short_score, regime, conviction) + reasons, risks, missing_data.
+    description: Read-only crypto trading intel for ETH/BTC/SOL via CoinGlass MCP + local Bybit/Binance indicator engine. Use for /eth /btc /sol /scan /risk /why /watch /unwatch /settings /set_threshold /cmds /last /funding /oi /etf /pulse /rsi /macd /bb /adx /heatmap or any open-interest, funding, long/short, liquidation, RSI/MACD/ADX, heatmap, ETF-flow request. Observation-only, never trades. Output — directional snapshot (long_score, short_score, regime, conviction) + reasons, risks, missing_data.
     ---
 
     # eth-trading-intel
@@ -15,7 +15,7 @@
 
     ## Output language — русский (single-language contract)
 
-    **Все command-level outputs** (snapshot, risk, scan, /funding, /oi, /etf, /pulse, /rsi, /macd, /bb, /adx, /heatmap, /help, /settings, /watch confirmations) рендерятся **только на русском**. Cron-алерты уже на русском с PR #125; chat-skill синхронизирован. Trader-slang (лонг, шорт, funding, OI, RSI, MACD, CVD, ETF) пишем кириллицей или латиницей как принято в трейдер-сообществе — главное держать единый стиль внутри одного output.
+    **Все command-level outputs** (snapshot, risk, scan, /funding, /oi, /etf, /pulse, /rsi, /macd, /bb, /adx, /heatmap, /cmds, /settings, /watch confirmations) рендерятся **только на русском**. Cron-алерты уже на русском с PR #125; chat-skill синхронизирован. Trader-slang (лонг, шорт, funding, OI, RSI, MACD, CVD, ETF) пишем кириллицей или латиницей как принято в трейдер-сообществе — главное держать единый стиль внутри одного output.
 
     **Узкое исключение — fixed-message branches** (`/why` empty-state, `/last` empty-state, `/etf SOL` reject, core-tools-unavailable, `/scan` no-cross). У них перечислены оба варианта `RU:` / `EN:` потому что это короткие строки одного состояния и оператор может ожидать ответ на языке запроса. **Только эти 5 точек** имеют EN-вариант — остальные команды русско-только; если пользователь пишет на английском, всё равно отвечаем по-русски.
 
@@ -33,7 +33,7 @@
     - `/unwatch SYMBOL` — убрать из watchlist
     - `/settings` — показать текущий watchlist + threshold
     - `/set_threshold N` — задать global threshold (50–95)
-    - `/help` — список всех команд (static, no CoinGlass calls)
+    - `/cmds` — список всех команд (static, no CoinGlass calls). Renamed from `/help` 2026-05-13 because openclaw native router reserves `/help`.
     - `/last` — recall `state.last_signal` без re-running pipeline
     - `/funding SYMBOL` — single-dimension snapshot: funding rate
     - `/oi SYMBOL [tf]` — single-dimension snapshot: open interest. Без `tf` — CoinGlass aggregated 4h по ~10 биржам. С `tf ∈ {1h, 4h}` — Bybit V5 single-source (обходит HOBBYIST блок на <4h).
@@ -489,13 +489,13 @@
 
     Lightweight commands для быстрого ad-hoc check одной метрики. Каждая делает 1-3 tool calls (vs 10 в full snapshot), не пишет `last_signal`, не считает scoring.
 
-    ### `/help`
+    ### `/cmds`
 
     Static text. Список всех 21 команд (16 base + 5 Phase 1.6 indicator commands) с usage и one-line описанием. Никаких CoinGlass calls. Категории и команды (на русском, single-language contract):
     - Торговля: /eth, /btc, /sol, /scan, /risk, /pulse, /funding, /oi, /etf, /why, /last
     - Индикаторы (Phase 1.6, local Bybit kline): /rsi, /macd, /bb, /adx, /heatmap
     - Список наблюдения: /watch, /unwatch, /settings, /set_threshold
-    - Прочее: /help
+    - Прочее: /cmds
 
     ### `/last`
 
@@ -560,7 +560,7 @@
          Δ 24h:   <pct24>% → <trend>
          ```
          Δ-окна: `tf=1h` → (Δ1h, Δ4h, Δ24h); `tf=4h` → (Δ4h, Δ12h, Δ24h). `trend ∈ {растёт, боковик, падает}` по Δ24h.
-    5. Note (печатать в конце Bybit-вывода или в `/help`): Bybit single ≈ 30% global perp OI; используй `/oi SYM` (без tf) для полной aggregated картины, `/oi SYM 1h` — для short-term momentum без HOBBYIST 4h floor.
+    5. Note (печатать в конце Bybit-вывода или в `/cmds`): Bybit single ≈ 30% global perp OI; используй `/oi SYM` (без tf) для полной aggregated картины, `/oi SYM 1h` — для short-term momentum без HOBBYIST 4h floor.
 
     ### `/etf SYMBOL`
 

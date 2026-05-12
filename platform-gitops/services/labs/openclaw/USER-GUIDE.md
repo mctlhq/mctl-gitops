@@ -130,14 +130,14 @@
 
 `/commands`, `/new`, `/reset`, `/compact`, `/stop`, `/think`, `/model`, `/fast`, `/verbose`, `/status`, `/whoami`, `/context`, `/skill` — встроены в openclaw runtime. Это session/options/status-управление, к торговому боту прямого отношения не имеют.
 
-### Известный quirk: `/help`
+### Trading-команды списка: `/cmds`
 
-`/help` зарегистрирован в `customCommands` (skill) и определён в `eth-trading-intel.md` как команда, выводящая список 21 trading-команд (16 base + 5 indicator из Phase 1.6). Однако на практике openclaw runtime может перехватывать `/help` и возвращать native-меню (Session/Options/Status/Skills/Skill/Commands) **даже при `commands.native: false`** — это эмпирически наблюдалось 2026-05-05. Если ты видишь native-меню вместо trading-списка:
+`/cmds` (skill `eth-trading-intel`) выводит список 21 trading-команд (16 base + 5 Phase 1.6 indicator). Никаких CoinGlass calls — чисто static text.
 
-- список trading-команд → эта памятка (`USER-GUIDE.md`) или `eth-trading-intel.md` секция `When to use`
-- native список → `/commands` (full list openclaw-runtime)
+`/help` принадлежит native router openclaw и возвращает session/options/status-меню. Раньше `/help` был зарегистрирован в skill `customCommands`, но native router всегда перехватывал его (даже при `commands.native: false`), и registration падал с warning `custom command "/help" conflicts with a native command`. С 2026-05-13 trading-help переименован в `/cmds` — collision устранена.
 
-Follow-up план: переименовать skill-команду `/help` → `/cmds` чтобы избежать collision с native router.
+- список trading-команд → `/cmds`
+- native session-меню → `/help` или `/commands`
 
 ## Где искать что-то странное
 
