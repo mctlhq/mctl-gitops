@@ -7,7 +7,7 @@
 
 image:
   repository: ghcr.io/mctlhq/mctl-openclaw
-  tag: "2026.5.2-mctl.1"
+  tag: "2026.5.2-mctl.2"
 podSecurityContext:
   fsGroup: 1000
 imagePullSecrets:
@@ -1613,3 +1613,26 @@ extraIngresses:
         hosts:
           - labs-openclaw.mctl.ai
           - labs-openclaw.mctl.me
+
+# Prometheus scrape config for the openclaw `/metrics` endpoint added in
+# mctl-openclaw#19 (codex token usage counters). Served on the same `http`
+# port (18789) as the gateway HTTP/UI, so we reuse the existing Service
+# named port rather than provisioning a second port.
+extraObjects:
+  - apiVersion: monitoring.coreos.com/v1
+    kind: ServiceMonitor
+    metadata:
+      name: labs-openclaw-codex-metrics
+      labels:
+        app.kubernetes.io/instance: labs-openclaw
+        app.kubernetes.io/name: base-service
+    spec:
+      selector:
+        matchLabels:
+          app.kubernetes.io/instance: labs-openclaw
+          app.kubernetes.io/name: base-service
+      endpoints:
+        - port: http
+          path: /metrics
+          interval: 30s
+          scrapeTimeout: 10s
