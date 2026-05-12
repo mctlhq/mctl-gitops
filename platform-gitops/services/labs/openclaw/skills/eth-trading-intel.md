@@ -32,7 +32,7 @@ description: Read-only crypto trading intelligence for ETH/BTC/SOL via the CoinG
 - `/help` — список всех команд (static, no CoinGlass calls)
 - `/last` — recall `state.last_signal` без re-running pipeline
 - `/funding SYMBOL` — single-dimension snapshot: funding rate
-- `/oi SYMBOL` — single-dimension snapshot: open interest
+- `/oi SYMBOL [tf]` — single-dimension snapshot: open interest. Без `tf` — CoinGlass aggregated 4h по ~10 биржам. С `tf ∈ {1h, 4h}` — Bybit V5 single-source (обходит HOBBYIST блок на <4h).
 - `/etf SYMBOL` — ETF flow deep-dive (только BTC и ETH; SOL/прочие → reject)
 - `/pulse SYMBOL` — компакт: price + funding direction + OI delta + RSI bucket
 - `/rsi SYMBOL [tf]` — multi-TF RSI (15m/1h/4h/12h/1d), source: local Bybit kline (Phase 1.6)
@@ -528,21 +528,54 @@ Static text. Список всех 21 команд (16 base + 5 Phase 1.6 indica
    Ранг: #34 из 200 по текущему funding (середина)
    ```
 
-### `/oi SYMBOL`
+### `/oi SYMBOL [tf]`
 
-1. Validate.
-2. Parallel:
-   - `get_futures_aggregated_open_interest_history({symbol, interval: "4h", limit: 12})` — agg trend
-   - Per-exchange split: 3 separate `get_futures_open_interest_history` calls для top exchanges (Binance, OKX, Bybit) с тем же interval
-3. Output:
-   ```
-   ETH open interest (4h)
-   Агрегат: $12.5B · 4h Δ: +0.4% · 12h Δ: +1.2% · 24h Δ: +3.1% → растёт
-   По биржам (24h Δ):
-     - Binance: $4.8B (+2.8%)
-     - OKX: $2.1B (+4.5%)
-     - Bybit: $3.2B (+1.9%)
-   ```
+Hybrid: без `tf` — CoinGlass aggregated 4h (широкая картина по ~10 биржам); с `tf ∈ {1h, 4h}` — Bybit V5 single-source (обходит HOBBYIST блок на интервалах <4h, но покрывает только Bybit ≈ 30% global perp OI).
+
+1. Validate symbol через cached `get_futures_supported_coins`.
+2. Если `tf` отсутствует → **branch A (CoinGlass aggregated, 4h)**:
+   - Parallel:
+     - `get_futures_aggregated_open_interest_history({symbol, interval: "4h", limit: 12})` — agg trend
+     - Per-exchange split: 3 separate `get_futures_open_interest_history` calls для top exchanges (Binance, OKX, Bybit) с тем же interval
+   - Output:
+     ```
+     ETH open interest (4h, aggregated ~10 бирж)
+     Агрегат: $12.5B · 4h Δ: +0.4% · 12h Δ: +1.2% · 24h Δ: +3.1% → растёт
+     По биржам (24h Δ):
+       - Binance: $4.8B (+2.8%)
+       - OKX: $2.1B (+4.5%)
+       - Bybit: $3.2B (+1.9%)
+     ```
+3. Если `tf` присутствует, но не равен `1h` и не равен `4h` → reject:
+   - RU: `Поддерживаются только tf 1h и 4h для Bybit single-source. Без tf — CoinGlass aggregated.`
+4. Если `tf ∈ {1h, 4h}` → **branch B (Bybit V5 single-source)**:
+   - Параметры: `tf=1h` → `intervalTime=1h`, kline `interval=60`, `limit=48`; `tf=4h` → `intervalTime=4h`, kline `interval=240`, `limit=24`.
+   - Один параллельный fan-out из 2 публичных GET-запросов (no auth):
+     - `https://api.bybit.com/v5/market/open-interest?category=linear&symbol=<SYMBOL>USDT&intervalTime=<tf>&limit=<N>` → `result.list[]` с полями `openInterest` (string, base coin units для linear контрактов) и `timestamp` (string ms).
+     - `https://api.bybit.com/v5/market/kline?category=linear&symbol=<SYMBOL>USDT&interval=<I>&limit=<N>` → `result.list[]` 7-element строки, index 4 = close.
+   - **Bybit возвращает newest-first → reverse оба массива в oldest-first** перед обработкой.
+   - Match по timestamp bucket: `oi_usd[i] = float(oi_coins[i]) * float(close[i])`.
+   - Deltas:
+     - Для `tf=1h`: Δ1h (последние 1 бар), Δ4h (последние 4 бара), Δ24h (последние 24 бара).
+     - Для `tf=4h`: Δ4h (последний 1 бар), Δ12h (последние 3 бара), Δ24h (последние 6 баров).
+   - Trend zone по Δ24h: `< −2%` → `падает`, `[−2%, +2%]` → `боковик`, `> +2%` → `растёт`.
+   - Output (`tf=1h`):
+     ```
+     ETH open interest 1h (source: bybit)
+     Bybit: $3.18B
+     Δ 1h:   +0.4%
+     Δ 4h:   +1.2%
+     Δ 24h:  +2.8% → растёт
+     ```
+   - Output (`tf=4h`):
+     ```
+     ETH open interest 4h (source: bybit)
+     Bybit: $3.18B
+     Δ 4h:   +1.2%
+     Δ 12h:  +2.1%
+     Δ 24h:  +2.8% → растёт
+     ```
+5. Note (печатать в конце Bybit-вывода или в `/help`): Bybit single ≈ 30% global perp OI; используй `/oi SYM` (без tf) для полной aggregated картины, `/oi SYM 1h` — для short-term momentum без HOBBYIST 4h floor.
 
 ### `/etf SYMBOL`
 
