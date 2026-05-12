@@ -36,7 +36,7 @@
     - `/help` — список всех команд (static, no CoinGlass calls)
     - `/last` — recall `state.last_signal` без re-running pipeline
     - `/funding SYMBOL` — single-dimension snapshot: funding rate
-    - `/oi SYMBOL` — single-dimension snapshot: open interest
+    - `/oi SYMBOL [tf]` — single-dimension snapshot: open interest. Без `tf` — CoinGlass aggregated 4h по ~10 биржам. С `tf ∈ {1h, 4h}` — Bybit V5 single-source (обходит HOBBYIST блок на <4h).
     - `/etf SYMBOL` — ETF flow deep-dive (только BTC и ETH; SOL/прочие → reject)
     - `/pulse SYMBOL` — компакт: price + funding direction + OI delta + RSI bucket
     - `/rsi SYMBOL [tf]` — multi-TF RSI (15m/1h/4h/12h/1d), source: local Bybit kline (Phase 1.6)
@@ -171,8 +171,8 @@
     5. `get_futures_top_long_short_position_ratio_history({exchange: "Binance", symbol: "ETHUSDT", interval: "4h", limit: 6})` — top trader bias
     6. `get_futures_aggregated_liquidation_history({symbol: "ETH", exchange_list: "Binance,OKX,Bybit", interval: "4h", limit: 12})` — recent liq waves
     7. `get_futures_aggregated_cvd_history({symbol: "ETH", exchange_list: "Binance,OKX,Bybit", interval: "4h", limit: 12, unit: "usd"})` — taker imbalance
-    8. `get_futures_rsi_list({sort_by: "rsi_4h", limit: 300})` — find ETH в результате
-    9. `get_futures_macd_list({sort_by: "macd_4h", limit: 300})` — то же
+    8. `get_futures_rsi_list({sort_by: "rsi_4h", limit: 300})` — **SKIP in default `/eth` / `/btc` / `/sol` pipeline.** Call only from `/rsi SYMBOL` or `/pulse` explicit commands. Append `coinglass_rsi_list_skipped` to `missing_data` (no penalty — cross-check only, local Bybit is source of truth).
+    9. `get_futures_macd_list({sort_by: "macd_4h", limit: 300})` — **SKIP in default pipeline.** Call only from `/macd SYMBOL` explicit command. Append `coinglass_macd_list_skipped` to `missing_data` (no penalty).
     10. **Symbol-gated ETF flow call** — feeds the ETF bonus in scoring:
         - `BTC` → `get_bitcoin_etf_flow_history({limit: 7})`
         - `ETH` → `get_ethereum_etf_flow_history({limit: 7})`
@@ -197,11 +197,11 @@
         - `trading-data__bybit_taker_24h({symbol: "<COIN>USDT"})` → `{data: {buy_vol_quote, sell_vol_quote, net_quote, last_close_price, ...}, meta: {window_age_sec, window_incomplete, source: "bybit_v5_publictrade_ws"}}`. Если `meta.window_incomplete == true` (первый час после рестарта pod-а) — leg помечается incomplete и не идёт в N-leg cascade; append `bybit_window_incomplete` в `missing_data`. Если tool возвращает `error` — leg в `null`, append `bybit_taker_unreachable`.
         - `trading-data__bitget_taker_24h({symbol: "<COIN>USDT", productType: "USDT-FUTURES"})` → аналогичная shape; те же window_incomplete / null правила, code `bitget_window_incomplete` / `bitget_taker_unreachable`.
         - Денежная единица `net_quote` — USDT (для USDT-perp пар), эквивалент USD; кладём напрямую в `cvd_24h.per_exchange.{bybit, bitget}` без дополнительного перевода.
-    15. **News sentiment (Phase 2 Hook B)** — `trading-data__news_recent({categories: ["<COIN>"], hours_back: 2, max: 10})` через in-cluster `trading-data` MCP (CryptoCompare News v2 free-tier, 5-минутный TTL cache в сервисе, ~100K calls/мес). Источник: `cryptocompare_news_v2`. **Только для ETH/BTC** (для SOL и других категорий CryptoCompare часто пуст; skip и append `<symbol>_news_unavailable` в `missing_data`, **без penalty** — bonus signal).
+    15. **News sentiment (Phase 2 Hook B)** — `trading-data__news_recent({categories: ["<COIN>"], hours_back: 2, max: 10})` через in-cluster `trading-data` MCP (CryptoCompare News v2 free-tier, 5-минутный TTL cache в сервисе, ~100K calls/мес). Источник: `cryptocompare_news_v2`. **GATE: ONLY for BTC and ETH. For all other symbols (SOL, ARB, etc.): DO NOT call this tool** — CryptoCompare coverage for alts is sparse and unreliable. Append `<symbol>_news_unavailable` to `missing_data` immediately, **без penalty** (bonus signal, не core).
         - Для каждого `item` LLM оценивает impact 1-10 на основе `title` + `body_excerpt` + `categories`/`tags`: ETF/SEC/SEC-action/hardfork/Fed-rate = 8-10; major exchange listing/upgrade = 6-7; alt-news/aggregated price commentary = 3-5; promo/sponsored = 1-2 (фильтр уже на стороне сервиса через default `excludeCategories=["Sponsored"]`). Aggregate в `news.score = max(impact)`, `news.high_impact_count = sum(impact ≥ 7)`, `news.top_titles = top-3 by impact`.
         - Если `news.score >= 8` И direction (bullish/bearish) ясно из контента — append соответствующий `+5` бонус long-side или short-side score (см. scoring rubric). На split direction (равноценные bull+bear новости) или ambiguous content — без бонуса, only `risks: ["news mixed: <top headline>"]`.
     16. **CVD aggregation (Phase 2 Hook B):** строим `cvd_24h.per_exchange = { binance: <usd|null>, okx: <usd|null>, bybit: <usd|null>, bitget: <usd|null> }`. Определяем set usable legs (см. N-leg cascade в `### Local indicators`). `cvd_24h.net_usd = sum(usable legs)`. Применяем cascade для `agreement` + `direction`. На `"split"` — append `risks: ["cvd source split: <breakdown по venue>"]`. На `"all_zero"` — append `risks: ["cvd all zero: ..."]`. Source string собирается из usable legs: `"binance_taker_buy_24h+okx_rubik_taker_volume_24h+bybit_publictrade_ws+bitget_publictrade_ws"` (joined по `+`, только usable).
-    17. **Onchain gas snapshot (Phase 2 Hook B follow-up)** — `trading-data__etherscan_gas_snapshot()` через in-cluster `trading-data` MCP (Etherscan V2 multichain `gastracker.gasoracle` free-tier, 15s TTL cache в сервисе, ~100K calls/day). Возвращает `{safe_gwei, standard_gwei, fast_gwei, suggest_base_fee_gwei, gas_used_ratio}` (последний — comma-separated string из 5 ratios последних блоков). **Symbol-agnostic** — gas одинаковый для всех символов (это ETH mainnet network state), но семантически релевантен только для **`/eth`**, потому что только ETH-перпы реагируют на L1 congestion. Для `/btc` и `/sol` step skip — append `<symbol>_gas_irrelevant` в `missing_data` (no penalty; gas не модель price-action на L1-агностичных активах).
+    17. **Onchain gas snapshot (Phase 2 Hook B follow-up)** — `trading-data__etherscan_gas_snapshot()` через in-cluster `trading-data` MCP (Etherscan V2 multichain `gastracker.gasoracle` free-tier, 15s TTL cache в сервисе, ~100K calls/day). Возвращает `{safe_gwei, standard_gwei, fast_gwei, suggest_base_fee_gwei, gas_used_ratio}` (последний — comma-separated string из 5 ratios последних блоков). **GATE: ONLY for ETH. For `/btc`, `/sol`, and all other symbols: DO NOT call this tool** — gas is ETH L1 network state and meaningless for L1-agnostic assets. Append `<symbol>_gas_irrelevant` to `missing_data` (no penalty; gas не модель price-action на L1-агностичных активах).
         - Для ETH bonus используется `standard_gwei` (середина oracle). Если tool возвращает `error` (Etherscan rate limit / NOTOK) → leg `null`, append `etherscan_gas_unreachable` в `missing_data` без penalty (bonus, не основа).
 
     Если Bybit/Binance kline unreachable (steps 11-12) → append `bybit_kline_unreachable` / `binance_kline_unreachable` к `missing_data`, индикаторы помечаются `null`. Если `trading-data` MCP вообще недоступен (e.g. pod down, network policy) → оба `bybit_taker_unreachable` + `bitget_taker_unreachable` в `missing_data`, `cvd_24h.per_exchange.{bybit,bitget}=null`, `news_unavailable` если step 15 тоже отвалится, и `etherscan_gas_unreachable` для step 17 — pipeline продолжается на Binance + OKX legs (graceful degradation на 2 venues, что было статусом Hook A). Если все 4 CVD legs недоступны → `cvd_24h = null`, `missing_data: ["cvd_unreachable"]`. CoinGlass `get_futures_rsi_list` / `get_futures_macd_list` (steps 8-9) — secondary; используются для cross-check warning, не для scoring.
@@ -532,21 +532,54 @@
        Ранг: #34 из 200 по текущему funding (середина)
        ```
 
-    ### `/oi SYMBOL`
+    ### `/oi SYMBOL [tf]`
 
-    1. Validate.
-    2. Parallel:
-       - `get_futures_aggregated_open_interest_history({symbol, interval: "4h", limit: 12})` — agg trend
-       - Per-exchange split: 3 separate `get_futures_open_interest_history` calls для top exchanges (Binance, OKX, Bybit) с тем же interval
-    3. Output:
-       ```
-       ETH open interest (4h)
-       Агрегат: $12.5B · 4h Δ: +0.4% · 12h Δ: +1.2% · 24h Δ: +3.1% → растёт
-       По биржам (24h Δ):
-         - Binance: $4.8B (+2.8%)
-         - OKX: $2.1B (+4.5%)
-         - Bybit: $3.2B (+1.9%)
-       ```
+    Hybrid: без `tf` — CoinGlass aggregated 4h (широкая картина по ~10 биржам); с `tf ∈ {1h, 4h}` — Bybit V5 single-source (обходит HOBBYIST блок на интервалах <4h, но покрывает только Bybit ≈ 30% global perp OI).
+
+    1. Validate symbol через cached `get_futures_supported_coins`.
+    2. Если `tf` отсутствует → **branch A (CoinGlass aggregated, 4h)**:
+       - Parallel:
+         - `get_futures_aggregated_open_interest_history({symbol, interval: "4h", limit: 12})` — agg trend
+         - Per-exchange split: 3 separate `get_futures_open_interest_history` calls для top exchanges (Binance, OKX, Bybit) с тем же interval
+       - Output:
+         ```
+         ETH open interest (4h, aggregated ~10 бирж)
+         Агрегат: $12.5B · 4h Δ: +0.4% · 12h Δ: +1.2% · 24h Δ: +3.1% → растёт
+         По биржам (24h Δ):
+           - Binance: $4.8B (+2.8%)
+           - OKX: $2.1B (+4.5%)
+           - Bybit: $3.2B (+1.9%)
+         ```
+    3. Если `tf` присутствует, но не равен `1h` и не равен `4h` → reject:
+       - RU: `Поддерживаются только tf 1h и 4h для Bybit single-source. Без tf — CoinGlass aggregated.`
+    4. Если `tf ∈ {1h, 4h}` → **branch B (Bybit V5 single-source)**:
+       - Параметры: `tf=1h` → `intervalTime=1h`, kline `interval=60`, `limit=48`; `tf=4h` → `intervalTime=4h`, kline `interval=240`, `limit=24`.
+       - Один параллельный fan-out из 2 публичных GET-запросов (no auth):
+         - `https://api.bybit.com/v5/market/open-interest?category=linear&symbol=<SYMBOL>USDT&intervalTime=<tf>&limit=<N>` → `result.list[]` с полями `openInterest` (string, base coin units для linear контрактов) и `timestamp` (string ms).
+         - `https://api.bybit.com/v5/market/kline?category=linear&symbol=<SYMBOL>USDT&interval=<I>&limit=<N>` → `result.list[]` 7-element строки, index 4 = close.
+       - **Bybit возвращает newest-first → reverse оба массива в oldest-first** перед обработкой.
+       - Match по timestamp bucket: `oi_usd[i] = float(oi_coins[i]) * float(close[i])`.
+       - Deltas:
+         - Для `tf=1h`: Δ1h (последние 1 бар), Δ4h (последние 4 бара), Δ24h (последние 24 бара).
+         - Для `tf=4h`: Δ4h (последний 1 бар), Δ12h (последние 3 бара), Δ24h (последние 6 баров).
+       - Trend zone по Δ24h: `< −2%` → `падает`, `[−2%, +2%]` → `боковик`, `> +2%` → `растёт`.
+       - Output (`tf=1h`):
+         ```
+         ETH open interest 1h (source: bybit)
+         Bybit: $3.18B
+         Δ 1h:   +0.4%
+         Δ 4h:   +1.2%
+         Δ 24h:  +2.8% → растёт
+         ```
+       - Output (`tf=4h`):
+         ```
+         ETH open interest 4h (source: bybit)
+         Bybit: $3.18B
+         Δ 4h:   +1.2%
+         Δ 12h:  +2.1%
+         Δ 24h:  +2.8% → растёт
+         ```
+    5. Note (печатать в конце Bybit-вывода или в `/help`): Bybit single ≈ 30% global perp OI; используй `/oi SYM` (без tf) для полной aggregated картины, `/oi SYM 1h` — для short-term momentum без HOBBYIST 4h floor.
 
     ### `/etf SYMBOL`
 
@@ -702,7 +735,7 @@
     - **Не агрегировать** scoring до scalar 0-100 — сохранять directional split (long_score, short_score)
     - **Не давать** entry/stop/TP цены без явной просьбы пользователя; и даже тогда — только educational ATR-based ranges, никогда конкретные orders
     - **Не повторять** snapshot pipeline в loop внутри одного chat-сообщения — pipeline стоит ~10 tool calls; для periodic monitoring используется внешний Argo CronWorkflow `labs-watch-scan` (см. Phase 1.5 / cron alerts ниже)
-    - **Не использовать** CoinGlass `get_futures_rsi_list` / `get_futures_macd_list` как primary source для RSI/MACD — они tier-нестабильны на HOBBYIST (часто `No content`/401). Local Bybit kline = source of truth (Phase 1.6). CoinGlass RSI/MACD lists остаются только для cross-check warning, не для scoring.
+    - **Не вызывать** `get_futures_rsi_list` / `get_futures_macd_list` в default pipeline `/eth` / `/btc` / `/sol` — они tier-нестабильны на HOBBYIST, local Bybit = source of truth. Вызывать **только** из `/rsi` и `/macd` команд.
     - **CVD source attribution обязателен.** На Phase 2 Hook B — `cvd_24h.source` склеивается из usable legs (joined по `+`) и `cvd_24h.per_exchange = {binance, okx, bybit, bitget}` всегда присутствует в snapshot (значения могут быть `null` при unreachable, либо leg может быть исключён через `<venue>_window_incomplete` в `missing_data` на cold-start). На full-stack happy path: `"binance_taker_buy_24h+okx_rubik_taker_volume_24h+bybit_publictrade_ws+bitget_publictrade_ws"`, ~95% global perp ETH. **Никогда** не возвращаться к 2-venue ("Binance + OKX, ~75%") как к baseline — Hook B сделал 4 venues статусом по умолчанию; деградация до 2 venues — fallback path, не норма, и обязана сопровождаться `<venue>_unreachable` / `<venue>_window_incomplete` в `missing_data` чтобы было видно почему.
     - **OKX ctVal — read once, cache long.** `data[0].ctVal` из `/api/v5/public/instruments` меняется крайне редко (history shows ~раз в годы). Не хитать каждый snapshot — кэшировать в state на сутки минимум; в крайнем случае — захардкодить `0.1` для ETH-USDT-SWAP с явным комментарием что это контрактный размер на дату скилла. ctValCcy обязан совпадать с base coin (assert; иначе abort OKX leg, помечать `okx_ctval_mismatch`).
 
