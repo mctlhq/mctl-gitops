@@ -191,8 +191,7 @@
         - `https://www.okx.com/api/v5/rubik/stat/taker-volume-contract?instId=<COIN>-USDT-SWAP&period=4H` → 100 баров `[ts, buyVol, sellVol]`, взять последние 6 для 24h окна.
         - `https://www.okx.com/api/v5/public/instruments?instType=SWAP&instId=<COIN>-USDT-SWAP` → `data[0].ctVal` (контрактный размер в base coin; для ETH-USDT-SWAP сейчас `0.1`). Кэшировать на длительный срок — меняется крайне редко.
         - `https://www.okx.com/api/v5/market/candles?instId=<COIN>-USDT-SWAP&bar=4H&limit=100` → 4h klines с close-ценой (поле index 4). **OKX-родной price source — независим от Binance.** Это даёт `okx_only` ветке агрегата (Binance unreachable) реально вычислимый USD delta.
-        - **Per-bar pricing:** для каждого OKX taker-volume бара взять matching close из **OKX market/candles** по timestamp (`bucket_ts = floor(ts / 14_400_000) * 14_400_000`). Per-bar delta_usd = `(buyVol − sellVol) * ctVal * okx_close_at_that_bar`. Sum сматченных пар = 24h OKX CVD.
-        - **Cross-venue price sanity (опционально, опираясь на step 12):** если Binance close доступен на том же ts и расходится с OKX close >2% → append `risks: ["okx/binance price spread >2% at <ts>: $<okx>, $<binance>"]`. Это сигнал dislocation/stale data. Сам OKX delta всё равно считается через OKX close (consistent self-source).
+        - Per-bar pricing rule + cross-venue price sanity check — см. `### Local indicators (Phase 1.6)` выше (одна canonical формулировка).
     14. **CVD 24h legs #3+#4 — Bybit + Bitget (Phase 2 Hook B)** через in-cluster `trading-data` MCP. Параллельно с шагами 12-13 (один round trip):
         - `trading-data__bybit_taker_24h({symbol: "<COIN>USDT"})` → `{data: {buy_vol_quote, sell_vol_quote, net_quote, last_close_price, ...}, meta: {window_age_sec, window_incomplete, source: "bybit_v5_publictrade_ws"}}`. Если `meta.window_incomplete == true` (первый час после рестарта pod-а) — leg помечается incomplete и не идёт в N-leg cascade; append `bybit_window_incomplete` в `missing_data`. Если tool возвращает `error` — leg в `null`, append `bybit_taker_unreachable`.
         - `trading-data__bitget_taker_24h({symbol: "<COIN>USDT", productType: "USDT-FUTURES"})` → аналогичная shape; те же window_incomplete / null правила, code `bitget_window_incomplete` / `bitget_taker_unreachable`.
@@ -563,22 +562,15 @@
          - Для `tf=1h`: Δ1h (последние 1 бар), Δ4h (последние 4 бара), Δ24h (последние 24 бара).
          - Для `tf=4h`: Δ4h (последний 1 бар), Δ12h (последние 3 бара), Δ24h (последние 6 баров).
        - Trend zone по Δ24h: `< −2%` → `падает`, `[−2%, +2%]` → `боковик`, `> +2%` → `растёт`.
-       - Output (`tf=1h`):
+       - Output (одна форма, Δ-окна зависят от `tf`):
          ```
-         ETH open interest 1h (source: bybit)
-         Bybit: $3.18B
-         Δ 1h:   +0.4%
-         Δ 4h:   +1.2%
-         Δ 24h:  +2.8% → растёт
+         ETH open interest <tf> (source: bybit)
+         Bybit: $<usd_total>
+         Δ <w1>:   <pct1>%
+         Δ <w2>:   <pct2>%
+         Δ 24h:   <pct24>% → <trend>
          ```
-       - Output (`tf=4h`):
-         ```
-         ETH open interest 4h (source: bybit)
-         Bybit: $3.18B
-         Δ 4h:   +1.2%
-         Δ 12h:  +2.1%
-         Δ 24h:  +2.8% → растёт
-         ```
+         Δ-окна: `tf=1h` → (Δ1h, Δ4h, Δ24h); `tf=4h` → (Δ4h, Δ12h, Δ24h). `trend ∈ {растёт, боковик, падает}` по Δ24h.
     5. Note (печатать в конце Bybit-вывода или в `/help`): Bybit single ≈ 30% global perp OI; используй `/oi SYM` (без tf) для полной aggregated картины, `/oi SYM 1h` — для short-term momentum без HOBBYIST 4h floor.
 
     ### `/etf SYMBOL`
@@ -728,16 +720,16 @@
 
     ## Anti-patterns
 
-    - **Не использовать** REST endpoint matrix CoinGlass для inference (что доступно где) — derive at runtime из tools/list + tool-call errors
-    - **Не вызывать** все 30 tools на каждый /eth — pipeline выше использует 10, остальное только по явному запросу
-    - **Не вызывать** STANDARD-tier-locked tools (`get_futures_coins_markets`, `get_futures_liquidation_max_pain`, `get_hyperliquid_whale_positions`, `get_futures_liquidation_heatmap_*`) — на HOBBYIST они вернут 401 "Upgrade plan"; их места в pipeline уже заменены или удалены
-    - **Не использовать** `interval` менее `4h` (1m, 5m, 15m, 30m, 1h) **в CoinGlass MCP-вызовах** — на HOBBYIST 403. Local Bybit kline на любом TF разрешён (Phase 1.6 — 15m/1h/4h/12h/1d через api.bybit.com).
-    - **Не агрегировать** scoring до scalar 0-100 — сохранять directional split (long_score, short_score)
-    - **Не давать** entry/stop/TP цены без явной просьбы пользователя; и даже тогда — только educational ATR-based ranges, никогда конкретные orders
-    - **Не повторять** snapshot pipeline в loop внутри одного chat-сообщения — pipeline стоит ~10 tool calls; для periodic monitoring используется внешний Argo CronWorkflow `labs-watch-scan` (см. Phase 1.5 / cron alerts ниже)
-    - **Не вызывать** `get_futures_rsi_list` / `get_futures_macd_list` в default pipeline `/eth` / `/btc` / `/sol` — они tier-нестабильны на HOBBYIST, local Bybit = source of truth. Вызывать **только** из `/rsi` и `/macd` команд.
-    - **CVD source attribution обязателен.** На Phase 2 Hook B — `cvd_24h.source` склеивается из usable legs (joined по `+`) и `cvd_24h.per_exchange = {binance, okx, bybit, bitget}` всегда присутствует в snapshot (значения могут быть `null` при unreachable, либо leg может быть исключён через `<venue>_window_incomplete` в `missing_data` на cold-start). На full-stack happy path: `"binance_taker_buy_24h+okx_rubik_taker_volume_24h+bybit_publictrade_ws+bitget_publictrade_ws"`, ~95% global perp ETH. **Никогда** не возвращаться к 2-venue ("Binance + OKX, ~75%") как к baseline — Hook B сделал 4 venues статусом по умолчанию; деградация до 2 venues — fallback path, не норма, и обязана сопровождаться `<venue>_unreachable` / `<venue>_window_incomplete` в `missing_data` чтобы было видно почему.
-    - **OKX ctVal — read once, cache long.** `data[0].ctVal` из `/api/v5/public/instruments` меняется крайне редко (history shows ~раз в годы). Не хитать каждый snapshot — кэшировать в state на сутки минимум; в крайнем случае — захардкодить `0.1` для ETH-USDT-SWAP с явным комментарием что это контрактный размер на дату скилла. ctValCcy обязан совпадать с base coin (assert; иначе abort OKX leg, помечать `okx_ctval_mismatch`).
+    - Не использовать REST endpoint matrix CoinGlass для inference — derive at runtime из `tools/list` + tool-call errors.
+    - Не дёргать все 30 tools на каждый `/eth` — pipeline = 10 calls, остальное по явному запросу.
+    - Не вызывать STANDARD-tier-locked tools (`get_futures_coins_markets`, `_liquidation_max_pain`, `_hyperliquid_whale_positions`, `_liquidation_heatmap_*`) — 401 Upgrade на HOBBYIST. Замены уже в pipeline.
+    - Не использовать `interval` <4h в CoinGlass MCP — на HOBBYIST 403. Local Bybit любой TF OK (Phase 1.6).
+    - Не агрегировать scoring в scalar 0-100 — сохранять directional split (`long_score`, `short_score`).
+    - Не давать entry/stop/TP без явной просьбы; даже с просьбой — educational ATR ranges only, не concrete orders.
+    - Не повторять snapshot pipeline в loop внутри одного chat-сообщения — для periodic monitoring есть Argo `labs-watch-scan`.
+    - Не вызывать `get_futures_rsi_list` / `_macd_list` в default `/eth` / `/btc` / `/sol` — tier-нестабильны; local Bybit = source of truth. Только из `/rsi` / `/macd`.
+    - CVD source attribution обязателен: `cvd_24h.per_exchange` всегда содержит все 4 venues (null для unreachable), `cvd_24h.source` склеивается dynamic из usable legs. Не возвращаться к 2-venue baseline — это fallback с обязательным `<venue>_unreachable` / `<venue>_window_incomplete` в `missing_data`.
+    - OKX `ctVal` — read once, cache long (меняется раз в годы). Захардкод `0.1` для ETH-USDT-SWAP допустим. assert `ctValCcy == base coin`, иначе abort OKX leg + `okx_ctval_mismatch`.
 
     ## Cron alerts (Phase 1.5)
 
@@ -763,22 +755,14 @@
 
     ## References
 
-    - **CoinGlass MCP Beta** — `https://api-mcp.coinglass.com/mcp` (streamable-HTTP, header `CG-API-KEY`). Текущий ключ на Hobbyist tier; `tools/list` отдаёт 30 tools (см. список выше).
-    - **CoinGlass official agent skills** — `https://github.com/coinglass-official/coinglass-api-skills`. **REST-based**, не MCP — оттуда не наследуем код, но используем как routing-cheat-sheet когда пользователь просит данные **за пределами** scope этого skill (futures, ETF, options, on-chain exchange flows, indicators, news, financial calendar). Карта intent→endpoint:
-      - **futures**: funding-rate, liquidation, long-short-ratio, open-interest, order-book-l2, taker-buy-sell, trading-market, hyperliquid-positions
-      - **etf**: bitcoin-etf, ethereum-etf, solana-etf, xrp-etf, grayscale
-      - **spots**: order-book, taker-buy-sell, trading-market
-      - **options**: put/call ratio, options flow, max pain
-      - **on-chain**: exchange-data (inflow/outflow, reserve), token (holder distribution), transactions (whale)
-      - **indic**: futures, spots, other (fear & greed, sentiment)
-      - **other**: financial-calendar (FOMC), news
-      Если такие данные нужны — найти в `tools/list` ближайший по namespace tool (e.g. `get_bitcoin_etf_flow_history` для ETF) и вызвать напрямую через MCP. REST-skill из upstream **не клонировать в наш репо**.
-    - **Phase 2 architecture** — `~/.claude/plans/smooth-soaring-candy.md` (own `labs-trading-data` service с Bybit + CryptoPanic + Etherscan + pandas-ta).
-    - **Bybit V5 public REST** (Phase 1.6 local indicator engine) — `https://bybit-exchange.github.io/docs/v5/market/kline`, `https://bybit-exchange.github.io/docs/v5/rate-limit` (600 req / 5 sec на IP, no auth).
-    - **Binance public klines** (Phase 1.6 CVD leg #1) — `https://developers.binance.com/docs/binance-spot-api-docs/rest-api/market-data-endpoints#kline-candlestick-data`. Index 9 = `taker_buy_base_asset_volume`.
-    - **OKX V5 rubik / public** (Phase 2 Hook A CVD leg #2) — `https://www.okx.com/docs-v5/en/#trading-statistics-rest-api-get-taker-volume-for-derivatives` (`taker-volume-contract`) + `https://www.okx.com/docs-v5/en/#public-data-rest-api-get-instruments` (для `ctVal`). No auth. Контрактный размер захардкожен в response под `data[0].ctVal`.
-    - **Multi-exchange taker endpoint matrix** — memory `reference_multi_exchange_taker_endpoints.md` (probed 2026-05-06): Binance + OKX публично доступны, Bybit + Bitget — Phase 2 Hook B work.
-    - **Phase 1.6 source spreadsheet** — `Индикаторы для робота_upd.numbers` (root of mctlhq workspace). Multi-TF матрица RSI/MACD/ADX + Liquidation Map / Heatmap (последние требуют CoinGlass STANDARD-tier upgrade и помечены Blocked). Bollinger snapshot вынесен в on-demand `/bb` команду — не считается в /eth pipeline.
+    - CoinGlass MCP Beta — `https://api-mcp.coinglass.com/mcp` (streamable-HTTP, header `CG-API-KEY`, HOBBYIST tier, 30 tools).
+    - CoinGlass intent→endpoint cheat-sheet (out-of-scope intents): см. upstream `github.com/coinglass-official/coinglass-api-skills` — REST-based, не клонировать. При нужде в out-of-scope data — искать в `tools/list` по namespace.
+    - Bybit V5 public REST — `bybit-exchange.github.io/docs/v5/market/kline` (600 req/5s/IP, no auth).
+    - Binance public klines — `developers.binance.com/docs/binance-spot-api-docs/rest-api/market-data-endpoints#kline-candlestick-data`. Index 9 = `taker_buy_base_asset_volume`.
+    - OKX V5 — `okx.com/docs-v5/en/#trading-statistics-rest-api-get-taker-volume-for-derivatives` + `/#public-data-rest-api-get-instruments` (ctVal). No auth, **User-Agent required**.
+    - Multi-exchange taker endpoint matrix — memory `reference_multi_exchange_taker_endpoints.md`.
+    - Phase 2 architecture — `~/.claude/plans/smooth-soaring-candy.md` (own `labs-trading-data`).
+    - Phase 1.6 source spreadsheet — `Индикаторы для робота_upd.numbers` (workspace root). Liquidation Map / Heatmap — Blocked (CoinGlass STANDARD).
   "k8s-kubeconfig-paths": |
     # Kubernetes kubeconfig Paths
 
