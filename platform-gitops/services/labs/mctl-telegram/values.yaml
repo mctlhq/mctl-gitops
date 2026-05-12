@@ -1,0 +1,35 @@
+# Service: mctl-telegram
+# Team: labs
+
+# Chart: base-service
+
+image:
+  repository: ghcr.io/mctlhq/mctl-telegram
+  tag: "0.1.0"
+imagePullSecrets:
+  - name: ghcr-credentials
+service:
+  port: 8080
+backstage:
+  kubernetesId: mctl-telegram
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+env:
+  APP_ENV: production
+ingress:
+  enabled: true
+  hosts:
+    - labs-mctl-telegram.mctl.ai
+    - labs-mctl-telegram.mctl.me
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls:
+    - secretName: mctl-telegram-tls
+      hosts:
+        - labs-mctl-telegram.mctl.ai
+        - labs-mctl-telegram.mctl.me
