@@ -4,7 +4,7 @@
   "eth-trading-intel": |
     ---
     name: eth-trading-intel
-    description: Read-only crypto trading intelligence for ETH/BTC/SOL via the CoinGlass MCP server plus a local Bybit/Binance indicator engine (Phase 1.6). Use when the user types /eth /btc /sol /scan /risk /why /watch /unwatch /settings /set_threshold /help /last /funding /oi /etf /pulse /rsi /macd /bb /adx /heatmap, or asks for an open-interest, funding, long/short, liquidation, RSI/MACD/ADX, multi-timeframe heatmap, ETF-flow, or whale-positions snapshot. Observation-only. Never executes trades. Output is a directional snapshot (long_score, short_score, regime, conviction) plus reasons, risks, and explicit missing_data.
+    description: Read-only crypto trading intel for ETH/BTC/SOL via CoinGlass MCP + local Bybit/Binance indicator engine. Use for /eth /btc /sol /scan /risk /why /watch /unwatch /settings /set_threshold /help /last /funding /oi /etf /pulse /rsi /macd /bb /adx /heatmap or any open-interest, funding, long/short, liquidation, RSI/MACD/ADX, heatmap, ETF-flow request. Observation-only, never trades. Output — directional snapshot (long_score, short_score, regime, conviction) + reasons, risks, missing_data.
     ---
 
     # eth-trading-intel
@@ -368,24 +368,13 @@
     - bybit_kline_unreachable
     ```
 
-    Если bias = "Нет преимущества":
-
-    ```
-    ETH снапшот (2026-05-05 12:34 UTC)
-    Bias: Нет преимущества
-    Лонг скор: 38 / Шорт скор: 41
-    Уверенность: низкая  Режим: флэт
-
-    Нет актуального сетапа. Рынок во флэте, индикаторы смешанные.
-    Причины:
-    - ...
-    ```
+    Если `bias == "Нет преимущества"` — тот же layout, заменить блок "Сильные стороны ..." на: `Нет актуального сетапа. Рынок во флэте, индикаторы смешанные.` + `Причины:` (1-3 пункта почему bias `No edge`). Блоки `Риски:` и `Действие:` пропустить.
 
     ### Phrasing guardrails
 
-    **ЗАПРЕЩЕНО** (на любом языке): "BUY NOW", "SELL NOW", "open long immediately", "open short immediately", "go long", "go short", "ПОКУПАЙ", "ПРОДАВАЙ", "открой лонг сейчас", "открой шорт сейчас", "вставай в лонг", "вставай в шорт", обещания цены/направления, советы про размер позиции/плечо, "guaranteed"/"гарантированно", "100%", "сейчас отличный вход".
+    **ЗАПРЕЩЕНО** (любой язык): "BUY/SELL NOW", "open/go long/short", "ПОКУПАЙ"/"ПРОДАВАЙ", "вставай в лонг/шорт", обещания цены/направления, советы про размер позиции/плечо, "guaranteed"/"гарантированно"/"100%"/"отличный вход".
 
-    **РАЗРЕШЕНО**: "наблюдение за лонг-сетапом", "наблюдение за шорт-сетапом", "возможный сквиз", "требуется ручной разбор", "ждать ретест", "не догонять", "преимущества нет", "ждать подтверждение", "крупняк/смарт мани на стороне лонга/шорта", "флэт без направления".
+    **РАЗРЕШЕНО**: "наблюдение за лонг/шорт-сетапом", "возможный сквиз", "ручной разбор", "ждать ретест/подтверждение", "не догонять", "преимущества нет", "крупняк на стороне X", "флэт без направления".
 
     (Английские фразы вида "watch long setup" / "no edge detected" заблокированы языковым контрактом — command-level outputs русско-только, см. `## Output language` выше; в 5 fixed-message branch-ах английская версия зафиксирована inline в RU/EN формате.)
 
