@@ -26,7 +26,7 @@ env:
   OPERATOR_GITHUB_LOGIN: mashkovd
   ALLOW_SEND: "false"
   LOG_LEVEL: info
-  DATABASE_URL: file:/tmp/mctl-telegram.db?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)
+  DATABASE_URL: file:/tmp/mctl-telegram.db
 ingress:
   enabled: true
   hosts:
