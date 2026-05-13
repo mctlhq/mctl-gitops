@@ -489,10 +489,10 @@ extraContainers:
         cpu: 25m
         memory: 64Mi
       limits:
-        # Explicit 1000m overrides the tenant LimitRange default (500m).
-        # `mc mirror` runs ~2s bursts every 10s and spikes past 500m; 1000m
-        # sits within the ovk LimitRange max (2) with headroom.
-        cpu: 1000m
+        # Bumped 2026-05-13: s3-sync sustained >70% throttling under 1000m
+        # (mc mirror bursts measured via CFS throttle metrics). 2000m stays
+        # well within ovk LimitRange max (3000m) and quota (6000m).
+        cpu: 2000m
         memory: 256Mi
     command: ["sh", "-c"]
     args:
@@ -633,7 +633,8 @@ extraContainers:
         cpu: 10m
         memory: 16Mi
       limits:
-        cpu: 100m
+        # Bumped 2026-05-13: skills-fanout >50% throttled under 100m.
+        cpu: 300m
         memory: 64Mi
     volumeMounts:
       - name: layer3-skills-cm
