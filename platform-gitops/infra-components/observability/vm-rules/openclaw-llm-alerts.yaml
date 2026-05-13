@@ -1,0 +1,97 @@
+# Alerts on openclaw LLM token throughput (codex + anthropic). Tied to the
+# /metrics counters wired in mctlhq/mctl-openclaw#19 (codex) and #20
+# (anthropic, partitions by `provider` label) and scraped via the
+# labs-openclaw-codex-metrics VMServiceScrape (gitops #201).
+#
+# The codex backend rides the operator's ChatGPT Plus quota, so the
+# throughput spike alert is the leading indicator before the account-level
+# rate limit kicks in and causes the well-known "hit your ChatGPT usage
+# limit" wedge (memory: feedback_openclaw_codex_usage_limits.md). The 5m
+# sustained threshold is intentionally below known Plus-tier headroom to
+# give the operator a chance to throttle before the cliff. The anthropic
+# provider has its own per-API-key quota so the threshold there is higher
+# (no flat ChatGPT-style cliff).
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: openclaw-llm-alerts
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: mctl-platform
+spec:
+  groups:
+    - name: openclaw.llm-throughput
+      rules:
+        - alert: OpenclawCodexPromptTokenSpike
+          expr: |
+            sum by (pod) (rate(openclaw_llm_prompt_tokens_total{provider="codex"}[5m])) * 60 > 25000
+          for: 5m
+          labels:
+            severity: warning
+            component: openclaw
+            provider: codex
+          annotations:
+            summary: openclaw codex prompt tokens >25k/min for 5m on {{ $labels.pod }}
+            description: |
+              Sustained prompt-token throughput on the codex (ChatGPT Plus)
+              provider is {{ $value | humanize }} tokens/min on pod
+              {{ $labels.pod }}. Plus tier typically starts pushing back near
+              30k tokens/min. Likely causes:
+              - Burst of /scan or /heatmap (loops over watchlist symbols)
+              - Telegram chat thread without throttle
+              - Looping skill / runaway agent
+              Inspect the per-command bargauge on the "openclaw — LLM Token
+              Usage" dashboard to identify the offending /command, and
+              consider `/set_threshold` or transient `/unwatch` to throttle.
+
+        - alert: OpenclawAnthropicPromptTokenSpike
+          expr: |
+            sum by (pod) (rate(openclaw_llm_prompt_tokens_total{provider="anthropic"}[5m])) * 60 > 60000
+          for: 5m
+          labels:
+            severity: warning
+            component: openclaw
+            provider: anthropic
+          annotations:
+            summary: openclaw anthropic prompt tokens >60k/min for 5m on {{ $labels.pod }}
+            description: |
+              Sustained prompt-token throughput on the anthropic provider is
+              {{ $value | humanize }} tokens/min on pod {{ $labels.pod }}.
+              Most often this is fallback traffic when codex is rate-limited
+              — check the "openclaw — LLM Token Usage" dashboard to confirm
+              codex went silent at the same time. The anthropic per-key
+              quota is higher than ChatGPT Plus, but sustained 60k/min still
+              indicates a looping skill or runaway agent.
+
+        - alert: OpenclawLlmRequestSpike
+          expr: |
+            sum by (pod, provider) (rate(openclaw_llm_requests_total[5m])) * 60 > 20
+          for: 5m
+          labels:
+            severity: warning
+            component: openclaw
+          annotations:
+            summary: openclaw {{ $labels.provider }} requests >20/min for 5m on {{ $labels.pod }}
+            description: |
+              Request rate is {{ $value | humanize }} req/min on
+              {{ $labels.pod }} for provider {{ $labels.provider }}.
+              Steady-state is typically <5/min for interactive chat plus the
+              scan cron. Likely a stuck loop or an unintentional burst —
+              check `kubectl -n labs logs {{ $labels.pod }} -c base-service
+              | grep llm_usage | tail`.
+
+        - alert: OpenclawLlmMetricsAbsent
+          expr: |
+            absent(openclaw_llm_requests_total) == 1
+          for: 30m
+          labels:
+            severity: info
+            component: openclaw
+          annotations:
+            summary: openclaw_llm_* metric series missing for 30m
+            description: |
+              Either the labs-openclaw pod has crashed, the /metrics
+              endpoint regressed, the ServiceMonitor lost its target, or
+              the tenant NetworkPolicy reverted (see
+              feedback_tenant_monitoring_scrape_networkpolicy.md). The
+              LLM-token dashboard goes blind without this series.

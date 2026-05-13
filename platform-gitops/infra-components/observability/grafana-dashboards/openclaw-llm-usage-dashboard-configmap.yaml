@@ -1,0 +1,388 @@
+# Grafana dashboard for openclaw LLM token usage observability (codex + anthropic).
+# Wired in mctlhq/mctl-openclaw#19 + gitops PR #201: /metrics endpoint +
+# per-request codex_usage Loki log line. Extended in gitops PR for
+# headline stats + per-command attribution + 7d trend.
+#
+# Sidecar in monitoring/grafana auto-discovers ConfigMaps labeled
+# `grafana_dashboard: "1"` and mounts them — same pattern as the
+# existing mctl-platform / mctl-agent-cleanup dashboards.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openclaw-llm-usage-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  openclaw-llm-usage.json: |
+    {
+      "title": "openclaw — LLM Token Usage",
+      "description": "Per-pod LLM (codex + anthropic) prompt/completion/cached/request rates (Prometheus) + per-command attribution (Loki) + 7d trend + headline 24h stats. provider label distinguishes codex (ChatGPT Plus) from anthropic fallback.",
+      "uid": "openclaw-llm-usage",
+      "tags": ["openclaw", "llm", "codex", "anthropic", "tokens", "observability"],
+      "schemaVersion": 39,
+      "version": 3,
+      "editable": true,
+      "graphTooltip": 1,
+      "timezone": "browser",
+      "time": { "from": "now-6h", "to": "now" },
+      "refresh": "30s",
+      "templating": {
+        "list": [
+          {
+            "name": "datasource",
+            "type": "datasource",
+            "query": "prometheus",
+            "current": { "text": "VictoriaMetrics", "value": "VictoriaMetrics" }
+          },
+          {
+            "name": "loki",
+            "type": "datasource",
+            "query": "loki",
+            "current": { "text": "Loki", "value": "Loki" }
+          },
+          {
+            "name": "pod",
+            "type": "query",
+            "datasource": { "type": "prometheus", "uid": "$datasource" },
+            "query": "label_values(openclaw_llm_requests_total, pod)",
+            "refresh": 2,
+            "includeAll": true,
+            "multi": true
+          }
+        ]
+      },
+      "panels": [
+        {
+          "type": "row",
+          "id": 50,
+          "title": "Headline (24h)",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+        },
+        {
+          "type": "stat",
+          "id": 10,
+          "title": "Requests (24h)",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 4, "w": 5, "x": 0, "y": 1 },
+          "targets": [
+            {
+              "expr": "sum by (provider) (increase(openclaw_llm_requests_total{pod=~\"$pod\"}[24h]))",
+              "legendFormat": "{{provider}} requests",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": { "unit": "short", "decimals": 0 }
+          },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" }
+        },
+        {
+          "type": "stat",
+          "id": 11,
+          "title": "Prompt tokens (24h)",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 4, "w": 5, "x": 5, "y": 1 },
+          "targets": [
+            {
+              "expr": "sum by (provider) (increase(openclaw_llm_prompt_tokens_total{pod=~\"$pod\"}[24h]))",
+              "legendFormat": "{{provider}} prompt",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": { "unit": "short", "decimals": 0 }
+          },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" }
+        },
+        {
+          "type": "stat",
+          "id": 12,
+          "title": "Completion tokens (24h)",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 4, "w": 5, "x": 10, "y": 1 },
+          "targets": [
+            {
+              "expr": "sum by (provider) (increase(openclaw_llm_completion_tokens_total{pod=~\"$pod\"}[24h]))",
+              "legendFormat": "{{provider}} completion",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": { "unit": "short", "decimals": 0 }
+          },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" }
+        },
+        {
+          "type": "stat",
+          "id": 13,
+          "title": "Cached tokens (24h)",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 4, "w": 4, "x": 15, "y": 1 },
+          "targets": [
+            {
+              "expr": "sum by (provider) (increase(openclaw_llm_cached_tokens_total{pod=~\"$pod\"}[24h]))",
+              "legendFormat": "{{provider}} cached",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": { "unit": "short", "decimals": 0 }
+          },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" }
+        },
+        {
+          "type": "stat",
+          "id": 14,
+          "title": "Cache hit ratio (24h)",
+          "description": "cached / (prompt + cached) — share of input tokens served from the OpenAI prompt cache. Higher = more reuse.",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 4, "w": 5, "x": 19, "y": 1 },
+          "targets": [
+            {
+              "expr": "sum(increase(openclaw_llm_cached_tokens_total{pod=~\"$pod\"}[24h])) / clamp_min(sum(increase(openclaw_llm_cached_tokens_total{pod=~\"$pod\"}[24h])) + sum(increase(openclaw_llm_prompt_tokens_total{pod=~\"$pod\"}[24h])), 1)",
+              "legendFormat": "hit_ratio",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "decimals": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "value": null, "color": "red" },
+                  { "value": 0.3, "color": "orange" },
+                  { "value": 0.6, "color": "green" }
+                ]
+              }
+            }
+          },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" }
+        },
+        {
+          "type": "row",
+          "id": 100,
+          "title": "Rates (1m / 5m)",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 }
+        },
+        {
+          "type": "timeseries",
+          "id": 1,
+          "title": "Prompt tokens/sec",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+          "targets": [
+            {
+              "expr": "sum by (pod, provider) (rate(openclaw_llm_prompt_tokens_total{pod=~\"$pod\"}[5m]))",
+              "legendFormat": "{{pod}} {{provider}}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 10 }
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "id": 2,
+          "title": "Completion tokens/sec",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+          "targets": [
+            {
+              "expr": "sum by (pod, provider) (rate(openclaw_llm_completion_tokens_total{pod=~\"$pod\"}[5m]))",
+              "legendFormat": "{{pod}} {{provider}}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 10 }
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "id": 3,
+          "title": "Requests/min",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+          "targets": [
+            {
+              "expr": "sum by (pod, provider) (rate(openclaw_llm_requests_total{pod=~\"$pod\"}[5m])) * 60",
+              "legendFormat": "{{pod}} {{provider}}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": { "drawStyle": "bars", "lineInterpolation": "smooth", "fillOpacity": 60 }
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "id": 4,
+          "title": "Cached tokens/sec (cache_read)",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
+          "targets": [
+            {
+              "expr": "sum by (pod, provider) (rate(openclaw_llm_cached_tokens_total{pod=~\"$pod\"}[5m]))",
+              "legendFormat": "{{pod}} {{provider}}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 10 }
+            }
+          }
+        },
+        {
+          "type": "row",
+          "id": 150,
+          "title": "7-day trend",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 }
+        },
+        {
+          "type": "timeseries",
+          "id": 20,
+          "title": "Prompt tokens/hour (7d)",
+          "description": "Hourly prompt-token throughput over the last 7 days — useful for baseline drift / weekday pattern.",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 23 },
+          "targets": [
+            {
+              "expr": "sum by (provider) (rate(openclaw_llm_prompt_tokens_total{pod=~\"$pod\"}[1h])) * 3600",
+              "legendFormat": "{{provider}} prompt/h",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 20 }
+            }
+          },
+          "options": { "tooltip": { "mode": "multi" } },
+          "transformations": [],
+          "timeFrom": "7d"
+        },
+        {
+          "type": "timeseries",
+          "id": 21,
+          "title": "Requests/hour (7d)",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 23 },
+          "targets": [
+            {
+              "expr": "sum by (provider) (rate(openclaw_llm_requests_total{pod=~\"$pod\"}[1h])) * 3600",
+              "legendFormat": "{{provider}} req/h",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": { "drawStyle": "bars", "lineInterpolation": "smooth", "fillOpacity": 50 }
+            }
+          },
+          "timeFrom": "7d"
+        },
+        {
+          "type": "row",
+          "id": 200,
+          "title": "Per-command attribution (Loki)",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 31 }
+        },
+        {
+          "type": "bargauge",
+          "id": 30,
+          "title": "Top commands by prompt tokens (24h)",
+          "description": "Aggregated from per-request codex_usage Loki log lines. `freeform` = no slash-command prefix (catch-all bucket for prose).",
+          "datasource": { "type": "loki", "uid": "$loki" },
+          "gridPos": { "h": 10, "w": 12, "x": 0, "y": 32 },
+          "targets": [
+            {
+              "expr": "topk(15, sum by (command) (sum_over_time({pod=~\"$pod\", container=\"base-service\"} |= \"llm_usage\" | json | unwrap prompt_tokens [24h])))",
+              "legendFormat": "{{command}}",
+              "refId": "A",
+              "queryType": "instant"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "value": null, "color": "blue" }
+                ]
+              }
+            }
+          },
+          "options": {
+            "orientation": "horizontal",
+            "displayMode": "gradient",
+            "valueMode": "color",
+            "reduceOptions": { "calcs": ["lastNotNull"] }
+          }
+        },
+        {
+          "type": "bargauge",
+          "id": 31,
+          "title": "Top commands by request count (24h)",
+          "description": "How many times each /command was invoked in the last 24h.",
+          "datasource": { "type": "loki", "uid": "$loki" },
+          "gridPos": { "h": 10, "w": 12, "x": 12, "y": 32 },
+          "targets": [
+            {
+              "expr": "topk(15, sum by (command) (count_over_time({pod=~\"$pod\", container=\"base-service\"} |= \"llm_usage\" | json [24h])))",
+              "legendFormat": "{{command}}",
+              "refId": "A",
+              "queryType": "instant"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "value": null, "color": "green" }
+                ]
+              }
+            }
+          },
+          "options": {
+            "orientation": "horizontal",
+            "displayMode": "gradient",
+            "valueMode": "color",
+            "reduceOptions": { "calcs": ["lastNotNull"] }
+          }
+        },
+        {
+          "type": "logs",
+          "id": 5,
+          "title": "Latest llm_usage events",
+          "datasource": { "type": "loki", "uid": "$loki" },
+          "gridPos": { "h": 10, "w": 24, "x": 0, "y": 42 },
+          "targets": [
+            {
+              "expr": "{pod=~\"$pod\", container=\"base-service\"} |= \"llm_usage\" | json | line_format \"{{.command}} model={{.model}} prompt={{.prompt_tokens}} completion={{.completion_tokens}}\"",
+              "refId": "A"
+            }
+          ],
+          "options": { "showTime": true, "wrapLogMessage": false }
+        }
+      ]
+    }
