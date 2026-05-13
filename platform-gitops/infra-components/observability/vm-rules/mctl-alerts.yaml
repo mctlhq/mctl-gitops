@@ -94,6 +94,22 @@ spec:
             summary: >-
               Node {{ $labels.node }} has disk pressure
 
+        - alert: NodeDiskSpaceHigh
+          expr: |
+            (
+              1 - (
+                node_filesystem_avail_bytes{fstype!="tmpfs", mountpoint="/"}
+                / node_filesystem_size_bytes{fstype!="tmpfs", mountpoint="/"}
+              )
+            ) > 0.80
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: >-
+              Node {{ $labels.instance }} root disk above 80%
+              ({{ $value | humanizePercentage }} used)
+
     - name: mctl.vault
       rules:
         - alert: VaultSealed
