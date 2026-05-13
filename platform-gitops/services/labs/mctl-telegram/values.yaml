@@ -21,12 +21,11 @@ resources:
     memory: 512Mi
 env:
   APP_ENV: production
-  AUTH_MODE: local-dev
-  AUTH_REQUIRED: "false"
+  AUTH_MODE: shared-hmac
+  AUTH_REQUIRED: "true"
   OPERATOR_GITHUB_LOGIN: mashkovd
   ALLOW_SEND: "false"
   LOG_LEVEL: info
-  DATABASE_URL: file:/tmp/mctl-telegram.db
   PUBLIC_BASE_URL: https://labs-mctl-telegram.mctl.ai
 ingress:
   enabled: true
@@ -55,3 +54,34 @@ dbInitJob:
 envFrom:
   - secretRef:
       name: "labs-mctl-telegram-db-creds"
+  - secretRef:
+      name: "labs-mctl-telegram-tg-api"
+  - secretRef:
+      name: "labs-mctl-telegram-encryption"
+  - secretRef:
+      name: "labs-mctl-telegram-oauth"
+extraExternalSecrets:
+  labs-mctl-telegram-tg-api:
+    refreshInterval: 1h
+    targetSecret: labs-mctl-telegram-tg-api
+    data:
+      - secretKey: TG_API_ID
+        remoteKey: secret/data/platform/mctl-telegram/api
+        property: TG_API_ID
+      - secretKey: TG_API_HASH
+        remoteKey: secret/data/platform/mctl-telegram/api
+        property: TG_API_HASH
+  labs-mctl-telegram-encryption:
+    refreshInterval: 1h
+    targetSecret: labs-mctl-telegram-encryption
+    data:
+      - secretKey: ENCRYPTION_KEY
+        remoteKey: secret/data/platform/mctl-telegram/encryption
+        property: ENCRYPTION_KEY
+  labs-mctl-telegram-oauth:
+    refreshInterval: 1h
+    targetSecret: labs-mctl-telegram-oauth
+    data:
+      - secretKey: OAUTH_JWT_SECRET
+        remoteKey: secret/data/platform/mctl-api/oauth
+        property: jwt-secret
