@@ -26,10 +26,11 @@ env:
   OPERATOR_GITHUB_LOGIN: mashkovd
   ALLOW_SEND: "true"
   LOG_LEVEL: info
-  PUBLIC_BASE_URL: https://labs-mctl-telegram.mctl.ai
+  PUBLIC_BASE_URL: https://tg.mctl.ai
 ingress:
   enabled: true
   hosts:
+    - tg.mctl.ai
     - labs-mctl-telegram.mctl.ai
     - labs-mctl-telegram.mctl.me
   annotations:
@@ -37,6 +38,7 @@ ingress:
   tls:
     - secretName: mctl-telegram-tls
       hosts:
+        - tg.mctl.ai
         - labs-mctl-telegram.mctl.ai
         - labs-mctl-telegram.mctl.me
 extraContainers: []
