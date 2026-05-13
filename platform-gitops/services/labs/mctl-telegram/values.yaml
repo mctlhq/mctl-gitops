@@ -27,6 +27,7 @@ env:
   ALLOW_SEND: "false"
   LOG_LEVEL: info
   DATABASE_URL: file:/tmp/mctl-telegram.db
+  PUBLIC_BASE_URL: https://labs-mctl-telegram.mctl.ai
 ingress:
   enabled: true
   hosts:
@@ -40,7 +41,6 @@ ingress:
         - labs-mctl-telegram.mctl.ai
         - labs-mctl-telegram.mctl.me
 extraContainers: []
-
 dbSecret:
   vaultPath: "teams/labs/mctl-telegram/database"
   secretName: "labs-mctl-telegram-db-creds"
