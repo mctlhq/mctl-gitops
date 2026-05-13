@@ -1,4 +1,4 @@
-# Grafana dashboard for openclaw codex token usage observability.
+# Grafana dashboard for openclaw LLM token usage observability (codex + anthropic).
 # Wired in mctlhq/mctl-openclaw#19 + gitops PR #201: /metrics endpoint +
 # per-request codex_usage Loki log line. Extended in gitops PR for
 # headline stats + per-command attribution + 7d trend.
@@ -9,19 +9,19 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: openclaw-codex-usage-dashboard
+  name: openclaw-llm-usage-dashboard
   namespace: monitoring
   labels:
     grafana_dashboard: "1"
 data:
-  openclaw-codex-usage.json: |
+  openclaw-llm-usage.json: |
     {
-      "title": "openclaw — Codex Token Usage",
-      "description": "Per-pod codex prompt/completion/cached/request rates (Prometheus) + per-command attribution (Loki) + 7d trend + headline 24h stats.",
-      "uid": "openclaw-codex-usage",
-      "tags": ["openclaw", "codex", "tokens", "observability"],
+      "title": "openclaw — LLM Token Usage",
+      "description": "Per-pod LLM (codex + anthropic) prompt/completion/cached/request rates (Prometheus) + per-command attribution (Loki) + 7d trend + headline 24h stats. provider label distinguishes codex (ChatGPT Plus) from anthropic fallback.",
+      "uid": "openclaw-llm-usage",
+      "tags": ["openclaw", "llm", "codex", "anthropic", "tokens", "observability"],
       "schemaVersion": 39,
-      "version": 2,
+      "version": 3,
       "editable": true,
       "graphTooltip": 1,
       "timezone": "browser",
@@ -45,7 +45,7 @@ data:
             "name": "pod",
             "type": "query",
             "datasource": { "type": "prometheus", "uid": "$datasource" },
-            "query": "label_values(openclaw_codex_requests_total, pod)",
+            "query": "label_values(openclaw_llm_requests_total, pod)",
             "refresh": 2,
             "includeAll": true,
             "multi": true
@@ -67,8 +67,8 @@ data:
           "gridPos": { "h": 4, "w": 5, "x": 0, "y": 1 },
           "targets": [
             {
-              "expr": "sum(increase(openclaw_codex_requests_total{pod=~\"$pod\"}[24h]))",
-              "legendFormat": "requests",
+              "expr": "sum by (provider) (increase(openclaw_llm_requests_total{pod=~\"$pod\"}[24h]))",
+              "legendFormat": "{{provider}} requests",
               "refId": "A"
             }
           ],
@@ -85,8 +85,8 @@ data:
           "gridPos": { "h": 4, "w": 5, "x": 5, "y": 1 },
           "targets": [
             {
-              "expr": "sum(increase(openclaw_codex_prompt_tokens_total{pod=~\"$pod\"}[24h]))",
-              "legendFormat": "prompt",
+              "expr": "sum by (provider) (increase(openclaw_llm_prompt_tokens_total{pod=~\"$pod\"}[24h]))",
+              "legendFormat": "{{provider}} prompt",
               "refId": "A"
             }
           ],
@@ -103,8 +103,8 @@ data:
           "gridPos": { "h": 4, "w": 5, "x": 10, "y": 1 },
           "targets": [
             {
-              "expr": "sum(increase(openclaw_codex_completion_tokens_total{pod=~\"$pod\"}[24h]))",
-              "legendFormat": "completion",
+              "expr": "sum by (provider) (increase(openclaw_llm_completion_tokens_total{pod=~\"$pod\"}[24h]))",
+              "legendFormat": "{{provider}} completion",
               "refId": "A"
             }
           ],
@@ -121,8 +121,8 @@ data:
           "gridPos": { "h": 4, "w": 4, "x": 15, "y": 1 },
           "targets": [
             {
-              "expr": "sum(increase(openclaw_codex_cached_tokens_total{pod=~\"$pod\"}[24h]))",
-              "legendFormat": "cached",
+              "expr": "sum by (provider) (increase(openclaw_llm_cached_tokens_total{pod=~\"$pod\"}[24h]))",
+              "legendFormat": "{{provider}} cached",
               "refId": "A"
             }
           ],
@@ -140,7 +140,7 @@ data:
           "gridPos": { "h": 4, "w": 5, "x": 19, "y": 1 },
           "targets": [
             {
-              "expr": "sum(increase(openclaw_codex_cached_tokens_total{pod=~\"$pod\"}[24h])) / clamp_min(sum(increase(openclaw_codex_cached_tokens_total{pod=~\"$pod\"}[24h])) + sum(increase(openclaw_codex_prompt_tokens_total{pod=~\"$pod\"}[24h])), 1)",
+              "expr": "sum(increase(openclaw_llm_cached_tokens_total{pod=~\"$pod\"}[24h])) / clamp_min(sum(increase(openclaw_llm_cached_tokens_total{pod=~\"$pod\"}[24h])) + sum(increase(openclaw_llm_prompt_tokens_total{pod=~\"$pod\"}[24h])), 1)",
               "legendFormat": "hit_ratio",
               "refId": "A"
             }
@@ -175,8 +175,8 @@ data:
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
           "targets": [
             {
-              "expr": "sum by (pod) (rate(openclaw_codex_prompt_tokens_total{pod=~\"$pod\"}[5m]))",
-              "legendFormat": "{{pod}}",
+              "expr": "sum by (pod, provider) (rate(openclaw_llm_prompt_tokens_total{pod=~\"$pod\"}[5m]))",
+              "legendFormat": "{{pod}} {{provider}}",
               "refId": "A"
             }
           ],
@@ -195,8 +195,8 @@ data:
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
           "targets": [
             {
-              "expr": "sum by (pod) (rate(openclaw_codex_completion_tokens_total{pod=~\"$pod\"}[5m]))",
-              "legendFormat": "{{pod}}",
+              "expr": "sum by (pod, provider) (rate(openclaw_llm_completion_tokens_total{pod=~\"$pod\"}[5m]))",
+              "legendFormat": "{{pod}} {{provider}}",
               "refId": "A"
             }
           ],
@@ -215,8 +215,8 @@ data:
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
           "targets": [
             {
-              "expr": "sum by (pod) (rate(openclaw_codex_requests_total{pod=~\"$pod\"}[5m])) * 60",
-              "legendFormat": "{{pod}}",
+              "expr": "sum by (pod, provider) (rate(openclaw_llm_requests_total{pod=~\"$pod\"}[5m])) * 60",
+              "legendFormat": "{{pod}} {{provider}}",
               "refId": "A"
             }
           ],
@@ -230,13 +230,13 @@ data:
         {
           "type": "timeseries",
           "id": 4,
-          "title": "Cached tokens/sec (free of charge)",
+          "title": "Cached tokens/sec (cache_read)",
           "datasource": { "type": "prometheus", "uid": "$datasource" },
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
           "targets": [
             {
-              "expr": "sum by (pod) (rate(openclaw_codex_cached_tokens_total{pod=~\"$pod\"}[5m]))",
-              "legendFormat": "{{pod}}",
+              "expr": "sum by (pod, provider) (rate(openclaw_llm_cached_tokens_total{pod=~\"$pod\"}[5m]))",
+              "legendFormat": "{{pod}} {{provider}}",
               "refId": "A"
             }
           ],
@@ -262,8 +262,8 @@ data:
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 23 },
           "targets": [
             {
-              "expr": "sum(rate(openclaw_codex_prompt_tokens_total{pod=~\"$pod\"}[1h])) * 3600",
-              "legendFormat": "prompt/h",
+              "expr": "sum by (provider) (rate(openclaw_llm_prompt_tokens_total{pod=~\"$pod\"}[1h])) * 3600",
+              "legendFormat": "{{provider}} prompt/h",
               "refId": "A"
             }
           ],
@@ -285,8 +285,8 @@ data:
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 23 },
           "targets": [
             {
-              "expr": "sum(rate(openclaw_codex_requests_total{pod=~\"$pod\"}[1h])) * 3600",
-              "legendFormat": "req/h",
+              "expr": "sum by (provider) (rate(openclaw_llm_requests_total{pod=~\"$pod\"}[1h])) * 3600",
+              "legendFormat": "{{provider}} req/h",
               "refId": "A"
             }
           ],
@@ -313,7 +313,7 @@ data:
           "gridPos": { "h": 10, "w": 12, "x": 0, "y": 32 },
           "targets": [
             {
-              "expr": "topk(15, sum by (command) (sum_over_time({pod=~\"$pod\", container=\"base-service\"} |= \"codex_usage\" | json | unwrap prompt_tokens [24h])))",
+              "expr": "topk(15, sum by (command) (sum_over_time({pod=~\"$pod\", container=\"base-service\"} |= \"llm_usage\" | json | unwrap prompt_tokens [24h])))",
               "legendFormat": "{{command}}",
               "refId": "A",
               "queryType": "instant"
@@ -346,7 +346,7 @@ data:
           "gridPos": { "h": 10, "w": 12, "x": 12, "y": 32 },
           "targets": [
             {
-              "expr": "topk(15, sum by (command) (count_over_time({pod=~\"$pod\", container=\"base-service\"} |= \"codex_usage\" | json [24h])))",
+              "expr": "topk(15, sum by (command) (count_over_time({pod=~\"$pod\", container=\"base-service\"} |= \"llm_usage\" | json [24h])))",
               "legendFormat": "{{command}}",
               "refId": "A",
               "queryType": "instant"
@@ -373,12 +373,12 @@ data:
         {
           "type": "logs",
           "id": 5,
-          "title": "Latest codex_usage events",
+          "title": "Latest llm_usage events",
           "datasource": { "type": "loki", "uid": "$loki" },
           "gridPos": { "h": 10, "w": 24, "x": 0, "y": 42 },
           "targets": [
             {
-              "expr": "{pod=~\"$pod\", container=\"base-service\"} |= \"codex_usage\" | json | line_format \"{{.command}} model={{.model}} prompt={{.prompt_tokens}} completion={{.completion_tokens}}\"",
+              "expr": "{pod=~\"$pod\", container=\"base-service\"} |= \"llm_usage\" | json | line_format \"{{.command}} model={{.model}} prompt={{.prompt_tokens}} completion={{.completion_tokens}}\"",
               "refId": "A"
             }
           ],
