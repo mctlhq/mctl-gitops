@@ -47,9 +47,10 @@ spec:
               cpu: 100m
               memory: 256Mi
             limits:
-              # Steady-state ~48m; 200m gives 4x cushion for unseal/auth bursts.
-              # Trimmed 500m→200m on 2026-05-10 (CPU-limits cluster headroom).
-              cpu: 200m
+              # Restored 200m→500m on 2026-05-13: steady-state usage reached
+              # 101m (50% of 200m limit), triggering CPUThrottlingHigh alerts.
+              # 500m was the pre-2026-05-10 value and proved sufficient.
+              cpu: 500m
               memory: 1Gi
 
           ingress:
