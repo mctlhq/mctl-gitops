@@ -1454,6 +1454,13 @@ configMaps:
               "https://labs-openclaw.mctl.ai",
               "https://labs-openclaw.mctl.me"
             ]
+          },
+          "http": {
+            "endpoints": {
+              "chatCompletions": {
+                "enabled": true
+              }
+            }
           }
         },
         "agents": {
