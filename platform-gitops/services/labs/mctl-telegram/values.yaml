@@ -24,7 +24,7 @@ env:
   AUTH_MODE: shared-hmac
   AUTH_REQUIRED: "true"
   OPERATOR_GITHUB_LOGIN: mashkovd
-  ALLOW_SEND: "false"
+  ALLOW_SEND: "true"
   LOG_LEVEL: info
   PUBLIC_BASE_URL: https://labs-mctl-telegram.mctl.ai
 ingress:
