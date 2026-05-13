@@ -7,7 +7,7 @@
 
 image:
   repository: ghcr.io/mctlhq/mctl-openclaw
-  tag: "2026.5.2-mctl.2"
+  tag: "2026.5.2-mctl.3"
 podSecurityContext:
   fsGroup: 1000
 imagePullSecrets:
@@ -44,7 +44,7 @@ strategy:
 terminationGracePeriodSeconds: 60
 env:
   APP_ENV: production
-  OPENCLAW_VERSION: "2026.5.2-mctl.2"
+  OPENCLAW_VERSION: "2026.5.2-mctl.3"
   OPENCLAW_BUNDLED_SKILLS_DIR: /home/node/.openclaw/bundled-skills
   OPENCLAW_GITHUB_ALLOWED_REPOS: "mctlhq/mctl-gitops,mctlhq/mctl-openclaw"
   PATH: "/whisper-storage:/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games"
