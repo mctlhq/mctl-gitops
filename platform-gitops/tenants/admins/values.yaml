@@ -10,7 +10,10 @@ tenant:
   quotas:
     requests.cpu: "1"
     requests.memory: "3Gi"
-    limits.cpu: "7"
+    # Bumped 2026-05-13: openclaw sidecar limit increase (s3-sync 2000m +
+    # skills-fanout 300m) brings pod limits to 6300m; bumped from 7 to 8
+    # to preserve 1000m+ headroom for deploy workflow pods.
+    limits.cpu: "8"
     limits.memory: "6Gi"
     pods: "12"
     persistentvolumeclaims: "2"
