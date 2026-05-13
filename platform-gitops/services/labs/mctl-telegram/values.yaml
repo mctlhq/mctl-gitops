@@ -40,3 +40,18 @@ ingress:
         - labs-mctl-telegram.mctl.ai
         - labs-mctl-telegram.mctl.me
 extraContainers: []
+
+dbSecret:
+  vaultPath: "teams/labs/mctl-telegram/database"
+  secretName: "labs-mctl-telegram-db-creds"
+dbInitJob:
+  enabled: false
+  database: "labs-mctl-telegram"
+  waitTable: "identities"
+  sql: |
+    INSERT INTO identities (provider, provider_id, status, metadata)
+    VALUES ('telegram', '__TELEGRAM_ID__', 'approved', '{}')
+    ON CONFLICT (provider, provider_id) DO UPDATE SET status = 'approved';
+envFrom:
+  - secretRef:
+      name: "labs-mctl-telegram-db-creds"

@@ -5,6 +5,9 @@ metadata:
   namespace: labs
   description: "mctl-telegram service"
   annotations:
+    platform.mctl.me/database: "true"
+    platform.mctl.me/database-team: "labs"
+    platform.mctl.me/database-app: "mctl-telegram"
     backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=labs-mctl-telegram
     backstage.io/kubernetes-id: mctl-telegram
     backstage.io/kubernetes-namespace: labs
