@@ -37,6 +37,7 @@ env:
   ALBUM_DEBOUNCE_SECONDS: "15"
   ALBUM_MAX_PHOTOS: "8"
   ALBUM_MAX_WAIT_SECONDS: "150"
+  CHAT_ID: "-974122276"
 # DATABASE_URL with asyncpg scheme is assembled from Vault DB creds via
 # ExternalSecret templating below (`externalSecret.targetTemplateData`)
 # rather than the previous `env: DATABASE_URL: "...$(DB_USER):$(DB_PASSWORD)..."`
