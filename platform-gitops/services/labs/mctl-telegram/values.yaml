@@ -27,6 +27,7 @@ env:
   LOG_LEVEL: info
   PUBLIC_BASE_URL: https://tg.mctl.ai
   OAUTH_ISSUER_URL: https://tg.mctl.ai
+  TELEGRAM_LOGIN_BOT_USERNAME: MCTL_AI_bot
   # CSV of Telegram user IDs that receive full scopes (admin allowlist)
   TG_LOGIN_ADMINS: "210408407"
 ingress:
