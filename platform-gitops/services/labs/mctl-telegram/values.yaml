@@ -93,7 +93,7 @@ extraExternalSecrets:
         remoteKey: secret/data/platform/mctl-api/oauth
         property: jwt-secret
   labs-mctl-telegram-login:
-    refreshInterval: 5m
+    refreshInterval: 1h
     targetSecret: labs-mctl-telegram-login
     data:
       - secretKey: TELEGRAM_LOGIN_BOT_TOKEN
