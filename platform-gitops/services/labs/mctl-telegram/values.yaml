@@ -21,12 +21,14 @@ resources:
     memory: 512Mi
 env:
   APP_ENV: production
-  AUTH_MODE: shared-hmac
+  AUTH_MODE: local-jwt
   AUTH_REQUIRED: "true"
-  OPERATOR_GITHUB_LOGIN: mashkovd
   ALLOW_SEND: "true"
   LOG_LEVEL: info
   PUBLIC_BASE_URL: https://tg.mctl.ai
+  OAUTH_ISSUER_URL: https://tg.mctl.ai
+  # CSV of Telegram user IDs that receive full scopes (admin allowlist)
+  TG_LOGIN_ADMINS: "210408407"
 ingress:
   enabled: true
   hosts:
@@ -62,6 +64,8 @@ envFrom:
       name: "labs-mctl-telegram-encryption"
   - secretRef:
       name: "labs-mctl-telegram-oauth"
+  - secretRef:
+      name: "labs-mctl-telegram-login"
 extraExternalSecrets:
   labs-mctl-telegram-tg-api:
     refreshInterval: 1h
@@ -87,3 +91,10 @@ extraExternalSecrets:
       - secretKey: OAUTH_JWT_SECRET
         remoteKey: secret/data/platform/mctl-api/oauth
         property: jwt-secret
+  labs-mctl-telegram-login:
+    refreshInterval: 1h
+    targetSecret: labs-mctl-telegram-login
+    data:
+      - secretKey: TELEGRAM_LOGIN_BOT_TOKEN
+        remoteKey: secret/data/platform/mctl-telegram/login
+        property: TELEGRAM_LOGIN_BOT_TOKEN
