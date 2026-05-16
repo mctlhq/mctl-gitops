@@ -5,14 +5,14 @@
 
 image:
   repository: ghcr.io/mctlhq/mctl-web
-  tag: "5.1.0"
+  tag: "6.0.0"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
-  # 5.x (redesign) runs nginx on 8080. The base-service chart binds the
-  # container port and the Service port to this single value, so it must
-  # change together with the image tag.
-  port: 8080
+  # 6.0.0 (pre-redesign rollback) runs nginx on port 80. The base-service
+  # chart binds the container port and the Service port to this single
+  # value, so it must change together with the image tag.
+  port: 80
 resources:
   requests:
     cpu: 100m
