@@ -70,6 +70,14 @@ spec:
           # admins-openclaw chat — TELEGRAM_BOT_TOKEN in Vault has the
           # corresponding token.
           OPENCLAW_BOT_USERNAME: "@MCTL_AI_bot"
+          # LLM fallback skill disabled — Anthropic Console API key removed.
+          # Deterministic skills cover all known alert types; TypeGeneric
+          # alerts will remain open until MAX_ANALYZING_AGE expires.
+          DISABLE_LLM_DIAGNOSIS: "true"
+          # Absolute TTL for analyzing tickets (CreatedAt-based, not reset by
+          # flapping alert heartbeats). Prevents eternal stale incidents when
+          # a flapping alert keeps UpdatedAt fresh but no skill can resolve it.
+          MAX_ANALYZING_AGE: "120h"
           DATABASE_URL: "postgresql://$(DB_USER):$(DB_PASSWORD)@shared-pg-rw.platform-db.svc:5432/mctl-agent"
         envFrom:
           - secretRef:
@@ -92,9 +100,6 @@ spec:
             - secretKey: MCTL_API_TOKEN
               remoteKey: platform/mctl-agent/tokens
               property: mctl-api-token
-            - secretKey: ANTHROPIC_API_KEY
-              remoteKey: platform/mctl-agent/tokens
-              property: anthropic-api-key
             - secretKey: GITHUB_TOKEN
               remoteKey: platform/mctl-agent/tokens
               property: github-token
