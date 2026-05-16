@@ -24,6 +24,7 @@ env:
 ingress:
   enabled: true
   hosts:
+    - ui.mctl.ai
     - admins-mctl-design.mctl.ai
     - admins-mctl-design.mctl.me
   annotations:
@@ -31,5 +32,6 @@ ingress:
   tls:
     - secretName: mctl-design-tls
       hosts:
+        - ui.mctl.ai
         - admins-mctl-design.mctl.ai
         - admins-mctl-design.mctl.me
