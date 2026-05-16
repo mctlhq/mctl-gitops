@@ -1,0 +1,51 @@
+apiVersion: argoproj.io/v1alpha1
+kind: CronWorkflow
+metadata:
+  name: mctl-agents-incidents
+  namespace: argo-workflows
+  annotations:
+    workflows.argoproj.io/description: |
+      Every-30-minute trigger for the incident responder.
+
+      Workflow logic lives in ClusterWorkflowTemplate `mctl-agents-run`
+      (cwft-mctl-agents-run.yaml). This CronWorkflow is a thin wrapper
+      that submits a Workflow with mode=incident-responder.
+
+      What it does:
+        1. Lists mctl incidents with status=analyzing.
+        2. Filters TypeGeneric incidents older than MIN_AGE_MINUTES (30 min).
+        3. For each (up to 5 per run), runs a Claude sub-agent that:
+           - Fetches incident details + service logs.
+           - Diagnoses root cause and writes a proposal to
+             agents-state/{target_service}/proposals/incident-{id[:8]}/.
+           - Sets .status.yaml status=accepted immediately (no human gate).
+           - Resolves the mctl incident with "diagnosis delegated to implementer".
+        4. The Tier 2 implementer picks up accepted proposals on its next run
+           and opens a PR. The Tier 3 shepherd drives it to merge.
+
+      Start suspended. Un-suspend after the first successful one-shot run
+      (verify proposals appear in agents-state/ and incidents resolve).
+spec:
+  # Every 30 minutes — incidents accumulate fast; quicker triage is better.
+  # Offset by :15 to avoid contention with the shepherd (:30) and the
+  # main agents-daily (06:00 UTC).
+  schedule: "15,45 * * * *"
+  timezone: "UTC"
+  # Skip overlapping runs. The run may take up to 10 min for 5 incidents.
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  # 24 ticks/day * 7 days of success history
+  successfulJobsHistoryLimit: 168
+  failedJobsHistoryLimit: 48
+  # Start suspended — un-suspend after smoke test.
+  suspend: true
+  workflowSpec:
+    workflowTemplateRef:
+      name: mctl-agents-run
+      clusterScope: true
+    arguments:
+      parameters:
+        - name: mode
+          value: "incident-responder"
+        - name: service
+          value: ""
