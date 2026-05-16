@@ -1,69 +1,63 @@
 # Tasks: mcp-go-upgrade-v2
 
-- [ ] 1. Bump `mark3labs/mcp-go` to v0.52.0 and tidy — run
-  `go get github.com/mark3labs/mcp-go@v0.52.0 && go mod tidy`. — DoD: `go.mod` lists
-  `github.com/mark3labs/mcp-go v0.52.0`; `go.sum` is consistent; no unintended transitive
-  dependency changes appear in the diff.
+- [ ] 1. Bump mcp-go to v0.54.0 in go.mod — run `go get github.com/mark3labs/mcp-go@v0.54.0 && go mod tidy`;
+  commit updated `go.mod` and `go.sum`. DoD: `go list -m github.com/mark3labs/mcp-go` returns
+  `v0.54.0`; `go build ./...` exits 0.
 
-- [ ] 2. Resolve all compile-time errors (depends on 1) — run `go build ./...` and fix every
-  breaking API change introduced between v0.31 and v0.52.0. Expected areas: tool registration
-  signatures, server option structs, transport initialisation, `CallToolResult` type. — DoD:
-  `go build ./...` succeeds with zero errors and zero new vet warnings.
+- [ ] 2. Audit tool registration API for breaking changes (depends on 1) — diff the mcp-go
+  changelog for any changes to `mcp.NewServer`, `mcp.NewTool`, handler function signatures, or
+  transport options between v0.31 and v0.54.0. DoD: documented PR comment listing all API changes
+  and confirming mctl-api handler code is compatible or identifying required adjustments.
 
-- [ ] 3. Re-validate and fix all 24 tool input schemas (depends on 2) — for each of the 24
-  registered MCP tools, verify the `InputSchema` accurately reflects accepted parameters and
-  types. Fix any inaccuracies. Enable per-tool SEP-1303 server-side validation where
-  available. — DoD: all 24 tools have valid JSON Schema definitions; no well-formed tool call
-  is incorrectly rejected; a tool call with an invalid parameter returns JSON-RPC error
-  `-32602` before the handler runs.
+- [ ] 3. Update tool registration code if required (depends on 2) — apply any handler signature
+  or option-function changes identified in step 2. DoD: `go build ./...` exits 0; all 24 tool
+  registrations compile without errors.
 
-- [ ] 4. Run the full unit test suite (depends on 2) — DoD: `go test ./...` passes with no
-  new failures.
+- [ ] 4. Wire OpenTelemetry tracing (depends on 3) — add `mcp.WithServerTracer(tracer)` to the
+  server initialisation using the existing OTel tracer (or a no-op tracer if OTel is not
+  configured). DoD: when OTel is configured, a span named after the tool appears in the trace
+  backend for each MCP tool call; when OTel is absent, the server starts without errors.
 
-- [ ] 5. Memory regression test on staging (depends on 2) — deploy the upgraded binary to
-  staging and send 1 000 sequential MCP tool calls. Observe `go_goroutines` and
-  `go_memstats_heap_inuse_bytes` in Prometheus before and after the load. — DoD: goroutine
-  count returns to pre-test baseline (within ±5%) after the load completes; no unbounded heap
-  growth is observed.
+- [ ] 5. Audit test harness request payloads for field-name case (depends on 3) — search all
+  test fixtures and mock clients for non-lowercase JSON-RPC field names; fix any that would be
+  rejected by the new strict dispatcher. DoD: `go test ./...` exits 0 with zero new failures.
 
-- [ ] 6. Validate OAuth 2.0 PKCE flow in staging (depends on 2) — run the full Claude.ai
-  connector PKCE authentication flow against the staging `/mcp` endpoint. — DoD: Claude.ai
-  connector successfully authenticates and the tool listing is returned.
+- [ ] 6. Run full unit and integration tests (depends on 4, 5) — execute `go test ./...`
+  including MCP integration tests. DoD: zero new failures; existing test coverage maintained.
 
-- [ ] 7. Run MCP Inspector against staging (depends on 3, 5, 6) — execute the upstream MCP
-  Inspector tool against the staging `/mcp` endpoint. — DoD: all 24 tools pass schema
-  validation and spec compliance; no JSON-RPC violations are reported.
+- [ ] 7. Validate all 24 tools via MCP Inspector (depends on 6) — per ADR-0001, run MCP
+  Inspector against the staging server; exercise each of the 24 tools with valid and invalid
+  inputs; confirm correct schemas and responses. DoD: MCP Inspector reports all 24 tools with
+  valid schemas; no unexpected errors; all read tools return expected data; all write tools
+  reject requests without proper auth.
 
-- [ ] 8. govulncheck verification (depends on 1) — DoD: `govulncheck ./...` reports zero
-  findings attributable to `mark3labs/mcp-go`; the output is attached to the PR.
+- [ ] 8. Load test in staging (depends on 7) — run a 10-minute MCP streaming load test at
+  representative concurrency; compare latency and error rate against the v0.31 baseline.
+  DoD: p99 latency ≤ baseline; zero panics in logs; OTel spans visible in trace UI.
 
-- [ ] 9. Deploy to `admins` production via ArgoCD (depends on 7, 8) — merge the updated
-  image tag to the gitops repository and sync. — DoD: ArgoCD reports `Healthy` and `Synced`;
-  pods restart cleanly; `go_goroutines` and heap metrics remain stable for 15 minutes
-  post-deploy; MCP error rate (`mcp_tool_errors_total`) shows no spike.
+- [ ] 9. Promote to production (depends on 8) — merge PR, ArgoCD deploys updated image.
+  DoD: production pod imports mcp-go v0.54.0 (`go list` in build log); health check green;
+  MCP endpoint responds to a smoke-test tool call within 2 seconds.
 
 ## Tests
 
-- [ ] T1. `go test ./...` — full unit suite passes on the upgraded dependency.
-- [ ] T2. MCP Inspector — all 24 tools pass schema and spec validation on staging.
-- [ ] T3. Schema rejection test — a tool call with a missing required parameter returns
-  JSON-RPC `-32602` without invoking the handler.
-- [ ] T4. PKCE flow test — Claude.ai connector authenticates end-to-end in staging.
-- [ ] T5. Memory / goroutine leak test — 1 000 sequential tool calls; goroutine count
-  returns to baseline (within ±5%) after the burst.
-- [ ] T6. `govulncheck ./...` — zero CVE findings for mcp-go.
-- [ ] T7. Post-deploy Prometheus check — `go_goroutines` and heap metrics stable for 15
-  minutes; `mcp_tool_errors_total` shows no regression.
+- [ ] T1. **CVE-2026-27896 regression test** — add a test that sends an MCP request with
+  `"Method"` (uppercase M) in the JSON-RPC body and asserts the server returns a -32600 error
+  rather than silently bypassing validation.
+
+- [ ] T2. **Panic safety test** — send a deliberately malformed MCP JSON payload (truncated,
+  missing required fields) and assert the server returns a JSON-RPC error response; confirm no
+  goroutine panic appears in logs.
+
+- [ ] T3. **OTel span presence test** — with an in-process OTel exporter, invoke one MCP tool
+  and assert a span with the correct tool-name attribute is recorded.
+
+- [ ] T4. **MCP Inspector full sweep** — automated or manual run of all 24 tools; results
+  recorded in the PR as a checklist (tool name + pass/fail).
 
 ## Rollback
-ArgoCD's automated sync will revert to the previous image tag if the readiness probe fails.
-Manual rollback procedure:
-1. In the mctl-gitops repository, revert the `mctl-api` image tag to the last known-good
-   release and push to main.
-2. `argocd app sync mctl-api` — ArgoCD deploys the previous image.
-3. Confirm `/healthz` returns HTTP 200 and `go_goroutines` stabilises.
-4. The HTTP body leak remains present in the rollback version. Apply a temporary mitigation:
-   set a shorter pod restart policy (e.g., memory limit with `requests == limits`) to
-   contain goroutine accumulation until the fix is re-attempted.
-5. Record the rollback in the incident log and schedule a re-attempt with the compile errors
-   fully triaged.
+1. Revert `go.mod`, `go.sum` changes: `git revert <commit-sha>`.
+2. Rebuild and redeploy the image with mcp-go v0.31.
+3. ArgoCD will detect the image change; if health checks fail, trigger `argocd app rollback
+   mctl-api` to restore the previous known-good revision.
+4. Re-run MCP Inspector against the rolled-back server to confirm all 24 tools are functional.
