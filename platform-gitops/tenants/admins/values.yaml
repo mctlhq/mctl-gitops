@@ -13,7 +13,10 @@ tenant:
     # Bumped 2026-05-13: openclaw sidecar limit increase (s3-sync 2000m +
     # skills-fanout 300m) brings pod limits to 6300m; bumped from 7 to 8
     # to preserve 1000m+ headroom for deploy workflow pods.
-    limits.cpu: "8"
+    # Bumped 2026-05-16: steady-state usage reached 7500m (openclaw 6300m +
+    # mctl-agent/mctl-design/mctl-docs/mctl-web 1200m), leaving only 500m —
+    # not enough for the 1000m deploy-pipeline pods. Raised 8 to 10.
+    limits.cpu: "10"
     limits.memory: "6Gi"
     pods: "12"
     persistentvolumeclaims: "2"
