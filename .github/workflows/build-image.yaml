@@ -181,6 +181,12 @@ jobs:
           push: true
           build-args: |
             APP_VERSION=${{ inputs.git_ref }}
+          # Optional BuildKit secret: a GitHub token for source Dockerfiles that
+          # install dependencies from GitHub Packages (e.g. mctl-web pulls
+          # @mctlhq/css). Services whose Dockerfile does not mount
+          # `id=github_token` simply ignore it — no behaviour change.
+          secrets: |
+            github_token=${{ secrets.GITHUB_TOKEN }}
           tags: |
             ${{ inputs.image_name }}:${{ inputs.image_tag }}
             ${{ inputs.image_name }}:latest
