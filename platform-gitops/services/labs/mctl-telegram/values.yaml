@@ -91,6 +91,12 @@ extraExternalSecrets:
   labs-mctl-telegram-oauth:
     refreshInterval: 1h
     targetSecret: labs-mctl-telegram-oauth
+    # Force ArgoCD client-side apply for this ExternalSecret. ArgoCD v3.3.8 with
+    # ServerSideApply + serverSideDiff fails to apply ExternalSecrets with
+    # "metadata.managedFields must be nil"; client-side apply bypasses that path.
+    # Remove once the platform-wide ArgoCD SSA bug is fixed (see tracking issue).
+    annotations:
+      argocd.argoproj.io/sync-options: ServerSideApply=false
     data:
       # Dedicated mctl-telegram JWT signing key. Previously OAUTH_JWT_SECRET was
       # sourced from mctl-api's shared secret (secret/data/platform/mctl-api/oauth),
