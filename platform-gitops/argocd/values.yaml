@@ -125,6 +125,14 @@ argo-cd:
       # See: https://github.com/argoproj/argo-cd/issues/9476
       application.resourceTrackingMethod: annotation
 
+      # Disable server-side diff. ArgoCD v3.3.8 server-side diff fails to apply
+      # ExternalSecret resources with "metadata.managedFields must be nil"
+      # (managedFields leak from the SSA dry-run into the real apply). Observed
+      # on labs-mctl-telegram-oauth and admins-mctl-agent. Reverting to
+      # client-side diff restores correct apply behaviour. Tracked in issue #225;
+      # re-evaluate after the ArgoCD upgrade.
+      controller.diff.server.side: "false"
+
     rbac:
       policy.default: ""
       scopes: "[groups]"
