@@ -92,9 +92,13 @@ extraExternalSecrets:
     refreshInterval: 1h
     targetSecret: labs-mctl-telegram-oauth
     data:
-      - secretKey: OAUTH_JWT_SECRET
-        remoteKey: secret/data/platform/mctl-api/oauth
-        property: jwt-secret
+      # Dedicated mctl-telegram JWT signing key. Previously OAUTH_JWT_SECRET was
+      # sourced from mctl-api's shared secret (secret/data/platform/mctl-api/oauth),
+      # so an mctl-api rotation silently invalidated every mctl-telegram token.
+      # The service now reads OAUTH_JWT_SIGNING_KEY from its own Vault path.
+      - secretKey: OAUTH_JWT_SIGNING_KEY
+        remoteKey: secret/data/platform/mctl-telegram/oauth
+        property: jwt-signing-key
   labs-mctl-telegram-login:
     refreshInterval: 1h
     targetSecret: labs-mctl-telegram-login
