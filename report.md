@@ -1,189 +1,158 @@
-# [daily-report] 2026-05-16 pipeline summary
-
-## 1. Summary
-
-20 proposals tracked across 8 repos: **16 merged**, **4 rejected**, **0 in-progress**, **0 proposed** — pipeline remains fully flushed, no change from yesterday. mctl-telegram had an active 24 h sprint: **14 PRs merged** (hands-off onboarding + Dependabot + OAuth client tier) plus 1 mctl-gitops config follow-up; mctl-telegram is now live at `0.11.0`. 8 deploy-service workflow runs landed in the last 24 h (all labs, all `mashkovd`). Shepherd cron ran 5 times on its 2 h cadence — all succeeded. **mctl-gitops#84** ([wip] claim mechanism) remains idle for **16 days** — a stable stale-pr problem (second consecutive report); stand-alone issue creation blocked by MCP scope restriction (same as yesterday — see §8).
+> **Routing note:** This issue was intended for `mctlhq/mctl-agents` but was posted here because the GitHub MCP session is scoped to `mctlhq/mctl-gitops` only. To fix: expand the MCP allowed-repositories list to include `mctlhq/mctl-agents`.
 
 ---
 
-## 2. Proposal pipeline state
+## Summary
 
-| repo | slug | status | pr | changed since yesterday |
-|---|---|---|---|---|
-| mctl-agents | tier3-pr-shepherd | merged | [#12](https://github.com/mctlhq/mctl-agents/pull/12) | — |
-| mctl-agent | incident-auto-cleanup-phase1 | merged | [#11](https://github.com/mctlhq/mctl-agent/pull/11) | — |
-| mctl-agent | incident-auto-cleanup-phase2 | merged | [#13](https://github.com/mctlhq/mctl-agent/pull/13) | — |
-| mctl-agent | incident-auto-cleanup-phase3 | merged | [#12](https://github.com/mctlhq/mctl-agent/pull/12) | — |
-| mctl-agent | incident-auto-cleanup-phase4-metrics | rejected | — | — |
-| mctl-agent | incident-auto-cleanup-phase4a-metrics-wiring | merged | [#16](https://github.com/mctlhq/mctl-agent/pull/16) | — |
-| mctl-agent | incident-auto-cleanup-phase4b-metrics-full | merged | [#17](https://github.com/mctlhq/mctl-agent/pull/17) | — |
-| mctl-agent | sqlite-cve-patch | merged | [#9](https://github.com/mctlhq/mctl-agent/pull/9) | — |
-| mctl-api | chi-security-patch | merged | [#39](https://github.com/mctlhq/mctl-api/pull/39) | — |
-| mctl-api | pgx-sqli-cve-2025-54236 | merged | [#40](https://github.com/mctlhq/mctl-api/pull/40) | — |
-| mctl-docs | fix-broken-mctl-ai-mcp-links | merged | [#6](https://github.com/mctlhq/mctl-docs/pull/6) | — |
-| mctl-docs | mcp-agents-tools | merged | [#7](https://github.com/mctlhq/mctl-docs/pull/7) | — |
-| mctl-gitops | argo-workflows-cve-patch-v2 | merged | [#85](https://github.com/mctlhq/mctl-gitops/pull/85) | — |
-| mctl-gitops | argocd-informer-cache-patch | merged | [#90](https://github.com/mctlhq/mctl-gitops/pull/90) | — |
-| mctl-gitops | eso-cve-patch | merged | [#87](https://github.com/mctlhq/mctl-gitops/pull/87) | — |
-| mctl-gitops | grafana-sql-rce-patch | merged | [#89](https://github.com/mctlhq/mctl-gitops/pull/89) | — |
-| mctl-openclaw | upgrade-to-2026-4-27 | rejected | [#15](https://github.com/mctlhq/mctl-openclaw/pull/15) | — |
-| mctl-portal | scaffolder-path-traversal | rejected | [#10](https://github.com/mctlhq/mctl-portal/pull/10) | — |
-| mctl-portal | scaffolder-secret-leak | rejected | [#12](https://github.com/mctlhq/mctl-portal/pull/12) | — |
-| mctl-web | wrangler-upgrade-security | merged | [#9](https://github.com/mctlhq/mctl-web/pull/9) | — |
+20 proposals tracked across 7 repos: **16 merged**, **4 rejected**, **0 in-progress**, **0 proposed**. The pipeline is fully drained with no change since the 2026-05-15 report (issue #213). Zero `mctl-agents` bot commits in the last 26 h. Very active human/deploy day: **21 PRs merged** on 2026-05-16, spanning mctl-telegram OAuth hardening (7 PRs), mctl-design launch, mctl-web redesign promotion then same-day rollback, and Claude PR-review CI rollout across repos. **3 active cluster incidents** (api.mctl.ai connector attached this run for the first time): `admins-mctl-agent` ArgoCD OutOfSync fired twice and `admins` namespace quota pressure. Follow-up comment posted on stale-pr issue [#188](https://github.com/mctlhq/mctl-gitops/issues/188) for `mctl-gitops#84` (now 17 days with no activity).
 
 ---
 
-## 3. Pipeline diff (vs yesterday — 2026-05-15)
+## Proposal pipeline state
 
-Previous report: local `report.md` (2026-05-15 run; never posted to GitHub — MCP scope blocked issue creation that day too).
+| repo | slug | status | pr | changed\_since\_yesterday |
+|------|------|--------|----|--------------------------|
+| mctl-agents | tier3-pr-shepherd | merged | [mctl-agents#12](https://github.com/mctlhq/mctl-agents/pull/12) | — |
+| mctl-agent | sqlite-cve-patch | merged | [mctl-agent#9](https://github.com/mctlhq/mctl-agent/pull/9) | — |
+| mctl-agent | incident-auto-cleanup-phase1 | merged | [mctl-agent#11](https://github.com/mctlhq/mctl-agent/pull/11) | — |
+| mctl-agent | incident-auto-cleanup-phase2 | merged | [mctl-agent#13](https://github.com/mctlhq/mctl-agent/pull/13) | — |
+| mctl-agent | incident-auto-cleanup-phase3 | merged | [mctl-agent#12](https://github.com/mctlhq/mctl-agent/pull/12) | — |
+| mctl-agent | incident-auto-cleanup-phase4-metrics | rejected | [mctl-agent#17](https://github.com/mctlhq/mctl-agent/pull/17) | — |
+| mctl-agent | incident-auto-cleanup-phase4a-metrics-wiring | merged | [mctl-agent#16](https://github.com/mctlhq/mctl-agent/pull/16) | — |
+| mctl-agent | incident-auto-cleanup-phase4b-metrics-full | merged | [mctl-agent#17](https://github.com/mctlhq/mctl-agent/pull/17) | — |
+| mctl-api | chi-security-patch | merged | [mctl-api#39](https://github.com/mctlhq/mctl-api/pull/39) | — |
+| mctl-api | pgx-sqli-cve-2025-54236 | merged | [mctl-api#40](https://github.com/mctlhq/mctl-api/pull/40) | — |
+| mctl-docs | fix-broken-mctl-ai-mcp-links | merged | [mctl-docs#6](https://github.com/mctlhq/mctl-docs/pull/6) | — |
+| mctl-docs | mcp-agents-tools | merged | [mctl-docs#7](https://github.com/mctlhq/mctl-docs/pull/7) | — |
+| mctl-portal | scaffolder-path-traversal | rejected | [mctl-portal#10](https://github.com/mctlhq/mctl-portal/pull/10) | — |
+| mctl-portal | scaffolder-secret-leak | rejected | [mctl-portal#12](https://github.com/mctlhq/mctl-portal/pull/12) | — |
+| mctl-openclaw | upgrade-to-2026-4-27 | rejected | [mctl-openclaw#15](https://github.com/mctlhq/mctl-openclaw/pull/15) | — |
+| mctl-web | wrangler-upgrade-security | merged | [mctl-web#9](https://github.com/mctlhq/mctl-web/pull/9) | — |
+| mctl-gitops | argo-workflows-cve-patch-v2 | merged | [mctl-gitops#85](https://github.com/mctlhq/mctl-gitops/pull/85) | — |
+| mctl-gitops | argocd-informer-cache-patch | merged | [mctl-gitops#90](https://github.com/mctlhq/mctl-gitops/pull/90) | — |
+| mctl-gitops | grafana-sql-rce-patch | merged | [mctl-gitops#89](https://github.com/mctlhq/mctl-gitops/pull/89) | — |
+| mctl-gitops | eso-cve-patch | merged | [mctl-gitops#87](https://github.com/mctlhq/mctl-gitops/pull/87) | — |
 
-- **Newly merged:** none (all proposals were already in terminal state)
+---
+
+## Pipeline diff (vs yesterday — issue #213, 2026-05-15)
+
+- **Newly merged:** none
 - **Newly rejected:** none
 - **Newly proposed:** none
 - **Still in-progress:** none
 - **Still proposed:** none
 
-No proposal-level movement today. All flux is in the PR/deploy layer (mctl-telegram sprint, §4–5).
+Pipeline is fully terminal. No delta from yesterday.
 
 ---
 
-## 4. Recent merged PRs (last 24 h)
+## Recent merged PRs (24h — 2026-05-16)
 
-14 PRs merged since 2026-05-15T09:00Z (13 × mctl-telegram, 1 × mctl-gitops):
+21 PRs merged across 5 repos:
 
-| # | repo | title | merged at |
-|---|---|---|---|
-| [#41](https://github.com/mctlhq/mctl-telegram/pull/41) | mctl-telegram | feat: hands-off client onboarding — open auto-approve + daily digest | 2026-05-16T08:39Z |
-| [#33](https://github.com/mctlhq/mctl-telegram/pull/33) | mctl-telegram | fix: add Dependabot and CodeQL for Scorecard compliance | 2026-05-16T01:41Z |
-| [#32](https://github.com/mctlhq/mctl-telegram/pull/32) | mctl-telegram | fix: pin GHA actions to SHA and restrict workflow permissions | 2026-05-16T01:30Z |
-| [#31](https://github.com/mctlhq/mctl-telegram/pull/31) | mctl-telegram | feat(oauth): client scope tier + DB-backed client management | 2026-05-16T01:14Z |
-| [#27](https://github.com/mctlhq/mctl-telegram/pull/27) | mctl-telegram | feat(oauth): in-browser enable_access flow for MTProto session onboarding | 2026-05-16T00:22Z |
-| [#30](https://github.com/mctlhq/mctl-telegram/pull/30) | mctl-telegram | ci: fix claude-review to actually post review findings | 2026-05-15T23:46Z |
-| [#29](https://github.com/mctlhq/mctl-telegram/pull/29) | mctl-telegram | chore: document squash-merge-only convention | 2026-05-15T23:41Z |
-| [#28](https://github.com/mctlhq/mctl-telegram/pull/28) | mctl-telegram | ci: add Claude-powered automated PR review | 2026-05-15T23:10Z |
-| [#26](https://github.com/mctlhq/mctl-telegram/pull/26) | mctl-telegram | fix: add unsafe-eval to CSP for Telegram widget | 2026-05-15T19:49Z |
-| [#25](https://github.com/mctlhq/mctl-telegram/pull/25) | mctl-telegram | fix: authorize page dark mode and CSP for Telegram widget | 2026-05-15T19:39Z |
-| [#24](https://github.com/mctlhq/mctl-telegram/pull/24) | mctl-telegram | fix: update connectors URL to claude.ai/customize/connectors | 2026-05-15T19:35Z |
-| [#23](https://github.com/mctlhq/mctl-telegram/pull/23) | mctl-telegram | fix(web): landing dark mode contrast — lead text + inline code | 2026-05-15T18:54Z |
-| [#214](https://github.com/mctlhq/mctl-gitops/pull/214) | mctl-gitops | feat(mctl-telegram): switch to local-jwt auth, wire TELEGRAM_LOGIN_BOT_TOKEN | 2026-05-15T18:43Z |
+**mctlhq/mctl-gitops (7):**
+- [#222](https://github.com/mctlhq/mctl-gitops/pull/222) fix: roll mctl-web back to pre-redesign (6.0.0)
+- [#221](https://github.com/mctlhq/mctl-gitops/pull/221) deploy: admins/mctl-web → 5.1.0 (redesign) _(immediately reverted by #222)_
+- [#220](https://github.com/mctlhq/mctl-gitops/pull/220) ci: add automated Claude PR review workflow
+- [#219](https://github.com/mctlhq/mctl-gitops/pull/219) ci: optional github_token build secret in build-image
+- [#218](https://github.com/mctlhq/mctl-gitops/pull/218) chore: raise admins namespace CPU quota to 10
+- [#216](https://github.com/mctlhq/mctl-gitops/pull/216) feat: add ui.mctl.ai host to mctl-design
+- [#215](https://github.com/mctlhq/mctl-gitops/pull/215) feat(mctl-agent): disable LLM diagnosis, add MAX_ANALYZING_AGE
 
-*(#21 and #22 were captured in yesterday's report.)*
+**mctlhq/mctl-telegram (10):**
+- [#46](https://github.com/mctlhq/mctl-telegram/pull/46) fix(oauth): replace broken account-switch control with help block
+- [#45](https://github.com/mctlhq/mctl-telegram/pull/45) fix(oauth): run widget logout in an iframe, not a popup
+- [#44](https://github.com/mctlhq/mctl-telegram/pull/44) fix(oauth): add origin to the Login Widget logout link
+- [#43](https://github.com/mctlhq/mctl-telegram/pull/43) fix(oauth): drop write-access request from the Login Widget
+- [#42](https://github.com/mctlhq/mctl-telegram/pull/42) feat(oauth): switch-account control on the authorize page
+- [#41](https://github.com/mctlhq/mctl-telegram/pull/41) feat: hands-off client onboarding — open auto-approve + daily digest
+- [#33](https://github.com/mctlhq/mctl-telegram/pull/33) fix: add Dependabot and CodeQL for Scorecard compliance
+- [#32](https://github.com/mctlhq/mctl-telegram/pull/32) fix: pin GHA actions to SHA and restrict workflow permissions
+- [#31](https://github.com/mctlhq/mctl-telegram/pull/31) feat(oauth): client scope tier + DB-backed client management
+- [#27](https://github.com/mctlhq/mctl-telegram/pull/27) feat(oauth): in-browser enable_access flow for MTProto session onboarding
 
----
+**mctlhq/mctl-web (2):**
+- [#16](https://github.com/mctlhq/mctl-web/pull/16) ci: add automated Claude PR review workflow
+- [#15](https://github.com/mctlhq/mctl-web/pull/15) feat: consume @mctlhq/css design tokens as single source of truth
 
-## 5. Bot commits (last 24 h)
+**mctlhq/mctl-agent (1):**
+- [#19](https://github.com/mctlhq/mctl-agent/pull/19) feat(skill): add DISABLE_LLM_DIAGNOSIS + MaxAnalyzingAge force-resolve
 
-| hash | timestamp | message |
-|---|---|---|
-| `e66c53c` | 2026-05-16T00:27:19Z | chore(agents): full run 2026-05-16 |
-
----
-
-## 6. Detected problems
-
-### Stable stale PR — mctl-gitops#84 (now 16 days)
-
-[mctlhq/mctl-gitops#84](https://github.com/mctlhq/mctl-gitops/pull/84) — **[wip] feat(agents): per-proposal claim mechanism for parallel implementer**
-
-- Last updated: 2026-04-30 (16 days ago)
-- Qualifies for `[stale-pr]` issue (>7 days, stable: present in 2026-05-15 report)
-- **Stand-alone issue creation blocked** — MCP session restricted to `mctlhq/mctl-gitops`; cannot write issues to `mctlhq/mctl-agents`. See §8.
-- **Recommended action:** rebase + push a commit if still active, or close with a note if superseded.
-
-### Open PRs stale >48 h (watch list)
-
-11 PRs with no update in >48 h. Those approaching or at the 7-day threshold:
-
-| # | repo | title | last updated | days stale |
-|---|---|---|---|---|
-| [#15](https://github.com/mctlhq/mctl-agents/pull/15) | mctl-agents | feat(orchestrator): Tier 2 implementer agents | 2026-05-09 | 7 d |
-| [#16](https://github.com/mctlhq/mctl-agents/pull/16) | mctl-agents | feat(orchestrator): rotate mentor digests >8 weeks | 2026-05-09 | 7 d |
-| [#17](https://github.com/mctlhq/mctl-agents/pull/17) | mctl-agents | feat(mctl-docs): fallback to GitHub API when sibling clones absent | 2026-05-09 | 7 d |
-| [#7](https://github.com/mctlhq/mctl-portal/pull/7) | mctl-portal | feat(app): add /proposals page for agents review | 2026-05-10 | 6 d |
-| [#47](https://github.com/mctlhq/mctl-api/pull/47) | mctl-api | feat(mcp): mctl_create_preview — build from branch support | 2026-05-10 | 6 d |
-| [#12](https://github.com/mctlhq/mctl-web/pull/12) | mctl-web | feat: redesign v3 | 2026-05-10 | 6 d |
-| [#53](https://github.com/mctlhq/mctl-api/pull/53) | mctl-api | deps: bump k8s.io/api 0.32.3→0.36.0 | 2026-05-11 | 5 d |
-| [#52](https://github.com/mctlhq/mctl-api/pull/52) | mctl-api | deps: bump mcp-go 0.46.0→0.52.0 | 2026-05-11 | 5 d |
-| [#51](https://github.com/mctlhq/mctl-api/pull/51) | mctl-api | deps: bump go-oidc/v3 3.17.0→3.18.0 | 2026-05-11 | 5 d |
-| [#50](https://github.com/mctlhq/mctl-api/pull/50) | mctl-api | deps: bump k8s.io/client-go 0.32.3→0.36.0 | 2026-05-11 | 5 d |
-
-mctl-agents #15/16/17 are at exactly 7 days today; `[stale-pr]` issues will be opened on the next run if still inactive (threshold: >7 days). mctl-api Dependabot PRs reach threshold on 2026-05-18.
+**mctlhq/mctl-design (1):**
+- [#1](https://github.com/mctlhq/mctl-design/pull/1) feat(storybook): MCTL chrome branding + light/dark chrome switcher
 
 ---
 
-## 7. Cluster health
+## Bot commits (26h)
 
-api.mctl.ai MCP connector is **attached and responding**.
+**`mctl-agents` author:** 0 commits.
 
-### Services (10 deployed)
-
-| team | service | image tag | host |
-|---|---|---|---|
-| admins | mctl-docs | 0.1.20 | docs.mctl.ai |
-| admins | mctl-web | 4.7.0 | mctl.me |
-| admins | openclaw | 2026.5.14-beta.1 | admins-openclaw.mctl.ai |
-| labs | kuptsi-app | 0.2.12 | labs-kuptsi-app.mctl.ai |
-| labs | **mctl-telegram** | **0.11.0** ↑ *(was 0.8.2 yesterday)* | tg.mctl.ai |
-| labs | openclaw | 2026.5.14-beta.1 | labs-openclaw.mctl.ai |
-| labs | pelican-proxy | 0.11.0 | labs-pelican-proxy.mctl.ai |
-| labs | pelican-proxy-pr-36 *(preview)* | preview.37 | pelican-proxy-pr-36.mctl.ai |
-| labs | trading-data | 0.2.4 | — |
-| ovk | openclaw | 2026.5.14-beta.1 | ovk-openclaw.mctl.ai |
-
-### Workflow runs (last 24 h)
-
-8 `deploy-service` runs since 2026-05-15T09:00Z, all team `labs`, all by `mashkovd`. No rollbacks or failures in window. Timings correlate tightly with mctl-telegram PR merges.
-
-| workflow | timestamp |
-|---|---|
-| deploy-service-b304fb3a | 2026-05-16T08:40Z |
-| deploy-service-c03f3266 | 2026-05-16T01:15Z |
-| deploy-service-712cb3bb | 2026-05-16T00:31Z |
-| deploy-service-f912ec61 | 2026-05-15T21:10Z |
-| deploy-service-7370d2d6 | 2026-05-15T20:40Z |
-| deploy-service-8b81747c | 2026-05-15T19:49Z |
-| deploy-service-1674df29 | 2026-05-15T19:40Z |
-| deploy-service-8c551fcf | 2026-05-15T18:54Z |
-
-### Agent cron runs (last 24 h)
-
-| operation | timestamp | status |
-|---|---|---|
-| mctl-agents-shepherd | 2026-05-16T08:30Z | succeeded |
-| mctl-agents-shepherd | 2026-05-16T06:30Z | succeeded |
-| mctl-agents-shepherd | 2026-05-16T04:30Z | succeeded |
-| mctl-agents-shepherd | 2026-05-16T02:30Z | succeeded |
-| mctl-agents-shepherd | 2026-05-16T00:30Z | succeeded |
-| mctl-agents-daily | 2026-05-16T00:00Z | succeeded |
-| mctl-agents-shepherd | 2026-05-15T22:30Z | succeeded |
-| mctl-agents-shepherd | 2026-05-15T20:30Z | succeeded |
-| mctl-agents-shepherd | 2026-05-15T18:30Z | succeeded |
-| mctl-agents-shepherd | 2026-05-15T16:30Z | succeeded |
-
-Shepherd running on 2 h cadence — all 5 runs since midnight succeeded. `mctl-agents-daily` ran at 00:00 UTC (this is a second/manual 09:00 UTC invocation of the same routine).
-
-*Per-service restart counts and MinIO PVC % not pulled this run (would require per-service `mctl_get_service_status` / `mctl_get_resource_usage` calls). ArgoCD sync state not checked. These are available for enrichment on a future run.*
+Other automated activity in `mctl-gitops` during the same window (not mctl-agents):
+- `argo-workflows[bot]` — 6 deploy commits (mctl-telegram 0.11–0.13, mctl-design 0.1–0.3 + onboard)
+- `mctl-deploy` — 7 commits (CI build secrets, quota bump, mctl-agent env vars, mctl-design domain, Claude review CI)
+- `Claude` — 1 commit: `chore(daily-report): 2026-05-16 pipeline snapshot`
 
 ---
 
-## 8. Errors during run
+## Detected problems
 
-| step | error | impact |
-|---|---|---|
-| Previous daily-report lookup | `mcp__github__list_issues` denied for `mctlhq/mctl-agents` (MCP scope = `mctlhq/mctl-gitops` only); used `search_issues` as fallback — confirmed 0 existing daily-report issues | No data lost; diff based on local `report.md` instead |
-| Stand-alone issue creation (`[stale-pr]` for mctl-gitops#84) | `mcp__github__issue_write` denied for `mctlhq/mctl-agents` | Issue not posted — second consecutive failure |
-| Daily-report issue creation | `mcp__github__issue_write` denied for `mctlhq/mctl-agents` | Report saved to local `report.md` only |
-| `gh` CLI | Not available in `$PATH` | No gh fallback |
-| Telegram | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` not set | Silently skipped |
+### Stale PRs
 
-**Persistent blocker:** The GitHub MCP session must be expanded to include `mctlhq/mctl-agents` (issue write + comment write) before this routine can post daily-report issues or stand-alone follow-up issues. This has now failed on two consecutive runs (2026-05-15, 2026-05-16).
+| PR | Days inactive | Stable? | Action |
+|----|--------------|---------|--------|
+| [mctl-gitops#84](https://github.com/mctlhq/mctl-gitops/pull/84) [DRAFT] per-proposal claim mechanism | **17 days** (since 2026-04-30) | ✓ flagged in 6+ reports | Follow-up comment → [#188](https://github.com/mctlhq/mctl-gitops/issues/188#issuecomment-4470049848) |
+| [mctl-agents#15](https://github.com/mctlhq/mctl-agents/pull/15) Tier 2 implementer agents | 8 days | First day >7d | Watching — will flag tomorrow if still stale |
+| [mctl-agents#16](https://github.com/mctlhq/mctl-agents/pull/16) rotate mentor digests >8w | 8 days | First day >7d | Watching |
+| [mctl-agents#17](https://github.com/mctlhq/mctl-agents/pull/17) mctl-docs GitHub API fallback | 8 days | First day >7d | Watching |
+| [mctl-api#47](https://github.com/mctlhq/mctl-api/pull/47) mctl_create_preview build-from-branch | 7 days | First day >7d | Watching |
+| [mctl-portal#7](https://github.com/mctlhq/mctl-portal/pull/7) [DRAFT] /proposals page | 7 days since 2026-05-10 | Reset by May-10 activity | Watching; tracked by existing issue [#121](https://github.com/mctlhq/mctl-gitops/issues/121) |
+
+**mctl-api dep bumps approaching threshold:** PRs [#50](https://github.com/mctlhq/mctl-api/pull/50), [#51](https://github.com/mctlhq/mctl-api/pull/51), [#52](https://github.com/mctlhq/mctl-api/pull/52), [#53](https://github.com/mctlhq/mctl-api/pull/53) last updated 2026-05-11 (6 days). Cross 7d threshold on 2026-05-18 if still open.
+
+### No stuck proposals
+
+All 20 proposals are in terminal state (merged or rejected). No `in-progress` or `proposed` items.
 
 ---
 
-## 9. TODO
+## Cluster health
 
-- **[P0 blocker]** Expand GitHub MCP session scope to include `mctlhq/mctl-agents` so daily-report issues, `[stale-pr]`, and `[stuck-proposal]` issues can be posted. Currently blocked on two consecutive runs.
-- Enrich next run with `mctl_get_service_status` (per-service restart counts) and `mctl_get_resource_usage` (MinIO PVC %) — connector is confirmed attached.
-- mctl-agents #15/16/17 cross the 7-day stale-pr threshold on **2026-05-17** — open `[stale-pr]` issues then if still inactive.
-- mctl-api Dependabot PRs #50–53 + mctl-portal #7 + mctl-web #12 cross threshold on **2026-05-17/18**.
-- Attach the `api.mctl.ai` MCP connector ArgoCD app sync state query to future runs.
+_api.mctl.ai MCP connector attached this run for the first time — partial cluster data below._
+
+### Active incidents (3)
+
+| severity | service | summary | status | created (UTC) |
+|----------|---------|---------|--------|---------------|
+| warning | admins / admins-mctl-agent | ArgoCD app OutOfSync for 1h | analyzing | 2026-05-17 04:16 |
+| warning | admins / admins-mctl-agent | ArgoCD app OutOfSync for 1h _(duplicate alert)_ | analyzing | 2026-05-16 12:57 |
+| warning | admins / monitoring-kube-state-metrics | Namespace quota going to be full | analyzing | 2026-05-16 10:49 |
+
+**Context:** The namespace quota warning fired at 10:49 — ~7 h before the CPU quota raise (PR #218, merged ~17:38 UTC). The quota-pressure alert may still be open because ArgoCD hasn't fully synced the new quota object, or because the raise hasn't been sufficient. The `admins-mctl-agent` OutOfSync alert is notable: the mctl-agent image was bumped to 1.14.0 in PR #215 (merged ~11:16 UTC) and a fix commit followed at ~11:16 UTC, but ArgoCD still reports OutOfSync as of 04:16 today. None of the three incidents has a proposed fix or open PR from `mctl-agent` (all at MEDIUM confidence, `analyzing` status).
+
+### Workflow runs (last 26h — via mctl_list_workflows)
+
+12 `deploy-service` workflows submitted on 2026-05-16, all triggered by `mashkovd`:
+- **labs** (7): mctl-telegram deployments across multiple versions + mctl-design
+- **admins** (5): mctl-design, mctl-agent, mctl-web redesign + rollback
+
+All return status `submitted`. Per-workflow completion status requires `mctl_get_workflow_status` per run — not fetched this cycle to limit API calls.
+
+_MinIO PVC %, per-service restart counts: not available via current MCP tool set._
+
+---
+
+## Errors during run
+
+- `gh` CLI not present in PATH — all GitHub operations performed via MCP tools instead.
+- GitHub MCP session scoped to `mctlhq/mctl-gitops` only. Cannot read/write `mctlhq/mctl-agents`. Daily report posted to `mctlhq/mctl-gitops`; stand-alone stale-pr issues for `mctlhq/mctl-agents` PRs cannot be filed until MCP scope is expanded.
+- Previous daily report retrieved from `mctlhq/mctl-gitops` (issue #213, 2026-05-15) — same workaround as prior runs.
+
+---
+
+## TODO
+
+- **MCP scope:** Expand GitHub MCP allowed-repositories to include `mctlhq/mctl-agents` to enable posting daily reports and stand-alone issues to the correct repo.
+- **Workflow completion:** Add `mctl_get_workflow_status` calls per-run to surface failed workflow runs in the daily report (currently all show `submitted`).
+- **ArgoCD sync state:** Use `mctl_get_service_status` to pull per-service sync/health state rather than relying solely on AlertManager incidents.
+- **Cluster resource usage:** Wire in `mctl_get_resource_usage` for MinIO PVC % and namespace quota fill rates now that the connector is available.
