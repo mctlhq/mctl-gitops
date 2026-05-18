@@ -1,0 +1,119 @@
+# Alert rules for mctl-telegram Prometheus metrics.
+#
+# These rules require mctl-telegram v0.17+ (which exposes /metrics) and a
+# Prometheus/VictoriaMetrics scrape job targeting the service. The
+# ServiceUnavailable alert additionally requires a blackbox-exporter probe
+# configured against /healthz.
+#
+# Threshold values are starting points; operators should tune them based on
+# observed traffic patterns in their deployment.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: mctl-telegram-alerts
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: mctl-platform
+    app.kubernetes.io/component: mctl-telegram
+spec:
+  groups:
+    - name: mctl-telegram
+      rules:
+        - alert: JWTExpiredSpike
+          expr: rate(mctl_auth_failures_total{reason="jwt_expired"}[5m]) > 0.1
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "mctl-telegram: JWT expired failures spiking"
+            description: >-
+              The rate of JWT expired failures exceeds 0.1/s over 5 minutes.
+              This may indicate mass token expiry or a clock skew issue between
+              the issuer and mctl-telegram.
+
+        - alert: JWTInvalidSpike
+          expr: rate(mctl_auth_failures_total{reason=~"jwt_invalid.*|jwt_wrong.*|jwt_missing.*"}[5m]) > 0.05
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "mctl-telegram: JWT invalid/wrong audience failures spiking"
+            description: >-
+              The rate of JWT signature, issuer, or audience failures exceeds
+              0.05/s over 5 minutes. Check whether the signing key or audience
+              configuration has drifted.
+
+        - alert: HighToolErrorRate
+          expr: |
+            rate(mctl_tool_invocations_total{status="error"}[5m])
+            /
+            rate(mctl_tool_invocations_total[5m]) > 0.1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "mctl-telegram: more than 10% of tool calls are failing"
+            description: >-
+              More than 10% of MCP tool invocations are returning errors over
+              the last 5 minutes. Check mctl-telegram logs for the specific
+              tools failing (tool label on mctl_tool_invocations_total).
+
+        - alert: HighToolLatency
+          expr: histogram_quantile(0.95, rate(mctl_tool_invocation_duration_seconds_bucket[5m])) > 5
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "mctl-telegram: p95 tool invocation latency > 5s"
+            description: >-
+              The 95th percentile tool invocation latency has exceeded 5 seconds
+              for 5 minutes. Telegram MTProto round-trips may be degraded.
+
+        - alert: ZeroTraffic
+          expr: rate(mctl_tool_invocations_total[15m]) == 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "mctl-telegram: no tool invocations for 15 minutes"
+            description: >-
+              No MCP tool calls have been recorded for 15 minutes. This may
+              indicate the service has stopped receiving requests during an
+              expected traffic window, or the /metrics scrape is broken.
+
+        - alert: RateLimitSpike
+          expr: rate(mctl_rate_limit_events_total[5m]) > 1
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "mctl-telegram: rate limit events spiking"
+            description: >-
+              More than 1 rate-limit rejection per second over 5 minutes.
+              A single client may be flooding requests or tokens may have
+              been compromised.
+
+        - alert: TelegramClientErrors
+          expr: increase(mctl_telegram_client_errors_total[10m]) > 0
+          for: 0m
+          labels:
+            severity: warning
+          annotations:
+            summary: "mctl-telegram: MTProto client exited with error"
+            description: >-
+              At least one Telegram MTProto client goroutine exited with a
+              non-context-canceled error in the last 10 minutes. Check
+              mctl-telegram logs for telegram client exit details.
+
+        - alert: ServiceUnavailable
+          # Requires a blackbox-exporter probe configured with
+          # job="mctl-telegram-healthz" targeting /healthz.
+          expr: probe_success{job="mctl-telegram-healthz"} == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "mctl-telegram: /healthz is failing"
+            description: >-
+              The mctl-telegram /healthz endpoint has been unreachable for
+              more than 1 minute. The service may be down or network-isolated.
