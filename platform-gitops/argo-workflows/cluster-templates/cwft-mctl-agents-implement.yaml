@@ -222,8 +222,12 @@ spec:
                 name: mctl-agents-secrets
                 key: mctl-token
                 optional: true
+          # Soft cap per proposal. Raised 3.00 -> 10.00: large issue-driven
+          # proposals (e.g. a full observability layer) blew the $3 cap and
+          # the SDK raised error_max_budget_usd before opening a PR. Small
+          # proposals still finish well under this.
           - name: IMPLEMENTER_BUDGET_USD
-            value: "3.00"
+            value: "10.00"
         resources:
           requests: { cpu: 200m, memory: 512Mi }
           limits:   { cpu: 2000m, memory: 4Gi }
