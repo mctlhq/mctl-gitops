@@ -126,11 +126,19 @@ spec:
           - "-c"
           - |
             set -e
+            # GITHUB_TOKEN is mandatory for the investigator: it reads the
+            # issue, clones the target repo, and posts the proposal comment.
+            # The secretKeyRef is marked optional so the pod still schedules
+            # for local/offline debugging — fail fast here with a clear
+            # message instead of surfacing an opaque `gh` auth error from
+            # deep inside Python.
+            if [ -z "$GITHUB_TOKEN" ]; then
+              echo "❌ GITHUB_TOKEN is not set — the investigator needs it to read the issue, clone the repo, and comment" >&2
+              exit 1
+            fi
             # Wire git's HTTPS credential helper to GITHUB_TOKEN so `gh repo
             # clone` and any later git op authenticate non-interactively.
-            if [ -n "$GITHUB_TOKEN" ]; then
-              gh auth setup-git
-            fi
+            gh auth setup-git
             # issue_url is required. Fail fast with a clear message rather
             # than letting argparse emit a terse usage error deep in logs.
             if [ -z "$WORKFLOW_ISSUE_URL" ]; then
@@ -219,15 +227,29 @@ spec:
           git config user.name "mctl-agents[bot]"
           git config user.email "mctl-agents[bot]@users.noreply.github.com"
 
+          # Scope guard: the investigator must only ever create/update files
+          # INSIDE a proposal directory — agents-state/<svc>/proposals/<slug>/.
+          # Anything else under agents-state/ (an inbox/ file, a mentor
+          # digest, a stray top-level file) is not this workflow's output;
+          # fail loudly rather than silently widening the commit. This is the
+          # investigate-side equivalent of the implement template's
+          # `.status.yaml`-only guard.
+          OUT_OF_SCOPE="$(git status --porcelain -- 'platform-gitops/agents-state/' ':(exclude,glob)platform-gitops/agents-state/*/proposals/*/**')"
+          if [ -n "$OUT_OF_SCOPE" ]; then
+            echo "❌ Refusing to commit changes outside a proposal directory under platform-gitops/agents-state/:"
+            printf '%s\n' "$OUT_OF_SCOPE"
+            exit 1
+          fi
+
           # Short-circuit BEFORE `git add` so a zero-change run (e.g. the
           # investigator skipped an already-accepted proposal, or failed
           # before writing anything) is a clean no-op under `set -e`.
-          CHANGES="$(git status --porcelain -- 'platform-gitops/agents-state/')"
+          CHANGES="$(git status --porcelain -- ':(glob)platform-gitops/agents-state/*/proposals/*/**')"
           if [ -z "$CHANGES" ]; then
-            echo "ℹ️  No agents-state changes — nothing to commit."
+            echo "ℹ️  No proposal changes — nothing to commit."
             exit 0
           fi
-          git add -- 'platform-gitops/agents-state/'
+          git add -- ':(glob)platform-gitops/agents-state/*/proposals/*/**'
 
           if git diff --cached --quiet; then
             echo "ℹ️  No staged changes — nothing to commit."
@@ -303,14 +325,21 @@ spec:
           esac
           SUBJECT="investigate ${WORKFLOW_ISSUE_URL:-(no issue_url)}"
           UI_URL="https://workflows.mctl.ai/workflows/argo-workflows/${WORKFLOW_NAME}"
-          TEXT="${ICON} mctl-agents: ${SUBJECT} — ${WORKFLOW_STATUS} (${WORKFLOW_DURATION}s)\n${UI_URL}"
+          # Build with a real newline (printf) so jq encodes it as a proper
+          # JSON `\n` below.
+          TEXT=$(printf '%s mctl-agents: %s — %s (%ss)\n%s' \
+            "$ICON" "$SUBJECT" "$WORKFLOW_STATUS" "$WORKFLOW_DURATION" "$UI_URL")
 
-          # Telegram leg.
+          # Telegram leg. JSON-encode the body via jq so a quote / newline /
+          # backslash in WORKFLOW_ISSUE_URL cannot malform the payload and
+          # silently drop the notification.
           if [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
+            TG_BODY=$(jq -nc --arg chat "$TG_CHAT_ID" --arg text "$TEXT" \
+              '{chat_id: $chat, text: $text, disable_web_page_preview: true}')
             curl -s -o /dev/null -w 'telegram http=%{http_code}\n' \
               -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
               -H "Content-Type: application/json" \
-              -d "{\"chat_id\":\"${TG_CHAT_ID}\",\"text\":\"${TEXT}\",\"disable_web_page_preview\":true}"
+              -d "$TG_BODY"
           else
             echo "ℹ️  TG_BOT_TOKEN or TG_CHAT_ID not set; skipping Telegram leg."
           fi
