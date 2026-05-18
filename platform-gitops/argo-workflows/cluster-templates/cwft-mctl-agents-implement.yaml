@@ -12,7 +12,7 @@ metadata:
 
         1. clone-gitops — SSH-clone mctl-gitops via the shared deploy key.
         2. run-implementer — orchestrator/run_implementer.py inside
-           ghcr.io/mctlhq/mctl-agents:1.8.0. The Python script gh-clones the
+           ghcr.io/mctlhq/mctl-agents:1.11.0. The Python script gh-clones the
            target sibling repo into /tmp, runs the Claude Agent SDK with the
            per-service implementer.md sub-agent, pushes the branch, opens a PR.
         3. commit-and-push — commits .status.yaml updates back to gitops main.
@@ -128,11 +128,14 @@ spec:
             mountPath: /secrets/deploy-key
 
     # ── 2. Run implementer orchestrator ───────────────────────────────────
-    # NB: ghcr.io/mctlhq/mctl-agents:1.8.0 is the first tag with `gh` CLI baked in.
-    # (added in mctl-agents PR #10). Earlier tags lack the module and crash with ImportError at the run-implementer step.
+    # NB: 1.11.0 carries the generic implementer fallback (agents/_generic/)
+    # and the read-merge-write update_status_yaml that preserves the `source`
+    # block on issue-driven proposals, plus `Closes <repo>#N` in the PR body.
+    # 1.8.0 was the first tag with `gh` CLI baked in (mctl-agents PR #10);
+    # tags before that crash with ImportError at this step.
     - name: run-implementer
       container:
-        image: ghcr.io/mctlhq/mctl-agents:1.8.0
+        image: ghcr.io/mctlhq/mctl-agents:1.11.0
         imagePullPolicy: IfNotPresent
         command: ["/entrypoint.sh"]
         args:
