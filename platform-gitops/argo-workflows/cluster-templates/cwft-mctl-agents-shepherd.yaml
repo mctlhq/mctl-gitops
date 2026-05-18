@@ -213,17 +213,17 @@ spec:
             mountPath: /secrets/deploy-key
 
     # ── 2. Run shepherd orchestrator ──────────────────────────────────────
-    # NB: ghcr.io/mctlhq/mctl-agents:1.10.0 ships the dead-letter
-    # `in-progress` recovery (mctl-agents PR #13). The discovery scope
-    # now includes `in-progress` proposals; process_one gates on PR
-    # shape so Tier 2 mid-flight is never raced — only CLOSED-unmerged
-    # PRs trigger the existing flip-to-rejected path. Reference
-    # incident: mctl-openclaw/upgrade-to-2026-4-27 closed 2026-04-30
-    # (manually reconciled via mctl-gitops PR #97 before the fix
-    # landed). 1.9.0 was the first tag with the orchestrator baked in.
+    # NB: 1.11.0 carries the read-merge-write update_status_yaml (preserves
+    # the `source` block on issue-driven proposals) and the generic
+    # implementer fallback used by the address-review subprocess for repos
+    # without an agents/<svc>/ scaffold. 1.10.0 shipped the dead-letter
+    # `in-progress` recovery (mctl-agents PR #13): discovery scope includes
+    # `in-progress` proposals; process_one gates on PR shape so Tier 2
+    # mid-flight is never raced — only CLOSED-unmerged PRs trigger the
+    # flip-to-rejected path. 1.9.0 was the first tag with the orchestrator.
     - name: run-shepherd
       container:
-        image: ghcr.io/mctlhq/mctl-agents:1.10.0
+        image: ghcr.io/mctlhq/mctl-agents:1.11.0
         imagePullPolicy: IfNotPresent
         command: ["/entrypoint.sh"]
         args:
@@ -323,8 +323,12 @@ spec:
           - name: SHEPHERD_BUDGET_USD
             value: "5.00"
         resources:
-          requests: { cpu: 200m, memory: 512Mi }
-          limits:   { cpu: 2000m, memory: 4Gi }
+          # memory 8Gi: the shepherd forks run_implementer.py
+          # --review-feedback in the same pod, which runs the target repo's
+          # `go build` sanity check — that plus the SDK process OOMKilled a
+          # 4Gi container (see cwft-mctl-agents-implement).
+          requests: { cpu: 200m, memory: 1Gi }
+          limits:   { cpu: 2000m, memory: 8Gi }
         volumeMounts:
           - name: workdir
             mountPath: /workdir
