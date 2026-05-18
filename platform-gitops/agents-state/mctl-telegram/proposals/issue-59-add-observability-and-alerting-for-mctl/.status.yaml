@@ -1,6 +1,7 @@
-status: in-progress
-updated_at: '2026-05-18T21:07:31Z'
+status: implemented
+updated_at: '2026-05-18T21:56:01Z'
 updated_by: mctl-agents[bot]
+pr: https://github.com/mctlhq/mctl-telegram/pull/61
 source:
   type: github_issue
   repo: mctlhq/mctl-telegram
