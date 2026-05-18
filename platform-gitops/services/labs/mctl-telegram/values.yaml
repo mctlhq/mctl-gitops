@@ -27,10 +27,15 @@ env:
   LOG_LEVEL: info
   PUBLIC_BASE_URL: https://tg.mctl.ai
   OAUTH_ISSUER_URL: https://tg.mctl.ai
-  TELEGRAM_LOGIN_BOT_USERNAME: MCTL_AI_bot
+  # Telegram OpenID Connect client id = the @MCTL_AI_bot numeric id (the part
+  # of the bot token before the colon). Not a secret. The matching
+  # TELEGRAM_OIDC_CLIENT_SECRET is sourced from Vault via the oauth
+  # ExternalSecret below. TELEGRAM_LOGIN_BOT_USERNAME is no longer read (the
+  # legacy Login Widget was replaced by the OIDC flow in mctl-telegram 0.16.0).
+  TELEGRAM_OIDC_CLIENT_ID: "8568443430"
   # CSV of Telegram user IDs that receive full scopes (admin allowlist)
   TG_LOGIN_ADMINS: "210408407"
-  # Open registration: every widget-authenticated user auto-gets the client
+  # Open registration: every Telegram-authenticated user auto-gets the client
   # tier. Ban a specific user with the set_telegram_access MCP tool.
   AUTO_APPROVE_CLIENTS: "true"
 ingress:
@@ -105,6 +110,12 @@ extraExternalSecrets:
       - secretKey: OAUTH_JWT_SIGNING_KEY
         remoteKey: secret/data/platform/mctl-telegram/oauth
         property: jwt-signing-key
+      # Telegram OIDC client secret (BotFather → Login Widget → OpenID Connect).
+      # Distinct from the bot API token; mctl-telegram presents it as an OIDC
+      # Relying Party at Telegram's token endpoint.
+      - secretKey: TELEGRAM_OIDC_CLIENT_SECRET
+        remoteKey: secret/data/platform/mctl-telegram/oauth
+        property: oidc-client-secret
   labs-mctl-telegram-login:
     refreshInterval: 1h
     targetSecret: labs-mctl-telegram-login
