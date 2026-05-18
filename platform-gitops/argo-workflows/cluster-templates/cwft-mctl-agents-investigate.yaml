@@ -1,0 +1,369 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterWorkflowTemplate
+metadata:
+  name: mctl-agents-investigate
+  annotations:
+    workflows.argoproj.io/description: |
+      Issue-driven entry point — investigator.
+
+      Takes a single GitHub issue URL and turns it into a spec-driven
+      proposal under platform-gitops/agents-state/<svc>/proposals/<slug>/
+      with .status.yaml status=proposed. From there the normal pipeline
+      applies: a human flips it to accepted, the Tier 2 implementer
+      (cwft-mctl-agents-implement) opens a PR, the Tier 3 shepherd merges.
+
+      Runs:
+        1. clone-gitops — SSH-clone mctl-gitops via the shared deploy key.
+        2. run-investigator — orchestrator/run_issue_investigator.py inside
+           ghcr.io/mctlhq/mctl-agents:1.11.0. The Python script reads the
+           issue via `gh`, gh-clones the target sibling repo read-only,
+           runs the Claude Agent SDK to write requirements/design/tasks.md,
+           writes .status.yaml, and comments the proposal link on the issue.
+        3. commit-and-push — commits the new proposal directory back to
+           gitops main.
+
+      Triggered by:
+        - mctl-api MCP tool mctl_trigger_issue (admin-only)
+        - operator submitting a Workflow that references this CWFT
+
+      NOT cron-triggered. A label-based GitHub Action trigger is a planned
+      follow-up (Phase 2), out of scope here.
+spec:
+  serviceAccountName: argo-workflow-sa
+  imagePullSecrets:
+    - name: ghcr-credentials
+  ttlStrategy:
+    secondsAfterCompletion: 86400
+  # Clone two repos (gitops + target) + Claude SDK. Same ceiling as the
+  # implementer pipeline.
+  activeDeadlineSeconds: 7200
+  entrypoint: investigate-issue
+  onExit: notify-telegram
+  # Same shared mutex as cwft-mctl-agents-implement / -run — all push to
+  # mctl-gitops main.
+  synchronization:
+    mutex:
+      name: mctl-gitops-main-writes
+
+  arguments:
+    parameters:
+      - name: issue_url
+        value: ""
+        # Required. Full GitHub issue URL, e.g.
+        # https://github.com/mctlhq/mctl-telegram/issues/123
+        # run-investigator fails fast with a clear message if empty.
+
+  volumeClaimTemplates:
+    - metadata:
+        name: workdir
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            # Smaller than cwft-mctl-agents-implement: the investigator
+            # gh-clones exactly ONE target repo, shallow (--depth=1), and
+            # only reads it. 4Gi is ample headroom over a single clone.
+            storage: 4Gi
+  volumes:
+    - name: deploy-key
+      secret:
+        secretName: mctl-gitops-deploy-key
+        defaultMode: 0600
+
+  templates:
+    - name: investigate-issue
+      steps:
+        - - name: clone
+            template: clone-gitops
+        - - name: investigate
+            template: run-investigator
+            # run_issue_investigator.py writes the proposal files + the
+            # comment before any later failure path. Letting commit-and-push
+            # run unconditionally makes a partially-written proposal durable
+            # for inspection; the commit step handles the "no diff" case.
+            continueOn:
+              failed: true
+              error: true
+        - - name: commit
+            template: commit-and-push
+
+    # ── 1. SSH-clone mctl-gitops into shared volume ───────────────────────
+    - name: clone-gitops
+      script:
+        image: alpine/git:2.43.0
+        command: [sh]
+        source: |
+          set -e
+          apk add --no-cache openssh-client ca-certificates
+          mkdir -p ~/.ssh
+          cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  StrictHostKeyChecking no\n' > ~/.ssh/config
+          chmod 600 ~/.ssh/config
+          git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops
+          mkdir -p /workdir/mctl-gitops/platform-gitops/agents-state
+          # PVC-backed scratch dir for run_issue_investigator's
+          # `gh repo clone` target — see TMPDIR in run-investigator below.
+          mkdir -p /workdir/clones
+          echo "✓ gitops cloned"
+        volumeMounts:
+          - name: workdir
+            mountPath: /workdir
+          - name: deploy-key
+            mountPath: /secrets/deploy-key
+
+    # ── 2. Run investigator orchestrator ──────────────────────────────────
+    # NB: ghcr.io/mctlhq/mctl-agents:1.11.0 is the first tag with
+    # orchestrator/run_issue_investigator.py. Earlier tags lack the module
+    # and crash with ImportError.
+    - name: run-investigator
+      container:
+        image: ghcr.io/mctlhq/mctl-agents:1.11.0
+        imagePullPolicy: IfNotPresent
+        command: ["/entrypoint.sh"]
+        args:
+          - "sh"
+          - "-c"
+          - |
+            set -e
+            # GITHUB_TOKEN is mandatory for the investigator: it reads the
+            # issue, clones the target repo, and posts the proposal comment.
+            # The secretKeyRef is marked optional so the pod still schedules
+            # for local/offline debugging — fail fast here with a clear
+            # message instead of surfacing an opaque `gh` auth error from
+            # deep inside Python.
+            if [ -z "$GITHUB_TOKEN" ]; then
+              echo "❌ GITHUB_TOKEN is not set — the investigator needs it to read the issue, clone the repo, and comment" >&2
+              exit 1
+            fi
+            # Wire git's HTTPS credential helper to GITHUB_TOKEN so `gh repo
+            # clone` and any later git op authenticate non-interactively.
+            gh auth setup-git
+            # issue_url is required. Fail fast with a clear message rather
+            # than letting argparse emit a terse usage error deep in logs.
+            if [ -z "$WORKFLOW_ISSUE_URL" ]; then
+              echo "❌ issue_url parameter is required" >&2
+              exit 1
+            fi
+            # Read the param from env, NOT inline workflow.parameters
+            # interpolation: a crafted value would otherwise be spliced into
+            # the shell command. `set --` keeps it a single quoted token.
+            set -- python -m orchestrator.run_issue_investigator \
+              --issue-url "$WORKFLOW_ISSUE_URL"
+            printf '→'
+            printf ' %s' "$@"
+            printf '\n'
+            exec "$@"
+        env:
+          # Workflow param injected as an env var so the shell layer can
+          # quote it safely. Direct workflow.parameters.* interpolation in
+          # the script body is a shell-injection vector.
+          - name: WORKFLOW_ISSUE_URL
+            value: "{{workflow.parameters.issue_url}}"
+          # entrypoint.sh symlinks <state>/<svc>/proposals onto the baked-in
+          # agents/<svc>/; run_issue_investigator reads STATE_DIR directly.
+          - name: STATE_DIR
+            value: /workdir/mctl-gitops/platform-gitops/agents-state
+          # Redirect Python's tempfile.gettempdir() onto the PVC so the
+          # target-repo clone lands in PVC-backed storage.
+          - name: TMPDIR
+            value: /workdir/clones
+          # Auth: OAuth (Claude Pro/Max). Same secret as the other pipelines.
+          - name: CLAUDE_CODE_OAUTH_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: claude-code-oauth-token
+          # GitHub PAT for `gh issue view`, `gh repo clone` and
+          # `gh issue comment`. Needs repo read on the target repo plus
+          # `issues: write` for the closing comment.
+          - name: GITHUB_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: github-token
+                optional: true
+          # Optional MCP token — lets the investigator inspect live service
+          # metrics/status while shaping the proposal. Degrades gracefully.
+          - name: MCTL_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: mctl-token
+                optional: true
+          - name: ISSUE_INVESTIGATOR_BUDGET_USD
+            value: "3.00"
+        resources:
+          requests: { cpu: 200m, memory: 512Mi }
+          limits:   { cpu: 2000m, memory: 4Gi }
+        volumeMounts:
+          - name: workdir
+            mountPath: /workdir
+
+    # ── 3. Commit & push back to mctl-gitops ──────────────────────────────
+    # Unlike cwft-mctl-agents-implement (which only ever rewrites .status.yaml
+    # and refuses anything else), the investigator CREATES a new proposal
+    # directory — requirements.md / design.md / tasks.md / .status.yaml. So
+    # this step stages the whole agents-state/ subtree. The investigator's
+    # SDK agent runs with cwd in a throwaway /tmp clone, never in the gitops
+    # worktree, so it cannot write outside agents-state/.
+    - name: commit-and-push
+      script:
+        image: alpine/git:2.43.0
+        command: [sh]
+        env:
+          - name: WORKFLOW_ISSUE_URL
+            value: "{{workflow.parameters.issue_url}}"
+        source: |
+          set -e
+          apk add --no-cache openssh-client ca-certificates
+          mkdir -p ~/.ssh
+          cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  StrictHostKeyChecking no\n' > ~/.ssh/config
+          chmod 600 ~/.ssh/config
+
+          cd /workdir/mctl-gitops
+          git config user.name "mctl-agents[bot]"
+          git config user.email "mctl-agents[bot]@users.noreply.github.com"
+
+          # Scope guard: the investigator must only ever create/update files
+          # INSIDE a proposal directory — agents-state/<svc>/proposals/<slug>/.
+          # Anything else under agents-state/ (an inbox/ file, a mentor
+          # digest, a stray top-level file) is not this workflow's output;
+          # fail loudly rather than silently widening the commit. This is the
+          # investigate-side equivalent of the implement template's
+          # `.status.yaml`-only guard.
+          OUT_OF_SCOPE="$(git status --porcelain -- 'platform-gitops/agents-state/' ':(exclude,glob)platform-gitops/agents-state/*/proposals/*/**')"
+          if [ -n "$OUT_OF_SCOPE" ]; then
+            echo "❌ Refusing to commit changes outside a proposal directory under platform-gitops/agents-state/:"
+            printf '%s\n' "$OUT_OF_SCOPE"
+            exit 1
+          fi
+
+          # Short-circuit BEFORE `git add` so a zero-change run (e.g. the
+          # investigator skipped an already-accepted proposal, or failed
+          # before writing anything) is a clean no-op under `set -e`.
+          CHANGES="$(git status --porcelain -- ':(glob)platform-gitops/agents-state/*/proposals/*/**')"
+          if [ -z "$CHANGES" ]; then
+            echo "ℹ️  No proposal changes — nothing to commit."
+            exit 0
+          fi
+          git add -- ':(glob)platform-gitops/agents-state/*/proposals/*/**'
+
+          if git diff --cached --quiet; then
+            echo "ℹ️  No staged changes — nothing to commit."
+            exit 0
+          fi
+
+          DATE=$(date -u +%Y-%m-%d)
+          if [ -n "$WORKFLOW_ISSUE_URL" ]; then
+            MSG="chore(agents): investigate ${WORKFLOW_ISSUE_URL} ${DATE}"
+          else
+            MSG="chore(agents): investigate run ${DATE}"
+          fi
+          git commit -m "$MSG"
+
+          for i in 1 2 3 4 5; do
+            if git push origin HEAD:main; then
+              echo "✅ Pushed proposal"
+              exit 0
+            fi
+            echo "⚠️  Push failed (attempt ${i}), rebasing..."
+            git pull --rebase origin main
+          done
+          echo "❌ Push failed after 5 attempts"
+          exit 1
+        volumeMounts:
+          - name: workdir
+            mountPath: /workdir
+          - name: deploy-key
+            mountPath: /secrets/deploy-key
+
+    # ── 4. Telegram notification (onExit) ──────────────────────────────────
+    # Same pattern as cwft-mctl-agents-implement.
+    - name: notify-telegram
+      script:
+        image: alpine:3.19
+        command: [sh]
+        env:
+          - name: TG_BOT_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: telegram-bot-token
+                optional: true
+          - name: TG_CHAT_ID
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: telegram-chat-id
+                optional: true
+          - name: MCTL_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: mctl-token
+                optional: true
+          - name: WORKFLOW_STATUS
+            value: "{{workflow.status}}"
+          - name: WORKFLOW_ISSUE_URL
+            value: "{{workflow.parameters.issue_url}}"
+          - name: WORKFLOW_NAME
+            value: "{{workflow.name}}"
+          - name: WORKFLOW_DURATION
+            value: "{{workflow.duration}}"
+        source: |
+          set +e
+          apk add --no-cache curl ca-certificates jq >/dev/null 2>&1
+
+          case "$WORKFLOW_STATUS" in
+            Succeeded) ICON="✅" ;;
+            Failed)    ICON="❌" ;;
+            Error)     ICON="⚠️" ;;
+            *)         ICON="⏳" ;;
+          esac
+          SUBJECT="investigate ${WORKFLOW_ISSUE_URL:-(no issue_url)}"
+          UI_URL="https://workflows.mctl.ai/workflows/argo-workflows/${WORKFLOW_NAME}"
+          # Build with a real newline (printf) so jq encodes it as a proper
+          # JSON `\n` below.
+          TEXT=$(printf '%s mctl-agents: %s — %s (%ss)\n%s' \
+            "$ICON" "$SUBJECT" "$WORKFLOW_STATUS" "$WORKFLOW_DURATION" "$UI_URL")
+
+          # Telegram leg. JSON-encode the body via jq so a quote / newline /
+          # backslash in WORKFLOW_ISSUE_URL cannot malform the payload and
+          # silently drop the notification.
+          if [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
+            TG_BODY=$(jq -nc --arg chat "$TG_CHAT_ID" --arg text "$TEXT" \
+              '{chat_id: $chat, text: $text, disable_web_page_preview: true}')
+            curl -s -o /dev/null -w 'telegram http=%{http_code}\n' \
+              -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+              -H "Content-Type: application/json" \
+              -d "$TG_BODY"
+          else
+            echo "ℹ️  TG_BOT_TOKEN or TG_CHAT_ID not set; skipping Telegram leg."
+          fi
+
+          # Incident leg — only on terminal failure.
+          if { [ "$WORKFLOW_STATUS" = "Failed" ] || [ "$WORKFLOW_STATUS" = "Error" ]; } && [ -n "$MCTL_TOKEN" ]; then
+            INCIDENT_ID="argo-${WORKFLOW_NAME}-$(date +%s)"
+            SUMMARY="${SUBJECT} ${WORKFLOW_STATUS} after ${WORKFLOW_DURATION}s — ${UI_URL}"
+            BODY=$(jq -nc --arg id "$INCIDENT_ID" --arg summary "$SUMMARY" '{
+              id: $id,
+              source: "argo-workflows",
+              type: "workflow_failed",
+              tenant: "admins",
+              service: "mctl-agents",
+              summary: $summary,
+              severity: "warning",
+              status: "open"
+            }')
+            curl -s -o /dev/null -w 'incident http=%{http_code}\n' \
+              -X POST "https://api.mctl.ai/api/v1/incidents" \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer ${MCTL_TOKEN}" \
+              -d "$BODY"
+          else
+            echo "ℹ️  Workflow ${WORKFLOW_STATUS} or MCTL_TOKEN missing; skipping incident leg."
+          fi
+          exit 0
