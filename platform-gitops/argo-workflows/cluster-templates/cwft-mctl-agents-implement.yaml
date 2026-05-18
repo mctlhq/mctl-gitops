@@ -229,8 +229,12 @@ spec:
           - name: IMPLEMENTER_BUDGET_USD
             value: "10.00"
         resources:
-          requests: { cpu: 200m, memory: 512Mi }
-          limits:   { cpu: 2000m, memory: 4Gi }
+          # memory bumped 4Gi -> 8Gi: the implementer sub-agent runs the
+          # target repo's build as a sanity check; `go build ./...` on a
+          # large Go service (e.g. mctl-telegram + gotd/td) on top of the
+          # Claude SDK process exceeded 4Gi and the container was OOMKilled.
+          requests: { cpu: 200m, memory: 1Gi }
+          limits:   { cpu: 2000m, memory: 8Gi }
         volumeMounts:
           - name: workdir
             mountPath: /workdir
