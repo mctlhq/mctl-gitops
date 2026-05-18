@@ -30,8 +30,7 @@ env:
   # Telegram OpenID Connect client id = the @MCTL_AI_bot numeric id (the part
   # of the bot token before the colon). Not a secret. The matching
   # TELEGRAM_OIDC_CLIENT_SECRET is sourced from Vault via the oauth
-  # ExternalSecret below. TELEGRAM_LOGIN_BOT_USERNAME is no longer read (the
-  # legacy Login Widget was replaced by the OIDC flow in mctl-telegram 0.16.0).
+  # ExternalSecret below.
   TELEGRAM_OIDC_CLIENT_ID: "8568443430"
   # CSV of Telegram user IDs that receive full scopes (admin allowlist)
   TG_LOGIN_ADMINS: "210408407"
