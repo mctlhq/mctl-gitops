@@ -1,9 +1,9 @@
 image:
   # build.yml in mctlhq/mctl-claude-remote sets IMAGE_NAME=mctlhq/claude-remote explicitly,
   # so GHCR publishes to ghcr.io/mctlhq/claude-remote (not mctlhq/mctl-claude-remote).
-  # Confirmed: ghcr.io/mctlhq/claude-remote:0.1.0 exists and is tagged.
+  # Confirmed: ghcr.io/mctlhq/claude-remote:0.1.1 exists and is tagged.
   repository: ghcr.io/mctlhq/claude-remote
-  tag: "0.1.0"
+  tag: "0.1.1"
 
 imagePullSecrets:
   - name: ghcr-credentials
@@ -40,7 +40,6 @@ securityContext:
 
 env:
   PORT: "8080"
-  CLAUDE_PORT: "3000"
 
 envFrom:
   - secretRef:
