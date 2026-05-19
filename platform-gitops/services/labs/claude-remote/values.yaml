@@ -3,7 +3,7 @@ image:
   # so GHCR publishes to ghcr.io/mctlhq/claude-remote (not mctlhq/mctl-claude-remote).
   # Confirmed: ghcr.io/mctlhq/claude-remote:0.1.1 exists and is tagged.
   repository: ghcr.io/mctlhq/claude-remote
-  tag: "0.1.3"
+  tag: "0.1.4"
 
 imagePullSecrets:
   - name: ghcr-credentials
@@ -96,7 +96,9 @@ initContainers:
         mc alias set s3 "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
         if [ -n "$(mc ls --recursive s3/platform-state/labs/claude-remote/ 2>/dev/null | head -1)" ]; then
           echo "Restoring workspace from MinIO..."
-          mc mirror s3/platform-state/labs/claude-remote/ /workspace
+          # --overwrite handles re-runs cleanly; --exclude '.mc/*' keeps mc's own
+          # config (in $HOME=/workspace/.mc) out of the restore loop.
+          mc mirror --overwrite --exclude '.mc/*' s3/platform-state/labs/claude-remote/ /workspace
           echo "Restore complete."
         else
           echo "No existing state in MinIO — fresh start."
@@ -137,7 +139,7 @@ extraContainers:
         mc alias set s3 "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
         while true; do
           mc mirror --overwrite --remove \
-            --exclude '*.tmp' \
+            --exclude '.mc/*' --exclude '*.tmp' \
             /workspace s3/platform-state/labs/claude-remote/ || true
           sleep 10
         done
@@ -167,7 +169,8 @@ extraContainers:
             - -c
             - |
               mc alias set s3 "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
-              mc mirror --overwrite --remove --exclude '*.tmp' \
+              mc mirror --overwrite --remove \
+                --exclude '.mc/*' --exclude '*.tmp' \
                 /workspace s3/platform-state/labs/claude-remote/
 
 probes:
