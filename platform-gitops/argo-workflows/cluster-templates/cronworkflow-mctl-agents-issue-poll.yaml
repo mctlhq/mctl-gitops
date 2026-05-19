@@ -48,7 +48,7 @@ spec:
   failedJobsHistoryLimit: 48
   # Start suspended — un-suspend after the smoke test (one-shot real run
   # confirming a labelled test issue produces a proposal).
-  suspend: true
+  suspend: false
   workflowSpec:
     workflowTemplateRef:
       name: mctl-agents-issue-poll
