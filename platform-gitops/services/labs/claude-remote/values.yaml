@@ -65,10 +65,10 @@ extraExternalSecrets:
     targetSecret: claude-remote-minio-creds
     data:
       - secretKey: access-key
-        remoteKey: secret/data/platform/minio
+        remoteKey: platform/minio
         property: root-user
       - secretKey: secret-key
-        remoteKey: secret/data/platform/minio
+        remoteKey: platform/minio
         property: root-password
 
 # Workspace lives in emptyDir, persisted to MinIO by s3-sync sidecar
