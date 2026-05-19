@@ -1,4 +1,7 @@
 image:
+  # build.yml in mctlhq/mctl-claude-remote sets IMAGE_NAME=mctlhq/claude-remote explicitly,
+  # so GHCR publishes to ghcr.io/mctlhq/claude-remote (not mctlhq/mctl-claude-remote).
+  # Confirmed: ghcr.io/mctlhq/claude-remote:0.1.0 exists and is tagged.
   repository: ghcr.io/mctlhq/claude-remote
   tag: "0.1.0"
 
@@ -45,7 +48,10 @@ envFrom:
 
 # ghcr-credentials is already managed by labs/openclaw — no second owner here.
 
-# CLAUDE_CODE_OAUTH_TOKEN from Vault (path: secret/platform/claude-remote)
+# CLAUDE_CODE_OAUTH_TOKEN from Vault (path: secret/platform/claude-remote).
+# vault-backend ClusterSecretStore has path="secret" version="v2" — ESO adds
+# "data/" automatically, so remoteKey does NOT need the "secret/data/" prefix
+# (same pattern as admins/mctl-agent which uses "platform/mctl-agent/tokens").
 externalSecret:
   targetSecret: claude-remote-secrets
   data:
@@ -78,6 +84,13 @@ extraVolumeMounts:
 initContainers:
   - name: restore-state
     image: minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+    resources:
+      requests:
+        cpu: 25m
+        memory: 64Mi
+      limits:
+        cpu: 500m
+        memory: 128Mi
     command: ["sh", "-c"]
     args:
       - |
@@ -151,7 +164,7 @@ extraContainers:
             - -c
             - |
               mc alias set s3 "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
-              mc mirror --overwrite --exclude '*.tmp' \
+              mc mirror --overwrite --remove --exclude '*.tmp' \
                 /workspace s3/platform-state/labs/claude-remote/
 
 probes:
@@ -174,6 +187,7 @@ probes:
     initialDelaySeconds: 0
     periodSeconds: 10
     timeoutSeconds: 3
+    failureThreshold: 5
 
 ingress:
   enabled: true
