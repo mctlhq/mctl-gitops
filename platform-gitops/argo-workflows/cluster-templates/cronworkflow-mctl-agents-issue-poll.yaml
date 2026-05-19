@@ -1,0 +1,55 @@
+apiVersion: argoproj.io/v1alpha1
+kind: CronWorkflow
+metadata:
+  name: mctl-agents-issue-poll
+  namespace: argo-workflows
+  annotations:
+    workflows.argoproj.io/description: |
+      Every-30-minute trigger for the issue-driven entry-point poller.
+
+      Workflow logic lives in ClusterWorkflowTemplate `mctl-agents-issue-poll`
+      (cwft-mctl-agents-issue-poll.yaml). This CronWorkflow is a thin wrapper
+      that submits a Workflow with no parameters, so the poller sweeps every
+      open mctlhq issue labelled `agent:investigate`.
+
+      What it does each tick:
+        1. `gh search issues` for open mctlhq issues labelled
+           `agent:investigate`.
+        2. For each, runs the issue-investigator in-process — gh-clones the
+           target repo read-only, runs the Claude Agent SDK to write the
+           requirements/design/tasks proposal triplet + .status.yaml
+           (status=proposed), comments the proposal link on the issue.
+        3. Removes the `agent:investigate` label so the next tick does not
+           re-investigate (and re-spend the SDK budget) the same issue.
+      The proposal stops at `proposed` — a human flips it to `accepted`,
+      the Tier 2 implementer opens a PR, the Tier 3 shepherd merges.
+
+      Start suspended. Un-suspend after the first successful one-shot run
+      (verify a labelled test issue yields a proposal and the label is
+      removed).
+spec:
+  # `10,40 * * * *` — fires at HH:10 and HH:40 (48 ticks/day). A tick with
+  # nothing labelled is a cheap no-op (one `gh search` + exit). The :10/:40
+  # offset stays clear of mctl-agents-shepherd (:30), mctl-agents-incidents
+  # (:15/:45), rotate-mctl-agent-github-token (:00) and mctl-agents-daily
+  # (06:00 UTC), so contention on the shared `mctl-gitops-main-writes`
+  # mutex is rare.
+  schedule: "10,40 * * * *"
+  timezone: "UTC"
+  # Forbid: never overlap two poll ticks. They contend on the same
+  # `mctl-gitops-main-writes` mutex anyway, and a queued tick would only
+  # delay the next genuine cron-driven one. Drop overlaps cleanly.
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  # Counts, NOT days. At 48 ticks/day, 96 ≈ 2 days of poll history and
+  # 48 ≈ 1 day of failures — enough for an incident-postmortem reach
+  # without bloating etcd.
+  successfulJobsHistoryLimit: 96
+  failedJobsHistoryLimit: 48
+  # Start suspended — un-suspend after the smoke test (one-shot real run
+  # confirming a labelled test issue produces a proposal).
+  suspend: true
+  workflowSpec:
+    workflowTemplateRef:
+      name: mctl-agents-issue-poll
+      clusterScope: true
