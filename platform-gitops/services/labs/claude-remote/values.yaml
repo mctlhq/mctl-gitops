@@ -43,11 +43,7 @@ envFrom:
   - secretRef:
       name: claude-remote-secrets
 
-# Creates ghcr-credentials pull secret in labs namespace via ESO
-registryCredentials:
-  vaultKey: platform/backstage/ghcr-credentials
-  secretName: ghcr-credentials
-  refreshInterval: 24h
+# ghcr-credentials is already managed by labs/openclaw — no second owner here.
 
 # CLAUDE_CODE_OAUTH_TOKEN from Vault (path: secret/platform/claude-remote)
 externalSecret:
@@ -126,7 +122,7 @@ extraContainers:
       - |
         mc alias set s3 "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
         while true; do
-          mc mirror --overwrite \
+          mc mirror --overwrite --remove \
             --exclude '*.tmp' \
             /workspace s3/platform-state/labs/claude-remote/ || true
           sleep 10
