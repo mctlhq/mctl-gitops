@@ -1,57 +1,57 @@
 apiVersion: argoproj.io/v1alpha1
 kind: ClusterWorkflowTemplate
 metadata:
-  name: mctl-agents-investigate
+  name: mctl-agents-issue-poll
   annotations:
     workflows.argoproj.io/description: |
-      Issue-driven entry point — investigator.
+      Issue-driven entry point — Phase 2 central poller.
 
-      Takes a single GitHub issue URL and turns it into a spec-driven
-      proposal under platform-gitops/agents-state/<svc>/proposals/<slug>/
-      with .status.yaml status=proposed. From there the normal pipeline
-      applies: a human flips it to accepted, the Tier 2 implementer
-      (cwft-mctl-agents-implement) opens a PR, the Tier 3 shepherd merges.
+      Scans every open issue under the mctlhq org carrying the
+      `agent:investigate` label and runs the issue-investigator for each,
+      turning labelled feature requests into `proposed` proposals under
+      platform-gitops/agents-state/<svc>/proposals/<slug>/.
+
+      Where cwft-mctl-agents-investigate handles ONE issue (manual MCP
+      trigger mctl_trigger_issue), this template handles the whole label
+      sweep — so an operator starts an investigation by *labelling* an
+      issue instead of calling an MCP tool. The poller removes the label
+      once an issue has been turned into a proposal, so a steady-state
+      run with nothing labelled is a cheap no-op.
 
       Runs:
         1. clone-gitops — SSH-clone mctl-gitops via the shared deploy key.
-        2. run-investigator — orchestrator/run_issue_investigator.py inside
-           ghcr.io/mctlhq/mctl-agents:1.12.0. The Python script reads the
-           issue via `gh`, gh-clones the target sibling repo read-only,
-           runs the Claude Agent SDK to write requirements/design/tasks.md,
-           writes .status.yaml, and comments the proposal link on the issue.
-        3. commit-and-push — commits the new proposal directory back to
+        2. run-poller — orchestrator/run_issue_poller.py inside
+           ghcr.io/mctlhq/mctl-agents:1.12.0. It `gh search`-es for
+           labelled issues, runs the investigator in-process per issue
+           (gh-clones the target repo read-only, runs the Claude Agent
+           SDK, writes the proposal triplet + .status.yaml, comments on
+           the issue), then removes the `agent:investigate` label.
+        3. commit-and-push — commits the new proposal directories back to
            gitops main.
 
       Triggered by:
-        - mctl-api MCP tool mctl_trigger_issue (admin-only)
-        - operator submitting a Workflow that references this CWFT
-
-      NOT cron-triggered. A label-based GitHub Action trigger is a planned
-      follow-up (Phase 2), out of scope here.
+        - cron via CronWorkflow `mctl-agents-issue-poll`
+        - operator submitting a one-shot Workflow that references this CWFT
 spec:
   serviceAccountName: argo-workflow-sa
   imagePullSecrets:
     - name: ghcr-credentials
   ttlStrategy:
     secondsAfterCompletion: 86400
-  # Clone two repos (gitops + target) + Claude SDK. Same ceiling as the
-  # implementer pipeline.
-  activeDeadlineSeconds: 7200
-  entrypoint: investigate-issue
+  # One poll may investigate several labelled issues back-to-back, each a
+  # gitops + target-repo clone plus a Claude SDK run. 4h ceiling covers a
+  # realistic backlog; the steady-state case (0-1 labelled issues) finishes
+  # in minutes.
+  activeDeadlineSeconds: 14400
+  entrypoint: poll-issues
   onExit: notify-telegram
-  # Same shared mutex as cwft-mctl-agents-implement / -run — all push to
-  # mctl-gitops main.
-  synchronization:
-    mutex:
-      name: mctl-gitops-main-writes
-
-  arguments:
-    parameters:
-      - name: issue_url
-        value: ""
-        # Required. Full GitHub issue URL, e.g.
-        # https://github.com/mctlhq/mctl-telegram/issues/123
-        # run-investigator fails fast with a clear message if empty.
+  # NB: the `mctl-gitops-main-writes` mutex is NOT declared here at workflow
+  # spec level. A poll cycle investigates N issues back-to-back (each a clone
+  # + Claude SDK run), so a spec-level lock — held from pod scheduling until
+  # commit-and-push exits — would block investigate/implement/shepherd/run
+  # from pushing to main for the whole multi-issue window. The lock lives on
+  # the commit-and-push template instead (the only step that writes to main),
+  # mirroring cwft-mctl-agents-shepherd.
 
   volumeClaimTemplates:
     - metadata:
@@ -60,9 +60,9 @@ spec:
         accessModes: ["ReadWriteOnce"]
         resources:
           requests:
-            # Smaller than cwft-mctl-agents-implement: the investigator
-            # gh-clones exactly ONE target repo, shallow (--depth=1), and
-            # only reads it. 4Gi is ample headroom over a single clone.
+            # gitops clone + one target-repo clone at a time (the poller
+            # rm-trees each target clone before moving to the next issue).
+            # Same ceiling as cwft-mctl-agents-investigate.
             storage: 4Gi
   volumes:
     - name: deploy-key
@@ -71,16 +71,16 @@ spec:
         defaultMode: 0600
 
   templates:
-    - name: investigate-issue
+    - name: poll-issues
       steps:
         - - name: clone
             template: clone-gitops
-        - - name: investigate
-            template: run-investigator
-            # run_issue_investigator.py writes the proposal files + the
-            # comment before any later failure path. Letting commit-and-push
-            # run unconditionally makes a partially-written proposal durable
-            # for inspection; the commit step handles the "no diff" case.
+        - - name: poll
+            template: run-poller
+            # run_issue_poller writes each proposal + comment before any
+            # later per-issue failure. Letting commit-and-push run
+            # unconditionally makes whatever DID get written durable for
+            # inspection; the commit step handles the "no diff" case.
             continueOn:
               failed: true
               error: true
@@ -102,8 +102,8 @@ spec:
           chmod 600 ~/.ssh/config
           git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops
           mkdir -p /workdir/mctl-gitops/platform-gitops/agents-state
-          # PVC-backed scratch dir for run_issue_investigator's
-          # `gh repo clone` target — see TMPDIR in run-investigator below.
+          # PVC-backed scratch dir for the per-issue `gh repo clone` target —
+          # see TMPDIR in run-poller below.
           mkdir -p /workdir/clones
           echo "✓ gitops cloned"
         volumeMounts:
@@ -112,11 +112,11 @@ spec:
           - name: deploy-key
             mountPath: /secrets/deploy-key
 
-    # ── 2. Run investigator orchestrator ──────────────────────────────────
-    # NB: orchestrator/run_issue_investigator.py first shipped in
-    # ghcr.io/mctlhq/mctl-agents:1.11.0 — pin >=1.11.0; earlier tags lack
-    # the module and crash with ImportError.
-    - name: run-investigator
+    # ── 2. Run issue-poller orchestrator ──────────────────────────────────
+    # NB: ghcr.io/mctlhq/mctl-agents:1.12.0 is the first tag with
+    # orchestrator/run_issue_poller.py. Earlier tags lack the module and
+    # crash with ImportError.
+    - name: run-poller
       container:
         image: ghcr.io/mctlhq/mctl-agents:1.12.0
         imagePullPolicy: IfNotPresent
@@ -126,46 +126,27 @@ spec:
           - "-c"
           - |
             set -e
-            # GITHUB_TOKEN is mandatory for the investigator: it reads the
-            # issue, clones the target repo, and posts the proposal comment.
+            # GITHUB_TOKEN is mandatory: the poller searches for labelled
+            # issues, clones target repos, comments, and removes the label.
             # The secretKeyRef is marked optional so the pod still schedules
             # for local/offline debugging — fail fast here with a clear
-            # message instead of surfacing an opaque `gh` auth error from
-            # deep inside Python.
+            # message instead of an opaque `gh` auth error from deep inside
+            # Python.
             if [ -z "$GITHUB_TOKEN" ]; then
-              echo "❌ GITHUB_TOKEN is not set — the investigator needs it to read the issue, clone the repo, and comment" >&2
+              echo "❌ GITHUB_TOKEN is not set — the poller needs it to search issues, clone repos, comment, and relabel" >&2
               exit 1
             fi
             # Wire git's HTTPS credential helper to GITHUB_TOKEN so `gh repo
             # clone` and any later git op authenticate non-interactively.
             gh auth setup-git
-            # issue_url is required. Fail fast with a clear message rather
-            # than letting argparse emit a terse usage error deep in logs.
-            if [ -z "$WORKFLOW_ISSUE_URL" ]; then
-              echo "❌ issue_url parameter is required" >&2
-              exit 1
-            fi
-            # Read the param from env, NOT inline workflow.parameters
-            # interpolation: a crafted value would otherwise be spliced into
-            # the shell command. `set --` keeps it a single quoted token.
-            set -- python -m orchestrator.run_issue_investigator \
-              --issue-url "$WORKFLOW_ISSUE_URL"
-            printf '→'
-            printf ' %s' "$@"
-            printf '\n'
-            exec "$@"
+            exec python -m orchestrator.run_issue_poller
         env:
-          # Workflow param injected as an env var so the shell layer can
-          # quote it safely. Direct workflow.parameters.* interpolation in
-          # the script body is a shell-injection vector.
-          - name: WORKFLOW_ISSUE_URL
-            value: "{{workflow.parameters.issue_url}}"
           # entrypoint.sh symlinks <state>/<svc>/proposals onto the baked-in
-          # agents/<svc>/; run_issue_investigator reads STATE_DIR directly.
+          # agents/<svc>/; run_issue_poller reads STATE_DIR directly.
           - name: STATE_DIR
             value: /workdir/mctl-gitops/platform-gitops/agents-state
-          # Redirect Python's tempfile.gettempdir() onto the PVC so the
-          # target-repo clone lands in PVC-backed storage.
+          # Redirect Python's tempfile.gettempdir() onto the PVC so each
+          # per-issue target-repo clone lands in PVC-backed storage.
           - name: TMPDIR
             value: /workdir/clones
           # Auth: OAuth (Claude Pro/Max). Same secret as the other pipelines.
@@ -174,9 +155,9 @@ spec:
               secretKeyRef:
                 name: mctl-agents-secrets
                 key: claude-code-oauth-token
-          # GitHub PAT for `gh issue view`, `gh repo clone` and
-          # `gh issue comment`. Needs repo read on the target repo plus
-          # `issues: write` for the closing comment.
+          # GitHub PAT for `gh search issues`, `gh repo clone`,
+          # `gh issue comment` and `gh issue edit --remove-label`. Needs repo
+          # read on the target repos plus `issues: write`.
           - name: GITHUB_TOKEN
             valueFrom:
               secretKeyRef:
@@ -184,7 +165,7 @@ spec:
                 key: github-token
                 optional: true
           # Optional MCP token — lets the investigator inspect live service
-          # metrics/status while shaping the proposal. Degrades gracefully.
+          # metrics/status while shaping a proposal. Degrades gracefully.
           - name: MCTL_TOKEN
             valueFrom:
               secretKeyRef:
@@ -201,19 +182,20 @@ spec:
             mountPath: /workdir
 
     # ── 3. Commit & push back to mctl-gitops ──────────────────────────────
-    # Unlike cwft-mctl-agents-implement (which only ever rewrites .status.yaml
-    # and refuses anything else), the investigator CREATES a new proposal
-    # directory — requirements.md / design.md / tasks.md / .status.yaml. So
-    # this step stages the whole agents-state/ subtree. The investigator's
-    # SDK agent runs with cwd in a throwaway /tmp clone, never in the gitops
-    # worktree, so it cannot write outside agents-state/.
+    # Like cwft-mctl-agents-investigate, the poller CREATES new proposal
+    # directories — requirements.md / design.md / tasks.md / .status.yaml.
+    # This step stages the proposal subtree only and refuses anything that
+    # lands outside a proposal directory.
     - name: commit-and-push
+      # Mutex scoped to this step — see the note at workflow spec level.
+      # Only commit-and-push writes to mctl-gitops main, so the lock is
+      # held for seconds (commit + push), not the whole multi-issue poll.
+      synchronization:
+        mutex:
+          name: mctl-gitops-main-writes
       script:
         image: alpine/git:2.43.0
         command: [sh]
-        env:
-          - name: WORKFLOW_ISSUE_URL
-            value: "{{workflow.parameters.issue_url}}"
         source: |
           set -e
           apk add --no-cache openssh-client ca-certificates
@@ -227,13 +209,11 @@ spec:
           git config user.name "mctl-agents[bot]"
           git config user.email "mctl-agents[bot]@users.noreply.github.com"
 
-          # Scope guard: the investigator must only ever create/update files
-          # INSIDE a proposal directory — agents-state/<svc>/proposals/<slug>/.
-          # Anything else under agents-state/ (an inbox/ file, a mentor
-          # digest, a stray top-level file) is not this workflow's output;
-          # fail loudly rather than silently widening the commit. This is the
-          # investigate-side equivalent of the implement template's
-          # `.status.yaml`-only guard.
+          # Scope guard: the poller (via the investigator) must only ever
+          # create/update files INSIDE a proposal directory —
+          # agents-state/<svc>/proposals/<slug>/. Anything else under
+          # agents-state/ is not this workflow's output; fail loudly rather
+          # than silently widening the commit.
           OUT_OF_SCOPE="$(git status --porcelain -- 'platform-gitops/agents-state/' ':(exclude,glob)platform-gitops/agents-state/*/proposals/*/**')"
           if [ -n "$OUT_OF_SCOPE" ]; then
             echo "❌ Refusing to commit changes outside a proposal directory under platform-gitops/agents-state/:"
@@ -241,9 +221,9 @@ spec:
             exit 1
           fi
 
-          # Short-circuit BEFORE `git add` so a zero-change run (e.g. the
-          # investigator skipped an already-accepted proposal, or failed
-          # before writing anything) is a clean no-op under `set -e`.
+          # Short-circuit BEFORE `git add` so a zero-change run (e.g. nothing
+          # was labelled, or every labelled issue was already in flight) is a
+          # clean no-op under `set -e`.
           CHANGES="$(git status --porcelain -- ':(glob)platform-gitops/agents-state/*/proposals/*/**')"
           if [ -z "$CHANGES" ]; then
             echo "ℹ️  No proposal changes — nothing to commit."
@@ -257,16 +237,11 @@ spec:
           fi
 
           DATE=$(date -u +%Y-%m-%d)
-          if [ -n "$WORKFLOW_ISSUE_URL" ]; then
-            MSG="chore(agents): investigate ${WORKFLOW_ISSUE_URL} ${DATE}"
-          else
-            MSG="chore(agents): investigate run ${DATE}"
-          fi
-          git commit -m "$MSG"
+          git commit -m "chore(agents): issue-poll ${DATE}"
 
           for i in 1 2 3 4 5; do
             if git push origin HEAD:main; then
-              echo "✅ Pushed proposal"
+              echo "✅ Pushed proposals"
               exit 0
             fi
             echo "⚠️  Push failed (attempt ${i}), rebasing..."
@@ -280,8 +255,8 @@ spec:
           - name: deploy-key
             mountPath: /secrets/deploy-key
 
-    # ── 4. Telegram notification (onExit) ──────────────────────────────────
-    # Same pattern as cwft-mctl-agents-implement.
+    # ── 4. Telegram + incident notification (onExit) ──────────────────────
+    # Same pattern as cwft-mctl-agents-investigate.
     - name: notify-telegram
       script:
         image: alpine:3.19
@@ -307,8 +282,6 @@ spec:
                 optional: true
           - name: WORKFLOW_STATUS
             value: "{{workflow.status}}"
-          - name: WORKFLOW_ISSUE_URL
-            value: "{{workflow.parameters.issue_url}}"
           - name: WORKFLOW_NAME
             value: "{{workflow.name}}"
           - name: WORKFLOW_DURATION
@@ -323,16 +296,12 @@ spec:
             Error)     ICON="⚠️" ;;
             *)         ICON="⏳" ;;
           esac
-          SUBJECT="investigate ${WORKFLOW_ISSUE_URL:-(no issue_url)}"
           UI_URL="https://workflows.mctl.ai/workflows/argo-workflows/${WORKFLOW_NAME}"
-          # Build with a real newline (printf) so jq encodes it as a proper
-          # JSON `\n` below.
-          TEXT=$(printf '%s mctl-agents: %s — %s (%ss)\n%s' \
-            "$ICON" "$SUBJECT" "$WORKFLOW_STATUS" "$WORKFLOW_DURATION" "$UI_URL")
+          TEXT=$(printf '%s mctl-agents: issue-poll — %s (%ss)\n%s' \
+            "$ICON" "$WORKFLOW_STATUS" "$WORKFLOW_DURATION" "$UI_URL")
 
           # Telegram leg. JSON-encode the body via jq so a quote / newline /
-          # backslash in WORKFLOW_ISSUE_URL cannot malform the payload and
-          # silently drop the notification.
+          # backslash cannot malform the payload and silently drop it.
           if [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
             TG_BODY=$(jq -nc --arg chat "$TG_CHAT_ID" --arg text "$TEXT" \
               '{chat_id: $chat, text: $text, disable_web_page_preview: true}')
@@ -347,7 +316,7 @@ spec:
           # Incident leg — only on terminal failure.
           if { [ "$WORKFLOW_STATUS" = "Failed" ] || [ "$WORKFLOW_STATUS" = "Error" ]; } && [ -n "$MCTL_TOKEN" ]; then
             INCIDENT_ID="argo-${WORKFLOW_NAME}-$(date +%s)"
-            SUMMARY="${SUBJECT} ${WORKFLOW_STATUS} after ${WORKFLOW_DURATION}s — ${UI_URL}"
+            SUMMARY="mctl-agents issue-poll ${WORKFLOW_STATUS} after ${WORKFLOW_DURATION}s — ${UI_URL}"
             BODY=$(jq -nc --arg id "$INCIDENT_ID" --arg summary "$SUMMARY" '{
               id: $id,
               source: "argo-workflows",
