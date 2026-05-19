@@ -84,7 +84,10 @@ order:
      write access to your Telegram chats — directly from claude.ai, with no extra apps."
    - Primary CTA button: `<a href="https://claude.ai/customize/connectors">Add to Claude</a>`,
      styled as a filled button using `var(--accent)` background.
-   - Secondary link: "See the docs" pointing to `/docs`.
+   - Secondary CTA: "Copy MCP URL" button — copies `{{.MCPURL}}` to clipboard via a small
+     inline `<script>` (single `navigator.clipboard.writeText` call; graceful fallback to
+     a visible `<input readonly>` if clipboard API is blocked).
+   - Tertiary link: "See the docs" pointing to `/docs`.
 
 3. **Use-case cards** (`#use-cases`)
    - Three cards in a responsive CSS grid (three columns ≥ 720 px, one column on mobile).

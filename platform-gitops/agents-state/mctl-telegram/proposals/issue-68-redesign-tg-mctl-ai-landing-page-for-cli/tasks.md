@@ -1,5 +1,15 @@
 # Tasks: issue-68-redesign-tg-mctl-ai-landing-page-for-cli
 
+- [ ] 0. Fix stale auth-model copy across `/security`, `/privacy`, and README
+  (no dependencies — ship as PR A before the landing redesign)
+  DoD: The `/security` page contains no references to `shared-hmac`, `api.mctl.ai`, or
+  GitHub OAuth as the primary auth mechanism. The `/privacy` page describes the current
+  Telegram OIDC / local-jwt model. README auth sections are consistent with the production
+  `AUTH_MODE=local-jwt` config; legacy-mode sections are either removed or clearly labelled.
+  Add tests in `internal/web/security_test.go` (or a new file) asserting that the
+  `/security` and `/privacy` response bodies do not contain the stale terminology.
+  `go test ./internal/web/...` passes.
+
 - [ ] 1. Create `internal/web/docs.html` — new reference documentation page
   (depends on nothing)
   DoD: File exists at `internal/web/docs.html`. Contains, in order: top bar (matching
