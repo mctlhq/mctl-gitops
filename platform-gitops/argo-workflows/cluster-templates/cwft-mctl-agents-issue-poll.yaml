@@ -45,11 +45,13 @@ spec:
   activeDeadlineSeconds: 14400
   entrypoint: poll-issues
   onExit: notify-telegram
-  # Same shared mutex as cwft-mctl-agents-investigate / -implement / -run —
-  # all push to mctl-gitops main.
-  synchronization:
-    mutex:
-      name: mctl-gitops-main-writes
+  # NB: the `mctl-gitops-main-writes` mutex is NOT declared here at workflow
+  # spec level. A poll cycle investigates N issues back-to-back (each a clone
+  # + Claude SDK run), so a spec-level lock — held from pod scheduling until
+  # commit-and-push exits — would block investigate/implement/shepherd/run
+  # from pushing to main for the whole multi-issue window. The lock lives on
+  # the commit-and-push template instead (the only step that writes to main),
+  # mirroring cwft-mctl-agents-shepherd.
 
   volumeClaimTemplates:
     - metadata:
@@ -185,6 +187,12 @@ spec:
     # This step stages the proposal subtree only and refuses anything that
     # lands outside a proposal directory.
     - name: commit-and-push
+      # Mutex scoped to this step — see the note at workflow spec level.
+      # Only commit-and-push writes to mctl-gitops main, so the lock is
+      # held for seconds (commit + push), not the whole multi-issue poll.
+      synchronization:
+        mutex:
+          name: mctl-gitops-main-writes
       script:
         image: alpine/git:2.43.0
         command: [sh]
