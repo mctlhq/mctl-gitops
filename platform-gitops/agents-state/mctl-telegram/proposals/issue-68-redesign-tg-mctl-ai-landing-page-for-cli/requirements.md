@@ -71,11 +71,66 @@ common client questions. No changes to backend logic are required.
 - WHILE CSS is loading or fails THE SYSTEM SHALL remain readable via the inline mctl design
   token fallback already present in the page `<head>`.
 
+## Operator notes (added before accept)
+
+The following requirements were identified in a pre-accept review of the live site
+(`tg.mctl.ai`) and the repository. They extend the original issue scope.
+
+### Track A — Docs consistency fix (prerequisite, ship first)
+
+The live `/security` and `/privacy` pages, and sections of the README, still describe the
+older `shared-hmac` / `api.mctl.ai` / GitHub-login auth model. The production deployment
+uses `AUTH_MODE=local-jwt` and Telegram OIDC. This inconsistency is a trust problem for
+prospective clients.
+
+- WHEN a visitor loads `/security` THE SYSTEM SHALL NOT contain references to
+  `shared-hmac`, `api.mctl.ai`, or GitHub OAuth as the auth mechanism (unless describing a
+  deprecated mode).
+- WHEN a visitor loads `/privacy` THE SYSTEM SHALL describe the current auth model
+  (Telegram OIDC / local-jwt) consistently with `/security`.
+- THE README auth sections SHALL agree with the production `AUTH_MODE=local-jwt` and
+  Telegram OIDC configuration; stale references to `api.mctl.ai` + GitHub auth SHALL be
+  removed or clearly marked as a legacy mode.
+- Add tests that assert the auth-model terminology on `/security`, `/privacy`, and
+  `/.well-known/oauth-protected-resource` is consistent (i.e., no stale model names).
+
+### Secondary CTA
+
+- WHEN a visitor loads `/` THE SYSTEM SHALL render a secondary CTA "Copy MCP URL" alongside
+  the primary "Add to Claude" button, allowing power users to manually add the connector.
+
+### Terminology consistency
+
+- All pages, README sections, and new HTML SHALL use "Telegram sign-in" (not "Telegram Login
+  Widget") unless the specific widget UI is still guaranteed by the current code path.
+  The current `internal/oauth/server.go` uses Telegram OIDC; the landing copy SHALL match.
+
+### Suggested implementation split
+
+To reduce review risk the implementer SHOULD open separate PRs in this order:
+
+| PR | Scope |
+|----|-------|
+| A  | Fix stale auth/trust copy on `/security`, `/privacy`, README; add consistency tests |
+| B  | Add `/docs` route and move reference tables there |
+| C  | Landing hero, use-case cards, how-it-works, trust section, FAQ, CTAs |
+| D  | Funnel telemetry, browser error polish, optional CSP cleanup (deferrable) |
+
+Each PR is independently mergeable. PRs B and C depend on A being merged first.
+
+### Deploy smoke checks
+
+Add integration/smoke tests (or at minimum `go test` assertions) for:
+- `/` — returns HTTP 200, body contains "Your Telegram, inside Claude"
+- `/security` — returns HTTP 200, body does not contain stale model names
+- `/privacy` — returns HTTP 200
+- `/.well-known/oauth-protected-resource` — returns HTTP 200, valid JSON
+
 ## Out of scope
 
 - Changes to backend Go handler logic beyond adding a `/docs` route and serving the new
   `docs.html` template.
-- Changes to `/security`, `/privacy`, or any OAuth/MCP endpoints.
+- Changes to OAuth/MCP endpoints.
 - Internationalisation or multi-language support.
 - Server-side analytics or A/B testing of page variants.
 - Replacing the current mctl design system (ui.mctl.ai/mctl.css) with a different CSS
