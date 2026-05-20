@@ -29,6 +29,7 @@ spec:
   schedule: "0 3 * * 0"
   timezone: "UTC"
   concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
   suspend: false
