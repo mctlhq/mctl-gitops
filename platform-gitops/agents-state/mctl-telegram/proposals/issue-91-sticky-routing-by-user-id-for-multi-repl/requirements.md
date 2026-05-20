@@ -68,6 +68,21 @@ documentation needed to enable safe multi-replica operation.
 - IF the `REPLICA_ID` environment variable is unset and `POD_NAME` is also
   unset, THE SYSTEM SHALL use the value `"unknown"` for the replica_id label
   without failing startup.
+- WHEN either `deploy/ingress/sticky-nginx.yaml` or
+  `deploy/ingress/sticky-envoy.yaml` is shipped, THE SYSTEM SHALL pass
+  `kubectl apply --dry-run=server` against a representative cluster
+  (ingress-nginx-controller-installed for the NGINX file, Istio-installed for
+  the Envoy file) with no admission errors.
+- WHEN an authenticated request bearing a valid bearer token traverses the
+  configured ingress, THE SYSTEM SHALL emit an access-log line containing the
+  injected `X-Mctl-Route-Key` header value derived from the JWT `sub` claim
+  (verifiable via NGINX `log_format` or Envoy `%REQ(X-MCTL-ROUTE-KEY)%`
+  formatter).
+- IF the Lua snippet relies on a function or symbol not exported by the host
+  Lua API (ingress-nginx OpenResty namespace for NGINX, Envoy
+  `stream_handle` namespace for Envoy), THE SYSTEM SHALL be rejected by the
+  proposal review — the snippet MUST only call documented host APIs (see
+  design.md `Implementation constraints` section).
 
 ## Out of scope
 

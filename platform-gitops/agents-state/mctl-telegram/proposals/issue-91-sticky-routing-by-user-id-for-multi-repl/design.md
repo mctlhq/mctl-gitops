@@ -137,6 +137,56 @@ header modifier filter together with a `BackendLBPolicy` (GEP-1731) specifying
 experimental in Gateway API v1.2, the Envoy example uses the Istio
 `DestinationRule` which is stable and widely deployed.
 
+### Implementation constraints (P1 traps discovered in PR #98)
+
+A previous implementation attempt (`mctlhq/mctl-telegram#98`, closed
+unmerged) shipped Ingress manifests that *parsed* and looked correct
+but rendered sticky routing non-functional in both flavours. The
+implementer's next attempt MUST treat these as hard constraints:
+
+1. **NGINX `configuration-snippet` accepts NGINX directives, not raw
+   Lua statements.** A snippet that contains bare `local auth = ...`
+   at the top level will either be rejected by ingress-nginx or
+   silently no-op. Lua must be wrapped in a directive block:
+   ```nginx
+   rewrite_by_lua_block {
+     local auth = ngx.req.get_headers()["authorization"]
+     -- ...
+     ngx.req.set_header("X-Mctl-Route-Key", sub)
+   }
+   ```
+   Reference: ingress-nginx Lua module documentation; see
+   `nginx.ingress.kubernetes.io/configuration-snippet` examples that
+   show `*_by_lua_block` wrapping for any non-trivial logic.
+
+2. **Envoy `HTTP_FILTER` patch requires the `Lua` filter config type,
+   not `LuaPerRoute`.** `LuaPerRoute` is a per-route override message
+   for an already-installed Lua filter; it does not accept
+   `inline_code` and will be rejected/ignored at filter-install time.
+   The EnvoyFilter patch must use:
+   ```yaml
+   value:
+     "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
+     inline_code: |
+       -- function envoy_on_request(handle) ... end
+   ```
+
+3. **Envoy Lua stream-handle API does not expose
+   `base64.decode`.** Only `base64Escape()` is provided. JWT payloads
+   are base64url and must be decoded manually (e.g. via a bit-ops
+   helper) or, preferably, the JWT `sub` should be lifted into a
+   header upstream (e.g. by Istio AuthorizationPolicy /
+   `jwt_payload`-claim header injection) and consumed by the Lua
+   filter directly. Calling `base64.decode(...)` from `envoy_on_request`
+   produces a runtime error and silently disables stickiness for every
+   authenticated request.
+
+Validation of the next attempt MUST include `kubectl apply
+--dry-run=server` on both manifests and, where possible, a live smoke
+of the header injection (NGINX access log showing the injected
+`X-Mctl-Route-Key`, or Envoy access log via the
+`%REQ(X-MCTL-ROUTE-KEY)%` format string).
+
 ### Layer 2: application — replica identity and observability
 
 **`internal/config/config.go`** — add one field:
