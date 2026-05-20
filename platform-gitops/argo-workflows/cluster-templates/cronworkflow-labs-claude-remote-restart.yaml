@@ -1,0 +1,64 @@
+apiVersion: argoproj.io/v1alpha1
+kind: CronWorkflow
+metadata:
+  name: labs-claude-remote-restart
+  namespace: argo-workflows
+  annotations:
+    workflows.argoproj.io/description: |
+      Weekly pod-restart for labs/claude-remote so the entrypoint's
+      `claude install latest --force` step runs and refreshes the
+      native claude binary at /workspace/.local/bin/claude (persisted
+      to MinIO).
+
+      Why a restart and not in-place `claude install`:
+      The remote-control session is a long-running PID 1 (script
+      wrapping `claude --remote-control`). It loads the claude
+      executable at startup and keeps it in memory. Re-installing
+      mid-flight rewrites the on-disk binary but the running PID
+      keeps the old code. Deployment restart triggers Recreate
+      strategy, claude re-execs with the freshly installed binary.
+
+      Companion to the labs/claude-remote service:
+      - Source: mctlhq/mctl-claude-remote (entrypoint.sh)
+      - Chart values: services/labs/claude-remote/values.yaml
+      - Bootstrap docs: services/labs/claude-remote/README.md
+spec:
+  # Sundays at 03:00 UTC — quiet hour, well clear of mctl-agents-daily
+  # (06:00 UTC) and watchlist scan (every :00/:30). One tick per week
+  # is enough; claude-code rarely ships breaking changes more often.
+  schedule: "0 3 * * 0"
+  timezone: "UTC"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  suspend: false
+  workflowSpec:
+    serviceAccountName: argo-workflow-sa
+    entrypoint: restart
+    activeDeadlineSeconds: 600
+    ttlStrategy:
+      secondsAfterCompletion: 86400
+      secondsAfterSuccess: 86400
+      secondsAfterFailure: 259200
+    templates:
+      - name: restart
+        # bitnami/kubectl uses full-semver tags only (1.33 alone doesn't
+        # exist); pinned within ±1 minor of cluster (currently k3s 1.33.x).
+        # See memory reference_bitnami_kubectl_semver_tags.md.
+        container:
+          image: bitnami/kubectl:1.33.4
+          command: ["sh", "-c"]
+          args:
+            - |
+              set -e
+              echo "[$(date -u +%FT%TZ)] restarting labs/claude-remote deployment for weekly claude-code refresh"
+              kubectl -n labs rollout restart deployment/labs-claude-remote-base-service
+              kubectl -n labs rollout status deployment/labs-claude-remote-base-service --timeout=5m
+              echo "[$(date -u +%FT%TZ)] restart complete — pod will run 'claude install latest --force' from entrypoint"
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
