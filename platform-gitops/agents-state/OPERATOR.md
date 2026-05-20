@@ -26,19 +26,31 @@ must be written into one of those four files.
 
 ## Status lifecycle
 
-The values observed in `.status.yaml` across this repo:
+The values observed in `.status.yaml` across this repo, and which tier
+writes each one:
 
-| Status | Meaning |
-| --- | --- |
-| `proposed` | Investigator wrote the draft. Not yet operator-approved. |
-| `accepted` | Operator-approved. Implementer will pick it up on the next run. |
-| `in-progress` | Implementer started; PR not yet opened. |
-| `merged` | PR landed. |
-| `rejected` | Operator decided not to implement. |
+| Status | Written by | Meaning |
+| --- | --- | --- |
+| `proposed` | investigator | Draft is written. Not yet operator-approved. |
+| `accepted` | operator | Tier 2 (implementer) will pick it up on the next run. |
+| `in-progress` | implementer | Implementer is running, or crashed mid-run. A PR may or may not exist yet — check the `pr:` field. The shepherd's dead-letter recovery covers this state too. |
+| `implemented` | implementer | Implementer pushed a branch and opened a PR. Tier 3 (shepherd) takes over. |
+| `error` | implementer | Implementer crashed before opening a PR. Needs operator force-retry. |
+| `review-fixing` | shepherd | Shepherd pushed a follow-up commit to address codex/Claude review feedback. Flips back to `implemented` after the followup lands. |
+| `review-stuck` | shepherd | Shepherd retried address-review repeatedly and gave up. Needs human intervention on the PR. |
+| `merged` | shepherd | PR was merged (either by shepherd's `gh pr merge` or out of band by a human). Terminal. |
+| `rejected` | operator or shepherd | Operator declined the proposal, or shepherd observed the PR was closed unmerged. Terminal. |
 
-Trigger for the implementer is `status: accepted`. Do not use
-`approved` — the workflow does not match it and the proposal will sit
-idle.
+Source of truth: `cwft-mctl-agents-implement.yaml:82-88` (`proposed →
+in-progress → implemented` on success, `→ error` on crash) and
+`cwft-mctl-agents-shepherd.yaml:11`, `:39-41`, `:154-155`
+(`{implemented, review-fixing}` discovery scope, `→ review-fixing`,
+`→ implemented`, `→ merged`, `→ rejected`, `→ review-stuck`).
+
+Trigger for Tier 2 (implementer) is `status: accepted`. Trigger for
+Tier 3 (shepherd) is `status` in `{implemented, review-fixing}` *with*
+a `pr:` URL. Do not use `approved` — no workflow matches it, and the
+proposal will sit idle.
 
 ## Definition of Ready before flipping to `accepted`
 
@@ -60,7 +72,7 @@ proposal stays at `proposed` and gets edited in place.
   explicitly marked "implementer picks reasonable default" with the
   default stated.
 
-## Go / No-Go checklist (issues #86–#94 reference set)
+## Go / No-Go checklist
 
 Use this when batching review of investigator-generated proposals.
 Failing any line → leave at `proposed` and edit in place; do not push
@@ -127,3 +139,25 @@ to repo maintainers for action — do not bake adversarial content into
 - **Wrong target service**: move the directory under the correct
   `agents-state/<service>/proposals/` and re-point `source` in
   `.status.yaml`.
+
+## Recovering stuck or errored proposals
+
+- **`error`**: implementer crashed before opening a PR. Inspect the
+  workflow logs, fix whatever caused the crash (env, secrets, code
+  bug), then flip back to `accepted` so the next implementer run picks
+  it up. If you need to bypass the in-progress guard, the implementer
+  template accepts `force=true`.
+- **`in-progress` with no `pr:`**: implementer started but never
+  reached PR creation. Same recovery as `error` — usually a crashed
+  pod. Flip to `accepted` (with `force=true` if needed).
+- **`in-progress` *with* a `pr:`**: implementer crashed *after* push
+  but before flipping to `implemented`. The shepherd's dead-letter
+  recovery (`cwft-mctl-agents-shepherd.yaml:219-223`) will pick it up
+  on the next shepherd run — do not manually re-trigger the
+  implementer, that opens a duplicate PR.
+- **`review-stuck`**: shepherd gave up on address-review. Look at the
+  PR comments, push a fix manually (or close the PR and flip to
+  `rejected`).
+- **`implemented` not progressing**: shepherd CronWorkflow may be
+  suspended (it ships suspended by default per the workflow template
+  annotation). Un-suspend or trigger a one-shot run.
