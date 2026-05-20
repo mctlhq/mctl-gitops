@@ -3,7 +3,7 @@ image:
   # so GHCR publishes to ghcr.io/mctlhq/claude-remote (not mctlhq/mctl-claude-remote).
   # Confirmed: ghcr.io/mctlhq/claude-remote:0.1.1 exists and is tagged.
   repository: ghcr.io/mctlhq/claude-remote
-  tag: "0.1.5"
+  tag: "0.1.6"
 
 imagePullSecrets:
   - name: ghcr-credentials
