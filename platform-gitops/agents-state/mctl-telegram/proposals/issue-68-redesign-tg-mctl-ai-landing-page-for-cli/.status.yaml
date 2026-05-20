@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-05-19T21:30:57Z'
+status: merged
+updated_at: '2026-05-20T00:30:44Z'
 updated_by: mctl-agents[bot]
 pr: https://github.com/mctlhq/mctl-telegram/pull/74
 source:
@@ -9,3 +9,5 @@ source:
   url: https://github.com/mctlhq/mctl-telegram/issues/68
 control:
   requires_human_approval: true
+merged_at: '2026-05-20T00:30:44Z'
+merge_commit: 1eae2133f8f504c946b7f36ff3fc262903985cfa
