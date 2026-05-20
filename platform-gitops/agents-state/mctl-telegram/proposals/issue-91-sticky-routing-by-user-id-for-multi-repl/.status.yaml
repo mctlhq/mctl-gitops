@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-05-20T18:54:03Z'
+status: rejected
+updated_at: '2026-05-20T20:30:53Z'
 updated_by: mctl-agents[bot]
 pr: https://github.com/mctlhq/mctl-telegram/pull/98
 source:
@@ -9,3 +9,4 @@ source:
   url: https://github.com/mctlhq/mctl-telegram/issues/91
 control:
   requires_human_approval: true
+notes: PR was closed without merging.
