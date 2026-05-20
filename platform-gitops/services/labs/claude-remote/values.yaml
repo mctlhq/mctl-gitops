@@ -41,22 +41,20 @@ securityContext:
 env:
   PORT: "8080"
 
-envFrom:
-  - secretRef:
-      name: claude-remote-secrets
+# Intentionally NO envFrom / no CLAUDE_CODE_OAUTH_TOKEN in env:
+#
+# `claude --remote-control` needs a full-scope claude.ai login (from
+# `claude auth login`) saved as ~/.claude/.credentials.json, restored
+# here from MinIO by the restore-state initContainer. If CLAUDE_CODE_OAUTH_TOKEN
+# is set in env, claude prefers it over the on-disk credentials and rejects
+# remote control with:
+#   [WARN] Remote Control requires a full-scope login token. Long-lived
+#   tokens (from `claude setup-token` or CLAUDE_CODE_OAUTH_TOKEN) are
+#   limited to inference-only for security reasons.
+# So this service deliberately keeps the env clean.
+# Bootstrap procedure for the credentials.json is in README.md.
 
 # ghcr-credentials is already managed by labs/openclaw — no second owner here.
-
-# CLAUDE_CODE_OAUTH_TOKEN from Vault (path: secret/platform/claude-remote).
-# vault-backend ClusterSecretStore has path="secret" version="v2" — ESO adds
-# "data/" automatically, so remoteKey does NOT need the "secret/data/" prefix
-# (same pattern as admins/mctl-agent which uses "platform/mctl-agent/tokens").
-externalSecret:
-  targetSecret: claude-remote-secrets
-  data:
-    - secretKey: CLAUDE_CODE_OAUTH_TOKEN
-      remoteKey: platform/claude-remote
-      property: CLAUDE_CODE_OAUTH_TOKEN
 
 # MinIO credentials — same Vault path as labs/openclaw
 extraExternalSecrets:
