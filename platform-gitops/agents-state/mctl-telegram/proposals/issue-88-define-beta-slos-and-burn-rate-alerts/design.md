@@ -90,10 +90,19 @@ correct SLI data sources for OAuth availability.
 
 ### Existing infrastructure for alerts and dashboards
 
-No `deploy/` directory exists in the repository. Issue #86 creates the
-PrometheusRule CRD infrastructure; issue #87 creates the initial Grafana
-dashboard. This proposal defines the YAML/JSON content; deployment plumbing is
-assumed delivered by those two issues.
+`deploy/alerts/` already exists, with `canary.rules.yaml` (issue #89) as the
+working precedent: a `monitoring.coreos.com/v1` `PrometheusRule` in
+`namespace: monitoring` with labels `prometheus: kube-prometheus` /
+`role: alert-rules`, which the VictoriaMetrics operator auto-converts to a
+VMRule. Issue #86 adds `deploy/alerts/mctl-telegram.rules.yaml` (pool / flood /
+oauth alerts). Issue #87 (Grafana dashboard) is already merged. So this
+proposal only needs to (a) define new SLO content and (b) APPEND to the file
+#86 creates — it does NOT create CRD infrastructure (that already exists) and
+does NOT need to wait on a dashboard that is already present.
+
+**Sequencing:** this proposal must be implemented AFTER #86 merges, because it
+appends burn-rate alert groups to the same `deploy/alerts/mctl-telegram.rules.yaml`
+file. Branch from a main that already contains #86's file.
 
 ---
 
@@ -191,8 +200,11 @@ A new Markdown file documenting:
 
 ### 3. deploy/alerts/mctl-telegram.rules.yaml
 
-A PrometheusRule CRD YAML (depends on the CRD being installed by #86) with two
-alert groups.
+APPEND two new burn-rate alert groups to the existing
+`deploy/alerts/mctl-telegram.rules.yaml` (created by #86). Keep the file's
+metadata unchanged (`namespace: monitoring`, labels `prometheus: kube-prometheus`
+/ `role: alert-rules` — matching `canary.rules.yaml`). The VM operator converts
+the whole PrometheusRule, including the new groups.
 
 **Group: mctl-telegram-tool-availability**
 
@@ -323,11 +335,15 @@ is acceptable. If higher resolution is needed, a follow-up chore can add 2s and
 
 ### Dependency on #86 and #87
 
-- The PrometheusRule YAML cannot be applied until the PrometheusRule CRD is
-  installed (depends on #86).
-- The Grafana JSON changes cannot be deployed until the base dashboard exists
-  (depends on #87).
-- `docs/slo.md` and the new metric can be merged independently of both.
+- The burn-rate groups APPEND to `deploy/alerts/mctl-telegram.rules.yaml`, which
+  #86 creates — so this must be implemented after #86 merges (file-level
+  ordering, not a CRD dependency: the PrometheusRule CRD / VM-operator conversion
+  is already proven by `canary.rules.yaml`).
+- The Grafana SLO row appends to the dashboard from #87, which is already merged
+  (`deploy/grafana/`). Verify the actual JSON path and avoid panel-ID conflicts
+  at implementation time.
+- `docs/slo.md` and the new `mctl_sessions_borrow_total` counter can be merged
+  independently of both.
 
 ### Backward compatibility
 

@@ -121,18 +121,33 @@ Diagnostic queries use:
 
 The SLO burn-rate section (the seventh entry) does not have a single named
 alert but links to both fast-burn and slow-burn Alertmanager alert names from
-#88. The diagnostic subsection cross-references the six specific alert sections
+#88. The diagnostic subsection cross-references the specific alert sections
 above, because SLO burn is a composite signal.
 
-The canary section (`MctlTelegramCanaryFailing`) references
-`mctl_telegram_canary_step_failure_total{step=}` as specified in the issue,
-acknowledging that this metric is defined in #89 and not yet present in the
-codebase.
+The canary alerts (`MctlTelegramCanaryFailing`, `MctlTelegramCanaryStale`,
+`MctlTelegramCanaryAbsent`) are **already shipped** in #89 and ALREADY have a
+dedicated runbook at `docs/runbooks/canary.md` (its alert annotations point
+there). Do NOT recreate canary content in `docs/runbook.md` — instead, the
+canary entry in the new runbook's table of contents links out to
+`docs/runbooks/canary.md`. This avoids a divergent second copy.
 
-### File 2: deploy/alerts/mctl-telegram.rules.yaml (update, depends on #86)
+Note on alert sourcing: the only alerts whose `runbook_url` this issue can edit
+in `deploy/alerts/mctl-telegram.rules.yaml` are #86's three new alerts
+(`MctlTelegramPoolNearCapacity`, `MctlTelegramFloodWaitSpike`,
+`MctlTelegramOAuthPendingStuck`). The auth-failure, client-error, and
+rate-limit alerts live in the `mctl-telegram-alerts` VMRule in `mctl-gitops`
+(from #59) — the runbook can still document them, but adding `runbook_url`
+there is a separate gitops edit, out of scope for the implementer's repo clone.
 
-After #86 lands and the alert rules YAML exists, add a `runbook_url` annotation
-to each PrometheusRule `alert:` block. Example diff:
+### File 2: deploy/alerts/mctl-telegram.rules.yaml (update, depends on #86 merged)
+
+After #86 merges and the alert rules YAML exists, add/confirm a `runbook_url`
+annotation on the three new alert blocks it contains
+(`MctlTelegramPoolNearCapacity`, `MctlTelegramFloodWaitSpike`,
+`MctlTelegramOAuthPendingStuck`). #86 already sets forward-referencing
+`docs/runbook.md#<anchor>` URLs; this issue just guarantees they resolve to the
+new sections. Do NOT touch `canary.rules.yaml` (its runbook_url already points
+to `docs/runbooks/canary.md`). Example diff:
 
 ```yaml
 annotations:
@@ -145,15 +160,19 @@ This task is explicitly listed as "depends on #86" in tasks.md.
 
 ### Anchor scheme
 
-| Alert name | Anchor id |
-|---|---|
-| MctlTelegramPoolNearCapacity | `mctltelegramnearcapacity` |
-| MctlTelegramFloodWaitSpike | `mctltelegramfloodwaitspike` |
-| MctlTelegramOAuthPendingStuck | `mctltelegramoauthpendingstuck` |
-| MctlTelegramAuthFailuresSpike | `mctltelegramauthfailuresspike` |
-| MctlTelegramClientErrorsSpike | `mctltelegramclienterrorsspike` |
-| MctlTelegramCanaryFailing | `mctltelegramcanarying` |
-| SLO burn-rate (fast + slow) | `sloburnrate` |
+| Alert name | Anchor id | Source |
+|---|---|---|
+| MctlTelegramPoolNearCapacity | `mctltelegramnearcapacity` | #86 (repo rules file) |
+| MctlTelegramFloodWaitSpike | `mctltelegramfloodwaitspike` | #86 |
+| MctlTelegramOAuthPendingStuck | `mctltelegramoauthpendingstuck` | #86 |
+| JWTExpiredSpike / JWTInvalidSpike | `jwtfailures` | #59 (gitops VMRule) |
+| TelegramClientErrors | `telegramclienterrors` | #59 (gitops VMRule) |
+| RateLimitSpike | `ratelimitspike` | #59 (gitops VMRule) |
+| Canary (Failing/Stale/Absent) | — links to `docs/runbooks/canary.md` | #89 (already shipped) |
+| SLO burn-rate (fast + slow) | `sloburnrate` | #88 |
+
+(The auth/client-error/rate-limit alerts use the deployed `mctl-telegram-alerts`
+VMRule names from #59, not the duplicate names the issue text originally drafted.)
 
 Anchors are all lowercase to match GitHub Markdown's auto-anchor behaviour and
 to avoid ambiguity between `id=` and fragment navigation.
@@ -208,7 +227,7 @@ No runtime memory or CPU is affected.
 
 | Risk | Mitigation |
 |---|---|
-| Anchor names drift from `runbook_url` values in #86 | Anchor scheme table in this design is the single source of truth; #86 implementer must reference it |
-| Canary metric names change in #89 | Runbook explicitly notes that `mctl_telegram_canary_*` names are provisional; a follow-up PR after #89 merges updates the section |
+| Anchor names drift from `runbook_url` values in #86 | Anchor scheme table in this design is the single source of truth; #86 already uses these anchors |
+| Canary content duplicated | #89 is already shipped with `docs/runbooks/canary.md`; this runbook LINKS to it rather than copying — no second source of truth |
 | SLO burn policy not yet defined by #88 | Section describes the intent (feature freeze, rollback) at a conceptual level; a follow-up sharpens the wording post-#88 |
 | Pod restart clears in-memory OAuth pending state | Runbook documents this trade-off explicitly in the `MctlTelegramOAuthPendingStuck` mitigation section |

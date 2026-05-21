@@ -31,9 +31,13 @@
   explicitly documents the FLOOD_WAIT and TTL-expiry exclusions; references
   `deploy/alerts/mctl-telegram.rules.yaml` for the alert YAML.
 
-- [ ] 4. Write `deploy/alerts/mctl-telegram.rules.yaml` (depends on 3)
+- [ ] 4. APPEND burn-rate groups to `deploy/alerts/mctl-telegram.rules.yaml`
+  (depends on 3 AND on #86 having merged — the file and its
+  `namespace: monitoring` + `prometheus: kube-prometheus`/`role: alert-rules`
+  metadata are created by #86; do NOT overwrite #86's pool/flood/oauth groups)
   — DoD: file is a valid PrometheusRule CRD YAML (apiVersion:
-  monitoring.coreos.com/v1); contains group `mctl-telegram-tool-availability`
+  monitoring.coreos.com/v1); retains #86's existing groups; adds group
+  `mctl-telegram-tool-availability`
   with MctlToolAvailabilityFastBurn (14.4x/1h, severity=page) and
   MctlToolAvailabilitySlowBurn (6x/6h, severity=ticket); contains group
   `mctl-telegram-oauth-availability` with MctlOAuthAvailabilityFastBurn and
