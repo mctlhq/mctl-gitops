@@ -52,12 +52,11 @@ is actually deployed.
   SHALL fire `MctlTelegramFloodWaitSpike` with `severity: critical`.
 - WHEN `mctl_oauth_pending_auth_size > 100` persists for 15 minutes THE SYSTEM
   SHALL fire `MctlTelegramOAuthPendingStuck` with `severity: warning`.
-- WHEN `sum(rate(mctl_auth_failures_total[5m])) > 1` THE SYSTEM SHALL fire
-  `MctlTelegramAuthFailuresSpike` with `severity: warning`.
-- WHEN `sum(rate(mctl_telegram_client_errors_total[5m])) > 0.2` THE SYSTEM SHALL
-  fire `MctlTelegramClientErrorsSpike` with `severity: warning`.
-- WHEN `sum(rate(mctl_rate_limit_events_total[5m])) > 1` THE SYSTEM SHALL fire
-  `MctlTelegramRateLimitWave` with `severity: warning`.
+- (SUPERSEDED — `MctlTelegramAuthFailuresSpike`, `MctlTelegramClientErrorsSpike`,
+  and `MctlTelegramRateLimitWave` are NOT shipped by this issue: they duplicate
+  the already-deployed `mctl-telegram-alerts` VMRule's `JWTExpiredSpike`/
+  `JWTInvalidSpike`, `TelegramClientErrors`, and `RateLimitSpike` respectively.
+  See design.md "Existing deployed alerts".)
 - WHILE the `PrometheusRule` manifest is deployed THE SYSTEM SHALL include
   `summary`, `description`, `runbook_url`, and `severity` annotations/labels on
   every alert rule.
@@ -70,8 +69,11 @@ is actually deployed.
 
 ## Out of scope
 
-- Burn-rate / error-budget SLO alerts (tracked separately).
-- Synthetic canary alerts (tracked separately).
+- The three alerts that duplicate the deployed `mctl-telegram-alerts` VMRule
+  (`MctlTelegramAuthFailuresSpike`, `MctlTelegramClientErrorsSpike`,
+  `MctlTelegramRateLimitWave`). Only Pool/FloodWait/OAuthPending ship here.
+- Burn-rate / error-budget SLO alerts (tracked separately in #88).
+- Synthetic canary alerts (already shipped in #89: `deploy/alerts/canary.rules.yaml`).
 - Prometheus Adapter configuration for HPA custom metrics (already covered by
   `docs/hpa.md` and `mctl-gitops/platform-gitops/k8s/prometheus-adapter/`).
 - Changes to Go metric instrumentation code in `internal/metrics/`.
@@ -79,13 +81,13 @@ is actually deployed.
 
 ## Open questions
 
-1. **Namespace and label selector**: The `PrometheusRule` needs a `namespace`
-   field and a set of labels that match the `Prometheus` CR's `ruleSelector`.
-   The issue does not specify the target namespace (likely `mctl` based on HPA
-   stanza in `docs/hpa.md`) or the required label set for the operator.
-   Reasonable default: `namespace: mctl`, labels `app: mctl-telegram` and
-   `release: kube-prometheus-stack` (common convention for kube-prometheus-stack
-   installs). Implementer should confirm with the gitops operator config.
+1. **Namespace and label selector** — RESOLVED. The platform runs the
+   VictoriaMetrics operator, which converts `PrometheusRule` → `VMRule` when the
+   object is in `namespace: monitoring` with labels `prometheus: kube-prometheus`
+   and `role: alert-rules`. This is proven by the deployed
+   `deploy/alerts/canary.rules.yaml` (converted to an operational
+   `mctl-telegram-canary` VMRule). Use exactly those values. Do NOT use
+   `namespace: mctl` or `release: kube-prometheus-stack`.
 
 2. **`for` clause on rate-based alerts**: `MctlTelegramFloodWaitSpike`,
    `MctlTelegramAuthFailuresSpike`, `MctlTelegramClientErrorsSpike`, and

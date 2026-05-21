@@ -34,20 +34,65 @@ No `PrometheusRule` CRD manifest exists anywhere in the repository tree.
 
 ### Deployment layout
 
-There is no `deploy/` directory in the repository at this time. The issue
-designates `deploy/alerts/mctl-telegram.rules.yaml` as the target path,
-consistent with a convention where deployment manifests live alongside the
-application source and are mirrored into `mctl-gitops` by the release pipeline.
+A `deploy/alerts/` directory now exists, created by the synthetic-canary work
+(issue #89): `deploy/alerts/canary.rules.yaml`. **This file is the authoritative
+precedent for this repo and the cluster** — follow it exactly. It is a
+`PrometheusRule` (`monitoring.coreos.com/v1`) with:
+
+```yaml
+metadata:
+  name: <rule-name>
+  namespace: monitoring
+  labels:
+    prometheus: kube-prometheus
+    role: alert-rules
+```
+
+The platform runs the **VictoriaMetrics operator**, which auto-converts any
+`PrometheusRule` carrying those labels into a `VMRule` (verified: the canary
+PrometheusRule was converted to an operational `mctl-telegram-canary` VMRule in
+the `monitoring` namespace). So `kind: PrometheusRule` is correct AS LONG AS the
+namespace is `monitoring` and the labels are `prometheus: kube-prometheus` +
+`role: alert-rules`. **Do NOT use `namespace: mctl` or
+`release: kube-prometheus-stack`** — those will silently never load.
+
+### Existing deployed alerts (issue #59) — DO NOT DUPLICATE
+
+A `VMRule` named `mctl-telegram-alerts` is already deployed in the `monitoring`
+namespace (source: `mctl-gitops/platform-gitops/infra-components/observability/
+vm-rules/mctl-telegram-alerts.yaml`, from issue #59). It already covers:
+
+| Existing alert | Expression |
+|---|---|
+| `JWTExpiredSpike` | `rate(mctl_auth_failures_total{reason="jwt_expired"}[5m]) > 0.1` |
+| `JWTInvalidSpike` | `rate(mctl_auth_failures_total{reason=~"jwt_invalid.*..."}[5m]) > 0.05` |
+| `HighToolErrorRate`, `HighToolLatency`, `ZeroTraffic` | tool-invocation SLIs |
+| `RateLimitSpike` | `rate(mctl_rate_limit_events_total[5m]) > 1` |
+| `TelegramClientErrors` | `increase(mctl_telegram_client_errors_total[10m]) > 0` |
+| `ServiceUnavailable` | blackbox `probe_success == 0` |
+
+Three of the alerts this issue originally listed are **already covered** by the
+above and MUST NOT be re-added (double-paging):
+- `MctlTelegramRateLimitWave` ≈ existing `RateLimitSpike` (identical metric/threshold) → DROP
+- `MctlTelegramClientErrorsSpike` ≈ existing `TelegramClientErrors` → DROP
+- `MctlTelegramAuthFailuresSpike` ≈ existing `JWTExpiredSpike` + `JWTInvalidSpike` → DROP
+
+The genuinely new alerts this issue should ship are only the three not yet
+covered: `MctlTelegramPoolNearCapacity`, `MctlTelegramFloodWaitSpike`,
+`MctlTelegramOAuthPendingStuck`.
 
 ## Proposed solution
 
 ### 1. New file: `deploy/alerts/mctl-telegram.rules.yaml`
 
-Create a `PrometheusRule` custom resource (Prometheus Operator CRD,
-`monitoring.coreos.com/v1`) at `deploy/alerts/mctl-telegram.rules.yaml`.
+Create a `PrometheusRule` custom resource (`monitoring.coreos.com/v1`) at
+`deploy/alerts/mctl-telegram.rules.yaml`, mirroring the structure of the
+existing `deploy/alerts/canary.rules.yaml` (same apiVersion, `namespace:
+monitoring`, labels `prometheus: kube-prometheus` / `role: alert-rules`).
 
-The manifest contains one `RuleGroup` named `mctl-telegram.rules` with eight
-alert rules covering every metric surface called out in the issue:
+The manifest contains one `RuleGroup` named `mctl-telegram.rules` with the
+THREE genuinely-new alert rules (the other surfaces are already covered by the
+deployed `mctl-telegram-alerts` VMRule — see "Existing deployed alerts" above):
 
 **MctlTelegramPoolNearCapacity (warning)**
 ```
@@ -99,28 +144,32 @@ refreshed every minute by the OAuth server sweeper (`oauth.Server.StartSweeper`
 called in `cmd/server/main.go` line 449), so a 15-minute window sees at minimum
 15 successive samples above threshold before firing.
 
-**MctlTelegramAuthFailuresSpike, MctlTelegramClientErrorsSpike, MctlTelegramRateLimitWave**
-Each uses `sum(rate(...[5m]))` with the threshold from the issue and `for: 2m`.
+(`MctlTelegramAuthFailuresSpike`, `MctlTelegramClientErrorsSpike`, and
+`MctlTelegramRateLimitWave` are intentionally OMITTED — they duplicate the
+already-deployed `mctl-telegram-alerts` VMRule. See "Existing deployed alerts".)
 
 Every alert carries:
 - `annotations.summary` — one-sentence human description.
 - `annotations.description` — one sentence with `{{ $value }}` templating where
   appropriate.
-- `annotations.runbook_url` — placeholder URL pointing to the GitHub wiki;
-  a follow-up issue replaces these with real runbook content.
+- `annotations.runbook_url` — points to the runbook section that issue #92 will
+  author at `docs/runbook.md#<anchor>` (use the anchor scheme in #92's design:
+  `mctltelegramnearcapacity`, `mctltelegramfloodwaitspike`,
+  `mctltelegramoauthpendingstuck`). The runbook file does not exist until #92
+  lands; the URL is forward-referencing and harmless until then.
 - `labels.severity` — `warning` or `critical`.
+- `labels.service: mctl-telegram` — matches the convention in `canary.rules.yaml`.
 
-The manifest metadata uses:
+The manifest metadata MUST be (matching `deploy/alerts/canary.rules.yaml`):
 ```yaml
-namespace: mctl
+namespace: monitoring
 labels:
-  app: mctl-telegram
-  release: kube-prometheus-stack
+  prometheus: kube-prometheus
+  role: alert-rules
 ```
-`namespace: mctl` matches the HPA stanza in `docs/hpa.md`. The `release` label
-is the standard selector used by kube-prometheus-stack's default
-`Prometheus` CR `ruleSelector`. The implementer should verify this matches their
-gitops Prometheus CR configuration (open question 1 in requirements).
+The VictoriaMetrics operator converts this PrometheusRule into a VMRule
+automatically (the canary rule proves this works). Do not use `namespace: mctl`
+or `release: kube-prometheus-stack`.
 
 ### 2. Update `docs/hpa.md`
 
@@ -132,13 +181,17 @@ existing prose notes about `mctl_telegram_flood_wait_events_total` and
 `mctl_oauth_pending_auth_size` (lines 125-133) should be updated to reference
 the manifest rather than suggesting future alert creation.
 
-### 3. Follow-up gitops PR (documented, not automated)
+### 3. Follow-up gitops mirror (documented, not automated)
 
-`docs/hpa.md` will note that the manifest should be mirrored at
-`platform-gitops/k8s/mctl-telegram/alerts/mctl-telegram.rules.yaml` in
-`mctl-gitops` (adjacent to the existing
-`platform-gitops/k8s/prometheus-adapter/` path referenced on line 101 of
-`docs/hpa.md`). The implementer must open that PR manually after this one merges.
+The PrometheusRule in this repo does NOT auto-deploy — it must be applied to the
+cluster. The GitOps-managed home for mctl-telegram alerts is
+`mctl-gitops/platform-gitops/infra-components/observability/vm-rules/` (where
+`mctl-telegram-alerts.yaml` from issue #59 already lives). `docs/hpa.md` should
+note that an operator mirrors the new rules there (as a sibling
+`mctl-telegram-extra.rules.yaml`, or by extending `mctl-telegram-alerts.yaml`).
+The implementer cannot write to `mctl-gitops` (writes outside its cwd clone are
+forbidden), so this mirror is a manual operator step after the mctl-telegram PR
+merges.
 
 ## Alternatives
 
@@ -153,17 +206,20 @@ asks to move the rules out of the doc. Rejected.
 One could write a Go tool (`cmd/gen-rules/main.go`) that reads metric
 registration and emits YAML. This would guarantee the metric names in the
 manifest stay in sync with `internal/metrics/metrics.go`. However, it adds
-build-time complexity for six alert rules whose metric names are stable
+build-time complexity for three alert rules whose metric names are stable
 identifiers unlikely to change silently. The risk of drift is low and caught at
-review time. Over-engineering for a six-rule file. Rejected.
+review time. Over-engineering for a three-rule file. Rejected.
 
-### C. Place the manifest in `mctl-gitops` directly, not in this repo (rejected)
+### C. Place the manifest only in `mctl-gitops`, not in this repo (rejected)
 
 Keeping deployment artifacts in the application repo (`deploy/`) ensures that a
 PR changing metric names also touches the alert expressions in the same diff, and
-that PRs to this repo are the authoritative gate for alert configuration. Placing
-the manifest only in `mctl-gitops` breaks that coupling. The issue explicitly
-names `deploy/alerts/mctl-telegram.rules.yaml` as the target path. Rejected.
+that PRs to this repo are the authoritative gate for alert configuration. The
+issue explicitly names `deploy/alerts/mctl-telegram.rules.yaml` as the target
+path, and `deploy/alerts/canary.rules.yaml` already establishes this pattern.
+Note this is a source-of-truth choice only — the file must still be mirrored
+into `mctl-gitops` to actually deploy (see section 3). Rejected as the *sole*
+location, kept as the authoring location.
 
 ## Platform impact
 
@@ -176,9 +232,9 @@ The manifest is purely additive. No existing behaviour changes. The `/metrics`
 endpoint, metric names, and cardinality are unaffected.
 
 ### Resource impact
-A `PrometheusRule` CR is a lightweight Kubernetes object evaluated by Prometheus
-Operator. Eight rules against time-series that are already being scraped add
-negligible evaluation overhead.
+A `PrometheusRule` CR is a lightweight Kubernetes object converted to a VMRule by
+the VictoriaMetrics operator and evaluated by vmalert. Three rules against
+time-series that are already being scraped add negligible evaluation overhead.
 
 ### Risks and mitigations
 
@@ -186,5 +242,6 @@ negligible evaluation overhead.
 |---|---|
 | Pool-capacity guard omitted; alert fires spuriously when cap is uncapped | Explicit `and mctl_telegram_pool_capacity > 0` in both pool alert expressions |
 | `for:` window absent on rate alerts; flapping on brief spikes | `for: 2m` stabilisation window added to all rate-based alerts |
-| Namespace or `ruleSelector` labels mismatch; rule never loaded by Prometheus Operator | Document the assumption (open question 1); implementer must verify against the gitops Prometheus CR config before the gitops mirror PR |
-| `docs/hpa.md` inline YAML removed but gitops mirror PR not opened | The gitops PR is a named task (task 4 in tasks.md); `docs/hpa.md` explicitly instructs operators on the mirror path |
+| Wrong namespace/labels → VM operator never converts the PrometheusRule | Use `namespace: monitoring` + labels `prometheus: kube-prometheus` / `role: alert-rules`, matching `deploy/alerts/canary.rules.yaml` exactly (proven to convert) |
+| Duplicate alerts with the deployed `mctl-telegram-alerts` VMRule → double-paging | Ship only the three new alerts (Pool, FloodWait, OAuthPending); drop RateLimitWave/ClientErrorsSpike/AuthFailuresSpike |
+| File in repo does not auto-deploy | `docs/hpa.md` documents the manual gitops mirror into `infra-components/observability/vm-rules/` |
