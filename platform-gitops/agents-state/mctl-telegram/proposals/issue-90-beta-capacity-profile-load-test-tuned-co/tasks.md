@@ -1,5 +1,18 @@
 # Tasks: issue-90-beta-capacity-profile-load-test-tuned-co
 
+> **IMPLEMENTER SCOPE (this PR): tasks 1, 2, 3 and tests T1, T2, T3 ONLY.**
+> These are pure code/test deliverables: the `DB_MAX_*` config wiring, the
+> `db.Open` pool parameters, the `test/load/` binary, and the CI build step.
+>
+> **Tasks 4-8 are DEFERRED — DO NOT attempt them in this PR.** They require
+> running the load-test binary against live 1 GiB / 2 GiB staging pods and
+> recording *measured* numbers (saturation points, RSS curves, DB pool
+> pressure). The implementer cannot run a real load test, so it MUST NOT
+> fabricate, estimate, or guess any of those values. Tasks 4-8 (the load-test
+> runs, `docs/load-test-beta.md`, `deploy/profiles/beta.env`, and the
+> `docs/hpa.md` capacity-table update) are a manual operational follow-up
+> after this code PR merges.
+
 - [ ] 1. Add DBMaxOpenConns and DBMaxIdleConns to config.Config —
   In `internal/config/config.go`, add two fields to the Config struct after
   the existing `TelegramMaxSessions` field:
