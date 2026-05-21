@@ -1,22 +1,16 @@
 image:
   repository: ghcr.io/mctlhq/mctl-claude-remote
-  tag: "0.1.8"
-
+  tag: "0.1.9"
 imagePullSecrets:
   - name: ghcr-credentials
-
 service:
   port: 8080
-
 replicaCount: 1
-
 # Single replica — Recreate avoids quota deadlocks (same reason as openclaw)
 strategy:
   type: Recreate
-
 # Give s3-sync sidecar time to flush workspace to MinIO on shutdown
 terminationGracePeriodSeconds: 60
-
 resources:
   requests:
     cpu: 250m
@@ -24,20 +18,16 @@ resources:
   limits:
     cpu: 1000m
     memory: 2Gi
-
 podSecurityContext:
   fsGroup: 1000
   runAsNonRoot: true
   runAsUser: 1000
-
 securityContext:
   allowPrivilegeEscalation: false
   capabilities:
     drop: [ALL]
-
 env:
   PORT: "8080"
-
 # Intentionally NO envFrom / no CLAUDE_CODE_OAUTH_TOKEN in env:
 #
 # `claude --remote-control` needs a full-scope claude.ai login (from
@@ -64,16 +54,13 @@ extraExternalSecrets:
       - secretKey: secret-key
         remoteKey: platform/minio
         property: root-password
-
 # Workspace lives in emptyDir, persisted to MinIO by s3-sync sidecar
 extraVolumes:
   - name: workspace
     emptyDir: {}
-
 extraVolumeMounts:
   - name: workspace
     mountPath: /workspace
-
 # Restore workspace from MinIO before claude starts
 initContainers:
   - name: restore-state
@@ -116,7 +103,6 @@ initContainers:
     volumeMounts:
       - name: workspace
         mountPath: /workspace
-
 # s3-sync sidecar — mirrors /workspace → MinIO every 10 s + sync on pod shutdown
 extraContainers:
   - name: s3-sync
@@ -167,7 +153,6 @@ extraContainers:
               mc mirror --overwrite --remove \
                 --exclude '.mc/*' --exclude '*.tmp' \
                 /workspace s3/platform-state/labs/claude-remote/
-
 probes:
   startup:
     path: /healthz
@@ -189,7 +174,6 @@ probes:
     periodSeconds: 10
     timeoutSeconds: 3
     failureThreshold: 5
-
 ingress:
   enabled: true
   className: traefik
@@ -205,6 +189,5 @@ ingress:
     enabled: true
     address: "https://app.mctl.ai/api/oidc-provider/forward-auth?tenant=labs&service=claude-remote"
     trustForwardHeader: true
-
 backstage:
   kubernetesId: claude-remote
