@@ -118,10 +118,47 @@ extraContainers:
     args:
       - |
         mc alias set s3 "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
+        # GC keep-list: auth, config, native binary, and mc's own state.
+        # Everything else under /workspace (cloned repos, caches, build
+        # artifacts) is disposable and is pruned on schedule / size.
+        keep() {
+          case "$1" in
+            .claude|.claude.json|CLAUDE.md|.local|.mc) return 0 ;;
+            *) return 1 ;;
+          esac
+        }
+        THRESHOLD_KB=5242880   # 5 GiB
+        WEEK=604800            # 7 days
+        last_gc=$(date +%s)    # don't prune right after a (re)start
+        i=0
         while true; do
-          mc mirror --overwrite --remove \
-            --exclude '.mc/*' --exclude '*.tmp' \
+          # Additive backup only -- NO --remove here, so a local logout that
+          # deletes ~/.claude/.credentials.json can never wipe the MinIO
+          # credentials backup (root cause of the 2026-05-21 restart loop).
+          mc mirror --overwrite --exclude '.mc/*' --exclude '*.tmp' \
             /workspace s3/platform-state/labs/claude-remote/ || true
+          # GC check ~hourly (360 * 10s) so du doesn't walk the tree each cycle.
+          i=$((i + 1))
+          if [ $((i % 360)) -eq 0 ]; then
+            now=$(date +%s)
+            size_kb=$(du -sk /workspace 2>/dev/null)
+            size_kb=${size_kb%%[!0-9]*}
+            if [ "${size_kb:-0}" -gt "$THRESHOLD_KB" ] || [ $((now - last_gc)) -ge "$WEEK" ]; then
+              echo "[gc] pruning /workspace (size=${size_kb}KB), keeping auth/config only"
+              for entry in /workspace/* /workspace/.[!.]*; do
+                [ -e "$entry" ] || continue
+                keep "$(basename "$entry")" && continue
+                echo "[gc] rm -rf $entry"
+                rm -rf "$entry"
+              done
+              # Reconcile the prune to MinIO. --remove clears the deleted paths,
+              # but --exclude '.claude/*' keeps auth/config backups untouchable.
+              mc mirror --overwrite --remove \
+                --exclude '.mc/*' --exclude '.claude/*' --exclude '*.tmp' \
+                /workspace s3/platform-state/labs/claude-remote/ || true
+              last_gc=$(date +%s)
+            fi
+          fi
           sleep 10
         done
     env:
@@ -150,8 +187,9 @@ extraContainers:
             - -c
             - |
               mc alias set s3 "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
-              mc mirror --overwrite --remove \
-                --exclude '.mc/*' --exclude '*.tmp' \
+              # Additive flush on shutdown -- NO --remove, same reason as the
+              # sync loop: never let teardown wipe the MinIO credentials backup.
+              mc mirror --overwrite --exclude '.mc/*' --exclude '*.tmp' \
                 /workspace s3/platform-state/labs/claude-remote/
 probes:
   startup:
