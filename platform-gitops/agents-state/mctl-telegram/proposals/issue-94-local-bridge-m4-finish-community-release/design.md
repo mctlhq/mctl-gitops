@@ -120,6 +120,43 @@ The following items from the issue are absent from the codebase:
 
 ## Proposed solution
 
+### Milestone split: M4 vs M4.1
+
+This issue as filed bundles 28 tasks across 6 slices into one "community
+release". That is too large to accept and implement as a single unit: it mixes
+in-repo production-hardening with cross-repo OAuth work, third-party
+distribution infrastructure (Homebrew tap, GoReleaser, code signing), and a new
+external dependency (`99designs/keyring`). To keep each implementer PR
+reviewable and to land production value early, the work is split into two
+milestones. The implementer should treat **M4 and M4.1 as separate accept/PR
+units**.
+
+**M4 — Production-ready bridge (Slices 1–2, this repo only).**
+Audit `call_path` marker, bridge metrics + flapping alert, `/security` page
+copy, accurate `DESIGN.md`, server-side pong deadline, and bounded
+backpressure. Every task is self-contained to `mctl-telegram`, additive, and
+reversible (see Rollback). This is the milestone that makes a multi-user bridge
+deployment observable and safe. Ship this first.
+
+**M4.1 — Community distribution (Slices 3–6).**
+Cross-repo OAuth PKCE (`mctl-api` + `mctl-web`), GoReleaser + Homebrew tap +
+install script + code signing, OS keychain integration, and user-facing docs.
+These depend on resources outside this repo, introduce new external surface, and
+are not required for an operator-driven bridge rollout.
+
+**Manual-token path is not gated on OAuth.** `mctl-telegram-local connect
+--token <jwt>` already works today and remains the supported path through all of
+M4 and into M4.1 (Task 17 keeps `--token` even after the PKCE flow lands).
+Therefore Slice 3 (cross-repo OAuth) is an **opt-in convenience, not a release
+blocker** — answering open question 4: the community release can ship on the
+manual-token path and migrate to OAuth as a follow-on. M4.1's distribution
+slices (4, 6) can land before Slice 3.
+
+The slice ordering inside each milestone is unchanged from `tasks.md`: within
+M4, Slice 1 lands before Slice 2; within M4.1, Slices 4/5/6 may proceed in
+parallel once M4's Slice 1 is merged, and Slice 3 lands whenever the cross-repo
+OAuth dependency is ready.
+
 ### Slice 1 — Server-side polish
 
 #### 1a. Audit `call_path` column
