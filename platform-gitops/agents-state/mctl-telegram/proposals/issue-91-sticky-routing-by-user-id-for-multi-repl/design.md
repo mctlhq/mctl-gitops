@@ -21,12 +21,38 @@ type ClientPool struct {
 
 `entries` maps an internal `user_id int64` to an `*entry`, where each entry
 holds a running `*telegram.Client` goroutine pair (`run` + `gc`). The `acquire`
-method (line 191) creates a new entry when none exists for the user. There is no
-cross-process state: each replica maintains its own map independently.
+method creates a new entry when none exists for the user.
 
-When a second replica receives a request for a user whose client is live on
-replica 1, `acquire` creates a fresh `*telegram.Client` with a fresh MTProto
-session. Telegram registers this as a new device login.
+#### What is per-replica vs what is shared
+
+The framing "the pool is in-process" is only half the picture, and getting the
+distinction right is essential to understanding why sticky routing is needed
+but a distributed pool is not.
+
+- **Per-replica (in-process):** the `entries map[int64]*entry`, the live
+  `*telegram.Client`, and its `run`/`gc` goroutines. These exist only inside the
+  pod that called `acquire` and are never shared across replicas.
+- **Shared (DB-backed via `Store *db.Store`):** the persisted MTProto session
+  credential and its validity/last-used state. `Borrow()` consults `p.Store` on
+  every invocation — `CheckSessionValid` *before* `acquire()`, `MarkLastUsed`
+  after a successful call, and `RevokeActiveSession` when MTProto returns an
+  auth-class error. The session credential itself is loaded/saved through
+  `SessionStore{Store: p.Store}`.
+
+The consequence: when a second replica receives a request for a user whose live
+client is on replica 1, the DB still holds a valid session row, but replica 2
+has no in-process entry, so `acquire` builds a fresh `*telegram.Client`. Telegram
+registers that fresh connection as a **new device login**. Sticky routing
+eliminates this by keeping a given `user_id` pinned to the replica that already
+holds its live client. A distributed (e.g. Redis-leased) pool is therefore
+**not** required to share credentials — those are already shared in the DB; the
+only thing sticky routing protects is the *liveness* of one in-process client
+per user, avoiding redundant device logins.
+
+When a replica is removed or the consistent hash re-maps a user (scale event,
+pod restart), the in-process client for that user is lost and the next request
+on the new replica triggers exactly one "new device login". This is unavoidable
+and is documented as expected behaviour, not a defect.
 
 ### Auth middleware and JWT structure
 
