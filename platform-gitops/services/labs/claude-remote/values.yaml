@@ -129,6 +129,7 @@ extraContainers:
         }
         THRESHOLD_KB=5242880   # 5 GiB
         WEEK=604800            # 7 days
+        ACTIVE=24h             # spare anything modified within this window
         last_gc=$(date +%s)    # don't prune right after a (re)start
         i=0
         while true; do
@@ -144,10 +145,16 @@ extraContainers:
             size_kb=$(du -sk /workspace 2>/dev/null)
             size_kb=${size_kb%%[!0-9]*}
             if [ "${size_kb:-0}" -gt "$THRESHOLD_KB" ] || [ $((now - last_gc)) -ge "$WEEK" ]; then
-              echo "[gc] pruning /workspace (size=${size_kb}KB), keeping auth/config only"
+              echo "[gc] pruning /workspace (size=${size_kb}KB), keeping auth/config + active work"
               for entry in /workspace/* /workspace/.[!.]*; do
                 [ -e "$entry" ] || continue
                 keep "$(basename "$entry")" && continue
+                # Spare anything modified within $ACTIVE -- likely active,
+                # uncommitted in-session work; only prune cold clutter.
+                if [ -n "$(mc find "$entry" --newer-than "$ACTIVE" 2>/dev/null | head -1)" ]; then
+                  echo "[gc] skip (active <$ACTIVE): $entry"
+                  continue
+                fi
                 echo "[gc] rm -rf $entry"
                 rm -rf "$entry"
               done
