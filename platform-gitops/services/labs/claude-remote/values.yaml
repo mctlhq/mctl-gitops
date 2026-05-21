@@ -118,10 +118,66 @@ extraContainers:
     args:
       - |
         mc alias set s3 "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
+        # GC keep-list: auth, config, native binary, and mc's own state.
+        # Everything else under /workspace (cloned repos, caches, build
+        # artifacts) is disposable and is pruned on schedule / size.
+        keep() {
+          case "$1" in
+            .claude|.claude.json|CLAUDE.md|.local|.mc) return 0 ;;
+            *) return 1 ;;
+          esac
+        }
+        THRESHOLD_KB=5242880   # 5 GiB
+        WEEK=604800            # 7 days
+        ACTIVE=24h             # spare anything modified within this window
+        last_gc=$(date +%s)    # don't prune right after a (re)start
+        i=0
         while true; do
-          mc mirror --overwrite --remove \
-            --exclude '.mc/*' --exclude '*.tmp' \
+          # Additive backup only -- NO --remove here, so a local logout that
+          # deletes ~/.claude/.credentials.json can never wipe the MinIO
+          # credentials backup (root cause of the 2026-05-21 restart loop).
+          mc mirror --overwrite --exclude '.mc/*' --exclude '*.tmp' \
             /workspace s3/platform-state/labs/claude-remote/ || true
+          # GC check ~hourly (360 * 10s) so du doesn't walk the tree each cycle.
+          i=$((i + 1))
+          if [ $((i % 360)) -eq 0 ]; then
+            now=$(date +%s)
+            size_kb=$(du -sk /workspace 2>/dev/null)
+            size_kb=${size_kb%%[!0-9]*}
+            if [ "${size_kb:-0}" -gt "$THRESHOLD_KB" ] || [ $((now - last_gc)) -ge "$WEEK" ]; then
+              echo "[gc] pruning /workspace (size=${size_kb}KB), keeping auth/config + active work"
+              for entry in /workspace/* /workspace/.[!.]*; do
+                [ -e "$entry" ] || continue
+                keep "$(basename "$entry")" && continue
+                # Spare anything modified within $ACTIVE -- likely active,
+                # uncommitted in-session work; only prune cold clutter.
+                # Fail SAFE: if the recency check itself errors (e.g. mc find
+                # unsupported on a future image), skip the entry rather than
+                # risk rm -rf'ing active work. (minio/mc has no find/grep, so
+                # the recency check must stay mc-native.)
+                if ! mc find "$entry" --newer-than "$ACTIVE" >/tmp/gc_recent 2>/dev/null; then
+                  echo "[gc] skip (recency check failed, fail-safe): $entry"
+                  continue
+                fi
+                if [ -s /tmp/gc_recent ]; then
+                  echo "[gc] skip (active <$ACTIVE): $entry"
+                  continue
+                fi
+                echo "[gc] rm -rf $entry"
+                rm -rf "$entry"
+              done
+              # Reconcile the prune to MinIO. --remove clears the deleted
+              # paths, but every keep-list entry is excluded so a delete in
+              # the narrow window between the rm loop and this mirror can
+              # never propagate and wipe an auth/config backup.
+              mc mirror --overwrite --remove \
+                --exclude '.mc/*' --exclude '.claude' --exclude '.claude/*' \
+                --exclude '.claude.json' --exclude 'CLAUDE.md' \
+                --exclude '.local' --exclude '.local/*' --exclude '*.tmp' \
+                /workspace s3/platform-state/labs/claude-remote/ || true
+              last_gc=$(date +%s)
+            fi
+          fi
           sleep 10
         done
     env:
@@ -150,8 +206,9 @@ extraContainers:
             - -c
             - |
               mc alias set s3 "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
-              mc mirror --overwrite --remove \
-                --exclude '.mc/*' --exclude '*.tmp' \
+              # Additive flush on shutdown -- NO --remove, same reason as the
+              # sync loop: never let teardown wipe the MinIO credentials backup.
+              mc mirror --overwrite --exclude '.mc/*' --exclude '*.tmp' \
                 /workspace s3/platform-state/labs/claude-remote/
 probes:
   startup:
