@@ -12,15 +12,19 @@
   for the authored sections; every Prometheus metric name matches a name
   registered in `internal/metrics/metrics.go`.
 
-- [ ] 2. Confirm `runbook_url` annotations on the three #86 alerts in
-  `deploy/alerts/mctl-telegram.rules.yaml` (depends on #86 having merged) — DoD:
-  each of `MctlTelegramPoolNearCapacity`, `MctlTelegramFloodWaitSpike`,
+- [ ] 2. Repoint `runbook_url` annotations on the three #86 alerts in
+  `deploy/alerts/mctl-telegram.rules.yaml` (depends on #86 having merged) — #86
+  shipped placeholder `runbook_url` values pointing at `docs/hpa.md#alerts`
+  (because `docs/runbook.md` did not exist yet); this task repoints each to the
+  per-alert anchor of the new `docs/runbook.md`. DoD: each of
+  `MctlTelegramPoolNearCapacity`, `MctlTelegramFloodWaitSpike`,
   `MctlTelegramOAuthPendingStuck` carries an `annotations.runbook_url` of the form
   `https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#<anchor>`,
-  where `<anchor>` matches the id table in `design.md`. Do NOT modify
-  `canary.rules.yaml`. The #59 VMRule alerts live in `mctl-gitops` — adding their
-  `runbook_url` is a separate manual gitops edit (out of scope for this PR). CI
-  passes on the updated YAML.
+  where `<anchor>` matches the id table in `design.md`; no `docs/hpa.md#alerts`
+  placeholder remains on these three alerts. Do NOT modify `canary.rules.yaml`.
+  The #59 VMRule alerts live in `mctl-gitops` — adding their `runbook_url` is a
+  separate manual gitops edit (out of scope for this PR). CI passes on the
+  updated YAML.
 
 ## Tests
 
