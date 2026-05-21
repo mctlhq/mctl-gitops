@@ -1,7 +1,16 @@
 # Tasks: issue-94-local-bridge-m4-finish-community-release
 
-Tasks are grouped by slice. Slices 1 and 2 are self-contained to this repo and
-should be landed first. Slices 3, 4, 5, 6 can proceed in parallel after Slice 1.
+Tasks are grouped by slice. The slices map onto two accept/PR milestones (see
+design.md "Milestone split: M4 vs M4.1"):
+
+- **M4 — Production-ready bridge:** Slices 1–2 (this repo only). Land first.
+- **M4.1 — Community distribution:** Slices 3–6 (cross-repo OAuth, GoReleaser/
+  Homebrew, OS keychain, docs). Accept and PR separately, after M4.
+
+Slices 1 and 2 are self-contained to this repo and should be landed first.
+Slices 3, 4, 5, 6 can proceed in parallel after Slice 1. The `connect --token`
+manual path remains supported throughout, so Slice 3 (cross-repo OAuth) is an
+opt-in convenience, not a release blocker.
 
 ---
 
