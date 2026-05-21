@@ -151,17 +151,29 @@ extraContainers:
                 keep "$(basename "$entry")" && continue
                 # Spare anything modified within $ACTIVE -- likely active,
                 # uncommitted in-session work; only prune cold clutter.
-                if [ -n "$(mc find "$entry" --newer-than "$ACTIVE" 2>/dev/null | head -1)" ]; then
+                # Fail SAFE: if the recency check itself errors (e.g. mc find
+                # unsupported on a future image), skip the entry rather than
+                # risk rm -rf'ing active work. (minio/mc has no find/grep, so
+                # the recency check must stay mc-native.)
+                if ! mc find "$entry" --newer-than "$ACTIVE" >/tmp/gc_recent 2>/dev/null; then
+                  echo "[gc] skip (recency check failed, fail-safe): $entry"
+                  continue
+                fi
+                if [ -s /tmp/gc_recent ]; then
                   echo "[gc] skip (active <$ACTIVE): $entry"
                   continue
                 fi
                 echo "[gc] rm -rf $entry"
                 rm -rf "$entry"
               done
-              # Reconcile the prune to MinIO. --remove clears the deleted paths,
-              # but --exclude '.claude/*' keeps auth/config backups untouchable.
+              # Reconcile the prune to MinIO. --remove clears the deleted
+              # paths, but every keep-list entry is excluded so a delete in
+              # the narrow window between the rm loop and this mirror can
+              # never propagate and wipe an auth/config backup.
               mc mirror --overwrite --remove \
-                --exclude '.mc/*' --exclude '.claude/*' --exclude '*.tmp' \
+                --exclude '.mc/*' --exclude '.claude' --exclude '.claude/*' \
+                --exclude '.claude.json' --exclude 'CLAUDE.md' \
+                --exclude '.local' --exclude '.local/*' --exclude '*.tmp' \
                 /workspace s3/platform-state/labs/claude-remote/ || true
               last_gc=$(date +%s)
             fi
