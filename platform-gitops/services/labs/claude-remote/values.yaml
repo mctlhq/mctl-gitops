@@ -403,6 +403,14 @@ configMaps:
             "merge_method": "squash"
           },
           {
+            "name": "mctlhq/mctl-telegram",
+            "pr_filter": {
+              "head_prefix": "feat/agents-"
+            },
+            "merge_mode": "when-green",
+            "merge_method": "squash"
+          },
+          {
             "name": "mctlhq/mctl-gitops",
             "pr_filter": {
               "head_prefix": "feat/agents-"
