@@ -23,7 +23,7 @@
          add a sentence pointing to the new bootstrap note.
          DoD: at most one cross-reference added where appropriate; no orphan mentions.
 
-- [ ] 5. Open a PR against `mctlhq/mctl-docs`, apply codex review, merge.
+- [ ] 5. Open a PR against `mctlhq/mctl-docs`, apply code review, merge.
          DoD: changes deployed to `docs.mctl.ai` via ArgoCD sync.
 
 ## Tests

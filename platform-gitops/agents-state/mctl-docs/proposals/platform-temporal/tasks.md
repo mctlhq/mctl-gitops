@@ -16,7 +16,7 @@
 - [ ] 6. Cross-link: add a brief mention + link to `docs/platform/overview.md`
         (the "What is MCTL?" page should list Temporal as a platform component).
         — DoD: `platform/overview.md` references `temporal.md`.
-- [ ] 7. Open a PR against `mctlhq/mctl-docs`, run codex review, merge.
+- [ ] 7. Open a PR against `mctlhq/mctl-docs`, run code review, merge.
         — DoD: deployed to docs.mctl.ai.
 
 ## Tests

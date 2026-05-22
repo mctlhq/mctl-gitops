@@ -10,7 +10,7 @@ The proactive R&D pipeline now produces work end-to-end:
 
 What's missing is the second half of the lifecycle. After a PR opens, a
 human still has to:
-1. Read the codex review (and Copilot review) when it lands, decide whether
+1. Read the code review (and Copilot review) when it lands, decide whether
    each finding is real, and either dismiss it or push a follow-up commit.
 2. Merge the PR once review is clean and CI is green.
 
@@ -22,7 +22,7 @@ decision should be automatable for the same class of change.
 
 This proposal adds **Tier 3 — the PR shepherd**. A new orchestrator module
 that runs on a 5-minute cron, picks up every implementer-opened PR, drives
-it through any codex review iterations, and merges it once it's clean and
+it through any code review iterations, and merges it once it's clean and
 green. Deploy watch and rollback (the natural Tier 4) are deliberately
 out of scope here so the first version stays small.
 

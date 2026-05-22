@@ -41,7 +41,7 @@
         absent.
         — DoD: cross-reference in place.
 
-- [ ] 9. Open a PR against `mctlhq/mctl-docs`, run codex review, merge.
+- [ ] 9. Open a PR against `mctlhq/mctl-docs`, run code review, merge.
         — DoD: changes deployed to docs.mctl.ai.
 
 ## Tests
