@@ -30,11 +30,11 @@ securityContext:
     drop: [ALL]
 env:
   PORT: "8080"
-  # pr-steward automation (branch prefix feat/agents-). Per-repo merge_mode
-  # (image 0.3.0+): global default is "never" (safe — escalate only), and a repo
-  # opts into auto-merge explicitly. mctl-design = when-green (gated by branch
-  # protection on its public main); mctl-gitops = never (inherits global; it is
-  # private and cannot have branch protection, so escalate-only — never auto-merge).
+  # pr-steward automation (branch prefix per repo). Per-repo merge_mode
+  # (image 0.3.0+): global default is "never" (safe — escalate only); a repo opts
+  # into auto-merge explicitly. mctl-design = when-green (gated by branch protection
+  # on its public main); mctl-telegram = when-green + squash (claude/* and fix/*);
+  # mctl-gitops = never (inherits global — private, no branch protection possible).
   # Inert in the image until this flag is "true" AND a RemoteTrigger fires a tick.
   PR_STEWARD_ENABLED: "true"
   PR_STEWARD_CONFIG: "/etc/steward/pr-steward.config.json"
@@ -362,6 +362,22 @@ configMaps:
               "head_prefix": "feat/agents-"
             },
             "merge_mode": "when-green"
+          },
+          {
+            "name": "mctlhq/mctl-telegram",
+            "pr_filter": {
+              "head_prefix": "claude/"
+            },
+            "merge_mode": "when-green",
+            "merge_method": "squash"
+          },
+          {
+            "name": "mctlhq/mctl-telegram",
+            "pr_filter": {
+              "head_prefix": "fix/"
+            },
+            "merge_mode": "when-green",
+            "merge_method": "squash"
           },
           {
             "name": "mctlhq/mctl-gitops",
