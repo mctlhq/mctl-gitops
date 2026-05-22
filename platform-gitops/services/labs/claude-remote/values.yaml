@@ -33,7 +33,9 @@ env:
   # pr-steward automation (branch prefix per repo). Per-repo merge_mode
   # (image 0.3.0+): global default is "never" (safe — escalate only); a repo opts
   # into auto-merge explicitly. mctl-design = when-green (gated by branch protection
-  # on its public main); mctl-telegram = when-green + squash (claude/* and fix/*);
+  # on its public main); mctl-docs = when-green (ruleset 16767982; NOTE: auto-MERGE
+  # only — mctl-docs has no deploy.yml, so docs.mctl.ai deploy stays manual via
+  # mctl_deploy_service); mctl-telegram = when-green + squash (claude/* and fix/*);
   # mctl-gitops = never (inherits global — private, no branch protection possible).
   # Inert in the image until this flag is "true" AND a RemoteTrigger fires a tick.
   PR_STEWARD_ENABLED: "true"
@@ -358,6 +360,13 @@ configMaps:
         "repos": [
           {
             "name": "mctlhq/mctl-design",
+            "pr_filter": {
+              "head_prefix": "feat/agents-"
+            },
+            "merge_mode": "when-green"
+          },
+          {
+            "name": "mctlhq/mctl-docs",
             "pr_filter": {
               "head_prefix": "feat/agents-"
             },
