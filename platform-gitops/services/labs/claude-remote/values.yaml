@@ -99,8 +99,11 @@ extraVolumes:
   # Shared volume for the steward's structured JSON log, so the log-tail
   # sidecar can surface it on a clean stdout (the base-service container's
   # stdout is full of claude --remote-control TUI/TTY escape codes).
+  # sizeLimit caps unbounded growth (one JSON line per tick) so the log can
+  # never accumulate ephemeral storage to the point of pod eviction.
   - name: steward-logs
-    emptyDir: {}
+    emptyDir:
+      sizeLimit: 100Mi
 extraVolumeMounts:
   - name: workspace
     mountPath: /workspace
