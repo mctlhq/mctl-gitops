@@ -1,10 +1,6 @@
-status: accepted
-updated_at: '2026-05-22T00:17:23Z'
-updated_by: mashkovd
-# Previous attempt PR https://github.com/mctlhq/mctl-telegram/pull/98 closed
-# unmerged: three independent P1 review findings rendered sticky routing
-# non-functional on both NGINX and Envoy paths. design.md now documents the
-# concrete constraints the next implementer attempt must respect.
+status: in-progress
+updated_at: '2026-05-22T06:41:26Z'
+updated_by: mctl-agents[bot]
 source:
   type: github_issue
   repo: mctlhq/mctl-telegram
