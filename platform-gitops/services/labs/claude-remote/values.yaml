@@ -47,6 +47,10 @@ env:
   # terminal steward state, so idle cadences cost one GitHub API call, not
   # Claude usage. Set to "0" to disable the loop (the live session still works).
   PR_STEWARD_SCHEDULE_SECONDS: "1200"
+  # Keep the per-tick timeout below the schedule interval (1080 < 1200) so a
+  # tick that runs to its limit always finishes before the next fires — rules
+  # out two concurrent `claude -p` runs (the 15-min tick lock is the backstop).
+  PR_STEWARD_TICK_TIMEOUT_SECONDS: "1080"
   PR_STEWARD_CONFIG: "/etc/steward/pr-steward.config.json"
   # Overlay skills dir — entrypoint copies these into the workspace skill dir.
   # Carries codex-watch (the review-polling "eyes"), absent from the base image.
