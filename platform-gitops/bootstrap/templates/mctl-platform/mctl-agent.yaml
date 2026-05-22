@@ -78,6 +78,13 @@ spec:
           # flapping alert heartbeats). Prevents eternal stale incidents when
           # a flapping alert keeps UpdatedAt fresh but no skill can resolve it.
           MAX_ANALYZING_AGE: "120h"
+          # AlertManager reconciliation: resolve tickets whose alert is no
+          # longer active in AM, instead of waiting out MAX_ANALYZING_AGE.
+          # Defaults to on in code; set explicitly so it's visible that this
+          # path is load-bearing for incident auto-close (it propagates to
+          # mctl-api as of mctl-agent 1.14.1). ALERTMANAGER_URL defaults to the
+          # in-cluster vmalertmanager service and is left on that default.
+          AM_RECONCILE_ENABLED: "true"
           DATABASE_URL: "postgresql://$(DB_USER):$(DB_PASSWORD)@shared-pg-rw.platform-db.svc:5432/mctl-agent"
         envFrom:
           - secretRef:
