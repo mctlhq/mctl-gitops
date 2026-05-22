@@ -35,9 +35,9 @@ spec:
   # Counts, NOT days. 4 ticks/day, so 8 ≈ 2 days of history.
   successfulJobsHistoryLimit: 8
   failedJobsHistoryLimit: 8
-  # Start suspended — un-suspend after the smoke test (one-shot real run
-  # confirming a skip-listed repo's merged PR flips its proposal to merged).
-  suspend: true
+  # Un-suspended at Stage 2: reconcile sweeps mctl-design every 6h, repairing
+  # any pr-steward-merged proposal that lost its `.status.yaml: merged` write-back.
+  suspend: false
   workflowSpec:
     workflowTemplateRef:
       name: mctl-agents-reconcile

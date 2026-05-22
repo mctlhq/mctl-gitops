@@ -28,8 +28,9 @@ securityContext:
     drop: [ALL]
 env:
   PORT: "8080"
-  # pr-steward automation (mctl-gitops canary + mctl-design Stage-0 dry pilot;
-  # branch prefix feat/agents-, merge_mode never — fix + escalate, no merge).
+  # pr-steward automation (mctl-gitops canary + mctl-design Stage-2 unattended;
+  # branch prefix feat/agents-, merge_mode when-green — fix, escalate, and merge
+  # on clean+green review. Gated by branch protection on mctl-design main).
   # Inert in the image until this flag is "true" AND a RemoteTrigger fires a tick.
   PR_STEWARD_ENABLED: "true"
   PR_STEWARD_CONFIG: "/etc/steward/pr-steward.config.json"
@@ -341,7 +342,7 @@ configMaps:
   pr-steward-config:
     pr-steward.config.json: |
       {
-        "merge_mode": "never",
+        "merge_mode": "when-green",
         "max_attempts": 3,
         "stuck_hours": 6,
         "tick_lock_stale_minutes": 15,
