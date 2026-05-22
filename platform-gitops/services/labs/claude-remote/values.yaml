@@ -16,7 +16,9 @@ resources:
     cpu: 250m
     memory: 512Mi
   limits:
-    cpu: 1000m
+    # PR-steward agent runs spike past 1000m and get CFS-throttled. Raised
+    # 1000m→1500m (fits labs LimitRange max 3 and quota limits.cpu 12).
+    cpu: 1500m
     memory: 2Gi
 podSecurityContext:
   fsGroup: 1000
