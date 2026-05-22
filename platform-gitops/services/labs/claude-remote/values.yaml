@@ -96,6 +96,11 @@ extraVolumes:
   - name: overlay-skills
     configMap:
       name: codex-watch-skill
+  # Shared volume for the steward's structured JSON log, so the log-tail
+  # sidecar can surface it on a clean stdout (the base-service container's
+  # stdout is full of claude --remote-control TUI/TTY escape codes).
+  - name: steward-logs
+    emptyDir: {}
 extraVolumeMounts:
   - name: workspace
     mountPath: /workspace
@@ -111,6 +116,8 @@ extraVolumeMounts:
   - name: overlay-skills
     mountPath: /opt/overlay-skills/codex-watch
     readOnly: true
+  - name: steward-logs
+    mountPath: /var/log/steward
 # Restore workspace from MinIO before claude starts
 initContainers:
   - name: restore-state
@@ -260,6 +267,33 @@ extraContainers:
               # sync loop: never let teardown wipe the MinIO credentials backup.
               mc mirror --overwrite --exclude '.mc/*' --exclude '*.tmp' \
                 /workspace s3/platform-state/labs/claude-remote/
+  # log-tail sidecar — surfaces the steward's structured JSON log on its own
+  # stdout so `kubectl logs <pod> -c steward-log` is clean. The base-service
+  # stdout is unreadable: claude --remote-control renders a TUI and needs a PTY,
+  # so its output can't be ANSI-stripped without dropping it to --print mode.
+  - name: steward-log
+    image: minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+    resources:
+      requests:
+        cpu: 10m
+        memory: 16Mi
+      limits:
+        cpu: 50m
+        memory: 32Mi
+    command: ["sh", "-c"]
+    args:
+      - |
+        # -F retries until base-service creates the file; -n +1 replays the
+        # whole file on (re)start so a fresh sidecar shows existing ticks.
+        exec tail -n +1 -F /var/log/steward/steward.log
+    securityContext:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: [ALL]
+    volumeMounts:
+      - name: steward-logs
+        mountPath: /var/log/steward
+        readOnly: true
 probes:
   startup:
     path: /healthz
@@ -332,7 +366,7 @@ configMaps:
           }
         },
         "logging": {
-          "file": "/tmp/steward.log"
+          "file": "/var/log/steward/steward.log"
         }
       }
   # codex-watch skill (the review-polling eyes), delivered in-cluster because
