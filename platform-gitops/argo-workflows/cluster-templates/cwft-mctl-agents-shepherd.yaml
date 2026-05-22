@@ -322,6 +322,15 @@ spec:
           # in practice most ticks find nothing to do and exit free.
           - name: SHEPHERD_BUDGET_USD
             value: "5.00"
+          # mctl-design's review/fix/merge is owned by pr-steward
+          # (mctl-claude-remote), not the shepherd. Skip it here so the two
+          # never contend on the same feat/agents-* PRs (double-push / merge
+          # race). run_shepherd reads this comma/space-separated list at
+          # import; unset = today's behavior for every other repo. The
+          # read-only --reconcile pass (cronworkflow-mctl-agents-reconcile)
+          # is the inverse — it handles ONLY these skip-listed repos.
+          - name: SHEPHERD_SKIP_SERVICES
+            value: "mctl-design"
         resources:
           # memory 8Gi: the shepherd forks run_implementer.py
           # --review-feedback in the same pod, which runs the target repo's

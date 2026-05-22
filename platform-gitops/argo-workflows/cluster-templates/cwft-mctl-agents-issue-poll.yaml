@@ -7,7 +7,7 @@ metadata:
       Issue-driven entry point — Phase 2 central poller.
 
       Scans every open issue under the mctlhq org carrying the
-      `agent:investigate` label and runs the issue-investigator for each,
+      `agents:intake` label and runs the issue-investigator for each,
       turning labelled feature requests into `proposed` proposals under
       platform-gitops/agents-state/<svc>/proposals/<slug>/.
 
@@ -25,7 +25,7 @@ metadata:
            labelled issues, runs the investigator in-process per issue
            (gh-clones the target repo read-only, runs the Claude Agent
            SDK, writes the proposal triplet + .status.yaml, comments on
-           the issue), then removes the `agent:investigate` label.
+           the issue), then removes the `agents:intake` label.
         3. commit-and-push — commits the new proposal directories back to
            gitops main.
 
