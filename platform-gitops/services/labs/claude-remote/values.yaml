@@ -28,7 +28,8 @@ securityContext:
     drop: [ALL]
 env:
   PORT: "8080"
-  # pr-steward automation (canary: mctl-gitops only, branch prefix feat/agents-).
+  # pr-steward automation (mctl-gitops canary + mctl-design Stage-0 dry pilot;
+  # branch prefix feat/agents-, merge_mode never — fix + escalate, no merge).
   # Inert in the image until this flag is "true" AND a RemoteTrigger fires a tick.
   PR_STEWARD_ENABLED: "true"
   PR_STEWARD_CONFIG: "/etc/steward/pr-steward.config.json"
@@ -316,6 +317,12 @@ configMaps:
         "repos": [
           {
             "name": "mctlhq/mctl-gitops",
+            "pr_filter": {
+              "head_prefix": "feat/agents-"
+            }
+          },
+          {
+            "name": "mctlhq/mctl-design",
             "pr_filter": {
               "head_prefix": "feat/agents-"
             }
