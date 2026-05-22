@@ -28,9 +28,11 @@ securityContext:
     drop: [ALL]
 env:
   PORT: "8080"
-  # pr-steward automation (mctl-gitops canary + mctl-design Stage-2 unattended;
-  # branch prefix feat/agents-, merge_mode when-green — fix, escalate, and merge
-  # on clean+green review. Gated by branch protection on mctl-design main).
+  # pr-steward automation (mctl-design Stage-2 unattended; branch prefix
+  # feat/agents-, merge_mode when-green — fix, escalate, and merge on clean+green
+  # review. Gated by branch protection on mctl-design main). merge_mode is global,
+  # so scope is mctl-design ONLY: mctl-gitops is private and cannot have branch
+  # protection, so it stays out of the steward list until per-repo merge_mode lands.
   # Inert in the image until this flag is "true" AND a RemoteTrigger fires a tick.
   PR_STEWARD_ENABLED: "true"
   PR_STEWARD_CONFIG: "/etc/steward/pr-steward.config.json"
@@ -352,12 +354,6 @@ configMaps:
           "claude[bot]"
         ],
         "repos": [
-          {
-            "name": "mctlhq/mctl-gitops",
-            "pr_filter": {
-              "head_prefix": "feat/agents-"
-            }
-          },
           {
             "name": "mctlhq/mctl-design",
             "pr_filter": {
