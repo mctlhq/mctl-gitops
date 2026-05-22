@@ -1,0 +1,44 @@
+apiVersion: argoproj.io/v1alpha1
+kind: CronWorkflow
+metadata:
+  name: mctl-agents-reconcile
+  namespace: argo-workflows
+  annotations:
+    workflows.argoproj.io/description: |
+      Low-frequency trigger for the read-only status reconciler.
+
+      Workflow logic lives in ClusterWorkflowTemplate `mctl-agents-reconcile`
+      (cwft-mctl-agents-reconcile.yaml). This CronWorkflow submits it with no
+      parameters, so it reconciles every SHEPHERD_SKIP_SERVICES repo: reads
+      each proposal's linked PR and flips .status.yaml to merged/rejected if
+      pr-steward's best-effort write-back was dropped. Read-only — no reviews,
+      no fixes, no merges, no SDK.
+
+      Cadence is deliberately low: the reconciler only repairs rare dropped
+      write-backs, so a 6-hour sweep is plenty. Bound of staleness for a
+      pr-steward-merged proposal that lost its write-back is therefore ~6h.
+
+      Start suspended. Un-suspend after the first successful one-shot run
+      (confirm a skip-listed repo's merged PR flips its proposal to merged).
+spec:
+  # `45 */6 * * *` — every 6h at HH:45 (00:45, 06:45, 12:45, 18:45 UTC).
+  # The :45 offset stays clear of mctl-agents-shepherd (:30),
+  # mctl-agents-issue-poll (:10/:40) and mctl-agents-incidents (:15/:45 is
+  # every 30 min — but reconcile is 4×/day, so the rare overlap on the shared
+  # `mctl-gitops-main-writes` mutex resolves via the commit step's retry loop).
+  schedule: "45 */6 * * *"
+  timezone: "UTC"
+  # Forbid: never overlap two reconcile ticks (they contend on the same
+  # mctl-gitops-main-writes mutex anyway).
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  # Counts, NOT days. 4 ticks/day, so 8 ≈ 2 days of history.
+  successfulJobsHistoryLimit: 8
+  failedJobsHistoryLimit: 8
+  # Start suspended — un-suspend after the smoke test (one-shot real run
+  # confirming a skip-listed repo's merged PR flips its proposal to merged).
+  suspend: true
+  workflowSpec:
+    workflowTemplateRef:
+      name: mctl-agents-reconcile
+      clusterScope: true
