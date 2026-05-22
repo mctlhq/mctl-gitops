@@ -10,16 +10,16 @@ metadata:
       Workflow logic lives in ClusterWorkflowTemplate `mctl-agents-issue-poll`
       (cwft-mctl-agents-issue-poll.yaml). This CronWorkflow is a thin wrapper
       that submits a Workflow with no parameters, so the poller sweeps every
-      open mctlhq issue labelled `agent:investigate`.
+      open mctlhq issue labelled `agents:intake`.
 
       What it does each tick:
         1. `gh search issues` for open mctlhq issues labelled
-           `agent:investigate`.
+           `agents:intake`.
         2. For each, runs the issue-investigator in-process — gh-clones the
            target repo read-only, runs the Claude Agent SDK to write the
            requirements/design/tasks proposal triplet + .status.yaml
            (status=proposed), comments the proposal link on the issue.
-        3. Removes the `agent:investigate` label so the next tick does not
+        3. Removes the `agents:intake` label so the next tick does not
            re-investigate (and re-spend the SDK budget) the same issue.
       The proposal stops at `proposed` — a human flips it to `accepted`,
       the Tier 2 implementer opens a PR, the Tier 3 shepherd merges.
