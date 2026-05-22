@@ -20,7 +20,7 @@
         > ([WhatsApp outbound targets](/platform/openclaw#whatsapp-outbound-target-formats))."
         — DoD: cross-reference in place and link resolves.
 
-- [ ] 5. Open a PR against `mctlhq/mctl-docs`, run codex review, merge.
+- [ ] 5. Open a PR against `mctlhq/mctl-docs`, run code review, merge.
         — DoD: deployed to docs.mctl.ai.
 
 ## Tests

@@ -91,12 +91,12 @@ Apply the same change to the `service` row in `### mctl_trigger_implementer`:
 > Review `dry_run` output before triggering a live run.
 
 Triggers the Tier 3 PR shepherd. The shepherd inspects `.status.yaml` entries with
-`status` in `{implementing, review-fixing}`, fetches each linked PR's codex review
+`status` in `{implementing, review-fixing}`, fetches each linked PR's code review
 state, and decides one of three actions:
 
 - **Implement feedback** — calls the implementer with `--review-feedback`, pushing
   a follow-up commit to the PR branch (transitions to `review-fixing`).
-- **Merge** — merges the PR once codex review passes and CI is green (transitions
+- **Merge** — merges the PR once code review passes and CI is green (transitions
   to `merged`).
 - **Wait** — no action if the PR is still pending review or CI.
 

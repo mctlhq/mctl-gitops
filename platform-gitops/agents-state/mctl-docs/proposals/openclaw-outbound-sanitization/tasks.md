@@ -17,7 +17,7 @@
         `mcp__mctl__*` tool if available.
         — DoD: version confirmed; remove or update the "version-status: unverified" note.
 
-- [ ] 5. Open a PR against `mctlhq/mctl-docs`, run codex review, merge.
+- [ ] 5. Open a PR against `mctlhq/mctl-docs`, run code review, merge.
         — DoD: deployed to `docs.mctl.ai/platform/openclaw`.
 
 ## Tests
