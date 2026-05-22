@@ -1,6 +1,7 @@
-status: in-progress
-updated_at: '2026-05-22T06:41:26Z'
-updated_by: mctl-agents[bot]
+status: implemented
+updated_at: '2026-05-22T07:00:21Z'
+updated_by: mashkovd
+pr: https://github.com/mctlhq/mctl-telegram/pull/124
 source:
   type: github_issue
   repo: mctlhq/mctl-telegram
