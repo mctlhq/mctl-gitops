@@ -18,8 +18,8 @@ metadata:
       write-backs, so a 6-hour sweep is plenty. Bound of staleness for a
       pr-steward-merged proposal that lost its write-back is therefore ~6h.
 
-      Start suspended. Un-suspend after the first successful one-shot run
-      (confirm a skip-listed repo's merged PR flips its proposal to merged).
+      Un-suspended at Stage 2: sweeps mctl-design every 6h, repairing any
+      pr-steward-merged proposal whose .status.yaml write-back was dropped.
 spec:
   # `45 */6 * * *` — every 6h at HH:45 (00:45, 06:45, 12:45, 18:45 UTC).
   # The :45 offset stays clear of mctl-agents-shepherd (:30),
@@ -35,9 +35,9 @@ spec:
   # Counts, NOT days. 4 ticks/day, so 8 ≈ 2 days of history.
   successfulJobsHistoryLimit: 8
   failedJobsHistoryLimit: 8
-  # Start suspended — un-suspend after the smoke test (one-shot real run
-  # confirming a skip-listed repo's merged PR flips its proposal to merged).
-  suspend: true
+  # Un-suspended at Stage 2: reconcile sweeps mctl-design every 6h, repairing
+  # any pr-steward-merged proposal that lost its `.status.yaml: merged` write-back.
+  suspend: false
   workflowSpec:
     workflowTemplateRef:
       name: mctl-agents-reconcile
