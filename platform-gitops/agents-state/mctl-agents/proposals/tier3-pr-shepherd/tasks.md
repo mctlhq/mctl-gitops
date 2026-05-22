@@ -5,7 +5,7 @@ CronWorkflow live in mctl-gitops and are added in a follow-up PR after
 this lands and a new mctl-agents tag is published.
 
 - [ ] 1. Add `agents/_shepherd/shepherd.md` — sub-agent system prompt
-  (≤ 300 words). Role: parse codex review findings into `{p1: bool,
+  (≤ 300 words). Role: parse code review findings into `{p1: bool,
   p2: bool, summaries: [...]}` JSON and shape the implementer
   followup prompt when needed. Tone matches existing implementer.md /
   researcher.md.

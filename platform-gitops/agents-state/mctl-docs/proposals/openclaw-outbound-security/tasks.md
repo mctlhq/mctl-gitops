@@ -13,7 +13,7 @@
 - [ ] 4. (Optional) If `docs/platform/openclaw.md` already has an in-page Table of
          Contents, confirm the new "Security" heading appears in it.
          — DoD: TOC entry visible in local preview.
-- [ ] 5. Open a PR against `mctlhq/mctl-docs`, run codex review, merge.
+- [ ] 5. Open a PR against `mctlhq/mctl-docs`, run code review, merge.
          — DoD: content live at docs.mctl.ai/platform/openclaw.
 
 ## Tests

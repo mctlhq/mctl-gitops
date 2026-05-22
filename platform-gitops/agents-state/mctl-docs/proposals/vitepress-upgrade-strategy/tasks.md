@@ -10,7 +10,7 @@
       block is visible, mermaid blocks (if any) render correctly.
 - [ ] 4. Cross-link: ensure `context/decisions/0001-vitepress-stack.md` references the new
       ADR 0003 as "See also". — DoD: cross-reference added.
-- [ ] 5. Open a PR in `mctlhq/mctl-docs`, codex review, merge. — DoD: deployed to docs.mctl.ai.
+- [ ] 5. Open a PR in `mctlhq/mctl-docs`, code review, merge. — DoD: deployed to docs.mctl.ai.
 
 ## Tests
 

@@ -13,7 +13,7 @@
 - [ ] 4. (Optional) Add a note in `docs/getting-started/index.md` or `docs/platform/components.md`
          hinting that admins can control the agents pipeline via MCP — drives discoverability.
          — DoD: one-liner cross-reference in place.
-- [ ] 5. Open a PR against `mctlhq/mctl-docs`, run codex review, merge.
+- [ ] 5. Open a PR against `mctlhq/mctl-docs`, run code review, merge.
          — DoD: content live at docs.mctl.ai/mcp/tools-reference.
 
 ## Tests

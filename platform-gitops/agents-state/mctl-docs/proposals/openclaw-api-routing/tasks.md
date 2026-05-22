@@ -10,7 +10,7 @@
 - [ ] 3. (Optional) Add a one-liner note to `docs/api/index.md` linking to the OpenClaw
          routing subsection for readers who land on the API reference first.
          — DoD: cross-reference in place.
-- [ ] 4. Open a PR against `mctlhq/mctl-docs`, run codex review, merge.
+- [ ] 4. Open a PR against `mctlhq/mctl-docs`, run code review, merge.
          — DoD: content live at docs.mctl.ai/platform/openclaw.
 
 ## Tests

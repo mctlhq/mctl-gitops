@@ -24,7 +24,7 @@
         mermaid diagram renders.
         — DoD: page renders with no errors; mermaid (if included) is visible.
 
-- [ ] 5. **Open a PR against `mctlhq/mctl-docs`**, request codex review, merge.
+- [ ] 5. **Open a PR against `mctlhq/mctl-docs`**, request code review, merge.
         — DoD: deployed to docs.mctl.ai.
 
 ## Tests

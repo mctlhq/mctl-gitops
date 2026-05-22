@@ -12,7 +12,7 @@
 - [ ] 5. Cross-link: check `docs/reference/troubleshooting.md` — if there is a
         section on ArgoCD CRD issues, add a "see also" pointer in the new subsection.
         — DoD: cross-reference in place or explicitly noted as not yet applicable.
-- [ ] 6. Open a PR against `mctlhq/mctl-docs`, run codex review, merge.
+- [ ] 6. Open a PR against `mctlhq/mctl-docs`, run code review, merge.
         — DoD: deployed to docs.mctl.ai.
 
 ## Tests

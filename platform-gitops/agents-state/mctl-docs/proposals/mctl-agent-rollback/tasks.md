@@ -25,7 +25,7 @@
         (b) auto-merge policy for the shepherd. Confirm details with the author of
         `mctl-agent:f955a0e`. — DoD: no `<TODO>` markers remain in the final page.
 
-- [ ] 6. Open a PR against `mctlhq/mctl-docs`, run codex review, address any
+- [ ] 6. Open a PR against `mctlhq/mctl-docs`, run code review, address any
         feedback, merge. — DoD: changes are deployed to docs.mctl.ai and the new
         section is visible at `https://docs.mctl.ai/guides/rollbacks`.
 

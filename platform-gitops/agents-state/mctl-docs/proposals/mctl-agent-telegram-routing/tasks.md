@@ -10,7 +10,7 @@
          to the new routing paragraph, for operators who discover the feature via the
          tenant guide.
          — DoD: cross-reference in place.
-- [ ] 4. Open a PR against `mctlhq/mctl-docs`, run codex review, merge.
+- [ ] 4. Open a PR against `mctlhq/mctl-docs`, run code review, merge.
          — DoD: content live at docs.mctl.ai/platform/components.
 
 ## Tests
