@@ -1,0 +1,10 @@
+status: proposed
+updated_at: '2026-05-22T16:10:18Z'
+updated_by: mctl-agents[bot]
+source:
+  type: github_issue
+  repo: mctlhq/mctl-design
+  issue: 4
+  url: https://github.com/mctlhq/mctl-design/issues/4
+control:
+  requires_human_approval: true
