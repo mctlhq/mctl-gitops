@@ -332,7 +332,7 @@ configMaps:
           }
         },
         "logging": {
-          "file": "/workspace/steward.log"
+          "file": "/tmp/steward.log"
         }
       }
   # codex-watch skill (the review-polling eyes), delivered in-cluster because
@@ -386,6 +386,9 @@ configMaps:
 
       notify() {
         local title="$1" body="$2" sound="${3:-Glass}"
+        # osascript is macOS-only; skip it elsewhere (e.g. in-cluster Linux) so the
+        # log stays clean. The result file is the source of truth either way.
+        [ "$(uname)" = "Darwin" ] || return 0
         osascript -e "display notification \"$body\" with title \"$title\" sound name \"$sound\"" >/dev/null 2>&1 || true
       }
 
@@ -410,9 +413,22 @@ configMaps:
         I=$(gh api "repos/$REPO/issues/$PR/comments" --jq "[.[] | $BOTFILTER | select(.created_at > \"$TS\")] | length" 2>/dev/null || echo 0)
         E=$(gh api "repos/$REPO/issues/comments/$ID/reactions" --jq "[.[] | $BOTFILTER | select(.created_at > \"$TS\") | .content] | last" 2>/dev/null || echo "")
         echo "[$(date -u +%FT%TZ)] tick $i: reviews=$R comments=$C issue_comments=$I reaction=$E"
-        if [ "${R:-0}" -gt 0 ] || [ "${C:-0}" -gt 0 ] || [ "${I:-0}" -gt 0 ] || [ "$E" = '"+1"' ] || [ "$E" = "+1" ]; then
+        # Fetch the latest bot issue-comment body up front so the hit gate can tell
+        # claude-review.yml's in-progress checklist from a real verdict. The checklist
+        # has UNCHECKED boxes ("- [ ]"); a finished verdict has only "- [x]", and codex
+        # posts no checklist at all. An issue-comment-only signal that is still a
+        # checklist is NOT a response yet -> keep polling (regression: false "clean"
+        # on the progress comment, mctlhq/mctl-gitops#267, 2026-05-22).
+        ICBODY=$(gh api "repos/$REPO/issues/$PR/comments" --jq "[.[] | $BOTFILTER | select(.created_at > \"$TS\") | .body] | last // \"\"" 2>/dev/null || echo "")
+        IC_INPROGRESS=0
+        if [ "${I:-0}" -gt 0 ] && [ "${R:-0}" -eq 0 ] && [ "${C:-0}" -eq 0 ]; then
+          if printf '%s' "$ICBODY" | grep -qF -- '- [ ]'; then
+            IC_INPROGRESS=1
+            echo "[$(date -u +%FT%TZ)] issue-comment is an in-progress checklist; still polling"
+          fi
+        fi
+        if [ "${R:-0}" -gt 0 ] || [ "${C:-0}" -gt 0 ] || { [ "${I:-0}" -gt 0 ] && [ "$IC_INPROGRESS" -eq 0 ]; } || [ "$E" = '"+1"' ] || [ "$E" = "+1" ]; then
           echo "[$(date -u +%FT%TZ)] hit; fetching details"
-          ICBODY=$(gh api "repos/$REPO/issues/$PR/comments" --jq "[.[] | $BOTFILTER | select(.created_at > \"$TS\") | .body] | last // \"\"" 2>/dev/null || echo "")
           {
             echo "status=responded"
             echo "trigger_ts=$TS"
@@ -457,10 +473,13 @@ configMaps:
 
       > **Known caveat — claude[bot] progress checklist.** When `claude-review.yml`
       > is also active, claude[bot] posts a *progress checklist* as a top-level
-      > issue comment seconds after the trigger, then edits it as it works. The
-      > watcher counts that as `issue_comments>0` and can fire early with a false
-      > "clean". If a result looks like a checklist (`- [ ]` items / "View job
-      > run"), the review is still running — re-poll or re-launch.
+      > issue comment seconds after the trigger, then edits it as it works. The hit
+      > gate guards against this: an issue-comment-only signal whose body still has an
+      > unchecked `- [ ]` box is treated as in-progress and the watcher keeps polling
+      > (a finished verdict has only `- [x]`, and codex posts no checklist). This
+      > matters for automated readers (e.g. pr-steward) that parse the result file
+      > rather than eyeballing it — without the guard every tick would misread the
+      > checklist as a clean review.
 
       Save with `chmod +x /tmp/codex-watch.sh`.
 
