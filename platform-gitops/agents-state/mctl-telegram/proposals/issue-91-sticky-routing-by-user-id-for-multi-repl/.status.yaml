@@ -1,7 +1,11 @@
-status: implemented
-updated_at: '2026-05-22T07:00:21Z'
+status: merged
+updated_at: '2026-05-22T09:01:36Z'
 updated_by: mashkovd
-pr: https://github.com/mctlhq/mctl-telegram/pull/124
+# Layer 2 (replica-identity observability) merged via PR #132. The original
+# implementer PR #124 was closed unmerged (its bot-pushed branch never
+# triggered CI); #132 re-applied the identical change on a clean branch.
+# Layer 1 (ingress consistent-hash manifests) is deferred to issue #126.
+pr: https://github.com/mctlhq/mctl-telegram/pull/132
 source:
   type: github_issue
   repo: mctlhq/mctl-telegram
@@ -9,3 +13,5 @@ source:
   url: https://github.com/mctlhq/mctl-telegram/issues/91
 control:
   requires_human_approval: true
+merged_at: '2026-05-22T09:00:45Z'
+merge_commit: d589cc8726dcecf5eb05d82edc8de270418dfa13
