@@ -1,6 +1,6 @@
 image:
   repository: ghcr.io/mctlhq/mctl-claude-remote
-  tag: "0.3.0"
+  tag: "0.4.0"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
@@ -37,8 +37,16 @@ env:
   # only — mctl-docs has no deploy.yml, so docs.mctl.ai deploy stays manual via
   # mctl_deploy_service); mctl-telegram = when-green + squash (claude/* and fix/*);
   # mctl-gitops = never (inherits global — private, no branch protection possible).
-  # Inert in the image until this flag is "true" AND a RemoteTrigger fires a tick.
+  # Inert in the image until this flag is "true".
   PR_STEWARD_ENABLED: "true"
+  # Built-in scheduler (0.4.0+): fire a headless `claude -p "Run the pr-steward
+  # skill"` tick every 20 min so the steward runs without a human prompting the
+  # live remote-control session (closes the manual-trigger gap, gitops #276).
+  # Each tick is gated by bin/pr-steward-precheck: it only spawns the model run
+  # when an in-scope PR (per the configMap repos/pr_filter) is not yet in a
+  # terminal steward state, so idle cadences cost one GitHub API call, not
+  # Claude usage. Set to "0" to disable the loop (the live session still works).
+  PR_STEWARD_SCHEDULE_SECONDS: "1200"
   PR_STEWARD_CONFIG: "/etc/steward/pr-steward.config.json"
   # Overlay skills dir — entrypoint copies these into the workspace skill dir.
   # Carries codex-watch (the review-polling "eyes"), absent from the base image.
@@ -294,9 +302,11 @@ extraContainers:
     command: ["sh", "-c"]
     args:
       - |
-        # -F retries until base-service creates the file; -n +1 replays the
+        # -F retries until base-service creates the files; -n +1 replays the
         # whole file on (re)start so a fresh sidecar shows existing ticks.
-        exec tail -n +1 -F /var/log/steward/steward.log
+        # Both the skill's structured JSON (steward.log) and the scheduler
+        # loop's precheck/tick output (scheduler.log) are surfaced here.
+        exec tail -n +1 -F /var/log/steward/steward.log /var/log/steward/scheduler.log
     securityContext:
       allowPrivilegeEscalation: false
       capabilities:
