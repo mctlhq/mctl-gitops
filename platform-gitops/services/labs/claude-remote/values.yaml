@@ -1,6 +1,6 @@
 image:
   repository: ghcr.io/mctlhq/mctl-claude-remote
-  tag: "0.2.4"
+  tag: "0.3.0"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
@@ -30,11 +30,11 @@ securityContext:
     drop: [ALL]
 env:
   PORT: "8080"
-  # pr-steward automation (mctl-design Stage-2 unattended; branch prefix
-  # feat/agents-, merge_mode when-green — fix, escalate, and merge on clean+green
-  # review. Gated by branch protection on mctl-design main). merge_mode is global,
-  # so scope is mctl-design ONLY: mctl-gitops is private and cannot have branch
-  # protection, so it stays out of the steward list until per-repo merge_mode lands.
+  # pr-steward automation (branch prefix feat/agents-). Per-repo merge_mode
+  # (image 0.3.0+): global default is "never" (safe — escalate only), and a repo
+  # opts into auto-merge explicitly. mctl-design = when-green (gated by branch
+  # protection on its public main); mctl-gitops = never (inherits global; it is
+  # private and cannot have branch protection, so escalate-only — never auto-merge).
   # Inert in the image until this flag is "true" AND a RemoteTrigger fires a tick.
   PR_STEWARD_ENABLED: "true"
   PR_STEWARD_CONFIG: "/etc/steward/pr-steward.config.json"
@@ -346,7 +346,7 @@ configMaps:
   pr-steward-config:
     pr-steward.config.json: |
       {
-        "merge_mode": "when-green",
+        "merge_mode": "never",
         "max_attempts": 3,
         "stuck_hours": 6,
         "tick_lock_stale_minutes": 15,
@@ -358,6 +358,13 @@ configMaps:
         "repos": [
           {
             "name": "mctlhq/mctl-design",
+            "pr_filter": {
+              "head_prefix": "feat/agents-"
+            },
+            "merge_mode": "when-green"
+          },
+          {
+            "name": "mctlhq/mctl-gitops",
             "pr_filter": {
               "head_prefix": "feat/agents-"
             }
