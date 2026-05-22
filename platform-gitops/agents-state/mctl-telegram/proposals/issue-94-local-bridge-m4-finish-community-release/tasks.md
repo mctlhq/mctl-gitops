@@ -1,5 +1,14 @@
 # Tasks: issue-94-local-bridge-m4-finish-community-release
 
+> ## Accepted scope (2026-05-22)
+> This proposal is accepted **scoped to M4 only — Slices 1 and 2** (tasks 1–14
+> plus tests T1–T8 and the Slice-1/Slice-2 rollback notes). The implementer MUST
+> implement ONLY those tasks in this PR.
+> **Do NOT implement Slices 3–6 (M4.1):** no cross-repo OAuth (tasks 15–17), no
+> GoReleaser/Homebrew/install script (18–22), no OS keychain (23–26), no
+> `docs/local-bridge.md` / landing cross-link (27–28). Those are deferred to a
+> separate M4.1 acceptance. Tests T9/T10 belong to M4.1 and are out of scope here.
+
 Tasks are grouped by slice. The slices map onto two accept/PR milestones (see
 design.md "Milestone split: M4 vs M4.1"):
 
@@ -72,11 +81,14 @@ opt-in convenience, not a release blocker.
   DoD: unit test in `tools_test.go` using a fake hub verifies the counter is
   incremented on success and on error.
 
-- [ ] 9. Create `deploy/alerts/mctl-telegram.rules.yaml` with
-  `MctlBridgeDaemonsFlapping` alert: `changes(mctl_bridge_active_daemons[10m]) > 20`,
+- [ ] 9. Add `MctlBridgeDaemonsFlapping` to the existing
+  `deploy/alerts/mctl-telegram.rules.yaml` (created by #86; already holds the
+  pool/flood-wait/OAuth and burn-rate alerts — append a rule to the existing
+  group, do not recreate the file): `changes(mctl_bridge_active_daemons[10m]) > 20`,
   severity `warning`.
   DoD: file is valid YAML, `promtool check rules deploy/alerts/mctl-telegram.rules.yaml`
-  exits 0; alert name and expression match the requirements.
+  exits 0; alert name and expression match the requirements; the pre-existing
+  alerts remain intact.
 
 - [ ] 10. Add "Local Bridge mode" section to `internal/web/security.html`.
   Replace the "track the planned Local Bridge mode" warning banner with a

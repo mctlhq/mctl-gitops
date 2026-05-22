@@ -83,9 +83,12 @@ listen address, and telegram configuration. No replica identity.
 
 ### Metrics
 
-`internal/metrics/metrics.go:69-157`: twelve collectors registered on a fresh
-`prometheus.Registry`. No replica-identity gauge exists. All gauges follow the
-pattern `prometheus.NewGauge(prometheus.GaugeOpts{Name: "mctl_...", Help: "..."})`.
+`internal/metrics/metrics.go`: fourteen collectors registered on a fresh
+`prometheus.Registry` (HTTP requests, auth failures, rate-limit events, tool
+invocations + duration histogram, client-pool size, client errors, pool
+capacity, flood-wait events, sessions connected/revoked/active, OAuth pending,
+and session-borrow totals). No replica-identity gauge exists. All gauges follow
+the pattern `prometheus.NewGauge(prometheus.GaugeOpts{Name: "mctl_...", Help: "..."})`.
 
 ### Documentation
 
@@ -93,7 +96,10 @@ pattern `prometheus.NewGauge(prometheus.GaugeOpts{Name: "mctl_...", Help: "..."}
 HPA stanza, Prometheus Adapter rule, and `MctlTelegramPoolNearCapacity` alert.
 There is no section on sticky routing or multi-replica session safety.
 
-No `deploy/` directory exists in this repository today.
+A `deploy/` directory exists today with `alerts/`, `canary/`, and `grafana/`
+subdirectories (added by the observability proposals #86/#87/#89). There is no
+`ingress/` subdirectory yet — the Layer-1 sticky-routing manifests below are
+added under a new `deploy/ingress/`.
 
 ---
 

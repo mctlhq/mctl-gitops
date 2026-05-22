@@ -222,7 +222,9 @@ Wire `BridgeCallsTotal` into `internal/mcp/tools.go` `bridgeCall()`:
 
 #### 1e. Alert rule
 
-Create `deploy/alerts/mctl-telegram.rules.yaml`:
+Add `MctlBridgeDaemonsFlapping` to the existing `deploy/alerts/mctl-telegram.rules.yaml`
+(the file was created by #86 and already holds the pool/flood-wait/OAuth and
+burn-rate alerts — append a new rule to the existing group, do not recreate the file):
 ```yaml
 groups:
   - name: mctl-telegram

@@ -1,6 +1,9 @@
-status: proposed
-updated_at: '2026-05-20T14:33:37Z'
-updated_by: mctl-agents[bot]
+status: accepted
+updated_at: '2026-05-22T00:17:23Z'
+updated_by: mashkovd
+# Accepted scoped to M4 only (Slices 1-2, tasks 1-14 + tests T1-T8). Slices 3-6
+# (M4.1: cross-repo OAuth, GoReleaser/Homebrew, keychain, docs) are deferred to a
+# separate M4.1 acceptance. See tasks.md "Accepted scope" banner.
 source:
   type: github_issue
   repo: mctlhq/mctl-telegram
