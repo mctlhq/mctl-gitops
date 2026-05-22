@@ -1,6 +1,9 @@
-status: implemented
-updated_at: '2026-05-22T07:08:21Z'
-updated_by: mctl-agents[bot]
+status: merged
+updated_at: '2026-05-22T09:01:36Z'
+updated_by: mashkovd
+# Accepted scope was M4 only (Slices 1-2). Merged via PR #125 after the P1
+# (audit-chain) and 2x P2 review findings were fixed; the 3 P3 nits were
+# cleared in follow-up PR #134. Slices 3-6 (M4.1) remain deferred.
 pr: https://github.com/mctlhq/mctl-telegram/pull/125
 source:
   type: github_issue
@@ -9,3 +12,5 @@ source:
   url: https://github.com/mctlhq/mctl-telegram/issues/94
 control:
   requires_human_approval: true
+merged_at: '2026-05-22T08:39:51Z'
+merge_commit: 7a6279a434c11ea8838d816e948aa541bcad34f9
