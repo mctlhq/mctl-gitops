@@ -1,0 +1,310 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterWorkflowTemplate
+metadata:
+  name: mctl-agents-reconcile
+  annotations:
+    workflows.argoproj.io/description: |
+      Read-only status reconciler for repos owned by another PR lifecycle
+      (pr-steward in mctl-claude-remote).
+
+      Runs `orchestrator/run_shepherd.py --reconcile`, which discovers ONLY
+      the services listed in SHEPHERD_SKIP_SERVICES (the inverse of the normal
+      Tier-3 shepherd discovery) and, per proposal, reads the linked PR and
+      flips .status.yaml to `merged` / `rejected` based on the live PR state.
+      It NEVER reads reviews, applies fixes, merges, or calls the Claude SDK.
+
+      Why this exists: pr-steward writes `.status.yaml: merged` after it
+      merges a feat/agents-* PR, but that write-back is best-effort and
+      non-blocking — it can be dropped on a push conflict or a pod crash,
+      leaving a proposal stuck at `implemented`. This pass is the
+      eventual-consistency safety net that repairs that drift. It does the
+      same two terminal flips the shepherd's flip-to-merged / flip-to-rejected
+      branches do, but for the skip-listed repos the shepherd never touches.
+
+      Steps:
+        1. clone-gitops — SSH-clone mctl-gitops via the shared deploy key.
+        2. run-reconcile — `run_shepherd --reconcile` inside
+           ghcr.io/mctlhq/mctl-agents. Reads STATE_DIR + a GitHub PAT (read
+           only — `gh api` PR snapshots). No SDK credential needed.
+        3. commit-and-push — commits any .status.yaml transitions back to
+           gitops main (same `:(glob)` filter + mutex as the shepherd).
+
+      SHEPHERD_SKIP_SERVICES MUST match the value on cwft-mctl-agents-shepherd
+      so the two cover disjoint repo sets (shepherd skips them; reconcile owns
+      only them).
+
+      Triggered by:
+        - cron via CronWorkflow `mctl-agents-reconcile` (low frequency;
+          ships suspended — operator un-suspends after a one-shot success)
+        - one-shot Workflow referencing this CWFT via workflowTemplateRef +
+          clusterScope:true
+spec:
+  serviceAccountName: argo-workflow-sa
+  imagePullSecrets:
+    - name: ghcr-credentials
+  # 3d TTL, matching the shepherd template, so workflow history outlives the
+  # CronWorkflow's successfulJobsHistoryLimit at the low reconcile cadence.
+  ttlStrategy:
+    secondsAfterCompletion: 259200
+  # 30-min budget: reconcile is read-only (a `gh api` PR fetch per skip-listed
+  # proposal + a status write). No SDK, no implementer subprocess, no merges.
+  activeDeadlineSeconds: 1800
+  entrypoint: reconcile-proposals
+  onExit: notify-telegram
+
+  arguments:
+    parameters:
+      - name: service
+        value: ""
+        # Optional. When set, reconcile only that service — and only if it is
+        # in SHEPHERD_SKIP_SERVICES (run_shepherd warns + matches nothing
+        # otherwise). Validated against config/settings.py SERVICES.
+      - name: dry_run
+        value: "false"
+        # When "true", discover + print would-be flips but write nothing.
+
+  volumeClaimTemplates:
+    - metadata:
+        name: workdir
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            # 2Gi is plenty: only a shallow gitops clone. No sibling-repo
+            # clones (reconcile never forks the implementer).
+            storage: 2Gi
+  volumes:
+    - name: deploy-key
+      secret:
+        secretName: mctl-gitops-deploy-key
+        defaultMode: 0600
+
+  templates:
+    - name: reconcile-proposals
+      steps:
+        - - name: clone
+            template: clone-gitops
+        - - name: reconcile
+            template: run-reconcile
+            # run_shepherd --reconcile writes .status.yaml flips to the
+            # worktree before any failure that may crash the step. Without
+            # continueOn, Argo would skip commit-and-push on non-zero exit and
+            # the repairs would never persist back to gitops main. commit
+            # handles the "no diff" case via `git diff --cached --quiet`.
+            continueOn:
+              failed: true
+              error: true
+        - - name: commit
+            template: commit-and-push
+
+    # ── 1. SSH-clone mctl-gitops into shared volume ───────────────────────
+    - name: clone-gitops
+      script:
+        image: alpine/git:2.43.0
+        command: [sh]
+        resources:
+          requests: { cpu: 50m, memory: 64Mi }
+          limits:   { cpu: 500m, memory: 256Mi }
+        source: |
+          set -e
+          apk add --no-cache openssh-client ca-certificates
+          mkdir -p ~/.ssh
+          cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
+          chmod 600 ~/.ssh/config
+          # Pin GitHub's host key (via ssh-keyscan over 443) instead of
+          # disabling verification, so a MITM / DNS-poison of ssh.github.com
+          # is caught rather than silently trusted (StrictHostKeyChecking no).
+          ssh-keyscan -p 443 -H ssh.github.com >> ~/.ssh/known_hosts 2>/dev/null
+          git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops
+          mkdir -p /workdir/mctl-gitops/platform-gitops/agents-state
+          echo "✓ gitops cloned"
+        volumeMounts:
+          - name: workdir
+            mountPath: /workdir
+          - name: deploy-key
+            mountPath: /secrets/deploy-key
+
+    # ── 2. Run reconcile (read-only) ──────────────────────────────────────
+    - name: run-reconcile
+      container:
+        image: ghcr.io/mctlhq/mctl-agents:1.12.2
+        imagePullPolicy: IfNotPresent
+        command: ["/entrypoint.sh"]
+        args:
+          - "sh"
+          - "-c"
+          - |
+            set -e
+            # Build argv via `set --` so workflow params (injected as env)
+            # are separate, quoted tokens — never spliced into the shell.
+            set -- python -m orchestrator.run_shepherd --reconcile
+            if [ -n "$WORKFLOW_SERVICE" ]; then
+              set -- "$@" --service "$WORKFLOW_SERVICE"
+            fi
+            if [ "$WORKFLOW_DRY_RUN" = "true" ]; then
+              set -- "$@" --dry-run
+            fi
+            printf '→'
+            printf ' %s' "$@"
+            printf '\n'
+            exec "$@"
+        env:
+          # Workflow params as env (NOT inline {{...}} in the script body —
+          # that is a shell-injection vector).
+          - name: WORKFLOW_SERVICE
+            value: "{{workflow.parameters.service}}"
+          - name: WORKFLOW_DRY_RUN
+            value: "{{workflow.parameters.dry_run}}"
+          - name: STATE_DIR
+            value: /workdir/mctl-gitops/platform-gitops/agents-state
+          # SINGLE-SOURCE INVARIANT (disjoint scope): this value MUST stay
+          # identical to SHEPHERD_SKIP_SERVICES on cwft-mctl-agents-shepherd.
+          # The two workflows partition the repo set — the shepherd SKIPS these
+          # services; reconcile owns ONLY them. If they ever diverge, a repo is
+          # processed by BOTH (duplicate/conflicting status flips) or NEITHER
+          # (orphaned). The companion change that sets the matching value on the
+          # shepherd CWFT must be live before this reconcile cron is enabled —
+          # which is exactly why cronworkflow-mctl-agents-reconcile ships
+          # `suspend: true`. Do NOT un-suspend it until the shepherd CWFT in the
+          # cluster carries this same skip. Edit the two in lockstep.
+          - name: SHEPHERD_SKIP_SERVICES
+            value: "mctl-design"
+          # Read-only GitHub PAT use: `gh api` PR snapshots in
+          # find_pr_for_proposal. No `gh pr merge`, no git push from this
+          # container (commit-and-push owns the write via the deploy key).
+          # No CLAUDE_CODE_OAUTH_TOKEN — --reconcile skips SDK auth entirely.
+          # NOT optional: a non-dry reconcile run requires the token; a missing
+          # secret should fail at pod-scheduling time, not as an opaque runtime
+          # `gh api` auth error. The in-cluster secret always carries this key.
+          - name: GITHUB_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: github-token
+        resources:
+          requests: { cpu: 100m, memory: 256Mi }
+          limits:   { cpu: 1000m, memory: 1Gi }
+        volumeMounts:
+          - name: workdir
+            mountPath: /workdir
+
+    # ── 3. Commit & push back to mctl-gitops ──────────────────────────────
+    # Only .status.yaml files should change in agents-state/ (run_shepherd
+    # --reconcile writes them on each terminal flip). Defensive: stage only
+    # that subtree. Same shape + mutex as the shepherd's commit-and-push.
+    - name: commit-and-push
+      synchronization:
+        mutex:
+          name: mctl-gitops-main-writes
+      script:
+        image: alpine/git:2.43.0
+        command: [sh]
+        resources:
+          requests: { cpu: 50m, memory: 64Mi }
+          limits:   { cpu: 500m, memory: 256Mi }
+        source: |
+          set -e
+          apk add --no-cache openssh-client ca-certificates
+          mkdir -p ~/.ssh
+          cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
+          chmod 600 ~/.ssh/config
+          # Pin GitHub's host key (via ssh-keyscan over 443) instead of
+          # disabling verification, so a MITM / DNS-poison of ssh.github.com
+          # is caught rather than silently trusted (StrictHostKeyChecking no).
+          ssh-keyscan -p 443 -H ssh.github.com >> ~/.ssh/known_hosts 2>/dev/null
+
+          cd /workdir/mctl-gitops
+          git config user.name "mctl-agents[bot]"
+          git config user.email "mctl-agents[bot]@users.noreply.github.com"
+
+          # Stage only .status.yaml updates under agents-state. Anything else
+          # changed there is NOT what this workflow should push — fail loudly.
+          NON_STATUS_CHANGES="$(git status --porcelain -- 'platform-gitops/agents-state/' ':(exclude,glob)platform-gitops/agents-state/**/.status.yaml')"
+          if [ -n "$NON_STATUS_CHANGES" ]; then
+            echo "❌ Refusing to commit non-.status.yaml changes under platform-gitops/agents-state/:"
+            printf '%s\n' "$NON_STATUS_CHANGES"
+            exit 1
+          fi
+
+          # Short-circuit BEFORE `git add`: a glob pathspec matching zero files
+          # crashes under `set -e`. A reconcile tick with nothing to repair is
+          # the common case.
+          STATUS_CHANGES="$(git status --porcelain -- ':(glob)platform-gitops/agents-state/**/.status.yaml')"
+          if [ -z "$STATUS_CHANGES" ]; then
+            echo "ℹ️  No .status.yaml updates — nothing to reconcile."
+            exit 0
+          fi
+          git add -- ':(glob)platform-gitops/agents-state/**/.status.yaml'
+
+          if git diff --cached --quiet; then
+            echo "ℹ️  No status updates after staging — nothing to commit."
+            exit 0
+          fi
+
+          DATE=$(date -u +%Y-%m-%d)
+          git commit -m "chore(agents): reconcile status ${DATE}"
+
+          for i in 1 2 3 4 5; do
+            if git push origin HEAD:main; then
+              echo "✅ Pushed status updates"
+              exit 0
+            fi
+            echo "⚠️  Push failed (attempt ${i}), rebasing..."
+            git pull --rebase origin main
+          done
+          echo "❌ Push failed after 5 attempts"
+          exit 1
+        volumeMounts:
+          - name: workdir
+            mountPath: /workdir
+          - name: deploy-key
+            mountPath: /secrets/deploy-key
+
+    # ── Telegram notification (onExit) ────────────────────────────────────
+    - name: notify-telegram
+      script:
+        image: alpine:3.19
+        command: [sh]
+        env:
+          - name: TG_BOT_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: telegram-bot-token
+                optional: true
+          - name: TG_CHAT_ID
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: telegram-chat-id
+                optional: true
+          - name: WORKFLOW_STATUS
+            value: "{{workflow.status}}"
+          - name: WORKFLOW_NAME
+            value: "{{workflow.name}}"
+          - name: WORKFLOW_DURATION
+            value: "{{workflow.duration}}"
+        source: |
+          set +e
+          apk add --no-cache curl ca-certificates >/dev/null 2>&1
+          case "$WORKFLOW_STATUS" in
+            Succeeded) ICON="✅" ;;
+            Failed)    ICON="❌" ;;
+            Error)     ICON="⚠️" ;;
+            *)         ICON="⏳" ;;
+          esac
+          UI_URL="https://workflows.mctl.ai/workflows/argo-workflows/${WORKFLOW_NAME}"
+          TEXT="${ICON} mctl-agents: reconcile — ${WORKFLOW_STATUS} (${WORKFLOW_DURATION}s)\n${UI_URL}"
+          if [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
+            curl -s -o /dev/null -w 'telegram http=%{http_code}\n' \
+              -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+              -H "Content-Type: application/json" \
+              -d "{\"chat_id\":\"${TG_CHAT_ID}\",\"text\":\"${TEXT}\",\"disable_web_page_preview\":true}"
+          else
+            echo "ℹ️  TG_BOT_TOKEN or TG_CHAT_ID not set; skipping Telegram leg."
+          fi
+          exit 0
