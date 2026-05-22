@@ -102,14 +102,21 @@ spec:
       script:
         image: alpine/git:2.43.0
         command: [sh]
+        resources:
+          requests: { cpu: 50m, memory: 64Mi }
+          limits:   { cpu: 500m, memory: 256Mi }
         source: |
           set -e
           apk add --no-cache openssh-client ca-certificates
           mkdir -p ~/.ssh
           cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  StrictHostKeyChecking no\n' > ~/.ssh/config
+          printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
           chmod 600 ~/.ssh/config
+          # Pin GitHub's host key (via ssh-keyscan over 443) instead of
+          # disabling verification, so a MITM / DNS-poison of ssh.github.com
+          # is caught rather than silently trusted (StrictHostKeyChecking no).
+          ssh-keyscan -p 443 -H ssh.github.com >> ~/.ssh/known_hosts 2>/dev/null
           git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops
           mkdir -p /workdir/mctl-gitops/platform-gitops/agents-state
           echo "✓ gitops cloned"
@@ -152,20 +159,30 @@ spec:
             value: "{{workflow.parameters.dry_run}}"
           - name: STATE_DIR
             value: /workdir/mctl-gitops/platform-gitops/agents-state
-          # Reconcile discovers ONLY services in this set. MUST match the value
-          # on cwft-mctl-agents-shepherd so the two cover disjoint repo sets.
+          # SINGLE-SOURCE INVARIANT (disjoint scope): this value MUST stay
+          # identical to SHEPHERD_SKIP_SERVICES on cwft-mctl-agents-shepherd.
+          # The two workflows partition the repo set — the shepherd SKIPS these
+          # services; reconcile owns ONLY them. If they ever diverge, a repo is
+          # processed by BOTH (duplicate/conflicting status flips) or NEITHER
+          # (orphaned). The companion change that sets the matching value on the
+          # shepherd CWFT must be live before this reconcile cron is enabled —
+          # which is exactly why cronworkflow-mctl-agents-reconcile ships
+          # `suspend: true`. Do NOT un-suspend it until the shepherd CWFT in the
+          # cluster carries this same skip. Edit the two in lockstep.
           - name: SHEPHERD_SKIP_SERVICES
             value: "mctl-design"
           # Read-only GitHub PAT use: `gh api` PR snapshots in
           # find_pr_for_proposal. No `gh pr merge`, no git push from this
           # container (commit-and-push owns the write via the deploy key).
           # No CLAUDE_CODE_OAUTH_TOKEN — --reconcile skips SDK auth entirely.
+          # NOT optional: a non-dry reconcile run requires the token; a missing
+          # secret should fail at pod-scheduling time, not as an opaque runtime
+          # `gh api` auth error. The in-cluster secret always carries this key.
           - name: GITHUB_TOKEN
             valueFrom:
               secretKeyRef:
                 name: mctl-agents-secrets
                 key: github-token
-                optional: true
         resources:
           requests: { cpu: 100m, memory: 256Mi }
           limits:   { cpu: 1000m, memory: 1Gi }
@@ -184,14 +201,21 @@ spec:
       script:
         image: alpine/git:2.43.0
         command: [sh]
+        resources:
+          requests: { cpu: 50m, memory: 64Mi }
+          limits:   { cpu: 500m, memory: 256Mi }
         source: |
           set -e
           apk add --no-cache openssh-client ca-certificates
           mkdir -p ~/.ssh
           cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  StrictHostKeyChecking no\n' > ~/.ssh/config
+          printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
           chmod 600 ~/.ssh/config
+          # Pin GitHub's host key (via ssh-keyscan over 443) instead of
+          # disabling verification, so a MITM / DNS-poison of ssh.github.com
+          # is caught rather than silently trusted (StrictHostKeyChecking no).
+          ssh-keyscan -p 443 -H ssh.github.com >> ~/.ssh/known_hosts 2>/dev/null
 
           cd /workdir/mctl-gitops
           git config user.name "mctl-agents[bot]"
