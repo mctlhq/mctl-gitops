@@ -369,6 +369,14 @@ configMaps:
             },
             "merge_mode": "when-green",
             "merge_method": "squash"
+          },
+          {
+            "name": "mctlhq/mctl-telegram",
+            "pr_filter": {
+              "head_prefix": "fix/"
+            },
+            "merge_mode": "when-green",
+            "merge_method": "squash"
           }
         ],
         "github_app": {
