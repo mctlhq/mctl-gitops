@@ -1,7 +1,8 @@
-status: implemented
-updated_at: '2026-05-22T16:13:22Z'
-updated_by: mctl-agents[bot]
+status: merged
+updated_at: '2026-05-22T19:08:24Z'
+updated_by: mashkovd
 pr: https://github.com/mctlhq/mctl-design/pull/5
+merge_commit: 03bd5aa84296
 source:
   type: github_issue
   repo: mctlhq/mctl-design
