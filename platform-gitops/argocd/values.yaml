@@ -281,10 +281,11 @@ argo-cd:
         # on 2026-05-10 (RAM real>requests gap on Global RAM dashboard).
         memory: 192Mi
       limits:
-        # Steady-state observed <50m; the controller is the hot path during
-        # reconciliation, not repo-server (mostly cached git fetch + helm
-        # template). 250m gives 5x headroom; trimmed 500m→250m on 2026-05-07.
-        cpu: 250m
+        # Steady-state is <50m, but reconciliation bursts (helm template
+        # render + git fetch) spike well above 250m for short windows and
+        # get CFS-throttled. The 500m→250m trim on 2026-05-07 was too
+        # aggressive and caused recurring CPUThrottlingHigh; restored to 500m.
+        cpu: 500m
         memory: 256Mi
     metrics:
       enabled: true
