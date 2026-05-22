@@ -8,7 +8,7 @@
       If absent, add `"overrides": { "lodash-es": "^4.18.1" }` as a temporary mitigation.
       — DoD: `npm audit` does not show CVE-2026-4800, CVE-2026-2950 as high/critical.
 - [ ] 4. Locally verify `npm run dev` and `vitepress build docs` after the overrides — DoD: build green, mermaid renders.
-- [ ] 5. Open a PR in `mctlhq/mctl-docs`, codex review, merge. — DoD: deployed to docs.mctl.ai.
+- [ ] 5. Open a PR in `mctlhq/mctl-docs`, code review, merge. — DoD: deployed to docs.mctl.ai.
 
 ## Tests
 

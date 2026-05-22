@@ -33,7 +33,7 @@
 - [ ] 6. Run `npm run dev` locally and open `docs/mcp/tools-reference.md#mctl-agents-pipeline`.
          — DoD: shepherd block renders, `dry_run` parameter table visible, no broken anchors.
 
-- [ ] 7. Open a PR against `mctlhq/mctl-docs`, run codex review, merge.
+- [ ] 7. Open a PR against `mctlhq/mctl-docs`, run code review, merge.
          — DoD: content live at docs.mctl.ai/mcp/tools-reference.
 
 ## Tests

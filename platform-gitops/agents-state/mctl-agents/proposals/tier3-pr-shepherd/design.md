@@ -88,7 +88,7 @@ Notes:
   - A line-anchored review comment by codex on `pr.head_sha` exists.
   - A top-level issue comment by codex matching `Didn't find any
     major issues` whose `created_at > pr.head_pushed_at`.
-  - A `+1` reaction by codex on the most recent `@codex review`
+  - A `+1` reaction by codex on the most recent `@claude review`
     trigger comment, AND that trigger comment's `created_at >
     pr.head_pushed_at`.
   Any signal predating the head push is ignored (treated as `wait`
@@ -111,7 +111,7 @@ Notes:
   for context (and can be displayed in the shepherd's per-tick log
   line for the operator) but does NOT block a merge. Project policy
   is documented in memory as
-  `feedback_pr_codex_review.md` (codex review gates every PR) and
+  `feedback_pr_codex_review.md` (code review gates every PR) and
   `reference_copilot_review_quirks_mctl_openclaw.md` (Copilot is
   best-effort, not gating; codex is the load-bearing review). The
   shepherd inherits that contract: if codex says clean, merge;

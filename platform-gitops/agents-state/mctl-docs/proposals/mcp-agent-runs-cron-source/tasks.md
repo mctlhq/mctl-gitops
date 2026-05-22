@@ -17,7 +17,7 @@
 - [ ] 5. Once mctl-gitops image bump for mctl-api ≥ 2026-05-07 is merged,
         remove the version-status note from the page. — DoD: clean prod
         docs without the unverified marker.
-- [ ] 6. Open a PR against `mctlhq/mctl-docs`, run codex review, merge.
+- [ ] 6. Open a PR against `mctlhq/mctl-docs`, run code review, merge.
         — DoD: deployed to docs.mctl.ai.
 
 ## Tests

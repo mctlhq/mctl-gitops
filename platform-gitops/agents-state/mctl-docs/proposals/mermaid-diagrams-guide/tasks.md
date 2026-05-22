@@ -14,7 +14,7 @@
 - [ ] 5. Audit existing `.md` files in `docs/` for `htmlLabels` — if found, create a separate
       fix-PR to remove them. —
       DoD: either no `htmlLabels` is found (OK) or a tracking issue/PR is created.
-- [ ] 6. Open a PR in `mctlhq/mctl-docs`, codex review, merge. —
+- [ ] 6. Open a PR in `mctlhq/mctl-docs`, code review, merge. —
       DoD: deployed to docs.mctl.ai, `/reference/diagrams` is reachable.
 
 ## Tests

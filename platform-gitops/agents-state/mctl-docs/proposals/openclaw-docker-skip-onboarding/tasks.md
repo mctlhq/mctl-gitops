@@ -8,7 +8,7 @@
 - [ ] 3. Cross-link: check `docs/guides/gitops-workflows.md` — if it mentions OpenClaw
          deployment, add a reference to the new "Deployment configuration" section.
          — DoD: relevant cross-reference in place (or noted as not applicable).
-- [ ] 4. Open a PR against `mctlhq/mctl-docs`, run codex review, merge.
+- [ ] 4. Open a PR against `mctlhq/mctl-docs`, run code review, merge.
          — DoD: content live at docs.mctl.ai/platform/openclaw.
 
 ## Tests

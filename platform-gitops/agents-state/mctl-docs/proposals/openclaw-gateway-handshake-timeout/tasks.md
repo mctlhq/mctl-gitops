@@ -8,7 +8,7 @@
 - [ ] 3. Check `docs/reference/troubleshooting.md` — if there is an existing entry about
          WebSocket or connection timeouts, add a cross-reference to the new config knob.
          — DoD: relevant cross-reference in place (or noted as not applicable).
-- [ ] 4. Open a PR against `mctlhq/mctl-docs`, run codex review, merge.
+- [ ] 4. Open a PR against `mctlhq/mctl-docs`, run code review, merge.
          — DoD: content live at docs.mctl.ai/platform/openclaw.
 
 ## Tests

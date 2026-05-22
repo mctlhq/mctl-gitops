@@ -19,7 +19,7 @@
         references `command` / `args` values and the rollout parity fix.
         — DoD: cross-reference in place; no orphan link.
 
-- [ ] 5. Open a PR against `mctlhq/mctl-docs`, run codex review, merge.
+- [ ] 5. Open a PR against `mctlhq/mctl-docs`, run code review, merge.
         — DoD: change deployed to docs.mctl.ai.
 
 ## Tests
