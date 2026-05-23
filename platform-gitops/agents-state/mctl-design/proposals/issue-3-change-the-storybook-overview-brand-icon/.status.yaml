@@ -1,7 +1,7 @@
-status: accepted
-updated_at: '2026-05-23T09:48:34Z'
+status: implemented
+updated_at: '2026-05-23T09:56:48Z'
 updated_by: mctl-agents[bot]
-notes: implementer produced no commits; reverted to accepted
+pr: https://github.com/mctlhq/mctl-design/pull/8
 source:
   type: github_issue
   repo: mctlhq/mctl-design
