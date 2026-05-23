@@ -679,7 +679,7 @@ extraContainers:
         async function check() {
           let creds;
           try { creds = JSON.parse(fs.readFileSync(CREDS, 'utf8')); } catch { return; }
-          if (!creds.refreshToken || !creds.clientId || (creds.refreshFailureCount || 0) > 0) return;
+          if (!creds.refreshToken || !creds.clientId || !creds.apiBase || (creds.refreshFailureCount || 0) > 0) return;
           const exp = Date.parse(creds.expiresAt);
           if (!Number.isFinite(exp) || exp - Date.now() > THRESHOLD_MS) return;
           const minLeft = Math.round((exp - Date.now()) / 60000);
@@ -695,14 +695,14 @@ extraContainers:
               let fresh; try { fresh = JSON.parse(fs.readFileSync(CREDS, 'utf8')); } catch { fresh = null; }
               if (fresh && fresh.refreshToken !== creds.refreshToken) return;
               const failed = { ...creds, refreshFailureCount: (creds.refreshFailureCount || 0) + 1, refreshFailureFirstAt: creds.refreshFailureFirstAt || new Date().toISOString(), updatedAt: new Date().toISOString() };
-              fs.writeFileSync(CREDS + '.tmp', JSON.stringify(failed, null, 2)); fs.renameSync(CREDS + '.tmp', CREDS);
+              fs.writeFileSync(CREDS + '.tmp', JSON.stringify(failed, null, 2), { mode: 0o600 }); fs.renameSync(CREDS + '.tmp', CREDS);
             }
             return;
           }
           const now = Date.now();
           const expiresIn = typeof body.expires_in === 'number' ? body.expires_in : 3600;
           const updated = { ...creds, accessToken: body.access_token, refreshToken: body.refresh_token || creds.refreshToken, expiresAt: new Date(now + expiresIn * 1000).toISOString(), updatedAt: new Date(now).toISOString(), refreshFailureCount: 0, refreshFailureFirstAt: null };
-          fs.writeFileSync(CREDS + '.tmp', JSON.stringify(updated, null, 2)); fs.renameSync(CREDS + '.tmp', CREDS);
+          fs.writeFileSync(CREDS + '.tmp', JSON.stringify(updated, null, 2), { mode: 0o600 }); fs.renameSync(CREDS + '.tmp', CREDS);
           process.stdout.write('[mctl-refresh] ok expiresAt=' + updated.expiresAt + '\n');
         }
         check().catch(e => process.stdout.write('[mctl-refresh] error: ' + e.message + '\n'));
