@@ -70,6 +70,109 @@ After the new pod comes up, claude.ai → Code should list `claude-remote`
 as a connected device. Verify in logs that the welcome banner now shows
 `<email>'s Organization` and 5+ ESTABLISHED outbound sockets exist.
 
+## Recovery runbook — wedged or disconnected session
+
+Two distinct failure modes drop the device; recovery differs. Identify which
+one first.
+
+### Mode A — credential-wipe loop (pod CrashLoops / 503 / "Not logged in")
+
+Symptom: base-service restart-loops, liveness fails, `claude auth status` →
+`authMethod: "none"`. Cause: the OAuth login was lost and the `s3-sync` mirror
+propagated the local logout to MinIO, so `restore-state` has nothing to pull.
+
+Recovery: re-run the **First-time bootstrap** `claude auth login` above in a
+real interactive TTY (`exec -it`), wait ~15s for the MinIO mirror, verify
+`.credentials.json` landed, then delete the pod.
+
+### Mode B — websocket-wedge (pod healthy, claude.ai says "Remote Control disconnected")
+
+Symptom: claude.ai shows the session "stopped responding", but the pod is
+`Running`/`Ready` with `restarts=0` and `claude auth status` is fine. The
+process is alive but its event loop is stalled (typically after a long blocking
+poll loop), so the relay websocket died while the TCP connection lingers
+ESTABLISHED.
+
+**As of image `0.7.0` this self-heals:** `/healthz` detects unread relay data
+in the socket receive queue (`RELAY_STALL_MS`, default 120s) and fails liveness
+→ kubelet restarts → the new pod resumes the prior session via `--resume`
+(`0.5.0+`). The steps below are the **manual fallback** — use them only if you
+need to recover before the watchdog fires, or want to resume a *specific*
+session.
+
+Set up access:
+
+```sh
+export KUBECONFIG=.../mctl-gitops/infrastructure/k3s-preview/kubeconfig.yaml
+POD=$(kubectl --context mctl-preprod -n labs get pods \
+  -l app.kubernetes.io/instance=labs-claude-remote -o name | head -1)
+POD=${POD#pod/}
+```
+
+1. **Confirm it's wedged (read-only).** Find the claude PID (the process whose
+   cmdline contains `--remote-control` and is *not* the `sh -c` wrapper) and
+   check it is idle and not draining its relay socket:
+
+   ```sh
+   # CPU delta ~0 over 3s = blocked event loop
+   kubectl --context mctl-preprod -n labs exec "$POD" -c base-service -- sh -lc '
+     read _ _ _ _ _ _ _ _ _ _ _ _ _ u1 _ < /proc/<PID>/stat; sleep 3
+     read _ _ _ _ _ _ _ _ _ _ _ _ _ u2 _ < /proc/<PID>/stat
+     echo "cpu delta=$((u2-u1)) (0=blocked)"'
+   # unread relay backlog (rxq>0 on a :443 socket = not draining = wedged)
+   kubectl --context mctl-preprod -n labs exec "$POD" -c base-service -- sh -lc '
+     awk "NR>1 && \$4==\"01\" && \$3 ~ /:01BB$/ {print \"txq:rxq=\" \$5}" \
+       /proc/net/tcp /proc/net/tcp6'
+   ```
+
+   A frozen TUI timer in the logs ("Channeling… (Ns)" not advancing) is the
+   tell-tale.
+
+2. **Snapshot the recovery point.** Record the session UUID and confirm it is in
+   MinIO *before* any destructive step. A restart creates a *newer* blank
+   session, so a later resume must target this UUID explicitly — not "newest".
+
+   ```sh
+   kubectl --context mctl-preprod -n labs exec "$POD" -c base-service -- sh -lc \
+     'ls -t /workspace/.claude/projects/*/*.jsonl | head -1'   # -> <UUID>.jsonl
+   kubectl --context mctl-preprod -n labs exec "$POD" -c s3-sync -- sh -lc \
+     'mc ls s3/platform-state/labs/claude-remote/.claude/projects/-workspace/<UUID>.jsonl'
+   ```
+
+3. **One targeted interrupt (best-effort, optional).** The `script` wrapper
+   (PID 1) holds the PTY master at `/proc/1/fd/3` (→ `/dev/pts/ptmx`; claude's
+   slave is `/dev/pts/0`). Send a *single* ESC:
+
+   ```sh
+   kubectl --context mctl-preprod -n labs exec "$POD" -c base-service -- sh -lc \
+     'printf "\033" > /proc/1/fd/3'
+   ```
+
+   In practice this does **not** revive a `--remote-control` session (input
+   arrives from the relay, not local stdin) — do not spray ESC/Ctrl-C across
+   `/proc/1/fd`. Treat it as a quick attempt, then move on.
+
+4. **Graceful restart.** Once confirmed wedged and the transcript is verified in
+   MinIO:
+
+   ```sh
+   kubectl --context mctl-preprod -n labs delete pod "$POD"
+   ```
+
+   `terminationGracePeriodSeconds: 60` lets `s3-sync` flush; `restore-state`
+   pulls creds + transcripts back. On `0.5.0+` the new pod auto-resumes the
+   latest session (entrypoint `--resume`); look for
+   `[entrypoint] resuming session <uuid>` in the logs.
+
+5. **Resume a *specific* session.** To bring back a particular conversation
+   instead of the newest, set `RESUME_SESSION_ID: "<uuid>"` in this service's
+   `values.yaml` and let ArgoCD roll the pod. Set `RESUME_SESSION: "false"` to
+   force a fresh session (e.g. if a transcript is corrupt).
+
+Post-recovery checks: `claude auth status` → `authMethod: claude.ai` /
+`subscriptionType: max`; pod `Ready` (so `/healthz` is 200); the resume-target
+transcript still present in MinIO; entrypoint log shows the resumed session id.
+
 ## Why this is OK from a GitOps perspective
 
 OAuth credentials are **rotating, stateful** secrets — the access token is
