@@ -5,7 +5,7 @@ metadata:
   namespace: argo-workflows
   annotations:
     workflows.argoproj.io/description: |
-      Every-30-minute trigger for the Tier 2 implementer.
+      Every-5-minute trigger for the Tier 2 implementer.
 
       Workflow logic lives in ClusterWorkflowTemplate `mctl-agents-implement`
       (cwft-mctl-agents-implement.yaml). This CronWorkflow is a thin wrapper
@@ -22,22 +22,21 @@ metadata:
       A tick with no accepted proposals is a cheap no-op (one glob + exit).
       ~$3 SDK cost per proposal processed.
 spec:
-  # `20 * * * *` — fires every hour at :20 (24 ticks/day). A tick with no
-  # accepted proposals is a cheap no-op (one fs glob + exit). The :20 offset
-  # stays clear of rotate-mctl-agent-github-token (:00), mctl-agents-incidents
-  # (:15/:45), and mctl-agents-shepherd (:30), so contention on the shared
-  # `mctl-gitops-main-writes` mutex is rare. Each actual implementation run
-  # can take up to 20 min — Forbid drops overlapping ticks cleanly.
-  schedule: "20 * * * *"
+  # `*/5 * * * *` — fires every 5 minutes (288 ticks/day). A tick with no
+  # accepted proposals is a cheap no-op (one fs glob + exit). May contend
+  # with other crons on `mctl-gitops-main-writes` mutex — Forbid drops
+  # overlapping ticks cleanly. Each actual implementation run takes up to
+  # 20 min, so most ticks are dropped while one run is in flight.
+  schedule: "*/5 * * * *"
   timezone: "UTC"
   # Forbid: implementation runs are slow (clone + SDK + push). Drop a queued
   # tick rather than stack two concurrent implementers on the same mutex.
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 600
-  # Counts, NOT days. At 24 ticks/day, 48 ≈ 2 days of history and
-  # 24 ≈ 1 day of failures — enough for postmortem reach without bloating etcd.
-  successfulJobsHistoryLimit: 48
-  failedJobsHistoryLimit: 24
+  # Counts, NOT days. At 288 ticks/day, 96 ≈ 8h of history and
+  # 48 ≈ 4h of failures — enough for recent debugging without bloating etcd.
+  successfulJobsHistoryLimit: 96
+  failedJobsHistoryLimit: 48
   suspend: false
   workflowSpec:
     workflowTemplateRef:
