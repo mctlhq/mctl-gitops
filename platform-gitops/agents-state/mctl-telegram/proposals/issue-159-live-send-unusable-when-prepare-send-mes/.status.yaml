@@ -1,6 +1,6 @@
-status: proposed
-updated_at: '2026-05-23T08:49:16Z'
-updated_by: mctl-agents[bot]
+status: accepted
+updated_at: '2026-05-23T09:15:00Z'
+updated_by: mashkovd
 source:
   type: github_issue
   repo: mctlhq/mctl-telegram
