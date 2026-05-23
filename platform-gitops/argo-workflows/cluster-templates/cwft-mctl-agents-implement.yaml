@@ -18,11 +18,9 @@ metadata:
         3. commit-and-push — commits .status.yaml updates back to gitops main.
 
       Triggered by:
+        - CronWorkflow mctl-agents-implement (every hour at :20 UTC)
         - mctl-api MCP tool mctl_trigger_implementer (admin-only)
         - operator submitting a Workflow that references this CWFT
-
-      NOT cron-triggered. NOT auto-triggered on .status.yaml change (would
-      require an Argo Events Sensor — out of scope for v1).
 spec:
   serviceAccountName: argo-workflow-sa
   imagePullSecrets:

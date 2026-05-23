@@ -1,0 +1,53 @@
+apiVersion: argoproj.io/v1alpha1
+kind: CronWorkflow
+metadata:
+  name: mctl-agents-implement
+  namespace: argo-workflows
+  annotations:
+    workflows.argoproj.io/description: |
+      Every-30-minute trigger for the Tier 2 implementer.
+
+      Workflow logic lives in ClusterWorkflowTemplate `mctl-agents-implement`
+      (cwft-mctl-agents-implement.yaml). This CronWorkflow is a thin wrapper
+      that submits a Workflow with no filters, so the implementer processes
+      every proposal whose .status.yaml is status=accepted.
+
+      What it does each tick:
+        1. Scans agents-state/<svc>/proposals/<slug>/.status.yaml for
+           status=accepted entries.
+        2. For each, gh-clones the target repo, runs the Claude Agent SDK
+           sub-agent to write and commit code, pushes feat/agents-<slug>,
+           opens a PR in mctlhq/<svc>.
+        3. Flips .status.yaml → implemented with pr: <url>.
+      A tick with no accepted proposals is a cheap no-op (one glob + exit).
+      ~$3 SDK cost per proposal processed.
+spec:
+  # `20 * * * *` — fires every hour at :20 (24 ticks/day). A tick with no
+  # accepted proposals is a cheap no-op (one fs glob + exit). The :20 offset
+  # stays clear of rotate-mctl-agent-github-token (:00), mctl-agents-incidents
+  # (:15/:45), and mctl-agents-shepherd (:30), so contention on the shared
+  # `mctl-gitops-main-writes` mutex is rare. Each actual implementation run
+  # can take up to 20 min — Forbid drops overlapping ticks cleanly.
+  schedule: "20 * * * *"
+  timezone: "UTC"
+  # Forbid: implementation runs are slow (clone + SDK + push). Drop a queued
+  # tick rather than stack two concurrent implementers on the same mutex.
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  # Counts, NOT days. At 24 ticks/day, 48 ≈ 2 days of history and
+  # 24 ≈ 1 day of failures — enough for postmortem reach without bloating etcd.
+  successfulJobsHistoryLimit: 48
+  failedJobsHistoryLimit: 24
+  suspend: false
+  workflowSpec:
+    workflowTemplateRef:
+      name: mctl-agents-implement
+      clusterScope: true
+    arguments:
+      parameters:
+        - name: service
+          value: ""
+        - name: slug
+          value: ""
+        - name: force
+          value: "false"
