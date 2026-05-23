@@ -668,6 +668,7 @@ extraContainers:
             }
             return;
           }
+          if (!body.access_token) { process.stdout.write('[mctl-refresh] invalid response: missing access_token\n'); return; }
           const now = Date.now();
           const expiresIn = typeof body.expires_in === 'number' ? body.expires_in : 3600;
           const updated = { ...creds, accessToken: body.access_token, refreshToken: body.refresh_token || creds.refreshToken, expiresAt: new Date(now + expiresIn * 1000).toISOString(), updatedAt: new Date(now).toISOString(), refreshFailureCount: 0, refreshFailureFirstAt: null };
