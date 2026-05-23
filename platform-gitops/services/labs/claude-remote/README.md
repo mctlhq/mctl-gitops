@@ -93,12 +93,20 @@ process is alive but its event loop is stalled (typically after a long blocking
 poll loop), so the relay websocket died while the TCP connection lingers
 ESTABLISHED.
 
-**As of image `0.7.0` this self-heals:** `/healthz` detects unread relay data
-in the socket receive queue (`RELAY_STALL_MS`, default 120s) and fails liveness
-→ kubelet restarts → the new pod resumes the prior session via `--resume`
-(`0.5.0+`). The steps below are the **manual fallback** — use them only if you
-need to recover before the watchdog fires, or want to resume a *specific*
-session.
+**This self-heals — the steps below are a manual fallback.** Two layers,
+fastest first:
+
+- **In-pod watchdog (`0.8.0+`):** an entrypoint background loop detects unread
+  relay data in the socket receive queue and, after `WATCHDOG_STALL_SECONDS`
+  (120s), kills the wedged claude leaf so the supervisor relaunches it in-pod
+  with `--resume` — no pod recreate.
+- **kubelet backstop (`0.7.0+`):** `/healthz` detects the same stall
+  (`RELAY_STALL_MS`, 120s) and fails liveness → kubelet recreates the pod →
+  resume via `--resume` (`0.5.0+`). Covers the case where the in-pod relaunch
+  can't recover.
+
+Use the steps below only to recover faster than the watchdog, or to resume a
+*specific* session.
 
 Set up access:
 
@@ -139,18 +147,13 @@ POD=${POD#pod/}
      'mc ls s3/platform-state/labs/claude-remote/.claude/projects/-workspace/<UUID>.jsonl'
    ```
 
-3. **One targeted interrupt (best-effort, optional).** The `script` wrapper
-   (PID 1) holds the PTY master at `/proc/1/fd/3` (→ `/dev/pts/ptmx`; claude's
-   slave is `/dev/pts/0`). Send a *single* ESC:
-
-   ```sh
-   kubectl --context mctl-preprod -n labs exec "$POD" -c base-service -- sh -lc \
-     'printf "\033" > /proc/1/fd/3'
-   ```
-
-   In practice this does **not** revive a `--remote-control` session (input
-   arrives from the relay, not local stdin) — do not spray ESC/Ctrl-C across
-   `/proc/1/fd`. Treat it as a quick attempt, then move on.
+3. **(Historical) targeted PTY interrupt — skip it.** A single ESC into the PTY
+   master does **not** revive a `--remote-control` session (input arrives from
+   the relay, not local stdin), so this is retained only as context. Note also
+   that as of `0.8.0` PID 1 is the **supervisor shell**, not `script` — the PTY
+   master now lives on the `script` child (the `script -qfc "claude
+   --remote-control …"` process), not `/proc/1/fd/*`. Just let the watchdog act
+   or go straight to the restart below; never spray ESC/Ctrl-C across `/proc`.
 
 4. **Graceful restart.** Once confirmed wedged and the transcript is verified in
    MinIO:
