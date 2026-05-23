@@ -103,6 +103,19 @@ spec:
               - job_name: kubernetes-pods
                 pipeline_stages:
                   - docker: {}
+                  - match:
+                      selector: '{namespace=~"labs|admins|ovk"}'
+                      stages:
+                        - regex:
+                            expression: '(?P<token_refresh_failed>\[openai-codex\] Token refresh failed)'
+                        - metrics:
+                            openclaw_token_refresh_failed_total:
+                              type: Counter
+                              description: "openai-codex token refresh failure count"
+                              source: token_refresh_failed
+                              config:
+                                match_all: false
+                                action: inc
                 kubernetes_sd_configs:
                   - role: pod
                 relabel_configs:

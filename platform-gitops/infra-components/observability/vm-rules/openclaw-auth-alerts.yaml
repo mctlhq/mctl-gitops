@@ -1,0 +1,36 @@
+# Alert on openai-codex token refresh failures logged by openclaw pods.
+# The Promtail metrics stage in loki.yaml converts the log pattern
+# "[openai-codex] Token refresh failed" into the counter
+# openclaw_token_refresh_failed_total. A single occurrence is enough to page
+# because a failed refresh means credentials will stop working when the
+# access token expires (~10 days from initial auth).
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: openclaw-auth-alerts
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: mctl-platform
+spec:
+  groups:
+    - name: openclaw.auth
+      rules:
+        - alert: OpenclawCodexTokenRefreshFailed
+          expr: |
+            increase(openclaw_token_refresh_failed_total[10m]) > 0
+          for: 0m
+          labels:
+            severity: warning
+            component: openclaw
+          annotations:
+            summary: "openclaw openai-codex token refresh failed (namespace={{ $labels.namespace }})"
+            description: |
+              Token refresh for openai-codex:default failed on at least one
+              openclaw pod. The access token expires 2026-06-02; if refresh
+              keeps failing the gateway will return "Missing API key" on the
+              next request after expiry. Likely causes:
+              - OpenAI revoked the refresh token (long idle period)
+              - Network issue reaching auth.openai.com from the cluster
+              - pi-ai upstream package changed CLIENT_ID
+              Fix: port-forward to the openclaw pod and re-authenticate via
+              manual_input mode in the Control UI (/overview).
