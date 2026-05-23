@@ -5,7 +5,7 @@ metadata:
   namespace: argo-workflows
   annotations:
     workflows.argoproj.io/description: |
-      Every-30-minute trigger for the issue-driven entry-point poller.
+      Every-5-minute trigger for the issue-driven entry-point poller.
 
       Workflow logic lives in ClusterWorkflowTemplate `mctl-agents-issue-poll`
       (cwft-mctl-agents-issue-poll.yaml). This CronWorkflow is a thin wrapper
@@ -28,22 +28,20 @@ metadata:
       (verify a labelled test issue yields a proposal and the label is
       removed).
 spec:
-  # `10,40 * * * *` — fires at HH:10 and HH:40 (48 ticks/day). A tick with
-  # nothing labelled is a cheap no-op (one `gh search` + exit). The :10/:40
-  # offset stays clear of mctl-agents-shepherd (:30), mctl-agents-incidents
-  # (:15/:45), rotate-mctl-agent-github-token (:00) and mctl-agents-daily
-  # (06:00 UTC), so contention on the shared `mctl-gitops-main-writes`
-  # mutex is rare.
-  schedule: "10,40 * * * *"
+  # `*/5 * * * *` — fires every 5 minutes (288 ticks/day). A tick with
+  # nothing labelled is a cheap no-op (one `gh search` + exit). May
+  # occasionally contend with mctl-agents-shepherd (:30), mctl-agents-incidents
+  # (:15/:45), and rotate-mctl-agent-github-token (:00) on the shared
+  # `mctl-gitops-main-writes` mutex — concurrencyPolicy: Forbid handles overlaps.
+  schedule: "*/5 * * * *"
   timezone: "UTC"
   # Forbid: never overlap two poll ticks. They contend on the same
   # `mctl-gitops-main-writes` mutex anyway, and a queued tick would only
   # delay the next genuine cron-driven one. Drop overlaps cleanly.
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 600
-  # Counts, NOT days. At 48 ticks/day, 96 ≈ 2 days of poll history and
-  # 48 ≈ 1 day of failures — enough for an incident-postmortem reach
-  # without bloating etcd.
+  # Counts, NOT days. At 288 ticks/day, 96 ≈ 8h of poll history and
+  # 48 ≈ 4h of failures — enough for recent debugging without bloating etcd.
   successfulJobsHistoryLimit: 96
   failedJobsHistoryLimit: 48
   # Start suspended — un-suspend after the smoke test (one-shot real run
