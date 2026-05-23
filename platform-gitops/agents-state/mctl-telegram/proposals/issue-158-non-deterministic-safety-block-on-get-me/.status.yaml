@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-05-23T09:35:55Z'
+updated_at: '2026-05-23T13:21:07Z'
 updated_by: mctl-agents[bot]
 pr: https://github.com/mctlhq/mctl-telegram/pull/162
 source:
@@ -9,3 +9,4 @@ source:
   url: https://github.com/mctlhq/mctl-telegram/issues/158
 control:
   requires_human_approval: true
+review_attempts: 1
