@@ -767,7 +767,7 @@ extraContainers:
     # Proactive mctl OAuth token refresh. Checks every 5 min and refreshes when
     # the access token has < 45 min remaining, matching the mctl-mcp-proxy.js
     # threshold. Prevents silent expiry on idle pods without any UI interaction.
-    image: node:22-alpine
+    image: node:22-alpine@sha256:968df39aedcea65eeb078fb336ed7191baf48f972b4479711397108be0966920
     resources:
       requests:
         cpu: 5m
@@ -813,6 +813,8 @@ extraContainers:
             process.stdout.write('[mctl-refresh] failed: ' + err + ' ' + desc + '\n');
             const invalid = ['invalid_grant', 'invalid_token'].includes(err) || desc.includes('refresh token');
             if (invalid) {
+              let fresh; try { fresh = JSON.parse(fs.readFileSync(CREDS, 'utf8')); } catch { fresh = null; }
+              if (fresh && fresh.refreshToken !== creds.refreshToken) return;
               const failed = { ...creds, refreshFailureCount: (creds.refreshFailureCount || 0) + 1, refreshFailureFirstAt: creds.refreshFailureFirstAt || new Date().toISOString(), updatedAt: new Date().toISOString() };
               fs.writeFileSync(CREDS + '.tmp', JSON.stringify(failed, null, 2)); fs.renameSync(CREDS + '.tmp', CREDS);
             }
