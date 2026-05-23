@@ -45,7 +45,7 @@ env:
   NODE_OPTIONS: "--max-old-space-size=1792"
   OPENCLAW_CONFIG_PATH: /config-rw/openclaw.json
   OPENCLAW_OPENAI_CODEX_PORTAL_CALLBACK_URL: "https://app.mctl.ai/api/oidc-provider/openai-codex/callback"
-  OPENCLAW_OPENAI_CODEX_CLIENT_ID: ""
+  OPENCLAW_OPENAI_CODEX_CLIENT_ID: "app_EMoamEEZ73f0CkXaXp7hrann"
 
 probes:
   startup:

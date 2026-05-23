@@ -276,7 +276,7 @@ spec:
                       - namespace = "monitoring"
                   - receiver: mctl-agent
                     matchers:
-                      - alertname =~ "PodCrashLooping|KubePodCrashLooping|KubePodNotReady|PodNotReady|TenantCPUQuotaHigh|TenantMemoryQuotaHigh|ArgoWorkflowFailed|ArgoWorkflowHighFailureRate|CPUThrottlingHigh|KubeJobNotCompleted|KubePersistentVolumeFillingUp|KubeStatefulSetReplicasMismatch|NodeHighCPU|NodeHighMemory|NodeLowMemoryAvailable|NodeDiskPressure|NodeDiskSpaceHigh|VaultSealed|MinioBucketUsageHigh|MinioBucketUsageCritical|ArgoCDApplicationDegraded|ArgoCDApplicationOutOfSyncLong"
+                      - alertname =~ "PodCrashLooping|KubePodCrashLooping|KubePodNotReady|PodNotReady|TenantCPUQuotaHigh|TenantMemoryQuotaHigh|ArgoWorkflowFailed|ArgoWorkflowHighFailureRate|CPUThrottlingHigh|KubeJobNotCompleted|KubePersistentVolumeFillingUp|KubeStatefulSetReplicasMismatch|NodeHighCPU|NodeHighMemory|NodeLowMemoryAvailable|NodeDiskPressure|NodeDiskSpaceHigh|VaultSealed|MinioBucketUsageHigh|MinioBucketUsageCritical|ArgoCDApplicationDegraded|ArgoCDApplicationOutOfSyncLong|OpenclawCodexTokenRefreshFailed"
               receivers:
                 - name: "null"
                 - name: mctl-agent
