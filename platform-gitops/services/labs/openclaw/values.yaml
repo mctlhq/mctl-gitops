@@ -683,6 +683,74 @@ extraContainers:
         readOnly: true
       - name: state-data
         mountPath: /home/node/.openclaw
+  - name: mctl-token-refresh
+    # Proactive mctl OAuth token refresh. Checks every 5 min and refreshes when
+    # the access token has < 45 min remaining, matching the mctl-mcp-proxy.js
+    # threshold. Prevents silent expiry on idle pods without any UI interaction.
+    image: node:22-alpine
+    resources:
+      requests:
+        cpu: 5m
+        memory: 32Mi
+      limits:
+        cpu: 50m
+        memory: 64Mi
+    command: ["sh", "-c"]
+    args:
+      - |
+        cat > /tmp/mctl-refresh.cjs << 'NODESCRIPT'
+        'use strict';
+        const fs = require('fs');
+        const https = require('https');
+        const CREDS = '/home/node/.openclaw/mcp-auth/mctl/credentials.json';
+        const INTERVAL_MS = 5 * 60 * 1000;
+        const THRESHOLD_MS = 45 * 60 * 1000;
+        function post(hostname, path, body) {
+          return new Promise(resolve => {
+            const buf = Buffer.from(body);
+            const req = https.request(
+              { hostname, path, method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json', 'Content-Length': buf.length } },
+              res => { let d = ''; res.on('data', c => d += c); res.on('end', () => { try { resolve({ ok: res.statusCode < 300, body: JSON.parse(d) }); } catch { resolve({ ok: false, body: {} }); } }); }
+            );
+            req.on('error', () => resolve({ ok: false, body: {} }));
+            req.write(buf);
+            req.end();
+          });
+        }
+        async function check() {
+          let creds;
+          try { creds = JSON.parse(fs.readFileSync(CREDS, 'utf8')); } catch { return; }
+          if (!creds.refreshToken || !creds.clientId || (creds.refreshFailureCount || 0) > 0) return;
+          const exp = Date.parse(creds.expiresAt);
+          if (!Number.isFinite(exp) || exp - Date.now() > THRESHOLD_MS) return;
+          const minLeft = Math.round((exp - Date.now()) / 60000);
+          process.stdout.write('[mctl-refresh] ' + new Date().toISOString() + ' expires in ' + minLeft + 'min, refreshing\n');
+          const params = new URLSearchParams({ grant_type: 'refresh_token', refresh_token: creds.refreshToken, client_id: creds.clientId });
+          const host = creds.apiBase.replace(/^https?:\/\//, '');
+          const { ok, body } = await post(host, '/oauth/token', params.toString());
+          if (!ok || body.error) {
+            const err = body.error || 'unknown', desc = body.error_description || '';
+            process.stdout.write('[mctl-refresh] failed: ' + err + ' ' + desc + '\n');
+            const invalid = ['invalid_grant', 'invalid_token'].includes(err) || desc.includes('refresh token');
+            if (invalid) {
+              const failed = { ...creds, refreshFailureCount: (creds.refreshFailureCount || 0) + 1, refreshFailureFirstAt: creds.refreshFailureFirstAt || new Date().toISOString(), updatedAt: new Date().toISOString() };
+              fs.writeFileSync(CREDS + '.tmp', JSON.stringify(failed, null, 2)); fs.renameSync(CREDS + '.tmp', CREDS);
+            }
+            return;
+          }
+          const now = Date.now();
+          const expiresIn = typeof body.expires_in === 'number' ? body.expires_in : 3600;
+          const updated = { ...creds, accessToken: body.access_token, refreshToken: body.refresh_token || creds.refreshToken, expiresAt: new Date(now + expiresIn * 1000).toISOString(), updatedAt: new Date(now).toISOString(), refreshFailureCount: 0, refreshFailureFirstAt: null };
+          fs.writeFileSync(CREDS + '.tmp', JSON.stringify(updated, null, 2)); fs.renameSync(CREDS + '.tmp', CREDS);
+          process.stdout.write('[mctl-refresh] ok expiresAt=' + updated.expiresAt + '\n');
+        }
+        check().catch(e => process.stdout.write('[mctl-refresh] error: ' + e.message + '\n'));
+        setInterval(() => check().catch(e => process.stdout.write('[mctl-refresh] error: ' + e.message + '\n')), INTERVAL_MS);
+        NODESCRIPT
+        exec node /tmp/mctl-refresh.cjs
+    volumeMounts:
+      - name: state-data
+        mountPath: /home/node/.openclaw
 persistence:
   state:
     enabled: false
