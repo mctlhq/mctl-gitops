@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-05-23T09:56:48Z'
+status: merged
+updated_at: '2026-05-23T12:46:10Z'
 updated_by: mctl-agents[bot]
 pr: https://github.com/mctlhq/mctl-design/pull/8
 source:
@@ -9,3 +9,5 @@ source:
   url: https://github.com/mctlhq/mctl-design/issues/3
 control:
   requires_human_approval: true
+merged_at: '2026-05-23T12:46:10Z'
+merge_commit: 86533f5f0d1938f504abc9c93507996b81f3dece
