@@ -27,6 +27,10 @@ env:
   LOG_LEVEL: info
   PUBLIC_BASE_URL: https://tg.mctl.ai
   OAUTH_ISSUER_URL: https://tg.mctl.ai
+  # Raised from the 10m default: the in-browser enable_access flow (phone -> SMS
+  # -> 2FA) is bounded by this same TTL (lookupEnable), and 10m is too tight for
+  # a human to receive and enter the SMS code -> "sign-in session has expired".
+  OAUTH_CODE_TTL: "30m"
   # Walkthrough video embedded on /demo (ChatGPT App Directory review).
   DEMO_VIDEO_URL: https://youtu.be/R9lnlB4w7Ew
   # Telegram OpenID Connect client id = the @MCTL_AI_bot numeric id (the part
