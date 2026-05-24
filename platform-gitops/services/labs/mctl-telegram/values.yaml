@@ -148,5 +148,4 @@ extraExternalSecrets:
         property: DEMO_REVIEWER_USERNAME
       - secretKey: DEMO_REVIEWER_PASSWORD
         remoteKey: secret/data/platform/mctl-telegram/demo
-        # Vault key is "PASSWORD" (no prefix); maps to the DEMO_REVIEWER_PASSWORD env var.
-        property: PASSWORD
+        property: DEMO_REVIEWER_PASSWORD
