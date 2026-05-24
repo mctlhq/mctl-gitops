@@ -39,6 +39,15 @@ env:
   # Open registration: every Telegram-authenticated user auto-gets the client
   # tier. Ban a specific user with the set_telegram_access MCP tool.
   AUTO_APPROVE_CLIENTS: "true"
+  # Reviewer/demo auth-mode for the ChatGPT App Directory review. When enabled,
+  # /oauth/authorize shows a password-gated "reviewer access" form that signs in
+  # as the demo Telegram account below WITHOUT the live Telegram OIDC login (no
+  # phone/SMS). DEMO_REVIEWER_USERNAME/PASSWORD come from Vault via the
+  # labs-mctl-telegram-demo ExternalSecret. Turn OFF and rotate the password
+  # after the review. The demo account's per-account send_enabled must be false
+  # so sends stay dry-run previews even though ALLOW_SEND is true globally.
+  DEMO_REVIEWER_ENABLED: "true"
+  DEMO_REVIEWER_TG_ID: "8745115872"
 ingress:
   enabled: true
   hosts:
@@ -76,6 +85,8 @@ envFrom:
       name: "labs-mctl-telegram-oauth"
   - secretRef:
       name: "labs-mctl-telegram-login"
+  - secretRef:
+      name: "labs-mctl-telegram-demo"
 extraExternalSecrets:
   labs-mctl-telegram-tg-api:
     refreshInterval: 1h
@@ -124,3 +135,17 @@ extraExternalSecrets:
       - secretKey: TELEGRAM_LOGIN_BOT_TOKEN
         remoteKey: secret/data/platform/mctl-telegram/login
         property: TELEGRAM_LOGIN_BOT_TOKEN
+  # Reviewer/demo auth-mode credentials (ChatGPT App Directory review). Seed the
+  # Vault path secret/data/platform/mctl-telegram/demo with DEMO_REVIEWER_USERNAME
+  # and DEMO_REVIEWER_PASSWORD before enabling DEMO_REVIEWER_ENABLED. Remove this
+  # block (and the env flags) after the review, then delete the Vault secret.
+  labs-mctl-telegram-demo:
+    refreshInterval: 1h
+    targetSecret: labs-mctl-telegram-demo
+    data:
+      - secretKey: DEMO_REVIEWER_USERNAME
+        remoteKey: secret/data/platform/mctl-telegram/demo
+        property: DEMO_REVIEWER_USERNAME
+      - secretKey: DEMO_REVIEWER_PASSWORD
+        remoteKey: secret/data/platform/mctl-telegram/demo
+        property: DEMO_REVIEWER_PASSWORD
