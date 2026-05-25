@@ -1,0 +1,35 @@
+# Service: instruments-proxy
+# Team: labs
+
+# Chart: base-service
+
+image:
+  repository: ghcr.io/mctlhq/instruments-proxy
+  tag: "0.1.0"
+imagePullSecrets:
+  - name: ghcr-credentials
+service:
+  port: 8787
+backstage:
+  kubernetesId: instruments-proxy
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+env:
+  APP_ENV: production
+ingress:
+  enabled: true
+  hosts:
+    - labs-instruments-proxy.mctl.ai
+    - labs-instruments-proxy.mctl.me
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls:
+    - secretName: instruments-proxy-tls
+      hosts:
+        - labs-instruments-proxy.mctl.ai
+        - labs-instruments-proxy.mctl.me
