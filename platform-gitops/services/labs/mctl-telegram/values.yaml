@@ -32,7 +32,7 @@ env:
   # a human to receive and enter the SMS code -> "sign-in session has expired".
   OAUTH_CODE_TTL: "30m"
   # Walkthrough video embedded on /demo (ChatGPT App Directory review).
-  DEMO_VIDEO_URL: https://youtu.be/R9lnlB4w7Ew
+  DEMO_VIDEO_URL: https://tg.mctl.ai/demo/walkthrough.mp4
   # Telegram OpenID Connect client id = the @MCTL_AI_bot numeric id (the part
   # of the bot token before the colon). Not a secret. The matching
   # TELEGRAM_OIDC_CLIENT_SECRET is sourced from Vault via the oauth
