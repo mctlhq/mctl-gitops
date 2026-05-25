@@ -4,11 +4,11 @@
 
 - [ ] 2. Delete accumulated dead canary pods in `labs` (ops, no PR required) — DoD: `kubectl -n labs get pods -l job-name` returns no `ImagePullBackOff` or `Error` pods related to `mctl-telegram-canary`.
 
-- [ ] 3. Update `deploy/canary/cronjob.yaml` in `mctl-telegram`: fix namespace, image tag, and add imagePullSecrets (depends on confirming secret name from mctl-gitops) — DoD: `deploy/canary/cronjob.yaml` has `namespace: labs`, image tag `0.36.0`, and an `imagePullSecrets` stanza referencing the confirmed pull-secret name; `go vet ./...` and `go test ./...` still pass (no Go changes needed, but CI must be green).
+- [ ] 3. Update `deploy/canary/cronjob.yaml` in `mctl-telegram`: fix namespace, image tag, and add imagePullSecrets — DoD: `deploy/canary/cronjob.yaml` has `namespace: labs`, image tag set to the value of `image.tag` currently in `platform-gitops/services/labs/mctl-telegram/values.yaml` in mctl-gitops (read that file to get the live tag; do not hardcode a version here), and an `imagePullSecrets` stanza referencing `ghcr-credentials` (the confirmed pull-secret name in the `labs` namespace); `go vet ./...` and `go test ./...` still pass (no Go changes needed, but CI must be green).
 
 - [ ] 4. Add `deploy/canary/cronjob.yaml` validation to `build.yml` CI (depends on 3) — DoD: the `build.yml` workflow contains a step that runs `kubectl --dry-run=client -f deploy/canary/cronjob.yaml` (or equivalent `kubeconform` invocation) and the step passes in CI on the PR that makes change 3; a subsequent PR that introduces a malformed field in `cronjob.yaml` causes CI to fail before merge.
 
-- [ ] 5. In `mctl-gitops`: ensure the GHCR pull secret `ghcr-pull-secret` (or the confirmed name) exists in the `labs` namespace — DoD: `kubectl -n labs get secret ghcr-pull-secret` succeeds; the secret contains a valid `.dockerconfigjson` with pull credentials for `ghcr.io/mctlhq`.
+- [ ] 5. In `mctl-gitops`: ensure the GHCR pull secret `ghcr-credentials` exists in the `labs` namespace — DoD: `kubectl -n labs get secret ghcr-credentials` succeeds; the secret contains a valid `.dockerconfigjson` with pull credentials for `ghcr.io/mctlhq`.
 
 - [ ] 6. In `mctl-gitops`: extend `release-deploy.yaml` to update the canary CronJob image tag alongside the main service Deployment (depends on 3 and 5) — DoD: triggering a test dispatch of `release-deploy.yaml` with a dummy tag results in the canary CronJob manifest in the gitops repo having the updated image tag committed; the ArgoCD/Flux reconciliation (or equivalent) applies the change to the `labs` cluster without error.
 
