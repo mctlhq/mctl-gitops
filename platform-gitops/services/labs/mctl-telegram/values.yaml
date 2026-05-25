@@ -17,7 +17,13 @@ resources:
     cpu: 200m
     memory: 256Mi
   limits:
-    cpu: 500m
+    # Raised 500m -> 1000m (2026-05-25): the in-browser login does a full MTProto
+    # handshake (DH key exchange + SendCode) which is CPU-heavy and was a suspect
+    # in the post-oidc_callback SendCode stalls. Headroom reduces the chance of
+    # CPU throttling stretching that round-trip past the timeout. Within the labs
+    # LimitRange max (3) and ResourceQuota limits.cpu (12), so no tenant-quota
+    # change is needed.
+    cpu: 1000m
     memory: 512Mi
 env:
   APP_ENV: production
