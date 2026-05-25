@@ -1,0 +1,64 @@
+# Prometheus Pushgateway — batch/ephemeral-job metric cache, scraped by vmagent.
+#
+# Previously deployed out-of-band (not under GitOps). Brought into the
+# `monitoring` ArgoCD Application (extra git source) so it is reconciled from
+# the source of truth.
+#
+# The Service carries the `app: prometheus-pushgateway` label and a NAMED port
+# so the VMServiceScrape in servicescrape.yaml can actually discover it. The
+# live objects were missing both, so the scrape pool had 0 targets and fired
+# ScrapePoolHasNoTargets continuously (see servicescrape.yaml for detail).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus-pushgateway
+  namespace: monitoring
+  labels:
+    app: prometheus-pushgateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus-pushgateway
+  template:
+    metadata:
+      labels:
+        app: prometheus-pushgateway
+    spec:
+      containers:
+        - name: pushgateway
+          image: prom/pushgateway:v1.10.0
+          args:
+            - --web.enable-admin-api
+          ports:
+            - containerPort: 9091
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus-pushgateway
+  namespace: monitoring
+  # This label is what the VMServiceScrape selector matches on. The live
+  # Service had no labels, so the scrape selected zero Services.
+  labels:
+    app: prometheus-pushgateway
+spec:
+  type: ClusterIP
+  selector:
+    app: prometheus-pushgateway
+  ports:
+    # Named so the VMServiceScrape endpoint can reference it by name. The live
+    # port was unnamed while the scrape referenced port "9091" (a name), which
+    # resolved to nothing.
+    - name: http
+      port: 9091
+      targetPort: 9091
+      protocol: TCP

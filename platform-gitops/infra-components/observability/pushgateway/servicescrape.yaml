@@ -1,0 +1,27 @@
+# Scrape config for prometheus-pushgateway.
+#
+# Two bugs in the previous (out-of-GitOps) object each independently produced a
+# scrape pool with 0 targets, so ScrapePoolHasNoTargets (namespace=monitoring,
+# routed to mctl-agent) fired continuously and AlertManager re-notified every
+# repeat_interval, spawning a fresh incident each cycle:
+#   1. selector matched label `app: prometheus-pushgateway`, but the Service
+#      carried no labels at all -> selected zero Services.
+#   2. endpoint port was "9091" (a port NAME), but the Service port was
+#      unnamed -> even on a match, the port would not resolve.
+# Fixed by labelling + naming the Service port (see pushgateway.yaml) and
+# referencing that port name here.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMServiceScrape
+metadata:
+  name: prometheus-pushgateway
+  namespace: monitoring
+spec:
+  namespaceSelector:
+    matchNames:
+      - monitoring
+  selector:
+    matchLabels:
+      app: prometheus-pushgateway
+  endpoints:
+    - port: http
+      honorLabels: true
