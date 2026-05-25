@@ -5,6 +5,13 @@
 
 # Chart: base-service
 
+# Scaled to zero on request (2026-05-25): the labs openclaw tenant is idle and
+# its 3000m CPU limit is the largest single consumer of the namespace quota.
+# Set back to 1 to bring it online — on scale-up the s3-sync restore-state probe
+# rehydrates session/auth state from MinIO (watch for the runtime-mirror lock
+# wedge; recovery: mc rm the stale lock + delete the pod).
+replicaCount: 0
+
 image:
   repository: ghcr.io/mctlhq/mctl-openclaw
   tag: "2026.5.14-beta.1"
