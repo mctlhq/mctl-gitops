@@ -21,6 +21,10 @@ resources:
     memory: 512Mi
 env:
   APP_ENV: production
+  # Advertised version string (/readyz, /__status, API index). The app's code
+  # default is a stale hardcoded literal, so set it here to match image.tag.
+  # Keep this in sync with image.tag above on each bump.
+  SERVICE_VERSION: "0.7.0"
   # 0.6.0: ~50 instruments across three live sources on the free TD tier.
   #  - Binance (crypto): real-time, free, unlimited.
   #  - TD WebSocket (8 top fx/metal/share): real-time, separate WS budget.
