@@ -1,0 +1,221 @@
+# Grafana dashboard for the mctl-telegram in-browser login (enable_access) flow.
+# Visualizes the metrics shipped in mctl-telegram 0.39.0 (gitops PR #219):
+#   - mctl_login_phone_step_total{result="ok|timeout|error"} (counter)
+#   - mctl_login_phone_to_code_duration_seconds (histogram of the
+#     phone-submit -> SendCode-response phase that hung in the 2026-05-25 incident)
+#
+# Sidecar in monitoring/grafana auto-discovers ConfigMaps labeled
+# `grafana_dashboard: "1"` and mounts them — same pattern as the existing
+# mctl-platform / openclaw-llm-usage dashboards.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mctl-telegram-login-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  mctl-telegram-login.json: |
+    {
+      "title": "mctl-telegram — Login Flow",
+      "description": "In-browser enable_access login (phone -> SMS -> 2FA). Outcome counter + SendCode-phase latency from mctl-telegram 0.39.0. The duration histogram measures the phone-submit -> SendCode-response round-trip that stalled >45s in the 2026-05-25 incident before the per-RPC timeout + metrics shipped (PR #219).",
+      "uid": "mctl-telegram-login",
+      "tags": ["mctl-telegram", "login", "oauth", "telegram", "observability"],
+      "schemaVersion": 39,
+      "version": 1,
+      "editable": true,
+      "graphTooltip": 1,
+      "timezone": "browser",
+      "time": { "from": "now-24h", "to": "now" },
+      "refresh": "30s",
+      "templating": {
+        "list": [
+          {
+            "name": "datasource",
+            "type": "datasource",
+            "query": "prometheus",
+            "current": { "text": "VictoriaMetrics", "value": "VictoriaMetrics" }
+          }
+        ]
+      },
+      "panels": [
+        {
+          "type": "row",
+          "id": 1,
+          "title": "Headline (24h)",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+        },
+        {
+          "type": "stat",
+          "id": 10,
+          "title": "Successful logins (24h)",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 4, "w": 5, "x": 0, "y": 1 },
+          "targets": [
+            {
+              "expr": "sum(increase(mctl_login_phone_step_total{result=\"ok\"}[24h]))",
+              "legendFormat": "ok",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": { "unit": "short", "decimals": 0, "color": { "mode": "fixed", "fixedColor": "green" } }
+          },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" }
+        },
+        {
+          "type": "stat",
+          "id": 11,
+          "title": "Timeouts (24h)",
+          "description": "SendCode stalls that hit the per-RPC deadline. >0 means the failure mode from the 2026-05-25 incident recurred. Drives MctlTelegramLoginSendCodeStalls.",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 4, "w": 5, "x": 5, "y": 1 },
+          "targets": [
+            {
+              "expr": "sum(increase(mctl_login_phone_step_total{result=\"timeout\"}[24h]))",
+              "legendFormat": "timeout",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short", "decimals": 0,
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] }
+            }
+          },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" }
+        },
+        {
+          "type": "stat",
+          "id": 12,
+          "title": "Errors (24h)",
+          "description": "Classified login failures other than timeout (e.g. PHONE_*, 2FA). Excludes the no-response stall, which is counted as timeout.",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 4, "w": 5, "x": 10, "y": 1 },
+          "targets": [
+            {
+              "expr": "sum(increase(mctl_login_phone_step_total{result=\"error\"}[24h]))",
+              "legendFormat": "error",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short", "decimals": 0,
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 1 } ] }
+            }
+          },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" }
+        },
+        {
+          "type": "stat",
+          "id": 13,
+          "title": "Success rate (24h)",
+          "description": "ok / all login attempts over the last 24h.",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 4, "w": 4, "x": 15, "y": 1 },
+          "targets": [
+            {
+              "expr": "sum(increase(mctl_login_phone_step_total{result=\"ok\"}[24h])) / clamp_min(sum(increase(mctl_login_phone_step_total[24h])), 1)",
+              "legendFormat": "success rate",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit", "decimals": 1, "min": 0, "max": 1,
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "orange", "value": 0.8 }, { "color": "green", "value": 0.95 } ] }
+            }
+          },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" }
+        },
+        {
+          "type": "stat",
+          "id": 14,
+          "title": "SendCode p95 (24h)",
+          "description": "p95 of the phone-submit -> SendCode-response phase. Healthy round-trip is a few seconds; the 90s top bucket is the handler ceiling.",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 4, "w": 5, "x": 19, "y": 1 },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(mctl_login_phone_to_code_duration_seconds_bucket[24h])) by (le))",
+              "legendFormat": "p95",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s", "decimals": 2,
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 15 }, { "color": "red", "value": 30 } ] }
+            }
+          },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" }
+        },
+        {
+          "type": "row",
+          "id": 2,
+          "title": "Trends",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 }
+        },
+        {
+          "type": "timeseries",
+          "id": 20,
+          "title": "Login outcomes by result",
+          "description": "Per-result login attempt rate. A rising timeout/error series is the early signal of a degrading login path.",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+          "targets": [
+            {
+              "expr": "sum by (result) (rate(mctl_login_phone_step_total[$__rate_interval]))",
+              "legendFormat": "{{result}}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 10, "stacking": { "mode": "none" } }
+            },
+            "overrides": [
+              { "matcher": { "id": "byName", "options": "ok" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } } ] },
+              { "matcher": { "id": "byName", "options": "timeout" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } } ] },
+              { "matcher": { "id": "byName", "options": "error" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } } ] }
+            ]
+          },
+          "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum"] }, "tooltip": { "mode": "multi" } }
+        },
+        {
+          "type": "timeseries",
+          "id": 21,
+          "title": "SendCode latency percentiles",
+          "description": "p50 / p90 / p95 of the phone-submit -> SendCode-response phase (ok logins only). A climb toward the 90s ceiling precedes timeouts.",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.50, sum(rate(mctl_login_phone_to_code_duration_seconds_bucket[$__rate_interval])) by (le))",
+              "legendFormat": "p50",
+              "refId": "A"
+            },
+            {
+              "expr": "histogram_quantile(0.90, sum(rate(mctl_login_phone_to_code_duration_seconds_bucket[$__rate_interval])) by (le))",
+              "legendFormat": "p90",
+              "refId": "B"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(mctl_login_phone_to_code_duration_seconds_bucket[$__rate_interval])) by (le))",
+              "legendFormat": "p95",
+              "refId": "C"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 5 },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 15 }, { "color": "red", "value": 30 } ] }
+            }
+          },
+          "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["max", "mean"] }, "tooltip": { "mode": "multi" } }
+        }
+      ]
+    }
