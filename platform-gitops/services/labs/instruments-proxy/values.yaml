@@ -34,3 +34,9 @@ ingress:
         - labs-instruments-proxy.mctl.ai
         - labs-instruments-proxy.mctl.me
 extraContainers: []
+externalSecret:
+  targetSecret: instruments-proxy-secrets
+  data:
+    - secretKey: TWELVEDATA_API_KEY
+      remoteKey: teams/labs/instruments-proxy
+      property: TWELVEDATA_API_KEY
