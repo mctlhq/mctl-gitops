@@ -117,3 +117,36 @@ spec:
             description: >-
               The mctl-telegram /healthz endpoint has been unreachable for
               more than 1 minute. The service may be down or network-isolated.
+
+        # Login-flow alerts (mctl-telegram 0.39.0+). The metrics they watch
+        # were added in source PR #219 to make the post-oidc_callback SendCode
+        # stall observable; see the "mctl-telegram — Login Flow" Grafana
+        # dashboard for the corresponding panels.
+        - alert: MctlTelegramLoginSendCodeStalls
+          expr: sum(increase(mctl_login_phone_step_total{result="timeout"}[15m])) >= 2
+          for: 1m
+          labels:
+            severity: warning
+          annotations:
+            summary: "mctl-telegram: logins stalling at the SendCode step"
+            description: >-
+              Two or more enable_access phone steps hit the SendCode wait
+              timeout in the last 15m. The connect/SendCode round-trip is
+              stalling — check the "telegram login: connecting / connection
+              established" breadcrumbs and the deferred "enable: telegram login
+              failed" logs to localise the hang.
+
+        - alert: MctlTelegramLoginSlow
+          expr: |
+            histogram_quantile(0.95,
+              sum(rate(mctl_login_phone_to_code_duration_seconds_bucket[30m])) by (le)
+            ) > 30
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "mctl-telegram: login SendCode p95 above 30s"
+            description: >-
+              The 95th-percentile connect + SendCode latency is approaching the
+              90s enableSendCodeWait ceiling. Logins are degrading and will
+              start timing out if this rises further.
