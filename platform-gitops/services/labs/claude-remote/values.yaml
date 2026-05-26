@@ -30,6 +30,13 @@ securityContext:
     drop: [ALL]
 env:
   PORT: "8080"
+  # Pin the resume target to the active work session. Without this the entrypoint
+  # resumes the "newest transcript on disk", which is unreliable after a restart
+  # (restore-state from MinIO resets file mtimes, so it picked stale/blank
+  # sessions like 92ff94d0 / f60da98d instead of the real one). Remove or update
+  # this once the session is finished. Session 65ef01db = the live
+  # mctl-telegram tier / handleTelegramCallback work (transcript restored, 800KB).
+  RESUME_SESSION_ID: "65ef01db-b382-4e47-b8c7-46bc5d0647fb"
   # pr-steward automation (branch prefix per repo). Per-repo merge_mode
   # (image 0.3.0+): global default is "never" (safe — escalate only); a repo opts
   # into auto-merge explicitly. mctl-design = when-green (gated by branch protection
