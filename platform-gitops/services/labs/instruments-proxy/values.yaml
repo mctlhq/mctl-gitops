@@ -21,6 +21,12 @@ resources:
     memory: 512Mi
 env:
   APP_ENV: production
+  UPSTREAM_TWELVEDATA: "true"
+  # Free "Basic 8" tier: 800 credits/day, charged per symbol. 6 symbols x one
+  # batch /quote call per 15 min ~= 576/day, under quota. Free tier is delayed,
+  # so quotes are honestly labelled delayed (no TWELVEDATA_REALTIME).
+  TWELVEDATA_POLL_MS: "900000"
+  TWELVEDATA_FRESH_MS: "1200000"
 ingress:
   enabled: true
   hosts:
@@ -40,3 +46,8 @@ externalSecret:
     - secretKey: TWELVEDATA_API_KEY
       remoteKey: teams/labs/instruments-proxy
       property: TWELVEDATA_API_KEY
+# Inject the synced secret into the container env so the proxy reads
+# TWELVEDATA_API_KEY (enables the Twelve Data live source).
+envFrom:
+  - secretRef:
+      name: instruments-proxy-secrets
