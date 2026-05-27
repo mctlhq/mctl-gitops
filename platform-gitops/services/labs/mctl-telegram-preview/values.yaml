@@ -105,11 +105,9 @@ extraExternalSecrets:
       - secretKey: OAUTH_JWT_SIGNING_KEY
         remoteKey: secret/data/platform/mctl-telegram-preview/oauth
         property: jwt-signing-key
-      # Preview uses a single bot for both OIDC and login; token stored once
-      # in the login path and referenced here to avoid duplication.
       - secretKey: TELEGRAM_OIDC_CLIENT_SECRET
-        remoteKey: secret/data/platform/mctl-telegram-preview/login
-        property: TELEGRAM_LOGIN_BOT_TOKEN
+        remoteKey: secret/data/platform/mctl-telegram-preview/oauth
+        property: oidc-client-secret
   labs-mctl-telegram-preview-login:
     refreshInterval: 1h
     targetSecret: labs-mctl-telegram-preview-login
