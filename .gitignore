@@ -28,4 +28,8 @@ mctl-*_kubeconfig.yaml
 .env
 .env.*
 
+# Go build outputs
+cli/mctl/mctl
+cli/mctl/mctl-new
+
 .claude/
