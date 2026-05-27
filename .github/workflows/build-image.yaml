@@ -113,7 +113,7 @@ jobs:
       - name: Generate GitHub App token
         id: app_token
         if: steps.vault_pat.outputs.has_pat != 'true'
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
         continue-on-error: true
         with:
           app-id: ${{ secrets.APP_ID }}
@@ -138,7 +138,7 @@ jobs:
 
       # --- Checkout source repo ---
       - name: Checkout source repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           repository: ${{ inputs.repo }}
           ref: ${{ inputs.git_ref }}
@@ -164,17 +164,17 @@ jobs:
 
       # --- Build & Push ---
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ steps.ghcr_token.outputs.username }}
           password: ${{ steps.ghcr_token.outputs.token }}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Build and push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: ${{ inputs.dockerfile_path }}
