@@ -1,0 +1,37 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: mctl-telegram-preview
+  namespace: labs
+  description: "mctl-telegram preview deployment — auto-updated on every push to main"
+  annotations:
+    platform.mctl.me/database: "true"
+    platform.mctl.me/database-team: "labs"
+    platform.mctl.me/database-app: "mctl-telegram-preview"
+    backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=labs-mctl-telegram-preview
+    backstage.io/kubernetes-id: mctl-telegram-preview
+    backstage.io/kubernetes-namespace: labs
+    argocd/app-name: labs-mctl-telegram-preview
+    github.com/source-repo: mctlhq/mctl-telegram
+    mctl.me/auto-deploy: "false"
+  links:
+    - url: https://ops.mctl.ai/applications/argocd/labs-mctl-telegram-preview
+      title: ArgoCD
+      icon: dashboard
+    - url: https://github.com/mctlhq/mctl-telegram
+      title: Source Repository
+      icon: github
+    - url: https://workflows.mctl.ai
+      title: Argo Workflows
+      icon: github
+    - url: https://tg-preview.mctl.ai
+      title: Service URL
+      icon: web
+  labels:
+    team: labs
+    env: apps
+spec:
+  type: service
+  lifecycle: development
+  owner: group:default/labs
+  system: system:default/team-labs
