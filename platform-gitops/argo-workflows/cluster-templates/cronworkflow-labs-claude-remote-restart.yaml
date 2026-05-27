@@ -47,7 +47,7 @@ spec:
         # exist); pinned within ±1 minor of cluster (currently k3s 1.33.x).
         # See memory reference_bitnami_kubectl_semver_tags.md.
         container:
-          image: alpine/k8s:1.33.12.4
+          image: bitnami/kubectl:1.33.12
           command: ["sh", "-c"]
           args:
             - |
