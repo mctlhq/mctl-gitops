@@ -53,9 +53,8 @@ module "kube-hetzner" {
   }
   hcloud_token = var.hcloud_token
 
-  source = "kube-hetzner/kube-hetzner/hcloud"
-  # Pin to a specific version for reproducibility
-  # version = "2.19.1"
+  source  = "kube-hetzner/kube-hetzner/hcloud"
+  version = "2.19.1"
 
   # SSH keys
   ssh_public_key  = file("~/.ssh/id_ed25519.pub")
@@ -118,8 +117,7 @@ module "kube-hetzner" {
   hetzner_ccm_use_helm = true
 
   # --- Upgrades ---
-  # TODO: enable after first apply (cycle with os_upgrade_toggle on initial change)
-  automatically_upgrade_os = false
+  automatically_upgrade_os = true
   system_upgrade_use_drain = true
 
   # --- Kubeconfig ---
