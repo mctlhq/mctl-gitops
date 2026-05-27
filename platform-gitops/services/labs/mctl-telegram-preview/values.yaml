@@ -31,6 +31,11 @@ env:
   PUBLIC_BASE_URL: https://tg-preview.mctl.ai
   OAUTH_ISSUER_URL: https://tg-preview.mctl.ai
   OAUTH_CODE_TTL: "30m"
+  # OriginGuard allowlist. Unset, it defaults to the PUBLIC_BASE_URL origin only,
+  # which 403s the browser Origin headers sent by the ChatGPT and Claude connector
+  # runtimes. Broadened here to validate connector access on preview before the
+  # same change ships to stable tg.mctl.ai. Arbitrary origins still get 403.
+  ALLOWED_ORIGINS: "https://tg-preview.mctl.ai,https://chatgpt.com,https://chat.openai.com,https://claude.ai"
   # Reuse stable demo video; preview doesn't serve its own.
   DEMO_VIDEO_URL: https://tg.mctl.ai/demo/walkthrough.mp4?v=2
   # Preview bot numeric ID (part before the colon in the bot token).
