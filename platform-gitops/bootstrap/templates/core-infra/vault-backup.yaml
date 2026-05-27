@@ -92,7 +92,7 @@ spec:
                   echo "Snapshot saved"
           containers:
             - name: upload
-              image: amazon/aws-cli:latest
+              image: amazon/aws-cli:2.22
               envFrom:
                 - secretRef:
                     name: vault-backup-r2-credentials
