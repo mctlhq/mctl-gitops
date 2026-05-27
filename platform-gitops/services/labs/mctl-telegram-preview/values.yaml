@@ -1,0 +1,117 @@
+# Service: mctl-telegram-preview
+# Team: labs
+# Preview track: auto-deployed on every push to main in mctlhq/mctl-telegram.
+# Stable track: tg.mctl.ai — updated by tagged releases only.
+
+# Chart: base-service
+
+image:
+  repository: ghcr.io/mctlhq/mctl-telegram
+  # Bootstrap tag; first preview-deploy.yml run bumps this to main-<sha>.
+  tag: "0.40.0"
+imagePullSecrets:
+  - name: ghcr-credentials
+service:
+  port: 8080
+backstage:
+  kubernetesId: mctl-telegram-preview
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    # MTProto DH handshake is CPU-heavy; same headroom as stable.
+    cpu: 1000m
+    memory: 512Mi
+env:
+  APP_ENV: preview
+  AUTH_MODE: local-jwt
+  AUTH_REQUIRED: "true"
+  ALLOW_SEND: "true"
+  LOG_LEVEL: info
+  PUBLIC_BASE_URL: https://tg-preview.mctl.ai
+  OAUTH_ISSUER_URL: https://tg-preview.mctl.ai
+  OAUTH_CODE_TTL: "30m"
+  # Reuse stable demo video; preview doesn't serve its own.
+  DEMO_VIDEO_URL: https://tg.mctl.ai/demo/walkthrough.mp4?v=2
+  # Preview bot numeric ID (part before the colon in the bot token).
+  # Bot is configured with domain tg-preview.mctl.ai in BotFather Login Widget settings.
+  # The matching TELEGRAM_OIDC_CLIENT_SECRET is sourced from
+  # secret/data/platform/mctl-telegram-preview/oauth via the oauth ExternalSecret.
+  TELEGRAM_OIDC_CLIENT_ID: "8923492300"
+  TG_LOGIN_ADMINS: "210408407"
+  AUTO_APPROVE_CLIENTS: "true"
+  # Reviewer demo mode not needed on preview.
+  DEMO_REVIEWER_ENABLED: "false"
+ingress:
+  enabled: true
+  hosts:
+    - tg-preview.mctl.ai
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls:
+    - secretName: mctl-telegram-preview-tls
+      hosts:
+        - tg-preview.mctl.ai
+extraContainers: []
+dbSecret:
+  vaultPath: "teams/labs/mctl-telegram-preview/database"
+  secretName: "labs-mctl-telegram-preview-db-creds"
+dbInitJob:
+  enabled: false
+  database: "labs-mctl-telegram-preview"
+  waitTable: "identities"
+  sql: |
+    INSERT INTO identities (provider, provider_id, status, metadata)
+    VALUES ('telegram', '__TELEGRAM_ID__', 'approved', '{}')
+    ON CONFLICT (provider, provider_id) DO UPDATE SET status = 'approved';
+envFrom:
+  - secretRef:
+      name: "labs-mctl-telegram-preview-db-creds"
+  - secretRef:
+      name: "labs-mctl-telegram-preview-tg-api"
+  - secretRef:
+      name: "labs-mctl-telegram-preview-encryption"
+  - secretRef:
+      name: "labs-mctl-telegram-preview-oauth"
+  - secretRef:
+      name: "labs-mctl-telegram-preview-login"
+extraExternalSecrets:
+  # TG_API_ID / TG_API_HASH are MTProto app-level credentials — shared with stable.
+  labs-mctl-telegram-preview-tg-api:
+    refreshInterval: 1h
+    targetSecret: labs-mctl-telegram-preview-tg-api
+    data:
+      - secretKey: TG_API_ID
+        remoteKey: secret/data/platform/mctl-telegram/api
+        property: TG_API_ID
+      - secretKey: TG_API_HASH
+        remoteKey: secret/data/platform/mctl-telegram/api
+        property: TG_API_HASH
+  # Separate ENCRYPTION_KEY: preview DB sessions must not share the stable key.
+  labs-mctl-telegram-preview-encryption:
+    refreshInterval: 1h
+    targetSecret: labs-mctl-telegram-preview-encryption
+    data:
+      - secretKey: ENCRYPTION_KEY
+        remoteKey: secret/data/platform/mctl-telegram-preview/encryption
+        property: ENCRYPTION_KEY
+  labs-mctl-telegram-preview-oauth:
+    refreshInterval: 1h
+    targetSecret: labs-mctl-telegram-preview-oauth
+    annotations:
+      argocd.argoproj.io/sync-options: ServerSideApply=false
+    data:
+      - secretKey: OAUTH_JWT_SIGNING_KEY
+        remoteKey: secret/data/platform/mctl-telegram-preview/oauth
+        property: jwt-signing-key
+      - secretKey: TELEGRAM_OIDC_CLIENT_SECRET
+        remoteKey: secret/data/platform/mctl-telegram-preview/oauth
+        property: oidc-client-secret
+  labs-mctl-telegram-preview-login:
+    refreshInterval: 1h
+    targetSecret: labs-mctl-telegram-preview-login
+    data:
+      - secretKey: TELEGRAM_LOGIN_BOT_TOKEN
+        remoteKey: secret/data/platform/mctl-telegram-preview/login
+        property: TELEGRAM_LOGIN_BOT_TOKEN
