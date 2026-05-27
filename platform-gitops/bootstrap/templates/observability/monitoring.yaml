@@ -258,7 +258,7 @@ spec:
                   - receiver: "null"
                     matchers:
                       - alertname = "KubeJobFailed"
-                      - namespace = "vault"
+                      - namespace =~ "vault|labs"
                   - receiver: "null"
                     matchers:
                       - alertname = "CPUThrottlingHigh"
