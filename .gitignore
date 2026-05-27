@@ -12,5 +12,20 @@ packer_cache/
 *.tfstate.*
 .terraform/
 crash.log
+*.tfvars
+
+# Kubernetes credentials
+kubeconfig*.yaml
+*.kubeconfig
+mctl-*_kubeconfig.yaml
+
+# SSH / TLS keys
+*.pem
+*.key
+*.crt
+
+# Environment files
+.env
+.env.*
 
 .claude/
