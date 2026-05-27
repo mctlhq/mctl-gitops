@@ -32,7 +32,7 @@ jobs:
     
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       
       # SSH keys are only needed for terraform apply (modifying cluster).
       # On push (plan only) we skip this — secrets may not be set.
@@ -52,7 +52,7 @@ jobs:
           ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N "" -C "ci-plan-dummy" -q
       
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
         with:
           terraform_version: 1.14.0
       
@@ -72,7 +72,7 @@ jobs:
 
       - name: Notify Telegram on failure
         if: failure()
-        uses: appleboy/telegram-action@master
+        uses: appleboy/telegram-action@37056891d444f558225b59f0d26b4b05c5e9828b # master 2026-05
         with:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
