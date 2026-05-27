@@ -481,7 +481,7 @@ spec:
               # write — onExit must always be able to read it.
               default: ""
       script:
-        image: bitnami/kubectl:latest
+        image: bitnami/kubectl:1.33
         command: [bash]
         env:
           - name: STARTED_AT
