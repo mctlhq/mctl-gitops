@@ -7,7 +7,6 @@
 
 image:
   repository: ghcr.io/mctlhq/mctl-telegram
-  # Bootstrap tag; first preview-deploy.yml run bumps this to main-<sha>.
   tag: "0.40.0"
 imagePullSecrets:
   - name: ghcr-credentials
