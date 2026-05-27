@@ -91,7 +91,7 @@ spec:
     # ─── Step 1: Onboard service ──────────────────────────────────────────────
     - name: run-onboard
       script:
-        image: bitnami/kubectl:1.33
+        image: alpine/k8s:1.33.12
         command: [bash]
         source: |
           set -e
@@ -143,7 +143,7 @@ spec:
     # ─── Step 3: Deploy new version (with env vars + secrets to test deploy action) ──
     - name: run-deploy
       script:
-        image: bitnami/kubectl:1.33
+        image: alpine/k8s:1.33.12
         command: [bash]
         source: |
           set -e
@@ -195,7 +195,7 @@ spec:
     # ─── Step 5: Provision database ───────────────────────────────────────────
     - name: run-provision-db
       script:
-        image: bitnami/kubectl:1.33
+        image: alpine/k8s:1.33.12
         command: [bash]
         source: |
           set -e
@@ -234,7 +234,7 @@ spec:
     # ─── Step 6: Update config ────────────────────────────────────────────────
     - name: run-update-config
       script:
-        image: bitnami/kubectl:1.33
+        image: alpine/k8s:1.33.12
         command: [bash]
         source: |
           set -e
@@ -285,7 +285,7 @@ spec:
     # ─── Step 8: Retire service ───────────────────────────────────────────────
     - name: run-retire
       script:
-        image: bitnami/kubectl:1.33
+        image: alpine/k8s:1.33.12
         command: [bash]
         source: |
           set -e
@@ -364,7 +364,7 @@ spec:
     # ─── Verification: ExternalSecret for app secrets synced in service ns ───
     - name: check-app-externalsecret
       script:
-        image: bitnami/kubectl:1.33
+        image: alpine/k8s:1.33.12
         command: [bash]
         source: |
           TEAM="{{workflow.parameters.team_name}}"
@@ -418,7 +418,7 @@ spec:
     # ─── Verification: env var + secret in pod (from deploy action) ──────────
     - name: check-deploy-env-and-secret
       script:
-        image: bitnami/kubectl:1.33
+        image: alpine/k8s:1.33.12
         command: [bash]
         source: |
           TEAM="{{workflow.parameters.team_name}}"
@@ -459,7 +459,7 @@ spec:
     # ─── Verification: pod running ────────────────────────────────────────────
     - name: check-pod-running
       script:
-        image: bitnami/kubectl:1.33
+        image: alpine/k8s:1.33.12
         command: [bash]
         source: |
           set -e
@@ -486,7 +486,7 @@ spec:
     # ─── Trigger ArgoCD sync for service app ─────────────────────────────────
     - name: trigger-argocd-sync
       script:
-        image: bitnami/kubectl:1.33
+        image: alpine/k8s:1.33.12
         command: [sh]
         source: |
           TEAM="{{workflow.parameters.team_name}}"
@@ -555,7 +555,7 @@ spec:
     # ─── Verification: ExternalSecret synced ─────────────────────────────────
     - name: check-k8s-secret
       script:
-        image: bitnami/kubectl:1.33
+        image: alpine/k8s:1.33.12
         command: [bash]
         source: |
           TEAM="{{workflow.parameters.team_name}}"
@@ -585,7 +585,7 @@ spec:
     # ─── Verification: env var in running pod ────────────────────────────────
     - name: check-env-var
       script:
-        image: bitnami/kubectl:1.33
+        image: alpine/k8s:1.33.12
         command: [bash]
         source: |
           TEAM="{{workflow.parameters.team_name}}"
