@@ -117,7 +117,9 @@ module "kube-hetzner" {
   hetzner_ccm_use_helm = true
 
   # --- Upgrades ---
-  automatically_upgrade_os = true
+  # Disabled: single control-plane node — draining it takes down the API server.
+  # Re-enable only after adding a second CP node (or migrating to HA).
+  automatically_upgrade_os = false
   system_upgrade_use_drain = true
 
   # --- Kubeconfig ---

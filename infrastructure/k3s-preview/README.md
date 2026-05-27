@@ -14,7 +14,7 @@ Uses the [`kube-hetzner`](https://github.com/kube-hetzner/terraform-hcloud-kube-
 | Workers | 3 × cx43 |
 | Load balancer | `lb11` (fsn1) |
 | Ingress | Traefik |
-| OS | openSUSE MicroOS (immutable, auto-updating) |
+| OS | openSUSE MicroOS (immutable; OS auto-upgrade **disabled** — single CP, see kube.tf) |
 | Module version | 2.19.1 (pinned in `kube.tf`) |
 
 ## Prerequisites

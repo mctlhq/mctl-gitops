@@ -13,6 +13,9 @@ packer_cache/
 .terraform/
 crash.log
 *.tfvars
+*.tfvars.json
+*.auto.tfvars.json
+*.tfplan
 
 # Kubernetes credentials
 kubeconfig*.yaml
@@ -23,10 +26,17 @@ mctl-*_kubeconfig.yaml
 *.pem
 *.key
 *.crt
+*.p12
+*.pfx
+*.der
+id_rsa
+id_ed25519
+id_ecdsa
 
 # Environment files
 .env
 .env.*
+.dev.vars
 
 # Go build outputs
 cli/mctl/mctl
