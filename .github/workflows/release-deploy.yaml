@@ -33,6 +33,10 @@ on:
         description: "Service name (matches the directory under platform-gitops/services/<team>/)"
         required: true
         type: string
+      values_path:
+        description: "Override gitops values file path (default: platform-gitops/services/<team>/<component>/values.yaml). Use for platform bootstrap services."
+        required: false
+        type: string
 
 jobs:
   build:
@@ -58,42 +62,65 @@ jobs:
         with:
           ref: main
 
-      - name: Bump image.tag in values.yaml
+      - name: Resolve gitops file path
+        id: paths
         env:
           TEAM: ${{ inputs.team_name }}
           SERVICE: ${{ inputs.component_name }}
+          VALUES_PATH: ${{ inputs.values_path }}
+        run: |
+          DEFAULT="platform-gitops/services/${TEAM}/${SERVICE}/values.yaml"
+          F="${VALUES_PATH:-$DEFAULT}"
+          echo "gitops_file=$F" >> "$GITHUB_OUTPUT"
+
+      - name: Bump image.tag in values.yaml
+        env:
+          GITOPS_FILE: ${{ steps.paths.outputs.gitops_file }}
           IMAGE_NAME: ${{ inputs.image_name }}
           NEW_TAG: ${{ inputs.image_tag }}
         run: |
           set -euo pipefail
-          F="platform-gitops/services/${TEAM}/${SERVICE}/values.yaml"
-          if [[ ! -f "$F" ]]; then
-            echo "::error::values.yaml not found at $F"
+          if [[ ! -f "$GITOPS_FILE" ]]; then
+            echo "::error::values file not found at $GITOPS_FILE"
             exit 1
           fi
           python3 <<'PYEOF'
           import os, re, sys
-          path = f"platform-gitops/services/{os.environ['TEAM']}/{os.environ['SERVICE']}/values.yaml"
+          path = os.environ['GITOPS_FILE']
           image_name = os.environ['IMAGE_NAME']
           new_tag = os.environ['NEW_TAG']
           with open(path) as fp:
               content = fp.read()
-          # Top-level image block: repository: <image>\n  tag: <old>
+          n1 = n2 = n3 = 0
+          # Pattern 1: combined repository: <image>\n  tag: <old>
           p1 = re.compile(r'(repository:\s*' + re.escape(image_name) + r'\n\s+tag:)[^\n]+')
           new_content, n1 = p1.subn(r'\1 "' + new_tag + '"', content)
-          # extraContainers / any inline image: <image>:<old>
+          # Pattern 2: split registry/repository (Backstage Helm chart style)
+          #   registry: <registry>\n  repository: <repo>\n  tag: <old>
+          # where image_name = <registry>/<repo> (e.g. ghcr.io/mctlhq/mctl-portal)
+          if '/' in image_name:
+              registry, repo = image_name.split('/', 1)
+              p3 = re.compile(
+                  r'(registry:\s*' + re.escape(registry) +
+                  r'\n\s+repository:\s*' + re.escape(repo) +
+                  r'\n\s+tag:)[^\n]+'
+              )
+              new_content, n3 = p3.subn(r'\1 ' + new_tag, new_content)
+          # Pattern 3: extraContainers / inline image: <image>:<old>
           p2 = re.compile(r'(image:\s*' + re.escape(image_name) + r'):[\w.\-]+')
           new_content, n2 = p2.subn(r'\1:' + new_tag, new_content)
-          if n1 == 0 and n2 == 0:
+          total = n1 + n2 + n3
+          if total == 0:
               print(f"ERROR: could not find any image tag pattern for {image_name} in {path}", file=sys.stderr)
               sys.exit(2)
           with open(path, 'w') as fp:
               fp.write(new_content)
-          print(f"OK: bumped {n1} repository/tag + {n2} inline image occurrence(s) in {path}")
+          print(f"OK: bumped {n1} repository/tag + {n3} split-registry/tag + {n2} inline image occurrence(s) in {path}")
           PYEOF
 
       - name: Commit and push
         env:
+          GITOPS_FILE: ${{ steps.paths.outputs.gitops_file }}
           TEAM: ${{ inputs.team_name }}
           SERVICE: ${{ inputs.component_name }}
           NEW_TAG: ${{ inputs.image_tag }}
@@ -101,10 +128,9 @@ jobs:
           set -euo pipefail
           git config user.email "ci@mctl.ai"
           git config user.name "mctl-ci"
-          F="platform-gitops/services/${TEAM}/${SERVICE}/values.yaml"
-          git add "$F"
+          git add "$GITOPS_FILE"
           if git diff --staged --quiet; then
-            echo "::notice::No tag change in $F (already at ${NEW_TAG})"
+            echo "::notice::No tag change in $GITOPS_FILE (already at ${NEW_TAG})"
             exit 0
           fi
           git commit -m "chore: bump ${TEAM}/${SERVICE} to ${NEW_TAG}"
@@ -119,5 +145,5 @@ jobs:
             echo "|-------|-------|"
             echo "| **Image** | \`${{ inputs.image_name }}:${{ inputs.image_tag }}\` |"
             echo "| **Git ref** | \`${{ inputs.git_ref }}\` |"
-            echo "| **Gitops file** | \`platform-gitops/services/${{ inputs.team_name }}/${{ inputs.component_name }}/values.yaml\` |"
+            echo "| **Gitops file** | \`${{ steps.paths.outputs.gitops_file }}\` |"
           } >> $GITHUB_STEP_SUMMARY
