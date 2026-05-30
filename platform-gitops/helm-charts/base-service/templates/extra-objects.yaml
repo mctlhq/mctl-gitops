@@ -1,4 +1,26 @@
+{{- /*
+Render arbitrary extra manifests supplied per-service in .Values.extraObjects.
+
+Optional per-object key `renderIf`: a template string evaluated against the
+root context ($). The object is rendered ONLY when that string renders to
+exactly "true" (after trimming whitespace); ANY other result — "false", "",
+"1", "yes", a non-match — is treated as false and the object is skipped. This
+is intentionally dumb: no truthy coercion, so behaviour stays predictable.
+Objects WITHOUT a `renderIf` key always render (backward compatible). The
+`renderIf` key itself is stripped from the emitted manifest.
+
+Example (gate a CronJob on an env flag):
+  extraObjects:
+    - renderIf: '{{ eq (.Values.env.MY_FLAG | toString) "true" }}'
+      apiVersion: batch/v1
+      kind: CronJob
+      ...
+*/ -}}
 {{- range $obj := .Values.extraObjects }}
+{{- $cond := "" }}
+{{- if hasKey $obj "renderIf" }}{{- $cond = $obj.renderIf }}{{- end }}
+{{- if or (not $cond) (eq (tpl ($cond | toString) $ | trim) "true") }}
 ---
-{{ tpl (toYaml $obj) $ }}
+{{ tpl (toYaml (omit $obj "renderIf")) $ }}
+{{- end }}
 {{- end }}
