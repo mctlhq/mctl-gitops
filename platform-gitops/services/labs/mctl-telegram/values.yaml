@@ -176,7 +176,12 @@ extraExternalSecrets:
 # post-freeze: make the DEMO_REVIEWER_TG_ID identity immune to TTL sweeps /
 # CheckSessionValid expiry, mirroring the evaluateSendGate reviewer override.
 extraObjects:
-  - apiVersion: batch/v1
+    # renderIf (base-service extra-objects.yaml): the CronJob is emitted ONLY
+    # when this template renders to exactly the string "true". Tied to
+    # DEMO_REVIEWER_ENABLED so the refresh job exists only while reviewer mode is
+    # on; turning the flag off removes it from the manifest and ArgoCD prunes it.
+  - renderIf: '{{ eq (.Values.env.DEMO_REVIEWER_ENABLED | toString) "true" }}'
+    apiVersion: batch/v1
     kind: CronJob
     metadata:
       name: labs-mctl-telegram-demo-session-refresh
