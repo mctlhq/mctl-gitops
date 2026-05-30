@@ -43,3 +43,9 @@ dbSecret:
   vaultPath: teams/labs/mctl-loyalty/database
   secretName: labs-mctl-loyalty-db-creds
 extraContainers: []
+externalSecret:
+  targetSecret: mctl-loyalty-secrets
+  data:
+    - secretKey: TELEGRAM_BOT_TOKEN
+      remoteKey: teams/labs/mctl-loyalty
+      property: TELEGRAM_BOT_TOKEN
