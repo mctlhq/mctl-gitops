@@ -194,8 +194,14 @@ spec:
           - name: ISSUE_INVESTIGATOR_BUDGET_USD
             value: "3.00"
         resources:
-          requests: { cpu: 200m, memory: 512Mi }
-          limits:   { cpu: 2000m, memory: 4Gi }
+          # memory bumped 4Gi -> 8Gi: on the largest target repos (e.g.
+          # mctl-openclaw — a ~500 MB shallow clone over a 100k-file monorepo)
+          # the Claude SDK's `claude` CLI child was OOM-killed mid-run, so the
+          # investigator never wrote the requirements/design/tasks triplet and
+          # the pod exited 1. Smaller repos (e.g. mctl-telegram) fit in 4Gi.
+          # Mirrors the same 4Gi -> 8Gi bump on cwft-mctl-agents-implement.
+          requests: { cpu: 200m, memory: 1Gi }
+          limits:   { cpu: 2000m, memory: 8Gi }
         volumeMounts:
           - name: workdir
             mountPath: /workdir
