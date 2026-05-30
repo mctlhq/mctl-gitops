@@ -58,9 +58,10 @@ spec:
               cpu: 100m
               memory: 128Mi
             limits:
-              # Steady-state ~11m; 250m gives 22x cushion. Trimmed 500m→250m
-              # on 2026-05-07 (CPU-limits cluster headroom).
-              cpu: 250m
+              # Steady-state ~11m; 500m gives headroom for GC/git-op bursts.
+              # Trimmed to 250m on 2026-05-07, reverted 2026-05-30 after
+              # repeated CPUThrottlingHigh incidents.
+              cpu: 500m
               memory: 256Mi
 
   ignoreDifferences:
