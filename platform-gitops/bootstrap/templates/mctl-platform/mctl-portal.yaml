@@ -197,7 +197,7 @@ type: kubernetes.io/service-account-token
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: backstage
+  name: admins-mctl-portal
   namespace: argocd
 spec:
   project: default

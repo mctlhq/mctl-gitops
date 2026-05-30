@@ -1,7 +1,7 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: mctl-api
+  name: admins-mctl-api
   namespace: argocd
 spec:
   project: platform
