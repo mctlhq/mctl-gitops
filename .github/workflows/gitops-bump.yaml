@@ -1,0 +1,177 @@
+name: Gitops Image Bump
+run-name: "gitops-bump ${{ inputs.image_name }}:${{ inputs.image_tag }}"
+
+# Bump-only workflow: called by app repos AFTER they push an image to GHCR.
+# Commits the tag change directly to main (same as release-deploy.yaml bump job).
+# All gitops structure knowledge stays here; app repos only pass:
+#   image_name + image_tag + values_path  (single Helm values.yaml)
+#       OR
+#   image_name + image_tag + values_glob  (glob for CWFT inline image: refs)
+#
+# Token requirements for callers (GITOPS_TOKEN):
+#   - actions: write  on mctlhq/mctl-gitops  (workflow_dispatch)
+#   Commits are made with this workflow's own GITHUB_TOKEN (contents: write),
+#   so the caller does NOT need repo-write access to mctl-gitops.
+on:
+  workflow_dispatch:
+    inputs:
+      image_name:
+        description: "Full image name (e.g. ghcr.io/mctlhq/mctl-agents)"
+        required: true
+        type: string
+      image_tag:
+        description: "New image tag (e.g. 1.15.0)"
+        required: true
+        type: string
+      values_path:
+        description: "Single file to bump (e.g. platform-gitops/services/labs/claude-remote/values.yaml). Mutually exclusive with values_glob."
+        required: false
+        type: string
+      values_glob:
+        description: "Glob pattern for multiple files (e.g. platform-gitops/argo-workflows/cluster-templates/cwft-mctl-agents-*.yaml). Mutually exclusive with values_path."
+        required: false
+        type: string
+
+# Serialize per image to avoid overlapping commits to main.
+concurrency:
+  group: gitops-bump-${{ inputs.image_name }}
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # commit + push to main
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: main
+
+      - name: Bump image tags
+        env:
+          IMAGE_NAME: ${{ inputs.image_name }}
+          NEW_TAG:    ${{ inputs.image_tag }}
+          VALUES_PATH: ${{ inputs.values_path }}
+          VALUES_GLOB: ${{ inputs.values_glob }}
+        run: |
+          set -euo pipefail
+          python3 <<'PYEOF'
+          import os, re, sys, glob as globmod
+
+          image_name = os.environ['IMAGE_NAME']
+          new_tag    = os.environ['NEW_TAG']
+          vpath      = os.environ.get('VALUES_PATH', '').strip()
+          vglob      = os.environ.get('VALUES_GLOB', '').strip()
+
+          # Point 3: exactly one of values_path / values_glob must be set
+          if not vpath and not vglob:
+              print("ERROR: provide exactly one of values_path or values_glob", file=sys.stderr)
+              sys.exit(1)
+          if vpath and vglob:
+              print("ERROR: values_path and values_glob are mutually exclusive", file=sys.stderr)
+              sys.exit(1)
+
+          # Point 4: no-op guard — fail loudly if glob resolves to nothing
+          if vglob:
+              files = sorted(globmod.glob(vglob))
+              if not files:
+                  print(f"ERROR: no files matched glob: {vglob}", file=sys.stderr)
+                  sys.exit(2)
+          else:
+              files = [vpath]
+
+          missing = [f for f in files if not os.path.isfile(f)]
+          if missing:
+              print(f"ERROR: file(s) not found: {missing}", file=sys.stderr)
+              sys.exit(2)
+
+          print(f"Files to process ({len(files)}):")
+          for f in files:
+              print(f"  {f}")
+
+          total_replaced = 0
+          total_already  = 0
+          for path in files:
+              with open(path) as fp:
+                  content = fp.read()
+              n1 = n2 = n3 = 0
+
+              # Pattern 1: repository: <image>\n  tag: <old>  (standard Helm values.yaml)
+              p1 = re.compile(r'(repository:\s*' + re.escape(image_name) + r'\n\s+tag:)[^\n]+')
+              out, n1 = p1.subn(r'\1 "' + new_tag + '"', content)
+
+              # Pattern 2: split registry/repository/tag (Backstage Helm chart style)
+              if '/' in image_name:
+                  registry, repo = image_name.split('/', 1)
+                  p_split = re.compile(
+                      r'(registry:\s*' + re.escape(registry) +
+                      r'\n\s+repository:\s*' + re.escape(repo) +
+                      r'\n\s+tag:)[^\n]+'
+                  )
+                  out, n3 = p_split.subn(r'\1 ' + new_tag, out)
+
+              # Pattern 3: inline image: <image>:<tag>  (CWFT style)
+              p3 = re.compile(r'(image:\s*' + re.escape(image_name) + r'):[\w.\-]+')
+              out, n2 = p3.subn(r'\1:' + new_tag, out)
+
+              n = n1 + n2 + n3
+              if n == 0:
+                  print(f"  {path}: WARN — no image pattern matched (skipped)")
+              else:
+                  # Point 5: distinguish "changed" vs "already at new_tag"
+                  if out == content:
+                      print(f"  {path}: already at {new_tag} (no diff)")
+                      total_already += n
+                  else:
+                      with open(path, 'w') as fp:
+                          fp.write(out)
+                      print(f"  {path}: bumped {n} occurrence(s)")
+                      total_replaced += n
+
+          # Point 5: if every match was already at new_tag → clean exit, no commit needed
+          if total_replaced == 0 and total_already > 0:
+              print(f"Already at {new_tag} in all files — nothing to do")
+              sys.exit(0)
+
+          # Point 5: if nothing matched at all → hard fail
+          if total_replaced == 0 and total_already == 0:
+              print(f"ERROR: no image tag pattern found for {image_name}", file=sys.stderr)
+              sys.exit(3)
+
+          print(f"Total: {total_replaced} occurrence(s) bumped across {len(files)} file(s)")
+          PYEOF
+
+      - name: Commit and push to main
+        env:
+          IMAGE_NAME: ${{ inputs.image_name }}
+          NEW_TAG:    ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+          git config user.email "ci@mctl.ai"
+          git config user.name  "mctl-ci"
+          git add -A
+          if git diff --staged --quiet; then
+            echo "::notice::No staged changes (already at ${NEW_TAG})"
+            exit 0
+          fi
+          SERVICE=$(basename "$IMAGE_NAME")
+          # Direct commit to main — scope is limited to image tag lines only
+          git commit -m "chore: bump ${SERVICE} to ${NEW_TAG}"
+          git push
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Gitops bump: \`${{ inputs.image_name }}:${{ inputs.image_tag }}\`"
+            echo ""
+            echo "| Field | Value |"
+            echo "|-------|-------|"
+            if [[ -n "${{ inputs.values_path }}" ]]; then
+              echo "| **Mode** | single file |"
+              echo "| **File** | \`${{ inputs.values_path }}\` |"
+            else
+              echo "| **Mode** | glob |"
+              echo "| **Glob** | \`${{ inputs.values_glob }}\` |"
+            fi
+          } >> $GITHUB_STEP_SUMMARY
