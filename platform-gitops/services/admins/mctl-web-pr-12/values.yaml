@@ -1,6 +1,6 @@
 image:
   repository: ghcr.io/mctlhq/mctl-web
-  tag: "pr-12-267796809b98a63b742c25f9551fe51193006f2f"
+  tag: "pr-12-a48f595c178aee0b8691ca5a0969435ad61a9ef5"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
