@@ -8,7 +8,12 @@ tenant:
     - userId: mashkovd
       role: owner
   quotas:
-    requests.cpu: "1"
+    # Bumped 2026-05-30: requests.cpu "1" left only ~60m headroom at
+    # steady-state (940m used), so a deploy/rollback workflow pod (100m
+    # requests) couldn't schedule — this deadlocked a mctl-web rollback
+    # during an outage. Raised 1 -> 2 to keep ~1000m+ headroom for
+    # deploy-pipeline / rollback workflow pods and rollout surges.
+    requests.cpu: "2"
     requests.memory: "3Gi"
     # Bumped 2026-05-13: openclaw sidecar limit increase (s3-sync 2000m +
     # skills-fanout 300m) brings pod limits to 6300m; bumped from 7 to 8
