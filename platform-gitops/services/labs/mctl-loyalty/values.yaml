@@ -1,0 +1,44 @@
+# Service: mctl-loyalty
+# Team: labs
+
+# Chart: base-service
+
+image:
+  repository: ghcr.io/mctlhq/mctl-loyalty
+  tag: "0.1.0"
+imagePullSecrets:
+  - name: ghcr-credentials
+service:
+  port: 8080
+backstage:
+  kubernetesId: mctl-loyalty
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+env:
+  APP_ENV: production
+  SERVICE_VERSION: 0.1.0
+  SUPER_ADMIN_TELEGRAM_IDS: "210408407"
+  QR_TTL_SECONDS: "60"
+ingress:
+  enabled: true
+  hosts:
+    - labs-mctl-loyalty.mctl.ai
+    - labs-mctl-loyalty.mctl.me
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls:
+    - secretName: mctl-loyalty-tls
+      hosts:
+        - labs-mctl-loyalty.mctl.ai
+        - labs-mctl-loyalty.mctl.me
+envFrom:
+  - secretRef:
+      name: labs-mctl-loyalty-db-creds
+dbSecret:
+  vaultPath: teams/labs/mctl-loyalty/database
+  secretName: labs-mctl-loyalty-db-creds
