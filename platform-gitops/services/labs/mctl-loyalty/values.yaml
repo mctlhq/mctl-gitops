@@ -27,6 +27,9 @@ env:
 ingress:
   enabled: true
   hosts:
+    # Customer-facing brand domain (matches the @MCTL Rewards bot).
+    - rewards.mctl.ai
+    # Legacy auto-generated hosts kept as permanent aliases (no downtime on cutover).
     - labs-mctl-loyalty.mctl.ai
     - labs-mctl-loyalty.mctl.me
   annotations:
@@ -34,6 +37,7 @@ ingress:
   tls:
     - secretName: mctl-loyalty-tls
       hosts:
+        - rewards.mctl.ai
         - labs-mctl-loyalty.mctl.ai
         - labs-mctl-loyalty.mctl.me
 envFrom:
