@@ -204,8 +204,8 @@ extraObjects:
                 mctl.me/component: demo-session-refresh
             spec:
               restartPolicy: OnFailure
-              imagePullSecrets:
-                - name: ghcr-credentials
+              # No imagePullSecrets: postgres:17-alpine is a public Docker Hub
+              # image (unlike the chart's dbInitJob, which can run GHCR app images).
               containers:
                 - name: refresh
                   image: postgres:17-alpine
