@@ -199,8 +199,6 @@ kind: Application
 metadata:
   name: backstage
   namespace: argocd
-  finalizers:
-    - resources-finalizer.argocd.argoproj.io
 spec:
   project: default
   source:
