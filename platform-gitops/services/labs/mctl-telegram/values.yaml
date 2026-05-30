@@ -59,11 +59,13 @@ env:
   # ExternalSecret below.
   TELEGRAM_OIDC_CLIENT_ID: "8568443430"
   # CSV of Telegram user IDs that receive full scopes (admin allowlist).
-  # 210408407 = operator (@MashkovD). 8745115872 = demo/reviewer (@mctlhq) — added
-  # so the App-Directory reviewer can exercise the 5 admin tools (admin:users),
-  # matching the submission docs ("all 14 tools reviewable"). Demo-review only;
-  # remove 8745115872 when DEMO_REVIEWER is turned off after the review.
-  TG_LOGIN_ADMINS: "210408407,8745115872"
+  # 210408407 = operator (@MashkovD) ONLY. The demo/reviewer account 8745115872
+  # (@mctlhq) is intentionally NON-admin (client tier): App-Directory reviewers
+  # exercise the 9 user-facing tools and should observe the 5 admin tools return
+  # a clean scope-denied (admin:users) — that is the correct permission boundary.
+  # Admin-tool success is demonstrated separately with operator credentials.
+  # (Reverts the temporary reviewer-admin grant; submission docs reframed to match.)
+  TG_LOGIN_ADMINS: "210408407"
   # Open registration: every Telegram-authenticated user auto-gets the client
   # tier. Ban a specific user with the set_telegram_access MCP tool.
   AUTO_APPROVE_CLIENTS: "true"
