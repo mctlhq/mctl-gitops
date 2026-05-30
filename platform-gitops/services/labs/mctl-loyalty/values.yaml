@@ -39,6 +39,9 @@ ingress:
 envFrom:
   - secretRef:
       name: labs-mctl-loyalty-db-creds
+  # TELEGRAM_BOT_TOKEN — synced from Vault by the externalSecret block below.
+  - secretRef:
+      name: mctl-loyalty-secrets
 dbSecret:
   vaultPath: teams/labs/mctl-loyalty/database
   secretName: labs-mctl-loyalty-db-creds
