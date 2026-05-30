@@ -11,6 +11,7 @@ spec:
       targetRevision: main
       path: helm
       helm:
+        releaseName: mctl-api
         values: |
           image:
             repository: ghcr.io/mctlhq/mctl-api
