@@ -102,6 +102,7 @@ spec:
       - host temporal_visibility temporal all scram-sha-256
       - host labs-mctl-telegram labs-mctl-telegram all scram-sha-256
       - host labs-mctl-telegram-preview labs-mctl-telegram-preview all scram-sha-256
+      - host labs-mctl-loyalty labs-mctl-loyalty all scram-sha-256
       - host all all 0.0.0.0/0 reject
 
   managed:
@@ -138,6 +139,12 @@ spec:
         passwordSecret:
           name: mctl-api-db-creds
       # Team app roles
+      - name: labs-mctl-loyalty
+        login: true
+        connectionLimit: 10
+        ensure: present
+        passwordSecret:
+          name: labs-mctl-loyalty-db-creds
       - name: labs-mctl-telegram-preview
         login: true
         connectionLimit: 10
