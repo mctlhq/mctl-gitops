@@ -32,9 +32,10 @@ on:
         required: false
         type: string
 
-# Serialize per image to avoid overlapping commits to main.
+# Global serialization: all bumps commit to main; per-image groups let two
+# concurrent runs race and produce a non-fast-forward push failure.
 concurrency:
-  group: gitops-bump-${{ inputs.image_name }}
+  group: gitops-bump
   cancel-in-progress: false
 
 jobs:
@@ -110,8 +111,8 @@ jobs:
                   )
                   out, n3 = p_split.subn(r'\1 ' + new_tag, out)
 
-              # Pattern 3: inline image: <image>:<tag>  (CWFT style)
-              p3 = re.compile(r'(image:\s*' + re.escape(image_name) + r'):[\w.\-]+')
+              # Pattern 3: inline image: <image>:<tag>  (CWFT style, quoted or unquoted)
+              p3 = re.compile(r'(image:\s*["\']?' + re.escape(image_name) + r')["\']?:[\w.\-]+')
               out, n2 = p3.subn(r'\1:' + new_tag, out)
 
               n = n1 + n2 + n3
@@ -161,17 +162,22 @@ jobs:
 
       - name: Summary
         if: always()
+        env:
+          IMAGE_NAME:   ${{ inputs.image_name }}
+          IMAGE_TAG:    ${{ inputs.image_tag }}
+          VALUES_PATH:  ${{ inputs.values_path }}
+          VALUES_GLOB:  ${{ inputs.values_glob }}
         run: |
           {
-            echo "## Gitops bump: \`${{ inputs.image_name }}:${{ inputs.image_tag }}\`"
+            echo "## Gitops bump: \`${IMAGE_NAME}:${IMAGE_TAG}\`"
             echo ""
             echo "| Field | Value |"
             echo "|-------|-------|"
-            if [[ -n "${{ inputs.values_path }}" ]]; then
+            if [[ -n "${VALUES_PATH}" ]]; then
               echo "| **Mode** | single file |"
-              echo "| **File** | \`${{ inputs.values_path }}\` |"
+              echo "| **File** | \`${VALUES_PATH}\` |"
             else
               echo "| **Mode** | glob |"
-              echo "| **Glob** | \`${{ inputs.values_glob }}\` |"
+              echo "| **Glob** | \`${VALUES_GLOB}\` |"
             fi
           } >> $GITHUB_STEP_SUMMARY
