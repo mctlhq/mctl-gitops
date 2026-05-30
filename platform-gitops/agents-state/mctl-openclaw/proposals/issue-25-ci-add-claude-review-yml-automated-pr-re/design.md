@@ -197,3 +197,26 @@ visible. Rejected.
   error), it fails the workflow step but does not block PR merge unless a branch
   protection rule requires it. The issue does not mention adding a required
   status check for `claude-review`, so failures are advisory.
+
+## Reviewer note (accept gate, 2026-05-30)
+
+**The `permissions:` block MUST match the sister-repo template — this
+supersedes the 2-permission block in the "Permissions block" section above and
+in tasks.md task 1.** The job-level permissions must be exactly:
+
+```yaml
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  id-token: write
+```
+
+Reason:
+- `id-token: write` is **required** for `claude-code-action`'s OIDC token
+  exchange — the action fails at runtime without it.
+- `issues: write` is required for the action's PR/issue
+  comment/label/status interactions depending on its behavior.
+
+Keep workflow-level `permissions: {}` and grant the four scopes at the job
+level, exactly as in `mctl-agent`/`mctl-api` `.github/workflows/claude-review.yml`.
