@@ -1,3 +1,4 @@
+replicaCount: 0
 image:
   repository: ghcr.io/mctlhq/mctl-web
   tag: "pr-12-a48f595c178aee0b8691ca5a0969435ad61a9ef5"
