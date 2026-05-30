@@ -32,7 +32,7 @@ metadata:
            including the /workdir/clones scratch dir for sibling-repo
            clones triggered by the implementer subprocess.
         2. run-shepherd — orchestrator/run_shepherd inside
-           ghcr.io/mctlhq/mctl-agents:1.14.0. Reads STATE_DIR + GitHub
+           ghcr.io/mctlhq/mctl-agents:1.14.1. Reads STATE_DIR + GitHub
            PAT, may invoke run_implementer as a subprocess for
            address-review followups.
         3. commit-and-push — commits any .status.yaml transitions back
@@ -223,7 +223,7 @@ spec:
     # flip-to-rejected path. 1.9.0 was the first tag with the orchestrator.
     - name: run-shepherd
       container:
-        image: ghcr.io/mctlhq/mctl-agents:1.14.0
+        image: ghcr.io/mctlhq/mctl-agents:1.14.1
         imagePullPolicy: IfNotPresent
         command: ["/entrypoint.sh"]
         args:
