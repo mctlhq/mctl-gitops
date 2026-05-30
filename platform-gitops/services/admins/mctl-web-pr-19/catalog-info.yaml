@@ -1,0 +1,18 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: mctl-web-pr-19
+  namespace: admins
+  description: "mctl-web PR #19 preview"
+  annotations:
+    argocd/app-name: admins-mctl-web-pr-19
+    github.com/source-repo: mctlhq/mctl-web
+    mctl.me/auto-deploy: "false"
+  labels:
+    team: admins
+    env: preview
+spec:
+  type: service
+  lifecycle: experimental
+  owner: group:default/admins
+  system: system:default/team-admins
