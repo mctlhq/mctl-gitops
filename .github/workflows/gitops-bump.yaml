@@ -1,0 +1,137 @@
+name: Gitops Image Bump
+run-name: "gitops-bump ${{ inputs.image_name }}:${{ inputs.image_tag }}"
+
+# Bump an image tag in gitops without triggering a full build.
+# Called by app repos after they have already pushed the image to GHCR.
+# Supports two addressing modes:
+#   - values_path: single values.yaml (standard Helm service)
+#   - values_glob: glob pattern for multiple files (e.g. CWFTs with inline image refs)
+on:
+  workflow_dispatch:
+    inputs:
+      image_name:
+        description: "Full image name (e.g. ghcr.io/mctlhq/mctl-agents)"
+        required: true
+        type: string
+      image_tag:
+        description: "New image tag (e.g. 1.15.0)"
+        required: true
+        type: string
+      values_path:
+        description: "Single file to bump (e.g. platform-gitops/services/labs/claude-remote/values.yaml)"
+        required: false
+        type: string
+      values_glob:
+        description: "Glob for multiple files (e.g. platform-gitops/argo-workflows/cluster-templates/cwft-mctl-agents-*.yaml)"
+        required: false
+        type: string
+
+# Serialize bumps per image to avoid overlapping commits to main.
+concurrency:
+  group: gitops-bump-${{ inputs.image_name }}
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: main
+
+      - name: Bump image tags
+        env:
+          IMAGE_NAME: ${{ inputs.image_name }}
+          NEW_TAG: ${{ inputs.image_tag }}
+          VALUES_PATH: ${{ inputs.values_path }}
+          VALUES_GLOB: ${{ inputs.values_glob }}
+        run: |
+          set -euo pipefail
+          python3 <<'PYEOF'
+          import os, re, sys, glob as globmod
+
+          image_name = os.environ['IMAGE_NAME']
+          new_tag    = os.environ['NEW_TAG']
+          vpath      = os.environ.get('VALUES_PATH', '').strip()
+          vglob      = os.environ.get('VALUES_GLOB', '').strip()
+
+          if not vpath and not vglob:
+              print("ERROR: set values_path or values_glob", file=sys.stderr)
+              sys.exit(1)
+
+          files = sorted(globmod.glob(vglob)) if vglob else [vpath]
+          if not files:
+              print(f"ERROR: no files matched: {vglob or vpath}", file=sys.stderr)
+              sys.exit(2)
+          missing = [f for f in files if not os.path.isfile(f)]
+          if missing:
+              print(f"ERROR: not found: {missing}", file=sys.stderr)
+              sys.exit(2)
+
+          total = 0
+          for path in files:
+              with open(path) as fp:
+                  content = fp.read()
+              n1 = n2 = n3 = 0
+              # Pattern 1: repository: <image>\n  tag: <old>
+              p1 = re.compile(r'(repository:\s*' + re.escape(image_name) + r'\n\s+tag:)[^\n]+')
+              out, n1 = p1.subn(r'\1 "' + new_tag + '"', content)
+              # Pattern 2: split registry/repository (Backstage Helm)
+              if '/' in image_name:
+                  registry, repo = image_name.split('/', 1)
+                  p3 = re.compile(
+                      r'(registry:\s*' + re.escape(registry) +
+                      r'\n\s+repository:\s*' + re.escape(repo) +
+                      r'\n\s+tag:)[^\n]+'
+                  )
+                  out, n3 = p3.subn(r'\1 ' + new_tag, out)
+              # Pattern 3: inline image: <image>:<tag>
+              p2 = re.compile(r'(image:\s*' + re.escape(image_name) + r'):[\w.\-]+')
+              out, n2 = p2.subn(r'\1:' + new_tag, out)
+              n = n1 + n2 + n3
+              if n:
+                  with open(path, 'w') as fp:
+                      fp.write(out)
+                  print(f"  {path}: {n} occurrence(s) bumped")
+              else:
+                  print(f"  {path}: no pattern matched (skipped)")
+              total += n
+
+          if total == 0:
+              print(f"ERROR: no matches for {image_name} in any file", file=sys.stderr)
+              sys.exit(3)
+          print(f"Total: {total} bumps across {len(files)} file(s)")
+          PYEOF
+
+      - name: Commit and push
+        env:
+          IMAGE_NAME: ${{ inputs.image_name }}
+          NEW_TAG:    ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+          git config user.email "ci@mctl.ai"
+          git config user.name  "mctl-ci"
+          git add -A
+          if git diff --staged --quiet; then
+            echo "::notice::Already at ${NEW_TAG}, nothing to commit"
+            exit 0
+          fi
+          SERVICE=$(basename "$IMAGE_NAME")
+          git commit -m "chore: bump ${SERVICE} to ${NEW_TAG}"
+          git push
+
+      - name: Summary
+        run: |
+          {
+            echo "## Gitops bump: ${{ inputs.image_name }}:${{ inputs.image_tag }}"
+            echo ""
+            echo "| Field | Value |"
+            echo "|-------|-------|"
+            if [[ -n "${{ inputs.values_path }}" ]]; then
+              echo "| **File** | \`${{ inputs.values_path }}\` |"
+            else
+              echo "| **Glob** | \`${{ inputs.values_glob }}\` |"
+            fi
+          } >> $GITHUB_STEP_SUMMARY
