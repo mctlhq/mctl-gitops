@@ -33,6 +33,17 @@ env:
   LOG_LEVEL: info
   PUBLIC_BASE_URL: https://tg.mctl.ai
   OAUTH_ISSUER_URL: https://tg.mctl.ai
+  # Origin-header allowlist for /mcp (OriginGuard, DNS-rebinding protection,
+  # active from 0.41.0). Requests with no Origin pass (server-to-server MCP
+  # clients send none); a present browser Origin MUST be on this list or it is
+  # rejected with 403. When ALLOWED_ORIGINS is unset the server defaults to the
+  # PUBLIC_BASE_URL origin only, which would 403 chatgpt.com / claude.ai — so
+  # they are listed explicitly. 0.40.0 has no OriginGuard and ignores this key,
+  # so landing it ahead of the 0.41.0 deploy is safe. NOTE: the values carry
+  # "https://" (colons); if mctl_deploy_service ever rewrites this file, verify
+  # the key survived the yq round-trip (it is known to strip colon-bearing env
+  # vars) and hand-edit to restore if dropped.
+  ALLOWED_ORIGINS: https://tg.mctl.ai,https://chatgpt.com,https://chat.openai.com,https://claude.ai
   # Raised from the 10m default: the in-browser enable_access flow (phone -> SMS
   # -> 2FA) is bounded by this same TTL (lookupEnable), and 10m is too tight for
   # a human to receive and enter the SMS code -> "sign-in session has expired".
