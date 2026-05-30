@@ -146,3 +146,14 @@ spec:
   cluster:
     name: shared-pg
   databaseReclaimPolicy: retain
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: labs-mctl-loyalty-db
+spec:
+  name: "labs-mctl-loyalty"
+  owner: "labs-mctl-loyalty"
+  cluster:
+    name: shared-pg
+  databaseReclaimPolicy: retain
