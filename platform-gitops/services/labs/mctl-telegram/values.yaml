@@ -162,3 +162,64 @@ extraExternalSecrets:
       - secretKey: DEMO_REVIEWER_PASSWORD
         remoteKey: secret/data/platform/mctl-telegram/demo
         property: DEMO_REVIEWER_PASSWORD
+
+# TEMPORARY workaround (ChatGPT App Directory review window). The demo/reviewer
+# Telegram session row is subject to the normal session TTLs (absolute 90d, idle
+# 30d) and to revoke-on-disconnect. If the row expires or is revoked, the reviewer
+# login dead-ends with "Sign-in interrupted: no active Telegram session" (the
+# CheckSessionValid -> ErrNoActiveSession path). This CronJob keeps the newest
+# demo session row perpetually fresh (un-revoke + push expires_at/last_used_at out
+# 90d, force send_enabled=false) so reviewers always find a usable session.
+# It does NOT re-login Telegram-side; if the MTProto session is signed out at
+# Telegram, a manual `mctl-telegram-login` re-seed is still required.
+# REMOVE this block (with DEMO_REVIEWER_ENABLED) once the durable fix ships
+# post-freeze: make the DEMO_REVIEWER_TG_ID identity immune to TTL sweeps /
+# CheckSessionValid expiry, mirroring the evaluateSendGate reviewer override.
+extraObjects:
+  - apiVersion: batch/v1
+    kind: CronJob
+    metadata:
+      name: labs-mctl-telegram-demo-session-refresh
+      labels:
+        app.kubernetes.io/name: mctl-telegram
+        app.kubernetes.io/part-of: mctl-platform
+        mctl.me/component: demo-session-refresh
+    spec:
+      # Daily at 03:17 UTC (off-peak). Margin is huge vs the 30d idle / 90d
+      # absolute TTLs; daily simply guarantees the session is never more than a
+      # day from a refresh during the review window.
+      schedule: "17 3 * * *"
+      concurrencyPolicy: Forbid
+      startingDeadlineSeconds: 300
+      successfulJobsHistoryLimit: 3
+      failedJobsHistoryLimit: 3
+      jobTemplate:
+        spec:
+          backoffLimit: 2
+          activeDeadlineSeconds: 120
+          template:
+            metadata:
+              labels:
+                app.kubernetes.io/name: mctl-telegram
+                mctl.me/component: demo-session-refresh
+            spec:
+              restartPolicy: OnFailure
+              # No imagePullSecrets: postgres:17-alpine is a public Docker Hub
+              # image (unlike the chart's dbInitJob, which can run GHCR app images).
+              containers:
+                - name: refresh
+                  image: postgres:17-alpine
+                  command: ["sh", "-c"]
+                  args:
+                    - |
+                      set -e
+                      echo "Refreshing demo reviewer session (tg 8745115872)..."
+                      psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "UPDATE telegram_accounts SET revoked_at = NULL, last_used_at = now(), expires_at = now() + interval '90 days', send_enabled = false WHERE id = (SELECT id FROM telegram_accounts WHERE user_id = (SELECT id FROM users WHERE telegram_login_id = '8745115872') AND telegram_user_id IS NOT NULL ORDER BY connected_at DESC LIMIT 1);"
+                      psql "$DATABASE_URL" -c "SELECT id, revoked_at, expires_at, last_used_at, send_enabled FROM telegram_accounts WHERE user_id = (SELECT id FROM users WHERE telegram_login_id = '8745115872') AND revoked_at IS NULL ORDER BY connected_at DESC LIMIT 1;"
+                      echo "Demo session refresh complete."
+                  env:
+                    - name: DATABASE_URL
+                      valueFrom:
+                        secretKeyRef:
+                          name: labs-mctl-telegram-db-creds
+                          key: DATABASE_URL
