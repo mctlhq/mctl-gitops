@@ -15,7 +15,7 @@ metadata:
       Runs:
         1. clone-gitops — SSH-clone mctl-gitops via the shared deploy key.
         2. run-investigator — orchestrator/run_issue_investigator.py inside
-           ghcr.io/mctlhq/mctl-agents:1.14.0. The Python script reads the
+           ghcr.io/mctlhq/mctl-agents:1.14.1. The Python script reads the
            issue via `gh`, gh-clones the target sibling repo read-only,
            runs the Claude Agent SDK to write requirements/design/tasks.md,
            writes .status.yaml, and comments the proposal link on the issue.
@@ -118,7 +118,7 @@ spec:
     # the module and crash with ImportError.
     - name: run-investigator
       container:
-        image: ghcr.io/mctlhq/mctl-agents:1.14.0
+        image: ghcr.io/mctlhq/mctl-agents:1.14.1
         imagePullPolicy: IfNotPresent
         command: ["/entrypoint.sh"]
         args:
