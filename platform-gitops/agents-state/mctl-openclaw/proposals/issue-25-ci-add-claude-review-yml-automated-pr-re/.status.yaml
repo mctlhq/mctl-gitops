@@ -1,6 +1,6 @@
-status: proposed
-updated_at: '2026-05-30T12:44:06Z'
-updated_by: mctl-agents[bot]
+status: accepted
+updated_at: '2026-05-30T12:50:05Z'
+updated_by: mashkovd
 source:
   type: github_issue
   repo: mctlhq/mctl-openclaw
