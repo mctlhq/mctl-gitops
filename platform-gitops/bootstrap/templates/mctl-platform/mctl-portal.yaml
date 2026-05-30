@@ -206,6 +206,7 @@ spec:
     chart: backstage
     targetRevision: 2.6.3
     helm:
+      releaseName: backstage
       values: |
         ingress:
           enabled: true
