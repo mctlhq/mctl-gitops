@@ -1,6 +1,7 @@
-status: in-progress
-updated_at: '2026-05-30T12:51:15Z'
-updated_by: mctl-agents[bot]
+status: implemented
+updated_at: '2026-05-30T13:10:49Z'
+updated_by: mashkovd
+pr: https://github.com/mctlhq/mctl-openclaw/pull/26
 source:
   type: github_issue
   repo: mctlhq/mctl-openclaw
