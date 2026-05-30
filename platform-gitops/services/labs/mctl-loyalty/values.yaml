@@ -22,7 +22,7 @@ resources:
 env:
   APP_ENV: production
   SERVICE_VERSION: 0.1.0
-  SUPER_ADMIN_TELEGRAM_IDS: "210408407"
+  SUPER_ADMIN_TELEGRAM_IDS: "210408407,7334138909"
   QR_TTL_SECONDS: "60"
 ingress:
   enabled: true
