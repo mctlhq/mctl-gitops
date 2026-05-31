@@ -39,6 +39,12 @@ ingress:
 envFrom:
   - secretRef:
       name: labs-mctl-pairdesk-db-creds
+  # TELEGRAM_BOT_TOKEN + TELEGRAM_WEBHOOK_SECRET — synced from Vault by the
+  # externalSecret block below. The onboard/update-config flow creates the
+  # ExternalSecret but does NOT auto-wire this envFrom (same as mctl-loyalty),
+  # so it must be added by hand or the bot token never reaches the pod.
+  - secretRef:
+      name: mctl-pairdesk-secrets
 dbSecret:
   vaultPath: teams/labs/mctl-pairdesk/database
   secretName: labs-mctl-pairdesk-db-creds
