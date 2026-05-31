@@ -103,6 +103,7 @@ spec:
       - host labs-mctl-telegram labs-mctl-telegram all scram-sha-256
       - host labs-mctl-telegram-preview labs-mctl-telegram-preview all scram-sha-256
       - host labs-mctl-loyalty labs-mctl-loyalty all scram-sha-256
+      - host labs-mctl-pairdesk labs-mctl-pairdesk all scram-sha-256
       - host all all 0.0.0.0/0 reject
 
   managed:
@@ -139,6 +140,12 @@ spec:
         passwordSecret:
           name: mctl-api-db-creds
       # Team app roles
+      - name: labs-mctl-pairdesk
+        login: true
+        connectionLimit: 10
+        ensure: present
+        passwordSecret:
+          name: labs-mctl-pairdesk-db-creds
       - name: labs-mctl-loyalty
         login: true
         connectionLimit: 10
