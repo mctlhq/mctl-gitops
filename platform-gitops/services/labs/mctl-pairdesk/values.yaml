@@ -21,6 +21,9 @@ resources:
     memory: 512Mi
 env:
   APP_ENV: production
+  MINI_APP_URL: https://labs-mctl-pairdesk.mctl.ai/app
+  TELEGRAM_WEBHOOK_URL: https://labs-mctl-pairdesk.mctl.ai/telegram/webhook
+  SUPER_ADMIN_TELEGRAM_IDS: "210408407"
 ingress:
   enabled: true
   hosts:
@@ -39,3 +42,12 @@ envFrom:
 dbSecret:
   vaultPath: teams/labs/mctl-pairdesk/database
   secretName: labs-mctl-pairdesk-db-creds
+externalSecret:
+  targetSecret: mctl-pairdesk-secrets
+  data:
+    - secretKey: TELEGRAM_BOT_TOKEN
+      remoteKey: teams/labs/mctl-pairdesk
+      property: TELEGRAM_BOT_TOKEN
+    - secretKey: TELEGRAM_WEBHOOK_SECRET
+      remoteKey: teams/labs/mctl-pairdesk
+      property: TELEGRAM_WEBHOOK_SECRET
