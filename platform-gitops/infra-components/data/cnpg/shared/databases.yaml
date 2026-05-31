@@ -157,3 +157,14 @@ spec:
   cluster:
     name: shared-pg
   databaseReclaimPolicy: retain
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: labs-mctl-pairdesk-db
+spec:
+  name: "labs-mctl-pairdesk"
+  owner: "labs-mctl-pairdesk"
+  cluster:
+    name: shared-pg
+  databaseReclaimPolicy: retain
