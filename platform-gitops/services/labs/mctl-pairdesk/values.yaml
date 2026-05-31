@@ -1,0 +1,41 @@
+# Service: mctl-pairdesk
+# Team: labs
+
+# Chart: base-service
+
+image:
+  repository: ghcr.io/mctlhq/mctl-pairdesk
+  tag: "0.1.0"
+imagePullSecrets:
+  - name: ghcr-credentials
+service:
+  port: 8080
+backstage:
+  kubernetesId: mctl-pairdesk
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+env:
+  APP_ENV: production
+ingress:
+  enabled: true
+  hosts:
+    - labs-mctl-pairdesk.mctl.ai
+    - labs-mctl-pairdesk.mctl.me
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls:
+    - secretName: mctl-pairdesk-tls
+      hosts:
+        - labs-mctl-pairdesk.mctl.ai
+        - labs-mctl-pairdesk.mctl.me
+envFrom:
+  - secretRef:
+      name: labs-mctl-pairdesk-db-creds
+dbSecret:
+  vaultPath: teams/labs/mctl-pairdesk/database
+  secretName: labs-mctl-pairdesk-db-creds

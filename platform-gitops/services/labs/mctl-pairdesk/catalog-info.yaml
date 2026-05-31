@@ -1,0 +1,38 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: mctl-pairdesk
+  namespace: labs
+  description: "mctl-pairdesk service"
+  annotations:
+    backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=labs-mctl-pairdesk
+    backstage.io/kubernetes-id: mctl-pairdesk
+    backstage.io/kubernetes-namespace: labs
+    argocd/app-name: labs-mctl-pairdesk
+    github.com/source-repo: mctlhq/mctl-pairdesk
+    # mctl.me/auto-deploy — triggered by GitHub App webhook on tag push
+    #   "true" or "auto" — deploy immediately via scaffolder
+    #   "confirm"         — notify only, user deploys manually from UI
+    #   "false" or absent — skip
+    mctl.me/auto-deploy: "false"
+  links:
+    - url: https://ops.mctl.ai/applications/argocd/labs-mctl-pairdesk
+      title: ArgoCD
+      icon: dashboard
+    - url: https://github.com/mctlhq/mctl-pairdesk
+      title: Source Repository
+      icon: github
+    - url: https://workflows.mctl.ai
+      title: Argo Workflows
+      icon: github
+    - url: https://labs-mctl-pairdesk.mctl.ai
+      title: Service URL
+      icon: web
+  labels:
+    team: labs
+    env: apps
+spec:
+  type: service
+  lifecycle: production
+  owner: group:default/labs
+  system: system:default/team-labs
