@@ -21,6 +21,7 @@ resources:
     memory: 512Mi
 env:
   APP_ENV: production
+  SERVICE_VERSION: "0.2.0"
   MINI_APP_URL: https://labs-mctl-pairdesk.mctl.ai/app
   TELEGRAM_WEBHOOK_URL: https://labs-mctl-pairdesk.mctl.ai/telegram/webhook
   SUPER_ADMIN_TELEGRAM_IDS: "210408407"
