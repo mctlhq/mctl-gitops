@@ -21,12 +21,13 @@ metadata:
       Un-suspended at Stage 2: sweeps mctl-design every 6h, repairing any
       pr-steward-merged proposal whose .status.yaml write-back was dropped.
 spec:
-  # `45 */6 * * *` — every 6h at HH:45 (00:45, 06:45, 12:45, 18:45 UTC).
-  # The :45 offset stays clear of mctl-agents-shepherd (:30),
-  # mctl-agents-issue-poll (:10/:40) and mctl-agents-incidents (:15/:45 is
-  # every 30 min — but reconcile is 4×/day, so the rare overlap on the shared
-  # `mctl-gitops-main-writes` mutex resolves via the commit step's retry loop).
-  schedule: "45 */6 * * *"
+  # `15 * * * *` — hourly at HH:15 UTC (was `45 */6` = 4×/day). Tightened so a
+  # pr-steward-merged proposal's `.status.yaml` write-back lands within ~1h
+  # instead of ~6h (steward-owned repos rely on reconcile for the merged flip).
+  # :15 overlaps the */5 crons (issue-poll, implement) and incidents (:15/:45);
+  # all contend on the shared `mctl-gitops-main-writes` mutex, so concurrent
+  # ticks serialize (one waits) and the commit step's retry loop resolves it.
+  schedule: "15 * * * *"
   timezone: "UTC"
   # Forbid: never overlap two reconcile ticks (they contend on the same
   # mctl-gitops-main-writes mutex anyway).
