@@ -1,6 +1,7 @@
-status: in-progress
-updated_at: '2026-06-03T18:10:41Z'
+status: implemented
+updated_at: '2026-06-03T20:13:20Z'
 updated_by: mctl-agents[bot]
+pr: https://github.com/mctlhq/mctl-pairdesk/pull/41
 source:
   type: github_issue
   repo: mctlhq/mctl-pairdesk
