@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-06-03T20:14:33Z'
+status: merged
+updated_at: '2026-06-03T21:16:10Z'
 updated_by: mctl-agents[bot]
 pr: https://github.com/mctlhq/mctl-pairdesk/pull/42
 source:
@@ -9,3 +9,5 @@ source:
   url: https://github.com/mctlhq/mctl-pairdesk/issues/34
 control:
   requires_human_approval: true
+merged_at: '2026-06-03T21:16:10Z'
+merge_commit: c0205c3029ff9de559d1ffec6222064de22fe71a
