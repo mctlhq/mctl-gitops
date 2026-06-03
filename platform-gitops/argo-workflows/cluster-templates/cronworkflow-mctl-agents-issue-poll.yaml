@@ -28,20 +28,24 @@ metadata:
       (verify a labelled test issue yields a proposal and the label is
       removed).
 spec:
-  # `*/5 * * * *` — fires every 5 minutes (288 ticks/day). A tick with
-  # nothing labelled is a cheap no-op (one `gh search` + exit). May
-  # occasionally contend with mctl-agents-shepherd (:30), mctl-agents-incidents
-  # (:15/:45), and rotate-mctl-agent-github-token (:00) on the shared
-  # `mctl-gitops-main-writes` mutex — concurrencyPolicy: Forbid handles overlaps.
-  schedule: "*/5 * * * *"
+  # `*/15 * * * *` — fires every 15 minutes (96 ticks/day). A tick with
+  # nothing labelled is a cheap no-op (one `gh search` + exit). Was `*/5`;
+  # dropped to `*/15` to cut contention on the shared
+  # `mctl-gitops-main-writes` mutex — at `*/5` the poll competed with the
+  # implement cron (`*/5`) and operator-triggered investigates, queuing
+  # their commit-and-push behind no-op poll ticks. 15-min intake latency is
+  # fine for an autonomous pipeline. Still occasionally overlaps
+  # mctl-agents-shepherd (:30), mctl-agents-incidents (:15/:45), and
+  # rotate-mctl-agent-github-token (:00); concurrencyPolicy: Forbid handles it.
+  schedule: "*/15 * * * *"
   timezone: "UTC"
   # Forbid: never overlap two poll ticks. They contend on the same
   # `mctl-gitops-main-writes` mutex anyway, and a queued tick would only
   # delay the next genuine cron-driven one. Drop overlaps cleanly.
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 600
-  # Counts, NOT days. At 288 ticks/day, 96 ≈ 8h of poll history and
-  # 48 ≈ 4h of failures — enough for recent debugging without bloating etcd.
+  # Counts, NOT days. At 96 ticks/day (every 15 min), 96 ≈ 24h of poll
+  # history and 48 ≈ 12h of failures — enough for recent debugging.
   successfulJobsHistoryLimit: 96
   failedJobsHistoryLimit: 48
   # Start suspended — un-suspend after the smoke test (one-shot real run
