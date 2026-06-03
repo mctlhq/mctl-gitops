@@ -46,7 +46,7 @@ env:
   #   mctl-docs     = shepherd-owned (removed from steward — low churn, no strict protection)
   #   mctl-gitops   = human-only (removed from steward AND in SHEPHERD_SKIP_SERVICES, so no
   #                   auto-merge by anyone; private, no branch protection possible)
-  # mctl-pairdesk joins as steward (when-green) once it is public + branch-protected.
+  #   mctl-pairdesk = steward, when-green + merge (public + branch-protected; in SHEPHERD_SKIP_SERVICES)
   # Inert in the image until this flag is "true".
   PR_STEWARD_ENABLED: "true"
   # Built-in scheduler (0.4.0+): fire a headless `claude -p "Run the pr-steward
@@ -412,6 +412,14 @@ configMaps:
             },
             "merge_mode": "when-green",
             "merge_method": "squash"
+          },
+          {
+            "name": "mctlhq/mctl-pairdesk",
+            "pr_filter": {
+              "head_prefix": "feat/agents-"
+            },
+            "merge_mode": "when-green",
+            "merge_method": "merge"
           }
         ],
         "github_app": {
