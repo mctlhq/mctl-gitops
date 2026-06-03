@@ -1,6 +1,7 @@
-status: accepted
-updated_at: '2026-06-03T11:12:24Z'
-updated_by: mashkovd
+status: implemented
+updated_at: '2026-06-03T11:20:30Z'
+updated_by: mctl-agents[bot]
+pr: https://github.com/mctlhq/mctl-pairdesk/pull/27
 source:
   type: github_issue
   repo: mctlhq/mctl-pairdesk
