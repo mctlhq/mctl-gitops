@@ -77,6 +77,12 @@ spec:
             template: clone-gitops
         - - name: implement
             template: run-implementer
+            arguments:
+              parameters:
+                - name: oauth-key
+                  value: claude-code-oauth-token
+                - name: is-fallback
+                  value: "false"
             # run_implementer.py writes .status.yaml updates (in-progress →
             # implemented/error) to the worktree BEFORE any failure that may
             # crash the step. Without continueOn, Argo would skip commit-and-push
@@ -90,6 +96,25 @@ spec:
             # exits (Failed) from pod-level errors like OOMKilled / deadline /
             # controller errors (Error). Both can leave partial .status.yaml
             # writes, so commit-and-push must run in either case.
+            continueOn:
+              failed: true
+              error: true
+        # Fallback retry on a SECOND Claude account. If the primary attempt did
+        # not succeed (most commonly the account-1 OAuth token hitting its
+        # five_hour usage limit → HTTP 429), rerun the SAME scope on the
+        # account-2 token `claude-code-oauth-token-2`. Mirrors claude-review.yml's
+        # CLAUDE_CODE_OAUTH_TOKEN_2 fallback. is-fallback=true makes the rerun
+        # force-reprocess the in-progress claim the primary left, and the run
+        # skips itself cleanly (exit 0) when token-2 is not seeded in Vault.
+        - - name: implement-fallback
+            template: run-implementer
+            when: "{{steps.implement.status}} != Succeeded"
+            arguments:
+              parameters:
+                - name: oauth-key
+                  value: claude-code-oauth-token-2
+                - name: is-fallback
+                  value: "true"
             continueOn:
               failed: true
               error: true
@@ -132,6 +157,17 @@ spec:
     # 1.8.0 was the first tag with `gh` CLI baked in (mctl-agents PR #10);
     # tags before that crash with ImportError at this step.
     - name: run-implementer
+      inputs:
+        parameters:
+          # Which Vault key under mctl-agents-secrets holds the OAuth token for
+          # this run. Primary step passes claude-code-oauth-token; the
+          # fallback step passes claude-code-oauth-token-2 (a second account).
+          - name: oauth-key
+            value: claude-code-oauth-token
+          # "true" only for the fallback retry: skip cleanly if token-2 absent,
+          # and force-reprocess the primary's in-progress claim.
+          - name: is-fallback
+            value: "false"
       container:
         image: ghcr.io/mctlhq/mctl-agents:1.16.0
         imagePullPolicy: IfNotPresent
@@ -141,6 +177,20 @@ spec:
           - "-c"
           - |
             set -e
+            # Fallback-token handling. When this run is the account-2 retry
+            # (is-fallback=true): skip cleanly if claude-code-oauth-token-2 is
+            # not seeded (empty token) rather than failing on auth, and mark the
+            # run forced so it reprocesses the in-progress claim the primary
+            # attempt left behind. Primary runs (is-fallback=false) are untouched
+            # — a missing primary token still fails loudly at SDK auth.
+            if [ "$IS_FALLBACK" = "true" ]; then
+              if [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+                echo "ℹ️  Fallback token (claude-code-oauth-token-2) not set — skipping fallback retry."
+                exit 0
+              fi
+              echo "↻ Primary attempt did not succeed — retrying on fallback OAuth token (account 2)."
+              WORKFLOW_FORCE=true
+            fi
             # Wire git's HTTPS credential helper to the same GITHUB_TOKEN
             # gh CLI uses. Without this, `gh repo clone` succeeds (it speaks
             # to the API directly) but the implementer's later `git push -u
@@ -194,11 +244,18 @@ spec:
           - name: TMPDIR
             value: /workdir/clones
           # Auth: OAuth (Claude Pro/Max). Same secret as the run pipeline.
+          # Key is parameterized: the primary step uses claude-code-oauth-token,
+          # the fallback step uses claude-code-oauth-token-2. optional:true lets
+          # the fallback pod schedule when token-2 is absent (the script then
+          # exits 0); a missing PRIMARY token still fails loudly at SDK auth.
           - name: CLAUDE_CODE_OAUTH_TOKEN
             valueFrom:
               secretKeyRef:
                 name: mctl-agents-secrets
-                key: claude-code-oauth-token
+                key: "{{inputs.parameters.oauth-key}}"
+                optional: true
+          - name: IS_FALLBACK
+            value: "{{inputs.parameters.is-fallback}}"
           # GitHub PAT for `gh repo clone` + `gh pr create`. PAT must have
           # repo write scope on mctlhq/*. Sub-plan B introduces this key in
           # the shared secret (same Vault path) — uses `dataFrom: extract`,
