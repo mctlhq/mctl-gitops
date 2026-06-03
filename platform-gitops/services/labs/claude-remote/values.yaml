@@ -39,11 +39,14 @@ env:
   RESUME_SESSION_ID: "65ef01db-b382-4e47-b8c7-46bc5d0647fb"
   # pr-steward automation (branch prefix per repo). Per-repo merge_mode
   # (image 0.3.0+): global default is "never" (safe — escalate only); a repo opts
-  # into auto-merge explicitly. mctl-design = when-green (gated by branch protection
-  # on its public main); mctl-docs = when-green (ruleset 16767982; NOTE: auto-MERGE
-  # only — mctl-docs has no deploy.yml, so docs.mctl.ai deploy stays manual via
-  # mctl_deploy_service); mctl-telegram = when-green + squash (claude/* and fix/*);
-  # mctl-gitops = never (inherits global — private, no branch protection possible).
+  # into auto-merge explicitly. Ownership is partitioned with the Tier-3 shepherd
+  # via SHEPHERD_SKIP_SERVICES (steward owns ONLY what the shepherd skips):
+  #   mctl-design   = steward, when-green (gated by branch protection on its public main)
+  #   mctl-telegram = steward, when-green + squash (claude/* and fix/* and feat/agents-*)
+  #   mctl-docs     = shepherd-owned (removed from steward — low churn, no strict protection)
+  #   mctl-gitops   = human-only (removed from steward AND in SHEPHERD_SKIP_SERVICES, so no
+  #                   auto-merge by anyone; private, no branch protection possible)
+  # mctl-pairdesk joins as steward (when-green) once it is public + branch-protected.
   # Inert in the image until this flag is "true".
   PR_STEWARD_ENABLED: "true"
   # Built-in scheduler (0.4.0+): fire a headless `claude -p "Run the pr-steward
@@ -387,13 +390,6 @@ configMaps:
             "merge_mode": "when-green"
           },
           {
-            "name": "mctlhq/mctl-docs",
-            "pr_filter": {
-              "head_prefix": "feat/agents-"
-            },
-            "merge_mode": "when-green"
-          },
-          {
             "name": "mctlhq/mctl-telegram",
             "pr_filter": {
               "head_prefix": "claude/"
@@ -416,12 +412,6 @@ configMaps:
             },
             "merge_mode": "when-green",
             "merge_method": "squash"
-          },
-          {
-            "name": "mctlhq/mctl-gitops",
-            "pr_filter": {
-              "head_prefix": "feat/agents-"
-            }
           }
         ],
         "github_app": {

@@ -170,7 +170,7 @@ spec:
           # `suspend: true`. Do NOT un-suspend it until the shepherd CWFT in the
           # cluster carries this same skip. Edit the two in lockstep.
           - name: SHEPHERD_SKIP_SERVICES
-            value: "mctl-design"
+            value: "mctl-design,mctl-telegram,mctl-gitops,mctl-pairdesk"
           # Read-only GitHub PAT use: `gh api` PR snapshots in
           # find_pr_for_proposal. No `gh pr merge`, no git push from this
           # container (commit-and-push owns the write via the deploy key).
