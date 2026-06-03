@@ -120,6 +120,14 @@ spec:
                 secondsAfterFailure: 86400
               podGC:
                 strategy: OnWorkflowCompletion
+              # Delete volumeClaimTemplate PVCs (the per-workflow `workdir`) on
+              # completion regardless of outcome. Argo's default is
+              # OnWorkflowSuccess, which RETAINS the PVC when a workflow fails;
+              # ttlStrategy then GCs the Workflow object, orphaning the PVC (and
+              # its backing Hetzner volume) permanently. This left several failed
+              # mctl-agents issue-poll workdir PVCs stranded (10Gi each).
+              volumeClaimGC:
+                strategy: OnWorkflowCompletion
 
         artifactRepository:
           archiveLogs: true
