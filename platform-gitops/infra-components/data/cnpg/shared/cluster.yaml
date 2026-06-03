@@ -6,7 +6,12 @@ metadata:
     argocd.argoproj.io/compare-options: IgnoreExtraneous
     argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
 spec:
-  instances: 1
+  # HA: primary + 1 hot standby. Two instances is the minimum that lets a node
+  # drain succeed — CNPG promotes the standby and evicts the old primary,
+  # instead of the drain deadlocking on the single-instance PDB (0 allowed
+  # disruptions) that left worker-cx43-fsn1-ftx cordoned for 13 days during a
+  # k3s upgrade. podAntiAffinity (preferred) spreads the two across nodes.
+  instances: 2
 
   # CNPG operator defaults (explicitly set to prevent ArgoCD OutOfSync)
   imageName: ghcr.io/cloudnative-pg/postgresql:17.2
