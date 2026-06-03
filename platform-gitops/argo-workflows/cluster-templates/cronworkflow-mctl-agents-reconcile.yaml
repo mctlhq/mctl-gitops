@@ -14,12 +14,14 @@ metadata:
       pr-steward's best-effort write-back was dropped. Read-only — no reviews,
       no fixes, no merges, no SDK.
 
-      Cadence is deliberately low: the reconciler only repairs rare dropped
-      write-backs, so a 6-hour sweep is plenty. Bound of staleness for a
-      pr-steward-merged proposal that lost its write-back is therefore ~6h.
+      Cadence: hourly. The reconciler only repairs rare dropped write-backs,
+      but steward-owned repos rely on it for the implemented->merged flip, so
+      an hourly sweep keeps the bound of staleness for a pr-steward-merged
+      proposal that lost its write-back at ~1h.
 
-      Un-suspended at Stage 2: sweeps mctl-design every 6h, repairing any
-      pr-steward-merged proposal whose .status.yaml write-back was dropped.
+      Un-suspended at Stage 2: sweeps every SHEPHERD_SKIP_SERVICES repo hourly,
+      repairing any pr-steward-merged proposal whose .status.yaml write-back
+      was dropped.
 spec:
   # `15 * * * *` — hourly at HH:15 UTC (was `45 */6` = 4×/day). Tightened so a
   # pr-steward-merged proposal's `.status.yaml` write-back lands within ~1h
@@ -33,11 +35,12 @@ spec:
   # mctl-gitops-main-writes mutex anyway).
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 600
-  # Counts, NOT days. 4 ticks/day, so 8 ≈ 2 days of history.
-  successfulJobsHistoryLimit: 8
-  failedJobsHistoryLimit: 8
-  # Un-suspended at Stage 2: reconcile sweeps mctl-design every 6h, repairing
-  # any pr-steward-merged proposal that lost its `.status.yaml: merged` write-back.
+  # Counts, NOT days. 24 ticks/day (hourly), so 48 ≈ 2 days of history.
+  successfulJobsHistoryLimit: 48
+  failedJobsHistoryLimit: 48
+  # Un-suspended at Stage 2: reconcile sweeps every SHEPHERD_SKIP_SERVICES repo
+  # hourly, repairing any pr-steward-merged proposal that lost its
+  # `.status.yaml: merged` write-back.
   suspend: false
   workflowSpec:
     workflowTemplateRef:
