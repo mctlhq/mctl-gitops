@@ -110,6 +110,48 @@ spec:
               Node {{ $labels.instance }} root disk above 80%
               ({{ $value | humanizePercentage }} used)
 
+        # A node left unschedulable longer than a normal upgrade drain.
+        # Catches the system-upgrade-controller failure mode where a failed
+        # apply-k3s-agent job leaves the node cordoned indefinitely (observed
+        # on worker-cx43-fsn1-ftx, cordoned 13 days, 2026-05-21 → 2026-06-03),
+        # and any forgotten manual `kubectl cordon`.
+        - alert: NodeCordoned
+          expr: |
+            kube_node_spec_unschedulable == 1
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: >-
+              Node {{ $labels.node }} has been cordoned (unschedulable) for
+              over 30m — possible stuck k3s upgrade or forgotten manual cordon
+
+    # k3s rolling-upgrade health (system-upgrade-controller).
+    # A failed apply job means a node is stuck mid-upgrade — typically a drain
+    # deadlock against a PodDisruptionBudget with 0 allowed disruptions
+    # (e.g. single-replica Postgres/Vault). Without this the cluster can run
+    # degraded for days unnoticed.
+    - name: mctl.cluster-upgrades
+      rules:
+        - alert: K3sUpgradeJobFailed
+          # kube_job_status_failed counts Failed *pods*, not the Job's Failed
+          # condition — a Job that had a pod fail then retried to success, or a
+          # retained completed Job, keeps a nonzero count. Exclude Jobs that
+          # have actually completed so we only page on a genuinely stuck
+          # upgrade. (kube-state-metrics here exposes kube_job_complete but not
+          # a kube_job_failed condition series.)
+          expr: |
+            kube_job_status_failed{namespace="system-upgrade"} > 0
+            unless on(namespace, job_name)
+            kube_job_complete{namespace="system-upgrade", condition="true"} == 1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: >-
+              k3s upgrade job {{ $labels.job_name }} failed in system-upgrade —
+              a node is stuck mid-upgrade (likely drain deadlock on a PDB)
+
     - name: mctl.vault
       rules:
         - alert: VaultSealed
