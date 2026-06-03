@@ -134,8 +134,16 @@ spec:
     - name: mctl.cluster-upgrades
       rules:
         - alert: K3sUpgradeJobFailed
+          # kube_job_status_failed counts Failed *pods*, not the Job's Failed
+          # condition — a Job that had a pod fail then retried to success, or a
+          # retained completed Job, keeps a nonzero count. Exclude Jobs that
+          # have actually completed so we only page on a genuinely stuck
+          # upgrade. (kube-state-metrics here exposes kube_job_complete but not
+          # a kube_job_failed condition series.)
           expr: |
             kube_job_status_failed{namespace="system-upgrade"} > 0
+            unless on(namespace, job_name)
+            kube_job_complete{namespace="system-upgrade", condition="true"} == 1
           for: 5m
           labels:
             severity: warning
