@@ -88,8 +88,9 @@ spec:
             # in the DB (Argo's migrate framework skips creating it because
             # schema_history was already stamped at the latest version by the
             # earlier broken config), so the GC now logs
-            # `relation "argo_workflows" does not exist` every ~5 min. Disabling
-            # offload removes that error path entirely without any shared-pg DDL.
+            # `relation "argo_workflows" does not exist` every ~5 min. With
+            # offload off the controller never creates or queries that table,
+            # so the error path is gone — and no shared-pg DDL is needed.
             # archive: true above is unaffected — archiving uses the hardcoded
             # `argo_archived_workflows` table, independent of offload.
             nodeStatusOffLoad: false
@@ -97,6 +98,13 @@ spec:
               host: shared-pg-rw.platform-db.svc
               port: 5432
               database: argo-workflows
+              # tableName MUST stay set even with offload disabled: the
+              # controller calls GetTableName() unconditionally whenever
+              # persistence is configured and fails to start on an empty value
+              # ("TableName is empty"), which would also take archiving down.
+              # The value is otherwise inert while nodeStatusOffLoad is false —
+              # no offload table is ever created or queried.
+              tableName: argo_workflows
               userNameSecret:
                 name: argo-workflows-db-creds
                 key: username
