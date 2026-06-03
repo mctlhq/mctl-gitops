@@ -1,0 +1,10 @@
+status: proposed
+updated_at: '2026-06-03T12:43:21Z'
+updated_by: mctl-agents[bot]
+source:
+  type: github_issue
+  repo: mctlhq/mctl-pairdesk
+  issue: 5
+  url: https://github.com/mctlhq/mctl-pairdesk/issues/5
+control:
+  requires_human_approval: true
