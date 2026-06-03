@@ -77,10 +77,32 @@ spec:
             template: clone-gitops
         - - name: investigate
             template: run-investigator
+            arguments:
+              parameters:
+                - name: oauth-key
+                  value: claude-code-oauth-token
+                - name: is-fallback
+                  value: "false"
             # run_issue_investigator.py writes the proposal files + the
             # comment before any later failure path. Letting commit-and-push
             # run unconditionally makes a partially-written proposal durable
             # for inspection; the commit step handles the "no diff" case.
+            continueOn:
+              failed: true
+              error: true
+        # If the primary attempt did not succeed (most often a five_hour
+        # subscription rate-limit / 429 on account 1), retry once on the
+        # fallback OAuth token — a *different* Claude account, key
+        # claude-code-oauth-token-2. Skipped cleanly if that key is unset.
+        - - name: investigate-fallback
+            template: run-investigator
+            when: "{{steps.investigate.status}} != Succeeded"
+            arguments:
+              parameters:
+                - name: oauth-key
+                  value: claude-code-oauth-token-2
+                - name: is-fallback
+                  value: "true"
             continueOn:
               failed: true
               error: true
@@ -117,6 +139,12 @@ spec:
     # ghcr.io/mctlhq/mctl-agents:1.11.0 — pin >=1.11.0; earlier tags lack
     # the module and crash with ImportError.
     - name: run-investigator
+      inputs:
+        parameters:
+          - name: oauth-key
+            value: claude-code-oauth-token
+          - name: is-fallback
+            value: "false"
       container:
         image: ghcr.io/mctlhq/mctl-agents:1.16.0
         imagePullPolicy: IfNotPresent
@@ -126,6 +154,16 @@ spec:
           - "-c"
           - |
             set -e
+            # Fallback retry (account 2): only fires when the primary attempt
+            # did not succeed. If the fallback token is unset, skip cleanly so
+            # a single-token install behaves exactly as before.
+            if [ "$IS_FALLBACK" = "true" ]; then
+              if [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+                echo "ℹ️  Fallback token (claude-code-oauth-token-2) not set — skipping fallback retry."
+                exit 0
+              fi
+              echo "↻ Primary investigate did not succeed — retrying on fallback OAuth token (account 2)."
+            fi
             # GITHUB_TOKEN is mandatory for the investigator: it reads the
             # issue, clones the target repo, and posts the proposal comment.
             # The secretKeyRef is marked optional so the pod still schedules
@@ -173,7 +211,12 @@ spec:
             valueFrom:
               secretKeyRef:
                 name: mctl-agents-secrets
-                key: claude-code-oauth-token
+                key: "{{inputs.parameters.oauth-key}}"
+                optional: true
+          # Which token was wired above (account-2 retry vs primary), read by
+          # the fallback guard in the script body.
+          - name: IS_FALLBACK
+            value: "{{inputs.parameters.is-fallback}}"
           # GitHub PAT for `gh issue view`, `gh repo clone` and
           # `gh issue comment`. Needs repo read on the target repo plus
           # `issues: write` for the closing comment.
