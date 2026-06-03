@@ -270,6 +270,12 @@ spec:
                     matchers:
                       - alertname =~ "KubePodNotReady|PodNotReady"
                       - namespace = "argo-workflows"
+                  # Node-cordon / stuck-upgrade alerts go straight to a human on
+                  # Telegram — mctl-agent cannot auto-remediate these (they need
+                  # an operator to uncordon / re-drive the upgrade).
+                  - receiver: telegram
+                    matchers:
+                      - alertname =~ "NodeCordoned|K3sUpgradeJobFailed"
                   - receiver: mctl-agent
                     matchers:
                       - alertname =~ "RecordingRulesNoData|ScrapePoolHasNoTargets|TooManyScrapeErrors|TooManyLogs"
