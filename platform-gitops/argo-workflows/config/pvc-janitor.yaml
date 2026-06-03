@@ -1,0 +1,115 @@
+# Backstop janitor for orphaned per-workflow `workdir` PVCs.
+#
+# Primary defence is workflowDefaults.spec.volumeClaimGC.strategy=OnWorkflowCompletion
+# (set in the argo-workflows Helm values), which deletes a workflow's
+# volumeClaimTemplate PVC when it finishes, success or failure. This CronJob is
+# defence-in-depth: it catches PVCs that slip through (e.g. a Workflow object
+# force-deleted or TTL-GC'd before its PVC was reclaimed, or pre-existing
+# orphans from before volumeClaimGC was enabled).
+#
+# A `<workflow-name>-workdir` PVC is deleted only when BOTH hold:
+#   - no Pod currently mounts it, AND
+#   - its owning Workflow is gone, or in a terminal phase (Succeeded/Failed/Error).
+# A running/pending workflow (incl. a just-submitted one with empty phase) is
+# kept, so this never races a live workflow.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: argo-pvc-janitor
+  namespace: argo-workflows
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: argo-pvc-janitor
+  namespace: argo-workflows
+rules:
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: ["argoproj.io"]
+    resources: ["workflows"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argo-pvc-janitor
+  namespace: argo-workflows
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: argo-pvc-janitor
+subjects:
+  - kind: ServiceAccount
+    name: argo-pvc-janitor
+    namespace: argo-workflows
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: argo-pvc-janitor
+  namespace: argo-workflows
+spec:
+  schedule: "17 * * * *"  # hourly, offset to avoid top-of-hour contention
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 300
+      ttlSecondsAfterFinished: 600  # don't let finished janitor jobs pile up
+      template:
+        spec:
+          serviceAccountName: argo-pvc-janitor
+          restartPolicy: Never
+          # alpine/k8s ships kubectl and is multi-pull-reliable. Do NOT use
+          # bitnami/kubectl — those Docker Hub tags were retired and silently
+          # wedge on ImagePullBackOff (see vault-auto-unseal incident).
+          containers:
+            - name: janitor
+              image: alpine/k8s:1.33.12
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 32Mi
+                limits:
+                  cpu: 200m
+                  memory: 128Mi
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -eu
+                  NS=argo-workflows
+                  echo "=== argo workdir PVC janitor ($(date -u +%FT%TZ)) ==="
+                  # PVCs currently mounted by some pod — never touch these.
+                  INUSE=$(kubectl get pods -n "$NS" \
+                    -o jsonpath='{range .items[*]}{range .spec.volumes[*]}{.persistentVolumeClaim.claimName}{"\n"}{end}{end}' \
+                    2>/dev/null | sort -u)
+                  for pvc in $(kubectl get pvc -n "$NS" -o name 2>/dev/null | sed 's#.*/##' | grep -- '-workdir$' || true); do
+                    if printf '%s\n' "$INUSE" | grep -qx "$pvc"; then
+                      echo "keep   $pvc (in use by a pod)"; continue
+                    fi
+                    wf="${pvc%-workdir}"
+                    if ! kubectl get workflow -n "$NS" "$wf" >/dev/null 2>&1; then
+                      echo "DELETE $pvc (owning workflow '$wf' gone — orphan)"
+                      kubectl delete pvc -n "$NS" "$pvc" --wait=false || true
+                      continue
+                    fi
+                    phase=$(kubectl get workflow -n "$NS" "$wf" -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
+                    case "$phase" in
+                      Succeeded|Failed|Error)
+                        echo "DELETE $pvc (workflow '$wf' phase=$phase, no pod)"
+                        kubectl delete pvc -n "$NS" "$pvc" --wait=false || true
+                        ;;
+                      *)
+                        echo "keep   $pvc (workflow '$wf' phase=${phase:-<pending>})"
+                        ;;
+                    esac
+                  done
+                  echo "=== done ==="
