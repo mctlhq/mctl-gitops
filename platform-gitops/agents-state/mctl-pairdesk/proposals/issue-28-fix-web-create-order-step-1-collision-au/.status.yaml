@@ -1,6 +1,6 @@
-status: proposed
-updated_at: '2026-06-03T12:13:07Z'
-updated_by: mctl-agents[bot]
+status: accepted
+updated_at: '2026-06-03T12:15:30Z'
+updated_by: mashkovd
 source:
   type: github_issue
   repo: mctlhq/mctl-pairdesk
