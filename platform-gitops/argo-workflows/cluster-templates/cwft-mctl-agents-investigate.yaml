@@ -93,7 +93,8 @@ spec:
         # If the primary attempt did not succeed (most often a five_hour
         # subscription rate-limit / 429 on account 1), retry once on the
         # fallback OAuth token — a *different* Claude account, key
-        # claude-code-oauth-token-2. Skipped cleanly if that key is unset.
+        # claude-code-oauth-token-2. If that key is unset the fallback fails
+        # (exit 1) so the run is reported Failed, not masked as success.
         - - name: investigate-fallback
             template: run-investigator
             when: "{{steps.investigate.status}} != Succeeded"
@@ -108,6 +109,21 @@ spec:
               error: true
         - - name: commit
             template: commit-and-push
+        # Truthful status. investigate + its fallback run with continueOn so a
+        # partial proposal still gets committed for inspection — but that also
+        # means a crash (e.g. five_hour 429 on both accounts) would otherwise
+        # leave the workflow GREEN with no proposal. Fail the run unless at
+        # least one attempt actually succeeded. NB: run_issue_investigator posts
+        # its "created a proposal" issue comment optimistically (before the
+        # commit), so that comment is NOT proof a proposal landed — this is.
+        - - name: assert-produced
+            template: assert-attempt
+            arguments:
+              parameters:
+                - name: primary
+                  value: "{{steps.investigate.status}}"
+                - name: fallback
+                  value: "{{steps.investigate-fallback.status}}"
 
     # ── 1. SSH-clone mctl-gitops into shared volume ───────────────────────
     - name: clone-gitops
@@ -159,8 +175,9 @@ spec:
             # a single-token install behaves exactly as before.
             if [ "$IS_FALLBACK" = "true" ]; then
               if [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
-                echo "ℹ️  Fallback token (claude-code-oauth-token-2) not set — skipping fallback retry."
-                exit 0
+                echo "❌ Primary investigate failed and no fallback token (claude-code-oauth-token-2) is set — cannot fall back." >&2
+                echo "   Exiting non-zero so the run reports Failed instead of being masked as success." >&2
+                exit 1
               fi
               echo "↻ Primary investigate did not succeed — retrying on fallback OAuth token (account 2)."
             fi
@@ -328,6 +345,36 @@ spec:
             mountPath: /workdir
           - name: deploy-key
             mountPath: /secrets/deploy-key
+
+    # ── 3b. Assert at least one attempt succeeded ─────────────────────────
+    # Without this, the continueOn on investigate/investigate-fallback plus a
+    # no-op commit (nothing to stage) would report the whole workflow as
+    # Succeeded even when every attempt crashed (e.g. five_hour 429) and no
+    # proposal was produced. Receives the two step statuses as parameters and
+    # fails iff neither is "Succeeded". Omitted steps resolve to "Omitted"
+    # (when investigate succeeds, the fallback is skipped) — harmless, because
+    # the primary clause already passes in that case.
+    - name: assert-attempt
+      inputs:
+        parameters:
+          - name: primary
+          - name: fallback
+      script:
+        image: alpine:3.19
+        command: [sh]
+        source: |
+          PRIMARY='{{inputs.parameters.primary}}'
+          FALLBACK='{{inputs.parameters.fallback}}'
+          echo "primary attempt: ${PRIMARY:-<none>}   fallback attempt: ${FALLBACK:-<none>}"
+          if [ "$PRIMARY" = "Succeeded" ] || [ "$FALLBACK" = "Succeeded" ]; then
+            echo "✓ An attempt succeeded — workflow status reflects real work."
+            exit 0
+          fi
+          echo "❌ Neither the primary attempt nor the account-2 fallback succeeded — no durable result produced." >&2
+          echo "   Most often the Claude five_hour usage limit / HTTP 429 on both accounts, or token-2 unset." >&2
+          echo "   An agent may still have posted an optimistic 'created a proposal' comment before crashing —" >&2
+          echo "   trust THIS status, not the comment. Re-run once quota resets." >&2
+          exit 1
 
     # ── 4. Telegram notification (onExit) ──────────────────────────────────
     # Same pattern as cwft-mctl-agents-implement.

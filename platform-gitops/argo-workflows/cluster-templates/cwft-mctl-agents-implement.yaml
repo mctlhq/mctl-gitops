@@ -104,8 +104,9 @@ spec:
         # five_hour usage limit → HTTP 429), rerun the SAME scope on the
         # account-2 token `claude-code-oauth-token-2`. Mirrors claude-review.yml's
         # CLAUDE_CODE_OAUTH_TOKEN_2 fallback. is-fallback=true makes the rerun
-        # force-reprocess the in-progress claim the primary left, and the run
-        # skips itself cleanly (exit 0) when token-2 is not seeded in Vault.
+        # force-reprocess the in-progress claim the primary left. If token-2 is
+        # not seeded the fallback fails (exit 1) so the run reports Failed
+        # instead of being masked as success.
         - - name: implement-fallback
             template: run-implementer
             when: "{{steps.implement.status}} != Succeeded"
@@ -120,6 +121,21 @@ spec:
               error: true
         - - name: commit
             template: commit-and-push
+        # Truthful status. implement + its fallback run with continueOn so a
+        # partial .status.yaml write still gets committed — but that also means
+        # a crash (e.g. five_hour 429 on both accounts) would otherwise leave
+        # the workflow GREEN while a proposal stays stuck in-progress with no
+        # PR. Fail the run unless at least one attempt succeeded. A genuine
+        # "nothing accepted to implement" run still has implement=Succeeded, so
+        # this never fails a legitimate no-op.
+        - - name: assert-produced
+            template: assert-attempt
+            arguments:
+              parameters:
+                - name: primary
+                  value: "{{steps.implement.status}}"
+                - name: fallback
+                  value: "{{steps.implement-fallback.status}}"
 
     # ── 1. SSH-clone mctl-gitops into shared volume ───────────────────────
     - name: clone-gitops
@@ -178,15 +194,17 @@ spec:
           - |
             set -e
             # Fallback-token handling. When this run is the account-2 retry
-            # (is-fallback=true): skip cleanly if claude-code-oauth-token-2 is
-            # not seeded (empty token) rather than failing on auth, and mark the
-            # run forced so it reprocesses the in-progress claim the primary
-            # attempt left behind. Primary runs (is-fallback=false) are untouched
-            # — a missing primary token still fails loudly at SDK auth.
+            # (is-fallback=true): if claude-code-oauth-token-2 is not seeded
+            # (empty token) fail non-zero so the run reports Failed instead of
+            # being masked as success; otherwise mark the run forced so it
+            # reprocesses the in-progress claim the primary attempt left behind.
+            # Primary runs (is-fallback=false) are untouched — a missing primary
+            # token still fails loudly at SDK auth.
             if [ "$IS_FALLBACK" = "true" ]; then
               if [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
-                echo "ℹ️  Fallback token (claude-code-oauth-token-2) not set — skipping fallback retry."
-                exit 0
+                echo "❌ Primary attempt failed and no fallback token (claude-code-oauth-token-2) is set — cannot fall back." >&2
+                echo "   Exiting non-zero so the run reports Failed instead of being masked as success." >&2
+                exit 1
               fi
               echo "↻ Primary attempt did not succeed — retrying on fallback OAuth token (account 2)."
               WORKFLOW_FORCE=true
@@ -382,6 +400,35 @@ spec:
             mountPath: /workdir
           - name: deploy-key
             mountPath: /secrets/deploy-key
+
+    # ── 3b. Assert at least one attempt succeeded ─────────────────────────
+    # Without this, the continueOn on implement/implement-fallback plus a
+    # commit that only persists whatever .status.yaml was written would report
+    # the whole workflow as Succeeded even when every attempt crashed (e.g.
+    # five_hour 429) and a proposal is left stuck in-progress with no PR.
+    # Receives the two step statuses and fails iff neither is "Succeeded".
+    # Omitted steps resolve to "Omitted" (when implement succeeds, the fallback
+    # is skipped) — harmless, the primary clause already passes in that case.
+    - name: assert-attempt
+      inputs:
+        parameters:
+          - name: primary
+          - name: fallback
+      script:
+        image: alpine:3.19
+        command: [sh]
+        source: |
+          PRIMARY='{{inputs.parameters.primary}}'
+          FALLBACK='{{inputs.parameters.fallback}}'
+          echo "primary attempt: ${PRIMARY:-<none>}   fallback attempt: ${FALLBACK:-<none>}"
+          if [ "$PRIMARY" = "Succeeded" ] || [ "$FALLBACK" = "Succeeded" ]; then
+            echo "✓ An attempt succeeded — workflow status reflects real work."
+            exit 0
+          fi
+          echo "❌ Neither the primary attempt nor the account-2 fallback succeeded — no durable result produced." >&2
+          echo "   Most often the Claude five_hour usage limit / HTTP 429 on both accounts, or token-2 unset." >&2
+          echo "   A proposal may be left stuck in-progress with no PR — re-run with force=true once quota resets." >&2
+          exit 1
 
     # ── 4. Telegram notification (onExit) ──────────────────────────────────
     # Same pattern as cwft-mctl-agents-run.
