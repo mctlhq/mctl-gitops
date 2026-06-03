@@ -1,7 +1,8 @@
-status: implemented
-updated_at: '2026-06-03T21:40:46Z'
-updated_by: mctl-agents[bot]
+status: merged
+updated_at: '2026-06-03T22:02:00Z'
+updated_by: mashkovd
 pr: https://github.com/mctlhq/mctl-pairdesk/pull/46
+merge_commit: 38df5cdffa7807ebc652a7531171dbc4e4142144
 source:
   type: github_issue
   repo: mctlhq/mctl-pairdesk
