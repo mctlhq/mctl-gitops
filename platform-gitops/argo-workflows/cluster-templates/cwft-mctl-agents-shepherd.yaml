@@ -330,7 +330,7 @@ spec:
           # read-only --reconcile pass (cronworkflow-mctl-agents-reconcile)
           # is the inverse — it handles ONLY these skip-listed repos.
           - name: SHEPHERD_SKIP_SERVICES
-            value: "mctl-design"
+            value: "mctl-design,mctl-telegram,mctl-gitops,mctl-pairdesk"
         resources:
           # memory 8Gi: the shepherd forks run_implementer.py
           # --review-feedback in the same pod, which runs the target repo's
