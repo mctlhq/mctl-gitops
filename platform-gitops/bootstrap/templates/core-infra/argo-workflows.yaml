@@ -78,23 +78,25 @@ spec:
             # reached 9.3k rows / 120MB since 2026-03-20 before this was set.
             # GC cadence is governed by ARCHIVED_WORKFLOW_GC_PERIOD.
             archiveTTL: 30d
-            # Offload workflow node tree to PostgreSQL instead of etcd.
-            # Reduces kube-apiserver watch-cache RAM by ~300-600Mi at 500+
-            # workflow objects (each workflow node stored as ~5KB instead of
-            # 36-107KB in etcd). Requires archive: true + PG already configured.
-            nodeStatusOffLoad: true
+            # Node-status offload to PostgreSQL is DISABLED. At this scale the
+            # live workflow count is tiny (the 30-min success TTL keeps very few
+            # objects around), so the kube-apiserver watch-cache pressure that
+            # offload mitigates does not exist, while offload has been nothing
+            # but trouble: the offload GC first crashed every pass on NULL
+            # `version` rows (when tableName collided with the archive table),
+            # and after correcting tableName the offload table no longer exists
+            # in the DB (Argo's migrate framework skips creating it because
+            # schema_history was already stamped at the latest version by the
+            # earlier broken config), so the GC now logs
+            # `relation "argo_workflows" does not exist` every ~5 min. Disabling
+            # offload removes that error path entirely without any shared-pg DDL.
+            # archive: true above is unaffected — archiving uses the hardcoded
+            # `argo_archived_workflows` table, independent of offload.
+            nodeStatusOffLoad: false
             postgresql:
               host: shared-pg-rw.platform-db.svc
               port: 5432
               database: argo-workflows
-              # tableName is the node-status OFFLOAD table. It MUST differ from
-              # the archive table, which Argo always hardcodes to
-              # `argo_archived_workflows`. Previously this was also set to
-              # `argo_archived_workflows`, collapsing both onto one merged-schema
-              # table; the offload GC then read NULL `version` rows and crashed
-              # every pass ("converting NULL to string"), so offloaded nodes were
-              # never pruned. Restore the conventional dedicated offload table.
-              tableName: argo_workflows
               userNameSecret:
                 name: argo-workflows-db-creds
                 key: username
