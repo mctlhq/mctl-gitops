@@ -233,11 +233,29 @@ extraObjects:
                   image: postgres:17-alpine
                   command: ["sh", "-c"]
                   args:
+                    # The UPDATE only un-revokes/extends an EXISTING session row; it
+                    # cannot recreate a session that was hard-deleted (e.g. a reviewer
+                    # delete_telegram_account call) or never completed login. Capture
+                    # the affected row id with RETURNING and fail loudly when none
+                    # matched, so a missing reviewer session surfaces as a failed Job
+                    # in ArgoCD/k8s status instead of a silent "UPDATE 0". On failure
+                    # the operator must re-run mctl-telegram-login on @mctlhq.
                     - |
                       set -e
                       echo "Refreshing demo reviewer session (tg 8745115872)..."
-                      psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "UPDATE telegram_accounts SET revoked_at = NULL, last_used_at = now(), expires_at = now() + interval '90 days', send_enabled = false WHERE id = (SELECT id FROM telegram_accounts WHERE user_id = (SELECT id FROM users WHERE telegram_login_id = '8745115872') AND telegram_user_id IS NOT NULL ORDER BY connected_at DESC LIMIT 1);"
-                      psql "$DATABASE_URL" -c "SELECT id, revoked_at, expires_at, last_used_at, send_enabled FROM telegram_accounts WHERE user_id = (SELECT id FROM users WHERE telegram_login_id = '8745115872') AND revoked_at IS NULL ORDER BY connected_at DESC LIMIT 1;"
+                      DEMO_UID=$(psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -tA -c "SELECT id FROM users WHERE telegram_login_id = '8745115872';")
+                      if [ -z "$DEMO_UID" ]; then
+                        echo "ERROR: demo reviewer user (telegram_login_id 8745115872) not found in users table." >&2
+                        exit 1
+                      fi
+                      REFRESHED=$(psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -tA -c "WITH target AS (SELECT id FROM telegram_accounts WHERE user_id = $DEMO_UID AND telegram_user_id IS NOT NULL ORDER BY connected_at DESC LIMIT 1) UPDATE telegram_accounts t SET revoked_at = NULL, last_used_at = now(), expires_at = now() + interval '90 days', send_enabled = false FROM target WHERE t.id = target.id RETURNING t.id;")
+                      if [ -z "$REFRESHED" ]; then
+                        echo "ERROR: no demo reviewer session row with a real telegram_user_id exists for user $DEMO_UID." >&2
+                        echo "The reviewer MTProto session was deleted or never completed login. Recover by re-running mctl-telegram-login on @mctlhq (OPERATOR_GITHUB_LOGIN=tg:8745115872)." >&2
+                        exit 1
+                      fi
+                      echo "Refreshed demo reviewer session row id $REFRESHED."
+                      psql "$DATABASE_URL" -c "SELECT id, revoked_at, expires_at, last_used_at, send_enabled FROM telegram_accounts WHERE user_id = $DEMO_UID AND revoked_at IS NULL ORDER BY connected_at DESC LIMIT 1;"
                       echo "Demo session refresh complete."
                   env:
                     - name: DATABASE_URL
