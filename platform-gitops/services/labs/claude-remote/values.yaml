@@ -30,13 +30,15 @@ securityContext:
     drop: [ALL]
 env:
   PORT: "8080"
-  # Pin the resume target to the active work session. Without this the entrypoint
-  # resumes the "newest transcript on disk", which is unreliable after a restart
-  # (restore-state from MinIO resets file mtimes, so it picked stale/blank
-  # sessions like 92ff94d0 / f60da98d instead of the real one). Remove or update
-  # this once the session is finished. Session 65ef01db = the live
-  # mctl-telegram tier / handleTelegramCallback work (transcript restored, 800KB).
-  RESUME_SESSION_ID: "65ef01db-b382-4e47-b8c7-46bc5d0647fb"
+  # No RESUME_SESSION_ID pin: as of image 0.9.0 the entrypoint manages its own
+  # session id in a state file, resuming it across restarts and rotating to a
+  # fresh one once the transcript exceeds SESSION_ROTATE_MAX_MB (20). On the first
+  # relaunch with no state file it ADOPTS the newest transcript on disk, so the
+  # existing operator session (65ef01db) is preserved, not wiped — and from then
+  # on the device self-manages. The pin previously existed only because the older
+  # "newest transcript on disk" resume was unreliable after a MinIO restore reset
+  # file mtimes; managed rotation supersedes that. (Set RESUME_SESSION_ID again to
+  # force-pin a specific session and disable rotation.)
   # pr-steward automation (branch prefix per repo). Per-repo merge_mode
   # (image 0.3.0+): global default is "never" (safe — escalate only); a repo opts
   # into auto-merge explicitly. Ownership is partitioned with the Tier-3 shepherd
@@ -70,18 +72,19 @@ env:
   GH_APP_PRIVATE_KEY_FILE: "/etc/steward/github-app/private-key.pem"
   GH_APP_TOKEN_FILE: "/run/steward/gh-token"
   # Persistent operator session — keep memory, never wedge. The entrypoint resumes
-  # the pinned RESUME_SESSION_ID on every (re)launch; with a headless
-  # (stdin=/dev/null) --remote-control bridge the "Resume from summary?" modal can
-  # never be answered, so a resumed session that crosses BOTH default thresholds
-  # (age > 70 min AND est. tokens > 100k) blocks startup → "Remote Control failed
-  # to connect: /login" → silent wedge (observed 2026-06-03, session stuck ~10h).
-  # Raise both thresholds so the modal never fires; resume then loads the full
-  # transcript silently and memory is preserved. AUTO_COMPACT_WINDOW makes the
-  # long-lived session sustainable: it auto-compacts (summarises, thread kept) at
-  # ~70% of a 200k window instead of choking mid-turn near the model max. These
-  # mirror the proven Mac-bridge wrapper config. (Phase 1 — env-only, no image
-  # release. Phase 2 will add state-file session rotation + retention prune +
-  # resumeReturnDismissed + a startup-wedge backstop in entrypoint.sh.)
+  # the managed session on every (re)launch; with a headless (stdin=/dev/null)
+  # --remote-control bridge the "Resume from summary?" modal can never be answered,
+  # so a resumed session that crosses BOTH default thresholds (age > 70 min AND
+  # est. tokens > 100k) would block startup → "Remote Control failed to connect:
+  # /login" → silent wedge (observed 2026-06-03, session stuck ~10h). Raise both
+  # thresholds so the modal never fires; resume then loads the full transcript
+  # silently and memory is preserved. AUTO_COMPACT_WINDOW makes the long-lived
+  # session sustainable: it auto-compacts (summarises, thread kept) at ~70% of a
+  # 200k window instead of choking mid-turn near the model max. These mirror the
+  # proven Mac-bridge wrapper config. (Image 0.9.0 adds the durability layer:
+  # managed session rotation + retention prune + a persisted resumeReturnDismissed
+  # setting + a startup-wedge backstop that auto-recovers if this env suppression
+  # ever breaks after a Claude Code update.)
   CLAUDE_CODE_RESUME_THRESHOLD_MINUTES: "2000000000"
   CLAUDE_CODE_RESUME_TOKEN_THRESHOLD: "2000000000"
   CLAUDE_CODE_AUTO_COMPACT_WINDOW: "140000"
