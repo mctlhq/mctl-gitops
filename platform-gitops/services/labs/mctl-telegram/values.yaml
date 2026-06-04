@@ -179,6 +179,16 @@ extraExternalSecrets:
       - secretKey: DEMO_REVIEWER_PASSWORD
         remoteKey: secret/data/platform/mctl-telegram/demo
         property: DEMO_REVIEWER_PASSWORD
+  # Telegram alert bot for the demo-reviewer-watch CronJob. Reuses the
+  # @MCTL_AI_bot token mctl-agent already uses to DM the operator (chat
+  # 210408407), read via the shared vault-backend ClusterSecretStore.
+  labs-mctl-telegram-alert-bot:
+    refreshInterval: 1h
+    targetSecret: labs-mctl-telegram-alert-bot
+    data:
+      - secretKey: TELEGRAM_BOT_TOKEN
+        remoteKey: secret/data/platform/mctl-agent/tokens
+        property: telegram-bot-token
 
 # TEMPORARY workaround (ChatGPT App Directory review window). The demo/reviewer
 # Telegram session row is subject to the normal session TTLs (absolute 90d, idle
@@ -263,3 +273,81 @@ extraObjects:
                         secretKeyRef:
                           name: labs-mctl-telegram-db-creds
                           key: DATABASE_URL
+  # Twice-daily reviewer watch: reads session health + 12h tool-call activity
+  # from audit_logs and pushes to the operator on Telegram (@MCTL_AI_bot ->
+  # chat 210408407). Loud ping on outage (0 active sessions), FYI on reviewer
+  # activity, silent when healthy + idle. Read-only against the DB.
+  - renderIf: '{{ eq (.Values.env.DEMO_REVIEWER_ENABLED | toString) "true" }}'
+    apiVersion: batch/v1
+    kind: CronJob
+    metadata:
+      name: labs-mctl-telegram-demo-reviewer-watch
+      labels:
+        app.kubernetes.io/name: mctl-telegram
+        app.kubernetes.io/part-of: mctl-platform
+        mctl.me/component: demo-reviewer-watch
+    spec:
+      schedule: "0 6,18 * * *"
+      concurrencyPolicy: Forbid
+      startingDeadlineSeconds: 300
+      successfulJobsHistoryLimit: 3
+      failedJobsHistoryLimit: 3
+      jobTemplate:
+        spec:
+          backoffLimit: 1
+          activeDeadlineSeconds: 120
+          template:
+            metadata:
+              labels:
+                app.kubernetes.io/name: mctl-telegram
+                mctl.me/component: demo-reviewer-watch
+            spec:
+              restartPolicy: OnFailure
+              containers:
+                - name: watch
+                  image: postgres:17-alpine
+                  command: ["sh", "-c"]
+                  args:
+                    - |
+                      set -eu
+                      apk add --no-cache curl >/dev/null 2>&1 || true
+                      command -v curl >/dev/null || { echo "ERROR: curl unavailable, cannot send alerts" >&2; exit 1; }
+                      q() { psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -tA -c "$1"; }
+                      send() {
+                        curl -fsS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+                          --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+                          --data-urlencode "disable_web_page_preview=true" \
+                          --data-urlencode "text=$1" >/dev/null 2>&1 || echo "WARN: telegram send failed" >&2
+                      }
+                      DEMO_UID=$(q "SELECT id FROM users WHERE telegram_login_id='8745115872';") || { echo "ERROR: DB unreachable" >&2; exit 1; }
+                      if [ -z "$DEMO_UID" ]; then
+                        send "🔴 mctl-telegram demo reviewer @mashkovd — demo user (telegram_login_id 8745115872) is MISSING from the DB. Reviewer login is broken."
+                        echo "ALERT: demo user missing"; exit 0
+                      fi
+                      ACTIVE=$(q "SELECT count(*) FROM telegram_accounts WHERE user_id=$DEMO_UID AND revoked_at IS NULL;") || { echo "ERROR: query failed" >&2; exit 1; }
+                      CALLS=$(q "SELECT count(*) FROM audit_logs WHERE user_id=$DEMO_UID AND created_at > now() - interval '12 hours';")
+                      ERRORS=$(q "SELECT count(*) FROM audit_logs WHERE user_id=$DEMO_UID AND status='error' AND created_at > now() - interval '12 hours';")
+                      LATEST=$(q "SELECT tool_name||' '||status||' @ '||to_char(created_at,'MM-DD HH24:MI') FROM audit_logs WHERE user_id=$DEMO_UID ORDER BY id DESC LIMIT 1;")
+                      echo "active=$ACTIVE calls_12h=$CALLS errors_12h=$ERRORS latest=${LATEST:-none}"
+                      if [ "${ACTIVE:-0}" -eq 0 ]; then
+                        send "🔴 mctl-telegram demo reviewer session DOWN @mashkovd — 0 active sessions for reviewer 8745115872; the ChatGPT reviewer will hit Sign-in interrupted. Recover: in-pod mctl-telegram-login on @mctlhq (OPERATOR_GITHUB_LOGIN=tg:8745115872, --qr)."
+                        echo "ALERT: session down"
+                      elif [ "${CALLS:-0}" -gt 0 ]; then
+                        send "👀 mctl-telegram reviewer activity (12h): ${CALLS} calls, ${ERRORS} errors. Latest: ${LATEST}. Session healthy (${ACTIVE} active)."
+                        echo "INFO: reviewer activity"
+                      else
+                        echo "quiet: session healthy, no reviewer activity in 12h — no Telegram sent"
+                      fi
+                  env:
+                    - name: DATABASE_URL
+                      valueFrom:
+                        secretKeyRef:
+                          name: labs-mctl-telegram-db-creds
+                          key: DATABASE_URL
+                    - name: TELEGRAM_BOT_TOKEN
+                      valueFrom:
+                        secretKeyRef:
+                          name: labs-mctl-telegram-alert-bot
+                          key: TELEGRAM_BOT_TOKEN
+                    - name: TELEGRAM_CHAT_ID
+                      value: "210408407"
