@@ -69,6 +69,22 @@ env:
   GH_APP_INSTALLATION_ID: "134480258"
   GH_APP_PRIVATE_KEY_FILE: "/etc/steward/github-app/private-key.pem"
   GH_APP_TOKEN_FILE: "/run/steward/gh-token"
+  # Persistent operator session — keep memory, never wedge. The entrypoint resumes
+  # the pinned RESUME_SESSION_ID on every (re)launch; with a headless
+  # (stdin=/dev/null) --remote-control bridge the "Resume from summary?" modal can
+  # never be answered, so a resumed session that crosses BOTH default thresholds
+  # (age > 70 min AND est. tokens > 100k) blocks startup → "Remote Control failed
+  # to connect: /login" → silent wedge (observed 2026-06-03, session stuck ~10h).
+  # Raise both thresholds so the modal never fires; resume then loads the full
+  # transcript silently and memory is preserved. AUTO_COMPACT_WINDOW makes the
+  # long-lived session sustainable: it auto-compacts (summarises, thread kept) at
+  # ~70% of a 200k window instead of choking mid-turn near the model max. These
+  # mirror the proven Mac-bridge wrapper config. (Phase 1 — env-only, no image
+  # release. Phase 2 will add state-file session rotation + retention prune +
+  # resumeReturnDismissed + a startup-wedge backstop in entrypoint.sh.)
+  CLAUDE_CODE_RESUME_THRESHOLD_MINUTES: "2000000000"
+  CLAUDE_CODE_RESUME_TOKEN_THRESHOLD: "2000000000"
+  CLAUDE_CODE_AUTO_COMPACT_WINDOW: "140000"
 # Intentionally NO envFrom / no CLAUDE_CODE_OAUTH_TOKEN in env:
 #
 # `claude --remote-control` needs a full-scope claude.ai login (from
