@@ -306,6 +306,13 @@ extraObjects:
               containers:
                 - name: watch
                   image: postgres:17-alpine
+                  resources:
+                    requests:
+                      cpu: 25m
+                      memory: 32Mi
+                    limits:
+                      cpu: 200m
+                      memory: 128Mi
                   command: ["sh", "-c"]
                   args:
                     - |
@@ -324,10 +331,10 @@ extraObjects:
                         send "🔴 mctl-telegram demo reviewer @mashkovd — demo user (telegram_login_id 8745115872) is MISSING from the DB. Reviewer login is broken."
                         echo "ALERT: demo user missing"; exit 0
                       fi
-                      ACTIVE=$(q "SELECT count(*) FROM telegram_accounts WHERE user_id=$DEMO_UID AND revoked_at IS NULL;") || { echo "ERROR: query failed" >&2; exit 1; }
-                      CALLS=$(q "SELECT count(*) FROM audit_logs WHERE user_id=$DEMO_UID AND created_at > now() - interval '12 hours';")
-                      ERRORS=$(q "SELECT count(*) FROM audit_logs WHERE user_id=$DEMO_UID AND status='error' AND created_at > now() - interval '12 hours';")
-                      LATEST=$(q "SELECT tool_name||' '||status||' @ '||to_char(created_at,'MM-DD HH24:MI') FROM audit_logs WHERE user_id=$DEMO_UID ORDER BY id DESC LIMIT 1;")
+                      ACTIVE=$(q "SELECT count(*) FROM telegram_accounts WHERE user_id=$DEMO_UID AND revoked_at IS NULL;") || { echo "ERROR: query failed (active)" >&2; exit 1; }
+                      CALLS=$(q "SELECT count(*) FROM audit_logs WHERE user_id=$DEMO_UID AND created_at > now() - interval '12 hours';") || { echo "ERROR: query failed (calls)" >&2; exit 1; }
+                      ERRORS=$(q "SELECT count(*) FROM audit_logs WHERE user_id=$DEMO_UID AND status='error' AND created_at > now() - interval '12 hours';") || { echo "ERROR: query failed (errors)" >&2; exit 1; }
+                      LATEST=$(q "SELECT tool_name||' '||status||' @ '||to_char(created_at,'MM-DD HH24:MI') FROM audit_logs WHERE user_id=$DEMO_UID ORDER BY id DESC LIMIT 1;") || { echo "ERROR: query failed (latest)" >&2; exit 1; }
                       echo "active=$ACTIVE calls_12h=$CALLS errors_12h=$ERRORS latest=${LATEST:-none}"
                       if [ "${ACTIVE:-0}" -eq 0 ]; then
                         send "🔴 mctl-telegram demo reviewer session DOWN @mashkovd — 0 active sessions for reviewer 8745115872; the ChatGPT reviewer will hit Sign-in interrupted. Recover: in-pod mctl-telegram-login on @mctlhq (OPERATOR_GITHUB_LOGIN=tg:8745115872, --qr)."
