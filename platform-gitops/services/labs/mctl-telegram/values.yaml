@@ -52,7 +52,7 @@ env:
   # ?v=1 is a cache-buster: Cloudflare cached a 404 for the bare .mp4 path
   # before the serving route shipped (0.37.0); a fresh query key avoids the
   # stale 404. Bump the number if the video is ever replaced.
-  DEMO_VIDEO_URL: https://tg.mctl.ai/demo/walkthrough.mp4?v=3
+  DEMO_VIDEO_URL: https://tg.mctl.ai/demo/walkthrough.mp4?v=4
   # Telegram OpenID Connect client id = the @MCTL_AI_bot numeric id (the part
   # of the bot token before the colon). Not a secret. The matching
   # TELEGRAM_OIDC_CLIENT_SECRET is sourced from Vault via the oauth
