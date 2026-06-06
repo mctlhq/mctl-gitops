@@ -78,7 +78,13 @@ spec:
       max_connections: "200"
       shared_buffers: "256MB"
       work_mem: "4MB"
-      temp_file_limit: "256MB"
+      # Raised 256MB->1GB on 2026-06-07. Argo Server merges archived workflows
+      # into its live list query; on a large argo_archived_workflows table that
+      # query's on-disk sort spilled past 256MB -> SQLSTATE 53400, breaking the
+      # Workflows UI. 1GB gives headroom on the 40Gi volume; statement_timeout
+      # (60s) bounds any runaway temp usage. (Argo archiveTTL was also cut to 7d
+      # to shrink that table at the source.) Reloadable GUC -> no restart.
+      temp_file_limit: "1GB"
       statement_timeout: "60s"
       lock_timeout: "10s"
       idle_in_transaction_session_timeout: "300s"
