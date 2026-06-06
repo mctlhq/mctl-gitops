@@ -73,11 +73,18 @@ spec:
             port: 9090
           persistence:
             archive: true
-            # Prune archived workflows after 30d. Without this the archive
-            # table grows unbounded (default retention is indefinite): it had
-            # reached 9.3k rows / 120MB since 2026-03-20 before this was set.
-            # GC cadence is governed by ARCHIVED_WORKFLOW_GC_PERIOD.
-            archiveTTL: 30d
+            # Prune archived workflows after 7d. Without a TTL the archive table
+            # grows unbounded (default retention is indefinite): it had reached
+            # 9.3k rows / 120MB since 2026-03-20 before a TTL was first set (30d).
+            # Lowered 30d->7d on 2026-06-07: at ~700 wf/day a 30d window let the
+            # archive reach ~20k rows of large workflow JSON. The Server merges
+            # archived workflows into the live `/api/v1/workflows/` list whenever
+            # the phase filter includes a terminal phase (the default UI filter
+            # includes Succeeded), and that merge query's on-disk sort spilled
+            # past shared-pg's temp_file_limit (256MB) -> SQLSTATE 53400, which
+            # broke the entire Workflows UI. 7d (~5k rows) keeps the merge query
+            # small. GC cadence is governed by ARCHIVED_WORKFLOW_GC_PERIOD (24h).
+            archiveTTL: 7d
             # Node-status offload to PostgreSQL is DISABLED. At this scale the
             # live workflow count is tiny (the 30-min success TTL keeps very few
             # objects around), so the kube-apiserver watch-cache pressure that
