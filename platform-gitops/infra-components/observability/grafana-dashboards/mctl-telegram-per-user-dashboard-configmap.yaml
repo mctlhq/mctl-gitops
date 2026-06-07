@@ -54,18 +54,18 @@ data:
             "multi": false,
             "includeAll": true,
             "allValue": ".+",
-            "query": "MashkovD (1, operator) : 1,mctlhq (6462, reviewer) : 6462,sleepingholly (384) : 384,nerealvm (9980) : 9980,rauf_techno (297) : 297,namax66 (8799) : 8799,dmitriimashkov (245) : 245,6030168936 (9607) : 9607",
+            "query": "MashkovD (1) : 1,mctlhq (6462) : 6462,sleepingholly (384) : 384,nerealvm (9980) : 9980,rauf_techno (297) : 297,namax66 (8799) : 8799,dmitriimashkov (245) : 245,user 9607 : 9607",
             "current": { "text": "All", "value": "$__all" },
             "options": [
-              { "selected": true,  "text": "All",                      "value": "$__all" },
-              { "selected": false, "text": "MashkovD (1, operator)",    "value": "1" },
-              { "selected": false, "text": "mctlhq (6462, reviewer)",   "value": "6462" },
-              { "selected": false, "text": "sleepingholly (384)",       "value": "384" },
-              { "selected": false, "text": "nerealvm (9980)",           "value": "9980" },
-              { "selected": false, "text": "rauf_techno (297)",         "value": "297" },
-              { "selected": false, "text": "namax66 (8799)",            "value": "8799" },
-              { "selected": false, "text": "dmitriimashkov (245)",      "value": "245" },
-              { "selected": false, "text": "6030168936 (9607)",         "value": "9607" }
+              { "selected": true,  "text": "All",                 "value": "$__all" },
+              { "selected": false, "text": "MashkovD (1)",        "value": "1" },
+              { "selected": false, "text": "mctlhq (6462)",       "value": "6462" },
+              { "selected": false, "text": "sleepingholly (384)", "value": "384" },
+              { "selected": false, "text": "nerealvm (9980)",     "value": "9980" },
+              { "selected": false, "text": "rauf_techno (297)",   "value": "297" },
+              { "selected": false, "text": "namax66 (8799)",      "value": "8799" },
+              { "selected": false, "text": "dmitriimashkov (245)","value": "245" },
+              { "selected": false, "text": "user 9607",           "value": "9607" }
             ]
           }
         ]
@@ -178,9 +178,9 @@ data:
           "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["sum"] }, "tooltip": { "mode": "multi", "sort": "desc" } },
           "targets": [
             {
-              "expr": "sum by (user_id) (rate({pod=~\"labs-mctl-telegram-base-service.+\", namespace=\"labs\"} |= \"mcp tool call\" | json | msg=\"mcp tool call\" | user_id=~\"^($user)$\" [$__auto]))",
+              "expr": "sum by (user) (rate({pod=~\"labs-mctl-telegram-base-service.+\", namespace=\"labs\"} |= \"mcp tool call\" | json | msg=\"mcp tool call\" | user_id=~\"^($user)$\" | label_format user=`{{ if eq .user_id \"1\" }}MashkovD{{ else if eq .user_id \"245\" }}dmitriimashkov{{ else if eq .user_id \"297\" }}rauf_techno{{ else if eq .user_id \"384\" }}sleepingholly{{ else if eq .user_id \"6462\" }}mctlhq{{ else if eq .user_id \"8799\" }}namax66{{ else if eq .user_id \"9980\" }}nerealvm{{ else }}{{ .user_id }}{{ end }}` [$__auto]))",
               "queryType": "range",
-              "legendFormat": "user {{user_id}}",
+              "legendFormat": "{{user}}",
               "refId": "A"
             }
           ]
@@ -195,9 +195,9 @@ data:
           "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["sum"] }, "tooltip": { "mode": "multi", "sort": "desc" } },
           "targets": [
             {
-              "expr": "sum by (user_id) (rate({pod=~\"labs-mctl-telegram-base-service.+\", namespace=\"labs\"} |= \"mcp tool call\" | json | msg=\"mcp tool call\" | user_id=~\"^($user)$\" | status=\"error\" [$__auto]))",
+              "expr": "sum by (user) (rate({pod=~\"labs-mctl-telegram-base-service.+\", namespace=\"labs\"} |= \"mcp tool call\" | json | msg=\"mcp tool call\" | user_id=~\"^($user)$\" | status=\"error\" | label_format user=`{{ if eq .user_id \"1\" }}MashkovD{{ else if eq .user_id \"245\" }}dmitriimashkov{{ else if eq .user_id \"297\" }}rauf_techno{{ else if eq .user_id \"384\" }}sleepingholly{{ else if eq .user_id \"6462\" }}mctlhq{{ else if eq .user_id \"8799\" }}namax66{{ else if eq .user_id \"9980\" }}nerealvm{{ else }}{{ .user_id }}{{ end }}` [$__auto]))",
               "queryType": "range",
-              "legendFormat": "user {{user_id}}",
+              "legendFormat": "{{user}}",
               "refId": "A"
             }
           ]
@@ -240,7 +240,7 @@ data:
           ],
           "targets": [
             {
-              "expr": "sum by (user_id) (count_over_time({pod=~\"labs-mctl-telegram-base-service.+\", namespace=\"labs\"} |= \"mcp tool call\" | json | msg=\"mcp tool call\" | user_id=~\"^($user)$\" [$__range]))",
+              "expr": "sum by (user) (count_over_time({pod=~\"labs-mctl-telegram-base-service.+\", namespace=\"labs\"} |= \"mcp tool call\" | json | msg=\"mcp tool call\" | user_id=~\"^($user)$\" | label_format user=`{{ if eq .user_id \"1\" }}MashkovD{{ else if eq .user_id \"245\" }}dmitriimashkov{{ else if eq .user_id \"297\" }}rauf_techno{{ else if eq .user_id \"384\" }}sleepingholly{{ else if eq .user_id \"6462\" }}mctlhq{{ else if eq .user_id \"8799\" }}namax66{{ else if eq .user_id \"9980\" }}nerealvm{{ else }}{{ .user_id }}{{ end }}` [$__range]))",
               "queryType": "instant",
               "refId": "A"
             }
@@ -261,7 +261,7 @@ data:
           "options": { "showTime": true, "wrapLogMessage": true, "dedupStrategy": "none", "sortOrder": "Descending", "enableLogDetails": true },
           "targets": [
             {
-              "expr": "{pod=~\"labs-mctl-telegram-base-service.+\", namespace=\"labs\"} |= \"mcp tool call\" | json | msg=\"mcp tool call\" | user_id=~\"^($user)$\"",
+              "expr": "{pod=~\"labs-mctl-telegram-base-service.+\", namespace=\"labs\"} |= \"mcp tool call\" | json | msg=\"mcp tool call\" | user_id=~\"^($user)$\" | label_format user=`{{ if eq .user_id \"1\" }}MashkovD{{ else if eq .user_id \"245\" }}dmitriimashkov{{ else if eq .user_id \"297\" }}rauf_techno{{ else if eq .user_id \"384\" }}sleepingholly{{ else if eq .user_id \"6462\" }}mctlhq{{ else if eq .user_id \"8799\" }}namax66{{ else if eq .user_id \"9980\" }}nerealvm{{ else }}{{ .user_id }}{{ end }}` | line_format `[{{.user}}] {{.tool}} -> {{.status}}{{ if .peer }} peer={{.peer}}{{ end }}{{ if .call_path }} ({{.call_path}}){{ end }}`",
               "queryType": "range",
               "refId": "A"
             }
@@ -276,7 +276,7 @@ data:
           "options": { "showTime": true, "wrapLogMessage": true, "dedupStrategy": "none", "sortOrder": "Descending", "enableLogDetails": true },
           "targets": [
             {
-              "expr": "{pod=~\"labs-mctl-telegram-base-service.+\", namespace=\"labs\"} |= \"mcp tool call\" | json | msg=\"mcp tool call\" | user_id=~\"^($user)$\" | status=\"error\"",
+              "expr": "{pod=~\"labs-mctl-telegram-base-service.+\", namespace=\"labs\"} |= \"mcp tool call\" | json | msg=\"mcp tool call\" | user_id=~\"^($user)$\" | status=\"error\" | label_format user=`{{ if eq .user_id \"1\" }}MashkovD{{ else if eq .user_id \"245\" }}dmitriimashkov{{ else if eq .user_id \"297\" }}rauf_techno{{ else if eq .user_id \"384\" }}sleepingholly{{ else if eq .user_id \"6462\" }}mctlhq{{ else if eq .user_id \"8799\" }}namax66{{ else if eq .user_id \"9980\" }}nerealvm{{ else }}{{ .user_id }}{{ end }}` | line_format `[{{.user}}] {{.tool}} -> {{.status}}{{ if .error_msg }} :: {{.error_msg}}{{ end }}{{ if .peer }} peer={{.peer}}{{ end }}`",
               "queryType": "range",
               "refId": "A"
             }
@@ -296,7 +296,7 @@ data:
           "gridPos": { "h": 8, "w": 24, "x": 0, "y": 43 },
           "options": {
             "mode": "markdown",
-            "content": "Logs carry the numeric **`user_id`** (= `users.id`). The `$user` dropdown maps it to Telegram usernames; with **All** selected the breakdown panels surface new `user_id`s automatically.\n\n| user_id | telegram | note |\n|--:|--|--|\n| 1 | MashkovD | operator / admin |\n| 6462 | mctlhq | reviewer / test |\n| 384 | sleepingholly | |\n| 9607 | (tg 6030168936) | no @username |\n| 9980 | nerealvm | |\n| 297 | rauf_techno | |\n| 8799 | namax66 | |\n| 245 | dmitriimashkov | |\n\n**To refresh this dropdown when users join**, regenerate the list from the telegram Postgres DB (`labs-mctl-telegram` on `shared-pg-rw`):\n\n```sql\nselect id, telegram_username, telegram_display_name, access_tier\nfrom users order by id;\n```\n\nPer-user detail older than **7 days** (Loki retention) is not shown here — the durable full-history record is the `audit_logs` table in the same DB."
+            "content": "Logs carry only the numeric **`user_id`** (= `users.id`); the Telegram username is **not** in the log line (it lives in the DB). This dashboard maps `user_id` -> username in two places, both hardcoded:\n1. the **`$user`** dropdown (text label -> user_id value), and\n2. a **`label_format user=...`** clause inside each per-user panel query (legends, table, and the reformatted log lines show the username, falling back to the numeric id when unknown).\n\n| user_id | telegram | note |\n|--:|--|--|\n| 1 | MashkovD | operator / admin |\n| 6462 | mctlhq | reviewer / test |\n| 384 | sleepingholly | |\n| 9607 | (tg 6030168936) | no @username -> shows `9607` |\n| 9980 | nerealvm | |\n| 297 | rauf_techno | |\n| 8799 | namax66 | |\n| 245 | dmitriimashkov | |\n\n**When users join**, refresh BOTH the dropdown and the `label_format` maps in the panel queries. Regenerate the roster from the telegram Postgres DB (`labs-mctl-telegram` on `shared-pg-rw`):\n\n```sql\nselect id, telegram_username, telegram_display_name, access_tier\nfrom users order by id;\n```\n\n_Proper fix (removes the hardcoded maps): log the username from the service so it flows automatically — a code change + release, currently blocked by the mctl-telegram freeze._\n\nPer-user detail older than **7 days** (Loki retention) is not shown here — the durable full-history record is the `audit_logs` table in the same DB."
           }
         }
       ]
