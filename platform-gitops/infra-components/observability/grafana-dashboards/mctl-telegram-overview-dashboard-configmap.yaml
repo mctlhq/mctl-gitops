@@ -1,0 +1,465 @@
+# Grafana dashboard for mctl-telegram service-level / product SLIs.
+#
+# Complements the "mctl-telegram — Login Flow" dashboard with the operational
+# and canary signals you'd watch to decide whether a build is healthy
+# (the MCP-server analogue of CTR for a web product): MCP request volume,
+# tool-call success rate, latency, active sessions/users, messages sent, and
+# the error/limit signals underneath them. All panels read metrics already
+# emitted by the service (mctl_ prefix on /metrics, port 8080); they only render
+# once the mctl-telegram VMServiceScrape is in place.
+#
+# Sidecar in monitoring/grafana auto-discovers ConfigMaps labeled
+# `grafana_dashboard: "1"` and mounts them — same pattern as the login dashboard.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mctl-telegram-overview-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  mctl-telegram-overview.json: |
+    {
+      "title": "mctl-telegram — Service Overview / SLIs",
+      "description": "Operational and canary SLIs for the mctl-telegram MCP server: tool-call success rate, MCP request volume, latency, active sessions/users, messages sent, and the auth/limit signals underneath. The 'tool-call success rate' panel is the headline canary metric — a healthy build keeps it high; a regression (e.g. 99.5% -> 93%) is cause to roll back even when pods stay green.",
+      "uid": "mctl-telegram-overview",
+      "tags": ["mctl-telegram", "telegram", "mcp", "sli", "observability"],
+      "schemaVersion": 39,
+      "version": 1,
+      "editable": true,
+      "graphTooltip": 1,
+      "timezone": "browser",
+      "time": { "from": "now-24h", "to": "now" },
+      "refresh": "30s",
+      "templating": {
+        "list": [
+          {
+            "name": "datasource",
+            "type": "datasource",
+            "query": "prometheus",
+            "current": { "text": "VictoriaMetrics", "value": "VictoriaMetrics" }
+          }
+        ]
+      },
+      "panels": [
+        {
+          "type": "row",
+          "id": 1,
+          "title": "Service SLIs (live)",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+        },
+        {
+          "type": "stat",
+          "id": 10,
+          "title": "Tool-call success rate (5m)",
+          "description": "ok / all MCP tool invocations over 5m. The headline canary signal: a sustained drop means the new build is degrading tool calls even if Kubernetes considers the pod healthy.",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 4, "w": 5, "x": 0, "y": 1 },
+          "targets": [
+            {
+              "expr": "sum(rate(mctl_tool_invocations_total{status=\"ok\"}[5m])) / clamp_min(sum(rate(mctl_tool_invocations_total[5m])), 1)",
+              "legendFormat": "success rate",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit", "decimals": 2, "min": 0, "max": 1,
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "orange", "value": 0.9 }, { "color": "green", "value": 0.95 } ] }
+            }
+          },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" }
+        },
+        {
+          "type": "stat",
+          "id": 11,
+          "title": "Tool calls/s (5m)",
+          "description": "MCP request volume across all tools. Near-zero during an expected traffic window drives the ZeroTraffic alert.",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 4, "w": 5, "x": 5, "y": 1 },
+          "targets": [
+            {
+              "expr": "sum(rate(mctl_tool_invocations_total[5m]))",
+              "legendFormat": "calls/s",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": { "unit": "reqps", "decimals": 2, "color": { "mode": "fixed", "fixedColor": "blue" } }
+          },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" }
+        },
+        {
+          "type": "stat",
+          "id": 12,
+          "title": "Tool p95 latency (5m)",
+          "description": "p95 wall-clock per tool invocation. >5s for 5m drives HighToolLatency; MTProto round-trips dominate.",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 4, "w": 4, "x": 10, "y": 1 },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(mctl_tool_invocation_duration_seconds_bucket[5m])) by (le))",
+              "legendFormat": "p95",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s", "decimals": 2,
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 2 }, { "color": "red", "value": 5 } ] }
+            }
+          },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" }
+        },
+        {
+          "type": "stat",
+          "id": 13,
+          "title": "Active sessions",
+          "description": "Non-revoked Telegram sessions used within the last hour (proxy for active users). Sampled once a minute.",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 4, "w": 5, "x": 14, "y": 1 },
+          "targets": [
+            {
+              "expr": "mctl_sessions_active",
+              "legendFormat": "active",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": { "unit": "short", "decimals": 0, "color": { "mode": "fixed", "fixedColor": "green" } }
+          },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" }
+        },
+        {
+          "type": "stat",
+          "id": 14,
+          "title": "Bridge daemons",
+          "description": "Currently connected Local Bridge daemon websocket sessions.",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 4, "w": 5, "x": 19, "y": 1 },
+          "targets": [
+            {
+              "expr": "sum(mctl_bridge_active_daemons)",
+              "legendFormat": "daemons",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": { "unit": "short", "decimals": 0, "color": { "mode": "fixed", "fixedColor": "purple" } }
+          },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" }
+        },
+        {
+          "type": "row",
+          "id": 2,
+          "title": "Tool traffic",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 }
+        },
+        {
+          "type": "timeseries",
+          "id": 20,
+          "title": "Tool-call success rate over time",
+          "description": "ok / all tool calls. The canary headline as a trend — compare across a deploy to spot a build that silently degrades tool success.",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+          "targets": [
+            {
+              "expr": "sum(rate(mctl_tool_invocations_total{status=\"ok\"}[$__rate_interval])) / clamp_min(sum(rate(mctl_tool_invocations_total[$__rate_interval])), 1)",
+              "legendFormat": "success rate",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit", "min": 0, "max": 1,
+              "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 10 },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "orange", "value": 0.9 }, { "color": "green", "value": 0.95 } ] },
+              "color": { "mode": "thresholds" }
+            }
+          },
+          "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "single" } }
+        },
+        {
+          "type": "timeseries",
+          "id": 21,
+          "title": "MCP request volume by tool",
+          "description": "Per-tool invocation rate. The shape of demand and which tools dominate traffic.",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+          "targets": [
+            {
+              "expr": "sum by (tool) (rate(mctl_tool_invocations_total[$__rate_interval]))",
+              "legendFormat": "{{tool}}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps",
+              "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 10, "stacking": { "mode": "normal" } }
+            }
+          },
+          "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "lastNotNull"] }, "tooltip": { "mode": "multi", "sort": "desc" } }
+        },
+        {
+          "type": "timeseries",
+          "id": 22,
+          "title": "Tool error rate by tool",
+          "description": "status=error invocation rate per tool. Isolates which tool is responsible when the success-rate SLI drops.",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+          "targets": [
+            {
+              "expr": "sum by (tool) (rate(mctl_tool_invocations_total{status=\"error\"}[$__rate_interval]))",
+              "legendFormat": "{{tool}}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps",
+              "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 10, "stacking": { "mode": "normal" } },
+              "color": { "mode": "palette-classic" }
+            }
+          },
+          "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["sum", "lastNotNull"] }, "tooltip": { "mode": "multi", "sort": "desc" } }
+        },
+        {
+          "type": "timeseries",
+          "id": 23,
+          "title": "Tool latency percentiles",
+          "description": "p50 / p95 / p99 of tool invocation wall-clock. SLO reference: 2s read, 4s destructive.",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.50, sum(rate(mctl_tool_invocation_duration_seconds_bucket[$__rate_interval])) by (le))",
+              "legendFormat": "p50",
+              "refId": "A"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(mctl_tool_invocation_duration_seconds_bucket[$__rate_interval])) by (le))",
+              "legendFormat": "p95",
+              "refId": "B"
+            },
+            {
+              "expr": "histogram_quantile(0.99, sum(rate(mctl_tool_invocation_duration_seconds_bucket[$__rate_interval])) by (le))",
+              "legendFormat": "p99",
+              "refId": "C"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 5 },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 2 }, { "color": "red", "value": 5 } ] }
+            }
+          },
+          "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["max", "mean"] }, "tooltip": { "mode": "multi" } }
+        },
+        {
+          "type": "row",
+          "id": 3,
+          "title": "Sessions & users",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 }
+        },
+        {
+          "type": "timeseries",
+          "id": 30,
+          "title": "Active sessions & client-pool saturation",
+          "description": "Active sessions (active users proxy), live MTProto client-pool size, and configured capacity (TELEGRAM_MAX_SESSIONS; -1 = uncapped). Pool size approaching capacity signals saturation.",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 23 },
+          "targets": [
+            {
+              "expr": "mctl_sessions_active",
+              "legendFormat": "active sessions",
+              "refId": "A"
+            },
+            {
+              "expr": "sum(mctl_telegram_client_pool_size)",
+              "legendFormat": "client-pool size",
+              "refId": "B"
+            },
+            {
+              "expr": "max(mctl_telegram_pool_capacity)",
+              "legendFormat": "pool capacity",
+              "refId": "C"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 8 }
+            },
+            "overrides": [
+              { "matcher": { "id": "byName", "options": "pool capacity" }, "properties": [ { "id": "custom.drawStyle", "value": "line" }, { "id": "custom.lineStyle", "value": { "fill": "dash" } }, { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } } ] }
+            ]
+          },
+          "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"] }, "tooltip": { "mode": "multi" } }
+        },
+        {
+          "type": "timeseries",
+          "id": 31,
+          "title": "Sessions connected vs revoked",
+          "description": "New sessions persisted vs revoked-by-reason (disconnect / delete / idle_expiry / absolute_expiry). A revoke spike with a flat connect line means churn.",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 23 },
+          "targets": [
+            {
+              "expr": "sum(rate(mctl_sessions_connected_total[$__rate_interval]))",
+              "legendFormat": "connected",
+              "refId": "A"
+            },
+            {
+              "expr": "sum by (reason) (rate(mctl_sessions_revoked_total[$__rate_interval]))",
+              "legendFormat": "revoked: {{reason}}",
+              "refId": "B"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 8 }
+            },
+            "overrides": [
+              { "matcher": { "id": "byName", "options": "connected" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } } ] }
+            ]
+          },
+          "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum"] }, "tooltip": { "mode": "multi" } }
+        },
+        {
+          "type": "timeseries",
+          "id": 32,
+          "title": "Messages sent (sent vs draft)",
+          "description": "send_message outcomes by sub-result: ':sent' = actually delivered, ':draft' = dry-run preview. The product-volume signal — how much real messaging the server drives.",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 7, "w": 12, "x": 0, "y": 31 },
+          "targets": [
+            {
+              "expr": "sum by (tool) (rate(mctl_tool_invocations_total{tool=~\"send_message.*\"}[$__rate_interval]))",
+              "legendFormat": "{{tool}}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps",
+              "custom": { "drawStyle": "bars", "fillOpacity": 60, "stacking": { "mode": "normal" } }
+            },
+            "overrides": [
+              { "matcher": { "id": "byName", "options": "send_message:sent" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } } ] },
+              { "matcher": { "id": "byName", "options": "send_message:draft" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "blue" } } ] }
+            ]
+          },
+          "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum"] }, "tooltip": { "mode": "multi" } }
+        },
+        {
+          "type": "timeseries",
+          "id": 33,
+          "title": "Telegram flood-wait & client errors",
+          "description": "FLOOD_WAIT / PEER_FLOOD events per tool, plus MTProto client goroutine exits (the TelegramClientErrors signal). Rising flood-wait means Telegram is throttling the account.",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 7, "w": 12, "x": 12, "y": 31 },
+          "targets": [
+            {
+              "expr": "sum by (tool) (rate(mctl_telegram_flood_wait_events_total[$__rate_interval]))",
+              "legendFormat": "flood-wait: {{tool}}",
+              "refId": "A"
+            },
+            {
+              "expr": "sum(rate(mctl_telegram_client_errors_total[$__rate_interval]))",
+              "legendFormat": "client errors",
+              "refId": "B"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 8 }
+            },
+            "overrides": [
+              { "matcher": { "id": "byName", "options": "client errors" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } } ] }
+            ]
+          },
+          "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum"] }, "tooltip": { "mode": "multi" } }
+        },
+        {
+          "type": "row",
+          "id": 4,
+          "title": "Auth, limits & HTTP",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 38 }
+        },
+        {
+          "type": "timeseries",
+          "id": 40,
+          "title": "Auth failures by reason",
+          "description": "mctl_auth_failures_total by reason/provider. jwt_expired / jwt_invalid spikes drive the JWTExpiredSpike / JWTInvalidSpike alerts.",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 39 },
+          "targets": [
+            {
+              "expr": "sum by (reason) (rate(mctl_auth_failures_total[$__rate_interval]))",
+              "legendFormat": "{{reason}}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps",
+              "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 10, "stacking": { "mode": "normal" } }
+            }
+          },
+          "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["sum", "lastNotNull"] }, "tooltip": { "mode": "multi", "sort": "desc" } }
+        },
+        {
+          "type": "timeseries",
+          "id": 41,
+          "title": "Rate-limit rejections by identity",
+          "description": "HTTP 429s issued by the limiter, split by identity_kind (user / anon). >1/s drives RateLimitSpike — a client flooding or compromised tokens.",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 39 },
+          "targets": [
+            {
+              "expr": "sum by (identity_kind) (rate(mctl_rate_limit_events_total[$__rate_interval]))",
+              "legendFormat": "{{identity_kind}}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps",
+              "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 10 }
+            }
+          },
+          "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum"] }, "tooltip": { "mode": "multi" } }
+        },
+        {
+          "type": "timeseries",
+          "id": 42,
+          "title": "HTTP requests by status class",
+          "description": "mctl_http_requests_total grouped into 2xx/3xx/4xx/5xx. A rising 5xx class is the front-door view of server-side failure.",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 47 },
+          "targets": [
+            {
+              "expr": "sum by (status_class) (label_replace(rate(mctl_http_requests_total[$__rate_interval]), \"status_class\", \"${1}xx\", \"status_code\", \"(.).*\"))",
+              "legendFormat": "{{status_class}}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps",
+              "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 10, "stacking": { "mode": "normal" } }
+            },
+            "overrides": [
+              { "matcher": { "id": "byName", "options": "2xx" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } } ] },
+              { "matcher": { "id": "byName", "options": "4xx" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } } ] },
+              { "matcher": { "id": "byName", "options": "5xx" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } } ] }
+            ]
+          },
+          "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "lastNotNull"] }, "tooltip": { "mode": "multi", "sort": "desc" } }
+        }
+      ]
+    }

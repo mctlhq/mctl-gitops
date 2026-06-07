@@ -1,0 +1,26 @@
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMServiceScrape
+metadata:
+  name: mctl-telegram
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  selector:
+    matchLabels:
+      # base-service is the shared chart used by every labs service, so the
+      # instance label is required to pin this scrape to mctl-telegram. It also
+      # excludes the labs-mctl-telegram-preview instance (separate Service).
+      app.kubernetes.io/instance: labs-mctl-telegram
+      app.kubernetes.io/name: base-service
+  namespaceSelector:
+    matchNames:
+      - labs
+  endpoints:
+    # The only Service port; mctl-telegram serves /metrics on the same 8080
+    # listener as the app (no separate metrics port). The /metrics handler is
+    # gated by the optional METRICS_ALLOW_CIDR, which is unset in values.yaml,
+    # so the in-cluster scrape is not blocked.
+    - port: http
+      path: /metrics
+      interval: 30s
