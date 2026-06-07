@@ -337,7 +337,7 @@ data:
           "gridPos": { "h": 7, "w": 12, "x": 0, "y": 31 },
           "targets": [
             {
-              "expr": "sum by (tool) (rate(mctl_tool_invocations_total{tool=~\"send_message.*\"}[$__rate_interval]))",
+              "expr": "sum by (tool) (rate(mctl_tool_invocations_total{tool=~\"send_message.*\",status=\"ok\"}[$__rate_interval]))",
               "legendFormat": "{{tool}}",
               "refId": "A"
             }
