@@ -1,0 +1,303 @@
+# Grafana dashboard for per-user drill-down of mctl-telegram activity.
+#
+# WHY Loki (not Prometheus): the mctl_* metrics carry NO per-user label
+# (only tool/status/route/reason) and adding one would require a code change
+# + release of the frozen service (0.41.8) AND risk unbounded cardinality if
+# AUTO_APPROVE_CLIENTS is ever enabled. Per-user detail is a logs problem:
+# internal/mcp/tools.go already mirrors every tool call to slog as JSON
+#   {"msg":"mcp tool call","tool":...,"user_id":N,"status":"ok|error","peer":...}
+# which promtail ships to Loki. This dashboard filters those lines by user_id.
+#
+# `user_id` here is the internal users.id (numeric). The $user dropdown maps it
+# to telegram usernames; with "All" selected the breakdown panels surface new
+# user_ids automatically (regenerate the dropdown list from the DB when users
+# join — see the Reference text panel). Loki retention is 168h (7d); the durable
+# full-history per-user record is the audit_logs Postgres table.
+#
+# Sidecar in monitoring/grafana auto-discovers ConfigMaps labeled
+# `grafana_dashboard: "1"` — same pattern as the login / overview dashboards.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mctl-telegram-per-user-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  mctl-telegram-per-user.json: |
+    {
+      "title": "mctl-telegram — Per-User Activity",
+      "description": "Per-user drill-down of mctl-telegram MCP tool calls, sourced from Loki (slog 'mcp tool call' lines carry user_id). Filter with the $user dropdown. Prometheus metrics have no per-user label, so this view is logs-based and bounded by Loki's 168h retention.",
+      "uid": "mctl-telegram-per-user",
+      "tags": ["mctl-telegram", "telegram", "per-user", "logs", "observability"],
+      "schemaVersion": 39,
+      "version": 1,
+      "editable": true,
+      "graphTooltip": 1,
+      "timezone": "browser",
+      "time": { "from": "now-24h", "to": "now" },
+      "refresh": "1m",
+      "templating": {
+        "list": [
+          {
+            "name": "datasource",
+            "type": "datasource",
+            "query": "loki",
+            "label": "Loki datasource",
+            "current": { "text": "Loki", "value": "Loki" }
+          },
+          {
+            "name": "user",
+            "type": "custom",
+            "label": "User",
+            "description": "Filter by mctl-telegram user_id (= users.id). 'All' shows every user broken out.",
+            "multi": false,
+            "includeAll": true,
+            "allValue": ".+",
+            "query": "MashkovD (1, operator) : 1,mctlhq (6462, reviewer) : 6462,sleepingholly (384) : 384,nerealvm (9980) : 9980,rauf_techno (297) : 297,namax66 (8799) : 8799,dmitriimashkov (245) : 245,6030168936 (9607) : 9607",
+            "current": { "text": "All", "value": "$__all" },
+            "options": [
+              { "selected": true,  "text": "All",                      "value": "$__all" },
+              { "selected": false, "text": "MashkovD (1, operator)",    "value": "1" },
+              { "selected": false, "text": "mctlhq (6462, reviewer)",   "value": "6462" },
+              { "selected": false, "text": "sleepingholly (384)",       "value": "384" },
+              { "selected": false, "text": "nerealvm (9980)",           "value": "9980" },
+              { "selected": false, "text": "rauf_techno (297)",         "value": "297" },
+              { "selected": false, "text": "namax66 (8799)",            "value": "8799" },
+              { "selected": false, "text": "dmitriimashkov (245)",      "value": "245" },
+              { "selected": false, "text": "6030168936 (9607)",         "value": "9607" }
+            ]
+          }
+        ]
+      },
+      "panels": [
+        {
+          "type": "row",
+          "id": 1,
+          "title": "Overview (selected user, dashboard range)",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+        },
+        {
+          "type": "stat",
+          "id": 10,
+          "title": "Tool-call success ratio",
+          "description": "ok / total tool calls for the selected user over the dashboard time range.",
+          "datasource": { "type": "loki", "uid": "$datasource" },
+          "gridPos": { "h": 4, "w": 6, "x": 0, "y": 1 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "min": 0,
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "red", "value": null },
+                  { "color": "yellow", "value": 0.9 },
+                  { "color": "green", "value": 0.99 }
+                ]
+              }
+            }
+          },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
+          "targets": [
+            {
+              "expr": "sum(count_over_time({pod=~\"labs-mctl-telegram-base-service.+\", namespace=\"labs\"} |= \"mcp tool call\" | json | msg=\"mcp tool call\" | user_id=~\"^($user)$\" | status=\"ok\" [$__range])) / sum(count_over_time({pod=~\"labs-mctl-telegram-base-service.+\", namespace=\"labs\"} |= \"mcp tool call\" | json | msg=\"mcp tool call\" | user_id=~\"^($user)$\" [$__range]))",
+              "queryType": "instant",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "type": "stat",
+          "id": 11,
+          "title": "Total tool calls",
+          "datasource": { "type": "loki", "uid": "$datasource" },
+          "gridPos": { "h": 4, "w": 6, "x": 6, "y": 1 },
+          "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "blue" } } },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
+          "targets": [
+            {
+              "expr": "sum(count_over_time({pod=~\"labs-mctl-telegram-base-service.+\", namespace=\"labs\"} |= \"mcp tool call\" | json | msg=\"mcp tool call\" | user_id=~\"^($user)$\" [$__range]))",
+              "queryType": "instant",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "type": "stat",
+          "id": 12,
+          "title": "Errors",
+          "datasource": { "type": "loki", "uid": "$datasource" },
+          "gridPos": { "h": 4, "w": 6, "x": 12, "y": 1 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] }
+            }
+          },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
+          "targets": [
+            {
+              "expr": "sum(count_over_time({pod=~\"labs-mctl-telegram-base-service.+\", namespace=\"labs\"} |= \"mcp tool call\" | json | msg=\"mcp tool call\" | user_id=~\"^($user)$\" | status=\"error\" [$__range]))",
+              "queryType": "instant",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "type": "stat",
+          "id": 13,
+          "title": "Distinct active users (range)",
+          "description": "Count of distinct user_ids with at least one tool call in the dashboard range. Ignores the $user filter on purpose.",
+          "datasource": { "type": "loki", "uid": "$datasource" },
+          "gridPos": { "h": 4, "w": 6, "x": 18, "y": 1 },
+          "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "purple" } } },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
+          "targets": [
+            {
+              "expr": "count(sum by (user_id) (count_over_time({pod=~\"labs-mctl-telegram-base-service.+\", namespace=\"labs\"} |= \"mcp tool call\" | json | msg=\"mcp tool call\" [$__range])))",
+              "queryType": "instant",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "type": "row",
+          "id": 2,
+          "title": "Volume & errors over time",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 }
+        },
+        {
+          "type": "timeseries",
+          "id": 20,
+          "title": "Tool calls/s by user",
+          "datasource": { "type": "loki", "uid": "$datasource" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+          "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" } } },
+          "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["sum"] }, "tooltip": { "mode": "multi", "sort": "desc" } },
+          "targets": [
+            {
+              "expr": "sum by (user_id) (count_over_time({pod=~\"labs-mctl-telegram-base-service.+\", namespace=\"labs\"} |= \"mcp tool call\" | json | msg=\"mcp tool call\" | user_id=~\"^($user)$\" [$__auto]))",
+              "queryType": "range",
+              "legendFormat": "user {{user_id}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "id": 21,
+          "title": "Errors/s by user",
+          "datasource": { "type": "loki", "uid": "$datasource" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+          "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" }, "color": { "mode": "palette-classic" } } },
+          "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["sum"] }, "tooltip": { "mode": "multi", "sort": "desc" } },
+          "targets": [
+            {
+              "expr": "sum by (user_id) (count_over_time({pod=~\"labs-mctl-telegram-base-service.+\", namespace=\"labs\"} |= \"mcp tool call\" | json | msg=\"mcp tool call\" | user_id=~\"^($user)$\" | status=\"error\" [$__auto]))",
+              "queryType": "range",
+              "legendFormat": "user {{user_id}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "type": "row",
+          "id": 3,
+          "title": "Breakdown",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 }
+        },
+        {
+          "type": "timeseries",
+          "id": 30,
+          "title": "Calls/s by tool (selected user)",
+          "datasource": { "type": "loki", "uid": "$datasource" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 15 },
+          "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never", "stacking": { "mode": "normal" } } } },
+          "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["sum"] }, "tooltip": { "mode": "multi", "sort": "desc" } },
+          "targets": [
+            {
+              "expr": "sum by (tool) (count_over_time({pod=~\"labs-mctl-telegram-base-service.+\", namespace=\"labs\"} |= \"mcp tool call\" | json | msg=\"mcp tool call\" | user_id=~\"^($user)$\" [$__auto]))",
+              "queryType": "range",
+              "legendFormat": "{{tool}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "type": "table",
+          "id": 31,
+          "title": "Top users by volume (range)",
+          "description": "Tool-call count per user_id over the dashboard range. Respects the $user filter (All = every user).",
+          "datasource": { "type": "loki", "uid": "$datasource" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 15 },
+          "fieldConfig": { "defaults": { "unit": "short" } },
+          "options": { "showHeader": true, "sortBy": [ { "displayName": "Value", "desc": true } ] },
+          "transformations": [
+            { "id": "labelsToFields", "options": {} },
+            { "id": "organize", "options": { "excludeByName": { "Time": true } } }
+          ],
+          "targets": [
+            {
+              "expr": "sum by (user_id) (count_over_time({pod=~\"labs-mctl-telegram-base-service.+\", namespace=\"labs\"} |= \"mcp tool call\" | json | msg=\"mcp tool call\" | user_id=~\"^($user)$\" [$__range]))",
+              "queryType": "instant",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "type": "row",
+          "id": 4,
+          "title": "Logs (selected user)",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 23 }
+        },
+        {
+          "type": "logs",
+          "id": 40,
+          "title": "Activity log",
+          "datasource": { "type": "loki", "uid": "$datasource" },
+          "gridPos": { "h": 10, "w": 24, "x": 0, "y": 24 },
+          "options": { "showTime": true, "wrapLogMessage": true, "dedupStrategy": "none", "sortOrder": "Descending", "enableLogDetails": true },
+          "targets": [
+            {
+              "expr": "{pod=~\"labs-mctl-telegram-base-service.+\", namespace=\"labs\"} |= \"mcp tool call\" | json | msg=\"mcp tool call\" | user_id=~\"^($user)$\"",
+              "queryType": "range",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "type": "logs",
+          "id": 41,
+          "title": "Errors only",
+          "datasource": { "type": "loki", "uid": "$datasource" },
+          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 34 },
+          "options": { "showTime": true, "wrapLogMessage": true, "dedupStrategy": "none", "sortOrder": "Descending", "enableLogDetails": true },
+          "targets": [
+            {
+              "expr": "{pod=~\"labs-mctl-telegram-base-service.+\", namespace=\"labs\"} |= \"mcp tool call\" | json | msg=\"mcp tool call\" | user_id=~\"^($user)$\" | status=\"error\"",
+              "queryType": "range",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "type": "row",
+          "id": 5,
+          "title": "Reference",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 42 }
+        },
+        {
+          "type": "text",
+          "id": 50,
+          "title": "user_id roster / regenerate the $user dropdown",
+          "datasource": { "type": "loki", "uid": "$datasource" },
+          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 43 },
+          "options": {
+            "mode": "markdown",
+            "content": "Logs carry the numeric **`user_id`** (= `users.id`). The `$user` dropdown maps it to Telegram usernames; with **All** selected the breakdown panels surface new `user_id`s automatically.\n\n| user_id | telegram | note |\n|--:|--|--|\n| 1 | MashkovD | operator / admin |\n| 6462 | mctlhq | reviewer / test |\n| 384 | sleepingholly | |\n| 9607 | (tg 6030168936) | no @username |\n| 9980 | nerealvm | |\n| 297 | rauf_techno | |\n| 8799 | namax66 | |\n| 245 | dmitriimashkov | |\n\n**To refresh this dropdown when users join**, regenerate the list from the telegram Postgres DB (`labs-mctl-telegram` on `shared-pg-rw`):\n\n```sql\nselect id, telegram_username, telegram_display_name, access_tier\nfrom users order by id;\n```\n\nPer-user detail older than **7 days** (Loki retention) is not shown here — the durable full-history record is the `audit_logs` table in the same DB."
+          }
+        }
+      ]
+    }
