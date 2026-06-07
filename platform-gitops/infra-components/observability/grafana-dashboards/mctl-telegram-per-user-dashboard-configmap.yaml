@@ -178,7 +178,7 @@ data:
           "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["sum"] }, "tooltip": { "mode": "multi", "sort": "desc" } },
           "targets": [
             {
-              "expr": "sum by (user_id) (count_over_time({pod=~\"labs-mctl-telegram-base-service.+\", namespace=\"labs\"} |= \"mcp tool call\" | json | msg=\"mcp tool call\" | user_id=~\"^($user)$\" [$__auto]))",
+              "expr": "sum by (user_id) (rate({pod=~\"labs-mctl-telegram-base-service.+\", namespace=\"labs\"} |= \"mcp tool call\" | json | msg=\"mcp tool call\" | user_id=~\"^($user)$\" [$__auto]))",
               "queryType": "range",
               "legendFormat": "user {{user_id}}",
               "refId": "A"
@@ -195,7 +195,7 @@ data:
           "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["sum"] }, "tooltip": { "mode": "multi", "sort": "desc" } },
           "targets": [
             {
-              "expr": "sum by (user_id) (count_over_time({pod=~\"labs-mctl-telegram-base-service.+\", namespace=\"labs\"} |= \"mcp tool call\" | json | msg=\"mcp tool call\" | user_id=~\"^($user)$\" | status=\"error\" [$__auto]))",
+              "expr": "sum by (user_id) (rate({pod=~\"labs-mctl-telegram-base-service.+\", namespace=\"labs\"} |= \"mcp tool call\" | json | msg=\"mcp tool call\" | user_id=~\"^($user)$\" | status=\"error\" [$__auto]))",
               "queryType": "range",
               "legendFormat": "user {{user_id}}",
               "refId": "A"
@@ -218,7 +218,7 @@ data:
           "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["sum"] }, "tooltip": { "mode": "multi", "sort": "desc" } },
           "targets": [
             {
-              "expr": "sum by (tool) (count_over_time({pod=~\"labs-mctl-telegram-base-service.+\", namespace=\"labs\"} |= \"mcp tool call\" | json | msg=\"mcp tool call\" | user_id=~\"^($user)$\" [$__auto]))",
+              "expr": "sum by (tool) (rate({pod=~\"labs-mctl-telegram-base-service.+\", namespace=\"labs\"} |= \"mcp tool call\" | json | msg=\"mcp tool call\" | user_id=~\"^($user)$\" [$__auto]))",
               "queryType": "range",
               "legendFormat": "{{tool}}",
               "refId": "A"
