@@ -1,12 +1,12 @@
-## Summary (2026-06-08 09:00 UTC)
+## Summary (2026-06-10 09:00 UTC)
 
-**60 proposals** across 10 repos (51 merged · 4 proposed · 5 rejected · 0 in-progress) — identical to yesterday, no pipeline changes. mctl-telegram stuck proposals (#390/#391) now **14 days** old; follow-up comments added. mctl-pairdesk #52/#53 at 4 days (watching). 2 PRs merged in 24 h (mctl-gitops#399/#409 — per-user Loki dashboards completing observability sprint). No bot commits. No new stale-PR issues — all 10 existing tracked via #392/#393/#400–#407. Daily-report issue: mctl-gitops#410.
+**60 proposals** across 11 repos (51 merged · 4 proposed · 5 rejected · 0 in-progress) — no state changes since #410 (2026-06-08). June 9 daily-report skipped. 0 PRs merged in 24 h. No bot commits (mctl-agents). 5 rapid-fire pelican-proxy deploys (0.12.0→0.16.0) in labs. mctl-telegram stuck proposals (#390/#391) now **16 days** old; follow-up comments added. mctl-pairdesk #52/#53 at 6 days (cross 7-day threshold tomorrow). All 10 stale-PR issues (#392/#393/#400–#407) updated with +2 d comments. No new standalone issues. api.mctl.ai MCP connector now attached. Daily-report issue: mctl-gitops#411.
 
 ---
 
 ## Proposal pipeline state
 
-_Previous snapshot: 2026-06-07 (60 proposals — identical today, no changes)._
+_Previous snapshot: 2026-06-08 / issue #410 (60 proposals — identical today, no changes. June 9 skipped)._
 
 | repo | slug | status | pr | changed_since_yesterday |
 |------|------|--------|----|------------------------|
@@ -43,8 +43,8 @@ _Previous snapshot: 2026-06-07 (60 proposals — identical today, no changes)._
 | mctl-pairdesk | issue-37-feat-web-one-currency-pair-per-order-rem | merged | [#43](https://github.com/mctlhq/mctl-pairdesk/pull/43) | — |
 | mctl-pairdesk | issue-38-fix-web-rate-slider-must-anchor-the-last | merged | [#44](https://github.com/mctlhq/mctl-pairdesk/pull/44) | — |
 | mctl-pairdesk | issue-45-add-web-test-harness-rateslider-anchorin | merged | [#46](https://github.com/mctlhq/mctl-pairdesk/pull/46) | — |
-| mctl-pairdesk | **issue-52-p3-add-native-showconfirm-for-destructiv** | **proposed** | — | still (4 d) |
-| mctl-pairdesk | **issue-53-p3-create-order-has-no-ttl-expiry-picker** | **proposed** | — | still (4 d) |
+| mctl-pairdesk | **issue-52-p3-add-native-showconfirm-for-destructiv** | **proposed** | — | still (6 d ⚠ crosses 7 d tomorrow) |
+| mctl-pairdesk | **issue-53-p3-create-order-has-no-ttl-expiry-picker** | **proposed** | — | still (6 d ⚠ crosses 7 d tomorrow) |
 | mctl-portal | scaffolder-path-traversal | rejected | [#10](https://github.com/mctlhq/mctl-portal/pull/10) | — |
 | mctl-portal | scaffolder-secret-leak | rejected | [#12](https://github.com/mctlhq/mctl-portal/pull/12) | — |
 | mctl-telegram | issue-59-add-observability-and-alerting-for-mctl | merged | [#61](https://github.com/mctlhq/mctl-telegram/pull/61) | — |
@@ -67,43 +67,44 @@ _Previous snapshot: 2026-06-07 (60 proposals — identical today, no changes)._
 | mctl-telegram | issue-158-non-deterministic-safety-block-on-get-me | merged | [#162](https://github.com/mctlhq/mctl-telegram/pull/162) | — |
 | mctl-telegram | issue-159-live-send-unusable-when-prepare-send-mes | merged | [#163](https://github.com/mctlhq/mctl-telegram/pull/163) | — |
 | mctl-telegram | issue-202-mctl-telegram-canary-cronjob-stuck-on-im | merged | [#211](https://github.com/mctlhq/mctl-telegram/pull/211) | — |
-| mctl-telegram | **issue-213-deploy-canary-prometheusrule-to-cluster** | **proposed** | — | still (14 d ⚠) |
-| mctl-telegram | **issue-214-self-service-canonicalize-client-tier-in** | **proposed** | — | still (14 d ⚠) |
+| mctl-telegram | **issue-213-deploy-canary-prometheusrule-to-cluster** | **proposed** | — | still (16 d ⚠⚠) |
+| mctl-telegram | **issue-214-self-service-canonicalize-client-tier-in** | **proposed** | — | still (16 d ⚠⚠) |
 | mctl-web | wrangler-upgrade-security | merged | [#9](https://github.com/mctlhq/mctl-web/pull/9) | — |
 
 **Totals:** 60 proposals — 51 merged · 4 proposed · 5 rejected · 0 in-progress
-_(Previous 2026-06-07: identical — no state changes)_
+_(Previous 2026-06-08 / #410: identical — no state changes. June 9 skipped.)_
 
 ---
 
-## Pipeline diff (vs 2026-06-07)
+## Pipeline diff (vs 2026-06-08 / #410)
+
+> Note: June 9 report was skipped — no daily-report issue found for 2026-06-09.
 
 - **Newly merged:** none
 - **Newly rejected:** none
 - **Newly proposed:** none
 - **Still in-progress:** none
 - **Still proposed (unchanged):**
-  - `mctl-telegram/issue-213` — 14 days ⚠ (follow-up comment → [#390](https://github.com/mctlhq/mctl-gitops/issues/390))
-  - `mctl-telegram/issue-214` — 14 days ⚠ (follow-up comment → [#391](https://github.com/mctlhq/mctl-gitops/issues/391))
-  - `mctl-pairdesk/issue-52` — 4 days (watching, threshold 7 d)
-  - `mctl-pairdesk/issue-53` — 4 days (watching, threshold 7 d)
+  - `mctl-telegram/issue-213` — **16 days** ⚠⚠ (follow-up comment → [#390](https://github.com/mctlhq/mctl-gitops/issues/390))
+  - `mctl-telegram/issue-214` — **16 days** ⚠⚠ (follow-up comment → [#391](https://github.com/mctlhq/mctl-gitops/issues/391))
+  - `mctl-pairdesk/issue-52` — **6 days** (crosses 7-day threshold tomorrow — standalone issue will open next run)
+  - `mctl-pairdesk/issue-53` — **6 days** (same)
 
 ---
 
 ## Recent merged PRs (24 h)
 
-Window: 2026-06-07T09:00Z → 2026-06-08T09:00Z
+Window: 2026-06-09T09:00Z → 2026-06-10T09:00Z
 
-| repo | PR | title | merged at |
-|------|----|-------|-----------|
-| mctl-gitops | [#409](https://github.com/mctlhq/mctl-gitops/pull/409) | feat(observability): usernames in mctl-telegram per-user dashboard | 2026-06-07T19:45Z |
-| mctl-gitops | [#399](https://github.com/mctlhq/mctl-gitops/pull/399) | feat(observability): per-user activity dashboard for mctl-telegram | 2026-06-07T17:09Z |
+_No PRs merged in the last 24 h across `mctlhq/*`._
 
 ---
 
 ## Bot commits (last 26 h)
 
-No results — no automated commits from the agent pipeline.
+No results — no automated commits from the agent pipeline (`mctl-agents`).
+
+Other commits in `mctl-gitops` last 26 h: 5 deploy commits for `labs/pelican-proxy` (0.12.0→0.16.0, 2026-06-09 12:37–19:15 UTC).
 
 ---
 
@@ -113,39 +114,43 @@ No results — no automated commits from the agent pipeline.
 
 | proposal | days | existing issue | action |
 |----------|------|---------------|--------|
-| mctl-telegram/issue-213 | **14 d** | [#390](https://github.com/mctlhq/mctl-gitops/issues/390) | comment added ✓ |
-| mctl-telegram/issue-214 | **14 d** | [#391](https://github.com/mctlhq/mctl-gitops/issues/391) | comment added ✓ |
+| mctl-telegram/issue-213 | **16 d** | [#390](https://github.com/mctlhq/mctl-gitops/issues/390) | comment added ✓ |
+| mctl-telegram/issue-214 | **16 d** | [#391](https://github.com/mctlhq/mctl-gitops/issues/391) | comment added ✓ |
 
-Watching (below threshold): mctl-pairdesk/52 (4 d), mctl-pairdesk/53 (4 d)
+Watching (will open standalone issues next run if still proposed):
+- mctl-pairdesk/52 (6 d, threshold 7 d tomorrow)
+- mctl-pairdesk/53 (6 d, threshold 7 d tomorrow)
 
 ### Stale PRs (all tracked, no new issues)
 
 | follow-up issue | tracked PR | days stale |
 |-----------------|-----------|------------|
-| [#392](https://github.com/mctlhq/mctl-gitops/issues/392) | [mctl-gitops#84](https://github.com/mctlhq/mctl-gitops/pull/84) [wip] per-proposal claim | **39 d** |
-| [#393](https://github.com/mctlhq/mctl-gitops/issues/393) | [mctl-agents#15](https://github.com/mctlhq/mctl-agents/pull/15) / [#16](https://github.com/mctlhq/mctl-agents/pull/16) / [#17](https://github.com/mctlhq/mctl-agents/pull/17) | **30 d** |
-| [#400](https://github.com/mctlhq/mctl-gitops/issues/400) | [mctl-portal#7](https://github.com/mctlhq/mctl-portal/pull/7) | 29 d |
-| [#401](https://github.com/mctlhq/mctl-gitops/issues/401) | [mctl-api#47](https://github.com/mctlhq/mctl-api/pull/47) | 29 d |
-| [#402](https://github.com/mctlhq/mctl-gitops/issues/402) | [mctl-gitops#217](https://github.com/mctlhq/mctl-gitops/pull/217) | 23 d |
-| [#403](https://github.com/mctlhq/mctl-gitops/issues/403) | [mctl-agent#20](https://github.com/mctlhq/mctl-agent/pull/20) | 23 d |
-| [#404](https://github.com/mctlhq/mctl-gitops/issues/404) | [mctl-telegram#146](https://github.com/mctlhq/mctl-telegram/pull/146) | 17 d |
-| [#405](https://github.com/mctlhq/mctl-gitops/issues/405) | [mctl-gitops#306](https://github.com/mctlhq/mctl-gitops/pull/306) | 14 d |
-| [#406](https://github.com/mctlhq/mctl-gitops/issues/406) | [mctl-telegram#221](https://github.com/mctlhq/mctl-telegram/pull/221) | 13 d |
-| [#407](https://github.com/mctlhq/mctl-gitops/issues/407) | [mctl-telegram#248](https://github.com/mctlhq/mctl-telegram/pull/248) | 9 d |
+| [#392](https://github.com/mctlhq/mctl-gitops/issues/392) | [mctl-gitops#84](https://github.com/mctlhq/mctl-gitops/pull/84) [wip] per-proposal claim | **41 d** |
+| [#393](https://github.com/mctlhq/mctl-gitops/issues/393) | [mctl-agents#15](https://github.com/mctlhq/mctl-agents/pull/15) / [#16](https://github.com/mctlhq/mctl-agents/pull/16) / [#17](https://github.com/mctlhq/mctl-agents/pull/17) | **32 d** |
+| [#400](https://github.com/mctlhq/mctl-gitops/issues/400) | [mctl-portal#7](https://github.com/mctlhq/mctl-portal/pull/7) | **31 d** |
+| [#401](https://github.com/mctlhq/mctl-gitops/issues/401) | [mctl-api#47](https://github.com/mctlhq/mctl-api/pull/47) | **31 d** |
+| [#402](https://github.com/mctlhq/mctl-gitops/issues/402) | [mctl-gitops#217](https://github.com/mctlhq/mctl-gitops/pull/217) | **25 d** |
+| [#403](https://github.com/mctlhq/mctl-gitops/issues/403) | [mctl-agent#20](https://github.com/mctlhq/mctl-agent/pull/20) | **25 d** |
+| [#404](https://github.com/mctlhq/mctl-gitops/issues/404) | [mctl-telegram#146](https://github.com/mctlhq/mctl-telegram/pull/146) | **19 d** |
+| [#405](https://github.com/mctlhq/mctl-gitops/issues/405) | [mctl-gitops#306](https://github.com/mctlhq/mctl-gitops/pull/306) | **16 d** |
+| [#406](https://github.com/mctlhq/mctl-gitops/issues/406) | [mctl-telegram#221](https://github.com/mctlhq/mctl-telegram/pull/221) | **15 d** |
+| [#407](https://github.com/mctlhq/mctl-gitops/issues/407) | [mctl-telegram#248](https://github.com/mctlhq/mctl-telegram/pull/248) | **11 d** |
 
-Watching for tomorrow (not yet stable):
-- mctl-pairdesk#57 (3 d), mctl-portal#23 (3 d)
-- mctl-api#70 / #71 CI dep-bumps (7 d — skipped, dep-bump convention)
-- mctl-telegram#263 (2 d) — release-please PR
+Watching for next run (not yet stable enough for issue):
+- mctl-pairdesk#57 (5 d), mctl-portal#23 (5 d) — cross 7 d on June 12
+- mctl-api#70 / #71 CI dep-bumps (9 d — skipped per dep-bump convention)
+- mctl-telegram#263 (4 d) — release-please PR
+- mctl-api#72 (2 d)
 
 ---
 
 ## Cluster health
 
-Skipped: api.mctl.ai MCP connector not attached yet. See TODO.
+**api.mctl.ai MCP connector is now attached** — cluster health sections enabled from next run.
 
 ---
 
 ## TODO
 
-Attach the api.mctl.ai MCP connector to this routine to unlock: `mctl_list_workflows` (workflow-run counts), `mctl_get_resource_usage` (MinIO PVC %), `mctl_get_service_status` (per-service restart counts), ArgoCD app sync state.
+1. Enable cluster health sections in next run: `mctl_list_workflows`, `mctl_get_resource_usage`, `mctl_get_service_status`, ArgoCD sync state.
+2. Add `mctlhq/mctl-agents` to GitHub MCP write scope (currently using mctl-gitops as fallback).
