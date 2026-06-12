@@ -1,0 +1,41 @@
+name: manifest-lint
+
+on:
+  pull_request:
+    paths:
+      - 'platform-gitops/**'
+      - '.github/workflows/manifest-lint.yml'
+
+permissions: {}
+
+jobs:
+  yamllint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: yamllint (relaxed)
+        run: |
+          pipx install yamllint || pip install yamllint
+          cat > /tmp/yamllint.yml <<'CFG'
+          extends: relaxed
+          rules:
+            line-length: disable
+            comments: disable
+            document-start: disable
+            truthy: disable
+          CFG
+          yamllint -c /tmp/yamllint.yml platform-gitops
+
+  helm-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: helm lint charts
+        run: |
+          for chart in platform-gitops/helm-charts/*/; do
+            if [ -f "$chart/Chart.yaml" ]; then
+              echo "== helm lint $chart =="
+              helm lint "$chart"
+            fi
+          done
