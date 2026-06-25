@@ -46,6 +46,13 @@ spec:
   # CronWorkflow's successfulJobsHistoryLimit at the low reconcile cadence.
   ttlStrategy:
     secondsAfterCompletion: 259200
+  # Release the workdir PVC (and its 10 GB Hetzner volume) as soon as the
+  # workflow finishes — success OR failure. The Argo default
+  # (OnWorkflowSuccess) keeps a failed run's volume attached until the
+  # ttlStrategy above deletes the whole workflow (up to 14 days for the run
+  # template), which leaked ~€6 of idle detached volumes in June 2026.
+  volumeClaimGC:
+    strategy: OnWorkflowCompletion
   # 30-min budget: reconcile is read-only (a `gh api` PR fetch per skip-listed
   # proposal + a status write). No SDK, no implementer subprocess, no merges.
   activeDeadlineSeconds: 1800
