@@ -27,6 +27,13 @@ spec:
     - name: ghcr-credentials
   ttlStrategy:
     secondsAfterCompletion: 86400
+  # Release the workdir PVC (and its 10 GB Hetzner volume) as soon as the
+  # workflow finishes — success OR failure. The Argo default
+  # (OnWorkflowSuccess) keeps a failed run's volume attached until the
+  # ttlStrategy above deletes the whole workflow (up to 14 days for the run
+  # template), which leaked ~€6 of idle detached volumes in June 2026.
+  volumeClaimGC:
+    strategy: OnWorkflowCompletion
   # Implementer pipeline can be slow: clone two repos + Claude SDK + push + PR.
   # Bump above the cron run's 1h budget.
   activeDeadlineSeconds: 7200

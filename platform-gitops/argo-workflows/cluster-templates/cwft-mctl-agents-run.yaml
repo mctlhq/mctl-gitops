@@ -30,6 +30,13 @@ spec:
   # daily cron's 14-success cap was unreachable (Codex P1 on PR #147).
   ttlStrategy:
     secondsAfterCompletion: 1209600
+  # Release the workdir PVC (and its 10 GB Hetzner volume) as soon as the
+  # workflow finishes — success OR failure. Without this the Argo default
+  # (OnWorkflowSuccess) keeps a failed run's volume attached for the full
+  # 14-day ttlStrategy above, which leaked ~€6 of idle detached volumes in
+  # June 2026.
+  volumeClaimGC:
+    strategy: OnWorkflowCompletion
   activeDeadlineSeconds: 3600
   entrypoint: run-agents
   # onExit always fires after the entrypoint completes — Succeeded, Failed,
