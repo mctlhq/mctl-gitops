@@ -69,6 +69,13 @@ spec:
   # could fill (Codex P1 on PR #147).
   ttlStrategy:
     secondsAfterCompletion: 259200
+  # Release the workdir PVC (and its 10 GB Hetzner volume) as soon as the
+  # workflow finishes — success OR failure. The Argo default
+  # (OnWorkflowSuccess) keeps a failed run's volume attached until the
+  # ttlStrategy above deletes the whole workflow (up to 14 days for the run
+  # template), which leaked ~€6 of idle detached volumes in June 2026.
+  volumeClaimGC:
+    strategy: OnWorkflowCompletion
   # Same 2h budget as the implementer: a single tick may invoke the
   # implementer subprocess (clone sibling repo + Claude SDK + push) for
   # every proposal that has unresolved P1/P2 findings.
