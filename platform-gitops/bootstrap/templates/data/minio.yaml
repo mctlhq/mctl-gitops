@@ -59,7 +59,10 @@ spec:
               # on 2026-05-10 (RAM real>requests gap on Global RAM dashboard).
               memory: 900Mi
             limits:
-              cpu: 500m
+              # Raised 500m→1000m on 2026-06-26: CPU usage peaked at 389m (78%
+              # of the 500m cap) with 35% CFS throttling, firing recurring
+              # resource_limit incidents. 1000m gives ~2.5x headroom over peak.
+              cpu: 1000m
               # Working set hit 99% of 512Mi limit during normal artifact-store
               # traffic (mctl-agents runs + openclaw S3-state writes); near-OOM
               # without warning. 1Gi gives a 2x cushion before next review.
