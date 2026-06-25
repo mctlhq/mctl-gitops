@@ -221,7 +221,12 @@ extraContainers:
         cpu: 25m
         memory: 64Mi
       limits:
-        cpu: 500m
+        # Raised 500m→1000m on 2026-06-26: the s3-sync sidecar (not the
+        # base-service, which throttles ~3%) hit 61% CFS throttling on bursty
+        # `mc mirror` runs, firing recurring resource_limit incidents on the
+        # claude-remote pod. Fits labs quota (limits.cpu 7.55/12) and the
+        # Container LimitRange max of 3000m.
+        cpu: 1000m
         memory: 128Mi
     command: ["sh", "-c"]
     args:
