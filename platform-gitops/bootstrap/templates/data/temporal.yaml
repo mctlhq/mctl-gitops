@@ -121,9 +121,13 @@ spec:
                 cpu: 50m
                 memory: 64Mi
               limits:
-                # Idle CLI sidecar — steady-state 2m; 100m is plenty.
-                # Trimmed 200m→100m on 2026-05-07.
-                cpu: 100m
+                # Raised 100m→500m on 2026-06-27. The 2026-05-07 trim to 100m
+                # looked safe by average (~6m) but the container makes frequent
+                # sub-period CPU bursts: over 24h it sat at ~53% CFS throttling
+                # (68% of samples >50%), firing recurring resource_limit
+                # incidents. 500m absorbs the bursts; usage stays ~6m so the
+                # limit is pure headroom (CPU is not reserved).
+                cpu: 500m
                 memory: 256Mi
 
           # The schema Job needs special handling under Argo CD:
