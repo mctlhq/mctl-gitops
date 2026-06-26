@@ -53,6 +53,27 @@ spec:
             disruptionBudget:
               maxUnavailable: 1
 
+          # Relaxed from the chart-default requiredDuringScheduling to preferred
+          # on 2026-06-26. With 3 replicas pinned to 3 worker nodes, REQUIRED
+          # anti-affinity meant a drained worker's vault pod had no spare node to
+          # reschedule onto and sat Pending until the node returned — which
+          # deadlocked k3s rolling upgrades (xgf + control-plane stuck cordoned,
+          # vault-2 Pending for >8m, upgrade job cycling). PREFERRED lets the pod
+          # co-locate during a drain so the drain/upgrade completes; the
+          # scheduler still spreads the 3 replicas across distinct nodes in
+          # steady state. The maxUnavailable:1 PDB above still protects quorum.
+          affinity: |
+            podAntiAffinity:
+              preferredDuringSchedulingIgnoredDuringExecution:
+                - weight: 100
+                  podAffinityTerm:
+                    labelSelector:
+                      matchLabels:
+                        app.kubernetes.io/name: vault
+                        app.kubernetes.io/instance: vault
+                        component: server
+                    topologyKey: kubernetes.io/hostname
+
           standalone:
             enabled: false
 
