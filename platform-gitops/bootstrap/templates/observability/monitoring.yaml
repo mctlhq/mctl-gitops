@@ -24,7 +24,11 @@ spec:
                   memory: 1400Mi
                 limits:
                   cpu: 750m
-                  memory: 1536Mi
+                  # Raised 1536Mi→2Gi on 2026-06-26: working set sat at ~1409Mi
+                  # (~92% of the 1536Mi cap), firing recurring ">80% memory used"
+                  # warnings and risking OOM. Request stays 1400Mi (no scheduling
+                  # change); the bump is pure headroom.
+                  memory: 2Gi
               extraArgs:
                 search.maxConcurrentRequests: "16"
                 search.maxQueueDuration: "30s"
