@@ -328,3 +328,83 @@ extraObjects:
                           key: TELEGRAM_BOT_TOKEN
                     - name: TELEGRAM_CHAT_ID
                       value: "210408407"
+  # Synthetic end-to-end canary. Every 10 minutes a black-box probe (the
+  # mctl-telegram-canary binary baked into the service image) exercises the
+  # public OAuth metadata endpoint plus the list_dialogs / get_unread_messages
+  # MCP tools against the live service, then pushes mctl_telegram_canary_*
+  # metrics to the cluster Pushgateway. Alerting lives in the
+  # mctl-telegram-canary VMRule (vm-rules/mctl-telegram-canary.yaml).
+  #
+  # Cadence is */10 — NOT the original */2. The every-2-min variant was once
+  # suspended (deploy/canary/cronjob.yaml suspend:true) over suspicion that its
+  # MTProto list_dialogs calls, sharing the server's Telegram egress IP,
+  # contributed to new-login SendCode throttling. That hang was fixed in
+  # 0.38.1/0.38.2 (PR #217), but */10 keeps egress load light while the ChatGPT
+  # App Directory review is in flight. Read-only token (tg:210408407), no send
+  # scope.
+  - apiVersion: batch/v1
+    kind: CronJob
+    metadata:
+      name: labs-mctl-telegram-canary
+      labels:
+        app.kubernetes.io/name: mctl-telegram
+        app.kubernetes.io/part-of: mctl-platform
+        mctl.me/component: canary
+    spec:
+      schedule: "*/10 * * * *"
+      concurrencyPolicy: Forbid
+      startingDeadlineSeconds: 120
+      successfulJobsHistoryLimit: 3
+      failedJobsHistoryLimit: 5
+      jobTemplate:
+        spec:
+          backoffLimit: 1
+          activeDeadlineSeconds: 120
+          template:
+            metadata:
+              labels:
+                app.kubernetes.io/name: mctl-telegram
+                mctl.me/component: canary
+            spec:
+              imagePullSecrets:
+                - name: ghcr-credentials
+              restartPolicy: Never
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 1000
+              containers:
+                - name: canary
+                  # Same image as the deployed service so the probe always
+                  # matches the running version (fixes issue-202's stale
+                  # hardcoded tag).
+                  image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+                  command: ["/usr/local/bin/mctl-telegram-canary"]
+                  securityContext:
+                    allowPrivilegeEscalation: false
+                    readOnlyRootFilesystem: true
+                    capabilities:
+                      drop: ["ALL"]
+                  env:
+                    - name: CANARY_BASE_URL
+                      value: "https://tg.mctl.ai"
+                    - name: CANARY_TG_USER_ID
+                      valueFrom:
+                        secretKeyRef:
+                          name: mctl-telegram-canary
+                          key: tg_user_id
+                    - name: CANARY_BEARER_TOKEN
+                      valueFrom:
+                        secretKeyRef:
+                          name: mctl-telegram-canary
+                          key: bearer_token
+                    - name: CANARY_PROBE_UNREAD
+                      value: "true"
+                    - name: PUSHGATEWAY_URL
+                      value: "http://prometheus-pushgateway.monitoring.svc.cluster.local:9091"
+                  resources:
+                    requests:
+                      cpu: "10m"
+                      memory: "32Mi"
+                    limits:
+                      cpu: "100m"
+                      memory: "64Mi"
