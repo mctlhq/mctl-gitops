@@ -1,0 +1,37 @@
+# Scrape the Prometheus Pushgateway so pushed metrics reach VictoriaMetrics.
+#
+# Background: the pushgateway was deployed manually (outside gitops) together
+# with a VMServiceScrape whose selector matched `app: prometheus-pushgateway`
+# on the *Service* — but that Service carries no labels, so vmagent never
+# discovered the target and nothing the pushgateway received (e.g. the
+# mctl-telegram canary's mctl_telegram_canary_* metrics) ever reached VM. That
+# is why MctlTelegramCanaryAbsent fired perpetually even once the canary
+# CronJob was pushing successfully.
+#
+# Fix: select the pushgateway *Pod* (which does carry app:
+# prometheus-pushgateway) via a VMPodScrape, bypassing the unlabeled Service.
+# honorLabels keeps the labels the canary pushed (job="mctl_telegram_canary",
+# instance="") intact — the canary VMRule's MctlTelegramCanaryStale alert keys
+# off push_time_seconds{job="mctl_telegram_canary"}.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMPodScrape
+metadata:
+  name: prometheus-pushgateway
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  selector:
+    matchLabels:
+      app: prometheus-pushgateway
+  namespaceSelector:
+    matchNames:
+      - monitoring
+  podMetricsEndpoints:
+    # Container port 9091 is unnamed, so target it by number.
+    - targetPort: 9091
+      path: /metrics
+      interval: 30s
+      # Preserve the job/instance labels pushed to the gateway rather than
+      # overwriting them with the scrape's own pod-derived labels.
+      honorLabels: true
