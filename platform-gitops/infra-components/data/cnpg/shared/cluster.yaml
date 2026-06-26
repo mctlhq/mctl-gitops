@@ -70,7 +70,11 @@ spec:
       cpu: 500m
     limits:
       memory: 1Gi
-      cpu: "1"   # CNPG normalizes 1000m → "1"; use "1" to match live state
+      # Raised 1→2 on 2026-06-26: the primary (shared-pg-1) hit 100% CFS
+      # throttling on bursts (checkpoints / CNPG base backups) against the 1m
+      # cap, firing recurring resource_limit incidents. Avg usage stays low
+      # (~89m peak) so request is left at 500m — this is burst headroom only.
+      cpu: "2"   # CNPG normalizes 2000m → "2"
 
   postgresql:
     parameters:
