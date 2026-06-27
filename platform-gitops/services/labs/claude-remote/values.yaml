@@ -179,7 +179,10 @@ initContainers:
         cpu: 25m
         memory: 64Mi
       limits:
-        cpu: 500m
+        # Raised 500m→1000m on 2026-06-27: the cold-start `mc mirror` restore
+        # CFS-throttled ~53%, slowing pod startup. Init-only burst; usage idles
+        # after, so the limit is headroom.
+        cpu: 1000m
         memory: 128Mi
     command: ["sh", "-c"]
     args:
@@ -221,12 +224,12 @@ extraContainers:
         cpu: 25m
         memory: 64Mi
       limits:
-        # Raised 500m→1000m on 2026-06-26: the s3-sync sidecar (not the
-        # base-service, which throttles ~3%) hit 61% CFS throttling on bursty
-        # `mc mirror` runs, firing recurring resource_limit incidents on the
-        # claude-remote pod. Fits labs quota (limits.cpu 7.55/12) and the
-        # Container LimitRange max of 3000m.
-        cpu: 1000m
+        # s3-sync sidecar (not base-service, which throttles ~3%) CFS-throttles
+        # on bursty `mc mirror` runs. 500m→1000m (2026-06-26) wasn't enough —
+        # still ~42% throttled — so raised 1000m→2000m on 2026-06-27, matching
+        # the openclaw tenants' s3-sync. Fits labs quota (limits.cpu 7.55/12)
+        # and the Container LimitRange max of 3000m.
+        cpu: 2000m
         memory: 128Mi
     command: ["sh", "-c"]
     args:
