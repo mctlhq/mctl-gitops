@@ -264,6 +264,36 @@ extraContainers:
           i=$((i + 1))
           if [ $((i % 360)) -eq 0 ]; then
             now=$(date +%s)
+            # --- Claude CLI version retention ---
+            # claude self-updates into .local/share/claude/versions/<ver> and
+            # never prunes old ones. The general GC keep-list protects all of
+            # .local, so these accumulated to ~9 GiB (30+ versions) and
+            # OOM-killed restore-state on cold start. Keep the active version
+            # (the .local/bin/claude symlink target) plus the 2 newest by mtime;
+            # delete the rest locally and propagate with a --remove SCOPED to the
+            # versions dir only — no credentials live there, so it's safe (unlike
+            # the additive main mirror). minio/mc has no grep/sed/awk; uses only
+            # readlink/ls/head/basename. Fail-safe: if the active version can't
+            # be resolved, skip entirely rather than risk deleting it.
+            VDIR=/workspace/.local/share/claude/versions
+            if [ -d "$VDIR" ]; then
+              ACTIVE=$(basename "$(readlink -f /workspace/.local/bin/claude 2>/dev/null)" 2>/dev/null)
+              if [ -n "$ACTIVE" ] && [ -d "$VDIR/$ACTIVE" ]; then
+                KEEP="$ACTIVE $(ls -1t "$VDIR" 2>/dev/null | head -2)"
+                for vn in $(ls -1 "$VDIR" 2>/dev/null); do
+                  [ -d "$VDIR/$vn" ] || continue
+                  skip=0
+                  for k in $KEEP; do [ "$vn" = "$k" ] && skip=1 && break; done
+                  [ "$skip" = 1 ] && continue
+                  echo "[gc] rm old claude version: $vn"
+                  rm -rf "$VDIR/$vn"
+                done
+                mc mirror --overwrite --remove "$VDIR" \
+                  s3/platform-state/labs/claude-remote/.local/share/claude/versions/ || true
+              else
+                echo "[gc] skip version retention (active version unresolved): '$ACTIVE'"
+              fi
+            fi
             size_kb=$(du -sk /workspace 2>/dev/null)
             size_kb=${size_kb%%[!0-9]*}
             if [ "${size_kb:-0}" -gt "$THRESHOLD_KB" ] || [ $((now - last_gc)) -ge "$WEEK" ]; then
