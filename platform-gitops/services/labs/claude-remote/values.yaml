@@ -183,7 +183,12 @@ initContainers:
         # CFS-throttled ~53%, slowing pod startup. Init-only burst; usage idles
         # after, so the limit is headroom.
         cpu: 1000m
-        memory: 128Mi
+        # Raised 128Mi→1Gi on 2026-06-27: the full cold-start `mc mirror` of the
+        # grown state (30+ accumulated claude CLI versions) exceeded 128Mi and
+        # was OOMKilled (exit 137), crash-looping restore-state for 3.5h and
+        # leaving the app Degraded. Init-only; base-service (2Gi) dominates the
+        # pod limit so this adds no quota (max(init, sum(containers))).
+        memory: 1Gi
     command: ["sh", "-c"]
     args:
       - |
