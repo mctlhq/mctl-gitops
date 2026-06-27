@@ -283,10 +283,10 @@ argo-cd:
         memory: 192Mi
       limits:
         # Steady-state is <50m, but reconciliation bursts (helm template
-        # render + git fetch) spike well above 250m for short windows and
-        # get CFS-throttled. The 500m→250m trim on 2026-05-07 was too
-        # aggressive and caused recurring CPUThrottlingHigh; restored to 500m.
-        cpu: 500m
+        # render + git fetch) spike well above the cap for short windows and
+        # get CFS-throttled. 500m→250m (2026-05-07) was too aggressive; 500m
+        # still throttled ~50% (7d), so raised 500m→1000m on 2026-06-27.
+        cpu: 1000m
         memory: 256Mi
     metrics:
       enabled: true
