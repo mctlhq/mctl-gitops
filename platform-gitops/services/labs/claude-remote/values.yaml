@@ -278,10 +278,13 @@ extraContainers:
             VDIR=/workspace/.local/share/claude/versions
             if [ -d "$VDIR" ]; then
               ACTIVE=$(basename "$(readlink -f /workspace/.local/bin/claude 2>/dev/null)" 2>/dev/null)
-              if [ -n "$ACTIVE" ] && [ -d "$VDIR/$ACTIVE" ]; then
+              # Version entries are FILES (per-release binaries, ~240 MB) plus
+              # UUID-named temp files from claude's atomic downloads — use -e,
+              # not -d. rm -rf handles either.
+              if [ -n "$ACTIVE" ] && [ -e "$VDIR/$ACTIVE" ]; then
                 KEEP="$ACTIVE $(ls -1t "$VDIR" 2>/dev/null | head -2)"
                 for vn in $(ls -1 "$VDIR" 2>/dev/null); do
-                  [ -d "$VDIR/$vn" ] || continue
+                  [ -e "$VDIR/$vn" ] || continue
                   skip=0
                   for k in $KEEP; do [ "$vn" = "$k" ] && skip=1 && break; done
                   [ "$skip" = 1 ] && continue
