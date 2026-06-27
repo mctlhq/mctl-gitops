@@ -83,12 +83,12 @@ module "kube-hetzner" {
   # --- Agent (Worker) Nodes ---
   agent_nodepools = [
     {
-      name                 = "worker-cx43-fsn1",
-      server_type          = "cx43",
-      location             = "fsn1",
-      labels               = [],
-      taints               = [],
-      count                = 3
+      name        = "worker-cx43-fsn1",
+      server_type = "cx43",
+      location    = "fsn1",
+      labels      = [],
+      taints      = [],
+      count       = 3
     },
   ]
 
@@ -121,6 +121,19 @@ module "kube-hetzner" {
   # Re-enable only after adding a second CP node (or migrating to HA).
   automatically_upgrade_os = false
   system_upgrade_use_drain = true
+
+  # Pin the k3s version instead of channel-tracking. With install_k3s_version
+  # set, the module renders the system-upgrade Plans with `version:` instead of
+  # `channel:` (templates/plans.yaml.tpl), so they no longer re-resolve against
+  # update.k3s.io. That endpoint is intermittently unreachable
+  # (ResolveFailed: connection timed out) and was transiently resolving to the
+  # OLDER v1.33.12 while all nodes were already on v1.33.13 — the hash mismatch
+  # spawned apply jobs that perpetually re-cordoned the un-drainable single
+  # control-plane (NodeCordoned alert storm, 2026-06-27). Pinning to the
+  # nodes' current version stops the churn; bump this line for controlled
+  # future upgrades. Matches the live `kubectl patch plan ... spec.version`
+  # mitigation applied 2026-06-27.
+  install_k3s_version = "v1.33.13+k3s1"
 
   # --- Kubeconfig ---
   # Best practice: generate via `terraform output --raw kubeconfig > kubeconfig.yaml`
