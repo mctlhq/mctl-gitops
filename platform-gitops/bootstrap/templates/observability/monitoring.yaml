@@ -150,9 +150,10 @@ spec:
                   cpu: 100m
                   memory: 128Mi
                 limits:
-                  # Steady-state ~123m; 250m gives 2x peak cushion. Trimmed
-                  # 500m→250m on 2026-05-07 (CPU-limits cluster headroom).
-                  cpu: 250m
+                  # Raised 250m→500m on 2026-06-27: the 2026-05-07 trim to 250m
+                  # was too aggressive — vmagent CFS-throttled ~37% (7d) on
+                  # scrape/remote-write bursts. 500m restores burst headroom.
+                  cpu: 500m
                   memory: 512Mi
 
           # VMAlert replaces Prometheus's alerting engine
