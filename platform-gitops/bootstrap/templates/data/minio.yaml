@@ -55,18 +55,20 @@ spec:
           resources:
             requests:
               cpu: 100m
-              # Observed RSS ~784Mi; 900Mi gives 15% buffer. Raised 512Mi→900Mi
-              # on 2026-05-10 (RAM real>requests gap on Global RAM dashboard).
-              memory: 900Mi
-            limits:
-              # Raised 500m→1000m on 2026-06-26: CPU usage peaked at 389m (78%
-              # of the 500m cap) with 35% CFS throttling, firing recurring
-              # resource_limit incidents. 1000m gives ~2.5x headroom over peak.
-              cpu: 1000m
-              # Working set hit 99% of 512Mi limit during normal artifact-store
-              # traffic (mctl-agents runs + openclaw S3-state writes); near-OOM
-              # without warning. 1Gi gives a 2x cushion before next review.
+              # Bumped 900Mi→1Gi on 2026-06-27 to reflect real sustained working
+              # set (~1Gi under artifact-store load).
               memory: 1Gi
+            limits:
+              # Raised 1000m→2000m on 2026-06-27: MinIO sat PEGGED at the 1000m
+              # cap (1003m, 100%) under sustained s3-sync load (claude-remote was
+              # mirroring a 9 GiB version bloat every 10s, since pruned), starving
+              # other clients — labs-watch-scan's state reads to MinIO timed out
+              # (60s) and the CronWorkflow failed every tick.
+              cpu: 2000m
+              # Raised 1Gi→2Gi on 2026-06-27: working set hit 1004Mi (>1Gi limit)
+              # and MinIO was OOMKill-restarting (27 restarts) → unresponsive,
+              # causing the read timeouts above. 2Gi gives real headroom.
+              memory: 2Gi
 
           buckets:
             - name: argo-workflows-logs
