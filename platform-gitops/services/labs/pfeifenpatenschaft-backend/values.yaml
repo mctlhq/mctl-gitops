@@ -26,6 +26,12 @@ env:
   SWEEPER_INTERVAL_SECONDS: "60"
   EMAIL_PROVIDER: console
   CHURCH_NOTIFICATION_RECIPIENTS: ""
+envFrom:
+  - secretRef:
+      name: labs-pfeifenpatenschaft-backend-db-creds
+dbSecret:
+  vaultPath: teams/labs/pfeifenpatenschaft-backend/database
+  secretName: labs-pfeifenpatenschaft-backend-db-creds
 ingress:
   enabled: true
   hosts:
