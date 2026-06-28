@@ -29,6 +29,9 @@ env:
 envFrom:
   - secretRef:
       name: labs-pfeifenpatenschaft-backend-db-creds
+  # TWINGLE_WEBHOOK_SECRET — synced from Vault by the externalSecret block below.
+  - secretRef:
+      name: pfeifenpatenschaft-backend-secrets
 dbSecret:
   vaultPath: teams/labs/pfeifenpatenschaft-backend/database
   secretName: labs-pfeifenpatenschaft-backend-db-creds
