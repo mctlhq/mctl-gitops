@@ -114,6 +114,7 @@ spec:
       - host labs-mctl-loyalty labs-mctl-loyalty all scram-sha-256
       - host labs-mctl-pairdesk labs-mctl-pairdesk all scram-sha-256
       - host labs-pfeifenpatenschaft labs-pfeifenpatenschaft all scram-sha-256
+      - host labs-pfeifenpatenschaft-backend labs-pfeifenpatenschaft-backend all scram-sha-256
       - host all all 0.0.0.0/0 reject
 
   managed:
@@ -150,6 +151,12 @@ spec:
         passwordSecret:
           name: mctl-api-db-creds
       # Team app roles
+      - name: labs-pfeifenpatenschaft-backend
+        login: true
+        connectionLimit: 10
+        ensure: present
+        passwordSecret:
+          name: labs-pfeifenpatenschaft-backend-db-creds
       - name: labs-pfeifenpatenschaft
         login: true
         connectionLimit: 10
