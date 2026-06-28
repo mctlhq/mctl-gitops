@@ -44,3 +44,9 @@ ingress:
       hosts:
         - labs-pfeifenpatenschaft-backend.mctl.ai
         - labs-pfeifenpatenschaft-backend.mctl.me
+externalSecret:
+  targetSecret: pfeifenpatenschaft-backend-secrets
+  data:
+    - secretKey: TWINGLE_WEBHOOK_SECRET
+      remoteKey: teams/labs/pfeifenpatenschaft-backend
+      property: TWINGLE_WEBHOOK_SECRET
