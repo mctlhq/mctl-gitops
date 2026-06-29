@@ -68,3 +68,13 @@ externalSecret:
     - secretKey: TWINGLE_WEBHOOK_SECRET
       remoteKey: teams/labs/pfeifenpatenschaft-backend
       property: TWINGLE_WEBHOOK_SECRET
+    # Admin web panel (/admin) login. The browser panel needs both of these;
+    # generate the hash with `npm run admin:hash -- '<password>'`.
+    # NOTE: write these properties into Vault (teams/labs/pfeifenpatenschaft-backend)
+    # BEFORE merging — a missing property fails the ExternalSecret sync.
+    - secretKey: ADMIN_PASSWORD_HASH
+      remoteKey: teams/labs/pfeifenpatenschaft-backend
+      property: ADMIN_PASSWORD_HASH
+    - secretKey: ADMIN_SESSION_SECRET
+      remoteKey: teams/labs/pfeifenpatenschaft-backend
+      property: ADMIN_SESSION_SECRET
