@@ -8,6 +8,12 @@ image:
   tag: "0.4.0"
 imagePullSecrets:
   - name: ghcr-credentials
+# Force a pod rollout when the admin secret keys are added below. envFrom
+# secretRef does not restart running pods when the Secret gains keys (no
+# reloader), so without this the live pod keeps booting without ADMIN_* and
+# /admin stays 404. Bump this date on any future secret-only change. (Codex P2.)
+podAnnotations:
+  rollout/admin-secrets: "2026-06-29"
 service:
   port: 8080
 backstage:
@@ -68,3 +74,13 @@ externalSecret:
     - secretKey: TWINGLE_WEBHOOK_SECRET
       remoteKey: teams/labs/pfeifenpatenschaft-backend
       property: TWINGLE_WEBHOOK_SECRET
+    # Admin web panel (/admin) login. The browser panel needs both of these;
+    # generate the hash with `npm run admin:hash -- '<password>'`.
+    # NOTE: write these properties into Vault (teams/labs/pfeifenpatenschaft-backend)
+    # BEFORE merging — a missing property fails the ExternalSecret sync.
+    - secretKey: ADMIN_PASSWORD_HASH
+      remoteKey: teams/labs/pfeifenpatenschaft-backend
+      property: ADMIN_PASSWORD_HASH
+    - secretKey: ADMIN_SESSION_SECRET
+      remoteKey: teams/labs/pfeifenpatenschaft-backend
+      property: ADMIN_SESSION_SECRET
