@@ -340,6 +340,20 @@ spec:
       kind: VMSingle
       jsonPointers:
         - /spec/extraContainers
+    # The victoria-metrics-operator subchart ships a `pre-delete` Helm hook
+    # ServiceAccount (cleanup-hook). ArgoCD applies it once but, being a
+    # pre-delete hook, never re-applies it on a normal sync — so when the
+    # k8s-stack chart bumps its bundled operator version, the live SA keeps the
+    # OLD `helm.sh/chart` / `app.kubernetes.io/version` labels while git renders
+    # the new ones. That label-only mismatch left the SA (and thus root-app)
+    # perpetually OutOfSync despite being Healthy. Ignore label diffs on this
+    # one SA; the hook still functions on app deletion.
+    - group: ""
+      kind: ServiceAccount
+      name: monitoring-victoria-metrics-operator-cleanup-hook
+      namespace: monitoring
+      jqPathExpressions:
+        - .metadata.labels
     # ESO admission webhook injects default fields absent in git.
     - group: external-secrets.io
       kind: ExternalSecret
