@@ -59,6 +59,9 @@ probes:
 ingress:
   enabled: true
   hosts:
+    # Short primary host. The longer labs-* hosts stay as working aliases so
+    # existing links/bookmarks keep working.
+    - orgel.mctl.ai
     - labs-pfeifenpatenschaft-backend.mctl.ai
     - labs-pfeifenpatenschaft-backend.mctl.me
   annotations:
@@ -66,6 +69,7 @@ ingress:
   tls:
     - secretName: pfeifenpatenschaft-backend-tls
       hosts:
+        - orgel.mctl.ai
         - labs-pfeifenpatenschaft-backend.mctl.ai
         - labs-pfeifenpatenschaft-backend.mctl.me
 externalSecret:
