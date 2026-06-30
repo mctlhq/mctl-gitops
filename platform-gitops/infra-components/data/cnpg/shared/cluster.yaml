@@ -98,7 +98,6 @@ spec:
       # Backstage — access to own db + postgres db (assertDatabaseExists check)
       - host backstage backstage all scram-sha-256
       - host postgres backstage all scram-sha-256
-      - host smoke-test-openclaw backstage all scram-sha-256
       # Argo Workflows — persistence and archive
       - host argo-workflows argoworkflows all scram-sha-256
       # Team apps — each role only its own database
