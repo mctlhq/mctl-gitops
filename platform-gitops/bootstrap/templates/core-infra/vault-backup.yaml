@@ -57,7 +57,11 @@ spec:
   jobTemplate:
     spec:
       backoffLimit: 2
-      ttlSecondsAfterFinished: 86400
+      # 2h (was 24h): clear the Job — and the transient failed-attempt pod a
+      # backoffLimit retry leaves behind — soon after the daily run, so it stops
+      # pinning KubeContainerWaiting for most of the day. Snapshot logs persist
+      # in Loki and successful backups are uploaded to R2 regardless.
+      ttlSecondsAfterFinished: 7200
       template:
         spec:
           serviceAccountName: vault-backup
