@@ -32,8 +32,21 @@ env:
   NODE_ENV: production
   RESERVATION_TTL_MINUTES: "15"
   SWEEPER_INTERVAL_SECONDS: "60"
+  # Church notification email (0.7.0). Currently console-only: notifications are
+  # logged (presence-only, no donor PII), NOT sent. To enable real delivery, set
+  # EMAIL_PROVIDER: smtp + SMTP_HOST/SMTP_PORT/SMTP_FROM here and add SMTP_USER /
+  # SMTP_PASSWORD via Vault+externalSecret (never plaintext in this file).
   EMAIL_PROVIDER: console
   CHURCH_NOTIFICATION_RECIPIENTS: ""
+  # Data retention / Löschkonzept (0.7.0). DISABLED by default and listed
+  # explicitly so the knobs aren't forgotten — NOTHING is deleted while
+  # RETENTION_ENABLED is "false". Before enabling: agree the windows (days; 0 =
+  # never) with the parish, then flip RETENTION_ENABLED to "true".
+  RETENTION_ENABLED: "false"
+  RETENTION_SWEEP_INTERVAL_SECONDS: "86400"
+  RETENTION_UNPAID_DELETE_DAYS: "7"
+  RETENTION_PAID_ANONYMIZE_DAYS: "0"
+  RETENTION_TWINGLE_EVENTS_DELETE_DAYS: "0"
 envFrom:
   - secretRef:
       name: labs-pfeifenpatenschaft-backend-db-creds
