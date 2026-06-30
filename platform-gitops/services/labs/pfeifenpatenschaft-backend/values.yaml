@@ -12,8 +12,10 @@ imagePullSecrets:
 # secretRef does not restart running pods when the Secret gains keys (no
 # reloader), so without this the live pod keeps booting without ADMIN_* and
 # /admin stays 404. Bump this date on any future secret-only change. (Codex P2.)
+# 2026-06-30: added PII_ENCRYPTION_KEY (0.6.0 PII-at-rest); bump forces the pod
+# to pick up the new key from the Secret.
 podAnnotations:
-  rollout/admin-secrets: "2026-06-29"
+  rollout/admin-secrets: "2026-06-30"
 service:
   port: 8080
 backstage:
@@ -88,3 +90,10 @@ externalSecret:
     - secretKey: ADMIN_SESSION_SECRET
       remoteKey: teams/labs/pfeifenpatenschaft-backend
       property: ADMIN_SESSION_SECRET
+    # PII encryption at rest (0.6.0). base64-encoded 256-bit key; the app refuses
+    # to start if set-but-malformed, and stores donor PII as plaintext if absent.
+    # Already written to Vault (teams/labs/pfeifenpatenschaft-backend) before this
+    # merge, so the ExternalSecret sync finds the property.
+    - secretKey: PII_ENCRYPTION_KEY
+      remoteKey: teams/labs/pfeifenpatenschaft-backend
+      property: PII_ENCRYPTION_KEY
