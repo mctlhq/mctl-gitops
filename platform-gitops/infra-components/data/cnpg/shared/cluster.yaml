@@ -66,10 +66,14 @@ spec:
 
   resources:
     requests:
-      memory: 1Gi
+      # Raised 1Gi→2Gi on 2026-06-30: shared-pg-1 was OOMKilled 11× against the
+      # 1Gi cap, forcing a primary failover to shared-pg-2. shared_buffers
+      # (256MB) + 200 max_connections work_mem + WAL/checkpoint buffers exceed
+      # 1Gi under load on this shared instance (9 tenant databases).
+      memory: 2Gi
       cpu: 500m
     limits:
-      memory: 1Gi
+      memory: 2Gi
       # Raised 1→2 on 2026-06-26: the primary (shared-pg-1) hit 100% CFS
       # throttling on bursts (checkpoints / CNPG base backups) against the 1m
       # cap, firing recurring resource_limit incidents. Avg usage stays low
