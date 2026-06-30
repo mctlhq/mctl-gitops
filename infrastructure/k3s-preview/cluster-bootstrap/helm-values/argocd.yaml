@@ -71,11 +71,21 @@ configs:
     server.insecure: true
 
   rbac:
+    policy.csv: ""
     policy.default: ""
     scopes: "[groups]"
 
   secret:
     createSecret: true
+
+  # Helm's default upgrade merge carries forward unset top-level keys from
+  # prior releases unless explicitly cleared here (same class of bug as the
+  # imagePullSecrets fix above). repositories/credentialTemplates were found
+  # to still contain a third-party repo credential left over from an earlier
+  # release of this chart release name; clear explicitly so future upgrades
+  # can't reintroduce them.
+  repositories: {}
+  credentialTemplates: {}
 
 server:
   ingress:
