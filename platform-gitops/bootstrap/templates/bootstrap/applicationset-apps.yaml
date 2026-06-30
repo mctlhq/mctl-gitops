@@ -71,11 +71,17 @@ spec:
         # `kubectl.kubernetes.io/last-applied-configuration` annotation can
         # pin a stale apiVersion across chart-version churn (2026-05-07
         # 0.10.x↔2.x roundtrip wedged ArgoCD on 41 ESs).
+        # Note: .metadata.managedFields must NOT be listed here — with
+        # RespectIgnoreDifferences=true + ServerSideApply, ArgoCD injects the
+        # live object's cached managedFields into the SSA apply payload, which
+        # the apiserver rejects ("metadata.managedFields must be nil"). That
+        # wedges every spec.data change on a labs ExternalSecret (hit 2026-06-29
+        # adding admin keys, 2026-06-30 adding PII_ENCRYPTION_KEY). The
+        # stale-apiVersion churn above is handled by ignoring .metadata.annotations.
         - group: external-secrets.io
           kind: ExternalSecret
           jqPathExpressions:
             - .metadata.annotations
-            - .metadata.managedFields
             - .spec.target.deletionPolicy
             - .spec.data[].remoteRef.conversionStrategy
             - .spec.data[].remoteRef.decodingStrategy
