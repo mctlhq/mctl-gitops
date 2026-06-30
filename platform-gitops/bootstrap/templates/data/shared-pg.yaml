@@ -21,7 +21,6 @@ spec:
         - .metadata.annotations
         - .metadata.labels
         - .status
-        - .spec.resources
   syncPolicy:
     automated:
       prune: true
