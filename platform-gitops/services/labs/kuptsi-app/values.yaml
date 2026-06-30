@@ -5,7 +5,7 @@
 
 image:
   repository: ghcr.io/mctlhq/kuptsi-app
-  tag: "0.2.15"
+  tag: "0.2.16"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
@@ -79,7 +79,7 @@ extraContainers:
     # ride the same kuptsi-v2 build. mctl_deploy_service action=deploy only
     # bumps `image.tag` in this file — bump here manually after each release
     # (or accept lag if you intentionally want to canary).
-    image: ghcr.io/mctlhq/kuptsi-app:0.2.15
+    image: ghcr.io/mctlhq/kuptsi-app:0.2.16
     imagePullPolicy: IfNotPresent
     command: ["python", "-m", "src.temporal.worker"]
     env:
