@@ -71,11 +71,24 @@ configs:
     server.insecure: true
 
   rbac:
+    policy.csv: ""
     policy.default: ""
     scopes: "[groups]"
 
   secret:
     createSecret: true
+
+  # Helm's default upgrade merge carries forward unset top-level keys from
+  # prior releases unless explicitly cleared here (same class of bug as the
+  # imagePullSecrets fix above). repositories/credentialTemplates were found
+  # to still contain a third-party repo credential left over from an earlier
+  # release of this chart release name.
+  #
+  # Must be `null`, not `{}` — Helm coalesces maps recursively on merge, so
+  # an empty map does not remove existing child keys from a stored release's
+  # values; only an explicit null unsets the key entirely.
+  repositories: null
+  credentialTemplates: null
 
 server:
   ingress:
