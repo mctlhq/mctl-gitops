@@ -138,10 +138,17 @@ spec:
 
         artifactRepository:
           archiveLogs: true
+          # Migrated 2026-07 from self-hosted MinIO to Cloudflare R2. Bucket
+          # name kept as "argo-workflows-logs" (recreated on R2 with a 30-day
+          # lifecycle rule). Credentials still come from the
+          # minio-artifact-credentials Secret (name unchanged), but that
+          # Secret's ExternalSecret now sources R2 keys from Vault
+          # (see argo-workflows/config/vault-auth.yaml).
           s3:
-            endpoint: minio.minio.svc:9000
+            endpoint: 6a09f637d20e1f66a8e9d45ebe778058.r2.cloudflarestorage.com
             bucket: argo-workflows-logs
-            insecure: true
+            region: auto
+            insecure: false
             accessKeySecret:
               name: minio-artifact-credentials
               key: accessKey
