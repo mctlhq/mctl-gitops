@@ -71,8 +71,6 @@ spec:
               memory: 2Gi
 
           buckets:
-            - name: argo-workflows-logs
-              policy: none
             - name: platform-cache
               policy: none
             - name: platform-state
