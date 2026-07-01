@@ -79,7 +79,7 @@ Subscribe to upstream releases to get notified of new versions.
 k3s-preview/
 ├── kube.tf                    # Main cluster config (module call + providers + outputs)
 ├── backend.tf                 # Remote state: Cloudflare R2
-├── cluster-bootstrap/         # ArgoCD Helm install + Vault ExternalSecret bootstrap
+├── cluster-bootstrap/         # ArgoCD Helm install (one-shot, see "Disaster recovery") + Vault ExternalSecret bootstrap
 │   ├── argocd.tf
 │   ├── helm-values/argocd.yaml
 │   └── vault-config/          # Vault policies + ClusterSecretStore
@@ -94,9 +94,36 @@ k3s-preview/
 Remote state in Cloudflare R2:
 - Bucket: `mctl-terraform-state`
 - Key: `k3s-preview/terraform.tfstate`
-- Cluster bootstrap state: `k3s-preview/cluster-bootstrap/terraform.tfstate`
+
+`cluster-bootstrap/` is a child module invoked from root `kube.tf` — it has
+no `backend.tf`/`versions.tf` of its own and must never be `init`'d/applied
+as an independent root; doing so once (before 2026-07-01) split the ArgoCD
+Helm release across two disconnected state files and caused a chain of
+ownership conflicts (see "Disaster recovery" below and PR history around
+2026-07-01 in this repo).
 
 Local `.tfstate` files are git-ignored. Never commit state files.
+
+## Disaster recovery: re-bootstrapping ArgoCD from zero
+
+`cluster-bootstrap/helm_release.argocd` is a **one-shot bootstrap resource**,
+gated behind `var.bootstrap_argocd` (default `false`) and deliberately kept
+OUT of Terraform state during routine operation — ArgoCD self-manages its
+own config via GitOps (`platform-gitops/argocd/`) once bootstrapped, and
+letting Terraform keep tracking the same Helm release causes it to fight
+ArgoCD's reconciler for ownership (this happened 2026-04-06 to 2026-07-01:
+Terraform's tracked state went stale for ~85 days while ArgoCD kept the live
+cluster current; re-running `terraform apply` against it then required
+manually re-labelling `argocd-self-managed`/`root-app` with Helm ownership
+metadata that ArgoCD's own reconciliation had stripped).
+
+For a genuine from-zero cluster rebuild:
+1. `terraform apply -var="bootstrap_argocd=true"` — installs ArgoCD and seeds
+   the `argocd-self-managed` + `root-app` Applications.
+2. Wait for both Applications to report `Healthy`/`Synced`
+   (`kubectl get application -n argocd`).
+3. `terraform state rm module.cluster-bootstrap.helm_release.argocd[0]` —
+   detaches it from Terraform again so routine `plan`/`apply` stays clean.
 
 ## Security notes
 
