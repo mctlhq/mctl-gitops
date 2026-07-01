@@ -1,0 +1,88 @@
+name: Validate Manifests
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+
+env:
+  KUBECONFORM_VERSION: "0.8.0"
+  # Community CRD schema catalog — covers ArgoCD Application, Argo Workflows,
+  # ExternalSecrets, CNPG Cluster, etc. that aren't in the core k8s schema set.
+  CRD_SCHEMA_LOCATION: "https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Install Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.0
+        with:
+          version: "v3.16.4"
+
+      - name: Install kubeconform
+        run: |
+          curl -sSL "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
+            | tar xz kubeconform
+          sudo mv kubeconform /usr/local/bin/
+
+      - name: Helm lint internal charts
+        run: |
+          set -euo pipefail
+          for chart in platform-gitops/helm-charts/*/ platform-gitops/bootstrap platform-gitops/argocd; do
+            echo "== helm lint $chart =="
+            helm lint "$chart"
+          done
+
+      - name: Render and validate per-service manifests
+        run: |
+          set -euo pipefail
+          tmpdir=$(mktemp -d)
+          fail=0
+          for values in platform-gitops/services/*/*/values.yaml; do
+            svc=$(dirname "$values")
+            if ! helm template test platform-gitops/helm-charts/base-service -f "$values" > "$tmpdir/render.yaml"; then
+              echo "::error::helm template failed for $svc"
+              fail=1
+              continue
+            fi
+            if ! kubeconform -strict -summary -schema-location default \
+                -schema-location "$CRD_SCHEMA_LOCATION" \
+                "$tmpdir/render.yaml"; then
+              echo "::error::manifest validation failed for $svc"
+              fail=1
+            fi
+          done
+          exit $fail
+
+      - name: Render and validate bootstrap and argocd charts
+        run: |
+          set -euo pipefail
+          tmpdir=$(mktemp -d)
+          helm template test platform-gitops/bootstrap -f platform-gitops/bootstrap/values.yaml > "$tmpdir/bootstrap.yaml"
+          helm template test platform-gitops/argocd -f platform-gitops/argocd/values.yaml > "$tmpdir/argocd.yaml"
+          kubeconform -strict -summary -schema-location default \
+            -schema-location "$CRD_SCHEMA_LOCATION" \
+            "$tmpdir/bootstrap.yaml" "$tmpdir/argocd.yaml"
+
+      - name: Validate raw manifests (tenants, argo-workflows, mcp, infra-components)
+        run: |
+          set -euo pipefail
+          # Excludes:
+          #  - values.yaml (Helm values, not a k8s manifest)
+          #  - catalog-info.yaml (Backstage entity, no k8s schema)
+          #  - cwft-mctl-agents-shepherd.yaml: intentionally sets .spec.outputs on a
+          #    ClusterWorkflowTemplate (see in-file comment) to satisfy Argo's static
+          #    validator; the community CRD schema catalog doesn't recognize this field
+          #    yet and flags it as an unknown property, even though it's required for
+          #    the CronWorkflow to schedule.
+          find platform-gitops/tenants platform-gitops/argo-workflows platform-gitops/mcp platform-gitops/infra-components \
+            \( -name "*.yaml" -o -name "*.yml" \) -print0 | \
+            xargs -0 kubeconform -strict -summary -schema-location default \
+              -ignore-filename-pattern '(^|.*/)(values\.yaml|catalog-info\.yaml|cwft-mctl-agents-shepherd\.yaml)$' \
+              -schema-location "$CRD_SCHEMA_LOCATION"
