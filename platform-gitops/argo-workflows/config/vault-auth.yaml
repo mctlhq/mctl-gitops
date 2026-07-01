@@ -72,7 +72,11 @@ spec:
         property: password
 
 ---
-# ExternalSecret for MinIO credentials (used as Argo Workflows artifact repository)
+# ExternalSecret for the Argo Workflows artifact repository credentials.
+# Migrated 2026-07 from self-hosted MinIO to Cloudflare R2 (see
+# argo-workflows.yaml artifactRepository.s3 for the endpoint change).
+# Secret name kept as "minio-artifact-credentials" to avoid touching the
+# Application manifest's secretRef; only the Vault source path changed.
 apiVersion: external-secrets.io/v1beta1
 kind: ExternalSecret
 metadata:
@@ -89,9 +93,9 @@ spec:
   data:
     - secretKey: accessKey
       remoteRef:
-        key: platform/minio
-        property: root-user
+        key: platform/r2-loki-argo
+        property: access-key
     - secretKey: secretKey
       remoteRef:
-        key: platform/minio
-        property: root-password
+        key: platform/r2-loki-argo
+        property: secret-key
