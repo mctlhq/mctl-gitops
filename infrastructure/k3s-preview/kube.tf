@@ -42,6 +42,16 @@ variable "cf_token" {
   description = "Cloudflare API token for DNS-01 ACME challenge"
 }
 
+variable "bootstrap_argocd" {
+  description = <<-EOT
+    Gate for cluster-bootstrap's one-shot helm_release.argocd resource.
+    Leave false for routine plan/apply. Only set true for a from-zero cluster
+    rebuild — see infrastructure/k3s-preview/README.md "Disaster recovery".
+  EOT
+  type        = bool
+  default     = false
+}
+
 # All secrets below migrated to Vault + ExternalSecrets
 # See: platform-gitops/apps/templates/
 
@@ -148,6 +158,8 @@ module "cluster-bootstrap" {
     kubernetes = kubernetes
   }
   source = "./cluster-bootstrap"
+
+  bootstrap_argocd = var.bootstrap_argocd
 
   depends_on = [
     module.kube-hetzner
