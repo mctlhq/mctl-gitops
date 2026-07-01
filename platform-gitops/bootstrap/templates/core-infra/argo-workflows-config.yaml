@@ -18,11 +18,20 @@ spec:
     # client-side `kubectl.kubernetes.io/last-applied-configuration` annotation
     # has historically pinned a stale apiVersion/resourceVersion across chart
     # version churn. Mirror the tenants ApplicationSet pattern.
+    #
+    # Do NOT list .metadata.managedFields here: with RespectIgnoreDifferences
+    # + ServerSideApply, ArgoCD injects the live object's cached managedFields
+    # into the SSA apply payload, which the apiserver rejects with
+    # "metadata.managedFields must be nil" (retried 5x, sync Failed). Hit on
+    # 2026-07-01 during the Loki/Argo R2 migration cutover (PR #483) — the
+    # minio-artifact-credentials ExternalSecret never got its new Vault path,
+    # leaving Argo Workflows artifact saves on dead MinIO creds. Same lesson
+    # already documented in applicationset-apps.yaml; this file just hadn't
+    # been updated to match.
     - group: external-secrets.io
       kind: ExternalSecret
       jqPathExpressions:
         - .metadata.annotations
-        - .metadata.managedFields
         - .spec.target.deletionPolicy
         - .spec.data[].remoteRef.conversionStrategy
         - .spec.data[].remoteRef.decodingStrategy
