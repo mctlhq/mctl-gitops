@@ -127,7 +127,6 @@ spec:
         inherit: true
         connectionLimit: 100  # 2 replicas * ~25 plugin connections during rolling deploy
         ensure: present
-        inherit: true
         passwordSecret:
           name: backstage-db-creds
       - name: argoworkflows
@@ -135,7 +134,6 @@ spec:
         inherit: true
         connectionLimit: 20
         ensure: present
-        inherit: true
         passwordSecret:
           name: argoworkflows-db-creds
       - name: mctl-agent
@@ -143,7 +141,6 @@ spec:
         inherit: true
         connectionLimit: 20
         ensure: present
-        inherit: true
         passwordSecret:
           name: mctl-agent-db-creds
       - name: mctl-api
