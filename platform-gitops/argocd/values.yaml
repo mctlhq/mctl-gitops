@@ -228,7 +228,11 @@ argo-cd:
         # GCs aggressively against the old soft cap and never uses the headroom.
         memory: 2Gi
       requests:
-        cpu: 100m
+        # Raised 100m->500m on 2026-07-02: observed sustained ~250-400m under
+        # normal reconciliation load (top consumer of CPU cluster-wide), so
+        # the 100m request badly underrepresented real usage for scheduler
+        # bin-packing. 500m covers steady-state with headroom.
+        cpu: 500m
         memory: 768Mi
     env:
       - name: GOMEMLIMIT
