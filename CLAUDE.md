@@ -28,6 +28,29 @@ GitOps repository. ArgoCD source of truth for the entire mctl platform.
 - `platform-gitops/argo-workflows/cluster-templates/wft-deploy-service.yaml` — deploy workflow
 - `platform-gitops/argo-workflows/config/vault-auth.yaml` — Vault auth for Argo Workflows
 
+## Branch Protection Exception — Automated Bot Commits
+
+The org-wide hard rule ("NEVER commit directly to main") does not apply to
+two GitHub Actions workflows in this repo, which are designed to push
+directly to `main` with no PR:
+
+- `gitops-bump.yaml` — bumps `image.tag` in a service's `values.yaml` after
+  a source-repo build succeeds.
+- `release-deploy.yaml` — bumps `image.tag` after `mctl_deploy_service` /
+  a release tag.
+
+This is intentional: both use their own scoped `GITHUB_TOKEN` with
+`contents: write` and only ever touch a single `image.tag` field, which is
+the same class of change the human "trivial changes — merge immediately"
+rule already allows to skip review. Requiring a PR (and therefore a human
+or Claude review) for every automated image bump would add review latency
+to the deploy path without a corresponding safety benefit.
+
+Everything else — any change to templates, RBAC, resource limits, secrets
+wiring, or ApplicationSet/Application specs — still goes through a feature
+branch and a PR, reviewed by `claude-review.yml` and validated by
+`validate-manifests.yml`, same as any other repo.
+
 ## Common Operations
 
 ### Deploy a new image tag
