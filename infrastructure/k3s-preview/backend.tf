@@ -6,6 +6,7 @@ terraform {
     bucket                      = "mctl-terraform-state"
     key                         = "k3s-preview/terraform.tfstate"
     region                      = "auto"
+    use_lockfile                = true
     skip_credentials_validation = true
     skip_requesting_account_id  = true
     skip_metadata_api_check     = true
