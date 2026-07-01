@@ -565,7 +565,13 @@ extraContainers:
               --exclude '*.tmp' \
               /home/node/.openclaw s3/platform-state/labs/openclaw/ || true
           fi
-          sleep 10
+          # Was 10s; the preStop hook below already does a synchronous final
+          # flush on graceful shutdown (same precedent as claude-remote's
+          # s3-sync, raised 10s->60s on 2026-06-xx), so the frequent tick
+          # only protects against ungraceful pod death. Raised 10s->60s on
+          # 2026-07-02 to cut MinIO request volume from the 3 openclaw
+          # tenants + claude-remote hammering platform-state continuously.
+          sleep 60
         done
     lifecycle:
       # Flush tenant state (auth-profiles.json, sessions, memory) to S3
