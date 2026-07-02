@@ -1,0 +1,28 @@
+name: no-root-yaml
+
+on:
+  pull_request:
+    paths:
+      - '**.yaml'
+      - '**.yml'
+      - '.github/workflows/no-root-yaml.yml'
+
+permissions: {}
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: reject top-level YAML files
+        run: |
+          # Cluster manifests and workflows belong under platform-gitops/ so
+          # ArgoCD manages their lifecycle. Stray root-level YAML bypasses that
+          # and is exactly how the plaintext-secret one-shots got committed.
+          found=$(git ls-files -- '*.yaml' '*.yml' | grep -v '/' || true)
+          if [ -n "$found" ]; then
+            echo "::error::Top-level YAML files are not allowed (move under platform-gitops/):"
+            echo "$found"
+            exit 1
+          fi
+          echo "No top-level YAML files. OK."
