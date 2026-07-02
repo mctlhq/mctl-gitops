@@ -335,6 +335,10 @@ spec:
       targetRevision: main
       path: platform-gitops/infra-components/observability/vm-rules
 
+    - repoURL: https://github.com/mctlhq/mctl-gitops.git
+      targetRevision: main
+      path: platform-gitops/infra-components/observability/pushgateway
+
   ignoreDifferences:
     - group: operator.victoriametrics.com
       kind: VMSingle
