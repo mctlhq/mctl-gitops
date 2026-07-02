@@ -112,7 +112,7 @@ spec:
     # ── 2. Run mctl-agents orchestrator with state mounted ────────────────
     - name: run-orchestrator
       container:
-        image: ghcr.io/mctlhq/mctl-agents:1.16.0
+        image: ghcr.io/mctlhq/mctl-agents:1.16.1
         imagePullPolicy: IfNotPresent
         # Explicit command + args so Argo's emissary executor doesn't need
         # to introspect the registry for ENTRYPOINT/CMD.
