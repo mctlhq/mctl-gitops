@@ -1,0 +1,42 @@
+name: yamllint
+
+on:
+  pull_request:
+    paths:
+      - 'platform-gitops/**'
+      - '.github/workflows/yamllint.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  yamllint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: yamllint (relaxed)
+        run: |
+          set -euo pipefail
+          pipx install yamllint==1.35.1
+          cat > /tmp/yamllint.yml <<'CFG'
+          extends: relaxed
+          # helm-charts/ templates and the two prod-placeholder files start with
+          # bare `{{- ... }}` Go-template directives, which aren't valid YAML on
+          # their own — yamllint can't parse them regardless of rule config.
+          ignore: |
+            platform-gitops/helm-charts/
+            platform-gitops/bootstrap/templates/bootstrap/applicationset-prod.yaml
+            platform-gitops/bootstrap/templates/projects/project-prod.yaml
+          rules:
+            # Helm templates routinely exceed 80 cols and carry Go-template
+            # markers, so line-length / comments / document-start are noise.
+            line-length: disable
+            comments: disable
+            document-start: disable
+            # truthy: Helm values legitimately use bare yes/no/on/off; disabled
+            # to avoid false positives. Revisit if we standardise on true/false.
+            truthy: disable
+          CFG
+          yamllint -c /tmp/yamllint.yml platform-gitops
