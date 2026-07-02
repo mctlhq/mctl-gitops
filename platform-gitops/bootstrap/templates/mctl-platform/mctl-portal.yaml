@@ -454,9 +454,12 @@ spec:
                   target: https://github.com/mctlhq/mctl-gitops/blob/main/platform-gitops/backstage/templates/delete-tenant/template.yaml
                   rules:
                     - allow: [Template]
-                # Tenant entities from the tenant-management backend
+                # Tenant entities from the tenant-management backend.
+                # The endpoint serves PII and requires the landing token; the
+                # catalog UrlReader cannot send headers, so it rides the query
+                # string. Backstage substitutes the env var at runtime.
                 - type: url
-                  target: https://app.mctl.ai/api/tenant-management/backstage/catalog.yaml
+                  target: https://app.mctl.ai/api/tenant-management/backstage/catalog.yaml?token=${BACKSTAGE_LANDING_TOKEN}
                   rules:
                     - allow: [User, Group, System]
 
