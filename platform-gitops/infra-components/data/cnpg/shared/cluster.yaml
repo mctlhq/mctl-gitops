@@ -15,7 +15,7 @@ spec:
 
   # CNPG operator defaults (explicitly set to prevent ArgoCD OutOfSync)
   imageName: ghcr.io/cloudnative-pg/postgresql:17.2
-  
+
   # Enable automated backups to internal MinIO
   backup:
     barmanObjectStore:
