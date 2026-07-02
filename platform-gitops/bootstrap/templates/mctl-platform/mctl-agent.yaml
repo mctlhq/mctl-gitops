@@ -114,9 +114,19 @@ spec:
             - secretKey: TELEGRAM_BOT_TOKEN
               remoteKey: platform/mctl-agent/tokens
               property: telegram-bot-token
-        # Note: mctl-agent-db-creds ExternalSecret is managed in cnpg/shared/secrets.yaml
-        # and synced to 'admins' namespace via cluster-wide sync or manual patch.
-        # For now, we assume it exists in the namespace.
+        # DB creds for the pod, synced from the same Vault path as the CNPG
+        # managed-role secret in platform-db (cnpg/shared/secrets.yaml).
+        # Owner policy adopts the previously hand-created secret so password
+        # rotation in Vault propagates here without manual patching.
+        extraExternalSecrets:
+          mctl-agent-db-creds:
+            data:
+              - secretKey: DB_USER
+                remoteKey: platform/mctl-agent/database
+                property: username
+              - secretKey: DB_PASSWORD
+                remoteKey: platform/mctl-agent/database
+                property: password
         ingress:
           enabled: true
           ingressClassName: traefik
