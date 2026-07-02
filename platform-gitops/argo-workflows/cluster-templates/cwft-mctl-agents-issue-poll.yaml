@@ -125,7 +125,7 @@ spec:
     # crash with ImportError.
     - name: run-poller
       container:
-        image: ghcr.io/mctlhq/mctl-agents:1.16.0
+        image: ghcr.io/mctlhq/mctl-agents:1.16.1
         imagePullPolicy: IfNotPresent
         command: ["/entrypoint.sh"]
         args:
