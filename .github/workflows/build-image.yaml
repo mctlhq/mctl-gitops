@@ -182,15 +182,16 @@ jobs:
           build-args: |
             APP_VERSION=${{ inputs.git_ref }}
           # BuildKit secret: a read:packages PAT for source Dockerfiles that
-          # install private GitHub Packages dependencies (mctl-web pulls
-          # @mctlhq/css). It is injected ONLY when building an allow-listed
-          # repo. This gate is keyed on `inputs.repo` — not a caller-set flag —
-          # because the workflow checks out and builds that repo's own
-          # Dockerfile: a caller cannot both name a trusted repo here AND run
-          # an attacker-controlled Dockerfile. Other repos get an empty value,
-          # so a malicious Dockerfile elsewhere never receives the PAT.
+          # install private GitHub Packages dependencies (mctl-web and
+          # mctl-docs pull @mctlhq/css). It is injected ONLY when building an
+          # allow-listed repo. This gate is keyed on `inputs.repo` — not a
+          # caller-set flag — because the workflow checks out and builds that
+          # repo's own Dockerfile: a caller cannot both name a trusted repo
+          # here AND run an attacker-controlled Dockerfile. Other repos get an
+          # empty value, so a malicious Dockerfile elsewhere never receives
+          # the PAT.
           secrets: |
-            github_token=${{ inputs.repo == 'mctlhq/mctl-web' && secrets.GH_PACKAGES_TOKEN || '' }}
+            github_token=${{ contains(fromJSON('["mctlhq/mctl-web","mctlhq/mctl-docs"]'), inputs.repo) && secrets.GH_PACKAGES_TOKEN || '' }}
           tags: |
             ${{ inputs.image_name }}:${{ inputs.image_tag }}
             ${{ inputs.image_name }}:latest
