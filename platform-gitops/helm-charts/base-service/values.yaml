@@ -6,7 +6,7 @@
 # -- Required: container image
 image:
   repository: ""   # MUST be set per service
-  tag: "latest"    # MUST be pinned per service
+  tag: ""    # MUST be pinned per service (semver or @sha256 digest); empty fails render
   pullPolicy: IfNotPresent
 
 # -- Required: service port
