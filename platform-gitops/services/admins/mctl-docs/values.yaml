@@ -35,3 +35,4 @@ ingress:
         - docs.mctl.ai
         - admins-mctl-docs.mctl.ai
         - admins-mctl-docs.mctl.me
+extraContainers: []
