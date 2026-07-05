@@ -222,7 +222,12 @@ roleRef:
   name: argo-workflow-helm-deploy
   apiGroup: rbac.authorization.k8s.io
 ---
-# MinIO artifact credentials — required by Argo Workflows argoexec init container
+# Artifact repository credentials — required by Argo Workflows argoexec init
+# container. Secret name kept as "minio-artifact-credentials" (legacy), but
+# points at the Cloudflare R2 bucket used since the 2026-07 migration — see
+# argo-workflows/config/vault-auth.yaml for the argo-workflows-namespace copy
+# this must stay in sync with. K8s resolves this SecretKeySelector within the
+# workflow's own namespace, so every tenant needs its own up-to-date copy.
 apiVersion: external-secrets.io/v1beta1
 kind: ExternalSecret
 metadata:
@@ -241,12 +246,12 @@ spec:
   data:
     - secretKey: accessKey
       remoteRef:
-        key: platform/minio
-        property: root-user
+        key: platform/r2-loki-argo
+        property: access-key
     - secretKey: secretKey
       remoteRef:
-        key: platform/minio
-        property: root-password
+        key: platform/r2-loki-argo
+        property: secret-key
 ---
 # Allow tenant-local argo-workflow-sa to manage ArgoCD Applications/ApplicationSets
 # in argocd namespace for deploy refresh and retire/delete workflows.
