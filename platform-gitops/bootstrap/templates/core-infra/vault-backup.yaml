@@ -74,7 +74,11 @@ spec:
               image: hashicorp/vault:1.18
               env:
                 - name: VAULT_ADDR
-                  value: http://vault.vault.svc.cluster.local:8200
+                  # Raft snapshots must hit the active (leader) node: through
+                  # the generic `vault` service a standby's request forwarding
+                  # corrupts the stream ("incomplete snapshot, unable to read
+                  # SHA256SUMS.sealed file"). KV reads are fine on any node.
+                  value: http://vault-active.vault.svc.cluster.local:8200
               volumeMounts:
                 - name: snapshot
                   mountPath: /snapshot
