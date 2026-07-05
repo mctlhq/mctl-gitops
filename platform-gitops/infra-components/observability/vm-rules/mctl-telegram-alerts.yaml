@@ -7,6 +7,16 @@
 #
 # Threshold values are starting points; operators should tune them based on
 # observed traffic patterns in their deployment.
+#
+# ZeroTraffic (rate(mctl_tool_invocations_total[15m]) == 0, "no tool
+# invocations for 15 minutes") was retired 2026-07 — it predates the
+# synthetic canary (mctl-telegram-canary.yaml) and, unlike the canary's
+# alerts, wasn't sized to tolerate a single missed */10 canary run (its
+# window was 15m/15m vs. the canary's 25-30m). It fired roughly daily on
+# transient gaps that self-healed, with no action ever taken. The canary's
+# MctlTelegramCanaryFailing/Stale/Absent alerts already cover "the service
+# actually stopped working" with better precision (real probe pass/fail,
+# not just "any traffic"). Do not re-add without cadence-aware thresholds.
 apiVersion: operator.victoriametrics.com/v1beta1
 kind: VMRule
 metadata:
@@ -68,18 +78,6 @@ spec:
             description: >-
               The 95th percentile tool invocation latency has exceeded 5 seconds
               for 5 minutes. Telegram MTProto round-trips may be degraded.
-
-        - alert: ZeroTraffic
-          expr: rate(mctl_tool_invocations_total[15m]) == 0
-          for: 15m
-          labels:
-            severity: warning
-          annotations:
-            summary: "mctl-telegram: no tool invocations for 15 minutes"
-            description: >-
-              No MCP tool calls have been recorded for 15 minutes. This may
-              indicate the service has stopped receiving requests during an
-              expected traffic window, or the /metrics scrape is broken.
 
         - alert: RateLimitSpike
           expr: rate(mctl_rate_limit_events_total[5m]) > 1
