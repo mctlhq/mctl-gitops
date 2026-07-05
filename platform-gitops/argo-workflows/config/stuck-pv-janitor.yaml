@@ -1,0 +1,114 @@
+# Daily janitor for Released PVs stuck behind an orphaned VolumeAttachment.
+#
+# Failure mode (seen 2026-07-05 with a failed mctl-agents-implement workdir):
+# a workflow pod dies hard (deadline kill / force delete), its PVC is
+# reclaimed, the PV flips to Released — but the hcloud CSI VolumeAttachment
+# is never cleaned up, so the external-provisioner's delete loop fails
+# forever with "volume is still attached to node ...". The Hetzner volume
+# keeps billing until someone deletes the VolumeAttachment by hand, after
+# which the CSI attacher detaches and the PV delete goes through on its own.
+#
+# A VolumeAttachment is deleted only when BOTH hold:
+#   - it is older than 30 min (never races a normal attach/detach cycle), AND
+#   - its PV is Released/Failed (claim fully deleted — pvc-protection
+#     guarantees no pod can still be using the volume) or gone entirely.
+# Bound/Available/Pending PVs are always kept. The PV object itself is never
+# deleted here — releasing the attachment is enough for the provisioner's
+# own retry loop to finish the job.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: stuck-pv-janitor
+  namespace: argo-workflows
+---
+# Cluster-scoped (unlike argo-pvc-janitor): PVs and VolumeAttachments are
+# cluster resources.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: stuck-pv-janitor
+rules:
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["volumeattachments"]
+    verbs: ["get", "list", "delete"]
+  - apiGroups: [""]
+    resources: ["persistentvolumes"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: stuck-pv-janitor
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: stuck-pv-janitor
+subjects:
+  - kind: ServiceAccount
+    name: stuck-pv-janitor
+    namespace: argo-workflows
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: stuck-pv-janitor
+  namespace: argo-workflows
+spec:
+  schedule: "37 4 * * *"  # daily, offset from 03:00 backups and hourly janitors
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 300
+      ttlSecondsAfterFinished: 600
+      template:
+        spec:
+          serviceAccountName: stuck-pv-janitor
+          restartPolicy: Never
+          # alpine/k8s ships kubectl and is multi-pull-reliable. Do NOT use
+          # bitnami/kubectl — those Docker Hub tags were retired and silently
+          # wedge on ImagePullBackOff (see vault-auto-unseal incident).
+          containers:
+            - name: janitor
+              image: alpine/k8s:1.33.12
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 32Mi
+                limits:
+                  cpu: 200m
+                  memory: 128Mi
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -eu
+                  echo "=== stuck-PV janitor ($(date -u +%FT%TZ)) ==="
+                  NOW=$(date -u +%s)
+                  MIN_AGE=1800
+                  kubectl get volumeattachments -o json \
+                    | jq -r --argjson now "$NOW" --argjson minage "$MIN_AGE" '
+                        .items[]
+                        | select((.metadata.creationTimestamp | fromdateiso8601)
+                                 < ($now - $minage))
+                        | "\(.metadata.name) \(.spec.source.persistentVolumeName // "-")"' \
+                    | while read -r va pv; do
+                        if [ "$pv" = "-" ]; then
+                          echo "keep   $va (no PV source — non-CSI attachment)"
+                          continue
+                        fi
+                        phase=$(kubectl get pv "$pv" \
+                          -o jsonpath='{.status.phase}' 2>/dev/null || echo "Missing")
+                        case "$phase" in
+                          Released|Failed|Missing)
+                            echo "DELETE $va (pv=$pv phase=$phase — claim gone, detach wedged)"
+                            kubectl delete volumeattachment "$va" --wait=false || true
+                            ;;
+                          *)
+                            echo "keep   $va (pv=$pv phase=$phase)"
+                            ;;
+                        esac
+                      done
+                  echo "=== done ==="
