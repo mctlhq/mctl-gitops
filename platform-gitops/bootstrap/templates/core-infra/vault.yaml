@@ -121,7 +121,10 @@ spec:
       kind: ExternalSecret
       jqPathExpressions:
         - .metadata.annotations
-        - .metadata.managedFields
+        # Note: .metadata.managedFields must NOT be listed here — with
+        # RespectIgnoreDifferences=true + ServerSideApply, ArgoCD injects the
+        # live object's cached managedFields into the SSA apply payload, which
+        # the apiserver rejects ("metadata.managedFields must be nil").
         - .spec.target.deletionPolicy
         - .spec.data[].remoteRef.conversionStrategy
         - .spec.data[].remoteRef.decodingStrategy
