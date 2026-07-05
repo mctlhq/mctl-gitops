@@ -9,7 +9,9 @@
 # its 3000m CPU limit is the largest single consumer of the namespace quota.
 # Set back to 1 to bring it online — on scale-up the s3-sync restore-state probe
 # rehydrates session/auth state from MinIO (watch for the runtime-mirror lock
-# wedge; recovery: mc rm the stale lock + delete the pod).
+# wedge; recovery: mc rm the stale lock + delete the pod). Also restore the
+# extraObjects ServiceMonitor at the bottom of this file (removed 2026-07 —
+# see that comment for why).
 replicaCount: 0
 
 image:
@@ -1714,21 +1716,31 @@ extraIngresses:
 # mctl-openclaw#19 (codex token usage counters). Served on the same `http`
 # port (18789) as the gateway HTTP/UI, so we reuse the existing Service
 # named port rather than provisioning a second port.
-extraObjects:
-  - apiVersion: monitoring.coreos.com/v1
-    kind: ServiceMonitor
-    metadata:
-      name: labs-openclaw-codex-metrics
-      labels:
-        app.kubernetes.io/instance: labs-openclaw
-        app.kubernetes.io/name: base-service
-    spec:
-      selector:
-        matchLabels:
-          app.kubernetes.io/instance: labs-openclaw
-          app.kubernetes.io/name: base-service
-      endpoints:
-        - port: http
-          path: /metrics
-          interval: 30s
-          scrapeTimeout: 10s
+#
+# Removed 2026-07 while replicaCount is 0 (see the comment above): the
+# Service this ServiceMonitor selects still exists, but with zero replicas
+# it has zero pod endpoints, so vmagent found a permanent 0-target
+# scrape_pool ("labs-openclaw-codex-metrics") and its default
+# ScrapePoolHasNoTargets rule fired daily for a condition that isn't
+# actionable (the tenant is deliberately paused). Restore this block
+# together with `replicaCount: 1` above when labs openclaw is brought
+# back online.
+#
+# extraObjects:
+#   - apiVersion: monitoring.coreos.com/v1
+#     kind: ServiceMonitor
+#     metadata:
+#       name: labs-openclaw-codex-metrics
+#       labels:
+#         app.kubernetes.io/instance: labs-openclaw
+#         app.kubernetes.io/name: base-service
+#     spec:
+#       selector:
+#         matchLabels:
+#           app.kubernetes.io/instance: labs-openclaw
+#           app.kubernetes.io/name: base-service
+#       endpoints:
+#         - port: http
+#           path: /metrics
+#           interval: 30s
+#           scrapeTimeout: 10s
