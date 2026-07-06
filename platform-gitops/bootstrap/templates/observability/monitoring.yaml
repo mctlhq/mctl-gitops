@@ -260,10 +260,19 @@ spec:
                     matchers:
                       - alertname = "KubeContainerWaiting"
                       - namespace = "vault"
+                  # vault CronJobs (backup, auto-unseal) are operator-owned —
+                  # mctl-agent can't remediate them, so a failed job pages a
+                  # human. This also backstops the jobs' own Telegram reports:
+                  # if the pod never starts (image pull, init-container crash)
+                  # the in-job notify can't fire, but this alert still does.
+                  - receiver: telegram
+                    matchers:
+                      - alertname = "KubeJobFailed"
+                      - namespace = "vault"
                   - receiver: "null"
                     matchers:
                       - alertname = "KubeJobFailed"
-                      - namespace =~ "vault|labs"
+                      - namespace = "labs"
                   - receiver: "null"
                     matchers:
                       - alertname = "CPUThrottlingHigh"

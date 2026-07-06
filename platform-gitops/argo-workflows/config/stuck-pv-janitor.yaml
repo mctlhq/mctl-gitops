@@ -80,11 +80,52 @@ spec:
                 limits:
                   cpu: 200m
                   memory: 128Mi
+              env:
+                # Daily-run Telegram report (admins chat). Optional: without
+                # the secret the janitor still runs, just silently.
+                - name: TG_BOT_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: mctl-agents-secrets
+                      key: telegram-bot-token
+                      optional: true
+                - name: TG_CHAT_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: mctl-agents-secrets
+                      key: telegram-chat-id
+                      optional: true
               command:
                 - /bin/sh
                 - -c
                 - |
                   set -eu
+                  ACTIONS=/tmp/actions.log
+                  : > "$ACTIONS"
+                  # Daily job: report every run (success summary or failure),
+                  # so a missing message is itself a signal.
+                  notify() {
+                    RC=$?
+                    set +e
+                    [ -n "${TG_BOT_TOKEN:-}" ] && [ -n "${TG_CHAT_ID:-}" ] || return 0
+                    if [ "$RC" -eq 0 ]; then
+                      DELETED=$(grep -c '^DELETE' "$ACTIONS" || true)
+                      KEPT=$(grep -c '^keep' "$ACTIONS" || true)
+                      MSG="stuck-pv-janitor OK: deleted ${DELETED} wedged VolumeAttachment(s), kept ${KEPT}"
+                      if [ "${DELETED:-0}" -gt 0 ]; then
+                        MSG="${MSG}
+                  $(grep '^DELETE' "$ACTIONS")"
+                      fi
+                    else
+                      MSG="stuck-pv-janitor FAILED (exit ${RC}) — see: kubectl -n argo-workflows logs job/<latest stuck-pv-janitor job>"
+                    fi
+                    curl -s --max-time 10 \
+                      "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+                      --data-urlencode "chat_id=${TG_CHAT_ID}" \
+                      --data-urlencode "text=${MSG}" > /dev/null \
+                      || echo "telegram notify failed; continuing"
+                  }
+                  trap notify EXIT
                   echo "=== stuck-PV janitor ($(date -u +%FT%TZ)) ==="
                   NOW=$(date -u +%s)
                   MIN_AGE=1800
@@ -96,18 +137,18 @@ spec:
                         | "\(.metadata.name) \(.spec.source.persistentVolumeName // "-")"' \
                     | while read -r va pv; do
                         if [ "$pv" = "-" ]; then
-                          echo "keep   $va (no PV source — non-CSI attachment)"
+                          echo "keep   $va (no PV source — non-CSI attachment)" | tee -a "$ACTIONS"
                           continue
                         fi
                         phase=$(kubectl get pv "$pv" \
                           -o jsonpath='{.status.phase}' 2>/dev/null || echo "Missing")
                         case "$phase" in
                           Released|Failed|Missing)
-                            echo "DELETE $va (pv=$pv phase=$phase — claim gone, detach wedged)"
+                            echo "DELETE $va (pv=$pv phase=$phase — claim gone, detach wedged)" | tee -a "$ACTIONS"
                             kubectl delete volumeattachment "$va" --wait=false || true
                             ;;
                           *)
-                            echo "keep   $va (pv=$pv phase=$phase)"
+                            echo "keep   $va (pv=$pv phase=$phase)" | tee -a "$ACTIONS"
                             ;;
                         esac
                       done

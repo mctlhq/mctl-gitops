@@ -80,12 +80,52 @@ spec:
                 limits:
                   cpu: 200m
                   memory: 128Mi
+              env:
+                # Telegram report (admins chat). Hourly job, so unlike the
+                # daily janitors it only reports when it deleted something or
+                # failed — a silent run is the normal case. Optional: without
+                # the secret the janitor still runs, just silently.
+                - name: TG_BOT_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: mctl-agents-secrets
+                      key: telegram-bot-token
+                      optional: true
+                - name: TG_CHAT_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: mctl-agents-secrets
+                      key: telegram-chat-id
+                      optional: true
               command:
                 - /bin/sh
                 - -c
                 - |
                   set -eu
                   NS=argo-workflows
+                  ACTIONS=/tmp/actions.log
+                  : > "$ACTIONS"
+                  notify() {
+                    RC=$?
+                    set +e
+                    [ -n "${TG_BOT_TOKEN:-}" ] && [ -n "${TG_CHAT_ID:-}" ] || return 0
+                    DELETED=$(grep -c '^DELETE' "$ACTIONS" || true)
+                    if [ "$RC" -eq 0 ] && [ "${DELETED:-0}" -eq 0 ]; then
+                      return 0
+                    fi
+                    if [ "$RC" -eq 0 ]; then
+                      MSG="argo-pvc-janitor: deleted ${DELETED} orphaned workdir PVC(s)
+                  $(grep '^DELETE' "$ACTIONS")"
+                    else
+                      MSG="argo-pvc-janitor FAILED (exit ${RC}) — see: kubectl -n argo-workflows logs job/<latest argo-pvc-janitor job>"
+                    fi
+                    curl -s --max-time 10 \
+                      "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+                      --data-urlencode "chat_id=${TG_CHAT_ID}" \
+                      --data-urlencode "text=${MSG}" > /dev/null \
+                      || echo "telegram notify failed; continuing"
+                  }
+                  trap notify EXIT
                   echo "=== argo workdir PVC janitor ($(date -u +%FT%TZ)) ==="
                   # PVCs currently mounted by some pod — never touch these.
                   INUSE=$(kubectl get pods -n "$NS" \
@@ -97,14 +137,14 @@ spec:
                     fi
                     wf="${pvc%-workdir}"
                     if ! kubectl get workflow -n "$NS" "$wf" >/dev/null 2>&1; then
-                      echo "DELETE $pvc (owning workflow '$wf' gone — orphan)"
+                      echo "DELETE $pvc (owning workflow '$wf' gone — orphan)" | tee -a "$ACTIONS"
                       kubectl delete pvc -n "$NS" "$pvc" --wait=false || true
                       continue
                     fi
                     phase=$(kubectl get workflow -n "$NS" "$wf" -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
                     case "$phase" in
                       Succeeded|Failed|Error)
-                        echo "DELETE $pvc (workflow '$wf' phase=$phase, no pod)"
+                        echo "DELETE $pvc (workflow '$wf' phase=$phase, no pod)" | tee -a "$ACTIONS"
                         kubectl delete pvc -n "$NS" "$pvc" --wait=false || true
                         ;;
                       *)
