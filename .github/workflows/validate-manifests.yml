@@ -76,13 +76,13 @@ jobs:
           # Excludes:
           #  - values.yaml (Helm values, not a k8s manifest)
           #  - catalog-info.yaml (Backstage entity, no k8s schema)
-          #  - cwft-mctl-agents-shepherd.yaml: intentionally sets .spec.outputs on a
-          #    ClusterWorkflowTemplate (see in-file comment) to satisfy Argo's static
-          #    validator; the community CRD schema catalog doesn't recognize this field
-          #    yet and flags it as an unknown property, even though it's required for
-          #    the CronWorkflow to schedule.
+          #  - cwft-mctl-agents-{shepherd,implement,issue-poll}.yaml: intentionally set
+          #    .spec.outputs on a ClusterWorkflowTemplate (see in-file comments) to
+          #    satisfy Argo's static validator; the community CRD schema catalog
+          #    doesn't recognize this field yet and flags it as an unknown property,
+          #    even though it's required for the CronWorkflow to schedule.
           find platform-gitops/tenants platform-gitops/argo-workflows platform-gitops/mcp platform-gitops/infra-components \
             \( -name "*.yaml" -o -name "*.yml" \) -print0 | \
             xargs -0 kubeconform -strict -summary -schema-location default \
-              -ignore-filename-pattern '(^|.*/)(values\.yaml|catalog-info\.yaml|cwft-mctl-agents-shepherd\.yaml)$' \
+              -ignore-filename-pattern '(^|.*/)(values\.yaml|catalog-info\.yaml|cwft-mctl-agents-(shepherd|implement|issue-poll)\.yaml)$' \
               -schema-location "$CRD_SCHEMA_LOCATION"

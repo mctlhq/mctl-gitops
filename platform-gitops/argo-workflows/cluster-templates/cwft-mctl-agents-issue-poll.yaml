@@ -60,6 +60,19 @@ spec:
   # the commit-and-push template instead (the only step that writes to main),
   # mirroring cwft-mctl-agents-shepherd.
 
+  # Workflow-level output declaration so the onExit handler's reference to
+  # `{{workflow.outputs.parameters.activity}}` passes Argo's static validator
+  # (same requirement documented on cwft-mctl-agents-shepherd's degraded_apps
+  # output). "none" when commit-and-push found nothing to commit — a poll
+  # tick with no labelled issues is the steady-state case at */15, and
+  # notify-telegram uses this to skip the Telegram leg for it.
+  outputs:
+    parameters:
+      - name: activity
+        valueFrom:
+          parameter: "{{steps.commit.outputs.parameters.activity}}"
+          default: "unknown"
+
   volumeClaimTemplates:
     - metadata:
         name: workdir
@@ -79,6 +92,11 @@ spec:
 
   templates:
     - name: poll-issues
+      outputs:
+        parameters:
+          - name: activity
+            valueFrom:
+              parameter: "{{steps.commit.outputs.parameters.activity}}"
       steps:
         - - name: clone
             template: clone-gitops
@@ -200,6 +218,14 @@ spec:
       synchronization:
         mutex:
           name: mctl-gitops-main-writes
+      # "yes" once a commit was actually pushed, "none" when there was
+      # nothing to commit — consumed by notify-telegram to skip the
+      # Telegram leg on a no-op Succeeded run.
+      outputs:
+        parameters:
+          - name: activity
+            valueFrom:
+              path: /tmp/activity
       script:
         image: alpine/git:2.43.0
         command: [sh]
@@ -234,12 +260,14 @@ spec:
           CHANGES="$(git status --porcelain -- ':(glob)platform-gitops/agents-state/*/proposals/*/**')"
           if [ -z "$CHANGES" ]; then
             echo "ℹ️  No proposal changes — nothing to commit."
+            echo -n "none" > /tmp/activity
             exit 0
           fi
           git add -- ':(glob)platform-gitops/agents-state/*/proposals/*/**'
 
           if git diff --cached --quiet; then
             echo "ℹ️  No staged changes — nothing to commit."
+            echo -n "none" > /tmp/activity
             exit 0
           fi
 
@@ -249,6 +277,7 @@ spec:
           for i in 1 2 3 4 5; do
             if git push origin HEAD:main; then
               echo "✅ Pushed proposals"
+              echo -n "yes" > /tmp/activity
               exit 0
             fi
             echo "⚠️  Push failed (attempt ${i}), rebasing..."
@@ -293,6 +322,11 @@ spec:
             value: "{{workflow.name}}"
           - name: WORKFLOW_DURATION
             value: "{{workflow.duration}}"
+          # "none" when commit-and-push had nothing to commit (steady-state
+          # tick with no labelled issues) — used below to skip the Telegram
+          # leg on a no-op Succeeded run.
+          - name: WORKFLOW_ACTIVITY
+            value: "{{workflow.outputs.parameters.activity}}"
         source: |
           set +e
           apk add --no-cache curl ca-certificates jq >/dev/null 2>&1
@@ -307,9 +341,13 @@ spec:
           TEXT=$(printf '%s mctl-agents: issue-poll — %s (%ss)\n%s' \
             "$ICON" "$WORKFLOW_STATUS" "$WORKFLOW_DURATION" "$UI_URL")
 
-          # Telegram leg. JSON-encode the body via jq so a quote / newline /
-          # backslash cannot malform the payload and silently drop it.
-          if [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
+          # Telegram leg. Skip a Succeeded run that found nothing labelled —
+          # at the */15 cadence that's the steady-state outcome. JSON-encode
+          # the body via jq so a quote / newline / backslash cannot malform
+          # the payload and silently drop it.
+          if [ "$WORKFLOW_STATUS" = "Succeeded" ] && [ "$WORKFLOW_ACTIVITY" = "none" ]; then
+            echo "ℹ️  Succeeded with no activity (nothing labelled) — skipping Telegram leg."
+          elif [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
             TG_BODY=$(jq -nc --arg chat "$TG_CHAT_ID" --arg text "$TEXT" \
               '{chat_id: $chat, text: $text, disable_web_page_preview: true}')
             curl -s -o /dev/null -w 'telegram http=%{http_code}\n' \
