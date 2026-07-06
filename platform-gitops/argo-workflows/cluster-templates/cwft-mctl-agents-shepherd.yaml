@@ -139,6 +139,13 @@ spec:
         valueFrom:
           parameter: "{{steps.verify.outputs.parameters.degraded_apps}}"
           default: ""
+      # "none" when commit-and-push found nothing to commit (steady-state
+      # hourly tick with no proposal transitions) — notify-telegram uses
+      # this to skip the Telegram leg on a no-op Succeeded run.
+      - name: activity
+        valueFrom:
+          parameter: "{{steps.commit.outputs.parameters.activity}}"
+          default: "unknown"
 
   templates:
     - name: shepherd-proposals
@@ -153,6 +160,10 @@ spec:
             valueFrom:
               parameter: "{{steps.verify.outputs.parameters.degraded_apps}}"
               default: ""
+          - name: activity
+            valueFrom:
+              parameter: "{{steps.commit.outputs.parameters.activity}}"
+              default: "unknown"
       steps:
         - - name: clone
             template: clone-gitops
@@ -364,6 +375,14 @@ spec:
       synchronization:
         mutex:
           name: mctl-gitops-main-writes
+      # "yes" once a commit was actually pushed, "none" when there was
+      # nothing to commit — consumed by notify-telegram to skip the
+      # Telegram leg on a no-op Succeeded run.
+      outputs:
+        parameters:
+          - name: activity
+            valueFrom:
+              path: /tmp/activity
       script:
         image: alpine/git:2.43.0
         command: [sh]
@@ -413,6 +432,7 @@ spec:
           STATUS_CHANGES="$(git status --porcelain -- ':(glob)platform-gitops/agents-state/**/.status.yaml')"
           if [ -z "$STATUS_CHANGES" ]; then
             echo "ℹ️  No .status.yaml updates — nothing to commit."
+            echo -n "none" > /tmp/activity
             exit 0
           fi
           git add -- ':(glob)platform-gitops/agents-state/**/.status.yaml'
@@ -423,6 +443,7 @@ spec:
             # ends up staging an empty diff (e.g. a permissions-only
             # change git ignores).
             echo "ℹ️  No status updates after staging — nothing to commit."
+            echo -n "none" > /tmp/activity
             exit 0
           fi
 
@@ -439,6 +460,7 @@ spec:
           for i in 1 2 3 4 5; do
             if git push origin HEAD:main; then
               echo "✅ Pushed status updates"
+              echo -n "yes" > /tmp/activity
               exit 0
             fi
             echo "⚠️  Push failed (attempt ${i}), rebasing..."
@@ -625,6 +647,11 @@ spec:
           # the list from workflow logs.
           - name: WORKFLOW_DEGRADED_APPS
             value: "{{workflow.outputs.parameters.degraded_apps}}"
+          # "none" when commit-and-push had nothing to commit (steady-state
+          # hourly tick with no proposal transitions) — used below to skip
+          # the Telegram leg on a no-op Succeeded run.
+          - name: WORKFLOW_ACTIVITY
+            value: "{{workflow.outputs.parameters.activity}}"
         source: |
           set +e
           apk add --no-cache curl ca-certificates jq >/dev/null 2>&1
@@ -651,8 +678,14 @@ spec:
             TEXT="${TEXT}\n⚠️ post-deploy-verify flagged: ${WORKFLOW_DEGRADED_APPS}"
           fi
 
-          # Telegram leg.
-          if [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
+          # Telegram leg. Skip a Succeeded run that transitioned nothing —
+          # at the hourly cadence that's the steady-state outcome, and an
+          # unconditional ✅ every hour drowned out real merges/rejections.
+          # Failed/Error/Unknown (incl. a post-deploy-verify degraded-apps
+          # failure) always notify regardless of activity.
+          if [ "$WORKFLOW_STATUS" = "Succeeded" ] && [ "$WORKFLOW_ACTIVITY" = "none" ]; then
+            echo "ℹ️  Succeeded with no activity (no proposal transitions) — skipping Telegram leg."
+          elif [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
             curl -s -o /dev/null -w 'telegram http=%{http_code}\n' \
               -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
               -H "Content-Type: application/json" \
