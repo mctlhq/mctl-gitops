@@ -139,13 +139,6 @@ spec:
         valueFrom:
           parameter: "{{steps.verify.outputs.parameters.degraded_apps}}"
           default: ""
-      # "none" when commit-and-push found nothing to commit (steady-state
-      # hourly tick with no proposal transitions) — notify-telegram uses
-      # this to skip the Telegram leg on a no-op Succeeded run.
-      - name: activity
-        valueFrom:
-          parameter: "{{steps.commit.outputs.parameters.activity}}"
-          default: "unknown"
 
   templates:
     - name: shepherd-proposals
@@ -156,14 +149,21 @@ spec:
           # include it in the alert. `default: ""` because the verify
           # step might never run (e.g. clone-gitops crashed) — onExit
           # still needs the parameter to resolve to *something*.
+          #
+          # NB: this is the ONLY workflow.outputs.parameters entry sourced
+          # from a step in this template. A second entry sourced from a
+          # DIFFERENT step (`activity` from `commit`, added 2026-07-06 and
+          # reverted the same day) broke Argo's static validator workflow-
+          # wide ("invalid spec: templates.notify-telegram: failed to
+          # resolve {{workflow.outputs.parameters.activity}}") even though
+          # each entry resolves fine alone — every CronWorkflow tick failed
+          # and scheduling stopped entirely. `activity` now travels via a
+          # /workdir/activity file on the shared PVC instead — see the note
+          # on commit-and-push.
           - name: degraded_apps
             valueFrom:
               parameter: "{{steps.verify.outputs.parameters.degraded_apps}}"
               default: ""
-          - name: activity
-            valueFrom:
-              parameter: "{{steps.commit.outputs.parameters.activity}}"
-              default: "unknown"
       steps:
         - - name: clone
             template: clone-gitops
@@ -375,14 +375,10 @@ spec:
       synchronization:
         mutex:
           name: mctl-gitops-main-writes
-      # "yes" once a commit was actually pushed, "none" when there was
-      # nothing to commit — consumed by notify-telegram to skip the
-      # Telegram leg on a no-op Succeeded run.
-      outputs:
-        parameters:
-          - name: activity
-            valueFrom:
-              path: /tmp/activity
+      # Writes /workdir/activity ("yes"/"none") for notify-telegram to read
+      # directly off the shared workdir PVC — NOT via Argo output parameters,
+      # see the note on the shepherd-proposals template's degraded_apps output
+      # for why.
       script:
         image: alpine/git:2.43.0
         command: [sh]
@@ -432,7 +428,7 @@ spec:
           STATUS_CHANGES="$(git status --porcelain -- ':(glob)platform-gitops/agents-state/**/.status.yaml')"
           if [ -z "$STATUS_CHANGES" ]; then
             echo "ℹ️  No .status.yaml updates — nothing to commit."
-            echo -n "none" > /tmp/activity
+            echo -n "none" > /workdir/activity
             exit 0
           fi
           git add -- ':(glob)platform-gitops/agents-state/**/.status.yaml'
@@ -443,7 +439,7 @@ spec:
             # ends up staging an empty diff (e.g. a permissions-only
             # change git ignores).
             echo "ℹ️  No status updates after staging — nothing to commit."
-            echo -n "none" > /tmp/activity
+            echo -n "none" > /workdir/activity
             exit 0
           fi
 
@@ -460,7 +456,7 @@ spec:
           for i in 1 2 3 4 5; do
             if git push origin HEAD:main; then
               echo "✅ Pushed status updates"
-              echo -n "yes" > /tmp/activity
+              echo -n "yes" > /workdir/activity
               exit 0
             fi
             echo "⚠️  Push failed (attempt ${i}), rebasing..."
@@ -647,14 +643,18 @@ spec:
           # the list from workflow logs.
           - name: WORKFLOW_DEGRADED_APPS
             value: "{{workflow.outputs.parameters.degraded_apps}}"
-          # "none" when commit-and-push had nothing to commit (steady-state
-          # hourly tick with no proposal transitions) — used below to skip
-          # the Telegram leg on a no-op Succeeded run.
-          - name: WORKFLOW_ACTIVITY
-            value: "{{workflow.outputs.parameters.activity}}"
+        volumeMounts:
+          - name: workdir
+            mountPath: /workdir
         source: |
           set +e
           apk add --no-cache curl ca-certificates jq >/dev/null 2>&1
+
+          # "none" when commit-and-push had nothing to commit (steady-state
+          # hourly tick with no proposal transitions). Read off the shared
+          # workdir PVC rather than a workflow output parameter — see the
+          # note on the shepherd-proposals template's degraded_apps output.
+          WORKFLOW_ACTIVITY=$(cat /workdir/activity 2>/dev/null || echo "unknown")
 
           case "$WORKFLOW_STATUS" in
             Succeeded) ICON="✅" ;;
