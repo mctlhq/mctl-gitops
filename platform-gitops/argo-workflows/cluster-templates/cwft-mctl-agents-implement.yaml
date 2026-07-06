@@ -44,19 +44,6 @@ spec:
     mutex:
       name: mctl-gitops-main-writes
 
-  # Workflow-level output declaration so the onExit handler's reference to
-  # `{{workflow.outputs.parameters.activity}}` passes Argo's static validator
-  # (same requirement documented on cwft-mctl-agents-shepherd's degraded_apps
-  # output). "none" when commit-and-push found nothing to commit — a run at
-  # the */5 cadence with an empty proposal queue is the steady-state case,
-  # and notify-telegram uses this to skip the Telegram leg for it.
-  outputs:
-    parameters:
-      - name: activity
-        valueFrom:
-          parameter: "{{steps.commit.outputs.parameters.activity}}"
-          default: "unknown"
-
   arguments:
     parameters:
       - name: service
@@ -92,11 +79,6 @@ spec:
 
   templates:
     - name: implement-proposals
-      outputs:
-        parameters:
-          - name: activity
-            valueFrom:
-              parameter: "{{steps.commit.outputs.parameters.activity}}"
       steps:
         - - name: clone
             template: clone-gitops
@@ -341,14 +323,16 @@ spec:
     # Only .status.yaml files should change in agents-state/ (run_implementer
     # writes them after each proposal). Defensive: stage only that subtree.
     - name: commit-and-push
-      # "yes" once a commit was actually pushed, "none" when there was
-      # nothing to commit — consumed by notify-telegram to skip the
-      # Telegram leg on a no-op Succeeded run.
-      outputs:
-        parameters:
-          - name: activity
-            valueFrom:
-              path: /tmp/activity
+      # Writes /workdir/activity ("yes"/"none") for notify-telegram to read
+      # directly off the shared workdir PVC — NOT via Argo output parameters.
+      # A `workflow.outputs.parameters.X` reference from onExit resolves fine
+      # with exactly one such parameter (see degraded_apps on
+      # cwft-mctl-agents-shepherd), but adding a SECOND one sourced from a
+      # different step broke Argo's static validator workflow-wide
+      # ("invalid spec: templates.notify-telegram: failed to resolve
+      # {{workflow.outputs.parameters.activity}}", reproduced 2026-07-06 —
+      # every CronWorkflow tick failed silently, `implement`/`issue-poll`
+      # stopped scheduling entirely). The PVC file sidesteps that mechanism.
       script:
         image: alpine/git:2.43.0
         command: [sh]
@@ -396,7 +380,7 @@ spec:
           STATUS_CHANGES="$(git status --porcelain -- ':(glob)platform-gitops/agents-state/**/.status.yaml')"
           if [ -z "$STATUS_CHANGES" ]; then
             echo "ℹ️  No .status.yaml updates — nothing to commit."
-            echo -n "none" > /tmp/activity
+            echo -n "none" > /workdir/activity
             exit 0
           fi
           git add -- ':(glob)platform-gitops/agents-state/**/.status.yaml'
@@ -406,7 +390,7 @@ spec:
             # but keep this guard in case `git add` ever ends up staging
             # an empty diff (e.g. a permissions-only change git ignores).
             echo "ℹ️  No status updates after staging — nothing to commit."
-            echo -n "none" > /tmp/activity
+            echo -n "none" > /workdir/activity
             exit 0
           fi
 
@@ -423,7 +407,7 @@ spec:
           for i in 1 2 3 4 5; do
             if git push origin HEAD:main; then
               echo "✅ Pushed status updates"
-              echo -n "yes" > /tmp/activity
+              echo -n "yes" > /workdir/activity
               exit 0
             fi
             echo "⚠️  Push failed (attempt ${i}), rebasing..."
@@ -505,14 +489,18 @@ spec:
             value: "{{workflow.name}}"
           - name: WORKFLOW_DURATION
             value: "{{workflow.duration}}"
-          # "none" when commit-and-push had nothing to commit (steady-state
-          # tick at the */5 cadence with an empty proposal queue) — used
-          # below to skip the Telegram leg on a no-op Succeeded run.
-          - name: WORKFLOW_ACTIVITY
-            value: "{{workflow.outputs.parameters.activity}}"
+        volumeMounts:
+          - name: workdir
+            mountPath: /workdir
         source: |
           set +e
           apk add --no-cache curl ca-certificates jq >/dev/null 2>&1
+
+          # "none" when commit-and-push had nothing to commit (steady-state
+          # tick at the */5 cadence with an empty proposal queue). Read off
+          # the shared workdir PVC rather than a workflow output parameter —
+          # see the note on commit-and-push for why.
+          WORKFLOW_ACTIVITY=$(cat /workdir/activity 2>/dev/null || echo "unknown")
 
           case "$WORKFLOW_STATUS" in
             Succeeded) ICON="✅" ;;
