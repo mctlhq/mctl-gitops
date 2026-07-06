@@ -44,6 +44,33 @@ spec:
         key: platform/vault/r2-backup
         property: endpoint
 ---
+# Telegram credentials for CronJob run-reports in the vault namespace
+# (consumed by vault-backup and vault-auto-unseal). Same bot + admins chat
+# as the mctl-agents workflows; only the two notify keys are mirrored here —
+# the rest of platform/mctl-agents (OAuth/PAT tokens) stays out of this ns.
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: telegram-notify
+  namespace: vault
+spec:
+  refreshInterval: 24h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: vault-backend
+  target:
+    name: telegram-notify
+    creationPolicy: Owner
+  data:
+    - secretKey: telegram-bot-token
+      remoteRef:
+        key: platform/mctl-agents
+        property: telegram-bot-token
+    - secretKey: telegram-chat-id
+      remoteRef:
+        key: platform/mctl-agents
+        property: telegram-chat-id
+---
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -104,6 +131,24 @@ spec:
               envFrom:
                 - secretRef:
                     name: vault-backup-r2-credentials
+              env:
+                # Daily-run Telegram report (admins chat). Covers this upload
+                # container only: a snapshot init-container failure kills the
+                # pod before we run, and is reported via the AlertManager
+                # KubeJobFailed → telegram route instead. Optional: without
+                # the secret the backup still runs, just silently.
+                - name: TG_BOT_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: telegram-notify
+                      key: telegram-bot-token
+                      optional: true
+                - name: TG_CHAT_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: telegram-notify
+                      key: telegram-chat-id
+                      optional: true
               volumeMounts:
                 - name: snapshot
                   mountPath: /snapshot
@@ -113,6 +158,23 @@ spec:
                 - |
                   set -e
                   TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+                  notify() {
+                    RC=$?
+                    set +e
+                    [ -n "${TG_BOT_TOKEN:-}" ] && [ -n "${TG_CHAT_ID:-}" ] || return 0
+                    if [ "$RC" -eq 0 ]; then
+                      SIZE=$(du -h /snapshot/vault-snapshot.snap 2>/dev/null | cut -f1)
+                      MSG="vault-backup OK: vault-snapshot-${TIMESTAMP}.snap (${SIZE:-?}) uploaded to R2"
+                    else
+                      MSG="vault-backup FAILED at upload (exit ${RC}) — see: kubectl -n vault logs job/<latest vault-backup job> -c upload"
+                    fi
+                    curl -s --max-time 10 \
+                      "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+                      --data-urlencode "chat_id=${TG_CHAT_ID}" \
+                      --data-urlencode "text=${MSG}" > /dev/null \
+                      || echo "telegram notify failed; continuing"
+                  }
+                  trap notify EXIT
 
                   echo "Uploading snapshot to R2..."
                   aws s3 cp /snapshot/vault-snapshot.snap \

@@ -55,11 +55,30 @@ spec:
               envFrom:
                 - secretRef:
                     name: vault-unseal-keys
+              env:
+                # Telegram report (admins chat). Runs every 2 min, so it only
+                # reports when it actually unsealed a pod — an unseal event
+                # means Vault restarted/crashed and a human should know.
+                # Optional: without the secret the job still runs, just
+                # silently.
+                - name: TG_BOT_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: telegram-notify
+                      key: telegram-bot-token
+                      optional: true
+                - name: TG_CHAT_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: telegram-notify
+                      key: telegram-chat-id
+                      optional: true
               command:
                 - /bin/sh
                 - -c
                 - |
                   echo "=== Vault Auto-Unseal Check ==="
+                  UNSEALED_PODS=""
                   PODS=$(kubectl get pods -n vault -l app.kubernetes.io/name=vault,component=server --no-headers -o custom-columns=":metadata.name" 2>/dev/null)
                   for pod in $PODS; do
                     echo "Checking $pod..."
@@ -78,8 +97,17 @@ spec:
                       kubectl exec -n vault $pod -- vault operator unseal "$UNSEAL_KEY_2"
                       kubectl exec -n vault $pod -- vault operator unseal "$UNSEAL_KEY_3"
                       echo "$pod unsealed ✅"
+                      UNSEALED_PODS="${UNSEALED_PODS} ${pod}"
                     else
                       echo "$pod is already unsealed ✅"
                     fi
                   done
+                  if [ -n "$UNSEALED_PODS" ] && [ -n "${TG_BOT_TOKEN:-}" ] && [ -n "${TG_CHAT_ID:-}" ]; then
+                    MSG="vault-auto-unseal: unsealed${UNSEALED_PODS} (a sealed pod means Vault restarted — check why)"
+                    curl -s --max-time 10 \
+                      "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+                      --data-urlencode "chat_id=${TG_CHAT_ID}" \
+                      --data-urlencode "text=${MSG}" > /dev/null \
+                      || echo "telegram notify failed; continuing"
+                  fi
                   echo "=== Done ==="
