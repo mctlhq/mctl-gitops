@@ -185,6 +185,15 @@ argo-cd:
         p, role:team-ovk, logs, get, apps/ovk-*, allow
         p, role:team-ovk, exec, create, apps/ovk-*, allow
         g, ovk, role:team-ovk
+
+        # Tenant: nfc
+        p, role:team-nfc, applications, get, apps/nfc-*, allow
+        p, role:team-nfc, applications, list, apps/nfc-*, allow
+        p, role:team-nfc, applications, sync, apps/nfc-*, allow
+        p, role:team-nfc, applications, override, apps/nfc-*, allow
+        p, role:team-nfc, logs, get, apps/nfc-*, allow
+        p, role:team-nfc, exec, create, apps/nfc-*, allow
+        g, nfc, role:team-nfc
     secret:
       createSecret: true
 
