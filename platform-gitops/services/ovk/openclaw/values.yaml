@@ -32,7 +32,10 @@ resources:
     memory: 768Mi
   limits:
     cpu: 3000m
-    memory: 2560Mi
+    # Memory limit was 3.33x the request; tenant quota usage showed this
+    # headroom unused. Trimmed to base-service's default 2x ratio to free
+    # quota ceiling for onboarding more tenants (2026-07).
+    memory: 1536Mi
 # Recreate avoids quota deadlocks for single-pod tenant deployments.
 strategy:
   type: Recreate
