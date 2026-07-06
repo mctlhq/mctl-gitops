@@ -24,7 +24,10 @@ resources:
     memory: 768Mi
   limits:
     cpu: 1500m
-    memory: 2560Mi
+    # 2x the request, matching base-service's default ratio — new tenants
+    # should not inherit the 3.33x ratio the existing openclaw instances
+    # carried before their 2026-07 memory-limit trim.
+    memory: 1536Mi
 
 # Recreate avoids quota deadlocks for single-pod tenant deployments.
 strategy:
