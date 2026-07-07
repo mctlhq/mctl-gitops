@@ -69,13 +69,6 @@ env:
   # allows PKCE-bound redirect URIs beyond the registered localhost one.
   # If it returns redirect_uri_mismatch, remove this and fall back to manual_input.
   OPENCLAW_OPENAI_CODEX_CLIENT_ID: "app_EMoamEEZ73f0CkXaXp7hrann"
-  # Resolved by openclaw bundle-mcp from the `__TRADING_DATA_URL__`
-  # placeholder in mcp.servers.trading-data.env (literal values in
-  # mcp.servers.<x>.env are not propagated to the spawned bridge process —
-  # only `__VAR__` placeholder substitution from pod env works). Service
-  # name has the `-base-service` suffix that the base-service chart adds
-  # by default.
-  TRADING_DATA_URL: "http://labs-trading-data-base-service.labs.svc.cluster.local:8080/mcp"
 # Probe tuning — k8s defaults (timeoutSeconds=1, failureThreshold=3) are too
 # tight for this image: gateway plugin install + first /healthz response can
 # stall the Node event loop past 1s. Explicit timeoutSeconds + failureThreshold
@@ -122,17 +115,6 @@ envFrom:
   # openai-codex limits are exhausted. See externalSecrets.openclaw-anthropic-secret.
   - secretRef:
       name: openclaw-anthropic-secret
-  # COINGLASS_API_KEY — used by the `coinglass` MCP server registration
-  # below. Header CG-API-KEY is interpolated from this env var (Path A).
-  # If openclaw runtime does not interpolate ${...} in mcp.servers headers,
-  # the fallback is a node bridge script that reads process.env directly.
-  - secretRef:
-      name: labs-openclaw-coinglass
-  # TRADING_DATA_TOKEN — bearer for the labs-trading-data MCP service
-  # (Bybit/Bitget WS taker + CryptoPanic/Etherscan REST). Read from
-  # process.env by /scripts/trading-data-mcp-proxy.js below.
-  - secretRef:
-      name: labs-trading-data-client
 initContainers:
   # 1. Restore state from MinIO (no-op for new tenants, preserves OAuth credentials on restart)
   - name: restore-state
@@ -410,19 +392,6 @@ initContainers:
         else
           echo "Telegram token is empty; leaving placeholder unchanged."
         fi
-        # CoinGlass MCP API key needs runtime injection because the
-        # claude-cli backend's bundle-mcp adapter copies mcp.servers.<name>.env
-        # values verbatim into the spawned bridge process's environment —
-        # there's no `${VAR}` interpolation on this code path
-        # (decodeHeaderEnvPlaceholder is only used by Codex/Gemini bundles).
-        # Same `__TELEGRAM_TOKEN__` sed-substitution pattern keeps the actual
-        # secret out of the rendered ConfigMap and the gitops repo.
-        if [ -n "${COINGLASS_API_KEY:-}" ]; then
-          echo "Injecting CoinGlass API key into runtime config..."
-          sed -i "s|__COINGLASS_API_KEY__|$COINGLASS_API_KEY|g" /config-rw/openclaw.json
-        else
-          echo "COINGLASS_API_KEY is empty; leaving placeholder unchanged."
-        fi
         WORKSPACE=/home/node/.openclaw/workspace
         mkdir -p "$WORKSPACE/memory" "$WORKSPACE/skills" /home/node/.openclaw/bundled-skills
 
@@ -511,11 +480,6 @@ initContainers:
           secretKeyRef:
             name: openclaw-telegram-secret
             key: OPENCLAW_TELEGRAM_TOKEN
-      - name: COINGLASS_API_KEY
-        valueFrom:
-          secretKeyRef:
-            name: labs-openclaw-coinglass
-            key: COINGLASS_API_KEY
     volumeMounts:
       - name: openclaw-config-tpl
         mountPath: /config-tpl
@@ -847,27 +811,6 @@ extraExternalSecrets:
       - secretKey: secret-key
         remoteKey: secret/data/platform/minio
         property: root-password
-  # CoinGlass MCP Beta API key. Mounted into the base-service container via
-  # envFrom above and consumed by the `coinglass` mcp.servers entry below.
-  # Vault path: secret/teams/labs/openclaw/coinglass with field `api_key`.
-  labs-openclaw-coinglass:
-    refreshInterval: 1h
-    targetSecret: labs-openclaw-coinglass
-    data:
-      - secretKey: COINGLASS_API_KEY
-        remoteKey: secret/data/teams/labs/openclaw/coinglass
-        property: api_key
-  # Bearer for the in-cluster labs-trading-data MCP service. Same Vault path
-  # is consumed server-side by services/labs/trading-data/values.yaml — the
-  # two ExternalSecrets read the same `bearer_token` field so client and
-  # server agree on the token without manual rotation across two repos.
-  labs-trading-data-client:
-    refreshInterval: 1h
-    targetSecret: labs-trading-data-client
-    data:
-      - secretKey: TRADING_DATA_TOKEN
-        remoteKey: secret/data/teams/labs/trading-data/client-token
-        property: bearer_token
 configMaps:
   openclaw-scripts:
     mcp-agent-proxy.js: |-
@@ -1037,289 +980,6 @@ configMaps:
           }
         } catch (_) {}
       }, 30 * 60 * 1000);
-    # CoinGlass MCP stdio bridge — required because the claude-cli backend's
-    # bundle-mcp step accepts only stdio MCP servers (it silently skips
-    # streamable-http/sse with "[bundle-mcp] skipped server because only stdio
-    # MCP servers are supported right now"). Bridge converts stdio JSON-RPC
-    # to POST against the upstream streamable-HTTP endpoint, injecting
-    # CG-API-KEY directly from process.env (envFrom -> labs-openclaw-coinglass).
-    coinglass-mcp-proxy.js: |-
-      #!/usr/bin/env node
-      // Two MCP-spec invariants codex flagged on the v1 bridge that this
-      // version handles:
-      //
-      // 1. Session/protocol headers must persist across requests after the
-      //    `initialize` handshake. Captures `mcp-session-id` from the first
-      //    server response and resends it on every subsequent POST. Captures
-      //    the negotiated `protocolVersion` from the initialize result and
-      //    sends it as `Mcp-Protocol-Version` per spec.
-      //
-      // 2. Streamable-HTTP servers may return `text/event-stream` instead of
-      //    `application/json`. Raw passthrough breaks stdio JSON-RPC framing,
-      //    so SSE responses are parsed: each `data:` line is decoded and
-      //    written as its own newline-delimited stdio JSON-RPC message.
-      const url = 'https://api-mcp.coinglass.com/mcp';
-      const apiKey = process.env.COINGLASS_API_KEY;
-      let sessionId = '';
-      let protocolVersion = '';
-      let queue = Promise.resolve();
-      process.stdin.setEncoding('utf8');
-      let buf = '';
-      process.stdin.on('data', chunk => {
-        buf += chunk;
-        let nl;
-        while ((nl = buf.indexOf('\n')) !== -1) {
-          const line = buf.slice(0, nl).trim();
-          buf = buf.slice(nl + 1);
-          if (line) queue = queue.then(() => handle(line)).catch(() => {});
-        }
-      });
-      function writeLine(obj) { process.stdout.write(JSON.stringify(obj) + '\n'); }
-      function captureProtocolVersion(message) {
-        if (
-          message &&
-          message.result &&
-          typeof message.result.protocolVersion === 'string' &&
-          message.result.protocolVersion
-        ) {
-          protocolVersion = message.result.protocolVersion;
-        }
-      }
-      function emit(message) {
-        captureProtocolVersion(message);
-        writeLine(message);
-      }
-      function parseSse(text) {
-        const messages = [];
-        for (const block of text.split(/\r?\n\r?\n/)) {
-          if (!block.trim()) continue;
-          const dataLines = [];
-          for (const rawLine of block.split(/\r?\n/)) {
-            if (rawLine.startsWith('data:')) dataLines.push(rawLine.slice(5).replace(/^ /, ''));
-          }
-          if (dataLines.length === 0) continue;
-          const payload = dataLines.join('\n');
-          try { messages.push(JSON.parse(payload)); } catch (_) { /* skip non-JSON keepalives */ }
-        }
-        return messages;
-      }
-      // CoinGlass MCP server returns HTTP 401 "Invalid Bearer token" on the
-      // standard MCP `initialize` method even when CG-API-KEY is correct
-      // (verified via curl from the pod, 2026-05-05). Other methods accept
-      // CG-API-KEY without an initialize handshake. claude-cli's bundle-mcp
-      // step requires a successful `initialize` reply or it times out and
-      // drops the server, so we synthesize the handshake locally and only
-      // forward methods CoinGlass actually serves. `notifications/initialized`
-      // is silently swallowed (it's a one-way notification per spec).
-      // Remove the synthetic branch only after CoinGlass fixes the upstream
-      // initialize handler — re-test by deleting the early-return below and
-      // checking base-service logs for `[bundle-mcp] failed to start`.
-      const PROTOCOL_VERSION = '2025-06-18';
-      function synthesizeInitialize(req) {
-        return {
-          jsonrpc: '2.0', id: req.id,
-          result: {
-            protocolVersion: PROTOCOL_VERSION,
-            capabilities: { tools: {} },
-            serverInfo: { name: 'coinglass-bridge', version: '1.0.0' },
-          },
-        };
-      }
-      async function handle(line) {
-        let req;
-        try { req = JSON.parse(line); } catch (_) { return; }
-        // JSON-RPC notifications (no `id` key) are one-way; the spec
-        // forbids responses, including errors. Track presence vs. value
-        // because `id: null` is a valid request id and must still get a
-        // reply, while a missing `id` field must not.
-        const isNotification = !req || !Object.prototype.hasOwnProperty.call(req, 'id');
-        const errorReply = (message) => {
-          if (isNotification) return;
-          writeLine({
-            jsonrpc: '2.0', id: req.id,
-            error: { code: -32603, message: String(message) },
-          });
-        };
-        if (req && req.method === 'initialize' && !isNotification) {
-          if (
-            req.params &&
-            typeof req.params.protocolVersion === 'string' &&
-            req.params.protocolVersion
-          ) {
-            protocolVersion = req.params.protocolVersion;
-          } else {
-            protocolVersion = PROTOCOL_VERSION;
-          }
-          writeLine(synthesizeInitialize(req));
-          return;
-        }
-        if (req && req.method && req.method.startsWith('notifications/')) {
-          // Don't forward client→server notifications; CoinGlass would 401
-          // on `notifications/initialized` the same way it does on
-          // `initialize`. Spec allows server to ignore unknown notifications.
-          return;
-        }
-        try {
-          const headers = {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json, text/event-stream',
-            'CG-API-KEY': apiKey || '',
-          };
-          if (sessionId) headers['Mcp-Session-Id'] = sessionId;
-          if (protocolVersion) headers['Mcp-Protocol-Version'] = protocolVersion;
-          const res = await fetch(url, { method: 'POST', headers, body: line });
-          const nextSession = res.headers.get('mcp-session-id');
-          if (nextSession) sessionId = nextSession;
-          // 404 with an attached Mcp-Session-Id means the upstream rejected
-          // the session (expired/unknown). Clear local state so the next
-          // request enters a fresh initialize flow instead of looping with
-          // a stale session id forever.
-          if (res.status === 404 && headers['Mcp-Session-Id']) {
-            sessionId = '';
-            protocolVersion = '';
-          }
-          const ctype = (res.headers.get('content-type') || '').toLowerCase();
-          const body = await res.text();
-          if (ctype.includes('text/event-stream')) {
-            for (const message of parseSse(body)) emit(message);
-          } else {
-            const trimmed = body.trim();
-            if (!trimmed) {
-              // Empty non-SSE body: an upstream gateway hiccup or 204.
-              // Bridge must reply with an error so the embedded claude
-              // doesn't hang waiting on a request that never returns.
-              errorReply(`empty response from coinglass MCP (${res.status})`);
-              return;
-            }
-            try { emit(JSON.parse(trimmed)); }
-            catch (_) {
-              errorReply(`non-JSON response from coinglass MCP (${res.status})`);
-            }
-          }
-        } catch (err) {
-          errorReply(err && err.message ? err.message : err);
-        }
-      }
-    # stdio -> HTTP+Bearer bridge for the in-cluster labs-trading-data MCP
-    # service. The claude-cli backend's `bundle-mcp` step accepts only stdio
-    # MCP servers (it silently skips streamable-HTTP / SSE), so this
-    # ~40-line proxy converts stdio JSON-RPC into Bearer-auth POSTs against
-    # the FastAPI streamable-HTTP endpoint. The trading-data service is
-    # stateless from the client side (no session-id, no protocol-version
-    # exchange beyond initialize) so this bridge is much simpler than the
-    # coinglass one — no auth refresh, no SSE re-framing, no env-var header
-    # interpolation. URL + token come from process.env (envFrom ->
-    # labs-trading-data-client + openclaw.json env passthrough below).
-    trading-data-mcp-proxy.js: |-
-      #!/usr/bin/env node
-      const url = process.env.TRADING_DATA_URL;
-      const token = process.env.TRADING_DATA_TOKEN;
-      let sessionId = '';
-      let queue = Promise.resolve();
-      process.stdin.setEncoding('utf8');
-      let buf = '';
-      process.stdin.on('data', chunk => {
-        buf += chunk;
-        let nl;
-        while ((nl = buf.indexOf('\n')) !== -1) {
-          const line = buf.slice(0, nl).trim();
-          buf = buf.slice(nl + 1);
-          if (line) queue = queue.then(() => handle(line)).catch(() => {});
-        }
-      });
-      function writeLine(obj) { process.stdout.write(JSON.stringify(obj) + '\n'); }
-      function isNotification(req) {
-        // JSON-RPC 2.0: a notification is a request object with no `id`
-        // member at all (e.g. `notifications/initialized`). It expects no
-        // response. We must NOT emit unsolicited error frames for these
-        // -- a stdio MCP client tracking ids would treat them as orphan
-        // replies (codex P2 round 2 on PR #137).
-        return !req || !Object.prototype.hasOwnProperty.call(req, 'id');
-      }
-      function rpcError(req, message) {
-        if (isNotification(req)) return;
-        writeLine({ jsonrpc: '2.0', id: req.id, error: { code: -32603, message: String(message) } });
-      }
-      // Parse a streamable-HTTP / SSE body into the JSON payloads of each
-      // event block. SSE allows one event to span multiple `data:` lines
-      // that the spec requires concatenating with `\n` before parsing;
-      // splitting per-line and JSON.parsing each fragment incorrectly
-      // discards every multi-line event (codex P2 round 2 on PR #137).
-      // Event blocks are separated by blank lines (one or more CRLF/LF).
-      function parseSseEvents(text) {
-        const out = [];
-        for (const block of text.split(/\r?\n\r?\n/)) {
-          if (!block.trim()) continue;
-          const dataLines = [];
-          for (const raw of block.split(/\r?\n/)) {
-            // Per spec: a leading single SP after the colon is part of
-            // formatting, not data. Strip exactly one leading space.
-            if (!raw.startsWith('data:')) continue;
-            const value = raw.slice(5);
-            dataLines.push(value.startsWith(' ') ? value.slice(1) : value);
-          }
-          if (!dataLines.length) continue;
-          const payload = dataLines.join('\n');
-          if (!payload.trim()) continue;
-          try { JSON.parse(payload); } catch (_) { continue; }
-          out.push(payload);
-        }
-        return out;
-      }
-      async function handle(line) {
-        let req;
-        try { req = JSON.parse(line); } catch (_) { return; }
-        if (!url || !token) {
-          rpcError(req, 'trading-data proxy not configured (TRADING_DATA_URL/TOKEN missing)');
-          return;
-        }
-        try {
-          const headers = {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json, text/event-stream',
-            'Authorization': `Bearer ${token}`,
-          };
-          if (sessionId) headers['Mcp-Session-Id'] = sessionId;
-          const res = await fetch(url, { method: 'POST', headers, body: line });
-          const nextSession = res.headers.get('mcp-session-id');
-          if (nextSession) sessionId = nextSession;
-          if (res.status === 404 && headers['Mcp-Session-Id']) {
-            sessionId = '';
-          }
-          const text = await res.text();
-          const contentType = (res.headers.get('content-type') || '').toLowerCase();
-          if (contentType.includes('text/event-stream')) {
-            const payloads = parseSseEvents(text);
-            for (const p of payloads) process.stdout.write(p + '\n');
-            if (payloads.length === 0) {
-              rpcError(req, `trading-data returned no parseable SSE payload (status ${res.status})`);
-            }
-            return;
-          }
-          // Non-SSE: validate that the body is a non-empty JSON document
-          // before passing through. Empty bodies, gateway HTML error
-          // pages, or upstream timeouts must surface as structured
-          // JSON-RPC errors so the agent retries cleanly instead of
-          // hitting a stdio framing exception (codex P2 round 1).
-          if (!text.trim()) {
-            // 202 Accepted with no body is the canonical reply to a
-            // notification. Skip silently in that case.
-            if (!isNotification(req)) {
-              rpcError(req, `trading-data returned empty body (status ${res.status})`);
-            }
-            return;
-          }
-          let parsed;
-          try { parsed = JSON.parse(text); } catch (_) {
-            const preview = text.length > 80 ? text.slice(0, 80) + '...' : text;
-            rpcError(req, `trading-data returned non-JSON body (status ${res.status}, content-type=${contentType || 'unknown'}, body=${preview})`);
-            return;
-          }
-          process.stdout.write(JSON.stringify(parsed) + '\n');
-        } catch (err) {
-          rpcError(req, err && err.message ? err.message : err);
-        }
-      }
     github-pr-mcp.js: |-
       #!/usr/bin/env node
       const { Buffer } = require('buffer');
@@ -1605,29 +1265,6 @@ configMaps:
               "native": false,
               "nativeSkills": false
             },
-            "customCommands": [
-              { "command": "eth", "description": "ETH snapshot via eth-trading-intel skill" },
-              { "command": "btc", "description": "BTC snapshot via eth-trading-intel skill" },
-              { "command": "sol", "description": "SOL snapshot via eth-trading-intel skill" },
-              { "command": "scan", "description": "Scan watchlist (BTC/ETH/SOL) by score threshold" },
-              { "command": "risk", "description": "Risk-only report. Usage: /risk SYMBOL" },
-              { "command": "why", "description": "Explain last trading signal" },
-              { "command": "watch", "description": "Watch SYMBOL. Usage: /watch SYMBOL [N] [long|short|both]" },
-              { "command": "unwatch", "description": "Remove symbol from watchlist. Usage: /unwatch SYMBOL" },
-              { "command": "settings", "description": "Show trading-intel watchlist + threshold" },
-              { "command": "set_threshold", "description": "Set scan threshold 50-95. Usage: /set_threshold N" },
-              { "command": "cmds", "description": "List all eth-trading-intel commands (renamed from /help to avoid native-router collision)" },
-              { "command": "last", "description": "Recall last trading signal from memory" },
-              { "command": "funding", "description": "Funding rate snapshot. Usage: /funding SYMBOL" },
-              { "command": "oi", "description": "Open interest snapshot. Usage: /oi SYMBOL" },
-              { "command": "etf", "description": "BTC/ETH ETF flow deep-dive. Usage: /etf BTC" },
-              { "command": "pulse", "description": "Compact: price, funding, OI, RSI. Usage: /pulse SYMBOL" },
-              { "command": "rsi", "description": "Multi-TF RSI 15m/1h/4h/12h/1d (Bybit). Usage: /rsi SYMBOL [tf|all]" },
-              { "command": "macd", "description": "MACD(12,26,9) on 1h/4h/1d (Bybit). Usage: /macd SYMBOL [tf]" },
-              { "command": "bb", "description": "Bollinger(20,2σ) on 1h/4h (Bybit). Usage: /bb SYMBOL [tf]" },
-              { "command": "adx", "description": "ADX(14) 4h trend strength (Bybit). Usage: /adx SYMBOL" },
-              { "command": "heatmap", "description": "Multi-symbol RSI heatmap by watchlist. Usage: /heatmap [tf]" }
-            ],
             "threadBindings": {
               "idleHours": 4,
               "maxAgeHours": 24
@@ -1663,21 +1300,6 @@ configMaps:
                 "MCTL_AUTH_FILE": "/home/node/.openclaw/mcp-auth/mctl/credentials.json"
               }
             },
-            "coinglass": {
-              "command": "node",
-              "args": ["/scripts/coinglass-mcp-proxy.js"],
-              "env": {
-                "COINGLASS_API_KEY": "__COINGLASS_API_KEY__"
-              }
-            },
-            "trading-data": {
-              "command": "node",
-              "args": ["/scripts/trading-data-mcp-proxy.js"],
-              "env": {
-                "TRADING_DATA_URL": "${TRADING_DATA_URL}",
-                "TRADING_DATA_TOKEN": "${TRADING_DATA_TOKEN}"
-              }
-            }
           }
         }
       }
