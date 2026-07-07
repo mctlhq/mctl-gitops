@@ -37,7 +37,17 @@ tenant:
     requests.cpu: "3"
     requests.memory: "5Gi"
     limits.cpu: "12"
-    limits.memory: "11Gi"
+    # Right-sized 2026-07: after the openclaw memory-limit trim (2560Mi ->
+    # 2048Mi, mctl-gitops#532), current steady-state usage is 6560Mi/11Gi —
+    # but labs-openclaw is scaled to 0 right now (see
+    # services/labs/openclaw/values.yaml) and documented to come back
+    # online. Budgeted for that: 6560Mi + 2048Mi (openclaw's trimmed limit,
+    # once re-enabled) + ~2Gi headroom (same margin the 2026-05-10 bump
+    # validated for concurrent workflow + preview pods) ~= 10.5Gi. Only a
+    # 512Mi trim vs the un-adjusted 9Gi first estimate, on purpose — this
+    # tenant has the documented history of workflow pods stuck Pending when
+    # headroom got too tight.
+    limits.memory: "10.5Gi"
     pods: "15"
     persistentvolumeclaims: "2"
     services: "15"

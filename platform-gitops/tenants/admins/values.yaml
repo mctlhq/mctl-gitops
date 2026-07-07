@@ -22,7 +22,13 @@ tenant:
     # mctl-agent/mctl-design/mctl-docs/mctl-web 1200m), leaving only 500m —
     # not enough for the 1000m deploy-pipeline pods. Raised 8 to 10.
     limits.cpu: "10"
-    limits.memory: "6Gi"
+    # Right-sized 2026-07: after the openclaw memory-limit trim (2560Mi ->
+    # 1536Mi, mctl-gitops#532), steady-state usage is 3712Mi/6Gi. Lowered to
+    # 5Gi, keeping ~1.3Gi headroom (same class of margin as the CPU buffer
+    # above) for deploy-pipeline/rollback workflow pods. Frees 1Gi of
+    # cluster-wide memory-limit quota ceiling for onboarding more tenants
+    # (docs/audit/PLATFORM_ASSESSMENT_2026-07.md capacity note).
+    limits.memory: "5Gi"
     pods: "12"
     persistentvolumeclaims: "2"
     services: "10"
