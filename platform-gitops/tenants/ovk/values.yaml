@@ -18,7 +18,13 @@ tenant:
     # skills-fanout 300m) brings pod limits to 5300m; bumped from 5 to 6
     # to accommodate new sidecar limits with headroom.
     limits.cpu: "6"
-    limits.memory: "4Gi"
+    # Right-sized 2026-07: after the openclaw memory-limit trim (2560Mi ->
+    # 1536Mi, mctl-gitops#532), steady-state usage is 1920Mi/4Gi (only
+    # openclaw runs in this tenant currently). Lowered to 3Gi, keeping
+    # ~1.1Gi headroom for workflow/rollout pods. Frees 1Gi of cluster-wide
+    # memory-limit quota ceiling for onboarding more tenants
+    # (docs/audit/PLATFORM_ASSESSMENT_2026-07.md capacity note).
+    limits.memory: "3Gi"
     pods: "5"
     persistentvolumeclaims: "2"
     services: "5"
