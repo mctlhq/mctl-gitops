@@ -297,12 +297,20 @@ spec:
             value: "{{workflow.duration}}"
         source: |
           set +e
+          # Hourly job — same "quiet unless it did something or failed" policy
+          # as argo-pvc-janitor. reconcile only repairs rare dropped
+          # write-backs (see the CronWorkflow description), so a routine
+          # Succeeded tick has nothing worth reporting; only notify on a
+          # non-Succeeded terminal status.
+          if [ "$WORKFLOW_STATUS" = "Succeeded" ]; then
+            echo "reconcile succeeded; routine tick, skipping Telegram notify."
+            exit 0
+          fi
           apk add --no-cache curl ca-certificates >/dev/null 2>&1
           case "$WORKFLOW_STATUS" in
-            Succeeded) ICON="✅" ;;
-            Failed)    ICON="❌" ;;
-            Error)     ICON="⚠️" ;;
-            *)         ICON="⏳" ;;
+            Failed) ICON="❌" ;;
+            Error)  ICON="⚠️" ;;
+            *)      ICON="⏳" ;;
           esac
           UI_URL="https://workflows.mctl.ai/workflows/argo-workflows/${WORKFLOW_NAME}"
           TEXT="${ICON} mctl-agents: reconcile — ${WORKFLOW_STATUS} (${WORKFLOW_DURATION}s)\n${UI_URL}"
