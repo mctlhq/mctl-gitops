@@ -1299,7 +1299,7 @@ configMaps:
                 "MCTL_API_URL": "https://api.mctl.ai",
                 "MCTL_AUTH_FILE": "/home/node/.openclaw/mcp-auth/mctl/credentials.json"
               }
-            },
+            }
           }
         }
       }
