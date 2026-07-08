@@ -9,6 +9,11 @@
 # point is visibility into other tenants' namespaces during onboarding
 # diagnosis, not just `labs`.
 #
+# pods/log added 2026-07-08: read-only pods/pods.list wasn't enough to
+# diagnose a silent-fail loop (3 cycles: fail, label kept, nothing written) —
+# without pods/log the agent can see a pod exists but not why it's failing.
+# get only; pods/log doesn't support list/watch as a subresource.
+#
 # Lives here rather than in services/labs/claude-remote/values.yaml
 # extraObjects: that service syncs under the "apps" AppProject, which sets
 # clusterResourceWhitelist: [] (see bootstrap/templates/projects/project-apps.yaml)
@@ -25,6 +30,9 @@ rules:
   - apiGroups: [""]
     resources: ["namespaces", "resourcequotas", "pods"]
     verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
   - apiGroups: ["apps"]
     resources: ["deployments"]
     verbs: ["get", "list", "watch"]
