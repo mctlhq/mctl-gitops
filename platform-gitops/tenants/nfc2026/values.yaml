@@ -1,0 +1,34 @@
+# Tenant configuration for: nfc2026
+# Created by: wft-create-tenant workflow
+# Managed by: ArgoCD ApplicationSet (applicationset-tenants)
+tenant:
+  name: nfc2026
+  displayName: "nfc2026"
+  description: "Looking for a new solution for deploying customer workloads."
+  contactEmail: "fbnewtz@gmail.com"
+  members:
+    - userId: WannaBeGeekster
+      role: owner
+  quotas:
+    requests.cpu: "1"
+    requests.memory: "2Gi"
+    limits.cpu: "2"
+    limits.memory: "3Gi"
+    pods: "10"
+    persistentvolumeclaims: "5"
+    services: "10"
+  limitRange:
+    enabled: true
+    default:
+      cpu: "500m"
+      memory: "256Mi"
+    defaultRequest:
+      cpu: "100m"
+      memory: "128Mi"
+    max:
+      cpu: "2"
+      memory: "5Gi"
+  networking:
+    allowIntraNamespace: true
+    allowClusterEgress: true
+    allowInternetEgress: false

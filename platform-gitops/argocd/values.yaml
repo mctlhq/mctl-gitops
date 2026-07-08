@@ -194,6 +194,15 @@ argo-cd:
         p, role:team-nfc, logs, get, apps/nfc-*, allow
         p, role:team-nfc, exec, create, apps/nfc-*, allow
         g, nfc, role:team-nfc
+
+        # Tenant: nfc2026
+        p, role:team-nfc2026, applications, get, apps/nfc2026-*, allow
+        p, role:team-nfc2026, applications, list, apps/nfc2026-*, allow
+        p, role:team-nfc2026, applications, sync, apps/nfc2026-*, allow
+        p, role:team-nfc2026, applications, override, apps/nfc2026-*, allow
+        p, role:team-nfc2026, logs, get, apps/nfc2026-*, allow
+        p, role:team-nfc2026, exec, create, apps/nfc2026-*, allow
+        g, nfc2026, role:team-nfc2026
     secret:
       createSecret: true
 
