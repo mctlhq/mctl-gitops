@@ -1,0 +1,46 @@
+# Read-only cluster diagnostics for labs/claude-remote (2026-07-08). The agent
+# needed real cluster state to diagnose a tenant-onboarding workflow that
+# reached the cluster (namespace/quota created) but never finished
+# registering in the mctl control plane — the mctl MCP tools had nothing to
+# show. kubectl in the image (mctl-claude-remote 0.10.0+) auto-detects
+# in-cluster config from the ServiceAccount's mounted token; no kubeconfig.
+# get/list/watch only — no create/update/patch/delete on anything.
+# ClusterRole (not Role) because namespaces is cluster-scoped and the whole
+# point is visibility into other tenants' namespaces during onboarding
+# diagnosis, not just `labs`.
+#
+# Lives here rather than in services/labs/claude-remote/values.yaml
+# extraObjects: that service syncs under the "apps" AppProject, which sets
+# clusterResourceWhitelist: [] (see bootstrap/templates/projects/project-apps.yaml)
+# and would reject a ClusterRole/ClusterRoleBinding. The bootstrap chart
+# (this file) runs under project: default (unrestricted), same pattern as
+# mctl-api-rbac.yaml. The ServiceAccount itself is created by the
+# base-service Helm chart (services/labs/claude-remote/values.yaml
+# serviceAccount.create: true) — namespace-scoped, so it's fine under "apps".
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: labs-claude-remote-readonly
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces", "resourcequotas", "pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["argoproj.io"]
+    resources: ["workflows", "applications"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: labs-claude-remote-readonly
+subjects:
+  - kind: ServiceAccount
+    name: labs-claude-remote-base-service
+    namespace: labs
+roleRef:
+  kind: ClusterRole
+  name: labs-claude-remote-readonly
+  apiGroup: rbac.authorization.k8s.io
