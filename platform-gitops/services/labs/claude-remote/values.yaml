@@ -31,6 +31,17 @@ securityContext:
   allowPrivilegeEscalation: false
   capabilities:
     drop: [ALL]
+# Dedicated ServiceAccount (instead of the namespace's "default") so the
+# read-only cluster RBAC bound to it (see
+# platform-gitops/bootstrap/templates/system/labs-claude-remote-rbac.yaml)
+# is scoped to this pod only, not every workload in `labs` that happens to
+# run under the default SA. The ClusterRole/ClusterRoleBinding themselves
+# can't live here as extraObjects: the "apps" AppProject that this service
+# syncs under sets clusterResourceWhitelist: [] (see project-apps.yaml) and
+# would reject the sync — cluster-scoped RBAC has to be granted from the
+# bootstrap chart (project: default), same pattern as mctl-api-rbac.yaml.
+serviceAccount:
+  create: true
 env:
   PORT: "8080"
   # No RESUME_SESSION_ID pin: as of image 0.9.0 the entrypoint manages its own
