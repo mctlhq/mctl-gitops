@@ -31,6 +31,47 @@ securityContext:
   allowPrivilegeEscalation: false
   capabilities:
     drop: [ALL]
+# Dedicated ServiceAccount (instead of the namespace's "default") so the
+# read-only RBAC below is scoped to this pod only, not every workload in
+# `labs` that happens to run under the default SA.
+serviceAccount:
+  create: true
+# Read-only cluster diagnostics (2026-07-08): the agent needed real cluster
+# state to diagnose a tenant-onboarding workflow that reached the cluster
+# (namespace/quota created) but never finished registering in the mctl
+# control plane — the mctl MCP tools had nothing to show. kubectl in the
+# image (mctl-claude-remote 0.10.0+) auto-detects in-cluster config from
+# this ServiceAccount's mounted token; no kubeconfig. get/list/watch only —
+# no create/update/patch/delete on anything. ClusterRole (not Role) because
+# namespaces is cluster-scoped and the whole point is visibility into
+# other tenants' namespaces during onboarding diagnosis, not just `labs`.
+extraObjects:
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRole
+    metadata:
+      name: labs-claude-remote-readonly
+    rules:
+      - apiGroups: [""]
+        resources: ["namespaces", "resourcequotas", "pods"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["apps"]
+        resources: ["deployments"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["argoproj.io"]
+        resources: ["workflows", "applications"]
+        verbs: ["get", "list", "watch"]
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRoleBinding
+    metadata:
+      name: labs-claude-remote-readonly
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: ClusterRole
+      name: labs-claude-remote-readonly
+    subjects:
+      - kind: ServiceAccount
+        name: labs-claude-remote-base-service
+        namespace: labs
 env:
   PORT: "8080"
   # No RESUME_SESSION_ID pin: as of image 0.9.0 the entrypoint manages its own
