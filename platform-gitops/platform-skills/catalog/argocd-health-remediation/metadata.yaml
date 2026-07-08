@@ -1,0 +1,10 @@
+name: argocd-health-remediation
+title: ArgoCD Health Remediation
+description: Diagnose and fix ArgoCD application incidents with GitOps-first remediation
+visibility: admin
+status: active
+owner: platform
+runtimes:
+  - mcp
+  - codex
+  - openclaw

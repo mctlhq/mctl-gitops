@@ -70,6 +70,11 @@ jobs:
             -schema-location "$CRD_SCHEMA_LOCATION" \
             "$tmpdir/bootstrap.yaml" "$tmpdir/argocd.yaml"
 
+      - name: Validate platform skill registry
+        run: |
+          python3 -m pip install --quiet pyyaml
+          scripts/validate-platform-skills.py
+
       - name: Validate raw manifests (tenants, argo-workflows, mcp, infra-components)
         run: |
           set -euo pipefail

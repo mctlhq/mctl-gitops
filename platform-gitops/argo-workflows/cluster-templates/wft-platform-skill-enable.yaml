@@ -1,0 +1,119 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterWorkflowTemplate
+metadata:
+  name: platform-skill-enable
+  annotations:
+    workflows.argoproj.io/description: Enable a platform skill for a tenant by editing platform-skills bindings in mctl-gitops.
+spec:
+  ttlStrategy:
+    secondsAfterSuccess: 1800
+    secondsAfterFailure: 86400
+    secondsAfterCompletion: 3600
+  entrypoint: update-binding
+  serviceAccountName: argo-workflow-sa
+  arguments:
+    parameters:
+      - name: tenant_name
+      - name: skill_name
+      - name: actor
+        value: unknown
+  templates:
+    - name: update-binding
+      inputs:
+        parameters:
+          - name: tenant_name
+          - name: skill_name
+          - name: actor
+      script:
+        image: alpine:3.19
+        command: [sh]
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+        env:
+          - name: TENANT
+            value: "{{inputs.parameters.tenant_name}}"
+          - name: SKILL
+            value: "{{inputs.parameters.skill_name}}"
+          - name: ACTOR
+            value: "{{inputs.parameters.actor}}"
+        envFrom:
+          - configMapRef:
+              name: mctl-platform-config
+        source: |
+          set -e
+          case "$TENANT:$SKILL" in
+            *[!a-z0-9:-]*|*..*|*/*) echo "Invalid tenant or skill"; exit 1 ;;
+          esac
+          SAFE_ACTOR=$(printf '%s' "$ACTOR" | tr -d '\r\n' | tr -d '[:cntrl:]')
+          [ -z "$SAFE_ACTOR" ] && SAFE_ACTOR=unknown
+          apk add --no-cache git openssh-client ca-certificates python3 py3-yaml > /dev/null
+          mkdir -p ~/.ssh
+          cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  StrictHostKeyChecking no\n' > ~/.ssh/config
+          chmod 600 ~/.ssh/config
+          git clone --depth=1 "git@github.com:${GITOPS_ORG}/${GITOPS_REPO}.git" /tmp/mctl-gitops
+          cd /tmp/mctl-gitops
+          git config user.name "argo-workflows[bot]"
+          git config user.email "argo-workflows[bot]@users.noreply.github.com"
+          FILE="platform-gitops/platform-skills/bindings/tenants/${TENANT}.yaml"
+          SKILL="$SKILL" python3 <<'PY'
+          import os, sys, yaml
+          skill = os.environ["SKILL"]
+          meta_path = f"platform-gitops/platform-skills/catalog/{skill}/metadata.yaml"
+          if not os.path.isfile(meta_path):
+              sys.exit(f"unknown skill: {skill}")
+          with open(meta_path, "r", encoding="utf-8") as f:
+              meta = yaml.safe_load(f) or {}
+          if meta.get("status") != "active":
+              sys.exit(f"skill {skill!r} is not active (status={meta.get('status')!r})")
+          if meta.get("visibility") != "tenant":
+              sys.exit(f"skill {skill!r} does not have tenant visibility (visibility={meta.get('visibility')!r})")
+          PY
+          apply_change() {
+            TENANT="$TENANT" SKILL="$SKILL" python3 <<'PY'
+          import os, yaml
+          tenant = os.environ["TENANT"]
+          skill = os.environ["SKILL"]
+          path = f"platform-gitops/platform-skills/bindings/tenants/{tenant}.yaml"
+          os.makedirs(os.path.dirname(path), exist_ok=True)
+          data = {"tenant": tenant, "enabledSkills": []}
+          if os.path.exists(path):
+              with open(path, "r", encoding="utf-8") as f:
+                  data = yaml.safe_load(f) or data
+          skills = list(dict.fromkeys(data.get("enabledSkills") or []))
+          if skill not in skills:
+              skills.append(skill)
+          data = {"tenant": tenant, "enabledSkills": sorted(skills)}
+          with open(path, "w", encoding="utf-8") as f:
+              yaml.safe_dump(data, f, sort_keys=False)
+          PY
+            git add "$FILE"
+          }
+          apply_change
+          if git diff --cached --quiet; then
+            echo "No binding changes"
+            exit 0
+          fi
+          git commit -m "feat(platform-skills): enable ${SKILL} for ${TENANT}" -m "Triggered by: ${SAFE_ACTOR}"
+          for i in 1 2 3 4 5; do
+            git push origin HEAD:main && exit 0
+            [ "$i" -eq 5 ] && exit 1
+            git fetch origin main
+            git reset --hard origin/main
+            apply_change
+            git diff --cached --quiet && exit 0
+            git commit -m "feat(platform-skills): enable ${SKILL} for ${TENANT}" -m "Triggered by: ${SAFE_ACTOR}"
+          done
+        volumeMounts:
+          - name: deploy-key
+            mountPath: /secrets/deploy-key
+      volumes:
+        - name: deploy-key
+          secret:
+            secretName: mctl-gitops-deploy-key
