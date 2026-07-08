@@ -1,6 +1,7 @@
-status: accepted
-updated_at: '2026-07-08T21:21:37Z'
+status: implemented
+updated_at: '2026-07-08T21:38:05Z'
 updated_by: mctl-agents[bot]
+pr: https://github.com/mctlhq/mctl-docs/pull/41
 source:
   type: github_issue
   repo: mctlhq/mctl-docs
