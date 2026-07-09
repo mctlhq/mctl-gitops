@@ -48,7 +48,13 @@ env:
   NODE_OPTIONS: "--max-old-space-size=1792"
   OPENCLAW_CONFIG_PATH: /config-rw/openclaw.json
   OPENCLAW_OPENAI_CODEX_PORTAL_CALLBACK_URL: "https://app.mctl.ai/api/oidc-provider/openai-codex/callback"
-  OPENCLAW_OPENAI_CODEX_CLIENT_ID: "app_EMoamEEZ73f0CkXaXp7hrann"
+  # Empty until a real OAuth client is registered with OpenAI for the
+  # app.mctl.ai redirect_uri. Do not reuse the localhost CLI client id here —
+  # auth.openai.com rejects it with authorize_hydra_invalid_request because
+  # that client is only registered for http://localhost:1455/auth/callback.
+  # Empty falls back to manual_input mode (browser redirects to localhost,
+  # tenant pastes the resulting URL back), which is the flow that works today.
+  OPENCLAW_OPENAI_CODEX_CLIENT_ID: ""
 
 probes:
   startup:
