@@ -126,6 +126,28 @@ spec:
                               config:
                                 match_all: false
                                 action: inc
+                        # Catches the broader "no usable credentials" case: never
+                        # connected, expired-then-purged, or explicitly
+                        # disconnected — none of which produce a "Token refresh
+                        # failed" line above. See mctlhq/mctl-gitops#556.
+                        # Named capture group (?P<provider>...) is kept only so
+                        # the extracted value could be promoted to a Loki label
+                        # via a `labels` stage; Promtail's `metrics` stage itself
+                        # does not attach per-value labels to the Counter it
+                        # exposes (metrics stage output has no dynamic labels,
+                        # only what's already on the log stream) — so this is a
+                        # single unlabeled total across all providers, same
+                        # shape as openclaw_token_refresh_failed_total above.
+                        - regex:
+                            expression: '(?P<missing_api_key>Missing API key for provider "(?P<provider>[^"]+)")'
+                        - metrics:
+                            openclaw_provider_missing_api_key_total:
+                              type: Counter
+                              description: "gateway 'Missing API key for provider' occurrence count (any provider)"
+                              source: missing_api_key
+                              config:
+                                match_all: false
+                                action: inc
                 kubernetes_sd_configs:
                   - role: pod
                 relabel_configs:

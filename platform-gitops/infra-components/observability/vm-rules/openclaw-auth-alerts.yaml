@@ -4,6 +4,17 @@
 # openclaw_token_refresh_failed_total. A single occurrence is enough to page
 # because a failed refresh means credentials will stop working when the
 # access token expires (~10 days from initial auth).
+#
+# KNOWN BLIND SPOT (mctlhq/mctl-gitops#556): OpenclawCodexTokenRefreshFailed
+# only covers "a token existed and its refresh attempt failed". Confirmed via
+# direct VictoriaMetrics query that openclaw_token_refresh_failed_total has
+# had zero data points, for any tenant, across the full 120-day retention
+# window — this alert has never fired, not even once. It cannot catch auth
+# never succeeding in the first place (mctlhq/mctl-gitops#555, a 7-week
+# regression where the OAuth authorize step itself was rejected before any
+# token ever existed) or credentials being missing outright. The
+# OpenclawProviderMissingApiKey alert below, on the "Missing API key for
+# provider" log line, is the actual safety net for that common case.
 apiVersion: operator.victoriametrics.com/v1beta1
 kind: VMRule
 metadata:
@@ -32,5 +43,27 @@ spec:
               - OpenAI revoked the refresh token (long idle period)
               - Network issue reaching auth.openai.com from the cluster
               - pi-ai upstream package changed CLIENT_ID
+              Fix: port-forward to the openclaw pod and re-authenticate via
+              manual_input mode in the Control UI (/overview).
+
+        - alert: OpenclawProviderMissingApiKey
+          expr: |
+            increase(openclaw_provider_missing_api_key_total[10m]) > 0
+          for: 0m
+          labels:
+            severity: warning
+            component: openclaw
+          annotations:
+            summary: "openclaw gateway reported missing API key for a provider (namespace={{ $labels.namespace }})"
+            description: |
+              At least one openclaw pod logged "Missing API key for provider"
+              in the last 10 minutes. This fires regardless of *why* the
+              credential is missing — never connected in the first place,
+              expired and then purged, or explicitly disconnected via
+              disconnectOpenAICodex() — so it catches the auth-never-succeeded
+              case (mctlhq/mctl-gitops#555) that
+              OpenclawCodexTokenRefreshFailed cannot see. The metric has no
+              per-provider label (see comment in loki.yaml); check the
+              affected pod's logs to identify which provider is affected.
               Fix: port-forward to the openclaw pod and re-authenticate via
               manual_input mode in the Control UI (/overview).
