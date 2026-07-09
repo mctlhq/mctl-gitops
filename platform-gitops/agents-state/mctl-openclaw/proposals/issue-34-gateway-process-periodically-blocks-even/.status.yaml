@@ -1,0 +1,10 @@
+status: proposed
+updated_at: '2026-07-09T23:00:24Z'
+updated_by: mctl-agents[bot]
+source:
+  type: github_issue
+  repo: mctlhq/mctl-openclaw
+  issue: 34
+  url: https://github.com/mctlhq/mctl-openclaw/issues/34
+control:
+  requires_human_approval: true
