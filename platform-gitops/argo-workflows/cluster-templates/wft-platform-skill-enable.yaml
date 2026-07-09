@@ -46,9 +46,9 @@ spec:
               name: mctl-platform-config
         source: |
           set -e
-          case "$TENANT:$SKILL" in
-            *[!a-z0-9:-]*|*..*|*/*) echo "Invalid tenant or skill"; exit 1 ;;
-          esac
+          NAME_RE='^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$'
+          echo "$TENANT" | grep -Eq "$NAME_RE" || { echo "Invalid tenant"; exit 1; }
+          echo "$SKILL" | grep -Eq "$NAME_RE" || { echo "Invalid skill"; exit 1; }
           SAFE_ACTOR=$(printf '%s' "$ACTOR" | tr -d '\r\n' | tr -d '[:cntrl:]')
           [ -z "$SAFE_ACTOR" ] && SAFE_ACTOR=unknown
           apk add --no-cache git openssh-client ca-certificates python3 py3-yaml > /dev/null
@@ -62,7 +62,8 @@ spec:
           git config user.name "argo-workflows[bot]"
           git config user.email "argo-workflows[bot]@users.noreply.github.com"
           FILE="platform-gitops/platform-skills/bindings/tenants/${TENANT}.yaml"
-          SKILL="$SKILL" python3 <<'PY'
+          check_skill_valid() {
+            SKILL="$SKILL" python3 <<'PY'
           import os, sys, yaml
           skill = os.environ["SKILL"]
           meta_path = f"platform-gitops/platform-skills/catalog/{skill}/metadata.yaml"
@@ -75,6 +76,8 @@ spec:
           if meta.get("visibility") != "tenant":
               sys.exit(f"skill {skill!r} does not have tenant visibility (visibility={meta.get('visibility')!r})")
           PY
+          }
+          check_skill_valid
           apply_change() {
             TENANT="$TENANT" SKILL="$SKILL" python3 <<'PY'
           import os, yaml
@@ -106,6 +109,7 @@ spec:
             [ "$i" -eq 5 ] && exit 1
             git fetch origin main
             git reset --hard origin/main
+            check_skill_valid
             apply_change
             git diff --cached --quiet && exit 0
             git commit -m "feat(platform-skills): enable ${SKILL} for ${TENANT}" -m "Triggered by: ${SAFE_ACTOR}"

@@ -467,6 +467,15 @@ spec:
               echo "WARNING: $SSO_FILE not found (already deleted). Skipping."
             fi
 
+            SKILL_BINDING_FILE="platform-gitops/platform-skills/bindings/tenants/${TENANT}.yaml"
+            if [ -f "$SKILL_BINDING_FILE" ]; then
+              git rm "$SKILL_BINDING_FILE"
+              echo "Removed $SKILL_BINDING_FILE"
+              CHANGED=true
+            else
+              echo "WARNING: $SKILL_BINDING_FILE not found (already deleted or never enabled). Skipping."
+            fi
+
             CNPG_DIR="platform-gitops/infra-components/data/cnpg/shared"
 
             DB_FILE="${CNPG_DIR}/databases.yaml"
@@ -516,6 +525,7 @@ spec:
           - Removed platform-gitops/tenants/${TENANT}/
           - Removed ArgoCD RBAC for role:team-${TENANT}
           - Removed database resources (DB CRDs, Secrets, Roles)
+          - Removed platform skill bindings for tenant ${TENANT}
 
           Deleted by Argo Workflows (wft-delete-tenant-safe)"
 
