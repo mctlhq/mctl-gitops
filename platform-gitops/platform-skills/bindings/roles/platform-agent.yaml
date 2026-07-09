@@ -1,0 +1,4 @@
+role: platform-agent
+enabledSkills:
+  - mctl-platform
+  - argocd-health-remediation

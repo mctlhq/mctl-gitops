@@ -1,0 +1,10 @@
+name: mctl-platform
+title: MCTL Platform
+description: Platform operations and troubleshooting guidance
+visibility: admin
+status: active
+owner: platform
+runtimes:
+  - mcp
+  - codex
+  - openclaw
