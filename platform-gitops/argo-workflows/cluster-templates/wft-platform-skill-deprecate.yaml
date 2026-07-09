@@ -42,9 +42,7 @@ spec:
               name: mctl-platform-config
         source: |
           set -e
-          case "$SKILL" in
-            *[!a-z0-9-]*|*..*|*/*) echo "Invalid skill"; exit 1 ;;
-          esac
+          echo "$SKILL" | grep -Eq '^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$' || { echo "Invalid skill"; exit 1; }
           SAFE_ACTOR=$(printf '%s' "$ACTOR" | tr -d '\r\n' | tr -d '[:cntrl:]')
           [ -z "$SAFE_ACTOR" ] && SAFE_ACTOR=unknown
           apk add --no-cache git openssh-client ca-certificates python3 py3-yaml > /dev/null
