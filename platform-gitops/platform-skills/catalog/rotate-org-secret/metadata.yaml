@@ -1,0 +1,9 @@
+name: rotate-org-secret
+title: Rotate Org Secret
+description: Rotate or set a GitHub Actions secret across all mctlhq repos without leaking the value
+visibility: admin
+status: active
+owner: platform
+runtimes:
+  - claude
+  - codex

@@ -2,3 +2,7 @@ role: admins
 enabledSkills:
   - mctl-platform
   - argocd-health-remediation
+  - tenant-safe-cleanup
+  - rotate-org-secret
+  - review-watch
+  - mctl-demo-walkthrough

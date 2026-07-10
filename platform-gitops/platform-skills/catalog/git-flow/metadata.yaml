@@ -1,0 +1,11 @@
+name: git-flow
+title: Git Flow
+description: Non-interactive git workflow for isolated changes with optional release tagging
+visibility: public
+status: active
+owner: platform
+runtimes:
+  - mcp
+  - claude
+  - codex
+  - openclaw
