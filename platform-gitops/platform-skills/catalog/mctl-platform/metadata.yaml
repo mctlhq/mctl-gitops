@@ -1,6 +1,6 @@
 name: mctl-platform
 title: MCTL Platform
-description: Platform operations and troubleshooting guidance
+description: MCTL platform operations, troubleshooting, and MCP OAuth recovery
 visibility: admin
 status: active
 owner: platform
