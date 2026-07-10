@@ -51,7 +51,10 @@ env:
   PATH: "/whisper-storage:/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games"
   LD_LIBRARY_PATH: /whisper-storage
   WHISPER_CPP_MODEL: /whisper-storage/ggml-base.bin
-  NODE_OPTIONS: "--max-old-space-size=1792"
+  # --inspect: TEMPORARY debug flag for the issue-34 event-loop-stall
+  # investigation (mctl-openclaw#34). Loopback-only, reachable solely via
+  # kubectl port-forward. Remove once CPU profiles are captured.
+  NODE_OPTIONS: "--max-old-space-size=1792 --inspect=127.0.0.1:9229"
   OPENCLAW_CONFIG_PATH: /config-rw/openclaw.json
   OPENCLAW_OPENAI_CODEX_PORTAL_CALLBACK_URL: "https://app.mctl.ai/api/oidc-provider/openai-codex/callback"
   # Confirmed: auth.openai.com rejects the pi-ai localhost client id with
