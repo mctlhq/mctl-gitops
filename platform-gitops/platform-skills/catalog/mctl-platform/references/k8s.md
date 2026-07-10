@@ -7,13 +7,13 @@ Prefer `mctl_*` MCP tools for anything they cover — these commands are the esc
 - Name: `mctl-preprod`
 - Runtime: **k3s** on Hetzner Cloud, provisioned via `kube-hetzner` Terraform module.
 - API server: `https://78.47.58.237:6443`
-- Kubeconfig on this machine: `/Users/dmitriimashkov/PycharmProjects/mctlhq/mctl-gitops/infrastructure/k3s-preview/kubeconfig.yaml`
+- Kubeconfig: `infrastructure/k3s-preview/kubeconfig.yaml` in your local mctl-gitops checkout
   - `infrastructure/k3s-preview/` is the real live cluster despite the name. `infrastructure/k3s-prod/` exists as an empty/planned spare.
 
-Every kubectl session starts with:
+Every kubectl session starts with (from the mctl-gitops checkout root):
 
 ```sh
-export KUBECONFIG=/Users/dmitriimashkov/PycharmProjects/mctlhq/mctl-gitops/infrastructure/k3s-preview/kubeconfig.yaml
+export KUBECONFIG="$(pwd)/infrastructure/k3s-preview/kubeconfig.yaml"
 ```
 
 ## Namespace map
@@ -71,7 +71,7 @@ Every `<team>-openclaw-base-service` pod is built from the shared `base-service`
 
 ## GitOps source of truth
 
-Repo: `https://github.com/mctlhq/mctl-gitops`. Local: `/Users/dmitriimashkov/PycharmProjects/mctlhq/mctl-gitops`.
+Repo: `https://github.com/mctlhq/mctl-gitops` (use your local checkout of it in the mctlhq workspace).
 
 Key files:
 

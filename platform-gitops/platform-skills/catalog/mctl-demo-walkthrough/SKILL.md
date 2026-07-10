@@ -12,7 +12,9 @@ shipping it through the normal PR → release → gitops flow.
 
 ## HARD SAFETY RULES (read first)
 - **Only** the test/reviewer account **`8745115872` (@mctlhq)**. NEVER the
-  operator **`210408407` (@MashkovD)**. ([[reference_mctl_telegram_account_ids]])
+  operator's personal account (the other connected identity — resolve it via
+  `list_telegram_identities` and treat every non-reviewer account as
+  off-limits).
 - **Verify the surface is the reviewer account before recording:** ask ChatGPT to
   send any message; the tool result MUST contain
   `dry_reason: "reviewer/demo account — sending is preview-only; no message is
@@ -93,8 +95,8 @@ db `labs-mctl-telegram` (reviewer = `users.telegram_login_id=8745115872`,
 Give the agent a self-contained prompt to:
 - Convert the GIF → mp4: `ffmpeg -y -i <gif> -movflags +faststart -pix_fmt yuv420p
   -vf "scale=1280:-2:flags=lanczos" -c:v libx264 -crf 28 internal/web/walkthrough.mp4`
-  (target < ~3MB). Replace `internal/web/walkthrough.mp4` in **mctl-telegram**
-  (`/Users/dmitriimashkov/PycharmProjects/mctlhq/mctl-telegram`); the route
+  (target < ~3MB). Replace `internal/web/walkthrough.mp4` in the local
+  **mctl-telegram** checkout in the mctlhq workspace; the route
   `/demo/walkthrough.mp4` + `//go:embed` already exist (0.37.0).
 - `go build ./... && go vet ./... && go test ./internal/web/...`; open a PR
   (conventional commit, NO `Co-Authored-By`), post EXACTLY `@claude review`.
