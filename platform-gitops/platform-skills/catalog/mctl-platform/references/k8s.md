@@ -156,15 +156,25 @@ State on each openclaw tenant lives in `emptyDir` mirrored to S3 by the `s3-sync
 ### Pre-flush before any rollout that re-runs init containers
 
 ```sh
+flush_failed=""
 for team in ovk labs admins; do
   pod=$(kubectl -n "$team" get pod -l app.kubernetes.io/instance="$team-openclaw" -o name | head -1)
+  if [ -z "$pod" ]; then
+    echo "FLUSH FAILED: no openclaw pod found in $team"
+    flush_failed="$flush_failed $team"
+    continue
+  fi
   kubectl -n "$team" exec "$pod" -c s3-sync -- \
     mc mirror --overwrite --exclude '*.lock' --exclude '*.tmp' \
-    /home/node/.openclaw "s3/platform-state/$team/openclaw/" || true
+    /home/node/.openclaw "s3/platform-state/$team/openclaw/" \
+    || { echo "FLUSH FAILED: $team"; flush_failed="$flush_failed $team"; }
 done
+[ -z "$flush_failed" ] || echo "DO NOT ROLL OUT:$flush_failed — state not flushed"
 ```
 
-`--overwrite` without `--remove` so a wonky source can't wipe S3.
+Do NOT proceed with the rollout for any team whose flush failed — the rollout
+re-runs init containers and an unflushed pod loses everything since the last
+sidecar mirror. `--overwrite` without `--remove` so a wonky source can't wipe S3.
 
 ### Verify the canary guard is live before trusting it
 

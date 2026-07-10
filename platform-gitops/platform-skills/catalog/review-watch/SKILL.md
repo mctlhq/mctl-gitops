@@ -1,6 +1,6 @@
 ---
 name: review-watch
-description: Monitor a GitHub PR in the background for a review-bot response. Watches BOTH claude[bot] (claude-review.yml) and chatgpt-codex-connector[bot] (@codex review). Launches a detached shell process that polls until a bot posts a review (line-anchored comments or top-level review body), a top-level issue comment (clean/"no findings"), or reacts 👍, then writes a result file you can read at any time. Use whenever the user has just posted "@codex review" or "@claude review" on a PR — or asks you to "watch / monitor / wait for / babysit the review" on a specific PR — and they want hands-off notification instead of manual `gh api` polling. Also use when they queue several PRs at once: launch one watcher per PR, in parallel.
+description: 'Monitor a GitHub PR in the background for a review-bot response. Watches BOTH claude[bot] (claude-review.yml) and chatgpt-codex-connector[bot] (@codex review). Launches a detached shell process that polls until a bot posts a review (line-anchored comments or top-level review body), a top-level issue comment (clean/"no findings"), or reacts with a thumbs-up, then writes a result file you can read at any time. Use whenever the user has just posted "@codex review" or "@claude review" on a PR — or asks you to "watch / monitor / wait for / babysit the review" on a specific PR — and they want hands-off notification instead of manual `gh api` polling. Also use when they queue several PRs at once: launch one watcher per PR, in parallel.'
 ---
 
 # review-watch — background PR-review monitor (detached shell)
@@ -63,8 +63,8 @@ notify() {
 # A missing trigger comment is therefore the COMMON case, not an error — fall
 # back to "now" and rely on the caller launching the watcher right after the
 # open/push event it wants to observe.
-TS=$(gh api "repos/$REPO/issues/$PR/comments" --jq '[.[] | select(.body | test("@(claude|codex) review"; "i"))] | last | .created_at')
-ID=$(gh api "repos/$REPO/issues/$PR/comments" --jq '[.[] | select(.body | test("@(claude|codex) review"; "i"))] | last | .id')
+TS=$(gh api --paginate --slurp "repos/$REPO/issues/$PR/comments" --jq '[.[][] | select(.body | test("@(claude|codex) review"; "i"))] | last | .created_at')
+ID=$(gh api --paginate --slurp "repos/$REPO/issues/$PR/comments" --jq '[.[][] | select(.body | test("@(claude|codex) review"; "i"))] | last | .id')
 if [ -z "$TS" ] || [ "$TS" = "null" ]; then
   TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   ID=""
@@ -72,17 +72,17 @@ if [ -z "$TS" ] || [ "$TS" = "null" ]; then
 fi
 echo "[$(date -u +%FT%TZ)] baseline trigger_ts=$TS trigger_id=${ID:-<none>}"
 for i in $(seq 1 10); do
-  R=$(gh api "repos/$REPO/pulls/$PR/reviews" --jq "[.[] | $BOTFILTER | select(.submitted_at > \"$TS\")] | length" 2>/dev/null || echo 0)
-  C=$(gh api "repos/$REPO/pulls/$PR/comments" --jq "[.[] | $BOTFILTER | select(.created_at > \"$TS\")] | length" 2>/dev/null || echo 0)
+  R=$(gh api --paginate --slurp "repos/$REPO/pulls/$PR/reviews" --jq "[.[][] | $BOTFILTER | select(.submitted_at > \"$TS\")] | length" 2>/dev/null || echo 0)
+  C=$(gh api --paginate --slurp "repos/$REPO/pulls/$PR/comments" --jq "[.[][] | $BOTFILTER | select(.created_at > \"$TS\")] | length" 2>/dev/null || echo 0)
   # Top-level issue comments — codex posts "no findings" results here
   # ("Codex Review: Didn't find any major issues. Swish!") instead of as
   # a PR review when there is nothing line-anchored to flag. Without this
   # check the watcher times out at 30 min while codex has already
   # responded clean within minutes (regression observed on
   # mctlhq/mctl-gitops#91, 2026-05-01).
-  I=$(gh api "repos/$REPO/issues/$PR/comments" --jq "[.[] | $BOTFILTER | select(.created_at > \"$TS\")] | length" 2>/dev/null || echo 0)
+  I=$(gh api --paginate --slurp "repos/$REPO/issues/$PR/comments" --jq "[.[][] | $BOTFILTER | select(.created_at > \"$TS\")] | length" 2>/dev/null || echo 0)
   E=""
-  [ -n "$ID" ] && E=$(gh api "repos/$REPO/issues/comments/$ID/reactions" --jq "[.[] | $BOTFILTER | select(.created_at > \"$TS\") | .content] | last" 2>/dev/null || echo "")
+  [ -n "$ID" ] && E=$(gh api --paginate --slurp "repos/$REPO/issues/comments/$ID/reactions" --jq "[.[][] | $BOTFILTER | select(.created_at > \"$TS\") | .content] | last" 2>/dev/null || echo "")
   echo "[$(date -u +%FT%TZ)] tick $i: reviews=$R comments=$C issue_comments=$I reaction=$E"
   # Fetch the latest bot issue-comment body up front so the hit gate can tell
   # claude-review.yml's in-progress checklist from a real verdict. The checklist
@@ -90,7 +90,7 @@ for i in $(seq 1 10); do
   # posts no checklist at all. An issue-comment-only signal that is still a
   # checklist is NOT a response yet -> keep polling (regression: false "clean"
   # on the progress comment, mctlhq/mctl-gitops#267, 2026-05-22).
-  ICBODY=$(gh api "repos/$REPO/issues/$PR/comments" --jq "[.[] | $BOTFILTER | select(.created_at > \"$TS\") | .body] | last // \"\"" 2>/dev/null || echo "")
+  ICBODY=$(gh api --paginate --slurp "repos/$REPO/issues/$PR/comments" --jq "[.[][] | $BOTFILTER | select(.created_at > \"$TS\") | .body] | last // \"\"" 2>/dev/null || echo "")
   IC_INPROGRESS=0
   if [ "${I:-0}" -gt 0 ] && [ "${R:-0}" -eq 0 ] && [ "${C:-0}" -eq 0 ]; then
     if printf '%s' "$ICBODY" | grep -qF -- '- [ ]'; then
@@ -109,11 +109,11 @@ for i in $(seq 1 10); do
       echo "issue_comment_count=$I"
       echo "reaction=$E"
       echo "---comments---"
-      gh api "repos/$REPO/pulls/$PR/comments" --jq "[.[] | $BOTFILTER | select(.created_at > \"$TS\") | {user: .user.login, path, line, original_line, body}]"
+      gh api --paginate --slurp "repos/$REPO/pulls/$PR/comments" --jq "[.[][] | $BOTFILTER | select(.created_at > \"$TS\") | {user: .user.login, path, line, original_line, body}]"
       echo "---reviews---"
-      gh api "repos/$REPO/pulls/$PR/reviews" --jq "[.[] | $BOTFILTER | select(.submitted_at > \"$TS\") | {user: .user.login, state, body, submitted_at}]"
+      gh api --paginate --slurp "repos/$REPO/pulls/$PR/reviews" --jq "[.[][] | $BOTFILTER | select(.submitted_at > \"$TS\") | {user: .user.login, state, body, submitted_at}]"
       echo "---issue_comments---"
-      gh api "repos/$REPO/issues/$PR/comments" --jq "[.[] | $BOTFILTER | select(.created_at > \"$TS\") | {user: .user.login, created_at, body}]"
+      gh api --paginate --slurp "repos/$REPO/issues/$PR/comments" --jq "[.[][] | $BOTFILTER | select(.created_at > \"$TS\") | {user: .user.login, created_at, body}]"
     } > "$RESULT"
     # "Clean" detection paths (bot signals):
     # 1. 👍 reaction on the trigger with no line-anchored reviews/comments

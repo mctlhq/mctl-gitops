@@ -47,10 +47,12 @@ This is the single-command rotation — one secret, all repos, no per-repo loop.
 ```
 
 ### Option D — interactive, no file (`read -rs`)
-`read -rs` does NOT log to `~/.zsh_history`:
+`read -rs` does NOT log to `~/.zsh_history`. Feed the value to `gh` via stdin
+(builtin `printf` does not exec, so the secret never appears in argv /
+`ps aux`) — never via `--body "$VAR"`:
 ```
 ! read -rs SECRET_VALUE && for repo in <target repos>; do
-    gh secret set <SECRET_NAME> -R "mctlhq/$repo" --body "$SECRET_VALUE" && echo "OK: $repo" || echo "FAIL: $repo"
+    printf '%s' "$SECRET_VALUE" | gh secret set <SECRET_NAME> -R "mctlhq/$repo" && echo "OK: $repo" || echo "FAIL: $repo"
   done; unset SECRET_VALUE
 ```
 The terminal waits silently — paste the token and press Enter.
