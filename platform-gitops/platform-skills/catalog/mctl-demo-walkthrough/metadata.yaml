@@ -1,0 +1,9 @@
+name: mctl-demo-walkthrough
+title: MCTL Telegram Demo Walkthrough
+description: Record the mctl-telegram ChatGPT demo walkthrough and auto-deploy the video to tg.mctl.ai/demo
+visibility: admin
+status: active
+owner: platform
+runtimes:
+  - mcp
+  - claude

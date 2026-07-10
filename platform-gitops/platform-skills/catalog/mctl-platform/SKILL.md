@@ -88,3 +88,18 @@ tokens, or authorization codes.
 - For ArgoCD sync, health, rollout, or stale-drift incidents, use the
   `argocd-health-remediation` platform skill.
 - Prefer the smallest reversible GitOps fix over imperative live-state changes.
+
+## References
+
+Deep-dive references live next to this file (available in a local checkout or
+materialized copy of the skill; the MCP read tool serves only this SKILL.md):
+
+- `references/deploy.md` — deploy/onboard flows, tenant quotas and LimitRange
+  defaults, env var handling, workflow tracking.
+- `references/k8s.md` — direct Kubernetes operations when MCP tools don't
+  cover it: cluster identity, namespace map, OpenClaw pod anatomy, safe
+  rollout and state-flush recipes, historical outage anti-patterns.
+- `references/tools.md` — `mctl_*` MCP tool catalog notes.
+- `references/troubleshooting.md` — CPU throttling / LimitRange traps,
+  incident diagnosis patterns.
+- `references/vault.md` — Vault paths, ExternalSecrets wiring.

@@ -1,0 +1,10 @@
+name: tenant-safe-cleanup
+title: Tenant Safe Cleanup
+description: Safely retire services and delete tenants without namespace, database, Vault, or ArgoCD fallout
+visibility: admin
+status: active
+owner: platform
+runtimes:
+  - mcp
+  - claude
+  - codex
