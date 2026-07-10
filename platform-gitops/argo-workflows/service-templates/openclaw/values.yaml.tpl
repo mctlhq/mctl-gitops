@@ -625,6 +625,15 @@ extraContainers:
     # the access token has < 45 min remaining, matching the mctl-mcp-proxy.js
     # threshold. Prevents silent expiry on idle pods without any UI interaction.
     image: node:22-alpine@sha256:968df39aedcea65eeb078fb336ed7191baf48f972b4479711397108be0966920
+    securityContext:
+      # Must match base-service's uid (node, 1000). Without this the container
+      # defaults to root, and a successful refresh rewrites credentials.json
+      # as root:node mode 0600 — unreadable by base-service, which silently
+      # breaks the connection immediately after a successful background
+      # refresh (observed live: mctl.connect.status starts failing right after
+      # a "[mctl-refresh] ok" log line).
+      runAsUser: 1000
+      runAsGroup: 1000
     resources:
       requests:
         cpu: 5m
@@ -657,7 +666,22 @@ extraContainers:
         async function check() {
           let creds;
           try { creds = JSON.parse(fs.readFileSync(CREDS, 'utf8')); } catch { return; }
-          if (!creds.refreshToken || !creds.clientId || !creds.apiBase || (creds.refreshFailureCount || 0) > 0) return;
+          if (!creds.refreshToken || !creds.clientId || !creds.apiBase) return;
+          const failureCount = creds.refreshFailureCount || 0;
+          if (failureCount > 0) {
+            // Capped exponential backoff (10/20/.../60min) instead of a
+            // permanent silent block. A single transient failure used to
+            // disable all future refresh attempts forever with zero logging;
+            // this still logs every skip so the cooldown is visible, and
+            // retries once the cooldown from the last attempt elapses.
+            const lastAttempt = Date.parse(creds.updatedAt || '') || 0;
+            const cooldownMs = Math.min(failureCount * 10, 60) * 60 * 1000;
+            const waitLeftMs = lastAttempt + cooldownMs - Date.now();
+            if (waitLeftMs > 0) {
+              process.stdout.write('[mctl-refresh] ' + new Date().toISOString() + ' skipping: ' + failureCount + ' consecutive failures, retry in ' + Math.round(waitLeftMs / 60000) + 'min\n');
+              return;
+            }
+          }
           const exp = Date.parse(creds.expiresAt);
           if (!Number.isFinite(exp) || exp - Date.now() > THRESHOLD_MS) return;
           const minLeft = Math.round((exp - Date.now()) / 60000);
