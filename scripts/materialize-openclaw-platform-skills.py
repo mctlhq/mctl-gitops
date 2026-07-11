@@ -133,9 +133,14 @@ def render(skills):
 def size_and_collision_guard(tenant, expected, errors):
     tenant_values_path = SERVICES / tenant / "openclaw" / "generated" / "skills-values.yaml"
     tenant_values = load_yaml(tenant_values_path)
-    total = len(expected.encode("utf-8")) + (
-        tenant_values_path.stat().st_size if tenant_values_path.exists() else 0
+    # Only the skills: map lands in the {team}-openclaw-skills ConfigMap;
+    # identity: goes to a separate ConfigMap and must not count here.
+    tenant_skills = tenant_values.get("skills") or {}
+    tenant_skills_bytes = sum(
+        len(str(key).encode("utf-8")) + len(str(value).encode("utf-8"))
+        for key, value in tenant_skills.items()
     )
+    total = len(expected.encode("utf-8")) + tenant_skills_bytes
     if total > FAIL_BYTES:
         errors.append(
             f"{tenant}: combined skills values {total} bytes exceed {FAIL_BYTES}"
@@ -144,7 +149,7 @@ def size_and_collision_guard(tenant, expected, errors):
     elif total > WARN_BYTES:
         print(f"warn {tenant}: combined skills values {total} bytes (> {WARN_BYTES})")
     platform_keys = set((yaml.safe_load(expected) or {}).get("skills") or {})
-    for name in sorted(platform_keys & set(tenant_values.get("skills") or {})):
+    for name in sorted(platform_keys & set(tenant_skills)):
         print(
             f"warn {tenant}: skill {name!r} exists both in catalog binding and"
             " tenant skills — tenant-authored version wins the Helm merge"
