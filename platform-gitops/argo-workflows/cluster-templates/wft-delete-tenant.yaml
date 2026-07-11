@@ -221,6 +221,17 @@ spec:
               echo "WARNING: $SKILL_BINDING_FILE not found (already deleted or never enabled). Skipping."
             fi
 
+            # Materialized platform skills would outlive the binding if
+            # retire-service hasn't removed services/${TENANT} yet, tripping
+            # the materializer's --check drift gate in CI forever. Plain
+            # git rm — this workflow's image has no python3/pyyaml.
+            PSV_FILE="platform-gitops/services/${TENANT}/openclaw/generated/platform-skills-values.yaml"
+            if [ -f "$PSV_FILE" ]; then
+              git rm "$PSV_FILE"
+              echo "Removed $PSV_FILE"
+              CHANGED=true
+            fi
+
             CNPG_DIR="platform-gitops/infra-components/data/cnpg/shared"
 
             DB_FILE="${CNPG_DIR}/databases.yaml"

@@ -69,6 +69,10 @@ spec:
               yaml.safe_dump(meta, f, sort_keys=False)
           PY
             git add "$FILE"
+            # Content no-op by design (deprecated-but-enabled skills keep
+            # rendering until disabled) — this resyncs any pre-existing drift.
+            python3 scripts/materialize-openclaw-platform-skills.py --all
+            git add -A platform-gitops/services
           }
           apply_change
           if git diff --cached --quiet; then

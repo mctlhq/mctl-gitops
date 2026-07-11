@@ -97,6 +97,12 @@ spec:
               yaml.safe_dump(data, f, sort_keys=False)
           PY
             git add "$FILE"
+            # Materialize the tenant's enabled catalog skills into its
+            # openclaw generated values (no-op for tenants without openclaw).
+            # `git add -A` on services/ stages writes AND deletions of the
+            # generated file; the clone is pristine so nothing else matches.
+            python3 scripts/materialize-openclaw-platform-skills.py --tenant "$TENANT"
+            git add -A platform-gitops/services
           }
           apply_change
           if git diff --cached --quiet; then
