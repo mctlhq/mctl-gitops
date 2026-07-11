@@ -23,8 +23,8 @@ metadata:
         4. The Tier 2 implementer picks up accepted proposals on its next run
            and opens a PR. The Tier 3 shepherd drives it to merge.
 
-      Start suspended. Un-suspend after the first successful one-shot run
-      (verify proposals appear in agents-state/ and incidents resolve).
+      Un-suspended 2026-07-11 after a successful one-shot smoke run
+      (mctl-agents-run-fa300c93, triggered via mctl_trigger_incident_responder).
 spec:
   # Every 30 minutes — incidents accumulate fast; quicker triage is better.
   # Offset by :15 to avoid contention with the shepherd (:30) and the
@@ -37,8 +37,7 @@ spec:
   # 24 ticks/day * 7 days of success history
   successfulJobsHistoryLimit: 168
   failedJobsHistoryLimit: 48
-  # Start suspended — un-suspend after smoke test.
-  suspend: true
+  suspend: false
   workflowSpec:
     workflowTemplateRef:
       name: mctl-agents-run
