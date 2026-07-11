@@ -88,10 +88,13 @@ def effective_skills(tenant, catalog, policy, errors):
         return None
     enabled = binding.get("enabledSkills") or []
     denylist = (policy.get("tenantDenylist") or {}).get(tenant) or []
-    # Empty allowlist means unrestricted — same as no allowlist. This mirrors
-    # mctl-api's enable preflight (validateTenantSkillEnable checks
-    # `ok && len(allowed) > 0`); do not diverge from it here.
-    allowlist = (policy.get("tenantAllowlist") or {}).get(tenant) or []
+    # Allowlist absent (no key for the tenant) = unrestricted; an explicit
+    # empty list = deny-all, so admins can block all platform skills for a
+    # tenant without touching every binding. Stricter than mctl-api's enable
+    # preflight, which currently treats an empty list as unrestricted
+    # (validateTenantSkillEnable: `ok && len(allowed) > 0`) — align the API
+    # side before relying on empty-list semantics there.
+    allowlist = (policy.get("tenantAllowlist") or {}).get(tenant)
     skills = {}
     for name in sorted(set(enabled)):
         meta = catalog.get(name)
@@ -105,7 +108,7 @@ def effective_skills(tenant, catalog, policy, errors):
             skip(name, "openclaw not in runtimes")
         elif name in denylist:
             skip(name, "denylisted in policy.yaml")
-        elif allowlist and name not in allowlist:
+        elif allowlist is not None and name not in allowlist:
             skip(name, "not in policy.yaml allowlist for this tenant")
         elif not (CATALOG / name / "SKILL.md").is_file():
             # Incomplete catalog entry (validate-platform-skills.py flags it
