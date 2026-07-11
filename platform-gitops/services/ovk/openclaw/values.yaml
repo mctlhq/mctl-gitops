@@ -1230,7 +1230,7 @@ configMaps:
           "defaults": {
             "skipBootstrap": true,
             "model": {
-              "primary": "openai-codex/gpt-5.4",
+              "primary": "openai-codex/gpt-5.6-sol",
               "fallbacks": ["anthropic/claude-haiku-4-5"]
             },
             "compaction": {
@@ -1295,7 +1295,7 @@ configMaps:
               "sessionKey": "hook:mctl-agent:{{payload.ticket.id}}",
               "messageTemplate": "You are the automated external remediation agent for mctl-agent.\n\nIncident:\n- Event: {{payload.event_type}}\n- Ticket: {{payload.ticket.id}}\n- Team: {{payload.ticket.team}}\n- Service: {{payload.ticket.service}}\n- Severity: {{payload.ticket.severity}}\n- Summary: {{payload.ticket.summary}}\n- Analysis: {{payload.ticket.analysis}}\n\nCallback contract:\n- claim_url: {{payload.delivery.claim_url}}\n- result_url: {{payload.delivery.result_url}}\n- callback_auth_header: {{payload.delivery.callback_auth_header}}\n- callback_auth_value: {{payload.delivery.callback_auth_value}}\n- agent_id: openclaw-labs\n- event_id: {{payload.event_id}}\n\nOperating mode:\n- Conservative PR-only remediation.\n- OpenClaw owns PR creation and follow-up commits for this incident flow.\n- mctl-agent remains the system of record for ticket state.\n- Do not perform direct destructive platform actions.\n- Do not resolve incidents directly.\n- Do not rely on any mctl-agent MCP server.\n- Ignore any generic startup ritual for this session.\n\nRules:\n1. Only auto-claim events ticket.fix_failed or ticket.escalated. Never auto-claim ticket.created.\n2. Before reading workspace files or doing any other exploration, call tool mctl_agent_external with action=claim.\n3. If claim returns 409 or ok=false, stop and summarize briefly.\n4. Only after a successful claim may you gather evidence.\n5. After claim, prefer available mctl_* tools first. Start with service status/config/logs, incidents, workflows, tenant details, and resource usage.\n6. Only use GitHub tools for explicit repo-backed remediation after evidence supports a concrete low-risk change. Respect the runtime repo allowlist.\n7. Reuse one deterministic remediation branch per ticket when updating an existing PR instead of creating parallel branches.\n8. Only send status=pr_created when a real PR has been created or updated and you have concrete artifacts for repo, branch, pr_url, pr_number, and commit_sha.\n9. If evidence is incomplete, the incident is synthetic, no safe repo-backed fix exists, GitHub access is unavailable, the repo is not allowlisted, the action would be destructive, or the safest path is operator review, send status=needs_human with a concise operator-ready summary and the next checks to perform.\n10. If the workflow itself fails after claim, send status=failed.\n11. Always send exactly one result callback after a successful claim.\n12. Use idempotencyKey=openclaw:{{payload.ticket.id}}:{{payload.event_id}}.",
               "deliver": false,
-              "model": "openai-codex/gpt-5.4",
+              "model": "openai-codex/gpt-5.6-sol",
               "thinking": "medium",
               "timeoutSeconds": 180
             }
