@@ -98,6 +98,10 @@ def effective_skills(tenant, catalog, policy):
             skip(name, "denylisted in policy.yaml")
         elif allowlist and name not in allowlist:
             skip(name, "not in policy.yaml allowlist for this tenant")
+        elif not (CATALOG / name / "SKILL.md").is_file():
+            # Incomplete catalog entry (validate-platform-skills.py flags it
+            # too) — degrade to a skip so --check reports cleanly in CI.
+            skip(name, "catalog entry has no SKILL.md")
         else:
             skills[name] = (CATALOG / name / "SKILL.md").read_text(encoding="utf-8")
     return skills
