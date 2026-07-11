@@ -76,12 +76,21 @@ def all_tenants():
     return sorted(tenants)
 
 
-def effective_skills(tenant, catalog, policy):
+def effective_skills(tenant, catalog, policy, errors):
     def skip(skill, reason):
         print(f"skip {tenant}/{skill}: {reason}")
 
-    enabled = load_yaml(BINDINGS / f"{tenant}.yaml").get("enabledSkills") or []
+    binding_path = BINDINGS / f"{tenant}.yaml"
+    binding = load_yaml(binding_path)
+    declared = binding.get("tenant")
+    if declared and declared != tenant:
+        errors.append(f"{binding_path}: tenant field {declared!r} does not match filename")
+        return None
+    enabled = binding.get("enabledSkills") or []
     denylist = (policy.get("tenantDenylist") or {}).get(tenant) or []
+    # Empty allowlist means unrestricted — same as no allowlist. This mirrors
+    # mctl-api's enable preflight (validateTenantSkillEnable checks
+    # `ok && len(allowed) > 0`); do not diverge from it here.
     allowlist = (policy.get("tenantAllowlist") or {}).get(tenant) or []
     skills = {}
     for name in sorted(set(enabled)):
@@ -146,7 +155,10 @@ def materialize(tenant, catalog, policy, check, errors):
     target = SERVICES / tenant / "openclaw" / "generated" / "platform-skills-values.yaml"
     skills = {}
     if (SERVICES / tenant / "openclaw").is_dir():
-        skills = effective_skills(tenant, catalog, policy)
+        skills = effective_skills(tenant, catalog, policy, errors)
+        if skills is None:
+            # Broken binding — leave the tenant's current state untouched.
+            return
     if not skills:
         if target.exists():
             if check:
