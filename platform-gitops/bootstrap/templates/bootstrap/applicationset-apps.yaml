@@ -15,16 +15,6 @@ spec:
         requeueAfterSeconds: 30
         directories:
           - path: platform-gitops/services/*/*
-          # FROZEN 2026-07-12: admins-openclaw is undergoing the mctl-openclaw#38
-          # upstream sync (108-conflict merge touching gateway/auth code). Excluded
-          # here so this ApplicationSet stops managing it; a standalone manual-sync-only
-          # Application (application-admins-openclaw-frozen.yaml) takes over so deploys
-          # require an explicit `argocd app sync admins-openclaw` instead of auto
-          # prune+selfHeal. To unfreeze: delete both this exclude entry and the
-          # standalone Application file, in the same PR, only after explicit
-          # double-confirmation from the operator.
-          - path: platform-gitops/services/admins/openclaw
-            exclude: true
   template:
     metadata:
       name: '{{`{{ index .path.segments 2 }}-{{ index .path.segments 3 }}`}}'
