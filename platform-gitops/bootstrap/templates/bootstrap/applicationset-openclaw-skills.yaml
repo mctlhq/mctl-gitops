@@ -9,12 +9,19 @@ metadata:
       Each Application renders two ConfigMaps in the tenant namespace:
         {team}-openclaw-skills   — Layer-3 skill markdown (workspace fan-out)
         {team}-openclaw-identity — Layer-3 identity overrides
-      Values are consumed from the per-tenant file
+      Values are consumed from two per-tenant files:
+        platform-gitops/services/{team}/openclaw/generated/platform-skills-values.yaml
+          — enabled platform-catalog skills, rendered by
+            scripts/materialize-openclaw-platform-skills.py via the
+            platform-skill-* workflows
         platform-gitops/services/{team}/openclaw/generated/skills-values.yaml
-      which is regenerated on every skill/identity save or delete by the
-      wft-openclaw-skill-save / wft-openclaw-identity-save workflows.
-      `ignoreMissingValueFiles: true` keeps the Application healthy on day 1
-      for tenants that have not yet saved any skill or identity override.
+          — tenant-authored skills/identity, regenerated on every skill or
+            identity save/delete by the wft-openclaw-skill-save /
+            wft-openclaw-identity-save workflows
+      Helm merges the `skills:` maps per key; the tenant-authored file is
+      listed last so it wins name collisions with platform skills.
+      `ignoreMissingValueFiles: true` keeps the Application healthy for
+      tenants that have neither file yet.
 spec:
   goTemplate: true
   goTemplateOptions: ["missingkey=error"]
@@ -51,10 +58,13 @@ spec:
           targetRevision: {{ .Values.spec.source.targetRevision }}
           path: platform-gitops/helm-charts/openclaw-skills
           helm:
-            # Skip the generated values file gracefully until the first skill
-            # or identity save creates it. Supported since ArgoCD 2.6.
+            # Skip generated values files gracefully until the first skill
+            # or identity save creates them. Supported since ArgoCD 2.6.
             ignoreMissingValueFiles: true
             valueFiles:
+              # Platform-catalog skills first, tenant-authored file last:
+              # tenant skills win Helm's per-key map merge on name collisions.
+              - $values/{{ `{{ .path.path }}` }}/generated/platform-skills-values.yaml
               - $values/{{ `{{ .path.path }}` }}/generated/skills-values.yaml
             parameters:
               - name: team

@@ -2,7 +2,7 @@
 
 - [ ] 1. Confirm prerequisite gate: verify `mctl-openclaw#34` is closed and PR #39 (`88f01335c4`) is merged into `origin/main` — DoD: `gh pr view 39 -R mctlhq/mctl-openclaw --json state,mergedAt` shows `state: MERGED`.
 
-- [ ] 2. Research "miniclaw" (parallel, does not block sync tasks) — DoD: a written evaluation note posted to issue #38 (or a linked follow-up issue) covering: what miniclaw is (or a statement that no credible source was found), maintenance activity, feature parity with mctl-openclaw's used surface, estimated fork patch surface reduction, migration cost, and a recommendation (continue openclaw OR open a migration issue OR defer for N months).
+- [ ] 2. Post the miniclaw evaluation (already researched by the operator — see `requirements.md` Open Question 1, resolved 2026-07-12) as a comment on issue #38 — DoD: a comment on `mctlhq/mctl-openclaw#38` stating no credible competing "miniclaw" project exists (name is overloaded across unrelated hobby projects; the one real active project, `memovai/mimiclaw`, is an ESP32 microcontroller reimplementation with no server/OAuth/multi-tenant surface and is not a viable migration target) and recommending continuing on openclaw. No further research needed — this task does not block the sync tasks below.
 
 - [ ] 3. Trigger the upstream sync workflow — DoD: `gh workflow run upstream-sync.yml -R mctlhq/mctl-openclaw` succeeds without error and the run appears in the Actions list. Command: `gh run list -R mctlhq/mctl-openclaw --workflow=upstream-sync.yml --limit 3` confirms a new run.
 
