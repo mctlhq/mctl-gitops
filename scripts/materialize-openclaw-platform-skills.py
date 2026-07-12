@@ -69,8 +69,12 @@ def load_catalog():
 
 def all_tenants():
     tenants = set()
+    # Filename is authoritative for scan scope: keying off the declared
+    # tenant: field would let a mismatched file dodge the guard in
+    # effective_skills() (nfc.yaml saying "tenant: admins" would enqueue
+    # admins and never process nfc.yaml at all).
     for path in sorted(BINDINGS.glob("*.yaml")) if BINDINGS.exists() else []:
-        tenants.add(load_yaml(path).get("tenant") or path.stem)
+        tenants.add(path.stem)
     for openclaw_dir in sorted(SERVICES.glob("*/openclaw")) if SERVICES.exists() else []:
         tenants.add(openclaw_dir.parent.name)
     return sorted(tenants)
@@ -161,12 +165,15 @@ def size_and_collision_guard(tenant, expected, errors):
 
 def materialize(tenant, catalog, policy, check, errors):
     target = SERVICES / tenant / "openclaw" / "generated" / "platform-skills-values.yaml"
-    skills = {}
-    if (SERVICES / tenant / "openclaw").is_dir():
-        skills = effective_skills(tenant, catalog, policy, errors)
-        if skills is None:
-            # Broken binding — leave the tenant's current state untouched.
-            return
+    # Validate the binding even for tenants without an openclaw service, so a
+    # tenant-field/filename mismatch always fails loudly.
+    skills = effective_skills(tenant, catalog, policy, errors)
+    if skills is None:
+        # Broken binding — leave the tenant's current state untouched.
+        return
+    if not (SERVICES / tenant / "openclaw").is_dir():
+        print(f"skip {tenant}: no openclaw service")
+        return
     if not skills:
         if target.exists():
             if check:
