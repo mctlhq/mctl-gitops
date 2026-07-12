@@ -1,3 +1,2 @@
 tenant: admins
-enabledSkills:
-- openclaw-smoke-skill
+enabledSkills: []
