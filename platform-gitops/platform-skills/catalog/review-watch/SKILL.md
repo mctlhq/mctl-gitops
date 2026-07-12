@@ -19,9 +19,9 @@ Use the script at `/tmp/review-watch.sh` (lazily ensure it exists; see "Bootstra
 
 Do NOT spawn an `Agent` for this. Sub-agent runtime has a strong bias toward the `Monitor` tool, which does not block the agent's completion — agents thinking they're "watching" Monitor exit in seconds without ever waiting. Two empirical attempts at agent-based watchers (with explicit "do not use Monitor" instructions) both failed in 26–39 seconds. The detached shell pattern below is what actually works.
 
-## Bootstrap — write `/tmp/review-watch.sh` if missing
+## Bootstrap — write `/tmp/review-watch.sh` if missing or stale
 
-Before launching watchers, check that the script is in place. If not, write it via Bash heredoc (the entire script body):
+Before launching watchers, check that the script is in place AND current: `grep -q 'BASE_TS' /tmp/review-watch.sh` — if the file is missing or the grep fails (pre-baseline-arg version), (re)write it via Bash heredoc (the entire script body):
 
 ```bash
 #!/bin/bash
@@ -33,8 +33,10 @@ Before launching watchers, check that the script is in place. If not, write it v
 #       <pr>             e.g. 5
 #       <result-file>    e.g. /tmp/review-watch-mctl-openclaw-5.result
 #       <log-file>       e.g. /tmp/review-watch-mctl-openclaw-5.log
+#       [baseline-ts]    optional explicit baseline, e.g. 2026-07-12T08:04:47Z —
+#                        pass the fix-up push time to ignore everything older
 set -u
-REPO="$1"; PR="$2"; RESULT="$3"; LOG="$4"
+REPO="$1"; PR="$2"; RESULT="$3"; LOG="$4"; BASE_TS="${5:-}"
 exec >"$LOG" 2>&1
 echo "[$(date -u +%FT%TZ)] watcher start repo=$REPO pr=$PR pid=$$"
 
@@ -63,26 +65,39 @@ notify() {
 # A missing trigger comment is therefore the COMMON case, not an error — fall
 # back to "now" and rely on the caller launching the watcher right after the
 # open/push event it wants to observe.
-TS=$(gh api --paginate --slurp "repos/$REPO/issues/$PR/comments" --jq '[.[][] | select(.body | test("@(claude|codex) review"; "i"))] | last | .created_at')
-ID=$(gh api --paginate --slurp "repos/$REPO/issues/$PR/comments" --jq '[.[][] | select(.body | test("@(claude|codex) review"; "i"))] | last | .id')
-if [ -z "$TS" ] || [ "$TS" = "null" ]; then
-  TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+#
+# CAVEAT: the latest trigger comment can be OLDER than the event you care
+# about (e.g. a day-old "@claude review" on a PR that just got a fix-up push
+# via the auto-fire path). Auto-detect would then match the bot's PREVIOUS
+# review and false-hit instantly. When an explicit baseline-ts (arg 5) is
+# given it wins unconditionally; the reaction check is skipped in that mode
+# (no trigger-comment ID to watch), which is fine — reviews/comments cover it.
+if [ -n "$BASE_TS" ]; then
+  TS="$BASE_TS"
   ID=""
-  echo "[$(date -u +%FT%TZ)] no trigger comment found; using launch time as baseline (auto-fire repo)"
+  echo "[$(date -u +%FT%TZ)] using explicit baseline from arg"
+else
+  TS=$(gh api --paginate "repos/$REPO/issues/$PR/comments" --jq '[.[] | select(.body | test("@(claude|codex) review"; "i"))] | last | .created_at')
+  ID=$(gh api --paginate "repos/$REPO/issues/$PR/comments" --jq '[.[] | select(.body | test("@(claude|codex) review"; "i"))] | last | .id')
+  if [ -z "$TS" ] || [ "$TS" = "null" ]; then
+    TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    ID=""
+    echo "[$(date -u +%FT%TZ)] no trigger comment found; using launch time as baseline (auto-fire repo)"
+  fi
 fi
 echo "[$(date -u +%FT%TZ)] baseline trigger_ts=$TS trigger_id=${ID:-<none>}"
 for i in $(seq 1 10); do
-  R=$(gh api --paginate --slurp "repos/$REPO/pulls/$PR/reviews" --jq "[.[][] | $BOTFILTER | select(.submitted_at > \"$TS\")] | length" 2>/dev/null || echo 0)
-  C=$(gh api --paginate --slurp "repos/$REPO/pulls/$PR/comments" --jq "[.[][] | $BOTFILTER | select(.created_at > \"$TS\")] | length" 2>/dev/null || echo 0)
+  R=$(gh api --paginate "repos/$REPO/pulls/$PR/reviews" --jq "[.[] | $BOTFILTER | select(.submitted_at > \"$TS\")] | length" 2>/dev/null || echo 0)
+  C=$(gh api --paginate "repos/$REPO/pulls/$PR/comments" --jq "[.[] | $BOTFILTER | select(.created_at > \"$TS\")] | length" 2>/dev/null || echo 0)
   # Top-level issue comments — codex posts "no findings" results here
   # ("Codex Review: Didn't find any major issues. Swish!") instead of as
   # a PR review when there is nothing line-anchored to flag. Without this
   # check the watcher times out at 30 min while codex has already
   # responded clean within minutes (regression observed on
   # mctlhq/mctl-gitops#91, 2026-05-01).
-  I=$(gh api --paginate --slurp "repos/$REPO/issues/$PR/comments" --jq "[.[][] | $BOTFILTER | select(.created_at > \"$TS\")] | length" 2>/dev/null || echo 0)
+  I=$(gh api --paginate "repos/$REPO/issues/$PR/comments" --jq "[.[] | $BOTFILTER | select(.created_at > \"$TS\")] | length" 2>/dev/null || echo 0)
   E=""
-  [ -n "$ID" ] && E=$(gh api --paginate --slurp "repos/$REPO/issues/comments/$ID/reactions" --jq "[.[][] | $BOTFILTER | select(.created_at > \"$TS\") | .content] | last" 2>/dev/null || echo "")
+  [ -n "$ID" ] && E=$(gh api --paginate "repos/$REPO/issues/comments/$ID/reactions" --jq "[.[] | $BOTFILTER | select(.created_at > \"$TS\") | .content] | last" 2>/dev/null || echo "")
   echo "[$(date -u +%FT%TZ)] tick $i: reviews=$R comments=$C issue_comments=$I reaction=$E"
   # Fetch the latest bot issue-comment body up front so the hit gate can tell
   # claude-review.yml's in-progress checklist from a real verdict. The checklist
@@ -90,10 +105,13 @@ for i in $(seq 1 10); do
   # posts no checklist at all. An issue-comment-only signal that is still a
   # checklist is NOT a response yet -> keep polling (regression: false "clean"
   # on the progress comment, mctlhq/mctl-gitops#267, 2026-05-22).
-  ICBODY=$(gh api --paginate --slurp "repos/$REPO/issues/$PR/comments" --jq "[.[][] | $BOTFILTER | select(.created_at > \"$TS\") | .body] | last // \"\"" 2>/dev/null || echo "")
+  # claude[bot]'s FIRST progress comment ("Claude Code is working…") has no
+  # checkboxes at all, so match its marker text too (regression: false hit
+  # on mctlhq/mctl-gitops#583, 2026-07-12).
+  ICBODY=$(gh api --paginate "repos/$REPO/issues/$PR/comments" --jq "[.[] | $BOTFILTER | select(.created_at > \"$TS\") | .body] | last // \"\"" 2>/dev/null || echo "")
   IC_INPROGRESS=0
   if [ "${I:-0}" -gt 0 ] && [ "${R:-0}" -eq 0 ] && [ "${C:-0}" -eq 0 ]; then
-    if printf '%s' "$ICBODY" | grep -qF -- '- [ ]'; then
+    if printf '%s' "$ICBODY" | grep -qF -- '- [ ]' || printf '%s' "$ICBODY" | grep -qF -- 'Claude Code is working'; then
       IC_INPROGRESS=1
       echo "[$(date -u +%FT%TZ)] issue-comment is an in-progress checklist; still polling"
     fi
@@ -109,11 +127,11 @@ for i in $(seq 1 10); do
       echo "issue_comment_count=$I"
       echo "reaction=$E"
       echo "---comments---"
-      gh api --paginate --slurp "repos/$REPO/pulls/$PR/comments" --jq "[.[][] | $BOTFILTER | select(.created_at > \"$TS\") | {user: .user.login, path, line, original_line, body}]"
+      gh api --paginate "repos/$REPO/pulls/$PR/comments" --jq "[.[] | $BOTFILTER | select(.created_at > \"$TS\") | {user: .user.login, path, line, original_line, body}]"
       echo "---reviews---"
-      gh api --paginate --slurp "repos/$REPO/pulls/$PR/reviews" --jq "[.[][] | $BOTFILTER | select(.submitted_at > \"$TS\") | {user: .user.login, state, body, submitted_at}]"
+      gh api --paginate "repos/$REPO/pulls/$PR/reviews" --jq "[.[] | $BOTFILTER | select(.submitted_at > \"$TS\") | {user: .user.login, state, body, submitted_at}]"
       echo "---issue_comments---"
-      gh api --paginate --slurp "repos/$REPO/issues/$PR/comments" --jq "[.[][] | $BOTFILTER | select(.created_at > \"$TS\") | {user: .user.login, created_at, body}]"
+      gh api --paginate "repos/$REPO/issues/$PR/comments" --jq "[.[] | $BOTFILTER | select(.created_at > \"$TS\") | {user: .user.login, created_at, body}]"
     } > "$RESULT"
     # "Clean" detection paths (bot signals):
     # 1. 👍 reaction on the trigger with no line-anchored reviews/comments
@@ -166,6 +184,7 @@ For each PR (`<owner>/<repo>` and `<N>`), in a single Bash call:
 nohup /tmp/review-watch.sh <owner>/<repo> <N> \
   /tmp/review-watch-<repo-stem>-<N>.result \
   /tmp/review-watch-<repo-stem>-<N>.log \
+  [baseline-ts] \
   >/dev/null 2>&1 &
 PID=$!
 disown $PID 2>/dev/null
@@ -173,6 +192,8 @@ echo "watcher pid=$PID"
 ```
 
 `<repo-stem>` = repo name without owner (e.g. `mctl-openclaw`). Multiple PRs ⇒ launch each in its own `nohup ... &` invocation, all in parallel from a single Bash call.
+
+**When to pass `baseline-ts`:** whenever the review you're waiting for was triggered by a PUSH (PR open or fix-up push on an auto-fire repo), pass that push's timestamp explicitly — e.g. `git log -1 --format=%cI` converted to UTC, or `date -u +%Y-%m-%dT%H:%M:%SZ` right after pushing. Without it, auto-detect anchors on the latest `@claude review` comment, which may be days old and would false-hit on the bot's previous review. Omit the arg only when you have JUST posted a fresh `@claude review` comment (auto-detect then finds exactly it, and the 👍-reaction path stays active).
 
 ## Reading results
 
@@ -225,7 +246,7 @@ If args are ambiguous, ask which PRs in one short AskUserQuestion before launchi
 - Codex usually responds within 1–5 minutes of `@claude review`. The 180s tick cadence catches it within the next tick. Sometimes codex takes 5–15 min when busy.
 - Result-file path convention: `/tmp/review-watch-<repo-stem>-<N>.result` — keep this stable so future sessions can find it without args.
 - If `gh api` returns 403/404, the watcher writes a status-error result and exits. No retries — auth/permission issues won't fix themselves.
-- The first `@claude review` issue comment is the trigger baseline. If the user re-triggers (posts `@claude review` again after a fix-up), launch a new watcher — the script's baseline-detection `last` filter picks up the latest trigger automatically.
+- The first `@claude review` issue comment is the trigger baseline. If the user re-triggers (posts `@claude review` again after a fix-up), launch a new watcher — the script's baseline-detection `last` filter picks up the latest trigger automatically. For push-triggered re-reviews (no fresh comment), always pass the explicit `baseline-ts` arg instead.
 
 ## What this skill is NOT for
 
