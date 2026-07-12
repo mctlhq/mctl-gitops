@@ -1,0 +1,9 @@
+name: openclaw-smoke-skill
+title: OpenClaw Smoke Skill
+description: Throwaway E2E smoke-test skill for the OpenClaw platform-skill materialization
+  adapter. Safe to deprecate.
+visibility: tenant
+status: active
+owner: platform
+runtimes:
+- openclaw
