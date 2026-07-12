@@ -1,3 +1,2 @@
 tenant: nfc
-enabledSkills:
-- openclaw-smoke-skill
+enabledSkills: []
