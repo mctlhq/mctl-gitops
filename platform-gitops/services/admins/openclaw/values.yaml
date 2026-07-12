@@ -596,8 +596,14 @@ extraContainers:
           # top-level, drop anything not present locally and not in the
           # skip-list. Gated by canary (caller passes "1") so non-canary
           # iterations never propagate deletes.
+          # Entry name = last whitespace-separated field of each `mc ls`
+          # line, trailing slash stripped. Parsed with parameter expansion:
+          # the minio/mc image ships neither awk nor sed (same reason
+          # restore-state avoids grep).
           if [ "$reconcile_extras" = "1" ]; then
-            mc ls "$S3_ROOT/" 2>/dev/null | awk '{print $NF}' | sed 's:/$::' | while IFS= read -r s3_entry; do
+            mc ls "$S3_ROOT/" 2>/dev/null | while IFS= read -r s3_line; do
+              s3_entry="${s3_line##* }"
+              s3_entry="${s3_entry%/}"
               [ -z "$s3_entry" ] && continue
               case "$s3_entry" in
                 plugin-runtime-deps) continue ;;
@@ -664,7 +670,9 @@ extraContainers:
                   fi
                 done
                 if [ "$reconcile_extras" = "1" ]; then
-                  mc ls "$S3_ROOT/" 2>/dev/null | awk '{print $NF}' | sed 's:/$::' | while IFS= read -r s3_entry; do
+                  mc ls "$S3_ROOT/" 2>/dev/null | while IFS= read -r s3_line; do
+                    s3_entry="${s3_line##* }"
+                    s3_entry="${s3_entry%/}"
                     [ -z "$s3_entry" ] && continue
                     case "$s3_entry" in
                       plugin-runtime-deps) continue ;;
