@@ -4,22 +4,28 @@
 #   {team}-openclaw-skills   — Layer-3 skill markdown (fanned out into workspace)
 #   {team}-openclaw-identity — Layer-3 identity overrides (AGENTS/SOUL/IDENTITY/USER/TOOLS.md)
 #
-# The real values are produced by the openclaw-skill-save / openclaw-identity-save
-# Argo workflows into:
+# The real values are produced into two generated files, both consumed by the
+# ApplicationSet via multi-source `$values/{{ .path.path }}/generated/...`
+# references (platform file first, tenant file last so tenant-authored skills
+# win Helm's per-key map merge on name collisions):
+#   platform-gitops/services/{team}/openclaw/generated/platform-skills-values.yaml
+#     — enabled platform-catalog skills, rendered by
+#       scripts/materialize-openclaw-platform-skills.py (platform-skill-* workflows)
 #   platform-gitops/services/{team}/openclaw/generated/skills-values.yaml
-# That file is then consumed by the ApplicationSet via a multi-source
-# `$values/{{ .path.path }}/generated/skills-values.yaml` reference.
+#     — tenant-authored skills/identity, rewritten by the
+#       openclaw-skill-save / openclaw-identity-save Argo workflows
 #
-# Do not hand-edit `generated/skills-values.yaml` — it is rewritten on every
-# skill/identity save or delete.
+# Do not hand-edit either generated file — they are rewritten on every
+# skill/identity save/delete or platform-skill change.
 
 # Tenant name. Always set by the ApplicationSet as a Helm parameter.
 team: ""
 
 # Map of skill name -> full SKILL.md content.
 # Each entry becomes a key `<name>.md` in the {team}-openclaw-skills ConfigMap.
-# Populated from generated/skills-values.yaml. Empty by default so a tenant
-# with no custom skills still gets a (placeholder) ConfigMap.
+# Populated from the merge of generated/platform-skills-values.yaml and
+# generated/skills-values.yaml. Empty by default so a tenant with no skills
+# still gets a (placeholder) ConfigMap.
 skills: {}
 
 # Map of identity filename -> file content. Keys must match one of the
