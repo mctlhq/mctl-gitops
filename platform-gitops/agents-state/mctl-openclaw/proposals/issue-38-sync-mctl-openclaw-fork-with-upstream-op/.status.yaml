@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-07-11T22:55:16Z'
+status: merged
+updated_at: '2026-07-12T00:00:58Z'
 updated_by: mctl-agents[bot]
 pr: https://github.com/mctlhq/mctl-openclaw/pull/41
 source:
@@ -9,3 +9,5 @@ source:
   url: https://github.com/mctlhq/mctl-openclaw/issues/38
 control:
   requires_human_approval: true
+merged_at: '2026-07-12T00:00:58Z'
+merge_commit: 2bbca61abdecf06244e231646855f3217f6d3f53
