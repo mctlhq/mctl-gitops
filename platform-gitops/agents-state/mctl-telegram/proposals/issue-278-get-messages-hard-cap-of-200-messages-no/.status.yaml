@@ -1,6 +1,7 @@
-status: accepted
-updated_at: '2026-07-12T13:06:17Z'
-updated_by: mashkovd
+status: implemented
+updated_at: '2026-07-12T16:58:46Z'
+updated_by: mctl-agents[bot]
+pr: https://github.com/mctlhq/mctl-telegram/pull/280
 source:
   type: github_issue
   repo: mctlhq/mctl-telegram
