@@ -74,6 +74,11 @@ jobs:
         run: |
           python3 -m pip install --quiet pyyaml
           scripts/validate-platform-skills.py
+          # Fails when a hand edit to catalog/bindings leaves a tenant's
+          # generated/platform-skills-values.yaml stale or orphaned. Lives in
+          # this PR (not the plumbing one) so the gate never precedes the
+          # workflows that keep the generated files in sync.
+          scripts/materialize-openclaw-platform-skills.py --check
 
       - name: Validate raw manifests (tenants, argo-workflows, mcp, infra-components)
         run: |

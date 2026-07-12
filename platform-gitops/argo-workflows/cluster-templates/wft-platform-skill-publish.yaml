@@ -84,6 +84,10 @@ spec:
               yaml.safe_dump(meta, f, sort_keys=False)
           PY
             git add "$DIR/SKILL.md" "$DIR/metadata.yaml"
+            # Re-materialize every tenant's openclaw platform-skill values:
+            # a publish can change content/metadata of an already-enabled skill.
+            python3 scripts/materialize-openclaw-platform-skills.py --all
+            git add -A platform-gitops/services
           }
           apply_change
           if git diff --cached --quiet; then
