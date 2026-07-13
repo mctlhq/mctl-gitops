@@ -1367,14 +1367,44 @@ extraIngresses:
 # port (18789) as the gateway HTTP/UI, so we reuse the existing Service
 # named port rather than provisioning a second port.
 #
-# Removed 2026-07 while replicaCount is 0 (see the comment above): the
-# Service this ServiceMonitor selects still exists, but with zero replicas
-# it has zero pod endpoints, so vmagent found a permanent 0-target
-# scrape_pool ("labs-openclaw-codex-metrics") and its default
-# ScrapePoolHasNoTargets rule fired daily for a condition that isn't
-# actionable (the tenant is deliberately paused). Restore this block
-# together with `replicaCount: 1` above when labs openclaw is brought
-# back online.
+# The ServiceMonitor below was removed 2026-07 while replicaCount is 0 (see
+# the comment above): the Service this ServiceMonitor selects still exists,
+# but with zero replicas it has zero pod endpoints, so vmagent found a
+# permanent 0-target scrape_pool ("labs-openclaw-codex-metrics") and its
+# default ScrapePoolHasNoTargets rule fired daily for a condition that isn't
+# actionable (the tenant is deliberately paused).
+#
+# However, the VictoriaMetrics operator auto-converted the ServiceMonitor to
+# a VMServiceScrape (labs/labs-openclaw-codex-metrics) before it was
+# removed, and did not clean it up when the ServiceMonitor was deleted. The
+# orphaned VMServiceScrape continued firing VmagentScrapePoolEmpty.
+#
+# Fix (incident-43d9e608): adopt the orphaned VMServiceScrape into ArgoCD
+# management via extraObjects, with no endpoints so the VM operator does not
+# configure a scrape pool for it. This stops the alert immediately. When
+# labs-openclaw is re-enabled (replicaCount: 1), remove this extraObjects
+# block and restore the ServiceMonitor below (or replace with a native
+# VMServiceScrape with proper endpoints).
+extraObjects:
+  - apiVersion: operator.victoriametrics.com/v1beta1
+    kind: VMServiceScrape
+    metadata:
+      name: labs-openclaw-codex-metrics
+      labels:
+        app.kubernetes.io/instance: labs-openclaw
+        app.kubernetes.io/name: base-service
+    spec:
+      selector:
+        matchLabels:
+          app.kubernetes.io/instance: labs-openclaw
+          app.kubernetes.io/name: base-service
+      # No endpoints configured: labs-openclaw is paused (replicaCount: 0).
+      # Omitting endpoints prevents the VM operator from generating any
+      # scrape job for this VMServiceScrape, so vmagent never creates the
+      # labs-openclaw-codex-metrics pool and VmagentScrapePoolEmpty cannot
+      # fire for it.
+
+# Original ServiceMonitor (kept as reference; restore with replicaCount: 1):
 #
 # extraObjects:
 #   - apiVersion: monitoring.coreos.com/v1
