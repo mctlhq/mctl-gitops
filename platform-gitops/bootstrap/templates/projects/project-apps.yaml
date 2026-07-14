@@ -53,24 +53,28 @@ spec:
       - group: networking.k8s.io
         kind: NetworkPolicy
 
-  # FROZEN 2026-07-12: admins-openclaw is undergoing the mctl-openclaw#38
-  # upstream sync (108-conflict merge touching gateway/auth code) — a training
-  # run for a "freeze before risky deploy" gate. `schedule: "* * * * *"` +
-  # `duration: 1h` means the deny window re-triggers every minute with an
-  # overlapping 1h span, so it is continuously active (no gaps) until this
-  # entry is removed. `manualSync: true` still allows an explicit
-  # `argocd app sync admins-openclaw` — only the ApplicationSet's automated
-  # prune+selfHeal is blocked. Scoped to this one Application by name; no
-  # other service on the platform is affected.
+  # FROZEN 2026-07-12 (admins-openclaw), extended 2026-07-15 (ovk-openclaw):
+  # both are undergoing the mctl-openclaw#38 upstream sync (108-conflict
+  # merge touching gateway/auth code) — a training run for a "freeze before
+  # risky deploy" gate. `schedule: "* * * * *"` + `duration: 1h` means the
+  # deny window re-triggers every minute with an overlapping 1h span, so it
+  # is continuously active (no gaps) until this entry is removed.
+  # `manualSync: true` still allows an explicit `argocd app sync
+  # <name>-openclaw` — only the ApplicationSet's automated prune+selfHeal is
+  # blocked. Scoped to these two Applications by name; labs-openclaw and
+  # every other service on the platform is unaffected — labs remains the
+  # first rollout target for the sync once it merges.
   #
-  # To unfreeze: delete this syncWindows entry, only after explicit double
-  # confirmation from the operator (two separate "yes", not one — lifting
-  # this re-enables auto-deploy mid-way through a large, security-sensitive
-  # upstream merge).
+  # To unfreeze: delete the relevant application entry (or the whole
+  # syncWindows block once both are ready), only after explicit double
+  # confirmation from the operator per app (two separate "yes", not one —
+  # lifting this re-enables auto-deploy mid-way through a large,
+  # security-sensitive upstream merge).
   syncWindows:
     - kind: deny
       schedule: "* * * * *"
       duration: 1h
       applications:
         - admins-openclaw
+        - ovk-openclaw
       manualSync: true
