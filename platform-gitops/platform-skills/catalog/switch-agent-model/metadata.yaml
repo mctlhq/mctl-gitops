@@ -1,0 +1,11 @@
+name: switch-agent-model
+title: Switch Agent Model
+description: Migrate the Claude model ID used by all mctl-agent/mctl-agents runtime
+  agents and their CI PR-review bots to a new model, in one coordinated pass across
+  both repos.
+visibility: admin
+status: active
+owner: platform
+runtimes:
+- claude
+- codex
