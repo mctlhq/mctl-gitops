@@ -551,7 +551,7 @@ spec:
               service: "mctl-agents",
               summary: $summary,
               severity: "warning",
-              # "analyzing", not "open": the incident-responder's discovery
+              # "analyzing", not "open": the incident-responder discovery
               # query only picks up status=analyzing, and nothing in mctl-api
               # ever promotes open->analyzing — a status of "open" here means
               # the incident sits unanalyzed forever (observed 2026-07-12:
