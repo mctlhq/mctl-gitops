@@ -84,8 +84,52 @@ spec:
             template: clone-gitops
         - - name: run
             template: run-orchestrator
+            arguments:
+              parameters:
+                - name: oauth-key
+                  value: claude-code-oauth-token
+                - name: is-fallback
+                  value: "false"
+            # continueOn so the fallback attempt and commit still run when the
+            # primary fails (most commonly the account-1 OAuth token hitting
+            # its five_hour usage limit → HTTP 429). Same rationale as
+            # cwft-mctl-agents-implement.
+            continueOn:
+              failed: true
+              error: true
+        # Fallback retry on a SECOND Claude account, mirroring
+        # cwft-mctl-agents-implement: the incident-responder cron shares
+        # `claude-code-oauth-token` with every other pipeline consumer, so a
+        # quota exhaustion event otherwise hard-fails EVERY 30-min tick until
+        # the window resets (observed 2026-07-12 18:16–20:16 UTC, 5 failed
+        # runs). If token-2 is not seeded the fallback fails (exit 1) so the
+        # run reports Failed instead of being masked as success.
+        - - name: run-fallback
+            template: run-orchestrator
+            when: "{{steps.run.status}} != Succeeded"
+            arguments:
+              parameters:
+                - name: oauth-key
+                  value: claude-code-oauth-token-2
+                - name: is-fallback
+                  value: "true"
+            continueOn:
+              failed: true
+              error: true
         - - name: commit
             template: commit-and-push
+        # Truthful status: run + fallback use continueOn so commit always
+        # persists partial state, which would otherwise leave the workflow
+        # GREEN when both attempts failed. Never fails a legitimate no-op —
+        # a "nothing to do" run still has run=Succeeded.
+        - - name: assert-produced
+            template: assert-attempt
+            arguments:
+              parameters:
+                - name: primary
+                  value: "{{steps.run.status}}"
+                - name: fallback
+                  value: "{{steps.run-fallback.status}}"
 
     # ── 1. SSH-clone mctl-gitops into shared volume ───────────────────────
     - name: clone-gitops
@@ -111,14 +155,45 @@ spec:
 
     # ── 2. Run mctl-agents orchestrator with state mounted ────────────────
     - name: run-orchestrator
+      inputs:
+        parameters:
+          # Which Vault key under mctl-agents-secrets holds the OAuth token for
+          # this attempt. Primary step passes claude-code-oauth-token; the
+          # fallback step passes claude-code-oauth-token-2 (a second account).
+          # Same convention as cwft-mctl-agents-implement.
+          - name: oauth-key
+            value: claude-code-oauth-token
+          # "true" only for the fallback retry: fail loudly if token-2 is
+          # absent instead of masking the double-failure as success.
+          - name: is-fallback
+            value: "false"
       container:
         image: ghcr.io/mctlhq/mctl-agents:1.16.1
         imagePullPolicy: IfNotPresent
         # Explicit command + args so Argo's emissary executor doesn't need
         # to introspect the registry for ENTRYPOINT/CMD.
         command: ["/entrypoint.sh"]
-        args: ["python", "-m", "orchestrator.run_all"]
+        args:
+          - "sh"
+          - "-c"
+          - |
+            set -e
+            # Fallback-token guard, mirroring cwft-mctl-agents-implement's
+            # run-implementer: on the account-2 retry an unseeded token-2
+            # (empty env via optional:true) must fail non-zero so the run
+            # reports Failed instead of being masked as success. A missing
+            # PRIMARY token still fails loudly at SDK auth.
+            if [ "$IS_FALLBACK" = "true" ]; then
+              if [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+                echo "❌ Primary attempt failed and no fallback token (claude-code-oauth-token-2) is set — cannot fall back." >&2
+                exit 1
+              fi
+              echo "↻ Primary attempt did not succeed — retrying on fallback OAuth token (account 2)."
+            fi
+            exec python -m orchestrator.run_all
         env:
+          - name: IS_FALLBACK
+            value: "{{inputs.parameters.is-fallback}}"
           - name: STATE_DIR
             value: /workdir/mctl-gitops/platform-gitops/agents-state
           # Run-mode dispatch (Phase 2 of plan logical-floating-lemon §Phase 2).
@@ -132,11 +207,17 @@ spec:
             value: "{{workflow.parameters.service}}"
           # Auth: OAuth (Claude Pro/Max). NOT API key — runs within owner's
           # subscription. Do NOT add ANTHROPIC_API_KEY in parallel.
+          # Key is parameterized: primary uses claude-code-oauth-token, the
+          # fallback step uses claude-code-oauth-token-2. optional:true lets
+          # the fallback pod schedule when token-2 is absent (the guard
+          # script then exits 1); a missing PRIMARY token still fails loudly
+          # at SDK auth.
           - name: CLAUDE_CODE_OAUTH_TOKEN
             valueFrom:
               secretKeyRef:
                 name: mctl-agents-secrets
-                key: claude-code-oauth-token
+                key: "{{inputs.parameters.oauth-key}}"
+                optional: true
           # Optional — agents degrade gracefully (no mcp__mctl__* tools)
           # if Vault doesn't have mctl-token yet.
           - name: MCTL_TOKEN
@@ -228,6 +309,27 @@ spec:
             mountPath: /workdir
           - name: deploy-key
             mountPath: /secrets/deploy-key
+
+    # ── 3b. Truthful-status assert (same pattern as cwft-mctl-agents-implement) ─
+    - name: assert-attempt
+      inputs:
+        parameters:
+          - name: primary
+          - name: fallback
+      script:
+        image: alpine:3.19
+        command: [sh]
+        source: |
+          PRIMARY='{{inputs.parameters.primary}}'
+          FALLBACK='{{inputs.parameters.fallback}}'
+          echo "primary attempt: ${PRIMARY:-<none>}   fallback attempt: ${FALLBACK:-<none>}"
+          if [ "$PRIMARY" = "Succeeded" ] || [ "$FALLBACK" = "Succeeded" ]; then
+            echo "✓ An attempt succeeded — workflow status reflects real work."
+            exit 0
+          fi
+          echo "❌ Neither the primary attempt nor the account-2 fallback succeeded — no durable result produced." >&2
+          echo "   Most often the Claude five_hour usage limit / HTTP 429 on both accounts, or token-2 unset." >&2
+          exit 1
 
     # ── 4. Telegram + incident notification (onExit handler — always fires) ─
     # Posts a one-line summary to admins chat with mode, status, duration,
@@ -330,7 +432,12 @@ spec:
               service: "mctl-agents",
               summary: $summary,
               severity: "warning",
-              status: "open"
+              # "analyzing", not "open": the incident-responder's discovery
+              # query only picks up status=analyzing, and nothing in mctl-api
+              # ever promotes open->analyzing — a status of "open" here means
+              # the incident sits unanalyzed forever (observed 2026-07-12:
+              # 6 self-reported workflow_failed incidents never picked up).
+              status: "analyzing"
             }')
             curl -s -o /dev/null -w 'incident http=%{http_code}\n' \
               -X POST "https://api.mctl.ai/api/v1/incidents" \

@@ -358,7 +358,12 @@ spec:
               service: "mctl-agents",
               summary: $summary,
               severity: "warning",
-              status: "open"
+              # "analyzing", not "open": the incident-responder's discovery
+              # query only picks up status=analyzing, and nothing in mctl-api
+              # ever promotes open->analyzing — a status of "open" here means
+              # the incident sits unanalyzed forever (observed 2026-07-12:
+              # 6 self-reported workflow_failed incidents never picked up).
+              status: "analyzing"
             }')
             curl -s -o /dev/null -w 'incident http=%{http_code}\n' \
               -X POST "https://api.mctl.ai/api/v1/incidents" \
