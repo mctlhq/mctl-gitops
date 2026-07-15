@@ -1,4 +1,5 @@
-status: implemented
-updated_at: '2026-07-15T03:05:08Z'
+status: rejected
+updated_at: '2026-07-15T20:01:21Z'
 updated_by: mctl-agents[bot]
 pr: https://github.com/mctlhq/mctl-agents/pull/56
+notes: PR was closed without merging.
