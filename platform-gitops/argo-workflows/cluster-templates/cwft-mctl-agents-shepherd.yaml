@@ -241,7 +241,7 @@ spec:
     # flip-to-rejected path. 1.9.0 was the first tag with the orchestrator.
     - name: run-shepherd
       container:
-        image: ghcr.io/mctlhq/mctl-agents:1.16.1
+        image: ghcr.io/mctlhq/mctl-agents:1.17.0
         imagePullPolicy: IfNotPresent
         command: ["/entrypoint.sh"]
         args:
