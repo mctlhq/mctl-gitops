@@ -1,8 +1,4 @@
-status: accepted
-updated_at: '2026-07-16T05:25:24Z'
-updated_by: _incident-responder
-notes: "auto-accepted: diagnosis from mctl incident argo-mctl-agents-incidents-1784168100-1784168441
-  and 4 duplicate occurrences (argo-mctl-agents-incidents-1784166300-1784166488,
-  argo-mctl-agents-incidents-1784164500-1784164817, argo-mctl-agents-incidents-1784162700-1784162970,
-  argo-mctl-agents-incidents-1784160900-1784161034), same root cause. Confidence: LOW,
-  see design.md."
+status: implemented
+updated_at: '2026-07-16T05:32:02Z'
+updated_by: mctl-agents[bot]
+pr: https://github.com/mctlhq/mctl-gitops/pull/595
