@@ -117,9 +117,17 @@ spec:
         # Phase 4 metric wiring health-check — the gauge family must be
         # present after the first poll cycle. Absence ≈ /metrics endpoint
         # broken or scraper not picking up the agent.
+        #
+        # The {namespace="admins"} matcher is required, not decorative:
+        # absent() only inherits into its output vector the labels that are
+        # equality-matched in the selector. Without it this alert fires with
+        # no namespace label at all, which mctl-agent's alert webhook maps
+        # to tenant="" — and mctl-api's incident store rejects an empty
+        # tenant as a missing required field, silently dropping the ticket
+        # (mctl-agent#37 worked around the symptom; this fixes the source).
         - alert: MctlAgentMetricsAbsent
           expr: |
-            absent(mctl_agent_open_tickets) == 1
+            absent(mctl_agent_open_tickets{namespace="admins"}) == 1
           for: 30m
           labels:
             severity: warning
