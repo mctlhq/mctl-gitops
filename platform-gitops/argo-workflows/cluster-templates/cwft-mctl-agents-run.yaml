@@ -53,6 +53,20 @@ spec:
     mutex:
       name: mctl-gitops-main-writes
 
+  # Loki/promtail relabels pod label `app.kubernetes.io/name` -> stream label
+  # `app` and `mctl.ai/team` -> stream label `team`
+  # (platform-gitops/bootstrap/templates/observability/loki.yaml
+  # relabel_configs). Argo Workflow pods otherwise carry only
+  # workflows.argoproj.io/* labels, so mctl_get_service_logs(team=admins,
+  # service=mctl-agents) returned zero lines even across the 2026-07-15
+  # incident-17841555 failure windows. Set them here so every pod this
+  # template spawns (clone / run / run-fallback / commit / notify) is
+  # queryable by team+app.
+  podMetadata:
+    labels:
+      app.kubernetes.io/name: mctl-agents
+      mctl.ai/team: admins
+
   arguments:
     parameters:
       - name: mode
@@ -253,6 +267,26 @@ spec:
 
     # ── 3. Commit & push back to mctl-gitops ──────────────────────────────
     - name: commit-and-push
+      # Bounded retry around the actual gitops-write step. The workflow-level
+      # `mctl-gitops-main-writes` mutex above only serializes this pipeline
+      # against OTHER Argo Workflows (implement/investigate/delete-tenant) —
+      # it does NOT protect against `gitops-bump.yaml` / `release-deploy.yaml`,
+      # which push straight to main from GitHub Actions with no mutex (see
+      # CLAUDE.md "Branch Protection Exception"). A burst of image-tag bumps
+      # can still race this step's own 5x rebase-and-push loop below to
+      # exhaustion. incident-17841555: mctl-agents-incidents failed 20x on
+      # 2026-07-15 with variable durations consistent with write contention,
+      # and a concurrent mctl-agents-implement run was observed blocked on
+      # this same mutex at investigation time. Retrying the whole step (not
+      # just the in-script loop) with backoff gives contention more time to
+      # clear before the run is reported Failed.
+      retryStrategy:
+        limit: "3"
+        retryPolicy: OnFailure
+        backoff:
+          duration: "30s"
+          factor: "2"
+          maxDuration: "5m"
       script:
         image: alpine/git:2.43.0
         command: [sh]
