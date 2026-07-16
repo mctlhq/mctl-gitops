@@ -118,12 +118,20 @@ spec:
           mkdir -p ~/.ssh
           cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
+          printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  ConnectTimeout 15\n  ServerAliveInterval 5\n  ServerAliveCountMax 3\n' > ~/.ssh/config
           chmod 600 ~/.ssh/config
           # Pin GitHub's host key (via ssh-keyscan over 443) instead of
           # disabling verification, so a MITM / DNS-poison of ssh.github.com
           # is caught rather than silently trusted (StrictHostKeyChecking no).
-          ssh-keyscan -p 443 -H ssh.github.com >> ~/.ssh/known_hosts 2>/dev/null
+          # -T 10: bound the keyscan itself — a stalled TCP handshake here has
+          # no other timeout and would otherwise hang until the workflow's
+          # 30-min activeDeadlineSeconds kills the whole run (observed 2026-07-16,
+          # gitops#593 follow-up: clone-gitops pod scheduled + ran 31min before
+          # being killed by the deadline, well past any single-connection budget).
+          ssh-keyscan -T 10 -p 443 -H ssh.github.com >> ~/.ssh/known_hosts 2>/dev/null
+          # ConnectTimeout/ServerAlive* above bound a stalled SSH connection so
+          # a network blip fails in ~15-30s instead of silently eating the
+          # workflow's entire deadline.
           git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops
           mkdir -p /workdir/mctl-gitops/platform-gitops/agents-state
           echo "✓ gitops cloned"
@@ -217,12 +225,16 @@ spec:
           mkdir -p ~/.ssh
           cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
+          printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  ConnectTimeout 15\n  ServerAliveInterval 5\n  ServerAliveCountMax 3\n' > ~/.ssh/config
           chmod 600 ~/.ssh/config
           # Pin GitHub's host key (via ssh-keyscan over 443) instead of
           # disabling verification, so a MITM / DNS-poison of ssh.github.com
           # is caught rather than silently trusted (StrictHostKeyChecking no).
-          ssh-keyscan -p 443 -H ssh.github.com >> ~/.ssh/known_hosts 2>/dev/null
+          # -T 10 / ConnectTimeout / ServerAlive* above: bound every SSH
+          # connection in this step so a network stall fails in ~15-30s
+          # instead of silently eating the workflow's 30-min activeDeadlineSeconds
+          # (see clone-gitops step for the observed incident this fixes).
+          ssh-keyscan -T 10 -p 443 -H ssh.github.com >> ~/.ssh/known_hosts 2>/dev/null
 
           cd /workdir/mctl-gitops
           git config user.name "mctl-agents[bot]"
