@@ -1,0 +1,4 @@
+status: accepted
+updated_at: 2026-07-16T04:50:00Z
+updated_by: _incident-responder
+notes: "auto-accepted: diagnosis from mctl incidents argo-mctl-agents-incidents-1784173500-1784173629, argo-mctl-agents-incidents-1784171700-1784171832, argo-mctl-agents-incidents-1784169900-1784170035 (same recurring signature). Confidence MEDIUM: root cause (Argo Workflows List API 500 due to missing argo_workflows offload table) reproduced live; causal link to the run/run-fallback pod crash is inferred from timing, not confirmed pod-level stdout. Primary fix step requires a human operator with shared-pg DB credentials this agent does not have."
