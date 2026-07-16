@@ -1,0 +1,4 @@
+status: accepted
+updated_at: 2026-07-16T05:52:00Z
+updated_by: _incident-responder
+notes: "auto-accepted: diagnosis from mctl incident argo-mctl-agents-shepherd-1784134800-1784143072 (duplicate: argo-mctl-agents-shepherd-1784124000-1784132276); confidence LOW, verify before applying"
