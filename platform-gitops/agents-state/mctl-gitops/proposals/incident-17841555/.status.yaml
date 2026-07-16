@@ -1,0 +1,4 @@
+status: accepted
+updated_at: 2026-07-16T06:18:36Z
+updated_by: _incident-responder
+notes: "auto-accepted: diagnosis from mctl incident argo-mctl-agents-incidents-1784155500-1784155659 (+4 duplicate incidents of same signature); LOW confidence, see design.md"
