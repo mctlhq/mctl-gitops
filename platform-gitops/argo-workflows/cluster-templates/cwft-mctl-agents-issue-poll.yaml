@@ -45,11 +45,18 @@ spec:
   # template), which leaked ~€6 of idle detached volumes in June 2026.
   volumeClaimGC:
     strategy: OnWorkflowCompletion
-  # One poll may investigate several labelled issues back-to-back, each a
-  # gitops + target-repo clone plus a Claude SDK run. 4h ceiling covers a
-  # realistic backlog; the steady-state case (0-1 labelled issues) finishes
-  # in minutes.
-  activeDeadlineSeconds: 14400
+  # incident-17841222: a 2026-07-15 issue-poll run hung for ~14850s (just past
+  # the old 14400s/4h ceiling below) with no Loki output and no distinguishing
+  # error, vs. same-day baseline runs completing in minutes at the */15
+  # cadence. A 4h ceiling does not "fail fast" against that baseline; it just
+  # delays the failure signal by 4 hours. Lowered to 1800s (30 min, 2x the
+  # cron cadence) so a hang is caught well before it silently burns most of a
+  # day and skips several scheduled ticks (concurrencyPolicy: Forbid means a
+  # hung run blocks new ticks from starting for as long as it holds the pod).
+  # If a genuine multi-issue backlog ever needs longer than 30 min, that is a
+  # sign the per-issue investigator itself needs a bound (see
+  # ISSUE_INVESTIGATOR_BUDGET_USD below) rather than raising this ceiling.
+  activeDeadlineSeconds: 1800
   entrypoint: poll-issues
   onExit: notify-telegram
   # NB: the `mctl-gitops-main-writes` mutex is NOT declared here at workflow
