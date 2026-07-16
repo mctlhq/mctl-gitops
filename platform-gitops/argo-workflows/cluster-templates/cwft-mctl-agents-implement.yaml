@@ -306,8 +306,14 @@ spec:
           # proposals (e.g. a full observability layer) blew the $3 cap and
           # the SDK raised error_max_budget_usd before opening a PR. Small
           # proposals still finish well under this.
+          # Raised 10.00 -> 20.00: mctl-telegram issue-287 (send_media tool)
+          # hit error_max_budget_usd at $10.10/140 tool uses with real,
+          # near-complete work (tests passing, at gofmt) still unfinished —
+          # a Go service with no per-service implementer image pays a cold
+          # Go-toolchain-bootstrap + full gotd/td module-cache build tax on
+          # top of the actual implementation cost every single run.
           - name: IMPLEMENTER_BUDGET_USD
-            value: "10.00"
+            value: "20.00"
         resources:
           # memory bumped 4Gi -> 8Gi: the implementer sub-agent runs the
           # target repo's build as a sanity check; `go build ./...` on a
