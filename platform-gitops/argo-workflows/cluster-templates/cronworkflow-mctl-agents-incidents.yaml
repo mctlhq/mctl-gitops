@@ -37,7 +37,10 @@ spec:
   # 24 ticks/day * 7 days of success history
   successfulJobsHistoryLimit: 168
   failedJobsHistoryLimit: 48
-  suspend: false
+  # TEMP: org-wide weekly Claude spend cap exhausted, overage disabled at org
+  # level. Suspended 2026-07-16 to stop noisy failed runs; re-enable
+  # (suspend: false) once the cap resets 2026-07-17T03:00:00Z. See gitops#593.
+  suspend: true
   workflowSpec:
     workflowTemplateRef:
       name: mctl-agents-run
