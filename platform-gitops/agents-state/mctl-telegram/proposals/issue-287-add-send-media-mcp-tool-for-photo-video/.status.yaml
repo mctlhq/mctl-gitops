@@ -1,6 +1,6 @@
-status: in-progress
-updated_at: '2026-07-16T22:07:18Z'
-updated_by: mctl-agents[bot]
+status: accepted
+updated_at: '2026-07-16T22:25:00Z'
+updated_by: mashkovd
 source:
   type: github_issue
   repo: mctlhq/mctl-telegram
