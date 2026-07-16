@@ -80,9 +80,16 @@ spec:
               check `kubectl -n labs logs {{ $labels.pod }} -c base-service
               | grep llm_usage | tail`.
 
+        # The {namespace="labs"} matcher is required, not decorative:
+        # absent() only inherits into its output vector the labels that are
+        # equality-matched in the selector. Without it this alert fires with
+        # no namespace label at all, which mctl-agent's alert webhook maps
+        # to tenant="" — and mctl-api's incident store rejects an empty
+        # tenant as a missing required field, silently dropping the ticket
+        # (mctl-agent#37 worked around the symptom; this fixes the source).
         - alert: OpenclawLlmMetricsAbsent
           expr: |
-            absent(openclaw_llm_requests_total) == 1
+            absent(openclaw_llm_requests_total{namespace="labs"}) == 1
           for: 30m
           labels:
             severity: info
@@ -94,4 +101,8 @@ spec:
               endpoint regressed, the ServiceMonitor lost its target, or
               the tenant NetworkPolicy reverted (see
               feedback_tenant_monitoring_scrape_networkpolicy.md). The
-              LLM-token dashboard goes blind without this series.
+              LLM-token dashboard goes blind without this series. Note:
+              labs-openclaw is currently scaled to 0 replicas (see
+              services/labs/openclaw/values.yaml), so this alert is
+              expected to fire continuously until it's brought back
+              online — not actionable in the meantime.
