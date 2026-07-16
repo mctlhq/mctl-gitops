@@ -41,10 +41,12 @@ spec:
   # Un-suspended at Stage 2: reconcile sweeps every SHEPHERD_SKIP_SERVICES repo
   # hourly, repairing any pr-steward-merged proposal that lost its
   # `.status.yaml: merged` write-back.
-  # TEMP: org-wide weekly Claude spend cap exhausted, overage disabled at org
-  # level. Re-suspended 2026-07-16 to stop noisy failed runs; re-enable
-  # (suspend: false) once the cap resets 2026-07-17T03:00:00Z. See gitops#593.
-  suspend: true
+  # NOT suspended during the 2026-07-16 org spend-cap outage: --reconcile
+  # never calls the Claude SDK (no CLAUDE_CODE_OAUTH_TOKEN in this template),
+  # so it's unaffected by the cap, and pausing it would leave pr-steward
+  # merges on skip-listed repos stuck at `implemented` for the outage
+  # window. See gitops#593 / PR #599 review discussion.
+  suspend: false
   workflowSpec:
     workflowTemplateRef:
       name: mctl-agents-reconcile
