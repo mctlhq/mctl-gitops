@@ -82,6 +82,20 @@ spec:
       steps:
         - - name: clone
             template: clone-gitops
+        # Restore any previously-saved Go module cache (see restore-go-cache
+        # below) so a Go-repo implementer run (currently only mctl-telegram)
+        # doesn't re-download the whole gotd/td dependency graph from a cold
+        # GOPATH every single time. No-op in ~1s for a non-Go run.
+        # continueOn: this is a purely optional performance cache — if
+        # minio-cache-creds hasn't synced yet or MinIO is briefly unhealthy,
+        # implementation must still proceed cold rather than the whole run
+        # failing before run-implementer even starts (codex P2 finding on
+        # PR #603).
+        - - name: restore-go-cache
+            template: restore-go-cache
+            continueOn:
+              failed: true
+              error: true
         - - name: implement
             template: run-implementer
             arguments:
@@ -128,6 +142,22 @@ spec:
               error: true
         - - name: commit
             template: commit-and-push
+        # Save whatever Go module cache got populated back to MinIO,
+        # regardless of whether implement/implement-fallback succeeded —
+        # even a run that hit its budget cap before finishing still
+        # downloaded real dependencies worth keeping for next time. Runs
+        # AFTER commit (not before): if a large mirror upload stalls or
+        # runs long, it must never risk the workflow hitting its
+        # activeDeadlineSeconds before the .status.yaml commit lands —
+        # that would silently leave a real implementation attempt stuck
+        # in-progress with no durable record (codex P2 finding on PR #603).
+        # activeDeadlineSeconds bounds worst-case stall time so this
+        # optional step can never eat meaningfully into the overall budget.
+        - - name: save-go-cache
+            template: save-go-cache
+            continueOn:
+              failed: true
+              error: true
         # Truthful status. implement + its fallback run with continueOn so a
         # partial .status.yaml write still gets committed — but that also means
         # a crash (e.g. five_hour 429 on both accounts) would otherwise leave
@@ -314,6 +344,16 @@ spec:
           # top of the actual implementation cost every single run.
           - name: IMPLEMENTER_BUDGET_USD
             value: "20.00"
+          # Point any Go toolchain the implementer installs (currently only
+          # mctl-telegram) at the module cache restored by restore-go-cache /
+          # persisted by save-go-cache, instead of the default ~/go inside
+          # this ephemeral per-run PVC. Harmless no-op env var for non-Go
+          # implementer runs. GOCACHE (compiled build cache, as opposed to
+          # downloaded module source) is deliberately NOT pointed at the
+          # MinIO-backed path — see restore-go-cache/save-go-cache below for
+          # why compiled artifacts must not land in the shared cache bucket.
+          - name: GOPATH
+            value: /workdir/gocache/gopath
         resources:
           # memory bumped 4Gi -> 8Gi: the implementer sub-agent runs the
           # target repo's build as a sanity check; `go build ./...` on a
@@ -321,6 +361,119 @@ spec:
           # Claude SDK process exceeded 4Gi and the container was OOMKilled.
           requests: { cpu: 200m, memory: 1Gi }
           limits:   { cpu: 2000m, memory: 8Gi }
+        volumeMounts:
+          - name: workdir
+            mountPath: /workdir
+
+    # ── 2b. Restore Go MODULE cache from MinIO ────────────────────────────
+    # Reuses the existing in-cluster MinIO (`platform-cache` bucket, same
+    # instance + Vault path as the openclaw whisper-cli build cache — see
+    # platform-gitops/argo-workflows/service-templates/openclaw/values.yaml.tpl)
+    # instead of provisioning a new PVC. `workdir` is a fresh per-workflow-run
+    # volumeClaimTemplate (released on completion), so without this every Go
+    # repo run re-downloads its whole module graph (e.g. mctl-telegram +
+    # gotd/td) from a cold GOPATH — this bridges that gap across separate
+    # workflow runs via object storage instead of a persistent volume.
+    # `mc mirror` (not tar) so the step only depends on the `mc` binary
+    # itself — no assumption that the minio/mc image ships tar/gzip.
+    #
+    # Deliberately GOPATH (downloaded third-party module source) ONLY, never
+    # GOCACHE (compiled build cache derived from the target repo's own
+    # source). The `platform-cache` bucket + minio-cache-creds credential is
+    # also used by openclaw tenant configs (see
+    # platform-gitops/services/labs/openclaw/values.yaml), so anything
+    # written here is readable from tenant workloads sharing that
+    # credential — compiled artifacts of a private repo must not land there
+    # (codex P2 finding on PR #603). Module source is comparatively low-risk
+    # (public OSS dependency code either way).
+    #
+    # Non-fatal by design (set +e, no `mc alias set ... || exit`): this is a
+    # purely optional performance cache. If minio-cache-creds hasn't synced
+    # yet or MinIO is briefly unhealthy, the run must still proceed cold
+    # instead of failing before run-implementer even starts (codex P2
+    # finding on PR #603 — this step also has continueOn at the step-list
+    # level as defense in depth for pod-level scheduling errors).
+    - name: restore-go-cache
+      script:
+        image: minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+        command: [sh]
+        env:
+          - name: MINIO_ENDPOINT
+            value: "http://minio.minio.svc.cluster.local:9000"
+          - name: MINIO_ACCESS_KEY
+            valueFrom:
+              secretKeyRef:
+                name: minio-cache-creds
+                key: access-key
+          - name: MINIO_SECRET_KEY
+            valueFrom:
+              secretKeyRef:
+                name: minio-cache-creds
+                key: secret-key
+          - name: MINIO_BUCKET
+            value: "platform-cache"
+        source: |
+          set +e
+          mkdir -p /workdir/gocache/gopath
+          mc alias set cache "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY" --quiet 2>&1
+          if mc mirror --quiet "cache/$MINIO_BUCKET/mctl-agents/gocache/gopath/" /workdir/gocache/gopath/ 2>&1; then
+            echo "✓ Go module cache restored"
+          else
+            echo "ℹ️  No existing Go module cache in MinIO (or restore failed) — starting cold."
+          fi
+          exit 0
+        resources:
+          requests: { cpu: 50m, memory: 128Mi }
+          limits:   { cpu: 500m, memory: 1Gi }
+        activeDeadlineSeconds: 300
+        volumeMounts:
+          - name: workdir
+            mountPath: /workdir
+
+    # ── 2c. Save Go MODULE cache back to MinIO ────────────────────────────
+    # Runs after commit (not before) — see the step-list comment above — and
+    # after implement/implement-fallback regardless of outcome, since even a
+    # run that hit its budget cap before opening a PR still downloaded real
+    # dependencies worth keeping. Best-effort: a save failure must not fail
+    # the whole workflow (the actual implementation result already landed).
+    # GOPATH only, same private-artifact reasoning as restore-go-cache above.
+    - name: save-go-cache
+      script:
+        image: minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+        command: [sh]
+        env:
+          - name: MINIO_ENDPOINT
+            value: "http://minio.minio.svc.cluster.local:9000"
+          - name: MINIO_ACCESS_KEY
+            valueFrom:
+              secretKeyRef:
+                name: minio-cache-creds
+                key: access-key
+          - name: MINIO_SECRET_KEY
+            valueFrom:
+              secretKeyRef:
+                name: minio-cache-creds
+                key: secret-key
+          - name: MINIO_BUCKET
+            value: "platform-cache"
+        source: |
+          set +e
+          if [ -d /workdir/gocache/gopath ] && [ -n "$(find /workdir/gocache/gopath -maxdepth 3 -type f -print -quit 2>/dev/null)" ]; then
+            mc alias set cache "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY" --quiet
+            mc mirror --quiet --overwrite /workdir/gocache/gopath/ "cache/$MINIO_BUCKET/mctl-agents/gocache/gopath/"
+            if [ $? -eq 0 ]; then
+              echo "✓ Go module cache saved"
+            else
+              echo "⚠️  Go module cache save failed (non-fatal, implementation result is unaffected)"
+            fi
+          else
+            echo "ℹ️  No Go module cache populated this run — nothing to save."
+          fi
+          exit 0
+        resources:
+          requests: { cpu: 50m, memory: 128Mi }
+          limits:   { cpu: 500m, memory: 1Gi }
+        activeDeadlineSeconds: 300
         volumeMounts:
           - name: workdir
             mountPath: /workdir
