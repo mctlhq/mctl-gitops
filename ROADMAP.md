@@ -57,10 +57,14 @@ PDB только у CNPG, prod-кластер — заглушки.
 
 ### 2.3 Закрыть документационный drift (дёшево, критично для доверия)
 Первый потенциальный клиент читает docs.mctl.ai; противоречия хуже пробелов.
-- [ ] Единая deployment matrix: rolling — default, blue-green — opt-in (исправить `guides/services.md`, сверить с `guides/rollbacks.md`).
-- [ ] Единая модель секретов БД: Vault → ExternalSecret → K8s Secret (исправить `guides/databases.md`, унифицировать имена переменных `DB_*` vs `DATABASE_*`).
-- [ ] Число MCP tools: в прозе «54», в таблице 61 — генерировать или сверять с `tools-reference.md`.
-- [ ] Обновить CLAUDE.md: mctl-agent (12 skills, не 9), mctl-portal (9 плагинов, добавить `proposals-backend`), mctl-web (Nuxt 4 vs 3 в README/CLAUDE.md).
+- [x] Единая deployment matrix: rolling — default, blue-green — opt-in (`guides/services.md`).
+- [x] Единая модель секретов БД: Vault → ExternalSecret → K8s Secret, переменные `DB_*` + `DATABASE_URL` (`guides/databases.md`).
+- [x] Число MCP tools: везде 62 (по `server_test.go`); в таблицу добавлен пропущенный `mctl_trigger_incident_responder`.
+- [x] CLAUDE.md синхронизированы: mctl-agent (12 skills, Postgres-хранилище), mctl-portal (9 плагинов, `proposals-backend`), mctl-web (Nuxt 4).
+- [ ] Разобрать Dependabot-долг на default-ветках (обнаружено при пуше):
+  mctl-portal — 162 (19 critical), mctl-web — 56 (1 critical), mctl-docs — 23.
+  Минимум: закрыть critical/high; для portal это в основном транзитивные
+  зависимости Backstage — сначала попробовать плановый Backstage upgrade.
 
 ### 2.4 Продукт: путь первого клиента
 - [ ] Пройти самому весь путь «нулевого пользователя» по `first-user-checklist` и `deploy-first-app`, зафиксировать все шероховатости как issues.
