@@ -62,10 +62,13 @@ PDB только у CNPG, prod-кластер — заглушки.
 - [x] Единая модель секретов БД: Vault → ExternalSecret → K8s Secret, переменные `DB_*` + `DATABASE_URL` (`guides/databases.md`).
 - [x] Число MCP tools: везде 62 (по `server_test.go`); в таблицу добавлен пропущенный `mctl_trigger_incident_responder`.
 - [x] CLAUDE.md синхронизированы: mctl-agent (12 skills, Postgres-хранилище), mctl-portal (9 плагинов, `proposals-backend`), mctl-web (Nuxt 4).
-- [ ] Разобрать Dependabot-долг на default-ветках (обнаружено при пуше):
-  mctl-portal — 162 (19 critical), mctl-web — 56 (1 critical), mctl-docs — 23.
-  Минимум: закрыть critical/high; для portal это в основном транзитивные
-  зависимости Backstage — сначала попробовать плановый Backstage upgrade.
+- [~] Разобрать Dependabot-долг на default-ветках:
+  - [x] mctl-web: 29 → 0 (npm audit fix + wrangler 4.87→4.112, сборка проверена).
+  - [ ] mctl-docs: заблокировано из CI-среды — приватный пакет `@mctlhq/css`
+    требует PAT с `read:packages`. Выполнить локально: `npm audit fix`, затем
+    `npm run build`. Остаток esbuild/vite закрывается только апгрейдом VitePress.
+  - [ ] mctl-portal: 162 (19 critical) — в основном транзитивные зависимости
+    Backstage; закрывать плановым Backstage upgrade, не точечными резолюциями.
 
 ### 2.4 Продукт: путь первого клиента
 - [ ] Пройти самому весь путь «нулевого пользователя» по `first-user-checklist` и `deploy-first-app`, зафиксировать все шероховатости как issues.
