@@ -52,6 +52,20 @@ variable "bootstrap_argocd" {
   default     = false
 }
 
+variable "etcd_s3_access_key" {
+  type        = string
+  default     = ""
+  sensitive   = true
+  description = "R2 access key for etcd snapshot uploads (empty disables S3 snapshots, e.g. local plan without creds)"
+}
+
+variable "etcd_s3_secret_key" {
+  type        = string
+  default     = ""
+  sensitive   = true
+  description = "R2 secret key for etcd snapshot uploads"
+}
+
 # All secrets below migrated to Vault + ExternalSecrets
 # See: platform-gitops/apps/templates/
 
@@ -111,6 +125,22 @@ module "kube-hetzner" {
 
   # --- Storage ---
   enable_longhorn = false
+
+  # --- etcd snapshots to R2 ---
+  # With a single control-plane node, S3 snapshots are the only off-node copy
+  # of cluster state. Every 6h, 56 kept = 14 days — matches the CNPG backup
+  # window. Bucket must pre-exist in R2 (same account as terraform-state);
+  # restore procedure: docs/runbooks/restore.md.
+  etcd_s3_backup = var.etcd_s3_access_key == "" ? {} : {
+    etcd-s3-endpoint            = "6a09f637d20e1f66a8e9d45ebe778058.r2.cloudflarestorage.com"
+    etcd-s3-access-key          = var.etcd_s3_access_key
+    etcd-s3-secret-key          = var.etcd_s3_secret_key
+    etcd-s3-bucket              = "mctl-etcd-snapshots"
+    etcd-s3-region              = "auto"
+    etcd-s3-folder              = "k3s-preview"
+    etcd-snapshot-schedule-cron = "0 */6 * * *"
+    etcd-snapshot-retention     = "56"
+  }
 
   # --- Cert Manager ---
   # Enabled by default (enable_cert_manager = true)

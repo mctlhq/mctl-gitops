@@ -54,8 +54,11 @@ tenant:
     # Allow egress to cluster-internal services (Vault, ArgoCD, DNS, etc.)
     allowClusterEgress: true
     # Allow egress to the internet (0.0.0.0/0)
-    # Set to false for most tenants, true for admin/platform teams
-    allowInternetEgress: true
+    # Closed by default; opt in per tenant (admin/platform teams, services
+    # calling external APIs). Argo Workflow pods get internet egress
+    # unconditionally via allow-workflow-internet-egress, so builds/deploys
+    # work either way. All existing tenants set this explicitly.
+    allowInternetEgress: false
     # Specific CIDR ranges to allow (in addition to cluster egress)
     # allowedCIDRs: []
 

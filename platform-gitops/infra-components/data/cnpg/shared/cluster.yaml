@@ -16,24 +16,30 @@ spec:
   # CNPG operator defaults (explicitly set to prevent ArgoCD OutOfSync)
   imageName: ghcr.io/cloudnative-pg/postgresql:17.2
 
-  # Enable automated backups to internal MinIO
+  # Backups go OFF-cluster to R2: the previous in-cluster MinIO target died
+  # together with the very cluster/PVCs it was protecting against. Same R2
+  # account+bucket as vault-backup and vmbackup; endpoint matches backend.tf.
+  # Old MinIO backups (s3://postgres-backups/shared-pg) age out on their own.
   backup:
     barmanObjectStore:
-      destinationPath: s3://postgres-backups/shared-pg
-      endpointURL: http://minio.minio.svc.cluster.local:9000
+      destinationPath: s3://vault-backup/postgres-backups/shared-pg
+      endpointURL: https://6a09f637d20e1f66a8e9d45ebe778058.r2.cloudflarestorage.com
       s3Credentials:
         accessKeyId:
-          name: minio-root-user
-          key: MINIO_ROOT_USER
+          name: cnpg-backup-r2
+          key: ACCESS_KEY_ID
         secretAccessKey:
-          name: minio-root-user
-          key: MINIO_ROOT_PASSWORD
+          name: cnpg-backup-r2
+          key: SECRET_ACCESS_KEY
       wal:
         compression: gzip
         maxParallel: 2
       data:
         compression: gzip
-    retentionPolicy: "3d"
+    # 14d: 3d left no margin to notice data loss that survives a weekend or
+    # a bad migration discovered late. WAL+base are gzip'd; 9 small tenant DBs
+    # fit comfortably in MinIO at this window.
+    retentionPolicy: "14d"
     target: prefer-standby
 
   affinity:

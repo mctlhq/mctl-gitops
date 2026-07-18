@@ -53,7 +53,7 @@ spec:
       - name: quota_pods
         value: "5"
       - name: allow_internet_egress
-        value: "true"
+        value: "false"
       - name: contact_email
         value: ""
       - name: creator_user_id
