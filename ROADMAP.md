@@ -83,7 +83,9 @@ PDB только у CNPG, prod-кластер — заглушки.
 - [ ] Обновить `wft-preview-deploy.yaml` / `wft-preview-delete.yaml` и NetworkPolicy: preview не ходит в prod-namespace.
 
 ### 3.2 Ужесточить дефолты изоляции
-- [ ] `allowInternetEgress: false` по умолчанию в `helm-charts/tenant/values.yaml` (сейчас `true` вопреки собственному комментарию); включать явно per-tenant.
+- [x] `allowInternetEgress: false` по умолчанию — в чарте tenant, Backstage-шаблоне
+  и wft-create-tenant. Существующие тенанты задают флаг явно, их поведение
+  не изменилось; workflow-поды сохраняют egress через отдельную политику.
 - [ ] PSS `restricted` для tenant-namespaces (сейчас `baseline`); проверить, что base-service проходит.
 
 ### 3.3 Сократить long-lived секреты в CI
