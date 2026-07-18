@@ -50,10 +50,11 @@ PDB только у CNPG, prod-кластер — заглушки.
   `persistence.data.enabled: false` — всё состояние в Postgres и покрыто CNPG-бэкапом.
   SQLite остался только как дефолт для локальной разработки. Осталось обновить
   CLAUDE.md агента, который всё ещё описывает SQLite как основное хранилище (→ 2.3).
-- [ ] Новый пункт вместо этого: **перевести CNPG-бэкапы с in-cluster MinIO на R2** —
-  сейчас бэкапы Postgres погибают вместе с кластером (см. Known gap в
-  `docs/runbooks/restore.md`). Паттерн R2-кредов через ExternalSecret уже есть
-  у vault-backup и vmbackup.
+- [x] **CNPG-бэкапы переведены с in-cluster MinIO на R2** (`s3://vault-backup/postgres-backups/shared-pg`,
+  креды из Vault `platform/vault/r2-backup`; одноразовый Backup CR сеет первый
+  базовый бэкап). Раньше бэкапы Postgres погибали вместе с кластером.
+  Проверить после merge: Secret `cnpg-backup-r2` синкается, `shared-pg-r2-initial`
+  завершился, в R2 появился `base/` каталог.
 
 ### 2.3 Закрыть документационный drift (дёшево, критично для доверия)
 Первый потенциальный клиент читает docs.mctl.ai; противоречия хуже пробелов.

@@ -9,7 +9,7 @@
 
 | Состояние | Где живёт | Бэкап | Куда | Retention | Переживает потерю кластера? |
 |---|---|---|---|---|---|
-| Postgres (9 tenant DB + backstage, argo, temporal, mctl-api audit) | CNPG `shared-pg` | barman + daily ScheduledBackup 02:00 | **MinIO in-cluster** `s3://postgres-backups/shared-pg` | 14d | **НЕТ — см. Known gap** |
+| Postgres (9 tenant DB + backstage, argo, temporal, mctl-api audit) | CNPG `shared-pg` | barman + daily ScheduledBackup 02:00 | R2 `s3://vault-backup/postgres-backups/shared-pg` | 14d | да |
 | Vault (все секреты платформы) | vault ns, raft | CronJob 03:00 | R2 `s3://<bucket>/vault-backups/` | 30 копий | да |
 | Кластерное состояние k8s (etcd) | single CP node | k3s snapshot каждые 6h | R2 `mctl-etcd-snapshots/k3s-preview` | 56 копий (14d) | да |
 | Метрики | VMSingle (3d retention) | vmbackup daily | R2 `s3://vault-backup/victoria-metrics` | — | да |
@@ -17,14 +17,15 @@
 | Terraform state | R2 `mctl-terraform-state` | версионирование R2 | — | — | да |
 | mctl-agent tickets/webhooks/metrics | Postgres `mctl-agent` DB в shared-pg (`DATABASE_URL`) | через CNPG | — | 14d | как Postgres |
 
-### Known gap (P1): бэкапы Postgres лежат внутри кластера
+### Закрытый gap: бэкапы Postgres переведены с in-cluster MinIO на R2
 
-`barmanObjectStore` пишет в MinIO, который сам работает на hcloud-volume PVC
-этого же кластера. При потере кластера (или PVC MinIO) пропадают и база, и её
-бэкапы. Vault и etcd уже в R2 — Postgres надо перевести туда же
-(паттерн готов: ExternalSecret с R2-кредами как у `vault-backup-r2` /
-`victoria-backup-r2`). До этого держать в голове: полный DR Postgres возможен
-только пока жив MinIO.
+До 2026-07 `barmanObjectStore` писал в MinIO на PVC этого же кластера — при
+потере кластера пропадали и база, и её бэкапы. Теперь destination — R2
+(креды: ExternalSecret `cnpg-backup-r2` ← Vault `platform/vault/r2-backup`).
+Старые бэкапы в MinIO (`s3://postgres-backups/shared-pg`) остаются читаемыми
+для PITR на даты до переключения, пока MinIO жив. Первый базовый бэкап в R2
+делает одноразовый `Backup` CR `shared-pg-r2-initial` — до его завершения
+восстановление возможно только из MinIO.
 
 ## 1. CNPG / Postgres
 
@@ -51,15 +52,15 @@ spec:
   externalClusters:
     - name: shared-pg
       barmanObjectStore:
-        destinationPath: s3://postgres-backups/shared-pg
-        endpointURL: http://minio.minio.svc.cluster.local:9000
+        destinationPath: s3://vault-backup/postgres-backups/shared-pg
+        endpointURL: https://6a09f637d20e1f66a8e9d45ebe778058.r2.cloudflarestorage.com
         s3Credentials:
           accessKeyId:
-            name: minio-root-user   # скопировать Secret в drill-namespace
-            key: MINIO_ROOT_USER
+            name: cnpg-backup-r2   # скопировать Secret в drill-namespace
+            key: ACCESS_KEY_ID
           secretAccessKey:
-            name: minio-root-user
-            key: MINIO_ROOT_PASSWORD
+            name: cnpg-backup-r2
+            key: SECRET_ACCESS_KEY
         wal:
           compression: gzip
 ```
@@ -67,7 +68,7 @@ spec:
 Проверка:
 ```bash
 kubectl create ns pg-restore-drill
-kubectl get secret minio-root-user -n cnpg-system -o yaml | \
+kubectl get secret cnpg-backup-r2 -n platform-db -o yaml | \
   sed 's/namespace: .*/namespace: pg-restore-drill/' | kubectl apply -f -
 kubectl apply -f restore-drill.yaml
 kubectl -n pg-restore-drill wait cluster/shared-pg-drill --for=condition=Ready --timeout=15m
@@ -83,7 +84,7 @@ PITR: добавить в `recovery` блок `recoveryTarget: { targetTime: "20
 
 ### Реальное восстановление
 
-То же самое, но в namespace `cnpg-system` с именем нового кластера, затем
+То же самое, но в namespace `platform-db` с именем нового кластера, затем
 переключить приложения (Secret'ы `*-db-creds` пересоздаст CNPG managed roles,
 rw-service имя поменяется — обновить values затронутых сервисов) — либо
 восстановить под старым именем после удаления погибшего Cluster CR.
@@ -166,8 +167,7 @@ restore Vault (§2) и Postgres (§1) — в этом порядке, т.к. ESO
 1. `terraform apply` (+ `bootstrap_argocd=true`) — голый кластер + ArgoCD.
 2. Vault restore (§2) + unseal → ESO оживает.
 3. ArgoCD синкает платформу из этого репо.
-4. Postgres restore (§1) — пока бэкапы в MinIO, этот шаг возможен только если
-   PVC MinIO уцелел (см. Known gap).
+4. Postgres restore (§1) из R2.
 5. Прогнать smoke: mctl-api `/healthz`, деплой тестового сервиса.
 
 ## Журнал drill'ов

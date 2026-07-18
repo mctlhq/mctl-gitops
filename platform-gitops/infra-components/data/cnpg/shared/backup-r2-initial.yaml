@@ -1,0 +1,12 @@
+# One-shot base backup so the R2 object store has a restorable base
+# immediately after the MinIO→R2 switch, instead of waiting for the next
+# 02:00 ScheduledBackup (WAL archiving alone can't seed recovery).
+# Harmless once completed; remove after the first scheduled R2 backup lands.
+apiVersion: postgresql.cnpg.io/v1
+kind: Backup
+metadata:
+  name: shared-pg-r2-initial
+spec:
+  cluster:
+    name: shared-pg
+  target: prefer-standby
