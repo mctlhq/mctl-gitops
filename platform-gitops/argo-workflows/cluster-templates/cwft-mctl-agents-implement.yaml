@@ -359,8 +359,11 @@ spec:
           # target repo's build as a sanity check; `go build ./...` on a
           # large Go service (e.g. mctl-telegram + gotd/td) on top of the
           # Claude SDK process exceeded 4Gi and the container was OOMKilled.
+          # cpu bumped 2000m -> 3000m: observed pegged at the 2-core limit
+          # during issue-283's run (Go toolchain bootstrap + SDK process
+          # contending for CPU), same profile as an earlier real stall.
           requests: { cpu: 200m, memory: 1Gi }
-          limits:   { cpu: 2000m, memory: 8Gi }
+          limits:   { cpu: 3000m, memory: 8Gi }
         volumeMounts:
           - name: workdir
             mountPath: /workdir
