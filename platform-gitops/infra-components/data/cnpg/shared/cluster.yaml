@@ -33,7 +33,10 @@ spec:
         maxParallel: 2
       data:
         compression: gzip
-    retentionPolicy: "3d"
+    # 14d: 3d left no margin to notice data loss that survives a weekend or
+    # a bad migration discovered late. WAL+base are gzip'd; 9 small tenant DBs
+    # fit comfortably in MinIO at this window.
+    retentionPolicy: "14d"
     target: prefer-standby
 
   affinity:

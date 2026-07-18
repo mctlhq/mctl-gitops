@@ -29,6 +29,10 @@ jobs:
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       TF_VAR_hcloud_token: ${{ secrets.HCLOUD_TOKEN }}
+      # etcd S3 snapshots reuse the R2 token; it must also grant access to
+      # the mctl-etcd-snapshots bucket
+      TF_VAR_etcd_s3_access_key: ${{ secrets.R2_ACCESS_KEY_ID }}
+      TF_VAR_etcd_s3_secret_key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
     
     steps:
       - name: Checkout

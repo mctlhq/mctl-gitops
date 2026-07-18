@@ -16,6 +16,7 @@ Uses the [`kube-hetzner`](https://github.com/kube-hetzner/terraform-hcloud-kube-
 | Ingress | Traefik |
 | OS | openSUSE MicroOS (immutable; OS auto-upgrade **disabled** — single CP, see kube.tf) |
 | Module version | 2.19.1 (pinned in `kube.tf`) |
+| etcd snapshots | every 6h → R2 bucket `mctl-etcd-snapshots` (56 kept = 14 days) |
 
 ## Prerequisites
 
@@ -27,6 +28,10 @@ Uses the [`kube-hetzner`](https://github.com/kube-hetzner/terraform-hcloud-kube-
   export AWS_SECRET_ACCESS_KEY=...
   ```
 - SSH key at `~/.ssh/id_ed25519`
+- For etcd S3 snapshots: `TF_VAR_etcd_s3_access_key` / `TF_VAR_etcd_s3_secret_key`
+  (R2 token must also cover the `mctl-etcd-snapshots` bucket — create it once in
+  the Cloudflare dashboard; left unset, snapshots simply stay disabled).
+  Restore procedure: `docs/runbooks/restore.md` at the repo root.
 
 ## First-time setup
 
