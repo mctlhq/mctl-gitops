@@ -17,7 +17,11 @@ spec:
           vmsingle:
             enabled: true
             spec:
-              retentionPeriod: "3d"
+              # Raised 3d→14d on 2026-07-18: the mctl-agent resource
+              # optimizer needs a 14-day observation window to compute
+              # right-sizing recommendations directly from VM history
+              # (its own SQLite/PG rollups only accumulate going forward).
+              retentionPeriod: "14d"
               resources:
                 requests:
                   cpu: 100m
@@ -37,7 +41,12 @@ spec:
                 accessModes: ["ReadWriteOnce"]
                 resources:
                   requests:
-                    storage: 10Gi
+                    # Sized 25Gi for the 14d retention (~4.7x the 3d data
+                    # volume that fit in 10Gi). Expansion needs the storage
+                    # class to allow volume expansion; if the PVC resize is
+                    # rejected, VM still runs — it drops oldest data at the
+                    # disk limit. vmbackup R2 size grows accordingly.
+                    storage: 25Gi
               # vmbackup sidecar — backs up to Cloudflare R2 daily
               extraContainers:
                 - name: vmbackup

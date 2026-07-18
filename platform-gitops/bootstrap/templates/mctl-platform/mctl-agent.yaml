@@ -86,6 +86,18 @@ spec:
           # mctl-api as of mctl-agent 1.14.1). ALERTMANAGER_URL defaults to the
           # in-cluster vmalertmanager service and is left on that default.
           AM_RECONCILE_ENABLED: "true"
+          # Resource optimizer (mctl Optimize): the collector starts
+          # accumulating hourly usage rollups immediately (read-only —
+          # no side effects), while OPTIMIZER_DRY_RUN keeps the daily
+          # recommendation pass Telegram-only. Flip dry-run to "false" in
+          # a separate PR once ≥7d of rollups exist and the dry-run
+          # recommendations look sane; widen the allowlist after the
+          # first SUCCESS verdict. VICTORIA_METRICS_URL is left on the
+          # in-cluster vmsingle default. Optimizer PRs use agent/optimize/*
+          # branches, which stay review-gated (claude/* would auto-merge).
+          OPTIMIZER_ENABLED: "true"
+          OPTIMIZER_DRY_RUN: "true"
+          OPTIMIZER_TENANT_ALLOWLIST: "labs"
           DATABASE_URL: "postgresql://$(DB_USER):$(DB_PASSWORD)@shared-pg-rw.platform-db.svc:5432/mctl-agent"
         envFrom:
           - secretRef:
