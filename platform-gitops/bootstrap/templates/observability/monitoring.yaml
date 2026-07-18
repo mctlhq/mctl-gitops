@@ -41,12 +41,14 @@ spec:
                 accessModes: ["ReadWriteOnce"]
                 resources:
                   requests:
-                    # Sized 25Gi for the 14d retention (~4.7x the 3d data
-                    # volume that fit in 10Gi). Expansion needs the storage
-                    # class to allow volume expansion; if the PVC resize is
-                    # rejected, VM still runs — it drops oldest data at the
-                    # disk limit. vmbackup R2 size grows accordingly.
-                    storage: 25Gi
+                    # Deliberately kept at 10Gi with the 14d retention: 3d
+                    # of data used only a fraction of this volume, and the
+                    # optimizer's own rollup store shrinks how much VM
+                    # history matters over time. If 14d outgrows the disk,
+                    # VMSingle stops ingesting (read-only) rather than
+                    # crashing — watch vm_free_disk_space_bytes before
+                    # deciding to pay for a bigger volume.
+                    storage: 10Gi
               # vmbackup sidecar — backs up to Cloudflare R2 daily
               extraContainers:
                 - name: vmbackup
