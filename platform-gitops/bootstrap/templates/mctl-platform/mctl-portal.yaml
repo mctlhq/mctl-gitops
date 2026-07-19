@@ -21,6 +21,7 @@ spec:
         AUTH_GITHUB_CLIENT_SECRET: "{{ `{{ .client_secret }}` }}"
         OIDC_CLIENT_ID: "{{ `{{ .oidc_client_id }}` }}"
         OIDC_CLIENT_SECRET: "{{ `{{ .oidc_client_secret }}` }}"
+        OIDC_RULES_CLIENT_SECRET: "{{ `{{ .rules_oidc_client_secret }}` }}"
         GITHUB_APP_ID: "{{ `{{ .app_id }}` }}"
         GITHUB_APP_CLIENT_ID: "{{ `{{ .client_id }}` }}"
         GITHUB_APP_CLIENT_SECRET: "{{ `{{ .client_secret }}` }}"
@@ -55,6 +56,13 @@ spec:
       remoteRef:
         key: platform/backstage/github-oauth
         property: client-secret
+    # Shared with the mctl-rules app (same Vault secret both sides of the
+    # OIDC client). Must exist in Vault BEFORE this file merges, or the
+    # whole backstage-oauth ExternalSecret stops syncing.
+    - secretKey: rules_oidc_client_secret
+      remoteRef:
+        key: teams/labs/mctl-rules
+        property: OIDC_CLIENT_SECRET
     - secretKey: app_id
       remoteRef:
         key: platform/github-app
@@ -347,6 +355,12 @@ spec:
                   redirectUris:
                     - https://ops.mctl.ai/api/dex/callback
                     - https://ops.mctl.ai/api/dex/callback
+                # mctl-rules (rules.mctl.ai) — confidential client + PKCE S256
+                - clientId: mctl-rules
+                  clientSecret: ${OIDC_RULES_CLIENT_SECRET}
+                  redirectUris:
+                    - https://rules.mctl.ai/api/auth/callback
+                    - https://labs-mctl-rules.mctl.ai/api/auth/callback
             resourceUsage:
               kubeConfigType: token
               kubeApiUrl: https://kubernetes.default.svc
