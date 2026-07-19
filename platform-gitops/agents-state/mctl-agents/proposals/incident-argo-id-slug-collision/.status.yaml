@@ -1,0 +1,4 @@
+status: accepted
+updated_at: 2026-07-19T18:51:32Z
+updated_by: _incident-responder
+notes: "auto-accepted: diagnosis from mctl incident argo-mctl-agents-incidents-1784483100-1784483248 (+4 duplicate occurrences of the same root cause). Slug deliberately does not follow the incident_id[:8] convention -- doing so would reproduce the exact collision bug being reported (see design.md)."
