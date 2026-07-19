@@ -1,0 +1,4 @@
+status: accepted
+updated_at: 2026-07-19T19:20:24Z
+updated_by: _incident-responder
+notes: "auto-accepted: diagnosis from mctl incident argo-mctl-agents-run-f868212c-1784381073; duplicate of already-tracked issue in mctl-gitops/proposals/incident-argo-mct (in-progress), no independent fix action"
