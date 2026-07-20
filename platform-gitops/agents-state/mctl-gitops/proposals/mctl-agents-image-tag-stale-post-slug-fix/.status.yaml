@@ -1,4 +1,4 @@
 status: accepted
-updated_at: 2026-07-19T23:47:00Z
-updated_by: _incident-responder
-notes: "auto-accepted: diagnosis from mctl incidents argo-mctl-agents-incidents-1784501100-1784501253 (+4 duplicates) — follow-up to merged PR #61 (incident-argo-id-slug-collision); image tag deploy step (task 6 of that proposal) was never done"
+updated_at: '2026-07-20T00:06:21Z'
+updated_by: mctl-agents[bot]
+notes: implementer produced no commits; reverted to accepted
