@@ -110,7 +110,13 @@ spec:
                       || echo "telegram notify failed; continuing"
                   }
 
-                  WORKFLOWS=$(kubectl get workflows -n "$NS" -o json | jq -r \
+                  WF_LIST_FILE=/tmp/workflows.json
+                  if ! kubectl get workflows -n "$NS" -o json > "$WF_LIST_FILE"; then
+                    echo "MUTEX_FORENSIC_SCAN_ERROR stage=list-workflows"
+                    exit 1
+                  fi
+
+                  WORKFLOWS=$(jq -r \
                     --arg lock "$LOCK" \
                     --argjson now "$NOW" \
                     --argjson cutoff "$CUTOFF" '
@@ -130,7 +136,7 @@ spec:
                         ] as $blocked
                       | select(($blocked | length) > 0)
                       | .metadata.name
-                    ')
+                    ' "$WF_LIST_FILE")
 
                   [ -n "$WORKFLOWS" ] || exit 0
 
@@ -144,6 +150,27 @@ spec:
                     WF_FILE="/tmp/workflow-${workflow}.json"
                     if ! kubectl get workflow -n "$NS" "$workflow" -o json > "$WF_FILE"; then
                       echo "MUTEX_FORENSIC_CAPTURE_ERROR workflow=${workflow} stage=get-workflow"
+                      rm -f "$WF_FILE"
+                      continue
+                    fi
+
+                    if ! still_waiting=$(jq -r --arg lock "$LOCK" '
+                      [
+                        (.status.nodes // {}
+                          | to_entries[]
+                          | .value
+                          | select((.phase // "") == "Pending")
+                          | select((.message // "") | contains($lock))
+                        )
+                      ]
+                      | length
+                    ' "$WF_FILE"); then
+                      echo "MUTEX_FORENSIC_CAPTURE_ERROR workflow=${workflow} stage=recheck-wait"
+                      rm -f "$WF_FILE"
+                      continue
+                    fi
+                    if [ "$still_waiting" -eq 0 ]; then
+                      echo "MUTEX_FORENSIC_RESOLVED workflow=${workflow} before_capture=true"
                       rm -f "$WF_FILE"
                       continue
                     fi
@@ -205,11 +232,6 @@ spec:
                         }
                     ' "$WF_FILE"); then
                       echo "MUTEX_FORENSIC_CAPTURE_ERROR workflow=${workflow} stage=node-snapshot"
-                      rm -f "$WF_FILE"
-                      continue
-                    fi
-                    if [ -z "$nodes" ]; then
-                      echo "MUTEX_FORENSIC_RESOLVED workflow=${workflow} before_capture=true"
                       rm -f "$WF_FILE"
                       continue
                     fi
