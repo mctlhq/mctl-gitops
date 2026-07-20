@@ -103,7 +103,7 @@ spec:
                     workflow=$1
                     [ -n "${TG_BOT_TOKEN:-}" ] && [ -n "${TG_CHAT_ID:-}" ] || return 0
                     message="Argo mutex wait >5m: ${workflow} is waiting for ${LOCK}. A forensic snapshot, lock-peer state, Events, and controller-log excerpt were written to Loki. Query: MUTEX_FORENSIC workflow=${workflow}"
-                    curl -s --max-time 10 \
+                    curl --fail --show-error --silent --max-time 10 \
                       "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
                       --data-urlencode "chat_id=${TG_CHAT_ID}" \
                       --data-urlencode "text=${message}" >/dev/null \
@@ -137,65 +137,85 @@ spec:
                   for workflow in $WORKFLOWS; do
                     echo "MUTEX_FORENSIC_BEGIN workflow=${workflow} captured_at=${CAPTURED_AT} lock=${LOCK}"
 
-                    kubectl get workflow -n "$NS" "$workflow" -o json \
-                      | jq -c --arg captured "$CAPTURED_AT" --arg lock "$LOCK" '
-                          {
-                            kind: "argo_mutex_forensic_workflow",
-                            capturedAt: $captured,
-                            lock: $lock,
-                            workflow: {
-                              name: .metadata.name,
-                              uid: .metadata.uid,
-                              resourceVersion: .metadata.resourceVersion,
-                              creationTimestamp: .metadata.creationTimestamp,
-                              labels: .metadata.labels,
-                              annotations: .metadata.annotations
-                            },
-                            spec: {
-                              activeDeadlineSeconds: .spec.activeDeadlineSeconds,
-                              synchronization: .spec.synchronization,
-                              entrypoint: .spec.entrypoint,
-                              onExit: .spec.onExit
-                            },
-                            status: {
-                              phase: .status.phase,
-                              message: .status.message,
-                              startedAt: .status.startedAt,
-                              finishedAt: .status.finishedAt,
-                              synchronization: .status.synchronization
-                            }
-                          }
-                        ' \
-                      | while IFS= read -r snapshot; do
-                          echo "MUTEX_FORENSIC_WORKFLOW workflow=${workflow} payload=${snapshot}"
-                        done
+                    # Capture the Workflow once into a file and derive all core
+                    # records from that exact resourceVersion. Do not annotate on
+                    # a transient API/jq failure or if the mutex wait resolved
+                    # between detection and capture; the next watchdog run may retry.
+                    WF_FILE="/tmp/workflow-${workflow}.json"
+                    if ! kubectl get workflow -n "$NS" "$workflow" -o json > "$WF_FILE"; then
+                      echo "MUTEX_FORENSIC_CAPTURE_ERROR workflow=${workflow} stage=get-workflow"
+                      rm -f "$WF_FILE"
+                      continue
+                    fi
 
-                    kubectl get workflow -n "$NS" "$workflow" -o json \
-                      | jq -c --arg lock "$LOCK" '
-                          (.status.nodes // {})
-                          | to_entries[]
-                          | select(
-                              ((.value.phase // "") == "Pending")
-                              or ((.value.phase // "") == "Running")
-                              or (((.value.message // "") | contains($lock)))
-                            )
-                          | {
-                              id: .key,
-                              name: .value.name,
-                              displayName: .value.displayName,
-                              type: .value.type,
-                              phase: .value.phase,
-                              message: .value.message,
-                              startedAt: .value.startedAt,
-                              finishedAt: .value.finishedAt,
-                              boundaryID: .value.boundaryID,
-                              hostNodeName: .value.hostNodeName,
-                              templateName: .value.templateName
-                            }
-                        ' \
-                      | while IFS= read -r node; do
-                          echo "MUTEX_FORENSIC_NODE workflow=${workflow} payload=${node}"
-                        done
+                    if ! snapshot=$(jq -c --arg captured "$CAPTURED_AT" --arg lock "$LOCK" '
+                      {
+                        kind: "argo_mutex_forensic_workflow",
+                        capturedAt: $captured,
+                        lock: $lock,
+                        workflow: {
+                          name: .metadata.name,
+                          uid: .metadata.uid,
+                          resourceVersion: .metadata.resourceVersion,
+                          creationTimestamp: .metadata.creationTimestamp,
+                          labels: .metadata.labels,
+                          annotations: .metadata.annotations
+                        },
+                        spec: {
+                          activeDeadlineSeconds: .spec.activeDeadlineSeconds,
+                          synchronization: .spec.synchronization,
+                          entrypoint: .spec.entrypoint,
+                          onExit: .spec.onExit
+                        },
+                        status: {
+                          phase: .status.phase,
+                          message: .status.message,
+                          startedAt: .status.startedAt,
+                          finishedAt: .status.finishedAt,
+                          synchronization: .status.synchronization
+                        }
+                      }
+                    ' "$WF_FILE"); then
+                      echo "MUTEX_FORENSIC_CAPTURE_ERROR workflow=${workflow} stage=workflow-snapshot"
+                      rm -f "$WF_FILE"
+                      continue
+                    fi
+                    echo "MUTEX_FORENSIC_WORKFLOW workflow=${workflow} payload=${snapshot}"
+
+                    if ! nodes=$(jq -c --arg lock "$LOCK" '
+                      (.status.nodes // {})
+                      | to_entries[]
+                      | select(
+                          ((.value.phase // "") == "Pending")
+                          or ((.value.phase // "") == "Running")
+                          or (((.value.message // "") | contains($lock)))
+                        )
+                      | {
+                          id: .key,
+                          name: .value.name,
+                          displayName: .value.displayName,
+                          type: .value.type,
+                          phase: .value.phase,
+                          message: .value.message,
+                          startedAt: .value.startedAt,
+                          finishedAt: .value.finishedAt,
+                          boundaryID: .value.boundaryID,
+                          hostNodeName: .value.hostNodeName,
+                          templateName: .value.templateName
+                        }
+                    ' "$WF_FILE"); then
+                      echo "MUTEX_FORENSIC_CAPTURE_ERROR workflow=${workflow} stage=node-snapshot"
+                      rm -f "$WF_FILE"
+                      continue
+                    fi
+                    if [ -z "$nodes" ]; then
+                      echo "MUTEX_FORENSIC_RESOLVED workflow=${workflow} before_capture=true"
+                      rm -f "$WF_FILE"
+                      continue
+                    fi
+                    printf '%s\n' "$nodes" | while IFS= read -r node; do
+                      echo "MUTEX_FORENSIC_NODE workflow=${workflow} payload=${node}"
+                    done
 
                     # Argo records mutex holders and waiters in each Workflow's
                     # .status.synchronization. Capture every live Workflow that
@@ -218,7 +238,8 @@ spec:
                         ' \
                       | while IFS= read -r peer; do
                           echo "MUTEX_FORENSIC_LOCK_PEER workflow=${workflow} payload=${peer}"
-                        done
+                        done \
+                      || true
 
                     kubectl get events -n "$NS" \
                       --field-selector "involvedObject.kind=Workflow,involvedObject.name=${workflow}" \
@@ -261,6 +282,7 @@ spec:
                         || true
                     done
 
+                    rm -f "$WF_FILE"
                     kubectl annotate workflow -n "$NS" "$workflow" \
                       "mctl.ai/mutex-forensic-captured-at=${CAPTURED_AT}" --overwrite
                     notify "$workflow"
