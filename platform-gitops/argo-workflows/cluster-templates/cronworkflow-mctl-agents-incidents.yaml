@@ -37,7 +37,12 @@ spec:
   # 24 ticks/day * 7 days of success history
   successfulJobsHistoryLimit: 168
   failedJobsHistoryLimit: 48
-  suspend: false
+  # TEMP: org-wide Claude monthly spend cap escalated to a 7-day rate-limit
+  # window (overageDisabledReason=org_level_disabled_until), resetting
+  # 2026-07-24T03:00:00Z. Runs now burn real cost mid-session before hitting
+  # the wall instead of failing instantly. Un-suspend after confirming the
+  # cap actually cleared. See memory: mctl-agents-crons-suspended-spend-cap.
+  suspend: true
   workflowSpec:
     workflowTemplateRef:
       name: mctl-agents-run
