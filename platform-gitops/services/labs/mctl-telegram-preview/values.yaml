@@ -7,7 +7,7 @@
 
 image:
   repository: ghcr.io/mctlhq/mctl-telegram
-  tag: "main-33e2375"
+  tag: "main-5133a87"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
