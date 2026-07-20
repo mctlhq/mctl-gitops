@@ -1,0 +1,222 @@
+# Forensic watchdog for the shared mctl-gitops write mutex.
+#
+# Incident #593 could not be root-caused because affected Workflow objects and
+# controller container logs were inspected after the useful window had passed.
+# This CronJob does not release locks or mutate workflow execution. It detects a
+# Workflow node waiting on mctl-gitops-main-writes for more than five minutes,
+# writes a compact structured snapshot plus nearby workflow-controller logs to
+# stdout (and therefore Loki), then annotates that Workflow so it is captured
+# only once. Each new stuck Workflow still produces its own snapshot.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: argo-mutex-forensics-watchdog
+  namespace: argo-workflows
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: argo-mutex-forensics-watchdog
+  namespace: argo-workflows
+rules:
+  - apiGroups: ["argoproj.io"]
+    resources: ["workflows"]
+    verbs: ["get", "list", "patch"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argo-mutex-forensics-watchdog
+  namespace: argo-workflows
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: argo-mutex-forensics-watchdog
+subjects:
+  - kind: ServiceAccount
+    name: argo-mutex-forensics-watchdog
+    namespace: argo-workflows
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: argo-mutex-forensics-watchdog
+  namespace: argo-workflows
+spec:
+  schedule: "*/2 * * * *"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 60
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 120
+      ttlSecondsAfterFinished: 600
+      template:
+        spec:
+          serviceAccountName: argo-mutex-forensics-watchdog
+          restartPolicy: Never
+          containers:
+            - name: watchdog
+              # Reuse the cluster's proven kubectl+jq image (also used by the
+              # PVC/PV janitors); avoid retired bitnami/kubectl tags.
+              image: alpine/k8s:1.33.12
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 32Mi
+                limits:
+                  cpu: 100m
+                  memory: 128Mi
+              env:
+                - name: TG_BOT_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: mctl-agents-secrets
+                      key: telegram-bot-token
+                      optional: true
+                - name: TG_CHAT_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: mctl-agents-secrets
+                      key: telegram-chat-id
+                      optional: true
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -eu
+
+                  NS=argo-workflows
+                  LOCK=mctl-gitops-main-writes
+                  MIN_WAIT_SECONDS=300
+                  NOW=$(date -u +%s)
+                  CUTOFF=$((NOW - MIN_WAIT_SECONDS))
+                  CAPTURED_AT=$(date -u +%FT%TZ)
+
+                  notify() {
+                    workflow=$1
+                    [ -n "${TG_BOT_TOKEN:-}" ] && [ -n "${TG_CHAT_ID:-}" ] || return 0
+                    message="Argo mutex wait >5m: ${workflow} is waiting for ${LOCK}. A forensic snapshot and controller-log excerpt were written to Loki. Query: MUTEX_FORENSIC workflow=${workflow}"
+                    curl -s --max-time 10 \
+                      "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+                      --data-urlencode "chat_id=${TG_CHAT_ID}" \
+                      --data-urlencode "text=${message}" >/dev/null \
+                      || echo "telegram notify failed; continuing"
+                  }
+
+                  WORKFLOWS=$(kubectl get workflows -n "$NS" -o json | jq -r \
+                    --arg lock "$LOCK" \
+                    --argjson now "$NOW" \
+                    --argjson cutoff "$CUTOFF" '
+                      .items[]
+                      | . as $wf
+                      | select((.metadata.annotations["mctl.ai/mutex-forensic-captured-at"] // "") == "")
+                      | [
+                          (.status.nodes // {}
+                            | to_entries[]
+                            | .value
+                            | select((.phase // "") == "Pending")
+                            | select((.message // "") | contains($lock))
+                            | (.startedAt // $wf.status.startedAt // $wf.metadata.creationTimestamp) as $started
+                            | ($started | fromdateiso8601?) as $started_epoch
+                            | select(($started_epoch // $now) <= $cutoff)
+                          )
+                        ] as $blocked
+                      | select(($blocked | length) > 0)
+                      | .metadata.name
+                    ')
+
+                  [ -n "$WORKFLOWS" ] || exit 0
+
+                  for workflow in $WORKFLOWS; do
+                    echo "MUTEX_FORENSIC_BEGIN workflow=${workflow} captured_at=${CAPTURED_AT} lock=${LOCK}"
+
+                    kubectl get workflow -n "$NS" "$workflow" -o json \
+                      | jq -c --arg captured "$CAPTURED_AT" --arg lock "$LOCK" '
+                          {
+                            kind: "argo_mutex_forensic_workflow",
+                            capturedAt: $captured,
+                            lock: $lock,
+                            workflow: {
+                              name: .metadata.name,
+                              uid: .metadata.uid,
+                              resourceVersion: .metadata.resourceVersion,
+                              creationTimestamp: .metadata.creationTimestamp,
+                              labels: .metadata.labels,
+                              annotations: .metadata.annotations
+                            },
+                            spec: {
+                              activeDeadlineSeconds: .spec.activeDeadlineSeconds,
+                              synchronization: .spec.synchronization,
+                              entrypoint: .spec.entrypoint,
+                              onExit: .spec.onExit
+                            },
+                            status: {
+                              phase: .status.phase,
+                              message: .status.message,
+                              startedAt: .status.startedAt,
+                              finishedAt: .status.finishedAt,
+                              synchronization: .status.synchronization
+                            }
+                          }
+                        ' \
+                      | while IFS= read -r snapshot; do
+                          echo "MUTEX_FORENSIC_WORKFLOW workflow=${workflow} payload=${snapshot}"
+                        done
+
+                    kubectl get workflow -n "$NS" "$workflow" -o json \
+                      | jq -c --arg lock "$LOCK" '
+                          (.status.nodes // {})
+                          | to_entries[]
+                          | select(
+                              ((.value.phase // "") == "Pending")
+                              or ((.value.phase // "") == "Running")
+                              or (((.value.message // "") | contains($lock)))
+                            )
+                          | {
+                              id: .key,
+                              name: .value.name,
+                              displayName: .value.displayName,
+                              type: .value.type,
+                              phase: .value.phase,
+                              message: .value.message,
+                              startedAt: .value.startedAt,
+                              finishedAt: .value.finishedAt,
+                              boundaryID: .value.boundaryID,
+                              hostNodeName: .value.hostNodeName,
+                              templateName: .value.templateName
+                            }
+                        ' \
+                      | while IFS= read -r node; do
+                          echo "MUTEX_FORENSIC_NODE workflow=${workflow} payload=${node}"
+                        done
+
+                    for pod in $(kubectl get pods -n "$NS" \
+                      -l 'app.kubernetes.io/component=workflow-controller,app.kubernetes.io/name=argo-workflows-workflow-controller' \
+                      -o name 2>/dev/null); do
+                      kubectl logs -n "$NS" "$pod" --since=20m --timestamps 2>/dev/null \
+                        | grep -Ei "${workflow}|${LOCK}|mutex|semaphore|synchronization" \
+                        | tail -n 500 \
+                        | while IFS= read -r line; do
+                            echo "MUTEX_FORENSIC_CONTROLLER workflow=${workflow} pod=${pod} ${line}"
+                          done \
+                        || true
+                      kubectl logs -n "$NS" "$pod" --previous --since=20m --timestamps 2>/dev/null \
+                        | grep -Ei "${workflow}|${LOCK}|mutex|semaphore|synchronization" \
+                        | tail -n 500 \
+                        | while IFS= read -r line; do
+                            echo "MUTEX_FORENSIC_CONTROLLER_PREVIOUS workflow=${workflow} pod=${pod} ${line}"
+                          done \
+                        || true
+                    done
+
+                    kubectl annotate workflow -n "$NS" "$workflow" \
+                      "mctl.ai/mutex-forensic-captured-at=${CAPTURED_AT}" --overwrite
+                    notify "$workflow"
+                    echo "MUTEX_FORENSIC_END workflow=${workflow} captured_at=${CAPTURED_AT}"
+                  done
