@@ -1,4 +1,4 @@
 status: accepted
-updated_at: 2026-07-20T04:49:44Z
-updated_by: _incident-responder
-notes: "auto-accepted: diagnosis from mctl incident argo-mctl-agents-incidents-1784515500-1784515683 -- duplicate of incident-mctl-agents-oauth-quota-exhaustion / incident-argo-mct, no independent fix"
+updated_at: '2026-07-20T05:04:35Z'
+updated_by: mctl-agents[bot]
+notes: implementer produced no commits; reverted to accepted
