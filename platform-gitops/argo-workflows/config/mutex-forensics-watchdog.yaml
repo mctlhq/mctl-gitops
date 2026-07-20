@@ -1,10 +1,11 @@
 # Forensic watchdog for the shared mctl-gitops write mutex.
 #
-# Incident #593 could not be root-caused because affected Workflow objects and
-# controller container logs were inspected after the useful window had passed.
-# This CronJob does not release locks or mutate workflow execution. It detects a
-# Workflow node waiting on mctl-gitops-main-writes for more than five minutes,
-# writes a compact structured snapshot plus nearby workflow-controller logs to
+# Incident #593 could not be root-caused because affected Workflow objects,
+# Kubernetes Events, and controller container logs were inspected after the
+# useful window had passed. This CronJob does not release locks or mutate
+# workflow execution. It detects a Workflow node waiting on
+# mctl-gitops-main-writes for more than five minutes, writes a compact structured
+# snapshot plus lock peers, Events, and nearby workflow-controller logs to
 # stdout (and therefore Loki), then annotates that Workflow so it is captured
 # only once. Each new stuck Workflow still produces its own snapshot.
 apiVersion: v1
@@ -23,7 +24,7 @@ rules:
     resources: ["workflows"]
     verbs: ["get", "list", "patch"]
   - apiGroups: [""]
-    resources: ["pods", "pods/log"]
+    resources: ["pods", "pods/log", "events"]
     verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -101,7 +102,7 @@ spec:
                   notify() {
                     workflow=$1
                     [ -n "${TG_BOT_TOKEN:-}" ] && [ -n "${TG_CHAT_ID:-}" ] || return 0
-                    message="Argo mutex wait >5m: ${workflow} is waiting for ${LOCK}. A forensic snapshot and controller-log excerpt were written to Loki. Query: MUTEX_FORENSIC workflow=${workflow}"
+                    message="Argo mutex wait >5m: ${workflow} is waiting for ${LOCK}. A forensic snapshot, lock-peer state, Events, and controller-log excerpt were written to Loki. Query: MUTEX_FORENSIC workflow=${workflow}"
                     curl -s --max-time 10 \
                       "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
                       --data-urlencode "chat_id=${TG_CHAT_ID}" \
@@ -195,6 +196,51 @@ spec:
                       | while IFS= read -r node; do
                           echo "MUTEX_FORENSIC_NODE workflow=${workflow} payload=${node}"
                         done
+
+                    # Argo records mutex holders and waiters in each Workflow's
+                    # .status.synchronization. Capture every live Workflow that
+                    # references this lock so the holder/queue can be reconstructed.
+                    kubectl get workflows -n "$NS" -o json \
+                      | jq -c --arg lock "$LOCK" '
+                          .items[]
+                          | select(
+                              ((.status.synchronization // {} | tostring) | contains($lock))
+                              or (((.status.nodes // {} | tostring) | contains($lock)))
+                            )
+                          | {
+                              name: .metadata.name,
+                              uid: .metadata.uid,
+                              phase: .status.phase,
+                              startedAt: .status.startedAt,
+                              finishedAt: .status.finishedAt,
+                              synchronization: .status.synchronization
+                            }
+                        ' \
+                      | while IFS= read -r peer; do
+                          echo "MUTEX_FORENSIC_LOCK_PEER workflow=${workflow} payload=${peer}"
+                        done
+
+                    kubectl get events -n "$NS" \
+                      --field-selector "involvedObject.kind=Workflow,involvedObject.name=${workflow}" \
+                      -o json 2>/dev/null \
+                      | jq -c '
+                          .items[]
+                          | {
+                              type: .type,
+                              reason: .reason,
+                              message: .message,
+                              count: .count,
+                              firstTimestamp: .firstTimestamp,
+                              lastTimestamp: .lastTimestamp,
+                              eventTime: .eventTime,
+                              reportingController: .reportingController,
+                              source: .source
+                            }
+                        ' \
+                      | while IFS= read -r event; do
+                          echo "MUTEX_FORENSIC_EVENT workflow=${workflow} payload=${event}"
+                        done \
+                      || true
 
                     for pod in $(kubectl get pods -n "$NS" \
                       -l 'app.kubernetes.io/component=workflow-controller,app.kubernetes.io/name=argo-workflows-workflow-controller' \
