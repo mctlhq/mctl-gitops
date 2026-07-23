@@ -223,6 +223,10 @@ spec:
           # clones would land on the pod's ephemeral storage and the
           # 8Gi PVC sizing would be ineffective for multi-repo runs.
           mkdir -p /workdir/clones
+          # Conservative default in case run-shepherd is killed before it can
+          # write its own status (e.g. OOMKilled) — treated as "not
+          # succeeded" by notify-telegram's resolve gate below.
+          echo -n "unknown" > /workdir/shepherd_status
           echo "✓ gitops cloned"
         volumeMounts:
           - name: workdir
@@ -279,7 +283,24 @@ spec:
             printf '→'
             printf ' %s' "$@"
             printf '\n'
-            exec "$@"
+            # NOT `exec` — the parent step has continueOn.failed/error:true,
+            # so a run-shepherd crash here is swallowed by the workflow's
+            # overall status and a later Succeeded commit-and-push +
+            # post-deploy-verify can leave WORKFLOW_STATUS=Succeeded even
+            # though this attempt's own merge/review-fix never actually
+            # completed (Codex P1 on PR #613, round 3). Capturing the real
+            # exit code to /workdir/shepherd_status lets notify-telegram
+            # tell a masked run-shepherd failure apart from a genuine clean
+            # run — same pattern as poller_status on cwft-mctl-agents-
+            # issue-poll's run-poller.
+            "$@"
+            RC=$?
+            if [ "$RC" -eq 0 ]; then
+              echo -n "succeeded" > /workdir/shepherd_status
+            else
+              echo -n "failed" > /workdir/shepherd_status
+            fi
+            exit "$RC"
         env:
           # Workflow params injected as env vars so the shell layer
           # can quote them safely. Direct `workflow.parameters.*`
@@ -662,6 +683,12 @@ spec:
             value: "{{workflow.parameters.service}}"
           - name: WORKFLOW_SLUG
             value: "{{workflow.parameters.slug}}"
+          # Same param/env-var naming as run-shepherd's WORKFLOW_DRY_RUN —
+          # used below to keep a dry_run=true run (decide()-only, no
+          # merge/review-fix subprocess) from resolving a REAL incident for
+          # the same scope (Codex P2 on PR #613, round 3).
+          - name: WORKFLOW_DRY_RUN
+            value: "{{workflow.parameters.dry_run}}"
           - name: WORKFLOW_NAME
             value: "{{workflow.name}}"
           - name: WORKFLOW_DURATION
@@ -694,6 +721,16 @@ spec:
           # post-deploy-verify for the false-resolve scenario this closes
           # (Codex P1 on PR #613).
           WORKFLOW_DEGRADED_APPS_UNFILTERED=$(cat /workdir/degraded_unfiltered.txt 2>/dev/null || echo "")
+
+          # run-shepherd's own truthful exit status ("succeeded"/"failed"/
+          # "unknown") — NOT the same thing as WORKFLOW_STATUS. The
+          # shepherd-proposals DAG runs run-shepherd with
+          # continueOn.failed/error, so a run-shepherd crash followed by a
+          # successful commit-and-push + post-deploy-verify still leaves
+          # WORKFLOW_STATUS=Succeeded even though the shepherd attempt
+          # itself never completed. See run-shepherd for where this is
+          # written.
+          SHEPHERD_STATUS=$(cat /workdir/shepherd_status 2>/dev/null || echo "unknown")
 
           # Stable dedup key for this recurring job. Two failures of the same
           # {service, slug} scope collapse into one open incident instead of
@@ -781,6 +818,22 @@ spec:
             # manual close later; a false resolve here would hide an
             # ongoing outage (Codex P1 on PR #613).
             echo "⚠️  Skipping resolve: still Degraded (unfiltered): ${WORKFLOW_DEGRADED_APPS_UNFILTERED}"
+          elif [ "$WORKFLOW_STATUS" = "Succeeded" ] && [ "$SHEPHERD_STATUS" != "succeeded" ] && [ -n "$MCTL_TOKEN" ]; then
+            # WORKFLOW_STATUS=Succeeded is not trustworthy on its own here —
+            # continueOn masks a run-shepherd crash (see run-shepherd).
+            # Don't resolve: a missed resolve just needs a manual close
+            # later; a false resolve here would hide a shepherd attempt
+            # that crashed before actually merging/fixing anything (Codex
+            # P1 on PR #613, round 3).
+            echo "⚠️  Skipping resolve: run-shepherd status was '${SHEPHERD_STATUS}', not a confirmed success."
+          elif [ "$WORKFLOW_STATUS" = "Succeeded" ] && [ "$WORKFLOW_DRY_RUN" = "true" ] && [ -n "$MCTL_TOKEN" ]; then
+            # dry_run=true only evaluates decide() and prints would-be
+            # transitions — no merge/review-fix subprocess ever ran, so a
+            # healthy post-deploy check here proves nothing about whether a
+            # REAL failed run for this scope was actually fixed. Resolving
+            # here would clear a real incident without anything having been
+            # done about it (Codex P2 on PR #613, round 3).
+            echo "ℹ️  Skipping resolve: dry_run=true run — no real action was taken for this scope."
           elif [ "$WORKFLOW_STATUS" = "Succeeded" ] && [ -n "$MCTL_TOKEN" ]; then
             # Close the loop: this scope's shepherd run finally succeeded
             # AND no app in the cluster is currently Degraded, so resolve
