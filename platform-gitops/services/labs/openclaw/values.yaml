@@ -1362,6 +1362,14 @@ extraIngresses:
           - labs-openclaw.mctl.ai
           - labs-openclaw.mctl.me
 
+# Explicit empty extraObjects so Helm/ArgoCD prunes the previously rendered
+# ServiceMonitor (labs-openclaw-codex-metrics) that was created when
+# replicaCount was 1. With replicaCount: 0 the Service has zero endpoints
+# and vmagent raised a permanent ScrapePoolHasNoTargets alert (incident
+# 6c4c2e3b). Restore the ServiceMonitor block below together with
+# `replicaCount: 1` when labs openclaw is brought back online.
+extraObjects: []
+
 # Prometheus scrape config for the openclaw `/metrics` endpoint added in
 # mctl-openclaw#19 (codex token usage counters). Served on the same `http`
 # port (18789) as the gateway HTTP/UI, so we reuse the existing Service
