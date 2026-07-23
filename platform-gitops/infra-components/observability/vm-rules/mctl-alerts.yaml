@@ -247,3 +247,58 @@ spec:
             description: >-
               MinIO write errors imminent. Free space immediately or expand
               PVC.
+
+    # mctl-agents cron pipeline staleness. Catches the OAuth quota-exhaustion
+    # failure mode where both claude-code-oauth-token and its fallback
+    # (claude-code-oauth-token-2) are exhausted/unseeded, which otherwise
+    # hard-fails every tick silently for 14+ hours with no alert (see
+    # platform-gitops/agents-state/mctl-gitops/proposals/
+    # incident-mctl-agents-oauth-quota-exhaustion/design.md).
+    #
+    # CONFIDENCE: MEDIUM, deliberately scoped conservatively — read this
+    # before relying on it in a real incident.
+    # `argo_workflows_total_count{phase="Succeeded"}` is a real, live-scraped
+    # metric: confirmed via the existing "Workflow Completions" panel in
+    # infra-components/observability/grafana-dashboards/
+    # mctl-platform-dashboard-configmap.yaml, which already queries
+    # `increase(argo_workflows_total_count{phase="..."}[10m])`. The
+    # originally-drafted metric name (`argo_workflows_completion_time_seconds`)
+    # could not be confirmed to exist anywhere in this repo or the argo-helm
+    # chart config and was not used. That dashboard panel also does NOT
+    # filter by workflow-template name, and this metric's label set could
+    # not be confirmed to carry a per-CronWorkflow-template label (e.g.
+    # `name`) from static repo inspection alone — no kubectl/live-query
+    # access was available. Scoping this alert to
+    # `name=~"mctl-agents-(incidents|implement).*"` as originally drafted
+    # risks the alert silently NEVER firing if that label doesn't exist
+    # (an empty label match yields no series, not a "no successes" value),
+    # which would defeat the entire purpose of this alert without any
+    # visible symptom. To guarantee the alert actually fires on a real
+    # outage, it is deliberately UNSCOPED (cluster-wide): it fires on ANY
+    # 6h window with zero successful Argo Workflow completions anywhere in
+    # this cluster. In practice this cluster's argo-workflows traffic is
+    # overwhelmingly mctl-agents cron ticks, so this should catch the
+    # target failure mode — at the cost of a false negative if an unrelated
+    # one-off workflow (e.g. a manual wft-deploy-service run) happens to
+    # succeed during the outage window. VERIFY against the live
+    # VictoriaMetrics instance whether `argo_workflows_total_count` (or a
+    # newer non-legacy equivalent) carries a `name` label before trusting
+    # this for precise mctl-agents-only diagnosis — if it does, narrow the
+    # selector to `phase="Succeeded",name=~"mctl-agents-(incidents|implement).*"`.
+    - name: mctl.agents-pipeline-health
+      rules:
+        - alert: MctlAgentsPipelineStale
+          expr: |
+            increase(argo_workflows_total_count{phase="Succeeded"}[6h]) == 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: >-
+              No Argo Workflow has completed successfully in 6h — the
+              mctl-agents cron pipelines (mctl-agents-incidents /
+              mctl-agents-implement) may be stuck. Check Vault
+              secret/platform/mctl-agents: claude-code-oauth-token may be
+              expired/exhausted and claude-code-oauth-token-2 may be
+              unseeded (see
+              platform-gitops/argo-workflows/secrets/mctl-agents-secrets.yaml)
