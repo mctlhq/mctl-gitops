@@ -511,12 +511,22 @@ spec:
         env:
           - name: STARTED_AT
             value: "{{inputs.parameters.started_at}}"
+        # Unfiltered-degraded signal below travels via /workdir/degraded_unfiltered.txt
+        # on the shared PVC, NOT a second workflow.outputs.parameters entry — see the
+        # note on cwft-mctl-agents-issue-poll's commit-and-push step for why a second
+        # global output parameter sourced from a different step broke Argo's static
+        # validator workflow-wide (2026-07-06 incident). This step and notify-telegram
+        # are different steps, so the same landmine applies here.
+        volumeMounts:
+          - name: workdir
+            mountPath: /workdir
         source: |
           set -uo pipefail
 
-          # Always create the output file first so the workflow-level
+          # Always create the output files first so the workflow-level
           # output parameter resolves even on early-exit paths.
           : > /tmp/degraded.txt
+          : > /workdir/degraded_unfiltered.txt
 
           # 5-min sleep ≈ ArgoCD's default app reconcile interval (180s)
           # plus a buffer for the per-resource health re-evaluation pass
@@ -596,6 +606,21 @@ spec:
           fi
           echo "✓ No persistent Degraded apps detected after shepherd run."
 
+          # Unfiltered snapshot (no lastTransitionTime threshold) of every
+          # currently-Degraded app, using the freshest kubectl read we have
+          # (post-grace RAW2 if the 120s grace check ran, else RAW). This
+          # step can pass above purely because a Degraded app's transition
+          # predates THIS run's threshold — that app would never show up
+          # in $BAD/$BAD2 again even though it never recovered. onExit
+          # uses this unfiltered list, not degraded_apps, to decide whether
+          # it's safe to resolve the shepherd fingerprint.
+          FRESH="${RAW2:-$RAW}"
+          printf '%s' "$FRESH" | jq -r '
+            .items[]
+            | select(.status.health.status == "Degraded")
+            | "\(.metadata.namespace)/\(.metadata.name)"
+          ' | tr '\n' ' ' > /workdir/degraded_unfiltered.txt
+
     # ── 5. Telegram notification (onExit) ──────────────────────────────────
     # Same pattern as cwft-mctl-agents-run / cwft-mctl-agents-implement.
     - name: notify-telegram
@@ -660,6 +685,15 @@ spec:
           # workdir PVC rather than a workflow output parameter — see the
           # note on the shepherd-proposals template's degraded_apps output.
           WORKFLOW_ACTIVITY=$(cat /workdir/activity 2>/dev/null || echo "unknown")
+
+          # Unfiltered (no time-threshold) snapshot of currently-Degraded
+          # apps, written by post-deploy-verify. Empty means the cluster is
+          # fully healthy; non-empty means at least one app is Degraded
+          # RIGHT NOW even if it's not "newly" so per this run's threshold.
+          # Used below to gate fingerprint resolution — see the note on
+          # post-deploy-verify for the false-resolve scenario this closes
+          # (Codex P1 on PR #613).
+          WORKFLOW_DEGRADED_APPS_UNFILTERED=$(cat /workdir/degraded_unfiltered.txt 2>/dev/null || echo "")
 
           # Stable dedup key for this recurring job. Two failures of the same
           # {service, slug} scope collapse into one open incident instead of
@@ -740,10 +774,18 @@ spec:
               -H "Content-Type: application/json" \
               -H "Authorization: Bearer ${MCTL_TOKEN}" \
               -d "$BODY"
+          elif [ "$WORKFLOW_STATUS" = "Succeeded" ] && [ -n "$WORKFLOW_DEGRADED_APPS_UNFILTERED" ] && [ -n "$MCTL_TOKEN" ]; then
+            # This run succeeded, but the cluster still has Degraded apps
+            # that just predate this run's detection threshold — do NOT
+            # resolve. A missed resolve only means the incident needs a
+            # manual close later; a false resolve here would hide an
+            # ongoing outage (Codex P1 on PR #613).
+            echo "⚠️  Skipping resolve: still Degraded (unfiltered): ${WORKFLOW_DEGRADED_APPS_UNFILTERED}"
           elif [ "$WORKFLOW_STATUS" = "Succeeded" ] && [ -n "$MCTL_TOKEN" ]; then
-            # Close the loop: this scope's shepherd run finally succeeded, so
-            # resolve any open incident sharing this fingerprint. No-op if
-            # none exists.
+            # Close the loop: this scope's shepherd run finally succeeded
+            # AND no app in the cluster is currently Degraded, so resolve
+            # any open incident sharing this fingerprint. No-op if none
+            # exists.
             RESOLVE_BODY=$(jq -nc --arg tenant "admins" --arg fingerprint "$FINGERPRINT" '{tenant: $tenant, fingerprint: $fingerprint}')
             curl -s -o /dev/null -w 'resolve http=%{http_code}\n' \
               -X POST "https://api.mctl.ai/api/v1/incidents/resolve-by-fingerprint" \

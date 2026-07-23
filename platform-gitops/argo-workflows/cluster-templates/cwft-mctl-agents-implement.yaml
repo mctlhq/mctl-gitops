@@ -737,10 +737,19 @@ spec:
               -H "Content-Type: application/json" \
               -H "Authorization: Bearer ${MCTL_TOKEN}" \
               -d "$BODY"
+          elif [ "$WORKFLOW_STATUS" = "Succeeded" ] && [ "$WORKFLOW_ACTIVITY" = "none" ]; then
+            # A "successful" no-op is NOT evidence of recovery: a
+            # force=false run explicitly skips a proposal stuck
+            # in-progress from a previous crashed attempt and still
+            # exits Succeeded. Resolving here would close an incident
+            # for work that was skipped, not fixed (Codex P2 on PR
+            # #613) — leave it open for a force=true re-run or manual
+            # triage instead.
+            echo "ℹ️  Succeeded with no activity — not resolving fingerprint (no confirmed fix)."
           elif [ "$WORKFLOW_STATUS" = "Succeeded" ] && [ -n "$MCTL_TOKEN" ]; then
-            # Close the loop: this scope's implement run finally succeeded,
-            # so resolve any open incident sharing this fingerprint. No-op
-            # if none exists.
+            # Close the loop: this scope's implement run finally succeeded
+            # AND committed real work, so resolve any open incident sharing
+            # this fingerprint. No-op if none exists.
             RESOLVE_BODY=$(jq -nc --arg tenant "admins" --arg fingerprint "$FINGERPRINT" '{tenant: $tenant, fingerprint: $fingerprint}')
             curl -s -o /dev/null -w 'resolve http=%{http_code}\n' \
               -X POST "https://api.mctl.ai/api/v1/incidents/resolve-by-fingerprint" \
