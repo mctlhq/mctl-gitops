@@ -247,3 +247,45 @@ spec:
             description: >-
               MinIO write errors imminent. Free space immediately or expand
               PVC.
+
+    # mctl-agents-run / mctl-agents-implement CronWorkflow health. Both
+    # pipelines share claude-code-oauth-token (see
+    # platform-gitops/argo-workflows/secrets/mctl-agents-secrets.yaml) and only
+    # fall back to claude-code-oauth-token-2 on failure. If the primary token
+    # is exhausted/invalid and the fallback token was never seeded in Vault,
+    # every tick fails fast (~100-210s) with no successful run in between --
+    # this produced 16+ duplicate workflow_failed incidents over 14.5h
+    # straight on 2026-07-16 with no alert ever firing (incident
+    # argo-mctl-agents-incidents-1784168100-1784168441 and its duplicates).
+    #
+    # A last-success-timestamp gauge (e.g. argo_workflows_completion_time_seconds)
+    # does not exist in the Argo Workflows controller's metrics set.
+    # argo_workflows_total_count is the real counter it exposes (labels:
+    # name, namespace, phase; already relied on by
+    # grafana-dashboards/mctl-platform-dashboard-configmap.yaml's "Workflow
+    # Completions" panel), so this is expressed as "at least one Failed
+    # completion in the window with zero Succeeded in that same window"
+    # rather than a staleness-of-last-success gauge.
+    - name: mctl.agents-pipeline-health
+      rules:
+        - alert: MctlAgentsPipelineStale
+          expr: |
+            increase(argo_workflows_total_count{name=~"mctl-agents-(incidents|implement).*", phase="Failed"}[6h]) > 0
+            and
+            increase(argo_workflows_total_count{name=~"mctl-agents-(incidents|implement).*", phase="Succeeded"}[6h]) == 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: >-
+              mctl-agents cron pipeline ({{ $labels.name }}) has failed with
+              no successful run in 6h -- check Vault
+              secret/platform/mctl-agents: claude-code-oauth-token may be
+              expired/exhausted and claude-code-oauth-token-2 may be unseeded
+            description: >-
+              See platform-gitops/argo-workflows/secrets/mctl-agents-secrets.yaml
+              and cwft-mctl-agents-run.yaml / cwft-mctl-agents-implement.yaml
+              for the primary/fallback OAuth token logic this alert guards.
+              mctl-agent cannot self-remediate an expired OAuth token (it is
+              the pipeline that would be down), so this routes straight to
+              telegram, not mctl-agent.
