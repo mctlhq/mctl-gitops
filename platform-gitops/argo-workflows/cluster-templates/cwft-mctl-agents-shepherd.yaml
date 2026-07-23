@@ -223,6 +223,10 @@ spec:
           # clones would land on the pod's ephemeral storage and the
           # 8Gi PVC sizing would be ineffective for multi-repo runs.
           mkdir -p /workdir/clones
+          # Conservative default in case run-shepherd is killed before it can
+          # write its own status (e.g. OOMKilled) — treated as "not
+          # succeeded" by notify-telegram's resolve gate below.
+          echo -n "unknown" > /workdir/shepherd_status
           echo "✓ gitops cloned"
         volumeMounts:
           - name: workdir
@@ -279,7 +283,24 @@ spec:
             printf '→'
             printf ' %s' "$@"
             printf '\n'
-            exec "$@"
+            # NOT `exec` — the parent step has continueOn.failed/error:true,
+            # so a run-shepherd crash here is swallowed by the workflow's
+            # overall status and a later Succeeded commit-and-push +
+            # post-deploy-verify can leave WORKFLOW_STATUS=Succeeded even
+            # though this attempt's own merge/review-fix never actually
+            # completed (Codex P1 on PR #613, round 3). Capturing the real
+            # exit code to /workdir/shepherd_status lets notify-telegram
+            # tell a masked run-shepherd failure apart from a genuine clean
+            # run — same pattern as poller_status on cwft-mctl-agents-
+            # issue-poll's run-poller.
+            "$@"
+            RC=$?
+            if [ "$RC" -eq 0 ]; then
+              echo -n "succeeded" > /workdir/shepherd_status
+            else
+              echo -n "failed" > /workdir/shepherd_status
+            fi
+            exit "$RC"
         env:
           # Workflow params injected as env vars so the shell layer
           # can quote them safely. Direct `workflow.parameters.*`
@@ -511,12 +532,22 @@ spec:
         env:
           - name: STARTED_AT
             value: "{{inputs.parameters.started_at}}"
+        # Unfiltered-degraded signal below travels via /workdir/degraded_unfiltered.txt
+        # on the shared PVC, NOT a second workflow.outputs.parameters entry — see the
+        # note on cwft-mctl-agents-issue-poll's commit-and-push step for why a second
+        # global output parameter sourced from a different step broke Argo's static
+        # validator workflow-wide (2026-07-06 incident). This step and notify-telegram
+        # are different steps, so the same landmine applies here.
+        volumeMounts:
+          - name: workdir
+            mountPath: /workdir
         source: |
           set -uo pipefail
 
-          # Always create the output file first so the workflow-level
+          # Always create the output files first so the workflow-level
           # output parameter resolves even on early-exit paths.
           : > /tmp/degraded.txt
+          : > /workdir/degraded_unfiltered.txt
 
           # 5-min sleep ≈ ArgoCD's default app reconcile interval (180s)
           # plus a buffer for the per-resource health re-evaluation pass
@@ -596,6 +627,21 @@ spec:
           fi
           echo "✓ No persistent Degraded apps detected after shepherd run."
 
+          # Unfiltered snapshot (no lastTransitionTime threshold) of every
+          # currently-Degraded app, using the freshest kubectl read we have
+          # (post-grace RAW2 if the 120s grace check ran, else RAW). This
+          # step can pass above purely because a Degraded app's transition
+          # predates THIS run's threshold — that app would never show up
+          # in $BAD/$BAD2 again even though it never recovered. onExit
+          # uses this unfiltered list, not degraded_apps, to decide whether
+          # it's safe to resolve the shepherd fingerprint.
+          FRESH="${RAW2:-$RAW}"
+          printf '%s' "$FRESH" | jq -r '
+            .items[]
+            | select(.status.health.status == "Degraded")
+            | "\(.metadata.namespace)/\(.metadata.name)"
+          ' | tr '\n' ' ' > /workdir/degraded_unfiltered.txt
+
     # ── 5. Telegram notification (onExit) ──────────────────────────────────
     # Same pattern as cwft-mctl-agents-run / cwft-mctl-agents-implement.
     - name: notify-telegram
@@ -628,10 +674,21 @@ spec:
           # command execution in a workflow pod.
           - name: WORKFLOW_STATUS
             value: "{{workflow.status}}"
+          # Identifies which CWFT this onExit handler belongs to — used to
+          # namespace the incident fingerprint below so run/implement/shepherd
+          # failures never collide with each other.
+          - name: WORKFLOW_TEMPLATE_KIND
+            value: "shepherd"
           - name: WORKFLOW_SERVICE
             value: "{{workflow.parameters.service}}"
           - name: WORKFLOW_SLUG
             value: "{{workflow.parameters.slug}}"
+          # Same param/env-var naming as run-shepherd's WORKFLOW_DRY_RUN —
+          # used below to keep a dry_run=true run (decide()-only, no
+          # merge/review-fix subprocess) from resolving a REAL incident for
+          # the same scope (Codex P2 on PR #613, round 3).
+          - name: WORKFLOW_DRY_RUN
+            value: "{{workflow.parameters.dry_run}}"
           - name: WORKFLOW_NAME
             value: "{{workflow.name}}"
           - name: WORKFLOW_DURATION
@@ -655,6 +712,30 @@ spec:
           # workdir PVC rather than a workflow output parameter — see the
           # note on the shepherd-proposals template's degraded_apps output.
           WORKFLOW_ACTIVITY=$(cat /workdir/activity 2>/dev/null || echo "unknown")
+
+          # Unfiltered (no time-threshold) snapshot of currently-Degraded
+          # apps, written by post-deploy-verify. Empty means the cluster is
+          # fully healthy; non-empty means at least one app is Degraded
+          # RIGHT NOW even if it's not "newly" so per this run's threshold.
+          # Used below to gate fingerprint resolution — see the note on
+          # post-deploy-verify for the false-resolve scenario this closes
+          # (Codex P1 on PR #613).
+          WORKFLOW_DEGRADED_APPS_UNFILTERED=$(cat /workdir/degraded_unfiltered.txt 2>/dev/null || echo "")
+
+          # run-shepherd's own truthful exit status ("succeeded"/"failed"/
+          # "unknown") — NOT the same thing as WORKFLOW_STATUS. The
+          # shepherd-proposals DAG runs run-shepherd with
+          # continueOn.failed/error, so a run-shepherd crash followed by a
+          # successful commit-and-push + post-deploy-verify still leaves
+          # WORKFLOW_STATUS=Succeeded even though the shepherd attempt
+          # itself never completed. See run-shepherd for where this is
+          # written.
+          SHEPHERD_STATUS=$(cat /workdir/shepherd_status 2>/dev/null || echo "unknown")
+
+          # Stable dedup key for this recurring job. Two failures of the same
+          # {service, slug} scope collapse into one open incident instead of
+          # a fresh one per tick; a differing service/slug still gets its own.
+          FINGERPRINT="workflow_failed:${WORKFLOW_TEMPLATE_KIND}:${WORKFLOW_SERVICE}:${WORKFLOW_SLUG}"
 
           case "$WORKFLOW_STATUS" in
             Succeeded) ICON="✅" ;;
@@ -694,13 +775,14 @@ spec:
             echo "ℹ️  TG_BOT_TOKEN or TG_CHAT_ID not set; skipping Telegram leg."
           fi
 
-          # Incident leg — only on terminal failure. See B6 G3 in
+          # Incident leg — only on terminal failure/success. See B6 G3 in
           # ~/.claude/plans/mctl-agents-daily-cron-visibility.md for why
           # cron-driven failures need to land in mctl_list_incidents.
           if { [ "$WORKFLOW_STATUS" = "Failed" ] || [ "$WORKFLOW_STATUS" = "Error" ]; } && [ -n "$MCTL_TOKEN" ]; then
             # Suffix the id with epoch-second so `argo retry <wf>`
             # produces a fresh incident — workflow names/UIDs stay
-            # stable across retries (Codex P2 on PR #149).
+            # stable across retries (Codex P2 on PR #149). Real cross-run
+            # dedup now happens via `fingerprint` below.
             INCIDENT_ID="argo-${WORKFLOW_NAME}-$(date +%s)"
             SUMMARY="shepherd ${SUBJECT} ${WORKFLOW_STATUS} after ${WORKFLOW_DURATION}s — ${UI_URL}"
             if [ -n "$WORKFLOW_DEGRADED_APPS" ]; then
@@ -708,7 +790,7 @@ spec:
             fi
             # JSON-encode via jq so quotes / newlines / backslashes in
             # WORKFLOW_SLUG / WORKFLOW_SERVICE cannot break the body.
-            BODY=$(jq -nc --arg id "$INCIDENT_ID" --arg summary "$SUMMARY" '{
+            BODY=$(jq -nc --arg id "$INCIDENT_ID" --arg summary "$SUMMARY" --arg fingerprint "$FINGERPRINT" '{
               id: $id,
               source: "argo-workflows",
               type: "workflow_failed",
@@ -721,13 +803,48 @@ spec:
               # ever promotes open->analyzing — a status of "open" here means
               # the incident sits unanalyzed forever (observed 2026-07-12:
               # 6 self-reported workflow_failed incidents never picked up).
-              status: "analyzing"
+              status: "analyzing",
+              fingerprint: $fingerprint
             }')
             curl -s -o /dev/null -w 'incident http=%{http_code}\n' \
               -X POST "https://api.mctl.ai/api/v1/incidents" \
               -H "Content-Type: application/json" \
               -H "Authorization: Bearer ${MCTL_TOKEN}" \
               -d "$BODY"
+          elif [ "$WORKFLOW_STATUS" = "Succeeded" ] && [ -n "$WORKFLOW_DEGRADED_APPS_UNFILTERED" ] && [ -n "$MCTL_TOKEN" ]; then
+            # This run succeeded, but the cluster still has Degraded apps
+            # that just predate this run's detection threshold — do NOT
+            # resolve. A missed resolve only means the incident needs a
+            # manual close later; a false resolve here would hide an
+            # ongoing outage (Codex P1 on PR #613).
+            echo "⚠️  Skipping resolve: still Degraded (unfiltered): ${WORKFLOW_DEGRADED_APPS_UNFILTERED}"
+          elif [ "$WORKFLOW_STATUS" = "Succeeded" ] && [ "$SHEPHERD_STATUS" != "succeeded" ] && [ -n "$MCTL_TOKEN" ]; then
+            # WORKFLOW_STATUS=Succeeded is not trustworthy on its own here —
+            # continueOn masks a run-shepherd crash (see run-shepherd).
+            # Don't resolve: a missed resolve just needs a manual close
+            # later; a false resolve here would hide a shepherd attempt
+            # that crashed before actually merging/fixing anything (Codex
+            # P1 on PR #613, round 3).
+            echo "⚠️  Skipping resolve: run-shepherd status was '${SHEPHERD_STATUS}', not a confirmed success."
+          elif [ "$WORKFLOW_STATUS" = "Succeeded" ] && [ "$WORKFLOW_DRY_RUN" = "true" ] && [ -n "$MCTL_TOKEN" ]; then
+            # dry_run=true only evaluates decide() and prints would-be
+            # transitions — no merge/review-fix subprocess ever ran, so a
+            # healthy post-deploy check here proves nothing about whether a
+            # REAL failed run for this scope was actually fixed. Resolving
+            # here would clear a real incident without anything having been
+            # done about it (Codex P2 on PR #613, round 3).
+            echo "ℹ️  Skipping resolve: dry_run=true run — no real action was taken for this scope."
+          elif [ "$WORKFLOW_STATUS" = "Succeeded" ] && [ -n "$MCTL_TOKEN" ]; then
+            # Close the loop: this scope's shepherd run finally succeeded
+            # AND no app in the cluster is currently Degraded, so resolve
+            # any open incident sharing this fingerprint. No-op if none
+            # exists.
+            RESOLVE_BODY=$(jq -nc --arg tenant "admins" --arg fingerprint "$FINGERPRINT" '{tenant: $tenant, fingerprint: $fingerprint}')
+            curl -s -o /dev/null -w 'resolve http=%{http_code}\n' \
+              -X POST "https://api.mctl.ai/api/v1/incidents/resolve-by-fingerprint" \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer ${MCTL_TOKEN}" \
+              -d "$RESOLVE_BODY"
           else
             echo "ℹ️  Workflow ${WORKFLOW_STATUS} or MCTL_TOKEN missing; skipping incident leg."
           fi

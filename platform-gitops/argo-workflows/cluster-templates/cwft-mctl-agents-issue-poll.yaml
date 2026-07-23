@@ -112,6 +112,10 @@ spec:
           # PVC-backed scratch dir for the per-issue `gh repo clone` target —
           # see TMPDIR in run-poller below.
           mkdir -p /workdir/clones
+          # Conservative default in case run-poller is killed before it can
+          # write its own status (e.g. OOMKilled) — treated as "not
+          # succeeded" by notify-telegram's resolve gate below.
+          echo -n "unknown" > /workdir/poller_status
           echo "✓ gitops cloned"
         volumeMounts:
           - name: workdir
@@ -141,12 +145,27 @@ spec:
             # Python.
             if [ -z "$GITHUB_TOKEN" ]; then
               echo "❌ GITHUB_TOKEN is not set — the poller needs it to search issues, clone repos, comment, and relabel" >&2
+              echo -n "failed" > /workdir/poller_status
               exit 1
             fi
             # Wire git's HTTPS credential helper to GITHUB_TOKEN so `gh repo
             # clone` and any later git op authenticate non-interactively.
             gh auth setup-git
-            exec python -m orchestrator.run_issue_poller
+            # NOT `exec` — the parent step has continueOn.failed/error:true,
+            # so a poller crash here is swallowed by the workflow's overall
+            # status and a later Succeeded commit-and-push can leave
+            # WORKFLOW_STATUS=Succeeded with labelled issues left
+            # unprocessed (Codex P1 on PR #613). Capturing the real exit
+            # code to /workdir/poller_status lets notify-telegram tell a
+            # masked poller failure apart from a genuine clean run.
+            python -m orchestrator.run_issue_poller
+            RC=$?
+            if [ "$RC" -eq 0 ]; then
+              echo -n "succeeded" > /workdir/poller_status
+            else
+              echo -n "failed" > /workdir/poller_status
+            fi
+            exit "$RC"
         env:
           # entrypoint.sh symlinks <state>/<svc>/proposals onto the baked-in
           # agents/<svc>/; run_issue_poller reads STATE_DIR directly.
@@ -302,6 +321,11 @@ spec:
                 optional: true
           - name: WORKFLOW_STATUS
             value: "{{workflow.status}}"
+          # Identifies which CWFT this onExit handler belongs to — used to
+          # namespace the incident fingerprint below so run/implement/shepherd
+          # failures never collide with each other.
+          - name: WORKFLOW_TEMPLATE_KIND
+            value: "issue-poll"
           - name: WORKFLOW_NAME
             value: "{{workflow.name}}"
           - name: WORKFLOW_DURATION
@@ -318,6 +342,20 @@ spec:
           # rather than a workflow output parameter — see the note on
           # commit-and-push for why.
           WORKFLOW_ACTIVITY=$(cat /workdir/activity 2>/dev/null || echo "unknown")
+
+          # run-poller's own truthful exit status ("succeeded"/"failed"/
+          # "unknown") — NOT the same thing as WORKFLOW_STATUS. The
+          # poll-issues DAG runs run-poller with continueOn.failed/error, so
+          # a poller crash followed by a successful commit-and-push still
+          # leaves WORKFLOW_STATUS=Succeeded even though labelled issues may
+          # be unprocessed. See run-poller for where this is written.
+          POLLER_STATUS=$(cat /workdir/poller_status 2>/dev/null || echo "unknown")
+
+          # Stable dedup key. Unlike run/implement/shepherd, one poll cycle
+          # sweeps every labelled issue in a single run — there is no
+          # per-run distinguishing parameter, so this is a fixed key: all
+          # issue-poll failures collapse into a single recurring incident.
+          FINGERPRINT="workflow_failed:${WORKFLOW_TEMPLATE_KIND}"
 
           case "$WORKFLOW_STATUS" in
             Succeeded) ICON="✅" ;;
@@ -346,11 +384,14 @@ spec:
             echo "ℹ️  TG_BOT_TOKEN or TG_CHAT_ID not set; skipping Telegram leg."
           fi
 
-          # Incident leg — only on terminal failure.
+          # Incident leg — only on terminal failure/success.
           if { [ "$WORKFLOW_STATUS" = "Failed" ] || [ "$WORKFLOW_STATUS" = "Error" ]; } && [ -n "$MCTL_TOKEN" ]; then
+            # Suffix the id with epoch-second so `argo retry <wf>` produces a
+            # fresh incident. Real cross-run dedup now happens via
+            # `fingerprint` below.
             INCIDENT_ID="argo-${WORKFLOW_NAME}-$(date +%s)"
             SUMMARY="mctl-agents issue-poll ${WORKFLOW_STATUS} after ${WORKFLOW_DURATION}s — ${UI_URL}"
-            BODY=$(jq -nc --arg id "$INCIDENT_ID" --arg summary "$SUMMARY" '{
+            BODY=$(jq -nc --arg id "$INCIDENT_ID" --arg summary "$SUMMARY" --arg fingerprint "$FINGERPRINT" '{
               id: $id,
               source: "argo-workflows",
               type: "workflow_failed",
@@ -363,13 +404,30 @@ spec:
               # ever promotes open->analyzing — a status of "open" here means
               # the incident sits unanalyzed forever (observed 2026-07-12:
               # 6 self-reported workflow_failed incidents never picked up).
-              status: "analyzing"
+              status: "analyzing",
+              fingerprint: $fingerprint
             }')
             curl -s -o /dev/null -w 'incident http=%{http_code}\n' \
               -X POST "https://api.mctl.ai/api/v1/incidents" \
               -H "Content-Type: application/json" \
               -H "Authorization: Bearer ${MCTL_TOKEN}" \
               -d "$BODY"
+          elif [ "$WORKFLOW_STATUS" = "Succeeded" ] && [ "$POLLER_STATUS" != "succeeded" ] && [ -n "$MCTL_TOKEN" ]; then
+            # WORKFLOW_STATUS=Succeeded is not trustworthy on its own here —
+            # continueOn masks a run-poller crash. Don't resolve: a missed
+            # resolve just needs a manual close later, a false resolve hides
+            # a real poll failure with issues left unprocessed.
+            echo "⚠️  Skipping resolve: run-poller status was '${POLLER_STATUS}', not a confirmed success."
+          elif [ "$WORKFLOW_STATUS" = "Succeeded" ] && [ -n "$MCTL_TOKEN" ]; then
+            # Close the loop: issue-poll finally succeeded AND run-poller
+            # itself confirmed success, so resolve any open incident
+            # sharing this fingerprint. No-op if none exists.
+            RESOLVE_BODY=$(jq -nc --arg tenant "admins" --arg fingerprint "$FINGERPRINT" '{tenant: $tenant, fingerprint: $fingerprint}')
+            curl -s -o /dev/null -w 'resolve http=%{http_code}\n' \
+              -X POST "https://api.mctl.ai/api/v1/incidents/resolve-by-fingerprint" \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer ${MCTL_TOKEN}" \
+              -d "$RESOLVE_BODY"
           else
             echo "ℹ️  Workflow ${WORKFLOW_STATUS} or MCTL_TOKEN missing; skipping incident leg."
           fi
