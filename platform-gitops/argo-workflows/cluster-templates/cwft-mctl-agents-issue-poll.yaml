@@ -302,6 +302,11 @@ spec:
                 optional: true
           - name: WORKFLOW_STATUS
             value: "{{workflow.status}}"
+          # Identifies which CWFT this onExit handler belongs to — used to
+          # namespace the incident fingerprint below so run/implement/shepherd
+          # failures never collide with each other.
+          - name: WORKFLOW_TEMPLATE_KIND
+            value: "issue-poll"
           - name: WORKFLOW_NAME
             value: "{{workflow.name}}"
           - name: WORKFLOW_DURATION
@@ -318,6 +323,12 @@ spec:
           # rather than a workflow output parameter — see the note on
           # commit-and-push for why.
           WORKFLOW_ACTIVITY=$(cat /workdir/activity 2>/dev/null || echo "unknown")
+
+          # Stable dedup key. Unlike run/implement/shepherd, one poll cycle
+          # sweeps every labelled issue in a single run — there is no
+          # per-run distinguishing parameter, so this is a fixed key: all
+          # issue-poll failures collapse into a single recurring incident.
+          FINGERPRINT="workflow_failed:${WORKFLOW_TEMPLATE_KIND}"
 
           case "$WORKFLOW_STATUS" in
             Succeeded) ICON="✅" ;;
@@ -346,11 +357,14 @@ spec:
             echo "ℹ️  TG_BOT_TOKEN or TG_CHAT_ID not set; skipping Telegram leg."
           fi
 
-          # Incident leg — only on terminal failure.
+          # Incident leg — only on terminal failure/success.
           if { [ "$WORKFLOW_STATUS" = "Failed" ] || [ "$WORKFLOW_STATUS" = "Error" ]; } && [ -n "$MCTL_TOKEN" ]; then
+            # Suffix the id with epoch-second so `argo retry <wf>` produces a
+            # fresh incident. Real cross-run dedup now happens via
+            # `fingerprint` below.
             INCIDENT_ID="argo-${WORKFLOW_NAME}-$(date +%s)"
             SUMMARY="mctl-agents issue-poll ${WORKFLOW_STATUS} after ${WORKFLOW_DURATION}s — ${UI_URL}"
-            BODY=$(jq -nc --arg id "$INCIDENT_ID" --arg summary "$SUMMARY" '{
+            BODY=$(jq -nc --arg id "$INCIDENT_ID" --arg summary "$SUMMARY" --arg fingerprint "$FINGERPRINT" '{
               id: $id,
               source: "argo-workflows",
               type: "workflow_failed",
@@ -363,13 +377,23 @@ spec:
               # ever promotes open->analyzing — a status of "open" here means
               # the incident sits unanalyzed forever (observed 2026-07-12:
               # 6 self-reported workflow_failed incidents never picked up).
-              status: "analyzing"
+              status: "analyzing",
+              fingerprint: $fingerprint
             }')
             curl -s -o /dev/null -w 'incident http=%{http_code}\n' \
               -X POST "https://api.mctl.ai/api/v1/incidents" \
               -H "Content-Type: application/json" \
               -H "Authorization: Bearer ${MCTL_TOKEN}" \
               -d "$BODY"
+          elif [ "$WORKFLOW_STATUS" = "Succeeded" ] && [ -n "$MCTL_TOKEN" ]; then
+            # Close the loop: issue-poll finally succeeded, so resolve any
+            # open incident sharing this fingerprint. No-op if none exists.
+            RESOLVE_BODY=$(jq -nc --arg tenant "admins" --arg fingerprint "$FINGERPRINT" '{tenant: $tenant, fingerprint: $fingerprint}')
+            curl -s -o /dev/null -w 'resolve http=%{http_code}\n' \
+              -X POST "https://api.mctl.ai/api/v1/incidents/resolve-by-fingerprint" \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer ${MCTL_TOKEN}" \
+              -d "$RESOLVE_BODY"
           else
             echo "ℹ️  Workflow ${WORKFLOW_STATUS} or MCTL_TOKEN missing; skipping incident leg."
           fi

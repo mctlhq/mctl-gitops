@@ -410,6 +410,11 @@ spec:
                 optional: true
           - name: WORKFLOW_STATUS
             value: "{{workflow.status}}"
+          # Identifies which CWFT this onExit handler belongs to — used to
+          # namespace the incident fingerprint below so run/implement/shepherd
+          # failures never collide with each other.
+          - name: WORKFLOW_TEMPLATE_KIND
+            value: "investigate"
           - name: WORKFLOW_ISSUE_URL
             value: "{{workflow.parameters.issue_url}}"
           - name: WORKFLOW_NAME
@@ -419,6 +424,11 @@ spec:
         source: |
           set +e
           apk add --no-cache curl ca-certificates jq >/dev/null 2>&1
+
+          # Stable dedup key for this issue. Repeats of the SAME issue collapse
+          # into one open incident; a DIFFERENT issue's failures must never
+          # collapse into it, so the full issue URL is part of the key.
+          FINGERPRINT="workflow_failed:${WORKFLOW_TEMPLATE_KIND}:${WORKFLOW_ISSUE_URL}"
 
           case "$WORKFLOW_STATUS" in
             Succeeded) ICON="✅" ;;
@@ -447,11 +457,11 @@ spec:
             echo "ℹ️  TG_BOT_TOKEN or TG_CHAT_ID not set; skipping Telegram leg."
           fi
 
-          # Incident leg — only on terminal failure.
+          # Incident leg — only on terminal failure/success.
           if { [ "$WORKFLOW_STATUS" = "Failed" ] || [ "$WORKFLOW_STATUS" = "Error" ]; } && [ -n "$MCTL_TOKEN" ]; then
             INCIDENT_ID="argo-${WORKFLOW_NAME}-$(date +%s)"
             SUMMARY="${SUBJECT} ${WORKFLOW_STATUS} after ${WORKFLOW_DURATION}s — ${UI_URL}"
-            BODY=$(jq -nc --arg id "$INCIDENT_ID" --arg summary "$SUMMARY" '{
+            BODY=$(jq -nc --arg id "$INCIDENT_ID" --arg summary "$SUMMARY" --arg fingerprint "$FINGERPRINT" '{
               id: $id,
               source: "argo-workflows",
               type: "workflow_failed",
@@ -464,13 +474,24 @@ spec:
               # ever promotes open->analyzing — a status of "open" here means
               # the incident sits unanalyzed forever (observed 2026-07-12:
               # 6 self-reported workflow_failed incidents never picked up).
-              status: "analyzing"
+              status: "analyzing",
+              fingerprint: $fingerprint
             }')
             curl -s -o /dev/null -w 'incident http=%{http_code}\n' \
               -X POST "https://api.mctl.ai/api/v1/incidents" \
               -H "Content-Type: application/json" \
               -H "Authorization: Bearer ${MCTL_TOKEN}" \
               -d "$BODY"
+          elif [ "$WORKFLOW_STATUS" = "Succeeded" ] && [ -n "$MCTL_TOKEN" ]; then
+            # Close the loop: this issue's investigation finally succeeded, so
+            # resolve any open incident sharing this fingerprint. No-op if
+            # none exists.
+            RESOLVE_BODY=$(jq -nc --arg tenant "admins" --arg fingerprint "$FINGERPRINT" '{tenant: $tenant, fingerprint: $fingerprint}')
+            curl -s -o /dev/null -w 'resolve http=%{http_code}\n' \
+              -X POST "https://api.mctl.ai/api/v1/incidents/resolve-by-fingerprint" \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer ${MCTL_TOKEN}" \
+              -d "$RESOLVE_BODY"
           else
             echo "ℹ️  Workflow ${WORKFLOW_STATUS} or MCTL_TOKEN missing; skipping incident leg."
           fi
