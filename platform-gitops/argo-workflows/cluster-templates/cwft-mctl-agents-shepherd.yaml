@@ -76,10 +76,19 @@ spec:
   # template), which leaked ~€6 of idle detached volumes in June 2026.
   volumeClaimGC:
     strategy: OnWorkflowCompletion
-  # Same 2h budget as the implementer: a single tick may invoke the
-  # implementer subprocess (clone sibling repo + Claude SDK + push) for
-  # every proposal that has unresolved P1/P2 findings.
-  activeDeadlineSeconds: 7200
+  # Raised from 7200 (2h) to 21600 (6h) — incident-17841348: two
+  # consecutive "all open PRs" sweeps (2026-07-15 16:17 and 19:17 UTC)
+  # both failed after ~8250s with post-deploy-verify never having set
+  # its degraded_apps output, consistent with the deadline killing the
+  # workflow mid-run before post-deploy-verify could finish. A full
+  # sweep with no service/slug filter can walk every proposal in
+  # {implemented, review-fixing} across every service, invoking the
+  # implementer subprocess for address-review followups on each one —
+  # 2h is not a generous enough ceiling for that in the worst case.
+  # 6h keeps a hard ceiling (so a genuinely stuck run still gets killed
+  # and alerted) while giving a full-repo sweep room to actually finish
+  # post-deploy-verify.
+  activeDeadlineSeconds: 21600
   entrypoint: shepherd-proposals
   onExit: notify-telegram
   # NB: the mctl-gitops-main-writes mutex used to live at workflow
@@ -655,6 +664,22 @@ spec:
           # workdir PVC rather than a workflow output parameter — see the
           # note on the shepherd-proposals template's degraded_apps output.
           WORKFLOW_ACTIVITY=$(cat /workdir/activity 2>/dev/null || echo "unknown")
+
+          # incident-17841348: when activeDeadlineSeconds kills the workflow
+          # before the verify step ever starts, the step node never existed,
+          # so `{{steps.verify.outputs.parameters.degraded_apps}}` fails to
+          # resolve entirely instead of falling back to the `default: ""`
+          # declared on the workflow-level output — Argo leaves the raw,
+          # un-substituted expression in WORKFLOW_DEGRADED_APPS. Detect that
+          # literal, un-rendered tag and normalize it to an explicit marker
+          # so a human never sees raw template syntax in an alert. A
+          # genuinely clean run (verify ran and found nothing) still
+          # resolves to an empty string here and is left alone below.
+          case "$WORKFLOW_DEGRADED_APPS" in
+            *'{{workflow.outputs.parameters.degraded_apps}}'*)
+              WORKFLOW_DEGRADED_APPS="unknown (step did not complete)"
+              ;;
+          esac
 
           case "$WORKFLOW_STATUS" in
             Succeeded) ICON="✅" ;;
