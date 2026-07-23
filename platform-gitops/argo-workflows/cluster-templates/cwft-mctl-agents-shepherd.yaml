@@ -169,6 +169,12 @@ spec:
             template: clone-gitops
         - - name: shepherd
             template: run-shepherd
+            arguments:
+              parameters:
+                - name: oauth-key
+                  value: claude-code-oauth-token
+                - name: is-fallback
+                  value: "false"
             # run_shepherd writes .status.yaml updates (implemented →
             # review-fixing, → merged, → rejected, → review-stuck)
             # to the worktree BEFORE any failure that may crash the
@@ -186,6 +192,25 @@ spec:
             # OOMKilled / deadline / controller errors (Error). Both
             # can leave partial .status.yaml writes, so commit-and-push
             # must run in either case.
+            continueOn:
+              failed: true
+              error: true
+        # Fallback retry on a SECOND Claude account, mirroring
+        # cwft-mctl-agents-run / -implement / -investigate: if the primary
+        # attempt did not succeed (most commonly the account-1 OAuth token
+        # hitting its five_hour/seven_day usage limit → HTTP 429), rerun the
+        # same scope on the account-2 token `claude-code-oauth-token-2`. If
+        # token-2 is not seeded the fallback fails (exit 1) so the run
+        # reports Failed instead of being masked as success.
+        - - name: shepherd-fallback
+            template: run-shepherd
+            when: "{{steps.shepherd.status}} != Succeeded"
+            arguments:
+              parameters:
+                - name: oauth-key
+                  value: claude-code-oauth-token-2
+                - name: is-fallback
+                  value: "true"
             continueOn:
               failed: true
               error: true
@@ -244,6 +269,18 @@ spec:
     # mid-flight is never raced — only CLOSED-unmerged PRs trigger the
     # flip-to-rejected path. 1.9.0 was the first tag with the orchestrator.
     - name: run-shepherd
+      inputs:
+        parameters:
+          # Which Vault key under mctl-agents-secrets holds the OAuth token
+          # for this attempt. Primary step passes claude-code-oauth-token;
+          # the fallback step passes claude-code-oauth-token-2 (a second
+          # account). Same convention as cwft-mctl-agents-run.
+          - name: oauth-key
+            value: claude-code-oauth-token
+          # "true" only for the fallback retry: fail loudly if token-2 is
+          # absent instead of masking the double-failure as success.
+          - name: is-fallback
+            value: "false"
       container:
         image: ghcr.io/mctlhq/mctl-agents:1.17.0
         imagePullPolicy: IfNotPresent
@@ -253,6 +290,19 @@ spec:
           - "-c"
           - |
             set -e
+            # Fallback-token guard, mirroring cwft-mctl-agents-run's
+            # run-orchestrator: on the account-2 retry an unseeded token-2
+            # (empty env via optional:true below) must fail non-zero so the
+            # run reports Failed instead of being masked as success. A
+            # missing PRIMARY token still fails loudly at SDK auth.
+            if [ "$IS_FALLBACK" = "true" ]; then
+              if [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+                echo "❌ Primary attempt failed and no fallback token (claude-code-oauth-token-2) is set — cannot fall back." >&2
+                echo -n "failed" > /workdir/shepherd_status
+                exit 1
+              fi
+              echo "↻ Primary attempt did not succeed — retrying on fallback OAuth token (account 2)."
+            fi
             # Wire git's HTTPS credential helper to the same
             # GITHUB_TOKEN gh CLI uses. Without this, `gh repo clone`
             # succeeds (it speaks to the API directly) but the
@@ -312,6 +362,8 @@ spec:
             value: "{{workflow.parameters.slug}}"
           - name: WORKFLOW_DRY_RUN
             value: "{{workflow.parameters.dry_run}}"
+          - name: IS_FALLBACK
+            value: "{{inputs.parameters.is-fallback}}"
           # Same STATE_DIR layout as cwft-mctl-agents-run /
           # cwft-mctl-agents-implement — entrypoint.sh symlinks
           # <state>/<svc>/proposals onto /app/agents/<svc>/proposals/
@@ -327,13 +379,17 @@ spec:
           # error.
           - name: TMPDIR
             value: /workdir/clones
-          # Auth: OAuth (Claude Pro/Max). Same secret as the run +
-          # implement pipelines.
+          # Auth: OAuth (Claude Pro/Max). Key is parameterized: primary uses
+          # claude-code-oauth-token, the fallback step uses
+          # claude-code-oauth-token-2. optional:true lets the fallback pod
+          # schedule when token-2 is absent (the guard script then exits 1);
+          # a missing PRIMARY token still fails loudly at SDK auth.
           - name: CLAUDE_CODE_OAUTH_TOKEN
             valueFrom:
               secretKeyRef:
                 name: mctl-agents-secrets
-                key: claude-code-oauth-token
+                key: "{{inputs.parameters.oauth-key}}"
+                optional: true
           # GitHub PAT for `gh api`, `gh pr merge`, and the
           # implementer subprocess's `gh repo clone` + `gh pr create`
           # calls. PAT must have repo write scope on mctlhq/*.

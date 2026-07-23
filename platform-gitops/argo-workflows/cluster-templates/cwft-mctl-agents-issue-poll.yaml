@@ -84,10 +84,35 @@ spec:
             template: clone-gitops
         - - name: poll
             template: run-poller
+            arguments:
+              parameters:
+                - name: oauth-key
+                  value: claude-code-oauth-token
+                - name: is-fallback
+                  value: "false"
             # run_issue_poller writes each proposal + comment before any
             # later per-issue failure. Letting commit-and-push run
             # unconditionally makes whatever DID get written durable for
             # inspection; the commit step handles the "no diff" case.
+            continueOn:
+              failed: true
+              error: true
+        # Fallback retry on a SECOND Claude account, mirroring
+        # cwft-mctl-agents-run / -implement / -investigate: if the primary
+        # attempt did not succeed (most commonly the account-1 OAuth token
+        # hitting its five_hour/seven_day usage limit → HTTP 429), rerun the
+        # whole label sweep on the account-2 token `claude-code-oauth-token-2`.
+        # If token-2 is not seeded the fallback fails (exit 1) so the run
+        # reports Failed instead of being masked as success.
+        - - name: poll-fallback
+            template: run-poller
+            when: "{{steps.poll.status}} != Succeeded"
+            arguments:
+              parameters:
+                - name: oauth-key
+                  value: claude-code-oauth-token-2
+                - name: is-fallback
+                  value: "true"
             continueOn:
               failed: true
               error: true
@@ -128,6 +153,18 @@ spec:
     # orchestrator/run_issue_poller.py. Earlier tags lack the module and
     # crash with ImportError.
     - name: run-poller
+      inputs:
+        parameters:
+          # Which Vault key under mctl-agents-secrets holds the OAuth token
+          # for this attempt. Primary step passes claude-code-oauth-token;
+          # the fallback step passes claude-code-oauth-token-2 (a second
+          # account). Same convention as cwft-mctl-agents-run.
+          - name: oauth-key
+            value: claude-code-oauth-token
+          # "true" only for the fallback retry: fail loudly if token-2 is
+          # absent instead of masking the double-failure as success.
+          - name: is-fallback
+            value: "false"
       container:
         image: ghcr.io/mctlhq/mctl-agents:1.17.0
         imagePullPolicy: IfNotPresent
@@ -137,6 +174,19 @@ spec:
           - "-c"
           - |
             set -e
+            # Fallback-token guard, mirroring cwft-mctl-agents-run's
+            # run-orchestrator: on the account-2 retry an unseeded token-2
+            # (empty env via optional:true below) must fail non-zero so the
+            # run reports Failed instead of being masked as success. A
+            # missing PRIMARY token still fails loudly at SDK auth.
+            if [ "$IS_FALLBACK" = "true" ]; then
+              if [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+                echo "❌ Primary attempt failed and no fallback token (claude-code-oauth-token-2) is set — cannot fall back." >&2
+                echo -n "failed" > /workdir/poller_status
+                exit 1
+              fi
+              echo "↻ Primary attempt did not succeed — retrying on fallback OAuth token (account 2)."
+            fi
             # GITHUB_TOKEN is mandatory: the poller searches for labelled
             # issues, clones target repos, comments, and removes the label.
             # The secretKeyRef is marked optional so the pod still schedules
@@ -167,6 +217,8 @@ spec:
             fi
             exit "$RC"
         env:
+          - name: IS_FALLBACK
+            value: "{{inputs.parameters.is-fallback}}"
           # entrypoint.sh symlinks <state>/<svc>/proposals onto the baked-in
           # agents/<svc>/; run_issue_poller reads STATE_DIR directly.
           - name: STATE_DIR
@@ -175,12 +227,17 @@ spec:
           # per-issue target-repo clone lands in PVC-backed storage.
           - name: TMPDIR
             value: /workdir/clones
-          # Auth: OAuth (Claude Pro/Max). Same secret as the other pipelines.
+          # Auth: OAuth (Claude Pro/Max). Key is parameterized: primary uses
+          # claude-code-oauth-token, the fallback step uses
+          # claude-code-oauth-token-2. optional:true lets the fallback pod
+          # schedule when token-2 is absent (the guard script then exits 1);
+          # a missing PRIMARY token still fails loudly at SDK auth.
           - name: CLAUDE_CODE_OAUTH_TOKEN
             valueFrom:
               secretKeyRef:
                 name: mctl-agents-secrets
-                key: claude-code-oauth-token
+                key: "{{inputs.parameters.oauth-key}}"
+                optional: true
           # GitHub PAT for `gh search issues`, `gh repo clone`,
           # `gh issue comment` and `gh issue edit --remove-label`. Needs repo
           # read on the target repos plus `issues: write`.
