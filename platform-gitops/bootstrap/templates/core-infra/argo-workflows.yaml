@@ -95,9 +95,19 @@ spec:
             # in the DB (Argo's migrate framework skips creating it because
             # schema_history was already stamped at the latest version by the
             # earlier broken config), so the GC now logs
-            # `relation "argo_workflows" does not exist` every ~5 min. With
-            # offload off the controller never creates or queries that table,
-            # so the error path is gone — and no shared-pg DDL is needed.
+            # `relation "argo_workflows" does not exist` every ~5 min.
+            # CORRECTION (2026-07-16, incident-1784173500): the paragraph
+            # above previously claimed this made the error path fully inert.
+            # That is wrong. `GET /api/v1/workflows/{namespace}` — a plain
+            # list call, unrelated to nodeStatusOffLoad — reproducibly 500s
+            # for any caller with this same "relation does not exist" error,
+            # and this has been observed correlating with mctl-agents-run
+            # cron failures (incident-responder, shepherd, issue-poll). This
+            # is a real DB-side defect, not cosmetic: it needs the
+            # `argo_workflows` table recreated via the controller's migrate
+            # framework, not just a config toggle here. See the proposal at
+            # platform-gitops/agents-state/mctl-gitops/proposals/incident-1784173500/
+            # for the fix.
             # archive: true above is unaffected — archiving uses the hardcoded
             # `argo_archived_workflows` table, independent of offload.
             nodeStatusOffLoad: false
