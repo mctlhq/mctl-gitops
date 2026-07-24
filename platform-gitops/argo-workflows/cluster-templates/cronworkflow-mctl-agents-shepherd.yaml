@@ -53,12 +53,15 @@ spec:
   # hour UTC and the workflow contends on the shared
   # `mctl-gitops-main-writes` mutex with the implementer / agents-run
   # workflows, so back-pressure is bounded.
-  # TEMP: org-wide Claude monthly spend cap escalated to a 7-day rate-limit
-  # window (overageDisabledReason=org_level_disabled_until), resetting
-  # 2026-07-24T03:00:00Z. Runs now burn real cost mid-session before hitting
-  # the wall instead of failing instantly. Un-suspend after confirming the
-  # cap actually cleared. See memory: mctl-agents-crons-suspended-spend-cap.
-  suspend: true
+  #
+  # Re-un-suspended 2026-07-25 after the 2026-07-24T03:00:00Z org-wide
+  # spend-cap reset (mctl-gitops#611 TEMP note): two manual
+  # mctl_trigger_shepherd probes (a dry-run sweep + a real single-slug
+  # trigger on mctl-gitops/incident-17841222) both completed Succeeded
+  # with the primary OAuth token, no fallback needed, and no
+  # workflow_failed incident — no RateLimitEvent/429 observed. See
+  # memory: mctl-agents-crons-suspended-spend-cap.
+  suspend: false
   workflowSpec:
     workflowTemplateRef:
       name: mctl-agents-shepherd
