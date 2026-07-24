@@ -124,7 +124,17 @@ spec:
               ttlStrategy:
                 secondsAfterCompletion: 3600
                 secondsAfterSuccess: 1800
-                secondsAfterFailure: 86400
+                # Bumped 24h -> 3d on 2026-07-16 (incident-17841555): the
+                # mctl-agents-incidents cron failed 20x on 2026-07-15 across
+                # a ~06:49-22:47 UTC window, and by the time it was
+                # investigated the next day the earlier failed Workflow
+                # objects were already gone (24h TTL), so `mctl_get_
+                # workflow_status` had nothing to query — an audit-trail gap
+                # independent of the underlying failure. 3d gives same-day
+                # and next-day triage a queryable live object regardless of
+                # what hour a failure landed; persistence.archiveTTL (7d,
+                # below) remains the longer-lived backstop in Postgres.
+                secondsAfterFailure: 259200
               podGC:
                 strategy: OnWorkflowCompletion
               # Delete volumeClaimTemplate PVCs (the per-workflow `workdir`) on
