@@ -48,12 +48,17 @@ spec:
   # history and 48 ≈ 12h of failures — enough for recent debugging.
   successfulJobsHistoryLimit: 96
   failedJobsHistoryLimit: 48
-  # TEMP: org-wide Claude monthly spend cap escalated to a 7-day rate-limit
-  # window (overageDisabledReason=org_level_disabled_until), resetting
-  # 2026-07-24T03:00:00Z. Runs now burn real cost mid-session before hitting
-  # the wall instead of failing instantly. Un-suspend after confirming the
-  # cap actually cleared. See memory: mctl-agents-crons-suspended-spend-cap.
-  suspend: true
+  # Re-un-suspended 2026-07-25 after the 2026-07-24T03:00:00Z org-wide
+  # spend-cap reset (mctl-gitops#611 TEMP note). This CronWorkflow has no
+  # dedicated one-shot MCP trigger, so the reset was verified via the
+  # equivalent code path instead: `mctl_trigger_issue` on
+  # mctlhq/mctl-telegram#296 (same issue-investigator / Claude SDK auth
+  # as the poll sweep) completed Succeeded end to end (6.5min real SDK
+  # session, commit, assert-produced), no fallback needed. The
+  # `agents:intake` label on #296 was removed manually afterward so the
+  # first live poll tick doesn't re-investigate it. See memory:
+  # mctl-agents-crons-suspended-spend-cap.
+  suspend: false
   workflowSpec:
     workflowTemplateRef:
       name: mctl-agents-issue-poll
