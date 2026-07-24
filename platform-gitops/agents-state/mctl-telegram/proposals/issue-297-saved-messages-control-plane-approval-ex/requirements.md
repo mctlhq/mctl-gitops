@@ -1,171 +1,214 @@
-# Saved Messages control plane, approval executor, and owner profile
+# Saved Messages control plane, approval executor, and owner profile (A-PR7)
 
 ## Context
-The communication agent (MCTL Communication Agent workstream, plan
-`tranquil-sleeping-map`) drafts replies to recruiter conversations on the
-owner's behalf but must never send anything without a human in the loop
-unless explicitly allowlisted. Prior work (#286/#288/#289/#290) built the
-storage layer for this: `agent_profiles`, `conversations`,
-`conversation_messages`, `agent_actions`, `owner_notifications`, and
-`incoming_events` (see `internal/db/agent_domain.go`,
-`internal/db/agent_actions.go`, `internal/db/agent_events.go`,
-`internal/db/agent_schema.go`), plus a pinned-connection listener runtime
-hook (`internal/telegram/agentruntime.go`, `internal/telegram/clientpool.go`)
-and a Saved-Messages-only send primitive (`internal/telegram/sendself.go:
-SendToSelf`). Issue #296 adds the agent's HTTP/MCP API surface that shares
-the action/notification flow with this issue.
 
-This issue is the piece that makes the owner able to see and steer what the
-agent is doing without a web UI: typing commands into their own Telegram
-"Saved Messages" chat. It also supplies the executor that turns an
-`approved` `agent_actions` row into an actual Telegram send (and only that),
-and the profile provider that hands the agent a bounded, non-sensitive view
-of who the owner is and how they want to be represented. Without this, an
-approved draft has no path to delivery, and the owner has no low-friction
-control surface (pause / take over / approve / reject) that works from their
-phone.
+The communication agent (M6 workstream) already has a working spine: `internal/agent/listener`
+turns live Telegram updates into durable `incoming_events` + `agent_jobs`, `internal/agentapi`
+lets an external worker propose replies and request owner approval, `internal/agent/policy`
+is the sole authority on what may auto-send, and `internal/db` already carries the
+`agent_actions` / `agent_profiles` / `conversations` / `owner_notifications` tables with a
+CAS-enforced action lifecycle. What is missing is the owner-facing control surface and the
+component that actually turns an approved action into a sent Telegram message:
+
+1. Nothing parses the owner's `/mctl ...` commands. `internal/agent/listener.Listener` already
+   defines a `CommandRouter` interface and detects Saved-Messages commands
+   (`extract.go:isMCTLCommand`), but `cmd/server/main.go:93` wires `listener.New(store,
+   agentQueue, nil, m)` — the router argument is `nil`. Nothing sends the owner a summary or an
+   approval request either (`internal/telegram/sendself.go:SendToSelf` exists but has no caller).
+2. Nothing executes an `approved` action. `agent_actions.status` can reach `approved` (via
+   `handleProposeReply`'s guarded-mode Allow path, or a future owner `/mctl approve`), but no code
+   ever moves it past that point. The `executing` status and its doc comment
+   (`internal/db/agent_actions.go:29-40`) currently describe it as a **dead trap state** — "nothing
+   auto-retries from executing" — which the issue explicitly asks to replace with a self-healing,
+   `random_id`-keyed retry.
+3. Nothing implements `agentapi.OwnerProfileProvider`. `internal/agentapi/server.go:20-31` defines
+   the interface and documents that `Server` runs with `Profile == nil` (returning 501 for
+   `GET /recruiters/{peer}`) "until #297 wires a real implementation in."
+
+This proposal designs the three packages that close these gaps — `internal/agent/control`,
+`internal/agent/executor`, `internal/agent/profile` — plus the minimal, unavoidable extensions to
+already-shipped packages (a `random_id` column, a couple of dedicated CAS store methods, a small
+listener wiring change) that those three packages need in order to satisfy the issue's
+crash-recovery and edit/delete-invalidation requirements. Getting this right matters because this
+is the layer that turns a policy decision into an irreversible action on the owner's real Telegram
+account — a bug here either silently drops an owner's approval or double-sends a message the owner
+never actually approved twice.
 
 ## User stories
-- AS the Telegram account owner I WANT to type `/mctl` commands into my own
-  Saved Messages chat SO THAT I can check on, pause, and steer the
-  communication agent without any other app or UI.
-- AS the Telegram account owner I WANT approval requests delivered to Saved
-  Messages with a summary, the draft reply, and a short approve/reject code
-  SO THAT I can review and decide from my phone in a few seconds.
-- AS the Telegram account owner I WANT an approved reply to be sent exactly
-  once, to the exact conversation I approved, even across a crash or restart
-  SO THAT I never end up with a duplicate or misdirected message to a
-  recruiter.
-- AS the platform operator I WANT the agent's send path to re-check the kill
-  switch, profile mode, and conversation state at execution time (not only
-  at proposal time) SO THAT a global stop or a mid-flight pause takes effect
-  even for actions that were already approved.
-- AS the account owner I WANT to control what the agent knows about me via a
-  single YAML file SO THAT I can edit my public profile, skills, and
-  preferences without redeploying, while restricted personal fields never
-  leave my control.
+
+- AS the account owner I WANT to type `/mctl status`, `/mctl leads`, `/mctl show <id>`,
+  `/mctl continue <id>`, `/mctl pause`, `/mctl takeover <id>`, `/mctl approve <code>`, and
+  `/mctl reject <code>` into my own Saved Messages SO THAT I can supervise and control the
+  communication agent from the same Telegram client I already use, without a separate app.
+- AS the account owner I WANT an approval request in Saved Messages that shows the conversation
+  summary, the exact draft reply, and the approve/reject code SO THAT I can make an informed
+  yes/no decision without switching context.
+- AS the account owner I WANT my kill switch flip, autopilot pause, conversation takeover, or a
+  newly-tripped rate limit to still block a previously-approved send SO THAT approving a draft five
+  minutes ago cannot bypass a guardrail I engaged since then.
+- AS the account owner I WANT the executor to never send the same approved reply twice, even if the
+  server crashes mid-send SO THAT a restart cannot double-message a recruiter.
+- AS the account owner I WANT a draft invalidated if I edit or delete the message it was drafted
+  from SO THAT the agent never sends a reply that answers something that no longer exists in the
+  chat.
+- AS the account owner I WANT my restricted profile fields (salary floor, visa status, etc.) to
+  never appear in anything the agent-facing API returns SO THAT a compromised or misbehaving worker
+  process cannot exfiltrate information I explicitly marked private.
+- AS an operator I WANT metrics for stuck `executing` actions, approval latency, dead-lettered
+  sends, and executor restarts SO THAT I can alert on the executor misbehaving instead of
+  discovering it from an owner complaint.
 
 ## Acceptance criteria (EARS)
-- WHEN the owner sends a Saved Messages text starting with `/mctl` THE
-  SYSTEM SHALL parse it with `ParseCommand` into one of: `status`, `leads`,
-  `show <id>`, `continue <id>`, `pause`, `takeover <id>`, `approve <code>`,
-  `reject <code>`, or a parse error, as a pure function with no I/O.
-- WHEN `ParseCommand` receives unrecognised input or malformed arguments
-  (missing/non-numeric id, missing code) THE SYSTEM SHALL return a
-  structured parse error and SHALL NOT panic.
-- WHEN the agent proposes a reply that requires approval THE SYSTEM SHALL
-  send an approval request to Saved Messages containing: a summary of the
-  conversation/intent, the full draft reply text, and both
-  `/mctl approve <code>` and `/mctl reject <code>` instructions, via
-  `internal/telegram.SendToSelf`.
-- WHEN a periodic sweep runs THE SYSTEM SHALL call
-  `Store.ExpireStaleAgentActions` with a 24h TTL and move
-  `pending_approval` rows older than the TTL to `expired`.
-- WHEN the owner sends `/mctl approve <code>` THE SYSTEM SHALL look up the
-  action by `(user_id, code)`, and IF found and in `pending_approval` THEN
-  THE SYSTEM SHALL CAS it to `approved` via `UpdateAgentActionStatus`; IF the
-  code does not resolve to a `pending_approval` action for that owner THEN
-  THE SYSTEM SHALL reply in Saved Messages that the code is invalid or
-  already resolved, without mutating any row.
-- WHEN the executor picks up an `approved` action THE SYSTEM SHALL, in
-  order: (1) re-check the global kill switch (`AGENT_KILL_SWITCH`), (2)
-  re-check the owner's profile mode and `autopilot_paused` flag, (3)
-  re-check the target conversation's state, (4) CAS the action from
-  `approved` to `executing`, (5) send via the conversation's stored peer
-  only (never a peer derived from the action payload or model output), (6)
-  on send success CAS `executing` to `executed` via `SetAgentActionExecuted`
-  with the resulting Telegram message id.
-- IF any of the kill-switch, profile-mode, or conversation-state re-checks
-  fails at execution time THEN THE SYSTEM SHALL NOT transition the action
-  out of `approved` and SHALL record the reason (policy_reasons / audit log)
-  without sending anything.
-- WHILE an action is in `executing` THE SYSTEM SHALL NOT auto-retry it from
-  that state under any circumstance (crash, timeout, panic recovery) — a row
-  stuck in `executing` SHALL be left for manual/operator inspection only.
-- WHEN the executor sends an approved reply THE SYSTEM SHALL append the
-  profile's disclosure line, separated by `policy.DisclosureSep`, before the
-  text leaves the process.
-- WHEN a status transition on `agent_actions` is requested THE SYSTEM SHALL
-  route it exclusively through `Store.UpdateAgentActionStatus` /
-  `SetAgentActionExecuted` / `ExpireStaleAgentActions` so every transition is
-  checked against `allowedActionTransitions` — no package in this proposal
-  SHALL write `agent_actions.status` via raw SQL.
-- WHEN `OwnerProfileProvider` loads the file at `AGENT_PROFILE_PATH` THE
-  SYSTEM SHALL parse identity / public_profile / skills / preferences /
-  restricted sections from YAML.
-- WHEN any agent-surface code (control-plane responses, executor context
-  passed to the reply generator, MCP tool output) reads the profile THE
-  SYSTEM SHALL NOT include fields from the `restricted` section, regardless
-  of caller.
-- IF a restricted field is marked `approval_required` or `never_auto_send`
-  THEN THE SYSTEM SHALL treat any generated content that would disclose it
-  as requiring the standard approval flow (never eligible for guarded-mode
-  auto-send), enforced structurally by never surfacing the value in the
-  first place.
-- WHEN `AGENT_ENABLED` is false or unset THE SYSTEM SHALL NOT parse Saved
-  Messages commands, NOT run the executor loop, and NOT load the profile
-  file — all three packages are inert.
-- WHEN any of the three packages logs THE SYSTEM SHALL NOT include message
-  bodies, draft text, approval codes, or restricted profile fields as raw
-  log attributes (relying on / extending `internal/audit/redact.go`'s
-  `sensitiveKeys`).
-- WHEN a Saved Messages send (owner summary, approval request, or executed
-  reply) completes or fails THE SYSTEM SHALL be recorded for audit purposes
-  (existing audit/notification tables), independent of the MCP-tool audit
-  path.
+
+### Command parsing (`internal/agent/control`)
+- WHEN `ParseCommand` is given a string that is not a syntactically valid `/mctl <verb> [arg]`
+  command THE SYSTEM SHALL return a parse error and no side effect — parsing is a pure function
+  with no I/O.
+- WHEN `ParseCommand` is given `/mctl status`, `/mctl leads`, `/mctl pause` THE SYSTEM SHALL return
+  a command requiring no argument.
+- WHEN `ParseCommand` is given `/mctl show <id>`, `/mctl continue <id>`, `/mctl takeover <id>` THE
+  SYSTEM SHALL return a command carrying a parsed integer conversation id, and SHALL reject a
+  non-numeric or missing id.
+- WHEN `ParseCommand` is given `/mctl approve <code>` or `/mctl reject <code>` THE SYSTEM SHALL
+  return a command carrying the approval code verbatim (case as typed; matching is case-sensitive,
+  matching `GetAgentActionByCode`'s existing contract).
+- WHEN `ParseCommand` is given an unrecognized verb THE SYSTEM SHALL return a parse error naming
+  the unknown verb, never a partial/best-guess command.
+
+### Notifier
+- WHEN the executor or control router needs to reach the owner THE SYSTEM SHALL send exclusively
+  via `internal/telegram.SendToSelf` (`InputPeerSelf`, the owner's own MTProto session) — never via
+  a bot token, which cannot post into Saved Messages.
+- WHEN an action reaches `pending_approval` THE SYSTEM SHALL send an approval request to Saved
+  Messages containing: a summary of the conversation/intent, the verbatim draft reply text, and the
+  exact `/mctl approve <code>` / `/mctl reject <code>` strings the owner can copy.
+- WHEN `/mctl status` is received THE SYSTEM SHALL reply in Saved Messages with the current agent
+  mode, autopilot-paused flag, kill-switch state, and counts of conversations by state.
+
+### Executor send flow and crash recovery
+- WHEN an action transitions into `approved` THE SYSTEM SHALL generate a Telegram `random_id` and
+  persist it on the action row BEFORE issuing the `messages.sendMessage` RPC.
+- WHEN the executor issues the send RPC THE SYSTEM SHALL have already CAS'd the action's status to
+  `executing` using the SAME database write that persisted the `random_id` (single atomic
+  transition), so that no `executing` row is ever missing its `random_id`.
+- IF the process restarts (or a tick observes) a row with `status = executing` THEN THE SYSTEM
+  SHALL retry `messages.sendMessage` with the SAME persisted `random_id`, relying on Telegram's
+  `random_id` deduplication to make the retry safe regardless of whether the original RPC reached
+  Telegram before the crash.
+- WHILE an action is in `executing` THE SYSTEM SHALL NOT mint a new `random_id` or send with a
+  different one under any circumstance.
+- WHEN a send (first attempt or retry) succeeds THE SYSTEM SHALL CAS the action from `executing` to
+  `executed`, record the returned Telegram message id, append the profile's disclosure text
+  (`policy.DisclosureSep` + `DisclosureText`) to the sent body, and increment the conversation's
+  autonomous-turn counter.
+- IF a send fails with a permanent Telegram error (e.g. peer no longer reachable, user blocked the
+  account) THEN THE SYSTEM SHALL stop retrying that action, move it to a terminal failed state with
+  the error recorded, and count it in the dead-letter metric — it SHALL NOT be retried indefinitely
+  the way a transient error is.
+
+### Re-check before send
+- WHEN the executor is about to issue the send RPC (both a fresh `approved -> executing` send and
+  an `executing` retry) THE SYSTEM SHALL re-run `policy.Evaluate` against freshly-read profile and
+  conversation rows, not the state captured at approval time.
+- IF the re-check evaluates to Deny (kill switch engaged, mode off, autopilot paused, conversation
+  no longer `active`, sender newly blocked, or any other current-truth deny condition) THEN THE
+  SYSTEM SHALL NOT issue the send RPC and SHALL move the action to a terminal denied state with the
+  fresh reasons recorded, even though it was previously approved.
+- WHILE a conversation is `taken_over` (owner replied in-thread or issued `/mctl takeover`) THE
+  SYSTEM SHALL treat any `pending_approval` or `executing` action for that conversation as blocked
+  by the next re-check and SHALL NOT let the agent's reply land after the owner's.
+
+### Edit/delete invalidation
+- IF the source incoming message that a `pending_approval`, `approved`, or `executing` action's
+  draft was derived from has since been edited THEN THE SYSTEM SHALL deny/expire that action with a
+  reason identifying the edit, rather than sending the stale draft unchanged.
+- IF the source incoming message has since been deleted THEN THE SYSTEM SHALL deny/expire that
+  action with a reason identifying the deletion.
+- THE SYSTEM SHALL perform this staleness check at the same re-check point as the policy re-check
+  (immediately before the send RPC), not only at proposal time.
+
+### Approval TTL
+- WHILE an action sits in `pending_approval` for longer than the configured TTL
+  (`AGENT_APPROVAL_TTL`, default 24h) THE SYSTEM SHALL expire it via the existing
+  `ExpireStaleAgentActions` sweep already wired in `internal/sweeper.AgentJobs` — this proposal
+  reuses that mechanism rather than duplicating it inside the executor.
+
+### Owner profile (`internal/agent/profile`)
+- WHEN the server starts with `AGENT_PROFILE_PATH` set THE SYSTEM SHALL load and validate the YAML
+  profile at that path before serving `GET /recruiters/{peer}`.
+- WHEN `PublicProfile(peerTGID)` is called THE SYSTEM SHALL return only the `identity`,
+  `public_profile`, `skills`, and `preferences` sections (or the subset of fields within them
+  intended for exposure).
+- THE SYSTEM SHALL NEVER include any field from the `restricted` section in the value returned by
+  `PublicProfile`, regardless of that field's `approval_required` / `never_auto_send` markers —
+  those markers describe a future gated-disclosure flow and are not, by themselves, a signal to
+  expose the field today.
+- IF `AGENT_PROFILE_PATH` is unset or the file is missing/invalid THEN THE SYSTEM SHALL leave
+  `Server.Profile` nil (existing 501 behavior) and log the reason, never panic or serve a
+  partially-loaded profile.
+
+### Gating and safety
+- WHILE `AGENT_ENABLED` is false THE SYSTEM SHALL NOT start the executor tick loop, the control
+  router, or mount any profile-backed endpoint — matching every other agent-domain feature's
+  gating convention.
+- THE SYSTEM SHALL route every send through the existing `allowedActionTransitions` CAS state
+  machine (extended, not bypassed, by this proposal) — no ad hoc `UPDATE agent_actions` outside
+  `internal/db`.
+- THE SYSTEM SHALL NOT log message bodies, draft text, or profile field values;
+  `internal/audit/redact.go`'s `sensitiveKeys` set governs this and SHALL be extended for any new
+  sensitive attribute keys this proposal introduces.
 
 ## Out of scope
-- The listener/dispatcher that turns raw Telegram updates into
-  `incoming_events` rows and detects `EventKindSavedCommand` (already
-  scaffolded via `AgentRuntime` in `internal/telegram/agentruntime.go`) —
-  this proposal assumes that dispatch exists and calls into
-  `internal/agent/control.ParseCommand` / the notifier, but does not build
-  the update-handler wiring itself.
-- The policy engine that decides `allow` / `require_approval` / `deny` for a
-  freshly proposed action, and the reply-drafting/LLM logic that produces
-  action payloads (part of the agent API surface, #296, and the reply
-  generation work referenced by the wider workstream).
-- The `/mctl status`/`leads`/`show` response *content* beyond what the
-  parser and notifier need to format a Saved Messages reply — the richer
-  MCP-facing read APIs belong to #296.
-- Any web/HTTP UI for approvals; Saved Messages is the only control surface
-  in this proposal.
-- Rate limiting / flood-wait handling for the executor's send call beyond
-  reusing the existing `internal/telegram` primitives — no new retry policy
-  is introduced (see `AgentActions` state machine: `executing` never
-  auto-retries).
-- Editing or hot-reloading the owner profile file at runtime beyond a simple
-  re-read (no watcher/webhook is specified).
+
+- The external agent worker itself (the process that calls Claude, proposes replies via
+  `internal/agentapi`) — that is #296 and earlier PRs, already merged into this clone.
+- A gated "ask owner to disclose a restricted field" flow that would use the `approval_required` /
+  `never_auto_send` markers to drive a live approval — the issue only asks that restricted fields
+  are stripped from the agent surface today; wiring the markers into an actual disclosure workflow
+  is future work.
+- Hot-reloading the owner profile YAML on file change (SIGHUP, fsnotify, etc.) — load-once-at-startup
+  is sufficient for this proposal; see Open Questions.
+- Multi-owner / multi-account profile management UI — `AGENT_PROFILE_PATH` is a single mounted file
+  per deployment, matching how the account is deployed today (one mctl-telegram instance per owner).
+- Rewriting `internal/agent/policy.Evaluate` — this proposal calls it more often (at approve-time
+  and again at send-time) but does not change its decision logic.
+- The PR-9 privacy/retention documentation the issue references in its final paragraph — flagged
+  as a downstream dependency below, not authored by this proposal.
 
 ## Open questions
-- Exact Go type/package that exposes `AGENT_KILL_SWITCH` and
-  `AGENT_ENABLED` (a `config.Config` field like `AgentRetentionDays`, or a
-  dedicated `internal/agent/policy` accessor introduced by #296) is not yet
-  in the codebase. This proposal assumes `internal/config.Config` gains
-  `AgentEnabled bool` / `AgentKillSwitch bool` fields following the existing
-  `envBool` convention, and that #296 either introduces or reuses that same
-  field — proceeding with that interpretation; the implementer should
-  reconcile with whatever #296 actually lands.
-- `policy.DisclosureSep` is named in the issue but no `internal/agent/policy`
-  package exists yet in this clone. This proposal assumes #296 introduces
-  `internal/agent/policy` with at least `DisclosureSep string` (a plain
-  constant, e.g. `"\n\n---\n"`) and that this issue's executor imports it
-  rather than redefining it. If #296 lands without it, the executor package
-  should define it locally and it can be hoisted into `policy` later.
-- The exact wire format of `/mctl status` and `/mctl leads` output (which
-  fields, how many leads) is not specified by the issue. This proposal
-  defines a minimal, useful summary (counts + most recent items) and leaves
-  richer formatting to be tuned post-merge.
-- Approval code generation (length, alphabet, collision handling against the
-  partial unique index `idx_agent_actions_code`) is not specified. This
-  proposal uses a short (6-char) unambiguous base32-style code generated at
-  the point an action transitions to `pending_approval`, with a regenerate-
-  on-collision retry, matching the "short code the owner types" description
-  in `internal/db/agent_actions.go`.
-- Multi-conversation disambiguation: if the owner has more than one
-  conversation pending approval and only sends `/mctl approve <code>`, the
-  code alone is sufficient (codes are unique per user among non-terminal
-  actions), so no additional disambiguation is required — recorded here so
-  the design does not need a "which conversation" prompt.
-- None beyond the above; where the issue is silent this proposal proceeds
-  with the most conservative (approval-required, no-auto-send) reading.
+
+- **Delete detection requires a small listener change outside the three named packages.** MTProto's
+  delete-message updates for private chats carry bare message IDs with no peer field, so detecting
+  "this specific incoming message was deleted" requires a new `OnDeleteMessages` handler in
+  `internal/agent/listener` that correlates deleted IDs against `incoming_events.message_id` for the
+  account, plus a new `EventKindMessageDelete`. The issue text scopes this proposal to
+  `internal/agent/control` / `executor` / `profile`, but the edit/delete-invalidation acceptance
+  criterion is not satisfiable without it. Interpretation taken: this listener change is treated as
+  a necessary, minimal extension of the already-shipped `internal/agent/listener` package (not a new
+  package), and is called out explicitly in tasks.md so the Tier 2 implementer does not miss it.
+- **Exact wording/format of `/mctl status` and `/mctl leads` output** is not specified by the issue.
+  Interpretation taken: mirror the fields already exposed by `GET /policy` and
+  `GET /conversations/{id}/context` (mode, autopilot_paused, kill switch, conversation counts by
+  state, and a compact per-lead line) so the control surface stays consistent with the agent-facing
+  HTTP surface rather than inventing new vocabulary.
+- **Whether `/mctl takeover <id>` should itself deny/cancel any action already `executing`** for
+  that conversation, or only conversations that are `pending_approval` at the moment of takeover.
+  Interpretation taken: `takeover` sets `conversation.state = taken_over` immediately (the same
+  mechanism the listener already uses for an in-thread owner reply), and the executor's mandatory
+  send-time re-check is what actually stops an in-flight `executing` action — no separate
+  cancellation code path is needed, since the re-check already covers this case generically.
+- **Whether the executor should be a goroutine inside `cmd/server` (poll-based, like the existing
+  sweepers) or a separate process/binary.** Interpretation taken: a goroutine inside `cmd/server`,
+  ticker-driven, mirroring `internal/sweeper` and `listener.RunSupervisor` — this is the only
+  process with direct access to the `telegram.ClientPool` needed to call `SendToInputPeer`, and
+  every other MTProto-writing feature in this codebase (digest, listener, MCP tools) lives in the
+  same process today.
+- **Whether permanently-failed sends should reuse the `denied` status or need a new terminal status**
+  (e.g. `send_failed`) distinct from a policy denial, for operator clarity. Interpretation taken:
+  reuse `denied` with a `policy_reasons` string prefixed to distinguish cause (e.g. "send failed:
+  ..." vs a policy reason), to avoid widening the state machine and the status-labeled metrics/
+  dashboards built around it. Flagged for Tier 2 / reviewer judgment since a new status is a
+  defensible alternative.
+- Everything else the issue specifies (command list, approval TTL value, disclosure separator,
+  policy re-check timing, `random_id` crash-recovery semantics) is unambiguous in the issue body and
+  is not treated as open.
