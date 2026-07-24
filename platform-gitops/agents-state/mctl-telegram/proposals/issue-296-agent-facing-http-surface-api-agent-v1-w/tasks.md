@@ -1,154 +1,122 @@
 # Tasks: issue-296-agent-facing-http-surface-api-agent-v1-w
 
-- [ ] 1. Add `selectAgentProvider(cfg *config.Config, store *db.Store) auth.Provider`
-      to `cmd/server/main.go`, structurally mirroring `selectBridgeProvider`
-      (`ExpectedAudience: "agent"`, `AudienceRequired: true`, same
-      `AUTH_MODE` switch, `rejectAllProvider` fail-closed fallback when
-      `OAUTH_JWT_SECRET` is unset, `localdev.New` fallback in `local-dev`
-      mode) — DoD: function compiles, unit test covers all four `AUTH_MODE`
-      branches (`local-jwt`, `shared-hmac`/`shared-hmac-legacy`,
-      `local-dev`, missing secret -> reject-all), matching the coverage
-      style of any existing `selectBridgeProvider` test.
+Context for the implementer: `internal/agentapi` and its `cmd/server`
+wiring already exist and already satisfy nearly all of issue #296 — this is
+not a greenfield build. Tasks 1-4 close the specific, verified gaps
+documented in design.md. Task 5 is a verification-only pass to catch
+anything this read-only investigation could not run (tests, lint, build).
+Do not restructure working handlers/tests beyond what each task specifies.
 
-- [ ] 2. Add `Store.ListIncomingEventsSince(ctx, userID, sinceID int64, limit int) ([]IncomingEvent, error)`
-      to `internal/db/agent_events.go`, ordered by `id ASC`, scoped to
-      `user_id`, decrypting `body_encrypted` the same way
-      `GetIncomingEvent` does — DoD: SQLite and Postgres both pass a test
-      inserting N events across two users and asserting the query returns
-      only the target user's rows newer than `sinceID`, in id order, capped
-      at `limit`.
+- [ ] 1. Prefix every audit entry this package writes with `agent.` —
+      DoD: `internal/agentapi/json.go`'s `audit()` method changes its
+      `s.Store.LogToolCall(ctx, userID, tool, ...)` call to pass
+      `"agent."+tool` instead of `tool`, with a one-line comment
+      referencing the issue's `agent.<name>` requirement; no handler call
+      site changes (they all already funnel through `audit()`); `go build
+      ./...` passes; a new/updated test in `internal/agentapi` asserts a
+      handler's persisted `LogToolCall` row (or an equivalent stored audit
+      record, via whatever accessor `internal/db/audit_chain.go` /
+      `store_audit_test.go` already exposes for reading back tool-call
+      rows) has `tool = "agent.get_events"` (or another representative
+      name), not the bare name.
 
-- [ ] 3. Create `internal/agentapi/policy.go` with the server-side
-      `evaluate(profile *db.AgentProfile, actionType, intent string,
-      replyChars int, senderBlocked bool) (decision string, reasons []string)`
-      function implementing the rules already promised in
-      `agent_actions.go`/`agent_domain.go` doc comments: `mode=="off"` or
-      `AutopilotPaused` -> `db.PolicyDeny`; `senderBlocked` -> `db.PolicyDeny`;
-      `replyChars > MaxReplyChars` -> `db.PolicyDeny`; `mode=="guarded"` and
-      `intent` present in the comma-separated `IntentAllowlist` ->
-      `db.PolicyAllow`; else -> `db.PolicyRequireApproval` — DoD: table-driven
-      unit test enumerates every `(mode, autopilot_paused, blocked,
-      over_length, intent-in-allowlist)` combination against the expected
-      decision; each `reasons` entry is a stable, greppable string (no
-      message content).
+- [ ] 2. Grep `deploy/`, `docs/runbooks/`, and any Grafana/alert
+      definitions (`deploy/grafana`, `deploy/alerts`) for the current bare
+      tool-name strings this package logs (`get_events`, `propose_reply`,
+      `save_job_lead`, `complete_agent_job`, `get_policy`,
+      `get_recruiter_profile`, `pause_autopilot`, `get_lead`,
+      `get_conversation_context`, `get_event`, `request_owner_approval`,
+      `send_owner_summary`) before merging task 1 — DoD: either no match
+      found (safe to merge task 1 as-is), or matches found and updated in
+      the same PR to the `agent.`-prefixed form so dashboards/alerts do not
+      silently go dark.
 
-- [ ] 4. Create `internal/agentapi/handlers.go` (depends on 2, 3): a
-      `Handlers` struct wrapping `*db.Store`, with `Register(mux)` binding
-      the routes listed in design.md under `/api/agent/v1` (`GET /profile`,
-      `GET /events`, `GET /conversations/{id}`, `GET
-      /conversations/{id}/messages`, `POST /actions`, `GET /actions/{id}`,
-      `POST /actions/{id}/execute`, `POST /notifications`). Every handler
-      derives `user_id` only from `auth.From(r.Context()).UserID`, never
-      from a path/query/body parameter — DoD: handlers compile against the
-      existing `web.AccountHandlers`-style `Register(mux)` shape; a test
-      asserts every handler 401s when `auth.From` returns nil (defensive
-      path, mirrors `NewBridgeTokenHandler`).
+- [ ] 3. Add an end-to-end audience-isolation test proving cross-audience
+      tokens are rejected across the `/api/agent/v1` vs `/bridge`/`/mcp`
+      boundary (depends on nothing above; can land independently or in the
+      same PR as 1-2) — DoD: a new test (either
+      `cmd/server/agentapi_audience_test.go` or an addition to
+      `cmd/server/main_test.go`) that: constructs a `localjwt.Issuer` and
+      two `localjwt.Provider`s with `ExpectedAudience: "bridge"` and
+      `ExpectedAudience: "agent"` respectively (mirroring
+      `selectBridgeProvider`/`selectAgentProvider`'s actual config, not a
+      hand-rolled shortcut), mints one token per audience, and asserts:
+      (a) the `aud=bridge` token against the agent-audience provider's
+      `Authenticate` returns an error (and, through `auth.Middleware`,
+      HTTP 401 today per requirements.md Open Question 1 — assert the
+      actual current status code, do not assume 403); (b) the `aud=agent`
+      token against the bridge-audience provider likewise errors/401s;
+      (c) the `aud=agent` token against the agent-audience provider
+      succeeds and yields the right `TelegramID`. Test passes with
+      `go test ./cmd/server/...`.
 
-- [ ] 5. Wire audit logging into every `agentapi` handler via the same
-      `Store.LogToolCall` path `web.AccountHandlers.audit` uses, with tool
-      names like `"POST /api/agent/v1/actions"` (depends on 4) — DoD: a
-      call through each route produces exactly one audit row visible via
-      `Store`'s audit query, with no plaintext `body`/`payload`/`text`
-      content in the logged fields.
+- [ ] 4. Add schema-validation edge-case tests to
+      `internal/agentapi/server_test.go` (independent of 1-3) — DoD: three
+      new test functions: (a) `TestHandleProposeReply_RejectsUnknownField`
+      — POST to `/actions/propose_reply` with a JSON body containing an
+      extra field such as `"peer_tg_id"` or `"peer"` alongside valid
+      `conversation_id`/`text` asserts HTTP 400 (this is also the
+      concrete regression test for "no client-supplied peer is ever
+      honored," satisfying that specific issue requirement); (b)
+      `TestDecodeStrict_MalformedJSONReturns400` — POST a body that is not
+      valid JSON (e.g. `{"conversation_id":`) to any POST endpoint asserts
+      400, not 500; (c) `TestDecodeStrict_OversizedBodyReturns400` — POST a
+      body larger than `maxRequestBodyBytes` (1 MiB) asserts 400, not a
+      panic or a hung connection. `go test ./internal/agentapi/...` passes.
 
-- [ ] 6. Implement `POST /api/agent/v1/actions` to call `evaluate()` (task
-      3), persist via `Store.InsertAgentAction` with the server-computed
-      `PolicyDecision`/`PolicyReasons` (never trusting a caller-supplied
-      decision field even if present in the request body) (depends on 3,
-      4) — DoD: integration test posts an action with a client-supplied
-      `policy_decision: "allow"` while the user's profile is `mode=off`,
-      and asserts the persisted row is `PolicyDeny`, not the client's
-      value.
-
-- [ ] 7. Implement `POST /api/agent/v1/actions/{id}/execute` using
-      `Store.UpdateAgentActionStatus`'s compare-and-set
-      (`approved -> executing`, then on success `executing -> executed` via
-      `Store.SetAgentActionExecuted`) and reject calls against actions in
-      `pending_approval`, `executing`, or any terminal state (depends on 4)
-      — DoD: test matrix covering every non-`approved` starting status
-      asserts the endpoint returns an error and leaves the row's status
-      unchanged; a double-execute race test (two concurrent calls on one
-      `approved` row) asserts exactly one succeeds.
-
-- [ ] 8. Add an in-process token-minting helper,
-      `agentapi.MintToken(issuer *localjwt.Issuer, tgID int64, tgUsername
-      string, ttl time.Duration) (string, error)`, producing a
-      `Claims{Audience: []string{"agent"}, ...}` token via the same
-      `localjwt.Issuer` construction pattern `registerOAuth`/bridge minting
-      use (depends on 1) — DoD: unit test mints a token and round-trips it
-      through `localjwt.Verify` + `CheckAudience(..., "agent", true)`
-      successfully, and confirms a token minted with a different (or no)
-      audience is rejected by `selectAgentProvider`'s provider.
-
-- [ ] 9. Mount `/api/agent/v1` in `cmd/server/main.go` immediately after
-      the existing `/api/account` mount, using
-      `auth.Middleware(agentProvider, true, m)` (always required, no
-      `cfg.AuthRequired` opt-out) (depends on 1, 4) — DoD:
-      `go build ./...` succeeds; a smoke test hits `GET
-      /api/agent/v1/profile` with no `Authorization` header and gets `401`;
-      with a valid `aud=agent` token for a user with no `agent_profiles`
-      row it gets a well-formed "not configured" response rather than a
-      500.
-
-- [ ] 10. Cross-account isolation tests (depends on 9): mint `aud=agent`
-      tokens for two distinct users A and B; assert user A's token cannot
-      read user B's events/conversations/actions (expect `404`, not a
-      cross-tenant row) — DoD: test passes and is added to
-      `internal/agentapi` (or wherever the project's existing
-      cross-provider isolation tests for `/bridge` live, for consistency).
-
-- [ ] 11. Update `docs/runbooks/` (or add a new short runbook alongside
-      `docs/runbooks/canary.md`) documenting the new `AUTH_MODE`-driven
-      `aud=agent` provider, the `evaluate()` policy rules, and how to
-      manually mint a test token for local development (depends on 1-9) —
-      DoD: a developer following the doc can `curl` every route locally
-      against `AUTH_MODE=local-dev`.
-
-- [ ] 12. Update `AGENTS.md`/`.claude/CLAUDE.md` "Key paths" section to add
-      `internal/agentapi/` once it exists, matching how `internal/bridge/`
-      is already listed — DoD: both files updated identically (already
-      near-duplicates today).
+- [ ] 5. Full verification pass (depends on 1-4 landing) — DoD: `go fmt
+      ./...`, `go vet ./...`, and `go test ./...` all pass locally;
+      `golangci-lint run` passes if available; re-read
+      `internal/agentapi/server_test.go` and `tokenhandler_test.go` in full
+      (not just this investigation's excerpts) to confirm no existing
+      assertion depends on the bare (unprefixed) audit tool names before
+      task 1 lands; confirm `AGENT_ENABLED=false` still fully hides
+      `/api/agent/v1` (no route registered, no panic) with the changes
+      applied.
 
 ## Tests
 
-- [ ] T1. Unit: `selectAgentProvider` across all `AUTH_MODE` values
-      (task 1).
-- [ ] T2. Unit: `Store.ListIncomingEventsSince` pagination + user scoping,
-      SQLite and Postgres (task 2).
-- [ ] T3. Unit: `evaluate()` table-driven policy matrix (task 3).
-- [ ] T4. Integration: full auth chain — no token -> 401; wrong audience
-      (e.g. an MCP or bridge token) -> 401; valid `agent` token -> 200
-      (tasks 1, 4, 9).
-- [ ] T5. Integration: `POST /actions` ignores client-supplied policy
-      decision and persists the server-evaluated one (task 6).
-- [ ] T6. Integration: `execute` compare-and-set rejects invalid starting
-      states and is race-safe under concurrent calls (task 7).
-- [ ] T7. Integration: cross-account isolation on every read/write route
-      (task 10).
-- [ ] T8. Integration: token minted via `agentapi.MintToken` verifies and
-      is rejected when given the wrong audience (task 8).
-- [ ] T9. Regression: existing `/mcp`, `/bridge`, `/api/account`,
-      `/api/bridge/token` test suites still pass unchanged (this PR must
-      not touch their behavior).
+- [ ] T1. `TestAgentAuditToolNamesArePrefixed` (task 1) — every handler in
+      `internal/agentapi` that calls `s.audit(...)` produces a
+      `LogToolCall` entry whose `tool` starts with `agent.`.
+- [ ] T2. `TestAgentAudienceIsolation_BridgeTokenRejectedByAgentSurface`
+      and `TestAgentAudienceIsolation_AgentTokenRejectedByBridge` (task 3)
+      — the core requirement the issue names explicitly ("bridge/API
+      tokens must 403 here, and agent tokens must 403 on non-agent
+      routes"); document the actual observed status code if it differs
+      from the issue's literal "403".
+- [ ] T3. `TestHandleProposeReply_RejectsUnknownField` (task 4) — proves no
+      client-supplied peer field is ever accepted, the single most
+      security-relevant assertion the issue calls out by name.
+- [ ] T4. `TestDecodeStrict_MalformedJSONReturns400` /
+      `TestDecodeStrict_OversizedBodyReturns400` (task 4) — malformed input
+      never produces a 500.
+- [ ] T5. Regression run of the existing suite —
+      `TestHandleEvents_TimesOutEmpty` (long-poll timeout, already passes),
+      `TestHandleJobComplete_RequiresPersistedAction` /
+      `_LeadOnlyJobCanComplete` (durable-completion invariant, already
+      passes), `TestHandleOwnerFacing_KillSwitchBlocksNotification`
+      (kill-switch propagation, already passes) — re-run after tasks 1-4 to
+      confirm no regression from the audit-prefix change or new test
+      helpers.
 
 ## Rollback
 
-All changes are additive (new package `internal/agentapi`, one new `Store`
-method, one new provider selector, one new route mount) with no schema
-migration and no change to existing route behavior. Rollback is a plain
-revert of the PR:
+All proposed changes are additive or confined to a single audit-logging
+call site:
 
-1. Revert the commit(s) that added `internal/agentapi`, the
-   `selectAgentProvider` function, and the `/api/agent/v1` mount in
-   `cmd/server/main.go`.
-2. No data migration to undo — `ListIncomingEventsSince` is a read-only
-   query against existing tables/columns; removing it drops no data.
-3. Because nothing in this milestone yet mints `aud=agent` tokens outside
-   of this PR's own `agentapi.MintToken` helper (task 8) and no production
-   caller depends on `/api/agent/v1` until the future agent-listener PR
-   lands, rollback carries no in-flight-request risk: at worst, an
-   already-issued agent token stops being accepted (401), which is the
-   same fail-safe behavior as if the token had simply expired.
-4. If task 11's runbook or task 12's `CLAUDE.md`/`AGENTS.md` edits already
-   merged separately, leave them — stale documentation referencing a
-   reverted feature is a cheap follow-up fix, not a rollback blocker.
+- Task 1 (audit prefix) rolls back by reverting the one-line change in
+  `internal/agentapi/json.go`'s `audit()` method — no data migration is
+  needed either direction since `LogToolCall` rows are an append-only
+  audit trail (per `internal/db/audit_chain.go`'s hash-chain design) and
+  old rows with bare names remain valid, readable history regardless of
+  which convention new rows use.
+- Tasks 2-5 (dashboard string updates, new tests) are pure additions;
+  rollback is `git revert` of the relevant commit(s) with no runtime state
+  to unwind.
+- No task touches `AGENT_ENABLED` gating, so if anything goes sideways
+  post-merge, disabling the entire surface in production remains the
+  existing, already-tested kill switch: set `AGENT_ENABLED=false` (or
+  engage `AGENT_KILL_SWITCH=true` to keep the surface reachable for
+  read-only polling but deny every state-changing action without a
+  redeploy).

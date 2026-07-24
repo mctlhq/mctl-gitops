@@ -2,293 +2,277 @@
 
 ## Current state
 
-**Auth stack.** `internal/auth/identity.go` defines `auth.Provider` (one
-method: `Authenticate(*http.Request) (*Identity, error)`) and
-`auth.Middleware` (`internal/auth/middleware.go`), which wraps any handler,
-calls the provider, and either 401s or injects `*Identity` into the request
-context via `auth.With`/`auth.From`. `internal/auth/localjwt/issuer.go`
-implements both sides: `Issuer.Mint(Claims, ttl)` signs HS256 JWTs with a
-polymorphic `aud` claim, and `Provider.Authenticate` verifies signature +
-issuer + expiry + audience (`CheckAudience`) and then resolves the token's
-`tg_id` to an internal `user_id` via `Store.EnsureUserByTelegramID`. This
-exact machinery is already reused three times with three different
-audiences:
+This section documents what actually exists in the clone at HEAD `e4e7928`
+(2026-07-24), read directly rather than assumed. A prior proposal in this
+same directory (dated 2026-07-19) described a codebase with no
+`internal/agentapi` package; that snapshot is stale and this design
+supersedes it.
 
-- MCP: `selectProvider` builds a `localjwt.Provider` with
-  `ExpectedAudience: cfg.OAUTHJWTAudience` (operator-configured, typically
-  unset/generic).
-- Bridge: `selectBridgeProvider` (`cmd/server/main.go:595-637`) builds a
-  *separate* `localjwt.Provider` with `ExpectedAudience: "bridge"` and
-  `AudienceRequired: true`, hard-coded (not operator-configurable) so a
-  regular MCP token can never authenticate `/bridge`. Bridge tokens
-  themselves are minted only after the caller already holds a valid MCP
-  token, via `POST /api/bridge/token`
-  (`internal/bridge/tokenhandler.go`), guarded by
-  `auth.Middleware(provider, true, m)`.
-- Local-dev: `local-dev` mode returns a fixed operator identity from
-  `localdev.New` for every provider selector, including the bridge one,
-  so the whole chain works without an OAuth issuer.
+**The auth-audience pattern this surface reuses.** `internal/auth/identity.go`
+defines the narrow `auth.Provider` interface
+(`Authenticate(*http.Request) (*Identity, error)`), and
+`internal/auth/middleware.go`'s `Middleware(p, required, m)` wraps any
+handler: on a provider error it always responds 401 (never falls through);
+on `nil, nil` with `required=true` it also 401s; only a non-nil identity
+proceeds. `internal/auth/localjwt/issuer.go` implements both the signer
+(`Issuer.Mint`) and the verifier (`Provider.Authenticate`, which chains
+`Verify` for signature/issuer/expiry then `CheckAudience` for the `aud`
+claim). This one provider type is instantiated three separate times in
+`cmd/server/main.go` with three different `ExpectedAudience` values —
+unset/generic for `/mcp` (`selectProvider`), `"bridge"` for `/bridge`
+(`selectBridgeProvider`, lines ~595-640), and `"agent"` for `/api/agent/v1`
+(`selectAgentProvider`, lines 682-710+). All three share the same
+fail-closed posture: if the active `AUTH_MODE` needs `OAUTH_JWT_SECRET` and
+it is unset, the provider is `rejectAllProvider(...)`, not a silent
+downgrade.
 
-**Communication-agent data model.** `internal/db/agent_schema.go` defines
-seven tables (`agent_profiles`, `incoming_events`, `conversations`,
-`conversation_messages`, `agent_actions`, `job_leads`,
-`owner_notifications`), all scoped by `user_id -> users(id)`. Typed access
-lives in three files:
+**`internal/agentapi` (already built).** Ten files, ~2100 lines:
 
-- `internal/db/agent_domain.go`: `AgentProfile` CRUD
-  (`UpsertAgentProfile`, `GetAgentProfile`, `SetAgentAutopilotPaused`,
-  `ListListenerEnabledProfiles`), `Conversation` CRUD (`EnsureConversation`,
-  `GetConversation`, `GetConversationByPeer`, `SetConversationState`,
-  `IncrementAutonomousTurns`, `ResetAutonomousTurns`,
-  `TouchConversationIncoming`), and `ConversationMessage` writes/reads
-  (`InsertConversationMessage`, `ListConversationMessages`).
-- `internal/db/agent_events.go`: `IncomingEvent` (`InsertIncomingEvent` —
-  idempotent via a unique `event_id` index, `GetIncomingEvent`,
-  `SweepAgentMessageBodies` for retention). There is **no** "list events
-  since X for user" query yet — only point lookup by `event_id`.
-- `internal/db/agent_actions.go`: `AgentAction` state machine
-  (`InsertAgentAction`, `GetAgentAction`/`GetAgentActionByCode`,
-  `UpdateAgentActionStatus` — a compare-and-set on `(from, to)` — plus
-  `SetAgentActionExecuted`, `ExpireStaleAgentActions`), `JobLead` CRUD, and
-  `OwnerNotification` writes (`InsertOwnerNotification`,
-  `MarkOwnerNotificationSent/Failed`). Body/payload columns
-  (`incoming_events.body_encrypted`, `agent_actions.payload_encrypted`,
-  `conversation_messages.body_encrypted`) are sealed with
-  `crypto.SealForUser`, matching the pattern `session_encrypted` already
-  uses (`internal/crypto`).
+- `server.go` — `Server` struct (`Store *db.Store`, `Queue *queue.Queue`,
+  `Profile OwnerProfileProvider`, `GlobalKill bool`, plus private
+  `longPollTimeout`/`jobVisibility`/`m`), `New(...)` constructor,
+  `WithProfile`/`WithLongPollTimeout` chaining setters, and `Register(mux
+  registrar)` which binds all twelve routes the issue asks for onto a
+  `registrar` interface (`Get`/`Post`) so the package never imports `chi`
+  directly — the same indirection `internal/web` uses.
+- `tokenhandler.go` — `NewAgentTokenHandler(secret, issuer)` implements
+  `POST /api/agent/token`: requires an already-authenticated caller (regular
+  MCP chain) with scope `admin:users`, mints a token for the
+  request-supplied `telegram_id` (deliberately not the caller's own
+  identity — an admin provisions a worker credential, they do not
+  self-mint), TTL default 30 days / max 90 days (`defaultAgentTokenTTL`,
+  `maxAgentTokenTTL`), `aud=["agent"]`.
+- `events.go` — `GET /events` (long-poll claim via `Queue.Claim`, 1s
+  re-poll tick, returns `{"jobs":[...]}`, 200 always, empty array on
+  timeout or client disconnect), `GET /event/{eventID}` (full event body),
+  `POST /jobs/{id}/complete` (the durable-result invariant: `status
+  =completed` requires a pre-existing `agent_actions` row
+  (`HasAgentActionForJob`) or a saved lead (`HasJobLeadForJob`) for that
+  `job_id`, else 409; `failed`/`ignored` need neither).
+- `actions.go` — `POST /actions/propose_reply` (conversation-derived peer
+  only; runs `policy.Evaluate`; three-way branch to
+  `Deny`/`RequireApproval`/`Allow` with an approval-code allocation loop
+  for the approval path, idempotent on `(job_id, action_type)` via
+  `InsertAgentAction`'s conflict handling), `POST /leads` (upsert),
+  `POST /actions/request_owner_approval` and `POST /notify/summary`
+  (share `handleOwnerFacing`: policy still evaluated for the kill-switch/
+  mode/autopilot gates even though owner-facing actions always resolve to
+  `Allow` once past those gates; `InsertOwnerNotification` is idempotent
+  per `action_id` to survive job redelivery).
+- `conversations.go` — `GET /conversations/{id}/context` (conversation row
+  + up to 100 recent messages + associated lead in one response),
+  `GET /leads/{id}`.
+- `misc.go` — `GET /policy` (advisory mirror of the caller's
+  `AgentProfile` mode/limits plus the kill-switch flag; the issue's stated
+  purpose — "so the worker/model can reason about what it's allowed to
+  propose" — matches exactly, with `policy.Evaluate` remaining the sole
+  authority server-side), `GET /recruiters/{peer}` (501 when
+  `Server.Profile == nil`, matches the issue's explicit interface seam for
+  #297), `POST /autopilot/pause` (`{"paused": bool}`, defaults to `true`
+  on an empty body).
+- `json.go` — `decodeStrict` (the issue's "strict JSON schema validation":
+  `json.Decoder.DisallowUnknownFields()` + `http.MaxBytesReader` capped at
+  1 MiB), `writeJSON`/`writeJSONError`, `identity()` (401 if
+  `auth.From(ctx)` is nil — defensive, since the outer middleware already
+  guarantees this in production), and the `audit()` wrapper over
+  `Store.LogToolCall`.
+- `approvalcode.go` — 6-character approval code generation used by the
+  `RequireApproval` path.
+- `server_test.go` / `tokenhandler_test.go` — 773 + 112 lines of
+  `httptest`-based tests, all passing as read (not independently re-run in
+  this read-only investigation, but structurally sound and internally
+  consistent with the handlers they exercise).
 
-Constants already encode the intended policy state machine:
-`AgentModeObserve/Guarded/Off`, `ConversationActive/Paused/TakenOver/Closed`,
-`ActionProposed -> PendingApproval -> Approved -> Executing -> Executed`
-(with `Rejected`/`Expired`/`Denied` off-ramps), and
-`PolicyAllow/RequireApproval/Deny`. The doc comment on `AgentProfile`
-explicitly states: "All limits are enforced server-side by the policy
-engine; the profile row is the single source of truth" and on `AgentAction`:
-"the agent process itself never enforces it" — i.e. by design, whatever
-calls into this data model is not trusted to self-report policy.
+**Wiring** (`cmd/server/main.go`, ~lines 326-343): mounted only when
+`cfg.AgentEnabled` (`AGENT_ENABLED`, default `false`,
+`internal/config/config.go`). The mint endpoint sits on the *regular* MCP
+auth chain (`auth.Middleware(provider, true, m)`), the agent surface itself
+sits behind `auth.Middleware(agentProvider, true, m)` where `agentProvider
+:= selectAgentProvider(cfg, store)`. `agentSrv.GlobalKill = cfg.AgentKillSwitch`
+wires the env-only kill switch in as a plain field, matching the pattern
+already used for `mcpSrv.MediaDownloadMaxBytes` elsewhere in this file.
 
-**Consumers today: none.** `grep -rn "agent_actions\|incoming_events\|AgentProfile" internal/mcp internal/web`
-returns no matches. `internal/telegram/agentruntime.go` defines the
-`AgentRuntime` interface (`HandlerFor`, `RunFor`) that `ClientPool` will
-call into (`WithAgentRuntime`, landed in PR #289), plus `Pin`/`Unpin` to
-exempt a listening user's pool entry from idle GC — but no concrete
-implementation exists in this clone, and its own comment says the runtime
-"lives outside the pool (internal/agent/listener)", a package that does not
-exist yet. Nothing in `cmd/server/main.go` wires an `AgentRuntime` today.
+**Dependencies this package reuses without modification** (all merged per
+the issue body): `internal/agent/queue` (`Queue.Claim`/`Queue.Complete`,
+metrics-wrapped facade over `internal/db/agent_jobs.go`'s
+`ClaimAgentJobs`/`CompleteAgentJob`, which do the real `SKIP LOCKED`
+claim + compare-and-set completion with the `attempt` fencing counter);
+`internal/agent/policy` (`policy.Evaluate`, pure function over
+`policy.Input{Profile, Conversation, Action, RecentAgentSends, GlobalKill,
+Now}`); `internal/db/agent_domain.go`,
+`agent_actions.go`, `agent_events.go` (typed store accessors and
+`Ensure`/`Get`/`Upsert`/`Has*` methods); `internal/db/store.go`'s
+`LogToolCall` (hash-chained audit, `internal/db/audit_chain.go`).
 
-**HTTP mounting pattern.** `cmd/server/main.go` shows the established
-recipe for a new authenticated JSON surface, used verbatim by `/api/account`
-(lines 258-263):
+**Confirmed gaps against the issue text** (see requirements.md's
+Acceptance criteria / Open questions for the full reasoning):
 
-```go
-accountMux := chi.NewRouter()
-accountHandlers := web.NewAccountHandlers(store, pool)
-accountHandlers.Register(accountMux)
-mux.Mount("/api/account", auth.Middleware(provider, true, m)(accountMux))
-```
-
-`web.AccountHandlers` (`internal/web/account.go`) is a small struct holding
-`*db.Store` (+ a narrow interface for whatever else it needs), a
-`Register(mux)` method binding relative routes, per-handler
-`auth.From(r.Context())` + `writeAccountErr`/`writeAccountJSON` helpers, and
-an `h.audit(...)` call after every operation that writes through
-`Store.LogToolCall` — the same audit trail MCP tool calls use, surfaced via
-`GET /api/account/audit`.
+1. `internal/agentapi/json.go`'s `audit()` helper and every call site
+   (`events.go`, `actions.go`, `conversations.go`, `misc.go`) pass bare
+   tool names (`"get_events"`, `"propose_reply"`, `"save_job_lead"`,
+   `"complete_agent_job"`, `"get_policy"`, `"get_recruiter_profile"`,
+   `"pause_autopilot"`, `"get_lead"`, `"get_conversation_context"`,
+   `"get_event"`, `"request_owner_approval"`, `"send_owner_summary"`) with
+   no `agent.` prefix, contradicting the issue's explicit
+   `agent.<name>` convention. Every other privileged surface in this
+   codebase that calls `LogToolCall` uses its own convention already
+   (`internal/oauth` uses `connect:...`, `internal/mcp` passes the bare MCP
+   tool name) — so this package not prefixing is an inconsistency
+   specifically against *this issue's* stated requirement, not against a
+   codebase-wide convention.
+2. No httptest in this codebase mounts the real `selectAgentProvider` (or
+   `selectBridgeProvider`) chain and proves cross-audience rejection.
+   `server_test.go`'s `testHarness.do` injects `*auth.Identity` directly
+   into the context, bypassing `auth.Middleware` and `localjwt.Provider`
+   entirely — appropriate for testing handler logic, but it means the
+   audience-isolation behavior the issue calls out by name
+   ("bridge/API tokens must 403 here, and agent tokens must 403 on
+   non-agent routes") has zero direct test coverage today, only the
+   generic unit coverage of `localjwt.CheckAudience` in
+   `internal/auth/localjwt/issuer_test.go` (`TestCheckAudience`), which
+   never touches this package's routes or `cmd/server`'s wiring.
+3. No test sends a structurally invalid POST body (malformed JSON, or a
+   JSON object with an extra field) to confirm `decodeStrict` actually
+   yields 400-not-500 through the handlers. Existing tests cover
+   domain-level validation (bad `status`, empty `text`, non-numeric
+   `limit=`) but not the schema-shape validation itself.
 
 ## Proposed solution
 
-Add a new `internal/agentapi` package (sibling to `internal/web`,
-`internal/bridge`) that mirrors the `web.AccountHandlers` shape, plus a
-fourth `localjwt.Provider` audience (`"agent"`) selected the same way the
-bridge provider is selected today.
+Because the substantial majority of the issue is already correctly
+implemented and tested, this proposal is intentionally scoped to closing
+the three gaps above rather than re-architecting anything. All changes stay
+inside `internal/agentapi` and `cmd/server` (a small `_test.go` addition),
+matching this codebase's existing package boundaries.
 
-**1. New audience + provider selector — `cmd/server/main.go`.**
-Add `selectAgentProvider(cfg, store) auth.Provider`, structurally identical
-to `selectBridgeProvider` (lines 595-637): a `localjwt.Provider` with
-`ExpectedAudience: "agent"`, `AudienceRequired: true`, keyed off the same
-`AUTH_MODE` switch (`local-jwt` / `shared-hmac(-legacy)` / `local-dev`
-fallback to `localdev.New`), and the same fail-closed `rejectAllProvider`
-when `OAUTH_JWT_SECRET` is unset. This reuses 100% of the existing
-verification code path (`localjwt.Verify` + `CheckAudience`); the only new
-runtime cost is one more `Provider` struct.
+1. **Prefix audit tool names with `agent.`.** Change
+   `internal/agentapi/json.go`'s `audit()` helper to prepend `"agent."` to
+   `tool` once, in the single choke point every handler already calls
+   through — no call site needs to change. This is the minimal,
+   single-point fix: `s.Store.LogToolCall(ctx, userID, "agent."+tool, "",
+   status, errMsg, "")`. Chosen over editing every call site individually
+   because it guarantees no handler can be added later that forgets the
+   prefix, and it is a one-line diff against a file that already exists
+   for exactly this purpose (every handler already funnels through
+   `s.audit`).
 
-**2. Token issuance — no new public endpoint (see Open question 1).**
-Because the communication-agent runtime is designed to run in-process
-(`AgentRuntime` wired directly into `telegram.ClientPool`), token minting
-happens server-side: `main.go` constructs one `localjwt.Issuer` (same
-secret/issuer as everything else) and, when/where the future
-`internal/agent/listener` package starts a user's listener loop, it mints
-a short-lived (e.g. 15m, refreshed on demand — shorter than the 1h
-`bridgeTokenTTL` since the caller is local and can re-mint cheaply) token
-with `Audience: []string{"agent"}` and the user's `tg_id`/`tg_username`,
-the same `Claims` struct the bridge path already uses. This PR adds the
-issuer wiring and the `Mint`-based helper (e.g.
-`agentapi.MintToken(issuer, userTGID, ttl)`) but the actual listener
-integration is out of scope (see requirements.md).
+2. **Add end-to-end audience-isolation tests.** Add a new
+   `cmd/server/agentapi_wiring_test.go` (or extend `main_test.go`) that:
+   builds a real `localjwt.Issuer`/`Provider` pair the way
+   `selectAgentProvider`/`selectBridgeProvider` do, mints a `aud=bridge`
+   token and a `aud=agent` token, mounts a minimal router reproducing the
+   two provider-gated mounts, and asserts: (a) the bridge token against an
+   agent-provider-gated handler is rejected (401, matching today's actual
+   `auth.Middleware` behavior — see the status-code decision recorded in
+   requirements.md's Open Question 1); (b) the agent token against a
+   bridge-provider-gated handler is rejected the same way; (c) the agent
+   token against the agent-provider-gated handler succeeds. This is
+   deliberately placed at the `cmd/server` level (or as a small new
+   `internal/agentapi` test that constructs a real `localjwt.Provider`
+   instead of injecting identity directly), not inside the existing
+   `server_test.go` harness, because the whole point is to exercise the
+   piece `server_test.go` currently bypasses.
 
-**3. Handlers — `internal/agentapi/handlers.go`.**
-A `Handlers` struct holding `*db.Store` (and nothing else — no pool, no
-crypto needed directly since `Store` already handles seal/unseal), with
-`Register(mux)` binding these routes (mounted at `/api/agent/v1`):
+3. **Add schema-validation edge-case tests.** Extend
+   `internal/agentapi/server_test.go` with: a `POST /actions/propose_reply`
+   with a body containing an unknown field (e.g. `{"conversation_id":1,
+   "text":"hi","peer_tg_id":999}`) asserting 400 — this one doubles as the
+   "no client-supplied peer is ever honored" test the issue explicitly
+   asks for, since `peer_tg_id` is not a field `proposeReplyRequest`
+   declares and `decodeStrict` must reject it outright rather than
+   silently ignore it; a request with a truncated/invalid JSON body
+   asserting 400; and a body exceeding `maxRequestBodyBytes` (1 MiB)
+   asserting 400, not a panic or 500 from `http.MaxBytesReader`'s
+   `io.ErrUnexpectedEOF`.
 
-```
-GET  /api/agent/v1/profile                 -> AgentProfile (mode, limits, disclosure text)
-GET  /api/agent/v1/events?since_id=N&limit=  -> []IncomingEvent, ordered by id
-GET  /api/agent/v1/conversations/{id}       -> Conversation + recent messages
-GET  /api/agent/v1/conversations/{id}/messages?since_id=&limit=
-POST /api/agent/v1/actions                  -> propose an action; server computes policy_decision
-GET  /api/agent/v1/actions/{id}             -> current AgentAction row
-POST /api/agent/v1/actions/{id}/execute     -> approved -> executing -> executed transition
-POST /api/agent/v1/notifications            -> record an owner_notifications row (e.g. summary queued)
-```
+4. **Record, do not change, the 401-vs-403 behavior.** Per requirements.md
+   Open Question 1, changing `auth.Middleware`'s status code for
+   audience-mismatch specifically (as opposed to every other
+   `Authenticate` failure) would touch all three audiences' shared
+   middleware and is out of proportion to this issue. The task list below
+   captures this as an explicit human-reviewable decision point rather than
+   silently diverging from the issue text.
 
-Every handler:
-- Reads `id := auth.From(r.Context())`; 401s defensively if nil (should be
-  unreachable given `auth.Middleware(provider, true, m)` in front, same
-  defensive pattern `NewBridgeTokenHandler` already uses).
-- Scopes every `Store` call to `id.UserID` — never accepts a caller-supplied
-  user id, closing the cross-account read/write path called out in
-  requirements.md.
-- Calls `h.audit(r, id, "<verb> /api/agent/v1/...", err)` on the way out,
-  reusing the exact `Store.LogToolCall` audit chain `web.AccountHandlers`
-  already writes to, so agent activity is visible via the existing
-  `get_my_auditLog` MCP tool and `GET /api/account/audit` without adding a
-  second audit mechanism.
-- Never logs `slog` attributes named `body`/`payload`/`text`/
-  `proposed_text` (all already in `sensitiveKeys`,
-  `internal/audit/redact.go`) with raw content — only ids/status/lengths.
-
-**4. Server-side policy evaluation — `internal/agentapi/policy.go`.**
-`POST /api/agent/v1/actions` cannot trust a caller-supplied
-`policy_decision` (requirements.md AC3-AC4). Add a small pure function:
-
-```go
-func evaluate(profile *db.AgentProfile, actionType, intent string, replyChars int, blocked bool) (decision string, reasons []string)
-```
-
-implementing exactly what the existing doc comments promise: `mode=="off"`
-or `AutopilotPaused` -> `PolicyDeny`; sender in `BlockedSenders` -> `PolicyDeny`;
-`replyChars > MaxReplyChars` -> `PolicyDeny` (or truncate + `RequireApproval`,
-TBD by implementer — flagged as an implementation detail, not a contract
-change); `mode=="guarded"` and `intent` in `IntentAllowlist` -> `PolicyAllow`;
-otherwise -> `PolicyRequireApproval`. This is intentionally the minimal
-version of "the policy engine" the doc comments already promise, not a new
-pluggable framework — `MaxMsgsPerMinute`/`MaxAutonomousTurns` rate/turn
-enforcement is explicitly deferred (see Out of scope) since it needs
-call-site data (recent send timestamps, current `conversations.autonomous_turns`)
-this PR's handler already has access to via `Store` but which is reasonable
-to land as a fast-follow once the first policy pass is proven out.
-
-**5. New `Store` query — `ListIncomingEventsSince`.**
-`agent_events.go` currently only supports point lookup
-(`GetIncomingEvent` by `event_id`). `GET /api/agent/v1/events` needs a
-ranged, ordered, paginated query scoped by `user_id`. Add:
-
-```go
-func (s *Store) ListIncomingEventsSince(ctx context.Context, userID, sinceID int64, limit int) ([]IncomingEvent, error)
-```
-
-mirroring the existing `ListConversationMessages`/`ListJobLeads` shape
-(`ORDER BY id ASC LIMIT ?`, decrypt each row's `body_encrypted` the same
-way `GetIncomingEvent` already does). This is additive — no schema
-migration needed, `idx_incoming_events_created_at` already exists but the
-handler should filter/sort on the primary key `id` for stable cursoring
-rather than `created_at` (multiple rows can share a timestamp).
-
-**6. Route mounting — `cmd/server/main.go`.**
-Immediately after the existing `/api/account` mount block:
-
-```go
-agentProvider := selectAgentProvider(cfg, store)
-agentMux := chi.NewRouter()
-agentapi.NewHandlers(store).Register(agentMux)
-mux.Mount("/api/agent/v1", auth.Middleware(agentProvider, true, m)(agentMux))
-```
-
-`auth.Middleware`'s `required` is always `true` here (unlike the MCP
-mount, which honors `cfg.AuthRequired` for anonymous local-dev testing) —
-an agent-facing surface with direct Telegram-send capability should never
-be reachable anonymously, matching `/bridge` and `/api/account`'s posture
-rather than `/mcp`'s.
+5. **No change to `GET /recruiters/{peer}`.** The 501 stub and the
+   `OwnerProfileProvider` interface are correct as-is per the issue's own
+   dependency ordering (#297 not yet merged). Confirmed by reading the
+   issue body's own text ("restricted fields stripped") against
+   `server.go`'s interface doc comment, which already describes exactly
+   that contract for whoever implements #297.
 
 ## Alternatives
 
-1. **Extend the existing MCP tool surface with `agent_*` tools instead of a
-   new HTTP surface.** Rejected: MCP tools authenticate with the general
-   MCP JWT (any `aud` the operator configured, typically none), so any MCP
-   client (Claude, ChatGPT, ad-hoc curl with a stolen user token) would
-   gain the ability to drive the autonomous agent's action queue. The
-   issue explicitly asks for a separate `aud=agent`-scoped surface, and
-   the codebase's existing pattern (bridge gets its own audience, not new
-   MCP tools) supports keeping this separate. It also avoids polluting the
-   MCP tool schema (`internal/mcp/tools.go`, already 70KB) with
-   internal-plumbing tools no end-user client should ever see or call.
+1. **Re-implement `internal/agentapi` from scratch per a fresh top-down
+   design, ignoring the existing code.** Rejected: the existing
+   implementation already matches the issue's endpoint list, auth model,
+   envelope contract, and idempotency/durability invariants, and carries
+   773+112 lines of passing tests exercising subtle correctness properties
+   (redelivery idempotency, kill-switch propagation to owner-facing
+   actions, job/conversation mismatch rejection, lead-only job completion)
+   that a rewrite would have to re-derive from the same source material
+   this investigation already read. Discarding working, tested code to
+   satisfy a "design proposal" format would be pure churn and would
+   introduce regression risk on invariants (e.g. `HasAgentActionForJob`'s
+   409 semantics) that took real review cycles to get right (see the `P1`/
+   `P2` comments throughout `server_test.go` referencing prior review
+   findings).
 
-2. **Give the agent runtime direct `*db.Store` access (no HTTP hop at
-   all), since `AgentRuntime` already runs in-process.** Rejected for this
-   PR: it's the fastest path today, but the issue explicitly asks for an
-   HTTP surface with its own JWT audience, which implies the design intends
-   to support an out-of-process agent runtime later (a separate worker
-   deployment, matching how `/bridge` supports an out-of-process Local
-   Bridge daemon). Building the HTTP boundary now — even though the only
-   caller in this milestone is in-process — keeps the option open without
-   a breaking change later, and forces the policy-evaluation logic to live
-   behind a real interface boundary instead of being inlined into whatever
-   package ends up running the agent loop.
+2. **Fix the `agent.` prefix and the missing tests by editing every call
+   site instead of the single `audit()` choke point.** Rejected in favor
+   of the choke-point fix: `internal/agentapi/json.go`'s `audit()` is
+   already the single function every handler calls, added specifically
+   "so every handler logs with the same call shape" per its own doc
+   comment — editing eleven call sites individually when one exists for
+   this exact purpose would violate that stated intent and create a
+   drift risk for the next endpoint added to this package.
 
-3. **Reuse `sharedhmac`/a brand-new bespoke auth scheme for the agent
-   surface instead of `localjwt` + a new audience.** Rejected: `localjwt`
-   already supports arbitrary audiences via `Claims.Audience` +
-   `CheckAudience`, and `selectBridgeProvider` already proves the pattern
-   composes cleanly with the existing `AUTH_MODE` switch (including
-   fail-closed behavior and `local-dev` fallback). Introducing a second
-   token format would duplicate `Verify`/`CheckAudience`/`EnsureUserByTelegramID`
-   logic for no benefit and would need its own entry in
-   `middleware.go`'s `providerName`/`classifyAuthError` helpers.
+3. **Move the audience-isolation test into `internal/agentapi/server_test.go`
+   by wiring a real `localjwt.Provider` into `testHarness`.** Considered,
+   and partially reasonable, but rejected as the primary location: the
+   interesting failure mode the issue calls out is specifically about
+   *routing* — a bridge token must fail at the `/bridge` vs
+   `/api/agent/v1` boundary that `cmd/server/main.go` establishes, which
+   `internal/agentapi` alone cannot exercise (it has no bridge routes to
+   test against). A `cmd/server`-level test (or a small dedicated test file
+   that constructs both provider chains) is the natural place this
+   cross-package invariant lives; `internal/agentapi` can still gain a
+   narrower same-package test that swaps `testHarness`'s identity-injection
+   for a real provider on selected tests if the implementer finds that
+   more convenient, but the cross-mount assertion belongs at the
+   integration layer.
 
 ## Platform impact
 
-- **Migrations:** none required for the route/handler work itself. The one
-  new `Store` method (`ListIncomingEventsSince`) is a `SELECT` against an
-  existing table/index — no `ALTER TABLE`. If the deferred
-  `MaxMsgsPerMinute`/`MaxAutonomousTurns` enforcement lands in this PR
-  after all, it still only reads existing columns.
-- **Backward compatibility:** fully additive. No existing route, table, or
-  `auth.Provider` behavior changes. `local-dev` and `shared-hmac-legacy`
-  deployments keep working unchanged; `/api/agent/v1` simply does not get
-  meaningfully exercised until something mints an `aud=agent` token, which
-  nothing in production does until the (separate, future) listener PR.
-- **Resource impact:** negligible — one more `chi` sub-router, one more
-  `localjwt.Provider` instance (stateless struct), one more indexed
-  `SELECT`. No new background goroutines beyond what a future listener PR
-  would add anyway.
+- **Migrations:** none. All schema this surface reads/writes
+  (`agent_profiles`, `incoming_events`, `conversations`,
+  `conversation_messages`, `agent_actions`, `agent_jobs`, `job_leads`,
+  `owner_notifications`) already exists per `internal/db/agent_schema.go`
+  and is unaffected by the proposed changes (audit-name prefix and new
+  tests touch no schema).
+- **Backward compatibility:** the `agent.` audit-prefix change is
+  additive-only for consumers of the audit log (existing entries keep their
+  old names; only new entries get the prefix) — any downstream tooling that
+  greps `LogToolCall` output for the current bare names (e.g.
+  `"propose_reply"`) should be checked before merging, since `agent.`
+  prefixing changes the exact string. No HTTP wire-format change: request/
+  response shapes are untouched.
+- **Resource impact:** negligible — one string concatenation per audit
+  call; new tests run in-process against SQLite `:memory:`, no new external
+  dependencies.
 - **Risks + mitigations:**
-  - *Risk:* a bug in `evaluate()` (policy.go) could let a `guarded`-mode
-    action bypass approval and auto-send. *Mitigation:* the compare-and-set
-    in `Store.UpdateAgentActionStatus` and the `executing` trap-state
-    (already documented in `agent_actions.go`) mean a wrong `allow`
-    decision can send at most once per proposed action, never double-send;
-    add unit tests enumerating every `(mode, autopilot_paused, blocked,
-    over_length)` combination against the documented state machine before
-    merge.
-  - *Risk:* cross-account data leakage if a handler ever accepts a
-    caller-supplied `user_id`. *Mitigation:* every handler derives
-    `user_id` exclusively from `auth.From(r.Context()).UserID`; add a test
-    that a token minted for user A cannot read user B's `/events` or
-    `/conversations/{id}` (expect `404`/`403`, not silent cross-tenant
-    return) — this is the same shape of test `internal/bridge` already has
-    for the bridge audience.
-  - *Risk:* forgetting to wire `selectAgentProvider` into the same
-    fail-closed posture as `selectBridgeProvider` (i.e. defaulting to
-    `localdev` in an ambiguous config and accidentally accepting
-    unauthenticated agent calls in a prod-like deployment).
-    *Mitigation:* copy the existing `rejectAllProvider` fallback verbatim
-    and add a config test analogous to whatever covers
-    `selectBridgeProvider` today (if none exists, add one — currently
-    `cmd/server/main_test.go` is only 2100 bytes / likely thin, worth
-    checking during implementation).
-  - *Risk:* plaintext message content ending up in structured logs via a
-    new field name not in `sensitiveKeys`. *Mitigation:* reuse the
-    existing key names (`body`, `payload`, `text`, `proposed_text`) for any
-    logged attribute that could carry content; do not invent new field
-    names for message text.
+  - *Risk:* the audit-prefix change breaks an existing downstream
+    dashboard/alert keyed on the old bare tool names. *Mitigation:* grep
+    the `deploy/` and `docs/runbooks/` trees for the current bare names
+    before merging (a Tier 2 implementer step, listed in tasks.md), and
+    call it out in the PR description per this repo's squash-merge
+    convention so the changelog line is discoverable.
+  - *Risk:* the new end-to-end audience test is flaky if it depends on
+    wall-clock JWT expiry. *Mitigation:* mint tokens with a several-minute
+    TTL in the test, matching the pattern already used in
+    `internal/auth/localjwt/issuer_test.go`.
+  - *Risk:* changing `auth.Middleware`'s status code later (if a future
+    decision reverses Open Question 1) is a breaking change for any
+    worker code that already treats 401 as "re-authenticate" vs 403 as
+    "fatal, do not retry." *Mitigation:* this proposal explicitly does not
+    make that change; it is flagged for human sign-off precisely because
+    of this downstream-behavior risk.

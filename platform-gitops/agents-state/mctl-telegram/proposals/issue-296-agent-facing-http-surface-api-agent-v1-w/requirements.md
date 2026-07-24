@@ -2,203 +2,233 @@
 
 ## Context
 
-`mctl-telegram` is building an autonomous "communication agent" (milestone M6)
-that watches a user's Telegram DMs and proposes/sends replies on their behalf
-under a policy the user configures. The database side of this feature already
-exists: `internal/db/agent_schema.go` defines `agent_profiles`,
-`incoming_events`, `conversations`, `conversation_messages`, `agent_actions`,
-`job_leads`, and `owner_notifications`, with typed accessors in
-`internal/db/agent_domain.go`, `agent_events.go`, and `agent_actions.go`
-(confirmed by reading these files). `internal/telegram/agentruntime.go`
-already wires a pluggable `AgentRuntime` (`HandlerFor`/`RunFor`) into the
-MTProto client pool so a per-user update listener can run inside a pooled
-client (landed in PR #289, "pinned pool entries with agent update handlers" —
-the only commit visible in this shallow clone, confirming A-PR6 follows
-directly after the pool/listener wiring).
+Issue #296 asks for a new, restricted HTTP surface under `/api/agent/v1` that
+the communication agent's worker process (a headless Option-C worker per
+#298, or an experimental Channels adapter) uses to poll for Telegram events,
+read conversation/lead/policy state, and propose the narrow set of actions
+the agent is allowed to take (reply, save a lead, ask the owner for
+approval, send an owner summary, pause autopilot, complete a job). The
+surface must authenticate with its own JWT audience (`aud=agent`), fail
+closed against any other token (bridge, regular MCP, or none), and never
+accept a client-supplied peer for outbound sends — the server derives the
+peer from the conversation row so there is no generic "send to arbitrary
+peer" primitive anywhere on this surface.
 
-What is still missing is any way for the agent's own reasoning process to
-read what came in and act on it. There is no HTTP surface, no MCP tool, and
-no consumer at all today (`grep` across `internal/mcp` and `internal/web`
-for `agent_actions`/`incoming_events`/`AgentProfile` returns nothing outside
-the `internal/db` package itself). Issue #296 asks for that surface: a new
-`/api/agent/v1` HTTP API, authenticated with a JWT whose `aud` claim is
-`"agent"`, so the communication-agent process (in-process goroutine or a
-separate worker) can poll for new events and propose/track actions without
-reusing the general-purpose MCP tool surface or the user-facing browser
-session. The issue body itself was not populated by the reporter (placeholder
-text only); this proposal is grounded entirely in the code already in the
-repository plus the closest existing precedent — the `aud=bridge` pattern
-used by `POST /api/bridge/token` and `GET /bridge`
-(`internal/bridge/tokenhandler.go`, `main.go` `selectBridgeProvider`).
+**This is a re-investigation, not a from-scratch design.** A prior proposal
+for this same issue (dated 2026-07-19, still on disk in this proposal
+directory before this rewrite) was grounded in a snapshot of the repository
+that had no `internal/agentapi` package at all. The current clone (checked
+out 2026-07-24, HEAD `e4e7928`) already contains a essentially complete
+implementation: package `internal/agentapi` (10 files, ~2100 lines including
+tests), mounted at `/api/agent/v1` in `cmd/server/main.go` behind
+`cfg.AgentEnabled` (`AGENT_ENABLED`), with a dedicated `aud=agent` JWT
+provider (`selectAgentProvider`) and a dedicated admin-only mint endpoint
+(`POST /api/agent/token`, `internal/agentapi/tokenhandler.go`). Every
+endpoint the issue lists exists and is wired (`internal/agentapi/server.go`
+`Register`). This proposal therefore documents the existing implementation
+against the issue's acceptance criteria, confirms what is already correct
+(most of it, with tests), and calls out the concrete, verified gaps a Tier 2
+implementer should close: two behavioral discrepancies from the issue text
+(audit-log naming, HTTP status code on cross-audience rejection) and three
+missing test scenarios the issue explicitly asks for.
 
-This matters because every other privileged channel in this codebase
-(`/mcp`, `/bridge`, `/telegram/connect/manage`) already has a scoped
-audience and an explicit provider selection function; leaving the agent
-runtime to either share the general MCP token (over-broad: MCP callers could
-also drive the agent surface) or bypass auth entirely (unacceptable per
-CLAUDE.md's "treat all Telegram data as private user data") would break that
-established isolation model.
+Why it matters: this surface is the *only* channel the communication agent
+has to mctl-telegram data or Telegram sends (per the package doc comment in
+`internal/agentapi/server.go`). Any gap between the issue's stated
+invariants and what is actually enforced/tested is a security-relevant gap,
+not a cosmetic one — the whole point of A-PR6 is that the agent cannot reach
+Telegram except through this narrow, audited, policy-gated door.
 
 ## User stories
 
-- AS the communication-agent runtime I WANT to authenticate to
-  `mctl-telegram` with a narrowly-scoped token SO THAT a leaked or misused
-  agent credential cannot be replayed against `/mcp`, `/bridge`, or
-  `/api/account`.
-- AS the communication-agent runtime I WANT to poll for new incoming
-  Telegram events for the users it manages SO THAT it can react to DMs
-  without holding an MTProto session itself.
-- AS the communication-agent runtime I WANT to propose a reply/action and
-  have the server independently evaluate it against the user's
-  `agent_profiles` policy (mode, intent allowlist, blocked senders, reply
-  length) SO THAT the policy is enforced in one place and cannot be
-  bypassed by a compromised or buggy agent process (this mirrors the
-  existing doc comment in `agent_actions.go`: "the agent process itself
-  never enforces it").
-- AS the communication-agent runtime I WANT to fetch the status of an
-  action it previously proposed, and to mark it executed after a
-  successful Telegram send SO THAT the `agent_actions` lifecycle state
-  machine stays authoritative in the DB.
-- AS the account owner I WANT the agent surface to only ever act within the
-  boundaries of my own `agent_profiles` row SO THAT one user's agent token
-  can never read or act on another user's conversations.
-- AS a platform operator I WANT agent-token issuance and every
-  `/api/agent/v1` call to be observable (metrics + audit log) in the same
-  way `/api/account` and `/api/bridge/token` already are SO THAT misuse or
-  runaway autonomous behavior is visible without needing bespoke tooling.
+- AS the communication agent worker (#298's headless process) I WANT to
+  long-poll for the next due job and fetch its full event body SO THAT I can
+  decide how to respond without polling the general MCP surface or holding a
+  standing websocket.
+- AS the communication agent worker I WANT to propose a reply, save a lead,
+  ask the owner for approval, or send an owner summary through narrow,
+  purpose-built endpoints SO THAT I can never be tricked (by a bad model
+  output or a compromised prompt) into sending to an arbitrary peer.
+- AS a platform operator I WANT to mint a long-lived `aud=agent` credential
+  for one specific Telegram account, scoped to nothing else, SO THAT a
+  deployed worker's credential cannot be replayed against `/mcp` or
+  `/bridge`, and a leaked bridge/MCP token cannot be replayed against the
+  agent surface.
+- AS a security reviewer I WANT every state-changing agent call recorded in
+  the existing hash-chained audit log under a name that is unambiguously
+  attributable to this surface SO THAT I can distinguish agent-initiated
+  actions from human/MCP-initiated ones in `LogToolCall` output without
+  cross-referencing source code.
+- AS the Tier 2 implementer picking this up next I WANT a precise list of
+  what is done, verified, and still open SO THAT I do not re-implement
+  working code or, worse, assume untested code paths are safe.
 
 ## Acceptance criteria (EARS)
 
-- WHEN a caller issues a request to any `/api/agent/v1/*` route without a
-  valid Bearer token THE SYSTEM SHALL respond `401 Unauthorized` and SHALL
-  NOT touch any `agent_*`/`conversations`/`incoming_events` table.
-- WHEN a caller presents a JWT whose `aud` claim does not include `"agent"`
-  THE SYSTEM SHALL reject the request the same way `selectBridgeProvider`
-  rejects a non-`bridge`-audience token on `/bridge` (401, classified as
-  `jwt_wrong_audience`/`jwt_missing_audience` by
-  `internal/auth/middleware.go`'s `classifyAuthError`).
-- WHEN a caller presents a valid `aud=agent` token THE SYSTEM SHALL scope
-  every subsequent read/write in that request to the `user_id` resolved
-  from the token's `tg_id` claim (via `Store.EnsureUserByTelegramID`, the
-  same resolution `localjwt.Provider.Authenticate` already performs) and
-  SHALL NOT accept a caller-supplied `user_id` parameter that could target
-  a different account.
-- WHEN the agent runtime calls `GET /api/agent/v1/events` THE SYSTEM SHALL
-  return incoming events for that user ordered by id/created_at with a
-  cursor (e.g. `since_id`) so repeated polls do not re-deliver already-seen
-  rows.
-- WHEN the agent runtime calls `POST /api/agent/v1/actions` with a proposed
-  action THE SYSTEM SHALL evaluate the user's current `AgentProfile` (mode,
-  `intent_allowlist`, `blocked_senders`, `max_reply_chars`) server-side and
-  SHALL persist the resulting `policy_decision`
-  (`allow`/`require_approval`/`deny`) itself — the caller-supplied intent
-  is an input to the decision, never the decision.
-- IF `AgentProfile.Mode` is `"off"` OR `AgentProfile.AutopilotPaused` is
-  true THEN THE SYSTEM SHALL deny every proposed auto-send action
-  regardless of what the agent runtime requests.
-- IF an action's resulting `policy_decision` is `allow` THEN THE SYSTEM
-  SHALL permit the agent runtime to transition it through
-  `approved -> executing -> executed` via the execute endpoint; IF the
-  decision is `require_approval` THEN THE SYSTEM SHALL require the
-  existing owner-approval path (Telegram `/mctl approve <code>`, already
-  modeled by `ApprovalCode` in `agent_actions.go`) before execution is
-  permitted, and the HTTP surface SHALL reject an execute call on a
-  `pending_approval` row.
-- WHEN the agent runtime calls the execute endpoint for an action already
-  in `executing` or a terminal state (`executed`, `rejected`, `expired`,
-  `denied`) THE SYSTEM SHALL reject the transition (compare-and-set
-  semantics, matching `Store.UpdateAgentActionStatus`'s documented
-  `from`/`to` contract) rather than silently double-sending.
-- WHILE the communication agent is disabled for a user
-  (`ListenerEnabled=false` or no `agent_profiles` row exists) THE SYSTEM
-  SHALL still authenticate `/api/agent/v1` calls scoped to that user (so
-  the agent runtime can read profile state / discover it is disabled) but
-  SHALL reject any action-creating or action-executing call for that user.
-- WHEN any `/api/agent/v1` handler completes THE SYSTEM SHALL record an
-  audit entry via the same `Store` audit path used by
-  `internal/web/account.go` (`h.audit(...)` -> `Store.LogToolCall`) so
-  agent activity is visible in `get_my_auditLog` / `/api/account/audit`.
-- WHEN message bodies or action payloads pass through `/api/agent/v1`
-  handlers or their logging THE SYSTEM SHALL NOT log plaintext content —
-  only encrypted-at-rest storage via `crypto.SealForUser` (the existing
-  mechanism `InsertIncomingEvent`/`InsertAgentAction` already use) and
-  redacted structured logs (existing `sensitiveKeys` in
-  `internal/audit/redact.go` already cover `body`/`payload`/`text`/
-  `proposed_text`).
-- IF `OAUTH_JWT_SECRET` is unset in a mode that would otherwise mount
-  `/api/agent/v1` THEN THE SYSTEM SHALL fail closed (mirror
-  `selectBridgeProvider`'s `rejectAllProvider` fallback) rather than
-  silently downgrading to an unauthenticated or `local-dev` identity.
-- WHEN `mctl-telegram` starts in `AUTH_MODE=local-dev` THE SYSTEM SHALL
-  still allow an operator to exercise `/api/agent/v1` end-to-end (matching
-  how `/bridge` falls back to `localdev.New` in that mode) so local
-  development does not require running the full OAuth issuer.
+Auth and audience isolation:
+- WHEN a request to any `/api/agent/v1/*` route carries a JWT with `aud`
+  other than `"agent"` (including a valid `aud=bridge` or generic MCP token)
+  THE SYSTEM SHALL reject the request and grant no access to agent data or
+  actions. (Implemented: `selectAgentProvider` + `localjwt.CheckAudience`,
+  `cmd/server/main.go`. Currently surfaces as HTTP 401 via
+  `auth.Middleware`'s generic `Authenticate` error path, not 403 — see Open
+  questions.)
+- WHEN a request to `/mcp` or `/bridge` carries a JWT with `aud="agent"` THE
+  SYSTEM SHALL reject it the same way, for the same reason (their providers'
+  `ExpectedAudience` do not include `"agent"`).
+- IF `AGENT_ENABLED` is false THEN THE SYSTEM SHALL NOT mount
+  `/api/agent/v1` at all (verified: `cmd/server/main.go`'s `if
+  cfg.AgentEnabled { ... }` block; default `false`,
+  `internal/config/config.go`).
+- WHEN `POST /api/agent/token` is called THE SYSTEM SHALL require the
+  caller to be authenticated on the *regular* MCP auth chain and hold the
+  `admin:users` scope, and SHALL mint a token for the `telegram_id` supplied
+  in the request body (not the caller's own identity) with `aud="agent"`.
+  This endpoint SHALL NOT be reachable from `/api/agent/v1` itself.
+- IF `OAUTH_JWT_SECRET` is unset in a JWT-based `AUTH_MODE` THEN THE SYSTEM
+  SHALL fail closed on the agent surface (`rejectAllProvider`), not fall
+  back to an unauthenticated or globally-shared provider.
+
+Endpoints (`internal/agentapi/server.go` `Register`, all implemented):
+- WHEN `GET /events` is polled THE SYSTEM SHALL hold the connection for up
+  to the configured long-poll window (production default 20s, under the
+  60s router timeout) and return `{"jobs": []}` with HTTP 200 on timeout,
+  never an error status.
+- WHEN `GET /events` claims one or more due jobs THE SYSTEM SHALL return,
+  per job, `job_id`, `event_id`, `conversation_id`, an `attempt` fencing
+  counter, and an advisory `deadline` (RFC3339) derived from the claim time
+  plus the configured job-visibility window.
+- WHEN a job is claimed by one caller THE SYSTEM SHALL NOT let a concurrent
+  or subsequent poll (by the same or another account) claim it again while
+  it remains within its visibility window, and SHALL NOT let a caller
+  authenticated for account A see or claim account B's jobs.
+- WHEN `GET /event/{id}` is called for a job that does not belong to the
+  caller's account THE SYSTEM SHALL return 404, not another account's data.
+- WHEN `POST /actions/propose_reply` is called THE SYSTEM SHALL derive the
+  outbound peer exclusively from the `conversation_id`'s stored `peer_tg_id`
+  server-side. The request schema SHALL NOT accept any peer-identifying
+  field, and no code path SHALL honor one even if a client sends it (backed
+  by `decodeStrict`'s `DisallowUnknownFields`).
+- WHEN `POST /jobs/{id}/complete` is called with `status=completed` THE
+  SYSTEM SHALL reject the call (409) unless a durable result already exists
+  for that job (`agent_actions` row via `HasAgentActionForJob`, or a saved
+  lead via `HasJobLeadForJob`) — an ack alone is never sufficient to close a
+  job.
+- WHEN `POST /jobs/{id}/complete` is called with a stale `attempt` value
+  (the job was reclaimed by the sweeper after a visibility timeout) THE
+  SYSTEM SHALL return 409, not silently accept the late ack.
+- WHEN `GET /recruiters/{peer}` is called and no `OwnerProfileProvider` is
+  configured THE SYSTEM SHALL return 501, not 500 or a fabricated profile
+  (current state: no provider is wired yet — see Open questions, dependency
+  on #297).
+- WHEN any POST body fails to decode (malformed JSON, wrong field types, or
+  a field not in the schema) THE SYSTEM SHALL respond 400 with a stable
+  `{"error": "..."}` shape, and SHALL NOT respond 500 for caller input
+  errors.
+- WHEN any handler encounters an unexpected internal error (DB failure,
+  etc.) THE SYSTEM SHALL log it via `slog` without message bodies, phone
+  numbers, or secrets, and respond with a generic 500 body that does not
+  leak internals.
+
+Audit:
+- WHEN any `/api/agent/v1` handler completes a request (success, denial, or
+  domain-level failure) THE SYSTEM SHALL record it via
+  `Store.LogToolCall`, the same hash-chained audit mechanism every other
+  privileged surface in this codebase uses.
+- IF an audit log entry originates from this package THEN its `tool` field
+  name SHALL be prefixed `agent.` (e.g. `agent.propose_reply`) per the
+  issue's explicit requirement, so it is distinguishable from MCP-tool and
+  bridge audit entries without inspecting source. **Not currently true**:
+  see Open questions / Out of scope boundary below — this is a confirmed
+  gap, not a design choice.
+
+Policy integration:
+- WHILE the process-wide `AGENT_KILL_SWITCH` is engaged THE SYSTEM SHALL
+  deny every state-changing action on this surface, including owner-facing
+  notifications, not only outbound replies (verified by
+  `TestHandleOwnerFacing_KillSwitchBlocksNotification`).
+- WHEN the same job is redelivered to a worker after a crash (worker died
+  after `propose_reply`/`notify/summary` but before `jobs/{id}/complete`)
+  THE SYSTEM SHALL return the same action id / approval code / notification
+  id as the original call, not create a duplicate (idempotent on
+  `(job_id, action_type)`; verified by
+  `TestHandleProposeReply_RedeliveryReturnsSameApprovalCode` and
+  `TestHandleOwnerFacing_RedeliveryDoesNotDuplicateNotification`).
 
 ## Out of scope
 
-- The actual agent reasoning/LLM loop that decides *what* to reply
-  (`internal/agent/listener`, referenced only as a forward comment in
-  `internal/telegram/agentruntime.go`, does not exist yet). This proposal
-  only builds the HTTP surface + auth boundary the runtime will call.
-- A full standalone "policy engine" package. This proposal requires
-  `POST /api/agent/v1/actions` to compute `policy_decision` server-side
-  using the fields already on `AgentProfile`, but a richer/pluggable policy
-  evaluator (e.g. per-minute rate limiting via `MaxMsgsPerMinute`,
-  autonomous-turn ceiling enforcement via `MaxAutonomousTurns`) can be
-  extracted into its own package in a follow-up without changing this
-  surface's routes or contracts.
-- The `agent_jobs` queue table referenced in a code comment
-  (`agent_actions.go`: `JobID int64 // agent_jobs.id`) does not exist in
-  `agent_schema.go` yet. This proposal does not create it; `job_id` is
-  accepted as an optional passthrough field only.
-- Rewriting or extending the existing `internal/mcp` tool surface, the
-  `/bridge` websocket relay, or `/api/account` self-service endpoints.
-- A minting flow analogous to `POST /api/bridge/token` where a *human's*
-  browser session exchanges its MCP JWT for an agent token. Given the
-  agent runtime in this milestone is expected to run in-process
-  (`AgentRuntime` is wired directly into `ClientPool`, not over a network
-  boundary), token issuance is assumed to happen server-side at process
-  start via a `localjwt.Issuer` call, not via a new public HTTP endpoint.
-  This is recorded as an open question below because the issue does not
-  specify it.
-- Owner-facing UI/dashboard for reviewing agent activity (separate from
-  the existing Telegram-native approval flow already implied by
-  `ApprovalCode`).
+- Implementing `OwnerProfileProvider` itself (the real profile-fetch +
+  restricted-field stripping logic) — that is #297 (A-PR7). This surface
+  already has the seam (`agentapi.OwnerProfileProvider` interface,
+  `Server.WithProfile`) and a safe 501 default; wiring a concrete
+  implementation is explicitly out of scope for #296 per the issue body.
+- The headless Option-C worker process itself and the experimental Channels
+  adapter (#298) — this surface is transport-agnostic and consumed
+  identically by both; neither consumer is built in this proposal.
+- Changing the job-queue, listener, or policy-engine semantics
+  (`internal/agent/queue`, `internal/agent/listener`,
+  `internal/agent/policy`) — those are `#286/#288/#289/#299/#290`, already
+  merged, and this proposal treats them as fixed dependencies to be reused,
+  not modified, except where a task below explicitly says otherwise.
+- Rate limiting / quota enforcement beyond what `internal/agent/policy`
+  already evaluates (per-conversation messages-per-minute). A true
+  account-wide rate limit is called out as a possible future need in
+  `internal/agentapi/actions.go`'s `recentAgentSends` doc comment but is not
+  part of this proposal.
+- Deleting or rewriting the prior (2026-07-19) proposal's historical
+  record outside of this directory — only this directory's three files are
+  replaced, per the task instructions.
 
 ## Open questions
 
-The GitHub issue body was not populated (placeholder only), so the
-following are inferred from the codebase and recorded rather than blocking
-on:
+1. **403 vs 401 on cross-audience rejection.** The issue text says
+   "cross-audience tokens must 403, not just be ignored." The current
+   implementation fails closed correctly (a bridge/MCP token is rejected,
+   never silently treated as anonymous) but does so via
+   `auth.Middleware`'s generic `Authenticate` error branch, which returns
+   401 for every provider-level rejection (bad signature, expired, wrong
+   issuer, *and* wrong audience alike — see `internal/auth/middleware.go`).
+   There is no code path in this codebase, on any of the three JWT
+   audiences (MCP/bridge/agent), that returns 403 for an audience mismatch;
+   403 is reserved elsewhere for scope failures on an otherwise-valid
+   identity (e.g. `tokenhandler.go`'s `admin:users` check). Interpretation
+   used in this proposal: the issue's real intent — "must be hard-rejected,
+   not silently dropped" — is satisfied today (it is a 401, not a 200 or a
+   silent no-op), and changing 200+ providers' shared middleware to special
+   case audience-mismatch as 403 would be a cross-cutting change well beyond
+   this package. Tasks below record this as a documentation/test task
+   (assert and pin the current 401 behavior with an explicit end-to-end
+   test) rather than a code change, but flag it for human sign-off since the
+   issue text is explicit about the status code.
+2. **`agent.<name>` audit prefix.** Confirmed gap (see Acceptance criteria
+   above and design.md) — `internal/agentapi/json.go`'s `audit` helper and
+   every call site pass bare tool names (`"get_events"`, `"propose_reply"`,
+   `"save_job_lead"`, etc.) with no `agent.` prefix, unlike the issue's
+   explicit `agent.<name>` convention. Resolved as a concrete task, not left
+   open, since it is unambiguous and low-risk to fix.
+3. **No end-to-end (real JWT + real chi mount) test exists for audience
+   isolation.** `internal/agentapi/server_test.go` bypasses
+   `auth.Middleware` entirely (it injects `*auth.Identity` straight into the
+   request context), so none of the 20+ tests in that file actually prove a
+   bridge-minted or MCP-minted token is rejected by the mounted
+   `/api/agent/v1` router, or that an agent-minted token is rejected by
+   `/mcp`/`/bridge`. `cmd/server/main_test.go` only covers
+   `selectProvider`'s `AUTH_MODE` switch, not `selectAgentProvider`'s, and
+   has no HTTP-level test at all. This is the single largest verified test
+   gap against the issue's explicit requirement ("aud enforcement: ...
+   bridge/API tokens must 403 here, and agent tokens must 403 on non-agent
+   routes"). Resolved as a task, not left open.
+4. **Schema-validation edge cases are only partially covered.** The issue
+   asks for "schema validation edge cases" as an explicit test category.
+   Today's tests exercise domain-level 400s (bad `limit=`, bad
+   `status=`, empty `text`) but no test sends a malformed JSON body or a
+   body with an extra/unknown field to confirm `decodeStrict`'s
+   `DisallowUnknownFields` + `MaxBytesReader` actually produce the required
+   400-not-500 behavior end to end. Resolved as a task.
+5. **`GET /recruiters/{peer}` is stubbed pending #297.** Not ambiguous —
+   the issue and the code agree this is expected (`OwnerProfileProvider`
+   nil-safe, 501 today) — recorded here only so the Tier 2 implementer does
+   not mistake the 501 for a bug.
 
-1. **Where does the `aud=agent` token get minted?** The `bridge` precedent
-   mints tokens via an authenticated HTTP endpoint (`POST
-   /api/bridge/token`) because the Local Bridge daemon is an external
-   process reached over the internet. The communication agent, per
-   `AgentRuntime`'s doc comment, is expected to run "outside the pool" but
-   inside the same deployment (`internal/agent/listener`, not yet built).
-   This proposal assumes an in-process `localjwt.Issuer` call (no new
-   public mint endpoint) is sufficient for A-PR6, since exposing a mint
-   endpoint before the actual runtime exists would be an unused attack
-   surface. If a future PR needs the agent runtime to run as a separate
-   deployable, a `/api/agent/token` endpoint analogous to
-   `/api/bridge/token` can be added then.
-2. **Full endpoint list.** The issue title only says "HTTP surface"; it
-   does not enumerate routes. This proposal's design.md proposes the
-   minimal set needed to close the loop the DB schema already implies
-   (read profile, read events, read/list/create/transition actions, touch
-   conversations, record owner notifications). Additional routes (job
-   leads CRUD, bulk event acknowledgement) can be added incrementally
-   under the same `/api/agent/v1` prefix without a breaking change.
-3. **Versioning posture of `v1`.** No other endpoint in this codebase is
-   versioned in its path (`/api/account`, `/api/bridge/token` are
-   unversioned). This proposal takes the issue's explicit `/api/agent/v1`
-   literally and treats `v1` as a fixed path segment now, with `v2`
-   reserved for a future breaking change — not as a signal to retrofit
-   versioning onto the other `/api/*` surfaces.
-4. **Polling vs. push.** This proposal specifies a polling `GET
-   /api/agent/v1/events?since_id=` contract because there is no existing
-   push/streaming mechanism between an in-process runtime and its own
-   host process's HTTP server (SSE/websocket would be unusual for
-   same-process communication). If the runtime ends up out-of-process,
-   this can be revisited.
+None of the above block proceeding: each has a concrete, reasonable
+resolution captured in tasks.md.
