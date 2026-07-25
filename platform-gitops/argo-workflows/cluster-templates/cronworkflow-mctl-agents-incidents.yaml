@@ -26,10 +26,13 @@ metadata:
       Un-suspended 2026-07-11 after a successful one-shot smoke run
       (mctl-agents-run-fa300c93, triggered via mctl_trigger_incident_responder).
 spec:
-  # Every 30 minutes — incidents accumulate fast; quicker triage is better.
-  # Offset by :15 to avoid contention with the shepherd (:30) and the
-  # main agents-daily (06:00 UTC).
-  schedule: "15,45 * * * *"
+  # Hourly (was every 30 min) — most Failed ticks trace to the known,
+  # unresolved incident-mctl-agents-oauth-quota-exhaustion issue (unseeded
+  # claude-code-oauth-token-2 fallback in Vault), which a GitOps PR can't
+  # fix. Halving the cadence halves the duplicate-failure/incident churn
+  # from that root cause without masking it. Offset by :15 to avoid
+  # contention with the shepherd (:30) and the main agents-daily (06:00 UTC).
+  schedule: "15 * * * *"
   timezone: "UTC"
   # Skip overlapping runs. The run may take up to 10 min for 5 incidents.
   concurrencyPolicy: Forbid

@@ -244,6 +244,13 @@ spec:
             value: "5.00"
           - name: MENTOR_BUDGET_USD
             value: "10.00"
+          # Incident-responder only (run_incident_responder.py's
+          # INCIDENT_RESPONDER_MODEL override) — routine diagnosis/proposal
+          # writing doesn't need Sonnet-tier reasoning on every one of the
+          # 24 daily cron ticks. Bare alias to match the convention in
+          # mctl-agents/config/settings.py (SERVICE_AGENT_MODEL etc.).
+          - name: INCIDENT_RESPONDER_MODEL
+            value: "claude-haiku-4-5"
         resources:
           requests: { cpu: 200m, memory: 512Mi }
           limits:   { cpu: 2000m, memory: 2Gi }
@@ -408,8 +415,13 @@ spec:
           UI_URL="https://workflows.mctl.ai/workflows/argo-workflows/${WORKFLOW_NAME}"
           TEXT="${ICON} mctl-agents: ${SUBJECT} — ${WORKFLOW_STATUS} (${WORKFLOW_DURATION}s)\n${UI_URL}"
 
-          # Telegram leg.
-          if [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
+          # Telegram leg. Suppress the routine "✅ Succeeded" ping for the
+          # incident-responder cron — it fires up to 24x/day and a clean
+          # triage run needs no human attention; Failed/Error still notifies
+          # for every mode, and other modes' Succeeded pings are untouched.
+          if [ "$WORKFLOW_STATUS" = "Succeeded" ] && [ "$WORKFLOW_MODE" = "incident-responder" ]; then
+            echo "ℹ️  Suppressing Succeeded ping for incident-responder (routine run)."
+          elif [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
             curl -s -o /dev/null -w 'telegram http=%{http_code}\n' \
               -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
               -H "Content-Type: application/json" \
