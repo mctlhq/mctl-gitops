@@ -51,8 +51,17 @@ probes:
 # matching mctl-telegram-preview's AGENT_PROFILE_OWNER_TG_ID and the
 # agent_profiles row created for C1 testing). Stored in Vault, never in git —
 # see extraExternalSecrets below.
+#
+# AGENT_API_BASE_URL must be the full /api/agent/v1 root, not just the host —
+# internal/agentworker/client.go appends paths like "/events" directly onto
+# it with no further prefix. An earlier version of this file set it to just
+# "https://tg-preview.mctl.ai", which made every poll 404 and left the pod
+# stuck failing readiness indefinitely (no crash loop, since /healthz doesn't
+# depend on the poll loop, but never Ready either). In-cluster service DNS
+# is used instead of the public hostname since the worker and
+# mctl-telegram-preview run in the same namespace/cluster.
 env:
-  AGENT_API_BASE_URL: "https://tg-preview.mctl.ai"
+  AGENT_API_BASE_URL: "http://labs-mctl-telegram-preview-base-service:8080/api/agent/v1"
 
 envFrom:
   - secretRef:
