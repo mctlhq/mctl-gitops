@@ -308,8 +308,13 @@ spec:
             "{\"metadata\":{\"annotations\":{\"argocd.argoproj.io/refresh\":\"hard\",\"mctl.ai/refresh-ts\":\"${TS}\"}}}"
           echo "ApplicationSet apps refresh requested."
 
+          # 48*5s = 240s. Observed 2026-07-25: two consecutive onboards of
+          # labs/agent-worker-preview each took ~175s for the app to appear
+          # after the hard refresh — the prior 150s window (30*5s) failed
+          # the workflow step both times despite the app landing correctly
+          # seconds later. 240s keeps a real margin above that.
           echo "Waiting for ArgoCD app ${APP_NAME} to appear..."
-          for i in $(seq 1 30); do
+          for i in $(seq 1 48); do
             if kubectl -n argocd get application "${APP_NAME}" >/dev/null 2>&1; then
               echo "ArgoCD app ${APP_NAME} is present."
               exit 0
