@@ -66,6 +66,8 @@ env:
 envFrom:
   - secretRef:
       name: labs-agent-worker-preview-api
+  - secretRef:
+      name: labs-agent-worker-preview-anthropic
 
 extraExternalSecrets:
   labs-agent-worker-preview-api:
@@ -75,3 +77,18 @@ extraExternalSecrets:
       - secretKey: AGENT_API_TOKEN
         remoteKey: secret/data/platform/labs/agent-worker-preview/api
         property: AGENT_API_TOKEN
+  # Dedicated Claude Code OAuth token for this worker's `claude -p` invocations
+  # — deliberately NOT the CLAUDE_CODE_OAUTH_TOKEN/_2 secrets shared by
+  # claude-review.yml across the org, which this same session watched exhaust
+  # its monthly quota and stall the interactive session + every repo's PR
+  # review gate simultaneously (see project_communication_agent memory's
+  # "production quota domain" note). internal/agentworker/claudeinvoker.go's
+  # minimalEnv() passes any CLAUDE_*-prefixed env var through to the spawned
+  # `claude` process unmodified, so this is picked up with no other wiring.
+  labs-agent-worker-preview-anthropic:
+    refreshInterval: 1h
+    targetSecret: labs-agent-worker-preview-anthropic
+    data:
+      - secretKey: CLAUDE_CODE_OAUTH_TOKEN
+        remoteKey: secret/data/platform/labs/agent-worker-preview/anthropic
+        property: CLAUDE_CODE_OAUTH_TOKEN
