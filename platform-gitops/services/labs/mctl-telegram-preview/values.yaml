@@ -56,12 +56,21 @@ env:
   AGENT_ENABLED: "true"
   AGENT_KILL_SWITCH: "true"
   AGENT_PROFILE_PATH: /etc/mctl-agent/profile.yaml
-  # 8745115872 = @mctlhq, the dedicated test/reviewer Telegram account (see
-  # reference_mctl_telegram_account_ids memory) — NOT the operator's admin
-  # account (210408407, TG_LOGIN_ADMINS above). The C1 listener only ever
-  # activates for an account with a matching agent_profiles.listener_enabled
-  # row, which nothing creates automatically.
-  AGENT_PROFILE_OWNER_TG_ID: "8745115872"
+  # 210408407 = @MashkovD, the operator's own admin account (TG_LOGIN_ADMINS
+  # above) — used as the C1 test target instead of the originally-planned
+  # dedicated reviewer account (8745115872, see
+  # reference_mctl_telegram_account_ids memory) because that account has
+  # never signed in on tg-preview.mctl.ai (no `users` row yet, so
+  # PUT /api/admin/agent/profile 404s on it) and standing up a login path for
+  # it wasn't worth the detour for an observe-only, kill-switch-closed test.
+  # Must match whichever account's agent_profiles row is used for C1 testing:
+  # internal/agent/executor.Executor.ProfileOwnerTGID scopes the profile's
+  # restricted-field enforcement (approval_required/never_auto_send) to
+  # exactly this one Telegram account, so a mismatch here would silently
+  # leave that enforcement inert for the account actually under test. The C1
+  # listener only ever activates for an account with a matching
+  # agent_profiles.listener_enabled row, which nothing creates automatically.
+  AGENT_PROFILE_OWNER_TG_ID: "210408407"
 ingress:
   enabled: true
   hosts:
