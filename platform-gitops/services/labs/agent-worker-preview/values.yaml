@@ -2,14 +2,13 @@
 # Team: labs
 # Chart: base-service (ingress disabled)
 
-# Kept at 0 until the C1 rollout sequence mints AGENT_API_TOKEN/sets
-# AGENT_API_BASE_URL (docs/plans/communication-agent.md's staged rollout
-# order) — this was never explicitly set during the original onboarding, so
-# the pod ran at the chart's replicaCount=1 default and crash-looped for 3+
-# hours on startup ("AGENT_API_BASE_URL is required") before this was
-# caught. Bump to 1 only as an explicit, separate step once the worker's
-# required env is actually configured below.
-replicaCount: 0
+# Bumped to 1 now that AGENT_API_BASE_URL/AGENT_API_TOKEN are wired (#628).
+# Still safe at this point: mctl-telegram-preview's AGENT_KILL_SWITCH stays
+# "true" and the C1 agent_profiles row (210408407) has listener_enabled=false,
+# so no DM ever reaches this worker yet — this step only proves the process
+# itself starts healthy against real config, per docs/plans/communication-agent.md's
+# staged rollout order.
+replicaCount: 1
 
 image:
   repository: ghcr.io/mctlhq/agent-worker-preview
