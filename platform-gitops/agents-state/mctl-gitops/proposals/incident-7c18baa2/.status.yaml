@@ -1,4 +1,4 @@
 status: accepted
-updated_at: 2026-07-25T19:17:54Z
-updated_by: _incident-responder
-notes: "auto-accepted: diagnosis from mctl incident e56ead41-8282-4a11-b4ae-3bbd88351d36"
+updated_at: '2026-07-25T19:33:44Z'
+updated_by: mctl-agents[bot]
+notes: implementer produced no commits; reverted to accepted
