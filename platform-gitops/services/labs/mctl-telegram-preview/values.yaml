@@ -47,6 +47,21 @@ env:
   AUTO_APPROVE_CLIENTS: "true"
   # Reviewer demo mode not needed on preview.
   DEMO_REVIEWER_ENABLED: "false"
+  # C1 (communication agent staging, disabled/observe-only) — see
+  # docs/plans/communication-agent.md. AGENT_KILL_SWITCH stays "true" until
+  # an explicit, separate decision opens it for an approve/send E2E test;
+  # AGENT_ENABLED only needs to be "true" to mount /api/agent/v1 and let
+  # POST /api/agent/token mint a worker credential and PUT
+  # /api/admin/agent/profile provision a test account's agent_profiles row.
+  AGENT_ENABLED: "true"
+  AGENT_KILL_SWITCH: "true"
+  AGENT_PROFILE_PATH: /etc/mctl-agent/profile.yaml
+  # 8745115872 = @mctlhq, the dedicated test/reviewer Telegram account (see
+  # reference_mctl_telegram_account_ids memory) — NOT the operator's admin
+  # account (210408407, TG_LOGIN_ADMINS above). The C1 listener only ever
+  # activates for an account with a matching agent_profiles.listener_enabled
+  # row, which nothing creates automatically.
+  AGENT_PROFILE_OWNER_TG_ID: "8745115872"
 ingress:
   enabled: true
   hosts:
@@ -58,6 +73,71 @@ ingress:
       hosts:
         - tg-preview.mctl.ai
 extraContainers: []
+# C1 owner profile (internal/agent/profile.Data, see AGENT_PROFILE_PATH
+# above). Sourced 2026-07-25 from the owner's own public LinkedIn profile
+# (linkedin.com/in/dmitriimashkov) at their request. restricted.
+# salary_expectations is NOT a stated figure -- it is a labeled market-rate
+# estimate (cost-of-living adjusted for Montenegro off US DevOps/platform
+# salary survey data) placeholder, marked never_auto_send so it cannot leave
+# the system even under an approved reply until replaced with a real number.
+configMaps:
+  agent-owner-profile:
+    profile.yaml: |
+      identity:
+        name: "Dmitrii Mashkov"
+        role: "Back End Developer @ Libertex Group | Building Scalable Solutions"
+        location: "Podgorica, Montenegro"
+        company: "Libertex Group"
+        education: "Kuban State University (KubSU)"
+      public_profile:
+        summary: >-
+          Backend / platform engineer focused on Kubernetes, GitOps, and
+          cloud infrastructure automation. Building mctl.ai, an AI-native
+          platform for Kubernetes and cloud operations built on Backstage,
+          Argo, K3s, HashiCorp Vault, VictoriaMetrics and Grafana, and MCTL
+          Telegram, a remote MCP connector for Telegram. Google Cloud
+          certified (Associate Cloud Engineer; Terraform on Google Cloud;
+          Cloud Security Fundamentals; Secure Google Cloud Network).
+        open_to: "Europe (+1 more) — On-site, Hybrid, Remote"
+      skills:
+        - Kubernetes
+        - GitOps
+        - Terraform
+        - AWS (EKS)
+        - Google Cloud Platform
+        - Platform Engineering
+        - Backstage
+        - Argo Workflows / Argo Rollouts / Argo CD
+        - HashiCorp Vault
+        - VictoriaMetrics
+        - Grafana
+        - Go (backend development)
+        - CI/CD
+        - MCP (Model Context Protocol) / AI tooling
+      preferences:
+        work_mode: "Remote, Hybrid, or On-site"
+        region: "Europe"
+      restricted:
+        salary_expectations:
+          value: >-
+            PLACEHOLDER, not a confirmed figure from the owner: rough
+            market-rate estimate for a mid-level backend/platform engineer
+            with Kubernetes/GitOps/Terraform/cloud experience, cost-of-living
+            adjusted for a Montenegro-based remote candidate off US DevOps
+            salary survey data (~EUR 3,500-5,000/month gross, wide-uncertainty
+            estimate). Replace with the owner's actual figure before any
+            guarded-mode use.
+          approval_required: true
+          never_auto_send: true
+extraVolumes:
+  - name: agent-owner-profile
+    configMap:
+      name: agent-owner-profile
+extraVolumeMounts:
+  - name: agent-owner-profile
+    mountPath: /etc/mctl-agent/profile.yaml
+    subPath: profile.yaml
+    readOnly: true
 dbSecret:
   vaultPath: "teams/labs/mctl-telegram-preview/database"
   secretName: "labs-mctl-telegram-preview-db-creds"
