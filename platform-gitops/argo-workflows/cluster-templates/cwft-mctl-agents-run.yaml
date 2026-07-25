@@ -244,6 +244,19 @@ spec:
             value: "5.00"
           - name: MENTOR_BUDGET_USD
             value: "10.00"
+          # Raised from the orchestrator's $5.00 code default
+          # (orchestrator/options.py INCIDENT_RESPONDER_BUDGET_USD) to match
+          # IMPLEMENTER_BUDGET_USD's precedent (cwft-mctl-agents-implement.yaml).
+          # Incidents about mctl-agents itself have no Loki logs (service runs
+          # as ephemeral Argo pods, not a persistent Deployment), forcing the
+          # responder into wider exploration than a normal tenant-service
+          # incident and making the $5 default easy to exhaust mid-diagnosis.
+          # See mctl-gitops/proposals/incident-d683e015 (Confidence: LOW --
+          # OAuth token exhaustion, tracked separately in
+          # incident-mctl-agents-oauth-quota-exhaustion, remains the more
+          # likely root cause for this failure class as a whole).
+          - name: INCIDENT_RESPONDER_BUDGET_USD
+            value: "20.00"
         resources:
           requests: { cpu: 200m, memory: 512Mi }
           limits:   { cpu: 2000m, memory: 2Gi }
