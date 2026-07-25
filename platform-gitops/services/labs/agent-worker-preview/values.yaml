@@ -47,4 +47,23 @@ probes:
     initialDelaySeconds: 60
     periodSeconds: 15
 
-env: {}
+# AGENT_API_TOKEN is the aud=agent worker credential minted via
+# POST /api/agent/token, scoped to a single Telegram account (210408407,
+# matching mctl-telegram-preview's AGENT_PROFILE_OWNER_TG_ID and the
+# agent_profiles row created for C1 testing). Stored in Vault, never in git —
+# see extraExternalSecrets below.
+env:
+  AGENT_API_BASE_URL: "https://tg-preview.mctl.ai"
+
+envFrom:
+  - secretRef:
+      name: labs-agent-worker-preview-api
+
+extraExternalSecrets:
+  labs-agent-worker-preview-api:
+    refreshInterval: 1h
+    targetSecret: labs-agent-worker-preview-api
+    data:
+      - secretKey: AGENT_API_TOKEN
+        remoteKey: secret/data/platform/labs/agent-worker-preview/api
+        property: AGENT_API_TOKEN
