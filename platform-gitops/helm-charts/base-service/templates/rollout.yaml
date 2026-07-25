@@ -16,10 +16,15 @@ spec:
       {{- include "base-service.selectorLabels" . | nindent 6 }}
   template:
     metadata:
-      {{- with .Values.podAnnotations }}
       annotations:
+        {{- if .Values.configMaps }}
+        # See deployment.yaml's identical annotation for why this is needed
+        # (subPath ConfigMap mounts don't live-update in a running pod).
+        checksum/config-maps: {{ .Values.configMaps | toYaml | sha256sum }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
-      {{- end }}
+        {{- end }}
       labels:
         {{- include "base-service.selectorLabels" . | nindent 8 }}
         {{- include "base-service.extraLabels" . | nindent 8 }}

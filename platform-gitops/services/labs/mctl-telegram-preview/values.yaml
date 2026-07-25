@@ -80,6 +80,19 @@ extraContainers: []
 # estimate (cost-of-living adjusted for Montenegro off US DevOps/platform
 # salary survey data) placeholder, marked never_auto_send so it cannot leave
 # the system even under an approved reply until replaced with a real number.
+#
+# !!! DO NOT ever replace the restricted.* placeholder values below with a
+# real figure directly in this file. !!! A plain ConfigMap is git-tracked:
+# any real compensation/reference/PII data written here becomes permanent,
+# plaintext git history readable by every repo reader and every cluster
+# identity with ConfigMap-read RBAC in this namespace -- approval_required/
+# never_auto_send only gate the AGENT's behavior, they do nothing to
+# protect data at rest. (Flagged by Codex review on mctl-gitops#623.)
+# Before entering a real restricted value: migrate this file's restricted
+# section to a Vault-backed Secret (ExternalSecret, same pattern as
+# labs-mctl-telegram-preview-oauth/-login/-encryption below) instead of
+# this ConfigMap. Tracked as a follow-up, not yet filed as of this PR --
+# do not proceed past the placeholder without it.
 configMaps:
   agent-owner-profile:
     profile.yaml: |
