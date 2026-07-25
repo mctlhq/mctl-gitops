@@ -39,10 +39,6 @@ spec:
   activeDeadlineSeconds: 7200
   entrypoint: implement-proposals
   onExit: notify-telegram
-  # Same shared mutex as cwft-mctl-agents-run — both push to mctl-gitops main.
-  synchronization:
-    mutex:
-      name: mctl-gitops-main-writes
 
   arguments:
     parameters:
@@ -495,6 +491,17 @@ spec:
       # {{workflow.outputs.parameters.activity}}", reproduced 2026-07-06 —
       # every CronWorkflow tick failed silently, `implement`/`issue-poll`
       # stopped scheduling entirely). The PVC file sidesteps that mechanism.
+      #
+      # Mutex scoped to just this template (not the whole workflow spec):
+      # only this step actually writes to mctl-gitops main, so it's the
+      # only part that needs to serialize against cwft-mctl-agents-run /
+      # wft-delete-tenant. Holding the shared lock for the entire
+      # multi-minute implementer run (clone + Claude SDK + push) starved
+      # other main-writers and was implicated in workflow_failed incidents
+      # from mutex contention.
+      synchronization:
+        mutex:
+          name: mctl-gitops-main-writes
       script:
         image: alpine/git:2.43.0
         command: [sh]
