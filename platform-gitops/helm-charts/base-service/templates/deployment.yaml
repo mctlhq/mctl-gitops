@@ -21,6 +21,18 @@ spec:
   template:
     metadata:
       annotations:
+        {{- if .Values.configMaps }}
+        # Forces a rollout whenever any configMaps entry changes. Needed
+        # because a subPath volumeMount (the only way to mount a single key
+        # from a ConfigMap as a file, e.g. extraVolumeMounts' subPath usage)
+        # does NOT get live-updated in a running pod when the source
+        # ConfigMap changes -- unlike a whole-directory ConfigMap mount,
+        # subPath breaks Kubernetes' usual symlink-swap update mechanism.
+        # Without this, an app that reads such a file once at startup (or
+        # even one that polls/reloads it) keeps serving stale content
+        # indefinitely after an operator edits the ConfigMap.
+        checksum/config-maps: {{ .Values.configMaps | toYaml | sha256sum }}
+        {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
