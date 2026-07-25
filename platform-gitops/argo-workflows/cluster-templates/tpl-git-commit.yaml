@@ -185,17 +185,18 @@ spec:
           if [ "$ACTION" = "onboard" ]; then
             mkdir -p "$DIR"
 
-            # values.yaml from template catalog
-            TMPL_DIR="platform-gitops/argo-workflows/service-templates/${SERVICE_TEMPLATE}"
-            if [ -d "$TMPL_DIR" ]; then
-              TPL="${TMPL_DIR}/values.yaml.tpl"
-              echo "Using service template: ${SERVICE_TEMPLATE}"
-            elif [ "$TYPE" = "base-service" ]; then
-              echo "Template '${SERVICE_TEMPLATE}' not found, falling back to default"
-              TPL="platform-gitops/argo-workflows/service-templates/default/values.yaml.tpl"
-            else
-              echo "Template '${SERVICE_TEMPLATE}' not found, falling back to worker"
+            # values.yaml from template catalog. "default" is the service_template
+            # parameter's own schema default, not a caller's explicit choice — so it
+            # must not override component_type's implied chart. Only an explicit,
+            # non-default service_template name is allowed to pick its own directory.
+            if [ "$SERVICE_TEMPLATE" != "default" ] && [ -d "platform-gitops/argo-workflows/service-templates/${SERVICE_TEMPLATE}" ]; then
+              TPL="platform-gitops/argo-workflows/service-templates/${SERVICE_TEMPLATE}/values.yaml.tpl"
+              echo "Using explicit service template: ${SERVICE_TEMPLATE}"
+            elif [ "$TYPE" = "worker-service" ]; then
+              echo "component_type=worker-service, using worker template"
               TPL="platform-gitops/argo-workflows/service-templates/worker/values.yaml.tpl"
+            else
+              TPL="platform-gitops/argo-workflows/service-templates/default/values.yaml.tpl"
             fi
 
             sed \
