@@ -334,6 +334,16 @@ spec:
             enabled: false
           kubeEtcd:
             enabled: false
+          # k3s runs kube-proxy embedded in the k3s server/agent process and
+          # does not create the kube-system/kube-proxy Service the chart's
+          # default ServiceMonitor selects. Left enabled, that selector
+          # matches zero Services, producing a permanent 0-target scrape_pool
+          # and a recurring "Vmagent has scrape_pool with 0 configured/
+          # discovered targets" alert (incident-7dc03565) — same class of
+          # issue as the etcd/scheduler/controller-manager components above,
+          # which k3s also doesn't expose separately.
+          kubeProxy:
+            enabled: false
           kubeScheduler:
             enabled: false
           kubeStateMetrics:
