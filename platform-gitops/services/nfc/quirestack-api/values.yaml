@@ -5,7 +5,7 @@
 
 image:
   repository: ghcr.io/mctlhq/quirestack-api
-  tag: "0.1.4"
+  tag: "0.1.5"
 imagePullSecrets:
   - name: ghcr-credentials
 # The nfc namespace has no ghcr-credentials secret otherwise — unlike labs/
@@ -42,8 +42,6 @@ ingress:
         - nfc-quirestack-api.mctl.me
 envFrom:
   - secretRef:
-      name: nfc-quirestack-api-db-creds
-  - secretRef:
       name: quirestack-api-secrets
 dbSecret:
   vaultPath: teams/nfc/quirestack-api/database
@@ -55,6 +53,9 @@ externalSecret:
     - secretKey: BETTER_AUTH_SECRET
       remoteKey: teams/nfc/quirestack-api
       property: BETTER_AUTH_SECRET
+    - secretKey: IMPORT_TOKEN
+      remoteKey: teams/nfc/quirestack-api
+      property: IMPORT_TOKEN
 # App only implements /health (no separate /healthz, /readyz like the chart
 # default expects) — verified via kubectl against the live pod.
 probes:
