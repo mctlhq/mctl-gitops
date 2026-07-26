@@ -9,7 +9,7 @@ metadata:
         2. retire-services  — discovers and retires all services for the tenant, waiting for completion
         3. cleanup-shared-db — removes any remaining tenant-owned shared CNPG resources
         4. delete-vault     — removes Vault policy + remaining secrets under teams/{name}/
-        5. delete-from-git  — removes tenant dir + ArgoCD RBAC from gitops repo
+        5. delete-from-git  — removes tenant dir + ArgoCD RBAC + Argo Workflows SSO ServiceAccount from gitops repo
         6. delete-k8s       — deletes ArgoCD app + K8s namespace
 
       DB cleanup in tenant state is handled before namespace deletion so shared-pg does not
@@ -458,7 +458,7 @@ spec:
               echo "WARNING: No ArgoCD RBAC found for tenant ${TENANT}, skipping."
             fi
 
-            SSO_FILE="platform-gitops/tenants/${TENANT}/sso.yaml"
+            SSO_FILE="platform-gitops/argo-workflows/sso-team-${TENANT}.yaml"
             if [ -f "$SSO_FILE" ]; then
               git rm "$SSO_FILE"
               echo "Removed $SSO_FILE"
