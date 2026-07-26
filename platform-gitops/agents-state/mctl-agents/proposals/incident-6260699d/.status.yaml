@@ -1,5 +1,7 @@
-status: implemented
-updated_at: '2026-07-26T02:07:12Z'
+status: review-stuck
+updated_at: '2026-07-26T03:03:02Z'
 updated_by: mctl-agents[bot]
 pr: https://github.com/mctlhq/mctl-agents/pull/66
-review_attempts: 2
+review_attempts: 3
+notes: Follow-up failed deterministically 3 time(s) (implementer follow-up exited
+  non-zero (42) for mctl-agents/incident-6260699d); human triage required.
