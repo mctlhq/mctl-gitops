@@ -8,6 +8,13 @@ image:
   tag: "0.1.4"
 imagePullSecrets:
   - name: ghcr-credentials
+# The nfc namespace has no ghcr-credentials secret otherwise — unlike labs/
+# admins/ovk, nfc doesn't run openclaw, which is what incidentally provides
+# it there. Every non-openclaw tenant hits this until it's baselined at the
+# tenant-chart level; scoping the fix to this service for now.
+registryCredentials:
+  secretName: ghcr-credentials
+  vaultKey: platform/backstage/ghcr-credentials
 service:
   port: 3001
 backstage:
@@ -36,6 +43,8 @@ ingress:
 envFrom:
   - secretRef:
       name: nfc-quirestack-api-db-creds
+  - secretRef:
+      name: quirestack-api-secrets
 dbSecret:
   vaultPath: teams/nfc/quirestack-api/database
   secretName: nfc-quirestack-api-db-creds
@@ -46,3 +55,16 @@ externalSecret:
     - secretKey: BETTER_AUTH_SECRET
       remoteKey: teams/nfc/quirestack-api
       property: BETTER_AUTH_SECRET
+# App only implements /health (no separate /healthz, /readyz like the chart
+# default expects) — verified via kubectl against the live pod.
+probes:
+  liveness:
+    path: /health
+    port: http
+    initialDelaySeconds: 10
+    periodSeconds: 15
+  readiness:
+    path: /health
+    port: http
+    initialDelaySeconds: 5
+    periodSeconds: 10
