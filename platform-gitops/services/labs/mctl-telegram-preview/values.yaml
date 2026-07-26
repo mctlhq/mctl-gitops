@@ -52,22 +52,11 @@ env:
   # lets POST /api/agent/token mint a worker credential and PUT
   # /api/admin/agent/profile provision a test account's agent_profiles row.
   #
-  # AGENT_KILL_SWITCH opened 2026-07-26 (explicit, separate operator decision)
-  # for the approve/send E2E test: internal/agent/control/notifier.go's
-  # DeliverPending gates ALL owner-facing Saved Messages delivery (drafts +
-  # approval requests) on this same flag, not just the executor's actual
-  # send-to-original-peer step — with it "true", the C1 test account's
-  # already-queued owner_notifications rows from earlier successful jobs
-  # were silently stuck pending with nothing indicating why (found by
-  # reading notifier.go directly after several clean job runs produced no
-  # visible draft). mode=observe (autopilot_paused=true) still requires
-  # explicit /mctl approve for anything to actually send; policy.go still
-  # unconditionally denies URLs/credentials/restricted profile fields
-  # regardless of this flag. Left open intentionally for continued C1
-  # observation, not a one-shot test — revert to "true" only on an explicit
-  # decision to pause C1 again.
+  # Keep the global safety gate closed between bounded C1 test windows.
+  # A rollout checklist may open it temporarily for approve/send E2E
+  # verification, but the final state must always restore it to "true".
   AGENT_ENABLED: "true"
-  AGENT_KILL_SWITCH: "false"
+  AGENT_KILL_SWITCH: "true"
   AGENT_PROFILE_PATH: /etc/mctl-agent/profile.yaml
   # 210408407 = @MashkovD, the operator's own admin account (TG_LOGIN_ADMINS
   # above) — used as the C1 test target instead of the originally-planned
