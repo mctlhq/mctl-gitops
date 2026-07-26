@@ -1,4 +1,4 @@
-status: accepted
-updated_at: 2026-07-26T22:16:53Z
-updated_by: _incident-responder
-notes: "auto-accepted: diagnosis from mctl incident argo-mctl-agents-implement-1785093300-1785094377 — workflow timeout suspected, recommend increasing activeDeadlineSeconds in Argo Workflow manifest"
+status: implemented
+updated_at: '2026-07-26T22:25:04Z'
+updated_by: mctl-agents[bot]
+pr: https://github.com/mctlhq/mctl-agents/pull/69
