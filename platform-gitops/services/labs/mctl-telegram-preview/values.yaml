@@ -55,11 +55,10 @@ env:
   # Keep the global safety gate closed between bounded C1 test windows.
   # A rollout checklist may open it temporarily for approve/send E2E
   # verification, but the final state must always restore it to "true".
-  # OPEN for the bounded approve/send E2E window (fix/saved-command-history-poll,
-  # mctl-telegram#319) — must be restored to "true" after the test, same as
-  # mctl-gitops#636.
+  # Approve/send E2E window (mctl-telegram#319, #322) closed 2026-07-26:
+  # full DM->draft->Saved-Messages-approve->send cycle confirmed live.
   AGENT_ENABLED: "true"
-  AGENT_KILL_SWITCH: "false"
+  AGENT_KILL_SWITCH: "true"
   AGENT_PROFILE_PATH: /etc/mctl-agent/profile.yaml
   # 210408407 = @MashkovD, the operator's own admin account (TG_LOGIN_ADMINS
   # above) — used as the C1 test target instead of the originally-planned
