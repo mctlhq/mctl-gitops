@@ -3,6 +3,11 @@
 
 # Chart: base-service
 
+# MTProto auth keys must never be opened by overlapping pods. Keep rollouts
+# stop-before-start until mctl-telegram has an exclusive session-owner runtime.
+strategy:
+  type: Recreate
+
 image:
   repository: ghcr.io/mctlhq/mctl-telegram
   tag: "0.44.1"
