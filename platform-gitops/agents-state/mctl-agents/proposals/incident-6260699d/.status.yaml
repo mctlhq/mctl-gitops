@@ -1,4 +1,4 @@
-status: accepted
-updated_at: 2026-07-26T00:16:01Z
-updated_by: _incident-responder
-notes: "auto-accepted: diagnosis from mctl incident argo-mctl-agents-implement-1785006900-1785008766"
+status: implemented
+updated_at: '2026-07-26T00:26:23Z'
+updated_by: mctl-agents[bot]
+pr: https://github.com/mctlhq/mctl-agents/pull/66
