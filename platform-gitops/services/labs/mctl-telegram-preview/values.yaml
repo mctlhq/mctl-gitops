@@ -234,3 +234,9 @@ extraExternalSecrets:
       - secretKey: TELEGRAM_LOGIN_BOT_TOKEN
         remoteKey: secret/data/platform/mctl-telegram-preview/login
         property: TELEGRAM_LOGIN_BOT_TOKEN
+externalSecret:
+  targetSecret: mctl-telegram-preview-secrets
+  data:
+    - secretKey: AGENT_PROFILE_YAML_B64
+      remoteKey: teams/labs/mctl-telegram-preview
+      property: AGENT_PROFILE_YAML_B64
