@@ -56,6 +56,25 @@ Look for tenant-owned leftovers such as:
 - managed roles
 - `pg_hba` entries
 
+Also check `platform-gitops/argo-workflows/sso-team-<tenant>.yaml` — the
+per-tenant Argo Workflows SSO `ServiceAccount` + `rbac-rule` created by
+`wft-create-tenant.yaml`. As of 2026-07-26 `wft-delete-tenant-safe.yaml`'s
+`delete-tenant-from-git` step checked the wrong path
+(`platform-gitops/tenants/<tenant>/sso.yaml`, which never existed) and
+silently skipped removing it, so **every prior tenant deletion** may have
+left one of these orphaned. An orphaned SSO ServiceAccount is not just
+inert clutter: if a user is later a member of two tenants whose SSO groups
+both resolve at the same `rbac-rule-precedence` (every tenant gets `"5"`
+hardcoded), Argo Workflows SSO can non-deterministically pick the wrong
+ServiceAccount and reject `deploy-service` with a `forbidden` error scoped
+to the stale tenant's namespace — this is exactly what happened with
+tenant `nfc2026` (a never-deleted duplicate of `nfc`, same owner). The
+path bug is fixed going forward (mctl-gitops#633), but when investigating
+an unexplained "forbidden ... in namespace X" from Argo Workflows for a
+user who has ever belonged to more than one tenant, check for leftover
+`sso-team-<old-tenant>.yaml` files as a likely root cause, not just
+missing RBAC in the target namespace.
+
 ### 4. Verify after deletion
 
 At the end verify:
@@ -68,7 +87,7 @@ At the end verify:
 ## High-Value Rules
 
 - Block unsafe tenant deletion if services still exist and orchestration is unavailable.
-- Prefer fail-closed behavior over “wait and hope”.
+- Prefer fail-closed behavior over "wait and hope".
 - If stale live resources remain after Git cleanup, delete only the confirmed leftovers.
 - Distinguish tenant-fallout from unrelated platform incidents before broad remediation.
 - Verify deletion with all four markers, not just API `404`:
