@@ -45,3 +45,18 @@ externalSecret:
 envFrom:
   - secretRef:
       name: quirestack-api-secrets
+
+dbSecret:
+  vaultPath: "teams/nfc/quirestack-api/database"
+  secretName: "nfc-quirestack-api-db-creds"
+dbInitJob:
+  enabled: false
+  database: "nfc-quirestack-api"
+  waitTable: "identities"
+  sql: |
+    INSERT INTO identities (provider, provider_id, status, metadata)
+    VALUES ('telegram', '__TELEGRAM_ID__', 'approved', '{}')
+    ON CONFLICT (provider, provider_id) DO UPDATE SET status = 'approved';
+envFrom:
+  - secretRef:
+      name: "nfc-quirestack-api-db-creds"
