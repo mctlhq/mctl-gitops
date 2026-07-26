@@ -6,7 +6,7 @@
 replicaCount: 0
 image:
   repository: ghcr.io/mctlhq/agent-worker-preview
-  tag: "main-925b67f"
+  tag: "c66ae9168fba0a54b2e5ec7070199fc4d87938dc"
 imagePullSecrets:
   - name: ghcr-credentials
 ingress:
