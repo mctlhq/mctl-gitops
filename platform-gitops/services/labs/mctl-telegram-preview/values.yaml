@@ -9,6 +9,9 @@
 # stop-before-start until mctl-telegram has an exclusive session-owner runtime.
 strategy:
   type: Recreate
+  # Explicit null removes the Deployment's default RollingUpdate settings
+  # when ArgoCD applies this transition with server-side apply.
+  rollingUpdate: null
 
 image:
   repository: ghcr.io/mctlhq/mctl-telegram
