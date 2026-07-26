@@ -40,3 +40,9 @@ dbSecret:
   vaultPath: teams/nfc/quirestack-api/database
   secretName: nfc-quirestack-api-db-creds
 extraContainers: []
+externalSecret:
+  targetSecret: quirestack-api-secrets
+  data:
+    - secretKey: BETTER_AUTH_SECRET
+      remoteKey: teams/nfc/quirestack-api
+      property: BETTER_AUTH_SECRET
