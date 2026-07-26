@@ -9,17 +9,13 @@
 # itself starts healthy against real config, per docs/plans/communication-agent.md's
 # staged rollout order.
 replicaCount: 1
-
 image:
   repository: ghcr.io/mctlhq/agent-worker-preview
-  tag: "0.45.0"
-
+  tag: "main-925b67f"
 imagePullSecrets:
   - name: ghcr-credentials
-
 ingress:
   enabled: false
-
 resources:
   requests:
     cpu: 100m
@@ -27,7 +23,6 @@ resources:
   limits:
     cpu: 500m
     memory: 256Mi
-
 probes:
   startup:
     path: /healthz
@@ -45,7 +40,6 @@ probes:
     port: http
     initialDelaySeconds: 60
     periodSeconds: 15
-
 # AGENT_API_TOKEN is the aud=agent worker credential minted via
 # POST /api/agent/token, scoped to a single Telegram account (210408407,
 # matching mctl-telegram-preview's AGENT_PROFILE_OWNER_TG_ID and the
@@ -73,41 +67,18 @@ env:
   AGENT_API_BASE_URL: "http://labs-mctl-telegram-preview-base-service:8080/api/agent/v1"
   AGENT_MAX_BUDGET_USD: "0.50"
   AGENT_SYSTEM_PROMPT: >-
-    You are the owner's communication agent for incoming Telegram direct
-    messages, currently handling the HR/recruiter scenario: classifying
-    inbound DMs, extracting job-opportunity details, and drafting replies
-    for the owner to review. You are running in OBSERVE mode: every reply
-    you propose requires the owner's manual approval before it can ever be
-    sent — propose_reply will return require_approval, not send anything
-    directly, and that is expected, not a failure.
+    You are the owner's communication agent for incoming Telegram direct messages, currently handling the HR/recruiter scenario: classifying inbound DMs, extracting job-opportunity details, and drafting replies for the owner to review. You are running in OBSERVE mode: every reply you propose requires the owner's manual approval before it can ever be sent — propose_reply will return require_approval, not send anything directly, and that is expected, not a failure.
 
-    On each job: call get_event and get_conversation_context to see the
-    message and conversation so far. If get_recruiter_profile is relevant to
-    answering a question about the owner's background, call it too. If the
-    message is a genuine job opportunity or recruiter outreach, call
-    save_job_lead with what you can extract (company, role, key details) —
-    safe to call with partial data, later calls upsert. Then call
-    propose_reply with a short, polite, professional draft reply addressing
-    what the sender asked. Do not include any links, phone numbers,
-    verification codes, or credentials in the reply — the server enforces
-    this regardless, but do not attempt it. Do not state a specific salary
-    figure; if compensation comes up, note that expectations can be
-    discussed after an initial conversation.
+    On each job: call get_event and get_conversation_context to see the message and conversation so far. If get_recruiter_profile is relevant to answering a question about the owner's background, call it too. If the message is a genuine job opportunity or recruiter outreach, call save_job_lead with what you can extract (company, role, key details) — safe to call with partial data, later calls upsert. Then call propose_reply with a short, polite, professional draft reply addressing what the sender asked. Do not include any links, phone numbers, verification codes, or credentials in the reply — the server enforces this regardless, but do not attempt it. Do not state a specific salary figure; if compensation comes up, note that expectations can be discussed after an initial conversation.
 
-    If the message is not a recruiter/job message (spam, unrelated chat,
-    already handled), it is fine to take no action beyond reviewing it.
+    If the message is not a recruiter/job message (spam, unrelated chat, already handled), it is fine to take no action beyond reviewing it.
 
-    Call complete_agent_job exactly once, as the last thing you do, after
-    you have taken every action this turn warrants — status=completed if you
-    persisted a result (a lead save or a reply proposal), status=ignored if
-    this message genuinely needed no action.
-
+    Call complete_agent_job exactly once, as the last thing you do, after you have taken every action this turn warrants — status=completed if you persisted a result (a lead save or a reply proposal), status=ignored if this message genuinely needed no action.
 envFrom:
   - secretRef:
       name: labs-agent-worker-preview-api
   - secretRef:
       name: labs-agent-worker-preview-anthropic
-
 extraExternalSecrets:
   labs-agent-worker-preview-api:
     refreshInterval: 1h
@@ -131,3 +102,4 @@ extraExternalSecrets:
       - secretKey: CLAUDE_CODE_OAUTH_TOKEN
         remoteKey: secret/data/platform/labs/agent-worker-preview/anthropic
         property: CLAUDE_CODE_OAUTH_TOKEN
+extraContainers: []
