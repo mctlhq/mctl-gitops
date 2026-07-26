@@ -67,22 +67,6 @@ env:
   # full DM->draft->Saved-Messages-approve->send cycle confirmed live.
   AGENT_ENABLED: "true"
   AGENT_KILL_SWITCH: "true"
-  AGENT_PROFILE_PATH: /etc/mctl-agent/profile.yaml
-  # 210408407 = @MashkovD, the operator's own admin account (TG_LOGIN_ADMINS
-  # above) — used as the C1 test target instead of the originally-planned
-  # dedicated reviewer account (8745115872, see
-  # reference_mctl_telegram_account_ids memory) because that account has
-  # never signed in on tg-preview.mctl.ai (no `users` row yet, so
-  # PUT /api/admin/agent/profile 404s on it) and standing up a login path for
-  # it wasn't worth the detour for an observe-only, kill-switch-closed test.
-  # Must match whichever account's agent_profiles row is used for C1 testing:
-  # internal/agent/executor.Executor.ProfileOwnerTGID scopes the profile's
-  # restricted-field enforcement (approval_required/never_auto_send) to
-  # exactly this one Telegram account, so a mismatch here would silently
-  # leave that enforcement inert for the account actually under test. The C1
-  # listener only ever activates for an account with a matching
-  # agent_profiles.listener_enabled row, which nothing creates automatically.
-  AGENT_PROFILE_OWNER_TG_ID: "210408407"
 ingress:
   enabled: true
   hosts:
@@ -94,20 +78,6 @@ ingress:
       hosts:
         - tg-preview.mctl.ai
 extraContainers: []
-# The whole owner profile is stored as one base64-encoded Vault property at
-# teams/labs/mctl-telegram-preview:AGENT_PROFILE_YAML_B64. ESO decodes it into
-# profile.yaml in a dedicated Kubernetes Secret. Keeping the public and
-# restricted sections in one secret avoids accidentally leaving future
-# restricted additions in a git-tracked ConfigMap.
-extraVolumes:
-  - name: agent-owner-profile
-    secret:
-      secretName: labs-mctl-telegram-preview-agent-owner-profile
-extraVolumeMounts:
-  - name: agent-owner-profile
-    mountPath: /etc/mctl-agent/profile.yaml
-    subPath: profile.yaml
-    readOnly: true
 dbSecret:
   vaultPath: "teams/labs/mctl-telegram-preview/database"
   secretName: "labs-mctl-telegram-preview-db-creds"
@@ -169,11 +139,3 @@ extraExternalSecrets:
       - secretKey: TELEGRAM_LOGIN_BOT_TOKEN
         remoteKey: secret/data/platform/mctl-telegram-preview/login
         property: TELEGRAM_LOGIN_BOT_TOKEN
-externalSecret:
-  targetSecret: labs-mctl-telegram-preview-agent-owner-profile
-  targetTemplateData:
-    profile.yaml: '{{ .AGENT_PROFILE_YAML_B64 | b64dec }}'
-  data:
-    - secretKey: AGENT_PROFILE_YAML_B64
-      remoteKey: teams/labs/mctl-telegram-preview
-      property: AGENT_PROFILE_YAML_B64

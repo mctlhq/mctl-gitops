@@ -17,9 +17,25 @@ resources:
   requests:
     cpu: 100m
     memory: 128Mi
+    ephemeral-storage: 128Mi
   limits:
     cpu: 500m
     memory: 256Mi
+    ephemeral-storage: 1Gi
+automountServiceAccountToken: false
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
 probes:
   startup:
     path: /healthz
@@ -76,6 +92,20 @@ envFrom:
       name: labs-agent-worker-preview-api
   - secretRef:
       name: labs-agent-worker-preview-anthropic
+extraVolumes:
+  # Claude Code needs a writable HOME for transient client state, and the
+  # worker writes a per-job MCP config under /tmp. Both stay ephemeral.
+  - name: agent-home
+    emptyDir:
+      sizeLimit: 256Mi
+  - name: agent-tmp
+    emptyDir:
+      sizeLimit: 256Mi
+extraVolumeMounts:
+  - name: agent-home
+    mountPath: /home/node
+  - name: agent-tmp
+    mountPath: /tmp
 extraExternalSecrets:
   labs-agent-worker-preview-api:
     refreshInterval: 1h
