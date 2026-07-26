@@ -5,7 +5,7 @@
 
 image:
   repository: ghcr.io/mctlhq/quirestack-api
-  tag: "0.1.3"
+  tag: "0.1.4"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
@@ -36,16 +36,10 @@ ingress:
 probes:
   liveness: null
   readiness: null
-externalSecret:
-  targetSecret: quirestack-api-secrets
-  data:
-    - secretKey: DATABASE_URL
-      remoteKey: teams/nfc/quirestack-api
-      property: DATABASE_URL
+externalSecret: {}
 envFrom:
   - secretRef:
       name: quirestack-api-secrets
-
 dbSecret:
   vaultPath: "teams/nfc/quirestack-api/database"
   secretName: "nfc-quirestack-api-db-creds"
@@ -57,6 +51,5 @@ dbInitJob:
     INSERT INTO identities (provider, provider_id, status, metadata)
     VALUES ('telegram', '__TELEGRAM_ID__', 'approved', '{}')
     ON CONFLICT (provider, provider_id) DO UPDATE SET status = 'approved';
-envFrom:
-  - secretRef:
-      name: "nfc-quirestack-api-db-creds"
+envFrom: []
+extraContainers: []
