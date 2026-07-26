@@ -1,0 +1,41 @@
+# Service: quirestack-api
+# Team: nfc
+
+# Chart: base-service
+
+image:
+  repository: ghcr.io/mctlhq/quirestack-api
+  tag: "0.1.4"
+imagePullSecrets:
+  - name: ghcr-credentials
+service:
+  port: 3001
+backstage:
+  kubernetesId: quirestack-api
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+env:
+  APP_ENV: production
+ingress:
+  enabled: true
+  hosts:
+    - nfc-quirestack-api.mctl.ai
+    - nfc-quirestack-api.mctl.me
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls:
+    - secretName: quirestack-api-tls
+      hosts:
+        - nfc-quirestack-api.mctl.ai
+        - nfc-quirestack-api.mctl.me
+envFrom:
+  - secretRef:
+      name: nfc-quirestack-api-db-creds
+dbSecret:
+  vaultPath: teams/nfc/quirestack-api/database
+  secretName: nfc-quirestack-api-db-creds
