@@ -2,10 +2,10 @@
 # Team: labs
 # Chart: base-service (ingress disabled)
 
-# Bounded C1 approve/send E2E test window (fix/saved-command-history-poll,
-# mctl-telegram#319) — must be closed back to 0 after the test, same as
-# mctl-gitops#636.
-replicaCount: 1
+# Keep the worker stopped between bounded C1 test windows. Last window
+# (mctl-telegram#319, #322) closed 2026-07-26: full DM->draft->Saved-Messages
+# -approve->send cycle confirmed live.
+replicaCount: 0
 image:
   repository: ghcr.io/mctlhq/agent-worker-preview
   tag: "c66ae9168fba0a54b2e5ec7070199fc4d87938dc"
