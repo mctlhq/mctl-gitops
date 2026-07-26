@@ -7,7 +7,7 @@ metadata:
       Fully deletes a tenant from the platform:
         1. validate        — checks tenant exists, not reserved
         2. delete-vault    — removes Vault policy + secrets under teams/{name}/
-        3. delete-from-git — removes tenant dir + ArgoCD RBAC from gitops repo
+        3. delete-from-git — removes tenant dir + ArgoCD RBAC + Argo Workflows SSO ServiceAccount from gitops repo
         4. delete-k8s      — deletes ArgoCD app + K8s namespace
 
       DB cleanup (tenants + tenant_members) is handled by the Backstage API
@@ -203,7 +203,7 @@ spec:
               echo "WARNING: No ArgoCD RBAC found for tenant ${TENANT}, skipping."
             fi
 
-            SSO_FILE="platform-gitops/tenants/${TENANT}/sso.yaml"
+            SSO_FILE="platform-gitops/argo-workflows/sso-team-${TENANT}.yaml"
             if [ -f "$SSO_FILE" ]; then
               git rm "$SSO_FILE"
               echo "Removed $SSO_FILE"
