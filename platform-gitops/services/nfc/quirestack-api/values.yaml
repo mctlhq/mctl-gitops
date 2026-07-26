@@ -39,3 +39,4 @@ envFrom:
 dbSecret:
   vaultPath: teams/nfc/quirestack-api/database
   secretName: nfc-quirestack-api-db-creds
+extraContainers: []
