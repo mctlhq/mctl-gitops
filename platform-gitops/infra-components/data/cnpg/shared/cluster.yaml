@@ -124,7 +124,6 @@ spec:
       - host labs-mctl-pairdesk labs-mctl-pairdesk all scram-sha-256
       - host labs-pfeifenpatenschaft labs-pfeifenpatenschaft all scram-sha-256
       - host labs-pfeifenpatenschaft-backend labs-pfeifenpatenschaft-backend all scram-sha-256
-      - host nfc-quirestack-api nfc-quirestack-api all scram-sha-256
       - host all all 0.0.0.0/0 reject
 
   managed:
@@ -158,12 +157,6 @@ spec:
         passwordSecret:
           name: mctl-api-db-creds
       # Team app roles
-      - name: nfc-quirestack-api
-        login: true
-        connectionLimit: 10
-        ensure: present
-        passwordSecret:
-          name: nfc-quirestack-api-db-creds
       - name: labs-pfeifenpatenschaft-backend
         login: true
         connectionLimit: 10
