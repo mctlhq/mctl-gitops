@@ -7,6 +7,14 @@ tenant:
   members:
     - userId: mashkovd
       role: owner
+  # admins already owns ghcr-credentials via the platform-level
+  # mctl-agent-ghcr ExternalSecret (bootstrap/templates/mctl-platform/
+  # mctl-agent-secrets.yaml). A second Owner ExternalSecret here would
+  # fight it for ownership — this exact collision held the admins-openclaw
+  # Application Degraded for 684 reconciliations over 7 days (see
+  # services/admins/openclaw/values.yaml's extraExternalSecrets comment).
+  ghcrCredentials:
+    enabled: false
   quotas:
     # Bumped 2026-05-30: requests.cpu "1" left only ~60m headroom at
     # steady-state (940m used), so a deploy/rollback workflow pod (100m
