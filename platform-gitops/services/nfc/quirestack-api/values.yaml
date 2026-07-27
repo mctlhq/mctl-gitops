@@ -37,6 +37,8 @@ ingress:
 envFrom:
   - secretRef:
       name: nfc-quirestack-api-db-creds
+  - secretRef:
+      name: quirestack-api-secrets
 dbSecret:
   vaultPath: teams/nfc/quirestack-api/database
   secretName: nfc-quirestack-api-db-creds
@@ -46,3 +48,17 @@ externalSecret:
     - secretKey: BETTER_AUTH_SECRET
       remoteKey: teams/nfc/quirestack-api
       property: BETTER_AUTH_SECRET
+# App only implements /health (no separate /healthz, /readyz like the chart
+# default expects). Will become self-service via health_check_path once
+# PR #(fix3a) merges; hand-set until then.
+probes:
+  liveness:
+    path: /health
+    port: http
+    initialDelaySeconds: 10
+    periodSeconds: 15
+  readiness:
+    path: /health
+    port: http
+    initialDelaySeconds: 5
+    periodSeconds: 10
