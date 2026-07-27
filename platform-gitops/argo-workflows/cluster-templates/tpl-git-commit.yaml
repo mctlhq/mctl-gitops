@@ -68,6 +68,8 @@ spec:
             value: "{{inputs.parameters.telegram_owner_id}}"
           - name: TELEGRAM_OWNER_IDS_JSON
             value: "{{inputs.parameters.telegram_owner_ids_json}}"
+          - name: HEALTH_CHECK_PATH
+            value: "{{inputs.parameters.health_check_path}}"
         envFrom:
           - configMapRef:
               name: mctl-platform-config
@@ -81,7 +83,6 @@ spec:
           TAG="{{inputs.parameters.image_tag}}"
           PORT="{{inputs.parameters.port}}"
           HOST="{{inputs.parameters.host}}"
-          HEALTH_PATH="{{inputs.parameters.health_check_path}}"
           ENV_VARS="{{inputs.parameters.env_vars}}"
           SECRET_VARS="{{inputs.parameters.secret_env_vars}}"
           REPO="{{inputs.parameters.dockerfile_repo}}"
@@ -234,8 +235,8 @@ spec:
             # skip_health_check null-out below so that skip_health_check
             # always wins if both are somehow set — otherwise this would
             # re-add a path to a probes object that was just nulled out.
-            if [ -n "$HEALTH_PATH" ]; then
-              yq eval -i ".probes.liveness.path = \"${HEALTH_PATH}\" | .probes.readiness.path = \"${HEALTH_PATH}\"" "${DIR}/values.yaml"
+            if [ -n "$HEALTH_CHECK_PATH" ]; then
+              yq eval -i '.probes.liveness.path = strenv(HEALTH_CHECK_PATH) | .probes.readiness.path = strenv(HEALTH_CHECK_PATH)' "${DIR}/values.yaml"
             fi
 
             # Disable probes if requested
