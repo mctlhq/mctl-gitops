@@ -1,0 +1,51 @@
+# Service: quirestack-web
+# Team: nfc
+
+# Chart: base-service
+
+image:
+  repository: ghcr.io/mctlhq/quirestack-web
+  tag: "0.1.7"
+imagePullSecrets:
+  - name: ghcr-credentials
+service:
+  port: 3000
+backstage:
+  kubernetesId: quirestack-web
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+env:
+  APP_ENV: production
+  API_URL: https://nfc-quirestack-api.mctl.ai
+  BETTER_AUTH_URL: https://nfc-quirestack-web.mctl.ai
+ingress:
+  enabled: true
+  hosts:
+    - nfc-quirestack-web.mctl.ai
+    - nfc-quirestack-web.mctl.me
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls:
+    - secretName: quirestack-web-tls
+      hosts:
+        - nfc-quirestack-web.mctl.ai
+        - nfc-quirestack-web.mctl.me
+envFrom:
+  - secretRef:
+      name: nfc-quirestack-web-db-creds
+  - secretRef:
+      name: quirestack-web-secrets
+dbSecret:
+  vaultPath: teams/nfc/quirestack-web/database
+  secretName: nfc-quirestack-web-db-creds
+externalSecret:
+  targetSecret: quirestack-web-secrets
+  data:
+    - secretKey: BETTER_AUTH_SECRET
+      remoteKey: teams/nfc/quirestack-web
+      property: BETTER_AUTH_SECRET
