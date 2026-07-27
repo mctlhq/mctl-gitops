@@ -29,32 +29,32 @@ spec:
         - -c
         - |
           set -e
-          
+
           # Authenticate with Vault using Kubernetes auth
           echo "🔐 Authenticating with Vault using ServiceAccount..."
           SA_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
-          
+
           VAULT_TOKEN=$(vault write -field=token auth/kubernetes/login \
             role=vault-cleanup \
             jwt="$SA_TOKEN")
-          
+
           if [ -z "$VAULT_TOKEN" ]; then
             echo "❌ Failed to authenticate with Vault"
             exit 1
           fi
-          
+
           export VAULT_TOKEN
           echo "✅ Authenticated successfully (token TTL: 5m)"
-          
+
           # Delete all secrets for this service
           echo "🧹 Cleaning up Vault secrets for ${TEAM}/${SERVICE}"
-          
+
           vault kv metadata delete secret/teams/${TEAM}/${SERVICE} 2>/dev/null && \
             echo "  ✅ Deleted secret/teams/${TEAM}/${SERVICE}" || \
             echo "  ℹ️  No main secrets found"
-          
+
           vault kv metadata delete secret/teams/${TEAM}/${SERVICE}/repo-pat 2>/dev/null && \
             echo "  ✅ Deleted repo-pat" || \
             echo "  ℹ️  No repo-pat found"
-          
+
           echo "✅ Vault cleanup completed for ${TEAM}/${SERVICE}"

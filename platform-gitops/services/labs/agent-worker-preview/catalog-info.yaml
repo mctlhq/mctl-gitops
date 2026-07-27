@@ -1,0 +1,35 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: agent-worker-preview
+  namespace: labs
+  description: "agent-worker-preview service"
+  annotations:
+    backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=labs-agent-worker-preview
+    backstage.io/kubernetes-id: agent-worker-preview
+    backstage.io/kubernetes-namespace: labs
+    argocd/app-name: labs-agent-worker-preview
+    github.com/source-repo: mctlhq/mctl-telegram
+    # mctl.me/auto-deploy — triggered by GitHub App webhook on tag push
+    #   "true" or "auto" — deploy immediately via scaffolder
+    #   "confirm"         — notify only, user deploys manually from UI
+    #   "false" or absent — skip
+    mctl.me/auto-deploy: "false"
+  links:
+    - url: https://ops.mctl.ai/applications/argocd/labs-agent-worker-preview
+      title: ArgoCD
+      icon: dashboard
+    - url: https://github.com/mctlhq/mctl-telegram
+      title: Source Repository
+      icon: github
+    - url: https://workflows.mctl.ai
+      title: Argo Workflows
+      icon: github
+  labels:
+    team: labs
+    env: apps
+spec:
+  type: worker
+  lifecycle: production
+  owner: group:default/labs
+  system: system:default/team-labs

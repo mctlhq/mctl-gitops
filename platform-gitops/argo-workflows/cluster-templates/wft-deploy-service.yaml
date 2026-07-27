@@ -58,6 +58,9 @@ spec:
         value: "false"
       - name: skip_health_check
         value: "false"
+      - name: health_check_path
+        value: ""
+        # e.g. "/health" (empty = no override, chart default /healthz + /readyz used)
       - name: dockerfile_path
         value: "Dockerfile"
       - name: image_tag
@@ -202,6 +205,8 @@ spec:
                   value: "{{workflow.parameters.provision_database}}"
                 - name: skip_health_check
                   value: "{{workflow.parameters.skip_health_check}}"
+                - name: health_check_path
+                  value: "{{workflow.parameters.health_check_path}}"
                 - name: dockerfile_repo
                   value: "{{workflow.parameters.dockerfile_repo}}"
                 - name: service_template
@@ -308,8 +313,13 @@ spec:
             "{\"metadata\":{\"annotations\":{\"argocd.argoproj.io/refresh\":\"hard\",\"mctl.ai/refresh-ts\":\"${TS}\"}}}"
           echo "ApplicationSet apps refresh requested."
 
+          # 48*5s = 240s. Observed 2026-07-25: two consecutive onboards of
+          # labs/agent-worker-preview each took ~175s for the app to appear
+          # after the hard refresh — the prior 150s window (30*5s) failed
+          # the workflow step both times despite the app landing correctly
+          # seconds later. 240s keeps a real margin above that.
           echo "Waiting for ArgoCD app ${APP_NAME} to appear..."
-          for i in $(seq 1 30); do
+          for i in $(seq 1 48); do
             if kubectl -n argocd get application "${APP_NAME}" >/dev/null 2>&1; then
               echo "ArgoCD app ${APP_NAME} is present."
               exit 0

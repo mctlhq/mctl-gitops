@@ -34,6 +34,16 @@ tenant:
     # Maximum number of services
     services: "10"
 
+  # -- GHCR pull credentials ExternalSecret (targets Secret "ghcr-credentials",
+  # which base-service's Deployment always references via imagePullSecrets).
+  # Defaults on so every current/future tenant gets it automatically. Set to
+  # false only for tenants that already own that Secret another way (e.g.
+  # via a platform-level or per-service openclaw ExternalSecret) — a second
+  # Owner ExternalSecret targeting the same Secret name causes ArgoCD
+  # self-heal drift fights between the two owners.
+  ghcrCredentials:
+    enabled: true
+
   # -- LimitRange defaults (applied to containers without explicit limits)
   limitRange:
     enabled: true
