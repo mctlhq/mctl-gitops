@@ -5,6 +5,9 @@ metadata:
   namespace: nfc
   description: "quirestack-api service"
   annotations:
+    platform.mctl.me/database: "true"
+    platform.mctl.me/database-team: "nfc"
+    platform.mctl.me/database-app: "quirestack-api"
     backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=nfc-quirestack-api
     backstage.io/kubernetes-id: quirestack-api
     backstage.io/kubernetes-namespace: nfc
