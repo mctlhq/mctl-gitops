@@ -1,0 +1,38 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: quirestack-api
+  namespace: nfc
+  description: "quirestack-api service"
+  annotations:
+    backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=nfc-quirestack-api
+    backstage.io/kubernetes-id: quirestack-api
+    backstage.io/kubernetes-namespace: nfc
+    argocd/app-name: nfc-quirestack-api
+    github.com/source-repo: WannaBeGeekster/quirestack
+    # mctl.me/auto-deploy — triggered by GitHub App webhook on tag push
+    #   "true" or "auto" — deploy immediately via scaffolder
+    #   "confirm"         — notify only, user deploys manually from UI
+    #   "false" or absent — skip
+    mctl.me/auto-deploy: "false"
+  links:
+    - url: https://ops.mctl.ai/applications/argocd/nfc-quirestack-api
+      title: ArgoCD
+      icon: dashboard
+    - url: https://github.com/WannaBeGeekster/quirestack
+      title: Source Repository
+      icon: github
+    - url: https://workflows.mctl.ai
+      title: Argo Workflows
+      icon: github
+    - url: https://nfc-quirestack-api.mctl.ai
+      title: Service URL
+      icon: web
+  labels:
+    team: nfc
+    env: apps
+spec:
+  type: service
+  lifecycle: production
+  owner: group:default/nfc
+  system: system:default/team-nfc
