@@ -1380,7 +1380,8 @@ extraIngresses:
 # orphaned VMServiceScrape continued firing VmagentScrapePoolEmpty.
 #
 # Fix (incident-43d9e608): adopt the orphaned VMServiceScrape into ArgoCD
-# management via extraObjects, with no endpoints so the VM operator does not
+# management via extraObjects, with an explicit empty endpoints list so the VM
+# operator clears any previously-applied endpoints and does not
 # configure a scrape pool for it. This stops the alert immediately. When
 # labs-openclaw is re-enabled (replicaCount: 1), remove this extraObjects
 # block and restore the ServiceMonitor below (or replace with a native
@@ -1399,10 +1400,12 @@ extraObjects:
           app.kubernetes.io/instance: labs-openclaw
           app.kubernetes.io/name: base-service
       # No endpoints configured: labs-openclaw is paused (replicaCount: 0).
-      # Omitting endpoints prevents the VM operator from generating any
-      # scrape job for this VMServiceScrape, so vmagent never creates the
+      # The explicit empty list is required for ServerSideApply to clear the
+      # endpoints left on the orphaned object; with no endpoints the VM
+      # operator generates no scrape job, so vmagent never creates the
       # labs-openclaw-codex-metrics pool and VmagentScrapePoolEmpty cannot
       # fire for it.
+      endpoints: []
 
 # Original ServiceMonitor (kept as reference; restore with replicaCount: 1):
 #
