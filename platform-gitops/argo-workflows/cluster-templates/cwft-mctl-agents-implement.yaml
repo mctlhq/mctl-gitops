@@ -217,6 +217,16 @@ spec:
           # and force-reprocess the primary's in-progress claim.
           - name: is-fallback
             value: "false"
+      # run_implementer discovers accepted proposals and only then persists
+      # the in-progress claim inside implement_one(). Keep that discovery and
+      # claim serialized across implementer workflows; otherwise two cron or
+      # manually-triggered runs can both select the same accepted proposal
+      # before either status update reaches git. This mutex is intentionally
+      # separate from mctl-gitops-main-writes, so implementation does not
+      # block unrelated workflows that only need to push to main.
+      synchronization:
+        mutex:
+          name: mctl-agents-proposal-claims
       container:
         image: ghcr.io/mctlhq/mctl-agents:1.19.0
         imagePullPolicy: IfNotPresent
