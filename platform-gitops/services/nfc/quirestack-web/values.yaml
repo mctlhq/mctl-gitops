@@ -5,7 +5,7 @@
 
 image:
   repository: ghcr.io/mctlhq/quirestack-web
-  tag: "0.1.7"
+  tag: "0.1.8"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
@@ -49,3 +49,4 @@ externalSecret:
     - secretKey: BETTER_AUTH_SECRET
       remoteKey: teams/nfc/quirestack-web
       property: BETTER_AUTH_SECRET
+extraContainers: []
