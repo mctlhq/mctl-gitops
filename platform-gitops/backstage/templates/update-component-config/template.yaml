@@ -25,10 +25,7 @@ spec:
           title: Service
           type: string
           description: "Select the deployed service to update"
-          ui:field: OwnedEntityPicker
-          ui:options:
-            allowedKinds:
-              - Component
+          ui:field: ServicePicker
 
     - title: Environment
       properties:
