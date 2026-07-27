@@ -58,6 +58,9 @@ spec:
         value: "false"
       - name: skip_health_check
         value: "false"
+      - name: health_check_path
+        value: ""
+        # e.g. "/health" (empty = no override, chart default /healthz + /readyz used)
       - name: dockerfile_path
         value: "Dockerfile"
       - name: image_tag
@@ -202,6 +205,8 @@ spec:
                   value: "{{workflow.parameters.provision_database}}"
                 - name: skip_health_check
                   value: "{{workflow.parameters.skip_health_check}}"
+                - name: health_check_path
+                  value: "{{workflow.parameters.health_check_path}}"
                 - name: dockerfile_repo
                   value: "{{workflow.parameters.dockerfile_repo}}"
                 - name: service_template
