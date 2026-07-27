@@ -11,6 +11,13 @@ tenant:
       role: owner
     - userId: mashkovd
       role: owner
+  # ovk already owns ghcr-credentials via services/ovk/openclaw/values.yaml
+  # extraExternalSecrets. A second Owner ExternalSecret here would fight it
+  # for ownership of the same Secret — the exact collision that held the
+  # admins-openclaw Application Degraded for 684 reconciliations over 7 days
+  # (see services/admins/openclaw/values.yaml's extraExternalSecrets comment).
+  ghcrCredentials:
+    enabled: false
   quotas:
     requests.cpu: "500m"
     requests.memory: "1500Mi"
