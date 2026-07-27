@@ -747,16 +747,14 @@ dbInitJob:
   enabled: false
 
 extraExternalSecrets:
-  ghcr-credentials:
-    refreshInterval: 24h
-    targetSecret: ghcr-credentials
-    targetTemplateType: kubernetes.io/dockerconfigjson
-    targetTemplateMetadataAnnotations:
-      argocd.argoproj.io/compare-options: IgnoreExtraneous
-    data:
-      - secretKey: .dockerconfigjson
-        remoteKey: platform/backstage/ghcr-credentials
-        property: dockerconfigjson
+  # ghcr-credentials is NOT declared here on purpose: every tenant now gets
+  # one baselined at the tenant-chart level (tenant.ghcrCredentials.enabled,
+  # default true). A newly onboarded openclaw service inherits that one; do
+  # not re-add a per-service copy here or it'll fight the tenant-level
+  # ExternalSecret for ownership of the same Secret (the exact drift this
+  # baseline was introduced to fix — see admins/labs/ovk's own openclaw
+  # values.yaml for the pre-existing exception, where the tenant-level
+  # default is explicitly disabled instead).
   openclaw-telegram-secret:
     refreshInterval: 1h
     targetSecret: openclaw-telegram-secret
