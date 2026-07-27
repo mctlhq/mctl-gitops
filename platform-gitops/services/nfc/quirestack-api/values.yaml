@@ -5,7 +5,7 @@
 
 image:
   repository: ghcr.io/mctlhq/quirestack-api
-  tag: "0.1.5"
+  tag: "0.1.7"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
@@ -19,9 +19,7 @@ resources:
   limits:
     cpu: 500m
     memory: 512Mi
-env:
-  APP_ENV: production
-  IMPORT_TOKEN: 3d86adebf681b43cb3258ac2ca8e379f3b49ddcfacb397b2
+env: {}
 ingress:
   enabled: true
   hosts:
@@ -62,3 +60,4 @@ probes:
     port: http
     initialDelaySeconds: 5
     periodSeconds: 10
+extraContainers: []
