@@ -236,7 +236,7 @@ spec:
             if [ "$PROVISION_DB" = "true" ]; then
               DB_SECRET="${TEAM}-${SERVICE}-db-creds"
               VAULT_PATH="teams/${TEAM}/${SERVICE}/database"
-              yq eval -i ".envFrom = ((.envFrom // []) + [{\"secretRef\": {\"name\": \"${DB_SECRET}\"}}] | unique_by(.secretRef.name))" "${DIR}/values.yaml"
+              yq eval -i ".envFrom = ((.envFrom // []) | map(select(.secretRef.name != \"${DB_SECRET}\")) + [{\"secretRef\": {\"name\": \"${DB_SECRET}\"}}])" "${DIR}/values.yaml"
               yq eval -i ".dbSecret.vaultPath = \"${VAULT_PATH}\"" "${DIR}/values.yaml"
               yq eval -i ".dbSecret.secretName = \"${DB_SECRET}\"" "${DIR}/values.yaml"
             fi
@@ -268,7 +268,7 @@ spec:
               done << 'SECRETEOF'
           {{inputs.parameters.secret_env_vars}}
           SECRETEOF
-              yq eval -i ".envFrom = ((.envFrom // []) + [{\"secretRef\": {\"name\": \"${SERVICE}-secrets\"}}] | unique_by(.secretRef.name))" "${DIR}/values.yaml"
+              yq eval -i ".envFrom = ((.envFrom // []) | map(select(.secretRef.name != \"${SERVICE}-secrets\")) + [{\"secretRef\": {\"name\": \"${SERVICE}-secrets\"}}])" "${DIR}/values.yaml"
             fi
 
             # catalog-info.yaml
@@ -388,7 +388,7 @@ spec:
               done << 'SECRETEOF3'
           {{inputs.parameters.secret_env_vars}}
           SECRETEOF3
-              yq eval -i ".envFrom = ((.envFrom // []) + [{\"secretRef\": {\"name\": \"${SERVICE}-secrets\"}}] | unique_by(.secretRef.name))" "${DIR}/values.yaml"
+              yq eval -i ".envFrom = ((.envFrom // []) | map(select(.secretRef.name != \"${SERVICE}-secrets\")) + [{\"secretRef\": {\"name\": \"${SERVICE}-secrets\"}}])" "${DIR}/values.yaml"
             fi
 
             git add "${DIR}/values.yaml"
@@ -441,7 +441,7 @@ spec:
               done << 'SECRETEOF2'
           {{inputs.parameters.secret_env_vars}}
           SECRETEOF2
-              yq eval -i ".envFrom = ((.envFrom // []) + [{\"secretRef\": {\"name\": \"${SERVICE}-secrets\"}}] | unique_by(.secretRef.name))" "${DIR}/values.yaml"
+              yq eval -i ".envFrom = ((.envFrom // []) | map(select(.secretRef.name != \"${SERVICE}-secrets\")) + [{\"secretRef\": {\"name\": \"${SERVICE}-secrets\"}}])" "${DIR}/values.yaml"
               CHANGED=true
             fi
 
