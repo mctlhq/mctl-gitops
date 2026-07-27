@@ -66,7 +66,7 @@ env:
   # Approve/send E2E window (mctl-telegram#319, #322) closed 2026-07-26:
   # full DM->draft->Saved-Messages-approve->send cycle confirmed live.
   AGENT_ENABLED: "true"
-  AGENT_KILL_SWITCH: "true"
+  AGENT_KILL_SWITCH: "false"
 ingress:
   enabled: true
   hosts:
