@@ -23,6 +23,8 @@ spec:
             default: "8080"
           - name: host
             default: ""
+          - name: health_check_path
+            default: ""
           - name: env_vars
             default: ""
           - name: secret_env_vars
@@ -66,6 +68,8 @@ spec:
             value: "{{inputs.parameters.telegram_owner_id}}"
           - name: TELEGRAM_OWNER_IDS_JSON
             value: "{{inputs.parameters.telegram_owner_ids_json}}"
+          - name: HEALTH_CHECK_PATH
+            value: "{{inputs.parameters.health_check_path}}"
         envFrom:
           - configMapRef:
               name: mctl-platform-config
@@ -225,6 +229,14 @@ spec:
               TLS_NAME="${SERVICE}-tls"
               yq eval -i ".ingress.annotations.\"cert-manager.io/cluster-issuer\" = \"letsencrypt-prod\"" "${DIR}/values.yaml"
               yq eval -i ".ingress.tls = [{\"secretName\": \"${TLS_NAME}\", \"hosts\": .ingress.hosts}]" "${DIR}/values.yaml"
+            fi
+
+            # Override probe path if requested. Runs before the
+            # skip_health_check null-out below so that skip_health_check
+            # always wins if both are somehow set — otherwise this would
+            # re-add a path to a probes object that was just nulled out.
+            if [ -n "$HEALTH_CHECK_PATH" ]; then
+              yq eval -i '.probes.liveness.path = strenv(HEALTH_CHECK_PATH) | .probes.readiness.path = strenv(HEALTH_CHECK_PATH)' "${DIR}/values.yaml"
             fi
 
             # Disable probes if requested
