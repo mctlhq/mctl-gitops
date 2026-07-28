@@ -150,8 +150,8 @@ spec:
             case "${PHASE}" in
               Succeeded)
                 if [ "${PROVISION_DB}" = "true" ]; then
-                  # Build the kubectl Go templates at runtime so their `{{ }}`
-                  # delimiters are not parsed as Argo template expressions.
+                  # Build the kubectl Go templates at runtime so their
+                  # double-brace delimiters are not parsed by Argo.
                   OPEN='{''{'
                   CLOSE='}''}'
                   DB_TIME_TEMPLATE="${OPEN}range \$id, \$node := .status.nodes${CLOSE}${OPEN}if eq \$node.displayName \"provision-database\"${CLOSE}${OPEN}\$node.finishedAt${CLOSE}${OPEN}\"\\n\"${CLOSE}${OPEN}end${CLOSE}${OPEN}end${CLOSE}"

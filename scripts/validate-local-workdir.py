@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 import sys
 
 import yaml
@@ -178,7 +179,10 @@ def validate_smoke_flow() -> None:
     assert 'value: "${PROVISION_DB}"' in onboard
     assert 'eq \\$node.displayName \\"provision-database\\"' in onboard
     assert 'eq \\$node.displayName \\"commit\\"' in onboard
-    assert "{{range $id" not in onboard
+    assert all(
+        expression.startswith("workflow.parameters.")
+        for expression in re.findall(r"\{\{([^}]+)\}\}", onboard)
+    )
     assert "DB_FINISHED" in onboard and "COMMIT_STARTED" in onboard
 
     pod_check = templates["check-pod-running"]["script"]["source"]
