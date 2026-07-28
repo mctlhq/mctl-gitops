@@ -58,18 +58,3 @@ probes:
     initialDelaySeconds: 5
     periodSeconds: 10
 extraContainers: []
-
-dbSecret:
-  vaultPath: "teams/nfc/quirestack-web/database"
-  secretName: "nfc-quirestack-web-db-creds"
-dbInitJob:
-  enabled: false
-  database: "nfc-quirestack-web"
-  waitTable: "identities"
-  sql: |
-    INSERT INTO identities (provider, provider_id, status, metadata)
-    VALUES ('telegram', '__TELEGRAM_ID__', 'approved', '{}')
-    ON CONFLICT (provider, provider_id) DO UPDATE SET status = 'approved';
-envFrom:
-  - secretRef:
-      name: "nfc-quirestack-web-db-creds"
