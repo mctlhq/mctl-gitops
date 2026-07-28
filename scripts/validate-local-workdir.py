@@ -188,6 +188,9 @@ def validate_alerts() -> None:
     pending = by_name["ArgoLocalWorkdirPodPending"]["expr"]
     assert "kube_pod_spec_volumes_persistentvolumeclaims_info" in pending
     assert "kube_persistentvolumeclaim_info" in pending
+    assert "kube_pod_labels" not in pending
+    assert "persistentvolumeclaim, storageclass" in pending
+    assert "group_left (storageclass)" in pending
     assert 'storageclass="argo-workdir-local"' in pending
     assert by_name["ArgoLocalWorkdirPodPending"]["for"] == "10m"
 

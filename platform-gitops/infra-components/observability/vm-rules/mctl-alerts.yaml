@@ -147,16 +147,14 @@ spec:
         # elsewhere and their pod remains Pending.
         - alert: ArgoLocalWorkdirPodPending
           expr: |
-            max by (namespace, pod, label_workflows_argoproj_io_workflow) (
+            max by (namespace, pod, persistentvolumeclaim, storageclass) (
               (kube_pod_status_phase{namespace="argo-workflows", phase="Pending"} == 1)
-              * on (namespace, pod) group_left (label_workflows_argoproj_io_workflow)
-              kube_pod_labels{namespace="argo-workflows", label_workflows_argoproj_io_workflow!=""}
               * on (namespace, pod) group_left (persistentvolumeclaim)
               kube_pod_spec_volumes_persistentvolumeclaims_info{
                 namespace="argo-workflows",
                 persistentvolumeclaim!=""
               }
-              * on (namespace, persistentvolumeclaim) group_left
+              * on (namespace, persistentvolumeclaim) group_left (storageclass)
               kube_persistentvolumeclaim_info{
                 namespace="argo-workflows",
                 storageclass="argo-workdir-local"
@@ -167,8 +165,9 @@ spec:
             severity: warning
           annotations:
             summary: >-
-              Argo workflow {{ $labels.label_workflows_argoproj_io_workflow }}
-              has a pending pod for over 10 minutes
+              Argo pod {{ $labels.pod }} using local workdir PVC
+              {{ $labels.persistentvolumeclaim }} has been pending for over
+              10 minutes
 
         - alert: ArgoLocalWorkdirQuotaHigh
           expr: |
