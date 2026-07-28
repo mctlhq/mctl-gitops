@@ -26,6 +26,10 @@ ALERTS = (
     ROOT
     / "platform-gitops/infra-components/observability/vm-rules/mctl-alerts.yaml"
 )
+MONITORING = (
+    ROOT
+    / "platform-gitops/bootstrap/templates/observability/monitoring.yaml"
+)
 SMOKE = (
     ROOT
     / "platform-gitops/argo-workflows/cluster-templates/wft-smoke-test.yaml"
@@ -137,6 +141,7 @@ def validate_alerts() -> None:
         "ArgoLocalWorkdirQuotaCritical",
         "NodeDiskSpaceHigh",
         "NodeDiskSpaceCritical",
+        "NodeFilesystemCollectorFailed",
     }
     assert expected <= set(by_name)
 
@@ -152,6 +157,21 @@ def validate_alerts() -> None:
     assert LOCAL_QUOTA_RESOURCE in critical
     assert "> 0.80" in high
     assert "> 0.95" in critical
+
+    collector = by_name["NodeFilesystemCollectorFailed"]
+    assert 'node_scrape_collector_success{' in collector["expr"]
+    assert 'collector="filesystem"' in collector["expr"]
+    assert collector["for"] == "5m"
+
+
+def validate_node_exporter_disk_metrics() -> None:
+    monitoring = MONITORING.read_text()
+    assert "prometheus-node-exporter:" in monitoring
+    assert "runAsNonRoot: false" in monitoring
+    assert "runAsUser: 0" in monitoring
+    assert 'drop: ["ALL"]' in monitoring
+    assert "type: RuntimeDefault" in monitoring
+    assert "NodeFilesystemCollectorFailed" in monitoring
 
 
 def validate_smoke_flow() -> None:
@@ -215,6 +235,7 @@ def main() -> int:
         validate_quota,
         validate_canary,
         validate_alerts,
+        validate_node_exporter_disk_metrics,
         validate_smoke_flow,
         validate_opted_in_agent_templates,
     )

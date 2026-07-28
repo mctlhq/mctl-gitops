@@ -126,6 +126,20 @@ spec:
               Node {{ $labels.instance }} root disk above 90%
               ({{ $value | humanizePercentage }} used)
 
+        - alert: NodeFilesystemCollectorFailed
+          expr: |
+            node_scrape_collector_success{
+              job="node-exporter",
+              collector="filesystem"
+            } == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: >-
+              Node exporter filesystem collector is failing on
+              {{ $labels.instance }}; disk-capacity alerts are blind
+
     - name: mctl.argo-local-workdir
       rules:
         # A local-path volume is pinned to its first worker.  If that worker
