@@ -1,0 +1,103 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterWorkflowTemplate
+metadata:
+  name: argo-local-workdir-canary
+  annotations:
+    workflows.argoproj.io/description: |
+      Verifies the argo-workdir-local StorageClass without changing any
+      production workflow template. The writer records the workflow UID and
+      node name on a local-path PVC; a separate reader pod verifies both the
+      marker and that Kubernetes scheduled it on the PV-affine node.
+
+      Set pause_before_read=true for the worker-cordon recovery drill. Resume
+      the workflow only after the writer's node has been cordoned.
+spec:
+  serviceAccountName: argo-workflow-sa
+  entrypoint: verify-local-workdir
+  activeDeadlineSeconds: 1800
+  ttlStrategy:
+    secondsAfterCompletion: 3600
+  volumeClaimGC:
+    strategy: OnWorkflowCompletion
+
+  arguments:
+    parameters:
+      - name: pause_before_read
+        value: "false"
+
+  volumeClaimTemplates:
+    - metadata:
+        name: workdir
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: argo-workdir-local
+        resources:
+          requests:
+            storage: 1Gi
+
+  templates:
+    - name: verify-local-workdir
+      steps:
+        - - name: write-marker
+            template: write-marker
+        - - name: pause
+            template: pause
+            when: "'{{workflow.parameters.pause_before_read}}' == 'true'"
+        - - name: read-marker
+            template: read-marker
+
+    - name: write-marker
+      container:
+        image: docker.io/library/busybox:1.36
+        command: [sh, -ceu]
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+          runAsNonRoot: true
+          runAsUser: 65534
+        args:
+          - |
+            printf '%s:%s\n' "$WORKFLOW_UID" "$NODE_NAME" > /workdir/canary
+            sync
+            echo "Wrote marker on ${NODE_NAME}"
+        env:
+          - name: WORKFLOW_UID
+            value: "{{workflow.uid}}"
+          - name: NODE_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: spec.nodeName
+        volumeMounts:
+          - name: workdir
+            mountPath: /workdir
+
+    - name: pause
+      suspend: {}
+
+    - name: read-marker
+      container:
+        image: docker.io/library/busybox:1.36
+        command: [sh, -ceu]
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+          runAsNonRoot: true
+          runAsUser: 65534
+        args:
+          - |
+            expected="${WORKFLOW_UID}:${NODE_NAME}"
+            actual="$(cat /workdir/canary)"
+            test "$actual" = "$expected"
+            echo "Verified marker and node affinity on ${NODE_NAME}"
+        env:
+          - name: WORKFLOW_UID
+            value: "{{workflow.uid}}"
+          - name: NODE_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: spec.nodeName
+        volumeMounts:
+          - name: workdir
+            mountPath: /workdir

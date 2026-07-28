@@ -101,14 +101,114 @@ spec:
                 node_filesystem_avail_bytes{fstype!="tmpfs", mountpoint="/"}
                 / node_filesystem_size_bytes{fstype!="tmpfs", mountpoint="/"}
               )
-            ) > 0.80
+            ) > 0.70
           for: 10m
           labels:
             severity: warning
           annotations:
             summary: >-
-              Node {{ $labels.instance }} root disk above 80%
+              Node {{ $labels.instance }} root disk above 70%
               ({{ $value | humanizePercentage }} used)
+
+        - alert: NodeDiskSpaceCritical
+          expr: |
+            (
+              1 - (
+                node_filesystem_avail_bytes{fstype!="tmpfs", mountpoint="/"}
+                / node_filesystem_size_bytes{fstype!="tmpfs", mountpoint="/"}
+              )
+            ) > 0.90
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: >-
+              Node {{ $labels.instance }} root disk above 90%
+              ({{ $value | humanizePercentage }} used)
+
+        - alert: NodeFilesystemCollectorFailed
+          expr: |
+            node_scrape_collector_success{
+              job="node-exporter",
+              collector="filesystem"
+            } == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: >-
+              Node exporter filesystem collector is failing on
+              {{ $labels.instance }}; disk-capacity alerts are blind
+
+    - name: mctl.argo-local-workdir
+      rules:
+        # A local-path volume is pinned to its first worker.  If that worker
+        # is drained or unavailable, later workflow steps cannot remount it
+        # elsewhere and their pod remains Pending.
+        - alert: ArgoLocalWorkdirPodPending
+          expr: |
+            max by (namespace, pod, label_workflows_argoproj_io_workflow) (
+              (kube_pod_status_phase{namespace="argo-workflows", phase="Pending"} == 1)
+              * on (namespace, pod) group_left (label_workflows_argoproj_io_workflow)
+              kube_pod_labels{namespace="argo-workflows", label_workflows_argoproj_io_workflow!=""}
+              * on (namespace, pod) group_left (persistentvolumeclaim)
+              kube_pod_spec_volumes_persistentvolumeclaims_info{
+                namespace="argo-workflows",
+                persistentvolumeclaim!=""
+              }
+              * on (namespace, persistentvolumeclaim) group_left
+              kube_persistentvolumeclaim_info{
+                namespace="argo-workflows",
+                storageclass="argo-workdir-local"
+              }
+            )
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: >-
+              Argo workflow {{ $labels.label_workflows_argoproj_io_workflow }}
+              has a pending pod for over 10 minutes
+
+        - alert: ArgoLocalWorkdirQuotaHigh
+          expr: |
+            kube_resourcequota{
+              namespace="argo-workflows",
+              resource="argo-workdir-local.storageclass.storage.k8s.io/requests.storage",
+              type="used"
+            }
+            / ignoring(type)
+            kube_resourcequota{
+              namespace="argo-workflows",
+              resource="argo-workdir-local.storageclass.storage.k8s.io/requests.storage",
+              type="hard"
+            } > 0.80
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: >-
+              Argo local workdir quota is above 80%
+
+        - alert: ArgoLocalWorkdirQuotaCritical
+          expr: |
+            kube_resourcequota{
+              namespace="argo-workflows",
+              resource="argo-workdir-local.storageclass.storage.k8s.io/requests.storage",
+              type="used"
+            }
+            / ignoring(type)
+            kube_resourcequota{
+              namespace="argo-workflows",
+              resource="argo-workdir-local.storageclass.storage.k8s.io/requests.storage",
+              type="hard"
+            } > 0.95
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: >-
+              Argo local workdir quota is above 95%
 
         # A node left unschedulable longer than a normal upgrade drain.
         # Catches the system-upgrade-controller failure mode where a failed
