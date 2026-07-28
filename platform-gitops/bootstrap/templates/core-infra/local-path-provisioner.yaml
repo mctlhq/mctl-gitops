@@ -168,7 +168,14 @@ data:
     metadata:
       name: helper-pod
     spec:
+      automountServiceAccountToken: false
       priorityClassName: system-node-critical
+      securityContext:
+        runAsGroup: 0
+        runAsNonRoot: false
+        runAsUser: 0
+        seLinuxOptions:
+          type: spc_t
       tolerations:
         - key: node.kubernetes.io/disk-pressure
           operator: Exists
@@ -177,3 +184,11 @@ data:
         - name: helper-pod
           image: docker.io/library/busybox:1.36
           imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["DAC_OVERRIDE", "FOWNER"]
+            readOnlyRootFilesystem: true
+            seccompProfile:
+              type: RuntimeDefault
