@@ -135,6 +135,7 @@ def validate_provisioner() -> None:
     command = container["command"]
     provisioner_flag = command.index("--provisioner-name")
     assert command[provisioner_flag + 1] == LOCAL_PROVISIONER
+    assert "--allow-unsafe-helper-pod-template" in command
 
 
 def validate_quota() -> None:
