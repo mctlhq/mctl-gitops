@@ -37,12 +37,9 @@ ingress:
         - nfc-quirestack-web.mctl.me
 envFrom:
   - secretRef:
-      name: nfc-quirestack-web-db-creds
+      name: nfc-quirestack-api-db-creds
   - secretRef:
       name: quirestack-web-secrets
-dbSecret:
-  vaultPath: teams/nfc/quirestack-web/database
-  secretName: nfc-quirestack-web-db-creds
 externalSecret:
   targetSecret: quirestack-web-secrets
   data:

@@ -143,18 +143,6 @@ spec:
           max_replicas: "5"
           cpu_threshold: "80"
 
-    - id: provision-db
-      name: Provision database
-      if: ${{ parameters.provisionDatabase }}
-      action: mctl:workflow:submit
-      input:
-        templateName: provision-database
-        clusterScope: true
-        namespace: ${{ parameters.teamName | parseEntityRef | pick('name') }}
-        parameters:
-          team_name: ${{ parameters.teamName | parseEntityRef | pick('name') }}
-          app_name: ${{ parameters.dockerfileRepo | serviceName }}
-
   output:
     text:
       - title: Type
