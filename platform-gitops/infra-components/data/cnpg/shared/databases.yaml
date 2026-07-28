@@ -189,3 +189,14 @@ spec:
   cluster:
     name: shared-pg
   databaseReclaimPolicy: retain
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: nfc-quirestack-web-db
+spec:
+  name: "nfc-quirestack-web"
+  owner: "nfc-quirestack-web"
+  cluster:
+    name: shared-pg
+  databaseReclaimPolicy: retain
