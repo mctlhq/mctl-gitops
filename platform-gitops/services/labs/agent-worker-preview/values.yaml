@@ -5,7 +5,7 @@
 # Keep the worker stopped between bounded C1 test windows. Last window
 # (mctl-telegram#319, #322) closed 2026-07-26: full DM->draft->Saved-Messages
 # -approve->send cycle confirmed live.
-replicaCount: 1
+replicaCount: 0
 image:
   repository: ghcr.io/mctlhq/agent-worker-preview
   tag: "main-57f9ba6"
