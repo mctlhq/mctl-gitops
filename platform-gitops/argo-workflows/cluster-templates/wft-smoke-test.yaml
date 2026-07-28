@@ -97,6 +97,7 @@ spec:
             template: check-k8s-secret
         - - name: verify-db-wiring
             template: check-db-secret-wiring
+            when: "{{workflow.parameters.provision_database_on_onboard}} == true"
         - - name: update-config
             template: run-update-config
         - - name: sync-argocd-app-2
@@ -795,7 +796,7 @@ spec:
         image: alpine/k8s:1.33.12
         command: [bash]
         source: |
-          set -e
+          set -euo pipefail
           TEAM="{{workflow.parameters.team_name}}"
           SVC="{{workflow.parameters.component_name}}"
           APP="${TEAM}-${SVC}"
@@ -803,18 +804,25 @@ spec:
 
           for i in $(seq 1 30); do
             APP_COUNT=$(kubectl get application "${APP}" -n argocd \
-              --ignore-not-found -o name 2>/dev/null | wc -l | tr -d ' ')
+              --ignore-not-found -o name | awk 'NF { count++ } END { print count + 0 }')
             DEPLOY_COUNT=$(kubectl get deployment -n "${TEAM}" \
-              -l "app.kubernetes.io/instance=${APP}" -o name 2>/dev/null | wc -l | tr -d ' ')
+              -l "app.kubernetes.io/instance=${APP}" -o name \
+              | awk 'NF { count++ } END { print count + 0 }')
             SERVICE_COUNT=$(kubectl get service -n "${TEAM}" \
-              -l "app.kubernetes.io/instance=${APP}" -o name 2>/dev/null | wc -l | tr -d ' ')
-            APP_ES_COUNT=$(kubectl get externalsecret -n "${TEAM}" \
-              -o jsonpath='{range .items[*]}{.spec.target.name}{"\n"}{end}' 2>/dev/null \
-              | grep -Ec "^(${SVC}-secrets|${DB_SECRET})$" || true)
-            APP_SECRET_COUNT=$(kubectl get secret -n "${TEAM}" \
-              -o name 2>/dev/null | grep -Ec "/(${SVC}-secrets|${DB_SECRET})$" || true)
+              -l "app.kubernetes.io/instance=${APP}" -o name \
+              | awk 'NF { count++ } END { print count + 0 }')
+            APP_ES_NAMES=$(kubectl get externalsecret -n "${TEAM}" \
+              -o jsonpath='{range .items[*]}{.spec.target.name}{"\n"}{end}')
+            APP_ES_COUNT=$(printf '%s\n' "${APP_ES_NAMES}" \
+              | awk -v app="${SVC}-secrets" -v db="${DB_SECRET}" \
+                '$0 == app || $0 == db { count++ } END { print count + 0 }')
+            APP_SECRET_NAMES=$(kubectl get secret -n "${TEAM}" -o name)
+            APP_SECRET_COUNT=$(printf '%s\n' "${APP_SECRET_NAMES}" \
+              | awk -v app="secret/${SVC}-secrets" -v db="secret/${DB_SECRET}" \
+                '$0 == app || $0 == db { count++ } END { print count + 0 }')
             DB_ES_COUNT=$(kubectl get externalsecret "${DB_SECRET}" -n platform-db \
-              --ignore-not-found -o name 2>/dev/null | wc -l | tr -d ' ')
+              --ignore-not-found -o name \
+              | awk 'NF { count++ } END { print count + 0 }')
             if [ "${APP_COUNT}${DEPLOY_COUNT}${SERVICE_COUNT}${APP_ES_COUNT}${APP_SECRET_COUNT}${DB_ES_COUNT}" = "000000" ]; then
               echo "Verified service, ArgoCD app, and secret references are removed"
               break

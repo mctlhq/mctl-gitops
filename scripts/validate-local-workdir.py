@@ -38,6 +38,9 @@ RETIRE = (
     ROOT
     / "platform-gitops/argo-workflows/cluster-templates/wft-retire-service.yaml"
 )
+TENANT_RBAC = (
+    ROOT / "platform-gitops/helm-charts/tenant/templates/argo-workflow.yaml"
+)
 AGENT_TEMPLATE_DIR = (
     ROOT / "platform-gitops/argo-workflows/cluster-templates"
 )
@@ -87,6 +90,25 @@ def validate_provisioner() -> None:
     assert storage_class["volumeBindingMode"] == "WaitForFirstConsumer"
     assert storage_class["reclaimPolicy"] == "Delete"
     assert storage_class["allowVolumeExpansion"] is False
+    topology = storage_class["allowedTopologies"]
+    assert topology == [
+        {
+            "matchLabelExpressions": [
+                {
+                    "key": "kubernetes.io/hostname",
+                    "values": sorted(WORKERS),
+                }
+            ]
+        }
+    ]
+
+    cluster_role = only(
+        docs, "ClusterRole", "argo-local-path-provisioner-role"
+    )
+    cluster_binding = only(
+        docs, "ClusterRoleBinding", "argo-local-path-provisioner-bind"
+    )
+    assert cluster_binding["roleRef"]["name"] == cluster_role["metadata"]["name"]
 
     config_map = only(docs, "ConfigMap", "local-path-config")
     config = json.loads(config_map["data"]["config.json"])
@@ -204,6 +226,15 @@ def validate_smoke_flow() -> None:
         "verify-db-wiring"
     )
     assert pipeline[-2:] == ["retire", "verify-retired"]
+    verify_db_wiring = next(
+        step[0]
+        for step in templates["smoke-pipeline"]["steps"]
+        if step[0]["name"] == "verify-db-wiring"
+    )
+    assert (
+        verify_db_wiring["when"]
+        == "{{workflow.parameters.provision_database_on_onboard}} == true"
+    )
 
     onboard = templates["run-onboard"]["script"]["source"]
     assert 'value: "${PROVISION_DB}"' in onboard
@@ -229,6 +260,16 @@ def validate_smoke_flow() -> None:
 
     assert "check-db-secret-wiring" in templates
     assert "check-retired" in templates
+    retired = templates["check-retired"]["script"]["source"]
+    assert "set -euo pipefail" in retired
+    assert "2>/dev/null" not in retired
+
+
+def validate_tenant_smoke_rbac() -> None:
+    rbac = TENANT_RBAC.read_text()
+    assert 'resources: ["pods", "pods/exec"]\n    verbs: ["get", "list", "watch", "create"]' in rbac
+    assert 'resources: ["services", "events"]\n    verbs: ["get", "list", "watch"]' in rbac
+    assert 'resources: ["pods", "pods/exec", "services", "events"]' not in rbac
 
 
 def validate_retire_cascade() -> None:
@@ -267,6 +308,7 @@ def main() -> int:
         validate_alerts,
         validate_node_exporter_disk_metrics,
         validate_smoke_flow,
+        validate_tenant_smoke_rbac,
         validate_retire_cascade,
         validate_opted_in_agent_templates,
     )
