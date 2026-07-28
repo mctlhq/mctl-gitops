@@ -299,6 +299,11 @@ spec:
                   - receiver: telegram
                     matchers:
                       - alertname =~ "NodeCordoned|K3sUpgradeJobFailed"
+                  # Local Argo workdirs are node-affine. These need an operator
+                  # to restore the worker or terminate and rerun the workflow.
+                  - receiver: telegram
+                    matchers:
+                      - alertname =~ "ArgoLocalWorkdirPodPending|ArgoLocalWorkdirQuotaHigh|ArgoLocalWorkdirQuotaCritical|NodeDiskSpaceCritical"
                   - receiver: mctl-agent
                     matchers:
                       - alertname =~ "RecordingRulesNoData|ScrapePoolHasNoTargets|TooManyScrapeErrors|TooManyLogs"

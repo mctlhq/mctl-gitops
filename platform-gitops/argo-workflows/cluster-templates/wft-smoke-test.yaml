@@ -8,7 +8,7 @@ metadata:
 
       Lifecycle tested:
         1.  onboard      — submit deploy-service(onboard) child workflow
-        2.  verify-pod   — kubectl wait for Deployment available
+        2.  verify-pod   — wait for Deployment; fail on missing Secret references
         3.  deploy       — submit deploy-service(deploy) with env_vars + secret_env_vars
         4.  verify-pod   — confirm Deployment still available after redeploy
         5.  sync-argocd  — trigger ArgoCD hard refresh for the service app
@@ -18,9 +18,11 @@ metadata:
         9.  provision-db — submit provision-database child workflow
         10. verify-vault — vault kv get confirms DB secret exists
         11. verify-secret — ExternalSecret synced into k8s Secret (platform-db ns)
-        12. update-config — submit deploy-service(update-config) child workflow
-        13. verify-env   — kubectl exec confirms SMOKE_TEST=true in pod env
-        14. retire       — submit retire-service child workflow
+        12. verify-db-wiring — service ExternalSecret and envFrom use the DB secret
+        13. update-config — submit deploy-service(update-config) child workflow
+        14. verify-env   — kubectl exec confirms SMOKE_TEST=true in pod env
+        15. retire       — submit retire-service child workflow
+        16. verify-retired — workload, secrets, and ArgoCD app are removed
 
       onExit handler always retires (cleanup even on failure).
 
@@ -49,6 +51,12 @@ spec:
         value: "smoke-test-svc"
       - name: dockerfile_repo
         value: "mctlhq/spring-test"
+      - name: component_type
+        value: "worker-service"
+      - name: git_tag
+        value: "main"
+      - name: provision_database_on_onboard
+        value: "false"
 
   templates:
 
@@ -79,6 +87,8 @@ spec:
             template: check-vault-secret
         - - name: verify-k8s-secret
             template: check-k8s-secret
+        - - name: verify-db-wiring
+            template: check-db-secret-wiring
         - - name: update-config
             template: run-update-config
         - - name: sync-argocd-app-2
@@ -87,6 +97,8 @@ spec:
             template: check-env-var
         - - name: retire
             template: run-retire
+        - - name: verify-retired
+            template: check-retired
 
     # ─── Step 1: Onboard service ──────────────────────────────────────────────
     - name: run-onboard
@@ -98,6 +110,9 @@ spec:
           TEAM="{{workflow.parameters.team_name}}"
           SVC="{{workflow.parameters.component_name}}"
           REPO="{{workflow.parameters.dockerfile_repo}}"
+          COMPONENT_TYPE="{{workflow.parameters.component_type}}"
+          GIT_TAG="{{workflow.parameters.git_tag}}"
+          PROVISION_DB="{{workflow.parameters.provision_database_on_onboard}}"
 
           WF_NAME=$(kubectl create -n argo-workflows -o jsonpath='{.metadata.name}' -f - << EOF
           apiVersion: argoproj.io/v1alpha1
@@ -114,14 +129,14 @@ spec:
               - {name: action,             value: onboard}
               - {name: team_name,          value: "${TEAM}"}
               - {name: component_name,     value: "${SVC}"}
-              - {name: component_type,     value: worker-service}
+              - {name: component_type,     value: "${COMPONENT_TYPE}"}
               - {name: dockerfile_repo,    value: "${REPO}"}
-              - {name: git_tag,            value: main}
+              - {name: git_tag,            value: "${GIT_TAG}"}
               - {name: port,               value: "8080"}
               - {name: host,               value: ""}
               - {name: env_vars,           value: ""}
               - {name: secret_env_vars,    value: ""}
-              - {name: provision_database, value: "false"}
+              - {name: provision_database, value: "${PROVISION_DB}"}
               - {name: skip_health_check,  value: "false"}
               - {name: dockerfile_path,    value: Dockerfile}
               - {name: image_tag,          value: ""}
@@ -133,7 +148,26 @@ spec:
               -o jsonpath='{.status.phase}' 2>/dev/null || echo "Pending")
             echo "  [${i}/80] ${PHASE}"
             case "${PHASE}" in
-              Succeeded) echo "✅ onboard Succeeded"; exit 0 ;;
+              Succeeded)
+                if [ "${PROVISION_DB}" = "true" ]; then
+                  DB_FINISHED=$(kubectl get workflow "${WF_NAME}" -n argo-workflows \
+                    -o go-template='{{range $id, $node := .status.nodes}}{{if eq $node.displayName "provision-database"}}{{$node.finishedAt}}{{"\n"}}{{end}}{{end}}' | tail -1)
+                  COMMIT_STARTED=$(kubectl get workflow "${WF_NAME}" -n argo-workflows \
+                    -o go-template='{{range $id, $node := .status.nodes}}{{if eq $node.displayName "commit"}}{{$node.startedAt}}{{"\n"}}{{end}}{{end}}' | tail -1)
+                  if [ -z "${DB_FINISHED}" ] || [ -z "${COMMIT_STARTED}" ]; then
+                    echo "Missing provision-database or commit timing in ${WF_NAME}"
+                    exit 1
+                  fi
+                  if [[ "${DB_FINISHED}" > "${COMMIT_STARTED}" ]]; then
+                    echo "Database provisioning finished after manifest commit started"
+                    echo "provision finished=${DB_FINISHED}; commit started=${COMMIT_STARTED}"
+                    exit 1
+                  fi
+                  echo "Verified provision-database finished before commit started"
+                fi
+                echo "onboard Succeeded"
+                exit 0
+                ;;
               Failed|Error) echo "❌ onboard ${PHASE}"; exit 1 ;;
             esac
             sleep 15
@@ -150,6 +184,8 @@ spec:
           TEAM="{{workflow.parameters.team_name}}"
           SVC="{{workflow.parameters.component_name}}"
           REPO="{{workflow.parameters.dockerfile_repo}}"
+          COMPONENT_TYPE="{{workflow.parameters.component_type}}"
+          GIT_TAG="{{workflow.parameters.git_tag}}"
 
           WF_NAME=$(kubectl create -n argo-workflows -o jsonpath='{.metadata.name}' -f - << EOF
           apiVersion: argoproj.io/v1alpha1
@@ -166,9 +202,9 @@ spec:
               - {name: action,             value: deploy}
               - {name: team_name,          value: "${TEAM}"}
               - {name: component_name,     value: "${SVC}"}
-              - {name: component_type,     value: worker-service}
+              - {name: component_type,     value: "${COMPONENT_TYPE}"}
               - {name: dockerfile_repo,    value: "${REPO}"}
-              - {name: git_tag,            value: main}
+              - {name: git_tag,            value: "${GIT_TAG}"}
               - {name: port,               value: "8080"}
               - {name: host,               value: ""}
               - {name: env_vars,           value: "SMOKE_ENV=deploy_action"}
@@ -240,6 +276,7 @@ spec:
           set -e
           TEAM="{{workflow.parameters.team_name}}"
           SVC="{{workflow.parameters.component_name}}"
+          COMPONENT_TYPE="{{workflow.parameters.component_type}}"
 
           WF_NAME=$(kubectl create -n argo-workflows -o jsonpath='{.metadata.name}' -f - << EOF
           apiVersion: argoproj.io/v1alpha1
@@ -256,7 +293,7 @@ spec:
               - {name: action,             value: update-config}
               - {name: team_name,          value: "${TEAM}"}
               - {name: component_name,     value: "${SVC}"}
-              - {name: component_type,     value: worker-service}
+              - {name: component_type,     value: "${COMPONENT_TYPE}"}
               - {name: dockerfile_repo,    value: ""}
               - {name: git_tag,            value: ""}
               - {name: port,               value: "8080"}
@@ -291,6 +328,7 @@ spec:
           set -e
           TEAM="{{workflow.parameters.team_name}}"
           SVC="{{workflow.parameters.component_name}}"
+          COMPONENT_TYPE="{{workflow.parameters.component_type}}"
 
           WF_NAME=$(kubectl create -n argo-workflows -o jsonpath='{.metadata.name}' -f - << EOF
           apiVersion: argoproj.io/v1alpha1
@@ -306,7 +344,7 @@ spec:
               parameters:
               - {name: team_name,            value: "${TEAM}"}
               - {name: component_name,       value: "${SVC}"}
-              - {name: component_type,       value: worker-service}
+              - {name: component_type,       value: "${COMPONENT_TYPE}"}
               - {name: delete_vault_secrets, value: "true"}
           EOF
           )
@@ -466,8 +504,34 @@ spec:
           TEAM="{{workflow.parameters.team_name}}"
           SVC="{{workflow.parameters.component_name}}"
           INSTANCE_LABEL="${TEAM}-${SVC}"
+
+          check_missing_secret_reference() {
+            PODS=$(kubectl get pods -n "${TEAM}" \
+              -l "app.kubernetes.io/instance=${INSTANCE_LABEL}" \
+              -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)
+            for POD in ${PODS}; do
+              WAITING=$(kubectl get pod "${POD}" -n "${TEAM}" \
+                -o jsonpath='{range .status.initContainerStatuses[*]}{.state.waiting.reason}{"\n"}{end}{range .status.containerStatuses[*]}{.state.waiting.reason}{"\n"}{end}' \
+                2>/dev/null || true)
+              if echo "${WAITING}" | grep -q "CreateContainerConfigError"; then
+                echo "Pod ${POD} reached CreateContainerConfigError"
+                kubectl describe pod "${POD}" -n "${TEAM}" | tail -30
+                return 1
+              fi
+              MISSING=$(kubectl get events -n "${TEAM}" \
+                --field-selector "involvedObject.kind=Pod,involvedObject.name=${POD}" \
+                -o jsonpath='{range .items[*]}{.message}{"\n"}{end}' 2>/dev/null || true)
+              if echo "${MISSING}" | grep -Eiq 'secret .* not found'; then
+                echo "Pod ${POD} referenced a Secret before it existed"
+                echo "${MISSING}" | grep -Ei 'secret .* not found'
+                return 1
+              fi
+            done
+          }
+
           echo "⏳ Waiting for ArgoCD to sync deployment (instance=${INSTANCE_LABEL}) in namespace ${TEAM}..."
           for i in $(seq 1 30); do
+            check_missing_secret_reference
             DEPLOY=$(kubectl get deployment -n "${TEAM}" -l "app.kubernetes.io/instance=${INSTANCE_LABEL}" -o name 2>/dev/null | head -1)
             [ -n "${DEPLOY}" ] && break || true
             echo "  [${i}/30] Not created yet..."
@@ -480,6 +544,7 @@ spec:
             --namespace "${TEAM}" \
             --for=condition=available \
             --timeout=180s
+          check_missing_secret_reference
           READY=$(kubectl get "${DEPLOY}" -n "${TEAM}" -o jsonpath='{.status.readyReplicas}')
           echo "✅ Deployment available (${READY:-0} ready replicas)"
 
@@ -582,6 +647,50 @@ spec:
             -o jsonpath='{.data.DATABASE_URL}' | base64 -d | grep -q "postgresql://"
           echo "✅ k8s Secret ${ES_NAME} in ${ES_NS} contains valid DATABASE_URL"
 
+    # ─── Verification: service consumes the provisioned DB secret ────────────
+    - name: check-db-secret-wiring
+      script:
+        image: alpine/k8s:1.33.12
+        command: [bash]
+        source: |
+          set -e
+          TEAM="{{workflow.parameters.team_name}}"
+          SVC="{{workflow.parameters.component_name}}"
+          INSTANCE_LABEL="${TEAM}-${SVC}"
+          DB_SECRET="${TEAM}-${SVC}-db-creds"
+
+          for i in $(seq 1 30); do
+            ES_NAME=$(kubectl get externalsecret -n "${TEAM}" \
+              -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.target.name}{"\n"}{end}' \
+              2>/dev/null | awk -F'\t' -v target="${DB_SECRET}" '$2==target{print $1}' | head -1)
+            STATUS=""
+            if [ -n "${ES_NAME}" ]; then
+              STATUS=$(kubectl get externalsecret "${ES_NAME}" -n "${TEAM}" \
+                -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)
+            fi
+            [ "${STATUS}" = "True" ] && break
+            echo "[${i}/30] Waiting for service DB ExternalSecret"
+            sleep 10
+          done
+          [ "${STATUS}" = "True" ] || {
+            echo "Service DB ExternalSecret did not become Ready"
+            exit 1
+          }
+          kubectl get secret "${DB_SECRET}" -n "${TEAM}" >/dev/null
+
+          DEPLOY=$(kubectl get deployment -n "${TEAM}" \
+            -l "app.kubernetes.io/instance=${INSTANCE_LABEL}" \
+            -o name | head -1)
+          ENV_FROM=$(kubectl get "${DEPLOY}" -n "${TEAM}" \
+            -o jsonpath='{range .spec.template.spec.containers[0].envFrom[*]}{.secretRef.name}{"\n"}{end}')
+          COUNT=$(echo "${ENV_FROM}" | grep -cx "${DB_SECRET}" || true)
+          if [ "${COUNT}" != "1" ]; then
+            echo "Expected exactly one envFrom reference to ${DB_SECRET}, found ${COUNT}"
+            echo "${ENV_FROM}"
+            exit 1
+          fi
+          echo "Verified DB ExternalSecret and Deployment envFrom wiring"
+
     # ─── Verification: env var in running pod ────────────────────────────────
     - name: check-env-var
       script:
@@ -614,3 +723,62 @@ spec:
           done
           echo "❌ SMOKE_TEST=true not found after 6 minutes"
           exit 1
+
+    # ─── Verification: retire removed runtime and secret references ──────────
+    - name: check-retired
+      script:
+        image: alpine/k8s:1.33.12
+        command: [bash]
+        source: |
+          set -e
+          TEAM="{{workflow.parameters.team_name}}"
+          SVC="{{workflow.parameters.component_name}}"
+          APP="${TEAM}-${SVC}"
+          DB_SECRET="${TEAM}-${SVC}-db-creds"
+
+          for i in $(seq 1 30); do
+            APP_COUNT=$(kubectl get application "${APP}" -n argocd \
+              --ignore-not-found -o name 2>/dev/null | wc -l | tr -d ' ')
+            DEPLOY_COUNT=$(kubectl get deployment -n "${TEAM}" \
+              -l "app.kubernetes.io/instance=${APP}" -o name 2>/dev/null | wc -l | tr -d ' ')
+            SERVICE_COUNT=$(kubectl get service -n "${TEAM}" \
+              -l "app.kubernetes.io/instance=${APP}" -o name 2>/dev/null | wc -l | tr -d ' ')
+            APP_ES_COUNT=$(kubectl get externalsecret -n "${TEAM}" \
+              -o jsonpath='{range .items[*]}{.spec.target.name}{"\n"}{end}' 2>/dev/null \
+              | grep -Ec "^(${SVC}-secrets|${DB_SECRET})$" || true)
+            APP_SECRET_COUNT=$(kubectl get secret -n "${TEAM}" \
+              -o name 2>/dev/null | grep -Ec "/(${SVC}-secrets|${DB_SECRET})$" || true)
+            DB_ES_COUNT=$(kubectl get externalsecret "${DB_SECRET}" -n platform-db \
+              --ignore-not-found -o name 2>/dev/null | wc -l | tr -d ' ')
+            if [ "${APP_COUNT}${DEPLOY_COUNT}${SERVICE_COUNT}${APP_ES_COUNT}${APP_SECRET_COUNT}${DB_ES_COUNT}" = "000000" ]; then
+              echo "Verified service, ArgoCD app, and secret references are removed"
+              break
+            fi
+            echo "[${i}/30] Waiting for retirement cleanup"
+            sleep 10
+          done
+          if [ "${APP_COUNT}${DEPLOY_COUNT}${SERVICE_COUNT}${APP_ES_COUNT}${APP_SECRET_COUNT}${DB_ES_COUNT}" != "000000" ]; then
+            echo "Retirement cleanup incomplete"
+            echo "app=${APP_COUNT} deploy=${DEPLOY_COUNT} service=${SERVICE_COUNT}"
+            echo "app_es=${APP_ES_COUNT} app_secret=${APP_SECRET_COUNT} platform_db_es=${DB_ES_COUNT}"
+            exit 1
+          fi
+
+          apk add --no-cache curl >/dev/null 2>&1
+          SA_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+          VAULT_TOKEN=$(curl -sS -X POST \
+            -H "Content-Type: application/json" \
+            -d "{\"role\":\"argo-workflow\",\"jwt\":\"${SA_TOKEN}\"}" \
+            "${VAULT_ADDR}/v1/auth/kubernetes/login" \
+            | grep '"client_token"' | sed 's/.*"client_token":"\([^"]*\)".*/\1/')
+          HTTP=$(curl -sS -o /dev/null -w "%{http_code}" \
+            -H "X-Vault-Token: ${VAULT_TOKEN}" \
+            "${VAULT_ADDR}/v1/secret/data/teams/${TEAM}/${SVC}")
+          if [ "${HTTP}" != "404" ]; then
+            echo "Vault app secret still exists (HTTP ${HTTP})"
+            exit 1
+          fi
+          echo "Verified Vault app secret is removed"
+        env:
+          - name: VAULT_ADDR
+            value: "http://vault.vault.svc.cluster.local:8200"

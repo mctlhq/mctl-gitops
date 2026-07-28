@@ -1,0 +1,10 @@
+# This caps declared local scratch.  local-path does not enforce filesystem
+# capacity, so the quota is a guardrail alongside node-disk alerts.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: argo-workdir-local
+  namespace: argo-workflows
+spec:
+  hard:
+    argo-workdir-local.storageclass.storage.k8s.io/requests.storage: 48Gi

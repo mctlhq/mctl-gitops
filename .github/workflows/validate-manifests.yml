@@ -80,6 +80,9 @@ jobs:
           # workflows that keep the generated files in sync.
           scripts/materialize-openclaw-platform-skills.py --check
 
+      - name: Validate Argo local workdir invariants
+        run: scripts/validate-local-workdir.py
+
       - name: Validate raw manifests (tenants, argo-workflows, mcp, infra-components)
         run: |
           set -euo pipefail
