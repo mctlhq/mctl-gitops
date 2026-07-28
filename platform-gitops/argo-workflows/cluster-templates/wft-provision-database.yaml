@@ -33,14 +33,18 @@ spec:
         tasks:
           - name: provision
             template: do-provision
+            arguments:
+              parameters:
+                - name: team_name
+                  value: "{{workflow.parameters.team_name}}"
+                - name: app_name
+                  value: "{{workflow.parameters.app_name}}"
 
     - name: do-provision
       inputs:
         parameters:
           - name: team_name
-            value: "{{workflow.parameters.team_name}}"
           - name: app_name
-            value: "{{workflow.parameters.app_name}}"
       script:
         image: alpine:3.19
         command: [sh]
