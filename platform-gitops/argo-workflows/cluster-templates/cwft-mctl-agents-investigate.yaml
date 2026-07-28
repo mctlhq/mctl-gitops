@@ -65,6 +65,7 @@ spec:
         name: workdir
       spec:
         accessModes: ["ReadWriteOnce"]
+        storageClassName: argo-workdir-local
         resources:
           requests:
             # Smaller than cwft-mctl-agents-implement: the investigator
