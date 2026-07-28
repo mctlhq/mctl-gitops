@@ -115,17 +115,18 @@ spec:
 
           prometheus-node-exporter:
             enabled: true
-            # MicroOS restricts /proc/<pid> to its owner. The chart default
-            # UID 65534 therefore cannot read /host/proc/1/mountinfo and the
-            # entire filesystem collector silently fails. Run as root only
-            # for host-proc traversal, while retaining a read-only rootfs,
-            # no privilege escalation, no capabilities, read-only host
-            # mounts, and no service-account token.
+            # MicroOS labels containers as container_t, which cannot traverse
+            # host /proc/<pid>; the filesystem collector then silently fails.
+            # spc_t permits the required host-proc read without privileged
+            # mode or capabilities. Retain a read-only rootfs, read-only host
+            # mounts, no privilege escalation, and no service-account token.
             securityContext:
               fsGroup: 0
               runAsGroup: 0
               runAsNonRoot: false
               runAsUser: 0
+              seLinuxOptions:
+                type: spc_t
             containerSecurityContext:
               allowPrivilegeEscalation: false
               capabilities:

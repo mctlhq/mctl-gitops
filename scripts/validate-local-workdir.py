@@ -201,6 +201,7 @@ def validate_node_exporter_disk_metrics() -> None:
     assert "prometheus-node-exporter:" in monitoring
     assert "runAsNonRoot: false" in monitoring
     assert "runAsUser: 0" in monitoring
+    assert "type: spc_t" in monitoring
     assert 'drop: ["ALL"]' in monitoring
     assert "type: RuntimeDefault" in monitoring
     assert "NodeFilesystemCollectorFailed" in monitoring
