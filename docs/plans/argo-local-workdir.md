@@ -32,6 +32,10 @@ volume while retaining explicit PVC lifecycle management.
   host directories containing files with arbitrary workload ownership,
   private modes, and sticky bits. All other capabilities are dropped;
   workflow pods retain their normal confined SELinux domain.
+- local-path-provisioner v0.0.36 requires the explicit
+  `--allow-unsafe-helper-pod-template` opt-in before it accepts any helper pod
+  security context. CI requires the flag together with the exact hardened
+  helper settings.
 - Physical smoke-test databases are deliberately retained. Workflow retirement
   removes GitOps, ExternalSecret, and Vault references but the CNPG database
   remains for explicit database-retention policy and later controlled cleanup.

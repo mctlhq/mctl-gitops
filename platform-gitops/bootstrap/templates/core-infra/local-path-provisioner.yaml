@@ -100,6 +100,7 @@ spec:
             - /etc/config/config.json
             - --provisioner-name
             - mctl.ai/argo-workdir-local
+            - --allow-unsafe-helper-pod-template
           resources:
             requests:
               cpu: 20m
