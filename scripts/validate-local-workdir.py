@@ -165,6 +165,13 @@ def validate_canary() -> None:
         security = templates[name]["container"]["securityContext"]
         assert security["runAsNonRoot"] is True
         assert security["runAsUser"] == 65534
+    writer = templates["write-marker"]["container"]["args"][0]
+    reader = templates["read-marker"]["container"]["args"][0]
+    assert "umask 077" in writer
+    assert "/workdir/private/canary" in writer
+    assert "/workdir/private/canary" in reader
+    assert "stat -c '%a' /workdir/private" in writer
+    assert "stat -c '%a' /workdir/private" in reader
 
 
 def validate_alerts() -> None:
