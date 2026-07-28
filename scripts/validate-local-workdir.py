@@ -119,6 +119,14 @@ def validate_provisioner() -> None:
     assert all(paths == [LOCAL_PATH] for paths in mapping.values())
     assert "DEFAULT_PATH_FOR_NON_LISTED_NODES" not in mapping
     assert 'mkdir -m 0777 -p "$VOL_DIR"' in config_map["data"]["setup"]
+    helper = yaml.safe_load(config_map["data"]["helperPod.yaml"])
+    helper_spec = helper["spec"]
+    assert helper_spec["automountServiceAccountToken"] is False
+    assert helper_spec["securityContext"]["seLinuxOptions"]["type"] == "spc_t"
+    helper_security = helper_spec["containers"][0]["securityContext"]
+    assert helper_security["allowPrivilegeEscalation"] is False
+    assert helper_security["capabilities"]["drop"] == ["ALL"]
+    assert helper_security["readOnlyRootFilesystem"] is True
 
     deployment = only(docs, "Deployment", "local-path-provisioner")
     container = deployment["spec"]["template"]["spec"]["containers"][0]

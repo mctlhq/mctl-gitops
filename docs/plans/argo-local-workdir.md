@@ -27,6 +27,9 @@ volume while retaining explicit PVC lifecycle management.
 - `volumeClaimGC: OnWorkflowCompletion`, StorageClass
   `reclaimPolicy: Delete`, and the provisioner's teardown helper form the
   cleanup chain. A broken controller or helper can still leave data on disk.
+- On SELinux-enabled MicroOS workers, only the provisioner helper pod uses
+  `spc_t` so it can create and remove the host directory. Workflow workload
+  pods retain their normal confined SELinux domain.
 - Physical smoke-test databases are deliberately retained. Workflow retirement
   removes GitOps, ExternalSecret, and Vault references but the CNPG database
   remains for explicit database-retention policy and later controlled cleanup.
