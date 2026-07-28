@@ -188,6 +188,7 @@ data:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
+              add: ["DAC_OVERRIDE"]
             readOnlyRootFilesystem: true
             seccompProfile:
               type: RuntimeDefault

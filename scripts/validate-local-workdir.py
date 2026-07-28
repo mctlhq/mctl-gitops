@@ -126,6 +126,7 @@ def validate_provisioner() -> None:
     helper_security = helper_spec["containers"][0]["securityContext"]
     assert helper_security["allowPrivilegeEscalation"] is False
     assert helper_security["capabilities"]["drop"] == ["ALL"]
+    assert helper_security["capabilities"]["add"] == ["DAC_OVERRIDE"]
     assert helper_security["readOnlyRootFilesystem"] is True
 
     deployment = only(docs, "Deployment", "local-path-provisioner")
