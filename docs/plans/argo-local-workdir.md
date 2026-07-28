@@ -36,9 +36,10 @@ volume while retaining explicit PVC lifecycle management.
 - Namespace quota: 48 GiB requested local workdir storage.
 - Warning and critical quota alerts: 80% and 95%.
 - Root disk alerts: 70% warning and 90% critical.
-- Node exporter runs with root UID but no Linux capabilities, no privilege
-  escalation, no service-account token, read-only rootfs, and read-only host
-  mounts. MicroOS otherwise denies `/host/proc/1/mountinfo` and disables the
+- Node exporter uses the MicroOS SELinux `spc_t` type with root UID, but no
+  Linux capabilities, no privileged mode, no privilege escalation, no
+  service-account token, read-only rootfs, and read-only host mounts. The
+  default `container_t` type denies `/host/proc/1/mountinfo` and disables the
   entire filesystem collector. A dedicated critical alert detects collector
   failure so disk-capacity alerts cannot be silently blind.
 - A 10-minute Pending alert joins workflow pods to PVCs whose StorageClass is
