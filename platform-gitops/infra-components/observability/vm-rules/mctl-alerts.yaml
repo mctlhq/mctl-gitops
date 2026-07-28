@@ -177,7 +177,7 @@ spec:
               resource="argo-workdir-local.storageclass.storage.k8s.io/requests.storage",
               type="used"
             }
-            /
+            / ignoring(type)
             kube_resourcequota{
               namespace="argo-workflows",
               resource="argo-workdir-local.storageclass.storage.k8s.io/requests.storage",
@@ -197,7 +197,7 @@ spec:
               resource="argo-workdir-local.storageclass.storage.k8s.io/requests.storage",
               type="used"
             }
-            /
+            / ignoring(type)
             kube_resourcequota{
               namespace="argo-workflows",
               resource="argo-workdir-local.storageclass.storage.k8s.io/requests.storage",

@@ -98,13 +98,31 @@ spec:
           APP_NAME="{{inputs.parameters.team_name}}-{{inputs.parameters.component_name}}"
           echo "🗑️ Deleting ArgoCD Application: ${APP_NAME}"
 
-          # Delete with background propagation (cascading delete)
-          kubectl delete application "${APP_NAME}" -n argocd --ignore-not-found=true --wait=false
+          # Keep Argo CD's resources finalizer long enough to cascade-delete
+          # the Deployment, Service, and ExternalSecrets. Only clear a stuck
+          # finalizer after a bounded wait; the smoke test then verifies that
+          # no runtime resources were orphaned by the fallback.
+          if kubectl delete application "${APP_NAME}" -n argocd \
+            --ignore-not-found=true --wait=true --timeout=180s; then
+            echo "✅ ArgoCD Application and managed resources deleted"
+            exit 0
+          fi
 
-          # Patch finalizer if it gets stuck (optional but safer for retirement)
-          kubectl patch application "${APP_NAME}" -n argocd -p '{"metadata":{"finalizers":null}}' --type=merge || true
+          echo "⚠️  Application deletion timed out after 180s; clearing stuck finalizer"
+          kubectl patch application "${APP_NAME}" -n argocd \
+            -p '{"metadata":{"finalizers":null}}' --type=merge || true
+          kubectl delete application "${APP_NAME}" -n argocd \
+            --ignore-not-found=true --wait=false
 
-          echo "✅ ArgoCD Application deletion triggered"
+          for i in $(seq 1 12); do
+            if ! kubectl get application "${APP_NAME}" -n argocd >/dev/null 2>&1; then
+              echo "✅ Stuck Application object removed"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "❌ Application ${APP_NAME} still exists after finalizer fallback"
+          exit 1
 
     # ─── Clean up DB resources from shared CNPG config ────────────────────
     - name: cleanup-db-from-gitops

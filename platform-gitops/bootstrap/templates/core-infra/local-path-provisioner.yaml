@@ -98,6 +98,8 @@ spec:
             - start
             - --config
             - /etc/config/config.json
+            - --provisioner-name
+            - mctl.ai/argo-workdir-local
           resources:
             requests:
               cpu: 20m
@@ -126,7 +128,7 @@ metadata:
   name: argo-workdir-local
   labels:
     app.kubernetes.io/part-of: mctl-platform
-provisioner: rancher.io/local-path
+provisioner: mctl.ai/argo-workdir-local
 volumeBindingMode: WaitForFirstConsumer
 reclaimPolicy: Delete
 allowVolumeExpansion: false

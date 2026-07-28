@@ -67,10 +67,18 @@ spec:
             template: run-onboard
         - - name: verify-pod
             template: check-pod-running
+            arguments:
+              parameters:
+                - name: previous_generation
+                  value: "0"
         - - name: deploy-version
             template: run-deploy
         - - name: verify-pod-after-deploy
             template: check-pod-running
+            arguments:
+              parameters:
+                - name: previous_generation
+                  value: "{{steps.deploy-version.outputs.parameters.previous_generation}}"
         - - name: sync-argocd-app-0
             template: trigger-argocd-sync
         - - name: verify-vault-app-secret
@@ -193,6 +201,17 @@ spec:
           COMPONENT_TYPE="{{workflow.parameters.component_type}}"
           GIT_TAG="{{workflow.parameters.git_tag}}"
 
+          DEPLOY=$(kubectl get deployment -n "${TEAM}" \
+            -l "app.kubernetes.io/instance=${TEAM}-${SVC}" \
+            -o name 2>/dev/null | head -1)
+          PREVIOUS_GENERATION="0"
+          if [ -n "${DEPLOY}" ]; then
+            PREVIOUS_GENERATION=$(kubectl get "${DEPLOY}" -n "${TEAM}" \
+              -o jsonpath='{.metadata.generation}')
+          fi
+          printf '%s' "${PREVIOUS_GENERATION}" > /tmp/previous-generation
+          echo "Deployment generation before deploy: ${PREVIOUS_GENERATION}"
+
           WF_NAME=$(kubectl create -n argo-workflows -o jsonpath='{.metadata.name}' -f - << EOF
           apiVersion: argoproj.io/v1alpha1
           kind: Workflow
@@ -233,6 +252,11 @@ spec:
             sleep 15
           done
           echo "❌ Timed out"; exit 1
+      outputs:
+        parameters:
+          - name: previous_generation
+            valueFrom:
+              path: /tmp/previous-generation
 
     # ─── Step 5: Provision database ───────────────────────────────────────────
     - name: run-provision-db
@@ -355,10 +379,10 @@ spec:
           EOF
           )
           echo "Submitted: ${WF_NAME}"
-          for i in $(seq 1 20); do
+          for i in $(seq 1 40); do
             PHASE=$(kubectl get workflow "${WF_NAME}" -n argo-workflows \
               -o jsonpath='{.status.phase}' 2>/dev/null || echo "Pending")
-            echo "  [${i}/20] ${PHASE}"
+            echo "  [${i}/40] ${PHASE}"
             case "${PHASE}" in
               Succeeded) echo "✅ retire Succeeded"; exit 0 ;;
               Failed|Error) echo "❌ retire ${PHASE}"; exit 1 ;;
@@ -502,6 +526,10 @@ spec:
 
     # ─── Verification: pod running ────────────────────────────────────────────
     - name: check-pod-running
+      inputs:
+        parameters:
+          - name: previous_generation
+            value: "0"
       script:
         image: alpine/k8s:1.33.12
         command: [bash]
@@ -510,6 +538,7 @@ spec:
           TEAM="{{workflow.parameters.team_name}}"
           SVC="{{workflow.parameters.component_name}}"
           INSTANCE_LABEL="${TEAM}-${SVC}"
+          PREVIOUS_GENERATION="{{inputs.parameters.previous_generation}}"
 
           check_missing_secret_reference() {
             PODS=$(kubectl get pods -n "${TEAM}" \
@@ -535,24 +564,54 @@ spec:
             done
           }
 
-          echo "⏳ Waiting for ArgoCD to sync deployment (instance=${INSTANCE_LABEL}) in namespace ${TEAM}..."
-          for i in $(seq 1 30); do
+          echo "⏳ Waiting for the current Deployment rollout in ${TEAM}/${SVC}..."
+          ROLLOUT_OK=false
+          for i in $(seq 1 48); do
             check_missing_secret_reference
             DEPLOY=$(kubectl get deployment -n "${TEAM}" -l "app.kubernetes.io/instance=${INSTANCE_LABEL}" -o name 2>/dev/null | head -1)
-            [ -n "${DEPLOY}" ] && break || true
-            echo "  [${i}/30] Not created yet..."
+            if [ -z "${DEPLOY}" ]; then
+              echo "  [${i}/48] Deployment not created yet"
+              sleep 10
+              continue
+            fi
+
+            GENERATION=$(kubectl get "${DEPLOY}" -n "${TEAM}" -o jsonpath='{.metadata.generation}')
+            OBSERVED=$(kubectl get "${DEPLOY}" -n "${TEAM}" -o jsonpath='{.status.observedGeneration}')
+            DESIRED=$(kubectl get "${DEPLOY}" -n "${TEAM}" -o jsonpath='{.spec.replicas}')
+            UPDATED=$(kubectl get "${DEPLOY}" -n "${TEAM}" -o jsonpath='{.status.updatedReplicas}')
+            READY=$(kubectl get "${DEPLOY}" -n "${TEAM}" -o jsonpath='{.status.readyReplicas}')
+            AVAILABLE=$(kubectl get "${DEPLOY}" -n "${TEAM}" -o jsonpath='{.status.availableReplicas}')
+
+            OBSERVED="${OBSERVED:-0}"
+            DESIRED="${DESIRED:-1}"
+            UPDATED="${UPDATED:-0}"
+            READY="${READY:-0}"
+            AVAILABLE="${AVAILABLE:-0}"
+            echo "  [${i}/48] generation=${GENERATION} observed=${OBSERVED} updated=${UPDATED}/${DESIRED} ready=${READY} available=${AVAILABLE}"
+
+            if [ "${PREVIOUS_GENERATION}" -gt 0 ] && \
+               [ "${GENERATION}" -le "${PREVIOUS_GENERATION}" ]; then
+              echo "  Waiting for ArgoCD to apply a generation newer than ${PREVIOUS_GENERATION}"
+              sleep 10
+              continue
+            fi
+            if [ "${OBSERVED}" -ge "${GENERATION}" ] && \
+               [ "${UPDATED}" -eq "${DESIRED}" ] && \
+               [ "${READY}" -eq "${DESIRED}" ] && \
+               [ "${AVAILABLE}" -eq "${DESIRED}" ]; then
+              ROLLOUT_OK=true
+              break
+            fi
             sleep 10
           done
-          DEPLOY=$(kubectl get deployment -n "${TEAM}" -l "app.kubernetes.io/instance=${INSTANCE_LABEL}" -o name 2>/dev/null | head -1)
-          [ -z "${DEPLOY}" ] && { echo "❌ Deployment never created"; exit 1; }
-          echo "Found: ${DEPLOY}"
-          kubectl wait "${DEPLOY}" \
-            --namespace "${TEAM}" \
-            --for=condition=available \
-            --timeout=180s
+          if [ "${ROLLOUT_OK}" != "true" ]; then
+            echo "❌ Deployment rollout did not complete"
+            kubectl get deployment -n "${TEAM}" \
+              -l "app.kubernetes.io/instance=${INSTANCE_LABEL}" -o wide || true
+            exit 1
+          fi
           check_missing_secret_reference
-          READY=$(kubectl get "${DEPLOY}" -n "${TEAM}" -o jsonpath='{.status.readyReplicas}')
-          echo "✅ Deployment available (${READY:-0} ready replicas)"
+          echo "✅ Deployment generation ${GENERATION} fully rolled out"
 
     # ─── Trigger ArgoCD sync for service app ─────────────────────────────────
     - name: trigger-argocd-sync

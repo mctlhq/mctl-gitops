@@ -14,6 +14,9 @@ volume while retaining explicit PVC lifecycle management.
 
 - `argo-workdir-local` is non-default and can only provision on the three CX43
   workers listed in `local-path-config`.
+- Its provisioner identity is `mctl.ai/argo-workdir-local`, deliberately
+  distinct from the k3s packaged controller's `rancher.io/local-path`, so the
+  controllers cannot race for each other's claims.
 - Each PV is a `hostPath` on `/var/lib/mctl/argo-workdir` and becomes pinned to
   the first consumer's node. It cannot be reattached to another worker.
 - A worker drain or failure after the first bind can leave a later workflow pod

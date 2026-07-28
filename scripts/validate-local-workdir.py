@@ -34,6 +34,10 @@ SMOKE = (
     ROOT
     / "platform-gitops/argo-workflows/cluster-templates/wft-smoke-test.yaml"
 )
+RETIRE = (
+    ROOT
+    / "platform-gitops/argo-workflows/cluster-templates/wft-retire-service.yaml"
+)
 AGENT_TEMPLATE_DIR = (
     ROOT / "platform-gitops/argo-workflows/cluster-templates"
 )
@@ -52,6 +56,7 @@ WORKERS = {
 }
 LOCAL_PATH = "/var/lib/mctl/argo-workdir"
 LOCAL_CLASS = "argo-workdir-local"
+LOCAL_PROVISIONER = "mctl.ai/argo-workdir-local"
 LOCAL_QUOTA_RESOURCE = (
     "argo-workdir-local.storageclass.storage.k8s.io/requests.storage"
 )
@@ -78,7 +83,7 @@ def only(docs: list[dict], kind: str, name: str) -> dict:
 def validate_provisioner() -> None:
     docs = documents(PROVISIONER)
     storage_class = only(docs, "StorageClass", LOCAL_CLASS)
-    assert storage_class["provisioner"] == "rancher.io/local-path"
+    assert storage_class["provisioner"] == LOCAL_PROVISIONER
     assert storage_class["volumeBindingMode"] == "WaitForFirstConsumer"
     assert storage_class["reclaimPolicy"] == "Delete"
     assert storage_class["allowVolumeExpansion"] is False
@@ -96,6 +101,9 @@ def validate_provisioner() -> None:
     deployment = only(docs, "Deployment", "local-path-provisioner")
     container = deployment["spec"]["template"]["spec"]["containers"][0]
     assert container["image"].endswith("local-path-provisioner:v0.0.36")
+    command = container["command"]
+    provisioner_flag = command.index("--provisioner-name")
+    assert command[provisioner_flag + 1] == LOCAL_PROVISIONER
 
 
 def validate_quota() -> None:
@@ -157,6 +165,8 @@ def validate_alerts() -> None:
     assert LOCAL_QUOTA_RESOURCE in critical
     assert "> 0.80" in high
     assert "> 0.95" in critical
+    assert "/ ignoring(type)" in high
+    assert "/ ignoring(type)" in critical
 
     collector = by_name["NodeFilesystemCollectorFailed"]
     assert 'node_scrape_collector_success{' in collector["expr"]
@@ -208,9 +218,29 @@ def validate_smoke_flow() -> None:
     pod_check = templates["check-pod-running"]["script"]["source"]
     assert "CreateContainerConfigError" in pod_check
     assert "secret .* not found" in pod_check
+    assert "PREVIOUS_GENERATION" in pod_check
+    assert ".status.observedGeneration" in pod_check
+    assert '"${GENERATION}" -le "${PREVIOUS_GENERATION}"' in pod_check
+
+    deploy = templates["run-deploy"]
+    output = deploy["outputs"]["parameters"][0]
+    assert output["name"] == "previous_generation"
+    assert output["valueFrom"]["path"] == "/tmp/previous-generation"
 
     assert "check-db-secret-wiring" in templates
     assert "check-retired" in templates
+
+
+def validate_retire_cascade() -> None:
+    retire = only(documents(RETIRE), "ClusterWorkflowTemplate", "retire-service")
+    templates = {
+        template["name"]: template for template in retire["spec"]["templates"]
+    }
+    source = templates["delete-argocd-app"]["script"]["source"]
+    wait = source.index("--wait=true --timeout=180s")
+    patch = source.index('"finalizers":null')
+    assert wait < patch
+    assert "still exists after finalizer fallback" in source
 
 
 def validate_opted_in_agent_templates() -> None:
@@ -237,6 +267,7 @@ def main() -> int:
         validate_alerts,
         validate_node_exporter_disk_metrics,
         validate_smoke_flow,
+        validate_retire_cascade,
         validate_opted_in_agent_templates,
     )
     for check in checks:
