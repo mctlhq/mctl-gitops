@@ -176,8 +176,9 @@ def validate_smoke_flow() -> None:
 
     onboard = templates["run-onboard"]["script"]["source"]
     assert 'value: "${PROVISION_DB}"' in onboard
-    assert 'eq $node.displayName "provision-database"' in onboard
-    assert 'eq $node.displayName "commit"' in onboard
+    assert 'eq \\$node.displayName \\"provision-database\\"' in onboard
+    assert 'eq \\$node.displayName \\"commit\\"' in onboard
+    assert "{{range $id" not in onboard
     assert "DB_FINISHED" in onboard and "COMMIT_STARTED" in onboard
 
     pod_check = templates["check-pod-running"]["script"]["source"]

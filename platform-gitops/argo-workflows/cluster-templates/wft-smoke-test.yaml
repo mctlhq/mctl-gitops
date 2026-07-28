@@ -150,10 +150,16 @@ spec:
             case "${PHASE}" in
               Succeeded)
                 if [ "${PROVISION_DB}" = "true" ]; then
+                  # Build the kubectl Go templates at runtime so their `{{ }}`
+                  # delimiters are not parsed as Argo template expressions.
+                  OPEN='{''{'
+                  CLOSE='}''}'
+                  DB_TIME_TEMPLATE="${OPEN}range \$id, \$node := .status.nodes${CLOSE}${OPEN}if eq \$node.displayName \"provision-database\"${CLOSE}${OPEN}\$node.finishedAt${CLOSE}${OPEN}\"\\n\"${CLOSE}${OPEN}end${CLOSE}${OPEN}end${CLOSE}"
+                  COMMIT_TIME_TEMPLATE="${OPEN}range \$id, \$node := .status.nodes${CLOSE}${OPEN}if eq \$node.displayName \"commit\"${CLOSE}${OPEN}\$node.startedAt${CLOSE}${OPEN}\"\\n\"${CLOSE}${OPEN}end${CLOSE}${OPEN}end${CLOSE}"
                   DB_FINISHED=$(kubectl get workflow "${WF_NAME}" -n argo-workflows \
-                    -o go-template='{{range $id, $node := .status.nodes}}{{if eq $node.displayName "provision-database"}}{{$node.finishedAt}}{{"\n"}}{{end}}{{end}}' | tail -1)
+                    -o go-template="${DB_TIME_TEMPLATE}" | tail -1)
                   COMMIT_STARTED=$(kubectl get workflow "${WF_NAME}" -n argo-workflows \
-                    -o go-template='{{range $id, $node := .status.nodes}}{{if eq $node.displayName "commit"}}{{$node.startedAt}}{{"\n"}}{{end}}{{end}}' | tail -1)
+                    -o go-template="${COMMIT_TIME_TEMPLATE}" | tail -1)
                   if [ -z "${DB_FINISHED}" ] || [ -z "${COMMIT_STARTED}" ]; then
                     echo "Missing provision-database or commit timing in ${WF_NAME}"
                     exit 1
