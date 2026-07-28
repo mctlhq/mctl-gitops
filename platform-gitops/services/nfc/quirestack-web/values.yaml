@@ -46,4 +46,15 @@ externalSecret:
     - secretKey: BETTER_AUTH_SECRET
       remoteKey: teams/nfc/quirestack-web
       property: BETTER_AUTH_SECRET
+probes:
+  liveness:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 10
+    periodSeconds: 15
+  readiness:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 5
+    periodSeconds: 10
 extraContainers: []
