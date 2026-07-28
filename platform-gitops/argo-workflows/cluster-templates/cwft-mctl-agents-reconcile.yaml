@@ -75,6 +75,7 @@ spec:
         name: workdir
       spec:
         accessModes: ["ReadWriteOnce"]
+        storageClassName: argo-workdir-local
         resources:
           requests:
             # 2Gi is plenty: only a shallow gitops clone. No sibling-repo
