@@ -1,6 +1,6 @@
-status: rejected
-updated_at: '2026-05-20T08:54:00Z'
-updated_by: operator
+status: needs-triage
+updated_at: '2026-07-29T11:17:45Z'
+updated_by: mctl-agents[bot]
 source:
   type: github_issue
   repo: mctlhq/mctl-telegram
@@ -8,3 +8,8 @@ source:
   url: https://github.com/mctlhq/mctl-telegram/issues/71
 control:
   requires_human_approval: true
+failure:
+  code: missing-pr
+  stage: reconcile
+  message: No canonical PR exists for the deterministic result branch.
+notes: 'reconcile: no canonical GitHub PR found'

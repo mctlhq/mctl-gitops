@@ -1,3 +1,8 @@
-status: in-progress
-updated_at: '2026-07-29T05:15:48Z'
+status: needs-triage
+updated_at: '2026-07-29T11:17:13Z'
 updated_by: mctl-agents[bot]
+failure:
+  code: missing-pr
+  stage: reconcile
+  message: No canonical PR exists for the deterministic result branch.
+notes: 'reconcile: no canonical GitHub PR found'
