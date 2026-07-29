@@ -25,10 +25,7 @@ spec:
           title: Service
           type: string
           description: "Select the deployed service to update"
-          ui:field: OwnedEntityPicker
-          ui:options:
-            allowedKinds:
-              - Component
+          ui:field: ServicePicker
 
     - title: Environment
       properties:
@@ -66,6 +63,12 @@ spec:
       action: catalog:fetch
       input:
         entityRef: ${{ parameters.serviceName }}
+
+    - id: require-team-access
+      name: Verify caller may modify this service
+      action: mctl:auth:requireTeamAccess
+      input:
+        team: ${{ steps['fetch-service'].output.entity.metadata.labels.team or steps['fetch-service'].output.entity.spec.owner | replace('group:', '') }}
 
     - id: update-config
       name: Apply changes via Argo Workflows
