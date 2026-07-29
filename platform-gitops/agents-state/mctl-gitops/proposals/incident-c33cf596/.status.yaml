@@ -1,4 +1,4 @@
-status: accepted
-updated_at: '2026-07-29T04:20:15.234156+00:00'
-updated_by: _incident-responder
-notes: 'auto-accepted: diagnosis from mctl incident 8ff99e00-e49c-43f4-a2e1-3f396344595e'
+status: implemented
+updated_at: '2026-07-29T05:00:49Z'
+updated_by: mctl-agents[bot]
+pr: https://github.com/mctlhq/mctl-gitops/pull/666

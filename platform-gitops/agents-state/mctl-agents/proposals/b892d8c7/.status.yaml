@@ -1,3 +1,4 @@
-status: in-progress
-updated_at: '2026-07-29T00:55:12Z'
+status: implemented
+updated_at: '2026-07-29T04:28:46Z'
 updated_by: mctl-agents[bot]
+pr: https://github.com/mctlhq/mctl-agents/pull/72
