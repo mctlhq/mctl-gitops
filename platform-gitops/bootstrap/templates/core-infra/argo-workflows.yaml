@@ -95,9 +95,14 @@ spec:
             # in the DB (Argo's migrate framework skips creating it because
             # schema_history was already stamped at the latest version by the
             # earlier broken config), so the GC now logs
-            # `relation "argo_workflows" does not exist` every ~5 min. With
-            # offload off the controller never creates or queries that table,
-            # so the error path is gone — and no shared-pg DDL is needed.
+            # `relation "argo_workflows" does not exist` every ~5 min.
+            # Disabling nodeStatusOffLoad removes the offload-GC query path,
+            # but it does not repair the database. A plain workflow list may
+            # still query persistence and surface the same missing-table
+            # error. Treat a recurrence as a DB migration incident: recreate
+            # the expected table through Argo's migration path rather than
+            # masking it with another controller toggle
+            # (incident-1784173500).
             # archive: true above is unaffected — archiving uses the hardcoded
             # `argo_archived_workflows` table, independent of offload.
             nodeStatusOffLoad: false
