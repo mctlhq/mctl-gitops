@@ -60,8 +60,8 @@ env:
   #   mctl-design   = steward, when-green (gated by branch protection on its public main)
   #   mctl-telegram = steward, when-green + squash (claude/* and fix/* and feat/agents-*)
   #   mctl-docs     = shepherd-owned (removed from steward — low churn, no strict protection)
-  #   mctl-gitops   = human-only (removed from steward AND in SHEPHERD_SKIP_SERVICES, so no
-  #                   auto-merge by anyone; private, no branch protection possible)
+  #   mctl-gitops   = steward phase A, never (inventory/escalation only; switch
+  #                   to when-green after the existing implementer backlog is triaged)
   #   mctl-pairdesk = steward, when-green + merge (public + branch-protected; in SHEPHERD_SKIP_SERVICES)
   # Inert in the image until this flag is "true".
   PR_STEWARD_ENABLED: "true"
@@ -472,6 +472,14 @@ configMaps:
               "head_prefix": "feat/agents-"
             },
             "merge_mode": "when-green"
+          },
+          {
+            "name": "mctlhq/mctl-gitops",
+            "pr_filter": {
+              "head_prefix": "feat/agents-"
+            },
+            "merge_mode": "never",
+            "merge_method": "merge"
           },
           {
             "name": "mctlhq/mctl-telegram",
