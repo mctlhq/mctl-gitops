@@ -1,8 +1,8 @@
 status: implemented
-updated_at: '2026-07-29T10:47:53Z'
+updated_at: '2026-07-29T12:32:10Z'
 updated_by: mctl-agents[bot]
 pr: https://github.com/mctlhq/mctl-gitops/pull/666
 github:
   state: open
-  head_sha: 0a7a9483f2bd4e83c602bdec80826e928d3e203e
-  observed_at: '2026-07-29T10:47:53Z'
+  head_sha: aedf9ab90db17b385f7db3961567323be6a0fe32
+  observed_at: '2026-07-29T12:32:10Z'
