@@ -9,9 +9,8 @@
 # its 3000m CPU limit is the largest single consumer of the namespace quota.
 # Set back to 1 to bring it online — on scale-up the s3-sync restore-state probe
 # rehydrates session/auth state from MinIO (watch for the runtime-mirror lock
-# wedge; recovery: mc rm the stale lock + delete the pod). Also restore the
-# extraObjects ServiceMonitor at the bottom of this file (removed 2026-07 —
-# see that comment for why).
+# wedge; recovery: mc rm the stale lock + delete the pod). Metrics scraping at
+# the bottom of this file follows replicaCount automatically.
 replicaCount: 0
 
 image:
@@ -1379,15 +1378,14 @@ extraIngresses:
 # removed, and did not clean it up when the ServiceMonitor was deleted. The
 # orphaned VMServiceScrape continued firing VmagentScrapePoolEmpty.
 #
-# Fix (incident-43d9e608): adopt the orphaned VMServiceScrape into ArgoCD
-# management via extraObjects, with an explicit empty endpoints list so the VM
-# operator clears any previously-applied endpoints and does not
-# configure a scrape pool for it. This stops the alert immediately. When
-# labs-openclaw is re-enabled (replicaCount: 1), remove this extraObjects
-# block and restore the ServiceMonitor below (or replace with a native
-# VMServiceScrape with proper endpoints).
+# Keep the native VMServiceScrape under ArgoCD ownership in both states. The
+# mutually exclusive renderIf entries share one object identity: at zero
+# replicas an explicit empty endpoint list clears the former orphan; above
+# zero it is rendered with the real endpoint automatically
+# (incidents 43d9e608 and 992434e2).
 extraObjects:
-  - apiVersion: operator.victoriametrics.com/v1beta1
+  - renderIf: '{{ eq (.Values.replicaCount | int) 0 }}'
+    apiVersion: operator.victoriametrics.com/v1beta1
     kind: VMServiceScrape
     metadata:
       name: labs-openclaw-codex-metrics
@@ -1406,24 +1404,21 @@ extraObjects:
       # labs-openclaw-codex-metrics pool and VmagentScrapePoolEmpty cannot
       # fire for it.
       endpoints: []
-
-# Original ServiceMonitor (kept as reference; restore with replicaCount: 1):
-#
-# extraObjects:
-#   - apiVersion: monitoring.coreos.com/v1
-#     kind: ServiceMonitor
-#     metadata:
-#       name: labs-openclaw-codex-metrics
-#       labels:
-#         app.kubernetes.io/instance: labs-openclaw
-#         app.kubernetes.io/name: base-service
-#     spec:
-#       selector:
-#         matchLabels:
-#           app.kubernetes.io/instance: labs-openclaw
-#           app.kubernetes.io/name: base-service
-#       endpoints:
-#         - port: http
-#           path: /metrics
-#           interval: 30s
-#           scrapeTimeout: 10s
+  - renderIf: '{{ gt (.Values.replicaCount | int) 0 }}'
+    apiVersion: operator.victoriametrics.com/v1beta1
+    kind: VMServiceScrape
+    metadata:
+      name: labs-openclaw-codex-metrics
+      labels:
+        app.kubernetes.io/instance: labs-openclaw
+        app.kubernetes.io/name: base-service
+    spec:
+      selector:
+        matchLabels:
+          app.kubernetes.io/instance: labs-openclaw
+          app.kubernetes.io/name: base-service
+      endpoints:
+        - port: http
+          path: /metrics
+          interval: 30s
+          scrapeTimeout: 10s
