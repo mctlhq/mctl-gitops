@@ -346,3 +346,39 @@ spec:
             description: >-
               MinIO write errors imminent. Free space immediately or expand
               PVC.
+
+    # The generic total_count metric only has namespace and phase labels, so
+    # it cannot distinguish agents pipelines. workflowtemplate_triggered_total
+    # identifies the referenced ClusterWorkflowTemplate and records each phase.
+    - name: mctl.agents-pipeline-health
+      rules:
+        - alert: MctlAgentsPipelineStale
+          expr: |
+            sum by (name) (
+              increase(argo_workflows_workflowtemplate_triggered_total{
+                namespace="argo-workflows",
+                cluster_scope="true",
+                name=~"mctl-agents-(run|implement)",
+                phase=~"Failed|Error"
+              }[6h])
+            ) > 0
+            and on (name)
+            sum by (name) (
+              increase(argo_workflows_workflowtemplate_triggered_total{
+                namespace="argo-workflows",
+                cluster_scope="true",
+                name=~"mctl-agents-(run|implement)",
+                phase="Succeeded"
+              }[6h])
+            ) == 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: >-
+              {{ $labels.name }} has failures and no successful run in 6h
+            description: >-
+              The agents pipeline may be blocked on model authentication,
+              quota, or infrastructure. Inspect recent Argo Workflow runs and
+              the mctl-agents pod logs; this alert routes directly to an
+              operator because the affected pipeline cannot self-remediate.
