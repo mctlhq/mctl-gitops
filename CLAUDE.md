@@ -28,6 +28,10 @@ GitOps repository. ArgoCD source of truth for the entire mctl platform.
 - `platform-gitops/argo-workflows/cluster-templates/wft-deploy-service.yaml` — deploy workflow
 - `platform-gitops/argo-workflows/config/vault-auth.yaml` — Vault auth for Argo Workflows
 
+## Active Plans
+- `docs/plans/github-first-implementer-pr-lifecycle.md` — phased rollout
+  that makes GitHub authoritative for implementer PR lifecycle state
+
 ## Branch Protection Exception — Automated Bot Commits
 
 The org-wide hard rule ("NEVER commit directly to main") does not apply to

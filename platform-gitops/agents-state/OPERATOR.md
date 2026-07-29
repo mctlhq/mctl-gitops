@@ -33,9 +33,10 @@ writes each one:
 | --- | --- | --- |
 | `proposed` | investigator | Draft is written. Not yet operator-approved. |
 | `accepted` | operator | Tier 2 (implementer) will pick it up on the next run. |
-| `in-progress` | implementer | Implementer is running, or crashed mid-run. A PR may or may not exist yet — check the `pr:` field. The shepherd's dead-letter recovery covers this state too. |
+| `in-progress` | implementer | Implementer passed GitHub preflight and holds a bounded attempt lease. |
 | `implemented` | implementer | Implementer pushed a branch and opened a PR. Tier 3 (shepherd) takes over. |
-| `error` | implementer | Implementer crashed before opening a PR. Needs operator force-retry. |
+| `error` | legacy implementer | Legacy pre-1.20 failure state; reconciler migrates it from GitHub. |
+| `needs-triage` | implementer/reconciler | No safe automatic next step. Inspect `failure`, GitHub and the proposal; automation will not retry it. |
 | `review-fixing` | shepherd | Shepherd pushed a follow-up commit to address codex/Claude review feedback. Flips back to `implemented` after the followup lands. |
 | `review-stuck` | shepherd | Shepherd retried address-review repeatedly and gave up. Needs human intervention on the PR. |
 | `merged` | shepherd | PR was merged (either by shepherd's `gh pr merge` or out of band by a human). Terminal. |
@@ -47,10 +48,15 @@ in-progress → implemented` on success, `→ error` on crash) and
 (`{implemented, review-fixing}` discovery scope, `→ review-fixing`,
 `→ implemented`, `→ merged`, `→ rejected`, `→ review-stuck`).
 
-Trigger for Tier 2 (implementer) is `status: accepted`. Trigger for
-Tier 3 (shepherd) is `status` in `{implemented, review-fixing}` *with*
-a `pr:` URL. Do not use `approved` — no workflow matches it, and the
-proposal will sit idle.
+GitHub is authoritative for PR existence and lifecycle; `.status.yaml` is a
+durable projection. The reconciler restores missing `pr` URLs and terminal
+state every 15 minutes.
+
+Trigger for Tier 2 is only `status: accepted`. `needs-triage`, `error`, and
+`in-progress` are never force-retried. After correcting the root cause, submit
+a normal GitOps PR that moves exactly one proposal back to `accepted`.
+Trigger for Tier 3 is `status` in `{implemented, review-fixing, in-progress}`;
+missing PR URLs are recovered from `feat/agents-<slug>`.
 
 ## Definition of Ready before flipping to `accepted`
 

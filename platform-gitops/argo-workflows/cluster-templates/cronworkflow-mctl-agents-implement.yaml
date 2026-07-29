@@ -37,9 +37,9 @@ spec:
   # 48 ≈ 4h of failures — enough for recent debugging without bloating etcd.
   successfulJobsHistoryLimit: 96
   failedJobsHistoryLimit: 48
-  # Temporarily suspended 2026-07-29 while the unscoped account-2 fallback
-  # is fixed. A fallback run forced retries for every in-progress proposal
-  # and exhausted the five-hour subscription quota in one batch.
+  # Phase A: keep implementation paused while GitHub-first reconciliation
+  # inventories the existing backlog. Resume only after the 12 open PRs have
+  # explicit merge/fix/close/needs-triage outcomes.
   suspend: true
   workflowSpec:
     workflowTemplateRef:
@@ -53,3 +53,5 @@ spec:
           value: ""
         - name: force
           value: "false"
+        - name: max_proposals
+          value: "1"

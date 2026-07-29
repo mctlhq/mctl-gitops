@@ -9,38 +9,27 @@ metadata:
 
       Workflow logic lives in ClusterWorkflowTemplate `mctl-agents-reconcile`
       (cwft-mctl-agents-reconcile.yaml). This CronWorkflow submits it with no
-      parameters, so it reconciles every SHEPHERD_SKIP_SERVICES repo: reads
-      each proposal's linked PR and flips .status.yaml to merged/rejected if
-      pr-steward's best-effort write-back was dropped. Read-only — no reviews,
-      no fixes, no merges, no SDK.
+      parameters, so it reconciles every service: discovers canonical PRs from
+      feat/agents-* branches, restores lost URLs, and projects open/merged/
+      closed/conflicted state. No reviews, fixes, merges, or SDK.
 
-      Cadence: hourly. The reconciler only repairs rare dropped write-backs,
-      but steward-owned repos rely on it for the implemented->merged flip, so
-      an hourly sweep keeps the bound of staleness for a pr-steward-merged
-      proposal that lost its write-back at ~1h.
-
-      Un-suspended at Stage 2: sweeps every SHEPHERD_SKIP_SERVICES repo hourly,
-      repairing any pr-steward-merged proposal whose .status.yaml write-back
-      was dropped.
+      Cadence: every 15 minutes, bounding an orphaned PR projection to one
+      steward tick while keeping the loop free of model quota.
 spec:
-  # `15 * * * *` — hourly at HH:15 UTC (was `45 */6` = 4×/day). Tightened so a
-  # pr-steward-merged proposal's `.status.yaml` write-back lands within ~1h
-  # instead of ~6h (steward-owned repos rely on reconcile for the merged flip).
-  # :15 overlaps the */5 crons (issue-poll, implement) and incidents (:15/:45);
+  # Every 15 minutes. Reconciliation performs GitHub reads and tiny status
+  # writes only; it never starts the SDK.
+  # The cadence overlaps the */5 crons (issue-poll, implement) and incidents;
   # all contend on the shared `mctl-gitops-main-writes` mutex, so concurrent
   # ticks serialize (one waits) and the commit step's retry loop resolves it.
-  schedule: "15 * * * *"
+  schedule: "*/15 * * * *"
   timezone: "UTC"
   # Forbid: never overlap two reconcile ticks (they contend on the same
   # mctl-gitops-main-writes mutex anyway).
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 600
-  # Counts, NOT days. 24 ticks/day (hourly), so 48 ≈ 2 days of history.
-  successfulJobsHistoryLimit: 48
-  failedJobsHistoryLimit: 48
-  # Un-suspended at Stage 2: reconcile sweeps every SHEPHERD_SKIP_SERVICES repo
-  # hourly, repairing any pr-steward-merged proposal that lost its
-  # `.status.yaml: merged` write-back.
+  # Counts, NOT days. 96 ticks/day, so 96 ≈ one day of history.
+  successfulJobsHistoryLimit: 96
+  failedJobsHistoryLimit: 96
   # NOT suspended during the 2026-07-16 org spend-cap outage: --reconcile
   # never calls the Claude SDK (no CLAUDE_CODE_OAUTH_TOKEN in this template),
   # so it's unaffected by the cap, and pausing it would leave pr-steward

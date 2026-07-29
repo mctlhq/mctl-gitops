@@ -4,22 +4,17 @@ metadata:
   name: mctl-agents-reconcile
   annotations:
     workflows.argoproj.io/description: |
-      Read-only status reconciler for repos owned by another PR lifecycle
-      (pr-steward in mctl-claude-remote).
+      GitHub-first status reconciler for every proposal service.
 
-      Runs `orchestrator/run_shepherd.py --reconcile`, which discovers ONLY
-      the services listed in SHEPHERD_SKIP_SERVICES (the inverse of the normal
-      Tier-3 shepherd discovery) and, per proposal, reads the linked PR and
-      flips .status.yaml to `merged` / `rejected` based on the live PR state.
-      It NEVER reads reviews, applies fixes, merges, or calls the Claude SDK.
+      Runs `orchestrator/run_shepherd.py --reconcile`, discovers canonical
+      feat/agents-* PRs even when `.status.yaml` lost its `pr` field, and
+      projects open/merged/closed/conflicted state. If a prior attempt pushed
+      commits but died before PR creation, it opens that one canonical PR. It
+      never runs a model, applies code fixes, or merges.
 
-      Why this exists: pr-steward writes `.status.yaml: merged` after it
-      merges a feat/agents-* PR, but that write-back is best-effort and
-      non-blocking — it can be dropped on a push conflict or a pod crash,
-      leaving a proposal stuck at `implemented`. This pass is the
-      eventual-consistency safety net that repairs that drift. It does the
-      same two terminal flips the shepherd's flip-to-merged / flip-to-rejected
-      branches do, but for the skip-listed repos the shepherd never touches.
+      GitHub is authoritative; `.status.yaml` is the durable projection and
+      operator audit trail. This pass is the eventual-consistency safety net
+      for both shepherd-owned and steward-owned repositories.
 
       Steps:
         1. clone-gitops — SSH-clone mctl-gitops via the shared deploy key.
@@ -29,13 +24,8 @@ metadata:
         3. commit-and-push — commits any .status.yaml transitions back to
            gitops main (same `:(glob)` filter + mutex as the shepherd).
 
-      SHEPHERD_SKIP_SERVICES MUST match the value on cwft-mctl-agents-shepherd
-      so the two cover disjoint repo sets (shepherd skips them; reconcile owns
-      only them).
-
       Triggered by:
-        - cron via CronWorkflow `mctl-agents-reconcile` (low frequency;
-          ships suspended — operator un-suspends after a one-shot success)
+        - cron via CronWorkflow `mctl-agents-reconcile`
         - one-shot Workflow referencing this CWFT via workflowTemplateRef +
           clusterScope:true
 spec:
@@ -53,8 +43,8 @@ spec:
   # template), which leaked ~€6 of idle detached volumes in June 2026.
   volumeClaimGC:
     strategy: OnWorkflowCompletion
-  # 30-min budget: reconcile is read-only (a `gh api` PR fetch per skip-listed
-  # proposal + a status write). No SDK, no implementer subprocess, no merges.
+  # 30-min budget: GitHub projection only. It may open a PR for an already
+  # pushed deterministic branch, but never runs SDK, review-fix, or merge.
   activeDeadlineSeconds: 1800
   entrypoint: reconcile-proposals
   onExit: notify-telegram
@@ -63,9 +53,7 @@ spec:
     parameters:
       - name: service
         value: ""
-        # Optional. When set, reconcile only that service — and only if it is
-        # in SHEPHERD_SKIP_SERVICES (run_shepherd warns + matches nothing
-        # otherwise). Validated against config/settings.py SERVICES.
+        # Optional. When set, reconcile only that service.
       - name: dry_run
         value: "false"
         # When "true", discover + print would-be flips but write nothing.
@@ -174,21 +162,9 @@ spec:
             value: "{{workflow.parameters.dry_run}}"
           - name: STATE_DIR
             value: /workdir/mctl-gitops/platform-gitops/agents-state
-          # SINGLE-SOURCE INVARIANT (disjoint scope): this value MUST stay
-          # identical to SHEPHERD_SKIP_SERVICES on cwft-mctl-agents-shepherd.
-          # The two workflows partition the repo set — the shepherd SKIPS these
-          # services; reconcile owns ONLY them. If they ever diverge, a repo is
-          # processed by BOTH (duplicate/conflicting status flips) or NEITHER
-          # (orphaned). The companion change that sets the matching value on the
-          # shepherd CWFT must be live before this reconcile cron is enabled —
-          # which is exactly why cronworkflow-mctl-agents-reconcile ships
-          # `suspend: true`. Do NOT un-suspend it until the shepherd CWFT in the
-          # cluster carries this same skip. Edit the two in lockstep.
-          - name: SHEPHERD_SKIP_SERVICES
-            value: "mctl-design,mctl-telegram,mctl-gitops,mctl-pairdesk"
-          # Read-only GitHub PAT use: `gh api` PR snapshots in
-          # find_pr_for_proposal. No `gh pr merge`, no git push from this
-          # container (commit-and-push owns the write via the deploy key).
+          # GitHub PAT use: PR snapshots and idempotent PR creation for an
+          # already-pushed deterministic branch. No code push or merge from
+          # this container (commit-and-push owns only the status projection).
           # No CLAUDE_CODE_OAUTH_TOKEN — --reconcile skips SDK auth entirely.
           # NOT optional: a non-dry reconcile run requires the token; a missing
           # secret should fail at pod-scheduling time, not as an opaque runtime
