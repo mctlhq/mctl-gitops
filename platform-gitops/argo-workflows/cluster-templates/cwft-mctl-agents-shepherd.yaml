@@ -769,6 +769,16 @@ spec:
           # note on the shepherd-proposals template's degraded_apps output.
           WORKFLOW_ACTIVITY=$(cat /workdir/activity 2>/dev/null || echo "unknown")
 
+          # If termination happens before verify exists, Argo can pass the
+          # unresolved expression through literally instead of the output's
+          # empty default. Never expose raw template syntax in the operator
+          # notification (incident-17841348).
+          case "$WORKFLOW_DEGRADED_APPS" in
+            *'{{workflow.outputs.parameters.degraded_apps}}'*)
+              WORKFLOW_DEGRADED_APPS="unknown (verification did not complete)"
+              ;;
+          esac
+
           # Unfiltered (no time-threshold) snapshot of currently-Degraded
           # apps, written by post-deploy-verify. Empty means the cluster is
           # fully healthy; non-empty means at least one app is Degraded
