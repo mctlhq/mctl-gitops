@@ -228,7 +228,7 @@ spec:
         mutex:
           name: mctl-agents-proposal-claims
       container:
-        image: ghcr.io/mctlhq/mctl-agents:1.19.0
+        image: ghcr.io/mctlhq/mctl-agents:1.20.0
         imagePullPolicy: IfNotPresent
         command: ["/entrypoint.sh"]
         args:
