@@ -1,8 +1,10 @@
-status: implemented
-updated_at: '2026-07-29T12:31:28Z'
+status: merged
+updated_at: '2026-07-29T12:46:30Z'
 updated_by: mctl-agents[bot]
 pr: https://github.com/mctlhq/mctl-gitops/pull/598
 github:
-  state: open
+  state: merged
   head_sha: da171c71d941abcf7337648ad61cd8e23a22311a
-  observed_at: '2026-07-29T12:31:28Z'
+  observed_at: '2026-07-29T12:46:30Z'
+merged_at: '2026-07-29T12:46:30Z'
+merge_commit: 8b8b431a476ddb020a72610db16dedffc8142365
