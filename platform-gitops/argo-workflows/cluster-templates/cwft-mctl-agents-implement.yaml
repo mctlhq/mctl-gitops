@@ -35,8 +35,10 @@ spec:
   # template), which leaked ~€6 of idle detached volumes in June 2026.
   volumeClaimGC:
     strategy: OnWorkflowCompletion
-  # Implementer pipeline can be slow: clone two repos + Claude SDK + push + PR.
-  # Bump above the cron run's 1h budget.
+  # One proposal may still need clone + bounded SDK work + push + PR, so keep
+  # a hard 2h safety ceiling. Do not raise this to accommodate an unlimited
+  # batch: max_proposals=1 below is the quota and runtime boundary introduced
+  # after incident-0f3b9ea3.
   activeDeadlineSeconds: 7200
   entrypoint: implement-proposals
   onExit: notify-telegram
