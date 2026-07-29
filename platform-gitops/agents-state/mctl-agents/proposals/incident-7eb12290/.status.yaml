@@ -1,8 +1,10 @@
-status: implemented
-updated_at: '2026-07-29T12:46:24Z'
+status: merged
+updated_at: '2026-07-29T13:01:14Z'
 updated_by: mctl-agents[bot]
 pr: https://github.com/mctlhq/mctl-agents/pull/69
 github:
   state: open
   head_sha: 9ec5429de48bc73abfd2a2e4f60511d5c32a5d57
   observed_at: '2026-07-29T12:46:24Z'
+merged_at: '2026-07-29T13:01:14Z'
+merge_commit: 32ff9316396095b332b864f87e15a432affa5528
