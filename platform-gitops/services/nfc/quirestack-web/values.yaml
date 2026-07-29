@@ -35,6 +35,11 @@ ingress:
       hosts:
         - nfc-quirestack-web.mctl.ai
         - nfc-quirestack-web.mctl.me
+# ExternalSecret refresh updates the Secret but does not restart this pod.
+# After rotating BETTER_AUTH_SECRET, perform an explicit rollout so Next.js
+# server-action references are rebuilt against the new runtime secret
+# (incident-c33cf596). The one-time incident rollout is intentionally not
+# kept as a permanent annotation.
 envFrom:
   - secretRef:
       name: nfc-quirestack-api-db-creds
