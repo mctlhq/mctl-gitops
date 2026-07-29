@@ -65,6 +65,7 @@ spec:
         name: workdir
       spec:
         accessModes: ["ReadWriteOnce"]
+        storageClassName: argo-workdir-local
         resources:
           requests:
             # gitops clone + one target-repo clone at a time (the poller

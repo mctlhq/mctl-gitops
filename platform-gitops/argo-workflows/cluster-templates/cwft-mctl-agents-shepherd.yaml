@@ -115,6 +115,7 @@ spec:
         name: workdir
       spec:
         accessModes: ["ReadWriteOnce"]
+        storageClassName: argo-workdir-local
         resources:
           requests:
             # Same 8Gi as the implementer: address-review followups
