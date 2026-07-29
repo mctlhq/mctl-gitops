@@ -1,6 +1,6 @@
 # GitHub-first implementer PR lifecycle
 
-Status: phase A live; awaiting backlog-decision acceptance
+Status: phase A verified; awaiting backlog-decision acceptance
 
 ## Problem
 
@@ -27,7 +27,7 @@ At the start of this rollout there were 12 open `feat/agents-*` PRs:
 
 ## Implementation
 
-### mctl-agents 1.20.0
+### mctl-agents 1.20.2
 
 - Shared read/merge/write status helper preserves all fields unless a caller
   explicitly removes one.
@@ -38,11 +38,15 @@ At the start of this rollout there were 12 open `feat/agents-*` PRs:
 - `--force` is removed; scheduled runs process at most one accepted proposal.
 - Reconcile scans every service, restores missing PR URLs, heals stale open
   state, records merge conflicts, and projects merged/closed terminal state.
+- Reconcile preserves a confirmed conflict when GitHub temporarily reports
+  `UNKNOWN`; only a changed head in a mergeable state may leave quarantine.
+- Existing `merged` and `rejected` decisions remain terminal when no
+  canonical PR exists. A real discovered PR may still repair stale projection.
 
 ### GitOps phase A
 
 - Implementer cron stays suspended while the existing backlog is reconciled.
-- Reconcile runs every 15 minutes with mctl-agents 1.20.0.
+- Reconcile runs every 15 minutes with mctl-agents 1.20.2.
 - `mctl-gitops` is added to pr-steward with exact
   `head_prefix=feat/agents-`, `merge_method=merge`, and `merge_mode=never`.
 - Shepherd continues to skip `mctl-gitops`; therefore only steward can drive
@@ -53,6 +57,13 @@ Phase A was merged in mctl-gitops #668. The first new reconciler tick,
 wrote projection commit `6ce9a750`. It restored the missing PR URLs for #71
 and #598, converted #66 from stale `review-stuck` to actionable
 `needs-triage`, and projected all current conflicts without invoking a model.
+
+The 11:00 and 11:30 UTC ticks exposed two transient-state regressions before
+1.20.2 was deployed: GitHub `UNKNOWN` could clear an already confirmed
+conflict, and a terminal proposal without a PR could be classified as
+`missing-pr`. mctl-agents #77 and #79 add regression coverage for both cases.
+The one incorrectly changed manual rejection was restored from its durable
+pre-reconcile record.
 
 ## Backlog gate
 
