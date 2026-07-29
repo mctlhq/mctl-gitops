@@ -53,6 +53,14 @@ spec:
     mutex:
       name: mctl-gitops-main-writes
 
+  # Promtail maps these pod labels to the Loki `app` and `team` labels. Argo
+  # pods otherwise cannot be found through mctl_get_service_logs during an
+  # incident (incident-17841555).
+  podMetadata:
+    labels:
+      app.kubernetes.io/name: mctl-agents
+      mctl.ai/team: admins
+
   arguments:
     parameters:
       - name: mode
@@ -273,6 +281,16 @@ spec:
 
     # ── 3. Commit & push back to mctl-gitops ──────────────────────────────
     - name: commit-and-push
+      # The workflow mutex does not cover direct GitHub Actions image bumps.
+      # Retry this bounded write step when one races the in-script rebase/push
+      # loop (incident-17841555).
+      retryStrategy:
+        limit: "3"
+        retryPolicy: OnFailure
+        backoff:
+          duration: "30s"
+          factor: "2"
+          maxDuration: "5m"
       script:
         image: alpine/git:2.43.0
         command: [sh]

@@ -129,7 +129,9 @@ spec:
               ttlStrategy:
                 secondsAfterCompletion: 3600
                 secondsAfterSuccess: 1800
-                secondsAfterFailure: 86400
+                # Keep failed live objects for next-day incident inspection;
+                # archived history remains available for seven days.
+                secondsAfterFailure: 259200
               podGC:
                 strategy: OnWorkflowCompletion
               # Delete volumeClaimTemplate PVCs (the per-workflow `workdir`) on
