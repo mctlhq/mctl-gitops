@@ -297,6 +297,11 @@ spec:
                     matchers:
                       - alertname = "KubeJobFailed"
                       - namespace = "vault"
+                  # A stale agents pipeline usually means its own model/auth
+                  # path is unavailable, so route directly to an operator.
+                  - receiver: telegram
+                    matchers:
+                      - alertname = "MctlAgentsPipelineStale"
                   - receiver: "null"
                     matchers:
                       - alertname = "KubeJobFailed"
