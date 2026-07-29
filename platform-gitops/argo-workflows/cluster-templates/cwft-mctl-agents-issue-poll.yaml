@@ -45,11 +45,11 @@ spec:
   # template), which leaked ~€6 of idle detached volumes in June 2026.
   volumeClaimGC:
     strategy: OnWorkflowCompletion
-  # One poll may investigate several labelled issues back-to-back, each a
-  # gitops + target-repo clone plus a Claude SDK run. 4h ceiling covers a
-  # realistic backlog; the steady-state case (0-1 labelled issues) finishes
-  # in minutes.
-  activeDeadlineSeconds: 14400
+  # A poll normally finishes in minutes. Bound it to two cron intervals so a
+  # stuck SDK/network call cannot hold concurrencyPolicy=Forbid for hours and
+  # silently suppress later intake ticks (incident-17841222). A legitimate
+  # backlog that exceeds this bound must be split or bounded per issue.
+  activeDeadlineSeconds: 1800
   entrypoint: poll-issues
   onExit: notify-telegram
   # NB: the `mctl-gitops-main-writes` mutex is NOT declared here at workflow
