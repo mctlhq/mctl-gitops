@@ -65,6 +65,19 @@ conflict, and a terminal proposal without a PR could be classified as
 The one incorrectly changed manual rejection was restored from its durable
 pre-reconcile record.
 
+Production acceptance completed on 2026-07-29:
+
+- The 11:45 UTC reconcile succeeded and projection commit `db8d8f2d` restored
+  four mctl-agents proposals to confirmed conflict quarantine.
+- The 12:00 UTC reconcile succeeded and projection commit `7c3d18bd` restored
+  the remaining three mctl-gitops proposals to conflict quarantine.
+- Immediately before the 12:15 UTC tick, GitHub reported `UNKNOWN` for
+  mctl-gitops #584, #595, and #597. Reconcile workflow
+  `mctl-agents-reconcile-1785327300` succeeded without creating a status
+  commit; `origin/main` remained at `7c3d18bd`.
+- The restored manual `rejected` proposal remained unchanged through both
+  post-deployment ticks.
+
 ## Backlog gate
 
 Snapshot after the first phase-A reconciliation:
