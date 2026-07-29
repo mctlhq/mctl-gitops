@@ -1,5 +1,9 @@
 status: rejected
-updated_at: '2026-07-27T03:15:59Z'
+updated_at: '2026-07-29T10:47:23Z'
 updated_by: mctl-agents[bot]
 pr: https://github.com/mctlhq/mctl-gitops/pull/626
 notes: PR was closed without merging.
+github:
+  state: closed
+  head_sha: 542b00bd5def37405a2ce52f101e3d67d3f2e927
+  observed_at: '2026-07-29T10:47:23Z'

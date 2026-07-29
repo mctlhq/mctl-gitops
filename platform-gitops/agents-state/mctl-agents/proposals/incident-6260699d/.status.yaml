@@ -1,7 +1,15 @@
-status: review-stuck
-updated_at: '2026-07-26T03:03:02Z'
+status: needs-triage
+updated_at: '2026-07-29T10:47:07Z'
 updated_by: mctl-agents[bot]
 pr: https://github.com/mctlhq/mctl-agents/pull/66
 review_attempts: 3
-notes: Follow-up failed deterministically 3 time(s) (implementer follow-up exited
-  non-zero (42) for mctl-agents/incident-6260699d); human triage required.
+notes: 'reconcile: open PR has a merge conflict'
+github:
+  state: open
+  head_sha: ad69360a9f0ffba79d03867e2076e8f6598c4463
+  blocking_reason: conflict
+  observed_at: '2026-07-29T10:47:07Z'
+failure:
+  code: merge-conflict
+  stage: reconcile
+  message: GitHub reports a merge conflict with the base branch.

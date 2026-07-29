@@ -1,5 +1,9 @@
 status: rejected
-updated_at: '2026-05-02T09:10:00Z'
-updated_by: operator
-notes: PR was closed without merging (P2 codex finding — manual cleanup).
+updated_at: '2026-07-29T10:48:00Z'
+updated_by: mctl-agents[bot]
+notes: PR was closed without merging.
 pr: https://github.com/mctlhq/mctl-openclaw/pull/15
+github:
+  state: closed
+  head_sha: 70c8c42cd83cc2fe9245a84918eeaed9b9b8b968
+  observed_at: '2026-07-29T10:48:00Z'
