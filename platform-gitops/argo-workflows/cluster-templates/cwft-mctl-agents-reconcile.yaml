@@ -132,7 +132,7 @@ spec:
     # ── 2. Run reconcile (read-only) ──────────────────────────────────────
     - name: run-reconcile
       container:
-        image: ghcr.io/mctlhq/mctl-agents:1.20.0
+        image: ghcr.io/mctlhq/mctl-agents:1.20.1
         imagePullPolicy: IfNotPresent
         command: ["/entrypoint.sh"]
         args:
