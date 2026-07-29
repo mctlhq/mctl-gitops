@@ -40,13 +40,10 @@ spec:
   # 24 ticks/day * 7 days of success history
   successfulJobsHistoryLimit: 168
   failedJobsHistoryLimit: 48
-  # Re-un-suspended 2026-07-25 after the 2026-07-24T03:00:00Z org-wide
-  # spend-cap reset (mctl-gitops#611 TEMP note): a real (non-dry-run)
-  # `mctl_trigger_incident_responder` probe completed Succeeded end to
-  # end (clone → run → commit → assert-produced), no fallback needed,
-  # no workflow_failed incident. See memory:
-  # mctl-agents-crons-suspended-spend-cap.
-  suspend: false
+  # Temporarily suspended 2026-07-29 with the implementer so incident
+  # proposals cannot feed the unscoped account-2 fallback while its
+  # forced-retry behavior is being fixed.
+  suspend: true
   workflowSpec:
     workflowTemplateRef:
       name: mctl-agents-run

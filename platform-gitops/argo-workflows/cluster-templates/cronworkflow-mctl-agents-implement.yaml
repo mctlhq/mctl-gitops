@@ -37,13 +37,10 @@ spec:
   # 48 ≈ 4h of failures — enough for recent debugging without bloating etcd.
   successfulJobsHistoryLimit: 96
   failedJobsHistoryLimit: 48
-  # Re-un-suspended 2026-07-25 after the 2026-07-24T03:00:00Z org-wide
-  # spend-cap reset (mctl-gitops#611 TEMP note): a real (non-dry-run)
-  # `mctl_trigger_implementer` probe completed Succeeded (cheap no-op —
-  # no accepted proposals at probe time), no fallback needed, no
-  # workflow_failed incident. See memory:
-  # mctl-agents-crons-suspended-spend-cap.
-  suspend: false
+  # Temporarily suspended 2026-07-29 while the unscoped account-2 fallback
+  # is fixed. A fallback run forced retries for every in-progress proposal
+  # and exhausted the five-hour subscription quota in one batch.
+  suspend: true
   workflowSpec:
     workflowTemplateRef:
       name: mctl-agents-implement
