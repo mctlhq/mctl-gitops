@@ -68,7 +68,6 @@ spec:
         name: workdir
       spec:
         accessModes: ["ReadWriteOnce"]
-        storageClassName: argo-workdir-local
         resources:
           requests:
             storage: 1Gi
