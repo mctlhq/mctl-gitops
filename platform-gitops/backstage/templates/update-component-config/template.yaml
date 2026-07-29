@@ -64,6 +64,12 @@ spec:
       input:
         entityRef: ${{ parameters.serviceName }}
 
+    - id: require-team-access
+      name: Verify caller may modify this service
+      action: mctl:auth:requireTeamAccess
+      input:
+        team: ${{ steps['fetch-service'].output.entity.metadata.labels.team or steps['fetch-service'].output.entity.spec.owner | replace('group:', '') }}
+
     - id: update-config
       name: Apply changes via Argo Workflows
       if: ${{ parameters.envVars or parameters.secretEnvVars or parameters.clearEnv or parameters.clearSecrets }}
