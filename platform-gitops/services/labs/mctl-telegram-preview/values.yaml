@@ -39,6 +39,13 @@ env:
   PUBLIC_BASE_URL: https://tg-preview.mctl.ai
   OAUTH_ISSUER_URL: https://tg-preview.mctl.ai
   OAUTH_CODE_TTL: "30m"
+  # TEMPORARY (added 2026-07-30, remove after the soak): shortened from the
+  # 1h default to force frequent refresh cycles and surface inter-process
+  # rotation races during the 24h grace-window soak for mctl-telegram#343
+  # (fixes the invalid_grant: refresh token already used outage). Revert to
+  # removing this line — the code default is 1h — once the soak concludes
+  # with continuous tool availability and no unexpected family revocations.
+  OAUTH_ACCESS_TOKEN_TTL: "2m"
   # OriginGuard allowlist. Unset, it defaults to the PUBLIC_BASE_URL origin only,
   # which 403s the browser Origin headers sent by the ChatGPT and Claude connector
   # runtimes. Broadened here to validate connector access on preview before the
