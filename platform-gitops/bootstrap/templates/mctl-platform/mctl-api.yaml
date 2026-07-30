@@ -47,6 +47,15 @@ spec:
             GIT_CONFIG_KEY_0: "safe.directory"
             GIT_CONFIG_VALUE_0: "*"
             LOKI_URL: "http://loki-stack.monitoring.svc.cluster.local:3100"
+            # Argo Workflows step-log archive, backing mctl_get_workflow_logs.
+            # Distinct from LOKI_URL above: promtail feeds Loki from long-lived
+            # service pods under the ArgoCD naming convention, so Loki can never
+            # serve an Argo step pod. Argo's wait sidecar uploads each step's log
+            # here as part of the step, making it the complete (and longer-lived)
+            # source for workflow post-mortems.
+            # Credentials come from mctl-api-secrets (Vault: platform/r2-loki-argo).
+            ARGO_LOGS_R2_ENDPOINT: "6a09f637d20e1f66a8e9d45ebe778058.r2.cloudflarestorage.com"
+            ARGO_LOGS_R2_BUCKET: "argo-workflows-logs"
             AUDIT_DB_URL: "postgresql://$(DB_USER):$(DB_PASSWORD)@shared-pg-rw.platform-db.svc:5432/mctl-api?sslmode=disable"
 
           envFromSecret: mctl-api-secrets
