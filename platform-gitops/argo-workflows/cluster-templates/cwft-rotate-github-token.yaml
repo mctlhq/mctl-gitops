@@ -1,19 +1,34 @@
 apiVersion: argoproj.io/v1alpha1
 kind: CronWorkflow
 metadata:
-  name: rotate-mctl-agent-github-token
+  name: rotate-github-app-tokens
   namespace: argo-workflows
   annotations:
     workflows.argoproj.io/description: |
-      Rotates the GitHub App installation token for mctl-agent every 30 minutes.
-      Reads the GitHub App private key from Vault, generates a new installation token,
-      writes it back to Vault, and triggers ExternalSecret re-sync so the mctl-agent
-      pod picks up the fresh token without a restart.
+      Rotates GitHub App installation tokens every 30 minutes, one per
+      configured target. Reads each App's private key from Vault, generates
+      a fresh installation token, merges it into the target Vault secret
+      (preserving every other key already there), and triggers that
+      target's ExternalSecret re-sync so the consuming pod picks up the
+      fresh token without a restart.
 
-      Installation tokens expire after 60 minutes, so a 30-minute cadence leaves a
-      safe 30-minute buffer. The previous "*/45" schedule was a cron-syntax bug
-      that fired at :00 and :45 (a 45/15 minute alternating pattern), not a steady
-      45-minute interval.
+      Installation tokens expire after 60 minutes, so a 30-minute cadence
+      leaves a safe 30-minute buffer. Targets are processed independently:
+      one App failing to mint (wrong installation, revoked key, API outage)
+      does not block the other's rotation.
+
+      Targets:
+        - mctl-agent  (App id 2902192)  -> secret/platform/mctl-agent/tokens
+                                            key github-token
+                                         -> ExternalSecret
+                                            admins/admins-mctl-agent-base-service
+        - mctl-agents (App id 4450852)  -> secret/platform/mctl-agents
+                                            key github-token
+                                         -> ExternalSecret
+                                            argo-workflows/mctl-agents-secrets
+
+      Renamed 2026-08-01 from rotate-mctl-agent-github-token (singular) now
+      that it rotates for both mctl-agent and mctl-agents.
 spec:
   schedule: "*/30 * * * *"
   timezone: "UTC"
@@ -46,14 +61,17 @@ spec:
             pip install cryptography --quiet
 
             python3 - << 'PYEOF'
-            import os, time, json, base64, urllib.request, urllib.error, subprocess
+            import os, time, json, base64, urllib.request, urllib.error
 
             VAULT_ADDR = os.environ["VAULT_ADDR"]
 
-            # ── Authenticate with Vault via Kubernetes SA token ──────────────────
+            from cryptography.hazmat.primitives import serialization, hashes
+            from cryptography.hazmat.primitives.asymmetric import padding
+            from cryptography.hazmat.backends import default_backend
+
+            # ── Vault auth via Kubernetes SA token (shared by every target) ──────
             with open("/var/run/secrets/kubernetes.io/serviceaccount/token") as f:
                 sa_token = f.read().strip()
-
             resp = urllib.request.urlopen(urllib.request.Request(
                 f"{VAULT_ADDR}/v1/auth/kubernetes/login",
                 data=json.dumps({"role": "argo-workflow", "jwt": sa_token}).encode(),
@@ -63,105 +81,124 @@ spec:
             vault_token = json.loads(resp.read())["auth"]["client_token"]
             print("✅ Vault authenticated")
 
-            # ── Read GitHub App credentials ───────────────────────────────────────
-            req = urllib.request.Request(
-                f"{VAULT_ADDR}/v1/secret/data/platform/github-app",
-                headers={"X-Vault-Token": vault_token}
-            )
-            data = json.loads(urllib.request.urlopen(req).read())["data"]["data"]
-            private_key = data["private-key"]
-            app_id = data["app-id"]
-            installation_id = data["installation-id"]
-            print(f"✅ Got GitHub App credentials (app={app_id}, installation={installation_id})")
-
-            # ── Generate GitHub App JWT ───────────────────────────────────────────
-            from cryptography.hazmat.primitives import serialization, hashes
-            from cryptography.hazmat.primitives.asymmetric import padding
-            from cryptography.hazmat.backends import default_backend
-
-            key = serialization.load_pem_private_key(
-                private_key.encode(), password=None, backend=default_backend()
-            )
-            now = int(time.time())
-            header = base64.urlsafe_b64encode(b'{"alg":"RS256","typ":"JWT"}').rstrip(b'=').decode()
-            payload_dict = {"iat": now - 60, "exp": now + 600, "iss": app_id}
-            payload = base64.urlsafe_b64encode(
-                json.dumps(payload_dict, separators=(',', ':')).encode()
-            ).rstrip(b'=').decode()
-            signing_input = f"{header}.{payload}".encode()
-            signature = key.sign(signing_input, padding.PKCS1v15(), hashes.SHA256())
-            sig_b64 = base64.urlsafe_b64encode(signature).rstrip(b'=').decode()
-            app_jwt = f"{header}.{payload}.{sig_b64}"
-
-            # ── Get installation access token ─────────────────────────────────────
-            req = urllib.request.Request(
-                f"https://api.github.com/app/installations/{installation_id}/access_tokens",
-                data=b"{}",
-                headers={
-                    "Authorization": f"Bearer {app_jwt}",
-                    "Accept": "application/vnd.github+json",
-                    "X-GitHub-Api-Version": "2022-11-28",
-                    "Content-Length": "2",
-                },
-                method="POST"
-            )
-            result = json.loads(urllib.request.urlopen(req).read())
-            new_token = result["token"]
-            expires_at = result["expires_at"]
-            print(f"✅ New GitHub token generated (expires: {expires_at})")
-
-            # ── Read existing Vault secret (to merge, not overwrite) ──────────────
-            req = urllib.request.Request(
-                f"{VAULT_ADDR}/v1/secret/data/platform/mctl-agent/tokens",
-                headers={"X-Vault-Token": vault_token}
-            )
-            existing = json.loads(urllib.request.urlopen(req).read())["data"]["data"]
-            existing["github-token"] = new_token
-
-            # ── Write merged secret back to Vault ─────────────────────────────────
-            req = urllib.request.Request(
-                f"{VAULT_ADDR}/v1/secret/data/platform/mctl-agent/tokens",
-                data=json.dumps({"data": existing}).encode(),
-                headers={
-                    "X-Vault-Token": vault_token,
-                    "Content-Type": "application/json",
-                },
-                method="POST"
-            )
-            write_resp = json.loads(urllib.request.urlopen(req).read())
-            version = write_resp["data"]["version"]
-            print(f"✅ Vault updated (version {version})")
-
-            # ── Trigger ExternalSecret re-sync via Kubernetes API ─────────────────
             with open("/var/run/secrets/kubernetes.io/serviceaccount/token") as f:
                 k8s_token = f.read().strip()
-            with open("/var/run/secrets/kubernetes.io/serviceaccount/namespace") as f:
-                k8s_ns = f.read().strip()
-
-            import ssl
-            k8s_ctx = ssl.create_default_context()
+            k8s_ctx = __import__("ssl").create_default_context()
             k8s_ctx.load_verify_locations("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt")
 
-            patch_body = json.dumps({
-                "metadata": {"annotations": {"force-sync": str(version)}}
-            }).encode()
-            req = urllib.request.Request(
-                "https://kubernetes.default.svc/apis/external-secrets.io/v1beta1"
-                "/namespaces/admins/externalsecrets/admins-mctl-agent-base-service",
-                data=patch_body,
-                headers={
-                    "Authorization": f"Bearer {k8s_token}",
-                    "Content-Type": "application/merge-patch+json",
-                },
-                method="PATCH"
-            )
-            try:
-                urllib.request.urlopen(req, context=k8s_ctx)
-                print("✅ ExternalSecret re-sync triggered")
-            except Exception as e:
-                print(f"⚠️  ExternalSecret annotate failed: {e}")
+            def vault_get(path):
+                req = urllib.request.Request(
+                    f"{VAULT_ADDR}/v1/secret/data/{path}",
+                    headers={"X-Vault-Token": vault_token}
+                )
+                return json.loads(urllib.request.urlopen(req).read())["data"]["data"]
 
-            print("🎉 GitHub token rotation complete")
+            def vault_write(path, data):
+                req = urllib.request.Request(
+                    f"{VAULT_ADDR}/v1/secret/data/{path}",
+                    data=json.dumps({"data": data}).encode(),
+                    headers={"X-Vault-Token": vault_token, "Content-Type": "application/json"},
+                    method="POST"
+                )
+                return json.loads(urllib.request.urlopen(req).read())["data"]["version"]
+
+            def mint_installation_token(creds):
+                private_key = creds["private-key"]
+                app_id = creds["app-id"]
+                installation_id = creds["installation-id"]
+                key = serialization.load_pem_private_key(
+                    private_key.encode(), password=None, backend=default_backend()
+                )
+                now = int(time.time())
+                header = base64.urlsafe_b64encode(b'{"alg":"RS256","typ":"JWT"}').rstrip(b'=').decode()
+                payload_dict = {"iat": now - 60, "exp": now + 600, "iss": app_id}
+                payload = base64.urlsafe_b64encode(
+                    json.dumps(payload_dict, separators=(',', ':')).encode()
+                ).rstrip(b'=').decode()
+                signing_input = f"{header}.{payload}".encode()
+                signature = key.sign(signing_input, padding.PKCS1v15(), hashes.SHA256())
+                sig_b64 = base64.urlsafe_b64encode(signature).rstrip(b'=').decode()
+                app_jwt = f"{header}.{payload}.{sig_b64}"
+
+                req = urllib.request.Request(
+                    f"https://api.github.com/app/installations/{installation_id}/access_tokens",
+                    data=b"{}",
+                    headers={
+                        "Authorization": f"Bearer {app_jwt}",
+                        "Accept": "application/vnd.github+json",
+                        "X-GitHub-Api-Version": "2022-11-28",
+                        "Content-Length": "2",
+                    },
+                    method="POST"
+                )
+                result = json.loads(urllib.request.urlopen(req).read())
+                return result["token"], result["expires_at"]
+
+            def force_sync_external_secret(namespace, name, version):
+                patch_body = json.dumps({
+                    "metadata": {"annotations": {"force-sync": str(version)}}
+                }).encode()
+                req = urllib.request.Request(
+                    "https://kubernetes.default.svc/apis/external-secrets.io/v1beta1"
+                    f"/namespaces/{namespace}/externalsecrets/{name}",
+                    data=patch_body,
+                    headers={
+                        "Authorization": f"Bearer {k8s_token}",
+                        "Content-Type": "application/merge-patch+json",
+                    },
+                    method="PATCH"
+                )
+                urllib.request.urlopen(req, context=k8s_ctx)
+
+            # ── One entry per App. Adding a new consumer of the same App
+            # pattern later only needs a new entry here, no template changes.
+            TARGETS = [
+                {
+                    "label": "mctl-agent",
+                    "creds_path": "platform/github-app",
+                    "dest_path": "platform/mctl-agent/tokens",
+                    "dest_key": "github-token",
+                    "es_namespace": "admins",
+                    "es_name": "admins-mctl-agent-base-service",
+                },
+                {
+                    "label": "mctl-agents",
+                    "creds_path": "platform/github-app-agents",
+                    "dest_path": "platform/mctl-agents",
+                    "dest_key": "github-token",
+                    "es_namespace": "argo-workflows",
+                    "es_name": "mctl-agents-secrets",
+                },
+            ]
+
+            failures = []
+            for t in TARGETS:
+                label = t["label"]
+                try:
+                    creds = vault_get(t["creds_path"])
+                    token, expires_at = mint_installation_token(creds)
+                    print(f"✅ [{label}] minted (installation={creds['installation-id']}, expires={expires_at})")
+
+                    # Read-merge-write: never replace the whole secret, only
+                    # the one key. Other keys at this path (OAuth tokens,
+                    # Telegram creds, ...) must survive untouched.
+                    existing = vault_get(t["dest_path"])
+                    before_keys = set(existing.keys())
+                    existing[t["dest_key"]] = token
+                    version = vault_write(t["dest_path"], existing)
+                    assert set(existing.keys()) == before_keys | {t["dest_key"]}, \
+                        f"[{label}] key set changed unexpectedly — refusing to trust this write"
+                    print(f"✅ [{label}] Vault {t['dest_path']} updated (version {version})")
+
+                    force_sync_external_secret(t["es_namespace"], t["es_name"], version)
+                    print(f"✅ [{label}] ExternalSecret {t['es_namespace']}/{t['es_name']} re-sync triggered")
+                except Exception as e:
+                    print(f"⚠️  [{label}] rotation failed: {e}")
+                    failures.append(label)
+
+            if failures:
+                raise SystemExit(f"rotation failed for: {', '.join(failures)}")
+            print("🎉 GitHub App token rotation complete")
             PYEOF
           env:
             - name: VAULT_ADDR
