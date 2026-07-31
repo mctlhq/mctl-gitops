@@ -2,10 +2,12 @@
 # Team: labs
 # Chart: base-service (ingress disabled)
 
-# Keep the worker stopped between bounded C1 test windows. Last window
-# (mctl-telegram#319, #322) closed 2026-07-26: full DM->draft->Saved-Messages
-# -approve->send cycle confirmed live.
-replicaCount: 0
+# 2026-07-31: running continuously for a real-traffic observe-mode soak
+# (see the AGENT_KILL_SWITCH comment in mctl-telegram-preview/values.yaml),
+# not the previous bounded-test-window pattern. Draft-only — every propose
+# still requires the owner's manual /mctl approve. AGENT_MAX_BUDGET_USD below
+# caps spend per job on this worker's own dedicated OAuth credential.
+replicaCount: 1
 image:
   repository: ghcr.io/mctlhq/agent-worker-preview
   tag: "main-57f9ba6"

@@ -60,13 +60,22 @@ env:
   # lets POST /api/agent/token mint a worker credential and PUT
   # /api/admin/agent/profile provision a test account's agent_profiles row.
   #
-  # Keep the global safety gate closed between bounded C1 test windows.
-  # A rollout checklist may open it temporarily for approve/send E2E
-  # verification, but the final state must always restore it to "true".
-  # Approve/send E2E window (mctl-telegram#319, #322) closed 2026-07-26:
-  # full DM->draft->Saved-Messages-approve->send cycle confirmed live.
+  # 2026-07-31: switched from bounded test windows to a SUSTAINED real-traffic
+  # observe-mode soak, toward the plan's MVP DoD (>=30 real dialogs,
+  # classification >=90%, 0 leaks, 0 wrong-peer sends — see "Rollout gates"
+  # in the plan doc). Kill switch is OFF so propose_reply can actually draft
+  # (confirmed live: with it on, propose_reply denies outright at the policy
+  # layer before ever reaching pending_approval — it is not just a send-time
+  # gate). Safety instead comes from agent_profiles.mode=observe +
+  # autopilot_paused=true (DB-level, not here): policy.Evaluate always
+  # returns RequireApproval in observe mode regardless of the kill switch, so
+  # every drafted reply still sits in pending_approval until the owner
+  # manually /mctl approve's it — nothing sends autonomously during this
+  # soak. sender_allowlist is empty (allow-all) so real inbound DMs to the
+  # owner's own account accumulate as the 30 dialogs, not synthetic test
+  # traffic. Revisit this comment when the soak ends and the gate reverts.
   AGENT_ENABLED: "true"
-  AGENT_KILL_SWITCH: "true"
+  AGENT_KILL_SWITCH: "false"
 ingress:
   enabled: true
   hosts:
