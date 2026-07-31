@@ -161,7 +161,15 @@ spec:
                     if [ "$RC" -eq 0 ]; then
                       DELETED=$(grep -c '^DELETE' "$ACTIONS" || true)
                       STRIPPED=$(grep -c '^STRIP' "$ACTIONS" || true)
-                      KEPT=$(grep -c '^keep' "$ACTIONS" || true)
+                      # Count DISTINCT attachments, not `keep` lines: both
+                      # passes log `keep`, so anything visible to both is
+                      # counted twice. That happens when an attachment is
+                      # Terminating for >1h (pass 2's gate) while its PV is
+                      # still Bound (so pass 1 keeps rather than deletes it)
+                      # — i.e. a wedged detach of a LIVE volume, which is the
+                      # exact hcloud failure this janitor exists for. Field 2
+                      # is the attachment name in all four `keep` variants.
+                      KEPT=$(awk '/^keep/ {print $2}' "$ACTIONS" | sort -u | wc -l | tr -d ' ')
                       if [ "${DELETED:-0}" -eq 0 ] && [ "${STRIPPED:-0}" -eq 0 ]; then
                         echo "no action taken (kept ${KEPT}); skipping Telegram notify."
                         return 0
