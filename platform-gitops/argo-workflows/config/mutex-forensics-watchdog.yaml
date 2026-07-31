@@ -8,6 +8,22 @@
 # snapshot plus lock peers, Events, and nearby workflow-controller logs to
 # stdout (and therefore Loki), then annotates that Workflow so it is captured
 # only once. Each new stuck Workflow still produces its own snapshot.
+#
+# Second detection pass — the stuck HOLDER (added after incident 2026-07-30):
+# Argo acquires a synchronization.mutex as soon as a step becomes next-in-line
+# in the DAG, not when that step's pod actually starts running. On 2026-07-30
+# `mctl-agents-shepherd`'s commit-and-push step took the lock at ~11:01 and then
+# sat Pending (unschedulable) for ~61 minutes, blowing the deadlines of two
+# whole cron cycles queued behind it. Five "mutex wait >5m" alerts fired that
+# morning and *not one of them named the holder* — the waiter pass below can
+# only ever see the victims.
+#
+# The holder pass therefore looks at the complementary signal: a Workflow whose
+# .status.synchronization.mutex.holding[] references this lock, whose holding
+# node is itself still Pending. A waiter's node is Pending *with the lock name
+# in .message*; a holder's node is Pending with the lock already granted. The
+# two passes are mutually exclusive by construction and are annotated and
+# reported separately.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -99,15 +115,30 @@ spec:
                   CUTOFF=$((NOW - MIN_WAIT_SECONDS))
                   CAPTURED_AT=$(date -u +%FT%TZ)
 
-                  notify() {
-                    workflow=$1
+                  send_telegram() {
+                    message=$1
                     [ -n "${TG_BOT_TOKEN:-}" ] && [ -n "${TG_CHAT_ID:-}" ] || return 0
-                    message="Argo mutex wait >5m: ${workflow} is waiting for ${LOCK}. A forensic snapshot, lock-peer state, Events, and controller-log excerpt were written to Loki. Query: MUTEX_FORENSIC workflow=${workflow}"
                     curl --fail --show-error --silent --max-time 10 \
                       "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
                       --data-urlencode "chat_id=${TG_CHAT_ID}" \
                       --data-urlencode "text=${message}" >/dev/null \
                       || echo "telegram notify failed; continuing"
+                  }
+
+                  notify() {
+                    workflow=$1
+                    send_telegram "Argo mutex wait >5m: ${workflow} is waiting for ${LOCK}. A forensic snapshot, lock-peer state, Events, and controller-log excerpt were written to Loki. Query: MUTEX_FORENSIC workflow=${workflow}"
+                  }
+
+                  # The holder alert is the actionable one: it names the workflow
+                  # that is actually blocking everyone else, which the waiter
+                  # alert structurally cannot do.
+                  notify_holder() {
+                    workflow=$1
+                    node=$2
+                    pending_for=$3
+                    waiters=$4
+                    send_telegram "Argo mutex HOLDER stuck: ${workflow} holds ${LOCK} but its step '${node}' has been Pending for ${pending_for}s (${waiters} workflow(s) queued behind it). This is the incident-2026-07-30 signature — the holder never runs, so nothing downstream can proceed. Query: MUTEX_HOLDER_FORENSIC workflow=${workflow}"
                   }
 
                   WF_LIST_FILE=/tmp/workflows.json
@@ -138,9 +169,11 @@ spec:
                       | .metadata.name
                     ' "$WF_LIST_FILE")
 
-                  [ -n "$WORKFLOWS" ] || exit 0
-
-                  for workflow in $WORKFLOWS; do
+                  # NOTE: do not `exit 0` when there are no waiters — the holder
+                  # pass at the bottom of this script must still run. A stuck
+                  # holder with zero waiters is exactly the state that precedes
+                  # the cascade, and is the cheapest moment to catch it.
+                  for workflow in ${WORKFLOWS:-}; do
                     echo "MUTEX_FORENSIC_BEGIN workflow=${workflow} captured_at=${CAPTURED_AT} lock=${LOCK}"
 
                     # Capture the Workflow once into a file and derive all core
@@ -309,4 +342,131 @@ spec:
                       "mctl.ai/mutex-forensic-captured-at=${CAPTURED_AT}" --overwrite
                     notify "$workflow"
                     echo "MUTEX_FORENSIC_END workflow=${workflow} captured_at=${CAPTURED_AT}"
+                  done
+
+                  # ── Pass 2: stuck HOLDER ────────────────────────────────────
+                  # Reuse the same workflow listing captured at the top of this
+                  # run so both passes describe one consistent moment.
+                  #
+                  # `holder` in .status.synchronization.mutex.holding[] is not a
+                  # stable single format across Argo versions (bare node id,
+                  # node name, or "<workflow>/<node id>"), so match it against
+                  # the node key, the node name, and a suffix match on the key.
+                  HOLDERS=$(jq -r \
+                    --arg lock "$LOCK" \
+                    --argjson now "$NOW" \
+                    --argjson cutoff "$CUTOFF" '
+                      .items[]
+                      | . as $wf
+                      | select(($wf.metadata.annotations["mctl.ai/mutex-holder-forensic-captured-at"] // "") == "")
+                      | ($wf.status.synchronization.mutex.holding // [])
+                      | map(select(((.mutex // "") | contains($lock))) | (.holder // ""))
+                      | map(select(. != ""))
+                      | unique
+                      | .[] as $holder
+                      | ($wf.status.nodes // {})
+                      | to_entries[]
+                      | select(
+                          (.key == $holder)
+                          or ((.value.name // "") == $holder)
+                          # Bind the key first: inside `endswith(...)` the input
+                          # is already $holder (a string), so a bare `.key`
+                          # there raises "Cannot index string with string".
+                          or (.key as $k | $holder | endswith($k))
+                        )
+                      | select((.value.phase // "") == "Pending")
+                      | ((.value.startedAt // $wf.status.startedAt // $wf.metadata.creationTimestamp)
+                          | fromdateiso8601?) as $started
+                      | select(($started // $now) <= $cutoff)
+                      | "\($wf.metadata.name) \(.key) \($now - ($started // $now)) \(.value.displayName // .value.name // .key)"
+                    ' "$WF_LIST_FILE" | sort -u)
+
+                  [ -n "$HOLDERS" ] || exit 0
+
+                  printf '%s\n' "$HOLDERS" | while read -r workflow nodeid pending_for displayname; do
+                    echo "MUTEX_HOLDER_FORENSIC_BEGIN workflow=${workflow} node=${nodeid} step=${displayname} pending_seconds=${pending_for} captured_at=${CAPTURED_AT} lock=${LOCK}"
+
+                    # Re-read the Workflow: do not annotate (and do not alert) if
+                    # the holder's pod got scheduled between listing and now.
+                    HWF_FILE="/tmp/holder-${workflow}.json"
+                    if ! kubectl get workflow -n "$NS" "$workflow" -o json > "$HWF_FILE"; then
+                      echo "MUTEX_HOLDER_FORENSIC_CAPTURE_ERROR workflow=${workflow} stage=get-workflow"
+                      rm -f "$HWF_FILE"
+                      continue
+                    fi
+                    still_pending=$(jq -r --arg node "$nodeid" '
+                      (.status.nodes[$node].phase // "gone") == "Pending"
+                    ' "$HWF_FILE" 2>/dev/null || echo "false")
+                    if [ "$still_pending" != "true" ]; then
+                      echo "MUTEX_HOLDER_FORENSIC_RESOLVED workflow=${workflow} node=${nodeid} before_capture=true"
+                      rm -f "$HWF_FILE"
+                      continue
+                    fi
+
+                    # Why is it Pending? This is the payload that turns the alert
+                    # into a diagnosis: unschedulable, ImagePullBackOff, volume
+                    # attach wedge, quota — all show up here.
+                    #
+                    # Resolve the pod by Argo's node-id label rather than by
+                    # deriving it from the node id: pod naming is version- and
+                    # `podNameFormat`-dependent, the label is not. An empty
+                    # result is legitimate (the pod may not exist yet) and must
+                    # not abort the capture.
+                    POD=$(kubectl get pods -n "$NS" \
+                      -l "workflows.argoproj.io/workflow=${workflow}" -o json 2>/dev/null \
+                      | jq -r --arg node "$nodeid" '
+                          [ .items[]
+                            | select((.metadata.labels["workflows.argoproj.io/node-id"] // "") == $node)
+                            | .metadata.name
+                          ] | first // ""
+                        ' 2>/dev/null || echo "")
+                    if [ -z "$POD" ]; then
+                      echo "MUTEX_HOLDER_FORENSIC_POD workflow=${workflow} node=${nodeid} payload={\"note\":\"no pod found for node — not yet created\"}"
+                    else
+                    kubectl get events -n "$NS" \
+                      --field-selector "involvedObject.kind=Pod,involvedObject.name=${POD}" \
+                      -o json 2>/dev/null \
+                      | jq -c '.items[] | {type, reason, message, count, lastTimestamp}' \
+                      | while IFS= read -r event; do
+                          echo "MUTEX_HOLDER_FORENSIC_POD_EVENT workflow=${workflow} pod=${POD} payload=${event}"
+                        done \
+                      || true
+
+                    kubectl get pod -n "$NS" "$POD" -o json 2>/dev/null \
+                      | jq -c '{
+                          phase: .status.phase,
+                          nodeName: .spec.nodeName,
+                          conditions: [.status.conditions[]? | {type, status, reason, message}],
+                          volumes: [.spec.volumes[]? | select(.persistentVolumeClaim) | .persistentVolumeClaim.claimName]
+                        }' \
+                      | while IFS= read -r podinfo; do
+                          echo "MUTEX_HOLDER_FORENSIC_POD workflow=${workflow} pod=${POD} payload=${podinfo}"
+                        done \
+                      || true
+                    fi
+
+                    # Count and name everyone stuck behind this holder — the
+                    # blast radius, and the number that goes into the alert.
+                    WAITERS=$(kubectl get workflows -n "$NS" -o json \
+                      | jq -r --arg lock "$LOCK" --arg self "$workflow" '
+                          [ .items[]
+                            | select(.metadata.name != $self)
+                            | select(
+                                ((.status.nodes // {} | tostring) | contains($lock))
+                                or ((.status.synchronization // {} | tostring) | contains($lock))
+                              )
+                            | .metadata.name
+                          ] | unique | .[]
+                        ' 2>/dev/null || true)
+                    WAITER_COUNT=0
+                    for w in ${WAITERS:-}; do
+                      WAITER_COUNT=$((WAITER_COUNT + 1))
+                      echo "MUTEX_HOLDER_FORENSIC_BLOCKED workflow=${workflow} blocked=${w}"
+                    done
+
+                    rm -f "$HWF_FILE"
+                    kubectl annotate workflow -n "$NS" "$workflow" \
+                      "mctl.ai/mutex-holder-forensic-captured-at=${CAPTURED_AT}" --overwrite
+                    notify_holder "$workflow" "$displayname" "$pending_for" "$WAITER_COUNT"
+                    echo "MUTEX_HOLDER_FORENSIC_END workflow=${workflow} node=${nodeid} pending_seconds=${pending_for} blocked_count=${WAITER_COUNT}"
                   done
