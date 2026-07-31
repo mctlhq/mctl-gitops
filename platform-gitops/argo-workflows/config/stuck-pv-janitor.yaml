@@ -1,4 +1,13 @@
-# Daily janitor for Released PVs stuck behind an orphaned VolumeAttachment.
+# Hourly janitor for Released PVs stuck behind an orphaned VolumeAttachment.
+#
+# Cadence: hourly, not daily. Hetzner-side attach/detach wedges are frequent
+# (caught 8 times in July 2026 alone: 07-12, 07-13, 07-14, 07-16, 07-20,
+# 07-22, 07-23, 07-29) and every hour a wedged attachment survives is an hour
+# a workflow pod can sit Pending — which, on 2026-07-30, meant holding the
+# shared mctl-gitops-main-writes mutex and taking two cron cycles down with
+# it. Reporting is therefore quiet-unless-it-acted (same policy as
+# argo-pvc-janitor); a daily "kept N" message at 24x the frequency would just
+# train everyone to ignore it.
 #
 # Failure mode (seen 2026-07-05 with a failed mctl-agents-implement workdir):
 # a workflow pod dies hard (deadline kill / force delete), its PVC is
@@ -15,6 +24,31 @@
 # Bound/Available/Pending PVs are always kept. The PV object itself is never
 # deleted here — releasing the attachment is enough for the provisioner's
 # own retry loop to finish the job.
+#
+# Second pass — zombie finalizer strip:
+# `kubectl delete` above is not always sufficient. When the CSI driver that
+# owns a VolumeAttachment's finalizer no longer exists, nothing can ever
+# remove that finalizer and the delete just parks the object in Terminating
+# forever. The 2026-07-05 first manual run found 7 wedged attachments, and 6
+# of them were exactly this: Longhorn zombies carrying an
+# `external-attacher/driver-longhorn-io` finalizer with deletionTimestamps
+# from 2026-02-18/2026-03-31, pointing at long-deleted nodes (pgo/sih/vhk).
+# Longhorn has since been uninstalled entirely (enable_longhorn = false in
+# infrastructure/k3s-preview/kube.tf), so those finalizers had to be cleared
+# by hand. This pass automates only that provably-safe case, gated on ALL of:
+#
+#   - the attachment already has a deletionTimestamp (someone/something has
+#     genuinely asked for it to go), AND
+#   - that deletionTimestamp is older than 1h (never races an in-flight
+#     detach — the normal hcloud wedge self-heals in 12-24h WITHOUT any
+#     intervention, and is handled by waiting, not by this), AND
+#   - the Node in .spec.nodeName no longer exists, AND
+#   - the CSIDriver in .spec.attacher no longer exists.
+#
+# The last two together are what make it safe: a finalizer strip on a LIVE
+# driver would abandon a still-attached volume rather than detach it. If
+# either the driver or the node is still present, the attachment is left
+# strictly alone — waiting is the validated remedy for the hcloud case.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -30,9 +64,19 @@ metadata:
 rules:
   - apiGroups: ["storage.k8s.io"]
     resources: ["volumeattachments"]
-    verbs: ["get", "list", "delete"]
+    # patch: zombie finalizer strip (see the header comment for the four
+    # conditions that must all hold before a finalizer is ever removed).
+    verbs: ["get", "list", "delete", "patch"]
   - apiGroups: [""]
     resources: ["persistentvolumes"]
+    verbs: ["get", "list"]
+  # Read-only liveness checks that gate the finalizer strip: is the node the
+  # attachment points at still real, and is its CSI driver still installed?
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["csidrivers"]
     verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -54,7 +98,9 @@ metadata:
   name: stuck-pv-janitor
   namespace: argo-workflows
 spec:
-  schedule: "37 4 * * *"  # daily, offset from 03:00 backups and hourly janitors
+  # Hourly at :37 — offset from the shepherd (:00), incidents (:15), and the
+  # */15 pollers so the janitor never contends with a workflow burst.
+  schedule: "37 * * * *"
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 1
   failedJobsHistoryLimit: 3
@@ -81,8 +127,9 @@ spec:
                   cpu: 200m
                   memory: 128Mi
               env:
-                # Daily-run Telegram report (admins chat). Optional: without
-                # the secret the janitor still runs, just silently.
+                # Telegram report (admins chat) on action or failure only.
+                # Optional: without the secret the janitor still runs, just
+                # silently.
                 - name: TG_BOT_TOKEN
                   valueFrom:
                     secretKeyRef:
@@ -102,20 +149,25 @@ spec:
                   set -eu
                   ACTIONS=/tmp/actions.log
                   : > "$ACTIONS"
-                  # Daily job: report every run (success summary or failure),
-                  # so a missing message is itself a signal.
+                  # Hourly job: stay quiet on a no-op tick (same policy as
+                  # argo-pvc-janitor). Report only when the janitor actually
+                  # deleted or stripped something, or when it failed — at 24
+                  # runs a day a routine "kept N" message would be pure noise
+                  # and would bury the runs that matter.
                   notify() {
                     RC=$?
                     set +e
                     [ -n "${TG_BOT_TOKEN:-}" ] && [ -n "${TG_CHAT_ID:-}" ] || return 0
                     if [ "$RC" -eq 0 ]; then
                       DELETED=$(grep -c '^DELETE' "$ACTIONS" || true)
+                      STRIPPED=$(grep -c '^STRIP' "$ACTIONS" || true)
                       KEPT=$(grep -c '^keep' "$ACTIONS" || true)
-                      MSG="stuck-pv-janitor OK: deleted ${DELETED} wedged VolumeAttachment(s), kept ${KEPT}"
-                      if [ "${DELETED:-0}" -gt 0 ]; then
-                        MSG="${MSG}
-                  $(grep '^DELETE' "$ACTIONS")"
+                      if [ "${DELETED:-0}" -eq 0 ] && [ "${STRIPPED:-0}" -eq 0 ]; then
+                        echo "no action taken (kept ${KEPT}); skipping Telegram notify."
+                        return 0
                       fi
+                      MSG="stuck-pv-janitor: deleted ${DELETED} wedged VolumeAttachment(s), stripped ${STRIPPED} zombie finalizer(s), kept ${KEPT}
+                  $(grep -E '^(DELETE|STRIP)' "$ACTIONS")"
                     else
                       MSG="stuck-pv-janitor FAILED (exit ${RC}) — see: kubectl -n argo-workflows logs job/<latest stuck-pv-janitor job>"
                     fi
@@ -152,4 +204,48 @@ spec:
                             ;;
                         esac
                       done
+
+                  # ── Pass 2: zombie finalizer strip ────────────────────────
+                  # Only for attachments whose owning CSI driver AND target
+                  # node are both already gone. See the header comment: on a
+                  # live driver this would abandon a still-attached volume
+                  # instead of detaching it, so every gate below is mandatory.
+                  echo "--- zombie finalizer scan ---"
+                  ZOMBIE_MIN_AGE=3600
+
+                  # Snapshot what actually exists right now. An empty node or
+                  # driver list means the API call failed, not that the cluster
+                  # is empty — bail rather than treat everything as gone.
+                  LIVE_NODES=$(kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
+                  LIVE_DRIVERS=$(kubectl get csidrivers -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
+                  if [ -z "$LIVE_NODES" ] || [ -z "$LIVE_DRIVERS" ]; then
+                    # Fail closed. An empty list here is an API error, not a
+                    # cluster with no nodes/drivers, and treating it as "gone"
+                    # would strip finalizers off live attachments.
+                    echo "refusing zombie scan: node or csidriver list came back empty"
+                  else
+                    kubectl get volumeattachments -o json \
+                      | jq -r --argjson now "$NOW" --argjson minage "$ZOMBIE_MIN_AGE" '
+                          .items[]
+                          # Must already be terminating: this pass never
+                          # initiates a deletion, it only unblocks one.
+                          | select(.metadata.deletionTimestamp != null)
+                          | select((.metadata.deletionTimestamp | fromdateiso8601)
+                                   < ($now - $minage))
+                          | select(((.metadata.finalizers // []) | length) > 0)
+                          | "\(.metadata.name) \(.spec.nodeName // "-") \(.spec.attacher // "-")"' \
+                      | while read -r va node attacher; do
+                          if printf '%s\n' "$LIVE_NODES" | grep -qxF "$node"; then
+                            echo "keep   $va (node=$node still exists)" | tee -a "$ACTIONS"
+                            continue
+                          fi
+                          if printf '%s\n' "$LIVE_DRIVERS" | grep -qxF "$attacher"; then
+                            echo "keep   $va (driver=$attacher still installed)" | tee -a "$ACTIONS"
+                            continue
+                          fi
+                          echo "STRIP  $va (node=$node gone, driver=$attacher gone — terminating >1h, nothing left to reconcile it)" | tee -a "$ACTIONS"
+                          kubectl patch volumeattachment "$va" --type merge \
+                            -p '{"metadata":{"finalizers":null}}' || true
+                        done
+                  fi
                   echo "=== done ==="
