@@ -71,6 +71,38 @@ roleRef:
   name: argo-workflow-runner
   apiGroup: rbac.authorization.k8s.io
 ---
+# Let rotate-github-app-tokens force-sync mctl-agents-secrets after writing a
+# fresh installation token to Vault, instead of waiting the ExternalSecret's
+# 1h refreshInterval. The per-tenant grant in helm-charts/tenant/templates/
+# argo-workflow.yaml only covers admins/labs/nfc/ovk — argo-workflows is not
+# a tenant namespace, so this central SA had no patch right here at all.
+# Scoped to the one object by name: this SA must not be able to touch any
+# other ExternalSecret in its own namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: argo-workflow-rotate-github-token
+  namespace: argo-workflows
+rules:
+  - apiGroups: ["external-secrets.io"]
+    resources: ["externalsecrets"]
+    resourceNames: ["mctl-agents-secrets"]
+    verbs: ["patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argo-workflow-rotate-github-token
+  namespace: argo-workflows
+subjects:
+  - kind: ServiceAccount
+    name: argo-workflow-sa
+    namespace: argo-workflows
+roleRef:
+  kind: Role
+  name: argo-workflow-rotate-github-token
+  apiGroup: rbac.authorization.k8s.io
+---
 # Allow workflow SA to trigger ArgoCD sync (annotate apps for hard refresh)
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
