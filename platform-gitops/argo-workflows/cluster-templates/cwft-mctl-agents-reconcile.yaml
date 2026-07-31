@@ -36,13 +36,8 @@ spec:
   # CronWorkflow's successfulJobsHistoryLimit at the low reconcile cadence.
   ttlStrategy:
     secondsAfterCompletion: 259200
-  # Release the workdir PVC (and its 10 GB Hetzner volume) as soon as the
-  # workflow finishes — success OR failure. The Argo default
-  # (OnWorkflowSuccess) keeps a failed run's volume attached until the
-  # ttlStrategy above deletes the whole workflow (up to 14 days for the run
-  # template), which leaked ~€6 of idle detached volumes in June 2026.
-  volumeClaimGC:
-    strategy: OnWorkflowCompletion
+  # No volumeClaimGC: this workflow no longer creates a PVC at all. See the
+  # `volumes:` block below.
   # 30-min budget: GitHub projection only. It may open a PR for an already
   # pushed deterministic branch, but never runs SDK, review-fix, or merge.
   activeDeadlineSeconds: 1800
@@ -58,17 +53,32 @@ spec:
         value: "false"
         # When "true", discover + print would-be flips but write nothing.
 
-  volumeClaimTemplates:
-    - metadata:
-        name: workdir
-      spec:
-        accessModes: ["ReadWriteOnce"]
-        resources:
-          requests:
-            # 2Gi is plenty: only a shallow gitops clone. No sibling-repo
-            # clones (reconcile never forks the implementer).
-            storage: 2Gi
+  # ── No PVC ────────────────────────────────────────────────────────────────
+  # This used to be a `volumeClaimTemplates` entry requesting 2Gi, which Argo
+  # provisions as a Hetzner Cloud volume at workflow start — attach, use for
+  # ~2 minutes, detach, destroy. At 96 ticks/day that is 96 attach/detach
+  # cycles a day for a workdir that holds nothing durable: a shallow gitops
+  # clone and some .status.yaml edits.
+  #
+  # Hetzner attach/detach actions wedge (`running`/`progress:0` for 10-12h,
+  # no cancel API) and `stuck-pv-janitor` caught that 8 times in July 2026.
+  # A wedged attach leaves the pod Pending, and a Pending pod that holds
+  # `mctl-gitops-main-writes` is exactly the 2026-07-30 cascade. Removing the
+  # volume removes that entire failure mode from this workflow.
+  #
+  # An `emptyDir` at spec level gives EACH pod its own scratch dir (they are
+  # not shared — that is the whole reason the PVC existed). Cross-step state
+  # now travels as an Argo artifact instead; see `run-reconcile` below.
+  #
+  # sizeLimit + ephemeral-storage limits are the other half of the win: unlike
+  # a PVC, emptyDir counts toward kubelet's ephemeral-storage accounting, so a
+  # runaway write evicts THIS pod instead of driving the node into
+  # DiskPressure and evicting whatever else happens to share it (vault,
+  # shared-pg live on the same three CX43 workers).
   volumes:
+    - name: workdir
+      emptyDir:
+        sizeLimit: 2Gi
     - name: deploy-key
       secret:
         secretName: mctl-gitops-deploy-key
@@ -77,60 +87,97 @@ spec:
   templates:
     - name: reconcile-proposals
       steps:
-        - - name: clone
-            template: clone-gitops
         - - name: reconcile
             template: run-reconcile
-            # run_shepherd --reconcile writes .status.yaml flips to the
-            # worktree before any failure that may crash the step. Without
-            # continueOn, Argo would skip commit-and-push on non-zero exit and
-            # the repairs would never persist back to gitops main. commit
-            # handles the "no diff" case via `git diff --cached --quiet`.
-            continueOn:
-              failed: true
-              error: true
         - - name: commit
             template: commit-and-push
+            arguments:
+              artifacts:
+                - name: status-updates
+                  from: "{{steps.reconcile.outputs.artifacts.status-updates}}"
+        # run_shepherd --reconcile writes .status.yaml flips to the worktree
+        # before any failure that may crash it, and those repairs MUST still
+        # reach main — that is what the old `continueOn: {failed, error}` on
+        # the reconcile step was for.
+        #
+        # continueOn is not usable any more: cross-step state now travels as
+        # an Argo artifact, and artifact collection from a pod that exited
+        # non-zero is not a guarantee worth betting a correctness property on.
+        # So `run-reconcile` swallows its own exit code (always exits 0, always
+        # emits the artifact) and reports it as an output parameter instead.
+        # This step turns that back into a workflow failure, AFTER the commit
+        # has landed.
+        - - name: assert-reconcile
+            template: assert-exit-code
+            arguments:
+              parameters:
+                - name: exit-code
+                  value: "{{steps.reconcile.outputs.parameters.exit-code}}"
 
-    # ── 1. SSH-clone mctl-gitops into shared volume ───────────────────────
-    - name: clone-gitops
-      script:
-        image: alpine/git:2.43.0
-        command: [sh]
-        resources:
-          requests: { cpu: 50m, memory: 64Mi }
-          limits:   { cpu: 500m, memory: 256Mi }
-        source: |
-          set -e
-          apk add --no-cache openssh-client ca-certificates
-          mkdir -p ~/.ssh
-          cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  ConnectTimeout 15\n  ServerAliveInterval 5\n  ServerAliveCountMax 3\n' > ~/.ssh/config
-          chmod 600 ~/.ssh/config
-          # Pin GitHub's host key (via ssh-keyscan over 443) instead of
-          # disabling verification, so a MITM / DNS-poison of ssh.github.com
-          # is caught rather than silently trusted (StrictHostKeyChecking no).
-          # -T 10: bound the keyscan itself — a stalled TCP handshake here has
-          # no other timeout and would otherwise hang until the workflow's
-          # 30-min activeDeadlineSeconds kills the whole run (observed 2026-07-16,
-          # gitops#593 follow-up: clone-gitops pod scheduled + ran 31min before
-          # being killed by the deadline, well past any single-connection budget).
-          ssh-keyscan -T 10 -p 443 -H ssh.github.com >> ~/.ssh/known_hosts 2>/dev/null
-          # ConnectTimeout/ServerAlive* above bound a stalled SSH connection so
-          # a network blip fails in ~15-30s instead of silently eating the
-          # workflow's entire deadline.
-          git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops
-          mkdir -p /workdir/mctl-gitops/platform-gitops/agents-state
-          echo "✓ gitops cloned"
-        volumeMounts:
-          - name: workdir
-            mountPath: /workdir
-          - name: deploy-key
-            mountPath: /secrets/deploy-key
-
-    # ── 2. Run reconcile (read-only) ──────────────────────────────────────
+    # ── 1. Run reconcile (read-only) ──────────────────────────────────────
+    # `clone-gitops` used to be its own step, writing into a workdir PVC that
+    # the next two steps mounted. With the PVC gone it becomes an
+    # initContainer in each pod that needs a checkout — same script, same
+    # deploy key, just run twice (once here, once in commit-and-push) into
+    # each pod's own emptyDir.
+    #
+    # A second shallow clone costs ~2-5s. It also makes commit-and-push
+    # strictly SAFER than before: it rebases onto a checkout taken after the
+    # reconcile finished rather than one taken before it started, so the
+    # window in which main can move underneath us shrinks.
     - name: run-reconcile
+      initContainers:
+        - name: clone-gitops
+          image: alpine/git:2.43.0
+          command: [sh, -c]
+          args:
+            - |
+              set -e
+              apk add --no-cache openssh-client ca-certificates
+              mkdir -p ~/.ssh
+              cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
+              chmod 600 ~/.ssh/id_ed25519
+              printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  ConnectTimeout 15\n  ServerAliveInterval 5\n  ServerAliveCountMax 3\n' > ~/.ssh/config
+              chmod 600 ~/.ssh/config
+              # Pin GitHub's host key (via ssh-keyscan over 443) instead of
+              # disabling verification, so a MITM / DNS-poison of
+              # ssh.github.com is caught rather than silently trusted
+              # (StrictHostKeyChecking no). -T 10 bounds the keyscan itself: a
+              # stalled TCP handshake here has no other timeout and would
+              # otherwise eat the workflow's whole 30-min deadline (observed
+              # 2026-07-16, gitops#593 follow-up — the clone ran 31 min before
+              # the deadline killed it).
+              ssh-keyscan -T 10 -p 443 -H ssh.github.com >> ~/.ssh/known_hosts 2>/dev/null
+              git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops
+              mkdir -p /workdir/mctl-gitops/platform-gitops/agents-state
+              echo "gitops cloned"
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits:   { cpu: 500m, memory: 256Mi }
+          volumeMounts:
+            - name: workdir
+              mountPath: /workdir
+            - name: deploy-key
+              mountPath: /secrets/deploy-key
+      outputs:
+        parameters:
+          # The reconcile's REAL exit code. The step itself always exits 0 (see
+          # below), so this is the only thing that can fail the workflow — the
+          # assert-reconcile step reads it after commit-and-push has run.
+          - name: exit-code
+            valueFrom:
+              path: /tmp/exit-code
+              # If the pod died before writing the file (OOM, node eviction,
+              # deadline) there is nothing to commit either. Report a distinct
+              # non-zero value rather than silently passing.
+              default: "254"
+        artifacts:
+          # The .status.yaml files the reconcile wrote, at their repo-relative
+          # paths. This replaces the shared workdir PVC as the cross-step
+          # channel. Always exists (the dir is created unconditionally), so
+          # collection never fails on an empty run.
+          - name: status-updates
+            path: /tmp/status-out
       container:
         image: ghcr.io/mctlhq/mctl-agents:1.20.2
         imagePullPolicy: IfNotPresent
@@ -140,6 +187,8 @@ spec:
           - "-c"
           - |
             set -e
+            mkdir -p /tmp/status-out
+
             # Build argv via `set --` so workflow params (injected as env)
             # are separate, quoted tokens — never spliced into the shell.
             set -- python -m orchestrator.run_shepherd --reconcile
@@ -152,7 +201,44 @@ spec:
             printf '→'
             printf ' %s' "$@"
             printf '\n'
-            exec "$@"
+
+            # Deliberately NOT `exec`, and deliberately not fatal. run_shepherd
+            # --reconcile writes .status.yaml flips to the worktree before any
+            # failure that may crash it, and those repairs must still reach
+            # main. Previously that was handled by `continueOn: {failed,
+            # error}` on this step plus a shared PVC. With an artifact handoff
+            # we cannot rely on Argo collecting outputs from a pod that exited
+            # non-zero, so this step swallows the code and hands it on as an
+            # output parameter for assert-reconcile to act on.
+            set +e
+            "$@"
+            RC=$?
+            set -e
+            printf '%s' "$RC" > /tmp/exit-code
+            echo "reconcile exited ${RC}"
+
+            # Collect exactly what commit-and-push is allowed to push:
+            # .status.yaml files under agents-state that actually changed.
+            # Anything else changing there is a bug, and commit-and-push still
+            # refuses it independently.
+            cd /workdir/mctl-gitops
+            # cut -c4- (not awk $NF): --porcelain is a fixed "XY <path>"
+            # layout, so this survives paths containing spaces. reconcile
+            # never renames, so the "old -> new" rename form cannot appear.
+            CHANGED=$(git status --porcelain -- ':(glob)platform-gitops/agents-state/**/.status.yaml' | cut -c4-)
+            if [ -z "$CHANGED" ]; then
+              echo "no .status.yaml changes to hand off"
+              exit 0
+            fi
+            printf '%s\n' "$CHANGED" | while IFS= read -r f; do
+              # A deletion would leave a porcelain entry with no file on disk.
+              # reconcile only ever flips statuses, but skip rather than fail
+              # the handoff if that ever changes.
+              [ -f "$f" ] || { echo "skipping ${f} (not a regular file)"; continue; }
+              mkdir -p "/tmp/status-out/$(dirname "$f")"
+              cp -a "$f" "/tmp/status-out/$f"
+              echo "handing off $f"
+            done
         env:
           # Workflow params as env (NOT inline {{...}} in the script body —
           # that is a shell-injection vector).
@@ -189,6 +275,40 @@ spec:
       synchronization:
         mutex:
           name: mctl-gitops-main-writes
+      inputs:
+        artifacts:
+          # The .status.yaml files run-reconcile wrote, at their repo-relative
+          # paths. Unpacked here, then copied over this pod's own fresh clone.
+          - name: status-updates
+            path: /artifact
+      initContainers:
+        # Same clone as run-reconcile's init — see the comment above that
+        # template for why this is duplicated rather than shared. Note this
+        # checkout is taken AFTER the reconcile finished, so the rebase window
+        # below is strictly narrower than it was with the old shared PVC.
+        - name: clone-gitops
+          image: alpine/git:2.43.0
+          command: [sh, -c]
+          args:
+            - |
+              set -e
+              apk add --no-cache openssh-client ca-certificates
+              mkdir -p ~/.ssh
+              cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
+              chmod 600 ~/.ssh/id_ed25519
+              printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  ConnectTimeout 15\n  ServerAliveInterval 5\n  ServerAliveCountMax 3\n' > ~/.ssh/config
+              chmod 600 ~/.ssh/config
+              ssh-keyscan -T 10 -p 443 -H ssh.github.com >> ~/.ssh/known_hosts 2>/dev/null
+              git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops
+              echo "gitops cloned"
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits:   { cpu: 500m, memory: 256Mi }
+          volumeMounts:
+            - name: workdir
+              mountPath: /workdir
+            - name: deploy-key
+              mountPath: /secrets/deploy-key
       script:
         image: alpine/git:2.43.0
         command: [sh]
@@ -203,14 +323,27 @@ spec:
           chmod 600 ~/.ssh/id_ed25519
           printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  ConnectTimeout 15\n  ServerAliveInterval 5\n  ServerAliveCountMax 3\n' > ~/.ssh/config
           chmod 600 ~/.ssh/config
+
           # Pin GitHub's host key (via ssh-keyscan over 443) instead of
           # disabling verification, so a MITM / DNS-poison of ssh.github.com
           # is caught rather than silently trusted (StrictHostKeyChecking no).
           # -T 10 / ConnectTimeout / ServerAlive* above: bound every SSH
           # connection in this step so a network stall fails in ~15-30s
           # instead of silently eating the workflow's 30-min activeDeadlineSeconds
-          # (see clone-gitops step for the observed incident this fixes).
+          # (see the clone-gitops initContainer for the observed incident this
+          # fixes).
           ssh-keyscan -T 10 -p 443 -H ssh.github.com >> ~/.ssh/known_hosts 2>/dev/null
+
+          # Lay the handed-off .status.yaml files over the fresh checkout done
+          # by this pod's clone-gitops initContainer. An empty artifact means
+          # the reconcile had nothing to repair — the common case — and the
+          # "no diff" guards below then exit 0 exactly as they did before.
+          if [ -d /artifact ] && [ -n "$(ls -A /artifact 2>/dev/null)" ]; then
+            cp -a /artifact/. /workdir/mctl-gitops/
+            echo "applied handed-off status updates"
+          else
+            echo "no handed-off status updates"
+          fi
 
           cd /workdir/mctl-gitops
           git config user.name "mctl-agents[bot]"
@@ -258,6 +391,41 @@ spec:
             mountPath: /workdir
           - name: deploy-key
             mountPath: /secrets/deploy-key
+
+    # ── 3. Truthful status ────────────────────────────────────────────────
+    # run-reconcile always exits 0 so its artifact is always collected (see
+    # that template). This is what turns a real reconcile failure back into a
+    # workflow failure — and it runs AFTER commit-and-push, so a crashed
+    # reconcile still gets its partial .status.yaml repairs pushed first,
+    # which is exactly what the old `continueOn: {failed, error}` guaranteed.
+    - name: assert-exit-code
+      inputs:
+        parameters:
+          - name: exit-code
+      script:
+        image: alpine:3.19
+        command: [sh]
+        env:
+          - name: RECONCILE_EXIT_CODE
+            value: "{{inputs.parameters.exit-code}}"
+        resources:
+          requests: { cpu: 10m, memory: 32Mi }
+          limits:   { cpu: 100m, memory: 64Mi }
+        source: |
+          set -e
+          if [ "$RECONCILE_EXIT_CODE" = "0" ]; then
+            echo "reconcile succeeded"
+            exit 0
+          fi
+          if [ "$RECONCILE_EXIT_CODE" = "254" ]; then
+            echo "reconcile pod produced no exit code — it died before"
+            echo "finishing (OOM, eviction, or deadline). Any .status.yaml"
+            echo "repairs it had already written were still committed."
+            exit 1
+          fi
+          echo "reconcile failed with exit ${RECONCILE_EXIT_CODE};"
+          echo "its .status.yaml repairs were committed first."
+          exit 1
 
     # ── Telegram notification (onExit) ────────────────────────────────────
     - name: notify-telegram
