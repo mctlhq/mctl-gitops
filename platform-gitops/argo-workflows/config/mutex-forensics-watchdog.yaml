@@ -138,7 +138,7 @@ spec:
                     node=$2
                     pending_for=$3
                     waiters=$4
-                    send_telegram "⛔ Argo mutex HOLDER stuck: ${workflow} holds ${LOCK} but its step '${node}' has been Pending for ${pending_for}s (${waiters} workflow(s) queued behind it). This is the incident-2026-07-30 signature — the holder never runs, so nothing downstream can proceed. Query: MUTEX_HOLDER_FORENSIC workflow=${workflow}"
+                    send_telegram "Argo mutex HOLDER stuck: ${workflow} holds ${LOCK} but its step '${node}' has been Pending for ${pending_for}s (${waiters} workflow(s) queued behind it). This is the incident-2026-07-30 signature — the holder never runs, so nothing downstream can proceed. Query: MUTEX_HOLDER_FORENSIC workflow=${workflow}"
                   }
 
                   WF_LIST_FILE=/tmp/workflows.json
