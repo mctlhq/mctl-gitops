@@ -26,6 +26,18 @@ spec:
   serviceAccountName: argo-workflow-sa
   imagePullSecrets:
     - name: ghcr-credentials
+  # Promtail maps these pod labels to the Loki `app` and `team` labels. Argo
+  # pods otherwise cannot be found through mctl_get_service_logs during an
+  # incident (incident-17841555) — cwft-mctl-agents-run.yaml has carried these
+  # since that incident; the rest of the agent templates did not, so their pods
+  # stayed invisible to log search. They also give NetworkPolicy a selector
+  # that picks out agent pods without catching platform workflows
+  # (deploy-service, create-tenant, ...) that share this namespace and do need
+  # in-cluster egress.
+  podMetadata:
+    labels:
+      app.kubernetes.io/name: mctl-agents
+      mctl.ai/team: admins
   ttlStrategy:
     secondsAfterCompletion: 86400
   # Release the workdir PVC (and its 10 GB Hetzner volume) as soon as the
