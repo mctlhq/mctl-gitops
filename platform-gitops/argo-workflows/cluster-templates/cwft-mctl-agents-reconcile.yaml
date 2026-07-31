@@ -17,12 +17,18 @@ metadata:
       for both shepherd-owned and steward-owned repositories.
 
       Steps:
-        1. clone-gitops — SSH-clone mctl-gitops via the shared deploy key.
-        2. run-reconcile — `run_shepherd --reconcile` inside
-           ghcr.io/mctlhq/mctl-agents. Reads STATE_DIR + a GitHub PAT (read
-           only — `gh api` PR snapshots). No SDK credential needed.
-        3. commit-and-push — commits any .status.yaml transitions back to
-           gitops main (same `:(glob)` filter + mutex as the shepherd).
+        1. run-reconcile — `run_shepherd --reconcile` inside
+           ghcr.io/mctlhq/mctl-agents, after a clone-gitops initContainer
+           SSH-clones mctl-gitops into this pod's emptyDir via the shared
+           deploy key. Reads STATE_DIR + a GitHub PAT (read only — `gh api`
+           PR snapshots). No SDK credential needed. Hands the changed
+           .status.yaml files on as an Argo artifact.
+        2. commit-and-push — clones again (its own initContainer), lays the
+           artifact over that fresh checkout, and commits the .status.yaml
+           transitions to gitops main (same `:(glob)` filter + mutex as the
+           shepherd).
+        3. assert-exit-code — fails the workflow if the reconcile itself
+           failed, but only after step 2 has pushed its repairs.
 
       Triggered by:
         - cron via CronWorkflow `mctl-agents-reconcile`
@@ -32,6 +38,18 @@ spec:
   serviceAccountName: argo-workflow-sa
   imagePullSecrets:
     - name: ghcr-credentials
+  # Promtail maps these pod labels to the Loki `app` and `team` labels. Argo
+  # pods otherwise cannot be found through mctl_get_service_logs during an
+  # incident (incident-17841555) — cwft-mctl-agents-run.yaml has carried these
+  # since that incident; the rest of the agent templates did not, so their pods
+  # stayed invisible to log search. They also give NetworkPolicy a selector
+  # that picks out agent pods without catching platform workflows
+  # (deploy-service, create-tenant, ...) that share this namespace and do need
+  # in-cluster egress.
+  podMetadata:
+    labels:
+      app.kubernetes.io/name: mctl-agents
+      mctl.ai/team: admins
   # 3d TTL, matching the shepherd template, so workflow history outlives the
   # CronWorkflow's successfulJobsHistoryLimit at the low reconcile cadence.
   ttlStrategy:
