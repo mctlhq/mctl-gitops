@@ -232,6 +232,16 @@ spec:
                 - app.mctl.ai
               secretName: backstage-mctl-ai-tls
 
+        # Backstage ran under the namespace's `default` ServiceAccount, which
+        # cannot be bound to a Vault role without handing that role to every
+        # other pod that defaults into it. A dedicated identity is the
+        # prerequisite for vault-secrets-backend authenticating with its own
+        # projected token instead of a static one.
+        serviceAccount:
+          create: true
+          name: backstage
+          automountServiceAccountToken: true
+
         backstage:
           image:
             registry: ghcr.io

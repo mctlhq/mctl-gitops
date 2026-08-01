@@ -13,27 +13,47 @@ vault policy write external-secrets-read vault-policy-external-secrets-read.hcl
 ```
 
 ### backstage-teams-rw
-Used by the Backstage VAULT_TOKEN (injected via backstage-secrets ExternalSecret).
-Grants read/write access to `secret/teams/*/*` so Backstage scaffolder templates
-can manage service secrets via the /proxy/vault endpoint.
+Used by `vault-secrets-backend` in Backstage to read and write service secrets
+under `secret/teams/*/*`.
 
 ```bash
 vault policy write backstage-teams-rw vault-policy-backstage-teams-rw.hcl
 ```
 
-Create/update the Backstage Vault token with both policies:
+Backstage authenticates with the projected token of its own `backstage`
+ServiceAccount — no long-lived token, same pattern as `vault-backup` below:
+
 ```bash
+vault write auth/kubernetes/role/backstage \
+  bound_service_account_names=backstage \
+  bound_service_account_namespaces=backstage \
+  policies=backstage-teams-rw \
+  ttl=1h
+```
+
+The plugin caches the issued token until 80% of its lease has elapsed and
+re-logs in on expiry, or immediately if Vault rejects it — so a revoked token
+self-heals instead of taking the DB-credentials card down.
+
+<details>
+<summary>Legacy: static token (fallback only)</summary>
+
+Set `vaultSecrets.token` instead of `vaultSecrets.kubernetesRole` to use a
+static token. This is for local dev. Do not reintroduce it in-cluster: the
+last one was revoked with nothing to renew it, and every Vault-backed route
+returned 500 until it was reissued by hand (2026-08-01).
+
+```bash
+# NB: -no-parent does not exist in Vault 1.20 — -orphan is the flag.
 vault token create \
   -policy=backstage-teams-rw \
-  -policy=external-secrets-read \
-  -no-parent \
   -period=87600h \
   -orphan \
   -display-name=backstage
 
-# Store the new token:
 vault kv put secret/platform/backstage/vault-token token="<TOKEN>"
 ```
+</details>
 
 ### vault-backup
 Used by the `vault-backup` CronJob (namespace `vault`) to take a raft snapshot.
@@ -74,5 +94,11 @@ secret/
 └── teams/
     └── {team}/
         └── {service}       ← Service secrets (KEY=value, managed via Backstage UI)
+            /database        ← DB credentials (written by wft-provision-database)
             /repo-pat        ← Private registry PAT (optional)
+            /telegram        ← Telegram bot token (optional, openclaw intake)
 ```
+
+Note the absence of a `platform/teams/...` branch. Nothing writes one; a
+reader that assumed it existed is what broke the DB-credentials card
+(mctl-portal#51).
