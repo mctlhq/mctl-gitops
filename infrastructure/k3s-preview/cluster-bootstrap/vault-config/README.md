@@ -72,7 +72,6 @@ and revoke the static token.
 Once active, the plugin caches the issued token until 80% of its lease has
 elapsed and re-logs in on expiry, or immediately if Vault rejects it, so a
 revoked token self-heals.
-</details>
 
 ### vault-backup
 Used by the `vault-backup` CronJob (namespace `vault`) to take a raft snapshot.
