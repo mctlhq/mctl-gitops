@@ -377,21 +377,15 @@ spec:
                       authProvider: serviceAccount
                       skipTLSVerify: true
                       serviceAccountToken: ${K8S_SERVICE_ACCOUNT_TOKEN}
-            proxy:
-              endpoints:
-                /vault:
-                  target: ${VAULT_ADDR}
-                  credentials: dangerously-allow-unauthenticated
-                  headers:
-                    X-Vault-Token: ${VAULT_TOKEN}
-                  allowedMethods:
-                    - GET
-                    - POST
-                    - PUT
-                    - DELETE
-                    - PATCH
-                  allowedHeaders:
-                    - Content-Type
+            # No /vault proxy endpoint. It existed to let scaffolder templates
+            # reach Vault via http:backstage:request, but no template ever used
+            # it — and with credentials: dangerously-allow-unauthenticated it
+            # attached the backstage-teams-rw token to ANY caller, so
+            # /api/proxy/vault/v1/secret/data/teams/<team>/<svc> served (and
+            # accepted writes to) every team secret with no auth at all.
+            # Backstage's own routes are the only supported path to Vault:
+            # vault-secrets-backend authenticates the caller and checks tenant
+            # membership before reading. Do not re-add a proxy here.
             techdocs:
               builder: local
               generator:
