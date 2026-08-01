@@ -28,7 +28,6 @@ spec:
         GITHUB_APP_PRIVATE_KEY: "{{ `{{ .private_key }}` }}"
         GITHUB_APP_INSTALLATION_ID: "{{ `{{ .installation_id }}` }}"
         VAULT_ADDR: "https://secrets.mctl.ai"
-        VAULT_TOKEN: "{{ `{{ .vault_token }}` }}"
         POSTGRES_USER: "{{ `{{ .postgres_user }}` }}"
         POSTGRES_PASSWORD: "{{ `{{ .postgres_password }}` }}"
         POSTGRES_HOST: "{{ `{{ .postgres_host }}` }}"
@@ -75,10 +74,6 @@ spec:
       remoteRef:
         key: platform/github-app
         property: installation-id
-    - secretKey: vault_token
-      remoteRef:
-        key: platform/backstage/vault-token
-        property: token
     - secretKey: postgres_user
       remoteRef:
         key: platform/backstage/database
@@ -335,14 +330,14 @@ spec:
               endpoint: ${VAULT_ADDR}
               # Kubernetes auth (mctl-portal#53): the backstage ServiceAccount
               # authenticates with its own projected token via the `backstage`
-              # Vault role instead of a static one. Takes precedence over
-              # `token` below, which stays configured as an instant-rollback
-              # path — revert this one line to fall back to it. Remove `token`
-              # (and drop VAULT_TOKEN from the ExternalSecret + revoke it in
-              # Vault) only after confirming "Vault kubernetes auth succeeded"
-              # in the pod logs and that the DB-credentials card still loads.
+              # Vault role. Confirmed live 2026-08-01 ("Vault kubernetes auth
+              # succeeded" in pod logs, DB-credentials card verified working).
+              # The static token is dropped from Backstage's ExternalSecret;
+              # it is NOT revoked in Vault — mctl-api still reads the same
+              # secret/platform/backstage/vault-token (see vault-config
+              # README). A rollback means reverting this commit, not minting
+              # a new token.
               kubernetesRole: backstage
-              token: ${VAULT_TOKEN}
             argoWorkflows:
               baseUrl: https://workflows.mctl.ai
               namespace: argo-workflows
