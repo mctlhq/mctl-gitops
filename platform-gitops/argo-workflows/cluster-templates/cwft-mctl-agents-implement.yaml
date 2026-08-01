@@ -91,6 +91,20 @@ spec:
       secret:
         secretName: mctl-gitops-deploy-key
         defaultMode: 0600
+    # GITHUB_TOKEN as a static env var is fixed at pod start via secretKeyRef
+    # — fine for a short run, but this template's 7200s activeDeadlineSeconds
+    # can outlive an installation token's ~60min TTL. A Secret volume is
+    # refreshed by kubelet roughly every sync period (default ~1min)
+    # independent of pod lifetime, so mounting it and re-reading at each
+    # gh/git call (orchestrator/github_token.py:refresh_github_token, wired
+    # into run_implementer.py's _run()) stays current for the whole run. See
+    # GITHUB_TOKEN_FILE on run-implementer below.
+    - name: github-token-file
+      secret:
+        secretName: mctl-agents-secrets
+        items:
+          - key: github-token
+            path: github-token
 
   templates:
     - name: implement-proposals
@@ -301,6 +315,13 @@ spec:
                 name: mctl-agents-secrets
                 key: github-token
                 optional: true
+          # Path to the mounted Secret volume (see spec.volumes above).
+          # refresh_github_token() re-reads GITHUB_TOKEN from this file
+          # before every gh/git subprocess, so a run that outlives the
+          # token's ~60min TTL still authenticates correctly. GITHUB_TOKEN
+          # above only seeds the very first call before any refresh happens.
+          - name: GITHUB_TOKEN_FILE
+            value: /var/run/gh/github-token
           # Optional MCP token, same convention as run pipeline.
           - name: MCTL_TOKEN
             valueFrom:
@@ -343,6 +364,9 @@ spec:
         volumeMounts:
           - name: workdir
             mountPath: /workdir
+          - name: github-token-file
+            mountPath: /var/run/gh
+            readOnly: true
 
     # ── 2b. Restore Go MODULE cache from MinIO ────────────────────────────
     # Reuses the existing in-cluster MinIO (`platform-cache` bucket, same
