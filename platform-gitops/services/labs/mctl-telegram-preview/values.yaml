@@ -76,6 +76,16 @@ env:
   # traffic. Revisit this comment when the soak ends and the gate reverts.
   AGENT_ENABLED: "true"
   AGENT_KILL_SWITCH: "false"
+  # BOUNDED DRILL WINDOW (opened 2026-08-01): random_id/RecoverStuck
+  # crash-recovery drill using the TEST-ONLY fault-injection hook from
+  # mctl-telegram#351. While true, the NEXT send this pod attempts hard-exits
+  # (os.Exit 137) right after send_random_id is durably persisted and the
+  # action is CASed to `executing`, before the Telegram RPC — every send is
+  # hit, not just a chosen one. RecoverStuck's retry path (recoverOne) does
+  # NOT check this flag, so the post-crash retry completes for real; no
+  # crash-loop risk. Revert to "false" as soon as the drill's crash+recovery
+  # cycle is confirmed in the DB.
+  AGENT_TEST_CRASH_AFTER_RESERVE: "true"
 ingress:
   enabled: true
   hosts:
