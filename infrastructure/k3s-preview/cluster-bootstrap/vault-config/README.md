@@ -20,12 +20,39 @@ under `secret/teams/*/*`.
 vault policy write backstage-teams-rw vault-policy-backstage-teams-rw.hcl
 ```
 
-#### Current in-cluster auth: static token
+#### Current in-cluster auth: Kubernetes auth (switched 2026-08-01)
 
-`mctl-portal.yaml` sets `vaultSecrets.token: ${VAULT_TOKEN}`, delivered by the
-`backstage-oauth` ExternalSecret from `secret/platform/backstage/vault-token`.
-**Production depends on this token — do not delete or stop renewing it until
-the Kubernetes-auth switch below has actually landed.**
+`mctl-portal.yaml` now sets `vaultSecrets.kubernetesRole: backstage`, which
+takes precedence over `vaultSecrets.token` in `plugin.ts` (mctl-portal#53).
+Backstage authenticates with the projected token of its own `backstage`
+ServiceAccount — the same pattern as `vault-backup` below — instead of a
+long-lived static token that was revoked once with nothing to renew it, and
+took every Vault-backed route down until it was reissued by hand
+(2026-08-01 incident).
+
+```bash
+vault write auth/kubernetes/role/backstage \
+  bound_service_account_names=backstage \
+  bound_service_account_namespaces=backstage \
+  policies=backstage-teams-rw \
+  ttl=1h
+```
+
+The plugin caches the issued token until 80% of its lease has elapsed and
+re-logs in on expiry, or immediately if Vault rejects it, so a revoked token
+self-heals.
+
+#### Rollback / legacy static token (kept configured, not yet removed)
+
+`vaultSecrets.token: ${VAULT_TOKEN}` is still set in `mctl-portal.yaml` as a
+one-line rollback: since `kubernetesRole` takes precedence, deleting that one
+line falls back to the static token on the next pod restart. The token itself
+is still delivered by the `backstage-oauth` ExternalSecret from
+`secret/platform/backstage/vault-token` and **must not be revoked** until
+Kubernetes auth is confirmed working live (`Vault kubernetes auth succeeded`
+in the pod logs, DB-credentials card still loads) — only then drop
+`vaultSecrets.token` from `mctl-portal.yaml`, drop `VAULT_TOKEN` from the
+ExternalSecret, and revoke the token below.
 
 ```bash
 # NB: -no-parent does not exist in Vault 1.20 — -orphan is the flag. The
@@ -42,36 +69,6 @@ vault kv put secret/platform/backstage/vault-token token="<TOKEN>"
 Backstage reads `VAULT_TOKEN` only at startup, so after replacing it force a
 sync of the `backstage-oauth` ExternalSecret and
 `kubectl -n backstage rollout restart deploy/backstage`.
-
-#### Planned: Kubernetes auth (prepared, not yet active)
-
-The static token above is a single point of failure — it was revoked once with
-nothing to renew it, and every Vault-backed route returned 500 until it was
-reissued by hand (2026-08-01). The replacement is the same pattern as
-`vault-backup` below: Backstage authenticates with the projected token of its
-own `backstage` ServiceAccount.
-
-Prepared so far: the `backstage` ServiceAccount exists, the Vault role exists,
-and `vault-secrets-backend` supports the mode (mctl-portal#53).
-
-```bash
-vault write auth/kubernetes/role/backstage \
-  bound_service_account_names=backstage \
-  bound_service_account_namespaces=backstage \
-  policies=backstage-teams-rw \
-  ttl=1h
-```
-
-Not switched on yet: `mctl-portal.yaml` still sets `vaultSecrets.token` and no
-`vaultSecrets.kubernetesRole`. To finish the migration, release a portal image
-containing #53, set `vaultSecrets.kubernetesRole: backstage`, confirm
-`Vault kubernetes auth succeeded` in the pod logs and that the DB-credentials
-card still loads — and only then drop `VAULT_TOKEN` from the ExternalSecret
-and revoke the static token.
-
-Once active, the plugin caches the issued token until 80% of its lease has
-elapsed and re-logs in on expiry, or immediately if Vault rejects it, so a
-revoked token self-heals.
 
 ### vault-backup
 Used by the `vault-backup` CronJob (namespace `vault`) to take a raft snapshot.
