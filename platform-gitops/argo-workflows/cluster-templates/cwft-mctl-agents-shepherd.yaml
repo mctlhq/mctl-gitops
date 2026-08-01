@@ -249,6 +249,26 @@ spec:
                   # crossed into Degraded *during* this shepherd run, so
                   # is plausibly caused by a merge in step 3.
                   value: "{{workflow.creationTimestamp}}"
+        # Truthful status. shepherd + shepherd-fallback run with continueOn so
+        # any .status.yaml transition they made before crashing is still
+        # committed — but that also means a crash (e.g. five_hour 429 on both
+        # accounts, or a bug in decide()) would otherwise leave the workflow
+        # GREEN with no proposal actually advanced. Until now the only signal
+        # was /workdir/shepherd_status feeding the onExit Telegram/incident
+        # leg — a side channel notify-telegram reads, not something that
+        # fails the Argo workflow itself. Same assert-attempt pattern as
+        # cwft-mctl-agents-{run,investigate,implement}: fail unless at least
+        # one attempt actually succeeded. A genuine "nothing to shepherd this
+        # tick" run still has shepherd=Succeeded, so this never fails a
+        # legitimate no-op.
+        - - name: assert-produced
+            template: assert-attempt
+            arguments:
+              parameters:
+                - name: primary
+                  value: "{{steps.shepherd.status}}"
+                - name: fallback
+                  value: "{{steps.shepherd-fallback.status}}"
 
     # ── 1. SSH-clone mctl-gitops into shared volume ───────────────────────
     - name: clone-gitops
@@ -731,6 +751,33 @@ spec:
             | select(.status.health.status == "Degraded")
             | "\(.metadata.namespace)/\(.metadata.name)"
           ' | tr '\n' ' ' > /workdir/degraded_unfiltered.txt
+
+    # ── 4b. Assert at least one attempt succeeded ───────────────────────────
+    # Same shape as cwft-mctl-agents-investigate's assert-attempt: receives
+    # both step statuses as parameters and fails iff neither is "Succeeded".
+    # Omitted steps resolve to "Omitted" (when shepherd succeeds, the
+    # fallback is skipped) — harmless, the primary clause already passes.
+    - name: assert-attempt
+      inputs:
+        parameters:
+          - name: primary
+          - name: fallback
+      script:
+        image: alpine:3.19
+        command: [sh]
+        source: |
+          PRIMARY='{{inputs.parameters.primary}}'
+          FALLBACK='{{inputs.parameters.fallback}}'
+          echo "shepherd attempt: ${PRIMARY:-<none>}   fallback attempt: ${FALLBACK:-<none>}"
+          if [ "$PRIMARY" = "Succeeded" ] || [ "$FALLBACK" = "Succeeded" ]; then
+            echo "✓ An attempt succeeded — workflow status reflects real work."
+            exit 0
+          fi
+          echo "❌ Neither the primary attempt nor the account-2 fallback succeeded — no proposal was actually advanced this tick." >&2
+          echo "   Most often the Claude five_hour usage limit / HTTP 429 on both accounts, or token-2 unset." >&2
+          echo "   Any partial .status.yaml transition was still committed — check /workdir/shepherd_status via the" >&2
+          echo "   onExit Telegram alert for the specific failure. Re-run once quota resets." >&2
+          exit 1
 
     # ── 5. Telegram notification (onExit) ──────────────────────────────────
     # Same pattern as cwft-mctl-agents-run / cwft-mctl-agents-implement.
