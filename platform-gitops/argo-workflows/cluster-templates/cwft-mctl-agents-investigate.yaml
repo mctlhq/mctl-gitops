@@ -88,6 +88,17 @@ spec:
       secret:
         secretName: mctl-gitops-deploy-key
         defaultMode: 0600
+    # See the same volume on cwft-mctl-agents-implement.yaml: a Secret
+    # volume is refreshed by kubelet independent of pod lifetime, unlike a
+    # plain env var fixed at pod start — needed because this template's
+    # 7200s activeDeadlineSeconds can outlive an installation token's
+    # ~60min TTL. See GITHUB_TOKEN_FILE on run-investigator below.
+    - name: github-token-file
+      secret:
+        secretName: mctl-agents-secrets
+        items:
+          - key: github-token
+            path: github-token
 
   templates:
     - name: investigate-issue
@@ -262,6 +273,13 @@ spec:
                 name: mctl-agents-secrets
                 key: github-token
                 optional: true
+          # Path to the mounted Secret volume (see spec.volumes above).
+          # refresh_github_token() re-reads GITHUB_TOKEN from this file
+          # before every gh/git subprocess, so a run that outlives the
+          # token's ~60min TTL still authenticates correctly. GITHUB_TOKEN
+          # above only seeds the very first call before any refresh happens.
+          - name: GITHUB_TOKEN_FILE
+            value: /var/run/gh/github-token
           # Optional MCP token — lets the investigator inspect live service
           # metrics/status while shaping the proposal. Degrades gracefully.
           - name: MCTL_TOKEN
@@ -284,6 +302,9 @@ spec:
         volumeMounts:
           - name: workdir
             mountPath: /workdir
+          - name: github-token-file
+            mountPath: /var/run/gh
+            readOnly: true
 
     # ── 3. Commit & push back to mctl-gitops ──────────────────────────────
     # Unlike cwft-mctl-agents-implement (which only ever rewrites .status.yaml
