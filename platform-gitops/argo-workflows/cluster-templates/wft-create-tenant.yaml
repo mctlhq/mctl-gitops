@@ -333,8 +333,38 @@ spec:
           YAML
 
           # ── Create SSO RBAC SA for Argo Workflows UI ─────────────────────────
+          # rbac-rule-precedence MUST be unique per tenant SA: Argo Workflows
+          # resolves a user's SSO ServiceAccount by evaluating every SA's
+          # rbac-rule and picking the highest-precedence match. Two tenant SAs
+          # tied at the same precedence produce a non-deterministic pick for
+          # any user who belongs to both groups (root cause of the nfc/nfc2026
+          # incident, mctlhq/mctl-gitops#695). Tenant precedence lives in the
+          # 100-998 band, monotonically increasing; the platform admins SA
+          # (config/sa-and-rbac.yaml) is fixed at 1000. A count-based scheme
+          # (live tenants, or even raw file count) can REUSE a value: create
+          # tenant A (gets 103), delete some other live tenant, create tenant
+          # B — the live/file count drops back down and B gets 103 again,
+          # colliding with A. Deriving the next value from the highest
+          # precedence CURRENTLY ON DISK instead is immune to that: deletions
+          # never lower it, so a value is never handed out twice regardless of
+          # create/delete order (caught by chatgpt-codex-connector[bot] on
+          # mctlhq/mctl-gitops#696). A hard ceiling also guards against ever
+          # reaching 1000 and tying/outranking admins.
           SSO_FILE="platform-gitops/argo-workflows/sso-team-${TENANT}.yaml"
           if [ ! -f "$SSO_FILE" ]; then
+            MAX_PRECEDENCE=99
+            for f in platform-gitops/argo-workflows/sso-team-*.yaml; do
+              [ -f "$f" ] || continue
+              existing_precedence=$(sed -n 's/.*rbac-rule-precedence: "\([0-9][0-9]*\)".*/\1/p' "$f" | head -1)
+              if [ -n "$existing_precedence" ] && [ "$existing_precedence" -gt "$MAX_PRECEDENCE" ]; then
+                MAX_PRECEDENCE=$existing_precedence
+              fi
+            done
+            PRECEDENCE=$((MAX_PRECEDENCE + 1))
+            if [ "$PRECEDENCE" -ge 999 ]; then
+              echo "ERROR: next tenant SSO precedence ($PRECEDENCE) would reach the admins reserved value (1000). Bump the admins precedence in config/sa-and-rbac.yaml before creating more tenants."
+              exit 1
+            fi
             cat > "$SSO_FILE" << YAML
           # SSO RBAC: team ${TENANT} — scoped to team namespace only
           apiVersion: v1
@@ -344,7 +374,7 @@ spec:
             namespace: argo-workflows
             annotations:
               workflows.argoproj.io/rbac-rule: "'${TENANT}' in groups"
-              workflows.argoproj.io/rbac-rule-precedence: "5"
+              workflows.argoproj.io/rbac-rule-precedence: "${PRECEDENCE}"
           ---
           apiVersion: v1
           kind: Secret
