@@ -331,10 +331,12 @@ spec:
               # Kubernetes auth (mctl-portal#53): the backstage ServiceAccount
               # authenticates with its own projected token via the `backstage`
               # Vault role. Confirmed live 2026-08-01 ("Vault kubernetes auth
-              # succeeded" in pod logs, DB-credentials card verified working)
-              # — the static token this replaced is now dropped from the
-              # ExternalSecret and revoked in Vault, so there is no config
-              # fallback left; a rollback means reverting this commit.
+              # succeeded" in pod logs, DB-credentials card verified working).
+              # The static token is dropped from Backstage's ExternalSecret;
+              # it is NOT revoked in Vault — mctl-api still reads the same
+              # secret/platform/backstage/vault-token (see vault-config
+              # README). A rollback means reverting this commit, not minting
+              # a new token.
               kubernetesRole: backstage
             argoWorkflows:
               baseUrl: https://workflows.mctl.ai
