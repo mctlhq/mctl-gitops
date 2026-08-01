@@ -45,24 +45,51 @@ values. `vaultSecrets.token` and the `VAULT_TOKEN` key in the
 `backstage-oauth` ExternalSecret are gone — Backstage itself no longer reads
 `secret/platform/backstage/vault-token` at all.
 
-**The token at `secret/platform/backstage/vault-token` is NOT revoked yet.**
-`platform-gitops/bootstrap/templates/mctl-platform/mctl-api-secrets.yaml`
-reads the same Vault path into its own `VAULT_TOKEN`, which `mctl-api`
-(`cmd/api/main.go`) uses to build a live Vault client for its own reads —
-unrelated to Backstage, added for the OpenClaw onboarding path. Revoking the
-token now would break mctl-api even though Backstage is fully migrated.
-Before revoking: either issue mctl-api its own separate token/role, or
-migrate it to Kubernetes auth the same way Backstage was. Until then this
-token stays alive and is a shared credential across two consumers, not a
-Backstage-only concern anymore.
-
-**Rollback for Backstage specifically** (Kubernetes auth breaks, static
-token still valid because of the above): re-add `token: ${VAULT_TOKEN}` to
+**Rollback for Backstage specifically:** re-add `token: ${VAULT_TOKEN}` to
 `vaultSecrets` in `mctl-portal.yaml` and the `VAULT_TOKEN` /
 `secretKey: vault_token` entries to the `backstage-oauth` ExternalSecret
-(reverting this PR does both). No new token needs minting — the one at
-`secret/platform/backstage/vault-token` is still live for exactly this
-reason.
+(reverting gitops#700 does both). No new token needs minting as long as the
+token below is still live.
+
+### mctl-api-openclaw-read
+Read-only access to the one path `mctl-api` actually reads:
+`secret/teams/{team}/{component}/telegram`, checked during OpenClaw
+onboarding preflight (`handlers_openclaw.go`) to confirm a Telegram bot
+token was saved. Scoped narrower than `backstage-teams-rw` on purpose — no
+write path, no reason to grant the rest of `secret/teams/*/*`.
+
+```bash
+vault policy write mctl-api-openclaw-read vault-policy-mctl-api-openclaw-read.hcl
+```
+
+### mctl-api auth: Kubernetes auth (migration in progress)
+
+`mctl-api.yaml` sets `VAULT_KUBERNETES_ROLE: mctl-api`, which takes
+precedence over `VAULT_TOKEN` (`mctl-api-secrets.yaml`) the same way
+`kubernetesRole` does for Backstage. mctl-api already runs under its own
+dedicated `mctl-api` ServiceAccount (`helm/templates/serviceaccount.yaml` in
+the mctl-api repo) — no new identity needed, just the Vault role:
+
+```bash
+vault write auth/kubernetes/role/mctl-api \
+  bound_service_account_names=mctl-api \
+  bound_service_account_namespaces=mctl-api \
+  policies=mctl-api-openclaw-read \
+  ttl=1h
+```
+
+Not confirmed live yet. Once the image with the Kubernetes-auth support
+lands and this config change deploys: confirm `"auth":"kubernetes"` in the
+`vault client enabled` startup log line and `vault kubernetes auth
+succeeded` on first use, and exercise the OpenClaw onboarding preflight path
+(or at minimum confirm no `vault auth:` errors under load). Only after both
+Backstage AND mctl-api are confirmed on Kubernetes auth does revoking
+`secret/platform/backstage/vault-token` become safe — it is a shared
+credential between the two, not a Backstage-only concern.
+
+**Rollback for mctl-api specifically:** delete the `VAULT_KUBERNETES_ROLE`
+line from `mctl-api.yaml` — `VAULT_TOKEN` is still configured and takes
+over on the next pod restart, same one-line-revert pattern as Backstage.
 
 ### vault-backup
 Used by the `vault-backup` CronJob (namespace `vault`) to take a raft snapshot.
