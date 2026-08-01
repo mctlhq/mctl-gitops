@@ -12,7 +12,7 @@ metadata:
   namespace: argo-workflows
   annotations:
     workflows.argoproj.io/rbac-rule: "'admins' in groups"
-    workflows.argoproj.io/rbac-rule-precedence: "10"
+    workflows.argoproj.io/rbac-rule-precedence: "1000"
 ---
 apiVersion: v1
 kind: Secret

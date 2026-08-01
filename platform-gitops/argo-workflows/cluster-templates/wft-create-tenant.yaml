@@ -333,8 +333,19 @@ spec:
           YAML
 
           # ── Create SSO RBAC SA for Argo Workflows UI ─────────────────────────
+          # rbac-rule-precedence MUST be unique per tenant SA: Argo Workflows
+          # resolves a user's SSO ServiceAccount by evaluating every SA's
+          # rbac-rule and picking the highest-precedence match. Two tenant SAs
+          # tied at the same precedence produce a non-deterministic pick for
+          # any user who belongs to both groups (root cause of the nfc/nfc2026
+          # incident, mctlhq/mctl-gitops#695). Tenant precedence lives in the
+          # 100-999 band, one value per existing sso-team-*.yaml at creation
+          # time; the platform admins SA (config/sa-and-rbac.yaml) is fixed at
+          # 1000 so it always outranks every tenant regardless of count.
           SSO_FILE="platform-gitops/argo-workflows/sso-team-${TENANT}.yaml"
           if [ ! -f "$SSO_FILE" ]; then
+            EXISTING_SSO_COUNT=$(ls platform-gitops/argo-workflows/sso-team-*.yaml 2>/dev/null | wc -l | tr -d ' ')
+            PRECEDENCE=$((100 + EXISTING_SSO_COUNT))
             cat > "$SSO_FILE" << YAML
           # SSO RBAC: team ${TENANT} — scoped to team namespace only
           apiVersion: v1
@@ -344,7 +355,7 @@ spec:
             namespace: argo-workflows
             annotations:
               workflows.argoproj.io/rbac-rule: "'${TENANT}' in groups"
-              workflows.argoproj.io/rbac-rule-precedence: "5"
+              workflows.argoproj.io/rbac-rule-precedence: "${PRECEDENCE}"
           ---
           apiVersion: v1
           kind: Secret
