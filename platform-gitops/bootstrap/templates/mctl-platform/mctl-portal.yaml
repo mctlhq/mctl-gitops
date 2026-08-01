@@ -333,6 +333,15 @@ spec:
               webhookSecret: ${GITHUB_WEBHOOK_SECRET}
             vaultSecrets:
               endpoint: ${VAULT_ADDR}
+              # Kubernetes auth (mctl-portal#53): the backstage ServiceAccount
+              # authenticates with its own projected token via the `backstage`
+              # Vault role instead of a static one. Takes precedence over
+              # `token` below, which stays configured as an instant-rollback
+              # path — revert this one line to fall back to it. Remove `token`
+              # (and drop VAULT_TOKEN from the ExternalSecret + revoke it in
+              # Vault) only after confirming "Vault kubernetes auth succeeded"
+              # in the pod logs and that the DB-credentials card still loads.
+              kubernetesRole: backstage
               token: ${VAULT_TOKEN}
             argoWorkflows:
               baseUrl: https://workflows.mctl.ai
