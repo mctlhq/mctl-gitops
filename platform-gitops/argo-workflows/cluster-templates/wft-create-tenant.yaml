@@ -339,24 +339,32 @@ spec:
           # tied at the same precedence produce a non-deterministic pick for
           # any user who belongs to both groups (root cause of the nfc/nfc2026
           # incident, mctlhq/mctl-gitops#695). Tenant precedence lives in the
-          # 100-999 band, one value per existing LIVE tenant at creation time
-          # (counted below); the platform admins SA (config/sa-and-rbac.yaml)
-          # is fixed at 1000 so it always outranks every tenant regardless of
-          # count.
+          # 100-998 band, monotonically increasing; the platform admins SA
+          # (config/sa-and-rbac.yaml) is fixed at 1000. A count-based scheme
+          # (live tenants, or even raw file count) can REUSE a value: create
+          # tenant A (gets 103), delete some other live tenant, create tenant
+          # B — the live/file count drops back down and B gets 103 again,
+          # colliding with A. Deriving the next value from the highest
+          # precedence CURRENTLY ON DISK instead is immune to that: deletions
+          # never lower it, so a value is never handed out twice regardless of
+          # create/delete order (caught by chatgpt-codex-connector[bot] on
+          # mctlhq/mctl-gitops#696). A hard ceiling also guards against ever
+          # reaching 1000 and tying/outranking admins.
           SSO_FILE="platform-gitops/argo-workflows/sso-team-${TENANT}.yaml"
           if [ ! -f "$SSO_FILE" ]; then
-            # Count only sso-team files for tenants that still exist — a raw
-            # file count would over-count if any sso-team-*.yaml is ever
-            # orphaned again (e.g. a future recurrence of the delete-path bug
-            # fixed in #633), inflating precedence for no reason. Filtering by
-            # tenant directory keeps the scheme correct regardless of orphans.
-            EXISTING_SSO_COUNT=0
+            MAX_PRECEDENCE=99
             for f in platform-gitops/argo-workflows/sso-team-*.yaml; do
               [ -f "$f" ] || continue
-              existing_name=$(basename "$f" .yaml | sed 's/^sso-team-//')
-              [ -d "platform-gitops/tenants/${existing_name}" ] && EXISTING_SSO_COUNT=$((EXISTING_SSO_COUNT + 1))
+              existing_precedence=$(sed -n 's/.*rbac-rule-precedence: "\([0-9][0-9]*\)".*/\1/p' "$f" | head -1)
+              if [ -n "$existing_precedence" ] && [ "$existing_precedence" -gt "$MAX_PRECEDENCE" ]; then
+                MAX_PRECEDENCE=$existing_precedence
+              fi
             done
-            PRECEDENCE=$((100 + EXISTING_SSO_COUNT))
+            PRECEDENCE=$((MAX_PRECEDENCE + 1))
+            if [ "$PRECEDENCE" -ge 999 ]; then
+              echo "ERROR: next tenant SSO precedence ($PRECEDENCE) would reach the admins reserved value (1000). Bump the admins precedence in config/sa-and-rbac.yaml before creating more tenants."
+              exit 1
+            fi
             cat > "$SSO_FILE" << YAML
           # SSO RBAC: team ${TENANT} — scoped to team namespace only
           apiVersion: v1
