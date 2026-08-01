@@ -66,9 +66,15 @@ env:
   # in the plan doc). Kill switch is OFF so propose_reply can actually draft
   # (confirmed live: with it on, propose_reply denies outright at the policy
   # layer before ever reaching pending_approval — it is not just a send-time
-  # gate). Safety instead comes from agent_profiles.mode=observe +
-  # autopilot_paused=true (DB-level, not here): policy.Evaluate always
-  # returns RequireApproval in observe mode regardless of the kill switch, so
+  # gate). Safety comes from agent_profiles.mode=observe AND
+  # autopilot_paused=false (DB-level, not here — see internal/agent/policy/
+  # policy.go): these are two SEPARATE gates, not one. autopilot_paused=true
+  # is an unconditional hard DENY checked before mode is even read — it does
+  # NOT downgrade to require-approval, so leaving it true (as an earlier
+  # version of this comment incorrectly claimed) silently blocks every draft
+  # with zero owner-visible signal, confirmed live 2026-08-01 (action id 42,
+  # "autopilot paused for this account"). mode=observe is the actual
+  # downgrade-to-RequireApproval gate ("observe mode: never auto-send"), so
   # every drafted reply still sits in pending_approval until the owner
   # manually /mctl approve's it — nothing sends autonomously during this
   # soak. sender_allowlist is empty (allow-all) so real inbound DMs to the
@@ -76,16 +82,6 @@ env:
   # traffic. Revisit this comment when the soak ends and the gate reverts.
   AGENT_ENABLED: "true"
   AGENT_KILL_SWITCH: "false"
-  # BOUNDED DRILL WINDOW (opened 2026-08-01): random_id/RecoverStuck
-  # crash-recovery drill using the TEST-ONLY fault-injection hook from
-  # mctl-telegram#351. While true, the NEXT send this pod attempts hard-exits
-  # (os.Exit 137) right after send_random_id is durably persisted and the
-  # action is CASed to `executing`, before the Telegram RPC — every send is
-  # hit, not just a chosen one. RecoverStuck's retry path (recoverOne) does
-  # NOT check this flag, so the post-crash retry completes for real; no
-  # crash-loop risk. Revert to "false" as soon as the drill's crash+recovery
-  # cycle is confirmed in the DB.
-  AGENT_TEST_CRASH_AFTER_RESERVE: "true"
 ingress:
   enabled: true
   hosts:
