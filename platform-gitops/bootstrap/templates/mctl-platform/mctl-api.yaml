@@ -38,6 +38,13 @@ spec:
             DEX_CLIENT_ID: mctl-api
             SELF_URL: https://api.mctl.ai
             VAULT_ADDR: https://secrets.mctl.ai
+            # Kubernetes auth (mirrors the Backstage migration, gitops#699):
+            # the mctl-api ServiceAccount authenticates with its own
+            # projected token via the `mctl-api` Vault role, taking
+            # precedence over VAULT_TOKEN below (mctl-api-secrets.yaml),
+            # which stays configured as an instant-rollback path until
+            # confirmed working live.
+            VAULT_KUBERNETES_ROLE: mctl-api
             # OAuth 2.0 for Claude.ai custom connector (PKCE, public client)
             # Secrets (OAUTH_GITHUB_CLIENT_ID, OAUTH_GITHUB_CLIENT_SECRET, OAUTH_JWT_SECRET)
             # come from mctl-api-secrets (Vault: platform/mctl-api/oauth-github)
