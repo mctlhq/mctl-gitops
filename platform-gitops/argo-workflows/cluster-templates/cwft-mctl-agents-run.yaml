@@ -176,7 +176,7 @@ spec:
           - name: is-fallback
             value: "false"
       container:
-        image: ghcr.io/mctlhq/mctl-agents:1.20.2
+        image: ghcr.io/mctlhq/mctl-agents:1.21.0
         imagePullPolicy: IfNotPresent
         # Explicit command + args so Argo's emissary executor doesn't need
         # to introspect the registry for ENTRYPOINT/CMD.
