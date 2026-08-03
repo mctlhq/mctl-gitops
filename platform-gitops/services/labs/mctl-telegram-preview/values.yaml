@@ -23,8 +23,12 @@ service:
 backstage:
   kubernetesId: mctl-telegram-preview
 resources:
+  # Right-sized 2026-08-03 (CPU request only): p95 28m/max 53m over 24h —
+  # no burst rationale was ever applied to the request, only the cpu limit
+  # below. Memory left untouched: max is 152MB (~30%) of the 512Mi limit,
+  # at the trim threshold, not idle enough to cut.
   requests:
-    cpu: 200m
+    cpu: 50m
     memory: 256Mi
   limits:
     # MTProto DH handshake is CPU-heavy; same headroom as stable.

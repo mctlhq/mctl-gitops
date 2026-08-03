@@ -31,7 +31,13 @@ resources:
     cpu: 250m
     memory: 768Mi
   limits:
-    cpu: 3000m
+    # Right-sized 2026-08-03: VictoriaMetrics history (24h) showed real
+    # usage of 0.11-0.12 cores max — the 3000m limit was pure unused quota
+    # ceiling, and combined with the s3-sync (2000m) + skills-fanout (300m)
+    # sidecars it accounted for 5350m/6000m (89%) of the tenant's
+    # limits.cpu quota. Trimmed to 1000m, ~8x real max, still comfortable
+    # burst headroom.
+    cpu: 1000m
     # Memory limit was 3.33x the request; tenant quota usage showed this
     # headroom unused. Trimmed to base-service's default 2x ratio to free
     # quota ceiling for onboarding more tenants (2026-07).

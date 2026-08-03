@@ -21,7 +21,10 @@ resources:
     memory: 128Mi
     ephemeral-storage: 128Mi
   limits:
-    cpu: 500m
+    # Right-sized 2026-08-03: p95 51m/max 100m over 24h — 300m keeps ~3x
+    # headroom over the observed max. Memory left untouched (max 161MB is
+    # already 63% of the 256Mi request, no room to trim).
+    cpu: 300m
     memory: 256Mi
     ephemeral-storage: 1Gi
 automountServiceAccountToken: false

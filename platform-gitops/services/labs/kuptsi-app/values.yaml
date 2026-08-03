@@ -13,11 +13,14 @@ service:
 backstage:
   kubernetesId: kuptsi-app
 resources:
+  # Right-sized 2026-08-03 (CPU only): p95 15m/max 17m over 24h — 200m limit
+  # still leaves ~12x headroom. Memory left untouched: real usage (257MB) is
+  # ~50% of the 512Mi limit, genuinely used, not idle headroom.
   requests:
-    cpu: 200m
+    cpu: 75m
     memory: 256Mi
   limits:
-    cpu: 500m
+    cpu: 200m
     memory: 512Mi
 # NOTE: do NOT let mctl_deploy_service stomp this block on tag bump — the
 # uvicorn entrypoint in kuptsi-app needs HOST/PORT/WEB_CONCURRENCY or it
