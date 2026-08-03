@@ -21,10 +21,17 @@ resources:
     memory: 128Mi
     ephemeral-storage: 128Mi
   limits:
-    # Right-sized 2026-08-03: p95 51m/max 100m over 24h — 300m keeps ~3x
-    # headroom over the observed max. Memory left untouched (max 161MB is
-    # already 63% of the 256Mi request, no room to trim).
-    cpu: 300m
+    # CORRECTED 2026-08-03: the 300m trim earlier today (based on a 24h p95
+    # of 51m/max 100m) caused real CPU-throttling alerts within hours —
+    # this worker shells out to `claude` CLI in short bursts that a ~7.5min
+    # metrics-scrape resolution doesn't reliably capture, in ANY lookback
+    # window (7d max is 208.5m, already 2x the 24h figure, and the pre-
+    # existing throttling alerts from 08-01/08-02 fired at the OLD 500m
+    # limit — so even 500m wasn't consistently enough). Set to 1000m,
+    # meaningfully above the previous 500m rather than just reverting to
+    # it, since 500m demonstrably still throttled sometimes. Do not trim
+    # this again from a steady-state p95/max sample alone.
+    cpu: 1000m
     memory: 256Mi
     ephemeral-storage: 1Gi
 automountServiceAccountToken: false
