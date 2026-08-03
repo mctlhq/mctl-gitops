@@ -13,7 +13,10 @@ strategy:
 terminationGracePeriodSeconds: 60
 resources:
   requests:
-    cpu: 250m
+    # Right-sized 2026-08-03: p95 59m over 24h — no burst rationale was ever
+    # applied to the request (only the limit below), so trimmed 250m→150m,
+    # still ~2.5x measured p95. Limit is untouched, see comment below.
+    cpu: 150m
     memory: 512Mi
   limits:
     # PR-steward agent runs spike past 1000m and get CFS-throttled. Raised

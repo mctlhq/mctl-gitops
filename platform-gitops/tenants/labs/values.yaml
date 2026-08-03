@@ -55,7 +55,10 @@ tenant:
     # tenant has the documented history of workflow pods stuck Pending when
     # headroom got too tight.
     limits.memory: "10.5Gi"
-    pods: "15"
+    # Bumped 2026-08-03: 11/15 services already deployed, no room to onboard
+    # more without hitting the pod ceiling first. Raised pods 15 → 25 ahead
+    # of the services quota becoming the binding constraint.
+    pods: "25"
     persistentvolumeclaims: "2"
     services: "15"
   limitRange:

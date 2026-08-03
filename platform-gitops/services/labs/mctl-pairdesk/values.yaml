@@ -13,12 +13,15 @@ service:
 backstage:
   kubernetesId: mctl-pairdesk
 resources:
+  # Right-sized 2026-08-03: p95 1.5m/42MB over 24h, was still at untouched
+  # chart defaults (<20% of limit used). Trimmed with generous headroom
+  # over measured max.
   requests:
-    cpu: 200m
-    memory: 256Mi
+    cpu: 50m
+    memory: 128Mi
   limits:
-    cpu: 500m
-    memory: 512Mi
+    cpu: 150m
+    memory: 256Mi
 env:
   APP_ENV: production
   SERVICE_VERSION: "0.2.0"

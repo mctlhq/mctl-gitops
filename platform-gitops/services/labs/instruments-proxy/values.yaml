@@ -13,12 +13,15 @@ service:
 backstage:
   kubernetesId: instruments-proxy
 resources:
+  # Right-sized 2026-08-03: p95 12m/44MB over 24h, was still at untouched
+  # chart defaults (<10% of limit used). Trimmed with ~4-15x headroom over
+  # measured max.
   requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
     cpu: 200m
     memory: 256Mi
-  limits:
-    cpu: 500m
-    memory: 512Mi
 env:
   APP_ENV: production
   # Advertised version string (/readyz, /__status, API index). The app's code
