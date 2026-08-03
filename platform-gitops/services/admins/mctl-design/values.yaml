@@ -13,12 +13,14 @@ service:
 backstage:
   kubernetesId: mctl-design
 resources:
+  # Right-sized 2026-08-03: static site, p95 0.17m/max 0.2m CPU, 8.4MB/8.6MB
+  # mem over 24h — was still at untouched chart defaults.
   requests:
-    cpu: 200m
-    memory: 256Mi
+    cpu: 50m
+    memory: 128Mi
   limits:
-    cpu: 500m
-    memory: 512Mi
+    cpu: 150m
+    memory: 256Mi
 env:
   APP_ENV: production
 ingress:

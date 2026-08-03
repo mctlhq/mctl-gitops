@@ -46,7 +46,13 @@ resources:
     cpu: 250m
     memory: 768Mi
   limits:
-    cpu: 4000m
+    # Right-sized 2026-08-03: steady-state p95/max is only 186m/193m, but
+    # the 2026-05-01 startup-burst incident above (1396m/1500m, 239
+    # restarts/22h) is the real constraint here, not steady-state load.
+    # Trimmed 4000m -> 3000m, keeping ~1600m headroom over that documented
+    # peak — NOT trimmed further like ovk/labs (1000m would reintroduce
+    # the exact crash-loop this comment describes).
+    cpu: 3000m
     # Memory limit was 3.33x the request; tenant quota usage showed this
     # headroom unused. Trimmed to base-service's default 2x ratio to free
     # quota ceiling for onboarding more tenants (2026-07).
