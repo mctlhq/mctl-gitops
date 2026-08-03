@@ -14,12 +14,14 @@ service:
   # value, so it must change together with the image tag.
   port: 80
 resources:
+  # Right-sized 2026-08-03: p95 0.2m/max 0.51m CPU, 14.4MB/14.4MB mem over
+  # 24h — was still at untouched chart defaults.
   requests:
-    cpu: 100m
-    memory: 256Mi
+    cpu: 50m
+    memory: 128Mi
   limits:
-    cpu: 250m
-    memory: 512Mi
+    cpu: 150m
+    memory: 256Mi
 env:
   APP_ENV: production
   t: "123"
