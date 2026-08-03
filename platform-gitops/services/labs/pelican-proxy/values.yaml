@@ -13,15 +13,18 @@ service:
 backstage:
   kubernetesId: pelican-proxy
 resources:
-  # Right-sized 2026-08-03: p95 8.5m/32MB over 24h, was still at untouched
-  # chart defaults (<10% of limit used). Trimmed with generous headroom
-  # over measured max.
+  # CORRECTED 2026-08-03: the 24h sample used for the first trim (p95
+  # 8.5m/32MB) badly understated real usage — a 7d pull shows max 71.7m
+  # CPU / 182MB mem, p95 163MB mem (already ~60% of the 256Mi limit set
+  # a few hours earlier). That trim triggered a real CPU-throttling alert
+  # within ~20min of rollout. Re-set with margin over the 7d max instead
+  # of the 24h one: ~4x CPU, ~1.9x mem over the 7d peak.
   requests:
-    cpu: 50m
-    memory: 128Mi
+    cpu: 75m
+    memory: 192Mi
   limits:
-    cpu: 150m
-    memory: 256Mi
+    cpu: 300m
+    memory: 512Mi
 env:
   APP_ENV: production
   CATALOG_INGEST_URL: https://pelican-catalog-worker.pelican-libertex.workers.dev/__ingest
