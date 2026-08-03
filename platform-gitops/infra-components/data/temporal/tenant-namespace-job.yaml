@@ -96,9 +96,37 @@ spec:
               # ── Tenant namespaces ─────────────────────────────────────────
               register_ns kuptsi 7
 
+              # Platform namespace for the mctl-agents dev-workflow control
+              # plane (DevLoopWorkflow: issue -> investigate -> approve ->
+              # implement -> review -> merge). 30d retention, vs kuptsi's 7:
+              # a dev loop can sit for days waiting on human approval, and the
+              # closed-workflow history is what answers "which agent version
+              # produced this PR" during a post-mortem. The durable record
+              # lives in the agent registry (mctl-api), so this is a debugging
+              # convenience window, not the system of record.
+              register_ns mctl-agents 30
+
               # ── Tenant search attributes ──────────────────────────────────
               # Add new entries when a tenant workflow needs to be queryable
               # by a custom attribute (Temporal-side equivalent of an index).
               # kuptsi-app tags TelegramAlbumWorkflow with LeadId for ops-time
               # filtering in Temporal Web UI and the failed-workflow monitor.
               register_sa kuptsi LeadId Keyword
+
+              # mctl-agents: filter dev-loop workflows in the Web UI by the
+              # repo they act on, the issue that started them, and the agent
+              # version that was pinned at start. AgentVersion in particular
+              # is what makes "show me everything that ran the bad prompt"
+              # answerable without a database query.
+              #
+              # On the very first sync these run seconds after the namespace
+              # above was created, and Temporal may not have propagated it to
+              # every host yet — search-attribute create can fail with an
+              # unknown-namespace error. That is expected and self-healing:
+              # set -e fails the Job, backoffLimit 5 retries it, and both
+              # helpers are idempotent so the retry is a no-op for whatever
+              # already succeeded. Only a persistent failure across all five
+              # attempts is a real problem.
+              register_sa mctl-agents Service Keyword
+              register_sa mctl-agents IssueNumber Int
+              register_sa mctl-agents AgentVersion Keyword
