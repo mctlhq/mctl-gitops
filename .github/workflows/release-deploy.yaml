@@ -169,7 +169,36 @@ jobs:
             exit 0
           fi
           git commit -m "chore: bump ${TEAM}/${SERVICE} to ${NEW_TAG}"
-          git push
+
+          # Concurrent release-deploy runs race to push here — e.g. a repo that
+          # ships two images from a single push to main (mctl-telegram builds
+          # both the server and the agent-worker), or two repos releasing at the
+          # same moment. A bare `git push` means the loser fails non-fast-forward
+          # AFTER its image is already in GHCR: the tag bump never lands, so the
+          # deploy silently doesn't happen and only the build looks green.
+          # Rebase and retry instead. This is safe because every bump commit
+          # rewrites exactly one image.tag line in one file — concurrent bumps
+          # for different services never conflict textually, and two for the
+          # same service converge on whichever tag pushed last.
+          for attempt in 1 2 3 4 5; do
+            if git push; then
+              exit 0
+            fi
+            if [[ "${attempt}" -eq 5 ]]; then
+              break
+            fi
+            echo "::notice::push rejected (attempt ${attempt}/5), rebasing onto origin/main"
+            # Jitter, not a flat backoff: two runs that collided once would
+            # otherwise wake up together and collide again.
+            sleep $(( attempt * 3 + RANDOM % 4 ))
+            if ! git pull --rebase origin main; then
+              git rebase --abort || true
+              echo "::error::tag bump for ${TEAM}/${SERVICE} conflicts with origin/main; not retrying"
+              exit 1
+            fi
+          done
+          echo "::error::could not push tag bump for ${TEAM}/${SERVICE} after 5 attempts"
+          exit 1
 
       - name: Summary
         run: |
