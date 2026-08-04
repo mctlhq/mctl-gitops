@@ -70,6 +70,19 @@ spec:
         value: ""
         # Required only when mode=single-service. Validated by the Python
         # orchestrator against config/settings.py SERVICES (exit 1 on mismatch).
+      - name: agent_image
+        value: ghcr.io/mctlhq/mctl-agents:1.21.0
+        # Default = today's pin, so submitting without this parameter is a
+        # zero-behaviour-change no-op. Overridden by the agent registry's
+        # resolved image_ref once a caller starts pinning per-run.
+        # cwft-mctl-agents-daily (weekly cron) references this template via
+        # workflowTemplateRef without overriding this param, so it inherits
+        # this default unchanged — no separate edit needed there.
+      - name: agent_version
+        value: ""
+        # Registry version string, carried for the record only — not
+        # consumed by the orchestrator. Left blank by any caller not yet
+        # using the registry.
 
   volumeClaimTemplates:
     - metadata:
@@ -176,7 +189,7 @@ spec:
           - name: is-fallback
             value: "false"
       container:
-        image: ghcr.io/mctlhq/mctl-agents:1.21.0
+        image: "{{workflow.parameters.agent_image}}"
         imagePullPolicy: IfNotPresent
         # Explicit command + args so Argo's emissary executor doesn't need
         # to introspect the registry for ENTRYPOINT/CMD.
