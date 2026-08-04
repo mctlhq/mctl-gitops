@@ -121,6 +121,16 @@ spec:
         # would-be transitions but does NOT invoke the implementer
         # subprocess and does NOT call `gh pr merge`. Useful for
         # operator dry runs and local smoke tests.
+      - name: agent_image
+        value: ghcr.io/mctlhq/mctl-agents:1.21.0
+        # Default = today's pin, so submitting without this parameter is a
+        # zero-behaviour-change no-op. Overridden by the agent registry's
+        # resolved image_ref once a caller starts pinning per-run.
+      - name: agent_version
+        value: ""
+        # Registry version string, carried for the record only — not
+        # consumed by run-shepherd. Left blank by any caller not yet
+        # using the registry.
 
   volumeClaimTemplates:
     - metadata:
@@ -326,7 +336,7 @@ spec:
           - name: is-fallback
             value: "false"
       container:
-        image: ghcr.io/mctlhq/mctl-agents:1.21.0
+        image: "{{workflow.parameters.agent_image}}"
         imagePullPolicy: IfNotPresent
         command: ["/entrypoint.sh"]
         args:
