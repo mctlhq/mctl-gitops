@@ -141,6 +141,8 @@ spec:
               parameters:
                 - name: oauth-key
                   value: claude-code-oauth-token
+                - name: is-fallback
+                  value: "false"
             # run_implementer.py writes .status.yaml updates (in-progress →
             # implemented/error) to the worktree BEFORE any failure that may
             # crash the step. Without continueOn, Argo would skip commit-and-push
@@ -154,6 +156,29 @@ spec:
             # exits (Failed) from pod-level errors like OOMKilled / deadline /
             # controller errors (Error). Both can leave partial .status.yaml
             # writes, so commit-and-push must run in either case.
+            continueOn:
+              failed: true
+              error: true
+        # Fallback retry on a SECOND Claude account, mirroring
+        # cwft-mctl-agents-run / -investigate / -shepherd / -issue-poll: if
+        # the primary attempt did not succeed (most commonly the account-1
+        # OAuth token hitting its five_hour/seven_day usage limit → HTTP
+        # 429), retry once on the account-2 token `claude-code-oauth-token-2`.
+        # Previously this CWFT had no fallback at all — a quota-exhausted
+        # primary token aborted the whole implement step with no retry,
+        # discovered 2026-08-05 when the phase-4 DevLoopWorkflow E2E
+        # verification hit exactly this gap. If token-2 is not seeded the
+        # fallback fails (exit 1) so the run reports Failed instead of being
+        # masked as success.
+        - - name: implement-fallback
+            template: run-implementer
+            when: "{{steps.implement.status}} != Succeeded"
+            arguments:
+              parameters:
+                - name: oauth-key
+                  value: claude-code-oauth-token-2
+                - name: is-fallback
+                  value: "true"
             continueOn:
               failed: true
               error: true
@@ -186,6 +211,8 @@ spec:
               parameters:
                 - name: primary
                   value: "{{steps.implement.status}}"
+                - name: fallback
+                  value: "{{steps.implement-fallback.status}}"
 
     # ── 1. SSH-clone mctl-gitops into shared volume ───────────────────────
     - name: clone-gitops
@@ -223,9 +250,15 @@ spec:
       inputs:
         parameters:
           # Which Vault key under mctl-agents-secrets holds the OAuth token for
-          # this run. The workflow performs exactly one bounded attempt.
+          # this run. Primary step passes claude-code-oauth-token; the
+          # fallback step passes claude-code-oauth-token-2 (a second
+          # account). Same convention as cwft-mctl-agents-run/-investigate.
           - name: oauth-key
             value: claude-code-oauth-token
+          # "true" only for the fallback retry: fail loudly if token-2 is
+          # absent instead of masking the double-failure as success.
+          - name: is-fallback
+            value: "false"
       # run_implementer discovers accepted proposals and only then persists
       # the in-progress claim inside implement_one(). Keep that discovery and
       # claim serialized across implementer workflows; otherwise two cron or
@@ -245,6 +278,16 @@ spec:
           - "-c"
           - |
             set -e
+            # Fallback retry (account 2): only fires when the primary attempt
+            # did not succeed. If the fallback token is unset, fail loudly so
+            # the run reports Failed instead of being masked as success.
+            if [ "$IS_FALLBACK" = "true" ]; then
+              if [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+                echo "❌ Primary implement failed and no fallback token (claude-code-oauth-token-2) is set — cannot fall back." >&2
+                exit 1
+              fi
+              echo "↻ Primary implement did not succeed — retrying on fallback OAuth token (account 2)."
+            fi
             if [ "$WORKFLOW_FORCE" = "true" ]; then
               echo "❌ force=true is no longer supported." >&2
               echo "   Review needs-triage, then move only that proposal back to accepted." >&2
@@ -279,6 +322,8 @@ spec:
             printf '\n'
             exec "$@"
         env:
+          - name: IS_FALLBACK
+            value: "{{inputs.parameters.is-fallback}}"
           # Workflow params injected as env vars so the shell layer can quote
           # them safely. Direct `workflow.parameters.*` (Argo template syntax) interpolation in
           # the script body is a shell-injection vector.
@@ -302,9 +347,12 @@ spec:
           # doesn't exist Python's mkstemp / mkdtemp will error.
           - name: TMPDIR
             value: /workdir/clones
-          # Auth: OAuth (Claude Pro/Max). A missing/invalid token aborts the
-          # workflow without changing accepted proposals; no second account
-          # is consumed automatically.
+          # Auth: OAuth (Claude Pro/Max). Key is parameterized: primary uses
+          # claude-code-oauth-token, the fallback step uses
+          # claude-code-oauth-token-2. optional:true lets the fallback pod
+          # schedule when token-2 is absent (the guard script then exits 1);
+          # a missing PRIMARY token still fails loudly at SDK auth without
+          # changing accepted proposals.
           - name: CLAUDE_CODE_OAUTH_TOKEN
             valueFrom:
               secretKeyRef:
@@ -609,18 +657,20 @@ spec:
       inputs:
         parameters:
           - name: primary
+          - name: fallback
       script:
         image: alpine:3.19
         command: [sh]
         source: |
           PRIMARY='{{inputs.parameters.primary}}'
-          echo "implementer attempt: ${PRIMARY:-<none>}"
-          if [ "$PRIMARY" = "Succeeded" ]; then
-            echo "✓ The bounded attempt succeeded."
+          FALLBACK='{{inputs.parameters.fallback}}'
+          echo "primary attempt: ${PRIMARY:-<none>}   fallback attempt: ${FALLBACK:-<none>}"
+          if [ "$PRIMARY" = "Succeeded" ] || [ "$FALLBACK" = "Succeeded" ]; then
+            echo "✓ An attempt succeeded — workflow status reflects real work."
             exit 0
           fi
-          echo "❌ Implementer failed; inspect the durable needs-triage reason." >&2
-          echo "   No fallback account or unfiltered retry was started." >&2
+          echo "❌ Neither the primary attempt nor the account-2 fallback succeeded; inspect the durable needs-triage reason." >&2
+          echo "   Most often the Claude five_hour/seven_day usage limit / HTTP 429 on both accounts, or token-2 unset." >&2
           exit 1
 
     # ── 4. Telegram notification (onExit) ──────────────────────────────────
