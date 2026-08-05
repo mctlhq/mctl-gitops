@@ -1,6 +1,6 @@
-status: accepted
-updated_at: '2026-08-05T13:40:00Z'
-updated_by: claude-code-e2e-verification
+status: needs-triage
+updated_at: '2026-08-05T14:33:50Z'
+updated_by: mctl-agents[bot]
 source:
   type: github_issue
   repo: mctlhq/mctl-design
@@ -8,3 +8,13 @@ source:
   url: https://github.com/mctlhq/mctl-design/issues/20
 control:
   requires_human_approval: true
+attempt:
+  id: 6e34eeff-8aa4-44f1-9871-ca4b21bc0006
+  started_at: '2026-08-05T14:33:45Z'
+  expires_at: '2026-08-05T16:43:45Z'
+  finished_at: '2026-08-05T14:33:50Z'
+failure:
+  code: no-commits
+  stage: agent
+  message: implementer produced no commits
+notes: 'agent: implementer produced no commits'
