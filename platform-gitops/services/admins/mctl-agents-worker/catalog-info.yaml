@@ -1,0 +1,35 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: mctl-agents-worker
+  namespace: admins
+  description: "Temporal worker for the dev-workflow control plane (DevLoopWorkflow)"
+  annotations:
+    backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=admins-mctl-agents-worker
+    backstage.io/kubernetes-id: mctl-agents-worker
+    backstage.io/kubernetes-namespace: admins
+    argocd/app-name: admins-mctl-agents-worker
+    github.com/source-repo: mctlhq/mctl-agents
+    # mctl.me/auto-deploy — triggered by GitHub App webhook on tag push
+    #   "true" or "auto" — deploy immediately via scaffolder
+    #   "confirm"         — notify only, user deploys manually from UI
+    #   "false" or absent — skip
+    mctl.me/auto-deploy: "false"
+  links:
+    - url: https://ops.mctl.ai/applications/argocd/admins-mctl-agents-worker
+      title: ArgoCD
+      icon: dashboard
+    - url: https://github.com/mctlhq/mctl-agents
+      title: Source Repository
+      icon: github
+    - url: https://workflows.mctl.ai
+      title: Argo Workflows
+      icon: github
+  labels:
+    team: admins
+    env: apps
+spec:
+  type: worker
+  lifecycle: production
+  owner: group:default/admins
+  system: system:default/team-admins

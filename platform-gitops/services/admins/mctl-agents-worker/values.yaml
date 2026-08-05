@@ -1,0 +1,81 @@
+# Worker: mctl-agents-worker
+# Team: admins
+# Chart: base-service (ingress disabled)
+#
+# Temporal worker for the dev-workflow control plane (plan phase 4):
+# DevLoopWorkflow (issue -> investigate -> approve -> implement) plus its
+# activities (resolve_agent_release, submit_and_wait, record_execution).
+# Rides the same ghcr.io/mctlhq/mctl-agents image every CWFT already uses,
+# with a different command — no separate build. Unlike kuptsi-app's
+# temporal-worker (a sibling container on an HTTP service), this is a
+# standalone Deployment: nothing here serves inbound traffic, so there is
+# no main container to ride alongside.
+#
+# replicaCount is 0 on purpose until this note is removed: orchestrator/temporal/
+# first ships in mctl-agents PR #105 (mctlhq/mctl-agents#105), not yet in any
+# tagged release as of this file's creation. Deploying at image.tag 1.21.0
+# today would crash-loop on `python -m orchestrator.temporal.worker` (module
+# does not exist in that image). Bump replicaCount to 1 AND image.tag to the
+# first release that includes PR #105 in the same change — do not split those
+# two edits across commits, or the window between them is exactly the
+# crash-loop this comment exists to avoid.
+replicaCount: 0
+image:
+  repository: ghcr.io/mctlhq/mctl-agents
+  tag: "1.21.0"
+imagePullSecrets:
+  - name: ghcr-credentials
+command: ["python", "-m", "orchestrator.temporal.worker"]
+ingress:
+  enabled: false
+# The chart's own values.yaml defaults probes.liveness/readiness to
+# httpGet /healthz and /readyz — fine for an HTTP service, fatal here: this
+# worker is a pure asyncio process with no HTTP server at all, so an
+# inherited default would CrashLoopBackOff it against a port nothing
+# listens on. Helm deep-merges values.yaml files, so `probes: {}` merges
+# nothing away and the chart defaults survive untouched (verified via `helm
+# template`) — each leaf must be nulled individually instead. `probes:
+# null` outright (tried first) also fails: the deployment template
+# dereferences .Values.probes.startup unconditionally before checking
+# truthiness, which errors on a nil .Values.probes even though startup has
+# no chart default to begin with.
+probes:
+  liveness: null
+  readiness: null
+resources:
+  # Light footprint on purpose: this process only polls HTTP endpoints
+  # (mctl-api, Temporal frontend) — it never spawns the Claude Code CLI or
+  # clones a repo, unlike agent-worker-preview or the Argo CWFT pods.
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+automountServiceAccountToken: false
+# No podSecurityContext/containerSecurityContext hardening yet, deliberately:
+# the mctl-agents Dockerfile has no USER directive (runs as root, same as
+# every Argo CWFT pod using this image today), and this worker isn't running
+# any pods yet (replicaCount: 0 above) to verify a non-root/read-only-rootfs
+# profile against. Add it in a follow-up once the worker is actually live —
+# guessing security settings against an unverified pod is worse than the
+# CWFT pods' existing (also unhardened) baseline.
+env:
+  TEMPORAL_ADDRESS: temporal-frontend.temporal.svc.cluster.local:7233
+  TEMPORAL_NAMESPACE: mctl-agents
+  LOG_LEVEL: info
+envFrom:
+  - secretRef:
+      name: mctl-agents-worker-secrets
+# MCTL_TOKEN is the same static admin service token the Argo CWFT pods use
+# (Vault path secret/platform/mctl-agents, key mctl-token — see
+# platform-gitops/argo-workflows/secrets/mctl-agents-secrets.yaml) — this
+# worker calls the identical mctl-api operations-execute / workflows /
+# agents endpoints those pods' orchestrator code calls, just from a
+# long-running process instead of a per-run Argo pod.
+externalSecret:
+  targetSecret: mctl-agents-worker-secrets
+  data:
+    - secretKey: MCTL_TOKEN
+      remoteKey: platform/mctl-agents
+      property: mctl-token
