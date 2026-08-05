@@ -95,7 +95,7 @@ jobs:
           for path in files:
               with open(path) as fp:
                   content = fp.read()
-              n1 = n2 = n3 = 0
+              n1 = n2 = n3 = n4 = 0
 
               # Pattern 1: repository: <image>\n  tag: <old>  (standard Helm values.yaml)
               p1 = re.compile(r'(repository:\s*' + re.escape(image_name) + r'\n\s+tag:)[^\n]+')
@@ -115,7 +115,16 @@ jobs:
               p3 = re.compile(r'(image:\s*["\']?' + re.escape(image_name) + r')["\']?:[\w.\-]+')
               out, n2 = p3.subn(r'\1:' + new_tag, out)
 
-              n = n1 + n2 + n3
+              # Pattern 4: workflow-parameter default value: <image>:<tag>
+              # (Argo CWFT parameterization style — arguments.parameters[].value,
+              # e.g. cwft-mctl-agents-*.yaml's agent_image param — the tag lives
+              # under `value:`, not `image:`, since the container's own `image:`
+              # field is a {{workflow.parameters.*}} template reference instead
+              # of a literal image:tag string.)
+              p4 = re.compile(r'(value:\s*["\']?' + re.escape(image_name) + r')["\']?:[\w.\-]+')
+              out, n4 = p4.subn(r'\1:' + new_tag, out)
+
+              n = n1 + n2 + n3 + n4
               if n == 0:
                   print(f"  {path}: WARN — no image pattern matched (skipped)")
               else:
