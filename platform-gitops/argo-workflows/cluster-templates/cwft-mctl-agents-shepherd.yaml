@@ -444,6 +444,28 @@ spec:
                 name: mctl-agents-secrets
                 key: "{{inputs.parameters.oauth-key}}"
                 optional: true
+          # Alternative route via agentrouter — bypasses the Anthropic weekly
+          # quota. ANTHROPIC_AUTH_TOKEN switches the SDK to API-key auth through
+          # the proxy; when absent (optional) the SDK falls back to the OAuth
+          # token above. ESO syncs these from Vault secret/platform/mctl-agents.
+          - name: ANTHROPIC_BASE_URL
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: ANTHROPIC_BASE_URL
+                optional: true
+          - name: ANTHROPIC_AUTH_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: ANTHROPIC_AUTH_TOKEN
+                optional: true
+          - name: ANTHROPIC_MODEL
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: ANTHROPIC_MODEL
+                optional: true
           # GitHub PAT for `gh api`, `gh pr merge`, and the
           # implementer subprocess's `gh repo clone` + `gh pr create`
           # calls. PAT must have repo write scope on mctlhq/*.
