@@ -64,6 +64,14 @@ spec:
             ARGO_LOGS_R2_ENDPOINT: "6a09f637d20e1f66a8e9d45ebe778058.r2.cloudflarestorage.com"
             ARGO_LOGS_R2_BUCKET: "argo-workflows-logs"
             AUDIT_DB_URL: "postgresql://$(DB_USER):$(DB_PASSWORD)@shared-pg-rw.platform-db.svc:5432/mctl-api?sslmode=disable"
+            # Dev-workflow control plane (phase 4): backs mctl_trigger_issue's
+            # use_temporal path and POST /api/v1/agents/dev-loop/*. Optional —
+            # cmd/api/main.go gates Temporal client init on this being set, so
+            # an unset/unreachable value degrades those specific endpoints to
+            # 503 rather than failing startup (same pattern as AUDIT_DB_URL
+            # above for the other optional stores).
+            TEMPORAL_ADDRESS: temporal-frontend.temporal.svc.cluster.local:7233
+            TEMPORAL_NAMESPACE: mctl-agents
 
           envFromSecret: mctl-api-secrets
           envFromExtraSecret: mctl-api-gitops-token
