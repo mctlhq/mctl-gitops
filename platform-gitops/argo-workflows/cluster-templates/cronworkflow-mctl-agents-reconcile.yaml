@@ -35,7 +35,7 @@ spec:
   # so it's unaffected by the cap, and pausing it would leave pr-steward
   # merges on skip-listed repos stuck at `implemented` for the outage
   # window. See gitops#593 / PR #599 review discussion.
-  suspend: false
+  suspend: true
   workflowSpec:
     workflowTemplateRef:
       name: mctl-agents-reconcile
