@@ -11,18 +11,15 @@
 # standalone Deployment: nothing here serves inbound traffic, so there is
 # no main container to ride alongside.
 #
-# replicaCount is 0 on purpose until this note is removed: orchestrator/temporal/
-# first ships in mctl-agents PR #105 (mctlhq/mctl-agents#105), not yet in any
-# tagged release as of this file's creation. Deploying at image.tag 1.21.0
-# today would crash-loop on `python -m orchestrator.temporal.worker` (module
-# does not exist in that image). Bump replicaCount to 1 AND image.tag to the
-# first release that includes PR #105 in the same change — do not split those
-# two edits across commits, or the window between them is exactly the
-# crash-loop this comment exists to avoid.
-replicaCount: 0
+# orchestrator/temporal/ shipped in mctl-agents PR #105, first released in
+# 1.22.0 — replicaCount and image.tag bumped together in the same commit,
+# per the crash-loop warning this comment used to carry (module doesn't
+# exist before 1.22.0, so splitting the two edits would crash-loop the pod
+# in the window between them).
+replicaCount: 1
 image:
   repository: ghcr.io/mctlhq/mctl-agents
-  tag: "1.21.0"
+  tag: "1.22.0"
 imagePullSecrets:
   - name: ghcr-credentials
 command: ["python", "-m", "orchestrator.temporal.worker"]
