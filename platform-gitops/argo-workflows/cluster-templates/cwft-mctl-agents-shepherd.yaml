@@ -485,8 +485,18 @@ spec:
           # import; unset = today's behavior for every other repo. The
           # read-only --reconcile pass (cronworkflow-mctl-agents-reconcile)
           # is the inverse — it handles ONLY these skip-listed repos.
+          #
+          # CAUTION for future edits: "skip-listed" no longer implies
+          # "steward-owned". That held while every entry here was a repo
+          # handed to pr-steward (see claude-remote/values.yaml), but
+          # mctl-academy is a third case — skipped by the shepherd AND absent
+          # from the steward's repo list, so nothing auto-merges it at all.
+          # That is deliberate: Academy's clean-room content policy makes
+          # human CODEOWNER approval the last check before a question
+          # publishes, and an agent merging its own content PR would defeat
+          # the gate. Do not "fix" the asymmetry by adding it to the steward.
           - name: SHEPHERD_SKIP_SERVICES
-            value: "mctl-design,mctl-telegram,mctl-gitops,mctl-pairdesk"
+            value: "mctl-design,mctl-telegram,mctl-gitops,mctl-pairdesk,mctl-academy"
         resources:
           # memory 8Gi: the shepherd forks run_implementer.py
           # --review-feedback in the same pod, which runs the target repo's
