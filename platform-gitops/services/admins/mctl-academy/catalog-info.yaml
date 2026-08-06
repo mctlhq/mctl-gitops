@@ -1,0 +1,38 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: mctl-academy
+  namespace: admins
+  description: "mctl-academy service"
+  annotations:
+    backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=admins-mctl-academy
+    backstage.io/kubernetes-id: mctl-academy
+    backstage.io/kubernetes-namespace: admins
+    argocd/app-name: admins-mctl-academy
+    github.com/source-repo: mctlhq/mctl-academy
+    # mctl.me/auto-deploy — triggered by GitHub App webhook on tag push
+    #   "true" or "auto" — deploy immediately via scaffolder
+    #   "confirm"         — notify only, user deploys manually from UI
+    #   "false" or absent — skip
+    mctl.me/auto-deploy: "false"
+  links:
+    - url: https://ops.mctl.ai/applications/argocd/admins-mctl-academy
+      title: ArgoCD
+      icon: dashboard
+    - url: https://github.com/mctlhq/mctl-academy
+      title: Source Repository
+      icon: github
+    - url: https://workflows.mctl.ai
+      title: Argo Workflows
+      icon: github
+    - url: https://admins-mctl-academy.mctl.ai
+      title: Service URL
+      icon: web
+  labels:
+    team: admins
+    env: apps
+spec:
+  type: service
+  lifecycle: production
+  owner: group:default/admins
+  system: system:default/team-admins
