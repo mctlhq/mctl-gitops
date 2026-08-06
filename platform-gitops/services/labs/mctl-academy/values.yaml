@@ -24,6 +24,7 @@ env:
 ingress:
   enabled: true
   hosts:
+    - academy.mctl.ai
     - labs-mctl-academy.mctl.ai
     - labs-mctl-academy.mctl.me
   annotations:
@@ -31,5 +32,6 @@ ingress:
   tls:
     - secretName: mctl-academy-tls
       hosts:
+        - academy.mctl.ai
         - labs-mctl-academy.mctl.ai
         - labs-mctl-academy.mctl.me
