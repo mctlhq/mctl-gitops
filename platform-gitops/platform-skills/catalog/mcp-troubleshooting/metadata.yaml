@@ -1,0 +1,12 @@
+name: mcp-troubleshooting
+title: MCP Troubleshooting & PKCE Auth Recovery
+description: Guidelines and procedure for diagnosing and fixing remote/local MCP server connections, OAuth 2.0 PKCE authentication flow, and session recovery across AI assistants
+visibility: public
+status: active
+owner: platform
+runtimes:
+  - mcp
+  - claude
+  - codex
+  - gemini
+  - openclaw
