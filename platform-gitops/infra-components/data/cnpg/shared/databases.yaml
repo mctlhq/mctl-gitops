@@ -189,3 +189,14 @@ spec:
   cluster:
     name: shared-pg
   databaseReclaimPolicy: retain
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: labs-mctl-academy-db
+spec:
+  name: "labs-mctl-academy"
+  owner: "labs-mctl-academy"
+  cluster:
+    name: shared-pg
+  databaseReclaimPolicy: retain

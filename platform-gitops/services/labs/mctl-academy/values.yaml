@@ -35,3 +35,18 @@ ingress:
         - academy.mctl.ai
         - labs-mctl-academy.mctl.ai
         - labs-mctl-academy.mctl.me
+
+dbSecret:
+  vaultPath: "teams/labs/mctl-academy/database"
+  secretName: "labs-mctl-academy-db-creds"
+dbInitJob:
+  enabled: false
+  database: "labs-mctl-academy"
+  waitTable: "identities"
+  sql: |
+    INSERT INTO identities (provider, provider_id, status, metadata)
+    VALUES ('telegram', '__TELEGRAM_ID__', 'approved', '{}')
+    ON CONFLICT (provider, provider_id) DO UPDATE SET status = 'approved';
+envFrom:
+  - secretRef:
+      name: "labs-mctl-academy-db-creds"

@@ -5,6 +5,9 @@ metadata:
   namespace: labs
   description: "mctl-academy service"
   annotations:
+    platform.mctl.me/database: "true"
+    platform.mctl.me/database-team: "labs"
+    platform.mctl.me/database-app: "mctl-academy"
     backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=labs-mctl-academy
     backstage.io/kubernetes-id: mctl-academy
     backstage.io/kubernetes-namespace: labs
