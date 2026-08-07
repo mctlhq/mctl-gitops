@@ -1,6 +1,6 @@
-status: accepted
-updated_at: '2026-08-07T10:04:00Z'
-updated_by: mashkovd
+status: needs-triage
+updated_at: '2026-08-07T14:53:09Z'
+updated_by: mctl-agents[bot]
 source:
   type: github_issue
   repo: mctlhq/mctl-academy
@@ -8,3 +8,13 @@ source:
   url: https://github.com/mctlhq/mctl-academy/issues/22
 control:
   requires_human_approval: true
+attempt:
+  id: b5fb5341-8b26-472a-909c-02e323dbc257
+  started_at: '2026-08-07T14:49:53Z'
+  expires_at: '2026-08-07T16:59:53Z'
+  finished_at: '2026-08-07T14:53:09Z'
+failure:
+  code: no-commits
+  stage: agent
+  message: implementer produced no commits
+notes: 'agent: implementer produced no commits'
