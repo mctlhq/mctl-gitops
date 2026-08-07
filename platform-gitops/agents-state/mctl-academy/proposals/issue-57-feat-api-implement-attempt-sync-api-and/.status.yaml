@@ -1,6 +1,6 @@
-status: accepted
-updated_at: '2026-08-07T16:22:15Z'
-updated_by: mashkovd
+status: implemented
+updated_at: '2026-08-07T17:18:35Z'
+updated_by: mctl-agents[bot]
 source:
   type: github_issue
   repo: mctlhq/mctl-academy
@@ -8,3 +8,9 @@ source:
   url: https://github.com/mctlhq/mctl-academy/issues/57
 control:
   requires_human_approval: true
+attempt:
+  id: 156152c7-65dc-405c-b781-7b4a39303df9
+  started_at: '2026-08-07T17:12:13Z'
+  expires_at: '2026-08-07T19:22:13Z'
+  finished_at: '2026-08-07T17:18:35Z'
+pr: https://github.com/mctlhq/mctl-academy/pull/62
