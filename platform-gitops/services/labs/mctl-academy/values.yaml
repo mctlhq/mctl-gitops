@@ -5,7 +5,7 @@
 
 image:
   repository: ghcr.io/mctlhq/mctl-academy
-  tag: "0.1.16"
+  tag: "0.1.19"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
@@ -63,3 +63,4 @@ externalSecret:
     - secretKey: PUBLIC_BASE_URL
       remoteKey: teams/labs/mctl-academy
       property: PUBLIC_BASE_URL
+extraContainers: []
