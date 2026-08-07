@@ -65,7 +65,7 @@ spec:
         value: "false"
         # When "true", discover + print would-be flips but write nothing.
       - name: agent_image
-        value: ghcr.io/mctlhq/mctl-agents:1.26.0
+        value: ghcr.io/mctlhq/mctl-agents:1.26.2
         # Default = today's pin, so submitting without this parameter is a
         # zero-behaviour-change no-op. Overridden by the agent registry's
         # resolved image_ref once a caller starts pinning per-run.
