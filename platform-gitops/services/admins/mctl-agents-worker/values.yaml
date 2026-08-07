@@ -76,3 +76,9 @@ externalSecret:
     - secretKey: MCTL_TOKEN
       remoteKey: platform/mctl-agents
       property: mctl-token
+    - secretKey: GITHUB_TOKEN
+      remoteKey: platform/mctl-agent/tokens
+      property: github-token
+    - secretKey: GH_TOKEN
+      remoteKey: platform/mctl-agent/tokens
+      property: github-token
