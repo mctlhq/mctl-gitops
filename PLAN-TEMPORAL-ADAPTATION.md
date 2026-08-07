@@ -124,7 +124,28 @@ issues).
 
 ---
 
-## 6. Итого
+## 7. Архитектура завершения воркфлоу по событиям (Event-Driven Signals vs Polling)
+
+### 7.1. Проблема Polling-модели
+В текущей реализации `submit_and_wait` (активность `DevLoopWorkflow`) воркер раз в 15 секунд поллит `mctl-api` в ожидании завершения Argo Workflow. 
+- **Следствия:** при сетевых сбоях, перезапусках воркеров или задержках `mctl-api` активность зависает в цикле повторов. Если процесс отменяется ручным `terminate()`, воркфлоу переходит в статус `Terminated` вместо зелёного `Completed`.
+
+### 7.2. Целевая архитектура (Event-Driven Signals)
+Вместо синхронного поллинга `submit_and_wait` переводится на асинхронное ожидание сигнала Temporal (`workflow.wait_condition`):
+
+1. **Вариант А: Argo `onExit` Webhook Hook**
+   - В Argo `ClusterWorkflowTemplate` добавляется `onExit` handler.
+   - По завершению генерации/пуша Argo отправляет POST-запрос в `mctl-api` (`/api/v1/webhooks/argo`).
+   - `mctl-api` отправляет сигнал `completed` с `WorkflowResult(status="Succeeded")` в соответствующий `DevLoopWorkflow`.
+
+2. **Вариант Б: GitHub Webhook на merge PR**
+   - При слиянии PR GitHub отправляет событие `pull_request.closed` (`merged: true`) на вебхук `mctl-api`.
+   - `mctl-api` находит из темы PR открывший его `DevLoopWorkflow` и передаёт сигнал `pr_merged`.
+   - `DevLoopWorkflow` мгновенно завершается с чистым зеленым статусом **`Completed`**.
+
+---
+
+## 8. Итого
 
 Academy-план **не ошибочен**, но описывает платформу в состоянии «до Temporal».
 С 1.23.0 оркестрация dev-loop'а переехала в Temporal, и это меняет:
@@ -133,6 +154,7 @@ Academy-план **не ошибочен**, но описывает платфо
 2. **Наблюдаемость** — Temporal UI вместо Argo Workflows UI.
 3. **Approval flow** — явный сигнал вместо автоматического перехода.
 4. **Пререквизиты** — worker ≥ 1.23.0 + namespace `mctl-agents`.
+5. **Завершение воркфлоу** — Сигналы событий (Argo/GitHub Webhooks) вместо Polling.
 
-Без учёта этих четырёх пунктов план рискует описать систему, которой в кластере
+Без учёта этих пяти пунктов план рискует описать систему, которой в кластере
 больше нет.
