@@ -1,0 +1,7 @@
+{
+  "$schema": "https://context7.com/schema/context7.json",
+  "projectTitle": "mctl-gitops Source of Truth",
+  "description": "GitOps source of truth for mctl platform: Helm values, Argo Workflows templates, infrastructure manifests, and development guidelines.",
+  "folders": ["platform-gitops", "infrastructure"],
+  "excludeFolders": [".git"]
+}
