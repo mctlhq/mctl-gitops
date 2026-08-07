@@ -1,5 +1,5 @@
-status: accepted
-updated_at: '2026-08-06T23:09:32Z'
+status: implemented
+updated_at: '2026-08-07T07:52:15Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -8,3 +8,8 @@ source:
   url: https://github.com/mctlhq/mctl-academy/issues/19
 control:
   requires_human_approval: true
+pr: https://github.com/mctlhq/mctl-academy/pull/27
+github:
+  state: open
+  observed_at: '2026-08-07T07:52:15Z'
+  head_sha: 754976bde8ea07ba3642e15a0be7f3c267645986
