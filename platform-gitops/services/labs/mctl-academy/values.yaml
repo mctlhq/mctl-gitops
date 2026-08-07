@@ -35,7 +35,6 @@ ingress:
         - academy.mctl.ai
         - labs-mctl-academy.mctl.ai
         - labs-mctl-academy.mctl.me
-
 dbSecret:
   vaultPath: "teams/labs/mctl-academy/database"
   secretName: "labs-mctl-academy-db-creds"
@@ -50,3 +49,17 @@ dbInitJob:
 envFrom:
   - secretRef:
       name: "labs-mctl-academy-db-creds"
+  - secretRef:
+      name: mctl-academy-secrets
+externalSecret:
+  targetSecret: mctl-academy-secrets
+  data:
+    - secretKey: GITHUB_CLIENT_ID
+      remoteKey: teams/labs/mctl-academy
+      property: GITHUB_CLIENT_ID
+    - secretKey: GITHUB_CLIENT_SECRET
+      remoteKey: teams/labs/mctl-academy
+      property: GITHUB_CLIENT_SECRET
+    - secretKey: PUBLIC_BASE_URL
+      remoteKey: teams/labs/mctl-academy
+      property: PUBLIC_BASE_URL
