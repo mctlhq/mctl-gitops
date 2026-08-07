@@ -1,5 +1,5 @@
-status: accepted
-updated_at: '2026-08-06T23:03:09Z'
+status: implemented
+updated_at: '2026-08-07T08:11:29Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -8,3 +8,9 @@ source:
   url: https://github.com/mctlhq/mctl-academy/issues/20
 control:
   requires_human_approval: true
+attempt:
+  id: dad25292-f16b-4e0d-b99c-dfc9d1181ede
+  started_at: '2026-08-07T07:59:24Z'
+  expires_at: '2026-08-07T10:09:24Z'
+  finished_at: '2026-08-07T08:11:29Z'
+pr: https://github.com/mctlhq/mctl-academy/pull/30
