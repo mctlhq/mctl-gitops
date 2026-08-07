@@ -1,7 +1,7 @@
 name: review-watch
 title: Review Watch
-description: Background monitor for PR review-bot responses (claude[bot] and chatgpt-codex-connector[bot])
-  via detached shell watcher
+description: Background monitor for PR review-bot responses (claude[bot], chatgpt-codex-connector[bot],
+  and agy pilot reviewer) via detached shell watcher
 visibility: admin
 status: active
 owner: platform

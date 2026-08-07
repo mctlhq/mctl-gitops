@@ -1,11 +1,11 @@
 ---
 name: review-watch
-description: 'Monitor a GitHub PR in the background for a review-bot response. Watches BOTH claude[bot] (claude-review.yml) and chatgpt-codex-connector[bot] (@codex review). Launches a detached shell process that polls until a bot posts a review (line-anchored comments or top-level review body), a top-level issue comment (clean/"no findings"), or reacts with a thumbs-up, then writes a result file you can read at any time. Use whenever the user has just posted "@codex review" or "@claude review" on a PR — or asks you to "watch / monitor / wait for / babysit the review" on a specific PR — and they want hands-off notification instead of manual `gh api` polling. Also use when they queue several PRs at once: launch one watcher per PR, in parallel.'
+description: 'Monitor a GitHub PR in the background for a review-bot response. Watches claude[bot] (claude-review.yml), chatgpt-codex-connector[bot] (@codex review), and — on repos that have it wired up (currently mctl-academy) — the agy pilot reviewer, which posts as github-actions[bot] with an `<!-- agy-review-pilot -->` marker. Launches a detached shell process that polls until a bot posts a review (line-anchored comments or top-level review body), a top-level issue comment (clean/"no findings"), or reacts with a thumbs-up, then writes a result file you can read at any time. Use whenever the user has just posted "@codex review" or "@claude review" on a PR — or asks you to "watch / monitor / wait for / babysit the review" on a specific PR — and they want hands-off notification instead of manual `gh api` polling. Also use when they queue several PRs at once: launch one watcher per PR, in parallel.'
 ---
 
 # review-watch — background PR-review monitor (detached shell)
 
-The user has set this up so they don't have to manually re-run `gh api` to check whether the review bot (claude[bot] or chatgpt-codex-connector[bot]) has finished reviewing.
+The user has set this up so they don't have to manually re-run `gh api` to check whether a review bot has finished reviewing — claude[bot], chatgpt-codex-connector[bot], and (on repos where it's wired up) the agy pilot reviewer.
 
 ## When to invoke
 
@@ -21,7 +21,7 @@ Do NOT spawn an `Agent` for this. Sub-agent runtime has a strong bias toward the
 
 ## Bootstrap — write `/tmp/review-watch.sh` if missing or stale
 
-Before launching watchers, check that the script is in place AND current: `grep -q 'BASE_TS' /tmp/review-watch.sh` — if the file is missing or the grep fails (pre-baseline-arg version), (re)write it via Bash heredoc (the entire script body):
+Before launching watchers, check that the script is in place AND current: `grep -q 'AGY_MARKER' /tmp/review-watch.sh` — if the file is missing or the grep fails (pre-baseline-arg or pre-agy version), (re)write it via Bash heredoc (the entire script body):
 
 ```bash
 #!/bin/bash
@@ -44,6 +44,14 @@ echo "[$(date -u +%FT%TZ)] watcher start repo=$REPO pr=$PR pid=$$"
 # --jq strings below; its inner double-quotes survive because shell variable
 # expansion happens after quote parsing. Add more bots here if needed.
 BOTFILTER='select(.user.login == "claude[bot]" or .user.login == "chatgpt-codex-connector[bot]")'
+
+# agy (Antigravity CLI pilot reviewer, currently mctl-academy only) posts via
+# `gh pr comment` using the workflow's GITHUB_TOKEN, so its login is the
+# generic "github-actions[bot]" — shared with every other Actions-posted
+# comment in the repo (release-please, other workflows, etc). Login alone
+# is not enough to identify it; every agy comment carries a hidden
+# `<!-- agy-review-pilot -->` marker, which is the only reliable filter.
+AGY_MARKER='<!-- agy-review-pilot -->'
 
 notify() {
   local title="$1" body="$2" sound="${3:-Glass}"
@@ -96,9 +104,12 @@ for i in $(seq 1 10); do
   # responded clean within minutes (regression observed on
   # mctlhq/mctl-gitops#91, 2026-05-01).
   I=$(gh api --paginate "repos/$REPO/issues/$PR/comments" --jq "[.[] | $BOTFILTER | select(.created_at > \"$TS\")] | length" 2>/dev/null || echo 0)
+  # agy pilot reviewer — see AGY_MARKER note above. Independent of BOTFILTER
+  # since its login collides with unrelated github-actions[bot] comments.
+  A=$(gh api --paginate "repos/$REPO/issues/$PR/comments" --jq "[.[] | select(.user.login == \"github-actions[bot]\") | select(.body | contains(\"$AGY_MARKER\")) | select(.created_at > \"$TS\")] | length" 2>/dev/null || echo 0)
   E=""
   [ -n "$ID" ] && E=$(gh api --paginate "repos/$REPO/issues/comments/$ID/reactions" --jq "[.[] | $BOTFILTER | select(.created_at > \"$TS\") | .content] | last" 2>/dev/null || echo "")
-  echo "[$(date -u +%FT%TZ)] tick $i: reviews=$R comments=$C issue_comments=$I reaction=$E"
+  echo "[$(date -u +%FT%TZ)] tick $i: reviews=$R comments=$C issue_comments=$I agy_comments=$A reaction=$E"
   # Fetch the latest bot issue-comment body up front so the hit gate can tell
   # claude-review.yml's in-progress checklist from a real verdict. The checklist
   # has UNCHECKED boxes ("- [ ]"); a finished verdict has only "- [x]", and codex
@@ -116,7 +127,7 @@ for i in $(seq 1 10); do
       echo "[$(date -u +%FT%TZ)] issue-comment is an in-progress checklist; still polling"
     fi
   fi
-  if [ "${R:-0}" -gt 0 ] || [ "${C:-0}" -gt 0 ] || { [ "${I:-0}" -gt 0 ] && [ "$IC_INPROGRESS" -eq 0 ]; } || [ "$E" = '"+1"' ] || [ "$E" = "+1" ]; then
+  if [ "${R:-0}" -gt 0 ] || [ "${C:-0}" -gt 0 ] || { [ "${I:-0}" -gt 0 ] && [ "$IC_INPROGRESS" -eq 0 ]; } || [ "${A:-0}" -gt 0 ] || [ "$E" = '"+1"' ] || [ "$E" = "+1" ]; then
     echo "[$(date -u +%FT%TZ)] hit; fetching details"
     {
       echo "status=responded"
@@ -125,6 +136,7 @@ for i in $(seq 1 10); do
       echo "review_count=$R"
       echo "comment_count=$C"
       echo "issue_comment_count=$I"
+      echo "agy_comment_count=$A"
       echo "reaction=$E"
       echo "---comments---"
       gh api --paginate "repos/$REPO/pulls/$PR/comments" --jq "[.[] | $BOTFILTER | select(.created_at > \"$TS\") | {user: .user.login, path, line, original_line, body}]"
@@ -132,6 +144,8 @@ for i in $(seq 1 10); do
       gh api --paginate "repos/$REPO/pulls/$PR/reviews" --jq "[.[] | $BOTFILTER | select(.submitted_at > \"$TS\") | {user: .user.login, state, body, submitted_at}]"
       echo "---issue_comments---"
       gh api --paginate "repos/$REPO/issues/$PR/comments" --jq "[.[] | $BOTFILTER | select(.created_at > \"$TS\") | {user: .user.login, created_at, body}]"
+      echo "---agy_comments---"
+      gh api --paginate "repos/$REPO/issues/$PR/comments" --jq "[.[] | select(.user.login == \"github-actions[bot]\") | select(.body | contains(\"$AGY_MARKER\")) | select(.created_at > \"$TS\") | {user: .user.login, created_at, body}]"
     } > "$RESULT"
     # "Clean" detection paths (bot signals):
     # 1. 👍 reaction on the trigger with no line-anchored reviews/comments
@@ -144,10 +158,10 @@ for i in $(seq 1 10); do
     if [ "${I:-0}" -gt 0 ] && [ "${R:-0}" -eq 0 ] && [ "${C:-0}" -eq 0 ]; then
       CLEAN="1"
     fi
-    if [ "$CLEAN" = "1" ]; then
+    if [ "$CLEAN" = "1" ] && [ "${A:-0}" -eq 0 ]; then
       notify "review-watch [$REPO#$PR]" "clean review (no findings)" "Glass"
     else
-      TOTAL=$(( ${R:-0} + ${C:-0} + ${I:-0} ))
+      TOTAL=$(( ${R:-0} + ${C:-0} + ${I:-0} + ${A:-0} ))
       notify "review-watch [$REPO#$PR]" "$TOTAL response(s) — read $RESULT" "Glass"
     fi
     exit 0
@@ -223,9 +237,21 @@ When the user later asks "did codex respond yet?" or similar, just `Read` the `.
     Trigger: <trigger_ts>
     Re-post @claude review or check repo settings.
 
-Severity parsing: claude[bot] prefixes each finding's body with a markdown badge `![P2 Badge](...)` — extract the `P0` / `P1` / `P2` / `P3` token. If absent, mark as `P?`.
+Severity parsing: claude[bot] prefixes each finding's body with a markdown badge `![P2 Badge](...)` — extract the `P0` / `P1` / `P2` / `P3` token. agy writes plain `**Severity:** P1` / `- **Severity:** P1` lines instead — extract the token the same way. If absent, mark as `P?`.
 
 One-line summary per finding: take the first **bold heading** (between `**`) from the comment body and trim to ~80 chars. Do NOT include the explanatory paragraph or full body — the user clicks into the PR for full context.
+
+  Format D — agy pilot findings (non-blocking, informational only — never treat as a merge gate):
+
+    [agy] <repo>#<N>: K findings (X P1, Y P2, Z P3)
+    https://github.com/<repo>/pull/<N>
+    - Pn {file}:{line} — {one-line summary}
+    ...
+    (pilot, non-blocking — does not affect merge gate)
+
+  If agy's comment body is exactly "No significant issues found.":
+
+    [agy] <repo>#<N>: no significant issues found (pilot, non-blocking)
 
 ## Multiple PRs
 
@@ -251,8 +277,9 @@ If args are ambiguous, ask which PRs in one short AskUserQuestion before launchi
 ## What this skill is NOT for
 
 - One-shot "check codex now" — for that, just call `gh api` directly. This skill is for the wait-and-notify case.
-- Reviews from bots other than `claude[bot]` / `chatgpt-codex-connector[bot]` (Gemini, etc.) — add the login to `BOTFILTER` in the script. For an entirely different review surface, write a sibling skill.
+- Reviews from bots other than `claude[bot]` / `chatgpt-codex-connector[bot]` / agy (marker-matched, see `AGY_MARKER`) — add the login (and a body marker, if the bot shares a generic login like `github-actions[bot]`) to the script. For an entirely different review surface, write a sibling skill.
 - Long-term watching across multiple `@claude review` retries — re-launch after each new trigger.
+- Treating agy findings as a merge blocker — the pilot is explicitly non-blocking (see [[project_agy_reviewer_pilot]] memory); only claude[bot] / codex P1-P2 gate a merge.
 
 ## Anti-patterns (do not regress)
 
