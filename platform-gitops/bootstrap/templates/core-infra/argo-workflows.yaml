@@ -148,6 +148,7 @@ spec:
                   templateRef:
                     name: global-workflow-completion-hook
                     template: notify-completion
+                    clusterScope: true
 
         artifactRepository:
           archiveLogs: true
