@@ -48,7 +48,8 @@ spec:
   # history and 48 ≈ 12h of failures — enough for recent debugging.
   successfulJobsHistoryLimit: 96
   failedJobsHistoryLimit: 48
-  suspend: false
+  # Suspended in favor of Temporal IssuePollWorkflow schedule (issue-poll-mctl-agents-schedule)
+  suspend: true
   workflowSpec:
     workflowTemplateRef:
       name: mctl-agents-issue-poll
