@@ -56,8 +56,8 @@ env:
   # The matching TELEGRAM_OIDC_CLIENT_SECRET is sourced from
   # secret/data/platform/mctl-telegram-preview/oauth via the oauth ExternalSecret.
   TELEGRAM_OIDC_CLIENT_ID: "8923492300"
-  TG_LOGIN_ADMINS: "210408407"
-  AUTO_APPROVE_CLIENTS: "true"
+  TG_LOGIN_ADMINS: "210408407,8745115872,924671154"
+  AUTO_APPROVE_CLIENTS: "false"
   # Reviewer demo mode not needed on preview.
   DEMO_REVIEWER_ENABLED: "false"
   # C1 (communication agent staging, observe-only) — see
