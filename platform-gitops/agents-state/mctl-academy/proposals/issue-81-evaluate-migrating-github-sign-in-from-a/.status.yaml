@@ -1,0 +1,10 @@
+status: proposed
+updated_at: '2026-08-08T07:40:53Z'
+updated_by: mctl-agents[bot]
+source:
+  type: github_issue
+  repo: mctlhq/mctl-academy
+  issue: 81
+  url: https://github.com/mctlhq/mctl-academy/issues/81
+control:
+  requires_human_approval: true
