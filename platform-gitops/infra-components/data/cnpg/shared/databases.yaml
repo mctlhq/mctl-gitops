@@ -182,17 +182,6 @@ spec:
 apiVersion: postgresql.cnpg.io/v1
 kind: Database
 metadata:
-  name: nfc-quirestack-api-db
-spec:
-  name: "nfc-quirestack-api"
-  owner: "nfc-quirestack-api"
-  cluster:
-    name: shared-pg
-  databaseReclaimPolicy: retain
----
-apiVersion: postgresql.cnpg.io/v1
-kind: Database
-metadata:
   name: labs-mctl-academy-db
 spec:
   name: "labs-mctl-academy"
