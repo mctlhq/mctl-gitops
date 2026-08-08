@@ -63,4 +63,10 @@ externalSecret:
     - secretKey: PUBLIC_BASE_URL
       remoteKey: teams/labs/mctl-academy
       property: PUBLIC_BASE_URL
+    - secretKey: BETTER_AUTH_SECRET
+      remoteKey: teams/labs/mctl-academy
+      property: BETTER_AUTH_SECRET
+    - secretKey: BETTER_AUTH_URL
+      remoteKey: teams/labs/mctl-academy
+      property: BETTER_AUTH_URL
 extraContainers: []
