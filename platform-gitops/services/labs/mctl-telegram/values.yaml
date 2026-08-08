@@ -77,10 +77,10 @@ env:
   # a clean scope-denied (admin:users) — that is the correct permission boundary.
   # Admin-tool success is demonstrated separately with operator credentials.
   # (Reverts the temporary reviewer-admin grant; submission docs reframed to match.)
-  TG_LOGIN_ADMINS: "210408407,8745115872,924671154"
+  TG_LOGIN_ADMINS: "210408407"
   # Open registration: every Telegram-authenticated user auto-gets the client
   # tier. Ban a specific user with the set_telegram_access MCP tool.
-  AUTO_APPROVE_CLIENTS: "false"
+  AUTO_APPROVE_CLIENTS: "true"
   # Reviewer/demo auth-mode for the ChatGPT App Directory review. When enabled,
   # /oauth/authorize shows a password-gated "reviewer access" form that signs in
   # as the demo Telegram account below WITHOUT the live Telegram OIDC login (no
