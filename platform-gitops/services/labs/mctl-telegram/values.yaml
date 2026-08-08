@@ -59,7 +59,8 @@ env:
   # -> 2FA) is bounded by this same TTL (lookupEnable), and 10m is too tight for
   # a human to receive and enter the SMS code -> "sign-in session has expired".
   OAUTH_CODE_TTL: "30m"
-  OAUTH_ACCESS_TOKEN_TTL: "8760h"
+  # Production security policy: short-lived access tokens (1h) enforced for OAuth 2.1 refresh token rotation
+  OAUTH_ACCESS_TOKEN_TTL: "1h"
   # Walkthrough video embedded on /demo (ChatGPT App Directory review).
   # ?v=1 is a cache-buster: Cloudflare cached a 404 for the bare .mp4 path
   # before the serving route shipped (0.37.0); a fresh query key avoids the
