@@ -43,6 +43,7 @@ env:
   PUBLIC_BASE_URL: https://tg-preview.mctl.ai
   OAUTH_ISSUER_URL: https://tg-preview.mctl.ai
   OAUTH_CODE_TTL: "30m"
+  OAUTH_ACCESS_TOKEN_TTL: "8760h"
   # OriginGuard allowlist. Unset, it defaults to the PUBLIC_BASE_URL origin only,
   # which 403s the browser Origin headers sent by the ChatGPT and Claude connector
   # runtimes. Broadened here to validate connector access on preview before the
