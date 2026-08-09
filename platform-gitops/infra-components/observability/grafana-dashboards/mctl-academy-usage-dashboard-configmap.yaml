@@ -15,8 +15,20 @@
 # authenticated non-admin org-wide Viewer by default, which would otherwise
 # make this readable by anyone Dex accepts. Restricting the folder ACL is a
 # one-time manual step via the Grafana UI/API after this ConfigMap first
-# creates the folder (not expressible via the sidecar ConfigMap mechanism) —
-# tracked as a required follow-up, not yet done as of this commit.
+# creates the folder — not expressible via the sidecar ConfigMap mechanism,
+# and the folder does not exist to set permissions on until this ArgoCD
+# Application syncs at least once.
+#
+# REQUIRED, tracked follow-up (owner: mashkovd/session operator, due:
+# immediately after this Application first syncs Healthy):
+#   1. Grafana UI → Internal folder → Permissions → remove the implicit
+#      "Viewer can view" default, grant only the Admin org role (or the
+#      specific account) View access.
+#   2. Verify by opening the dashboard URL in a private/incognito window
+#      signed in as any non-admin Dex-authenticated account (or via the
+#      Grafana HTTP API as that account) and confirming a 403, not the
+#      dashboard.
+# Until both are done, treat this dashboard as NOT actually private.
 #
 # Sidecar in the monitoring/grafana deployment auto-discovers ConfigMaps
 # with label `grafana_dashboard: "1"` — same pattern as

@@ -12,6 +12,16 @@
 # datasource (e.g. Grafana Explore, not just this dashboard's fixed panels)
 # read those out directly.
 #
+# This grant lives in a DIFFERENT repo (mctl-academy migration
+# 1755100000000_academy_readonly_role.mjs) that this gitops repo cannot
+# validate at merge time — a regression there (e.g. someone widening it back
+# to table-level SELECT) would silently defeat the protection described
+# above with no signal here. Verified by hand against a real postgres:17
+# instance seeded with a fake session.token: `SELECT token FROM "session"`
+# and `SELECT email FROM "user"` both fail with "permission denied for
+# table" as academy_readonly, while every query this dashboard's panels
+# actually run succeeds. Re-verify the same way if that migration changes.
+#
 # Access to this datasource is not yet folder-restricted at the Grafana
 # level — see the required follow-up noted in
 # platform-gitops/infra-components/observability/grafana-dashboards/mctl-academy-usage-dashboard-configmap.yaml.
