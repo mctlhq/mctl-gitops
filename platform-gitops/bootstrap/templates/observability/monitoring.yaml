@@ -268,6 +268,12 @@ spec:
                 label: grafana_dashboard
                 labelValue: "1"
                 searchNamespace: ALL
+                # Reads the grafana_folder ConfigMap ANNOTATION (not the
+                # discovery label above) to place a dashboard into a named
+                # Grafana folder instead of always landing in General — used
+                # by mctl-academy-usage-dashboard-configmap.yaml so its
+                # folder ACL can be locked down independently.
+                folderAnnotation: grafana_folder
             plugins:
               - victoriametrics-metrics-datasource
             resources:

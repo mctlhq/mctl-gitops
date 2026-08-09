@@ -145,7 +145,15 @@ argo-cd:
         p, role:admin, repositories, *, */*, allow
         p, role:admin, projects, *, */*, allow
         g, admins, role:admin
-        g, mashkovd@mctl.me, role:admin
+        # Redundant with the group grant above (mashkovd is in the "admins"
+        # tenant/group per mctl-portal's membership table, confirmed via
+        # mctl_whoami: Admin=true, Teams=[admins ovk]) — kept only as an
+        # explicit belt-and-suspenders binding. The Dex-issued token's real
+        # email claim is always "<login>@mctl.me" (hardcoded in
+        # mctl-portal/plugins/oidc-provider-backend/src/router.ts, a
+        # deliberate internal-identity convention, not touched here), so a
+        # binding on any other domain never actually matches a live token.
+        g, mashkovd@mctl.ai, role:admin
 
         # mctl-api service account: read all applications for status checks
         p, mctl-api, applications, get, */*, allow
