@@ -4,11 +4,13 @@
 # migration 1755100000000_academy_readonly_role.mjs — so panels can compute
 # sign-ups/logins/attempts per day without any new app instrumentation.
 #
-# academy_readonly's grants are COLUMN-level, not table-level: only
-# "user"."createdAt" and "session"."createdAt" (plus all of attempts, which
-# has no sensitive columns). "session" also holds the live bearer token
+# academy_readonly's grants are COLUMN-level everywhere, not table-level:
+# "user"."createdAt", "session"."createdAt", and on attempts only
+# (user_id, domain, correct, attempted_at) — never id/question_id, which
+# would let a direct query reconstruct a specific learner's full
+# per-question answer history. "session" also holds the live bearer token
 # behind the mctl_session cookie, and "user" holds email/name/githubLogin —
-# a table-wide grant would let anything with query access to this
+# a table-wide grant on either would let anything with query access to this
 # datasource (e.g. Grafana Explore, not just this dashboard's fixed panels)
 # read those out directly.
 #
@@ -53,5 +55,14 @@ data:
           sslmode: require
           postgresVersion: 1700
           timescaledb: false
+          # academy_readonly's CNPG connectionLimit is 5 (cluster.yaml). A
+          # single dashboard refresh opens one connection per SQL target —
+          # 9 targets across this dashboard's panels — so an unbounded pool
+          # here could exceed that limit and surface "too many connections
+          # for role" on an arbitrary subset of panels. Capped with
+          # headroom for the datasource's own "Save & Test" connection.
+          maxOpenConns: 3
+          maxIdleConns: 3
+          connMaxLifetime: 14400
         secureJsonData:
           password: $__env{ACADEMY_RO_DB_PASSWORD}

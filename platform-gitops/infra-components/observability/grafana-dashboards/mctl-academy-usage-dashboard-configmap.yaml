@@ -60,7 +60,7 @@ data:
         {
           "type": "row",
           "id": 100,
-          "title": "Last 30 days",
+          "title": "Summary",
           "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
         },
         {
@@ -81,7 +81,7 @@ data:
         {
           "type": "stat",
           "id": 2,
-          "title": "Sessions created (last 30d)",
+          "title": "Sessions created (selected range)",
           "description": "Counts session rows currently in the table, not a login-event ledger. A learner who signs out (or an expired session that gets pruned) disappears from this count, so it undercounts historical logins — see the About panel.",
           "datasource": { "type": "postgres", "uid": "mctl-academy-readonly-pg" },
           "gridPos": { "h": 5, "w": 6, "x": 6, "y": 1 },
@@ -97,7 +97,7 @@ data:
         {
           "type": "stat",
           "id": 3,
-          "title": "Attempts (last 30d)",
+          "title": "Attempts (selected range)",
           "datasource": { "type": "postgres", "uid": "mctl-academy-readonly-pg" },
           "gridPos": { "h": 5, "w": 6, "x": 12, "y": 1 },
           "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
@@ -112,7 +112,7 @@ data:
         {
           "type": "stat",
           "id": 4,
-          "title": "Unique active users (last 30d)",
+          "title": "Unique active users (selected range)",
           "datasource": { "type": "postgres", "uid": "mctl-academy-readonly-pg" },
           "gridPos": { "h": 5, "w": 6, "x": 18, "y": 1 },
           "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
@@ -163,7 +163,7 @@ data:
         {
           "type": "timeseries",
           "id": 7,
-          "title": "Questions answered per day (total vs correct)",
+          "title": "Questions answered per day (total vs correct — backfill caveat, see About)",
           "datasource": { "type": "postgres", "uid": "mctl-academy-readonly-pg" },
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 15 },
           "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10 }, "unit": "short" } },
@@ -183,7 +183,7 @@ data:
         {
           "type": "barchart",
           "id": 8,
-          "title": "Attempts by domain (last 30d)",
+          "title": "Attempts by domain (selected range)",
           "datasource": { "type": "postgres", "uid": "mctl-academy-readonly-pg" },
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 15 },
           "options": { "orientation": "horizontal", "legend": { "displayMode": "list", "placement": "right" } },
@@ -208,7 +208,7 @@ data:
           "gridPos": { "h": 8, "w": 24, "x": 0, "y": 24 },
           "options": {
             "mode": "markdown",
-            "content": "Reads `\"user\"`, `\"session\"`, and `attempts` directly from the `labs-mctl-academy` Postgres database via a **read-only** role (`academy_readonly`) — see mctl-academy migration `1755100000000_academy_readonly_role.mjs`. Grants are **column-level**, not table-level: only `\"user\".\"createdAt\"` and `\"session\".\"createdAt\"` (plus all of `attempts`, which has no sensitive columns) — the role cannot read `session.token` (the live session-cookie credential), `user.email`/`name`/`githubLogin`, `\"account\"` (OAuth tokens), or `\"verification\"`.\n\n**⚠️ Known gap, not yet closed:** this datasource and dashboard are not yet folder/permission-restricted in Grafana — see the header comment on this ConfigMap and on `academy-postgres-datasource.yaml` for what's required before this is actually private.\n\n**\"Sessions created\" is not a login-event ledger.** The `session` table is live authentication state, not an append-only log: a learner signing out (or session-cleanup pruning an expired row) removes it from this count, so these panels undercount historical logins. Building an immutable login-event log would need new app instrumentation, which is deliberately out of scope here (DB-only, no new logging).\n\n**There is no anonymous-usage panel.** Practice done while signed out is stored only in the browser's `localStorage` and is never written to `attempts` — `POST /api/attempts` returns 401 without inserting when unauthenticated (see `server/routes/attempts.mjs`). Every row in `attempts` therefore belongs to a signed-in learner; a signed-in-vs-anonymous split over this table would be meaningless.\n\nThis is a private operations view for the maintainer only. mctl-academy's `README.md`/`PRIVACY.md` promise \"no analytics, no tracking\" to learners — that promise is about the public product and is unaffected by this internal dashboard, which is not linked anywhere in the app."
+            "content": "Reads `\"user\"`, `\"session\"`, and `attempts` directly from the `labs-mctl-academy` Postgres database via a **read-only** role (`academy_readonly`) — see mctl-academy migration `1755100000000_academy_readonly_role.mjs`. Grants are **column-level everywhere**, not table-level: only `\"user\".\"createdAt\"`, `\"session\".\"createdAt\"`, and on `attempts` only `(user_id, domain, correct, attempted_at)` — never `id`/`question_id`, and never `session.token` (the live session-cookie credential), `user.email`/`name`/`githubLogin`, `\"account\"` (OAuth tokens), or `\"verification\"`.\n\n**⚠️ Known gap, not yet closed:** this datasource and dashboard are not yet folder/permission-restricted in Grafana — see the header comment on this ConfigMap and on `academy-postgres-datasource.yaml` for what's required before this is actually private.\n\n**\"Sessions created\" is not a login-event ledger.** The `session` table is live authentication state, not an append-only log: a learner signing out (or session-cleanup pruning an expired row) removes it from this count, so these panels undercount historical logins. Building an immutable login-event log would need new app instrumentation, which is deliberately out of scope here (DB-only, no new logging).\n\n**Backfilled attempts land on the sync day, not the practice day.** Anonymous practice is stored only in the browser's `localStorage`; if that learner later signs in, the client backfills those answers via `POST /api/attempts` without the original timestamp, so Postgres stamps `attempted_at` with the sync moment. Days with unusually high attempts/unique-users can be one learner syncing weeks of offline practice at once, not a real usage spike.\n\n**There is no anonymous-usage panel.** `POST /api/attempts` returns 401 without inserting when unauthenticated (see `server/routes/attempts.mjs`) — every row in `attempts` belongs to a signed-in learner (see the backfill note above for how that learner may have practiced before signing in), so a signed-in-vs-anonymous split over this table would be meaningless.\n\nThis is a private operations view for the maintainer only. mctl-academy's `README.md`/`PRIVACY.md` promise \"no analytics, no tracking\" to learners — that promise is about the public product and is unaffected by this internal dashboard, which is not linked anywhere in the app."
           }
         }
       ]
