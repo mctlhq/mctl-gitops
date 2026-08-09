@@ -125,6 +125,9 @@ spec:
       - host labs-pfeifenpatenschaft labs-pfeifenpatenschaft all scram-sha-256
       - host labs-pfeifenpatenschaft-backend labs-pfeifenpatenschaft-backend all scram-sha-256
       - host labs-mctl-academy labs-mctl-academy all scram-sha-256
+      # Read-only Grafana dashboard role — SELECT-only, see
+      # mctl-academy migration 1755100000000_academy_readonly_role.mjs.
+      - host labs-mctl-academy academy_readonly all scram-sha-256
       - host all all 0.0.0.0/0 reject
 
   managed:
@@ -164,6 +167,18 @@ spec:
         ensure: present
         passwordSecret:
           name: labs-mctl-academy-db-creds
+      # Read-only role for the private mctl-academy usage dashboard in
+      # Grafana. CNPG owns this role's password (from Vault, via the
+      # academy-readonly-db-creds ExternalSecret below); table-level SELECT
+      # grants are applied separately by mctl-academy's own migration
+      # (1755100000000_academy_readonly_role.mjs), which CNPG's role
+      # management does not cover.
+      - name: academy_readonly
+        login: true
+        connectionLimit: 5
+        ensure: present
+        passwordSecret:
+          name: academy-readonly-db-creds
       - name: labs-pfeifenpatenschaft-backend
         login: true
         connectionLimit: 10

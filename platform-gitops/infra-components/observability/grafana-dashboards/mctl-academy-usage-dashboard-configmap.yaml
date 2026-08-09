@@ -1,5 +1,5 @@
 # Private, maintainer-only Grafana dashboard for mctl-academy usage:
-# sign-ups, logins, and questions answered per day. Queries the
+# sign-ups, sessions created, and questions answered per day. Queries the
 # "mctl-academy (read-only)" Postgres datasource (see
 # platform-gitops/bootstrap/templates/observability/academy-postgres-datasource.yaml)
 # directly against the labs-mctl-academy database — no new app
@@ -8,6 +8,15 @@
 # Not linked from mctl-academy's own UI or docs — README.md/PRIVACY.md's
 # "no analytics, no tracking" commitment is about the public product, not
 # this internal operations dashboard.
+#
+# grafana_folder places this in its own "Internal" folder (rather than
+# General) so folder-level view permissions can be locked down to the
+# maintainer only — Grafana's OIDC auto-signup (monitoring.yaml) grants every
+# authenticated non-admin org-wide Viewer by default, which would otherwise
+# make this readable by anyone Dex accepts. Restricting the folder ACL is a
+# one-time manual step via the Grafana UI/API after this ConfigMap first
+# creates the folder (not expressible via the sidecar ConfigMap mechanism) —
+# tracked as a required follow-up, not yet done as of this commit.
 #
 # Sidecar in the monitoring/grafana deployment auto-discovers ConfigMaps
 # with label `grafana_dashboard: "1"` — same pattern as
@@ -19,11 +28,13 @@ metadata:
   namespace: monitoring
   labels:
     grafana_dashboard: "1"
+  annotations:
+    grafana_folder: "Internal"
 data:
   mctl-academy-usage.json: |
     {
       "title": "mctl-academy — Usage (private)",
-      "description": "Sign-ups, logins, and questions answered. Maintainer-only; not a product feature.",
+      "description": "Sign-ups, sessions, and questions answered. Maintainer-only; not a product feature.",
       "uid": "mctl-academy-usage",
       "tags": ["mctl-academy", "usage", "internal"],
       "schemaVersion": 39,
@@ -58,7 +69,8 @@ data:
         {
           "type": "stat",
           "id": 2,
-          "title": "Logins (last 30d)",
+          "title": "Sessions created (last 30d)",
+          "description": "Counts session rows currently in the table, not a login-event ledger. A learner who signs out (or an expired session that gets pruned) disappears from this count, so it undercounts historical logins — see the About panel.",
           "datasource": { "type": "postgres", "uid": "mctl-academy-readonly-pg" },
           "gridPos": { "h": 5, "w": 6, "x": 6, "y": 1 },
           "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
@@ -124,7 +136,7 @@ data:
         {
           "type": "timeseries",
           "id": 6,
-          "title": "Logins per day",
+          "title": "Sessions created per day (not all-time logins — see About)",
           "datasource": { "type": "postgres", "uid": "mctl-academy-readonly-pg" },
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 7 },
           "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 50 }, "unit": "short" } },
@@ -132,7 +144,7 @@ data:
             {
               "refId": "A",
               "format": "time_series",
-              "rawSql": "SELECT date_trunc('day', \"createdAt\") AS time, count(*) AS logins FROM \"session\" WHERE $__timeFilter(\"createdAt\") GROUP BY 1 ORDER BY 1;"
+              "rawSql": "SELECT date_trunc('day', \"createdAt\") AS time, count(*) AS sessions FROM \"session\" WHERE $__timeFilter(\"createdAt\") GROUP BY 1 ORDER BY 1;"
             }
           ]
         },
@@ -174,32 +186,17 @@ data:
         {
           "type": "row",
           "id": 300,
-          "title": "Signed-in vs anonymous practice",
+          "title": "About",
           "gridPos": { "h": 1, "w": 24, "x": 0, "y": 23 }
-        },
-        {
-          "type": "piechart",
-          "id": 9,
-          "title": "Attempts: signed-in vs anonymous (last 30d)",
-          "datasource": { "type": "postgres", "uid": "mctl-academy-readonly-pg" },
-          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
-          "targets": [
-            {
-              "refId": "A",
-              "format": "table",
-              "rawSql": "SELECT (CASE WHEN user_id IS NULL THEN 'anonymous' ELSE 'signed-in' END) AS kind, count(*) AS attempts FROM attempts WHERE $__timeFilter(attempted_at) GROUP BY 1;"
-            }
-          ]
         },
         {
           "type": "text",
           "id": 10,
           "title": "About this dashboard",
-          "datasource": { "type": "postgres", "uid": "mctl-academy-readonly-pg" },
-          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 24 },
           "options": {
             "mode": "markdown",
-            "content": "Reads `\"user\"`, `\"session\"`, and `attempts` directly from the `labs-mctl-academy` Postgres database via a **read-only** role (`academy_readonly`) scoped to exactly those three tables — see mctl-academy migration `1755100000000_academy_readonly_role.mjs`. It deliberately cannot read `\"account\"` (OAuth tokens) or `\"verification\"`.\n\nThis is a private operations view for the maintainer only. mctl-academy's `README.md`/`PRIVACY.md` promise \"no analytics, no tracking\" to learners — that promise is about the public product and is unaffected by this internal dashboard, which is not linked anywhere in the app."
+            "content": "Reads `\"user\"`, `\"session\"`, and `attempts` directly from the `labs-mctl-academy` Postgres database via a **read-only** role (`academy_readonly`) scoped to exactly those three tables — see mctl-academy migration `1755100000000_academy_readonly_role.mjs`. It deliberately cannot read `\"account\"` (OAuth tokens) or `\"verification\"`.\n\n**\"Sessions created\" is not a login-event ledger.** The `session` table is live authentication state, not an append-only log: a learner signing out (or session-cleanup pruning an expired row) removes it from this count, so these panels undercount historical logins. Building an immutable login-event log would need new app instrumentation, which is deliberately out of scope here (DB-only, no new logging).\n\n**There is no anonymous-usage panel.** Practice done while signed out is stored only in the browser's `localStorage` and is never written to `attempts` — `POST /api/attempts` returns 401 without inserting when unauthenticated (see `server/routes/attempts.mjs`). Every row in `attempts` therefore belongs to a signed-in learner; a signed-in-vs-anonymous split over this table would be meaningless.\n\nThis is a private operations view for the maintainer only. mctl-academy's `README.md`/`PRIVACY.md` promise \"no analytics, no tracking\" to learners — that promise is about the public product and is unaffected by this internal dashboard, which is not linked anywhere in the app."
           }
         }
       ]

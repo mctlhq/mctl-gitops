@@ -215,11 +215,16 @@ spec:
               # Consumed via the $__env{} macro in the mctl-academy
               # read-only Postgres datasource (academy-postgres-datasource
               # ConfigMap) instead of a plaintext password in provisioning
-              # YAML.
+              # YAML. optional: true so a Grafana rollout never hard-fails
+              # with CreateContainerConfigError if this Secret doesn't exist
+              # yet (e.g. Vault not populated, or ESO hasn't synced) — the
+              # datasource just fails "Save & Test" until it does, instead
+              # of taking down all of Grafana.
               ACADEMY_RO_DB_PASSWORD:
                 secretKeyRef:
                   name: academy-grafana-readonly-secret
                   key: password
+                  optional: true
             grafana.ini:
               server:
                 root_url: https://grafana.mctl.ai
