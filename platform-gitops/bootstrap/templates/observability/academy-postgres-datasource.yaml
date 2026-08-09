@@ -1,0 +1,36 @@
+# Read-only Postgres datasource for the private mctl-academy usage
+# dashboard. Queries the labs-mctl-academy database on the shared CNPG
+# cluster directly via the academy_readonly role (SELECT-only on
+# "user"/"session"/attempts — see mctl-academy migration
+# 1755100000000_academy_readonly_role.mjs), so panels can compute
+# sign-ups/logins/attempts per day without any new app instrumentation.
+#
+# Password is never in this file: it's injected into the Grafana container
+# as ACADEMY_RO_DB_PASSWORD (see grafana.envValueFrom in monitoring.yaml,
+# sourced from the academy-grafana-readonly-secret ExternalSecret) and
+# expanded here via Grafana's $__env{} provisioning macro.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: academy-postgres-grafana-datasource
+  namespace: monitoring
+  labels:
+    grafana_datasource: "1"
+data:
+  academy-postgres-datasource.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: mctl-academy (read-only)
+        uid: mctl-academy-readonly-pg
+        type: postgres
+        url: shared-pg-rw.platform-db.svc.cluster.local:5432
+        database: labs-mctl-academy
+        user: academy_readonly
+        access: proxy
+        isDefault: false
+        jsonData:
+          sslmode: require
+          postgresVersion: 1700
+          timescaledb: false
+        secureJsonData:
+          password: $__env{ACADEMY_RO_DB_PASSWORD}

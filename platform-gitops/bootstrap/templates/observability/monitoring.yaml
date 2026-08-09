@@ -212,6 +212,14 @@ spec:
                 secretKeyRef:
                   name: grafana-admin-secret
                   key: oidc-client-secret
+              # Consumed via the $__env{} macro in the mctl-academy
+              # read-only Postgres datasource (academy-postgres-datasource
+              # ConfigMap) instead of a plaintext password in provisioning
+              # YAML.
+              ACADEMY_RO_DB_PASSWORD:
+                secretKeyRef:
+                  name: academy-grafana-readonly-secret
+                  key: password
             grafana.ini:
               server:
                 root_url: https://grafana.mctl.ai
