@@ -3,4 +3,4 @@
 # is removed again once the self-test run is green.
 image:
   repository: ghcr.io/mctlhq/bump-selftest
-  tag: "0.0.0"
+  tag: "0.0.2"
