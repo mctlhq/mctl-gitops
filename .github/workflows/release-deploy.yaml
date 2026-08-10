@@ -81,9 +81,13 @@ jobs:
             echo "::error::Vault lookup for platform/github-app-agents failed (HTTP $HTTP_CODE)"
             exit 1
           fi
-          APP_ID=$(jq -r '.data.data["app-id"]' /tmp/agents-app.json)
-          PRIVATE_KEY=$(jq -r '.data.data["private-key"]' /tmp/agents-app.json)
+          APP_ID=$(jq -r '.data.data["app-id"] // empty' /tmp/agents-app.json)
+          PRIVATE_KEY=$(jq -r '.data.data["private-key"] // empty' /tmp/agents-app.json)
           rm -f /tmp/agents-app.json
+          if [[ -z "$APP_ID" || -z "$PRIVATE_KEY" ]]; then
+            echo "::error::platform/github-app-agents is missing app-id or private-key"
+            exit 1
+          fi
           echo "::add-mask::${APP_ID}"
           echo "::add-mask::${PRIVATE_KEY}"
           echo "app-id=${APP_ID}" >> "$GITHUB_OUTPUT"
