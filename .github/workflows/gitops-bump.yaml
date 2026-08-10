@@ -10,9 +10,9 @@ run-name: "gitops-bump ${{ inputs.image_name }}:${{ inputs.image_tag }}"
 #
 # Token requirements for callers (GITOPS_TOKEN):
 #   - actions: write  on mctlhq/mctl-gitops  (for workflow_dispatch)
-#   Commits are made with a mctl-agents GitHub App token this workflow mints
-#   itself (main is a protected branch; that app is on its bypass list), so
-#   the caller does NOT need repo-write access to mctl-gitops.
+#   Commits are made with an MCTL App token this workflow mints itself (main
+#   is protected by a ruleset; that app is on its bypass list), so the caller
+#   does NOT need repo-write access to mctl-gitops.
 on:
   workflow_dispatch:
     inputs:
@@ -45,47 +45,18 @@ jobs:
     permissions:
       contents: write  # commit + push to main
     steps:
-      # main is protected (required PR + review); the default GITHUB_TOKEN
-      # has no bypass for that, so a plain checkout+push here gets rejected.
-      # The mctl-agents GitHub App is on this repo's bypass list for exactly
-      # this reason — mint a token as that app instead. Its credentials live
-      # in Vault at platform/github-app-agents (NOT the repo's own
-      # APP_ID/APP_PRIVATE_KEY secrets, which are a different app — MCTL
-      # App — that has no write access to this repo).
-      - name: Fetch mctl-agents App credentials from Vault
-        id: agents_app_creds
-        run: |
-          set -euo pipefail
-          VAULT_URL="${{ secrets.VAULT_ADDR }}/v1/secret/data/platform/github-app-agents"
-          HTTP_CODE=$(curl -sL -o /tmp/agents-app.json -w "%{http_code}" \
-            -H "X-Vault-Token: ${{ secrets.VAULT_TOKEN }}" \
-            "$VAULT_URL")
-          if [[ "$HTTP_CODE" != "200" ]]; then
-            echo "::error::Vault lookup for platform/github-app-agents failed (HTTP $HTTP_CODE)"
-            exit 1
-          fi
-          APP_ID=$(jq -r '.data.data["app-id"] // empty' /tmp/agents-app.json)
-          PRIVATE_KEY=$(jq -r '.data.data["private-key"] // empty' /tmp/agents-app.json)
-          rm -f /tmp/agents-app.json
-          if [[ -z "$APP_ID" || -z "$PRIVATE_KEY" ]]; then
-            echo "::error::platform/github-app-agents is missing app-id or private-key"
-            exit 1
-          fi
-          echo "::add-mask::${APP_ID}"
-          echo "::add-mask::${PRIVATE_KEY}"
-          echo "app-id=${APP_ID}" >> "$GITHUB_OUTPUT"
-          {
-            echo "private-key<<PRIVATE_KEY_EOF"
-            echo "${PRIVATE_KEY}"
-            echo "PRIVATE_KEY_EOF"
-          } >> "$GITHUB_OUTPUT"
-
+      # main is protected by the `main-protection` ruleset (required PR +
+      # review); the default GITHUB_TOKEN has no bypass for it, so a plain
+      # checkout+push here gets rejected with GH013. MCTL App is on that
+      # ruleset's bypass list specifically for these tag-bump commits — the
+      # narrowly-scoped exception to "never commit to main" that CLAUDE.md
+      # documents — so mint a token as that app and push with it.
       - name: Generate GitHub App token
         id: app_token
         uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
         with:
-          app-id: ${{ steps.agents_app_creds.outputs.app-id }}
-          private-key: ${{ steps.agents_app_creds.outputs.private-key }}
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
           owner: mctlhq
           repositories: mctl-gitops
 
