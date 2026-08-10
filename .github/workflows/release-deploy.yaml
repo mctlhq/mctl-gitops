@@ -62,9 +62,23 @@ jobs:
     permissions:
       contents: write
     steps:
+      # main is protected (required PR + review); the default GITHUB_TOKEN
+      # has no bypass for that, so a plain checkout+push here gets GH006
+      # rejected. The mctl-agents GitHub App is on this repo's bypass list
+      # for exactly this reason — mint a token as that app instead.
+      - name: Generate GitHub App token
+        id: app_token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: mctlhq
+          repositories: mctl-gitops
+
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: main
+          token: ${{ steps.app_token.outputs.token }}
 
       - name: Validate mutually exclusive inputs
         env:
