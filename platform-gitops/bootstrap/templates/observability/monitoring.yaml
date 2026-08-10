@@ -212,6 +212,19 @@ spec:
                 secretKeyRef:
                   name: grafana-admin-secret
                   key: oidc-client-secret
+              # Consumed via the $__env{} macro in the mctl-academy
+              # read-only Postgres datasource (academy-postgres-datasource
+              # ConfigMap) instead of a plaintext password in provisioning
+              # YAML. optional: true so a Grafana rollout never hard-fails
+              # with CreateContainerConfigError if this Secret doesn't exist
+              # yet (e.g. Vault not populated, or ESO hasn't synced) — the
+              # datasource just fails "Save & Test" until it does, instead
+              # of taking down all of Grafana.
+              ACADEMY_RO_DB_PASSWORD:
+                secretKeyRef:
+                  name: academy-grafana-readonly-secret
+                  key: password
+                  optional: true
             grafana.ini:
               server:
                 root_url: https://grafana.mctl.ai
@@ -255,6 +268,22 @@ spec:
                 label: grafana_dashboard
                 labelValue: "1"
                 searchNamespace: ALL
+                # Reads the grafana_folder ConfigMap ANNOTATION (not the
+                # discovery label above) to place a dashboard into a named
+                # Grafana folder instead of always landing in General — used
+                # by mctl-academy-usage-dashboard-configmap.yaml so its
+                # folder ACL can be locked down independently.
+                folderAnnotation: grafana_folder
+                provider:
+                  # folderAnnotation alone only tells the k8s-sidecar where
+                  # to WRITE the dashboard JSON on disk (a subdirectory named
+                  # after the annotation value) — it does not, by itself,
+                  # make Grafana's dashboard provisioner treat that
+                  # subdirectory as a distinct folder. Without this, every
+                  # sidecar-discovered dashboard still imports flat into one
+                  # default folder regardless of folderAnnotation, silently
+                  # defeating the Internal-folder ACL plan.
+                  foldersFromFilesStructure: true
             plugins:
               - victoriametrics-metrics-datasource
             resources:

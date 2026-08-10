@@ -1,0 +1,200 @@
+# Private, maintainer-only Grafana dashboard for mctl-academy usage:
+# sign-ups, sessions created, and questions answered per day. Queries the
+# "mctl-academy (read-only)" Postgres datasource (see
+# platform-gitops/bootstrap/templates/observability/academy-postgres-datasource.yaml)
+# directly against the labs-mctl-academy database — no new app
+# instrumentation, no logs, no metrics exporter.
+#
+# Not linked from mctl-academy's own UI or docs — README.md/PRIVACY.md's
+# "no analytics, no tracking" commitment is about the public product, not
+# this internal operations dashboard.
+#
+# grafana_folder places this in its own "Internal" folder (rather than
+# General) so folder-level view permissions can be locked down to the
+# maintainer only — Grafana's OIDC auto-signup (monitoring.yaml) grants every
+# authenticated non-admin org-wide Viewer by default, which would otherwise
+# make this readable by anyone Dex accepts. Restricting the folder ACL is a
+# one-time manual step via the Grafana UI/API after this ConfigMap first
+# creates the folder — not expressible via the sidecar ConfigMap mechanism,
+# and the folder does not exist to set permissions on until this ArgoCD
+# Application syncs at least once.
+#
+# REQUIRED, tracked follow-up (owner: mashkovd/session operator, due:
+# immediately after this Application first syncs Healthy):
+#   1. Grafana UI → Internal folder → Permissions → remove the implicit
+#      "Viewer can view" default, grant only the Admin org role (or the
+#      specific account) View access.
+#   2. Verify by opening the dashboard URL in a private/incognito window
+#      signed in as any non-admin Dex-authenticated account (or via the
+#      Grafana HTTP API as that account) and confirming a 403, not the
+#      dashboard.
+# Until both are done, treat this dashboard as NOT actually private.
+#
+# Sidecar in the monitoring/grafana deployment auto-discovers ConfigMaps
+# with label `grafana_dashboard: "1"` — same pattern as
+# mctl-agent-cleanup-dashboard-configmap.yaml.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mctl-academy-usage-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+  annotations:
+    grafana_folder: "Internal"
+data:
+  mctl-academy-usage.json: |
+    {
+      "title": "mctl-academy — Usage (private)",
+      "description": "Sign-ups, sessions, and questions answered. Maintainer-only; not a product feature.",
+      "uid": "mctl-academy-usage",
+      "tags": ["mctl-academy", "usage", "internal"],
+      "schemaVersion": 39,
+      "version": 1,
+      "editable": true,
+      "graphTooltip": 1,
+      "timezone": "browser",
+      "time": { "from": "now-30d", "to": "now" },
+      "refresh": "1h",
+      "panels": [
+        {
+          "type": "row",
+          "id": 100,
+          "title": "Summary",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+        },
+        {
+          "type": "stat",
+          "id": 1,
+          "title": "Total sign-ups (all time)",
+          "datasource": { "type": "postgres", "uid": "mctl-academy-readonly-pg" },
+          "gridPos": { "h": 5, "w": 8, "x": 0, "y": 1 },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
+          "targets": [
+            {
+              "refId": "A",
+              "format": "table",
+              "rawSql": "SELECT count(*) FROM \"user\";"
+            }
+          ]
+        },
+        {
+          "type": "stat",
+          "id": 2,
+          "title": "Sessions created (selected range)",
+          "description": "Counts session rows currently in the table, not a login-event ledger. A learner who signs out (or an expired session that gets pruned) disappears from this count, so it undercounts historical logins — see the About panel.",
+          "datasource": { "type": "postgres", "uid": "mctl-academy-readonly-pg" },
+          "gridPos": { "h": 5, "w": 8, "x": 8, "y": 1 },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
+          "targets": [
+            {
+              "refId": "A",
+              "format": "table",
+              "rawSql": "SELECT count(*) FROM \"session\" WHERE $__timeFilter(\"createdAt\");"
+            }
+          ]
+        },
+        {
+          "type": "stat",
+          "id": 3,
+          "title": "Attempts (selected range)",
+          "datasource": { "type": "postgres", "uid": "mctl-academy-readonly-pg" },
+          "gridPos": { "h": 5, "w": 8, "x": 16, "y": 1 },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
+          "targets": [
+            {
+              "refId": "A",
+              "format": "table",
+              "rawSql": "SELECT count(*) FROM attempts WHERE $__timeFilter(attempted_at);"
+            }
+          ]
+        },
+        {
+          "type": "row",
+          "id": 200,
+          "title": "Trends",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 6 }
+        },
+        {
+          "type": "timeseries",
+          "id": 5,
+          "title": "Sign-ups per day",
+          "datasource": { "type": "postgres", "uid": "mctl-academy-readonly-pg" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 7 },
+          "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 50 }, "unit": "short" } },
+          "targets": [
+            {
+              "refId": "A",
+              "format": "time_series",
+              "rawSql": "SELECT date_trunc('day', \"createdAt\") AS time, count(*) AS signups FROM \"user\" WHERE $__timeFilter(\"createdAt\") GROUP BY 1 ORDER BY 1;"
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "id": 6,
+          "title": "Sessions created per day (not all-time logins — see About)",
+          "datasource": { "type": "postgres", "uid": "mctl-academy-readonly-pg" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 7 },
+          "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 50 }, "unit": "short" } },
+          "targets": [
+            {
+              "refId": "A",
+              "format": "time_series",
+              "rawSql": "SELECT date_trunc('day', \"createdAt\") AS time, count(*) AS sessions FROM \"session\" WHERE $__timeFilter(\"createdAt\") GROUP BY 1 ORDER BY 1;"
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "id": 7,
+          "title": "Questions answered per day (total vs correct — backfill caveat, see About)",
+          "datasource": { "type": "postgres", "uid": "mctl-academy-readonly-pg" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 15 },
+          "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10 }, "unit": "short" } },
+          "targets": [
+            {
+              "refId": "A",
+              "format": "time_series",
+              "rawSql": "SELECT date_trunc('day', attempted_at) AS time, count(*) AS total_attempts FROM attempts WHERE $__timeFilter(attempted_at) GROUP BY 1 ORDER BY 1;"
+            },
+            {
+              "refId": "B",
+              "format": "time_series",
+              "rawSql": "SELECT date_trunc('day', attempted_at) AS time, count(*) FILTER (WHERE correct) AS correct_attempts FROM attempts WHERE $__timeFilter(attempted_at) GROUP BY 1 ORDER BY 1;"
+            }
+          ]
+        },
+        {
+          "type": "barchart",
+          "id": 8,
+          "title": "Attempts by domain (selected range)",
+          "datasource": { "type": "postgres", "uid": "mctl-academy-readonly-pg" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 15 },
+          "options": { "orientation": "horizontal", "legend": { "displayMode": "list", "placement": "right" } },
+          "targets": [
+            {
+              "refId": "A",
+              "format": "table",
+              "rawSql": "SELECT domain, count(*) AS attempts FROM attempts WHERE $__timeFilter(attempted_at) GROUP BY domain ORDER BY attempts DESC;"
+            }
+          ]
+        },
+        {
+          "type": "row",
+          "id": 300,
+          "title": "About",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 23 }
+        },
+        {
+          "type": "text",
+          "id": 10,
+          "title": "About this dashboard",
+          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 24 },
+          "options": {
+            "mode": "markdown",
+            "content": "Reads `\"user\"`, `\"session\"`, and `attempts` directly from the `labs-mctl-academy` Postgres database via a **read-only** role (`academy_readonly`) — see mctl-academy migration `1755100000000_academy_readonly_role.mjs`. Grants are **column-level everywhere**, not table-level: only `\"user\".\"createdAt\"`, `\"session\".\"createdAt\"`, and on `attempts` only `(domain, correct, attempted_at)` — never `id`/`question_id`/`user_id`, and never `session.token` (the live session-cookie credential), `user.email`/`name`/`githubLogin`, `\"account\"` (OAuth tokens), or `\"verification\"`.\n\n**There is no \"unique active users\" panel, on purpose.** Computing it needs `count(DISTINCT user_id)`, and granting `user_id` on `attempts` would let anything querying this role directly (e.g. Grafana Explore, not just this dashboard's aggregate panels) pair a specific pseudonymous learner with their exact per-question `domain`/`correct`/`attempted_at` history — the kind of per-individual observability `PRIVACY.md` promises the product doesn't do, even internally. Aggregate attempt counts don't need `user_id` at all, so it's simply not granted.\n\n**⚠️ Known gap, not yet closed:** this datasource and dashboard are not yet folder/permission-restricted in Grafana — see the header comment on this ConfigMap and on `academy-postgres-datasource.yaml` for what's required before this is actually private.\n\n**\"Sessions created\" is not a login-event ledger.** The `session` table is live authentication state, not an append-only log: a learner signing out (or session-cleanup pruning an expired row) removes it from this count, so these panels undercount historical logins. Building an immutable login-event log would need new app instrumentation, which is deliberately out of scope here (DB-only, no new logging).\n\n**Backfilled attempts land on the sync day, not the practice day.** Anonymous practice is stored only in the browser's `localStorage`; if that learner later signs in, the client backfills those answers via `POST /api/attempts` without the original timestamp, so Postgres stamps `attempted_at` with the sync moment. A day with an unusually high attempts count can be one learner syncing weeks of offline practice at once, not a real usage spike.\n\n**There is no anonymous-usage panel.** `POST /api/attempts` returns 401 without inserting when unauthenticated (see `server/routes/attempts.mjs`) — every row in `attempts` belongs to a signed-in learner (see the backfill note above for how that learner may have practiced before signing in), so a signed-in-vs-anonymous split over this table would be meaningless.\n\n**Past days on this dashboard are not immutable.** Every panel reads live data, not an event log — a learner's \"Clear history\" or account deletion cascades into `attempts`, retroactively shrinking whatever day those rows used to count toward. Correct (deletion should actually delete, including from aggregates), but it means a number you saw here yesterday can be lower today.\n\nThis is a private operations view for the maintainer only. mctl-academy's `README.md`/`PRIVACY.md` promise \"no analytics, no tracking\" to learners — that promise is about the public product and is unaffected by this internal dashboard, which is not linked anywhere in the app."
+          }
+        }
+      ]
+    }
