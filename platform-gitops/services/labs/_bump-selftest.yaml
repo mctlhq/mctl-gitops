@@ -1,0 +1,6 @@
+# Scratch file for verifying the gitops-bump push path under the mctl-agents
+# App token. Not a real service — no ArgoCD Application points at it, and it
+# is removed again once the self-test run is green.
+image:
+  repository: ghcr.io/mctlhq/bump-selftest
+  tag: "0.0.0"
