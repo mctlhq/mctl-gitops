@@ -54,6 +54,17 @@ data:
         access: proxy
         isDefault: false
         jsonData:
+          # Duplicates the top-level `database` above. The top-level field
+          # is what the backend actually connects with (confirmed via
+          # "Save & Test" — succeeds), but Grafana's query-time frontend
+          # gate (packages/grafana-sql/src/datasource/SqlDatasource.ts,
+          # checkForDatabaseIssue) reads jsonData.database specifically and
+          # blocks every panel query with "You do not currently have a
+          # default database configured" if only the top-level field is
+          # set — confirmed live on this exact datasource: connection test
+          # green, every panel erroring with that message until this was
+          # added.
+          database: labs-mctl-academy
           sslmode: require
           postgresVersion: 1700
           timescaledb: false
