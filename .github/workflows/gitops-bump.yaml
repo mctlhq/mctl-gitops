@@ -10,8 +10,9 @@ run-name: "gitops-bump ${{ inputs.image_name }}:${{ inputs.image_tag }}"
 #
 # Token requirements for callers (GITOPS_TOKEN):
 #   - actions: write  on mctlhq/mctl-gitops  (for workflow_dispatch)
-#   Commits are made with this workflow's own GITHUB_TOKEN (contents: write),
-#   so the caller does NOT need repo-write access to mctl-gitops.
+#   Commits are made with a mctl-agents GitHub App token this workflow mints
+#   itself (main is a protected branch; that app is on its bypass list), so
+#   the caller does NOT need repo-write access to mctl-gitops.
 on:
   workflow_dispatch:
     inputs:
@@ -44,9 +45,23 @@ jobs:
     permissions:
       contents: write  # commit + push to main
     steps:
+      # main is protected (required PR + review); the default GITHUB_TOKEN
+      # has no bypass for that, so a plain checkout+push here gets GH006
+      # rejected. The mctl-agents GitHub App is on this repo's bypass list
+      # for exactly this reason — mint a token as that app instead.
+      - name: Generate GitHub App token
+        id: app_token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: mctlhq
+          repositories: mctl-gitops
+
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: main
+          token: ${{ steps.app_token.outputs.token }}
 
       - name: Bump image tags
         env:

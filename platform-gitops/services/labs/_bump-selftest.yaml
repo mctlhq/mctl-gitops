@@ -1,0 +1,5 @@
+# Scratch file for verifying the gitops-bump workflow's push mechanism after
+# switching it to an App token — not a real service, removed before merge.
+image:
+  repository: ghcr.io/mctlhq/bump-selftest
+  tag: "0.0.0"
