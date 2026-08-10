@@ -2,4 +2,4 @@
 # switching it to an App token — not a real service, removed before merge.
 image:
   repository: ghcr.io/mctlhq/bump-selftest
-  tag: "0.0.0"
+  tag: "0.0.1"
