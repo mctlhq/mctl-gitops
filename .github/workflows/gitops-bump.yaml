@@ -10,9 +10,9 @@ run-name: "gitops-bump ${{ inputs.image_name }}:${{ inputs.image_tag }}"
 #
 # Token requirements for callers (GITOPS_TOKEN):
 #   - actions: write  on mctlhq/mctl-gitops  (for workflow_dispatch)
-#   Commits are made with an MCTL App token this workflow mints itself (main
-#   is protected by a ruleset; that app is on its bypass list), so the caller
-#   does NOT need repo-write access to mctl-gitops.
+#   Commits are made with an mctl-agents App token this workflow mints itself
+#   (main is protected by a ruleset; that app is on its bypass list), so the
+#   caller does NOT need repo-write access to mctl-gitops.
 on:
   workflow_dispatch:
     inputs:
@@ -47,16 +47,26 @@ jobs:
     steps:
       # main is protected by the `main-protection` ruleset (required PR +
       # review); the default GITHUB_TOKEN has no bypass for it, so a plain
-      # checkout+push here gets rejected with GH013. MCTL App is on that
-      # ruleset's bypass list specifically for these tag-bump commits — the
-      # narrowly-scoped exception to "never commit to main" that CLAUDE.md
-      # documents — so mint a token as that app and push with it.
+      # checkout+push here gets rejected with GH013. The mctl-agents App is
+      # on that ruleset's bypass list for exactly these tag-bump commits —
+      # the narrowly-scoped exception to "never commit to main" that
+      # CLAUDE.md documents — so mint a token as that app and push with it.
+      #
+      # Deliberately NOT the repo's APP_ID/APP_PRIVATE_KEY (MCTL App): that
+      # is the user-facing App people authorize at mctl.ai/#request-access,
+      # whose published description promises least privilege. Letting it
+      # bypass branch protection here would widen it in exactly the
+      # direction #761 is trying to narrow. mctl-agents is backend-only
+      # automation, so the bypass stays with it.
+      #
+      # Its credentials are repo secrets rather than a Vault lookup: Vault
+      # is unreachable from GitHub Actions runners (#779).
       - name: Generate GitHub App token
         id: app_token
         uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
         with:
-          app-id: ${{ secrets.APP_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.AGENTS_APP_ID }}
+          private-key: ${{ secrets.AGENTS_APP_PRIVATE_KEY }}
           owner: mctlhq
           repositories: mctl-gitops
 
