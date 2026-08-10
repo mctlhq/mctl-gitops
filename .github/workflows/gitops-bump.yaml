@@ -58,6 +58,10 @@ jobs:
           owner: mctlhq
           repositories: mctl-gitops
 
+      - name: Debug app identity
+        run: |
+          echo "app-slug: ${{ steps.app_token.outputs.app-slug }}" >> "$GITHUB_STEP_SUMMARY"
+
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: main
