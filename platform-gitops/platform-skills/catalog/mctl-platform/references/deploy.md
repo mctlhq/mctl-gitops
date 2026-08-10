@@ -94,6 +94,64 @@ mctl_deploy_service(
 )
 ```
 
+## Release → Auto-Deploy Patterns
+
+Two different conventions exist across mctlhq/* service repos for getting a
+new version deployed after code merges to `main`. Check which one a repo
+actually uses (grep its `.github/workflows/`) before assuming either —
+`mctl_deploy_service`'s own onboarding guidance only documents pattern B,
+which is now the less common one for actively-developed service repos.
+
+**Pattern A — release-please + centralized dispatch (current default for
+mctlhq/* org repos: mctl-agent, mctl-api, mctl-agents, mctl-docs,
+mctl-portal, mctl-telegram).** `release-please` accumulates conventional
+commits into a version-bump PR; merging it cuts a real tag + GitHub release
+(`release_created == true`). A step in that same `release-please.yml`
+job then mints a short-lived GitHub App token scoped to `mctl-gitops`
+(`actions/create-github-app-token`, org secrets `APP_ID`/`APP_PRIVATE_KEY`)
+and dispatches `mctl-gitops`'s `release-deploy.yaml` (`workflow_dispatch`)
+with the new tag, image name, team, and component — that reusable workflow
+builds the image and bumps `image.tag` in
+`platform-gitops/services/<team>/<component>/values.yaml`, which ArgoCD then
+syncs. Deploys are therefore versioned and deliberate (one per release), not
+one per commit. Copy an existing repo's `release-please.yml` verbatim when
+onboarding a new one — team_name/component_name/image_name are the only
+things that change; add `values_path` or `values_glob` only if that repo's
+gitops values file isn't at the default
+`platform-gitops/services/<team>/<component>/values.yaml`.
+
+Onboarding checklist for Pattern A on a **new** repo:
+- `release-please.yml`'s deploy-dispatch step (above) — easy to forget if
+  the repo starts release-please before it's actually onboarded as a
+  service; nothing fails loudly when it's missing, releases just silently
+  never deploy (this happened to mctl-academy — onboarded, but the dispatch
+  step was never added after the fact; every release since produced a tag
+  with nothing consuming it, until fixed in mctl-academy#154).
+- The release-please PR itself needs a passing review to merge under normal
+  branch protection (`required_approving_review_count: 1`). If the repo's
+  `claude-review.yml` calls the centralized reusable workflow
+  (`mctlhq/.github/.github/workflows/claude-review.yml`), its default
+  `allowed-bots: mctl-claude-remote,github-actions` already covers this —
+  nothing to add. If a repo instead inlines `claude-code-action` directly
+  (older repos, pre-dating the reusable workflow), it needs
+  `allowed_bots: "github-actions"` added explicitly or release-please PRs
+  can never pass review — see the 11-repo fix landed 2026-07-31. Separately,
+  first-time/held Actions runs on a release-please PR (`action_required`
+  conclusion, 0 jobs started) are a different, unrelated gate — approve them
+  with `gh api --method POST repos/<owner>/<repo>/actions/runs/<id>/approve`
+  (once per held run) rather than treating that as a review-bot problem.
+
+**Pattern B — direct per-push deploy (older/simpler repos: e.g.
+mctl-instruments).** A `deploy` job in the repo's own `ci.yml` POSTs
+straight to `https://api.mctl.ai/api/v1/operations/deploy-service/execute`
+on every push to `main`, authenticated with a classic PAT
+(`MCTL_GITHUB_TOKEN`, scope `read:user`) stored as a repo secret. No
+release-please, no semver tag gate — every merge to main deploys. This is
+what the scaffolding guide at docs.mctl.ai and `mctl_deploy_service`'s own
+onboarding instructions describe; it's the simplest path for a brand-new
+repo that doesn't need controlled/versioned releases, but do not assume an
+established service repo uses it — check first.
+
 ## Deploy Actions
 
 | Action | When to use | What happens |
