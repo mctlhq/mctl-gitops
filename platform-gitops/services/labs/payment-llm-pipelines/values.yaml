@@ -1,0 +1,43 @@
+# Service: payment-llm-pipelines
+# Team: labs
+
+# Chart: base-service
+
+image:
+  repository: ghcr.io/mctlhq/payment-llm-pipelines
+  tag: "0.1.0"
+imagePullSecrets:
+  - name: ghcr-credentials
+service:
+  port: 8080
+backstage:
+  kubernetesId: payment-llm-pipelines
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+env:
+  APP_ENV: production
+  MOCK: "1"
+  APP_VERSION: 0.1.0
+  GIT_COMMIT: da144f8
+ingress:
+  enabled: true
+  hosts:
+    - labs-payment-llm-pipelines.mctl.ai
+    - labs-payment-llm-pipelines.mctl.me
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls:
+    - secretName: payment-llm-pipelines-tls
+      hosts:
+        - labs-payment-llm-pipelines.mctl.ai
+        - labs-payment-llm-pipelines.mctl.me
+probes:
+  liveness:
+    path: /healthz
+  readiness:
+    path: /healthz

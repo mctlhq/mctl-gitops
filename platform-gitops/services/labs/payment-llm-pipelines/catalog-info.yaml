@@ -1,0 +1,38 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: payment-llm-pipelines
+  namespace: labs
+  description: "payment-llm-pipelines service"
+  annotations:
+    backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=labs-payment-llm-pipelines
+    backstage.io/kubernetes-id: payment-llm-pipelines
+    backstage.io/kubernetes-namespace: labs
+    argocd/app-name: labs-payment-llm-pipelines
+    github.com/source-repo: mashkovd/payment-llm-pipelines
+    # mctl.me/auto-deploy — triggered by GitHub App webhook on tag push
+    #   "true" or "auto" — deploy immediately via scaffolder
+    #   "confirm"         — notify only, user deploys manually from UI
+    #   "false" or absent — skip
+    mctl.me/auto-deploy: "false"
+  links:
+    - url: https://ops.mctl.ai/applications/argocd/labs-payment-llm-pipelines
+      title: ArgoCD
+      icon: dashboard
+    - url: https://github.com/mashkovd/payment-llm-pipelines
+      title: Source Repository
+      icon: github
+    - url: https://workflows.mctl.ai
+      title: Argo Workflows
+      icon: github
+    - url: https://labs-payment-llm-pipelines.mctl.ai
+      title: Service URL
+      icon: web
+  labels:
+    team: labs
+    env: apps
+spec:
+  type: service
+  lifecycle: production
+  owner: group:default/labs
+  system: system:default/team-labs
