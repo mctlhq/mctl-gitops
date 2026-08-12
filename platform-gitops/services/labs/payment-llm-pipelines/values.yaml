@@ -23,7 +23,7 @@ env:
   APP_ENV: production
   MOCK: "1"
   APP_VERSION: 0.1.0
-  GIT_COMMIT: da144f8
+  GIT_COMMIT: 72fd714
 ingress:
   enabled: true
   hosts:
@@ -41,3 +41,4 @@ probes:
     path: /healthz
   readiness:
     path: /healthz
+extraContainers: []
