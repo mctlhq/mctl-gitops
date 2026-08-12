@@ -23,7 +23,7 @@ env:
   APP_ENV: production
   MOCK: "1"
   APP_VERSION: 0.1.0
-  GIT_COMMIT: cf53329
+  GIT_COMMIT: c04e0e5
 ingress:
   enabled: true
   hosts:
