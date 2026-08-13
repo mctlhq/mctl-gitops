@@ -21,6 +21,19 @@ spec:
     - from:
         # Raft peer traffic (8201) and vault-active/standby service routing.
         - podSelector: {}
+        # Vault is published at secrets.mctl.ai, and the two biggest in-cluster
+        # consumers reach it through that public hostname rather than the
+        # Service: mctl-portal and mctl-api both set
+        # VAULT_ADDR: https://secrets.mctl.ai. Their connections therefore
+        # arrive from a Traefik pod, so the mctl-api/backstage entries below do
+        # not cover them and omitting Traefik would break Backstage and mctl-api
+        # outright.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: traefik
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
         # ESO resolves every ExternalSecret in the cluster from here.
         - namespaceSelector:
             matchLabels:
@@ -39,6 +52,13 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: monitoring
+        # `admins` is deliberately not listed. It hosts platform workloads and is
+        # named explicitly in the mctl-api and argo-workflows policies, but no
+        # container there talks to Vault directly (checked every container and
+        # initContainer in the namespace for a Vault address). Its workflow pods
+        # are covered by the rule below, and anything using the public hostname
+        # arrives via Traefik above.
+        #
         # Argo runs some workflows inside the tenant namespace itself (verified:
         # an ovk-namespaced Workflow at time of writing), and those pods still
         # need Vault login. Namespace + pod selector in one element ANDs them, so

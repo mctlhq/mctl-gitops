@@ -49,6 +49,13 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: argo-workflows
+        # Grafana queries Postgres directly: the academy usage dashboard is
+        # provisioned with a datasource pointed at shared-pg-rw:5432
+        # (observability/academy-postgres-datasource.yaml), so monitoring needs
+        # 5432 here and not only the metrics port below.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
       ports:
         - protocol: TCP
           port: 5432
