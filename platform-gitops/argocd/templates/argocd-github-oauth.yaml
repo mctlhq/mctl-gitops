@@ -1,6 +1,13 @@
 apiVersion: external-secrets.io/v1beta1
 kind: ExternalSecret
 metadata:
+  # Historical name: this used to carry MCTL App's client id/secret for an
+  # ArgoCD dex GitHub connector. That connector is gone (it lived only in the
+  # one-shot Terraform bootstrap values and could never resolve these keys —
+  # they are written by this chart, which in the same sync replaces the dex
+  # config with the Backstage OIDC connector). No GitHub credentials here any
+  # more. The name is kept because renaming an ExternalSecret means deleting
+  # and recreating it, and this one merges into argocd-secret.
   name: argocd-github-oauth
   namespace: argocd
   annotations:
@@ -14,14 +21,6 @@ spec:
     name: argocd-secret
     creationPolicy: Merge  # merge with existing secret, don't overwrite
   data:
-    - secretKey: github-client-id
-      remoteRef:
-        key: platform/github-app
-        property: client-id
-    - secretKey: github-client-secret
-      remoteRef:
-        key: platform/github-app
-        property: client-secret
     - secretKey: argo-workflows-sso-client-secret
       remoteRef:
         key: platform/argo-workflows/sso

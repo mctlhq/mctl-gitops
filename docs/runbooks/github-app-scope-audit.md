@@ -86,32 +86,44 @@ nothing:
   code justifying `actions:write` on customer repos. Deleted
   (mctl-portal#56).
 
-## Open decision: `members:read`
+## `members:read` — resolved, no consumer
 
-`members:read` is **not** unused, contrary to the first pass of this audit.
+An intermediate pass of this audit claimed `members:read` was load-bearing
+because `infrastructure/k3s-preview/cluster-bootstrap/helm-values/argocd.yaml`
+bootstrapped ArgoCD with a dex **GitHub** connector gated on
+`orgs: [mctlhq]`. That connector existed, but it could never function, so
+the permission had no working consumer.
 
-`infrastructure/k3s-preview/cluster-bootstrap/helm-values/argocd.yaml`
-bootstraps ArgoCD with a dex **GitHub** connector using
-`$github-client-id` / `$github-client-secret` (synced from
-`platform/github-app` by `platform-gitops/argocd/templates/argocd-github-oauth.yaml`)
-and gates on `orgs: [mctlhq]`. Resolving org membership is exactly what
-`members:read` backs.
+ArgoCD's live SSO is the OIDC connector against Backstage in
+`platform-gitops/argocd/values.yaml`, applied by the `argocd-self-managed`
+Application. The Terraform values are a **one-shot bootstrap**
+(`bootstrap_argocd`, default `false`, deliberately removed from state — see
+`cluster-bootstrap/argocd.tf`), and `argocd-self-managed` overwrites
+`dex.config` as soon as it first syncs.
 
-The self-managed production ArgoCD does **not** use this — it runs an OIDC
-connector against Backstage (`platform-gitops/argocd/values.yaml`), so the
-GitHub connector only matters during bootstrap.
+The GitHub connector referenced `$github-client-id` / `$github-client-secret`.
+Those keys are written into `argocd-secret` by
+`platform-gitops/argocd/templates/argocd-github-oauth.yaml` — part of the
+**self-managed chart**, not of the bootstrap release. So:
 
-Either:
+- during bootstrap the keys do not exist yet (nor does ESO, which arrives via
+  `root-app`), and dex cannot resolve them;
+- by the time they exist, the same sync has already replaced `dex.config`
+  with the Backstage connector.
 
-1. Migrate the preview bootstrap to the same Backstage OIDC connector prod
-   already uses, then drop `members:read` and the two ExternalSecret keys; or
-2. Keep `members:read` on MCTL App and accept that customers are asked for
-   org-membership read.
+Dead in every state. The connector and the two now-orphaned ExternalSecret
+keys were removed, and `members:read` dropped from MCTL App.
 
-Option 1 is the one consistent with the rule at the top of this file.
-Not yet done — it changes how operators log in to the preview cluster's
-ArgoCD, so it needs a deliberate window rather than riding along with a
-scope cleanup.
+There is consequently no ArgoCD SSO between the bootstrap release coming up
+and `argocd-self-managed` syncing — unchanged behaviour, now documented in
+`infrastructure/k3s-preview/README.md` under "Disaster recovery" (`argocd
+--core` against the kubeconfig Terraform just wrote).
+
+Note: because that ExternalSecret targets `argocd-secret` with
+`creationPolicy: Merge`, ESO does not delete keys it stops managing —
+`github-client-id` / `github-client-secret` linger in the live secret until
+removed by hand. Harmless (nothing reads them), but worth clearing when
+convenient.
 
 ## Verifying current state
 
