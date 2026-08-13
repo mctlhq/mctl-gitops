@@ -1,0 +1,87 @@
+# root-app manages itself.
+#
+# Until now it was the one Application nobody reconciled: it was created by
+# the one-shot Terraform bootstrap (`cluster-bootstrap/helm-values/argocd.yaml`,
+# gated behind `bootstrap_argocd`, deliberately removed from Terraform state)
+# and after that only ever touched by hand — its live object carried
+# `kubectl-patch` / `kubectl-label` / `kubectl-annotate` field managers and no
+# `argocd.argoproj.io/tracking-id` at all. The root of the whole App-of-Apps
+# tree therefore had no source of truth: drift on it was invisible, and a
+# from-zero rebuild would silently restore a different spec than what was
+# running.
+#
+# This file is that source of truth. The spec below was read off the live
+# object rather than copied from the Terraform values, because the two had
+# already diverged — see the PR for the details.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root-app
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  annotations:
+    # Resource-level Prune=false, and it is load-bearing: root-app manages
+    # itself with `prune: true`, so without this, deleting or renaming THIS
+    # FILE would make root-app treat itself as extraneous and prune itself.
+    # Combined with the cascading resources-finalizer above, that deletion
+    # would walk every child Application and take the platform down. One
+    # mistaken file rename must not be a cluster-wide teardown.
+    #
+    # This exempts only root-app. Child Applications stay prunable, which is
+    # the behaviour we actually want from `prune: true` — an Application
+    # removed from platform-gitops/bootstrap still leaves the cluster.
+    #
+    # Deleting root-app on purpose is now a deliberate manual act.
+    argocd.argoproj.io/sync-options: Prune=false
+spec:
+  project: default
+  source:
+    repoURL: {{ .Values.spec.source.repoURL }}
+    targetRevision: {{ .Values.spec.source.targetRevision }}
+    path: platform-gitops/bootstrap
+    helm:
+      valueFiles:
+        - values.yaml
+  destination:
+    server: {{ .Values.spec.destination.server }}
+    namespace: argocd
+  syncPolicy:
+    automated:
+      # prune stays true: this is how an Application deleted from
+      # platform-gitops/bootstrap actually leaves the cluster.
+      prune: true
+      selfHeal: true
+  ignoreDifferences:
+    # ArgoCD adds `pre-delete-finalizer.argocd.argoproj.io` and
+    # `.../cleanup` to any child Application that uses sync hooks — today
+    # `monitoring`, via its victoria-metrics cleanup hook. Those finalizers
+    # cannot exist in git, so the array never matched and root-app sat
+    # OutOfSync permanently, re-syncing Application/monitoring on every
+    # reconcile (autoHealAttemptsCount was at 28 when this was found). The
+    # damage was not the wasted syncs but the lost signal: root-app could
+    # never be green, so real drift anywhere in the tree had nothing to
+    # stand out against.
+    #
+    # Scoped to the generated entries only, NOT the whole field. Ignoring
+    # all of /metadata/finalizers would also hide a missing
+    # `resources-finalizer.argocd.argoproj.io` on a child Application:
+    # selfHeal would not restore it, and if that Application were later
+    # removed from the chart, pruning it would not cascade to its managed
+    # resources, orphaning those workloads.
+    #
+    # `select(startswith(...))` matches both generated entries
+    # (`pre-delete-finalizer.argocd.argoproj.io` and its `/cleanup`
+    # sibling) and never the required one — verified against a live
+    # finalizer list, where it resolves to indices 1 and 2 only.
+    #
+    # NOTE this is a jq path that indexes into an array, i.e. the shape that
+    # wedged argocd-self-managed in #789. It is safe HERE only because
+    # root-app does not set RespectIgnoreDifferences: the rule suppresses
+    # the diff and never feeds live values back into the apply payload.
+    # **Do not add RespectIgnoreDifferences to root-app without replacing
+    # this rule** — that combination is the bug.
+    - group: argoproj.io
+      kind: Application
+      jqPathExpressions:
+        - .metadata.finalizers[] | select(startswith("pre-delete-finalizer.argocd.argoproj.io"))
