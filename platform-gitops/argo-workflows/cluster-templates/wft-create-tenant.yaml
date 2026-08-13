@@ -193,6 +193,38 @@ spec:
           echo "Vault policy tenant-${TENANT} created successfully."
           vault policy read "tenant-${TENANT}"
 
+          # ESO read policy + the Kubernetes auth role that backs the tenant's
+          # namespaced SecretStore. Kept separate from tenant-${TENANT} above
+          # (which scopes Argo's own read/write) so neither has to widen for
+          # the other. Without the role, the SecretStore the tenant chart
+          # renders has nothing to authenticate as and every ExternalSecret in
+          # the new namespace fails.
+          echo "Creating Vault policy: eso-tenant-${TENANT}"
+          vault policy write "eso-tenant-${TENANT}" - <<EOF
+          # Read-only ESO access for tenant: ${TENANT}
+          # Created by: wft-create-tenant workflow
+
+          path "secret/data/teams/${TENANT}/*" {
+            capabilities = ["read"]
+          }
+          path "secret/metadata/teams/${TENANT}/*" {
+            capabilities = ["read", "list"]
+          }
+          EOF
+
+          # bound_service_account_namespaces is the actual tenant boundary: a
+          # tenant-eso token minted in any other namespace cannot assume this
+          # role even though every tenant names its SA identically.
+          echo "Creating Kubernetes auth role: eso-tenant-${TENANT}"
+          vault write "auth/kubernetes/role/eso-tenant-${TENANT}" \
+            bound_service_account_names=tenant-eso \
+            bound_service_account_namespaces="${TENANT}" \
+            policies="eso-tenant-${TENANT}" \
+            ttl=1h
+
+          echo "ESO role eso-tenant-${TENANT} created successfully."
+          vault read "auth/kubernetes/role/eso-tenant-${TENANT}"
+
     # ────────────────────────────────────────────────────────────────────────
     - name: commit-tenant-to-git
       inputs:

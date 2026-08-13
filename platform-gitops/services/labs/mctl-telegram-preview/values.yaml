@@ -124,6 +124,9 @@ envFrom:
 extraExternalSecrets:
   # TG_API_ID / TG_API_HASH are MTProto app-level credentials — shared with stable.
   labs-mctl-telegram-preview-tg-api:
+    # Platform-scoped path — cluster store required; tenant-store only resolves this tenant's prefix.
+    store: vault-backend
+    storeKind: ClusterSecretStore
     refreshInterval: 1h
     targetSecret: labs-mctl-telegram-preview-tg-api
     data:
@@ -135,6 +138,9 @@ extraExternalSecrets:
         property: TG_API_HASH
   # Separate ENCRYPTION_KEY: preview DB sessions must not share the stable key.
   labs-mctl-telegram-preview-encryption:
+    # Platform-scoped path — cluster store required; tenant-store only resolves this tenant's prefix.
+    store: vault-backend
+    storeKind: ClusterSecretStore
     refreshInterval: 1h
     targetSecret: labs-mctl-telegram-preview-encryption
     data:
@@ -142,6 +148,9 @@ extraExternalSecrets:
         remoteKey: secret/data/platform/mctl-telegram-preview/encryption
         property: ENCRYPTION_KEY
   labs-mctl-telegram-preview-oauth:
+    # Platform-scoped path — cluster store required; tenant-store only resolves this tenant's prefix.
+    store: vault-backend
+    storeKind: ClusterSecretStore
     refreshInterval: 1h
     targetSecret: labs-mctl-telegram-preview-oauth
     annotations:
@@ -154,6 +163,9 @@ extraExternalSecrets:
         remoteKey: secret/data/platform/mctl-telegram-preview/oauth
         property: oidc-client-secret
   labs-mctl-telegram-preview-login:
+    # Platform-scoped path — cluster store required; tenant-store only resolves this tenant's prefix.
+    store: vault-backend
+    storeKind: ClusterSecretStore
     refreshInterval: 1h
     targetSecret: labs-mctl-telegram-preview-login
     data:
