@@ -83,10 +83,13 @@ spec:
           jqPathExpressions:
             - .metadata.annotations
             - .spec.target.deletionPolicy
-            - .spec.data[].remoteRef.conversionStrategy
-            - .spec.data[].remoteRef.decodingStrategy
-            - .spec.data[].remoteRef.metadataPolicy
-            - .spec.dataFrom[].extract.conversionStrategy
-            - .spec.dataFrom[].extract.decodingStrategy
-            - .spec.dataFrom[].extract.metadataPolicy
+            # The six `.spec.data[].remoteRef.*` / `.spec.dataFrom[].extract.*` entries
+            # that used to sit here were removed. A jq path that indexes INTO an array,
+            # combined with RespectIgnoreDifferences + ServerSideApply, makes ArgoCD
+            # merge the live array elements back into the apply payload — so spec.data
+            # can never shrink. Dropping an entry then reports a successful sync and
+            # stays OutOfSync forever (#789, upstream argo-cd#17694, fix due in ArgoCD
+            # 3.6 — we run 3.3.8). They ignored ESO's own CRD defaults, which the
+            # base-service / tenant chart templates now state explicitly instead, so
+            # git matches live.
             - .status
