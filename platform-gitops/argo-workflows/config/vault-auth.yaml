@@ -61,15 +61,27 @@ spec:
   target:
     name: argo-workflows-db-creds
     creationPolicy: Owner
+  # conversionStrategy / decodingStrategy / metadataPolicy below are ESO's own
+  # CRD defaults, spelled out on purpose: ignoring them instead via a
+  # `.spec.data[].remoteRef.*` jq path is what wedges an Application under
+  # ServerSideApply + RespectIgnoreDifferences — the array can then never
+  # shrink (#789, upstream argo-cd#17694). Keep in sync with the ESO version
+  # pinned in core-infra/external-secrets.yaml.
   data:
     - secretKey: username
       remoteRef:
         key: platform/argo-workflows/database
         property: username
+        conversionStrategy: Default
+        decodingStrategy: None
+        metadataPolicy: None
     - secretKey: password
       remoteRef:
         key: platform/argo-workflows/database
         property: password
+        conversionStrategy: Default
+        decodingStrategy: None
+        metadataPolicy: None
 
 ---
 # ExternalSecret for the Argo Workflows artifact repository credentials.
@@ -95,7 +107,13 @@ spec:
       remoteRef:
         key: platform/r2-loki-argo
         property: access-key
+        conversionStrategy: Default
+        decodingStrategy: None
+        metadataPolicy: None
     - secretKey: secretKey
       remoteRef:
         key: platform/r2-loki-argo
         property: secret-key
+        conversionStrategy: Default
+        decodingStrategy: None
+        metadataPolicy: None
