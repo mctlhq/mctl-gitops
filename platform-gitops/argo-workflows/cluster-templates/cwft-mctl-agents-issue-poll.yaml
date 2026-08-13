@@ -4,30 +4,32 @@ metadata:
   name: mctl-agents-issue-poll
   annotations:
     workflows.argoproj.io/description: |
-      Issue-driven entry point — Phase 2 central poller.
+      Issue-driven entry point — Phase 5 Temporal dispatcher.
 
       Scans every open issue under the mctlhq org carrying the
-      `agents:intake` label and runs the issue-investigator for each,
-      turning labelled feature requests into `proposed` proposals under
-      platform-gitops/agents-state/<svc>/proposals/<slug>/.
+      `agents:intake` label and starts one Temporal `DevLoopWorkflow` per
+      issue, then removes the label so the next tick does not re-dispatch.
 
-      Where cwft-mctl-agents-investigate handles ONE issue (manual MCP
-      trigger mctl_trigger_issue), this template handles the whole label
-      sweep — so an operator starts an investigation by *labelling* an
-      issue instead of calling an MCP tool. The poller removes the label
-      once an issue has been turned into a proposal, so a steady-state
-      run with nothing labelled is a cheap no-op.
+      This template used to run the whole investigation in-process: it
+      SSH-cloned mctl-gitops, ran the Claude Agent SDK per issue to write a
+      proposal triplet under agents-state/<svc>/proposals/<slug>/, and
+      committed the result back to gitops main. Since mctl-agents 1.23.0
+      (PR #106) none of that happens here — `run_issue_poller` only
+      discovers labelled issues and hands each one to Temporal. The actual
+      investigate → approve → implement → review pipeline, including the
+      account-2 OAuth rate-limit fallback, now lives inside
+      `DevLoopWorkflow` and the CWFTs it submits.
+
+      Consequently this template no longer needs: a gitops clone, the
+      deploy key, a workdir PVC, a Claude OAuth token (it makes no SDK
+      call, so it cannot hit a 429 and has nothing to fall back to), or a
+      commit-and-push step (it writes no files). What remains is one
+      short-lived pod doing `gh search` + a Temporal RPC per issue.
 
       Runs:
-        1. clone-gitops — SSH-clone mctl-gitops via the shared deploy key.
-        2. run-poller — orchestrator/run_issue_poller.py inside
-           ghcr.io/mctlhq/mctl-agents:1.14.1. It `gh search`-es for
-           labelled issues, runs the investigator in-process per issue
-           (gh-clones the target repo read-only, runs the Claude Agent
-           SDK, writes the proposal triplet + .status.yaml, comments on
-           the issue), then removes the `agents:intake` label.
-        3. commit-and-push — commits the new proposal directories back to
-           gitops main.
+        1. poll — orchestrator/run_issue_poller.py. It `gh search`-es for
+           labelled issues, starts (or attaches to) each issue's
+           DevLoopWorkflow via Temporal, then removes the label.
 
       Triggered by:
         - cron via CronWorkflow `mctl-agents-issue-poll`
@@ -38,39 +40,27 @@ spec:
     - name: ghcr-credentials
   # Promtail maps these pod labels to the Loki `app` and `team` labels. Argo
   # pods otherwise cannot be found through mctl_get_service_logs during an
-  # incident (incident-17841555) — cwft-mctl-agents-run.yaml has carried these
-  # since that incident; the rest of the agent templates did not, so their pods
-  # stayed invisible to log search. They also give NetworkPolicy a selector
+  # incident (incident-17841555). They also give NetworkPolicy a selector
   # that picks out agent pods without catching platform workflows
-  # (deploy-service, create-tenant, ...) that share this namespace and do need
-  # in-cluster egress.
+  # (deploy-service, create-tenant, ...) that share this namespace.
   podMetadata:
     labels:
       app.kubernetes.io/name: mctl-agents
       mctl.ai/team: admins
   ttlStrategy:
     secondsAfterCompletion: 86400
-  # Release the workdir PVC (and its 10 GB Hetzner volume) as soon as the
-  # workflow finishes — success OR failure. The Argo default
-  # (OnWorkflowSuccess) keeps a failed run's volume attached until the
-  # ttlStrategy above deletes the whole workflow (up to 14 days for the run
-  # template), which leaked ~€6 of idle detached volumes in June 2026.
-  volumeClaimGC:
-    strategy: OnWorkflowCompletion
-  # A poll normally finishes in minutes. Bound it to two cron intervals so a
-  # stuck SDK/network call cannot hold concurrencyPolicy=Forbid for hours and
-  # silently suppress later intake ticks (incident-17841222). A legitimate
-  # backlog that exceeds this bound must be split or bounded per issue.
-  activeDeadlineSeconds: 1800
+  # A poll is now a `gh search` plus one Temporal RPC per issue — seconds,
+  # not minutes. Bounded well below the 15-min cron interval so a wedged
+  # network call cannot hold concurrencyPolicy=Forbid across ticks and
+  # silently suppress later intake (incident-17841222). Was 1800 when this
+  # template still ran a Claude SDK session per labelled issue.
+  activeDeadlineSeconds: 600
   entrypoint: poll-issues
   onExit: notify-telegram
-  # NB: the `mctl-gitops-main-writes` mutex is NOT declared here at workflow
-  # spec level. A poll cycle investigates N issues back-to-back (each a clone
-  # + Claude SDK run), so a spec-level lock — held from pod scheduling until
-  # commit-and-push exits — would block investigate/implement/shepherd/run
-  # from pushing to main for the whole multi-issue window. The lock lives on
-  # the commit-and-push template instead (the only step that writes to main),
-  # mirroring cwft-mctl-agents-shepherd.
+  # NB: no `mctl-gitops-main-writes` mutex anywhere in this template. It
+  # used to be held by commit-and-push, the only step that wrote to gitops
+  # main; the poller no longer writes any files, so there is nothing to
+  # serialise against the other agent workflows.
 
   arguments:
     parameters:
@@ -79,117 +69,34 @@ spec:
         # Default = today's pin, so submitting without this parameter is a
         # zero-behaviour-change no-op. Overridden by the agent registry's
         # resolved image_ref once a caller starts pinning per-run.
+        # NB: 1.23.0 is the first tag whose run_issue_poller dispatches to
+        # Temporal. Earlier tags investigate in-process and expect the
+        # gitops clone + workdir PVC this template no longer provides, so
+        # pinning this parameter backwards will fail rather than degrade.
       - name: agent_version
         value: ""
         # Registry version string, carried for the record only — not
         # consumed by run-poller. Left blank by any caller not yet using
         # the registry.
 
-  volumeClaimTemplates:
-    - metadata:
-        name: workdir
-      spec:
-        accessModes: ["ReadWriteOnce"]
-        resources:
-          requests:
-            # gitops clone + one target-repo clone at a time (the poller
-            # rm-trees each target clone before moving to the next issue).
-            # Same ceiling as cwft-mctl-agents-investigate.
-            storage: 4Gi
-  volumes:
-    - name: deploy-key
-      secret:
-        secretName: mctl-gitops-deploy-key
-        defaultMode: 0600
+  # No volumeClaimTemplates and no deploy-key volume: nothing here clones a
+  # repo or writes a file any more. Dropping the 4Gi PVC also removes a
+  # Hetzner volume attach/detach cycle per run — those wedge for 10-12h with
+  # no cancel API and were caught 8 times in July 2026 alone.
 
   templates:
     - name: poll-issues
       steps:
-        - - name: clone
-            template: clone-gitops
         - - name: poll
             template: run-poller
-            arguments:
-              parameters:
-                - name: oauth-key
-                  value: claude-code-oauth-token
-                - name: is-fallback
-                  value: "false"
-            # run_issue_poller writes each proposal + comment before any
-            # later per-issue failure. Letting commit-and-push run
-            # unconditionally makes whatever DID get written durable for
-            # inspection; the commit step handles the "no diff" case.
-            continueOn:
-              failed: true
-              error: true
-        # Fallback retry on a SECOND Claude account, mirroring
-        # cwft-mctl-agents-run / -implement / -investigate: if the primary
-        # attempt did not succeed (most commonly the account-1 OAuth token
-        # hitting its five_hour/seven_day usage limit → HTTP 429), rerun the
-        # whole label sweep on the account-2 token `claude-code-oauth-token-2`.
-        # If token-2 is not seeded the fallback fails (exit 1) so the run
-        # reports Failed instead of being masked as success.
-        - - name: poll-fallback
-            template: run-poller
-            when: "{{steps.poll.status}} != Succeeded"
-            arguments:
-              parameters:
-                - name: oauth-key
-                  value: claude-code-oauth-token-2
-                - name: is-fallback
-                  value: "true"
-            continueOn:
-              failed: true
-              error: true
-        - - name: commit
-            template: commit-and-push
+            # No continueOn: there is no later step whose success could mask
+            # a poller failure, so a non-zero exit must fail the workflow
+            # outright. That is what makes {{workflow.status}} trustworthy
+            # for notify-telegram below, and is why the old
+            # /workdir/poller_status side-channel is gone.
 
-    # ── 1. SSH-clone mctl-gitops into shared volume ───────────────────────
-    - name: clone-gitops
-      script:
-        image: alpine/git:2.43.0
-        command: [sh]
-        source: |
-          set -e
-          apk add --no-cache openssh-client ca-certificates
-          mkdir -p ~/.ssh
-          cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  StrictHostKeyChecking no\n' > ~/.ssh/config
-          chmod 600 ~/.ssh/config
-          git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops
-          mkdir -p /workdir/mctl-gitops/platform-gitops/agents-state
-          # PVC-backed scratch dir for the per-issue `gh repo clone` target —
-          # see TMPDIR in run-poller below.
-          mkdir -p /workdir/clones
-          # Conservative default in case run-poller is killed before it can
-          # write its own status (e.g. OOMKilled) — treated as "not
-          # succeeded" by notify-telegram's resolve gate below.
-          echo -n "unknown" > /workdir/poller_status
-          echo "✓ gitops cloned"
-        volumeMounts:
-          - name: workdir
-            mountPath: /workdir
-          - name: deploy-key
-            mountPath: /secrets/deploy-key
-
-    # ── 2. Run issue-poller orchestrator ──────────────────────────────────
-    # NB: ghcr.io/mctlhq/mctl-agents:1.12.0 is the first tag with
-    # orchestrator/run_issue_poller.py. Earlier tags lack the module and
-    # crash with ImportError.
+    # ── Run issue-poller orchestrator ─────────────────────────────────────
     - name: run-poller
-      inputs:
-        parameters:
-          # Which Vault key under mctl-agents-secrets holds the OAuth token
-          # for this attempt. Primary step passes claude-code-oauth-token;
-          # the fallback step passes claude-code-oauth-token-2 (a second
-          # account). Same convention as cwft-mctl-agents-run.
-          - name: oauth-key
-            value: claude-code-oauth-token
-          # "true" only for the fallback retry: fail loudly if token-2 is
-          # absent instead of masking the double-failure as success.
-          - name: is-fallback
-            value: "false"
       container:
         image: "{{workflow.parameters.agent_image}}"
         imagePullPolicy: IfNotPresent
@@ -199,185 +106,53 @@ spec:
           - "-c"
           - |
             set -e
-            # Fallback-token guard, mirroring cwft-mctl-agents-run's
-            # run-orchestrator: on the account-2 retry an unseeded token-2
-            # (empty env via optional:true below) must fail non-zero so the
-            # run reports Failed instead of being masked as success. A
-            # missing PRIMARY token still fails loudly at SDK auth.
-            if [ "$IS_FALLBACK" = "true" ]; then
-              if [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
-                echo "❌ Primary attempt failed and no fallback token (claude-code-oauth-token-2) is set — cannot fall back." >&2
-                echo -n "failed" > /workdir/poller_status
-                exit 1
-              fi
-              echo "↻ Primary attempt did not succeed — retrying on fallback OAuth token (account 2)."
-            fi
             # GITHUB_TOKEN is mandatory: the poller searches for labelled
-            # issues, clones target repos, comments, and removes the label.
-            # The secretKeyRef is marked optional so the pod still schedules
-            # for local/offline debugging — fail fast here with a clear
-            # message instead of an opaque `gh` auth error from deep inside
-            # Python.
+            # issues and removes the label once dispatched. The secretKeyRef
+            # is marked optional so the pod still schedules for local/offline
+            # debugging — fail fast here with a clear message instead of an
+            # opaque `gh` auth error from deep inside Python.
             if [ -z "$GITHUB_TOKEN" ]; then
-              echo "❌ GITHUB_TOKEN is not set — the poller needs it to search issues, clone repos, comment, and relabel" >&2
-              echo -n "failed" > /workdir/poller_status
+              echo "❌ GITHUB_TOKEN is not set — the poller needs it to search issues and relabel" >&2
               exit 1
             fi
-            # Wire git's HTTPS credential helper to GITHUB_TOKEN so `gh repo
-            # clone` and any later git op authenticate non-interactively.
+            # Wire git's HTTPS credential helper to GITHUB_TOKEN so any git
+            # op authenticates non-interactively.
             gh auth setup-git
-            # NOT `exec` — the parent step has continueOn.failed/error:true,
-            # so a poller crash here is swallowed by the workflow's overall
-            # status and a later Succeeded commit-and-push can leave
-            # WORKFLOW_STATUS=Succeeded with labelled issues left
-            # unprocessed (Codex P1 on PR #613). Capturing the real exit
-            # code to /workdir/poller_status lets notify-telegram tell a
-            # masked poller failure apart from a genuine clean run.
-            python -m orchestrator.run_issue_poller
-            RC=$?
-            if [ "$RC" -eq 0 ]; then
-              echo -n "succeeded" > /workdir/poller_status
-            else
-              echo -n "failed" > /workdir/poller_status
-            fi
-            exit "$RC"
+            # `exec` is safe here, unlike the pre-1.23.0 version of this
+            # template: with continueOn gone from the step above, the exit
+            # code propagates straight to {{workflow.status}} instead of
+            # being swallowed.
+            exec python -m orchestrator.run_issue_poller
         env:
-          - name: IS_FALLBACK
-            value: "{{inputs.parameters.is-fallback}}"
-          # entrypoint.sh symlinks <state>/<svc>/proposals onto the baked-in
-          # agents/<svc>/; run_issue_poller reads STATE_DIR directly.
-          - name: STATE_DIR
-            value: /workdir/mctl-gitops/platform-gitops/agents-state
-          # Redirect Python's tempfile.gettempdir() onto the PVC so each
-          # per-issue target-repo clone lands in PVC-backed storage.
-          - name: TMPDIR
-            value: /workdir/clones
-          # Auth: OAuth (Claude Pro/Max). Key is parameterized: primary uses
-          # claude-code-oauth-token, the fallback step uses
-          # claude-code-oauth-token-2. optional:true lets the fallback pod
-          # schedule when token-2 is absent (the guard script then exits 1);
-          # a missing PRIMARY token still fails loudly at SDK auth.
-          - name: CLAUDE_CODE_OAUTH_TOKEN
-            valueFrom:
-              secretKeyRef:
-                name: mctl-agents-secrets
-                key: "{{inputs.parameters.oauth-key}}"
-                optional: true
-          # GitHub PAT for `gh search issues`, `gh repo clone`,
-          # `gh issue comment` and `gh issue edit --remove-label`. Needs repo
-          # read on the target repos plus `issues: write`.
+          # Temporal connection. These match run_issue_poller's own defaults
+          # (orchestrator/temporal/start.py) and the values mctl-agents-worker
+          # already runs with — set explicitly so the dispatch target is
+          # visible here rather than buried in a Python default.
+          - name: TEMPORAL_ADDRESS
+            value: temporal-frontend.temporal.svc.cluster.local:7233
+          - name: TEMPORAL_NAMESPACE
+            value: mctl-agents
+          # GitHub PAT for `gh search issues` and
+          # `gh issue edit --remove-label`. Needs repo read on the target
+          # repos plus `issues: write`.
           - name: GITHUB_TOKEN
             valueFrom:
               secretKeyRef:
                 name: mctl-agents-secrets
                 key: github-token
                 optional: true
-          # Optional MCP token — lets the investigator inspect live service
-          # metrics/status while shaping a proposal. Degrades gracefully.
-          - name: MCTL_TOKEN
-            valueFrom:
-              secretKeyRef:
-                name: mctl-agents-secrets
-                key: mctl-token
-                optional: true
-          - name: ISSUE_INVESTIGATOR_BUDGET_USD
-            value: "3.00"
+          # No CLAUDE_CODE_OAUTH_TOKEN, MCTL_TOKEN, STATE_DIR, TMPDIR or
+          # ISSUE_INVESTIGATOR_BUDGET_USD: this step makes no Claude SDK
+          # call, reads no gitops state, clones no repo, and has no budget
+          # to cap.
         resources:
-          requests: { cpu: 200m, memory: 512Mi }
-          limits:   { cpu: 2000m, memory: 4Gi }
-        volumeMounts:
-          - name: workdir
-            mountPath: /workdir
+          # Trimmed from 2000m/4Gi, which sized a Claude SDK session plus a
+          # repo clone. This process now does one `gh search` and a handful
+          # of gRPC calls.
+          requests: { cpu: 100m, memory: 128Mi }
+          limits:   { cpu: 1000m, memory: 512Mi }
 
-    # ── 3. Commit & push back to mctl-gitops ──────────────────────────────
-    # Like cwft-mctl-agents-investigate, the poller CREATES new proposal
-    # directories — requirements.md / design.md / tasks.md / .status.yaml.
-    # This step stages the proposal subtree only and refuses anything that
-    # lands outside a proposal directory.
-    - name: commit-and-push
-      # Mutex scoped to this step — see the note at workflow spec level.
-      # Only commit-and-push writes to mctl-gitops main, so the lock is
-      # held for seconds (commit + push), not the whole multi-issue poll.
-      synchronization:
-        mutex:
-          name: mctl-gitops-main-writes
-      # Writes /workdir/activity ("yes"/"none") for notify-telegram to read
-      # directly off the shared workdir PVC — NOT via Argo output parameters.
-      # A `workflow.outputs.parameters.X` reference from onExit resolves fine
-      # with exactly one such parameter (see degraded_apps on
-      # cwft-mctl-agents-shepherd), but adding a SECOND one sourced from a
-      # different step broke Argo's static validator workflow-wide
-      # ("invalid spec: templates.notify-telegram: failed to resolve
-      # {{workflow.outputs.parameters.activity}}", reproduced 2026-07-06 —
-      # every CronWorkflow tick failed silently, `implement`/`issue-poll`
-      # stopped scheduling entirely). The PVC file sidesteps that mechanism.
-      script:
-        image: alpine/git:2.43.0
-        command: [sh]
-        source: |
-          set -e
-          apk add --no-cache openssh-client ca-certificates
-          mkdir -p ~/.ssh
-          cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  StrictHostKeyChecking no\n' > ~/.ssh/config
-          chmod 600 ~/.ssh/config
-
-          cd /workdir/mctl-gitops
-          git config user.name "mctl-agents[bot]"
-          git config user.email "mctl-agents[bot]@users.noreply.github.com"
-
-          # Scope guard: the poller (via the investigator) must only ever
-          # create/update files INSIDE a proposal directory —
-          # agents-state/<svc>/proposals/<slug>/. Anything else under
-          # agents-state/ is not this workflow's output; fail loudly rather
-          # than silently widening the commit.
-          OUT_OF_SCOPE="$(git status --porcelain -- 'platform-gitops/agents-state/' ':(exclude,glob)platform-gitops/agents-state/*/proposals/*/**')"
-          if [ -n "$OUT_OF_SCOPE" ]; then
-            echo "❌ Refusing to commit changes outside a proposal directory under platform-gitops/agents-state/:"
-            printf '%s\n' "$OUT_OF_SCOPE"
-            exit 1
-          fi
-
-          # Short-circuit BEFORE `git add` so a zero-change run (e.g. nothing
-          # was labelled, or every labelled issue was already in flight) is a
-          # clean no-op under `set -e`.
-          CHANGES="$(git status --porcelain -- ':(glob)platform-gitops/agents-state/*/proposals/*/**')"
-          if [ -z "$CHANGES" ]; then
-            echo "ℹ️  No proposal changes — nothing to commit."
-            echo -n "none" > /workdir/activity
-            exit 0
-          fi
-          git add -- ':(glob)platform-gitops/agents-state/*/proposals/*/**'
-
-          if git diff --cached --quiet; then
-            echo "ℹ️  No staged changes — nothing to commit."
-            echo -n "none" > /workdir/activity
-            exit 0
-          fi
-
-          DATE=$(date -u +%Y-%m-%d)
-          git commit -m "chore(agents): issue-poll ${DATE}"
-
-          for i in 1 2 3 4 5; do
-            if git push origin HEAD:main; then
-              echo "✅ Pushed proposals"
-              echo -n "yes" > /workdir/activity
-              exit 0
-            fi
-            echo "⚠️  Push failed (attempt ${i}), rebasing..."
-            git pull --rebase origin main
-          done
-          echo "❌ Push failed after 5 attempts"
-          exit 1
-        volumeMounts:
-          - name: workdir
-            mountPath: /workdir
-          - name: deploy-key
-            mountPath: /secrets/deploy-key
-
-    # ── 4. Telegram + incident notification (onExit) ──────────────────────
-    # Same pattern as cwft-mctl-agents-investigate.
+    # ── Telegram + incident notification (onExit) ─────────────────────────
     - name: notify-telegram
       script:
         image: alpine:3.19
@@ -412,31 +187,34 @@ spec:
             value: "{{workflow.name}}"
           - name: WORKFLOW_DURATION
             value: "{{workflow.duration}}"
-        volumeMounts:
-          - name: workdir
-            mountPath: /workdir
         source: |
           set +e
           apk add --no-cache curl ca-certificates jq >/dev/null 2>&1
 
-          # "none" when commit-and-push had nothing to commit (steady-state
-          # tick with no labelled issues). Read off the shared workdir PVC
-          # rather than a workflow output parameter — see the note on
-          # commit-and-push for why.
-          WORKFLOW_ACTIVITY=$(cat /workdir/activity 2>/dev/null || echo "unknown")
+          # NB: this handler used to read /workdir/activity and
+          # /workdir/poller_status off a shared PVC — deliberately, NOT via
+          # Argo output parameters, because a SECOND
+          # `workflow.outputs.parameters.*` reference sourced from a
+          # different step broke Argo's static validator workflow-wide on
+          # 2026-07-06 and silently stopped every CronWorkflow from
+          # scheduling. Both files are gone now, and neither is needed:
+          #   - poller_status existed only because the poll step ran with
+          #     continueOn, so a crash could still leave the workflow
+          #     Succeeded. That continueOn is gone, so WORKFLOW_STATUS is
+          #     the truth on its own.
+          #   - activity ("did we commit anything") existed to mute the
+          #     steady-state no-op tick. The CronWorkflow's dispatcher
+          #     pre-check now runs the same `gh search` BEFORE submitting
+          #     and only creates this Workflow when something is actually
+          #     labelled, so a run reaching this point always had work to do.
+          # If this template ever regains a second step that must report
+          # something to this handler, use a PVC file again — not a second
+          # output parameter.
 
-          # run-poller's own truthful exit status ("succeeded"/"failed"/
-          # "unknown") — NOT the same thing as WORKFLOW_STATUS. The
-          # poll-issues DAG runs run-poller with continueOn.failed/error, so
-          # a poller crash followed by a successful commit-and-push still
-          # leaves WORKFLOW_STATUS=Succeeded even though labelled issues may
-          # be unprocessed. See run-poller for where this is written.
-          POLLER_STATUS=$(cat /workdir/poller_status 2>/dev/null || echo "unknown")
-
-          # Stable dedup key. Unlike run/implement/shepherd, one poll cycle
-          # sweeps every labelled issue in a single run — there is no
-          # per-run distinguishing parameter, so this is a fixed key: all
-          # issue-poll failures collapse into a single recurring incident.
+          # Stable dedup key. One poll cycle sweeps every labelled issue in a
+          # single run — there is no per-run distinguishing parameter, so this
+          # is a fixed key: all issue-poll failures collapse into a single
+          # recurring incident.
           FINGERPRINT="workflow_failed:${WORKFLOW_TEMPLATE_KIND}"
 
           case "$WORKFLOW_STATUS" in
@@ -449,13 +227,9 @@ spec:
           TEXT=$(printf '%s mctl-agents: issue-poll — %s (%ss)\n%s' \
             "$ICON" "$WORKFLOW_STATUS" "$WORKFLOW_DURATION" "$UI_URL")
 
-          # Telegram leg. Skip a Succeeded run that found nothing labelled —
-          # at the */15 cadence that's the steady-state outcome. JSON-encode
-          # the body via jq so a quote / newline / backslash cannot malform
-          # the payload and silently drop it.
-          if [ "$WORKFLOW_STATUS" = "Succeeded" ] && [ "$WORKFLOW_ACTIVITY" = "none" ]; then
-            echo "ℹ️  Succeeded with no activity (nothing labelled) — skipping Telegram leg."
-          elif [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
+          # Telegram leg. JSON-encode the body via jq so a quote / newline /
+          # backslash cannot malform the payload and silently drop it.
+          if [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
             TG_BODY=$(jq -nc --arg chat "$TG_CHAT_ID" --arg text "$TEXT" \
               '{chat_id: $chat, text: $text, disable_web_page_preview: true}')
             curl -s -o /dev/null -w 'telegram http=%{http_code}\n' \
@@ -469,8 +243,7 @@ spec:
           # Incident leg — only on terminal failure/success.
           if { [ "$WORKFLOW_STATUS" = "Failed" ] || [ "$WORKFLOW_STATUS" = "Error" ]; } && [ -n "$MCTL_TOKEN" ]; then
             # Suffix the id with epoch-second so `argo retry <wf>` produces a
-            # fresh incident. Real cross-run dedup now happens via
-            # `fingerprint` below.
+            # fresh incident. Real cross-run dedup happens via `fingerprint`.
             INCIDENT_ID="argo-${WORKFLOW_NAME}-$(date +%s)"
             SUMMARY="mctl-agents issue-poll ${WORKFLOW_STATUS} after ${WORKFLOW_DURATION}s — ${UI_URL}"
             BODY=$(jq -nc --arg id "$INCIDENT_ID" --arg summary "$SUMMARY" --arg fingerprint "$FINGERPRINT" '{
@@ -494,16 +267,9 @@ spec:
               -H "Content-Type: application/json" \
               -H "Authorization: Bearer ${MCTL_TOKEN}" \
               -d "$BODY"
-          elif [ "$WORKFLOW_STATUS" = "Succeeded" ] && [ "$POLLER_STATUS" != "succeeded" ] && [ -n "$MCTL_TOKEN" ]; then
-            # WORKFLOW_STATUS=Succeeded is not trustworthy on its own here —
-            # continueOn masks a run-poller crash. Don't resolve: a missed
-            # resolve just needs a manual close later, a false resolve hides
-            # a real poll failure with issues left unprocessed.
-            echo "⚠️  Skipping resolve: run-poller status was '${POLLER_STATUS}', not a confirmed success."
           elif [ "$WORKFLOW_STATUS" = "Succeeded" ] && [ -n "$MCTL_TOKEN" ]; then
-            # Close the loop: issue-poll finally succeeded AND run-poller
-            # itself confirmed success, so resolve any open incident
-            # sharing this fingerprint. No-op if none exists.
+            # Close the loop: issue-poll succeeded, so resolve any open
+            # incident sharing this fingerprint. No-op if none exists.
             RESOLVE_BODY=$(jq -nc --arg tenant "admins" --arg fingerprint "$FINGERPRINT" '{tenant: $tenant, fingerprint: $fingerprint}')
             curl -s -o /dev/null -w 'resolve http=%{http_code}\n' \
               -X POST "https://api.mctl.ai/api/v1/incidents/resolve-by-fingerprint" \
