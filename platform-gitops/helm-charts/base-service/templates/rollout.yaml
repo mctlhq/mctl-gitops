@@ -31,7 +31,7 @@ spec:
         {{- include "base-service.selectorLabels" . | nindent 8 }}
         {{- include "base-service.extraLabels" . | nindent 8 }}
         {{- with .Values.podLabels }}
-        {{- toYaml . | nindent 8 }}
+        {{- include "base-service.podLabels" . | nindent 8 }}
         {{- end }}
     spec:
       {{- if ne (.Values.automountServiceAccountToken | toString) "<nil>" }}

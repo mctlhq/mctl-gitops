@@ -63,15 +63,18 @@ spec:
         # an ovk-namespaced Workflow at time of writing), and those pods still
         # need Vault login. Namespace + pod selector in one element ANDs them.
         #
-        # Treat this as an availability allowance, NOT a security boundary: the
-        # workflow label is forgeable. base-service copies arbitrary
-        # .Values.podLabels onto pods, and update-config applies a caller-supplied
-        # config_patch to values.yaml with yq, so a tenant who can configure a
-        # service can label an ordinary app pod and match this rule. The same
-        # forgery already defeats allow-workflow-internet-egress, which predates
-        # this policy — fixing it needs admission control on the label and is
-        # tracked separately. What actually bounds a tenant at Vault is the
-        # per-tenant role and policy from the ESO split, not this selector.
+        # The label was forgeable when this policy was written: base-service
+        # copied arbitrary .Values.podLabels onto pods and update-config applies
+        # a caller-supplied config_patch to values.yaml with yq, so a tenant
+        # could label an app pod and claim this exception. base-service now
+        # refuses workflows.argoproj.io/* in podLabels, which closes that path
+        # here and for the older allow-workflow-internet-egress policy. Argo sets
+        # the label on its own pods directly, so nothing legitimate is affected.
+        # Editing a tenant values.yaml by hand goes through PR review; #800
+        # tracks admission control for defence in depth.
+        #
+        # Either way, what ultimately bounds a tenant at Vault is the per-tenant
+        # role and policy from the ESO split, not this selector.
         - namespaceSelector:
             matchExpressions:
               - key: mctl.me/tenant
