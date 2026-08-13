@@ -6,7 +6,7 @@ metadata:
     workflows.argoproj.io/description: |
       Reusable template: clones the gitops repo, runs a generation script,
       commits and pushes only within the allowed path prefix.
-      Uses GitHub App token from mounted secret.
+      Authenticates to GitHub with the mctl-gitops SSH deploy key.
 spec:
   templates:
     # ── Generate and commit service manifests ─────────────────────────────────
@@ -134,33 +134,13 @@ spec:
           printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  StrictHostKeyChecking no\n' > ~/.ssh/config
           chmod 600 ~/.ssh/config
 
-          # ── 1. Get GitHub App token (API calls only; not critical — git uses SSH) ──
-          GH_TOKEN=""
-          if [ -f /var/run/secrets/github-app/app-id ]; then
-            APP_ID=$(cat /var/run/secrets/github-app/app-id)
-            INSTALL_ID=$(cat /var/run/secrets/github-app/installation-id)
-            APP_KEY=/var/run/secrets/github-app/private-key
-
-            NOW=$(date +%s)
-            IAT=$((NOW - 60))
-            EXP=$((NOW + 540))
-            HEADER=$(printf '{"alg":"RS256","typ":"JWT"}' | base64 | tr -d '=' | tr '/+' '_-' | tr -d '\n')
-            PAYLOAD=$(printf '{"iat":%d,"exp":%d,"iss":"%s"}' "$IAT" "$EXP" "$APP_ID" | base64 | tr -d '=' | tr '/+' '_-' | tr -d '\n')
-            SIG=$(printf '%s.%s' "$HEADER" "$PAYLOAD" | openssl dgst -sha256 -sign "$APP_KEY" | base64 | tr -d '=' | tr '/+' '_-' | tr -d '\n')
-            JWT="${HEADER}.${PAYLOAD}.${SIG}"
-
-            GH_TOKEN=$(curl -sf -X POST \
-              -H "Authorization: Bearer ${JWT}" \
-              -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/app/installations/${INSTALL_ID}/access_tokens" | \
-              grep '"token"' | head -1 | cut -d'"' -f4) || true
-          fi
-
-          if [ -z "$GH_TOKEN" ]; then
-            echo "⚠️  GitHub App token unavailable (non-fatal, git uses SSH deploy key)"
-          fi
-
-          # ── 2. Clone gitops repo via SSH ─────────────────────────────────────
+          # ── 1. Clone gitops repo via SSH ─────────────────────────────────────
+          # This template used to mint a GitHub App installation token here for
+          # "API calls", but nothing in it ever read $GH_TOKEN — every git
+          # operation below goes over the SSH deploy key. The block was removed
+          # along with the github-app-credentials mount: it was a live consumer
+          # of MCTL App's private key inside the cluster for no benefit, and
+          # MCTL App is being narrowed to read-only (#761).
           echo "📥 Cloning ${GITOPS_REPO}..."
           git clone --depth=1 "git@github.com:${GITOPS_ORG}/${GITOPS_REPO}.git" /tmp/mctl-gitops
           cd /tmp/mctl-gitops
@@ -168,10 +148,10 @@ spec:
           git config user.name "argo-workflows[bot]"
           git config user.email "argo-workflows[bot]@users.noreply.github.com"
 
-          # ── 3. Service directory ──────────────────────────────────────────
+          # ── 2. Service directory ──────────────────────────────────────────
           DIR="platform-gitops/services/${TEAM}/${SERVICE}"
 
-          # ── 4. Security: validate path stays within allowed scope ─────────
+          # ── 3. Security: validate path stays within allowed scope ─────────
           ALLOWED_BASES="platform-gitops/services/${TEAM}"
           ALLOWED=false
           for base in $ALLOWED_BASES; do
@@ -185,7 +165,7 @@ spec:
             exit 1
           fi
 
-          # ── 5. Generate files ──────────────────────────────────────────────
+          # ── 4. Generate files ──────────────────────────────────────────────
           if [ "$ACTION" = "onboard" ]; then
             mkdir -p "$DIR"
 
@@ -470,7 +450,7 @@ spec:
             fi
           fi
 
-          # ── 6. Push with rebase retry ──────────────────────────────────────
+          # ── 5. Push with rebase retry ──────────────────────────────────────
           MAX_RETRIES=5
           for i in $(seq 1 $MAX_RETRIES); do
             if git push origin HEAD:main; then
@@ -488,15 +468,9 @@ spec:
 
           echo "✅ Commit pushed — ArgoCD will sync automatically"
         volumeMounts:
-          - name: github-app-credentials
-            mountPath: /var/run/secrets/github-app
           - name: deploy-key
             mountPath: /secrets/deploy-key
       volumes:
-        - name: github-app-credentials
-          secret:
-            secretName: github-app-credentials
-            optional: true
         - name: deploy-key
           secret:
             secretName: mctl-gitops-deploy-key
@@ -565,15 +539,9 @@ spec:
             fi
           done
         volumeMounts:
-          - name: github-app-credentials
-            mountPath: /var/run/secrets/github-app
           - name: deploy-key
             mountPath: /secrets/deploy-key
       volumes:
-        - name: github-app-credentials
-          secret:
-            secretName: github-app-credentials
-            optional: true
         - name: deploy-key
           secret:
             secretName: mctl-gitops-deploy-key
