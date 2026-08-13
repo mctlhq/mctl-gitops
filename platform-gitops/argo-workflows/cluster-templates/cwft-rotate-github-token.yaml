@@ -17,18 +17,17 @@ metadata:
       the sense that a failure in one (mint, Vault write, or ExternalSecret
       re-sync) does not abort the loop and the other still rotates.
 
-      That is NOT a separate failure domain, though: since 2026-08-13 both
-      targets mint from the same App, so a revoked key, a removed
+      That is NOT a separate failure domain, though. Since 2026-08-13 both
+      targets mint from the same App — mctl-agents (id 4450852), the
+      backend-only automation App — so a revoked key, a removed
       installation, or a GitHub outage takes out both at once. When
-      triaging, check whether one target failed or both — both failing
+      triaging, check whether one target failed or both: both failing
       points at the shared App, one failing at that target's Vault path or
       ExternalSecret.
 
-      Both targets now mint from the same App — mctl-agents (id 4450852),
-      the backend-only automation App. They stay separate entries because
-      they land in different Vault paths and re-sync different
-      ExternalSecrets, and because a future consumer may warrant its own
-      App again.
+      They remain separate entries because they land in different Vault
+      paths and re-sync different ExternalSecrets, and because a future
+      consumer may warrant its own App again.
 
       Targets:
         - mctl-agent  (App id 4450852)  -> secret/platform/mctl-agent/tokens
