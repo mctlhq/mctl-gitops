@@ -20,7 +20,19 @@ Example (gate a CronJob on an env flag):
 {{- $cond := "" }}
 {{- if hasKey $obj "renderIf" }}{{- $cond = $obj.renderIf }}{{- end }}
 {{- if or (not $cond) (eq (tpl ($cond | toString) $ | trim) "true") }}
+{{- $rendered := tpl (toYaml (omit $obj "renderIf")) $ }}
+{{- /* Same guard as base-service.podLabels, applied to the arbitrary manifests
+    this template emits. Without it the podLabels check is trivially sidestepped:
+    an extraObject can be a Pod or Deployment whose template carries
+    workflows.argoproj.io/workflow, and the forged pod then matches the
+    NetworkPolicy exceptions meant for Argo-created pods. Matching the rendered
+    text rather than a specific field keeps selectors, annotations and nested
+    pod templates covered. No current service references the prefix, so this
+    rejects only new attempts. */}}
+{{- if regexMatch "workflows\\.argoproj\\.io/" $rendered }}
+{{- fail "extraObjects may not reference workflows.argoproj.io/*: that label gates NetworkPolicy exceptions for Argo-created pods" }}
+{{- end }}
 ---
-{{ tpl (toYaml (omit $obj "renderIf")) $ }}
+{{ $rendered }}
 {{- end }}
 {{- end }}
