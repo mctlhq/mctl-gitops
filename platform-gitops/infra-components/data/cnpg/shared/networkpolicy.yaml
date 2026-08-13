@@ -1,0 +1,62 @@
+# Ingress allowlist for the shared-pg namespace.
+#
+# Unlike vault, tenants legitimately need this namespace: every service with a
+# database dials shared-pg-rw:5432 directly from its app pod. So this policy
+# does not — and cannot — deny tenants. What it does is bound the exposure to
+# the Postgres and metrics ports from tenant namespaces, instead of the current
+# state where allow-cluster-egress makes every port on every pod here reachable
+# from every pod in the cluster.
+#
+# Isolation *between* tenants on the shared cluster remains pg_hba's job: each
+# role is scoped to its own database and no tenant role has superuser, createdb
+# or createrole (see cluster.yaml spec.postgresql.pg_hba).
+#
+# Picked up automatically — the shared-pg Application syncs this directory.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-shared-pg-ingress
+  namespace: platform-db
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    # Streaming replication between instances and pooler -> primary.
+    - from:
+        - podSelector: {}
+    # CNPG operator: reconciliation, failover, backup orchestration.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cnpg-system
+    # Application traffic. Tenant namespaces plus the platform consumers
+    # (Backstage, mctl-api, Temporal, Argo Workflows) that hold their own roles.
+    - from:
+        - namespaceSelector:
+            matchExpressions:
+              - key: mctl.me/tenant
+                operator: Exists
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: backstage
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: mctl-api
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: temporal
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: argo-workflows
+      ports:
+        - protocol: TCP
+          port: 5432
+    # CNPG exports Postgres metrics on 9187.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 9187

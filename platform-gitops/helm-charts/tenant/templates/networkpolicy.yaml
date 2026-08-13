@@ -69,14 +69,33 @@ spec:
   policyTypes:
     - Egress
   egress:
-    - ports:
+    # DNS, scoped to CoreDNS. This rule previously had no `to:` at all, which
+    # allowed port 53 to any destination including the public internet — an
+    # egress path out of the cluster even for tenants with allowInternetEgress
+    # off.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
         - port: 53
           protocol: UDP
         - port: 53
           protocol: TCP
+    # Pod and Service CIDRs, minus the node subnets. Egress to the whole of
+    # 10.0.0.0/8 also covered the nodes themselves, so any tenant pod could
+    # reach kubelet on 10250 and the API server on 6443 directly (both verified
+    # reachable). Excluding the node subnets leaves normal in-cluster traffic
+    # intact — the API server is still reachable through its Service address
+    # 10.43.0.1:443, where RBAC applies.
     - to:
         - ipBlock:
             cidr: 10.0.0.0/8
+            except:
+              # workers
+              - 10.0.0.0/24
+              # control plane
+              - 10.255.0.0/24
     - to:
         - ipBlock:
             cidr: 172.16.0.0/12

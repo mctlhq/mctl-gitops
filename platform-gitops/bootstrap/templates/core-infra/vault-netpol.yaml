@@ -1,0 +1,53 @@
+# Ingress allowlist for the Vault namespace.
+#
+# The tenant chart's allow-cluster-egress opens egress to all of RFC1918 with no
+# port restriction, and vault/ had no ingress policy, so vault:8200 was reachable
+# from every pod in the cluster. Nothing was exploitable through it — Vault
+# authenticates every request — but network reachability of the secret store is
+# not something tenant workloads should have.
+#
+# Selecting all pods with policyTypes: [Ingress] makes this an allowlist: any
+# source not named below is denied. No separate default-deny is needed.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-vault-ingress
+  namespace: vault
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        # Raft peer traffic (8201) and vault-active/standby service routing.
+        - podSelector: {}
+        # ESO resolves every ExternalSecret in the cluster from here.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: external-secrets
+        # Workflows authenticate via auth/kubernetes/login (provision-database,
+        # create-tenant, deploy-service).
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: argo-workflows
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: backstage
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: mctl-api
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+        # Argo runs some workflows inside the tenant namespace itself (verified:
+        # an ovk-namespaced Workflow at time of writing), and those pods still
+        # need Vault login. Namespace + pod selector in one element ANDs them, so
+        # this admits workflow pods only — ordinary tenant app pods stay denied.
+        - namespaceSelector:
+            matchExpressions:
+              - key: mctl.me/tenant
+                operator: Exists
+          podSelector:
+            matchExpressions:
+              - key: workflows.argoproj.io/workflow
+                operator: Exists

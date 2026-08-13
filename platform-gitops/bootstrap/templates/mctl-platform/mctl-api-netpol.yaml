@@ -1,0 +1,42 @@
+# Ingress allowlist for the mctl-api (control plane) namespace.
+#
+# mctl-api already rejects unauthenticated calls (verified: /api/v1/* returns 401
+# from an unprivileged pod, only /healthz is open), so this is defence in depth —
+# it removes the network path rather than relying solely on the token check.
+#
+# Applied as a raw manifest by root-app because the mctl-api Application renders
+# an external chart (mctl-api repo helm/) that has no extraObjects hook; this is
+# the same pattern as mctl-api-rbac.yaml and mctl-api-monitor.yaml.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-mctl-api-ingress
+  namespace: mctl-api
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector: {}
+        # Public ingress — the MCP endpoint and CLI both enter through Traefik.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: traefik
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+        # Workflows call back into mctl-api to report operation status.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: argo-workflows
+        # admins hosts platform workloads, not tenant apps: mctl-agent and the
+        # agents worker drive mctl-api's operations/agents endpoints directly.
+        # Carving this out is required — treating admins as a plain tenant here
+        # would break the agent pipeline.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: admins
