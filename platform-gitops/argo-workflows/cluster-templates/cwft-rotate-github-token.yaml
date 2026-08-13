@@ -13,9 +13,16 @@ metadata:
       fresh token without a restart.
 
       Installation tokens expire after 60 minutes, so a 30-minute cadence
-      leaves a safe 30-minute buffer. Targets are processed independently:
-      one App failing to mint (wrong installation, revoked key, API outage)
-      does not block the other's rotation.
+      leaves a safe 30-minute buffer. Targets are processed independently in
+      the sense that a failure in one (mint, Vault write, or ExternalSecret
+      re-sync) does not abort the loop and the other still rotates.
+
+      That is NOT a separate failure domain, though: since 2026-08-13 both
+      targets mint from the same App, so a revoked key, a removed
+      installation, or a GitHub outage takes out both at once. When
+      triaging, check whether one target failed or both — both failing
+      points at the shared App, one failing at that target's Vault path or
+      ExternalSecret.
 
       Both targets now mint from the same App — mctl-agents (id 4450852),
       the backend-only automation App. They stay separate entries because
