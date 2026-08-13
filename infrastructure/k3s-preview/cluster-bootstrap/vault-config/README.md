@@ -113,6 +113,54 @@ After both commands run, the CronJob is self-sufficient and rotates auth on
 every run. The legacy static token at `secret/platform/vault/backup-token`
 can be deleted once the next scheduled run succeeds.
 
+## ESO tenant isolation
+
+ESO reads Vault through three distinct identities. The split exists because a
+`ClusterSecretStore` is usable from every namespace and authenticates as the ESO
+controller's own ServiceAccount — so any path it can read is readable by every
+tenant, regardless of which namespace the `ExternalSecret` lives in. A tenant
+naming another tenant's `remoteRef.key` is enough to read it.
+
+| Store | Kind | Vault role | Scope |
+|---|---|---|---|
+| `vault-backend` | ClusterSecretStore | `external-secrets` | `secret/data/platform/*` only |
+| `tenant-store` (per tenant ns) | SecretStore | `eso-tenant-{name}` | `secret/data/teams/{name}/*` |
+| `cnpg-db-creds` (platform-db) | SecretStore | `cnpg-db-creds` | `secret/data/teams/+/+/database` |
+
+**Never add `teams/*` back to `external-secrets-read`** — that single line is
+what made every tenant's secrets readable from every other tenant namespace.
+
+Per-tenant roles are created by the `wft-create-tenant` workflow. To create one
+by hand (or to backfill an existing tenant):
+
+```bash
+sed 's/${TENANT}/labs/g' vault-policy-tenant-eso.hcl.tmpl \
+  | vault policy write eso-tenant-labs -
+
+vault write auth/kubernetes/role/eso-tenant-labs \
+  bound_service_account_names=tenant-eso \
+  bound_service_account_namespaces=labs \
+  policies=eso-tenant-labs \
+  ttl=1h
+```
+
+The `platform-db` store is a one-off, created the same way from
+`vault-policy-cnpg-db-creds-read.hcl` (see the header of that file).
+
+**Multi-team tenants (`tenant.teams`).** The role name follows the *namespace*,
+not the tenant: a tenant with teams renders one namespace per team
+(`{tenant}-{team}`) and therefore needs one `eso-tenant-{namespace}` role each,
+since `bound_service_account_namespaces` matches exact namespaces. No tenant
+uses `tenant.teams` today, and `wft-create-tenant` only creates the single
+bare-tenant role — create the extra roles by hand before enabling teams for a
+real tenant, or ExternalSecrets in the sub-namespaces will fail with a 403.
+
+Verify a tenant cannot reach another tenant's prefix:
+
+```bash
+vault token capabilities <tenant-token> secret/data/teams/<other-tenant>/x  # → deny
+```
+
 ## Vault Secret Structure
 
 ```

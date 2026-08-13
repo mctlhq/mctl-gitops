@@ -44,6 +44,29 @@ tenant:
   ghcrCredentials:
     enabled: true
 
+  # -- Tenant-scoped Vault SecretStore, rendered into every namespace this
+  # tenant owns. base-service points its ExternalSecrets here by default, so
+  # tenant secrets never resolve through the cluster-wide vault-backend store
+  # (which any namespace can use, and which now only reaches platform/*).
+  # Requires the matching Vault role/policy eso-tenant-{tenant} to exist —
+  # wft-create-tenant creates it; see vault-config/README.md to backfill.
+  secretStore:
+    enabled: true
+    name: "tenant-store"
+    serviceAccountName: "tenant-eso"
+    server: "http://vault.vault.svc.cluster.local:8200"
+    # KV v2 mount — must match the ClusterSecretStore or every remoteRef.key moves
+    path: "secret"
+    version: "v2"
+    authMountPath: "kubernetes"
+
+  # -- ExternalSecrets in this namespace that Argo Workflows may patch by name.
+  # Workflow RBAC is otherwise read-only on ExternalSecrets, because the Role is
+  # bound to the central argo-workflow-sa in every tenant namespace and blanket
+  # write would let one workflow repoint another tenant's secret. List only
+  # objects a platform workflow genuinely force-refreshes.
+  externalSecretPatchTargets: []
+
   # -- LimitRange defaults (applied to containers without explicit limits)
   limitRange:
     enabled: true

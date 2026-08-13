@@ -123,6 +123,10 @@ env:
 # MinIO credentials — same Vault path as labs/openclaw
 extraExternalSecrets:
   labs-claude-remote-minio:
+    # Platform-scoped path — must use the cluster store; tenant-store only
+    # resolves secret/data/teams/labs/*.
+    store: vault-backend
+    storeKind: ClusterSecretStore
     targetSecret: claude-remote-minio-creds
     data:
       - secretKey: access-key
@@ -134,6 +138,8 @@ extraExternalSecrets:
   # pr-steward GitHub App private key (RS256 PEM). Mounted on tmpfs, 0440,
   # never in env — gh-app-token mints a 1h installation token from it.
   mctl-claude-remote-github-app:
+    store: vault-backend
+    storeKind: ClusterSecretStore
     targetSecret: claude-remote-github-app
     data:
       - secretKey: private-key.pem

@@ -1,0 +1,23 @@
+# Per-tenant ESO read policy — TEMPLATE, ${TENANT} is substituted per tenant.
+#
+# Backs the namespaced SecretStore `tenant-store` that the tenant chart renders
+# into each tenant namespace. Because the store is namespaced and this policy is
+# scoped to a single tenant prefix, an ExternalSecret in tenant A cannot resolve
+# a path under tenant B even though both use an identically-named store.
+#
+# Created automatically by the wft-create-tenant workflow. To apply by hand:
+#   sed 's/${TENANT}/labs/g' vault-policy-tenant-eso.hcl.tmpl \
+#     | vault policy write eso-tenant-labs -
+#   vault write auth/kubernetes/role/eso-tenant-labs \
+#     bound_service_account_names=tenant-eso \
+#     bound_service_account_namespaces=labs \
+#     policies=eso-tenant-labs \
+#     ttl=1h
+
+path "secret/data/teams/${TENANT}/*" {
+  capabilities = ["read"]
+}
+
+path "secret/metadata/teams/${TENANT}/*" {
+  capabilities = ["read", "list"]
+}

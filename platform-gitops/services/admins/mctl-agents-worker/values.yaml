@@ -71,6 +71,10 @@ envFrom:
 # agents endpoints those pods' orchestrator code calls, just from a
 # long-running process instead of a per-run Argo pod.
 externalSecret:
+  # Platform-scoped paths — must use the cluster store; tenant-store only
+  # resolves secret/data/teams/admins/*.
+  store: vault-backend
+  storeKind: ClusterSecretStore
   targetSecret: mctl-agents-worker-secrets
   data:
     - secretKey: MCTL_TOKEN

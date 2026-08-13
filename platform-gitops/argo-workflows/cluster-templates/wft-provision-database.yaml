@@ -190,9 +190,13 @@ spec:
             name: ${DB_NAME}-db-creds
           spec:
             refreshInterval: 1h
+            # Namespaced store scoped to teams/+/+/database. Do not switch this
+            # back to the cluster-wide vault-backend: that store is usable from
+            # every namespace, which is what let one tenant read another's
+            # credentials.
             secretStoreRef:
-              kind: ClusterSecretStore
-              name: vault-backend
+              kind: SecretStore
+              name: cnpg-db-creds
             target:
               name: ${DB_NAME}-db-creds
               creationPolicy: Owner
