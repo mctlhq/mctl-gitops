@@ -17,8 +17,14 @@ metadata:
       one App failing to mint (wrong installation, revoked key, API outage)
       does not block the other's rotation.
 
+      Both targets now mint from the same App — mctl-agents (id 4450852),
+      the backend-only automation App. They stay separate entries because
+      they land in different Vault paths and re-sync different
+      ExternalSecrets, and because a future consumer may warrant its own
+      App again.
+
       Targets:
-        - mctl-agent  (App id 2902192)  -> secret/platform/mctl-agent/tokens
+        - mctl-agent  (App id 4450852)  -> secret/platform/mctl-agent/tokens
                                             key github-token
                                          -> ExternalSecret
                                             admins/admins-mctl-agent-base-service
@@ -29,6 +35,11 @@ metadata:
 
       Renamed 2026-08-01 from rotate-mctl-agent-github-token (singular) now
       that it rotates for both mctl-agent and mctl-agents.
+
+      2026-08-13: the mctl-agent target moved off MCTL App (id 2902192).
+      MCTL App is the user-facing App installed from mctl.ai and is being
+      narrowed to read-only (#761), so it can no longer back a token that
+      opens PRs.
 spec:
   schedule: "*/30 * * * *"
   timezone: "UTC"
