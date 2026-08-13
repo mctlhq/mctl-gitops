@@ -39,10 +39,21 @@ spec:
         - /metadata/annotations
     - group: external-secrets.io
       kind: ExternalSecret
+      # Only scalar paths here, deliberately. The three
+      # `.spec.data[].remoteRef.*` entries that used to sit above these were
+      # removed: combined with RespectIgnoreDifferences + ServerSideApply,
+      # a jq path that indexes INTO an array makes ArgoCD merge the live
+      # array elements back into the apply payload, so the array can never
+      # shrink. Removing an entry from spec.data then reports a successful
+      # sync and stays OutOfSync forever (#789, upstream argo-cd#17694,
+      # fix due in ArgoCD 3.6 — we run 3.3.8).
+      #
+      # ESO defaults those three fields (conversionStrategy: Default,
+      # decodingStrategy: None, metadataPolicy: None), which is why they
+      # were ignored in the first place. They are now written out
+      # explicitly in argocd-github-oauth.yaml instead, so git matches live
+      # and no ignore rule is needed.
       jqPathExpressions:
-        - .spec.data[].remoteRef.conversionStrategy
-        - .spec.data[].remoteRef.decodingStrategy
-        - .spec.data[].remoteRef.metadataPolicy
         - .spec.target.deletionPolicy
         - .spec.target.template.engineVersion
         - .spec.target.template.mergePolicy

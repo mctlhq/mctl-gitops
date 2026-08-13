@@ -20,16 +20,35 @@ spec:
   target:
     name: argocd-secret
     creationPolicy: Merge  # merge with existing secret, don't overwrite
+  # conversionStrategy / decodingStrategy / metadataPolicy are ESO's own
+  # defaults and would normally be omitted. They are written out explicitly
+  # because the alternative — letting ESO default them and ignoring the drift
+  # via `.spec.data[].remoteRef.*` in argocd-self-managed's ignoreDifferences —
+  # is what wedged this Application: a jq path indexing into an array, plus
+  # RespectIgnoreDifferences + ServerSideApply, makes ArgoCD merge live array
+  # elements back into the apply payload, so spec.data can never shrink
+  # (#789, upstream argo-cd#17694). Stating the defaults here lets that ignore
+  # rule go away. Keep them in sync if ESO ever changes its defaults — a
+  # mismatch shows up immediately as OutOfSync rather than silently.
   data:
     - secretKey: argo-workflows-sso-client-secret
       remoteRef:
         key: platform/argo-workflows/sso
         property: client-secret
+        conversionStrategy: Default
+        decodingStrategy: None
+        metadataPolicy: None
     - secretKey: backstage-oidc-client-id
       remoteRef:
         key: platform/backstage/github-oauth
         property: client-id
+        conversionStrategy: Default
+        decodingStrategy: None
+        metadataPolicy: None
     - secretKey: backstage-oidc-client-secret
       remoteRef:
         key: platform/backstage/github-oauth
         property: client-secret
+        conversionStrategy: Default
+        decodingStrategy: None
+        metadataPolicy: None
