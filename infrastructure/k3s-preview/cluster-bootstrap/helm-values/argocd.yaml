@@ -151,10 +151,15 @@ extraObjects:
             - /metadata/annotations
         - group: external-secrets.io
           kind: ExternalSecret
+          # Scalar paths only. A jq path that indexes INTO an array, combined
+          # with RespectIgnoreDifferences + ServerSideApply, makes ArgoCD merge
+          # the live array elements back into the apply payload, so spec.data
+          # can never shrink (#789, upstream argo-cd#17694). The three
+          # `.spec.data[].remoteRef.*` entries that used to sit here were
+          # removed from git in #790; seeding them here would hand a rebuilt
+          # cluster the bug back for the minutes before argocd-self-managed
+          # first syncs.
           jqPathExpressions:
-            - .spec.data[].remoteRef.conversionStrategy
-            - .spec.data[].remoteRef.decodingStrategy
-            - .spec.data[].remoteRef.metadataPolicy
             - .spec.target.deletionPolicy
             - .spec.target.template.engineVersion
             - .spec.target.template.mergePolicy
@@ -165,6 +170,14 @@ extraObjects:
     metadata:
       name: root-app
       namespace: argocd
+      finalizers:
+        - resources-finalizer.argocd.argoproj.io
+      annotations:
+        # root-app manages itself with prune: true, so without this a rename
+        # or deletion of its own manifest would make it prune itself — and the
+        # cascading finalizer above would walk every child Application on the
+        # way out. See platform-gitops/bootstrap/templates/bootstrap/root-app.yaml.
+        argocd.argoproj.io/sync-options: Prune=false
     spec:
       project: default
       source:
@@ -181,22 +194,19 @@ extraObjects:
         automated:
           prune: true
           selfHeal: true
-        syncOptions:
-          - ServerSideApply=true
-          - RespectIgnoreDifferences=true
         retry:
           limit: 5
           backoff:
             duration: 5s
             factor: 2
             maxDuration: 3m
+      # No ServerSideApply / RespectIgnoreDifferences here, deliberately: the
+      # live root-app has neither, and the finalizer rule below indexes into an
+      # array — the #789 shape, which is only safe WITHOUT
+      # RespectIgnoreDifferences. root-app also owns no ExternalSecrets, so the
+      # ExternalSecret rule that used to sit here was pure liability.
       ignoreDifferences:
-        - group: external-secrets.io
-          kind: ExternalSecret
+        - group: argoproj.io
+          kind: Application
           jqPathExpressions:
-            - .spec.data[].remoteRef.conversionStrategy
-            - .spec.data[].remoteRef.decodingStrategy
-            - .spec.data[].remoteRef.metadataPolicy
-            - .spec.target.deletionPolicy
-            - .spec.target.template.engineVersion
-            - .spec.target.template.mergePolicy
+            - .metadata.finalizers[] | select(startswith("pre-delete-finalizer.argocd.argoproj.io"))

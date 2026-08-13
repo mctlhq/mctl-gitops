@@ -382,6 +382,23 @@ spec:
             echo "Vault policy tenant-${TENANT} not found (already deleted). Skipping."
           fi
 
+          # ESO role + policy created by wft-create-tenant. Left behind, the
+          # role would still be assumable by anything that later lands a
+          # ServiceAccount named tenant-eso in a namespace reusing this name.
+          if vault read "auth/kubernetes/role/eso-tenant-${TENANT}" > /dev/null 2>&1; then
+            vault delete "auth/kubernetes/role/eso-tenant-${TENANT}"
+            echo "Vault ESO role eso-tenant-${TENANT} deleted."
+          else
+            echo "Vault ESO role eso-tenant-${TENANT} not found. Skipping."
+          fi
+
+          if vault policy read "eso-tenant-${TENANT}" > /dev/null 2>&1; then
+            vault policy delete "eso-tenant-${TENANT}"
+            echo "Vault policy eso-tenant-${TENANT} deleted."
+          else
+            echo "Vault policy eso-tenant-${TENANT} not found. Skipping."
+          fi
+
           echo "Cleaning up Vault secrets under teams/${TENANT}/..."
           SERVICES=$(vault kv list -format=json -mount=secret "teams/${TENANT}/" 2>/dev/null || echo "[]")
           if [ "$SERVICES" != "[]" ]; then

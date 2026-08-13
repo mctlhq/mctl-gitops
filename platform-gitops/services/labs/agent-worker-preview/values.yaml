@@ -10,7 +10,7 @@
 replicaCount: 1
 image:
   repository: ghcr.io/mctlhq/agent-worker-preview
-  tag: "main-b1eea10"
+  tag: "main-56a81f1"
   # tag is auto-bumped by mctl-telegram's preview-deploy.yml on every push to
   # main, same as mctl-telegram-preview — do not hand-pin it. It was pinned by
   # hand until 2026-08-03 only because that workflow dispatched a build for the
@@ -127,6 +127,9 @@ extraVolumeMounts:
     mountPath: /tmp
 extraExternalSecrets:
   labs-agent-worker-preview-api:
+    # Platform-scoped path — cluster store required; tenant-store only resolves this tenant's prefix.
+    store: vault-backend
+    storeKind: ClusterSecretStore
     refreshInterval: 1h
     targetSecret: labs-agent-worker-preview-api
     data:
@@ -142,6 +145,9 @@ extraExternalSecrets:
   # minimalEnv() passes any CLAUDE_*-prefixed env var through to the spawned
   # `claude` process unmodified, so this is picked up with no other wiring.
   labs-agent-worker-preview-anthropic:
+    # Platform-scoped path — cluster store required; tenant-store only resolves this tenant's prefix.
+    store: vault-backend
+    storeKind: ClusterSecretStore
     refreshInterval: 1h
     targetSecret: labs-agent-worker-preview-anthropic
     data:

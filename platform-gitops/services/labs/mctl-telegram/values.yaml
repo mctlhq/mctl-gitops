@@ -132,6 +132,9 @@ envFrom:
       name: "labs-mctl-telegram-demo"
 extraExternalSecrets:
   labs-mctl-telegram-tg-api:
+    # Platform-scoped path — cluster store required; tenant-store only resolves this tenant's prefix.
+    store: vault-backend
+    storeKind: ClusterSecretStore
     refreshInterval: 1h
     targetSecret: labs-mctl-telegram-tg-api
     data:
@@ -142,6 +145,9 @@ extraExternalSecrets:
         remoteKey: secret/data/platform/mctl-telegram/api
         property: TG_API_HASH
   labs-mctl-telegram-encryption:
+    # Platform-scoped path — cluster store required; tenant-store only resolves this tenant's prefix.
+    store: vault-backend
+    storeKind: ClusterSecretStore
     refreshInterval: 1h
     targetSecret: labs-mctl-telegram-encryption
     data:
@@ -149,6 +155,9 @@ extraExternalSecrets:
         remoteKey: secret/data/platform/mctl-telegram/encryption
         property: ENCRYPTION_KEY
   labs-mctl-telegram-oauth:
+    # Platform-scoped path — cluster store required; tenant-store only resolves this tenant's prefix.
+    store: vault-backend
+    storeKind: ClusterSecretStore
     refreshInterval: 1h
     targetSecret: labs-mctl-telegram-oauth
     # Force ArgoCD client-side apply for this ExternalSecret. ArgoCD v3.3.8 with
@@ -172,6 +181,9 @@ extraExternalSecrets:
         remoteKey: secret/data/platform/mctl-telegram/oauth
         property: oidc-client-secret
   labs-mctl-telegram-login:
+    # Platform-scoped path — cluster store required; tenant-store only resolves this tenant's prefix.
+    store: vault-backend
+    storeKind: ClusterSecretStore
     refreshInterval: 1h
     targetSecret: labs-mctl-telegram-login
     data:
@@ -183,6 +195,9 @@ extraExternalSecrets:
   # and DEMO_REVIEWER_PASSWORD before enabling DEMO_REVIEWER_ENABLED. Remove this
   # block (and the env flags) after the review, then delete the Vault secret.
   labs-mctl-telegram-demo:
+    # Platform-scoped path — cluster store required; tenant-store only resolves this tenant's prefix.
+    store: vault-backend
+    storeKind: ClusterSecretStore
     refreshInterval: 1h
     targetSecret: labs-mctl-telegram-demo
     data:
@@ -196,6 +211,9 @@ extraExternalSecrets:
   # @MCTL_AI_bot token mctl-agent already uses to DM the operator (chat
   # 210408407), read via the shared vault-backend ClusterSecretStore.
   labs-mctl-telegram-alert-bot:
+    # Platform-scoped path — cluster store required; tenant-store only resolves this tenant's prefix.
+    store: vault-backend
+    storeKind: ClusterSecretStore
     refreshInterval: 1h
     targetSecret: labs-mctl-telegram-alert-bot
     data:

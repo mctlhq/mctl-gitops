@@ -15,6 +15,19 @@ path "sys/policies/acl/tenant-*" {
   capabilities = ["create", "read", "update", "delete"]
 }
 
+# Per-tenant ESO policies, read by the namespaced SecretStore in each tenant
+# namespace. Kept separate from tenant-{name} (which scopes Argo's own
+# read/write access) so the two can diverge without widening either.
+path "sys/policies/acl/eso-tenant-*" {
+  capabilities = ["create", "read", "update", "delete"]
+}
+
+# Kubernetes auth roles backing those ESO policies. Without this, the tenant
+# policy created by wft-create-tenant stays an orphan ACL that nothing can assume.
+path "auth/kubernetes/role/eso-tenant-*" {
+  capabilities = ["create", "read", "update", "delete"]
+}
+
 # Read own policy (for debugging/verification)
 path "sys/policies/acl/argo-workflow-provisioner" {
   capabilities = ["read"]

@@ -105,6 +105,11 @@ spec:
           - secretRef:
               name: mctl-agent-db-creds
         externalSecret:
+          # Platform-scoped paths, so this stays on the cluster store rather
+          # than base-service's tenant-store default — the admins tenant role
+          # only grants teams/admins/*.
+          store: vault-backend
+          storeKind: ClusterSecretStore
           targetSecret: mctl-agent-secrets
           targetTemplateData:
             # Sole Telegram chat. Per-tenant routing intentionally disabled —
@@ -132,6 +137,8 @@ spec:
         # rotation in Vault propagates here without manual patching.
         extraExternalSecrets:
           mctl-agent-db-creds:
+            store: vault-backend
+            storeKind: ClusterSecretStore
             data:
               - secretKey: DB_USER
                 remoteKey: platform/mctl-agent/database

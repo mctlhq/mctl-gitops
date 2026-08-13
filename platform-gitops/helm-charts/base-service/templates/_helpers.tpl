@@ -80,3 +80,21 @@ tries is either a mistake or an attempt, and both deserve a visible sync error.
 {{- end }}
 {{- toYaml . }}
 {{- end }}
+
+{{/*
+secretStoreRef for any ExternalSecret this chart renders.
+
+Defaults to the namespaced `tenant-store` SecretStore, which resolves only this
+tenant's Vault prefix. The cluster-wide `vault-backend` store is usable from
+every namespace and now only reaches secret/data/platform/*, so a service that
+needs a platform path must opt in explicitly:
+
+  externalSecret:
+    store: vault-backend
+    storeKind: ClusterSecretStore
+
+Accepts a dict of "store" and "kind".
+*/}}
+{{- define "base-service.secretStoreRef" -}}
+name: {{ .store | default "tenant-store" }}
+kind: {{ .kind | default "SecretStore" }}{{- end }}
