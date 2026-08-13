@@ -60,6 +60,13 @@ tenant:
     version: "v2"
     authMountPath: "kubernetes"
 
+  # -- ExternalSecrets in this namespace that Argo Workflows may patch by name.
+  # Workflow RBAC is otherwise read-only on ExternalSecrets, because the Role is
+  # bound to the central argo-workflow-sa in every tenant namespace and blanket
+  # write would let one workflow repoint another tenant's secret. List only
+  # objects a platform workflow genuinely force-refreshes.
+  externalSecretPatchTargets: []
+
   # -- LimitRange defaults (applied to containers without explicit limits)
   limitRange:
     enabled: true

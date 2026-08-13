@@ -15,6 +15,11 @@ tenant:
   # services/admins/openclaw/values.yaml's extraExternalSecrets comment).
   ghcrCredentials:
     enabled: false
+  # cwft-rotate-github-token force-refreshes this ExternalSecret after minting
+  # each 1h GitHub App token for mctl-agent. Workflow RBAC on ExternalSecrets is
+  # read-only everywhere else.
+  externalSecretPatchTargets:
+    - admins-mctl-agent-base-service
   quotas:
     # Bumped 2026-05-30: requests.cpu "1" left only ~60m headroom at
     # steady-state (940m used), so a deploy/rollback workflow pod (100m

@@ -52,6 +52,12 @@ spec:
       kind: RoleBinding
     - group: external-secrets.io
       kind: ExternalSecret
+    # SecretStore — the tenant chart renders a namespaced `tenant-store` into
+    # every tenant namespace. Tenant Applications run under this project, so
+    # without this entry ArgoCD refuses the resource and every ExternalSecret
+    # that defaults to that store stays NotReady.
+    - group: external-secrets.io
+      kind: SecretStore
     - group: apps
       kind: Deployment
     - group: networking.k8s.io

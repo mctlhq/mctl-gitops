@@ -79,15 +79,27 @@ rules:
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["get", "list"]
-  {{- /* Read-only on purpose. This Role is also bound to the central
-      argo-workflows/argo-workflow-sa in every tenant namespace, so write verbs
-      here let one workflow repoint another tenant's ExternalSecret at an
-      arbitrary Vault path. Smoke tests force a refresh via the ArgoCD app's
-      refresh=hard annotation (wft-smoke-test), not by patching ExternalSecrets,
-      so nothing needs patch/update. */}}
+  {{- /* Blanket write was dropped: this Role is also bound to the central
+      argo-workflows/argo-workflow-sa in every tenant namespace, so patch/update
+      on all ExternalSecrets let one workflow repoint another tenant's secret at
+      an arbitrary Vault path. Smoke tests refresh via the ArgoCD app's
+      refresh=hard annotation (wft-smoke-test), not by patching. */}}
   - apiGroups: ["external-secrets.io"]
     resources: ["externalsecrets", "secretstores"]
     verbs: ["get", "list", "watch"]
+  {{- with $.Values.tenant.externalSecretPatchTargets }}
+  {{- /* Named exception for cwft-rotate-github-token, which force-refreshes a
+      specific ExternalSecret after minting each 1h GitHub App token. Without a
+      patch grant the rotation records the target as failed and mctl-agent waits
+      on the normal ESO interval, which can leave it holding an expired token.
+      resourceNames keeps this to the listed objects, so it does not restore the
+      cross-tenant repointing primitive above. */}}
+  - apiGroups: ["external-secrets.io"]
+    resources: ["externalsecrets"]
+    resourceNames:
+      {{- toYaml . | nindent 6 }}
+    verbs: ["patch", "update"]
+  {{- end }}
 ---
 # Bind tenant's local workflow SA to smoke-verify Role
 apiVersion: rbac.authorization.k8s.io/v1

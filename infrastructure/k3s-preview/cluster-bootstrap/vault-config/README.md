@@ -147,6 +147,14 @@ vault write auth/kubernetes/role/eso-tenant-labs \
 The `platform-db` store is a one-off, created the same way from
 `vault-policy-cnpg-db-creds-read.hcl` (see the header of that file).
 
+**Multi-team tenants (`tenant.teams`).** The role name follows the *namespace*,
+not the tenant: a tenant with teams renders one namespace per team
+(`{tenant}-{team}`) and therefore needs one `eso-tenant-{namespace}` role each,
+since `bound_service_account_namespaces` matches exact namespaces. No tenant
+uses `tenant.teams` today, and `wft-create-tenant` only creates the single
+bare-tenant role — create the extra roles by hand before enabling teams for a
+real tenant, or ExternalSecrets in the sub-namespaces will fail with a 403.
+
 Verify a tenant cannot reach another tenant's prefix:
 
 ```bash
