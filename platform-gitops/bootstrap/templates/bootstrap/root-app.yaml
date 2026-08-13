@@ -20,6 +20,20 @@ metadata:
   namespace: argocd
   finalizers:
     - resources-finalizer.argocd.argoproj.io
+  annotations:
+    # Resource-level Prune=false, and it is load-bearing: root-app manages
+    # itself with `prune: true`, so without this, deleting or renaming THIS
+    # FILE would make root-app treat itself as extraneous and prune itself.
+    # Combined with the cascading resources-finalizer above, that deletion
+    # would walk every child Application and take the platform down. One
+    # mistaken file rename must not be a cluster-wide teardown.
+    #
+    # This exempts only root-app. Child Applications stay prunable, which is
+    # the behaviour we actually want from `prune: true` — an Application
+    # removed from platform-gitops/bootstrap still leaves the cluster.
+    #
+    # Deleting root-app on purpose is now a deliberate manual act.
+    argocd.argoproj.io/sync-options: Prune=false
 spec:
   project: default
   source:
@@ -49,13 +63,25 @@ spec:
     # never be green, so real drift anywhere in the tree had nothing to
     # stand out against.
     #
-    # jsonPointers, NOT a jqPathExpression into the array. A path of the
-    # shape `.metadata.finalizers[]` combined with RespectIgnoreDifferences
-    # is exactly the trap in #789 that wedged argocd-self-managed. This
-    # ignores the whole field, which is safe; root-app also does not set
-    # RespectIgnoreDifferences, so this only suppresses the diff and never
-    # changes what a sync applies.
+    # Scoped to the generated entries only, NOT the whole field. Ignoring
+    # all of /metadata/finalizers would also hide a missing
+    # `resources-finalizer.argocd.argoproj.io` on a child Application:
+    # selfHeal would not restore it, and if that Application were later
+    # removed from the chart, pruning it would not cascade to its managed
+    # resources, orphaning those workloads.
+    #
+    # `select(startswith(...))` matches both generated entries
+    # (`pre-delete-finalizer.argocd.argoproj.io` and its `/cleanup`
+    # sibling) and never the required one — verified against a live
+    # finalizer list, where it resolves to indices 1 and 2 only.
+    #
+    # NOTE this is a jq path that indexes into an array, i.e. the shape that
+    # wedged argocd-self-managed in #789. It is safe HERE only because
+    # root-app does not set RespectIgnoreDifferences: the rule suppresses
+    # the diff and never feeds live values back into the apply payload.
+    # **Do not add RespectIgnoreDifferences to root-app without replacing
+    # this rule** — that combination is the bug.
     - group: argoproj.io
       kind: Application
-      jsonPointers:
-        - /metadata/finalizers
+      jqPathExpressions:
+        - .metadata.finalizers[] | select(startswith("pre-delete-finalizer.argocd.argoproj.io"))
