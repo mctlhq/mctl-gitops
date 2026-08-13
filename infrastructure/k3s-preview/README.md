@@ -130,6 +130,27 @@ For a genuine from-zero cluster rebuild:
 3. `terraform state rm module.cluster-bootstrap.helm_release.argocd[0]` —
    detaches it from Terraform again so routine `plan`/`apply` stays clean.
 
+**There is no ArgoCD SSO during step 2.** The bootstrap release ships no dex
+connector and `admin.enabled: false`; SSO arrives with `argocd-self-managed`,
+and its issuer is Backstage, which is itself deployed later by `root-app`.
+So the UI has no login until the platform is up — which is exactly the window
+step 2 asks you to watch.
+
+Drive it from the CLI instead, against the kubeconfig Terraform just wrote:
+
+```bash
+export KUBECONFIG=$PWD/kubeconfig.yaml
+argocd --core app list
+argocd --core app get argocd-self-managed
+argocd --core app get root-app
+```
+
+`--core` talks to the Kubernetes API directly and never authenticates to the
+ArgoCD server, so it works before any connector exists. Plain
+`kubectl -n argocd get application` works too; `--core` is only nicer for
+sync/health detail. Once `argocd-self-managed` is `Synced`, the Backstage
+connector is live and the UI at `ops.mctl.ai` behaves normally.
+
 ## Security notes
 
 - `terraform.tfvars` contains the Hetzner API token — git-ignored, never commit

@@ -17,18 +17,24 @@ configs:
     admin.enabled: false
     timeout.reconciliation: 180s
 
-    # Dex connector for GitHub OAuth
-    dex.config: |
-      connectors:
-      - type: github
-        id: github
-        name: GitHub
-        config:
-          baseURL: https://github.com
-          clientID: "$github-client-id"
-          clientSecret: "$github-client-secret"
-          orgs:
-            - name: mctlhq
+    # No dex.config here, deliberately. SSO is configured by
+    # argocd-self-managed from platform-gitops/argocd/values.yaml (an OIDC
+    # connector against Backstage), which replaces whatever this bootstrap
+    # release installed as soon as it first syncs.
+    #
+    # A GitHub connector used to sit here and could never have worked: it
+    # referenced $github-client-id / $github-client-secret, and those keys
+    # are written into argocd-secret by
+    # platform-gitops/argocd/templates/argocd-github-oauth.yaml — part of the
+    # self-managed chart, not of this release. During bootstrap the keys (and
+    # ESO itself, which arrives via root-app) do not exist yet, so dex cannot
+    # resolve them; by the time they do exist, the same sync has already
+    # replaced this dex.config with the Backstage one.
+    #
+    # So there is no SSO in the window between this release coming up and
+    # argocd-self-managed syncing. That is not a regression — see the
+    # "Disaster recovery" section of ../../README.md for how to drive ArgoCD
+    # during that window.
 
     # Health checks needed for bootstrap
     resource.customizations.health.external-secrets.io_ExternalSecret: |
