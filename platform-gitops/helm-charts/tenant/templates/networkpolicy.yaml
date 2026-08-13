@@ -84,10 +84,7 @@ spec:
           protocol: TCP
     # Pod and Service CIDRs, minus the node subnets. Egress to the whole of
     # 10.0.0.0/8 also covered the nodes themselves, so any tenant pod could
-    # reach kubelet on 10250 and the API server on 6443 directly (both verified
-    # reachable). Excluding the node subnets leaves normal in-cluster traffic
-    # intact — the API server is still reachable through its Service address
-    # 10.43.0.1:443, where RBAC applies.
+    # reach kubelet on 10250 directly (verified reachable before this change).
     - to:
         - ipBlock:
             cidr: 10.0.0.0/8
@@ -96,6 +93,20 @@ spec:
               - 10.0.0.0/24
               # control plane
               - 10.255.0.0/24
+    # The Kubernetes API needs its own rule. Service DNAT happens before egress
+    # filtering on this datapath, so a connection to kubernetes.default
+    # (10.43.0.1:443) is evaluated against the control-plane endpoint
+    # 10.255.0.101:6443 and the exception above drops it — measured, not
+    # assumed: with only the rule above, 10.43.0.1:443 is BLOCKED, which would
+    # strand every Argo executor running in a tenant namespace. Allowing 6443
+    # on the control-plane subnet restores the API while leaving kubelet
+    # (10250) blocked on both subnets.
+    - to:
+        - ipBlock:
+            cidr: 10.255.0.0/24
+      ports:
+        - protocol: TCP
+          port: 6443
     - to:
         - ipBlock:
             cidr: 172.16.0.0/12

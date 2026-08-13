@@ -52,17 +52,26 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: monitoring
-        # `admins` is deliberately not listed. It hosts platform workloads and is
-        # named explicitly in the mctl-api and argo-workflows policies, but no
-        # container there talks to Vault directly (checked every container and
-        # initContainer in the namespace for a Vault address). Its workflow pods
-        # are covered by the rule below, and anything using the public hostname
-        # arrives via Traefik above.
-        #
+        # admins hosts platform workloads, not tenant apps, and is named in the
+        # mctl-api and argo-workflows policies for the same reason. No container
+        # there addresses Vault today, so this is for consistency rather than a
+        # known dependency.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: admins
         # Argo runs some workflows inside the tenant namespace itself (verified:
         # an ovk-namespaced Workflow at time of writing), and those pods still
-        # need Vault login. Namespace + pod selector in one element ANDs them, so
-        # this admits workflow pods only — ordinary tenant app pods stay denied.
+        # need Vault login. Namespace + pod selector in one element ANDs them.
+        #
+        # Treat this as an availability allowance, NOT a security boundary: the
+        # workflow label is forgeable. base-service copies arbitrary
+        # .Values.podLabels onto pods, and update-config applies a caller-supplied
+        # config_patch to values.yaml with yq, so a tenant who can configure a
+        # service can label an ordinary app pod and match this rule. The same
+        # forgery already defeats allow-workflow-internet-egress, which predates
+        # this policy — fixing it needs admission control on the label and is
+        # tracked separately. What actually bounds a tenant at Vault is the
+        # per-tenant role and policy from the ESO split, not this selector.
         - namespaceSelector:
             matchExpressions:
               - key: mctl.me/tenant
