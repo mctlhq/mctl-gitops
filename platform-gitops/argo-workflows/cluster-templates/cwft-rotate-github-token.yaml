@@ -154,8 +154,13 @@ spec:
             # pattern later only needs a new entry here, no template changes.
             TARGETS = [
                 {
+                    # Minted from the mctl-agents App, not MCTL App: this token
+                    # is what mctl-agent's fixer uses to open PRs against
+                    # mctl-gitops, and MCTL App is the user-facing App people
+                    # install from mctl.ai — it is being narrowed to read-only
+                    # (#761), so no write path may depend on it any more.
                     "label": "mctl-agent",
-                    "creds_path": "platform/github-app",
+                    "creds_path": "platform/github-app-agents",
                     "dest_path": "platform/mctl-agent/tokens",
                     "dest_key": "github-token",
                     "es_namespace": "admins",
