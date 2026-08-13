@@ -1,0 +1,61 @@
+# root-app manages itself.
+#
+# Until now it was the one Application nobody reconciled: it was created by
+# the one-shot Terraform bootstrap (`cluster-bootstrap/helm-values/argocd.yaml`,
+# gated behind `bootstrap_argocd`, deliberately removed from Terraform state)
+# and after that only ever touched by hand — its live object carried
+# `kubectl-patch` / `kubectl-label` / `kubectl-annotate` field managers and no
+# `argocd.argoproj.io/tracking-id` at all. The root of the whole App-of-Apps
+# tree therefore had no source of truth: drift on it was invisible, and a
+# from-zero rebuild would silently restore a different spec than what was
+# running.
+#
+# This file is that source of truth. The spec below was read off the live
+# object rather than copied from the Terraform values, because the two had
+# already diverged — see the PR for the details.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root-app
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: {{ .Values.spec.source.repoURL }}
+    targetRevision: {{ .Values.spec.source.targetRevision }}
+    path: platform-gitops/bootstrap
+    helm:
+      valueFiles:
+        - values.yaml
+  destination:
+    server: {{ .Values.spec.destination.server }}
+    namespace: argocd
+  syncPolicy:
+    automated:
+      # prune stays true: this is how an Application deleted from
+      # platform-gitops/bootstrap actually leaves the cluster.
+      prune: true
+      selfHeal: true
+  ignoreDifferences:
+    # ArgoCD adds `pre-delete-finalizer.argocd.argoproj.io` and
+    # `.../cleanup` to any child Application that uses sync hooks — today
+    # `monitoring`, via its victoria-metrics cleanup hook. Those finalizers
+    # cannot exist in git, so the array never matched and root-app sat
+    # OutOfSync permanently, re-syncing Application/monitoring on every
+    # reconcile (autoHealAttemptsCount was at 28 when this was found). The
+    # damage was not the wasted syncs but the lost signal: root-app could
+    # never be green, so real drift anywhere in the tree had nothing to
+    # stand out against.
+    #
+    # jsonPointers, NOT a jqPathExpression into the array. A path of the
+    # shape `.metadata.finalizers[]` combined with RespectIgnoreDifferences
+    # is exactly the trap in #789 that wedged argocd-self-managed. This
+    # ignores the whole field, which is safe; root-app also does not set
+    # RespectIgnoreDifferences, so this only suppresses the diff and never
+    # changes what a sync applies.
+    - group: argoproj.io
+      kind: Application
+      jsonPointers:
+        - /metadata/finalizers
