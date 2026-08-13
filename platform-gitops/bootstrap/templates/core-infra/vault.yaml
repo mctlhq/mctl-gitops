@@ -126,12 +126,21 @@ spec:
         # live object's cached managedFields into the SSA apply payload, which
         # the apiserver rejects ("metadata.managedFields must be nil").
         - .spec.target.deletionPolicy
-        - .spec.data[].remoteRef.conversionStrategy
-        - .spec.data[].remoteRef.decodingStrategy
-        - .spec.data[].remoteRef.metadataPolicy
-        - .spec.dataFrom[].extract.conversionStrategy
-        - .spec.dataFrom[].extract.decodingStrategy
-        - .spec.dataFrom[].extract.metadataPolicy
+        # The six `.spec.data[].remoteRef.*` / `.spec.dataFrom[].extract.*` entries
+        # that used to sit here were removed. A jq path that indexes INTO an array,
+        # combined with RespectIgnoreDifferences + ServerSideApply, makes ArgoCD
+        # merge the live array elements back into the apply payload — so spec.data
+        # can never shrink. Dropping an entry then reports a successful sync and
+        # stays OutOfSync forever (#789, upstream argo-cd#17694, fix due in ArgoCD
+        # 3.6 — we run 3.3.8). They ignored ESO's own CRD defaults, which the
+        # ExternalSecrets now state explicitly instead, so git matches live.
+        #
+        # This whole ExternalSecret rule is in fact inert for THIS Application:
+        # its only source is the hashicorp/vault chart, which renders no
+        # ExternalSecret. `vault-backup.yaml` — the one ExternalSecret in the
+        # vault namespace — lives in the bootstrap chart and belongs to
+        # root-app. Kept rather than deleted so the rule stays uniform with the
+        # apps that do own ExternalSecrets.
         - .status
     # Hashicorp vault chart 0.28.1 renders fields that the API server
     # normalises away — without ServerSideDiff the controller would
