@@ -225,6 +225,38 @@ spec:
           echo "ESO role eso-tenant-${TENANT} created successfully."
           vault read "auth/kubernetes/role/eso-tenant-${TENANT}"
 
+          # Preview namespace ESO: same SA name, different namespace, policy
+          # that can only read teams/${TENANT}/+/preview/*. Without this the
+          # SecretStore in {TENANT}-preview cannot authenticate.
+          echo "Creating Vault policy: eso-tenant-${TENANT}-preview"
+          vault policy write "eso-tenant-${TENANT}-preview" - <<EOF
+          # Read-only ESO access for tenant preview namespace: ${TENANT}-preview
+          # Created by: wft-create-tenant workflow
+
+          path "secret/data/teams/${TENANT}/+/preview" {
+            capabilities = ["read"]
+          }
+          path "secret/data/teams/${TENANT}/+/preview/*" {
+            capabilities = ["read"]
+          }
+          path "secret/metadata/teams/${TENANT}/+/preview" {
+            capabilities = ["read", "list"]
+          }
+          path "secret/metadata/teams/${TENANT}/+/preview/*" {
+            capabilities = ["read", "list"]
+          }
+          EOF
+
+          echo "Creating Kubernetes auth role: eso-tenant-${TENANT}-preview"
+          vault write "auth/kubernetes/role/eso-tenant-${TENANT}-preview" \
+            bound_service_account_names=tenant-eso \
+            bound_service_account_namespaces="${TENANT}-preview" \
+            policies="eso-tenant-${TENANT}-preview" \
+            ttl=1h
+
+          echo "ESO role eso-tenant-${TENANT}-preview created successfully."
+          vault read "auth/kubernetes/role/eso-tenant-${TENANT}-preview"
+
     # ────────────────────────────────────────────────────────────────────────
     - name: commit-tenant-to-git
       inputs:

@@ -4,7 +4,9 @@ metadata:
   name: preview-delete
   annotations:
     workflows.argoproj.io/description: |
-      Delete a preview environment by running helm uninstall on the preview release.
+      Delete a preview environment by running helm uninstall on the preview
+      release in {team}-preview. Also checks the legacy production namespace
+      for leftovers from before ROADMAP 3.1.
 spec:
   entrypoint: delete-pipeline
   serviceAccountName: argo-workflow-sa
@@ -41,10 +43,20 @@ spec:
           COMPONENT="{{inputs.parameters.component_name}}"
           PREVIEW_ID="{{inputs.parameters.preview_id}}"
           RELEASE="preview-${COMPONENT}-${PREVIEW_ID}"
+          NS_PREVIEW="${TEAM}-preview"
 
+          uninstalled=""
+          if helm status "${RELEASE}" -n "${NS_PREVIEW}" > /dev/null 2>&1; then
+            helm uninstall "${RELEASE}" -n "${NS_PREVIEW}" --wait
+            echo "Preview release ${RELEASE} uninstalled from namespace ${NS_PREVIEW}"
+            uninstalled=1
+          fi
+          # Leftovers from before ROADMAP 3.1 lived in the production namespace.
           if helm status "${RELEASE}" -n "${TEAM}" > /dev/null 2>&1; then
             helm uninstall "${RELEASE}" -n "${TEAM}" --wait
-            echo "Preview release ${RELEASE} uninstalled from namespace ${TEAM}"
-          else
-            echo "Release ${RELEASE} not found in namespace ${TEAM} — already deleted or never existed"
+            echo "Preview release ${RELEASE} uninstalled from legacy namespace ${TEAM}"
+            uninstalled=1
+          fi
+          if [ -z "${uninstalled}" ]; then
+            echo "Release ${RELEASE} not found in ${NS_PREVIEW} or ${TEAM} — already deleted or never existed"
           fi

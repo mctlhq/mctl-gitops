@@ -399,6 +399,20 @@ spec:
             echo "Vault policy eso-tenant-${TENANT} not found. Skipping."
           fi
 
+          if vault read "auth/kubernetes/role/eso-tenant-${TENANT}-preview" > /dev/null 2>&1; then
+            vault delete "auth/kubernetes/role/eso-tenant-${TENANT}-preview"
+            echo "Vault ESO role eso-tenant-${TENANT}-preview deleted."
+          else
+            echo "Vault ESO role eso-tenant-${TENANT}-preview not found. Skipping."
+          fi
+
+          if vault policy read "eso-tenant-${TENANT}-preview" > /dev/null 2>&1; then
+            vault policy delete "eso-tenant-${TENANT}-preview"
+            echo "Vault policy eso-tenant-${TENANT}-preview deleted."
+          else
+            echo "Vault policy eso-tenant-${TENANT}-preview not found. Skipping."
+          fi
+
           echo "Cleaning up Vault secrets under teams/${TENANT}/..."
           SERVICES=$(vault kv list -format=json -mount=secret "teams/${TENANT}/" 2>/dev/null || echo "[]")
           if [ "$SERVICES" != "[]" ]; then
@@ -602,6 +616,13 @@ spec:
             echo "Namespace ${TENANT} not found, skipping."
           fi
 
+          if kubectl get ns "${TENANT}-preview" > /dev/null 2>&1; then
+            echo "Deleting preview namespace ${TENANT}-preview..."
+            kubectl delete ns "${TENANT}-preview"
+          else
+            echo "Namespace ${TENANT}-preview not found, skipping."
+          fi
+
           echo "Waiting for service apps, tenant app, and namespace to disappear..."
           for i in $(seq 1 60); do
             APP_COUNT=$(kubectl get app -n argocd -l "team=${TENANT}" --no-headers 2>/dev/null | wc -l | tr -d ' ')
@@ -615,8 +636,13 @@ spec:
             else
               NS_RC=$?
             fi
-            echo "  [${i}/60] serviceApps=${APP_COUNT} tenantAppRc=${TENANT_APP_RC} namespaceRc=${NS_RC}"
-            if [ "${APP_COUNT}" = "0" ] && [ "${TENANT_APP_RC}" -ne 0 ] && [ "${NS_RC}" -ne 0 ]; then
+            if kubectl get ns "${TENANT}-preview" > /dev/null 2>&1; then
+              PREVIEW_NS_RC=0
+            else
+              PREVIEW_NS_RC=$?
+            fi
+            echo "  [${i}/60] serviceApps=${APP_COUNT} tenantAppRc=${TENANT_APP_RC} namespaceRc=${NS_RC} previewNsRc=${PREVIEW_NS_RC}"
+            if [ "${APP_COUNT}" = "0" ] && [ "${TENANT_APP_RC}" -ne 0 ] && [ "${NS_RC}" -ne 0 ] && [ "${PREVIEW_NS_RC}" -ne 0 ]; then
               echo "K8s cleanup fully complete for tenant ${TENANT}."
               exit 0
             fi
