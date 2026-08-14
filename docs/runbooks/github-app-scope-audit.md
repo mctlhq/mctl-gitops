@@ -4,7 +4,15 @@ Which GitHub App backs which automation, what permission each consumer
 actually needs, and the rule for adding new ones.
 
 Written for mctlhq/mctl-gitops#761. Audit performed 2026-08-10, applied
-2026-08-13.
+2026-08-13/14. **Complete** — MCTL App is now `contents:read` +
+`metadata:read`, verified through the installations endpoint:
+
+```
+mctl-app     {"contents":"read","metadata":"read"}
+mctl-agents  {"actions":"write","checks":"read","contents":"write",
+              "issues":"write","metadata":"read","pull_requests":"write",
+              "workflows":"write"}
+```
 
 ## The rule
 
@@ -16,6 +24,11 @@ Written for mctlhq/mctl-gitops#761. Audit performed 2026-08-10, applied
 > MCTL needs limited access to automate GitHub Actions and manage
 > deployments. We follow the principle of least privilege and request only
 > what is necessary to operate securely.
+
+That text is now **stale** — the App has no Actions permission at all. The
+"Add a note to users" field still carries it; replacing it is pending, and
+the field has a hard **240-character limit** that rejects the whole form
+submission (the existing text must be cleared first, not appended to).
 
 New internal automation goes on `mctl-agents`. If you find yourself adding
 `secrets.APP_ID` to a workflow that pushes, opens a PR, or dispatches
@@ -112,7 +125,7 @@ Those keys are written into `argocd-secret` by
   with the Backstage connector.
 
 Dead in every state. The connector and the two now-orphaned ExternalSecret
-keys were removed, and `members:read` dropped from MCTL App.
+keys were removed (#788), and `members:read` dropped from MCTL App.
 
 There is consequently no ArgoCD SSO between the bootstrap release coming up
 and `argocd-self-managed` syncing — unchanged behaviour, now documented in
@@ -120,10 +133,12 @@ and `argocd-self-managed` syncing — unchanged behaviour, now documented in
 --core` against the kubeconfig Terraform just wrote).
 
 Note: because that ExternalSecret targets `argocd-secret` with
-`creationPolicy: Merge`, ESO does not delete keys it stops managing —
-`github-client-id` / `github-client-secret` linger in the live secret until
-removed by hand. Harmless (nothing reads them), but worth clearing when
-convenient.
+`creationPolicy: Merge`, ESO does not delete keys it stops managing — so
+`github-client-id` / `github-client-secret` lingered in the live secret
+after the chart stopped writing them. **Deleted by hand 2026-08-13** and
+confirmed not to return across a forced ESO resync. Note this was only safe
+after #790: while the ExternalSecret still listed them, ESO rewrote both
+within seconds of any deletion.
 
 ## Verifying current state
 
@@ -135,9 +150,34 @@ gh api orgs/mctlhq/installations \
 
 # Every workflow still minting as MCTL App across the workspace.
 # Expected: only mctl-gitops/.github/workflows/build-image.yaml
-grep -rn "secrets.APP_ID" --include="*.yml" --include="*.yaml" .
+grep -rnE '^[^#]*\$\{\{ *secrets\.APP_(ID|PRIVATE_KEY) *\}\}' \
+  --include="*.yml" --include="*.yaml" .
 ```
+
+Anchor the pattern outside comments. Several workflows now carry an
+explanatory line naming `secrets.APP_ID` precisely to say they must *not*
+use it; a bare `grep -rn "secrets.APP_ID"` reports all of them and makes a
+clean workspace look dirty.
 
 `gh api repos/mctlhq/<repo>/collaborators/mctl-app[bot]/permission` is
 **not** a valid check — it returns `"none"` for installed Apps that plainly
 have write. Use the installations endpoint above.
+
+## Changing an App's permissions
+
+Both directions go through the App's own settings page
+(`/organizations/mctlhq/settings/apps/<slug>/permissions`) — there is no
+REST endpoint for editing declared permissions.
+
+**Widening takes two steps.** Saving on the App page only updates the
+declaration; every existing installation keeps its old grant until it
+*accepts* the change at
+`/organizations/mctlhq/settings/installations/<installation_id>`, where a
+banner reads "<app> is requesting an update to its permissions". This bit
+the `actions: read → write` change on `mctl-agents`: the API still reported
+`"actions":"read"` after a successful save, and only flipped after the
+installation was accepted.
+
+**Narrowing applies immediately** — no acceptance step, no banner.
+
+Verify either way through `gh api orgs/mctlhq/installations`, not the page.
