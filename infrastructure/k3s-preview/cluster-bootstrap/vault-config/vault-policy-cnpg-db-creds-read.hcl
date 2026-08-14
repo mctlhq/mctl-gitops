@@ -25,15 +25,3 @@ path "secret/data/teams/+/+/database" {
 path "secret/metadata/teams/+/+/database" {
   capabilities = ["read", "list"]
 }
-
-# Read-only shared-pg roles that are not the service's own `database` key —
-# currently only academy_readonly (Grafana dashboards against mctl-academy).
-# Add a path here when another read-only pg role is provisioned; do NOT widen
-# the patterns above to teams/+/+/* , which would pull in repo-pat and telegram.
-path "secret/data/teams/+/+/grafana-readonly" {
-  capabilities = ["read"]
-}
-
-path "secret/metadata/teams/+/+/grafana-readonly" {
-  capabilities = ["read", "list"]
-}
