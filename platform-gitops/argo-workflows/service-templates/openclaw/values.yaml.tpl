@@ -77,6 +77,9 @@ probes:
 envFrom:
   - secretRef:
       name: __TEAM_NAME__-__SERVICE_NAME__-db-creds
+  # Bearer for in-cluster mctl-agent /mcp (mcp-agent-proxy.js).
+  - secretRef:
+      name: mctl-agent-api-token
 
 initContainers:
   # 1. Restore state from MinIO (no-op for new tenants, preserves OAuth credentials on restart)
@@ -772,6 +775,17 @@ extraExternalSecrets:
       - secretKey: secret-key
         remoteKey: secret/data/platform/minio
         property: root-password
+  # Inbound mctl-agent MCP bearer. Platform path — cluster store required;
+  # tenant-store only resolves this tenant's prefix.
+  mctl-agent-api-token:
+    store: vault-backend
+    storeKind: ClusterSecretStore
+    refreshInterval: 1h
+    targetSecret: mctl-agent-api-token
+    data:
+      - secretKey: AGENT_API_TOKEN
+        remoteKey: platform/mctl-agent/tokens
+        property: api-token
 
 configMaps:
   openclaw-scripts:
@@ -798,7 +812,10 @@ configMaps:
       function callAgent(body) {
         return new Promise((resolve, reject) => {
           const data = JSON.stringify(body);
-          const req = http.request({ hostname: 'admins-mctl-agent-base-service.admins.svc.cluster.local', port: 8080, path: '/mcp', method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } }, res => {
+          const headers = { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) };
+          const token = process.env.AGENT_API_TOKEN;
+          if (token) headers.Authorization = 'Bearer ' + token;
+          const req = http.request({ hostname: 'admins-mctl-agent-base-service.admins.svc.cluster.local', port: 8080, path: '/mcp', method: 'POST', headers }, res => {
             let out = ''; res.on('data', c => { out += c; }); res.on('end', () => { try { resolve(JSON.parse(out)); } catch (_) { reject(new Error('invalid JSON')); } });
           });
           req.on('error', reject); req.write(data); req.end();

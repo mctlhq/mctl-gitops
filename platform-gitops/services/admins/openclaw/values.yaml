@@ -144,6 +144,11 @@ envFrom:
   # openai-codex limits are exhausted. See externalSecrets.openclaw-anthropic-secret.
   - secretRef:
       name: openclaw-anthropic-secret
+  # Bearer for in-cluster mctl-agent /mcp (mcp-agent-proxy.js). Same Vault
+  # key the agent loads as AGENT_API_TOKEN. Header is skipped if unset so
+  # a lagging ExternalSecret does not break the old unauthenticated image.
+  - secretRef:
+      name: mctl-agent-api-token
 initContainers:
   # 1. Restore state from MinIO (no-op for new tenants, preserves OAuth credentials on restart)
   - name: restore-state
@@ -961,6 +966,16 @@ extraExternalSecrets:
       - secretKey: ANTHROPIC_API_KEY
         remoteKey: secret/data/platform/anthropic
         property: api-key
+  # Inbound mctl-agent MCP bearer. Platform path — cluster store required.
+  mctl-agent-api-token:
+    store: vault-backend
+    storeKind: ClusterSecretStore
+    refreshInterval: 1h
+    targetSecret: mctl-agent-api-token
+    data:
+      - secretKey: AGENT_API_TOKEN
+        remoteKey: platform/mctl-agent/tokens
+        property: api-token
   minio-cache-creds:
     # Platform-scoped path — cluster store required; tenant-store only resolves this tenant's prefix.
     store: vault-backend
@@ -999,7 +1014,10 @@ configMaps:
       function callAgent(body) {
         return new Promise((resolve, reject) => {
           const data = JSON.stringify(body);
-          const req = http.request({ hostname: 'admins-mctl-agent-base-service.admins.svc.cluster.local', port: 8080, path: '/mcp', method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } }, res => {
+          const headers = { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) };
+          const token = process.env.AGENT_API_TOKEN;
+          if (token) headers.Authorization = 'Bearer ' + token;
+          const req = http.request({ hostname: 'admins-mctl-agent-base-service.admins.svc.cluster.local', port: 8080, path: '/mcp', method: 'POST', headers }, res => {
             let out = ''; res.on('data', c => { out += c; }); res.on('end', () => { try { resolve(JSON.parse(out)); } catch (_) { reject(new Error('invalid JSON')); } });
           });
           req.on('error', reject); req.write(data); req.end();
