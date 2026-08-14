@@ -19,7 +19,7 @@
 replicaCount: 1
 image:
   repository: ghcr.io/mctlhq/mctl-agents
-  tag: "1.26.6"
+  tag: "1.28.0"
 imagePullSecrets:
   - name: ghcr-credentials
 command: ["python", "-m", "orchestrator.temporal.worker"]
@@ -50,10 +50,12 @@ resources:
     cpu: 500m
     memory: 256Mi
 automountServiceAccountToken: false
-# Non-root comes from the mctl-agents image USER (uid 1000) once this
-# tag is new enough to include it. Do not set runAsNonRoot/runAsUser here
-# until that tag is live — Kubernetes would refuse the current root image.
+# 1.28.0 is the first tag with USER app (uid 1000) in the image.
 podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
   seccompProfile:
     type: RuntimeDefault
 containerSecurityContext:
