@@ -121,3 +121,65 @@ spec:
       matchExpressions:
         - key: mctl.me/tenant
           operator: Exists
+---
+# CVE-2026-42876 (ESO 0.1.0–2.4.0, this cluster runs 0.10.7): an actor able to
+# create an ExternalSecret can make the operator mint a Kubernetes Secret of type
+# kubernetes.io/service-account-token naming any ServiceAccount. The API server
+# then fills in a long-lived token for it, and ESO — not the actor — supplies the
+# privilege. Classic confused deputy.
+#
+# The fix is ESO >= 2.4.1, which needs Kubernetes >= 1.34; this cluster is on
+# 1.33 with a single control plane, so the upgrade is a separate project. This
+# policy removes the reachable path in the meantime.
+#
+# Reachability here is not through the API — no tenant ServiceAccount can create
+# ExternalSecrets (checked: argo-workflow-sa and default in every tenant
+# namespace) — but through GitOps: base-service exposes targetTemplateType in
+# extraExternalSecrets, and update-config writes a caller-supplied config_patch
+# into exactly those values.
+#
+# Nothing legitimate needs this type: zero ExternalSecrets in the cluster render
+# it, and the two templates that do set a type hardcode dockerconfigjson/Opaque.
+# Mounting a token via a Pod's serviceAccountName remains the supported path.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: mctl-deny-sa-token-externalsecrets
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["external-secrets.io"]
+        # Every version this CRD serves today, plus v1 so the rule survives the
+        # v1beta1 -> v1 migration that ESO 0.16/0.17 forces.
+        apiVersions: ["v1alpha1", "v1beta1", "v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["externalsecrets", "clusterexternalsecrets"]
+  validations:
+    - expression: >-
+        !(has(object.spec.target) && has(object.spec.target.template) &&
+          has(object.spec.target.template.type) &&
+          object.spec.target.template.type == 'kubernetes.io/service-account-token')
+      message: "ExternalSecrets may not target a kubernetes.io/service-account-token Secret (CVE-2026-42876); mount tokens via a Pod's serviceAccountName instead"
+      reason: Forbidden
+    # ClusterExternalSecret nests the same shape one level deeper. Vacuously true
+    # for a plain ExternalSecret, and vice versa.
+    - expression: >-
+        !(has(object.spec.externalSecretSpec) && has(object.spec.externalSecretSpec.target) &&
+          has(object.spec.externalSecretSpec.target.template) &&
+          has(object.spec.externalSecretSpec.target.template.type) &&
+          object.spec.externalSecretSpec.target.template.type == 'kubernetes.io/service-account-token')
+      message: "ClusterExternalSecrets may not target a kubernetes.io/service-account-token Secret (CVE-2026-42876)"
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: mctl-deny-sa-token-externalsecrets
+spec:
+  policyName: mctl-deny-sa-token-externalsecrets
+  validationActions: [Deny]
+  matchResources:
+    # Cluster-wide: ESO's privilege is the same wherever the ExternalSecret sits,
+    # so a platform namespace is no safer a place to do this than a tenant one.
+    namespaceSelector: {}
