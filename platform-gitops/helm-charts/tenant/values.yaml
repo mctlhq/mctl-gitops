@@ -96,8 +96,14 @@ tenant:
     # The private-subnet exceptions in allow-cluster-egress do not cover these:
     # a pod with internet egress can otherwise reach a node's public IP, where
     # kubelet (10250) and ssh (22) both answer — measured, not assumed.
-    # Update when the cluster's nodes change. The durable control is the
-    # Hetzner firewall; this only binds pods that NetworkPolicy applies to.
+    # Update when the cluster's nodes change.
+    #
+    # This rule is what protects kubelet from *inside* the cluster. It is not
+    # redundant with the Hetzner firewall: measured 2026-08-14, 10250 is already
+    # refused from the public internet, yet was reachable from a pod, because
+    # pod-to-node-public-IP traffic does not traverse the cloud firewall. Port 22
+    # is the reverse — open from the internet by design (see
+    # infrastructure/k3s-preview/kube.tf) and closed here.
     nodePublicCIDRs:
       # control plane
       - 78.47.58.237/32

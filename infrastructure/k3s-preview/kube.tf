@@ -84,6 +84,26 @@ module "kube-hetzner" {
   ssh_public_key  = file("~/.ssh/id_ed25519.pub")
   ssh_private_key = file("~/.ssh/id_ed25519")
 
+  # firewall_ssh_source and firewall_kube_api_source are deliberately left at
+  # the module default (0.0.0.0/0, ::/0). Measured from outside the cluster on
+  # 2026-08-14: 22 and 6443 answer publicly, 10250 (kubelet) does not — the
+  # cloud firewall already refuses it, so there is nothing to close there.
+  #
+  # 6443 must stay open: it is the only path to the API server from operators'
+  # machines and there is no VPN or bastion.
+  #
+  # 22 is an accepted risk rather than an oversight. Password authentication is
+  # off (sshd offers publickey,keyboard-interactive; OpenSSH 10.2), so brute
+  # force is not viable and the residual exposure is a future pre-auth OpenSSH
+  # vulnerability. Narrowing it was considered and rejected: this module drives
+  # node configuration over SSH, so an allowlist pins `terraform apply` to those
+  # addresses, and the operator's address is dynamic — a silent lockout later
+  # would be recoverable only through the Hetzner console. Revisit if a static
+  # address or a bastion appears.
+  #
+  # Pods reaching a node's public IP bypass this firewall entirely; that path is
+  # closed by tenant.networking.nodePublicCIDRs in the tenant chart.
+
   # Network
   network_region = "eu-central"
 
