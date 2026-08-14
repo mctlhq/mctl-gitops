@@ -72,6 +72,8 @@ spec:
             # above for the other optional stores).
             TEMPORAL_ADDRESS: temporal-frontend.temporal.svc.cluster.local:7233
             TEMPORAL_NAMESPACE: mctl-agents
+            # ARGO_WEBHOOK_SECRET is not listed here; envFromSecret below
+            # injects it from Vault platform/mctl-api/argo-webhook (SOC F13).
 
           envFromSecret: mctl-api-secrets
           envFromExtraSecret: mctl-api-gitops-token
