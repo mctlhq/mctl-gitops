@@ -1,0 +1,123 @@
+# Admission-level backstop for the tenant NetworkPolicy carve-outs (#800).
+#
+# The base-service chart already refuses these shapes, but a chart guard only
+# covers what the chart renders. Anything applied another way — a hand-written
+# manifest committed to gitops, a direct API call with a tenant's token — walks
+# straight past it. These policies enforce the same rules at the API server.
+#
+# Native ValidatingAdmissionPolicy rather than Kyverno: it is GA on this cluster
+# (admissionregistration.k8s.io/v1, k8s 1.33) and adds no runtime component to
+# operate, upgrade, or fail closed on.
+---
+# `workflows.argoproj.io/workflow` gates NetworkPolicy exceptions meant for pods
+# Argo created — internet egress in every tenant namespace, Vault reachability.
+# Argo's own controller stamps it on the pods it creates; nothing else legitimately
+# sets it (verified: no long-lived workload in the cluster carries it).
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: mctl-deny-forged-workflow-labels
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+      - apiGroups: ["apps"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
+      - apiGroups: ["batch"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["jobs", "cronjobs"]
+      - apiGroups: ["argoproj.io"]
+        apiVersions: ["v1alpha1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["rollouts"]
+  matchConditions:
+    # The workflow controller is the one actor that must be able to set this
+    # label. Without the exemption every workflow pod would be rejected.
+    - name: exclude-argo-workflow-controller
+      expression: "request.userInfo.username != 'system:serviceaccount:argo-workflows:argo-workflows-workflow-controller'"
+  validations:
+    - expression: >-
+        !(has(object.metadata.labels) &&
+          object.metadata.labels.exists(k, k.startsWith('workflows.argoproj.io/')))
+      message: "workflows.argoproj.io/* labels are reserved for Argo-created pods; they gate NetworkPolicy exceptions"
+      reason: Forbidden
+    # Covers the pod template of every controller kind above. Vacuously true for
+    # bare Pods, which have no spec.template.
+    - expression: >-
+        !(has(object.spec) && has(object.spec.template) &&
+          has(object.spec.template.metadata) && has(object.spec.template.metadata.labels) &&
+          object.spec.template.metadata.labels.exists(k, k.startsWith('workflows.argoproj.io/')))
+      message: "workflows.argoproj.io/* labels in a pod template are reserved for Argo-created pods"
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: mctl-deny-forged-workflow-labels
+spec:
+  policyName: mctl-deny-forged-workflow-labels
+  validationActions: [Deny]
+  matchResources:
+    # Cluster-wide on purpose. Scoping to tenant namespaces would leave the
+    # label forgeable in platform namespaces, and nothing there needs to set it
+    # either — the controller is exempted by identity, not by namespace.
+    namespaceSelector: {}
+---
+# NetworkPolicies are additive: one permissive egress rule inside a tenant's own
+# namespace undoes the platform restrictions — internet egress, node exclusions —
+# without touching anything else. So tenant namespaces get an allowlist of the
+# policy names the platform itself renders there, and nothing else.
+#
+# Adding a platform-owned policy to a tenant namespace means adding its name
+# here too. That is deliberate friction: it is the only thing standing between a
+# tenant-authored policy and the isolation model.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: mctl-tenant-networkpolicy-allowlist
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["networking.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["networkpolicies"]
+  validations:
+    - expression: >-
+        object.metadata.name in [
+          'default-deny-all',
+          'allow-intra-namespace',
+          'allow-cluster-egress',
+          'allow-internet-egress',
+          'allow-workflow-internet-egress',
+          'allow-ingress-from-traefik',
+          'allow-ingress-from-monitoring',
+          'allow-mctl-services-internet-egress',
+          'allow-monitoring-to-mctl-agent'
+        ]
+      message: "NetworkPolicies in tenant namespaces are limited to the platform-rendered set; policies are additive and a new one can relax the tenant's isolation"
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: mctl-tenant-networkpolicy-allowlist
+spec:
+  policyName: mctl-tenant-networkpolicy-allowlist
+  validationActions: [Deny]
+  matchResources:
+    # Tenant namespaces only. Platform namespaces legitimately grow new policies
+    # (the four shared-namespace allowlists were added this way) and are not
+    # writable by tenants.
+    namespaceSelector:
+      matchExpressions:
+        - key: mctl.me/tenant
+          operator: Exists
