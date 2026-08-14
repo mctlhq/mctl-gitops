@@ -60,6 +60,28 @@ Service account name
 {{- end }}
 
 {{/*
+User-supplied pod labels, with the Argo workflow prefix refused.
+
+`workflows.argoproj.io/workflow` gates NetworkPolicy carve-outs that are meant
+for pods Argo itself created — internet egress in every tenant namespace, and
+Vault reachability. podLabels is tenant-controlled (update-config applies a
+caller-supplied config_patch to values.yaml with yq), so without this guard a
+tenant can label an ordinary app pod and claim those allowances.
+
+Argo sets the label on its own pods directly; nothing legitimate needs to set it
+through this chart. Failing loudly beats silently dropping it — a config that
+tries is either a mistake or an attempt, and both deserve a visible sync error.
+*/}}
+{{- define "base-service.podLabels" -}}
+{{- range $k, $v := . }}
+{{- if hasPrefix "workflows.argoproj.io/" $k }}
+{{- fail (printf "podLabels may not set %q: this label gates NetworkPolicy exceptions for Argo-created pods" $k) }}
+{{- end }}
+{{- end }}
+{{- toYaml . }}
+{{- end }}
+
+{{/*
 secretStoreRef for any ExternalSecret this chart renders.
 
 Defaults to the namespaced `tenant-store` SecretStore, which resolves only this
@@ -75,5 +97,4 @@ Accepts a dict of "store" and "kind".
 */}}
 {{- define "base-service.secretStoreRef" -}}
 name: {{ .store | default "tenant-store" }}
-kind: {{ .kind | default "SecretStore" }}
-{{- end }}
+kind: {{ .kind | default "SecretStore" }}{{- end }}

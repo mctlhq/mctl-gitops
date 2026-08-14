@@ -1,0 +1,85 @@
+# Ingress allowlist for the Vault namespace.
+#
+# The tenant chart's allow-cluster-egress opens egress to all of RFC1918 with no
+# port restriction, and vault/ had no ingress policy, so vault:8200 was reachable
+# from every pod in the cluster. Nothing was exploitable through it — Vault
+# authenticates every request — but network reachability of the secret store is
+# not something tenant workloads should have.
+#
+# Selecting all pods with policyTypes: [Ingress] makes this an allowlist: any
+# source not named below is denied. No separate default-deny is needed.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-vault-ingress
+  namespace: vault
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        # Raft peer traffic (8201) and vault-active/standby service routing.
+        - podSelector: {}
+        # Vault is published at secrets.mctl.ai, and the two biggest in-cluster
+        # consumers reach it through that public hostname rather than the
+        # Service: mctl-portal and mctl-api both set
+        # VAULT_ADDR: https://secrets.mctl.ai. Their connections therefore
+        # arrive from a Traefik pod, so the mctl-api/backstage entries below do
+        # not cover them and omitting Traefik would break Backstage and mctl-api
+        # outright.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: traefik
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+        # ESO resolves every ExternalSecret in the cluster from here.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: external-secrets
+        # Workflows authenticate via auth/kubernetes/login (provision-database,
+        # create-tenant, deploy-service).
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: argo-workflows
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: backstage
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: mctl-api
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+        # admins hosts platform workloads, not tenant apps, and is named in the
+        # mctl-api and argo-workflows policies for the same reason. No container
+        # there addresses Vault today, so this is for consistency rather than a
+        # known dependency.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: admins
+        # Argo runs some workflows inside the tenant namespace itself (verified:
+        # an ovk-namespaced Workflow at time of writing), and those pods still
+        # need Vault login. Namespace + pod selector in one element ANDs them.
+        #
+        # The label was forgeable when this policy was written: base-service
+        # copied arbitrary .Values.podLabels onto pods and update-config applies
+        # a caller-supplied config_patch to values.yaml with yq, so a tenant
+        # could label an app pod and claim this exception. base-service now
+        # refuses workflows.argoproj.io/* in podLabels, which closes that path
+        # here and for the older allow-workflow-internet-egress policy. Argo sets
+        # the label on its own pods directly, so nothing legitimate is affected.
+        # Editing a tenant values.yaml by hand goes through PR review; #800
+        # tracks admission control for defence in depth.
+        #
+        # Either way, what ultimately bounds a tenant at Vault is the per-tenant
+        # role and policy from the ESO split, not this selector.
+        - namespaceSelector:
+            matchExpressions:
+              - key: mctl.me/tenant
+                operator: Exists
+          podSelector:
+            matchExpressions:
+              - key: workflows.argoproj.io/workflow
+                operator: Exists

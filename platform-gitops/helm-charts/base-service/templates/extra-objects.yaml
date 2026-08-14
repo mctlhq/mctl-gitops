@@ -20,7 +20,51 @@ Example (gate a CronJob on an env flag):
 {{- $cond := "" }}
 {{- if hasKey $obj "renderIf" }}{{- $cond = $obj.renderIf }}{{- end }}
 {{- if or (not $cond) (eq (tpl ($cond | toString) $ | trim) "true") }}
+{{- $rendered := tpl (toYaml (omit $obj "renderIf")) $ }}
+{{- /* Same guard as base-service.podLabels, applied to the arbitrary manifests
+    this template emits. Without it the podLabels check is trivially sidestepped:
+    an extraObject can be a Pod or Deployment whose template carries
+    workflows.argoproj.io/workflow, and the forged pod then matches the
+    NetworkPolicy exceptions meant for Argo-created pods. Matching the rendered
+    text rather than a specific field keeps selectors, annotations and nested
+    pod templates covered. No current service references the prefix, so this
+    rejects only new attempts. */}}
+{{- if regexMatch "workflows\\.argoproj\\.io/" $rendered }}
+{{- fail "extraObjects may not reference workflows.argoproj.io/*: that label gates NetworkPolicy exceptions for Argo-created pods" }}
+{{- end }}
+{{- /* Confine extra objects to the release namespace. The apps AppProject sets
+    destinations.namespace: "*" and whitelists networking.k8s.io/*, so without
+    this an extraObject could be a NetworkPolicy carrying
+    metadata.namespace: vault — and because NetworkPolicies are additive, a
+    permissive ingress rule there would override the platform allowlists
+    entirely, no label forgery needed. An object that omits the namespace
+    lands in the release namespace, which is the normal case. */}}
+{{- $parsed := (fromYaml $rendered) | default dict }}
+{{- $objNs := get (get $parsed "metadata" | default dict) "namespace" | default "" }}
+{{- if and $objNs (ne ($objNs | toString) $.Release.Namespace) }}
+{{- fail (printf "extraObjects may not target namespace %q (release namespace is %q): cross-namespace objects can relax platform NetworkPolicies" ($objNs | toString) $.Release.Namespace) }}
+{{- end }}
+{{- /* NetworkPolicy is refused outright, in any namespace. Policies are purely
+    additive, so one permissive egress rule in the service's own namespace undoes
+    the tenant chart's restrictions — internet egress, the node exclusions, all of
+    it — without touching another namespace. A values flag could not gate this:
+    update-config applies a caller-supplied config_patch to the same values.yaml,
+    so anything expressible in values is reachable by whoever can patch it.
+    Platform-owned policies belong in the bootstrap chart, applied by root-app,
+    where tenants have no write path — that is where mctl-agent's
+    allow-monitoring-to-mctl-agent now lives. */}}
+{{- /* Matched against the rendered text, not $parsed.kind: a `kind: List`
+    wrapper carries its real resources under `items`, so a structural check on
+    the outer kind alone sees only the List and waves the nested policy through.
+    The same reasoning applies to the namespace check above, which reads only
+    the outer metadata — hence the List rejection below. */}}
+{{- if regexMatch "(?m)^\\s*kind:\\s*[\"']?NetworkPolicy[\"']?\\s*$" $rendered }}
+{{- fail "extraObjects may not define a NetworkPolicy (including nested in a List): policies are additive and would relax the tenant's own restrictions. Add platform-owned policies to the bootstrap chart instead." }}
+{{- end }}
+{{- if eq ((get $parsed "kind") | default "" | toString) "List" }}
+{{- fail "extraObjects may not use a List wrapper: its items bypass the per-object namespace and kind checks. Declare each object as its own extraObjects entry." }}
+{{- end }}
 ---
-{{ tpl (toYaml (omit $obj "renderIf")) $ }}
+{{ $rendered }}
 {{- end }}
 {{- end }}

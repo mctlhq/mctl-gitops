@@ -20,26 +20,6 @@ spec:
           - name: ghcr-credentials
         service:
           port: 8080
-        extraObjects:
-          - apiVersion: networking.k8s.io/v1
-            kind: NetworkPolicy
-            metadata:
-              name: allow-monitoring-to-mctl-agent
-            spec:
-              podSelector:
-                matchLabels:
-                  app.kubernetes.io/instance: admins-mctl-agent
-                  app.kubernetes.io/name: base-service
-              policyTypes:
-                - Ingress
-              ingress:
-                - from:
-                    - namespaceSelector:
-                        matchLabels:
-                          kubernetes.io/metadata.name: monitoring
-                  ports:
-                    - protocol: TCP
-                      port: 8080
         podSecurityContext:
           fsGroup: 1000
         resources:
@@ -205,3 +185,30 @@ spec:
       - ApplyOutOfSyncOnly=true
       - ServerSideApply=true
       - RespectIgnoreDifferences=true
+---
+# Moved out of the Application's base-service extraObjects: that path now
+# refuses NetworkPolicy outright, because extraObjects is reachable from a
+# tenant-supplied config_patch and NetworkPolicies are additive — a tenant could
+# otherwise add a permissive egress rule in its own namespace and undo the
+# platform restrictions. This policy is platform-owned, so it belongs in the
+# bootstrap chart alongside mctl-agent-rbac.yaml, applied directly by root-app.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-monitoring-to-mctl-agent
+  namespace: admins
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: admins-mctl-agent
+      app.kubernetes.io/name: base-service
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 8080
