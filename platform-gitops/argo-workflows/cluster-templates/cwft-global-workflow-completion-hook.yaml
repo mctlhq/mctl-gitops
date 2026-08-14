@@ -6,15 +6,50 @@ metadata:
     workflows.argoproj.io/description: |
       Global completion hook that sends an instant HTTP POST event to mctl-api
       upon workflow completion, unblocking Temporal activities without polling delay.
+      Body is HMAC-SHA256 signed (X-MCTL-Signature: sha256=<hex>) with
+      ARGO_WEBHOOK_SECRET from Vault. Unsigned calls are rejected by mctl-api 4.32.2+.
 spec:
   serviceAccountName: argo-workflow-sa
   templates:
     - name: notify-completion
       container:
-        image: curlimages/curl:latest
-        command: [sh, -c]
+        image: python:3.12-alpine
+        env:
+          - name: WORKFLOW_NAME
+            value: "{{workflow.name}}"
+          - name: WORKFLOW_PHASE
+            value: "{{workflow.status}}"
+          - name: ARGO_WEBHOOK_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: mctl-api-argo-webhook
+                key: ARGO_WEBHOOK_SECRET
+                optional: true
+        command: [python3, -c]
         args:
           - |
-            curl -s -X POST http://mctl-api.admins.svc.cluster.local:8080/api/v1/workflows/events/argo-complete \
-              -H "Content-Type: application/json" \
-              -d "{\"workflow_name\":\"{{workflow.name}}\",\"phase\":\"{{workflow.status}}\"}" || true
+            import hmac, hashlib, json, os, urllib.request
+            try:
+                secret = os.environ.get("ARGO_WEBHOOK_SECRET") or ""
+                if not secret:
+                    raise SystemExit(0)
+                body = json.dumps(
+                    {
+                        "workflow_name": os.environ.get("WORKFLOW_NAME", ""),
+                        "phase": os.environ.get("WORKFLOW_PHASE", ""),
+                    },
+                    separators=(",", ":"),
+                ).encode()
+                sig = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+                req = urllib.request.Request(
+                    "http://mctl-api.mctl-api.svc.cluster.local:8080/api/v1/workflows/events/argo-complete",
+                    data=body,
+                    method="POST",
+                    headers={
+                        "Content-Type": "application/json",
+                        "X-MCTL-Signature": "sha256=" + sig,
+                    },
+                )
+                urllib.request.urlopen(req, timeout=10).read()
+            except Exception:
+                pass
