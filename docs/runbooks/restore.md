@@ -11,7 +11,7 @@
 |---|---|---|---|---|---|
 | Postgres (9 tenant DB + backstage, argo, temporal, mctl-api audit) | CNPG `shared-pg` | barman + daily ScheduledBackup 02:00 | R2 `s3://vault-backup/postgres-backups/shared-pg` | 14d | да |
 | Vault (все секреты платформы) | vault ns, raft | CronJob 03:00 | R2 `s3://<bucket>/vault-backups/` | 30 копий | да |
-| Кластерное состояние k8s (etcd) | single CP node | k3s snapshot каждые 6h | R2 `mctl-etcd-snapshots/k3s-preview` | 56 копий (14d) | да |
+| Кластерное состояние k8s (etcd) | single CP node | k3s snapshot ~12h local on CP | local disk only (R2 `mctl-etcd-snapshots` not wired on the live node; drill 2026-08-14) | ~5 local copies | нет (пока S3 не включён) |
 | Метрики | VMSingle (3d retention) | vmbackup daily | R2 `s3://vault-backup/victoria-metrics` | — | да |
 | Логи | Loki | хранение сразу в R2 | R2 | 7d | да |
 | Terraform state | R2 `mctl-terraform-state` | версионирование R2 | — | — | да |
@@ -73,9 +73,9 @@ kubectl get secret cnpg-backup-r2 -n platform-db -o yaml | \
 kubectl apply -f restore-drill.yaml
 kubectl -n pg-restore-drill wait cluster/shared-pg-drill --for=condition=Ready --timeout=15m
 # сверить данные: список БД + счётчики строк в паре ключевых таблиц
-kubectl -n pg-restore-drill exec shared-pg-drill-1 -- psql -c '\l'
-kubectl -n pg-restore-drill exec shared-pg-drill-1 -- \
-  psql -d backstage -c 'select count(*) from final_entities;'
+kubectl -n pg-restore-drill exec shared-pg-drill-1 -c postgres -- psql -c '\l'
+kubectl -n pg-restore-drill exec shared-pg-drill-1 -c postgres -- \
+  psql -d backstage -c 'select count(*) from catalog.final_entities;'
 # убрать за собой
 kubectl delete ns pg-restore-drill
 ```
@@ -127,10 +127,22 @@ docker rm -f vault-drill
 
 ## 3. etcd / k3s (single control-plane)
 
-Снапшоты пишутся каждые 6h в R2 `mctl-etcd-snapshots/k3s-preview`
-(настроено в `infrastructure/k3s-preview/kube.tf`, `etcd_s3_backup`).
+Локальные снапшоты пишутся на CP-ноду (`/var/lib/rancher/k3s/server/db/snapshots`,
+сейчас каждые 12h). Terraform описывает выгрузку в R2 `mctl-etcd-snapshots/k3s-preview`
+каждые 6h (`infrastructure/k3s-preview/kube.tf`, `etcd_s3_backup`), но на живой
+CP-ноде `k3s etcd-snapshot ls --etcd-s3` отвечает `s3 configuration was not set`
+(drill 2026-08-14). Пока S3 не включён, etcd **не** переживает потерю control-plane
+диска — только локальные файлы.
 
-### Проверка, что снапшоты вообще идут (после первого apply)
+### Проверка локальных снапшотов (drill)
+
+```bash
+# on the control-plane node, as root
+ls -lh /var/lib/rancher/k3s/server/db/snapshots
+sudo k3s etcd-snapshot ls
+```
+
+### Проверка S3 (после того как etcd_s3_backup реально попадёт в k3s config)
 
 ```bash
 ssh <cp-node> sudo k3s etcd-snapshot ls --etcd-s3 \
@@ -174,6 +186,6 @@ restore Vault (§2) и Postgres (§1) — в этом порядке, т.к. ESO
 
 | Дата | Что проверяли | Результат | Заметки |
 |---|---|---|---|
-| — | CNPG restore | не проводился | |
-| — | Vault restore | не проводился | |
-| — | etcd snapshot ls | не проводился | ждёт первого apply с etcd_s3_backup |
+| 2026-08-14 | CNPG restore | OK | Restored `shared-pg` into `pg-restore-drill` from R2 barman (`shared-pg-daily-20260814020000` lineage). Cluster Ready. `catalog.final_entities` count 55 matches prod. Namespace deleted after the drill. |
+| 2026-08-14 | Vault restore | OK | Downloaded `vault-snapshot-20260814-030026.snap` (165KiB) from R2, raft restore `-force` into a throwaway in-cluster Vault, unsealed with production shamir keys, `kv list secret/platform/` readable. Job deleted. |
+| 2026-08-14 | etcd snapshot ls | PARTIAL | Local snapshots present on CP (`etcd-snapshot-mctl-preprod-control-plane-fsn1-bnt-*`, ~105MiB, last 2026-08-14 12:00, ~12h cadence). `k3s etcd-snapshot ls --etcd-s3` failed: `s3 configuration was not set`. R2 listing with in-cluster backup creds: AccessDenied / NoSuchBucket. Off-cluster etcd backup is not live. |
