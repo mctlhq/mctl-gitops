@@ -53,8 +53,16 @@ Example (gate a CronJob on an env flag):
     Platform-owned policies belong in the bootstrap chart, applied by root-app,
     where tenants have no write path — that is where mctl-agent's
     allow-monitoring-to-mctl-agent now lives. */}}
-{{- if eq ((get $parsed "kind") | default "" | toString) "NetworkPolicy" }}
-{{- fail "extraObjects may not define a NetworkPolicy: policies are additive and would relax the tenant's own restrictions. Add platform-owned policies to the bootstrap chart instead." }}
+{{- /* Matched against the rendered text, not $parsed.kind: a `kind: List`
+    wrapper carries its real resources under `items`, so a structural check on
+    the outer kind alone sees only the List and waves the nested policy through.
+    The same reasoning applies to the namespace check above, which reads only
+    the outer metadata — hence the List rejection below. */}}
+{{- if regexMatch "(?m)^\\s*kind:\\s*[\"']?NetworkPolicy[\"']?\\s*$" $rendered }}
+{{- fail "extraObjects may not define a NetworkPolicy (including nested in a List): policies are additive and would relax the tenant's own restrictions. Add platform-owned policies to the bootstrap chart instead." }}
+{{- end }}
+{{- if eq ((get $parsed "kind") | default "" | toString) "List" }}
+{{- fail "extraObjects may not use a List wrapper: its items bypass the per-object namespace and kind checks. Declare each object as its own extraObjects entry." }}
 {{- end }}
 ---
 {{ $rendered }}
