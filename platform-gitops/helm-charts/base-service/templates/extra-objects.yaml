@@ -39,10 +39,22 @@ Example (gate a CronJob on an env flag):
     permissive ingress rule there would override the platform allowlists
     entirely, no label forgery needed. An object that omits the namespace
     lands in the release namespace, which is the normal case. */}}
-{{- $objNs := (get ((fromYaml $rendered) | default dict) "metadata" | default dict) }}
-{{- $objNs = get $objNs "namespace" | default "" }}
+{{- $parsed := (fromYaml $rendered) | default dict }}
+{{- $objNs := get (get $parsed "metadata" | default dict) "namespace" | default "" }}
 {{- if and $objNs (ne ($objNs | toString) $.Release.Namespace) }}
 {{- fail (printf "extraObjects may not target namespace %q (release namespace is %q): cross-namespace objects can relax platform NetworkPolicies" ($objNs | toString) $.Release.Namespace) }}
+{{- end }}
+{{- /* NetworkPolicy is refused outright, in any namespace. Policies are purely
+    additive, so one permissive egress rule in the service's own namespace undoes
+    the tenant chart's restrictions — internet egress, the node exclusions, all of
+    it — without touching another namespace. A values flag could not gate this:
+    update-config applies a caller-supplied config_patch to the same values.yaml,
+    so anything expressible in values is reachable by whoever can patch it.
+    Platform-owned policies belong in the bootstrap chart, applied by root-app,
+    where tenants have no write path — that is where mctl-agent's
+    allow-monitoring-to-mctl-agent now lives. */}}
+{{- if eq ((get $parsed "kind") | default "" | toString) "NetworkPolicy" }}
+{{- fail "extraObjects may not define a NetworkPolicy: policies are additive and would relax the tenant's own restrictions. Add platform-owned policies to the bootstrap chart instead." }}
 {{- end }}
 ---
 {{ $rendered }}
