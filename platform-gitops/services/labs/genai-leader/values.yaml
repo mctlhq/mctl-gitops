@@ -1,0 +1,40 @@
+# Service: genai-leader
+# Team: labs
+
+# Chart: base-service
+
+image:
+  repository: ghcr.io/mctlhq/genai-leader
+  tag: "0.1.0"
+imagePullSecrets:
+  - name: ghcr-credentials
+service:
+  port: 8080
+backstage:
+  kubernetesId: genai-leader
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+env:
+  APP_ENV: production
+ingress:
+  enabled: true
+  hosts:
+    - labs-genai-leader.mctl.ai
+    - labs-genai-leader.mctl.me
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls:
+    - secretName: genai-leader-tls
+      hosts:
+        - labs-genai-leader.mctl.ai
+        - labs-genai-leader.mctl.me
+probes:
+  liveness:
+    path: /healthz
+  readiness:
+    path: /healthz
