@@ -38,6 +38,7 @@ spec:
         ARGO_WORKFLOWS_TOKEN: "{{ `{{ .argo_workflows_token }}` }}"
         GITHUB_WEBHOOK_SECRET: "{{ `{{ .webhook_secret }}` }}"
         BACKSTAGE_LANDING_TOKEN: "{{ `{{ .landing_token }}` }}"
+        BACKSTAGE_TOKEN: "{{ `{{ .backstage_token }}` }}"
   data:
     - secretKey: client_id
       remoteRef:
@@ -66,6 +67,15 @@ spec:
       remoteRef:
         key: platform/mctl-rules
         property: OIDC_CLIENT_SECRET
+    # Shared with mctl-api, which reads the same Vault path into its own
+    # BACKSTAGE_TOKEN. Both sides must see the identical value: mctl-api sends
+    # it as a Bearer, Backstage matches it against backend.auth.externalAccess.
+    # Rotating it means rewriting this one Vault key — both ExternalSecrets
+    # then pick the new value up on their next sync.
+    - secretKey: backstage_token
+      remoteRef:
+        key: platform/mctl-api/backstage-token
+        property: token
     - secretKey: app_id
       remoteRef:
         key: platform/github-app
