@@ -321,6 +321,12 @@ def validate_opted_in_agent_templates() -> None:
         assert len(local_claims) == len(claims)
 
 
+def validate_agents_workdir_nonroot_handoff() -> None:
+    for filename in AGENT_TEMPLATES:
+        text = (AGENT_TEMPLATE_DIR / filename).read_text()
+        assert "chown -R 1000:1000 /workdir" in text, filename
+
+
 def main() -> int:
     checks = (
         validate_provisioner,
@@ -332,6 +338,7 @@ def main() -> int:
         validate_tenant_smoke_rbac,
         validate_retire_cascade,
         validate_opted_in_agent_templates,
+        validate_agents_workdir_nonroot_handoff,
     )
     for check in checks:
         check()

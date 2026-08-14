@@ -306,6 +306,10 @@ spec:
           # write its own status (e.g. OOMKilled) — treated as "not
           # succeeded" by notify-telegram's resolve gate below.
           echo -n "unknown" > /workdir/shepherd_status
+          # uid 1000 is the mctl-agents image USER (SOC F8). This clone step
+          # runs as root in alpine/git; without the handoff the next step
+          # cannot write STATE_DIR or TMPDIR.
+          chown -R 1000:1000 /workdir
           echo "✓ gitops cloned"
         volumeMounts:
           - name: workdir

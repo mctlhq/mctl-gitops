@@ -183,6 +183,10 @@ spec:
           # PVC-backed scratch dir for run_issue_investigator's
           # `gh repo clone` target — see TMPDIR in run-investigator below.
           mkdir -p /workdir/clones
+          # uid 1000 is the mctl-agents image USER (SOC F8). This clone step
+          # runs as root in alpine/git; without the handoff the next step
+          # cannot write STATE_DIR or TMPDIR.
+          chown -R 1000:1000 /workdir
           echo "✓ gitops cloned"
         volumeMounts:
           - name: workdir

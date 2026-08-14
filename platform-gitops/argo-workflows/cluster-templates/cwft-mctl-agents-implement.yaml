@@ -236,6 +236,10 @@ spec:
           # ephemeral storage and the 8Gi PVC sizing in this template would
           # be ineffective for multi-repo runs (codex P2 finding).
           mkdir -p /workdir/clones
+          # uid 1000 is the mctl-agents image USER (SOC F8). This clone step
+          # runs as root in alpine/git; without the handoff the next step
+          # cannot write STATE_DIR or TMPDIR.
+          chown -R 1000:1000 /workdir
           echo "✓ gitops cloned"
         volumeMounts:
           - name: workdir
