@@ -45,11 +45,12 @@ def rewrite_remote_key(key: str, team: str, service: str) -> str:
     prefix, path = strip_data_prefix(key)
     if path.startswith("platform/"):
         return key
-    if "/preview/" in path or path.endswith("/preview"):
-        return key
     teams_prefix = f"teams/{team}/"
     if not path.startswith("teams/"):
-        return key
+        raise SystemExit(
+            f"refusing preview deploy: unrecognized Vault path {key!r} "
+            f"(expected teams/<team>/... or platform/...)"
+        )
     if not path.startswith(teams_prefix):
         raise SystemExit(
             f"refusing preview deploy: Vault path {key!r} is not under {teams_prefix}"
