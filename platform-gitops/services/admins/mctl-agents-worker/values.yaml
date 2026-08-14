@@ -50,13 +50,17 @@ resources:
     cpu: 500m
     memory: 256Mi
 automountServiceAccountToken: false
-# No podSecurityContext/containerSecurityContext hardening yet, deliberately:
-# the mctl-agents Dockerfile has no USER directive (runs as root, same as
-# every Argo CWFT pod using this image today), and this worker isn't running
-# any pods yet (replicaCount: 0 above) to verify a non-root/read-only-rootfs
-# profile against. Add it in a follow-up once the worker is actually live —
-# guessing security settings against an unverified pod is worse than the
-# CWFT pods' existing (also unhardened) baseline.
+# Non-root comes from the mctl-agents image USER (uid 1000) once this
+# tag is new enough to include it. Do not set runAsNonRoot/runAsUser here
+# until that tag is live — Kubernetes would refuse the current root image.
+podSecurityContext:
+  seccompProfile:
+    type: RuntimeDefault
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
 env:
   TEMPORAL_ADDRESS: temporal-frontend.temporal.svc.cluster.local:7233
   TEMPORAL_NAMESPACE: mctl-agents

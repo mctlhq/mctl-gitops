@@ -172,6 +172,10 @@ spec:
               ssh-keyscan -T 10 -p 443 -H ssh.github.com >> ~/.ssh/known_hosts 2>/dev/null
               git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops
               mkdir -p /workdir/mctl-gitops/platform-gitops/agents-state
+              # uid 1000 is the mctl-agents image USER (SOC F8). This init
+              # container runs as root in alpine/git; without the handoff the
+              # main container cannot write STATE_DIR.
+              chown -R 1000:1000 /workdir
               echo "gitops cloned"
           resources:
             requests: { cpu: 50m, memory: 64Mi }
