@@ -91,6 +91,51 @@ credential between the two, not a Backstage-only concern.
 line from `mctl-api.yaml` — `VAULT_TOKEN` is still configured and takes
 over on the next pod restart, same one-line-revert pattern as Backstage.
 
+### github-actions (GitHub OIDC JWT)
+
+`build-image.yaml` no longer uses a long-lived `VAULT_TOKEN` GitHub Actions
+secret. The job requests an OIDC JWT from `token.actions.githubusercontent.com`
+(`permissions.id-token: write`) and logs into Vault `auth/jwt` as role
+`github-actions`. The resulting token can only read
+`secret/data/teams/+/+/repo-pat`.
+
+One-time apply (Vault admin token; `VAULT_ADDR=https://secrets.mctl.ai`).
+Vault 1.17+ requires `bound_audiences` to match the JWT `aud` claim.
+
+```bash
+vault auth enable jwt
+
+vault write auth/jwt/config \
+  oidc_discovery_url="https://token.actions.githubusercontent.com" \
+  bound_issuer="https://token.actions.githubusercontent.com"
+
+vault policy write github-actions-repo-pat \
+  infrastructure/k3s-preview/cluster-bootstrap/vault-config/vault-policy-github-actions-repo-pat.hcl
+
+vault write auth/jwt/role/github-actions -<<'EOF'
+{
+  "role_type": "jwt",
+  "user_claim": "sub",
+  "bound_audiences": "https://github.com/mctlhq",
+  "bound_claims_type": "glob",
+  "bound_claims": {
+    "repository": "mctlhq/mctl-gitops",
+    "job_workflow_ref": "mctlhq/mctl-gitops/.github/workflows/build-image.yaml@*"
+  },
+  "policies": ["github-actions-repo-pat"],
+  "ttl": "10m"
+}
+EOF
+```
+
+Vault must be able to fetch GitHub's OIDC JWKS over HTTPS (egress from the
+vault namespace to `token.actions.githubusercontent.com`). After the first
+successful `build-image.yaml` run, delete the GitHub Actions secret
+`VAULT_TOKEN` on `mctlhq/mctl-gitops` — the workflow no longer reads it.
+
+**Rollback:** restore `secrets.VAULT_TOKEN` on the fetch step in
+`build-image.yaml` and keep this JWT role in place unused.
+
 ### vault-backup
 Used by the `vault-backup` CronJob (namespace `vault`) to take a raft snapshot.
 No long-lived token: the CronJob authenticates via Kubernetes auth using the

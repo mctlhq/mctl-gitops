@@ -457,6 +457,7 @@ spec:
 
           # Find the line with the last policy entry (before the 'secret:' key)
           # We insert new tenant RBAC before the 'secret:' section
+          # No tenant exec. Argo CD exec is admin-only (SOC F4).
           RBAC_BLOCK="
                   # Tenant: ${TENANT}
                   p, role:team-${TENANT}, applications, get, apps/${TENANT}-*, allow
@@ -464,7 +465,6 @@ spec:
                   p, role:team-${TENANT}, applications, sync, apps/${TENANT}-*, allow
                   p, role:team-${TENANT}, applications, override, apps/${TENANT}-*, allow
                   p, role:team-${TENANT}, logs, get, apps/${TENANT}-*, allow
-                  p, role:team-${TENANT}, exec, create, apps/${TENANT}-*, allow
                   g, ${TENANT}, role:team-${TENANT}"
 
           # Check if tenant already has RBAC (shouldn't happen given validate step, but be safe)

@@ -49,7 +49,31 @@ VAULT_TOKEN=$(vault write -field=token auth/kubernetes/login \
   role=external-secrets jwt="${SA_TOKEN}")
 ```
 
-### 3. Recommended: Write via Argo Workflow
+### 3. GitHub Actions JWT (read-only repo PAT)
+
+Used by `mctl-gitops` `.github/workflows/build-image.yaml`. No long-lived
+Vault token in GitHub Actions — the job mints a GitHub OIDC JWT and logs
+into `auth/jwt` role `github-actions`.
+
+```bash
+# From a GitHub Actions runner (id-token: write). Audience must match the
+# Vault role bound_audiences (https://github.com/mctlhq).
+JWT=$(curl -sS \
+  -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+  "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https%3A%2F%2Fgithub.com%2Fmctlhq" \
+  | jq -r .value)
+
+VAULT_TOKEN=$(curl -sS -X POST \
+  -H "Content-Type: application/json" \
+  -d "{\"role\":\"github-actions\",\"jwt\":\"${JWT}\"}" \
+  "https://secrets.mctl.ai/v1/auth/jwt/login" | jq -r .auth.client_token)
+```
+
+Policy `github-actions-repo-pat` can only read `secret/data/teams/+/+/repo-pat`.
+One-time Vault enable is documented in
+`infrastructure/k3s-preview/cluster-bootstrap/vault-config/README.md`.
+
+### 4. Recommended: Write via Argo Workflow
 
 The platform's `tpl-vault-write` ClusterWorkflowTemplate has write access:
 

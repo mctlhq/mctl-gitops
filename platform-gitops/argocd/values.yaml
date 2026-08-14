@@ -25,7 +25,14 @@ argo-cd:
   configs:
     cm:
       url: https://ops.mctl.ai
-      admin.enabled: true
+      # Local admin is disabled. UI login is Backstage OIDC via Dex
+      # (dex.config below). Confirm SSO at https://ops.mctl.ai/auth/login
+      # before syncing this change: the login page must 303 to
+      # /api/dex/auth?client_id=argo-cd. Break-glass is `argocd --core`
+      # against the cluster kubeconfig (see infrastructure/k3s-preview/README.md).
+      # Bootstrap helm-values/argocd.yaml already ships admin.enabled: false;
+      # this aligns the self-managed live release with that.
+      admin.enabled: false
       timeout.reconciliation: 180s
       accounts.developers: apiKey, login, sync, application, admin
       accounts.mctl-api: apiKey
@@ -116,6 +123,13 @@ argo-cd:
           secret: "$argo-workflows-sso-client-secret"
 
     params:
+      # HTTP inside the cluster. TLS terminates at the Traefik Ingress
+      # (server.ingress.tls + cert-manager letsencrypt-prod, secret argocd-tls,
+      # hostname ops.mctl.ai). This is the standard Argo CD behind-ingress
+      # pattern and the compensating control for server.insecure: clients
+      # never speak cleartext to ops.mctl.ai. Terminating TLS on argocd-server
+      # itself would require rewriting probes and the Ingress to backend HTTPS
+      # and is deferred; do not set this false without that pairing.
       server.insecure: true
       controller.status.processors: "5"
       controller.operation.processors: "3"
@@ -159,13 +173,15 @@ argo-cd:
         # mctl-api service account: read all applications for status checks
         p, mctl-api, applications, get, */*, allow
 
+        # Tenant roles: no exec. Argo CD exec is a cluster-admin-adjacent
+        # shell into application pods; only role:admin retains it. New
+        # tenants are seeded without exec by wft-create-tenant.
         # Tenant: labs
         p, role:team-labs, applications, get, apps/labs-*, allow
         p, role:team-labs, applications, list, apps/labs-*, allow
         p, role:team-labs, applications, sync, apps/labs-*, allow
         p, role:team-labs, applications, override, apps/labs-*, allow
         p, role:team-labs, logs, get, apps/labs-*, allow
-        p, role:team-labs, exec, create, apps/labs-*, allow
         g, labs, role:team-labs
 
         # Tenant: yyy
@@ -174,7 +190,6 @@ argo-cd:
         p, role:team-yyy, applications, sync, apps/yyy-*, allow
         p, role:team-yyy, applications, override, apps/yyy-*, allow
         p, role:team-yyy, logs, get, apps/yyy-*, allow
-        p, role:team-yyy, exec, create, apps/yyy-*, allow
         g, yyy, role:team-yyy
 
         p, role:team-xxxx, applications, get, apps/xxxx-*, allow
@@ -182,7 +197,6 @@ argo-cd:
         p, role:team-xxxx, applications, sync, apps/xxxx-*, allow
         p, role:team-xxxx, applications, override, apps/xxxx-*, allow
         p, role:team-xxxx, logs, get, apps/xxxx-*, allow
-        p, role:team-xxxx, exec, create, apps/xxxx-*, allow
         g, xxxx, role:team-xxxx
         # Tenant: ovk
         p, role:team-ovk, applications, get, apps/ovk-*, allow
@@ -190,7 +204,6 @@ argo-cd:
         p, role:team-ovk, applications, sync, apps/ovk-*, allow
         p, role:team-ovk, applications, override, apps/ovk-*, allow
         p, role:team-ovk, logs, get, apps/ovk-*, allow
-        p, role:team-ovk, exec, create, apps/ovk-*, allow
         g, ovk, role:team-ovk
 
         # Tenant: nfc
@@ -199,7 +212,6 @@ argo-cd:
         p, role:team-nfc, applications, sync, apps/nfc-*, allow
         p, role:team-nfc, applications, override, apps/nfc-*, allow
         p, role:team-nfc, logs, get, apps/nfc-*, allow
-        p, role:team-nfc, exec, create, apps/nfc-*, allow
         g, nfc, role:team-nfc
 
     secret:
