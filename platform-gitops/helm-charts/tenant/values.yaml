@@ -114,6 +114,21 @@ tenant:
     # Specific CIDR ranges to allow (in addition to cluster egress)
     # allowedCIDRs: []
 
+  # -- Ephemeral preview namespace ({tenant}-preview). Isolated from the
+  # production tenant namespace: own ExternalSecrets, own Vault ESO role
+  # (preview/ prefix only), NetworkPolicy that cannot reach the prod ns.
+  # Disable only if this tenant must not run preview-deploy at all.
+  preview:
+    enabled: true
+    quotas:
+      requests.cpu: "1"
+      requests.memory: "2Gi"
+      limits.cpu: "4"
+      limits.memory: "4Gi"
+      pods: "8"
+      persistentvolumeclaims: "1"
+      services: "8"
+
   # -- Pod Security Standards level for the namespace
   # "baseline" allows workflow/CI pods running as root (required for apk, git, etc.)
   # "restricted" enforces non-root + no privilege escalation (stricter, for app-only namespaces)

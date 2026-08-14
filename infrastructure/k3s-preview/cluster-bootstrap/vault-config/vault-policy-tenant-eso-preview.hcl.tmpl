@@ -1,0 +1,32 @@
+# Per-tenant ESO read policy for the {tenant}-preview namespace.
+# ${TENANT} is substituted per tenant.
+#
+# Narrower than vault-policy-tenant-eso.hcl.tmpl: this role can only read
+# teams/${TENANT}/<service>/preview and teams/${TENANT}/<service>/preview/*.
+# Production paths (teams/${TENANT}/<service>/<leaf>) 403.
+#
+# Created by wft-create-tenant and ensured on every preview-deploy.
+#   sed 's/${TENANT}/labs/g' vault-policy-tenant-eso-preview.hcl.tmpl \
+#     | vault policy write eso-tenant-labs-preview -
+#   vault write auth/kubernetes/role/eso-tenant-labs-preview \
+#     bound_service_account_names=tenant-eso \
+#     bound_service_account_namespaces=labs-preview \
+#     policies=eso-tenant-labs-preview \
+#     ttl=1h
+
+# Single KV object holding every preview key for a service.
+path "secret/data/teams/${TENANT}/+/preview" {
+  capabilities = ["read"]
+}
+
+path "secret/data/teams/${TENANT}/+/preview/*" {
+  capabilities = ["read"]
+}
+
+path "secret/metadata/teams/${TENANT}/+/preview" {
+  capabilities = ["read", "list"]
+}
+
+path "secret/metadata/teams/${TENANT}/+/preview/*" {
+  capabilities = ["read", "list"]
+}

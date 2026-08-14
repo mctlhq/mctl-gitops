@@ -12,7 +12,7 @@
 | Утверждение аудита | Реальность | Где проверено |
 |---|---|---|
 | «Бэкапов нет» | **Неверно.** CNPG barman → MinIO (daily, retention 3d), Vault raft snapshot → R2 (daily, 30 копий), vmbackup → R2 | `infra-components/data/cnpg/shared/`, `bootstrap/templates/core-infra/vault-backup.yaml`, `bootstrap/templates/observability/monitoring.yaml` |
-| «Preview делит секреты с prod» | **Верно.** Helm release preview ставится в namespace команды и монтирует те же Secret'ы | `argo-workflows/cluster-templates/wft-preview-deploy.yaml` (описание в самом шаблоне) |
+| «Preview делит секреты с prod» | **Закрыто.** Preview ставится в `{team}-preview`; tenant Vault-пути переписываются на `teams/<team>/<service>/preview/*`; NetworkPolicy не пускает в prod-namespace | `argo-workflows/cluster-templates/wft-preview-deploy.yaml`, `helm-charts/tenant/templates/preview.yaml` |
 | «Long-lived MCTL_GITHUB_TOKEN в auto-deploy» | **Неточно.** В коде такого токена нет — это ручная инструкция в доках. Реальный long-lived секрет — `VAULT_TOKEN` в GHA `build-image.yaml`; in-cluster токен GitHub App ротируется каждые 30 мин | `.github/workflows/build-image.yaml:88-96`, `cwft-rotate-github-token.yaml` |
 | «blue-green by default» vs «rolling by default» | Код: rolling через ArgoCD sync; blue-green в base-service есть, но opt-in. Доки противоречат друг другу | `helm-charts/base-service/`, mctl-docs `guides/services.md:82` vs `guides/rollbacks.md:24` |
 | «Изоляция тенантов не подтверждена» | Есть: default-deny NetworkPolicy, ResourceQuota, LimitRange, PSS baseline. Но `allowInternetEgress: true` по умолчанию | `helm-charts/tenant/templates/`, `values.yaml:58` |
@@ -82,8 +82,8 @@ PDB только у CNPG, prod-кластер — заглушки.
 
 ### 3.1 Изоляция preview от production-секретов (блокер №1)
 Сейчас preview из любой ветки получает полные production-креды команды.
-- [ ] Вариант-минимум: отдельный namespace `{team}-preview` (через tenant chart) + собственные ExternalSecret'ы на отдельные Vault-пути `secret/data/teams/<team>/<service>/preview/*`.
-- [ ] Обновить `wft-preview-deploy.yaml` / `wft-preview-delete.yaml` и NetworkPolicy: preview не ходит в prod-namespace.
+- [x] Вариант-минимум: отдельный namespace `{team}-preview` (через tenant chart) + собственные ExternalSecret'ы на отдельные Vault-пути `secret/data/teams/<team>/<service>/preview/*`.
+- [x] Обновить `wft-preview-deploy.yaml` / `wft-preview-delete.yaml` и NetworkPolicy: preview не ходит в prod-namespace.
 
 ### 3.2 Ужесточить дефолты изоляции
 - [x] `allowInternetEgress: false` по умолчанию — в чарте tenant, Backstage-шаблоне

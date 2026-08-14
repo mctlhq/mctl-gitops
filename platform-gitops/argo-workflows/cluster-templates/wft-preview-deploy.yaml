@@ -11,11 +11,18 @@ metadata:
         2. Build from branch (git_ref set): triggers build-image.yaml in mctl-gitops,
            waits for the image to be pushed to GHCR, then deploys.
 
-      The preview Helm release (preview-{app}-{id}) runs in the team's own namespace.
+      The preview Helm release (preview-{app}-{id}) runs in {team}-preview, not
+      the production tenant namespace. Tenant Vault paths are rewritten to
+      teams/<team>/<service>/preview/* and resolved through a namespaced
+      SecretStore whose ESO role cannot read production secrets. Platform
+      paths (GHCR, shared MinIO) stay on ClusterSecretStore.
       Accessible at {app}-{id}.{PLATFORM_DOMAIN} (covered by *.{PLATFORM_DOMAIN} wildcard).
-      Inherits imagePullSecrets, service.port, envFrom, and resources from the service values.yaml.
-      Reuses the existing ExternalSecret-provisioned secret — no new secret is created.
       Cleanup via preview-delete workflow (helm uninstall).
+      Vault ESO role eso-tenant-{team}-preview is created by wft-create-tenant
+      (not by this workflow — preview-deploy must not use the provisioner policy).
+      Seed preview secrets before the first deploy:
+        vault kv put secret/teams/<team>/<service>/preview/<leaf> ...
+      Missing preview paths fail closed (pod never gets prod credentials).
 spec:
   ttlStrategy:
     secondsAfterSuccess: 1800
@@ -205,7 +212,7 @@ spec:
             memory: 128Mi
             cpu: 50m
 
-    # ── Deploy: Helm install/upgrade into team namespace ─────────────────────────
+    # ── Deploy: Helm install/upgrade into {team}-preview ─────────────────────────
     - name: deploy
       inputs:
         parameters:
@@ -248,6 +255,7 @@ spec:
           TAG="{{inputs.parameters.image_tag}}"
           TTL_HOURS="{{inputs.parameters.ttl_hours}}"
           PORT="{{inputs.parameters.port}}"
+          NS="${TEAM}-preview"
 
           PREVIEW_ID=$(echo "${ARGO_WORKFLOW_NAME}" | tr -cd 'a-z0-9' | tail -c 6)
           RELEASE="preview-${COMPONENT}-${PREVIEW_ID}"
@@ -256,7 +264,7 @@ spec:
           echo "${PREVIEW_ID}" > /tmp/preview_id
           echo "https://${HOST}" > /tmp/preview_url
 
-          apk add --no-cache git openssh-client > /dev/null 2>&1
+          apk add --no-cache git openssh-client python3 py3-yaml > /dev/null 2>&1
           mkdir -p ~/.ssh
           cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
@@ -266,10 +274,38 @@ spec:
 
           CHART_PATH="/tmp/mctl-gitops/platform-gitops/helm-charts/base-service"
           SERVICE_VALUES="/tmp/mctl-gitops/platform-gitops/services/${TEAM}/${COMPONENT}/values.yaml"
+          PREVIEW_VALUES="/tmp/preview-values.yaml"
+
+          python3 /tmp/mctl-gitops/platform-gitops/argo-workflows/scripts/rewrite_preview_values.py \
+            --team "${TEAM}" --service "${COMPONENT}" \
+            --in "${SERVICE_VALUES}" --out "${PREVIEW_VALUES}"
+
+          # preview.yaml (namespace, RBAC, SecretStore) is applied by ArgoCD
+          # from the tenant chart. Do not --create-namespace: that would skip
+          # NetworkPolicy and the preview-only ESO role.
+          echo "Waiting for namespace ${NS} (tenant-${TEAM} chart)..."
+          ready=""
+          i=1
+          while [ "$i" -le 36 ]; do
+            if helm list -n "${NS}" >/dev/null 2>&1; then
+              ready=1
+              echo "${NS} is ready"
+              break
+            fi
+            echo "  waiting ${i}/36"
+            i=$((i + 1))
+            sleep 5
+          done
+          if [ -z "${ready}" ]; then
+            echo "ERROR: namespace ${NS} is not ready after 3m." >&2
+            echo "Wait for ArgoCD Application tenant-${TEAM} to sync preview.yaml" >&2
+            echo "(Namespace, helm-deploy Role, SecretStore), then retry." >&2
+            exit 1
+          fi
 
           helm upgrade --install "${RELEASE}" "${CHART_PATH}" \
-            --namespace "${TEAM}" \
-            --values "${SERVICE_VALUES}" \
+            --namespace "${NS}" \
+            --values "${PREVIEW_VALUES}" \
             --set image.tag="${TAG}" \
             --set ingress.enabled=true \
             --set ingress.className=traefik \
@@ -277,14 +313,14 @@ spec:
             --set "ingress.hosts={${HOST}}" \
             --set "ingress.tls[0].secretName=${RELEASE}-tls" \
             --set "ingress.tls[0].hosts={${HOST}}" \
-            --set externalSecret=null \
             --set blueGreen.enabled=false \
+            --set dbInitJob.enabled=false \
             ${PORT:+--set service.port="${PORT}"} \
             --set-string "podLabels.mctl\\.ai/preview=true" \
             --set-string "podLabels.mctl\\.ai/preview-id=${PREVIEW_ID}" \
             --wait --timeout=5m
 
-          echo "Preview deployed: https://${HOST} (release: ${RELEASE}, ttl: ${TTL_HOURS}h)"
+          echo "Preview deployed: https://${HOST} (release: ${RELEASE}, namespace: ${NS}, ttl: ${TTL_HOURS}h)"
         resources:
           requests:
             memory: 256Mi

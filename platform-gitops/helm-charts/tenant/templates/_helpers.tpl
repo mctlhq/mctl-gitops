@@ -48,3 +48,12 @@ Usage: range (include "tenant.namespaces" . | fromJsonArray)
   {{- list $tenantName | toJson -}}
 {{- end -}}
 {{- end }}
+
+{{/*
+Ephemeral preview namespace for this tenant: {tenant}-preview.
+Preview Helm releases and their ExternalSecrets live here so they cannot
+mount production secrets from the tenant's primary namespace.
+*/}}
+{{- define "tenant.previewNamespace" -}}
+{{- printf "%s-preview" (include "tenant.name" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
