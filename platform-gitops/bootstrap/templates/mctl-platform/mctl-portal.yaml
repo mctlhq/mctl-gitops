@@ -301,6 +301,27 @@ spec:
               baseUrl: https://app.mctl.ai
               listen:
                 port: 7007
+              # mctl-api is not a Backstage backend and cannot mint service
+              # tokens, so it authenticates with this shared static token, sent
+              # as a Bearer. Without an entry here Backstage answers "Illegal
+              # token" — which is what kept custom domains unusable after
+              # mctl-portal 951d450 dropped the unauthenticated policy from
+              # /domains* to close a domain-hijack vector.
+              # BACKSTAGE_TOKEN comes from the ExternalSecret above, reading the
+              # same Vault key mctl-api reads, so both sides match by
+              # construction. Note this appConfig is the only config the pod
+              # loads (--config app-config-from-configmap.yaml); the repo's
+              # app-config.production.yaml is not used in production.
+              # Interim: type: jwks against mctl-api's in-cluster ServiceAccount
+              # identity would drop the shared secret entirely.
+              auth:
+                externalAccess:
+                  - type: static
+                    options:
+                      token: ${BACKSTAGE_TOKEN}
+                      subject: mctl-api
+                    accessRestrictions:
+                      - plugin: custom-domains
               reading:
                 allow:
                   - host: app.mctl.ai
