@@ -414,7 +414,7 @@ spec:
               kubeConfigType: token
               kubeApiUrl: https://kubernetes.default.svc
               kubeToken: ${K8S_SERVICE_ACCOUNT_TOKEN}
-              skipTLSVerify: true
+              caFile: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
             kubernetes:
               serviceLocatorMethod:
                 type: multiTenant
@@ -511,14 +511,10 @@ spec:
                   target: https://github.com/mctlhq/mctl-gitops/blob/main/platform-gitops/backstage/templates/delete-tenant/template.yaml
                   rules:
                     - allow: [Template]
-                # Tenant entities from the tenant-management backend.
-                # The endpoint serves PII and requires the landing token; the
-                # catalog UrlReader cannot send headers, so it rides the query
-                # string. Backstage substitutes the env var at runtime.
-                - type: url
-                  target: https://app.mctl.ai/api/tenant-management/backstage/catalog.yaml?token=${BACKSTAGE_LANDING_TOKEN}
-                  rules:
-                    - allow: [User, Group, System]
+                # Tenant User/Group/System entities come from
+                # TenantCatalogEntityProvider (in-process, mctl-portal 4.11.2+).
+                # Do not re-add catalog.yaml?token= — UrlReader cannot send
+                # headers and the query token leaks via logs and referrer.
 
         # PostgreSQL subchart disabled — using shared CNPG cluster in platform-db namespace
         postgresql:
