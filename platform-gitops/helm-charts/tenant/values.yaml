@@ -92,6 +92,19 @@ tenant:
     # unconditionally via allow-workflow-internet-egress, so builds/deploys
     # work either way. All existing tenants set this explicitly.
     allowInternetEgress: false
+    # -- Node public addresses, excluded from the internet-egress rules.
+    # The private-subnet exceptions in allow-cluster-egress do not cover these:
+    # a pod with internet egress can otherwise reach a node's public IP, where
+    # kubelet (10250) and ssh (22) both answer — measured, not assumed.
+    # Update when the cluster's nodes change. The durable control is the
+    # Hetzner firewall; this only binds pods that NetworkPolicy applies to.
+    nodePublicCIDRs:
+      # control plane
+      - 78.47.58.237/32
+      # workers
+      - 91.99.127.137/32
+      - 91.99.152.207/32
+      - 91.99.112.66/32
     # Specific CIDR ranges to allow (in addition to cluster egress)
     # allowedCIDRs: []
 

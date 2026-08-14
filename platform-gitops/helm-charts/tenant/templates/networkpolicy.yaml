@@ -139,6 +139,15 @@ spec:
               - 10.0.0.0/8
               - 172.16.0.0/12
               - 192.168.0.0/16
+{{- /* The nodes answer on public addresses too, which the RFC1918 exceptions
+    above do not cover. Measured from a pod holding exactly this rule: the
+    worker public IP accepted 10250 (kubelet) and 22 (ssh) while ordinary
+    internet egress worked, so excluding only the private subnets left the
+    node-isolation goal unmet. Keep in sync with the cluster's nodes; the
+    durable fix belongs in the Hetzner firewall. */}}
+{{- range $cidr := $networking.nodePublicCIDRs }}
+              - {{ $cidr }}
+{{- end }}
 {{- end }}
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -167,6 +176,15 @@ spec:
               - 10.0.0.0/8
               - 172.16.0.0/12
               - 192.168.0.0/16
+{{- /* The nodes answer on public addresses too, which the RFC1918 exceptions
+    above do not cover. Measured from a pod holding exactly this rule: the
+    worker public IP accepted 10250 (kubelet) and 22 (ssh) while ordinary
+    internet egress worked, so excluding only the private subnets left the
+    node-isolation goal unmet. Keep in sync with the cluster's nodes; the
+    durable fix belongs in the Hetzner firewall. */}}
+{{- range $cidr := $networking.nodePublicCIDRs }}
+              - {{ $cidr }}
+{{- end }}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 6. Allow ingress from Traefik ingress controller.

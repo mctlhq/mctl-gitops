@@ -32,6 +32,18 @@ Example (gate a CronJob on an env flag):
 {{- if regexMatch "workflows\\.argoproj\\.io/" $rendered }}
 {{- fail "extraObjects may not reference workflows.argoproj.io/*: that label gates NetworkPolicy exceptions for Argo-created pods" }}
 {{- end }}
+{{- /* Confine extra objects to the release namespace. The apps AppProject sets
+    destinations.namespace: "*" and whitelists networking.k8s.io/*, so without
+    this an extraObject could be a NetworkPolicy carrying
+    metadata.namespace: vault — and because NetworkPolicies are additive, a
+    permissive ingress rule there would override the platform allowlists
+    entirely, no label forgery needed. An object that omits the namespace
+    lands in the release namespace, which is the normal case. */}}
+{{- $objNs := (get ((fromYaml $rendered) | default dict) "metadata" | default dict) }}
+{{- $objNs = get $objNs "namespace" | default "" }}
+{{- if and $objNs (ne ($objNs | toString) $.Release.Namespace) }}
+{{- fail (printf "extraObjects may not target namespace %q (release namespace is %q): cross-namespace objects can relax platform NetworkPolicies" ($objNs | toString) $.Release.Namespace) }}
+{{- end }}
 ---
 {{ $rendered }}
 {{- end }}
