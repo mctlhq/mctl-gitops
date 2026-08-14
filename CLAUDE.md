@@ -82,7 +82,9 @@ All secrets follow this pattern:
 2. An `ExternalSecret` in `platform-gitops/services/<team>/<service>/` references the Vault path
 3. The ESO operator syncs it to a Kubernetes Secret in the tenant namespace
 
-Never put secret values in YAML. Use `${{ secrets.VAULT_TOKEN }}` in GHA only.
+Never put secret values in YAML. GitHub Actions authenticates to Vault with
+OIDC JWT (`id-token: write` + `auth/jwt` role `github-actions`), not a
+long-lived `VAULT_TOKEN`.
 
 ## Terraform (k3s-preview cluster)
 

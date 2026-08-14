@@ -75,38 +75,75 @@ jobs:
     permissions:
       contents: read
       packages: write
+      # OIDC JWT for Vault JWT auth (ROADMAP 3.3). No long-lived VAULT_TOKEN.
+      id-token: write
     steps:
-      # --- Tier 1: Vault PAT ---
+      # --- Tier 1: Vault PAT via GitHub OIDC -> Vault JWT ---
       - name: Fetch Vault PAT
         id: vault_pat
+        env:
+          VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
         run: |
+          set -euo pipefail
           REPO="${{ inputs.repo }}"
-          echo "repo_owner=${REPO%%/*}" >> $GITHUB_OUTPUT
-          echo "repo_name=${REPO##*/}" >> $GITHUB_OUTPUT
+          echo "repo_owner=${REPO%%/*}" >> "$GITHUB_OUTPUT"
+          echo "repo_name=${REPO##*/}" >> "$GITHUB_OUTPUT"
 
+          VAULT_ADDR="${VAULT_ADDR:-https://secrets.mctl.ai}"
           PAT=""
-          if [[ -n "${{ secrets.VAULT_ADDR }}" && -n "${{ secrets.VAULT_TOKEN }}" ]]; then
-            echo "🔑 Vault configured — fetching repo PAT…"
-            VAULT_URL="${{ secrets.VAULT_ADDR }}/v1/secret/data/teams/${{ inputs.team_name }}/${{ inputs.component_name }}/repo-pat"
-            HTTP_CODE=$(curl -sL -o /tmp/vault-resp.json -w "%{http_code}" \
-              -H "X-Vault-Token: ${{ secrets.VAULT_TOKEN }}" \
-              "$VAULT_URL" 2>/dev/null || echo "000")
-            echo "   Vault HTTP status: $HTTP_CODE"
-            if [[ "$HTTP_CODE" == "200" ]]; then
-              PAT=$(jq -r '.data.data.pat // empty' /tmp/vault-resp.json 2>/dev/null || true)
-              if [[ -n "$PAT" ]]; then
-                echo "   ✅ PAT retrieved (length: ${#PAT})"
+
+          if [[ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" || -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]]; then
+            echo "GitHub OIDC token endpoint unavailable; skipping Vault PAT"
+          else
+            echo "Requesting GitHub OIDC token for Vault JWT login"
+            OIDC_JSON=$(curl -sS \
+              -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              -H "Accept: application/json; api-version=2.0" \
+              -H "Content-Type: application/json" \
+              "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https%3A%2F%2Fgithub.com%2Fmctlhq" \
+              || true)
+            JWT=$(printf '%s' "${OIDC_JSON:-}" | jq -r '.value // empty' 2>/dev/null || true)
+            unset OIDC_JSON
+            if [[ -z "$JWT" || "$JWT" == "null" ]]; then
+              echo "Failed to mint GitHub OIDC token; skipping Vault PAT"
+            else
+              LOGIN_BODY=$(jq -n --arg jwt "$JWT" --arg role "github-actions" \
+                '{role: $role, jwt: $jwt}')
+              unset JWT
+              LOGIN=$(curl -sS -X POST \
+                -H "Content-Type: application/json" \
+                -d "$LOGIN_BODY" \
+                "${VAULT_ADDR}/v1/auth/jwt/login" || true)
+              unset LOGIN_BODY
+              VAULT_TOKEN=$(printf '%s' "${LOGIN:-}" | jq -r '.auth.client_token // empty' 2>/dev/null || true)
+              unset LOGIN
+              if [[ -z "$VAULT_TOKEN" || "$VAULT_TOKEN" == "null" ]]; then
+                echo "Vault JWT login failed; skipping Vault PAT"
+              else
+                echo "::add-mask::${VAULT_TOKEN}"
+                VAULT_URL="${VAULT_ADDR}/v1/secret/data/teams/${{ inputs.team_name }}/${{ inputs.component_name }}/repo-pat"
+                HTTP_CODE=$(curl -sS -o /tmp/vault-resp.json -w "%{http_code}" \
+                  -H "X-Vault-Token: ${VAULT_TOKEN}" \
+                  "$VAULT_URL" || echo "000")
+                unset VAULT_TOKEN
+                echo "Vault HTTP status: ${HTTP_CODE}"
+                if [[ "$HTTP_CODE" == "200" ]]; then
+                  PAT=$(jq -r '.data.data.pat // empty' /tmp/vault-resp.json || true)
+                  if [[ -n "$PAT" ]]; then
+                    echo "PAT retrieved (length: ${#PAT})"
+                  fi
+                fi
+                rm -f /tmp/vault-resp.json
               fi
             fi
-            rm -f /tmp/vault-resp.json
           fi
 
           if [[ -n "$PAT" ]]; then
             echo "::add-mask::${PAT}"
-            echo "pat=${PAT}" >> $GITHUB_OUTPUT
-            echo "has_pat=true" >> $GITHUB_OUTPUT
+            echo "pat=${PAT}" >> "$GITHUB_OUTPUT"
+            echo "has_pat=true" >> "$GITHUB_OUTPUT"
           else
-            echo "has_pat=false" >> $GITHUB_OUTPUT
+            echo "has_pat=false" >> "$GITHUB_OUTPUT"
           fi
 
       # --- Tier 2: GitHub App token ---

@@ -13,7 +13,7 @@
 |---|---|---|
 | «Бэкапов нет» | **Неверно.** CNPG barman → MinIO (daily, retention 3d), Vault raft snapshot → R2 (daily, 30 копий), vmbackup → R2 | `infra-components/data/cnpg/shared/`, `bootstrap/templates/core-infra/vault-backup.yaml`, `bootstrap/templates/observability/monitoring.yaml` |
 | «Preview делит секреты с prod» | **Закрыто.** Preview ставится в `{team}-preview`; tenant Vault-пути переписываются на `teams/<team>/<service>/preview/*`; NetworkPolicy не пускает в prod-namespace | `argo-workflows/cluster-templates/wft-preview-deploy.yaml`, `helm-charts/tenant/templates/preview.yaml` |
-| «Long-lived MCTL_GITHUB_TOKEN в auto-deploy» | **Неточно.** В коде такого токена нет — это ручная инструкция в доках. Реальный long-lived секрет — `VAULT_TOKEN` в GHA `build-image.yaml`; in-cluster токен GitHub App ротируется каждые 30 мин | `.github/workflows/build-image.yaml:88-96`, `cwft-rotate-github-token.yaml` |
+| «Long-lived MCTL_GITHUB_TOKEN в auto-deploy» | **Закрыто для GHA Vault.** `build-image.yaml` ходит в Vault через GitHub OIDC JWT (роль `github-actions`); in-cluster токен GitHub App по-прежнему ротируется каждые 30 мин | `.github/workflows/build-image.yaml`, `vault-policy-github-actions-repo-pat.hcl`, `cwft-rotate-github-token.yaml` |
 | «blue-green by default» vs «rolling by default» | Код: rolling через ArgoCD sync; blue-green в base-service есть, но opt-in. Доки противоречат друг другу | `helm-charts/base-service/`, mctl-docs `guides/services.md:82` vs `guides/rollbacks.md:24` |
 | «Изоляция тенантов не подтверждена» | Есть: default-deny NetworkPolicy, ResourceQuota, LimitRange, PSS baseline. Но `allowInternetEgress: true` по умолчанию | `helm-charts/tenant/templates/`, `values.yaml:58` |
 
@@ -92,7 +92,7 @@ PDB только у CNPG, prod-кластер — заглушки.
 - [ ] PSS `restricted` для tenant-namespaces (сейчас `baseline`); проверить, что base-service проходит.
 
 ### 3.3 Сократить long-lived секреты в CI
-- [ ] Заменить `VAULT_TOKEN` в `build-image.yaml` на Vault JWT/OIDC auth для GitHub Actions (паттерн ротации через GitHub App уже есть в `cwft-rotate-github-token.yaml` — переиспользовать подход).
+- [x] Заменить `VAULT_TOKEN` в `build-image.yaml` на Vault JWT/OIDC auth для GitHub Actions (роль `github-actions`, policy `github-actions-repo-pat`; one-time `vault auth enable jwt` в `vault-config/README.md`).
 - [ ] Убрать fallback-секреты `GHCR_PAT` / `GH_PACKAGES_TOKEN`, если основной путь стабилен.
 
 ### 3.4 Операционный минимум для чужих нагрузок

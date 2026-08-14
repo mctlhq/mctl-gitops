@@ -74,6 +74,8 @@ configs:
       return hs
 
   params:
+    # HTTP inside the cluster; TLS terminates at Traefik (ingress.tls below).
+    # Same compensating control as platform-gitops/argocd/values.yaml.
     server.insecure: true
 
   rbac:
