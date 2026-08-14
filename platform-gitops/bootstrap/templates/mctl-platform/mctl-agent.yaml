@@ -111,6 +111,19 @@ spec:
             - secretKey: TELEGRAM_BOT_TOKEN
               remoteKey: platform/mctl-agent/tokens
               property: telegram-bot-token
+            # Inbound auth (mctl-agent >= 1.15.1). 1.15.0 ignores these env
+            # vars, so wiring them before the image bump is safe. Empty
+            # values would keep the public surface open; the keys must
+            # exist in Vault (secret/platform/mctl-agent/tokens).
+            - secretKey: AGENT_API_TOKEN
+              remoteKey: platform/mctl-agent/tokens
+              property: api-token
+            - secretKey: TELEGRAM_WEBHOOK_SECRET
+              remoteKey: platform/mctl-agent/tokens
+              property: telegram-webhook-secret
+            - secretKey: ALERTMANAGER_WEBHOOK_TOKEN
+              remoteKey: platform/mctl-agent/tokens
+              property: alertmanager-webhook-token
         # DB creds for the pod, synced from the same Vault path as the CNPG
         # managed-role secret in platform-db (cnpg/shared/secrets.yaml).
         # Owner policy adopts the previously hand-created secret so password

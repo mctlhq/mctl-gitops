@@ -203,7 +203,8 @@ spec:
 
                     # Read-merge-write: never replace the whole secret, only
                     # the one key. Other keys at this path (OAuth tokens,
-                    # Telegram creds, ...) must survive untouched.
+                    # Telegram creds, inbound auth tokens, ...) must survive
+                    # untouched. Never vault kv put a partial object here.
                     existing = vault_get(t["dest_path"])
                     before_keys = set(existing.keys())
                     existing[t["dest_key"]] = token
