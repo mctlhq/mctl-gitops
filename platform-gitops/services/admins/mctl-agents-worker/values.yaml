@@ -114,6 +114,21 @@ externalSecret:
     - secretKey: MCTL_TOKEN
       remoteKey: platform/mctl-agents
       property: mctl-token
+    # The Claude Agent SDK authenticates from CLAUDE_CODE_OAUTH_TOKEN. Without
+    # it every agent run inside this worker ends as
+    # 'Not logged in · Please run /login' (apiKeySource: none) — observed on
+    # every incident-responder tick, and independent of the GitHub token fix
+    # above. The Argo CronWorkflow pods have always read this key from the same
+    # Vault path via mctl-agents-secrets in the argo-workflows namespace; the
+    # wiring was simply never added when issue-poll moved into this worker.
+    #
+    # Delivered via envFrom, so a rotation needs a pod restart to take effect.
+    # That is acceptable here (unlike the 60-min GitHub App token that needed
+    # GITHUB_TOKEN_FILE): this is a long-lived Pro/Max OAuth token, rotated by
+    # hand, not on a schedule.
+    - secretKey: CLAUDE_CODE_OAUTH_TOKEN
+      remoteKey: platform/mctl-agents
+      property: claude-code-oauth-token
     - secretKey: GITHUB_TOKEN
       remoteKey: platform/mctl-agent/tokens
       property: github-token
