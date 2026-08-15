@@ -45,6 +45,20 @@ spec:
     name: shared-pg
   databaseReclaimPolicy: retain
 ---
+# Backs three optional mctl-api stores (alerts, audit log, agent registry),
+# all initialised from AUDIT_DB_URL. Owner must be mctl-api: each store runs
+# CREATE TABLE IF NOT EXISTS on startup.
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: mctl-api-db
+spec:
+  name: "mctl-api"
+  owner: "mctl-api"
+  cluster:
+    name: shared-pg
+  databaseReclaimPolicy: retain
+---
 apiVersion: postgresql.cnpg.io/v1
 kind: Database
 metadata:
