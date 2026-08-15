@@ -19,7 +19,11 @@ tenant:
   ghcrCredentials:
     enabled: false
   quotas:
-    requests.cpu: "500m"
+    # Bumped 2026-08-15: kube-state-metrics "namespace quota is going to be
+    # full" fired (incident 8c23258d) — used was 490m/500m (98%). openclaw's
+    # steady requests already consume nearly the whole allowance, leaving no
+    # room for a single workflow/rollout pod.
+    requests.cpu: "750m"
     requests.memory: "1500Mi"
     # Bumped 2026-05-13: openclaw sidecar limit increase (s3-sync 2000m +
     # skills-fanout 300m) brings pod limits to 5300m; bumped from 5 to 6

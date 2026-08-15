@@ -13,14 +13,19 @@ service:
 backstage:
   kubernetesId: kuptsi-app
 resources:
-  # Right-sized 2026-08-03 (CPU only): p95 15m/max 17m over 24h — 200m limit
-  # still leaves ~12x headroom. Memory left untouched: real usage (257MB) is
-  # ~50% of the 512Mi limit, genuinely used, not idle headroom.
+  # Right-sized 2026-08-03 (CPU only): p95 15m/max 17m over 24h. Memory left
+  # untouched: real usage (257MB) is ~50% of the 512Mi limit, genuinely used,
+  # not idle headroom.
+  # CPU limit raised 200m→300m 2026-08-15: cold start is CPU-bound (2 gunicorn
+  # workers import ~19s of CPU work each under the shared limit — see the
+  # startupProbe note below) and the 0.2.18 rollout fired resource_limit
+  # throttling alerts (incident f4270f49). 300m shortens the ~95s boot and
+  # keeps ~15x headroom over steady-state p95.
   requests:
     cpu: 75m
     memory: 256Mi
   limits:
-    cpu: 200m
+    cpu: 300m
     memory: 512Mi
 # NOTE: do NOT let mctl_deploy_service stomp this block on tag bump — the
 # uvicorn entrypoint in kuptsi-app needs HOST/PORT/WEB_CONCURRENCY or it

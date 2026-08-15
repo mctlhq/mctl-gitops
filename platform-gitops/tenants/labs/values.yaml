@@ -60,7 +60,10 @@ tenant:
     # of the services quota becoming the binding constraint.
     pods: "25"
     persistentvolumeclaims: "2"
-    services: "15"
+    # Bumped 2026-08-15: 14/15 services in use (kube-state-metrics quota
+    # alert, incident 3ec8a575) — the 2026-08-03 pods bump anticipated
+    # exactly this; services is now the binding constraint.
+    services: "20"
   limitRange:
     enabled: true
     default:
