@@ -558,6 +558,12 @@ spec:
           printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  StrictHostKeyChecking no\n' > ~/.ssh/config
           chmod 600 ~/.ssh/config
 
+          # clone-gitops chowns /workdir to uid 1000 (the mctl-agents image
+          # USER, SOC F8). This container runs as root, so git's
+          # dubious-ownership check would otherwise refuse the repo — the
+          # first local `git config` then dies with "fatal: not in a git
+          # directory" (incident 2026-08-14 23:02, hourly shepherd failures).
+          git config --global --add safe.directory /workdir/mctl-gitops
           cd /workdir/mctl-gitops
           git config user.name "mctl-agents[bot]"
           git config user.email "mctl-agents[bot]@users.noreply.github.com"
