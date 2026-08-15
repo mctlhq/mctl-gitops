@@ -16,10 +16,15 @@
 # per the crash-loop warning this comment used to carry (module doesn't
 # exist before 1.22.0, so splitting the two edits would crash-loop the pod
 # in the window between them).
+#
+# This tag is bumped by hand. `chore: bump admins/mctl-agents to <x>` (the
+# automated bump) only rewrites the six CWFT image params in
+# argo-workflows/cluster-templates/ — it does not touch this file, so the
+# worker silently stays behind until someone edits it here.
 replicaCount: 1
 image:
   repository: ghcr.io/mctlhq/mctl-agents
-  tag: "1.28.0"
+  tag: "1.28.1"
 imagePullSecrets:
   - name: ghcr-credentials
 command: ["python", "-m", "orchestrator.temporal.worker"]
