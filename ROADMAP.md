@@ -116,6 +116,12 @@ mctl-api и Argo CD server/repo-server (3.4).
 Триггер: подписан первый клиент / появилась реальная чужая нагрузка.
 
 - [ ] **Прод-кластер**: `infrastructure/k3s-prod/` из стаба в реальный Terraform — 3 control-plane (HA etcd + S3 snapshots), отдельный LB, `applicationset-prod.yaml`. Preprod остаётся staging'ом платформы.
+  Vault в прод-кластере поднимается с TLS-listener'ом с первого дня (серты от
+  cert-manager до первого unseal) — закрывает SOC F15 без ретрофита. На preprod
+  `tls_disable = 1` остаётся accepted residual (edge TLS на Traefik, NetworkPolicy;
+  см. комментарий в `bootstrap/templates/core-infra/vault.yaml` и
+  `docs/runbooks/control-plane.md`): миграция живого raft-кворума на https — это
+  неконтейнящийся откат ради защиты от атакующего, который уже сидит в CNI.
 - [ ] Промоушен-путь preprod → prod для платформенных компонентов (сейчас всё катится сразу в единственный кластер).
 - [ ] Базовые SLO: доступность mctl-api, успешность deploy-workflow, ArgoCD sync lag, успешность бэкапов; алерты на error budget вместо интуиции.
 - [ ] Cost-дашборд по tenant/namespace (данные уже есть в VictoriaMetrics) + TTL-очистка preview (ttl_hours уже есть — проверить фактическую отработку).
