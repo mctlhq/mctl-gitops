@@ -99,6 +99,10 @@ secret. The job requests an OIDC JWT from `token.actions.githubusercontent.com`
 `github-actions`. The resulting token can only read
 `secret/data/teams/+/+/repo-pat`.
 
+**Applied and confirmed end to end on 2026-08-15**: `auth/jwt` is mounted, the
+policy and role exist, and a real `build-image.yaml` run authenticated against
+them. The block below is kept as the recreate-from-scratch recipe.
+
 One-time apply (Vault admin token; `VAULT_ADDR=https://secrets.mctl.ai`).
 Vault 1.17+ requires `bound_audiences` to match the JWT `aud` claim.
 
@@ -129,16 +133,60 @@ EOF
 ```
 
 Vault must be able to fetch GitHub's OIDC JWKS over HTTPS (egress from the
-vault namespace to `token.actions.githubusercontent.com`).
+vault namespace to `token.actions.githubusercontent.com`). The vault
+namespace's NetworkPolicy is ingress-only, so nothing blocks this.
 
-Do not delete the org-wide GitHub Actions secret `VAULT_TOKEN` (visibility
-ALL). `build-image.yaml` does not read it after the OIDC JWT login, but
-other repositories still do — removing it would break those repos. There
-must be no repo-level `VAULT_TOKEN` on `mctlhq/mctl-gitops`.
+#### No Vault GitHub Actions secrets remain
 
-**Rollback:** restore `secrets.VAULT_TOKEN` on the fetch step in
-`build-image.yaml` and keep this JWT role in place unused. The org-wide
-secret remains in place for other repos.
+All three were deleted on 2026-08-15, each after an org-wide
+`gh search code` confirmed nothing referenced it:
+
+- **`VAULT_ADDR`** (repo, `mctlhq/mctl-gitops`) — this one was actively
+  breaking the JWT login. Its value had gone stale and answered
+  `HTTP 410 Gone` from a runner. Because the step does
+  `VAULT_ADDR="${VAULT_ADDR:-https://secrets.mctl.ai}"`, the stale secret
+  silently *shadowed* the correct default, so every login died in ~0.3s with
+  `Vault JWT login failed; skipping Vault PAT` while the Vault side was
+  perfectly healthy. The step still reads `secrets.VAULT_ADDR` into its env,
+  so recreating the secret remains a supported override — but it must be
+  exactly `https://secrets.mctl.ai`. A `${SECRET:-sane-default}` fallback
+  buys nothing while a wrong secret exists.
+- **`VAULT_TOKEN`** (org, visibility ALL) — an earlier revision of this file
+  said other repositories still read it. They do not: the only match for
+  `secrets.VAULT_TOKEN` anywhere in the org was that sentence itself. There
+  was never a repo-level `VAULT_TOKEN` on `mctlhq/mctl-gitops`.
+- **`VAULT_PROVISION_TOKEN`** (repo and org) — zero references, unrelated to
+  this flow, removed in the same sweep.
+
+Actions secret *values* can never be read back, only names and update
+timestamps. Verify consumers by searching code, not by inspecting the secret.
+
+#### Reading a run
+
+`build-image.yaml` discards Vault's error body, so the step log is all you get:
+
+| Log line | Meaning |
+|---|---|
+| `Vault HTTP status: 200` | Login worked, PAT found |
+| `Vault HTTP status: 404` | **Also success** — login and policy are fine, there is simply no `repo-pat` at that path |
+| `Vault HTTP status: 403` | Login worked, the policy is wrong |
+| `Vault JWT login failed` | Login itself was rejected — wrong `VAULT_ADDR`, or a claim does not match the role |
+
+To probe without building anything, dispatch `build-image.yaml` with a
+deliberately nonexistent `git_ref`: the Vault step runs first and checkout
+then fails before GHCR login. Do not let a probe run to completion — a
+successful build also pushes `:latest`.
+
+To debug a *rejected* login, push a throwaway branch carrying an `on: push`
+workflow with `id-token: write` that decodes the JWT payload claims and curls
+`auth/jwt/login` with `-w '%{http_code}'`. Never log the raw JWT — it is a
+bearer credential; print decoded claims only. `workflow_dispatch` will not
+work here, as it only fires from the default branch.
+
+**Rollback:** `vault auth disable jwt` plus
+`vault policy delete github-actions-repo-pat`. No workflow change is needed —
+`build-image.yaml` falls back to the GitHub App token on its own, which is
+exactly what it did for the whole period this role did not exist.
 
 ### vault-backup
 Used by the `vault-backup` CronJob (namespace `vault`) to take a raft snapshot.
