@@ -424,7 +424,10 @@ spec:
                     - url: https://kubernetes.default.svc
                       name: production
                       authProvider: serviceAccount
-                      skipTLSVerify: true
+                      # Verify the in-cluster API endpoint against the mounted
+                      # ServiceAccount CA instead of skipTLSVerify (SOC CC6.7,
+                      # same approach as resourceUsage.caFile / F7).
+                      caFile: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
                       serviceAccountToken: ${K8S_SERVICE_ACCOUNT_TOKEN}
             # No /vault proxy endpoint. It existed to let scaffolder templates
             # reach Vault via http:backstage:request, but no template ever used
