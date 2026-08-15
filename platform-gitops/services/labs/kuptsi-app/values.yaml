@@ -62,6 +62,20 @@ envFrom:
 # kuptsi FastAPI exposes /health (see src/app.py); base-service defaults aim
 # at /healthz + /readyz which would never become Ready.
 probes:
+  # Cold start takes ~90-100s: WEB_CONCURRENCY=2 gunicorn workers each import
+  # the app (~19s of CPU work incl. logfire.configure) while sharing a 200m CPU
+  # limit. Without a startupProbe, liveness begins probing at 30s and kills the
+  # container on its third failure at ~90s — right where startup lands, so the
+  # pod either wins the race or CrashLoopBackOffs forever. Observed live on the
+  # 0.2.18 rollout (7 restarts, killed at 88s every time, never reaching
+  # "Started server process"); the previous pod had simply not cold-started in
+  # 12 days. The startupProbe gives boot up to 300s (30 x 10s) and holds
+  # liveness/readiness off until it passes.
+  startup:
+    path: /health
+    port: http
+    periodSeconds: 10
+    failureThreshold: 30
   liveness:
     path: /health
     port: http
@@ -79,9 +93,11 @@ probes:
 extraContainers:
   - name: temporal-worker
     # NOTE: keep this tag in sync with `image.tag` above; both containers must
-    # ride the same kuptsi-v2 build. mctl_deploy_service action=deploy only
-    # bumps `image.tag` in this file — bump here manually after each release
-    # (or accept lag if you intentionally want to canary).
+    # ride the same kuptsi-v2 build. mctl_deploy_service action=deploy now bumps
+    # this line too — verified on the 0.2.17 -> 0.2.18 deploy (commit 90babc0d
+    # changed both tags and touched nothing else). No manual follow-up needed;
+    # still worth checking the deploy diff, since the tooling used to bump only
+    # `image.tag` and to re-template unrelated keys.
     image: ghcr.io/mctlhq/kuptsi-app:0.2.18
     imagePullPolicy: IfNotPresent
     command: ["python", "-m", "src.temporal.worker"]
