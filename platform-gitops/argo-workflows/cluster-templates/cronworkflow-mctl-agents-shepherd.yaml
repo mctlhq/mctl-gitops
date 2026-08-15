@@ -5,7 +5,8 @@ metadata:
   namespace: argo-workflows
   annotations:
     workflows.argoproj.io/description: |
-      Every-hour (HH:00) trigger for the Tier 3 PR shepherd.
+      Two-hourly (09:00-23:00 UTC, 8/day) trigger for the Tier 3 PR
+      shepherd.
 
       All workflow logic lives in ClusterWorkflowTemplate
       `mctl-agents-shepherd` (cwft-mctl-agents-shepherd.yaml). This
@@ -23,13 +24,24 @@ metadata:
       flipped 11 proposals (9 to `merged`, 2 to `rejected`) with no
       false positives.
 spec:
-  # `0 * * * *` — fires at HH:00 every hour (24 ticks/day). A tick with
-  # no proposals in {implemented, review-fixing} is a cheap no-op (one
-  # glob + exit). Contends with rotate-github-app-tokens (also :00)
-  # on the `mctl-gitops-main-writes` mutex — Forbid drops overlaps cleanly.
-  # Was `30 */2 * * *` (12 ticks/day); increased 2026-05-23 to reduce
-  # worst-case PR-sit-time from ~2h to ~1h.
-  schedule: "0 * * * *"
+  # `0 9-23/2 * * *` — 09, 11, 13, 15, 17, 19, 21, 23 UTC (8 ticks/day).
+  # A tick with no proposals in {implemented, review-fixing} is a cheap
+  # no-op (one glob + exit). Contends with rotate-github-app-tokens (also
+  # :00) on the `mctl-gitops-main-writes` mutex — Forbid drops overlaps
+  # cleanly, and since #852 the mutex is held only for the seconds
+  # commit-and-push runs rather than the whole tick.
+  #
+  # History: `30 */2 * * *` (12/day) → `0 * * * *` (24/day) on 2026-05-23
+  # to cut worst-case PR-sit-time from ~2h to ~1h → this on 2026-08-15.
+  # That trade is deliberate: PR-sit-time goes back up (2h during the
+  # working day, 10h across the overnight gap), and in exchange each tick
+  # stops costing a Hetzner volume provision + attach/detach cycle and an
+  # SDK run. 24 → 8 volumes a day on the one template that still carries a
+  # workdir PVC and is the live victim of the Multi-Attach stalls behind
+  # the mutex cascades (see reference_argo_agents_pvc_multiattach_stall).
+  # Revisit once shepherd moves to emptyDir, which removes the volume cost
+  # entirely and makes a denser cadence cheap again.
+  schedule: "0 9-23/2 * * *"
   timezone: "UTC"
   # Forbid: never overlap two shepherd ticks. They all contend on the
   # same `mctl-gitops-main-writes` mutex anyway, and a queued tick
@@ -38,10 +50,12 @@ spec:
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 600
   # Counts, NOT days — Argo retains the last N succeeded / N failed
-  # Workflow objects regardless of age. For shepherd's `0 * * * *` cron
-  # (24 ticks/day) 48 ≈ 2 days of successful triage history and 24
-  # ≈ 1 day of failures. Kept window matches the typical
-  # incident-postmortem reach without bloating etcd.
+  # Workflow objects regardless of age. At 8 ticks/day these limits are no
+  # longer the binding constraint: the CWFT's 3d ttlStrategy deletes a run
+  # before 48 of them accumulate (that would take 6 days), so the effective
+  # window is ~3 days / ~24 runs. Left at 48/24 deliberately — they cost
+  # nothing unbinding, and they become right again if the cadence goes back
+  # up after the emptyDir move.
   #
   # Default was 3 (~6 hours), which masked the firing pattern during
   # the 2026-05-07 ESO triage. See plan
@@ -49,10 +63,10 @@ spec:
   successfulJobsHistoryLimit: 48
   failedJobsHistoryLimit: 24
   # Active — un-suspended after the smoke test (one-shot real run on
-  # 2026-05-01 flipped 11 proposals correctly). Schedule fires every
-  # hour UTC and the workflow contends on the shared
-  # `mctl-gitops-main-writes` mutex with the implementer / agents-run
-  # workflows, so back-pressure is bounded.
+  # 2026-05-01 flipped 11 proposals correctly). Schedule fires every two
+  # hours between 09:00 and 23:00 UTC and the workflow contends on the
+  # shared `mctl-gitops-main-writes` mutex with the implementer /
+  # agents-run workflows, so back-pressure is bounded.
   #
   # Re-un-suspended 2026-07-25 after the 2026-07-24T03:00:00Z org-wide
   # spend-cap reset (mctl-gitops#611 TEMP note): two manual
