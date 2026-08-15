@@ -97,7 +97,13 @@ mctl-api и Argo CD server/repo-server (3.4).
 - [x] `allowInternetEgress: false` по умолчанию — в чарте tenant, Backstage-шаблоне
   и wft-create-tenant. Существующие тенанты задают флаг явно, их поведение
   не изменилось; workflow-поды сохраняют egress через отдельную политику.
-- [ ] PSS `restricted` для tenant-namespaces (сейчас `baseline`); проверить, что base-service проходит.
+- [~] PSS `restricted` для tenant-namespaces — в два шага:
+  - [x] Шаг 1: `audit`/`warn` labels подняты до `restricted` при `enforce: baseline`
+    (`podSecurityObserveLevel` в tenant-чарте) — apiserver пишет каждое would-be
+    нарушение в audit-log и warnings, ничего не ломая.
+  - [ ] Шаг 2: по собранным нарушениям флипнуть `podSecurityLevel: restricted`
+    per-tenant там, где base-service проходит; workflow-поды с root-`chown`
+    остаются на `baseline`.
 
 ### 3.3 Сократить long-lived секреты в CI
 - [x] Заменить `VAULT_TOKEN` в `build-image.yaml` на Vault JWT/OIDC auth для GitHub Actions (роль `github-actions`, policy `github-actions-repo-pat`; one-time `vault auth enable jwt` в `vault-config/README.md`).

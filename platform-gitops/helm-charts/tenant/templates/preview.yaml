@@ -5,6 +5,7 @@
 {{- $store := .Values.tenant.secretStore }}
 {{- $preview := .Values.tenant.preview }}
 {{- $pss := .Values.podSecurityLevel | default "baseline" }}
+{{- $pssObserve := .Values.podSecurityObserveLevel | default "restricted" }}
 ---
 # Isolated preview namespace. Production workloads stay in {{ $tenantName }};
 # preview-deploy Helm releases and their ExternalSecrets live here so a branch
@@ -17,8 +18,8 @@ metadata:
     {{- include "tenant.labels" $ | nindent 4 }}
     mctl.me/preview: "true"
     pod-security.kubernetes.io/enforce: {{ $pss }}
-    pod-security.kubernetes.io/audit: {{ $pss }}
-    pod-security.kubernetes.io/warn: {{ $pss }}
+    pod-security.kubernetes.io/audit: {{ $pssObserve }}
+    pod-security.kubernetes.io/warn: {{ $pssObserve }}
 ---
 apiVersion: v1
 kind: ResourceQuota

@@ -133,3 +133,10 @@ tenant:
   # "baseline" allows workflow/CI pods running as root (required for apk, git, etc.)
   # "restricted" enforces non-root + no privilege escalation (stricter, for app-only namespaces)
   podSecurityLevel: "baseline"
+  # -- PSS level for the audit/warn labels only — enforcement stays at
+  # podSecurityLevel. Running observe at "restricted" while enforcing
+  # "baseline" surfaces every would-be violation in apiserver warnings and
+  # the audit log without breaking a single pod, so the later per-tenant
+  # flip of podSecurityLevel to "restricted" is based on observed data
+  # (ROADMAP 3.2, step 1 of 2).
+  podSecurityObserveLevel: "restricted"
