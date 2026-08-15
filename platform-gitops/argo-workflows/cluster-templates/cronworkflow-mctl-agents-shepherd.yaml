@@ -5,7 +5,8 @@ metadata:
   namespace: argo-workflows
   annotations:
     workflows.argoproj.io/description: |
-      Every-hour (HH:00) trigger for the Tier 3 PR shepherd.
+      Two-hourly (09:00-23:00 UTC, 8/day) trigger for the Tier 3 PR
+      shepherd.
 
       All workflow logic lives in ClusterWorkflowTemplate
       `mctl-agents-shepherd` (cwft-mctl-agents-shepherd.yaml). This
@@ -62,10 +63,10 @@ spec:
   successfulJobsHistoryLimit: 48
   failedJobsHistoryLimit: 24
   # Active — un-suspended after the smoke test (one-shot real run on
-  # 2026-05-01 flipped 11 proposals correctly). Schedule fires every
-  # hour UTC and the workflow contends on the shared
-  # `mctl-gitops-main-writes` mutex with the implementer / agents-run
-  # workflows, so back-pressure is bounded.
+  # 2026-05-01 flipped 11 proposals correctly). Schedule fires every two
+  # hours between 09:00 and 23:00 UTC and the workflow contends on the
+  # shared `mctl-gitops-main-writes` mutex with the implementer /
+  # agents-run workflows, so back-pressure is bounded.
   #
   # Re-un-suspended 2026-07-25 after the 2026-07-24T03:00:00Z org-wide
   # spend-cap reset (mctl-gitops#611 TEMP note): two manual
