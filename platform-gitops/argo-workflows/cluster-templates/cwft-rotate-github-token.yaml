@@ -29,15 +29,24 @@ metadata:
       paths and re-sync different ExternalSecrets, and because a future
       consumer may warrant its own App again.
 
-      Targets:
+      Targets (one mint per Vault path; every ExternalSecret reading that path
+      is re-synced from the same mint):
         - mctl-agent  (App id 4450852)  -> secret/platform/mctl-agent/tokens
                                             key github-token
-                                         -> ExternalSecret
+                                         -> ExternalSecrets
                                             admins/admins-mctl-agent-base-service
+                                            admins/admins-mctl-agents-worker-base-service
         - mctl-agents (App id 4450852)  -> secret/platform/mctl-agents
                                             key github-token
                                          -> ExternalSecret
                                             argo-workflows/mctl-agents-secrets
+
+      Note the re-sync only refreshes the Kubernetes Secret. A consumer that
+      reads the token from `envFrom`/`secretKeyRef` still never sees the new
+      value — environment variables are fixed when the container starts. Only
+      a mounted Secret volume (or a re-read from Vault) actually propagates,
+      which is why mctl-agents-worker mounts the token as a file and
+      orchestrator/github_token.py re-reads it before each gh/git call.
 
       Renamed 2026-08-01 from rotate-mctl-agent-github-token (singular) now
       that it rotates for both mctl-agent and mctl-agents.
@@ -180,16 +189,24 @@ spec:
                     "creds_path": "platform/github-app-agents",
                     "dest_path": "platform/mctl-agent/tokens",
                     "dest_key": "github-token",
-                    "es_namespace": "admins",
-                    "es_name": "admins-mctl-agent-base-service",
+                    # Two consumers read this one Vault path, so both get
+                    # re-synced from a single mint. The worker was missing
+                    # here and fell back to its ExternalSecret's own refresh
+                    # interval, which used to be 1h — the same as the token's
+                    # TTL, i.e. no margin at all.
+                    "external_secrets": [
+                        ("admins", "admins-mctl-agent-base-service"),
+                        ("admins", "admins-mctl-agents-worker-base-service"),
+                    ],
                 },
                 {
                     "label": "mctl-agents",
                     "creds_path": "platform/github-app-agents",
                     "dest_path": "platform/mctl-agents",
                     "dest_key": "github-token",
-                    "es_namespace": "argo-workflows",
-                    "es_name": "mctl-agents-secrets",
+                    "external_secrets": [
+                        ("argo-workflows", "mctl-agents-secrets"),
+                    ],
                 },
             ]
 
@@ -213,8 +230,9 @@ spec:
                         f"[{label}] key set changed unexpectedly — refusing to trust this write"
                     print(f"✅ [{label}] Vault {t['dest_path']} updated (version {version})")
 
-                    force_sync_external_secret(t["es_namespace"], t["es_name"], version)
-                    print(f"✅ [{label}] ExternalSecret {t['es_namespace']}/{t['es_name']} re-sync triggered")
+                    for es_namespace, es_name in t["external_secrets"]:
+                        force_sync_external_secret(es_namespace, es_name, version)
+                        print(f"✅ [{label}] ExternalSecret {es_namespace}/{es_name} re-sync triggered")
                 except Exception as e:
                     print(f"⚠️  [{label}] rotation failed: {e}")
                     failures.append(label)

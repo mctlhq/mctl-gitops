@@ -67,9 +67,33 @@ env:
   TEMPORAL_ADDRESS: temporal-frontend.temporal.svc.cluster.local:7233
   TEMPORAL_NAMESPACE: mctl-agents
   LOG_LEVEL: info
+  # GitHub App installation tokens expire after 60 min. rotate-github-app-tokens
+  # mints a fresh one every 30 min into Vault, but env vars are frozen at
+  # container start, so a long-lived pod like this one is authenticated for at
+  # most an hour and then 401s forever. orchestrator/github_token.py exists for
+  # exactly this and re-reads the token before every gh/git subprocess — but
+  # only when GITHUB_TOKEN_FILE points at a mounted file, which was never set
+  # here. Its docstring assumes issue-poll is a short-lived Argo cron pod whose
+  # run "fits inside one token's TTL"; that stopped being true when issue-poll
+  # moved into this permanent Temporal worker.
+  GITHUB_TOKEN_FILE: /var/run/secrets/github/GITHUB_TOKEN
 envFrom:
   - secretRef:
       name: mctl-agents-worker-secrets
+# Same Secret, mounted as a file so kubelet keeps it current. envFrom alone
+# cannot: a Secret update never propagates into an already-running process's
+# environment, only into a projected volume.
+extraVolumes:
+  - name: github-token
+    secret:
+      secretName: mctl-agents-worker-secrets
+      items:
+        - key: GITHUB_TOKEN
+          path: GITHUB_TOKEN
+extraVolumeMounts:
+  - name: github-token
+    mountPath: /var/run/secrets/github
+    readOnly: true
 # MCTL_TOKEN is the same static admin service token the Argo CWFT pods use
 # (Vault path secret/platform/mctl-agents, key mctl-token — see
 # platform-gitops/argo-workflows/secrets/mctl-agents-secrets.yaml) — this
@@ -81,6 +105,10 @@ externalSecret:
   # resolves secret/data/teams/admins/*.
   store: vault-backend
   storeKind: ClusterSecretStore
+  # 15m, not the 1h default: the GitHub App token this syncs lives 60 min, so
+  # an hourly refresh gives the mounted file zero margin — it could serve an
+  # already-expired token right up to the next sync.
+  refreshInterval: 15m
   targetSecret: mctl-agents-worker-secrets
   data:
     - secretKey: MCTL_TOKEN
@@ -89,6 +117,9 @@ externalSecret:
     - secretKey: GITHUB_TOKEN
       remoteKey: platform/mctl-agent/tokens
       property: github-token
-    - secretKey: GH_TOKEN
-      remoteKey: platform/mctl-agent/tokens
-      property: github-token
+    # No GH_TOKEN here on purpose. The gh CLI gives GH_TOKEN precedence over
+    # GITHUB_TOKEN (verified in-pod: with both set, `gh auth status` reports
+    # "The token in GH_TOKEN is invalid"), so a frozen GH_TOKEN from pod start
+    # would shadow the GITHUB_TOKEN that github_token.py keeps refreshing and
+    # defeat the whole mechanism above. Nothing in orchestrator/ reads GH_TOKEN
+    # by name — gh picks up GITHUB_TOKEN on its own.
