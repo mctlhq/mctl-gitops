@@ -301,6 +301,8 @@ spec:
               baseUrl: https://app.mctl.ai
               listen:
                 port: 7007
+              csp:
+                img-src: ["'self'", 'data:', 'https://ui.mctl.ai']
               # mctl-api is not a Backstage backend and cannot mint service
               # tokens, so it authenticates with this shared static token, sent
               # as a Bearer. Without an entry here Backstage answers "Illegal
