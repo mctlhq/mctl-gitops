@@ -34,7 +34,14 @@ argo-cd:
       # this aligns the self-managed live release with that.
       admin.enabled: false
       timeout.reconciliation: 180s
-      accounts.developers: apiKey, login, sync, application, admin
+      # SOC F4 accepted residual: local password login stays possible for
+      # this account. It is inert in practice — policy.default is "" and no
+      # "g, developers, ..." binding exists in policy.csv, so a login can do
+      # nothing. Kept only in case its apiKey is used somewhere out of band;
+      # delete the account once that is ruled out. (Argo CD only recognizes
+      # the apiKey and login capabilities — the previously listed
+      # "sync, application, admin" tokens were silently ignored.)
+      accounts.developers: apiKey, login
       accounts.mctl-api: apiKey
 
       # Health check for ExternalSecrets
