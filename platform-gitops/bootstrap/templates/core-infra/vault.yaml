@@ -27,6 +27,11 @@ spec:
                 ui = true
 
                 listener "tcp" {
+                  # SOC F15 accepted residual: east-west Vault is plaintext.
+                  # Edge TLS terminates at Traefik (secrets.mctl.ai). Enabling
+                  # a TLS listener is a Raft/cert change (retry_join https,
+                  # every in-cluster VAULT_ADDR) and is not a contained
+                  # rollback. See docs/runbooks/control-plane.md.
                   tls_disable = 1
                   address = "[::]:8200"
                   cluster_address = "[::]:8201"

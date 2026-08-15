@@ -1,0 +1,18 @@
+# SOC F11: keep at least one mctl-api pod through voluntary disruption
+# (drain, kured). replicaCount stays 1 — this budget allows 0 evictions, which
+# is the point for a singleton control-plane API. Rolling updates still work
+# because Deployments delete pods directly; PDBs only gate the Eviction API.
+#
+# Applied as a raw manifest by root-app because the mctl-api Application
+# renders an external chart (mctl-api repo helm/) that has no PDB template;
+# same pattern as mctl-api-netpol.yaml.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: mctl-api
+  namespace: mctl-api
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mctl-api

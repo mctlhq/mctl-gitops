@@ -219,6 +219,12 @@ argo-cd:
 
   # Server ingress configuration
   server:
+    # SOC F11: singleton server. minAvailable 1 allows 0 voluntary evictions
+    # (drain/kured). Replica count stays 1. Rolling updates still work because
+    # Deployments do not use the Eviction API.
+    pdb:
+      enabled: true
+      minAvailable: 1
     ingress:
       enabled: true
       ingressClassName: traefik
@@ -308,6 +314,10 @@ argo-cd:
       failureThreshold: 3
 
   repoServer:
+    # SOC F11: singleton repo-server. Same drain protection as server.pdb.
+    pdb:
+      enabled: true
+      minAvailable: 1
     resources:
       requests:
         cpu: 100m

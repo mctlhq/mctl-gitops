@@ -20,7 +20,7 @@
 Реальные пробелы, подтверждённые кодом: etcd-снапшоты не настроены на preprod (только TODO
 в `infrastructure/k3s-prod/README.md`), restore ни разу не проверялся, состояние mctl-agent
 в SQLite на поде без бэкапа, retention CNPG всего 3 дня, HPA opt-in и почти не используется,
-PDB только у CNPG, prod-кластер — заглушки.
+PDB у CNPG, Traefik, mctl-api и Argo CD server/repo-server; prod-кластер — заглушки.
 
 ## 1. Принцип приоритизации
 
@@ -96,9 +96,12 @@ PDB только у CNPG, prod-кластер — заглушки.
 - [ ] Убрать fallback-секреты `GHCR_PAT` / `GH_PACKAGES_TOKEN`, если основной путь стабилен.
 
 ### 3.4 Операционный минимум для чужих нагрузок
-- [ ] PDB для платформенных компонентов (mctl-api, Traefik, ArgoCD) — не для tenant-приложений.
+- [x] PDB для платформенных компонентов (mctl-api, Traefik, ArgoCD) — не для tenant-приложений.
+  Traefik already 3 replicas + maxUnavailable 33%; mctl-api and Argo CD
+  server/repo-server get minAvailable 1. Second CP node stays Horizon 2.
+  See `docs/runbooks/control-plane.md`.
 - [ ] Включить HPA (шаблон уже есть в base-service) для mctl-api как референс.
-- [ ] Мини-runbook «что делать при падении single control-plane» — честно задокументировать ограничение preprod.
+- [x] Мини-runbook «что делать при падении single control-plane» — честно задокументировать ограничение preprod (`docs/runbooks/control-plane.md`).
 
 ## 4. Горизонт 2 — есть первый платящий клиент
 

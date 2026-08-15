@@ -6,6 +6,9 @@ HashiCorp Vault stores all platform secrets. ExternalSecrets operator syncs them
 
 - **UI:** https://ops.mctl.ai/vault (or direct Vault UI if exposed)
 - **Internal endpoint:** `http://vault.vault.svc:8200`
+- **TLS:** edge only (`https://secrets.mctl.ai`). The Raft listener is
+  `tls_disable = 1` (SOC F15 accepted residual). Do not flip that without
+  a cert/retry_join plan — see `docs/runbooks/control-plane.md`.
 - **Namespace:** `vault`
 - **KV mount:** `secret` (KV v2)
 - **ClusterSecretStore:** `vault-backend`

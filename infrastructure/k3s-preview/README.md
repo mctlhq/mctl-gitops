@@ -88,6 +88,7 @@ k3s-preview/
 │   ├── argocd.tf
 │   ├── helm-values/argocd.yaml
 │   └── vault-config/          # Vault policies + ClusterSecretStore
+├── audit-policy.yaml          # k3s apiserver audit policy (SOC F20; not kubectl-applied)
 └── extra-manifests/           # Additional K8s resources applied post-cluster:
     ├── letsencrypt-*.yaml.tpl # cert-manager ClusterIssuers (prod + staging + http01)
     ├── kured.yaml.tpl         # Automated node reboots after OS upgrades
