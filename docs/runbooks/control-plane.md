@@ -61,8 +61,8 @@ Policy file: `infrastructure/k3s-preview/audit-policy.yaml`.
 - SubjectAccessReviews: RequestResponse.
 - Catch-all: Metadata.
 - Logs stay on the CP node at `/var/lib/rancher/k3s/server/logs/audit.log`
-  (14-day rotation via `audit-log-maxage`). Shipping those files to Loki
-  is not part of this control.
+  (30-day rotation via `audit-log-maxage=30`, 100MiB files, 10 backups).
+  Shipping those files to Loki is not part of this control.
 
 From-zero rebuilds write the file in `preinstall_exec` and pass
 `kube-apiserver-arg` via `control_planes_custom_config`. On the live
