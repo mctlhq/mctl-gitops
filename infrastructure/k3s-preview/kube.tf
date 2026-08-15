@@ -195,6 +195,35 @@ module "kube-hetzner" {
   # mitigation applied 2026-06-27.
   install_k3s_version = "v1.33.13+k3s1"
 
+  # SOC F20: Kubernetes API audit. preinstall_exec writes the policy file
+  # before k3s starts (from-zero rebuilds). control_planes_custom_config
+  # replaces the empty kube-apiserver-arg list (authentication_config is
+  # unset, so local.kube_apiserver_arg is []). On the live cluster the file
+  # must exist at /var/lib/rancher/k3s/server/audit.yaml BEFORE a terraform
+  # apply that ships these args, or the apiserver will refuse to start.
+  # Policy: infrastructure/k3s-preview/audit-policy.yaml
+  # (Metadata on secrets/tokenreviews; RequestResponse on authz reviews;
+  # no secret values). See docs/runbooks/control-plane.md.
+  preinstall_exec = [
+    join("\n", [
+      "install -d -m 0755 /var/lib/rancher/k3s/server/logs",
+      "cat >/var/lib/rancher/k3s/server/audit.yaml <<'AUDIT_POLICY'",
+      file("${path.module}/audit-policy.yaml"),
+      "AUDIT_POLICY",
+      "chmod 0600 /var/lib/rancher/k3s/server/audit.yaml",
+    ])
+  ]
+
+  control_planes_custom_config = {
+    kube-apiserver-arg = [
+      "audit-policy-file=/var/lib/rancher/k3s/server/audit.yaml",
+      "audit-log-path=/var/lib/rancher/k3s/server/logs/audit.log",
+      "audit-log-maxage=30",
+      "audit-log-maxbackup=10",
+      "audit-log-maxsize=100",
+    ]
+  }
+
   # --- Kubeconfig ---
   # Best practice: generate via `terraform output --raw kubeconfig > kubeconfig.yaml`
   # create_kubeconfig = false

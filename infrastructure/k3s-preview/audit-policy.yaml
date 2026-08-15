@@ -1,0 +1,79 @@
+# Kubernetes API server audit policy for mctl-preprod (SOC F20).
+# This is NOT a cluster-scoped API object — do not kubectl apply it.
+# k3s loads it from /var/lib/rancher/k3s/server/audit.yaml via
+# kube-apiserver-arg (see kube.tf control_planes_custom_config).
+#
+# Rules are first-match. Secret values and bearer tokens must never appear
+# in Request/RequestResponse bodies, so those objects stay at Metadata.
+# High-churn leases/events/node heartbeats are dropped so a Metadata
+# catch-all cannot fill the CP disk (observed 19MiB in ~8 minutes with
+# no exclusions).
+apiVersion: audit.k8s.io/v1
+kind: Policy
+omitManagedFields: true
+omitStages:
+  - RequestReceived
+rules:
+  # Health and discovery: noise, no security value.
+  - level: None
+    nonResourceURLs:
+      - /healthz*
+      - /livez*
+      - /readyz*
+      - /metrics
+      - /version
+      - /openapi*
+      - /swagger*
+
+  # Secrets: metadata only. Must sit before the controller None rules so
+  # kube-controller-manager secret watches are still recorded.
+  - level: Metadata
+    resources:
+      - group: ""
+        resources: ["secrets"]
+
+  # TokenReview/TokenRequest bodies carry bearer tokens. Metadata records
+  # that an authn check happened without logging the token.
+  - level: Metadata
+    resources:
+      - group: "authentication.k8s.io"
+        resources: ["tokenreviews", "tokenrequests"]
+
+  # High-churn cluster plumbing.
+  - level: None
+    resources:
+      - group: "coordination.k8s.io"
+        resources: ["leases"]
+      - group: ""
+        resources: ["events", "events/status", "endpoints"]
+      - group: "events.k8s.io"
+        resources: ["events"]
+      - group: "discovery.k8s.io"
+        resources: ["endpointslices"]
+
+  - level: None
+    userGroups: ["system:nodes"]
+    verbs: ["get", "patch", "update"]
+    resources:
+      - group: ""
+        resources: ["nodes", "nodes/status"]
+
+  - level: None
+    users:
+      - system:kube-controller-manager
+      - system:kube-scheduler
+      - system:apiserver
+    verbs: ["get", "list", "watch"]
+
+  # Authorization reviews: request+response, no secret values.
+  - level: RequestResponse
+    resources:
+      - group: "authorization.k8s.io"
+        resources:
+          - subjectaccessreviews
+          - localsubjectaccessreviews
+          - selfsubjectaccessreviews
+          - selfsubjectrulesreviews
+
+  # Everything else: who did what to which object, no request bodies.
+  - level: Metadata
