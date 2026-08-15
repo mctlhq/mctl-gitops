@@ -11,16 +11,18 @@
 
 | Утверждение аудита | Реальность | Где проверено |
 |---|---|---|
-| «Бэкапов нет» | **Неверно.** CNPG barman → MinIO (daily, retention 3d), Vault raft snapshot → R2 (daily, 30 копий), vmbackup → R2 | `infra-components/data/cnpg/shared/`, `bootstrap/templates/core-infra/vault-backup.yaml`, `bootstrap/templates/observability/monitoring.yaml` |
+| «Бэкапов нет» | **Неверно.** CNPG barman → R2 (daily, retention 14d), Vault raft snapshot → R2 (daily, 30 копий), vmbackup → R2 | `infra-components/data/cnpg/shared/`, `bootstrap/templates/core-infra/vault-backup.yaml`, `bootstrap/templates/observability/monitoring.yaml` |
 | «Preview делит секреты с prod» | **Закрыто.** Preview ставится в `{team}-preview`; tenant Vault-пути переписываются на `teams/<team>/<service>/preview/*`; NetworkPolicy не пускает в prod-namespace | `argo-workflows/cluster-templates/wft-preview-deploy.yaml`, `helm-charts/tenant/templates/preview.yaml` |
 | «Long-lived MCTL_GITHUB_TOKEN в auto-deploy» | **Закрыто для GHA Vault.** `build-image.yaml` ходит в Vault через GitHub OIDC JWT (роль `github-actions`); in-cluster токен GitHub App по-прежнему ротируется каждые 30 мин | `.github/workflows/build-image.yaml`, `vault-policy-github-actions-repo-pat.hcl`, `cwft-rotate-github-token.yaml` |
 | «blue-green by default» vs «rolling by default» | Код: rolling через ArgoCD sync; blue-green в base-service есть, но opt-in. Доки противоречат друг другу | `helm-charts/base-service/`, mctl-docs `guides/services.md:82` vs `guides/rollbacks.md:24` |
-| «Изоляция тенантов не подтверждена» | Есть: default-deny NetworkPolicy, ResourceQuota, LimitRange, PSS baseline. Но `allowInternetEgress: true` по умолчанию | `helm-charts/tenant/templates/`, `values.yaml:58` |
+| «Изоляция тенантов не подтверждена» | Есть: default-deny NetworkPolicy, ResourceQuota, LimitRange, PSS baseline; `allowInternetEgress: false` по умолчанию (см. 3.2) | `helm-charts/tenant/templates/`, `values.yaml` |
 
-Реальные пробелы, подтверждённые кодом: etcd-снапшоты не настроены на preprod (только TODO
-в `infrastructure/k3s-prod/README.md`), restore ни разу не проверялся, состояние mctl-agent
-в SQLite на поде без бэкапа, retention CNPG всего 3 дня, HPA opt-in и почти не используется,
-PDB у CNPG, Traefik, mctl-api и Argo CD server/repo-server; prod-кластер — заглушки.
+Реальные пробелы, подтверждённые кодом: etcd-снапшоты в S3/R2 не настроены на preprod —
+drill 2026-08-14 показал только локальные снапшоты на CP-диске (см.
+`docs/runbooks/restore.md`); HPA opt-in и почти не используется; prod-кластер — заглушки.
+Закрыто с момента написания: restore drills CNPG/Vault проведены 2026-08-14, состояние
+mctl-agent переехало в Postgres (2.2), retention CNPG поднят до 14d, PDB у CNPG, Traefik,
+mctl-api и Argo CD server/repo-server (3.4).
 
 ## 1. Принцип приоритизации
 
@@ -37,12 +39,18 @@ PDB у CNPG, Traefik, mctl-api и Argo CD server/repo-server; prod-класте�
 ## 2. Горизонт 0 — ближайшие 2–4 недели
 
 ### 2.1 Проверить, что бэкапы реально восстанавливаются (главный технический риск)
-Бэкапы настроены, но ни один restore не проводился. Непроверенный бэкап = отсутствие бэкапа.
-- [ ] Restore drill CNPG: поднять кластер из barmanObjectStore в отдельный namespace, сверить данные.
-- [ ] Restore drill Vault: `vault operator raft snapshot restore` из R2 в тестовый Vault (можно kind/локально).
-- [ ] Поднять retention CNPG с `3d` до `14d`–`30d` (`infra-components/data/cnpg/shared/cluster.yaml`).
-- [ ] Настроить k3s etcd-снапшоты в S3/R2 на preprod (сейчас TODO только для будущего prod) — при одном control-plane это единственная защита состояния кластера.
-- [ ] Записать результаты как runbook `docs/runbooks/restore.md` (в этом репо).
+Непроверенный бэкап = отсутствие бэкапа. Drills проведены 2026-08-14, журнал —
+`docs/runbooks/restore.md`.
+- [x] Restore drill CNPG: восстановлен в `pg-restore-drill` из barmanObjectStore, данные
+  сверены (`catalog.final_entities=55` совпало с prod); drill 2026-08-14.
+- [x] Restore drill Vault: `vault operator raft snapshot restore` снапшота из R2 в
+  throwaway Vault, `secret/platform/` читается; drill 2026-08-14.
+- [x] Retention CNPG поднят до `14d` (`infra-components/data/cnpg/shared/cluster.yaml`).
+- [ ] Настроить k3s etcd-снапшоты в S3/R2 на preprod — drill 2026-08-14 показал, что на
+  живом CP только локальные снапшоты (~12h, локальный диск); `--etcd-s3` не задан, т.е.
+  состояние кластера НЕ переживает потерю CP-диска. При одном control-plane это
+  единственная защита состояния кластера.
+- [x] Записать результаты как runbook `docs/runbooks/restore.md` (в этом репо).
 
 ### 2.2 Убрать невосстановимое состояние mctl-agent
 - [x] **Уже сделано** (обнаружено при проверке): деплой агента задаёт
