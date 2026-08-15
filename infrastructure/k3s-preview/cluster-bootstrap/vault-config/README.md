@@ -129,12 +129,16 @@ EOF
 ```
 
 Vault must be able to fetch GitHub's OIDC JWKS over HTTPS (egress from the
-vault namespace to `token.actions.githubusercontent.com`). After the first
-successful `build-image.yaml` run, delete the GitHub Actions secret
-`VAULT_TOKEN` on `mctlhq/mctl-gitops` — the workflow no longer reads it.
+vault namespace to `token.actions.githubusercontent.com`).
+
+Do not delete the org-wide GitHub Actions secret `VAULT_TOKEN` (visibility
+ALL). `build-image.yaml` does not read it after the OIDC JWT login, but
+other repositories still do — removing it would break those repos. There
+must be no repo-level `VAULT_TOKEN` on `mctlhq/mctl-gitops`.
 
 **Rollback:** restore `secrets.VAULT_TOKEN` on the fetch step in
-`build-image.yaml` and keep this JWT role in place unused.
+`build-image.yaml` and keep this JWT role in place unused. The org-wide
+secret remains in place for other repos.
 
 ### vault-backup
 Used by the `vault-backup` CronJob (namespace `vault`) to take a raft snapshot.
