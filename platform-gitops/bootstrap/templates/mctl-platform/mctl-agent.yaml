@@ -34,6 +34,18 @@ spec:
           MCTL_API_URL: "http://mctl-api.mctl-api.svc:8080"
           GITHUB_OWNER: mctlhq
           GITHUB_REPO: mctl-gitops
+          # GitHub App installation tokens expire after 60 min.
+          # rotate-github-app-tokens mints a fresh one every 30 min into Vault,
+          # but env vars are frozen at container start — a Secret update never
+          # reaches an already-running process's environment. This pod runs for
+          # weeks, so GITHUB_TOKEN from envFrom below is authenticated for at
+          # most an hour after a restart and then 401s on every API call until
+          # something restarts it (observed 2026-08-14: 10h of 401s).
+          # internal/fixer.tokenSource re-reads this file before every GitHub
+          # API call, which is the only way rotation lands. Unset (mctl-agent
+          # <= 1.15.3) it falls back to the frozen env value, so this key and
+          # the volume below are inert on older tags.
+          GITHUB_TOKEN_FILE: /var/run/secrets/github/GITHUB_TOKEN
           POLL_INTERVAL: "5m"
           # Flapping CPU throttling alerts (openclaw, etc.) oscillate every
           # 30m-4h, generating duplicate tickets each cycle. Default 10m
@@ -84,12 +96,31 @@ spec:
               name: mctl-agent-secrets
           - secretRef:
               name: mctl-agent-db-creds
+        # Same Secret as envFrom above, mounted as a file so kubelet keeps it
+        # current. Only the projected volume tracks Secret updates; the env
+        # copy never does. Same shape as admins/mctl-agents-worker.
+        extraVolumes:
+          - name: github-token
+            secret:
+              secretName: mctl-agent-secrets
+              items:
+                - key: GITHUB_TOKEN
+                  path: GITHUB_TOKEN
+        extraVolumeMounts:
+          - name: github-token
+            mountPath: /var/run/secrets/github
+            readOnly: true
         externalSecret:
           # Platform-scoped paths, so this stays on the cluster store rather
           # than base-service's tenant-store default — the admins tenant role
           # only grants teams/admins/*.
           store: vault-backend
           storeKind: ClusterSecretStore
+          # 15m, not the 1h default: the GitHub App token synced here lives
+          # 60 min and is re-minted every 30, so an hourly refresh leaves the
+          # mounted file with zero margin — it could serve an already-expired
+          # token right up to the next sync.
+          refreshInterval: 15m
           targetSecret: mctl-agent-secrets
           targetTemplateData:
             # Sole Telegram chat. Per-tenant routing intentionally disabled —
