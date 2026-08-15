@@ -58,11 +58,8 @@ spec:
   activeDeadlineSeconds: 7200
   entrypoint: investigate-issue
   onExit: notify-telegram
-  # Same shared mutex as cwft-mctl-agents-implement / -run — all push to
-  # mctl-gitops main.
-  synchronization:
-    mutex:
-      name: mctl-gitops-main-writes
+  # NB: mctl-gitops-main-writes lives on the commit-and-push template, not
+  # here at spec level — see the note there.
 
   arguments:
     parameters:
@@ -328,6 +325,18 @@ spec:
     # SDK agent runs with cwd in a throwaway /tmp clone, never in the gitops
     # worktree, so it cannot write outside agents-state/.
     - name: commit-and-push
+      # Same shared mutex as the other mctl-agents templates — all push to
+      # mctl-gitops main.
+      #
+      # Scoped to this template, NOT the workflow spec: at spec level a single
+      # investigation held the global lock for its entire run (the SDK pass
+      # alone takes minutes, and activeDeadlineSeconds allows 2h), so a batch
+      # of investigations serialised every other gitops writer behind them —
+      # the 2026-08-06 storm. Race-against-other-writers is still handled below
+      # by the 5×retry-with-rebase loop.
+      synchronization:
+        mutex:
+          name: mctl-gitops-main-writes
       script:
         image: alpine/git:2.43.0
         command: [sh]

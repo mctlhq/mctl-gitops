@@ -44,14 +44,8 @@ spec:
   # operator doesn't have to poll mctl_list_recent_agent_runs after each
   # mctl_trigger_*.
   onExit: notify-telegram
-  # Serialize with every other workflow that pushes to mctl-gitops main
-  # (wft-delete-tenant et al.). Without this, cron + on-demand MCP triggers
-  # could race the commit-and-push step — `git pull --rebase` retries do
-  # eventually win but waste agent-runtime PVC time and produce noisy logs.
-  # Same mutex name as wft-delete-tenant.yaml so we share the lock.
-  synchronization:
-    mutex:
-      name: mctl-gitops-main-writes
+  # NB: mctl-gitops-main-writes lives on the commit-and-push template, not
+  # here at spec level — see the note there.
 
   # Promtail maps these pod labels to the Loki `app` and `team` labels. Argo
   # pods otherwise cannot be found through mctl_get_service_logs during an
@@ -298,6 +292,21 @@ spec:
 
     # ── 3. Commit & push back to mctl-gitops ──────────────────────────────
     - name: commit-and-push
+      # Serialize with every other workflow that pushes to mctl-gitops main
+      # (wft-delete-tenant, the other mctl-agents templates). Same mutex name
+      # so they share one lock.
+      #
+      # Scoped to this template, NOT the workflow spec: at spec level the lock
+      # was taken for the whole run — clone, the LLM agent pass, notify — even
+      # though only this step writes to main. The 2026-08-15 00:00 tick held it
+      # that way for 30 minutes and queued the shepherd behind it until both
+      # blew their deadlines. Same fix f4e93059 made for the shepherd on
+      # 2026-05-07, which named this template as a victim without changing it.
+      # Race-against-other-writers is still handled below by the 5×
+      # retry-with-rebase loop.
+      synchronization:
+        mutex:
+          name: mctl-gitops-main-writes
       # The workflow mutex does not cover direct GitHub Actions image bumps.
       # Retry this bounded write step when one races the in-script rebase/push
       # loop (incident-17841555).
