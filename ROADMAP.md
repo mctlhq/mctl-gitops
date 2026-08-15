@@ -48,11 +48,13 @@ mctl-api и Argo CD server/repo-server (3.4). SOC-реестр F1–F20 закр
 - [x] Restore drill Vault: `vault operator raft snapshot restore` снапшота из R2 в
   throwaway Vault, `secret/platform/` читается; drill 2026-08-14.
 - [x] Retention CNPG поднят до `14d` (`infra-components/data/cnpg/shared/cluster.yaml`).
-- [~] Настроить k3s etcd-снапшоты в S3/R2 на preprod — бакет `mctl-etcd-snapshots`
-  создан 2026-08-15, `kube.tf` описывает `etcd_s3_backup` (6h, retention 56 = 14d).
-  Живой CP всё ещё без `--etcd-s3` (локальные снапшоты ~12h). Операторский apply:
-  [gitops#841](https://github.com/mctlhq/mctl-gitops/issues/841). При одном
-  control-plane это единственная защита состояния кластера.
+- [x] Настроить k3s etcd-снапшоты в S3/R2 на preprod — **включено 2026-08-15**
+  (`terraform apply` доставил `etcd_s3_backup` на CP; расписание 6h, retention 56 =
+  14d). Проверено с обеих сторон: on-demand `k3s etcd-snapshot save` показал
+  `s3://mctl-etcd-snapshots/k3s-preview/...` в `etcd-snapshot ls`, и объект
+  подтверждён листингом бакета R2 (50.6 MB). Закрыло
+  [gitops#841](https://github.com/mctlhq/mctl-gitops/issues/841); процедура
+  восстановления — `docs/runbooks/restore.md` §3.
 - [x] Записать результаты как runbook `docs/runbooks/restore.md` (в этом репо).
 
 ### 2.2 Убрать невосстановимое состояние mctl-agent

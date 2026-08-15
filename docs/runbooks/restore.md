@@ -11,7 +11,7 @@
 |---|---|---|---|---|---|
 | Postgres (9 tenant DB + backstage, argo, temporal, mctl-api audit) | CNPG `shared-pg` | barman + daily ScheduledBackup 02:00 | R2 `s3://vault-backup/postgres-backups/shared-pg` | 14d | да |
 | Vault (все секреты платформы) | vault ns, raft | CronJob 03:00 | R2 `s3://<bucket>/vault-backups/` | 30 копий | да |
-| Кластерное состояние k8s (etcd) | single CP node | k3s snapshot ~12h local on CP | local disk only (R2 `mctl-etcd-snapshots` not wired on the live node; drill 2026-08-14) | ~5 local copies | нет (пока S3 не включён) |
+| Кластерное состояние k8s (etcd) | single CP node | k3s snapshot 6h local + S3 upload (включено 2026-08-15) | R2 `s3://mctl-etcd-snapshots/k3s-preview` | 56 копий (14d) | да |
 | Метрики | VMSingle (3d retention) | vmbackup daily | R2 `s3://vault-backup/victoria-metrics` | — | да |
 | Логи | Loki | хранение сразу в R2 | R2 | 7d | да |
 | Terraform state | R2 `mctl-terraform-state` | версионирование R2 | — | — | да |
@@ -127,12 +127,15 @@ docker rm -f vault-drill
 
 ## 3. etcd / k3s (single control-plane)
 
-Локальные снапшоты пишутся на CP-ноду (`/var/lib/rancher/k3s/server/db/snapshots`,
-сейчас каждые 12h). Terraform описывает выгрузку в R2 `mctl-etcd-snapshots/k3s-preview`
-каждые 6h (`infrastructure/k3s-preview/kube.tf`, `etcd_s3_backup`), но на живой
-CP-ноде `k3s etcd-snapshot ls --etcd-s3` отвечает `s3 configuration was not set`
-(drill 2026-08-14). Пока S3 не включён, etcd **не** переживает потерю control-plane
-диска — только локальные файлы.
+Снапшоты пишутся локально (`/var/lib/rancher/k3s/server/db/snapshots`) и
+выгружаются в R2 `mctl-etcd-snapshots/k3s-preview` каждые 6h, retention 56
+(`infrastructure/k3s-preview/kube.tf`, `etcd_s3_backup`; креды — R2-токен
+`mctl-etcd-snapshots-k3s`, копия в macOS Keychain оператора, сервис
+`mctl-r2-etcd-snapshots`). **Включено 2026-08-15** terraform apply'ем: k3s
+перезапущен с `etcd-s3` конфигом, on-demand `k3s etcd-snapshot save` подтверждён
+и в `etcd-snapshot ls` (`s3://...`), и независимым листингом бакета. До этой даты
+S3 не был настроен (drill 2026-08-14: `s3 configuration was not set`) и etcd не
+переживал потерю CP-диска.
 
 ### Проверка локальных снапшотов (drill)
 
