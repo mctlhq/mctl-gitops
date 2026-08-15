@@ -15,11 +15,18 @@ tenant:
   # services/admins/openclaw/values.yaml's extraExternalSecrets comment).
   ghcrCredentials:
     enabled: false
-  # cwft-rotate-github-token force-refreshes this ExternalSecret after minting
-  # each 1h GitHub App token for mctl-agent. Workflow RBAC on ExternalSecrets is
-  # read-only everywhere else.
+  # cwft-rotate-github-token force-refreshes these ExternalSecrets after minting
+  # each 1h GitHub App token. Workflow RBAC on ExternalSecrets is read-only
+  # everywhere else, and resourceNames keeps the grant to exactly these objects.
+  #
+  # Both read the same platform/mctl-agent/tokens Vault path from one mint. The
+  # worker was added to the workflow's re-sync list in #842 but not here, so
+  # every run since has 403'd on it and exited 1 — the mint and the Vault write
+  # had already succeeded, so the failure was pure noise that also hid any real
+  # rotation failure behind it.
   externalSecretPatchTargets:
     - admins-mctl-agent-base-service
+    - admins-mctl-agents-worker-base-service
   quotas:
     # Bumped 2026-05-30: requests.cpu "1" left only ~60m headroom at
     # steady-state (940m used), so a deploy/rollback workflow pod (100m
