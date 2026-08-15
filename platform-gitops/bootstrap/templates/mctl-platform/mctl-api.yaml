@@ -63,7 +63,15 @@ spec:
             # Credentials come from mctl-api-secrets (Vault: platform/r2-loki-argo).
             ARGO_LOGS_R2_ENDPOINT: "6a09f637d20e1f66a8e9d45ebe778058.r2.cloudflarestorage.com"
             ARGO_LOGS_R2_BUCKET: "argo-workflows-logs"
-            AUDIT_DB_URL: "postgresql://$(DB_USER):$(DB_PASSWORD)@shared-pg-rw.platform-db.svc:5432/mctl-api?sslmode=disable"
+            # CNPG shared-pg has TLS on (server cert SANs include
+            # shared-pg-rw.platform-db.svc). sslmode=require encrypts without
+            # pinning the operator CA; verify-full needs a copied CA secret
+            # in this namespace (helm postgresCA) and can wait for CA sync.
+            AUDIT_DB_URL: "postgresql://$(DB_USER):$(DB_PASSWORD)@shared-pg-rw.platform-db.svc:5432/mctl-api?sslmode=require"
+            # Traefik pod IPs (namespace traefik). X-Forwarded-For is trusted
+            # for audit client IP only from these peers (SOC F20). Update if
+            # Traefik replicas roll to new IPs.
+            TRUSTED_PROXY_CIDRS: "10.42.4.181/32,10.42.6.242/32,10.42.5.93/32"
             # Dev-workflow control plane (phase 4): backs mctl_trigger_issue's
             # use_temporal path and POST /api/v1/agents/dev-loop/*. Optional —
             # cmd/api/main.go gates Temporal client init on this being set, so
