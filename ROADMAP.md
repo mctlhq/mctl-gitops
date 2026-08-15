@@ -17,12 +17,14 @@
 | «blue-green by default» vs «rolling by default» | Код: rolling через ArgoCD sync; blue-green в base-service есть, но opt-in. Доки противоречат друг другу | `helm-charts/base-service/`, mctl-docs `guides/services.md:82` vs `guides/rollbacks.md:24` |
 | «Изоляция тенантов не подтверждена» | Есть: default-deny NetworkPolicy, ResourceQuota, LimitRange, PSS baseline; `allowInternetEgress: false` по умолчанию (см. 3.2) | `helm-charts/tenant/templates/`, `values.yaml` |
 
-Реальные пробелы, подтверждённые кодом: etcd-снапшоты в S3/R2 не настроены на preprod —
-drill 2026-08-14 показал только локальные снапшоты на CP-диске (см.
-`docs/runbooks/restore.md`); HPA opt-in и почти не используется; prod-кластер — заглушки.
+Реальные пробелы, подтверждённые кодом: etcd-снапшоты в S3/R2 на preprod подготовлены,
+но не включены на живом CP (бакет `mctl-etcd-snapshots` создан 2026-08-15, terraform
+описывает выгрузку; apply — [gitops#841](https://github.com/mctlhq/mctl-gitops/issues/841));
+HPA opt-in и почти не используется; prod-кластер — заглушки.
 Закрыто с момента написания: restore drills CNPG/Vault проведены 2026-08-14, состояние
 mctl-agent переехало в Postgres (2.2), retention CNPG поднят до 14d, PDB у CNPG, Traefik,
-mctl-api и Argo CD server/repo-server (3.4).
+mctl-api и Argo CD server/repo-server (3.4). SOC-реестр F1–F20 закрыт 2026-08-15
+(agent inbound auth 1.15.3, preview isolation, portal 4.11.2, Vault JWT/OIDC).
 
 ## 1. Принцип приоритизации
 
@@ -46,10 +48,11 @@ mctl-api и Argo CD server/repo-server (3.4).
 - [x] Restore drill Vault: `vault operator raft snapshot restore` снапшота из R2 в
   throwaway Vault, `secret/platform/` читается; drill 2026-08-14.
 - [x] Retention CNPG поднят до `14d` (`infra-components/data/cnpg/shared/cluster.yaml`).
-- [ ] Настроить k3s etcd-снапшоты в S3/R2 на preprod — drill 2026-08-14 показал, что на
-  живом CP только локальные снапшоты (~12h, локальный диск); `--etcd-s3` не задан, т.е.
-  состояние кластера НЕ переживает потерю CP-диска. При одном control-plane это
-  единственная защита состояния кластера.
+- [~] Настроить k3s etcd-снапшоты в S3/R2 на preprod — бакет `mctl-etcd-snapshots`
+  создан 2026-08-15, `kube.tf` описывает `etcd_s3_backup` (6h, retention 56 = 14d).
+  Живой CP всё ещё без `--etcd-s3` (локальные снапшоты ~12h). Операторский apply:
+  [gitops#841](https://github.com/mctlhq/mctl-gitops/issues/841). При одном
+  control-plane это единственная защита состояния кластера.
 - [x] Записать результаты как runbook `docs/runbooks/restore.md` (в этом репо).
 
 ### 2.2 Убрать невосстановимое состояние mctl-agent
@@ -71,7 +74,9 @@ mctl-api и Argo CD server/repo-server (3.4).
 - [x] Число MCP tools: везде 62 (по `server_test.go`); в таблицу добавлен пропущенный `mctl_trigger_incident_responder`.
 - [x] CLAUDE.md синхронизированы: mctl-agent (12 skills, Postgres-хранилище), mctl-portal (9 плагинов, `proposals-backend`), mctl-web (Nuxt 4).
 - [~] Разобрать Dependabot-долг на default-ветках:
-  - [x] mctl-web: 29 → 0 (npm audit fix + wrangler 4.87→4.112, сборка проверена).
+  - [x] mctl-web: июль 29 → 0; августовская волна 34 → 0 в [mctl-web#55](https://github.com/mctlhq/mctl-web/pull/55)
+    (npm audit fix + wrangler 4.87→4.123, CI green, Claude APPROVED; merge pending
+    на branch protection).
   - [ ] mctl-docs: заблокировано из CI-среды — приватный пакет `@mctlhq/css`
     требует PAT с `read:packages`. Выполнить локально: `npm audit fix`, затем
     `npm run build`. Остаток esbuild/vite закрывается только апгрейдом VitePress.
@@ -100,10 +105,10 @@ mctl-api и Argo CD server/repo-server (3.4).
 - [~] PSS `restricted` для tenant-namespaces — в два шага:
   - [x] Шаг 1: `audit`/`warn` labels подняты до `restricted` при `enforce: baseline`
     (`podSecurityObserveLevel` в tenant-чарте) — apiserver пишет каждое would-be
-    нарушение в audit-log и warnings, ничего не ломая.
+    нарушение в audit-log и warnings, ничего не ломая (#838).
   - [ ] Шаг 2: по собранным нарушениям флипнуть `podSecurityLevel: restricted`
     per-tenant там, где base-service проходит; workflow-поды с root-`chown`
-    остаются на `baseline`.
+    остаются на `baseline`. Напоминание 2026-08-29.
 
 ### 3.3 Сократить long-lived секреты в CI
 - [x] Заменить `VAULT_TOKEN` в `build-image.yaml` на Vault JWT/OIDC auth для GitHub Actions (роль `github-actions`, policy `github-actions-repo-pat`; one-time `vault auth enable jwt` в `vault-config/README.md`).
