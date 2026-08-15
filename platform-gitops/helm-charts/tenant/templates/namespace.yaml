@@ -14,8 +14,8 @@ metadata:
     {{- include "tenant.labels" $ | nindent 4 }}
     mctl.me/team: {{ .name | quote }}
     pod-security.kubernetes.io/enforce: {{ $.Values.podSecurityLevel | default "baseline" }}
-    pod-security.kubernetes.io/audit: {{ $.Values.podSecurityLevel | default "baseline" }}
-    pod-security.kubernetes.io/warn: {{ $.Values.podSecurityLevel | default "baseline" }}
+    pod-security.kubernetes.io/audit: {{ $.Values.podSecurityObserveLevel | default "restricted" }}
+    pod-security.kubernetes.io/warn: {{ $.Values.podSecurityObserveLevel | default "restricted" }}
 {{- end }}
 {{- else }}
 {{- /* Legacy single-namespace tenant */}}
@@ -26,6 +26,6 @@ metadata:
   labels:
     {{- include "tenant.labels" . | nindent 4 }}
     pod-security.kubernetes.io/enforce: {{ .Values.podSecurityLevel | default "baseline" }}
-    pod-security.kubernetes.io/audit: {{ .Values.podSecurityLevel | default "baseline" }}
-    pod-security.kubernetes.io/warn: {{ .Values.podSecurityLevel | default "baseline" }}
+    pod-security.kubernetes.io/audit: {{ .Values.podSecurityObserveLevel | default "restricted" }}
+    pod-security.kubernetes.io/warn: {{ .Values.podSecurityObserveLevel | default "restricted" }}
 {{- end }}
