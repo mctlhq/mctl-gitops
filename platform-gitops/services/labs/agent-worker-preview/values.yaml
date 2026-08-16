@@ -72,9 +72,12 @@ probes:
     initialDelaySeconds: 60
     periodSeconds: 15
 # AGENT_API_TOKEN is the aud=agent worker credential minted via
-# POST /api/agent/token, scoped to a single Telegram account (210408407,
-# matching the encrypted agent_profiles row created for C1 testing). Stored
-# in Vault, never in git — see extraExternalSecrets below.
+# POST /api/agent/token, scoped to a single Telegram account. Target soak
+# account is 8745115872 (@mctlhq), not operator 210408407 — preview MCP and
+# production canary must not share the operator personal MTProto session.
+# The live Vault value still has to be reminted for 8745115872 after that
+# user completes a real OIDC/MTProto login on tg-preview (not DEMO_REVIEWER
+# password login). Stored in Vault, never in git — see extraExternalSecrets.
 #
 # AGENT_API_BASE_URL must be the full /api/agent/v1 root, not just the host —
 # internal/agentworker/client.go appends paths like "/events" directly onto

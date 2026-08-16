@@ -93,9 +93,16 @@ env:
   # downgrade-to-RequireApproval gate ("observe mode: never auto-send"), so
   # every drafted reply still sits in pending_approval until the owner
   # manually /mctl approve's it — nothing sends autonomously during this
-  # soak. sender_allowlist is empty (allow-all) so real inbound DMs to the
-  # owner's own account accumulate as the 30 dialogs, not synthetic test
-  # traffic. Revisit this comment when the soak ends and the gate reverts.
+  # soak. sender_allowlist is empty (allow-all) so real inbound DMs
+  # accumulate as the 30 dialogs, not synthetic test traffic.
+  # Soak/ingest MUST bind to 8745115872 (@mctlhq), not operator 210408407:
+  # the operator personal account is also used for interactive preview MCP
+  # and must not be the shared MTProto session (AUTH_KEY_DUPLICATED with
+  # production). Git cannot complete that switch — it needs a real Telegram
+  # OIDC login as @mctlhq on tg-preview.mctl.ai, PUT /api/admin/agent/profile
+  # for telegram_id 8745115872, and a reminted aud=agent token in Vault
+  # (secret/data/platform/labs/agent-worker-preview/api). Do not turn
+  # DEMO_REVIEWER_ENABLED on as a substitute. Revisit when the soak ends.
   AGENT_ENABLED: "true"
   AGENT_KILL_SWITCH: "false"
 ingress:
