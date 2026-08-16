@@ -93,14 +93,18 @@ env:
   # Open registration: every Telegram-authenticated user auto-gets the client
   # tier. Ban a specific user with the set_telegram_access MCP tool.
   AUTO_APPROVE_CLIENTS: "true"
-  # Reviewer/demo auth-mode for the ChatGPT App Directory review. When enabled,
-  # /oauth/authorize shows a password-gated "reviewer access" form that signs in
-  # as the demo Telegram account below WITHOUT the live Telegram OIDC login (no
-  # phone/SMS). DEMO_REVIEWER_USERNAME/PASSWORD come from Vault via the
-  # labs-mctl-telegram-demo ExternalSecret. Turn OFF and rotate the password
-  # after the review. The demo account's per-account send_enabled must be false
-  # so sends stay dry-run previews even though ALLOW_SEND is true globally.
-  DEMO_REVIEWER_ENABLED: "true"
+  # Reviewer/demo password-bypass login (ChatGPT App Directory review). OFF
+  # after the review: /oauth/authorize must not expose the password form.
+  # DEMO_REVIEWER_USERNAME/PASSWORD still sync from Vault via
+  # labs-mctl-telegram-demo; rotate DEMO_REVIEWER_PASSWORD at
+  # secret/data/platform/mctl-telegram/demo after this flag is false (do not
+  # put the password in git). extraObjects CronJobs below are renderIf-gated
+  # on this flag and prune when it is false. 8745115872 (@mctlhq) remains the
+  # dedicated service Telegram user for production canary MTProto — that
+  # account must be a real Telegram OIDC/session login, not this bypass.
+  # Keep per-account send_enabled=false on that identity so canary probes
+  # stay read-only even though ALLOW_SEND is true globally.
+  DEMO_REVIEWER_ENABLED: "false"
   DEMO_REVIEWER_TG_ID: "8745115872"
 ingress:
   enabled: true
@@ -386,9 +390,14 @@ extraObjects:
   # suspended (deploy/canary/cronjob.yaml suspend:true) over suspicion that its
   # MTProto list_dialogs calls, sharing the server's Telegram egress IP,
   # contributed to new-login SendCode throttling. That hang was fixed in
-  # 0.38.1/0.38.2 (PR #217), but */10 keeps egress load light while the ChatGPT
-  # App Directory review is in flight. Read-only token (tg:210408407), no send
-  # scope.
+  # 0.38.1/0.38.2 (PR #217), but */10 keeps egress load light. Identity lives
+  # in the out-of-band Secret mctl-telegram-canary (tg_user_id + bearer_token)
+  # — not in git. Target identity is 8745115872 (@mctlhq), read-only scopes,
+  # no send. Do not point this probe at operator 210408407: that personal
+  # account is also logged into preview MCP, and sharing one MTProto user
+  # across prod+preview causes AUTH_KEY_DUPLICATED. After
+  # DEMO_REVIEWER_ENABLED is off, remint the secret for @mctlhq (real
+  # OIDC/session, not the password bypass). Recreate + 1 replica stays.
   - apiVersion: batch/v1
     kind: CronJob
     metadata:
