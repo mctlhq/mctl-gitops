@@ -1,0 +1,90 @@
+# Durable alerting for scheduled backups.
+#
+# Why this exists, given KubeJobFailed already covers failed backup Jobs:
+# KubeJobFailed is keyed on an ephemeral object. On 2026-08-16 it fired
+# correctly at 03:16 and then "resolved" at 05:00 — not because the backup had
+# recovered, but because ttlSecondsAfterFinished deleted the Job and
+# kube_job_failed disappeared with it. The alert going green meant only that
+# the evidence had been garbage-collected; the cluster still had no snapshot
+# for that day, and nobody found out until 14:20.
+#
+# kube_cronjob_status_last_successful_time is a property of the CronJob itself,
+# so it survives Job GC and stays stale until a run actually succeeds. That is
+# the signal an auditor can rely on for CC7.5, and the one a human should be
+# paged on.
+#
+# NB: ArgoCD's built-in CronJob health check covers the same ground from the
+# other side (it marks a CronJob Degraded while lastScheduleTime is newer than
+# lastSuccessfulTime, which is what held root-app Degraded for 11h on
+# 2026-08-16). These two are deliberately redundant: that one depends on the
+# ArgoCD app tree and its alert routing, this one only on kube-state-metrics.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: mctl-backup-alerts
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: mctl-platform
+    app.kubernetes.io/component: backups
+spec:
+  groups:
+    - name: mctl.backups
+      interval: 60s
+      rules:
+        - alert: VaultBackupStale
+          # Daily at 03:00 UTC, so 25h tolerates one late/slow run without
+          # firing, but never tolerates a whole missed day.
+          expr: |
+            time() - kube_cronjob_status_last_successful_time{
+              namespace="vault", cronjob="vault-backup"
+            } > 90000
+          for: 10m
+          labels:
+            severity: critical
+            service: vault
+          annotations:
+            summary: "Vault raft snapshot has not succeeded in over 25 hours"
+            description: >-
+              The vault-backup CronJob (schedule 0 3 * * *) has no successful
+              run in the last 25 hours, so there is no fresh Vault snapshot in
+              R2. Unlike KubeJobFailed this does not clear when the failed Job
+              is garbage-collected — it clears only when a backup actually
+              succeeds. Check `kubectl -n vault get cronjob vault-backup -o
+              jsonpath='{.status}'` and the pod logs in Loki under
+              {app="vault-backup"}; the Job object itself may already be gone.
+              Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/restore.md
+        - alert: VaultBackupMetricAbsent
+          # Catches the failure mode the staleness rule cannot see: if the
+          # CronJob is deleted or kube-state-metrics stops exposing it, the
+          # series vanishes and `time() - <absent>` never evaluates, so
+          # VaultBackupStale would silently stop firing forever.
+          expr: |
+            absent(kube_cronjob_status_last_successful_time{
+              namespace="vault", cronjob="vault-backup"
+            })
+          for: 30m
+          labels:
+            severity: warning
+            service: vault
+          annotations:
+            summary: "vault-backup CronJob metrics have been absent for 30m"
+            description: >-
+              No kube_cronjob_status_last_successful_time series for
+              vault/vault-backup. Either the CronJob was removed, it has never
+              completed a successful run since creation, or kube-state-metrics
+              is not scraping it. While this is absent, VaultBackupStale cannot
+              fire, so Vault backups are effectively unmonitored.
+              Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/restore.md
+        - alert: VaultBackupSuspended
+          expr: kube_cronjob_spec_suspend{namespace="vault", cronjob="vault-backup"} == 1
+          for: 30m
+          labels:
+            severity: warning
+            service: vault
+          annotations:
+            summary: "vault-backup CronJob is suspended"
+            description: >-
+              The vault-backup CronJob is suspended and will take no further
+              snapshots. A suspended CronJob keeps its last lastSuccessfulTime,
+              so this is the only signal until VaultBackupStale trips 25h later.
+              Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/restore.md
