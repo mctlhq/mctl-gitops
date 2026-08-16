@@ -380,11 +380,22 @@ spec:
                     - bot_token_file: /etc/vm/secrets/alertmanager-telegram-secret/bot-token
                       chat_id: {{ .Values.alertmanager.telegramChatId | int64 }}
                       parse_mode: HTML
+                      # job_name/pod are emitted only when the alert carries
+                      # them. Without job_name a KubeJobFailed in a namespace
+                      # that runs several CronJobs reads as "Job failed to
+                      # complete. Namespace: vault" and says nothing about
+                      # WHICH job — vault runs both the daily backup and the
+                      # 2-minute auto-unseal, and telling them apart meant
+                      # going to the cluster.
                       message: |
                         {{ "{{" }} range .Alerts {{ "}}" }}
                         <b>{{ "{{" }} .Status | toUpper {{ "}}" }}: {{ "{{" }} .Labels.alertname {{ "}}" }}</b>
                         {{ "{{" }} .Annotations.summary {{ "}}" }}
                         <i>Namespace: {{ "{{" }} .Labels.namespace {{ "}}" }}</i>
+                        {{ "{{" }} if .Labels.job_name {{ "}}" }}<i>Job: {{ "{{" }} .Labels.job_name {{ "}}" }}</i>
+                        {{ "{{" }} end {{ "}}" }}
+                        {{ "{{" }} if .Labels.pod {{ "}}" }}<i>Pod: {{ "{{" }} .Labels.pod {{ "}}" }}</i>
+                        {{ "{{" }} end {{ "}}" }}
                         {{ "{{" }} end {{ "}}" }}
 
           # Disable Prometheus (operator components)
