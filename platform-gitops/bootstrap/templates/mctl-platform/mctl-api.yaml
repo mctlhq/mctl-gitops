@@ -48,7 +48,20 @@ spec:
             # OAuth 2.0 for Claude.ai custom connector (PKCE, public client)
             # Secrets (OAUTH_GITHUB_CLIENT_ID, OAUTH_GITHUB_CLIENT_SECRET, OAUTH_JWT_SECRET)
             # come from mctl-api-secrets (Vault: platform/mctl-api/oauth-github)
-            OAUTH_ALLOWED_REDIRECT_URIS: "https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback,http://localhost:6274/oauth/callback,http://localhost:6274/oauth/callback/debug,https://chatgpt.com/connector/oauth/*"
+            #
+            # Entries ending in "/*" are prefix matches, everything else is an
+            # exact string compare (internal/auth/oauth_server.go IsRedirectURIAllowed).
+            # Loopback (http://localhost|127.0.0.1|[::1]:PORT/...) is always accepted
+            # and deliberately not listed here — CLI clients that bind an ephemeral
+            # port need no entry at all.
+            #
+            # antigravity.google: the Antigravity/Gemini CLI registers via RFC 7591
+            # DCR with a redirect on its own hosted domain rather than a loopback,
+            # so without this entry every registration attempt 400s and the client
+            # can only be used with a hand-pasted static bearer token. Wildcard
+            # rather than an exact path because the callback path is not documented
+            # and has to survive client updates.
+            OAUTH_ALLOWED_REDIRECT_URIS: "https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback,http://localhost:6274/oauth/callback,http://localhost:6274/oauth/callback/debug,https://chatgpt.com/connector/oauth/*,https://antigravity.google/*"
             # Allow git operations on emptyDir volume (owned by root, run as uid=1000)
             GIT_CONFIG_COUNT: "1"
             GIT_CONFIG_KEY_0: "safe.directory"
