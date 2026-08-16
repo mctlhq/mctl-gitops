@@ -43,8 +43,16 @@ env:
   PUBLIC_BASE_URL: https://tg-preview.mctl.ai
   OAUTH_ISSUER_URL: https://tg-preview.mctl.ai
   OAUTH_CODE_TTL: "30m"
-  # NON-PRODUCTION EXCEPTION: 1-year TTL for developer/reviewer preview testing only. MUST NOT be copied to stable/prod.
-  OAUTH_ACCESS_TOKEN_TTL: "8760h"
+  # Was "8760h" — a 1-year access token, carried as a deliberate
+  # non-production exception so developers and reviewers would not have to
+  # re-authenticate. It bought that convenience by disabling the thing that
+  # limits the blast radius of a leak: a token minted here stayed valid until
+  # 2027, and one of them did leak, into chat logs and several on-disk client
+  # configs. Refresh-token rotation now works end-to-end (verified against
+  # this deployment 2026-08-16), so the convenience no longer needs paying
+  # for — a client whose hour is up renews silently and nobody is prompted.
+  # Match stable rather than inventing a third value.
+  OAUTH_ACCESS_TOKEN_TTL: "1h"
   # OriginGuard allowlist. Unset, it defaults to the PUBLIC_BASE_URL origin only,
   # which 403s the browser Origin headers sent by the ChatGPT and Claude connector
   # runtimes. Broadened here to validate connector access on preview before the
