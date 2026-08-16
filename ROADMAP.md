@@ -73,12 +73,15 @@ mctl-api и Argo CD server/repo-server (3.4). SOC-реестр F1–F20 закр
 Первый потенциальный клиент читает docs.mctl.ai; противоречия хуже пробелов.
 - [x] Единая deployment matrix: rolling — default, blue-green — opt-in (`guides/services.md`).
 - [x] Единая модель секретов БД: Vault → ExternalSecret → K8s Secret, переменные `DB_*` + `DATABASE_URL` (`guides/databases.md`).
-- [x] Число MCP tools: везде 62 (по `server_test.go`); в таблицу добавлен пропущенный `mctl_trigger_incident_responder`.
+- [x] Число MCP tools: везде **70** (по `server_test.go`); счётчик сверен и в mctl-docs
+  ([mctl-docs#84](https://github.com/mctlhq/mctl-docs/pull/84)). Значение 62 держалось
+  здесь после того, как набор инструментов вырос — цифру в этом файле приходится
+  обновлять вручную, автоматической сверки с `server_test.go` нет.
 - [x] CLAUDE.md синхронизированы: mctl-agent (12 skills, Postgres-хранилище), mctl-portal (9 плагинов, `proposals-backend`), mctl-web (Nuxt 4).
 - [~] Разобрать Dependabot-долг на default-ветках:
   - [x] mctl-web: июль 29 → 0; августовская волна 34 → 0 в [mctl-web#55](https://github.com/mctlhq/mctl-web/pull/55)
-    (npm audit fix + wrangler 4.87→4.123, CI green, Claude APPROVED; merge pending
-    на branch protection).
+    (npm audit fix + wrangler 4.87→4.123, CI green, Claude APPROVED). Смержен
+    2026-08-15.
   - [ ] mctl-docs: заблокировано из CI-среды — приватный пакет `@mctlhq/css`
     требует PAT с `read:packages`. Выполнить локально: `npm audit fix`, затем
     `npm run build`. Остаток esbuild/vite закрывается только апгрейдом VitePress.
