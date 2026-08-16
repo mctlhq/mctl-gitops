@@ -40,10 +40,26 @@ spec:
   # 24 ticks/day * 7 days of success history
   successfulJobsHistoryLimit: 168
   failedJobsHistoryLimit: 48
-  # Temporarily suspended 2026-07-29 with the implementer so incident
-  # proposals cannot feed the unscoped account-2 fallback while its
-  # forced-retry behavior is being fixed.
-  suspend: true
+  # Resumed 2026-08-16 after both blockers were verified gone, not assumed:
+  #
+  #   1. The suspension reason recorded here on 2026-07-29 was an unseeded
+  #      `claude-code-oauth-token-2`, which made the account-2 fallback fail
+  #      the whole run. Vault `secret/platform/mctl-agents` now carries that
+  #      field alongside `claude-code-oauth-token` (both 108 chars), so the
+  #      fallback has a real second account to retry on.
+  #   2. Diagnosed tickets used to sit claiming `analyzing` forever. The
+  #      `escalated` status that ends that shipped in mctl-agent 1.16.0 and
+  #      is live (pod admins-mctl-agent-base-service running :1.16.0).
+  #
+  # Both were checked against Vault and the cluster rather than against the
+  # changelog — the first was the reason written down here, the second the
+  # reason people remembered, and they were not the same blocker.
+  #
+  # The sibling CronWorkflows stay suspended on their own separate grounds:
+  # `implement` until the Phase A backlog of 12 open PRs has explicit
+  # outcomes, `issue-poll` permanently, having been superseded by the
+  # Temporal IssuePollWorkflow schedule.
+  suspend: false
   workflowSpec:
     workflowTemplateRef:
       name: mctl-agents-run
