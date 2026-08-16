@@ -24,7 +24,7 @@
 replicaCount: 1
 image:
   repository: ghcr.io/mctlhq/mctl-agents
-  tag: "1.28.1"
+  tag: "1.28.2"
 imagePullSecrets:
   - name: ghcr-credentials
 command: ["python", "-m", "orchestrator.temporal.worker"]
@@ -48,6 +48,13 @@ resources:
   # Light footprint on purpose: this process only polls HTTP endpoints
   # (mctl-api, Temporal frontend) — it never spawns the Claude Code CLI or
   # clones a repo, unlike agent-worker-preview or the Argo CWFT pods.
+  #
+  # That stopped being true when the incident responder moved into
+  # IncidentLoopWorkflow as an in-process activity: it ran a Claude SDK
+  # session here, against a pod with no gitops checkout to write proposals
+  # into, and was OOMKilled every tick (8 restarts, 2026-08-15). Reverting
+  # to an Argo submit (mctl-agents 1.28.2, #180) makes the claim above
+  # accurate again — which is why 256Mi stays.
   requests:
     cpu: 50m
     memory: 128Mi
