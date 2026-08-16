@@ -49,7 +49,17 @@ env:
   # which 403s the browser Origin headers sent by the ChatGPT and Claude connector
   # runtimes. Broadened here to validate connector access on preview before the
   # same change ships to stable tg.mctl.ai. Arbitrary origins still get 403.
-  ALLOWED_ORIGINS: "https://tg-preview.mctl.ai,https://chatgpt.com,https://chat.openai.com,https://claude.ai"
+  ALLOWED_ORIGINS: "https://tg-preview.mctl.ai,https://chatgpt.com,https://chat.openai.com,https://claude.ai,https://antigravity.google"
+  # redirect_uri host allowlist for unregistered client_ids and for every
+  # redirect_uri supplied at RFC 7591 dynamic registration (0.50.0+; earlier
+  # images ignore this key and use the built-in list). Setting it REPLACES the
+  # built-in default rather than extending it, so the defaults are restated
+  # here — dropping one silently breaks that client's registration.
+  # antigravity.google is the addition: the Antigravity CLI registers with a
+  # redirect on its own hosted domain, and without it every attempt 400s,
+  # leaving a hand-pasted static bearer token as the only way in.
+  # Loopback hosts are accepted regardless of this list.
+  OAUTH_ALLOWED_IMPLICIT_HOSTS: "claude.ai,claude.com,chatgpt.com,antigravity.google,localhost,127.0.0.1"
   # Reuse stable demo video; preview doesn't serve its own.
   DEMO_VIDEO_URL: https://tg.mctl.ai/demo/walkthrough.mp4?v=2
   # Preview bot numeric ID (part before the colon in the bot token).

@@ -54,7 +54,18 @@ env:
   # "https://" (colons); if mctl_deploy_service ever rewrites this file, verify
   # the key survived the yq round-trip (it is known to strip colon-bearing env
   # vars) and hand-edit to restore if dropped.
-  ALLOWED_ORIGINS: https://tg.mctl.ai,https://chatgpt.com,https://chat.openai.com,https://claude.ai
+  ALLOWED_ORIGINS: https://tg.mctl.ai,https://chatgpt.com,https://chat.openai.com,https://claude.ai,https://antigravity.google
+  # redirect_uri host allowlist for unregistered client_ids and for every
+  # redirect_uri supplied at RFC 7591 dynamic registration (0.50.0+; earlier
+  # images ignore this key and use the built-in list). Setting it REPLACES the
+  # built-in default rather than extending it, so the defaults are restated
+  # here — dropping one silently breaks that client's registration.
+  # antigravity.google is the addition: the Antigravity CLI registers with a
+  # redirect on its own hosted domain, and without it every attempt 400s,
+  # leaving a hand-pasted static bearer token as the only way in.
+  # Loopback hosts are accepted regardless of this list. Same yq caveat as
+  # ALLOWED_ORIGINS above: no colons here, but verify after any rewrite.
+  OAUTH_ALLOWED_IMPLICIT_HOSTS: claude.ai,claude.com,chatgpt.com,antigravity.google,localhost,127.0.0.1
   # Raised from the 10m default: the in-browser enable_access flow (phone -> SMS
   # -> 2FA) is bounded by this same TTL (lookupEnable), and 10m is too tight for
   # a human to receive and enter the SMS code -> "sign-in session has expired".
