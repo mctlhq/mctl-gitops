@@ -314,6 +314,12 @@ spec:
                   - receiver: "null"
                     matchers:
                       - alertname =~ "InfoInhibitor|Watchdog"
+                  # Kept namespace-wide on purpose. A failed vault-backup pod
+                  # sits in Waiting (init container errored) and would pin this
+                  # alert, but KubeContainerWaiting adds nothing there:
+                  # KubeJobFailed already fires with job_name, VaultBackupStale
+                  # covers the durable "no snapshot today" case, and the pod's
+                  # logs live in Loki under {app="vault-backup"}.
                   - receiver: "null"
                     matchers:
                       - alertname = "KubeContainerWaiting"
@@ -327,11 +333,35 @@ spec:
                     matchers:
                       - alertname = "KubeJobFailed"
                       - namespace = "vault"
+                  # Backup staleness pages a human directly: mctl-agent cannot
+                  # remediate a missing snapshot, and these alerts exist
+                  # precisely because the Job-scoped ones vanish with the Job.
+                  - receiver: telegram
+                    matchers:
+                      - alertname =~ "VaultBackupStale|VaultBackupMetricAbsent|VaultBackupSuspended"
                   # A stale agents pipeline usually means its own model/auth
                   # path is unavailable, so route directly to an operator.
                   - receiver: telegram
                     matchers:
                       - alertname = "MctlAgentsPipelineStale"
+                  # Platform/infra Applications (projects default + platform)
+                  # also page a human, in ADDITION to mctl-agent — hence
+                  # continue: true, which lets the catch-all route below still
+                  # raise the incident. Tenant service apps (project "apps")
+                  # are deliberately left agent-only; this is about the
+                  # platform's own control plane.
+                  #
+                  # Why: on 2026-08-16 root-app was Degraded for 11h because
+                  # the nightly Vault backup never succeeded (ArgoCD marks a
+                  # CronJob Degraded while lastScheduleTime > lastSuccessful-
+                  # Time). That signal was correct and durable — but it went
+                  # only to the mctl-agent receiver, whose pipeline was down,
+                  # so no human ever heard about a missing backup.
+                  - receiver: telegram
+                    continue: true
+                    matchers:
+                      - alertname =~ "ArgoCDApplicationDegraded|ArgoCDApplicationOutOfSyncLong"
+                      - project =~ "default|platform"
                   - receiver: "null"
                     matchers:
                       - alertname = "KubeJobFailed"
