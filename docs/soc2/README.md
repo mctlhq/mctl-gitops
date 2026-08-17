@@ -28,10 +28,12 @@ loyalty, pairdesk.
 | [cuecs.md](cuecs.md) | Complementary user entity and inherited controls |
 | [vendors.md](vendors.md) | Subservice organizations |
 | [control-matrix.md](control-matrix.md) | TSC → control → evidence → test of design |
+| [risk-register.md](risk-register.md) | Scored risks; not ROADMAP |
+| [fraud-memo.md](fraud-memo.md) | No platform payments |
+| [compensating-controls.md](compensating-controls.md) | Solo operator + admin bypass |
+| [access-review.md](access-review.md) | Quarterly checklist |
+| [emergency-change.md](emergency-change.md) | Hotfix / bypass / kubectl |
 | [evidence/github-org-mfa.md](evidence/github-org-mfa.md) | Org MFA probe |
-
-Procedures (risk register, SoD memo, access review, emergency change) land
-in a follow-up commit under this directory.
 
 ## Honest residuals (do not hide)
 
