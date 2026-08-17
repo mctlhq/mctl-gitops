@@ -17,10 +17,10 @@
 | «blue-green by default» vs «rolling by default» | Код: rolling через ArgoCD sync; blue-green в base-service есть, но opt-in. Доки противоречат друг другу | `helm-charts/base-service/`, mctl-docs `guides/services.md:82` vs `guides/rollbacks.md:24` |
 | «Изоляция тенантов не подтверждена» | Есть: default-deny NetworkPolicy, ResourceQuota, LimitRange, PSS baseline; `allowInternetEgress: false` по умолчанию (см. 3.2) | `helm-charts/tenant/templates/`, `values.yaml` |
 
-Реальные пробелы, подтверждённые кодом: etcd-снапшоты в S3/R2 на preprod подготовлены,
-но не включены на живом CP (бакет `mctl-etcd-snapshots` создан 2026-08-15, terraform
-описывает выгрузку; apply — [gitops#841](https://github.com/mctlhq/mctl-gitops/issues/841));
-HPA opt-in и почти не используется; prod-кластер — заглушки.
+Реальные пробелы, подтверждённые кодом: HPA opt-in и почти не используется;
+prod-кластер — заглушки. etcd S3 на preprod **включён 2026-08-15**
+([gitops#841](https://github.com/mctlhq/mctl-gitops/issues/841); журнал —
+`docs/runbooks/restore.md`).
 Закрыто с момента написания: restore drills CNPG/Vault проведены 2026-08-14, состояние
 mctl-agent переехало в Postgres (2.2), retention CNPG поднят до 14d, PDB у CNPG, Traefik,
 mctl-api и Argo CD server/repo-server (3.4). SOC-реестр F1–F20 закрыт 2026-08-15
@@ -149,7 +149,9 @@ mctl-api и Argo CD server/repo-server (3.4). SOC-реестр F1–F20 закр
 - OpenTelemetry/tracing — когда появятся multi-hop инциденты, которые нечем разбирать.
 - Cosign/provenance + admission policy (Kyverno) — когда клиенты начнут спрашивать про supply chain.
 - Упрощение self-hosting (сокращение hardcoded refs) — когда появится спрос на self-hosted.
-- Compliance mapping (CIS/SOC2-lite) — когда попросит первый enterprise-лид.
+- CIS mapping, SOC 2 Type II, ISO 27001 — когда попросит первый enterprise-лид.
+  Type I **paper** (system description, assertion, CUECs, vendor register)
+  живёт в `docs/soc2/` и собирается сейчас; это не аттестация и не бейдж.
 
 ## 6. Чего в плане сознательно нет
 
