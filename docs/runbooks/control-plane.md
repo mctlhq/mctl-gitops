@@ -31,9 +31,10 @@ Compensating controls in place:
    (`README.md` "Disaster recovery").
 2. Restore Vault, then Postgres, in that order — ESO depends on Vault
    (`docs/runbooks/restore.md`).
-3. etcd off-cluster snapshots are **not live** (local CP snapshots only).
-   Treat cluster-state recovery as best-effort until S3 etcd snapshots
-   are wired.
+3. Restore etcd from R2 (`s3://mctl-etcd-snapshots/k3s-preview`). Off-cluster
+   snapshots have been live since 2026-08-15 (gitops#841; ROADMAP 2.1).
+   Procedure: `docs/runbooks/restore.md` §3. A full restore *drill* has not
+   been run — presence in S3 is confirmed, not a throwaway-cluster restore.
 
 Do not add a second CP node from this runbook.
 
@@ -69,11 +70,12 @@ From-zero rebuilds write the file in `preinstall_exec` and pass
 cluster the file must exist **before** a terraform apply that adds those
 args, or the apiserver will refuse to start.
 
-## F9 — Vault JWT for GitHub Actions (admin-blocked)
+## F9 — Vault JWT for GitHub Actions (live)
 
-Code is merged. Do **not** `vault auth enable jwt` from this repo or widen
-the provisioner. A Vault admin at `secrets.mctl.ai` must run the four
-commands in `infrastructure/k3s-preview/cluster-bootstrap/vault-config/README.md`.
+`auth/jwt` is mounted. Role `github-actions` is live. GHA `build-image.yaml`
+logs in with OIDC (`permissions.id-token: write`). Confirmed end to end on
+2026-08-15 (`infrastructure/k3s-preview/cluster-bootstrap/vault-config/README.md`).
+Do **not** `vault auth enable jwt` again and do not widen the provisioner.
 
 ## F18 — PSS restricted / cosign (Horizon 3)
 
