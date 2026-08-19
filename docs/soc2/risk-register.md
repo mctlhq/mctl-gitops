@@ -7,7 +7,7 @@ Scale: High / Medium / Low for inherent and residual.
 
 | ID | Risk | TSC | Inherent | Treatment | Residual | Status |
 |---|---|---|---|---|---|---|
-| R1 | GitHub org without required MFA | CC6 | High | Enable org 2FA requirement; evidence in `evidence/github-org-mfa.md` | Low | Closed 2026-08-19 — `two_factor_requirement_enabled=true`; two members still enrolling |
+| R1 | GitHub org without required MFA | CC6 | High | Enable org 2FA requirement; evidence in `evidence/github-org-mfa.md` | Low | Closed 2026-08-19 — requirement `true`; `2fa_disabled` count 0 |
 | R2 | Single control-plane node loss | A1 | High | etcd S3 + restore runbook; second CP is Horizon 2 (F11) | Medium | Accepted |
 | R3 | Vault east-west plaintext | C1 | Medium | Edge TLS + NetworkPolicy; TLS-from-day-one on future prod cluster (F15) | Medium | Accepted |
 | R4 | First packet to Vault rejected (NP race) | A1/CC7 | Medium | Wait loop on `vault-backup` only (gitops#862). Do not spray | Low on that Job | Accepted; 17 Aug 03:00:40Z succeeded |
