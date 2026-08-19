@@ -36,8 +36,8 @@ A second control plane is Horizon 2 (F11).
 
 | Component | Role | Typical image |
 |---|---|---|
-| mctl-api | REST + MCP + OAuth | `ghcr.io/mctlhq/mctl-api` (live 4.32.6 on 2026-08-17) |
-| mctl-agent | Tickets, alerts, dispatch | `ghcr.io/mctlhq/mctl-agent` (live 1.16.0) |
+| mctl-api | REST + MCP + OAuth | `ghcr.io/mctlhq/mctl-api` (live 4.32.7 on 2026-08-19) |
+| mctl-agent | Tickets, alerts, dispatch | `ghcr.io/mctlhq/mctl-agent` (live 1.16.1) |
 | mctl-agents | Implementer / shepherd workers | `ghcr.io/mctlhq/mctl-agents` |
 | mctl-portal | Backstage at app.mctl.ai | `ghcr.io/mctlhq/mctl-portal` |
 | mctl-web | Landing + Cloudflare Worker | `ghcr.io/mctlhq/mctl-web` |

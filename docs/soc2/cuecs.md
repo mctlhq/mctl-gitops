@@ -8,7 +8,7 @@ designed as described.
 
 | CUEC | Why |
 |---|---|
-| Protect the GitHub account used to sign in (MFA on the user account, even while the org requirement is being enabled) | GitHub is the human IdP |
+| Protect the GitHub account used to sign in (MFA). Org requirement is on as of 2026-08-19; user accounts still need to enroll | GitHub is the human IdP |
 | Keep tenant secrets in Vault paths, not in git or chat | Isolation is path-based |
 | Treat preview namespaces as non-production | Preview uses `teams/<team>/<svc>/preview/*`, not prod paths |
 | Do not put regulated data (PHI, cardholder data) on this platform without a written agreement | Product scope is GitHub identity + platform ops; no BAA |
