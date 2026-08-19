@@ -6,10 +6,12 @@ metadata:
     workflows.argoproj.io/description: |
       Verifies the argo-workdir-local StorageClass without changing any
       production workflow template. The writer records the workflow UID and
-      node name inside a workload-owned mode 0700 directory; a separate reader
-      pod verifies the marker and that Kubernetes scheduled it on the
-      PV-affine node. Completion also exercises teardown through private DAC
-      permissions.
+      node name inside a workload-owned mode 0700 directory and creates an
+      empty subdirectory; a separate reader pod verifies the marker, removes
+      the subdirectory, and confirms that Kubernetes scheduled it on the
+      PV-affine node. The rmdir check catches incompatible SELinux labels on
+      hostPath-backed volumes. Completion also exercises teardown through
+      private DAC permissions.
 
       Set pause_before_read=true for the worker-cordon recovery drill. Resume
       the workflow only after the writer's node has been cordoned.
@@ -62,6 +64,7 @@ spec:
           - |
             umask 077
             mkdir /workdir/private
+            mkdir /workdir/private/removable
             test "$(stat -c '%a' /workdir/private)" = "700"
             printf '%s:%s\n' "$WORKFLOW_UID" "$NODE_NAME" > /workdir/private/canary
             sync
@@ -96,6 +99,8 @@ spec:
             test "$(stat -c '%a' /workdir/private)" = "700"
             actual="$(cat /workdir/private/canary)"
             test "$actual" = "$expected"
+            rmdir /workdir/private/removable
+            test ! -e /workdir/private/removable
             echo "Verified private marker and node affinity on ${NODE_NAME}"
         env:
           - name: WORKFLOW_UID

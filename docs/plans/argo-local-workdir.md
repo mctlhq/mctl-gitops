@@ -32,6 +32,11 @@ volume while retaining explicit PVC lifecycle management.
   host directories containing files with arbitrary workload ownership,
   private modes, and sticky bits. All other capabilities are dropped;
   workflow pods retain their normal confined SELinux domain.
+- The setup helper labels each new backing directory `container_file_t`.
+  Without this explicit label, the host path inherits
+  `container_var_lib_t`; confined workflow pods can create files there but
+  cannot remove directories, which breaks operations such as Git rebase
+  cleanup across workflow steps.
 - local-path-provisioner v0.0.36 requires the explicit
   `--allow-unsafe-helper-pod-template` opt-in before it accepts any helper pod
   security context. CI requires the flag together with the exact hardened

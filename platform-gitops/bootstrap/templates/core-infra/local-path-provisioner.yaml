@@ -159,6 +159,7 @@ data:
     #!/bin/sh
     set -eu
     mkdir -m 0777 -p "$VOL_DIR"
+    chcon -t container_file_t "$VOL_DIR"
   teardown: |-
     #!/bin/sh
     set -eu
@@ -183,7 +184,7 @@ data:
           effect: NoSchedule
       containers:
         - name: helper-pod
-          image: docker.io/library/busybox:1.36
+          image: registry.access.redhat.com/ubi9/ubi-minimal@sha256:34880b64c07f28f64d95737f82f891516de9a3b43583f39970f7bf8e4cfa48b7
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false

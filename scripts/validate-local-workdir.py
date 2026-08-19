@@ -119,10 +119,14 @@ def validate_provisioner() -> None:
     assert all(paths == [LOCAL_PATH] for paths in mapping.values())
     assert "DEFAULT_PATH_FOR_NON_LISTED_NODES" not in mapping
     assert 'mkdir -m 0777 -p "$VOL_DIR"' in config_map["data"]["setup"]
+    assert 'chcon -t container_file_t "$VOL_DIR"' in config_map["data"]["setup"]
     helper = yaml.safe_load(config_map["data"]["helperPod.yaml"])
     helper_spec = helper["spec"]
     assert helper_spec["automountServiceAccountToken"] is False
     assert helper_spec["securityContext"]["seLinuxOptions"]["type"] == "spc_t"
+    assert helper_spec["containers"][0]["image"].startswith(
+        "registry.access.redhat.com/ubi9/ubi-minimal@sha256:"
+    )
     helper_security = helper_spec["containers"][0]["securityContext"]
     assert helper_security["allowPrivilegeEscalation"] is False
     assert helper_security["capabilities"]["drop"] == ["ALL"]
@@ -168,10 +172,13 @@ def validate_canary() -> None:
     writer = templates["write-marker"]["container"]["args"][0]
     reader = templates["read-marker"]["container"]["args"][0]
     assert "umask 077" in writer
+    assert "mkdir /workdir/private/removable" in writer
     assert "/workdir/private/canary" in writer
     assert "/workdir/private/canary" in reader
     assert "stat -c '%a' /workdir/private" in writer
     assert "stat -c '%a' /workdir/private" in reader
+    assert "rmdir /workdir/private/removable" in reader
+    assert "test ! -e /workdir/private/removable" in reader
 
 
 def validate_alerts() -> None:
