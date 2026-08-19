@@ -1,14 +1,13 @@
-# Management assertion (draft)
+# Management assertion
 
-Do not treat this file as signed. A human owner dates and signs it before
-CPA fieldwork. Bots and agents must not fill the signature block.
+Signed 2026-08-19. Bots and agents must not alter the signature block.
 
 ---
 
 We have prepared the description of the MCTL platform system titled
 `docs/soc2/system-description.md` in repository `mctlhq/mctl-gitops`.
 
-We confirm, as of ________ (date):
+We confirm, as of 19 August 2026:
 
 1. The description fairly presents the system that provides GitOps-based
    Kubernetes platform services to user entities.
@@ -26,8 +25,8 @@ This is not an assertion of operating effectiveness over a period
 
 Signed:
 
-Name: ________________________
+Name: Dmitrii Mashkov
 
-Role: ________________________
+Role: Founder
 
-Date: ________________________
+Date: 19 August 2026

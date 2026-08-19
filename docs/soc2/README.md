@@ -24,7 +24,7 @@ loyalty, pairdesk.
 | Document | Role |
 |---|---|
 | [system-description.md](system-description.md) | People, software, infra, procedures, data |
-| [management-assertion.md](management-assertion.md) | Draft assertion — human signs later |
+| [management-assertion.md](management-assertion.md) | Signed 2026-08-19 by Founder Dmitrii Mashkov |
 | [cuecs.md](cuecs.md) | Complementary user entity and inherited controls |
 | [vendors.md](vendors.md) | Subservice organizations |
 | [control-matrix.md](control-matrix.md) | TSC → control → evidence → test of design |
