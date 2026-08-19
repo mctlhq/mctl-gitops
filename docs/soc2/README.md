@@ -42,8 +42,8 @@ Single control-plane (F11). Vault east-west `tls_disable=1` (F15). PSS
 `style-src 'unsafe-inline'` (rejected in nginx.conf). apiserver audit.log
 on the CP disk, not Loki (F20). `gitops-bump` / `release-deploy` write
 `image.tag` to main. GitHub rulesets allow admin bypass. Org MFA
-requirement is **on** as of 2026-08-19 (secure methods only); two members
-still enrolling.
+requirement is **on** as of 2026-08-19 (secure methods only);
+`2fa_disabled` count 0 after the same-day offboarding.
 
 ## What this is not
 
