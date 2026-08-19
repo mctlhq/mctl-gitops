@@ -12,22 +12,14 @@ gh api orgs/mctlhq --jq .two_factor_requirement_enabled
 | When (UTC) | Result | How |
 |---|---|---|
 | 2026-08-17T06:45Z | `false` | Type I readiness audit |
-| 2026-08-17T06:52Z | `false` | `PATCH /orgs/mctlhq` with `two_factor_requirement_enabled=true` is a no-op; the field is not writable via this REST endpoint |
+| 2026-08-17T06:52Z | `false` | `PATCH /orgs/mctlhq` is a no-op; field is not writable via REST |
+| 2026-08-19T16:37Z | `true` | Owner enabled in org Authentication security UI. Also "Only allow secure two-factor methods" (authenticator / passkey / security key / GitHub Mobile; SMS disallowed). |
 
-GitHub does not expose an org-owner REST toggle for this setting. It is an
-Authentication security control in the org UI.
+The control is the **org requirement**, not whether one account happens to
+have TOTP.
 
-## Enable (org owner)
+## Residual after enable
 
-1. Open https://github.com/organizations/mctlhq/settings/security
-2. Under "Authentication", enable **Require two-factor authentication**
-3. Re-run the probe above. Required value: `true`
-4. Update the table in this file with the new timestamp
-
-Do not record member 2FA status here. The control is the **org requirement**,
-not whether one account happens to have TOTP.
-
-## Residual until enabled
-
-`two_factor_requirement_enabled=false` remains a Type I CC6 sample fail.
-Members may already use 2FA personally; that is not the control.
+Two org members still have 2FA unset (`gh api 'orgs/mctlhq/members?filter=2fa_disabled'`).
+They cannot use org resources until they enroll. Do not list logins here.
+Track them in the next access review (`access-review.md`).

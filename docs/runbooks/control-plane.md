@@ -50,8 +50,8 @@ updating every in-cluster `VAULT_ADDR`. A botched rollout splits Raft
 quorum. Deferred until a customer asks, with the existing ingress TLS as
 the compensating control.
 
-`AUDIT_DB_URL sslmode=disable` to CNPG is **not** this repo. It lives in
-the mctl-api overlay and belongs to the mctl-api change path.
+`AUDIT_DB_URL sslmode=require` to CNPG is live in `mctl-api.yaml` (F15
+partial). Vault east-west TLS is the remaining hole, not Postgres.
 
 ## F20 — Kubernetes API audit
 

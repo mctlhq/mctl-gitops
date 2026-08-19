@@ -8,10 +8,10 @@ fails a design test.
 |---|---|---|---|---|
 | CC1 | Solo founder + AGENTS.md + SECURITY.md + Contributor Covenant | `AGENTS.md`, `SECURITY.md`, `ROADMAP.md` | Inspect policies exist and name an owner | No org chart, no CoC ack, no CODEOWNERS on core repos |
 | CC2 | Privacy + runbooks + docs.mctl.ai | `mctl-web` privacy, `docs/runbooks/*`, this binder | Read description vs live cluster | Privacy subprocessors incomplete; runbooks drifted until 2026-08-17 |
-| CC3 | Engineering F-register and ROADMAP | Internal SOC canvas / reviews/; `ROADMAP.md` | Confirm residuals are listed here | No scored risk register yet (follow-up file) |
+| CC3 | Engineering F-register, ROADMAP, `docs/soc2/risk-register.md` | this binder | Confirm residuals are listed | Fraud memo exists; no annual signed risk assessment |
 | CC4 | Grafana / Alertmanager / VaultBackupStale | `monitoring.yaml`, `backup-alerts.yaml` | Confirm rules exist in git | Infra monitoring ≠ control monitoring; no internal audit |
-| CC5 | Branch + PR + Claude P1/P2 + GitOps | `claude-review.yml`, Argo CD apps | Open one merged PR; confirm merge commit | No change-management policy; squash vs merge drift in api CONTRIBUTING.md |
-| CC6 | GitHub OAuth, Dex, Vault K8s/JWT, tenant NP, joiner/leaver WFTs | overlays, `networkpolicy.yaml`, `wft-create-tenant.yaml` | Probe auth; inspect NP; org MFA API | Org MFA requirement `false` on 2026-08-17; open DCR is product choice |
+| CC5 | Branch + PR + Claude P1/P2 + GitOps | `claude-review.yml`, Argo CD apps | Open one merged PR; confirm merge commit | Emergency-change.md exists; squash vs merge drift in api CONTRIBUTING.md |
+| CC6 | GitHub OAuth, Dex, Vault K8s/JWT, tenant NP, joiner/leaver WFTs, org MFA | overlays, `networkpolicy.yaml`, `evidence/github-org-mfa.md` | Probe auth; `two_factor_requirement_enabled` | MFA on 2026-08-19; two members still enrolling; open DCR is product choice |
 | CC7 | R2 backups, drills, responder CronWorkflow, api audit, k8s AuditPolicy | `restore.md`, `audit-policy.yaml`, CronWorkflow | CronJob lastSuccessful; suspend=false | audit.log node-local; no IR customer-notification SLA |
 | CC8 | No direct main; live branch protection; bot tag bumps only | GitHub rulesets; `gitops-bump.yaml`; `CLAUDE.md` | `gh api repos/.../rulesets` | Pass for design |
 | CC9 | Restore runbook; dual GitHub Apps | `restore.md`, `github-app-scope-audit.md` | Read runbook | No vendor SOC file (this `vendors.md`) |
