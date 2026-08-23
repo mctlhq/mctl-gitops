@@ -90,6 +90,17 @@ env:
   # Admin-tool success is demonstrated separately with operator credentials.
   # (Reverts the temporary reviewer-admin grant; submission docs reframed to match.)
   TG_LOGIN_ADMINS: "210408407"
+  # Identities exempt from the 90-day absolute session TTL (mctl-telegram#409,
+  # implemented in #410). Only the absolute ceiling is lifted — the 30-day idle
+  # TTL still retires an identity nobody uses. Takes effect from the release
+  # that carries #410; on 0.50.1 the variable is simply unread.
+  #   210408407 — operator. Its session hit the ceiling on 2026-08-23 01:38:44
+  #     (connected_at + 90d exactly) and the sweeper revoked it 79s later,
+  #     which is what opened incident 2f3d550f. Recovery is phone+SMS+2FA,
+  #     so a human is on the hook every 90 days for a session in daily use.
+  #   924671154 — the canary's identity (below). A monitoring probe must never
+  #     need an interactive reconnect to keep running.
+  SESSION_TTL_EXEMPT_TG_IDS: "210408407,924671154"
   # Open registration: every Telegram-authenticated user auto-gets the client
   # tier. Ban a specific user with the set_telegram_access MCP tool.
   AUTO_APPROVE_CLIENTS: "true"
@@ -392,12 +403,21 @@ extraObjects:
   # contributed to new-login SendCode throttling. That hang was fixed in
   # 0.38.1/0.38.2 (PR #217), but */10 keeps egress load light. Identity lives
   # in the out-of-band Secret mctl-telegram-canary (tg_user_id + bearer_token)
-  # — not in git. Target identity is 8745115872 (@mctlhq), read-only scopes,
-  # no send. Do not point this probe at operator 210408407: that personal
-  # account is also logged into preview MCP, and sharing one MTProto user
-  # across prod+preview causes AUTH_KEY_DUPLICATED. After
-  # DEMO_REVIEWER_ENABLED is off, remint the secret for @mctlhq (real
-  # OIDC/session, not the password bypass). Recreate + 1 replica stays.
+  # — not in git. Target identity is 924671154 (@dmitriimashkov) as of
+  # 2026-08-23, read-only scopes (telegram:dialogs:read + messages:read),
+  # send_enabled=false on its row. Do not point this probe at operator
+  # 210408407: that personal account is also logged into preview MCP, and
+  # sharing one MTProto user across prod+preview causes AUTH_KEY_DUPLICATED.
+  # It had in fact been running as 210408407 until this change — the secret
+  # was never reminted after the note below was written — and both databases
+  # confirm 210408407 is active on stable and preview simultaneously.
+  # 8745115872 (@mctlhq) was the earlier candidate but is tied up as the
+  # App-Directory demo identity; 924671154 exists on stable only, so moving
+  # there removes the sharing rather than relocating it.
+  # The bearer token is NOT mintable through /api/agent/token (that issues
+  # aud=agent, accepted only on /api/agent/v1/*, never on /mcp) — see
+  # mctl-telegram#412 for the missing bounded mint path. Recreate + 1 replica
+  # stays.
   - apiVersion: batch/v1
     kind: CronJob
     metadata:
