@@ -713,7 +713,21 @@ extraContainers:
           let creds;
           try { creds = JSON.parse(fs.readFileSync(CREDS, 'utf8')); } catch { return; }
           if (!creds.refreshToken || !creds.clientId || !creds.apiBase) return;
-          const failureCount = creds.refreshFailureCount || 0;
+          let failureCount = creds.refreshFailureCount || 0;
+          // A reconnect from the Control UI (or a refresh performed by
+          // mctl-mcp-proxy) writes a brand new refresh token into this file
+          // but leaves refreshFailureCount untouched, while bumping updatedAt
+          // — which pushed the cooldown below an hour further out instead of
+          // ending it. Observed live 2026-08-23: the UI read "Connected as
+          // mashkovd" while this loop kept logging "skipping: 20 consecutive
+          // failures". A counter recorded against a token that is no longer
+          // the current one is stale, so drop it.
+          if (failureCount > 0 && creds.refreshFailureToken && creds.refreshFailureToken !== creds.refreshToken) {
+            process.stdout.write('[mctl-refresh] ' + new Date().toISOString() + ' credentials replaced externally, clearing ' + failureCount + ' stale failures\n');
+            creds = { ...creds, refreshFailureCount: 0, refreshFailureFirstAt: null, refreshFailureToken: null };
+            fs.writeFileSync(CREDS + '.tmp', JSON.stringify(creds, null, 2), { mode: 0o600 }); fs.renameSync(CREDS + '.tmp', CREDS);
+            failureCount = 0;
+          }
           if (failureCount > 0) {
             // Capped exponential backoff (10/20/.../60min) instead of a
             // permanent silent block. A single transient failure used to
@@ -742,7 +756,7 @@ extraContainers:
             if (invalid) {
               let fresh; try { fresh = JSON.parse(fs.readFileSync(CREDS, 'utf8')); } catch { fresh = null; }
               if (fresh && fresh.refreshToken !== creds.refreshToken) return;
-              const failed = { ...creds, refreshFailureCount: (creds.refreshFailureCount || 0) + 1, refreshFailureFirstAt: creds.refreshFailureFirstAt || new Date().toISOString(), updatedAt: new Date().toISOString() };
+              const failed = { ...creds, refreshFailureCount: (creds.refreshFailureCount || 0) + 1, refreshFailureFirstAt: creds.refreshFailureFirstAt || new Date().toISOString(), refreshFailureToken: creds.refreshToken, updatedAt: new Date().toISOString() };
               fs.writeFileSync(CREDS + '.tmp', JSON.stringify(failed, null, 2), { mode: 0o600 }); fs.renameSync(CREDS + '.tmp', CREDS);
             }
             return;
@@ -750,7 +764,7 @@ extraContainers:
           if (!body.access_token) { process.stdout.write('[mctl-refresh] invalid response: missing access_token\n'); return; }
           const now = Date.now();
           const expiresIn = typeof body.expires_in === 'number' ? body.expires_in : 3600;
-          const updated = { ...creds, accessToken: body.access_token, refreshToken: body.refresh_token || creds.refreshToken, expiresAt: new Date(now + expiresIn * 1000).toISOString(), updatedAt: new Date(now).toISOString(), refreshFailureCount: 0, refreshFailureFirstAt: null };
+          const updated = { ...creds, accessToken: body.access_token, refreshToken: body.refresh_token || creds.refreshToken, expiresAt: new Date(now + expiresIn * 1000).toISOString(), updatedAt: new Date(now).toISOString(), refreshFailureCount: 0, refreshFailureFirstAt: null, refreshFailureToken: null };
           fs.writeFileSync(CREDS + '.tmp', JSON.stringify(updated, null, 2), { mode: 0o600 }); fs.renameSync(CREDS + '.tmp', CREDS);
           process.stdout.write('[mctl-refresh] ok expiresAt=' + updated.expiresAt + '\n');
         }
