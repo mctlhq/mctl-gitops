@@ -1,0 +1,5 @@
+status: accepted
+updated_at: 2026-08-23T03:00:47Z
+updated_by: _incident-responder
+notes: >-
+  auto-accepted: diagnosis from mctl incident 2463ac41bf854a77ac7d34e476cdf864. labs-mctl-telegram canary probe consistently fails with 'no active session' errors on MCP tool calls. ArgoCD app degraded as a result.

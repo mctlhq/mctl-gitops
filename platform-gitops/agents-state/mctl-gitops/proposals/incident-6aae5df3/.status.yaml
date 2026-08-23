@@ -1,0 +1,5 @@
+status: accepted
+updated_at: 2026-08-23T03:00:47Z
+updated_by: _incident-responder
+notes: >-
+  auto-accepted: diagnosis from mctl incident 5f4cdb7524bd45e4ac95beec6aae5df3. mctl-telegram canary probe consistently fails with 'no active session' errors in MCP tool calls. Root cause is session state loss in labs-mctl-telegram service.
