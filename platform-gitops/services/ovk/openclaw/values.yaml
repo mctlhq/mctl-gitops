@@ -731,7 +731,14 @@ extraContainers:
           if (failureCount > 0 && creds.refreshFailureToken !== creds.refreshToken) {
             const why = creds.refreshFailureToken ? 'credentials replaced' : 'no token marker';
             process.stdout.write('[mctl-refresh] ' + new Date().toISOString() + ' clearing ' + failureCount + ' stale failures (' + why + ')\n');
-            creds = { ...creds, refreshFailureCount: 0, refreshFailureFirstAt: null, refreshFailureToken: null };
+            // Merge the cleared fields into the freshest file rather than the
+            // snapshot read at the top of check(): mctl-mcp-proxy or a Control
+            // UI reconnect may have rotated the tokens in between, and writing
+            // the snapshot back would restore an already-rotated refresh token
+            // — killing the very credentials this is trying to unblock. Same
+            // re-read discipline the failure path below already uses.
+            let latest; try { latest = JSON.parse(fs.readFileSync(CREDS, 'utf8')); } catch { latest = null; }
+            creds = { ...(latest || creds), refreshFailureCount: 0, refreshFailureFirstAt: null, refreshFailureToken: null };
             fs.writeFileSync(CREDS + '.tmp', JSON.stringify(creds, null, 2), { mode: 0o600 }); fs.renameSync(CREDS + '.tmp', CREDS);
             failureCount = 0;
           }
