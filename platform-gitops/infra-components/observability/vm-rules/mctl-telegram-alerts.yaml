@@ -72,7 +72,7 @@ spec:
             summary: "mctl-telegram: more than 10% of tool calls are failing"
             description: >-
               More than 10% of MCP tool invocations are returning errors over
-              the last 5 minutes. Check mctl-telegram logs for the specific
+              the last 15 minutes. Check mctl-telegram logs for the specific
               tools failing (tool label on mctl_tool_invocations_total).
 
         - alert: HighToolLatency
