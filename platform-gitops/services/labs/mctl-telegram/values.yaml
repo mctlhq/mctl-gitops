@@ -110,11 +110,13 @@ env:
   # labs-mctl-telegram-demo; rotate DEMO_REVIEWER_PASSWORD at
   # secret/data/platform/mctl-telegram/demo after this flag is false (do not
   # put the password in git). extraObjects CronJobs below are renderIf-gated
-  # on this flag and prune when it is false. 8745115872 (@mctlhq) remains the
-  # dedicated service Telegram user for production canary MTProto — that
-  # account must be a real Telegram OIDC/session login, not this bypass.
-  # Keep per-account send_enabled=false on that identity so canary probes
-  # stay read-only even though ALLOW_SEND is true globally.
+  # on this flag and prune when it is false. 8745115872 (@mctlhq) is the demo
+  # identity only — it is NO LONGER the canary account. The production canary
+  # moved to 924671154 (@dmitriimashkov) on 2026-08-23; see the canary CronJob
+  # comment below for why. Whatever identity the canary runs as must be a real
+  # Telegram OIDC/session login rather than this password bypass, and must
+  # carry per-account send_enabled=false so probes stay read-only even though
+  # ALLOW_SEND is true globally.
   DEMO_REVIEWER_ENABLED: "false"
   DEMO_REVIEWER_TG_ID: "8745115872"
 ingress:
