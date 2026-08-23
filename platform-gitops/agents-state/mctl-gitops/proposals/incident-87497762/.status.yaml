@@ -1,0 +1,7 @@
+status: accepted
+updated_at: 2026-08-23T16:01:14Z
+updated_by: _incident-responder
+notes: >-
+  auto-accepted: diagnosis from mctl incident argo-mctl-agents-shepherd-1787497200-1787497762
+  (shepherd post-deploy-verify failed due to labs-mctl-telegram service becoming
+  degraded with session management errors in MCP tool layer)
