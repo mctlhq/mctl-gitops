@@ -54,10 +54,17 @@ spec:
               configuration has drifted.
 
         - alert: HighToolErrorRate
+          # The window must outlast the canary's period. The canary CronJob
+          # runs every 10 minutes, so on an idle service a [5m] window
+          # regularly contains no invocations at all, the ratio evaluates to
+          # 0/0, the series disappears and the alert resolves itself — while
+          # the failure is still ongoing. Seen 2026-08-23: fired 07:14,
+          # "resolved" 07:19, and the canary was still failing at 20:30.
+          # [15m] always covers at least one full canary period.
           expr: |
-            rate(mctl_tool_invocations_total{status="error"}[5m])
+            rate(mctl_tool_invocations_total{status="error"}[15m])
             /
-            rate(mctl_tool_invocations_total[5m]) > 0.1
+            rate(mctl_tool_invocations_total[15m]) > 0.1
           for: 5m
           labels:
             severity: warning
