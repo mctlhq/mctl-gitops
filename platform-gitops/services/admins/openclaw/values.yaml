@@ -851,8 +851,15 @@ extraContainers:
           // mashkovd" while this loop kept logging "skipping: 20 consecutive
           // failures". A counter recorded against a token that is no longer
           // the current one is stale, so drop it.
-          if (failureCount > 0 && creds.refreshFailureToken && creds.refreshFailureToken !== creds.refreshToken) {
-            process.stdout.write('[mctl-refresh] ' + new Date().toISOString() + ' credentials replaced externally, clearing ' + failureCount + ' stale failures\n');
+          // A counter written before refreshFailureToken existed carries no
+          // marker at all. That is exactly the state this change is meant to
+          // repair — admins-openclaw sat at count 20 with no marker — so a
+          // missing marker must clear too, not just a mismatched one. If the
+          // token really is still dead the next attempt simply re-arms the
+          // counter, this time with a marker.
+          if (failureCount > 0 && creds.refreshFailureToken !== creds.refreshToken) {
+            const why = creds.refreshFailureToken ? 'credentials replaced' : 'no token marker';
+            process.stdout.write('[mctl-refresh] ' + new Date().toISOString() + ' clearing ' + failureCount + ' stale failures (' + why + ')\n');
             creds = { ...creds, refreshFailureCount: 0, refreshFailureFirstAt: null, refreshFailureToken: null };
             fs.writeFileSync(CREDS + '.tmp', JSON.stringify(creds, null, 2), { mode: 0o600 }); fs.renameSync(CREDS + '.tmp', CREDS);
             failureCount = 0;
