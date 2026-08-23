@@ -1,0 +1,8 @@
+status: accepted
+updated_at: 2026-08-23T18:01:19Z
+updated_by: _incident-responder
+notes: >-
+  auto-accepted: diagnosis from mctl incident
+  argomctlagentsshepherd17875044001787504945 — mctl-agents reconciliation
+  workflows fail because state directory /workdir/mctl-gitops/platform-gitops/agents-state
+  is missing. Creating this directory will restore agent state management.
