@@ -3,7 +3,7 @@
 Draft for a SOC 2 Type I Section III. Seeded from
 `mctl-docs/docs/platform/architecture.md`,
 `infrastructure/k3s-preview/README.md`, and live cluster `mctl-preprod`
-on 2026-08-17. Not customer marketing copy.
+on 2026-08-17, live tags refreshed 2026-08-24. Not customer marketing copy.
 
 ## 1. People
 
@@ -11,7 +11,7 @@ MCTL is operated by a single founder (`@mashkovd`) plus automated agents
 (Claude PR review, mctl-agents implementer/shepherd, mctl-agent incident
 pipeline). There is no board, no security team, and no separate change
 approver. Compensating controls are documented in
-`compensating-controls.md` once that file exists.
+`compensating-controls.md`.
 
 Humans authenticate with GitHub. Agents authenticate with GitHub Apps,
 Vault Kubernetes auth, or Vault JWT (GitHub Actions OIDC).
@@ -37,7 +37,7 @@ A second control plane is Horizon 2 (F11).
 | Component | Role | Typical image |
 |---|---|---|
 | mctl-api | REST + MCP + OAuth | `ghcr.io/mctlhq/mctl-api` (live 4.32.7 on 2026-08-19) |
-| mctl-agent | Tickets, alerts, dispatch | `ghcr.io/mctlhq/mctl-agent` (live 1.16.1) |
+| mctl-agent | Tickets, alerts, dispatch | `ghcr.io/mctlhq/mctl-agent` (live 1.16.2 on 2026-08-24) |
 | mctl-agents | Implementer / shepherd workers | `ghcr.io/mctlhq/mctl-agents` |
 | mctl-portal | Backstage at app.mctl.ai | `ghcr.io/mctlhq/mctl-portal` |
 | mctl-web | Landing + Cloudflare Worker | `ghcr.io/mctlhq/mctl-web` |

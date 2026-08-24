@@ -78,7 +78,7 @@ chore(infrastructure): upgrade Terraform AWS provider to 5.x
 4. Open a pull request against `main`.
 5. Fill out the PR template with a description of your changes.
 6. Wait for review -- at least one maintainer approval is required.
-7. PRs are merged via **squash merge** to keep the history clean.
+7. PRs are merged with a **merge commit** (`gh pr merge --merge --delete-branch`), never squash. The feature branch must stay visible in the git graph.
 
 ## Getting Help
 
