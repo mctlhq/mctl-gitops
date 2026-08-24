@@ -3,7 +3,7 @@
 Internal package for a point-in-time test of design. Not a report. Not a
 badge. Not on docs.mctl.ai.
 
-**As of:** 2026-08-19
+**As of:** 2026-08-24
 **System:** MCTL platform on cluster `mctl-preprod`
 **Criteria in scope:** Security (CC1–CC9), Availability (A1), Confidentiality (C1)
 **Out of scope:** Type II observation window, HIPAA, ISO 27001, tenant
