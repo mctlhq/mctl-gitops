@@ -251,35 +251,34 @@ extraExternalSecrets:
       - secretKey: TELEGRAM_BOT_TOKEN
         remoteKey: secret/data/platform/mctl-agent/tokens
         property: telegram-bot-token
-# TEMPORARY workaround (ChatGPT App Directory review window). The demo/reviewer
-# Telegram session row is subject to the normal session TTLs (absolute 90d, idle
-# 30d) and to revoke-on-disconnect. If the row expires or is revoked, the reviewer
-# login dead-ends with "Sign-in interrupted: no active Telegram session" (the
-# CheckSessionValid -> ErrNoActiveSession path). This CronJob keeps the newest
-# demo session row perpetually fresh (un-revoke + push expires_at/last_used_at out
-# 90d, force send_enabled=false) so reviewers always find a usable session.
-# It does NOT re-login Telegram-side; if the MTProto session is signed out at
-# Telegram, a manual `mctl-telegram-login` re-seed is still required.
-# DO NOT remove this block yet — the durable fix it anticipated has only half
-# shipped. SESSION_TTL_EXEMPT_TG_IDS (mctl-telegram#410, live since 0.51.0)
-# covers the ABSOLUTE TTL only, and 8745115872 is on that list as of this
-# change. The CronJob still carries three things the exemption does not:
-#   - the idle TTL. SweepIdleSessions keys on last_used_at, not expires_at, and
-#     the exemption does not touch it. Today row 43 has expires_at 2026-11-14
-#     but last_used_at 2026-08-16, so idle expiry would revoke it around
-#     2026-09-15 — the binding deadline is the one the exemption does NOT
-#     lift. The NULL trick that works for expires_at cannot work here: any
-#     single tool call re-arms last_used_at via MarkLastUsed.
-#   - un-revoking a row that has already been swept, which nothing else does.
-#   - re-asserting send_enabled=false on the demo identity.
-# Removing it now would leave reviewer mode dying quietly ~30 days after the
-# last reviewer call. Track mctl-telegram#413 for the idle half; when that
-# ships, this block and DEMO_REVIEWER_ENABLED can go together.
+# Reviewer-session recovery. Narrowed on 2026-08-24: this job used to hold the
+# demo/reviewer row (8745115872) open against both session TTLs, and that half
+# is now redundant — the absolute ceiling is waived for
+# SESSION_TTL_EXEMPT_TG_IDS since mctl-telegram#410 (0.51.0) and the idle sweep
+# since #413 (0.52.0), which taught SweepIdleSessions and CheckSessionValid to
+# skip exempt identities instead of keying purely on last_used_at.
+#
+# Worse than redundant, actually: writing expires_at = now() + 90d put a
+# non-NULL deadline back on a row the exemption expresses as NULL, so the job
+# and ReconcileTTLExemptions were undoing each other between restarts. The
+# UPDATE no longer touches last_used_at or expires_at.
+#
+# What it still does, and why the job is NOT deleted: it un-revokes the row.
+# `disconnect_telegram_account` sets revoked_at for a NON-TTL reason, and
+# ChatGPT Developer Mode auto-executes that tool on prompt submit with no Deny
+# panel (confirmed 2026-05-25 while recording the demo). Once the last row is
+# revoked, demo_login and every RPC dead-end on ErrNoActiveSession and the
+# reviewer account is bricked mid-review. Nothing else recovers that: the
+# reviewer watch below only reports the outage. session_encrypted survives a
+# disconnect and Telegram is not signed out, so un-revoking is a complete fix
+# for this case — unlike a Telegram-side signout, which still needs a manual
+# `mctl-telegram-login` re-seed and never was covered here.
 extraObjects:
   # renderIf (base-service extra-objects.yaml): the CronJob is emitted ONLY
   # when this template renders to exactly the string "true". Tied to
-  # DEMO_REVIEWER_ENABLED so the refresh job exists only while reviewer mode is
-  # on; turning the flag off removes it from the manifest and ArgoCD prunes it.
+  # DEMO_REVIEWER_ENABLED so the recovery job exists only while reviewer mode
+  # is on; turning the flag off removes it from the manifest and ArgoCD prunes
+  # it.
   - renderIf: '{{ eq (.Values.env.DEMO_REVIEWER_ENABLED | toString) "true" }}'
     apiVersion: batch/v1
     kind: CronJob
@@ -334,7 +333,7 @@ extraObjects:
                         echo "ERROR: demo reviewer user (telegram_login_id 8745115872) not found in users table." >&2
                         exit 1
                       fi
-                      REFRESHED=$(psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -tA -c "WITH target AS (SELECT id FROM telegram_accounts WHERE user_id = $DEMO_UID AND telegram_user_id IS NOT NULL ORDER BY connected_at DESC LIMIT 1) UPDATE telegram_accounts t SET revoked_at = NULL, last_used_at = now(), expires_at = now() + interval '90 days', send_enabled = false FROM target WHERE t.id = target.id RETURNING t.id;")
+                      REFRESHED=$(psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -tA -c "WITH target AS (SELECT id FROM telegram_accounts WHERE user_id = $DEMO_UID AND telegram_user_id IS NOT NULL ORDER BY connected_at DESC LIMIT 1) UPDATE telegram_accounts t SET revoked_at = NULL, send_enabled = false FROM target WHERE t.id = target.id RETURNING t.id;")
                       if [ -z "$REFRESHED" ]; then
                         echo "ERROR: no demo reviewer session row with a real telegram_user_id exists for user $DEMO_UID." >&2
                         echo "The reviewer MTProto session was deleted or never completed login. Recover by re-running mctl-telegram-login on @mctlhq (OPERATOR_GITHUB_LOGIN=tg:8745115872)." >&2
