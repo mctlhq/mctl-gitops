@@ -1,6 +1,6 @@
-status: needs-triage
-updated_at: '2026-08-24T08:33:50Z'
-updated_by: mctl-agents[bot]
+status: accepted
+updated_at: '2026-08-24T08:40:00Z'
+updated_by: mashkovd
 source:
   type: github_issue
   repo: mctlhq/mctl-telegram
@@ -13,10 +13,3 @@ attempt:
   started_at: '2026-08-24T08:18:43Z'
   expires_at: '2026-08-24T10:28:43Z'
   finished_at: '2026-08-24T08:33:50Z'
-failure:
-  code: operation-timeout
-  stage: runtime
-  message: 'operation timed out: operation exceeded 900s (model stream, client construction,
-    or mctl connectivity check)'
-notes: 'runtime: operation timed out: operation exceeded 900s (model stream, client
-  construction, or mctl connectivity check)'
