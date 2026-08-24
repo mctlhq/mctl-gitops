@@ -76,7 +76,7 @@ jobs:
 
       - name: Notify Telegram on failure
         if: failure()
-        uses: appleboy/telegram-action@37056891d444f558225b59f0d26b4b05c5e9828b # master 2026-05
+        uses: appleboy/telegram-action@390cf7345777cd821dba28c72f436a78bce19cc5 # master 2026-05
         with:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
