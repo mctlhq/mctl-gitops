@@ -1,6 +1,6 @@
-status: accepted
-updated_at: '2026-08-24T07:34:17Z'
-updated_by: mashkovd
+status: implemented
+updated_at: '2026-08-24T08:14:31Z'
+updated_by: mctl-agents[bot]
 source:
   type: github_issue
   repo: mctlhq/mctl-telegram
@@ -8,3 +8,9 @@ source:
   url: https://github.com/mctlhq/mctl-telegram/issues/412
 control:
   requires_human_approval: true
+attempt:
+  id: f4d39495-c1dc-4e11-9ec3-4a85e6d88fd6
+  started_at: '2026-08-24T08:04:26Z'
+  expires_at: '2026-08-24T10:14:26Z'
+  finished_at: '2026-08-24T08:14:31Z'
+pr: https://github.com/mctlhq/mctl-telegram/pull/414
