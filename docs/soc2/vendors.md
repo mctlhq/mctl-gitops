@@ -1,8 +1,7 @@
 # Subservice organizations
 
-No vendor SOC reports are on file as of 2026-08-24. Privacy policy source
-(`mctl-web` `app/pages/privacy/index.vue`) names the processors below.
-Live `https://mctl.ai/privacy` follows the next mctl-web release.
+No vendor SOC reports are on file as of 2026-08-24. Live privacy policy
+`https://mctl.ai/privacy` (mctl-web 7.4.0) names the processors below.
 
 | Org | Role | In privacy policy? | SOC report on file? |
 |---|---|---|---|
