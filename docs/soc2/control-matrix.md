@@ -7,7 +7,7 @@ fails a design test.
 | TSC | Control as designed | Evidence | Test of design (point in time) | Hole |
 |---|---|---|---|---|
 | CC1 | Solo founder + AGENTS.md + SECURITY.md + Contributor Covenant | `AGENTS.md`, `SECURITY.md`, `ROADMAP.md` | Inspect policies exist and name an owner | No org chart, no CoC ack, no CODEOWNERS on core repos |
-| CC2 | Privacy + runbooks + docs.mctl.ai | `mctl-web` privacy, `docs/runbooks/*`, this binder | Read description vs live cluster | Pass for design — live https://mctl.ai/privacy as of mctl-web 7.4.0 (2026-08-24) |
+| CC2 | Privacy + runbooks + docs.mctl.ai | `mctl-web` privacy, `docs/runbooks/*`, this binder | Read description vs live cluster | Subprocessors live on mctl-web 7.4.0; §6 still overclaims all-in-transit TLS vs Vault east-west (F15) |
 | CC3 | Engineering F-register, ROADMAP, `docs/soc2/risk-register.md` | this binder | Confirm residuals are listed | Fraud memo exists; no annual signed risk assessment |
 | CC4 | Grafana / Alertmanager / VaultBackupStale | `monitoring.yaml`, `backup-alerts.yaml` | Confirm rules exist in git | Infra monitoring ≠ control monitoring; no internal audit |
 | CC5 | Branch + PR + Claude P1/P2 + GitOps | `claude-review.yml`, Argo CD apps | Open one merged PR; confirm merge commit | Pass for design |
