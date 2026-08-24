@@ -280,14 +280,58 @@ extraContainers:
         THRESHOLD_KB=5242880   # 5 GiB
         WEEK=604800            # 7 days
         ACTIVE=24h             # spare anything modified within this window
+        ACTIVE_SECONDS=86400   # same window in seconds, for the stat-based file check
         last_gc=$(date +%s)    # don't prune right after a (re)start
         i=0
+        # Refuse to mirror an empty-token .credentials.json. The additive mirror
+        # below protects the MinIO backup from a local DELETE, but --overwrite
+        # happily propagates a REWRITE-IN-PLACE with empty strings: once that
+        # lands, the good backup is gone and restore-state hands the broken file
+        # back on every restart. That is exactly how labs/claude-remote sat
+        # logged out for a day on 2026-08-23 while /healthz, the in-pod watchdog
+        # and ArgoCD all reported healthy. See mctl-claude-remote#40.
+        #
+        # minio/mc has no jq/grep/sed/awk, but /bin/sh here IS bash, so the check
+        # is pure shell: strip whitespace, then look for the empty-token markers.
+        CRED=/workspace/.claude/.credentials.json
+        cred_is_valid() {
+          [ -s "$CRED" ] || return 1
+          local raw ns
+          raw=$(cat "$CRED" 2>/dev/null) || return 1
+          ns=${raw//[$' \t\n\r']/}
+          case "$ns" in
+            *'"accessToken":""'*|*'"refreshToken":""'*|*'"expiresAt":0'*) return 1 ;;
+          esac
+          # Require the field to be present at all -- a truncated file that never
+          # got as far as the token must not count as valid either.
+          case "$ns" in *'"accessToken":"'*) return 0 ;; esac
+          return 1
+        }
         while true; do
           # Additive backup only -- NO --remove here, so a local logout that
           # deletes ~/.claude/.credentials.json can never wipe the MinIO
           # credentials backup (root cause of the 2026-05-21 restart loop).
-          mc mirror --overwrite --exclude '.mc/*' --exclude '*.tmp' \
-            /workspace s3/platform-state/labs/claude-remote/ || true
+          if [ -e "$CRED" ] && ! cred_is_valid; then
+            # Loud, every cycle: this is a silent-logout condition that no other
+            # signal reports. Keep the last known-good copy in MinIO untouched.
+            echo "[cred-guard] REFUSING to mirror $CRED -- tokens are empty/expired." \
+                 "MinIO keeps the last good copy; recover with 'claude auth login'" \
+                 "in this pod (see mctl-claude-remote#40)."
+            mc mirror --overwrite --exclude '.mc/*' --exclude '*.tmp' \
+              --exclude '.claude/.credentials.json' \
+              /workspace s3/platform-state/labs/claude-remote/ || true
+          else
+            mc mirror --overwrite --exclude '.mc/*' --exclude '*.tmp' \
+              /workspace s3/platform-state/labs/claude-remote/ || true
+            # Keep a last-known-good copy that a later wipe cannot overwrite:
+            # it is only ever refreshed while the live file is valid. Recovery
+            # then needs a copy, not an interactive browser login.
+            if cred_is_valid; then
+              mc cp "$CRED" \
+                s3/platform-state/labs/claude-remote/.claude/.credentials.json.lastgood \
+                >/dev/null 2>&1 || true
+            fi
+          fi
           # GC check ~hourly (60 * 60s) so du doesn't walk the tree each cycle.
           i=$((i + 1))
           if [ $((i % 60)) -eq 0 ]; then
@@ -305,12 +349,17 @@ extraContainers:
             # be resolved, skip entirely rather than risk deleting it.
             VDIR=/workspace/.local/share/claude/versions
             if [ -d "$VDIR" ]; then
-              ACTIVE=$(basename "$(readlink -f /workspace/.local/bin/claude 2>/dev/null)" 2>/dev/null)
+              # NOT named ACTIVE: that is the GC recency window ("24h") set at the
+              # top of this script. Reusing the name turned the later recency
+              # check into `mc find --newer-than claude`, which fails to parse, so
+              # every entry hit the fail-safe skip and the GC never pruned
+              # anything. See mctl-claude-remote#41.
+              ACTIVE_VER=$(basename "$(readlink -f /workspace/.local/bin/claude 2>/dev/null)" 2>/dev/null)
               # Version entries are FILES (per-release binaries, ~240 MB) plus
               # UUID-named temp files from claude's atomic downloads — use -e,
               # not -d. rm -rf handles either.
-              if [ -n "$ACTIVE" ] && [ -e "$VDIR/$ACTIVE" ]; then
-                KEEP="$ACTIVE $(ls -1t "$VDIR" 2>/dev/null | head -2)"
+              if [ -n "$ACTIVE_VER" ] && [ -e "$VDIR/$ACTIVE_VER" ]; then
+                KEEP="$ACTIVE_VER $(ls -1t "$VDIR" 2>/dev/null | head -2)"
                 for vn in $(ls -1 "$VDIR" 2>/dev/null); do
                   [ -e "$VDIR/$vn" ] || continue
                   skip=0
@@ -322,7 +371,7 @@ extraContainers:
                 mc mirror --overwrite --remove "$VDIR" \
                   s3/platform-state/labs/claude-remote/.local/share/claude/versions/ || true
               else
-                echo "[gc] skip version retention (active version unresolved): '$ACTIVE'"
+                echo "[gc] skip version retention (active version unresolved): '$ACTIVE_VER'"
               fi
             fi
             size_kb=$(du -sk /workspace 2>/dev/null)
@@ -334,15 +383,31 @@ extraContainers:
                 keep "$(basename "$entry")" && continue
                 # Spare anything modified within $ACTIVE -- likely active,
                 # uncommitted in-session work; only prune cold clutter.
-                # Fail SAFE: if the recency check itself errors (e.g. mc find
-                # unsupported on a future image), skip the entry rather than
-                # risk rm -rf'ing active work. (minio/mc has no find/grep, so
-                # the recency check must stay mc-native.)
-                if ! mc find "$entry" --newer-than "$ACTIVE" >/tmp/gc_recent 2>/dev/null; then
-                  echo "[gc] skip (recency check failed, fail-safe): $entry"
-                  continue
+                # Fail SAFE: if the recency check itself errors, skip the entry
+                # rather than risk rm -rf'ing active work.
+                #
+                # `mc find` is directory-oriented: on a plain file it exits with
+                # "readdirent ...: not a directory", so EVERY file entry used to
+                # hit the fail-safe skip. Files are checked with stat instead
+                # (present in this image); directories keep mc find, which
+                # recurses and so notices a freshly edited nested file that the
+                # directory's own mtime would miss. See mctl-claude-remote#41.
+                recent=""
+                if [ -d "$entry" ]; then
+                  if ! mc find "$entry" --newer-than "$ACTIVE" >/tmp/gc_recent 2>/dev/null; then
+                    echo "[gc] skip (recency check failed, fail-safe): $entry"
+                    continue
+                  fi
+                  [ -s /tmp/gc_recent ] && recent=yes
+                else
+                  mtime=$(stat -c %Y "$entry" 2>/dev/null)
+                  if [ -z "$mtime" ]; then
+                    echo "[gc] skip (recency check failed, fail-safe): $entry"
+                    continue
+                  fi
+                  [ $((now - mtime)) -lt "$ACTIVE_SECONDS" ] && recent=yes
                 fi
-                if [ -s /tmp/gc_recent ]; then
+                if [ -n "$recent" ]; then
                   echo "[gc] skip (active <$ACTIVE): $entry"
                   continue
                 fi
@@ -391,8 +456,35 @@ extraContainers:
               mc alias set s3 "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
               # Additive flush on shutdown -- NO --remove, same reason as the
               # sync loop: never let teardown wipe the MinIO credentials backup.
-              mc mirror --overwrite --exclude '.mc/*' --exclude '*.tmp' \
-                /workspace s3/platform-state/labs/claude-remote/
+              #
+              # The same empty-token guard as the sync loop, and it matters MORE
+              # here: this hook runs on every termination, including the weekly
+              # scheduled restart, so an unguarded flush would overwrite the good
+              # MinIO credentials moments before the replacement pod restores
+              # them -- which is exactly how the 2026-08-23 logout became
+              # persistent. Duplicated rather than shared because a preStop exec
+              # is its own process with no access to the sidecar's shell state.
+              CRED=/workspace/.claude/.credentials.json
+              cred_is_valid() {
+                [ -s "$CRED" ] || return 1
+                local raw ns
+                raw=$(cat "$CRED" 2>/dev/null) || return 1
+                ns=${raw//[$' \t\n\r']/}
+                case "$ns" in
+                  *'"accessToken":""'*|*'"refreshToken":""'*|*'"expiresAt":0'*) return 1 ;;
+                esac
+                case "$ns" in *'"accessToken":"'*) return 0 ;; esac
+                return 1
+              }
+              if [ -e "$CRED" ] && ! cred_is_valid; then
+                echo "[cred-guard] shutdown flush EXCLUDING $CRED -- tokens are empty/expired"
+                mc mirror --overwrite --exclude '.mc/*' --exclude '*.tmp' \
+                  --exclude '.claude/.credentials.json' \
+                  /workspace s3/platform-state/labs/claude-remote/
+              else
+                mc mirror --overwrite --exclude '.mc/*' --exclude '*.tmp' \
+                  /workspace s3/platform-state/labs/claude-remote/
+              fi
   # log-tail sidecar — surfaces the steward's structured JSON log on its own
   # stdout so `kubectl logs <pod> -c steward-log` is clean. The base-service
   # stdout is unreadable: claude --remote-control renders a TUI and needs a PTY,
