@@ -100,7 +100,10 @@ env:
   #     so a human is on the hook every 90 days for a session in daily use.
   #   924671154 — the canary's identity (below). A monitoring probe must never
   #     need an interactive reconnect to keep running.
-  SESSION_TTL_EXEMPT_TG_IDS: "210408407,924671154"
+  #   8745115872 — the App-Directory demo/reviewer identity. Recovering it is
+  #     an in-pod mctl-telegram-login re-seed, which nobody is going to do
+  #     mid-review.
+  SESSION_TTL_EXEMPT_TG_IDS: "210408407,924671154,8745115872"
   # Open registration: every Telegram-authenticated user auto-gets the client
   # tier. Ban a specific user with the set_telegram_access MCP tool.
   AUTO_APPROVE_CLIENTS: "true"
@@ -257,9 +260,21 @@ extraExternalSecrets:
 # 90d, force send_enabled=false) so reviewers always find a usable session.
 # It does NOT re-login Telegram-side; if the MTProto session is signed out at
 # Telegram, a manual `mctl-telegram-login` re-seed is still required.
-# REMOVE this block (with DEMO_REVIEWER_ENABLED) once the durable fix ships
-# post-freeze: make the DEMO_REVIEWER_TG_ID identity immune to TTL sweeps /
-# CheckSessionValid expiry, mirroring the evaluateSendGate reviewer override.
+# DO NOT remove this block yet — the durable fix it anticipated has only half
+# shipped. SESSION_TTL_EXEMPT_TG_IDS (mctl-telegram#410, live since 0.51.0)
+# covers the ABSOLUTE TTL only, and 8745115872 is on that list as of this
+# change. The CronJob still carries three things the exemption does not:
+#   - the idle TTL. SweepIdleSessions keys on last_used_at, not expires_at, and
+#     the exemption does not touch it. Today row 43 has expires_at 2026-11-14
+#     but last_used_at 2026-08-16, so idle expiry would revoke it around
+#     2026-09-15 — the binding deadline is the one the exemption does NOT
+#     lift. The NULL trick that works for expires_at cannot work here: any
+#     single tool call re-arms last_used_at via MarkLastUsed.
+#   - un-revoking a row that has already been swept, which nothing else does.
+#   - re-asserting send_enabled=false on the demo identity.
+# Removing it now would leave reviewer mode dying quietly ~30 days after the
+# last reviewer call. Track mctl-telegram#413 for the idle half; when that
+# ships, this block and DEMO_REVIEWER_ENABLED can go together.
 extraObjects:
   # renderIf (base-service extra-objects.yaml): the CronJob is emitted ONLY
   # when this template renders to exactly the string "true". Tied to
