@@ -11,7 +11,8 @@ Live `https://mctl.ai/privacy` follows the next mctl-web release.
 | GitHub | Identity, git, Actions, GitHub Apps | Yes | No |
 | Anthropic | Claude PR review, mctl-agents inference | Yes | No |
 | Let's Encrypt | Public certificates via cert-manager | Yes | No |
-| Telegram | Operator paging (mctl-agent) | Yes | No |
+| Telegram | Operator paging; landing tenant-request and contact-form notifications | Yes | No |
+| Resend | Transactional welcome email after tenant provision | Yes | No |
 
 Self-hosted, not subservice orgs: Vault, CNPG, Argo CD, Argo Workflows,
 Traefik, Dex, VictoriaMetrics, Loki, Grafana.
