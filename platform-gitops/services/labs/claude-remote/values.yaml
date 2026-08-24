@@ -220,7 +220,17 @@ initContainers:
           echo "Restoring workspace from MinIO..."
           # --overwrite handles re-runs cleanly; --exclude '.mc/*' keeps mc's own
           # config (in $HOME=/workspace/.mc) out of the restore loop.
-          mc mirror --overwrite --exclude '.mc/*' s3/platform-state/labs/claude-remote/ /workspace
+          #
+          # --preserve restores each file's ORIGINAL mtime instead of stamping it
+          # with the restore time. Without it /workspace is a fresh emptyDir on
+          # every restart, so every file looked seconds old and the GC's 24h
+          # recency window measured "time since this pod started" — and because
+          # the pod is restarted weekly, the window effectively never expired and
+          # the GC could never prune. Verified through a real MinIO round trip:
+          # with --preserve a 10-day-old file comes back dated 10 days ago;
+          # without it, dated now. Every mirror that writes to MinIO passes
+          # --preserve too, otherwise there is no stored mtime to restore.
+          mc mirror --overwrite --preserve --exclude '.mc/*' s3/platform-state/labs/claude-remote/ /workspace
           echo "Restore complete."
         else
           echo "No existing state in MinIO — fresh start."
@@ -317,17 +327,17 @@ extraContainers:
             echo "[cred-guard] REFUSING to mirror $CRED -- tokens are empty/expired." \
                  "MinIO keeps the last good copy; recover with 'claude auth login'" \
                  "in this pod (see mctl-claude-remote#40)."
-            mc mirror --overwrite --exclude '.mc/*' --exclude '*.tmp' \
+            mc mirror --overwrite --preserve --exclude '.mc/*' --exclude '*.tmp' \
               --exclude '.claude/.credentials.json' \
               /workspace s3/platform-state/labs/claude-remote/ || true
           else
-            mc mirror --overwrite --exclude '.mc/*' --exclude '*.tmp' \
+            mc mirror --overwrite --preserve --exclude '.mc/*' --exclude '*.tmp' \
               /workspace s3/platform-state/labs/claude-remote/ || true
             # Keep a last-known-good copy that a later wipe cannot overwrite:
             # it is only ever refreshed while the live file is valid. Recovery
             # then needs a copy, not an interactive browser login.
             if cred_is_valid; then
-              mc cp "$CRED" \
+              mc cp --preserve "$CRED" \
                 s3/platform-state/labs/claude-remote/.claude/.credentials.json.lastgood \
                 >/dev/null 2>&1 || true
             fi
@@ -368,7 +378,7 @@ extraContainers:
                   echo "[gc] rm old claude version: $vn"
                   rm -rf "$VDIR/$vn"
                 done
-                mc mirror --overwrite --remove "$VDIR" \
+                mc mirror --overwrite --preserve --remove "$VDIR" \
                   s3/platform-state/labs/claude-remote/.local/share/claude/versions/ || true
               else
                 echo "[gc] skip version retention (active version unresolved): '$ACTIVE_VER'"
@@ -383,6 +393,9 @@ extraContainers:
                 keep "$(basename "$entry")" && continue
                 # Spare anything modified within $ACTIVE -- likely active,
                 # uncommitted in-session work; only prune cold clutter.
+                # This now means what it says: mtimes survive restarts because
+                # restore-state and every upload mirror pass --preserve. Ages
+                # accumulate across restarts instead of resetting weekly.
                 # Fail SAFE: if the recency check itself errors, skip the entry
                 # rather than risk rm -rf'ing active work.
                 #
@@ -418,7 +431,7 @@ extraContainers:
               # paths, but every keep-list entry is excluded so a delete in
               # the narrow window between the rm loop and this mirror can
               # never propagate and wipe an auth/config backup.
-              mc mirror --overwrite --remove \
+              mc mirror --overwrite --preserve --remove \
                 --exclude '.mc/*' --exclude '.claude' --exclude '.claude/*' \
                 --exclude '.claude.json' --exclude 'CLAUDE.md' \
                 --exclude '.local' --exclude '.local/*' --exclude '*.tmp' \
@@ -478,11 +491,11 @@ extraContainers:
               }
               if [ -e "$CRED" ] && ! cred_is_valid; then
                 echo "[cred-guard] shutdown flush EXCLUDING $CRED -- tokens are empty/expired"
-                mc mirror --overwrite --exclude '.mc/*' --exclude '*.tmp' \
+                mc mirror --overwrite --preserve --exclude '.mc/*' --exclude '*.tmp' \
                   --exclude '.claude/.credentials.json' \
                   /workspace s3/platform-state/labs/claude-remote/
               else
-                mc mirror --overwrite --exclude '.mc/*' --exclude '*.tmp' \
+                mc mirror --overwrite --preserve --exclude '.mc/*' --exclude '*.tmp' \
                   /workspace s3/platform-state/labs/claude-remote/
               fi
   # log-tail sidecar — surfaces the steward's structured JSON log on its own
