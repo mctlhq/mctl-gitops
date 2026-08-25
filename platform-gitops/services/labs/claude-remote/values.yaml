@@ -1,6 +1,6 @@
 image:
   repository: ghcr.io/mctlhq/mctl-claude-remote
-  tag: "0.10.3"
+  tag: "0.10.4"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
