@@ -104,11 +104,13 @@ spec:
               cpu: 100m
               memory: 128Mi
             limits:
-              # Steady-state ~11m; 500m gives headroom for GC/git-op bursts.
-              # Trimmed to 250m on 2026-05-07, reverted 2026-05-30 after
-              # repeated CPUThrottlingHigh incidents.
-              cpu: 500m
-              memory: 256Mi
+              # Steady-state is low, but 24h metrics on 2026-08-25 showed
+              # CPU p95 ~207m with burst max ~728m and CFS throttling p95 ~53%.
+              # Raised 500m -> 650m to reduce burst throttling without masking
+              # pathological sustained CPU. Memory p95 was ~249Mi against the
+              # old 256Mi limit, so raise it modestly as well.
+              cpu: 650m
+              memory: 320Mi
 
   ignoreDifferences:
     # ESO admission webhook injects defaults absent in git, plus legacy
