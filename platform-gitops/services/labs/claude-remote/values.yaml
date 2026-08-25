@@ -25,7 +25,14 @@ resources:
     # Memory limit was 4x the request (2Gi); tenant quota usage data showed
     # this headroom sitting unused. Trimmed to base-service's default 2x
     # ratio to free quota ceiling for onboarding more tenants (2026-07).
-    memory: 1024Mi
+    # Restored to 2Gi on 2026-08-25: the "unused headroom" reading was taken
+    # from idle samples. The session process tree alone sits at ~646 MB, so
+    # 1Gi left ~370 MB for work, and a `go build` (GOMAXPROCS=8) blew straight
+    # through it — the cgroup OOM-killed the WHOLE container, dropping the
+    # remote-control session mid-task with nothing in the transcript. See
+    # mctl-claude-remote#34. Fits LimitRange max 3Gi; labs quota
+    # limits.memory goes 6304Mi -> 7328Mi of 10752Mi. Request stays 512Mi.
+    memory: 2048Mi
 podSecurityContext:
   fsGroup: 1000
   runAsNonRoot: true
@@ -278,12 +285,17 @@ extraContainers:
     args:
       - |
         mc alias set s3 "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
-        # GC keep-list: auth, config, native binary, and mc's own state.
-        # Everything else under /workspace (cloned repos, caches, build
-        # artifacts) is disposable and is pruned on schedule / size.
+        # GC keep-list: auth, config, native binary, git identity, and mc's
+        # own state. Everything else under /workspace (cloned repos, caches,
+        # build artifacts) is disposable and is pruned on schedule / size.
+        #
+        # .gitconfig carries the App-bot commit identity that pr-steward needs
+        # to commit at all. entrypoint.sh writes it, but only at start — a
+        # prune in the middle of a pod's life would leave the steward unable
+        # to commit until the next restart. 107 bytes; keep it.
         keep() {
           case "$1" in
-            .claude|.claude.json|CLAUDE.md|.local|.mc) return 0 ;;
+            .claude|.claude.json|CLAUDE.md|.gitconfig|.local|.mc) return 0 ;;
             *) return 1 ;;
           esac
         }
@@ -384,11 +396,98 @@ extraContainers:
                 echo "[gc] skip version retention (active version unresolved): '$ACTIVE_VER'"
               fi
             fi
+            # --- claude updater orphans in .local/bin (2026-08-25) ---
+            # The updater downloads into .local/bin under a UUID name, then
+            # renames into versions/ and repoints the `claude` symlink. Every
+            # interrupted update leaves the UUID blob behind, and .local is
+            # keep-listed wholesale, so nothing ever collected them: 107 files
+            # / 1.9 GB locally and 2.7 GiB in MinIO when this was written.
+            # The ONLY legitimate entry here is the `claude` symlink, so the
+            # predicate is "not a symlink" rather than a name pattern — no
+            # UUID matching, and a future real symlink is spared too.
+            # Fail-safe: if the symlink is missing or dangling, the updater may
+            # be mid-rename; skip the whole sweep rather than race it.
+            BINDIR=/workspace/.local/bin
+            if [ -L "$BINDIR/claude" ] && [ -e "$BINDIR/claude" ]; then
+              for f in "$BINDIR"/* "$BINDIR"/.[!.]*; do
+                [ -e "$f" ] || continue
+                [ -L "$f" ] && continue
+                # Age gate, NOT redundant with the symlink guard above. During
+                # a self-update the symlink is still valid and still points at
+                # the OLD version while the new one downloads here under a UUID
+                # name — the guard only covers the later rename/repoint window.
+                # Without this the hourly sweep would delete an update in
+                # flight. A live download is seconds old; real orphans are days
+                # old. Fail SAFE on an unreadable mtime, as everywhere else.
+                fmtime=$(stat -c %Y "$f" 2>/dev/null)
+                [ -z "$fmtime" ] && continue
+                [ $((now - fmtime)) -lt "$ACTIVE_SECONDS" ] && continue
+                echo "[gc] rm updater orphan: $f"
+                rm -rf "$f"
+              done
+              # --remove SCOPED to .local/bin, same rationale as versions/
+              # above: no credentials live here. Never widen this to /workspace.
+              mc mirror --overwrite --preserve --remove "$BINDIR" \
+                s3/platform-state/labs/claude-remote/.local/bin/ || true
+            else
+              echo "[gc] skip .local/bin sweep (claude symlink missing or dangling)"
+            fi
+            # --- claude updater staging (2026-08-25) ---
+            # .cache/claude/staging/<ver>.<n>.<epoch>/ holds partially fetched
+            # releases. 14 of them / 3.3 GB had accumulated: .cache is NOT
+            # keep-listed, but the size-triggered prune below judges .cache as
+            # ONE entry, and a fresh .cache/gh file spared the whole 3.5 GB
+            # tree. Staging is transient by definition, so age it out directly
+            # with the same window the file branch uses.
+            SDIR=/workspace/.cache/claude/staging
+            if [ -d "$SDIR" ]; then
+              for s in "$SDIR"/*; do
+                [ -e "$s" ] || continue
+                smtime=$(stat -c %Y "$s" 2>/dev/null)
+                # Fail SAFE, as everywhere else in this GC: unreadable mtime
+                # means skip, never delete.
+                [ -z "$smtime" ] && continue
+                [ $((now - smtime)) -lt "$ACTIVE_SECONDS" ] && continue
+                echo "[gc] rm stale staging: $s"
+                rm -rf "$s"
+              done
+              # Reconcile to MinIO with a --remove SCOPED to staging (no
+              # credentials here, same rationale as versions/ and bin/ above).
+              # Required, not cosmetic: this sweep runs OUTSIDE the size gate
+              # below, so freeing enough space to drop under the threshold
+              # means the root mirror never runs and the deletions never
+              # propagate. The normal sync loop and preStop flush are
+              # deliberately additive, and last_gc resets on every restart, so
+              # without this the objects survive in MinIO and restore-state
+              # downloads them all back on the next cold start — which is the
+              # path that used to OOM-kill it. MinIO currently holds staging
+              # dirs going back to 2.1.185, far more than the 14 left on disk.
+              mc mirror --overwrite --preserve --remove "$SDIR" \
+                s3/platform-state/labs/claude-remote/.cache/claude/staging/ || true
+            fi
             size_kb=$(du -sk /workspace 2>/dev/null)
             size_kb=${size_kb%%[!0-9]*}
             if [ "${size_kb:-0}" -gt "$THRESHOLD_KB" ] || [ $((now - last_gc)) -ge "$WEEK" ]; then
               echo "[gc] pruning /workspace (size=${size_kb}KB), keeping auth/config + active work"
+              # Build the candidate list, descending ONE level into .cache.
+              # The recency check below is recursive, so judging .cache as a
+              # single entry meant one freshly written .cache/gh blob spared
+              # the entire 3.5 GB tree — including 3.3 GB of dead claude
+              # staging. Per-subdirectory, `gh` stays and `claude` goes.
+              # `set --` is safe here: this script is `sh -c <one arg>` and so
+              # has no positional parameters of its own.
+              set --
               for entry in /workspace/* /workspace/.[!.]*; do
+                [ -e "$entry" ] || continue
+                if [ -d "$entry" ] && [ "$(basename "$entry")" = ".cache" ]; then
+                  for sub in "$entry"/* "$entry"/.[!.]*; do
+                    [ -e "$sub" ] && set -- "$@" "$sub"
+                  done
+                else
+                  set -- "$@" "$entry"
+                fi
+              done
+              for entry in "$@"; do
                 [ -e "$entry" ] || continue
                 keep "$(basename "$entry")" && continue
                 # Spare anything modified within $ACTIVE -- likely active,
@@ -434,6 +533,7 @@ extraContainers:
               mc mirror --overwrite --preserve --remove \
                 --exclude '.mc/*' --exclude '.claude' --exclude '.claude/*' \
                 --exclude '.claude.json' --exclude 'CLAUDE.md' \
+                --exclude '.gitconfig' \
                 --exclude '.local' --exclude '.local/*' --exclude '*.tmp' \
                 /workspace s3/platform-state/labs/claude-remote/ || true
               last_gc=$(date +%s)
