@@ -438,16 +438,28 @@ extraContainers:
             # keep-listed, but the size-triggered prune below judges .cache as
             # ONE entry, and a fresh .cache/gh file spared the whole 3.5 GB
             # tree. Staging is transient by definition, so age it out directly
-            # with the same window the file branch uses.
+            # against the same 24h window.
+            #
+            # Each entry is a DIRECTORY, so the age comes from `mc find`, NOT
+            # from stat. Directories are not S3 objects, so --preserve cannot
+            # carry their mtime: restore-state re-creates them and every entry
+            # reads as 0h forever, which would make this sweep a permanent
+            # no-op. The nested release binary IS an object and does keep its
+            # mtime, and `mc find` recurses, so it sees the real age. Verified
+            # on the live pod: dir mtime 20:59 (restore time) while the
+            # `claude` blob inside it is 29h old and `mc find --newer-than 24h`
+            # correctly returns nothing.
             SDIR=/workspace/.cache/claude/staging
             if [ -d "$SDIR" ]; then
               for s in "$SDIR"/*; do
-                [ -e "$s" ] || continue
-                smtime=$(stat -c %Y "$s" 2>/dev/null)
-                # Fail SAFE, as everywhere else in this GC: unreadable mtime
-                # means skip, never delete.
-                [ -z "$smtime" ] && continue
-                [ $((now - smtime)) -lt "$ACTIVE_SECONDS" ] && continue
+                [ -d "$s" ] || continue
+                # Fail SAFE, as everywhere else in this GC: if the recency
+                # check itself errors, skip rather than delete.
+                if ! mc find "$s" --newer-than "$ACTIVE" >/tmp/gc_staging 2>/dev/null; then
+                  echo "[gc] skip staging (recency check failed, fail-safe): $s"
+                  continue
+                fi
+                [ -s /tmp/gc_staging ] && continue
                 echo "[gc] rm stale staging: $s"
                 rm -rf "$s"
               done
