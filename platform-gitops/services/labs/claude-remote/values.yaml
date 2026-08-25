@@ -412,6 +412,16 @@ extraContainers:
               for f in "$BINDIR"/* "$BINDIR"/.[!.]*; do
                 [ -e "$f" ] || continue
                 [ -L "$f" ] && continue
+                # Age gate, NOT redundant with the symlink guard above. During
+                # a self-update the symlink is still valid and still points at
+                # the OLD version while the new one downloads here under a UUID
+                # name — the guard only covers the later rename/repoint window.
+                # Without this the hourly sweep would delete an update in
+                # flight. A live download is seconds old; real orphans are days
+                # old. Fail SAFE on an unreadable mtime, as everywhere else.
+                fmtime=$(stat -c %Y "$f" 2>/dev/null)
+                [ -z "$fmtime" ] && continue
+                [ $((now - fmtime)) -lt "$ACTIVE_SECONDS" ] && continue
                 echo "[gc] rm updater orphan: $f"
                 rm -rf "$f"
               done
@@ -441,6 +451,19 @@ extraContainers:
                 echo "[gc] rm stale staging: $s"
                 rm -rf "$s"
               done
+              # Reconcile to MinIO with a --remove SCOPED to staging (no
+              # credentials here, same rationale as versions/ and bin/ above).
+              # Required, not cosmetic: this sweep runs OUTSIDE the size gate
+              # below, so freeing enough space to drop under the threshold
+              # means the root mirror never runs and the deletions never
+              # propagate. The normal sync loop and preStop flush are
+              # deliberately additive, and last_gc resets on every restart, so
+              # without this the objects survive in MinIO and restore-state
+              # downloads them all back on the next cold start — which is the
+              # path that used to OOM-kill it. MinIO currently holds staging
+              # dirs going back to 2.1.185, far more than the 14 left on disk.
+              mc mirror --overwrite --preserve --remove "$SDIR" \
+                s3/platform-state/labs/claude-remote/.cache/claude/staging/ || true
             fi
             size_kb=$(du -sk /workspace 2>/dev/null)
             size_kb=${size_kb%%[!0-9]*}
