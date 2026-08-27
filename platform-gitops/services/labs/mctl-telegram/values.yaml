@@ -431,9 +431,19 @@ extraObjects:
   # App-Directory demo identity; 924671154 exists on stable only, so moving
   # there removes the sharing rather than relocating it.
   # The bearer token is NOT mintable through /api/agent/token (that issues
-  # aud=agent, accepted only on /api/agent/v1/*, never on /mcp) — see
-  # mctl-telegram#412 for the missing bounded mint path. Recreate + 1 replica
-  # stays.
+  # aud=agent, accepted only on /api/agent/v1/*, never on /mcp). The path that
+  # does mint it is POST /api/mcp/worker-token, shipped in mctl-telegram#412:
+  # admin-scoped, read-only allowlist, 30d default and 90d ceiling. Since
+  # #421 the canary renews itself from there (see the RBAC below) and only
+  # needs a human every year, when the renewal chain hits its ceiling.
+  # Recreate + 1 replica stays.
+  # The canary's ServiceAccount, Role and RoleBinding are NOT here. They are
+  # platform-owned and live in bootstrap/templates/system/
+  # labs-mctl-telegram-canary-rbac.yaml, which explains why at length. Short
+  # version: the "apps" AppProject does not whitelist RBAC so ArgoCD would
+  # drop them silently, and whitelisting it project-wide would let any tenant
+  # grant itself patch on NetworkPolicies through update-config's
+  # config_patch. Only the serviceAccountName reference below belongs here.
   - apiVersion: batch/v1
     kind: CronJob
     metadata:
@@ -462,6 +472,10 @@ extraObjects:
                 app.kubernetes.io/name: mctl-telegram
                 mctl.me/component: canary
             spec:
+              # Needed for token self-renewal: the projected service-account
+              # volume is what authenticates the PATCH that writes the renewed
+              # token back into the Secret.
+              serviceAccountName: labs-mctl-telegram-canary
               imagePullSecrets:
                 - name: ghcr-credentials
               restartPolicy: Never
@@ -495,6 +509,13 @@ extraObjects:
                           key: bearer_token
                     - name: CANARY_PROBE_UNREAD
                       value: "true"
+                    # Naming the Secret is what switches renewal on; the
+                    # binary leaves it off entirely when this is unset, so
+                    # this line and the RBAC above must travel together.
+                    # Namespace is read from the projected service-account
+                    # volume, not configured, so it cannot point elsewhere.
+                    - name: CANARY_TOKEN_SECRET_NAME
+                      value: "mctl-telegram-canary"
                     - name: PUSHGATEWAY_URL
                       value: "http://prometheus-pushgateway.monitoring.svc.cluster.local:9091"
                   resources:
