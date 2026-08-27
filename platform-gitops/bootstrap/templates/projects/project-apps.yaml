@@ -39,6 +39,21 @@ spec:
       kind: "*"
     - group: traefik.io
       kind: "*"
+    # Namespace-scoped RBAC only, and deliberately NOT kind: "*" like the
+    # entries above. A workload that must talk to the API server needs a Role
+    # and a RoleBinding beside it (the canary that renews its own token in
+    # labs is the first); without this the Application syncs "successfully"
+    # while ArgoCD silently drops those two objects, and the workload fails
+    # later with a 403 that points nowhere near the real cause.
+    #
+    # ClusterRole/ClusterRoleBinding stay out of reach regardless: they are
+    # cluster-scoped, so they are governed by clusterResourceWhitelist above,
+    # which is empty on purpose. An app can therefore grant itself rights
+    # inside its own namespace and nowhere else.
+    - group: rbac.authorization.k8s.io
+      kind: Role
+    - group: rbac.authorization.k8s.io
+      kind: RoleBinding
 
   orphanedResources:
     warn: true
