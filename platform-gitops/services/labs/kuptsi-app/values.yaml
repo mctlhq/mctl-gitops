@@ -5,7 +5,7 @@
 
 image:
   repository: ghcr.io/mctlhq/kuptsi-app
-  tag: "0.2.22"
+  tag: "0.2.23"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
@@ -103,7 +103,7 @@ extraContainers:
     # changed both tags and touched nothing else). No manual follow-up needed;
     # still worth checking the deploy diff, since the tooling used to bump only
     # `image.tag` and to re-template unrelated keys.
-    image: ghcr.io/mctlhq/kuptsi-app:0.2.22
+    image: ghcr.io/mctlhq/kuptsi-app:0.2.23
     imagePullPolicy: IfNotPresent
     command: ["python", "-m", "src.temporal.worker"]
     env:
