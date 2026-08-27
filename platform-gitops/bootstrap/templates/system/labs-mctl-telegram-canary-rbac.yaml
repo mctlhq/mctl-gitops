@@ -1,0 +1,83 @@
+# RBAC for the mctl-telegram canary's token self-renewal (mctl-telegram#421).
+#
+# The canary's bearer token is bounded (30d default since #412), which made
+# expiry a scheduled outage: the probe would go red on a calendar date and
+# stay red until a human re-minted. It now renews itself in the last third of
+# the token's life and PATCHes the replacement into its own Secret, which is
+# what these three objects permit.
+#
+# WHY THIS LIVES IN BOOTSTRAP AND NOT IN THE SERVICE'S extraObjects
+#
+# The obvious placement — services/labs/mctl-telegram/values.yaml, beside the
+# CronJob it serves — does not work, and the second attempt at it (widening
+# the "apps" AppProject to allow rbac.authorization.k8s.io) is worse than not
+# working. Two separate reasons, both found in review of gitops#906:
+#
+#   1. The "apps" project's namespaceResourceWhitelist has no
+#      rbac.authorization.k8s.io entry, so ArgoCD silently drops a Role and
+#      RoleBinding placed there while reporting the Application Synced.
+#   2. Adding that entry would apply to EVERY Application in the shared
+#      project, and update-config applies a caller-supplied config_patch to
+#      the same values.yaml — so anything expressible in values is reachable
+#      by whoever can patch it. A tenant could then ship a Role granting
+#      patch on networkpolicies plus a RoleBinding to its own workload, and
+#      rewrite the platform allowlists from inside its pod. That is exactly
+#      the escape helm-charts/base-service/templates/extra-objects.yaml
+#      refuses NetworkPolicy outright to prevent, and its comment already
+#      states the conclusion: platform-owned grants belong in the bootstrap
+#      chart, applied by root-app, where tenants have no write path.
+#
+# Same reasoning and same place as labs-claude-remote-rbac.yaml next door.
+#
+# SCOPE
+#
+# get + patch on ONE named Secret. No list, no watch, no delete, no wildcard,
+# and nothing cluster-scoped. A compromised canary pod can rewrite its own
+# read-only credential and nothing else.
+#
+# Residual worth naming: anyone who can schedule a pod in `labs` can set
+# serviceAccountName to this SA and inherit the same grant. Platform-owning
+# the ServiceAccount does not prevent that — a namespace's occupants can
+# always reference its ServiceAccounts. The containment is the Role itself
+# being narrow enough that inheriting it buys only the ability to overwrite a
+# read-only worker token, which the server will happily reissue anyway.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: labs-mctl-telegram-canary
+  namespace: labs
+  labels:
+    app.kubernetes.io/name: mctl-telegram
+    app.kubernetes.io/part-of: mctl-platform
+    mctl.me/component: canary
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: labs-mctl-telegram-canary-secret
+  namespace: labs
+  labels:
+    app.kubernetes.io/name: mctl-telegram
+    mctl.me/component: canary
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["mctl-telegram-canary"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: labs-mctl-telegram-canary-secret
+  namespace: labs
+  labels:
+    app.kubernetes.io/name: mctl-telegram
+    mctl.me/component: canary
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: labs-mctl-telegram-canary-secret
+subjects:
+  - kind: ServiceAccount
+    name: labs-mctl-telegram-canary
+    namespace: labs

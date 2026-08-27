@@ -437,59 +437,13 @@ extraObjects:
   # #421 the canary renews itself from there (see the RBAC below) and only
   # needs a human every year, when the renewal chain hits its ceiling.
   # Recreate + 1 replica stays.
-  # RBAC for canary token self-renewal (mctl-telegram#421). The canary's
-  # bearer token is bounded (30d default since #412), which turned expiry into
-  # a scheduled outage: the probe would go red on a calendar date and stay red
-  # until a human re-minted. It now renews itself in the last third of the
-  # token's life and writes the replacement back into its own Secret, which is
-  # what these three objects exist to permit.
-  #
-  # The grant is deliberately the smallest one that works: get + patch on ONE
-  # named Secret. No list, no watch, no delete, no wildcard — a compromised
-  # probe pod can rewrite its own read-only credential and nothing else. In
-  # particular the canary is NOT given admin:users on the mctl-telegram side,
-  # which would have let it mint a token for any Telegram account; the renew
-  # endpoint instead copies identity and scopes from the token presented, so
-  # it cannot escalate.
-  #
-  # Note this lives here and not in mctl-telegram's deploy/canary/cronjob.yaml.
-  # That file is not applied by anything — the deployed canary is rendered from
-  # this values.yaml — and a design proposal for #421 put the RBAC there,
-  # where it would have taken effect nowhere while looking correct.
-  - apiVersion: v1
-    kind: ServiceAccount
-    metadata:
-      name: labs-mctl-telegram-canary
-      labels:
-        app.kubernetes.io/name: mctl-telegram
-        app.kubernetes.io/part-of: mctl-platform
-        mctl.me/component: canary
-  - apiVersion: rbac.authorization.k8s.io/v1
-    kind: Role
-    metadata:
-      name: labs-mctl-telegram-canary-secret
-      labels:
-        app.kubernetes.io/name: mctl-telegram
-        mctl.me/component: canary
-    rules:
-      - apiGroups: [""]
-        resources: ["secrets"]
-        resourceNames: ["mctl-telegram-canary"]
-        verbs: ["get", "patch"]
-  - apiVersion: rbac.authorization.k8s.io/v1
-    kind: RoleBinding
-    metadata:
-      name: labs-mctl-telegram-canary-secret
-      labels:
-        app.kubernetes.io/name: mctl-telegram
-        mctl.me/component: canary
-    roleRef:
-      apiGroup: rbac.authorization.k8s.io
-      kind: Role
-      name: labs-mctl-telegram-canary-secret
-    subjects:
-      - kind: ServiceAccount
-        name: labs-mctl-telegram-canary
+  # The canary's ServiceAccount, Role and RoleBinding are NOT here. They are
+  # platform-owned and live in bootstrap/templates/system/
+  # labs-mctl-telegram-canary-rbac.yaml, which explains why at length. Short
+  # version: the "apps" AppProject does not whitelist RBAC so ArgoCD would
+  # drop them silently, and whitelisting it project-wide would let any tenant
+  # grant itself patch on NetworkPolicies through update-config's
+  # config_patch. Only the serviceAccountName reference below belongs here.
   - apiVersion: batch/v1
     kind: CronJob
     metadata:
