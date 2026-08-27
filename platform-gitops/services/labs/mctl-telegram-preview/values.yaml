@@ -98,29 +98,67 @@ env:
   # version of this comment incorrectly claimed) silently blocks every draft
   # with zero owner-visible signal, confirmed live 2026-08-01 (action id 42,
   # "autopilot paused for this account"). mode=observe is the actual
-  # downgrade-to-RequireApproval gate ("observe mode: never auto-send"), so
-  # every drafted reply still sits in pending_approval until the owner
-  # manually /mctl approve's it — nothing sends autonomously during this
-  # soak. sender_allowlist is empty (allow-all) so real inbound DMs
-  # accumulate as the 30 dialogs, not synthetic test traffic.
-  # Soak/ingest binds to 8745115872 (@mctlhq), not operator 210408407: the
-  # operator's personal account is also used for interactive preview MCP, and
-  # an observe-mode agent should not have their private correspondence in
-  # scope. The MTProto login as @mctlhq was completed on 2026-08-27
-  # (connected_at 21:35 UTC, send_enabled=false), so this now describes the
-  # deployed state rather than an intention — see #868 and #869 for why that
-  # distinction is worth keeping.
+  # downgrade-to-RequireApproval gate ("observe mode: never auto-send").
   #
-  # On AUTH_KEY_DUPLICATED, which earlier revisions of this comment cited as
-  # the reason: it was overstated. Two independent logins of one account get
-  # two different auth keys and Telegram permits that; prod and preview also
-  # have separate databases and separate ENCRYPTION_KEYs, so they never
-  # shared a key. What they genuinely shared was the account itself — its
-  # Telegram rate-limit budget, and the operator's private chats.
+  # CHANGED 2026-08-27: the soak now runs mode=guarded with
+  # autopilot_paused=false and intent_allowlist="discovery", so a reply whose
+  # intent is "discovery" — the neutral "which company / what role is this"
+  # question, and 5 of the 6 drafts the owner had approved by then — SENDS
+  # AUTONOMOUSLY. Everything else still routes to approval, because an intent
+  # absent from the allowlist is denied by intentAllowed (an EMPTY allowlist
+  # permits nothing, which is why this had to be set explicitly rather than
+  # cleared).
   #
-  # Do not turn DEMO_REVIEWER_ENABLED on as a substitute for a real login:
-  # the password bypass authenticates a user but creates no MTProto session,
-  # so the soak would still have nothing to read. Revisit when the soak ends.
+  # The remaining guardrails are all in policy.go and stay active in guarded
+  # mode: no URLs, no credential-shaped content, max 6 autonomous turns per
+  # conversation, max 2 sends/minute, silence once the owner replies in-thread
+  # ("conversation taken over"), blocked-sender list, and the disclosure line
+  # appended to every reply. AGENT_KILL_SWITCH below is the one-flip stop: it
+  # denies at the policy layer before a draft is ever produced.
+  #
+  # disclosure_text was reworded at the same time. It used to read "...and
+  # reviewed before sending", which stops being true the moment a reply goes
+  # out unattended — it now claims only AI assistance, which holds for both
+  # the auto-sent and the approved paths.
+  #
+  # sender_allowlist is empty (allow-all) so real inbound DMs accumulate as
+  # the 30 dialogs, not synthetic test traffic. Note this is the opposite
+  # default from intent_allowlist above: empty means allow-all here and
+  # deny-all there.
+  # THE SOAK RUNS ON THE OPERATOR'S PERSONAL ACCOUNT 210408407, DELIBERATELY.
+  #
+  # Earlier revisions of this comment said it "MUST bind to 8745115872
+  # (@mctlhq)" in the imperative mood while the deployment did the opposite —
+  # the exact trap #869 is about. The migration was actually attempted on
+  # 2026-08-27 and reverted the same evening, because it does not work:
+  #
+  #   Every job and every incoming event in this deployment belongs to
+  #   user_id 1 (210408407) — 7058 events and 3195 jobs as of that date, all
+  #   of them real recruiter DMs to the operator. @mctlhq has none and will
+  #   have none: nobody messages a service account. Job claiming is scoped to
+  #   the token's user (agentapi.handleClaimJobs -> Queue.Claim(ctx,
+  #   id.UserID, ...)), so pointing AGENT_API_TOKEN at @mctlhq leaves the
+  #   worker authenticated, healthy and polling an empty queue forever, while
+  #   the operator's jobs pile up unclaimed. A soak with no traffic is not a
+  #   soak.
+  #
+  # The privacy argument for the switch also does not survive contact with the
+  # code. Ingest is driven by the listener supervisor, which starts one
+  # listener per agent_profile with listener_enabled on that account's own
+  # MTProto session — not by the worker's token. Changing the token moves who
+  # PROCESSES the events, never who GENERATES them. To take the operator's
+  # correspondence out of scope you switch off listener_enabled for user 1, or
+  # end the soak; there is no third option, and swapping the token only
+  # created the illusion of one.
+  #
+  # @mctlhq is logged in here and left as groundwork (send_enabled=false,
+  # listener_enabled=false so it holds no pointless MTProto connection). If
+  # the soak is ever re-pointed at it, it must be given real traffic first.
+  #
+  # Do not turn DEMO_REVIEWER_ENABLED on as a substitute for a real login: the
+  # password bypass authenticates a user but creates no MTProto session, so
+  # the soak would still have nothing to read.
+
   AGENT_ENABLED: "true"
   AGENT_KILL_SWITCH: "false"
   # Absolute-TTL exemptions (mctl-telegram#410, 0.51.0+). Preview had none,
