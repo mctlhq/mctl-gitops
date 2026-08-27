@@ -70,10 +70,13 @@ spec:
         - alert: MctlTelegramCanaryTokenExpiring
           # Fed by mctl_telegram_canary_token_expires_in_seconds, added in
           # mctl-telegram 0.53.0. Since #412 the canary's bearer token is
-          # deliberately bounded (30d default, 90d ceiling) and the canary
-          # cannot renew itself yet (#421), so expiry is a scheduled outage
-          # that needs a human with an admin:users login. Seven days is chosen
-          # to survive a week of leave, not to be a tight deadline.
+          # deliberately bounded (30d default, 90d ceiling). Since #421 the
+          # canary renews itself, so reaching this threshold now means either
+          # renewal has been failing for days — MctlTelegramCanaryTokenRenewal
+          # Failing below fires first — or the credential hit its one-year
+          # renewal ceiling and genuinely needs a human with an admin:users
+          # login. Seven days is chosen to survive a week of leave, not to be
+          # a tight deadline.
           #
           # No absent() companion on purpose: the canary omits this series
           # rather than publishing a 0 when the token carries no readable exp
@@ -92,4 +95,31 @@ spec:
               canary goes red and stays red until reminted. Remint with
               POST /api/mcp/worker-token (admin:users scope) and write the
               result into the mctl-telegram-canary Secret in labs.
+              Runbook: https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbooks/canary.md
+        - alert: MctlTelegramCanaryTokenRenewalFailing
+          # Renewal is fail-open by design: a failed renewal leaves the run
+          # green, because the token it fell back on is still valid for
+          # roughly ten more days. That is correct for a probe — a broken
+          # renewal is not an outage of the service under test — but it means
+          # mctl_telegram_canary_success will never reveal it. This alert is
+          # the only thing that does.
+          #
+          # Warning, not critical, and on purpose: there are ~10 days of
+          # runway when the first failure lands, so this should be handled in
+          # working hours long before MctlTelegramCanaryTokenExpiring
+          # escalates the same underlying problem.
+          expr: mctl_telegram_canary_step_failure_total{step="token_renew"} > 0
+          for: 30m
+          labels:
+            severity: warning
+            service: mctl-telegram
+          annotations:
+            summary: "mctl-telegram canary cannot renew its own token"
+            description: >-
+              The canary tried to renew CANARY_BEARER_TOKEN and failed. The
+              run still succeeded on the existing token, so nothing is
+              user-visible yet — but it will be in about ten days. The pod log
+              in labs carries the exact reason; the usual causes are missing
+              RBAC on the mctl-telegram-canary Secret and an exhausted
+              one-year renewal window.
               Runbook: https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbooks/canary.md
