@@ -36,6 +36,22 @@ spec:
         maxParallel: 2
       data:
         compression: gzip
+        # Ask for an immediate checkpoint instead of a spread one. Without
+        # this, barman calls pg_backup_start(..., fast=false), which waits for
+        # a checkpoint paced by checkpoint_completion_target — and that wait
+        # runs as an ordinary session, subject to the cluster-wide
+        # statement_timeout of 60s below.
+        #
+        # On 2026-08-27 the restartpoint took 61.5s and the backup was
+        # cancelled 1.5s short of finishing. The seven green nights before it
+        # were luck, not margin: restartpoints that same night ranged from 15s
+        # to 50s, so whether the daily backup succeeds was effectively a coin
+        # weighted by how many buffers happened to be dirty. See #905.
+        #
+        # Cost is an I/O spike at 02:00 on the standby (target: prefer-standby),
+        # which serves no writes. That is much cheaper than nondeterministically
+        # skipping nightly backups of nine tenant databases.
+        immediateCheckpoint: true
     # 14d: 3d left no margin to notice data loss that survives a weekend or
     # a bad migration discovered late. WAL+base are gzip'd; 9 small tenant DBs
     # fit comfortably in MinIO at this window.
