@@ -101,13 +101,17 @@ env:
   # downgrade-to-RequireApproval gate ("observe mode: never auto-send").
   #
   # CHANGED 2026-08-27: the soak now runs mode=guarded with
-  # autopilot_paused=false and intent_allowlist="discovery", so a reply whose
-  # intent is "discovery" — the neutral "which company / what role is this"
-  # question, and 5 of the 6 drafts the owner had approved by then — SENDS
-  # AUTONOMOUSLY. Everything else still routes to approval, because an intent
-  # absent from the allowlist is denied by intentAllowed (an EMPTY allowlist
-  # permits nothing, which is why this had to be set explicitly rather than
-  # cleared).
+  # autopilot_paused=false and intent_allowlist="discovery,schedule", so
+  # replies with those two intents SEND AUTONOMOUSLY:
+  #   discovery — the neutral "which company / what role is this" question;
+  #     5 of the 6 drafts the owner had approved by then were this.
+  #   schedule  — proposing a call. Narrower in practice than it sounds: the
+  #     agent has no calendar access, so it cannot commit to a specific time.
+  # Together they cover 6 of the 6 approved drafts. Everything else
+  # (clarify, acknowledge_shared_opportunity, and every owner-facing summary)
+  # still routes to approval, because an intent absent from the allowlist is
+  # denied by intentAllowed — an EMPTY allowlist permits NOTHING, which is why
+  # this had to be set explicitly rather than cleared.
   #
   # The remaining guardrails are all in policy.go and stay active in guarded
   # mode: no URLs, no credential-shaped content, max 6 autonomous turns per
