@@ -10,13 +10,14 @@ metadata:
         2. run-orchestrator — ghcr.io/mctlhq/mctl-agents:<tag> with
            STATE_DIR pointing at agents-state/. RUN_MODE / RUN_SERVICE env
            vars (from workflow parameters) tell the Python orchestrator
-           whether to do full / mentor-only / single-service.
+           whether to do full / mentor-only / single-service /
+           incident-responder / platform-report.
         3. commit-and-push — commit any agents-state diff, push to main
            with rebase-on-conflict (5 retries).
 
       Triggered by:
         - cron via CronWorkflow `mctl-agents-daily` (mode=full, weekly Sat 00:00 UTC)
-        - mctl-api MCP tools mctl_trigger_{agents_run,mentor_only,single_service}
+        - mctl-api MCP tools mctl_trigger_{agents_run,mentor_only,single_service,platform_report}
           (each submits a Workflow that references this template via
           workflowTemplateRef + clusterScope:true with appropriate parameters)
 spec:
@@ -59,7 +60,7 @@ spec:
     parameters:
       - name: mode
         value: "full"
-        # full | mentor-only | single-service
+        # full | mentor-only | single-service | incident-responder | platform-report
       - name: service
         value: ""
         # Required only when mode=single-service. Validated by the Python
@@ -217,9 +218,11 @@ spec:
             value: /workdir/mctl-gitops/platform-gitops/agents-state
           # Run-mode dispatch (Phase 2 of plan logical-floating-lemon §Phase 2).
           # Python orchestrator reads these and branches:
-          #   full           → all service-agents in parallel + mentor
-          #   mentor-only    → mentor only (cheap re-aggregation)
-          #   single-service → one service-agent named in RUN_SERVICE; no mentor
+          #   full             → all service-agents in parallel + mentor + platform reporter
+          #   mentor-only      → mentor only (cheap re-aggregation)
+          #   single-service   → one service-agent named in RUN_SERVICE; no mentor
+          #   incident-responder → diagnose leftover incidents
+          #   platform-report  → weekly operational health from mctl MCP
           - name: RUN_MODE
             value: "{{workflow.parameters.mode}}"
           - name: RUN_SERVICE
@@ -263,6 +266,8 @@ spec:
             value: "5.00"
           - name: MENTOR_BUDGET_USD
             value: "10.00"
+          - name: PLATFORM_REPORTER_BUDGET_USD
+            value: "2.00"
           # Raised from the orchestrator's $5.00 code default
           # (orchestrator/options.py INCIDENT_RESPONDER_BUDGET_USD) to match
           # IMPLEMENTER_BUDGET_USD's precedent (cwft-mctl-agents-implement.yaml).

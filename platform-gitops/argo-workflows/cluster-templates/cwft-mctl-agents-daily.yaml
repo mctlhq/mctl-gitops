@@ -16,6 +16,7 @@ metadata:
         - mctl-api MCP tool mctl_trigger_mentor_only      → mode=mentor-only
         - mctl-api MCP tool mctl_trigger_single_service   → mode=single-service, service=<name>
         - mctl-api MCP tool mctl_trigger_agents_run       → mode=full (same as this cron, on demand)
+        - mctl-api MCP tool mctl_trigger_platform_report  → mode=platform-report
 spec:
   schedule: "0 0 * * 6"
   timezone: "UTC"
