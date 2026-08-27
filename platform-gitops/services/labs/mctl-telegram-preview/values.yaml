@@ -120,10 +120,18 @@ env:
   # appended to every reply. AGENT_KILL_SWITCH below is the one-flip stop: it
   # denies at the policy layer before a draft is ever produced.
   #
-  # disclosure_text was reworded at the same time. It used to read "...and
-  # reviewed before sending", which stops being true the moment a reply goes
-  # out unattended — it now claims only AI assistance, which holds for both
-  # the auto-sent and the approved paths.
+  # disclosure_text was reworded at the same time, and then shortened to the
+  # single line "— ИИ-ассистент". It used to read "...and reviewed before
+  # sending", which stops being true the moment a reply goes out unattended;
+  # the long English sentence also sat awkwardly under a Russian reply.
+  #
+  # It cannot be emptied. policy.go denies a reply outright when
+  # disclosure_text is blank, and that check sits BEFORE the observe/guarded
+  # split — so clearing the field does not drop the footer, it switches the
+  # agent off entirely ("no disclosure text configured"). That is deliberate:
+  # with autopilot on, these messages reach real people with the owner
+  # nowhere in the loop, and the line is the only thing telling the recipient
+  # they are corresponding with software.
   #
   # sender_allowlist is empty (allow-all) so real inbound DMs accumulate as
   # the 30 dialogs, not synthetic test traffic. Note this is the opposite
