@@ -148,3 +148,11 @@ roll back together as one unit. No data migration or state to unwind:
 tables or columns are introduced. If only the admin-bypass audit logging
 (task 10) needs to be pulled back due to log-volume concerns, it can be
 reverted independently without touching the auth-gating behavior.
+
+## Human review decisions (2026-08-28, operator via Claude)
+
+- Task 3: use `getTenantMember`/`isAdminUser` from `plugins/tenant-backend/src/membershipLookup.ts` (Option B). Do NOT deep-import `requireTenantRole` from vault-secrets-backend's router.
+- `/repo-tags` gated to any authenticated user: APPROVED (tag enumeration by logged-in users is acceptable for now).
+- Gating `/install-status` and `POST /repos/sync`, dropping the non-admin no-team "all installations" mode, and admin-bypass audit logging: all APPROVED.
+- `/popup-done` stays public: APPROVED (state-token gated flow).
+- Frontend `fetchApi` changes (tasks 11/12) are mandatory; manual E2E of the scaffolder popup flow is required before merge and must be stated as verified in the PR description.

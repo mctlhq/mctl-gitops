@@ -117,3 +117,10 @@ left unset:
    not left in place.
 3. No database or schema changes were made, so no data migration rollback
    is needed either way.
+
+## Human review decisions (2026-08-28, operator via Claude)
+
+- Task 3 (Telegram gate): APPROVED — require BOTH webhook secret AND chat allowlist for command execution; remove the fully-unconfigured open mode. Update `TestTelegramOpenModeWhenFullyUnconfigured` accordingly.
+- The `/telegram` endpoint keeps returning HTTP 200 to Telegram; "401" in the issue applies to the authorization decision, as the design interprets. Confirmed.
+- Single PR is acceptable (no two-phase rollout needed): production env vars are set via Vault/gitops; verify pod env before merge per fail-closed-config practice.
+- Add at least one automated assertion for the startup warning (task 8) instead of eyeballing, e.g. extract the warn-emitting helper and unit-test it.

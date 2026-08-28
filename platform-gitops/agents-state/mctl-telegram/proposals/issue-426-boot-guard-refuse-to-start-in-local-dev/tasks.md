@@ -104,3 +104,10 @@ the new guard, the immediate mitigation is fixing that deployment's
 `ADDR`/`AUTH_MODE`/`AUTH_REQUIRED`/`ENCRYPTION_KEY` (per the guard's own
 error message) rather than rolling back the code, since the guard is
 reporting a real insecure configuration.
+
+## Human review decisions (2026-08-28, operator via Claude)
+
+- `ENV` as a new config var: APPROVED. Additionally REQUIRED: include a task to set `ENV: "production"` for mctl-telegram (and preview) in mctl-gitops platform values in a companion PR, and note the deploy-order (code first, env second is safe: guard is additive).
+- `docker-compose.yml` MUST be fixed in the same PR (not a follow-up issue): set a loopback ADDR or provide the required auth/encryption env in compose.
+- Empty-host `ADDR=:8080` = non-loopback: confirmed, keep fail-closed; doc updates approved.
+- No opt-out flag: confirmed, do not add one.
