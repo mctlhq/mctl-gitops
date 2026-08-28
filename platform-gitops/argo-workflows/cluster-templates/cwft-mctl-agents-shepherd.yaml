@@ -122,7 +122,7 @@ spec:
         # subprocess and does NOT call `gh pr merge`. Useful for
         # operator dry runs and local smoke tests.
       - name: agent_image
-        value: ghcr.io/mctlhq/mctl-agents:1.29.2
+        value: ghcr.io/mctlhq/mctl-agents:1.28.2
         # Default = today's pin, so submitting without this parameter is a
         # zero-behaviour-change no-op. Overridden by the agent registry's
         # resolved image_ref once a caller starts pinning per-run.
