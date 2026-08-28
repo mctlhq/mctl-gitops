@@ -120,8 +120,12 @@ env:
   # appended to every reply. AGENT_KILL_SWITCH below is the one-flip stop: it
   # denies at the policy layer before a draft is ever produced.
   #
-  # disclosure_text was reworded at the same time, and then shortened to the
-  # single line "— ИИ-ассистент". It used to read "...and reviewed before
+  # disclosure_text was reworded at the same time, and is now the bilingual
+  # single line "— ИИ-ассистент / AI assistant". Bilingual on purpose: this
+  # footer is the ONLY notice a recipient gets, the soak takes unrestricted
+  # inbound DMs, and the agent already answers some recruiters in English —
+  # messages 77 and 83 of the live thread are English replies. A Russian-only
+  # line discloses nothing to those recipients. It used to read "...and reviewed before
   # sending", which stops being true the moment a reply goes out unattended;
   # the long English sentence also sat awkwardly under a Russian reply.
   #
