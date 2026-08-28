@@ -188,7 +188,10 @@ spec:
           # only ever matched when the id happened to contain the domain
           # string (i.e. never, with UUID ids).
           DOMAIN_DATA=$(curl -sSf -H "Authorization: Bearer ${BACKSTAGE_TOKEN}" "${BACKSTAGE_URL}/api/custom-domains/domains?team=${TEAM}&service=${SERVICE}")
-          DOMAIN_ID=$(echo "$DOMAIN_DATA" | yq -p=json ".domains[] | select(.domain == \"${DOMAIN}\") | .id" - 2>/dev/null || true)
+          # yq failures (malformed JSON, bad expression) must fail the step
+          # with yq's own stderr — not be swallowed into an empty DOMAIN_ID
+          # that then reads as a misleading "domain not found".
+          DOMAIN_ID=$(echo "$DOMAIN_DATA" | yq -p=json ".domains[] | select(.domain == \"${DOMAIN}\") | .id" -)
           [ "$DOMAIN_ID" = "null" ] && DOMAIN_ID=""
           if [ -n "$DOMAIN_ID" ]; then
             curl -sSf -X POST -H "Authorization: Bearer ${BACKSTAGE_TOKEN}" "${BACKSTAGE_URL}/api/custom-domains/domains/${DOMAIN_ID}/activate"
