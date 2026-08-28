@@ -1,6 +1,6 @@
-status: accepted
-updated_at: '2026-08-28T05:43:50Z'
-updated_by: operator
+status: needs-triage
+updated_at: '2026-08-28T06:01:31Z'
+updated_by: mctl-agents[bot]
 source:
   type: github_issue
   repo: mctlhq/mctl-portal
@@ -9,12 +9,12 @@ source:
 control:
   requires_human_approval: true
 attempt:
-  id: fdd840fc-0d90-4b34-9617-c54b06c8725e
-  started_at: '2026-08-28T00:56:18Z'
-  expires_at: '2026-08-28T03:06:18Z'
-  finished_at: '2026-08-28T00:58:38Z'
+  id: 075bd945-fec1-4f1b-9fbc-dfa4e1d2de1c
+  started_at: '2026-08-28T05:49:49Z'
+  expires_at: '2026-08-28T07:59:49Z'
+  finished_at: '2026-08-28T06:01:31Z'
+notes: 'agent: implementer produced no commits'
 failure:
   code: no-commits
   stage: agent
   message: implementer produced no commits
-notes: 'agent: implementer produced no commits'
