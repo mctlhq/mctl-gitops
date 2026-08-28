@@ -1,6 +1,6 @@
-status: accepted
-updated_at: '2026-08-28T00:02:18Z'
-updated_by: operator
+status: implemented
+updated_at: '2026-08-28T00:39:12Z'
+updated_by: mctl-agents[bot]
 source:
   type: github_issue
   repo: mctlhq/mctl-telegram
@@ -8,3 +8,9 @@ source:
   url: https://github.com/mctlhq/mctl-telegram/issues/426
 control:
   requires_human_approval: true
+attempt:
+  id: ff575541-fcab-41d4-9988-c08c570dd261
+  started_at: '2026-08-28T00:27:37Z'
+  expires_at: '2026-08-28T02:37:37Z'
+  finished_at: '2026-08-28T00:39:12Z'
+pr: https://github.com/mctlhq/mctl-telegram/pull/431
