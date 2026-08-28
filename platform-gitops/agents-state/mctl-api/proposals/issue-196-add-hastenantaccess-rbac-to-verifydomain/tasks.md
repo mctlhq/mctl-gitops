@@ -94,3 +94,10 @@ to unwind. If a partial rollback is needed under pressure, reverting just
 than a partial one. No feature flag is introduced; there is nothing to
 toggle off short of redeploying the previous image tag
 (`mctl_rollback_service` to the prior git tag is sufficient).
+
+## Human review decisions (2026-08-28, operator via Claude)
+
+- REJECTED: making `team` a REQUIRED query param (breaking public REST contract). Instead: accept `team` as OPTIONAL. When absent, resolve ownership server-side — fetch the caller's accessible teams (from the auth context) and check the domain id against those teams' domain lists (or fetch the unfiltered list with the service token and match id → team, then apply HasTenantAccess to that team). 404 when the id is not found in any accessible team, preserving the no-existence-leak behavior. When `team` IS provided, validate as designed.
+- REJECTED: `user == nil` bypassing all checks. Fail closed: nil user → 401/403 in the handlers. Update existing unit tests to construct an authenticated user instead of shaping production code around old tests. Admin bypass stays.
+- MCP `toolVerifyDomain` passing `team` explicitly: APPROVED (it has team in scope).
+- Extra Backstage list call per verify/delete: acceptable; note it in the PR description.

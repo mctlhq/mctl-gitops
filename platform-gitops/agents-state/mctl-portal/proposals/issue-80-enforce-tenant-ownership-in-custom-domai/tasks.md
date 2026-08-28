@@ -116,3 +116,11 @@ membership-sync lag causes false negatives):
    wrong while the rest is fine, the narrower fix is to widen
    `authorizeForTeam`'s accepted tiers for that one route rather than a
    full revert.
+
+## Human review decisions (2026-08-28, operator via Claude)
+
+- VERIFIED against mctl-gitops `argo-workflows/cluster-templates/wft-add-custom-domain.yaml` (operator, 2026-08-28): the workflow calls BOTH `GET /api/custom-domains/domains?team=...` (line ~169) and `POST .../domains/{id}/activate` (line ~172) with NO credentials at all (plain in-cluster curl, `|| true`). The design's assumption "activate accepts a Backstage service credential" does not match today's caller.
+- Decision: gate all routes as designed, and additionally accept a Backstage service credential (or configured external-access static token) on `GET /domains` and `POST /domains/:id/activate` for this workflow caller. A companion mctl-gitops change will add the Authorization header to both curl calls in wft-add-custom-domain.yaml.
+- Deploy-order requirement (state in PR description): the portal PR must not be deployed before the gitops workflow-template change is merged, otherwise domain activation silently breaks (the curl swallows errors). Coordinate both merges.
+- `created_by` from request body: fix it in this PR (set from the authenticated caller); it is in the same handler and cheap.
+- Role tiering rejected (any role authorizes all routes): APPROVED.
