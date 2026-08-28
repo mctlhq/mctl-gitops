@@ -21,7 +21,18 @@ Do NOT spawn an `Agent` for this. Sub-agent runtime has a strong bias toward the
 
 ## Bootstrap — write `/tmp/review-watch.sh` if missing or stale
 
-Before launching watchers, check that the script is in place AND current: `grep -q 'AGY_MARKER' /tmp/review-watch.sh` — if the file is missing or the grep fails (pre-baseline-arg or pre-agy version), (re)write it via Bash heredoc (the entire script body):
+Before launching watchers, check that the script is in place AND current:
+`grep -qF "AGY_MARKER='<!-- agy-review -->'" /tmp/review-watch.sh` — if the file
+is missing or the grep fails, (re)write it via Bash heredoc (the entire script
+body).
+
+The predicate matches the marker's **value**, not just the name `AGY_MARKER`.
+Checking the name was the bug: a stale `/tmp/review-watch.sh` from before
+2026-08-28 defines `AGY_MARKER` too — with the wrong value
+`<!-- agy-review-pilot -->` — so a name-only grep declared it current and the
+host kept running the broken watcher, silently missing every agy response,
+until someone deleted the file by hand. Any future change to the script body
+must move this predicate onto something the old version cannot satisfy.
 
 ```bash
 #!/bin/bash
