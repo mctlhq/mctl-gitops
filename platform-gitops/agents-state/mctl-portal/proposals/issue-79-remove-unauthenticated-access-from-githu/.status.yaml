@@ -1,6 +1,6 @@
-status: accepted
-updated_at: '2026-08-28T00:02:18Z'
-updated_by: operator
+status: needs-triage
+updated_at: '2026-08-28T00:54:58Z'
+updated_by: mctl-agents[bot]
 source:
   type: github_issue
   repo: mctlhq/mctl-portal
@@ -8,3 +8,15 @@ source:
   url: https://github.com/mctlhq/mctl-portal/issues/79
 control:
   requires_human_approval: true
+attempt:
+  id: 3718cedf-7273-4b8f-a963-e2ef1ffe3cca
+  started_at: '2026-08-28T00:39:50Z'
+  expires_at: '2026-08-28T02:49:50Z'
+  finished_at: '2026-08-28T00:54:58Z'
+failure:
+  code: operation-timeout
+  stage: runtime
+  message: 'operation timed out: operation exceeded 900s (model stream, client construction,
+    or mctl connectivity check)'
+notes: 'runtime: operation timed out: operation exceeded 900s (model stream, client
+  construction, or mctl connectivity check)'
