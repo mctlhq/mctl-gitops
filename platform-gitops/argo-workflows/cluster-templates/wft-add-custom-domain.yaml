@@ -43,6 +43,16 @@ spec:
         envFrom:
           - configMapRef:
               name: mctl-platform-config
+        env:
+          # Backstage external-access token (subject mctl-api): the
+          # custom-domains routes this script calls are auth-gated since
+          # mctl-portal#89 (see issue #920). ExternalSecret
+          # backstage-workflow-token in this namespace.
+          - name: BACKSTAGE_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: backstage-workflow-token
+                key: BACKSTAGE_TOKEN
         source: |
           set -e
           apk add --no-cache curl git openssh-client bind-tools yq > /dev/null 2>&1
@@ -164,13 +174,21 @@ spec:
           done
 
           # ── 10. Callback to Backstage to activate domain ──────────────────
+          # Both routes are auth-gated (mctl-portal#89): the plugin's
+          # isWorkflowCaller admits only this external-access identity.
+          # Activate failures are no longer swallowed — the ingress change
+          # is already pushed by this point, so a failed activate must
+          # surface (the domain would otherwise stay pending silently).
           echo "📡 Notifying Backstage..."
           # Find domain ID from Backstage
-          DOMAIN_DATA=$(curl -sS "${BACKSTAGE_URL}/api/custom-domains/domains?team=${TEAM}&service=${SERVICE}" 2>/dev/null)
+          DOMAIN_DATA=$(curl -sS -H "Authorization: Bearer ${BACKSTAGE_TOKEN}" "${BACKSTAGE_URL}/api/custom-domains/domains?team=${TEAM}&service=${SERVICE}")
           DOMAIN_ID=$(echo "$DOMAIN_DATA" | grep -o "\"id\":\"[^\"]*\"" | grep -B0 "$DOMAIN" | head -1 | sed 's/"id":"//;s/"//')
           if [ -n "$DOMAIN_ID" ]; then
-            curl -sS -X POST "${BACKSTAGE_URL}/api/custom-domains/domains/${DOMAIN_ID}/activate" 2>/dev/null || true
+            curl -sSf -X POST -H "Authorization: Bearer ${BACKSTAGE_TOKEN}" "${BACKSTAGE_URL}/api/custom-domains/domains/${DOMAIN_ID}/activate"
             echo "✅ Domain status updated to active"
+          else
+            echo "⚠️  Domain id for ${DOMAIN} not found in Backstage — activation skipped" >&2
+            exit 1
           fi
 
           echo ""
