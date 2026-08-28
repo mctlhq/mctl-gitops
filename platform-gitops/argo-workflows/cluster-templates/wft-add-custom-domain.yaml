@@ -181,8 +181,15 @@ spec:
           # surface (the domain would otherwise stay pending silently).
           echo "📡 Notifying Backstage..."
           # Find domain ID from Backstage
-          DOMAIN_DATA=$(curl -sS -H "Authorization: Bearer ${BACKSTAGE_TOKEN}" "${BACKSTAGE_URL}/api/custom-domains/domains?team=${TEAM}&service=${SERVICE}")
-          DOMAIN_ID=$(echo "$DOMAIN_DATA" | grep -o "\"id\":\"[^\"]*\"" | grep -B0 "$DOMAIN" | head -1 | sed 's/"id":"//;s/"//')
+          # -f on both curls: a 401/403 must fail here, not surface later as
+          # a bogus "domain not found". The id is extracted with yq from the
+          # entry whose .domain matches — the old grep-only pipeline threw
+          # away every field except id and then grepped for the domain, so it
+          # only ever matched when the id happened to contain the domain
+          # string (i.e. never, with UUID ids).
+          DOMAIN_DATA=$(curl -sSf -H "Authorization: Bearer ${BACKSTAGE_TOKEN}" "${BACKSTAGE_URL}/api/custom-domains/domains?team=${TEAM}&service=${SERVICE}")
+          DOMAIN_ID=$(echo "$DOMAIN_DATA" | yq -p=json ".domains[] | select(.domain == \"${DOMAIN}\") | .id" - 2>/dev/null || true)
+          [ "$DOMAIN_ID" = "null" ] && DOMAIN_ID=""
           if [ -n "$DOMAIN_ID" ]; then
             curl -sSf -X POST -H "Authorization: Bearer ${BACKSTAGE_TOKEN}" "${BACKSTAGE_URL}/api/custom-domains/domains/${DOMAIN_ID}/activate"
             echo "✅ Domain status updated to active"
