@@ -18,7 +18,7 @@ User prompt → Claude → MCP tool call → mctl-api → Argo Workflow → GitO
 - **Builds:** GitHub Actions (docker build+push to ghcr.io/mctlhq/)
 - **Config:** Helm values in git → ArgoCD auto-sync
 - **Secrets:** HashiCorp Vault → ExternalSecrets → K8s Secrets
-- **Domains:** auto `{team}-{service}.mctl.ai` + `.mctl.me` mirror
+- **Domains:** auto `{team}-{service}.mctl.ai` (primary only — the `.mctl.me` mirror was retired 2026-08-28; that domain now answers 410 Gone)
 - **Logs:** Loki (query via `mctl_get_service_logs`)
 
 ## Quick Start
