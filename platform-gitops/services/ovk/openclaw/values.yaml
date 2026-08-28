@@ -1283,8 +1283,7 @@ configMaps:
           "controlUi": {
             "enabled": true,
             "allowedOrigins": [
-              "https://ovk-openclaw.mctl.ai",
-              "https://ovk-openclaw.mctl.me"
+              "https://ovk-openclaw.mctl.ai"
             ]
           }
         },
@@ -1403,11 +1402,9 @@ ingress:
       - X-Mctl-Team-Role
   hosts:
     - ovk-openclaw.mctl.ai
-    - ovk-openclaw.mctl.me
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
   tls:
     - secretName: openclaw-tls
       hosts:
         - ovk-openclaw.mctl.ai
-        - ovk-openclaw.mctl.me

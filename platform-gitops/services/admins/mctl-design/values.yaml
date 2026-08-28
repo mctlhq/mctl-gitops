@@ -28,7 +28,6 @@ ingress:
   hosts:
     - ui.mctl.ai
     - admins-mctl-design.mctl.ai
-    - admins-mctl-design.mctl.me
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
   tls:
@@ -36,5 +35,4 @@ ingress:
       hosts:
         - ui.mctl.ai
         - admins-mctl-design.mctl.ai
-        - admins-mctl-design.mctl.me
 extraContainers: []

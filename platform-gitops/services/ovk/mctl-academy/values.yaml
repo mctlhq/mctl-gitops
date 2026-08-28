@@ -25,11 +25,9 @@ ingress:
   enabled: true
   hosts:
     - ovk-mctl-academy.mctl.ai
-    - ovk-mctl-academy.mctl.me
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
   tls:
     - secretName: mctl-academy-tls
       hosts:
         - ovk-mctl-academy.mctl.ai
-        - ovk-mctl-academy.mctl.me

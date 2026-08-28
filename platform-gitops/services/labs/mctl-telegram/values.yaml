@@ -127,7 +127,6 @@ ingress:
   hosts:
     - tg.mctl.ai
     - labs-mctl-telegram.mctl.ai
-    - labs-mctl-telegram.mctl.me
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
   tls:
@@ -135,7 +134,6 @@ ingress:
       hosts:
         - tg.mctl.ai
         - labs-mctl-telegram.mctl.ai
-        - labs-mctl-telegram.mctl.me
 extraContainers: []
 dbSecret:
   vaultPath: "teams/labs/mctl-telegram/database"

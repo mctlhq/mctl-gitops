@@ -59,8 +59,18 @@ spec:
             echo "❌ Invalid domain format: ${DOMAIN}"
             exit 1
           }
-          # Reject platform domains
-          echo "$DOMAIN" | grep -qvE "\.(${PLATFORM_DOMAIN//./\\.}|${PLATFORM_DOMAIN_ALT//./\\.})$" || {
+          # Reject platform domains. PLATFORM_DOMAIN_ALT is optional (it is
+          # empty since mctl.me was retired), and interpolating an empty value
+          # straight into the alternation produces "\.(mctl\.ai|)$" — an empty
+          # sub-expression, which BusyBox grep rejects outright: every domain
+          # then fails the check and no custom domain can be added at all.
+          # Build the pattern instead, and only add the alternation when there
+          # is something to alternate with.
+          PLATFORM_PATTERN="\.${PLATFORM_DOMAIN//./\\.}$"
+          if [ -n "${PLATFORM_DOMAIN_ALT}" ]; then
+            PLATFORM_PATTERN="\.(${PLATFORM_DOMAIN//./\\.}|${PLATFORM_DOMAIN_ALT//./\\.})$"
+          fi
+          echo "$DOMAIN" | grep -qvE "$PLATFORM_PATTERN" || {
             echo "❌ Cannot add platform domain as custom: ${DOMAIN}"
             exit 1
           }

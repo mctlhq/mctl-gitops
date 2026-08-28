@@ -32,14 +32,12 @@ ingress:
   enabled: true
   hosts:
     - labs-mctl-pairdesk.mctl.ai
-    - labs-mctl-pairdesk.mctl.me
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
   tls:
     - secretName: mctl-pairdesk-tls
       hosts:
         - labs-mctl-pairdesk.mctl.ai
-        - labs-mctl-pairdesk.mctl.me
 envFrom:
   - secretRef:
       name: labs-mctl-pairdesk-db-creds

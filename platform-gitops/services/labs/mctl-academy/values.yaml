@@ -27,7 +27,6 @@ ingress:
   hosts:
     - academy.mctl.ai
     - labs-mctl-academy.mctl.ai
-    - labs-mctl-academy.mctl.me
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
   tls:
@@ -35,7 +34,6 @@ ingress:
       hosts:
         - academy.mctl.ai
         - labs-mctl-academy.mctl.ai
-        - labs-mctl-academy.mctl.me
 dbSecret:
   vaultPath: "teams/labs/mctl-academy/database"
   secretName: "labs-mctl-academy-db-creds"

@@ -17,7 +17,12 @@ data:
   GITOPS_REPO: "mctl-gitops"
   # Primary platform domain (auto-generated service hostnames use this)
   PLATFORM_DOMAIN: "mctl.ai"
-  # Alternate/mirror domain (optional, leave empty to disable mirroring)
-  PLATFORM_DOMAIN_ALT: "mctl.me"
+  # Alternate/mirror domain (optional, leave empty to disable mirroring).
+  # Emptied 2026-08-28: mctl.me is retired — Cloudflare answers 410 Gone for
+  # every host on it. While this was set, tpl-git-commit mirrored each
+  # service's hostname onto the dead domain and put it in the TLS block, so
+  # every deploy re-added a SAN that cert-manager then had to keep renewing.
+  # Leave empty unless a replacement mirror domain actually serves traffic.
+  PLATFORM_DOMAIN_ALT: ""
   # Container registry prefix (images are pushed as {CONTAINER_REGISTRY}/{component}:{tag})
   CONTAINER_REGISTRY: "ghcr.io/mctlhq"

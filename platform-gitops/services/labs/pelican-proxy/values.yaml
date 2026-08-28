@@ -32,14 +32,12 @@ ingress:
   enabled: true
   hosts:
     - labs-pelican-proxy.mctl.ai
-    - labs-pelican-proxy.mctl.me
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
   tls:
     - secretName: pelican-proxy-tls
       hosts:
         - labs-pelican-proxy.mctl.ai
-        - labs-pelican-proxy.mctl.me
 externalSecret:
   targetSecret: pelican-proxy-secrets
   data:

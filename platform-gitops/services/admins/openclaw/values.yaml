@@ -1413,8 +1413,7 @@ configMaps:
           "controlUi": {
             "enabled": true,
             "allowedOrigins": [
-              "https://admins-openclaw.mctl.ai",
-              "https://admins-openclaw.mctl.me"
+              "https://admins-openclaw.mctl.ai"
             ]
           }
         },
@@ -1545,11 +1544,9 @@ ingress:
       - X-Mctl-Team-Role
   hosts:
     - admins-openclaw.mctl.ai
-    - admins-openclaw.mctl.me
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
   tls:
     - secretName: openclaw-tls
       hosts:
         - admins-openclaw.mctl.ai
-        - admins-openclaw.mctl.me
