@@ -53,6 +53,20 @@ spec:
               secretKeyRef:
                 name: backstage-workflow-token
                 key: BACKSTAGE_TOKEN
+                # optional bridges the namespace transition: today this
+                # workflow runs in the TENANT namespace (mctl-api operations
+                # executor), where the secret deliberately does NOT exist —
+                # replicating a platform credential into tenant namespaces
+                # would let any tenant read it (tenant SAs can get secrets)
+                # and impersonate the workflow tier. Until mctl-api routes
+                # add/remove-custom-domain to the argo-workflows namespace,
+                # the pod starts with an empty token and the (still
+                # ungated) Backstage routes accept the calls; once the
+                # namespace move and the portal gate both ship, the secret
+                # resolves here and the calls are authenticated. Deploy
+                # order: mctl-api namespace change BEFORE the mctl-portal
+                # release that gates the routes.
+                optional: true
         source: |
           set -e
           apk add --no-cache curl git openssh-client bind-tools yq > /dev/null 2>&1
@@ -165,13 +179,20 @@ spec:
           DNS verified: CNAME points to ${AUTO_DOMAIN}
           TLS: HTTP-01 via letsencrypt-http01 ClusterIssuer"
 
+          PUSHED=false
           for i in $(seq 1 5); do
             if git push origin HEAD:main; then
               echo "✅ Pushed — ArgoCD will sync"
+              PUSHED=true
               break
             fi
             git pull --rebase origin main
           done
+          if [ "$PUSHED" != "true" ]; then
+            echo "❌ git push failed after 5 attempts — aborting before the Backstage callback" >&2
+            echo "   (activating without the ingress commit would leave the domain 'active' with no ingress)" >&2
+            exit 1
+          fi
 
           # ── 10. Callback to Backstage to activate domain ──────────────────
           # Both routes are auth-gated (mctl-portal#89): the plugin's
