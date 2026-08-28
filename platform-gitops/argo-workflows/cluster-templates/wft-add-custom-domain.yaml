@@ -44,6 +44,18 @@ spec:
           - configMapRef:
               name: mctl-platform-config
         env:
+          # Workflow params injected as env vars so the shell layer can
+          # quote them: direct {{inputs.parameters.*}} interpolation into
+          # the script body is a shell-injection vector, and this pod now
+          # also holds the Backstage token — a crafted team/service/domain
+          # value must not be able to exfiltrate it (same hardening the
+          # mctl-agents commit-and-push steps already use).
+          - name: PARAM_TEAM
+            value: "{{inputs.parameters.team_name}}"
+          - name: PARAM_SERVICE
+            value: "{{inputs.parameters.service_name}}"
+          - name: PARAM_DOMAIN
+            value: "{{inputs.parameters.domain}}"
           # Backstage external-access token (subject mctl-api): the
           # custom-domains routes this script calls are auth-gated since
           # mctl-portal#89 (see issue #920). ExternalSecret
@@ -71,9 +83,9 @@ spec:
           set -e
           apk add --no-cache curl git openssh-client bind-tools yq > /dev/null 2>&1
 
-          TEAM="{{inputs.parameters.team_name}}"
-          SERVICE="{{inputs.parameters.service_name}}"
-          DOMAIN="{{inputs.parameters.domain}}"
+          TEAM="$PARAM_TEAM"
+          SERVICE="$PARAM_SERVICE"
+          DOMAIN="$PARAM_DOMAIN"
           AUTO_DOMAIN="${TEAM}-${SERVICE}.${PLATFORM_DOMAIN}"
           BACKSTAGE_URL="http://backstage.backstage.svc.cluster.local:7007"
 
@@ -215,7 +227,19 @@ spec:
           DOMAIN_ID=$(echo "$DOMAIN_DATA" | yq -p=json ".domains[] | select(.domain == \"${DOMAIN}\") | .id" -)
           [ "$DOMAIN_ID" = "null" ] && DOMAIN_ID=""
           if [ -n "$DOMAIN_ID" ]; then
-            curl -sSf -X POST -H "Authorization: Bearer ${BACKSTAGE_TOKEN}" "${BACKSTAGE_URL}/api/custom-domains/domains/${DOMAIN_ID}/activate"
+            if ! curl -sSf -X POST -H "Authorization: Bearer ${BACKSTAGE_TOKEN}" "${BACKSTAGE_URL}/api/custom-domains/domains/${DOMAIN_ID}/activate"; then
+              # A rerun after a transient callback failure lands here with
+              # the ingress commit already on main. Only swallow the error
+              # when the domain is in fact already active; anything else
+              # (auth, outage) stays a hard failure.
+              STATUS=$(echo "$DOMAIN_DATA" | yq -p=json ".domains[] | select(.domain == \"${DOMAIN}\") | .status" -)
+              if [ "$STATUS" = "active" ]; then
+                echo "ℹ️  Activate call failed but domain is already active — treating as success"
+              else
+                echo "❌ Backstage activate failed and domain is not active (status=${STATUS})" >&2
+                exit 1
+              fi
+            fi
             echo "✅ Domain status updated to active"
           else
             echo "⚠️  Domain id for ${DOMAIN} not found in Backstage — activation skipped" >&2
