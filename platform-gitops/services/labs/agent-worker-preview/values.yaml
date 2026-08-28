@@ -72,12 +72,23 @@ probes:
     initialDelaySeconds: 60
     periodSeconds: 15
 # AGENT_API_TOKEN is the aud=agent worker credential minted via
-# POST /api/agent/token, scoped to a single Telegram account. Target soak
-# account is 8745115872 (@mctlhq), not operator 210408407 — preview MCP and
-# production canary must not share the operator personal MTProto session.
-# The live Vault value still has to be reminted for 8745115872 after that
-# user completes a real OIDC/MTProto login on tg-preview (not DEMO_REVIEWER
-# password login). Stored in Vault, never in git — see extraExternalSecrets.
+# POST /api/agent/token, scoped to a single Telegram account. It is bound to
+# operator 210408407, and DO NOT "fix" that by reminting it for 8745115872
+# (@mctlhq) — an earlier version of this comment instructed exactly that, and
+# following it breaks the soak.
+#
+# Tried on 2026-08-27 and reverted the same evening. Job claiming is scoped to
+# the token's user (agentapi.handleClaimJobs -> Queue.Claim(ctx, id.UserID,
+# ...)), and every job in this deployment belongs to 210408407 because they
+# are real recruiter DMs to the operator. @mctlhq has none, so the worker sat
+# authenticated, healthy and polling an empty queue while the operator's jobs
+# went unclaimed — a green worker doing nothing.
+#
+# The privacy motive behind that instruction does not work through this token
+# either: ingest comes from the listener supervisor on each account's own
+# MTProto session, so the token decides who PROCESSES events, never who
+# generates them. See services/labs/mctl-telegram-preview/values.yaml for the
+# full reasoning. Stored in Vault, never in git — see extraExternalSecrets.
 #
 # AGENT_API_BASE_URL must be the full /api/agent/v1 root, not just the host —
 # internal/agentworker/client.go appends paths like "/events" directly onto
@@ -100,7 +111,7 @@ env:
   AGENT_API_BASE_URL: "http://labs-mctl-telegram-preview-base-service:8080/api/agent/v1"
   AGENT_MAX_BUDGET_USD: "0.50"
   AGENT_SYSTEM_PROMPT: >-
-    You are the owner's communication agent for incoming Telegram direct messages, currently handling the HR/recruiter scenario: classifying inbound DMs, extracting job-opportunity details, and drafting replies for the owner to review. You are running in OBSERVE mode: every reply you propose requires the owner's manual approval before it can ever be sent — propose_reply will return require_approval, not send anything directly, and that is expected, not a failure.
+    You are the owner's communication agent for incoming Telegram direct messages, currently handling the HR/recruiter scenario: classifying inbound DMs, extracting job-opportunity details, and replying on the owner's behalf. You are running in GUARDED mode, which means some of your replies are sent for real with nobody checking them first: a propose_reply whose intent is "discovery" or "schedule" is delivered to the actual recipient immediately. Write those as finished messages you would be willing to send under the owner's name, not as drafts someone will polish. Every other intent still returns require_approval and waits for the owner, and that is expected, not a failure. Do not add a sign-off identifying yourself as an assistant — a disclosure line is appended automatically after your text, and writing your own produces it twice.
 
     On each job: call get_event and get_conversation_context to see the message and conversation so far. If get_recruiter_profile is relevant to answering a question about the owner's background, call it too. If the message is a genuine job opportunity or recruiter outreach, call save_job_lead with what you can extract (company, role, key details) — safe to call with partial data, later calls upsert. Then call propose_reply with a short, polite, professional draft reply addressing what the sender asked. Do not invent missing facts. Do not include links, phone numbers, verification codes, credentials, private addresses, or other secrets. Do not state a specific salary figure; if compensation comes up, note that expectations can be discussed after an initial conversation.
 

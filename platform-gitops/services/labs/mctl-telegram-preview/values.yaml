@@ -188,9 +188,23 @@ env:
   #   210408407 — the operator's own preview MCP session (Antigravity/Cursor).
   #     Recovery is phone+SMS+2FA, i.e. a human on the hook every 90 days for
   #     a session in daily use. That is exactly what #413 removed on prod.
-  # The idle sweep still applies to both; this exempts only the absolute
-  # ceiling, so an identity nobody uses is still retired.
-  SESSION_TTL_EXEMPT_TG_IDS: "8745115872,210408407"
+  #
+  # THE EXEMPTION IS NOT ABSOLUTE-ONLY. An earlier version of this comment
+  # claimed the idle sweep still applied — it does not. SweepIdleSessions
+  # splices the same ttlExemptClause into its WHERE (store.go), so a listed id
+  # is skipped by BOTH the 90-day ceiling and the 30-day idle check. An exempt
+  # session that stops being used is therefore never retired automatically.
+  #
+  # That is why only 210408407 is listed. It is in daily interactive use, so
+  # the idle sweep would never fire on it anyway and the exemption costs
+  # nothing beyond what it is meant to buy. 8745115872 is deliberately NOT
+  # here: after the reverted migration it holds no traffic and
+  # listener_enabled=false, so exempting it would keep an unused MTProto
+  # credential alive forever for no purpose. Letting the idle sweep retire it
+  # in 30 days is the correct outcome — if the soak is ever pointed at that
+  # account, it needs a fresh login regardless, and the id can be added back
+  # at that moment.
+  SESSION_TTL_EXEMPT_TG_IDS: "210408407"
 ingress:
   enabled: true
   hosts:
