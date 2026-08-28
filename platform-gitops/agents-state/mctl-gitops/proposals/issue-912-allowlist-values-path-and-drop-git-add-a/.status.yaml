@@ -1,0 +1,10 @@
+status: proposed
+updated_at: '2026-08-28T21:32:47Z'
+updated_by: mctl-agents[bot]
+source:
+  type: github_issue
+  repo: mctlhq/mctl-gitops
+  issue: 912
+  url: https://github.com/mctlhq/mctl-gitops/issues/912
+control:
+  requires_human_approval: true
