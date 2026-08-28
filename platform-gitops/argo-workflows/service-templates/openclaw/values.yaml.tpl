@@ -1211,8 +1211,7 @@ configMaps:
           "controlUi": {
             "enabled": true,
             "allowedOrigins": [
-              "https://__TEAM_NAME__-__SERVICE_NAME__.mctl.ai",
-              "https://__TEAM_NAME__-__SERVICE_NAME__.mctl.me"
+              "https://__TEAM_NAME__-__SERVICE_NAME__.mctl.ai"
             ]
           }
         },

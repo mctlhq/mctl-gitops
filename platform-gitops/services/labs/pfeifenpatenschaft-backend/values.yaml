@@ -81,7 +81,6 @@ ingress:
     # existing links/bookmarks keep working.
     - orgel.mctl.ai
     - labs-pfeifenpatenschaft-backend.mctl.ai
-    - labs-pfeifenpatenschaft-backend.mctl.me
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
   tls:
@@ -89,7 +88,6 @@ ingress:
       hosts:
         - orgel.mctl.ai
         - labs-pfeifenpatenschaft-backend.mctl.ai
-        - labs-pfeifenpatenschaft-backend.mctl.me
 externalSecret:
   targetSecret: pfeifenpatenschaft-backend-secrets
   data:

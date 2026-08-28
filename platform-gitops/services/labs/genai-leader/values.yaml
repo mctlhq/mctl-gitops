@@ -25,14 +25,12 @@ ingress:
   enabled: true
   hosts:
     - labs-genai-leader.mctl.ai
-    - labs-genai-leader.mctl.me
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
   tls:
     - secretName: genai-leader-tls
       hosts:
         - labs-genai-leader.mctl.ai
-        - labs-genai-leader.mctl.me
 probes:
   liveness:
     path: /healthz

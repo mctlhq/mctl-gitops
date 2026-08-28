@@ -1287,8 +1287,7 @@ configMaps:
           "controlUi": {
             "enabled": true,
             "allowedOrigins": [
-              "https://labs-openclaw.mctl.ai",
-              "https://labs-openclaw.mctl.me"
+              "https://labs-openclaw.mctl.ai"
             ]
           },
           "http": {
@@ -1397,19 +1396,16 @@ ingress:
       - X-Mctl-Team-Role
   hosts:
     - labs-openclaw.mctl.ai
-    - labs-openclaw.mctl.me
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
   tls:
     - secretName: openclaw-tls
       hosts:
         - labs-openclaw.mctl.ai
-        - labs-openclaw.mctl.me
 extraIngresses:
   - name: labs-openclaw-hooks
     hosts:
       - labs-openclaw.mctl.ai
-      - labs-openclaw.mctl.me
     path: /hooks
     pathType: Prefix
     annotations:
@@ -1418,7 +1414,6 @@ extraIngresses:
       - secretName: openclaw-tls
         hosts:
           - labs-openclaw.mctl.ai
-          - labs-openclaw.mctl.me
 
 # Prometheus scrape config for the openclaw `/metrics` endpoint added in
 # mctl-openclaw#19 (codex token usage counters). Served on the same `http`

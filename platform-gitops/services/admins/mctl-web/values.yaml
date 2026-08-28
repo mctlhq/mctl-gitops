@@ -33,13 +33,11 @@ ingress:
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
   hosts:
-    - mctl.me
     - mctl.ru
     - mctl.ai
   tls:
     - secretName: mctl-web-tls
       hosts:
-        - mctl.me
         - mctl.ru
         - mctl.ai
 blueGreen:
