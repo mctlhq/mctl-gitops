@@ -61,10 +61,32 @@ spec:
           # the failure is still ongoing. Seen 2026-08-23: fired 07:14,
           # "resolved" 07:19, and the canary was still failing at 20:30.
           # [15m] always covers at least one full canary period.
+          #
+          # sum without(tool, status) on BOTH sides is what makes this a
+          # ratio at all. Without it the division matches series on every
+          # shared label — including `status` — so each error series was
+          # divided by itself and the expression evaluated to exactly 1
+          # whenever any tool had failed at all. The 0.1 threshold was
+          # unreachable in the other direction: the alert meant "at least
+          # one tool call errored in 15m", not "more than 10% are failing",
+          # and fired most mornings with the service perfectly healthy.
+          # Verified with promtool against 5 errors in 155 calls (3.2%):
+          # the old expression returns 1, the new one 0.032.
+          #
+          # Aggregating away `tool` (not by tool) is deliberate: the
+          # threshold is about the service's overall health, and a single
+          # rarely-used tool failing twice should not read as "10% of tool
+          # calls are failing". Instance labels are kept, so the preview
+          # deployment's soak traffic stays a separate series and cannot
+          # drag production over the threshold.
           expr: |
-            rate(mctl_tool_invocations_total{status="error"}[15m])
+            sum without(tool, status) (
+              rate(mctl_tool_invocations_total{status="error"}[15m])
+            )
             /
-            rate(mctl_tool_invocations_total[15m]) > 0.1
+            sum without(tool, status) (
+              rate(mctl_tool_invocations_total[15m])
+            ) > 0.1
           for: 5m
           labels:
             severity: warning
