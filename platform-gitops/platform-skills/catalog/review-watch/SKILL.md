@@ -1,6 +1,6 @@
 ---
 name: review-watch
-description: 'Monitor a GitHub PR in the background for a review-bot response. Watches claude[bot] (claude-review.yml), chatgpt-codex-connector[bot] (@codex review), and — on repos that have it wired up (currently mctl-academy) — the agy pilot reviewer, which posts as github-actions[bot] with an `<!-- agy-review-pilot -->` marker. Launches a detached shell process that polls until a bot posts a review (line-anchored comments or top-level review body), a top-level issue comment (clean/"no findings"), or reacts with a thumbs-up, then writes a result file you can read at any time. Use whenever the user has just posted "@codex review" or "@claude review" on a PR — or asks you to "watch / monitor / wait for / babysit the review" on a specific PR — and they want hands-off notification instead of manual `gh api` polling. Also use when they queue several PRs at once: launch one watcher per PR, in parallel.'
+description: 'Monitor a GitHub PR in the background for a review-bot response. Watches claude[bot] (claude-review.yml), chatgpt-codex-connector[bot] (@codex review), and — on repos that have it wired up — the agy reviewer, which posts as github-actions[bot] with an `<!-- agy-review -->` marker. Launches a detached shell process that polls until a bot posts a review (line-anchored comments or top-level review body), a top-level issue comment (clean/"no findings"), or reacts with a thumbs-up, then writes a result file you can read at any time. Use whenever the user has just posted "@codex review" or "@claude review" on a PR — or asks you to "watch / monitor / wait for / babysit the review" on a specific PR — and they want hands-off notification instead of manual `gh api` polling. Also use when they queue several PRs at once: launch one watcher per PR, in parallel.'
 ---
 
 # review-watch — background PR-review monitor (detached shell)
@@ -21,7 +21,18 @@ Do NOT spawn an `Agent` for this. Sub-agent runtime has a strong bias toward the
 
 ## Bootstrap — write `/tmp/review-watch.sh` if missing or stale
 
-Before launching watchers, check that the script is in place AND current: `grep -q 'AGY_MARKER' /tmp/review-watch.sh` — if the file is missing or the grep fails (pre-baseline-arg or pre-agy version), (re)write it via Bash heredoc (the entire script body):
+Before launching watchers, check that the script is in place AND current:
+`grep -qF "AGY_MARKER='<!-- agy-review -->'" /tmp/review-watch.sh` — if the file
+is missing or the grep fails, (re)write it via Bash heredoc (the entire script
+body).
+
+The predicate matches the marker's **value**, not just the name `AGY_MARKER`.
+Checking the name was the bug: a stale `/tmp/review-watch.sh` from before
+2026-08-28 defines `AGY_MARKER` too — with the wrong value
+`<!-- agy-review-pilot -->` — so a name-only grep declared it current and the
+host kept running the broken watcher, silently missing every agy response,
+until someone deleted the file by hand. Any future change to the script body
+must move this predicate onto something the old version cannot satisfy.
 
 ```bash
 #!/bin/bash
@@ -45,13 +56,20 @@ echo "[$(date -u +%FT%TZ)] watcher start repo=$REPO pr=$PR pid=$$"
 # expansion happens after quote parsing. Add more bots here if needed.
 BOTFILTER='select(.user.login == "claude[bot]" or .user.login == "chatgpt-codex-connector[bot]")'
 
-# agy (Antigravity CLI pilot reviewer, currently mctl-academy only) posts via
+# agy (Antigravity reviewer) posts via
 # `gh pr comment` using the workflow's GITHUB_TOKEN, so its login is the
 # generic "github-actions[bot]" — shared with every other Actions-posted
 # comment in the repo (release-please, other workflows, etc). Login alone
 # is not enough to identify it; every agy comment carries a hidden
-# `<!-- agy-review-pilot -->` marker, which is the only reliable filter.
-AGY_MARKER='<!-- agy-review-pilot -->'
+# `<!-- agy-review -->` marker, which is the only reliable filter.
+#
+# The marker MUST match what mctlhq/.github/.github/workflows/agy-review.yml
+# actually echoes (`<!-- agy-review -->`; grep "Publish review comment" there).
+# It said `<!-- agy-review-pilot -->` until 2026-08-28 and therefore never
+# matched anything: every watcher reported agy_comments=0 while agy was
+# posting normally. On mctl-agent#105 that hid two real P2 findings, which
+# were only caught by checking `gh api .../issues/<N>/comments` by hand.
+AGY_MARKER='<!-- agy-review -->'
 
 notify() {
   local title="$1" body="$2" sound="${3:-Glass}"
