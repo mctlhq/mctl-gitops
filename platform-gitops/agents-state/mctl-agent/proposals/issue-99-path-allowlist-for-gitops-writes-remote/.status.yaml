@@ -1,6 +1,6 @@
-status: needs-triage
-updated_at: '2026-08-29T07:22:58Z'
-updated_by: mctl-agents[bot]
+status: accepted
+updated_at: '2026-08-29T13:20:09Z'
+updated_by: mashkovd
 source:
   type: github_issue
   repo: mctlhq/mctl-agent
@@ -16,7 +16,5 @@ attempt:
 failure:
   code: operation-timeout
   stage: runtime
-  message: 'operation timed out: operation exceeded 900s (model stream, client construction,
-    or mctl connectivity check)'
-notes: 'runtime: operation timed out: operation exceeded 900s (model stream, client
-  construction, or mctl connectivity check)'
+  message: 'operation timed out: operation exceeded 900s (model stream, client construction, or mctl connectivity check)'
+notes: 'runtime: operation timed out: operation exceeded 900s (model stream, client construction, or mctl connectivity check)'
