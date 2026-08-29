@@ -66,3 +66,13 @@ migration. To roll back:
    `AUTO_MERGE_ENABLED=true` explicitly in that tenant's deployment env —
    the opt-in path this change introduces is the intended escape hatch and
    requires no code change.
+
+## Operator decisions (approve, 2026-08-29)
+
+- Accepted as proposed, one addition: when AUTO_MERGE_ENABLED is set to an
+  unrecognized value ("1", "TRUE", "yes", ...), log a warning naming the
+  raw value before treating it as false — a silently-ignored truthy intent
+  is how fail-closed defaults turn into invisible outages.
+- Land order: this PR merges BEFORE issue-99 (both touch the
+  `NewGitHubFixer` signature and `cmd/agent/main.go` wiring); issue-99
+  rebases on top.

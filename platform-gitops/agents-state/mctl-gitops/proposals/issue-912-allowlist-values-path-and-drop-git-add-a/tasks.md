@@ -99,3 +99,21 @@ touched), so a revert cleanly restores the prior `git add -A` + unvalidated
 data migration, no in-flight state (each dispatch run is independent), so
 rollback carries no risk beyond re-exposing the original issue until the fix
 is reapplied.
+
+## Operator decisions (approve, 2026-08-29)
+
+- Accepted with three binding adjustments:
+  1. Do NOT use `git add -- $(cat <file>)` — unquoted command substitution
+     word-splits on spaces/newlines. Use `xargs -r git add --` or a
+     `while IFS= read -r` loop over the handoff file.
+  2. The /tmp handoff file MUST fail closed: if the bump step reports
+     success but the handoff file is missing or empty at `git add` time,
+     exit non-zero — a silent no-op commit hides a broken pipeline.
+  3. Caller inventory (verified 2026-08-29 across all 23 org repos, record
+     as a comment next to the allowlist): the three prefixes
+     `bootstrap/templates/mctl-platform/` (mctl-agent/api/portal),
+     `argo-workflows/cluster-templates/` (mctl-agents CWFT glob) and
+     `services/` (docs/telegram/academy/design and all tenant services)
+     cover every real caller of gitops-bump/release-deploy. No fourth
+     prefix exists today; adding one requires editing the allowlist
+     deliberately.

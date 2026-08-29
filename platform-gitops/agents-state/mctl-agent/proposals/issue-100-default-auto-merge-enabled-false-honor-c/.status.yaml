@@ -1,6 +1,6 @@
-status: proposed
-updated_at: '2026-08-28T21:31:33Z'
-updated_by: mctl-agents[bot]
+status: accepted
+updated_at: '2026-08-29T06:46:56Z'
+updated_by: mashkovd
 source:
   type: github_issue
   repo: mctlhq/mctl-agent

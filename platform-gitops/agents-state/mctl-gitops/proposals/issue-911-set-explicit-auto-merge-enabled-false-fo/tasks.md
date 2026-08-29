@@ -59,3 +59,10 @@ intervention needed. Because `strategy.type: Recreate` is already in
 place, the rollback pod swap is atomic the same way the forward change
 is: no mixed-env window. There is no data migration or external state to
 unwind; this is a pure env-var change.
+
+## Operator decisions (approve, 2026-08-29)
+
+- Accepted as proposed, no scope changes.
+- Verification stays two-step as designed: rendered manifest AND live pod
+  env (`AUTO_MERGE_ENABLED=false` in the running container), not just
+  ArgoCD Synced.

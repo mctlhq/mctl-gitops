@@ -95,3 +95,15 @@ Revert the single commit/PR that lands tasks 1-4 (`git revert` on
 the workflow no longer references it. No state, no data, no in-flight
 migration — safe to revert at any time with a single PR (which, per the
 existing rule, needs review since it touches `.github/workflows/**`).
+
+## Operator decision: REJECTED (2026-08-29)
+
+Premise is stale. Verified 2026-08-28/29: the last 60 merges to
+mctl-gitops main contain zero `claude/*` branches, and agents-state
+changes land via direct bot push (DeployKey bypass), not via `claude/*`
+PRs — the path-guard would gate a flow that no longer exists, while
+adding real friction (self-blocking rollout, throwaway PRs to test,
+interference with interactive claude/* sessions). The actual residual
+exposure is bypass-token direct pushes, which is a different control
+(audit of bypass actors), tracked separately. Issue closed with this
+rationale; no implementation.
