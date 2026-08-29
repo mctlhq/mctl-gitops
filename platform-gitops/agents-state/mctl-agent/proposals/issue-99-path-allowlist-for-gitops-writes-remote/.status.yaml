@@ -1,6 +1,6 @@
-status: accepted
-updated_at: '2026-08-29T13:20:09Z'
-updated_by: mashkovd
+status: needs-triage
+updated_at: '2026-08-29T13:39:00Z'
+updated_by: mctl-agents[bot]
 source:
   type: github_issue
   repo: mctlhq/mctl-agent
@@ -9,12 +9,14 @@ source:
 control:
   requires_human_approval: true
 attempt:
-  id: d6feda5d-56bb-429e-b3ac-53afe64b2388
-  started_at: '2026-08-29T07:07:51Z'
-  expires_at: '2026-08-29T09:17:51Z'
-  finished_at: '2026-08-29T07:22:58Z'
+  id: 2cb4e348-b96e-40bb-ba6d-7d7f5c537811
+  started_at: '2026-08-29T13:23:53Z'
+  expires_at: '2026-08-29T15:33:53Z'
+  finished_at: '2026-08-29T13:39:00Z'
+notes: 'runtime: operation timed out: operation exceeded 900s (model stream, client
+  construction, or mctl connectivity check)'
 failure:
   code: operation-timeout
   stage: runtime
-  message: 'operation timed out: operation exceeded 900s (model stream, client construction, or mctl connectivity check)'
-notes: 'runtime: operation timed out: operation exceeded 900s (model stream, client construction, or mctl connectivity check)'
+  message: 'operation timed out: operation exceeded 900s (model stream, client construction,
+    or mctl connectivity check)'
