@@ -1,0 +1,10 @@
+status: proposed
+updated_at: '2026-08-29T14:32:33Z'
+updated_by: mctl-agents[bot]
+source:
+  type: github_issue
+  repo: mctlhq/mctl-api
+  issue: 197
+  url: https://github.com/mctlhq/mctl-api/issues/197
+control:
+  requires_human_approval: true
