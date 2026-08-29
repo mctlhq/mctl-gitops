@@ -154,6 +154,13 @@ spec:
             echo "❌ No .status.yaml at agents-state/${WORKFLOW_SERVICE}/proposals/${WORKFLOW_SLUG}/ — nothing to approve" >&2
             exit 1
           fi
+          # Top-level `status:` is the one field this flip requires. A file
+          # where it is missing, indented, or nested is malformed for our
+          # purposes — say so explicitly instead of a cryptic later failure.
+          if ! grep -q '^status:' "$STATUS_FILE"; then
+            echo "❌ ${STATUS_FILE} has no top-level 'status:' field (malformed or unexpectedly indented .status.yaml)" >&2
+            exit 1
+          fi
           CURRENT=$(sed -n 's/^status:[[:space:]]*//p' "$STATUS_FILE" | head -1)
           if [ "$CURRENT" = "accepted" ]; then
             # Idempotent path: a Temporal retry of submit_and_wait, or a
@@ -190,7 +197,11 @@ spec:
             fi
           done
           if ! grep -q '^approval:' "$STATUS_FILE"; then
-            printf 'approval:\n  approved_by: %s\n  approved_at: %s\n' "$APPROVER_SAFE" "'${NOW}'" >> "$STATUS_FILE"
+            # Single-quote approved_by: the sanitized charset still allows
+            # YAML indicators in first position (`@alice`, a bare `-`),
+            # which are invalid unquoted. The charset excludes ' itself, so
+            # plain quoting is always safe.
+            printf "approval:\n  approved_by: '%s'\n  approved_at: '%s'\n" "$APPROVER_SAFE" "$NOW" >> "$STATUS_FILE"
           fi
           # Post-edit verification: the flip this workflow exists to make
           # must actually be on disk before the commit step runs, otherwise
@@ -277,7 +288,22 @@ spec:
               exit 0
             fi
             echo "⚠️  Push failed (attempt ${i}), rebasing..."
-            git pull --rebase origin main
+            if ! git pull --rebase origin main; then
+              # A conflict on OUR file means someone else already changed
+              # this proposal's status — most likely a concurrent approve of
+              # the same proposal (different approver/timestamp on the same
+              # lines). If main already reads accepted, that flip landed and
+              # this run's job is done: treat it as the same idempotent
+              # no-op the flip step grants, instead of failing the loop.
+              git rebase --abort || true
+              git fetch origin main
+              if git show "origin/main:${STATUS_PATH}" 2>/dev/null | grep -q '^status: accepted$'; then
+                echo "ℹ️  ${WORKFLOW_SLUG} already accepted on main (concurrent approve) — no-op."
+                exit 0
+              fi
+              echo "❌ Rebase conflict and main does not read 'status: accepted' — needs a human look" >&2
+              exit 1
+            fi
           done
           echo "❌ Push failed after 5 attempts"
           exit 1
