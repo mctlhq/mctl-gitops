@@ -43,3 +43,6 @@ cli/mctl/mctl
 cli/mctl/mctl-new
 
 .claude/
+
+# Build output of scripts/check-vm-rules.sh (extracted VMRule specs)
+platform-gitops/infra-components/observability/vm-rules/tests/generated/
