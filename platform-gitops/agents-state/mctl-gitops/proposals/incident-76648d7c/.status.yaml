@@ -1,0 +1,6 @@
+status: accepted
+updated_at: 2026-08-29T21:00:51Z
+updated_by: _incident-responder
+notes: >-
+  auto-accepted: ArgoCD application out of sync despite healthy pods.
+  Diagnosis from mctl incident 75dee28b6d6c43a59ceaea8f76648d7c
