@@ -1,6 +1,6 @@
-status: accepted
-updated_at: '2026-08-29T16:46:22Z'
-updated_by: mashkovd
+status: implemented
+updated_at: '2026-08-29T23:00:57Z'
+updated_by: mctl-agents[bot]
 source:
   type: github_issue
   repo: mctlhq/mctl-portal
@@ -8,3 +8,9 @@ source:
   url: https://github.com/mctlhq/mctl-portal/issues/81
 control:
   requires_human_approval: true
+attempt:
+  id: 1ff44147-6142-4a02-a7a6-c851e3ccc474
+  started_at: '2026-08-29T22:40:26Z'
+  expires_at: '2026-08-30T00:50:26Z'
+  finished_at: '2026-08-29T23:00:57Z'
+pr: https://github.com/mctlhq/mctl-portal/pull/100
