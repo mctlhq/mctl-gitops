@@ -55,6 +55,13 @@ spec:
           # 4h→12h so a full day's flaps fold into one ticket.
           ALERT_FLAP_COOLDOWN: "12h"
           DRY_RUN: "false"
+          # Explicit fail-closed override: mctl-agent's code default for this flag
+          # is true, which combined with DRY_RUN=false would let agent-authored
+          # PRs to this repo auto-merge without review. Pin it here regardless of
+          # the code-side default (companion mctl-agent issue: flip the default to
+          # false) so the deployment's intent doesn't silently depend on whatever
+          # a future image tag ships as its compiled-in default.
+          AUTO_MERGE_ENABLED: "false"
           WEBHOOK_ENABLED: "true"
           WEBHOOK_CALLBACK_URL: "https://agent.mctl.ai"
           WEBHOOK_DEFAULT_TTL: "15m"
