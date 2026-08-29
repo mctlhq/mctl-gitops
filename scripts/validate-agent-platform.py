@@ -110,12 +110,30 @@ def version_satisfies(version: str, constraint: str) -> bool:
 # --------------------------------------------------------------------------
 
 
+def require_limit(limits: dict, key: str):
+    """Read a policy ceiling, failing closed when it is missing or non-numeric.
+
+    policy.yaml has no JSON Schema, so a mistyped or dropped ceiling would
+    otherwise leave the limit unset and skip the ceiling check entirely --
+    the one place this validator could fail *open*. Every other policy list
+    degrades to an empty collection, which correctly makes every reference
+    "unknown"; these two scalars must raise instead.
+    """
+    value = limits.get(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise CatalogValidationError(
+            f"spec.limits.{key} is missing or non-numeric ({value!r});"
+            " policy ceilings must be declared explicitly (fail closed)"
+        )
+    return value
+
+
 class Policy:
     def __init__(self, doc: dict):
         spec = doc.get("spec") or {}
         limits = spec.get("limits") or {}
-        self.max_budget_usd = limits.get("maxBudgetUsd")
-        self.max_timeout_seconds = limits.get("maxTimeoutSeconds")
+        self.max_budget_usd = require_limit(limits, "maxBudgetUsd")
+        self.max_timeout_seconds = require_limit(limits, "maxTimeoutSeconds")
         self.known_tools = {t["name"] for t in spec.get("knownTools") or []}
         self.known_skills = set(spec.get("knownSkills") or [])
         self.known_model_policy_tasks = set(spec.get("knownModelPolicyTasks") or [])
@@ -135,8 +153,8 @@ class Policy:
         return cls(load_yaml(path))
 
 
-def load_policy(errors: list) -> Policy | None:
-    path = CATALOG / "policy.yaml"
+def load_policy(errors: list, path: pathlib.Path | None = None) -> Policy | None:
+    path = path if path is not None else CATALOG / "policy.yaml"
     if not path.exists():
         errors.append(f"{path}: missing policy.yaml")
         return None
@@ -195,11 +213,11 @@ def validate_profile_file(path: pathlib.Path, schema: dict, policy: Policy, erro
             errors.append(f"{path}: unknown evidence kind {kind!r} (not in policy.yaml knownEvidenceKinds)")
 
     # -- budget / timeout ceilings --
-    if policy.max_budget_usd is not None and spec["budgetUsd"] > policy.max_budget_usd:
+    if spec["budgetUsd"] > policy.max_budget_usd:
         errors.append(
             f"{path}: budgetUsd {spec['budgetUsd']} exceeds policy ceiling {policy.max_budget_usd}"
         )
-    if policy.max_timeout_seconds is not None and spec["timeoutSeconds"] > policy.max_timeout_seconds:
+    if spec["timeoutSeconds"] > policy.max_timeout_seconds:
         errors.append(
             f"{path}: timeoutSeconds {spec['timeoutSeconds']} exceeds policy ceiling {policy.max_timeout_seconds}"
         )
@@ -377,6 +395,12 @@ def run(root: pathlib.Path) -> list:
     return errors
 
 
+def case_policy_path(case_dir: pathlib.Path) -> pathlib.Path:
+    """A fixture may ship its own policy.yaml to exercise policy loading."""
+    fixture_policy = case_dir / "policy.yaml"
+    return fixture_policy if fixture_policy.exists() else CATALOG / "policy.yaml"
+
+
 def run_selftest() -> list:
     problems: list = []
     profile_schema = load_json(SCHEMAS / "execution-profile.schema.json")
@@ -386,7 +410,7 @@ def run_selftest() -> list:
         if not case_dir.is_dir():
             continue
         errors: list = []
-        policy = load_policy(errors)
+        policy = load_policy(errors, case_policy_path(case_dir))
         if policy is not None:
             validate_catalog(case_dir, profile_schema, release_schema, policy, errors)
         if errors:
@@ -397,7 +421,7 @@ def run_selftest() -> list:
         if not case_dir.is_dir():
             continue
         errors = []
-        policy = load_policy(errors)
+        policy = load_policy(errors, case_policy_path(case_dir))
         if policy is not None:
             validate_catalog(case_dir, profile_schema, release_schema, policy, errors)
         if not errors:
