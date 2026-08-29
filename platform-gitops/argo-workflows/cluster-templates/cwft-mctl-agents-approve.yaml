@@ -172,11 +172,33 @@ spec:
           APPROVER_SAFE=$(printf '%s' "$WORKFLOW_APPROVER" | tr -cd 'A-Za-z0-9._@-' | cut -c1-64)
           [ -n "$APPROVER_SAFE" ] || APPROVER_SAFE="unknown"
           NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          # The CURRENT read above already proved a top-level `status:` line
+          # exists (it parsed to "proposed"), so this sed always matches.
           sed -i "s/^status:[[:space:]].*$/status: accepted/" "$STATUS_FILE"
-          sed -i "s/^updated_at:[[:space:]].*$/updated_at: '${NOW}'/" "$STATUS_FILE"
-          sed -i "s/^updated_by:[[:space:]].*$/updated_by: mctl-agents[bot]/" "$STATUS_FILE"
+          # updated_at/updated_by may be absent on a hand-written or partial
+          # file — sed on a missing line is a silent no-op, so insert-or-
+          # replace explicitly instead of assuming the investigator's shape.
+          for FIELD in updated_at updated_by; do
+            case "$FIELD" in
+              updated_at) VALUE="'${NOW}'" ;;
+              updated_by) VALUE="mctl-agents[bot]" ;;
+            esac
+            if grep -q "^${FIELD}:" "$STATUS_FILE"; then
+              sed -i "s|^${FIELD}:[[:space:]].*$|${FIELD}: ${VALUE}|" "$STATUS_FILE"
+            else
+              printf '%s: %s\n' "$FIELD" "$VALUE" >> "$STATUS_FILE"
+            fi
+          done
           if ! grep -q '^approval:' "$STATUS_FILE"; then
             printf 'approval:\n  approved_by: %s\n  approved_at: %s\n' "$APPROVER_SAFE" "'${NOW}'" >> "$STATUS_FILE"
+          fi
+          # Post-edit verification: the flip this workflow exists to make
+          # must actually be on disk before the commit step runs, otherwise
+          # fail loudly here — a partially-updated file would otherwise be
+          # committed, and retries would loop on status=proposed forever.
+          if ! grep -q '^status: accepted$' "$STATUS_FILE"; then
+            echo "❌ Post-edit check failed: ${STATUS_FILE} does not read 'status: accepted'" >&2
+            exit 1
           fi
           echo "✅ ${WORKFLOW_SERVICE}/${WORKFLOW_SLUG}: proposed → accepted (by ${APPROVER_SAFE})" >&2
           echo -n "flipped"
@@ -208,6 +230,17 @@ spec:
             value: "{{workflow.parameters.approver}}"
         source: |
           set -e
+          # Same guards as flip-status — defense in depth: this pod holds
+          # the deploy key, so never trust that the earlier step validated.
+          if [ -z "$WORKFLOW_SERVICE" ] || [ -z "$WORKFLOW_SLUG" ]; then
+            echo "❌ service and slug are both required" >&2
+            exit 1
+          fi
+          case "$WORKFLOW_SERVICE$WORKFLOW_SLUG" in
+            */*|*..*|*' '*)
+              echo "❌ service/slug must be plain directory names" >&2
+              exit 1 ;;
+          esac
           apk add --no-cache openssh-client ca-certificates
           mkdir -p ~/.ssh
           cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
