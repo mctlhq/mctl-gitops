@@ -34,11 +34,11 @@ on:
         required: true
         type: string
       values_path:
-        description: "Override gitops values file path (default: platform-gitops/services/<team>/<component>/values.yaml). Use for platform bootstrap services. Mutually exclusive with values_glob."
+        description: "Override gitops values file path (default: platform-gitops/services/<team>/<component>/values.yaml). Use for platform bootstrap services. May be combined with values_glob to bump both in one run."
         required: false
         type: string
       values_glob:
-        description: "Glob pattern for multiple files (e.g. platform-gitops/argo-workflows/cluster-templates/cwft-mctl-agents-*.yaml). Use when a component's image tag is inline across several manifests instead of one values.yaml. Mutually exclusive with values_path."
+        description: "Glob pattern for multiple files (e.g. platform-gitops/argo-workflows/cluster-templates/cwft-mctl-agents-*.yaml). Use when a component's image tag is inline across several manifests instead of one values.yaml. May be combined with values_path."
         required: false
         type: string
 
@@ -91,16 +91,6 @@ jobs:
         with:
           ref: main
           token: ${{ steps.app_token.outputs.token }}
-
-      - name: Validate mutually exclusive inputs
-        env:
-          VALUES_PATH: ${{ inputs.values_path }}
-          VALUES_GLOB: ${{ inputs.values_glob }}
-        run: |
-          if [[ -n "$VALUES_PATH" && -n "$VALUES_GLOB" ]]; then
-            echo "::error::values_path and values_glob are mutually exclusive"
-            exit 1
-          fi
 
       - name: Bump image tag(s)
         env:
@@ -165,6 +155,13 @@ jobs:
                   )
                   sys.exit(4)
 
+          # values_glob and values_path combine: a component whose tag lives
+          # both inline across CWFTs (glob) and in a deployment values.yaml
+          # (path) gets both bumped in one run — e.g. mctl-agents, whose
+          # worker deployment silently stayed on an old tag while only the
+          # CWFT defaults were bumped (mctl-agents#220). With neither set,
+          # the conventional per-service values.yaml is used.
+          files = []
           if vglob:
               validate_allowed(vglob)
               files = sorted(globmod.glob(vglob))
@@ -173,14 +170,13 @@ jobs:
                   sys.exit(2)
               for f in files:
                   validate_allowed(f)
-          else:
-              if vpath:
-                  validate_allowed(vpath)
-                  files = [vpath]
-              else:
-                  default_path = f"platform-gitops/services/{team}/{service}/values.yaml"
-                  validate_allowed(default_path)
-                  files = [default_path]
+          if vpath:
+              validate_allowed(vpath)
+              files.append(vpath)
+          if not files:
+              default_path = f"platform-gitops/services/{team}/{service}/values.yaml"
+              validate_allowed(default_path)
+              files = [default_path]
 
           missing = [f for f in files if not os.path.isfile(f)]
           if missing:
@@ -194,6 +190,7 @@ jobs:
           total_replaced = 0
           total_already = 0
           changed_files = []
+          matched_per_file = {}
           for path in files:
               with open(path) as fp:
                   content = fp.read()
@@ -222,6 +219,7 @@ jobs:
               p4 = re.compile(r'(value:\s*["\']?' + re.escape(image_name) + r')["\']?:[\w.\-]+')
               out, n4 = p4.subn(r'\1:' + new_tag, out)
               n = n1 + n2 + n3 + n4
+              matched_per_file[path] = n
               if n == 0:
                   print(f"  {path}: WARN — no image pattern matched (skipped)")
                   continue
@@ -234,6 +232,17 @@ jobs:
                   print(f"  {path}: bumped {n} occurrence(s)")
                   total_replaced += n
                   changed_files.append(path)
+
+          # An explicitly requested single file (values_path or the
+          # per-service default) with no pattern match is an error, not a
+          # warning: unlike glob members — where some files legitimately
+          # don't carry the image — the caller named this exact file, and
+          # letting glob matches satisfy the aggregate check would report
+          # success while the requested deployment silently stays on the
+          # old tag.
+          if vpath and matched_per_file.get(vpath, 0) == 0:
+              print(f"ERROR: no image tag pattern for {image_name} in explicitly requested {vpath}", file=sys.stderr)
+              sys.exit(3)
 
           # Hand off exactly the files this step actually rewrote to the
           # "Commit and push" step, which stages only these files
@@ -330,7 +339,8 @@ jobs:
             echo "| **Git ref** | \`${{ inputs.git_ref }}\` |"
             if [[ -n "${{ inputs.values_glob }}" ]]; then
               echo "| **Gitops glob** | \`${{ inputs.values_glob }}\` |"
-            else
+            fi
+            if [[ -n "${{ inputs.values_path }}" || -z "${{ inputs.values_glob }}" ]]; then
               echo "| **Gitops file** | \`${{ inputs.values_path || format('platform-gitops/services/{0}/{1}/values.yaml', inputs.team_name, inputs.component_name) }}\` |"
             fi
           } >> $GITHUB_STEP_SUMMARY
