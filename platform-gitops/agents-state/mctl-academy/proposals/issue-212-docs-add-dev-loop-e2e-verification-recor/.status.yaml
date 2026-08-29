@@ -1,5 +1,5 @@
-status: accepted
-updated_at: '2026-08-29T14:07:18Z'
+status: implemented
+updated_at: '2026-08-29T14:14:08Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -9,5 +9,11 @@ source:
 control:
   requires_human_approval: true
 approval:
-  approved_by: 'unknown'
+  approved_by: unknown
   approved_at: '2026-08-29T14:07:18Z'
+attempt:
+  id: 4a620ea8-272e-4a03-9a20-1e23516dfc15
+  started_at: '2026-08-29T14:13:34Z'
+  expires_at: '2026-08-29T16:23:34Z'
+  finished_at: '2026-08-29T14:14:08Z'
+pr: https://github.com/mctlhq/mctl-academy/pull/213
