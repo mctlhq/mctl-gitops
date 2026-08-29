@@ -79,3 +79,14 @@ deploy:
 3. No data was migrated or persisted in a new shape, so no data cleanup is
    needed on rollback; any `store.savePendingAuth` rows written during the
    rollout window simply expire on their existing TTL as before.
+
+## Operator decisions (approve, 2026-08-29)
+
+- Accepted as proposed. All legitimate returnTo producers verified on live
+  main to stay within https://*.mctl.ai or relative paths (/forward-auth,
+  /tenant-login, vault-secrets /openclaw/intake, /authorize).
+- Add two edge-case tests: returnTo with a backslash variant ('\\/evil')
+  and a trailing-dot host ('https://mctl.ai./' must be rejected).
+- Note in the PR description: .mctl.me is deliberately NOT allowlisted
+  (domain retired, gitops#934); any resurrected *.mctl.me environment
+  would need a deliberate allowlist edit.

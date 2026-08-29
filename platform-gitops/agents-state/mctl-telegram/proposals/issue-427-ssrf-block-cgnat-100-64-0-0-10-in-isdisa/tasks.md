@@ -75,3 +75,9 @@ config, schema, or external state changes. To roll back:
   succeed instead of being rejected, restoring pre-fix (vulnerable)
   behavior — acceptable only as a temporary measure while investigating a
   regression, not a long-term option.
+
+## Operator decisions (approve, 2026-08-29)
+
+- Accepted as proposed. One correction: current line numbers on main are
+  59-64 (doc comment) and 65-72 (isDisallowedIP), not 63-71 — re-anchor
+  before editing. No other changes; callers need no modification.
