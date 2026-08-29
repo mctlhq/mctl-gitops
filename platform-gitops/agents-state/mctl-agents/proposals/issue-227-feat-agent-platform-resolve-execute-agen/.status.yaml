@@ -1,6 +1,6 @@
-status: accepted
-updated_at: '2026-08-29T22:39:20Z'
-updated_by: mashkovd
+status: implemented
+updated_at: '2026-08-29T23:22:25Z'
+updated_by: mctl-agents[bot]
 source:
   type: github_issue
   repo: mctlhq/mctl-agents
@@ -8,3 +8,9 @@ source:
   url: https://github.com/mctlhq/mctl-agents/issues/227
 control:
   requires_human_approval: true
+attempt:
+  id: 71440c0c-ef36-49a6-b527-a1e183cbff04
+  started_at: '2026-08-29T23:01:43Z'
+  expires_at: '2026-08-30T01:11:43Z'
+  finished_at: '2026-08-29T23:22:25Z'
+pr: https://github.com/mctlhq/mctl-agents/pull/234
