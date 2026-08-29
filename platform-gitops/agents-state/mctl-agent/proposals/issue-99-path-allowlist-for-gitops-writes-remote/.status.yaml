@@ -1,6 +1,6 @@
-status: accepted
-updated_at: '2026-08-29T13:47:42Z'
-updated_by: mashkovd
+status: implemented
+updated_at: '2026-08-29T14:12:55Z'
+updated_by: mctl-agents[bot]
 source:
   type: github_issue
   repo: mctlhq/mctl-agent
@@ -9,12 +9,8 @@ source:
 control:
   requires_human_approval: true
 attempt:
-  id: 2cb4e348-b96e-40bb-ba6d-7d7f5c537811
-  started_at: '2026-08-29T13:23:53Z'
-  expires_at: '2026-08-29T15:33:53Z'
-  finished_at: '2026-08-29T13:39:00Z'
-notes: 'runtime: operation timed out: operation exceeded 900s (model stream, client construction, or mctl connectivity check)'
-failure:
-  code: operation-timeout
-  stage: runtime
-  message: 'operation timed out: operation exceeded 900s (model stream, client construction, or mctl connectivity check)'
+  id: 79b2cfa9-f353-4603-ab2d-6b29b0014753
+  started_at: '2026-08-29T13:55:56Z'
+  expires_at: '2026-08-29T16:05:56Z'
+  finished_at: '2026-08-29T14:12:55Z'
+pr: https://github.com/mctlhq/mctl-agent/pull/114
