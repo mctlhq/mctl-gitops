@@ -1,0 +1,79 @@
+# Unit tests for mctl-telegram-alerts.yaml.
+#
+# rule_files is resolved relative to this file. generated/ is produced by
+# scripts/check-vm-rules.sh, which extracts each VMRule's `.spec` — a plain
+# Prometheus rule-group document — so promtool can evaluate the very rules
+# the cluster runs.
+rule_files:
+  - generated/mctl-telegram-alerts.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # HighToolErrorRate shipped without aggregation on either side of the
+  # division. PromQL then matches series on every shared label, `status`
+  # included, so each error series was divided by itself: the expression
+  # evaluated to exactly 1 whenever any tool had errored at all, and the 10%
+  # threshold was unreachable in either direction. A syntax check has nothing
+  # to say about that, which is why it survived for months.
+  - interval: 1m
+    name: HighToolErrorRate stays quiet at a 3% error rate
+    input_series:
+      # 3 errors and 97 successes over 20 minutes, spread across two tools.
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",instance="prod",tool="send_message",status="error"}'
+        values: '0+0.1x20'
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",instance="prod",tool="send_message",status="ok"}'
+        values: '0+3x20'
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",instance="prod",tool="list_dialogs",status="ok"}'
+        values: '0+1.9x20'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: HighToolErrorRate
+        exp_alerts: []
+
+  - interval: 1m
+    name: HighToolErrorRate fires when a fifth of the calls fail
+    input_series:
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",instance="prod",tool="send_message",status="error"}'
+        values: '0+1x30'
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",instance="prod",tool="send_message",status="ok"}'
+        values: '0+4x30'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: HighToolErrorRate
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: mctl-telegram
+              instance: prod
+            exp_annotations:
+              summary: "mctl-telegram: more than 10% of tool calls are failing"
+              description: >-
+                More than 10% of MCP tool invocations are returning errors over
+                the last 15 minutes. Check mctl-telegram logs for the specific
+                tools failing (tool label on mctl_tool_invocations_total).
+
+  # The instance label is deliberately kept out of the aggregation so the
+  # preview deployment's soak traffic cannot drag production over the
+  # threshold, or hide a production failure behind preview's clean calls.
+  - interval: 1m
+    name: a failing preview does not implicate production
+    input_series:
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",instance="preview",tool="send_message",status="error"}'
+        values: '0+1x30'
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",instance="prod",tool="send_message",status="ok"}'
+        values: '0+4x30'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: HighToolErrorRate
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: mctl-telegram
+              instance: preview
+            exp_annotations:
+              summary: "mctl-telegram: more than 10% of tool calls are failing"
+              description: >-
+                More than 10% of MCP tool invocations are returning errors over
+                the last 15 minutes. Check mctl-telegram logs for the specific
+                tools failing (tool label on mctl_tool_invocations_total).

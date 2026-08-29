@@ -83,12 +83,32 @@ jobs:
       - name: Validate Argo local workdir invariants
         run: scripts/validate-local-workdir.py
 
+      - name: Install promtool
+        env:
+          PROMETHEUS_VERSION: "3.5.0"
+        run: |
+          set -euo pipefail
+          curl -sSL "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz" \
+            | tar xz --strip-components=1 "prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool"
+          sudo mv promtool /usr/local/bin/
+
+      # Syntax AND semantics. kubeconform above only sees a VMRule as a valid
+      # CRD instance; the expressions inside are an opaque string to it.
+      # HighToolErrorRate shipped a division that matched on `status` and so
+      # evaluated errors/errors = 1, firing most mornings on a healthy
+      # service, and no gate in this repo had anything to say about it for
+      # months. The unit tests are the part that closes that.
+      - name: Check and unit-test alerting rules
+        run: scripts/check-vm-rules.sh
+
       - name: Validate raw manifests (tenants, argo-workflows, mcp, infra-components)
         run: |
           set -euo pipefail
           # Excludes:
           #  - values.yaml (Helm values, not a k8s manifest)
           #  - catalog-info.yaml (Backstage entity, no k8s schema)
+          #  - *_test.yaml: promtool rule unit tests, not k8s manifests
+          #    (run by scripts/check-vm-rules.sh above)
           #  - cwft-mctl-agents-{shepherd,implement,issue-poll}.yaml: intentionally set
           #    .spec.outputs on a ClusterWorkflowTemplate (see in-file comments) to
           #    satisfy Argo's static validator; the community CRD schema catalog
@@ -97,5 +117,5 @@ jobs:
           find platform-gitops/tenants platform-gitops/argo-workflows platform-gitops/mcp platform-gitops/infra-components \
             \( -name "*.yaml" -o -name "*.yml" \) -print0 | \
             xargs -0 kubeconform -strict -summary -schema-location default \
-              -ignore-filename-pattern '(^|.*/)(values\.yaml|catalog-info\.yaml|cwft-mctl-agents-(shepherd|implement|issue-poll)\.yaml)$' \
+              -ignore-filename-pattern '(^|.*/)(values\.yaml|catalog-info\.yaml|cwft-mctl-agents-(shepherd|implement|issue-poll)\.yaml|.*_test\.yaml)$' \
               -schema-location "$CRD_SCHEMA_LOCATION"
