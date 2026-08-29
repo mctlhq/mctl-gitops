@@ -1,6 +1,6 @@
-status: accepted
-updated_at: '2026-08-29T16:46:22Z'
-updated_by: mashkovd
+status: implemented
+updated_at: '2026-08-29T17:33:37Z'
+updated_by: mctl-agents[bot]
 source:
   type: github_issue
   repo: mctlhq/mctl-api
@@ -8,3 +8,9 @@ source:
   url: https://github.com/mctlhq/mctl-api/issues/197
 control:
   requires_human_approval: true
+attempt:
+  id: 79efc5e0-2d46-4707-9f53-5473ce387150
+  started_at: '2026-08-29T17:30:37Z'
+  expires_at: '2026-08-29T19:40:37Z'
+  finished_at: '2026-08-29T17:33:37Z'
+pr: https://github.com/mctlhq/mctl-api/pull/214
