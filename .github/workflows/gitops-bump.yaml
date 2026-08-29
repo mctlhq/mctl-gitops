@@ -91,6 +91,48 @@ jobs:
           vpath      = os.environ.get('VALUES_PATH', '').strip()
           vglob      = os.environ.get('VALUES_GLOB', '').strip()
 
+          # The mctl-agents App token used to push this commit is on the
+          # main-protection ruleset's bypass list on the understanding (see
+          # CLAUDE.md's "Branch Protection Exception") that it only ever
+          # touches image.tag data. Nothing about workflow_dispatch inputs
+          # enforces that on its own, so values_path/values_glob are
+          # allowlisted here before any file is opened.
+          #
+          # Caller inventory verified 2026-08-29 across all 23 org repos:
+          # these three prefixes cover every real caller of
+          # gitops-bump/release-deploy — platform-gitops/services/ (tenant
+          # services, docs/telegram/academy/design), platform-gitops/
+          # argo-workflows/cluster-templates/ (mctl-agents CWFT glob), and
+          # platform-gitops/bootstrap/templates/mctl-platform/
+          # (mctl-agent/mctl-api/mctl-portal). No fourth prefix exists
+          # today; adding one requires editing this allowlist deliberately.
+          ALLOWED_PREFIXES = (
+              "platform-gitops/services/",
+              "platform-gitops/argo-workflows/cluster-templates/",
+              "platform-gitops/bootstrap/templates/mctl-platform/",
+          )
+
+          def validate_allowed(path):
+              if os.path.isabs(path):
+                  print(f"ERROR: path must be relative, got absolute path: {path}", file=sys.stderr)
+                  sys.exit(4)
+              # normpath collapses "a/../b" segments; comparing before/after
+              # catches ".." traversal without relying on normpath alone —
+              # this repo checkout has no symlinks, so normpath alone would
+              # suffice, but the explicit check documents intent and fails
+              # closed even if a future path shape confuses normpath.
+              if ".." in path.split("/"):
+                  print(f"ERROR: path must not contain '..' segments: {path}", file=sys.stderr)
+                  sys.exit(4)
+              normalized = os.path.normpath(path)
+              if not normalized.startswith(ALLOWED_PREFIXES):
+                  print(
+                      f"ERROR: path '{path}' is not under an allowed prefix. "
+                      f"Allowed: {', '.join(ALLOWED_PREFIXES)}",
+                      file=sys.stderr,
+                  )
+                  sys.exit(4)
+
           # Point 3: exactly one of values_path / values_glob must be set
           if not vpath and not vglob:
               print("ERROR: provide exactly one of values_path or values_glob", file=sys.stderr)
@@ -101,11 +143,15 @@ jobs:
 
           # Point 4: no-op guard — fail loudly if glob resolves to nothing
           if vglob:
+              validate_allowed(vglob)
               files = sorted(globmod.glob(vglob))
               if not files:
                   print(f"ERROR: no files matched glob: {vglob}", file=sys.stderr)
                   sys.exit(2)
+              for f in files:
+                  validate_allowed(f)
           else:
+              validate_allowed(vpath)
               files = [vpath]
 
           missing = [f for f in files if not os.path.isfile(f)]
@@ -119,6 +165,7 @@ jobs:
 
           total_replaced = 0
           total_already  = 0
+          changed_files  = []
           for path in files:
               with open(path) as fp:
                   content = fp.read()
@@ -164,6 +211,16 @@ jobs:
                           fp.write(out)
                       print(f"  {path}: bumped {n} occurrence(s)")
                       total_replaced += n
+                      changed_files.append(path)
+
+          # Hand off exactly the files this step actually rewrote to the
+          # "Commit and push" step, which stages only these files
+          # explicitly, never the full working tree. Written unconditionally
+          # (even when empty) so that step can tell "nothing changed" apart
+          # from "this step never got here" and fail closed on the latter.
+          with open('/tmp/gitops-bump-changed-files.txt', 'w') as fp:
+              for p in changed_files:
+                  fp.write(p + '\n')
 
           # Point 5: idempotent — already at target in all files
           if total_replaced == 0 and total_already > 0:
@@ -186,13 +243,36 @@ jobs:
           set -euo pipefail
           git config user.email "ci@mctl.ai"
           git config user.name  "mctl-ci"
-          git add -A
+
+          CHANGED_FILES=/tmp/gitops-bump-changed-files.txt
+          if [[ ! -f "${CHANGED_FILES}" ]]; then
+            echo "::error::changed-files handoff file missing — bump step did not report its results, refusing to commit blind"
+            exit 1
+          fi
+
+          # Stage exactly the allowlist-validated file(s) the bump step
+          # reported as changed, not the full working tree, so an unrelated
+          # modified/untracked file left in the runner's checkout can never
+          # be swept into this commit. Read line-by-line (not unquoted
+          # command substitution) so filenames are never word-split.
+          git_add_args=()
+          while IFS= read -r f; do
+            [[ -n "$f" ]] && git_add_args+=("$f")
+          done < "${CHANGED_FILES}"
+
+          if [[ ${#git_add_args[@]} -eq 0 ]]; then
+            echo "::notice::No staged changes (already at ${NEW_TAG})"
+            exit 0
+          fi
+
+          git add -- "${git_add_args[@]}"
           if git diff --staged --quiet; then
             echo "::notice::No staged changes (already at ${NEW_TAG})"
             exit 0
           fi
           SERVICE=$(basename "$IMAGE_NAME")
-          # Direct commit to main — scope is image tag lines only
+          # Direct commit to main — scoped to exactly the allowlisted,
+          # explicitly-staged file(s) above.
           git commit -m "chore: bump ${SERVICE} to ${NEW_TAG}"
           git push
 
