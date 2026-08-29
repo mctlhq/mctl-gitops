@@ -1,0 +1,323 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterWorkflowTemplate
+metadata:
+  name: mctl-agents-approve
+  annotations:
+    workflows.argoproj.io/description: |
+      Dev-loop approve step — flips exactly one proposal's .status.yaml from
+      proposed to accepted and commits that single file back to gitops main.
+
+      This is the phase-5 cutover of the manual "operator edits gitops by
+      hand" flip (mctlhq/mctl-agents#150): the Temporal worker deliberately
+      holds no gitops checkout or deploy key, so the DevLoopWorkflow submits
+      this CWFT after its approve() signal instead of writing gitops itself.
+
+        1. clone-gitops — SSH-clone mctl-gitops via the shared deploy key.
+        2. flip-status — proposed → accepted for the {service, slug} pair,
+           recording approver identity. Idempotent: already-accepted exits 0
+           so Temporal retries and rebase races never fail the loop; any
+           other status (implemented, needs-triage, ...) fails loudly.
+        3. commit-and-push — commits ONLY that proposal's .status.yaml under
+           the mctl-gitops-main-writes mutex.
+
+      Deliberately does NOT take the mctl-agents-proposal-claims mutex: that
+      lock serializes implementer discovery/claims, and approve only touches
+      its own slug's file — holding both here would risk lock-ordering
+      deadlock against a concurrently running implement workflow.
+
+      Triggered by:
+        - Temporal DevLoopWorkflow (mctl-agents) via mctl-api operation
+          mctl-agents-approve, after the approve() signal
+        - mctl-api MCP tool / operator submitting a Workflow that references
+          this CWFT (manual approves stay possible)
+spec:
+  serviceAccountName: argo-workflow-sa
+  imagePullSecrets:
+    - name: ghcr-credentials
+  # Same Loki/NetworkPolicy labels as the other mctl-agents templates — see
+  # cwft-mctl-agents-implement.yaml for the incident history behind them.
+  podMetadata:
+    labels:
+      app.kubernetes.io/name: mctl-agents
+      mctl.ai/team: admins
+  ttlStrategy:
+    secondsAfterCompletion: 86400
+  volumeClaimGC:
+    strategy: OnWorkflowCompletion
+  # clone + one-line file edit + push. No agent, no SDK — anything beyond a
+  # few minutes here is a wedged mutex or a broken push, not real work.
+  activeDeadlineSeconds: 600
+  entrypoint: approve-proposal
+
+  arguments:
+    parameters:
+      - name: service
+        # Required. Service directory under platform-gitops/agents-state/.
+        value: ""
+      - name: slug
+        # Required. Proposal directory name (e.g. issue-42-fix-foo). The flip
+        # targets exactly agents-state/<service>/proposals/<slug>/.status.yaml.
+        value: ""
+      - name: approver
+        # Optional identity of whoever fired the approve signal. Recorded in
+        # the .status.yaml approval block and the commit message for the
+        # audit trail (#150); "unknown" when the caller predates the field.
+        value: "unknown"
+
+  volumeClaimTemplates:
+    - metadata:
+        name: workdir
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            # Only a --depth=1 clone of mctl-gitops lives here — no sibling
+            # repos, no Go cache. Smallest Hetzner CSI volume tier.
+            storage: 1Gi
+  volumes:
+    - name: deploy-key
+      secret:
+        secretName: mctl-gitops-deploy-key
+        defaultMode: 0600
+
+  templates:
+    - name: approve-proposal
+      steps:
+        - - name: clone
+            template: clone-gitops
+        - - name: flip
+            template: flip-status
+        - - name: commit
+            template: commit-and-push
+            # Skip the mutex-holding commit entirely when flip-status found
+            # the proposal already accepted (idempotent retry / rebase race).
+            when: "{{steps.flip.outputs.result}} == flipped"
+
+    # ── 1. SSH-clone mctl-gitops into shared volume ───────────────────────
+    - name: clone-gitops
+      script:
+        image: alpine/git:2.43.0
+        command: [sh]
+        source: |
+          set -e
+          apk add --no-cache openssh-client ca-certificates
+          mkdir -p ~/.ssh
+          cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  StrictHostKeyChecking no\n' > ~/.ssh/config
+          chmod 600 ~/.ssh/config
+          git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops
+          echo "✓ gitops cloned"
+        resources:
+          requests: { cpu: 50m, memory: 128Mi }
+          limits:   { cpu: 500m, memory: 512Mi }
+        volumeMounts:
+          - name: workdir
+            mountPath: /workdir
+          - name: deploy-key
+            mountPath: /secrets/deploy-key
+
+    # ── 2. Flip proposed → accepted ───────────────────────────────────────
+    # stdout is EXACTLY "flipped" or "noop" — Argo captures the script's
+    # whole stdout as outputs.result, and the step-list `when` compares it
+    # verbatim, so every log line here goes to stderr instead.
+    - name: flip-status
+      script:
+        image: alpine/git:2.43.0
+        command: [sh]
+        env:
+          # Params via env, never inline {{workflow.parameters.*}} in the
+          # script body — same shell-injection reasoning as the other
+          # mctl-agents templates (this pod shares the workdir a push step
+          # later trusts).
+          - name: WORKFLOW_SERVICE
+            value: "{{workflow.parameters.service}}"
+          - name: WORKFLOW_SLUG
+            value: "{{workflow.parameters.slug}}"
+          - name: WORKFLOW_APPROVER
+            value: "{{workflow.parameters.approver}}"
+        source: |
+          set -e
+          if [ -z "$WORKFLOW_SERVICE" ] || [ -z "$WORKFLOW_SLUG" ]; then
+            echo "❌ service and slug are both required" >&2
+            exit 1
+          fi
+          # service/slug become path components below — refuse separators
+          # and dot-dot so a crafted value cannot escape agents-state/.
+          case "$WORKFLOW_SERVICE$WORKFLOW_SLUG" in
+            */*|*..*|*' '*)
+              echo "❌ service/slug must be plain directory names" >&2
+              exit 1 ;;
+          esac
+          STATUS_FILE="/workdir/mctl-gitops/platform-gitops/agents-state/${WORKFLOW_SERVICE}/proposals/${WORKFLOW_SLUG}/.status.yaml"
+          if [ ! -f "$STATUS_FILE" ]; then
+            echo "❌ No .status.yaml at agents-state/${WORKFLOW_SERVICE}/proposals/${WORKFLOW_SLUG}/ — nothing to approve" >&2
+            exit 1
+          fi
+          # Top-level `status:` is the one field this flip requires. A file
+          # where it is missing, indented, or nested is malformed for our
+          # purposes — say so explicitly instead of a cryptic later failure.
+          if ! grep -q '^status:' "$STATUS_FILE"; then
+            echo "❌ ${STATUS_FILE} has no top-level 'status:' field (malformed or unexpectedly indented .status.yaml)" >&2
+            exit 1
+          fi
+          CURRENT=$(sed -n 's/^status:[[:space:]]*//p' "$STATUS_FILE" | head -1)
+          if [ "$CURRENT" = "accepted" ]; then
+            # Idempotent path: a Temporal retry of submit_and_wait, or a
+            # manual approve racing the automated one. Exit 0 so the loop
+            # proceeds to implement instead of failing on a double-approve.
+            echo "ℹ️  ${WORKFLOW_SLUG} is already accepted — no-op." >&2
+            echo -n "noop"
+            exit 0
+          fi
+          if [ "$CURRENT" != "proposed" ]; then
+            echo "❌ ${WORKFLOW_SLUG} has status '${CURRENT:-<missing>}' — only proposed → accepted is a valid approve" >&2
+            exit 1
+          fi
+          # Approver lands in YAML and the commit message — keep it to a
+          # conservative charset rather than trying to quote arbitrary input.
+          APPROVER_SAFE=$(printf '%s' "$WORKFLOW_APPROVER" | tr -cd 'A-Za-z0-9._@-' | cut -c1-64)
+          [ -n "$APPROVER_SAFE" ] || APPROVER_SAFE="unknown"
+          NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          # A hand-written file may lack a trailing newline; the appends
+          # below would then glue their first key onto the last scalar
+          # (`...: trueapproval:`), producing invalid YAML. Normalize once.
+          if [ -n "$(tail -c1 "$STATUS_FILE")" ]; then
+            echo >> "$STATUS_FILE"
+          fi
+          # The CURRENT read above already proved a top-level `status:` line
+          # exists (it parsed to "proposed"), so this sed always matches.
+          sed -i "s/^status:[[:space:]].*$/status: accepted/" "$STATUS_FILE"
+          # updated_at/updated_by may be absent on a hand-written or partial
+          # file — sed on a missing line is a silent no-op, so insert-or-
+          # replace explicitly instead of assuming the investigator's shape.
+          for FIELD in updated_at updated_by; do
+            case "$FIELD" in
+              updated_at) VALUE="'${NOW}'" ;;
+              updated_by) VALUE="mctl-agents[bot]" ;;
+            esac
+            if grep -q "^${FIELD}:" "$STATUS_FILE"; then
+              sed -i "s|^${FIELD}:[[:space:]].*$|${FIELD}: ${VALUE}|" "$STATUS_FILE"
+            else
+              printf '%s: %s\n' "$FIELD" "$VALUE" >> "$STATUS_FILE"
+            fi
+          done
+          if ! grep -q '^approval:' "$STATUS_FILE"; then
+            # Single-quote approved_by: the sanitized charset still allows
+            # YAML indicators in first position (`@alice`, a bare `-`),
+            # which are invalid unquoted. The charset excludes ' itself, so
+            # plain quoting is always safe.
+            printf "approval:\n  approved_by: '%s'\n  approved_at: '%s'\n" "$APPROVER_SAFE" "$NOW" >> "$STATUS_FILE"
+          fi
+          # Post-edit verification: the flip this workflow exists to make
+          # must actually be on disk before the commit step runs, otherwise
+          # fail loudly here — a partially-updated file would otherwise be
+          # committed, and retries would loop on status=proposed forever.
+          if ! grep -q '^status: accepted$' "$STATUS_FILE"; then
+            echo "❌ Post-edit check failed: ${STATUS_FILE} does not read 'status: accepted'" >&2
+            exit 1
+          fi
+          echo "✅ ${WORKFLOW_SERVICE}/${WORKFLOW_SLUG}: proposed → accepted (by ${APPROVER_SAFE})" >&2
+          echo -n "flipped"
+        resources:
+          requests: { cpu: 50m, memory: 64Mi }
+          limits:   { cpu: 200m, memory: 256Mi }
+        volumeMounts:
+          - name: workdir
+            mountPath: /workdir
+
+    # ── 3. Commit & push back to mctl-gitops ──────────────────────────────
+    # Same template-scoped mutex + .status.yaml-only staging guard as
+    # cwft-mctl-agents-implement.yaml (see the comments there for why the
+    # mutex is on this template only, not the workflow spec). Stages exactly
+    # the one file flip-status edited.
+    - name: commit-and-push
+      synchronization:
+        mutex:
+          name: mctl-gitops-main-writes
+      script:
+        image: alpine/git:2.43.0
+        command: [sh]
+        env:
+          - name: WORKFLOW_SERVICE
+            value: "{{workflow.parameters.service}}"
+          - name: WORKFLOW_SLUG
+            value: "{{workflow.parameters.slug}}"
+          - name: WORKFLOW_APPROVER
+            value: "{{workflow.parameters.approver}}"
+        source: |
+          set -e
+          # Same guards as flip-status — defense in depth: this pod holds
+          # the deploy key, so never trust that the earlier step validated.
+          if [ -z "$WORKFLOW_SERVICE" ] || [ -z "$WORKFLOW_SLUG" ]; then
+            echo "❌ service and slug are both required" >&2
+            exit 1
+          fi
+          case "$WORKFLOW_SERVICE$WORKFLOW_SLUG" in
+            */*|*..*|*' '*)
+              echo "❌ service/slug must be plain directory names" >&2
+              exit 1 ;;
+          esac
+          apk add --no-cache openssh-client ca-certificates
+          mkdir -p ~/.ssh
+          cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  StrictHostKeyChecking no\n' > ~/.ssh/config
+          chmod 600 ~/.ssh/config
+
+          git config --global --add safe.directory /workdir/mctl-gitops
+          cd /workdir/mctl-gitops
+          git config user.name "mctl-agents[bot]"
+          git config user.email "mctl-agents[bot]@users.noreply.github.com"
+
+          STATUS_PATH="platform-gitops/agents-state/${WORKFLOW_SERVICE}/proposals/${WORKFLOW_SLUG}/.status.yaml"
+          # Guard: this workflow must only ever change the one status file.
+          OTHER_CHANGES="$(git status --porcelain | grep -v -F " ${STATUS_PATH}" || true)"
+          if [ -n "$OTHER_CHANGES" ]; then
+            echo "❌ Refusing to commit — worktree has changes beyond ${STATUS_PATH}:" >&2
+            printf '%s\n' "$OTHER_CHANGES" >&2
+            exit 1
+          fi
+          git add -- "$STATUS_PATH"
+          if git diff --cached --quiet; then
+            echo "ℹ️  No staged change — nothing to commit."
+            exit 0
+          fi
+
+          APPROVER_SAFE=$(printf '%s' "$WORKFLOW_APPROVER" | tr -cd 'A-Za-z0-9._@-' | cut -c1-64)
+          [ -n "$APPROVER_SAFE" ] || APPROVER_SAFE="unknown"
+          git commit -m "chore(agents): approve ${WORKFLOW_SLUG} (${APPROVER_SAFE})"
+
+          for i in 1 2 3 4 5; do
+            if git push origin HEAD:main; then
+              echo "✅ Pushed approve commit"
+              exit 0
+            fi
+            echo "⚠️  Push failed (attempt ${i}), rebasing..."
+            if ! git pull --rebase origin main; then
+              # A conflict on OUR file means someone else already changed
+              # this proposal's status — most likely a concurrent approve of
+              # the same proposal (different approver/timestamp on the same
+              # lines). If main already reads accepted, that flip landed and
+              # this run's job is done: treat it as the same idempotent
+              # no-op the flip step grants, instead of failing the loop.
+              git rebase --abort || true
+              git fetch origin main
+              if git show "origin/main:${STATUS_PATH}" 2>/dev/null | grep -q '^status: accepted$'; then
+                echo "ℹ️  ${WORKFLOW_SLUG} already accepted on main (concurrent approve) — no-op."
+                exit 0
+              fi
+              echo "❌ Rebase conflict and main does not read 'status: accepted' — needs a human look" >&2
+              exit 1
+            fi
+          done
+          echo "❌ Push failed after 5 attempts"
+          exit 1
+        resources:
+          requests: { cpu: 50m, memory: 128Mi }
+          limits:   { cpu: 500m, memory: 512Mi }
+        volumeMounts:
+          - name: workdir
+            mountPath: /workdir
+          - name: deploy-key
+            mountPath: /secrets/deploy-key
