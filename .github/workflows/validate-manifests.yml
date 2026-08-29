@@ -109,6 +109,9 @@ jobs:
           #  - catalog-info.yaml (Backstage entity, no k8s schema)
           #  - *_test.yaml: promtool rule unit tests, not k8s manifests
           #    (run by scripts/check-vm-rules.sh above)
+          #  - vm-rules/tests/generated/: build output of check-vm-rules.sh
+          #    (extracted rule-group docs, no `kind`). The script now cleans
+          #    up after itself; this pattern is the belt-and-braces guard.
           #  - cwft-mctl-agents-{shepherd,implement,issue-poll}.yaml: intentionally set
           #    .spec.outputs on a ClusterWorkflowTemplate (see in-file comments) to
           #    satisfy Argo's static validator; the community CRD schema catalog
@@ -118,4 +121,5 @@ jobs:
             \( -name "*.yaml" -o -name "*.yml" \) -print0 | \
             xargs -0 kubeconform -strict -summary -schema-location default \
               -ignore-filename-pattern '(^|.*/)(values\.yaml|catalog-info\.yaml|cwft-mctl-agents-(shepherd|implement|issue-poll)\.yaml|.*_test\.yaml)$' \
+              -ignore-filename-pattern '.*/vm-rules/tests/generated/.*' \
               -schema-location "$CRD_SCHEMA_LOCATION"

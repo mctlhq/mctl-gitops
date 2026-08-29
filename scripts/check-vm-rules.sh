@@ -24,6 +24,11 @@ GEN_DIR="$TESTS_DIR/generated"
 
 rm -rf "$GEN_DIR"
 mkdir -p "$GEN_DIR"
+# Build output must not outlive the check: the kubeconform step that runs
+# after this script sweeps all of infra-components and chokes on these
+# extracted rule-group documents (no `kind`), which turned validate red on
+# every branch on 2026-08-29.
+trap 'rm -rf "$GEN_DIR"' EXIT
 
 shopt -s nullglob
 fail=0
