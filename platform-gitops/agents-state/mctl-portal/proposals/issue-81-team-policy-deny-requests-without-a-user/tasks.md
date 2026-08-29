@@ -124,3 +124,32 @@ DENYs breaking real portal usage:
    should identify exactly which permission was denied.
 3. No data migration or persisted state is touched by this change, so
    rollback is a pure code/image revert with no cleanup step required.
+
+## Operator decisions (approve with rewritten scope, 2026-08-29)
+
+- Task 1 REWRITTEN — the open question is answered, do not build the
+  service-subject allowlist: ServerPermissionClient (permission-node
+  0.11.0) decides for service principals locally and never reaches this
+  policy, and permission-backend forwards only user/none principals. A
+  request with !user here is therefore always an anonymous caller —
+  implement an UNCONDITIONAL DENY with a logger.warn naming the
+  permission. Drop test T2's allowlist premise. This cannot break the
+  external:mctl-api custom-domains caller (it never traverses the
+  permission framework).
+- Task 3 corrections: there is NO 'catalog-location' resource type
+  (catalog.location.* are basic permissions — the isResourcePermission
+  branch is unreachable, remove it) and NO 'search.read' permission
+  (search authorizes per-document via catalog.entity.read — do not seed
+  it).
+- Seed ALLOWED_NON_CATALOG_PERMISSIONS with: the six scaffolder
+  permissions (scaffolder.action.execute, scaffolder.task.create,
+  scaffolder.task.read, scaffolder.task.cancel,
+  scaffolder.template.parameter.read, scaffolder.template.step.read)
+  plus kubernetes.resources.read and kubernetes.clusters.read (member
+  EntityPage Kubernetes tab depends on them). Add kubernetes.proxy only
+  if it shows up in warn logs during soak.
+- Soak (Task 6) MUST cover: a member opening the Kubernetes tab, running
+  a scaffolder template, the scaffolder tasks page, search, and
+  notifications.
+- Land order: this PR lands LAST of the three portal proposals, after
+  #83 and #82 are merged, with DENY warn-logging enabled from the start.

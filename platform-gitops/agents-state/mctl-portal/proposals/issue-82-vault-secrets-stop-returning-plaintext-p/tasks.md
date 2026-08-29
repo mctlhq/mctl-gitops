@@ -123,3 +123,23 @@ open when this ships, treat that specifically as the first thing to check if
 a team reports secrets disappearing after a config edit — reverting the
 `SecureVarsEditorField` change (task 6) alone is sufficient to restore the
 old (pre-fill) behavior without touching the backend role/masking changes.
+
+## Operator decisions (approve, 2026-08-29)
+
+- Accepted with adjustments:
+  1. Task 7 is RESOLVED, do not re-investigate: verified against gitops —
+     wft-deploy-service.yaml:157 skips the write-secrets step entirely
+     when secret_env_vars is empty, and tpl-vault-write.yaml:74-93 MERGES
+     non-empty submissions with existing keys (omitted keys survive).
+     Empty prefill cannot wipe secrets. Record these references in the PR
+     description.
+  2. Fix the citation: the three-value tenant role type lives in
+     plugins/tenant-backend/src/types.ts:64 (github-app-connect-backend
+     has no such file).
+  3. PR description must call out the clearSecrets semantics change:
+     clearSecrets=true with an untouched field used to be a no-op
+     (prefill immediately rewrote the list); after this change it is a
+     real full wipe — that is the checkbox finally meaning what it says.
+  4. 'developer' as the minimum role for /reveal is approved (the issue
+     said owner; developer matches the documented role model in
+     module.ts:25 — note the deviation in the PR).

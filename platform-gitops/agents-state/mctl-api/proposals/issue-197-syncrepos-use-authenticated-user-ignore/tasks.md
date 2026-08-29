@@ -70,3 +70,20 @@ plain `git revert` fully restores prior behavior with no follow-up cleanup
 required. If only the handler needs to be rolled back urgently (e.g. it
 turns out some deployment truly depends on nil-user syncing), the minimal
 revert is task 1 alone; tasks 2-4 are independently safe to keep or drop.
+
+## Operator decisions (approve, 2026-08-29)
+
+- Option 1 (strict) confirmed by the operator: remove the user field
+  entirely; always use the authenticated user's ID; no admin override.
+  Rationale: the mctl-api -> github-app-connect hop currently sends no
+  credentials and has been receiving 401s since portal#79 shipped, so no
+  live caller depends on on-behalf-of sync; if that scenario is ever
+  needed it returns deliberately with the chain repair (see companion
+  issue), not inside a security fix.
+- Task 1: use writeError(w, http.StatusUnauthorized, ...) exactly as
+  handlers_domains.go does — not raw http.Error.
+- PR description must state: the Backstage layer (portal#88) already
+  rejects a mismatched user param, this fix is the second, mctl-api-side
+  layer of the same control; and the sync path is currently broken
+  end-to-end (companion issue filed) — this PR neither fixes nor worsens
+  that.
