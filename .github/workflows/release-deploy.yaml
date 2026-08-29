@@ -190,6 +190,7 @@ jobs:
           total_replaced = 0
           total_already = 0
           changed_files = []
+          matched_per_file = {}
           for path in files:
               with open(path) as fp:
                   content = fp.read()
@@ -218,6 +219,7 @@ jobs:
               p4 = re.compile(r'(value:\s*["\']?' + re.escape(image_name) + r')["\']?:[\w.\-]+')
               out, n4 = p4.subn(r'\1:' + new_tag, out)
               n = n1 + n2 + n3 + n4
+              matched_per_file[path] = n
               if n == 0:
                   print(f"  {path}: WARN — no image pattern matched (skipped)")
                   continue
@@ -230,6 +232,17 @@ jobs:
                   print(f"  {path}: bumped {n} occurrence(s)")
                   total_replaced += n
                   changed_files.append(path)
+
+          # An explicitly requested single file (values_path or the
+          # per-service default) with no pattern match is an error, not a
+          # warning: unlike glob members — where some files legitimately
+          # don't carry the image — the caller named this exact file, and
+          # letting glob matches satisfy the aggregate check would report
+          # success while the requested deployment silently stays on the
+          # old tag.
+          if vpath and matched_per_file.get(vpath, 0) == 0:
+              print(f"ERROR: no image tag pattern for {image_name} in explicitly requested {vpath}", file=sys.stderr)
+              sys.exit(3)
 
           # Hand off exactly the files this step actually rewrote to the
           # "Commit and push" step, which stages only these files
