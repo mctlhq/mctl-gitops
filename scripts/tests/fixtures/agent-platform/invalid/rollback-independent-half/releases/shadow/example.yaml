@@ -1,0 +1,33 @@
+# Invalid: rollbackOf 5 replays history revision 5's profile half
+# (example@1.0.0) but pairs it with a definition version ("2") that
+# revision 5 never recorded (it recorded "1") -- an independently chosen
+# mix of the two halves. Independent rollback of either half is rejected.
+apiVersion: agents.mctl.ai/v1alpha2
+kind: ReleaseBindingIntent
+metadata:
+  agent: example
+  environment: shadow
+spec:
+  sourceManifest:
+    repo: mctlhq/mctl-agents
+    path: agents/_manifests/example/agent.yaml
+    gitSha: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+  bindingSource: compatibility-fixture
+  promotable: false
+  registryLifecycle:
+    definition: published
+    profile: published
+  definition:
+    name: example
+    version: "2"
+    profileCompatibility: ">=1.0.0 <2.0.0"
+  profile:
+    name: example
+    version: "1.0.0"
+  bindingRevision: 6
+  previousBindingRevision: 5
+  rollbackOf: 5
+  history:
+    - bindingRevision: 5
+      definition: {name: example, version: "1"}
+      profile: {name: example, version: "1.0.0"}

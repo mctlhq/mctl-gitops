@@ -1,0 +1,27 @@
+# Invalid: spec.budgetUsd and spec.timeoutSeconds are required bounds.
+apiVersion: agents.mctl.ai/v1alpha2
+kind: ExecutionProfile
+metadata:
+  name: example
+  owner: platform
+spec:
+  version: "1.0.0"
+  modelPolicyRef:
+    task: service_agent
+    compatibility: ">=1.0.0 <2.0.0"
+  skills: []
+  tools: [Read]
+  policyRef: read-only-investigation
+  permissions:
+    repository: {read: true, branchCreate: false, commit: false, pullRequestCreate: false, merge: false}
+    kubernetes: none
+    network: approved-providers-only
+    mutationScopes: [proposal-directory-write]
+  runtime:
+    entrypoint: orchestrator.run_example:main
+    optionsBuilder: orchestrator.options:build_example_options
+    sandbox: {backend: argo, clusterWorkflowTemplate: mctl-agents-investigate, approved: true}
+  approval:
+    requiredBefore: []
+  evidence:
+    required: [proposal]

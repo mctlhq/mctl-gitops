@@ -1,0 +1,31 @@
+# ReleaseBindingIntent fixture -- NOT a real registry release. See
+# issue-investigator.yaml's header comment for why (no real mctl-api
+# v1alpha2 rows exist yet). gitSha is a placeholder.
+apiVersion: agents.mctl.ai/v1alpha2
+kind: ReleaseBindingIntent
+metadata:
+  agent: shepherd
+  environment: shadow
+spec:
+  sourceManifest:
+    repo: mctlhq/mctl-agents
+    path: agents/_manifests/shepherd/agent.yaml
+    gitSha: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+  bindingSource: compatibility-fixture
+  promotable: false
+  registryLifecycle:
+    definition: published
+    profile: published
+  definition:
+    name: shepherd
+    version: "1"
+    profileCompatibility: ">=1.0.0 <2.0.0"
+  profile:
+    name: shepherd-default
+    version: "1.0.0"
+  bindingRevision: 3
+  previousBindingRevision: 2
+  history:
+    - bindingRevision: 2
+      definition: {name: shepherd, version: "1"}
+      profile: {name: shepherd-default, version: "1.0.0"}

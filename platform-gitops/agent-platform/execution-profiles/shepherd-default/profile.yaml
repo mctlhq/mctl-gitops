@@ -1,0 +1,55 @@
+# ExecutionProfile for shepherd (ADR 007). Preserves today's effective
+# values: $5.00 per-tick budget (cwft-mctl-agents-shepherd.yaml
+# SHEPHERD_BUDGET_USD, raised from the Tier 3 spec's $1.00 default) and the
+# CWFT's 7200s activeDeadlineSeconds (no per-tick SHEPHERD_TIMEOUT_SECONDS
+# override exists today). No mcp__mctl__* tool and network stays
+# approved-providers-only-scoped to GitHub, matching
+# docs/agent-inventory.yaml's "mcp_servers={} / no mctl MCP access" note for
+# this agent (mctl-agents issue-226 design.md). merge: true and the
+# pull-request-merge mutation scope are the one high-risk capability this
+# profile grants -- gated by the "merge" approval rule below.
+apiVersion: agents.mctl.ai/v1alpha2
+kind: ExecutionProfile
+metadata:
+  name: shepherd-default
+  owner: platform
+spec:
+  version: "1.0.0"
+  modelPolicyRef:
+    task: shepherd
+    compatibility: ">=1.0.0 <2.0.0"
+  skills: []
+  tools:
+    - Read
+    - Grep
+    - Glob
+    - Bash
+    - WebFetch
+  policyRef: pr-shepherd
+  permissions:
+    repository:
+      read: true
+      branchCreate: false
+      commit: false
+      pullRequestCreate: false
+      merge: true
+    kubernetes: none
+    network: approved-providers-only
+    mutationScopes:
+      - proposal-status
+      - pull-request-merge
+  budgetUsd: 5.00
+  timeoutSeconds: 7200
+  runtime:
+    entrypoint: orchestrator.run_shepherd:tick
+    optionsBuilder: orchestrator.options:build_shepherd_options
+    sandbox:
+      backend: argo
+      clusterWorkflowTemplate: mctl-agents-shepherd
+      approved: true
+  approval:
+    requiredBefore:
+      - merge
+  evidence:
+    required:
+      - pull-request

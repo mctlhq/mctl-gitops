@@ -1,0 +1,138 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://mctl.ai/schemas/agents/v1alpha2/execution-profile.schema.json",
+  "title": "ExecutionProfile",
+  "description": "agents.mctl.ai/v1alpha2 ExecutionProfile, per ADR 007 (mctlhq/mctl-agents docs/adr/007-agent-definition-execution-profile-contract.md). Reusable, independently versioned execution-shape constraints referenced by an AgentDefinition's executionProfileRef. Does not carry AgentDefinition identity/prompt/trigger data, and does not carry a global lifecycleState field -- registry publish/environment-release state lives in mctl-api, not here.",
+  "type": "object",
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": { "const": "agents.mctl.ai/v1alpha2" },
+    "kind": { "const": "ExecutionProfile" },
+    "metadata": {
+      "type": "object",
+      "required": ["name", "owner"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$" },
+        "owner": { "type": "string", "minLength": 1 }
+      }
+    },
+    "spec": {
+      "type": "object",
+      "required": [
+        "version",
+        "modelPolicyRef",
+        "skills",
+        "tools",
+        "policyRef",
+        "permissions",
+        "budgetUsd",
+        "timeoutSeconds",
+        "runtime",
+        "approval",
+        "evidence"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "type": "string",
+          "description": "Semver-ish content version of this profile file. Bumped on any spec change. Independent of the mctl-api registry's own publish version number.",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        },
+        "modelPolicyRef": {
+          "type": "object",
+          "required": ["task", "compatibility"],
+          "additionalProperties": false,
+          "properties": {
+            "task": { "type": "string", "minLength": 1 },
+            "compatibility": { "type": "string", "minLength": 1 }
+          }
+        },
+        "skills": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true
+        },
+        "tools": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true,
+          "description": "SDK tool names only. Never authorization by itself -- see spec.permissions."
+        },
+        "policyRef": { "type": "string", "minLength": 1 },
+        "permissions": {
+          "type": "object",
+          "required": ["repository", "kubernetes", "network", "mutationScopes"],
+          "additionalProperties": false,
+          "properties": {
+            "repository": {
+              "type": "object",
+              "required": ["read", "branchCreate", "commit", "pullRequestCreate", "merge"],
+              "additionalProperties": false,
+              "properties": {
+                "read": { "type": "boolean" },
+                "branchCreate": { "type": "boolean" },
+                "commit": { "type": "boolean" },
+                "pullRequestCreate": { "type": "boolean" },
+                "merge": { "type": "boolean" }
+              }
+            },
+            "kubernetes": { "enum": ["none", "read-only", "namespace-scoped"] },
+            "network": { "enum": ["none", "approved-providers-only"] },
+            "mutationScopes": {
+              "type": "array",
+              "items": { "type": "string" },
+              "uniqueItems": true
+            }
+          }
+        },
+        "budgetUsd": { "type": "number", "exclusiveMinimum": 0 },
+        "timeoutSeconds": { "type": "integer", "exclusiveMinimum": 0 },
+        "runtime": {
+          "type": "object",
+          "required": ["entrypoint", "optionsBuilder", "sandbox"],
+          "additionalProperties": false,
+          "properties": {
+            "entrypoint": { "type": "string", "minLength": 1 },
+            "optionsBuilder": { "type": "string", "minLength": 1 },
+            "sandbox": {
+              "type": "object",
+              "required": ["backend", "clusterWorkflowTemplate", "approved"],
+              "additionalProperties": false,
+              "properties": {
+                "backend": { "type": "string", "minLength": 1 },
+                "clusterWorkflowTemplate": { "type": "string", "minLength": 1 },
+                "approved": { "type": "boolean" }
+              }
+            }
+          }
+        },
+        "approval": {
+          "type": "object",
+          "required": ["requiredBefore"],
+          "additionalProperties": false,
+          "properties": {
+            "requiredBefore": {
+              "type": "array",
+              "items": { "type": "string" },
+              "uniqueItems": true
+            }
+          }
+        },
+        "evidence": {
+          "type": "object",
+          "required": ["required"],
+          "additionalProperties": false,
+          "properties": {
+            "required": {
+              "type": "array",
+              "items": { "type": "string" },
+              "uniqueItems": true
+            }
+          }
+        }
+      }
+    }
+  }
+}

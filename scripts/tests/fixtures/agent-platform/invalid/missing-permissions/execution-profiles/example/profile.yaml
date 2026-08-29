@@ -1,0 +1,24 @@
+# Invalid: spec.permissions is required by execution-profile.schema.json.
+apiVersion: agents.mctl.ai/v1alpha2
+kind: ExecutionProfile
+metadata:
+  name: example
+  owner: platform
+spec:
+  version: "1.0.0"
+  modelPolicyRef:
+    task: service_agent
+    compatibility: ">=1.0.0 <2.0.0"
+  skills: []
+  tools: [Read]
+  policyRef: read-only-investigation
+  budgetUsd: 3.00
+  timeoutSeconds: 900
+  runtime:
+    entrypoint: orchestrator.run_example:main
+    optionsBuilder: orchestrator.options:build_example_options
+    sandbox: {backend: argo, clusterWorkflowTemplate: mctl-agents-investigate, approved: true}
+  approval:
+    requiredBefore: []
+  evidence:
+    required: [proposal]

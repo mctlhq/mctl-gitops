@@ -1,0 +1,53 @@
+# ExecutionProfile for issue-investigator (ADR 007). Preserves today's
+# effective values: $3.00 budget (cwft-mctl-agents-investigate.yaml
+# ISSUE_INVESTIGATOR_BUDGET_USD) and the CWFT's 7200s activeDeadlineSeconds
+# (no per-op ISSUE_INVESTIGATOR_TIMEOUT_SECONDS override exists today, so the
+# pod-level deadline is the effective timeout). Read-only against the target
+# repository: repository.commit/branchCreate/pullRequestCreate/merge are all
+# false, and the only mutation scopes are writing the proposal triplet and
+# commenting on the source issue -- neither requires a human approval gate.
+apiVersion: agents.mctl.ai/v1alpha2
+kind: ExecutionProfile
+metadata:
+  name: issue-investigator-default
+  owner: platform
+spec:
+  version: "1.0.0"
+  modelPolicyRef:
+    task: issue_investigator
+    compatibility: ">=1.0.0 <2.0.0"
+  skills: []
+  tools:
+    - Read
+    - Grep
+    - Glob
+    - WebSearch
+    - WebFetch
+    - "mcp__mctl__*"
+  policyRef: read-only-investigation
+  permissions:
+    repository:
+      read: true
+      branchCreate: false
+      commit: false
+      pullRequestCreate: false
+      merge: false
+    kubernetes: none
+    network: approved-providers-only
+    mutationScopes:
+      - proposal-directory-write
+      - issue-comment
+  budgetUsd: 3.00
+  timeoutSeconds: 7200
+  runtime:
+    entrypoint: orchestrator.run_issue_investigator:investigate
+    optionsBuilder: orchestrator.options:build_issue_investigator_options
+    sandbox:
+      backend: argo
+      clusterWorkflowTemplate: mctl-agents-investigate
+      approved: true
+  approval:
+    requiredBefore: []
+  evidence:
+    required:
+      - proposal

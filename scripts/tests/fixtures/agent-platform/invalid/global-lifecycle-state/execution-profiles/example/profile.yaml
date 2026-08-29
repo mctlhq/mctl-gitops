@@ -1,0 +1,34 @@
+# Invalid: spec.lifecycleState is not a recognized field.
+# execution-profile.schema.json sets additionalProperties: false on spec --
+# no global mutable lifecycleState field is allowed here (ADR 007:
+# registry version owns published/deprecated/disabled, environment binding
+# derives active).
+apiVersion: agents.mctl.ai/v1alpha2
+kind: ExecutionProfile
+metadata:
+  name: example
+  owner: platform
+spec:
+  version: "1.0.0"
+  lifecycleState: active
+  modelPolicyRef:
+    task: service_agent
+    compatibility: ">=1.0.0 <2.0.0"
+  skills: []
+  tools: [Read]
+  policyRef: read-only-investigation
+  permissions:
+    repository: {read: true, branchCreate: false, commit: false, pullRequestCreate: false, merge: false}
+    kubernetes: none
+    network: approved-providers-only
+    mutationScopes: [proposal-directory-write]
+  budgetUsd: 3.00
+  timeoutSeconds: 900
+  runtime:
+    entrypoint: orchestrator.run_example:main
+    optionsBuilder: orchestrator.options:build_example_options
+    sandbox: {backend: argo, clusterWorkflowTemplate: mctl-agents-investigate, approved: true}
+  approval:
+    requiredBefore: []
+  evidence:
+    required: [proposal]

@@ -80,6 +80,15 @@ jobs:
           # workflows that keep the generated files in sync.
           scripts/materialize-openclaw-platform-skills.py --check
 
+      - name: Validate agent platform catalog
+        run: |
+          python3 -m pip install --quiet pyyaml jsonschema
+          # --selftest also replays scripts/tests/fixtures/agent-platform/
+          # {valid,invalid} so a change that silently weakens a check (e.g.
+          # a reference no longer failing closed) fails CI even though the
+          # real platform-gitops/agent-platform/ catalog itself is fine.
+          scripts/validate-agent-platform.py --selftest
+
       - name: Validate Argo local workdir invariants
         run: scripts/validate-local-workdir.py
 

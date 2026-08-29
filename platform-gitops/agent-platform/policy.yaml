@@ -1,0 +1,139 @@
+# Agent platform policy ceilings and reference catalogs (ADR 007,
+# mctlhq/mctl-agents docs/adr/007-agent-definition-execution-profile-contract.md).
+#
+# This is the single source of "what an ExecutionProfile or
+# ReleaseBindingIntent is allowed to claim" for scripts/validate-agent-platform.py.
+# Every reference an ExecutionProfile or ReleaseBindingIntent makes (tool,
+# skill, policyRef, mutation scope, model-policy task, runtime, sandbox) is
+# checked against a list here. An entry not present in the matching list
+# fails validation closed — see requirements.md's "Unknown tool/action/
+# policy/permission/model/skill/runtime references fail closed."
+#
+# Tools are never authorization by themselves (a tool grants SDK-level
+# capability; a permission scope plus its approval rule grants the right to
+# use it mutably). See knownTools[].category below — "mutating" tools still
+# require the profile to declare a matching permission scope AND approval
+# rule before they can touch anything outside the sandbox pod.
+
+apiVersion: agents.mctl.ai/v1alpha2
+kind: AgentPlatformPolicy
+metadata:
+  name: platform-default
+  owner: platform
+
+spec:
+  # Hard ceilings. An ExecutionProfile's budgetUsd/timeoutSeconds must be
+  # <= these. Raising a ceiling is itself a reviewed mctl-gitops PR.
+  limits:
+    maxBudgetUsd: 25.00
+    maxTimeoutSeconds: 7200
+
+  # Every SDK tool name an ExecutionProfile.spec.tools entry may reference.
+  # "category" is informational classification only (read/write/exec/mcp) —
+  # it does not grant capability. Actual mutation capability comes from
+  # spec.permissions + spec.approval, checked independently below.
+  knownTools:
+    - name: Read
+      category: read
+    - name: Grep
+      category: read
+    - name: Glob
+      category: read
+    - name: WebSearch
+      category: network
+    - name: WebFetch
+      category: network
+    - name: Write
+      category: write
+    - name: Edit
+      category: write
+    - name: Bash
+      category: exec
+    - name: "mcp__mctl__*"
+      category: mcp
+
+  # Platform-skill references an ExecutionProfile.spec.skills entry may
+  # name. Source of truth for skill *content* stays
+  # platform-gitops/platform-skills/catalog/ (see
+  # scripts/validate-platform-skills.py) — this list is only the subset
+  # sanctioned for agent-platform execution profiles to reference.
+  knownSkills:
+    - mctl-platform
+    - git-flow
+
+  # model-policy "task" names an ExecutionProfile.spec.modelPolicyRef.task
+  # may reference. The model-policy versions/profiles themselves are owned
+  # by mctl-agents config/model-policy.yaml; this catalog only enumerates
+  # which task keys mctl-gitops profiles are allowed to point at, so a typo
+  # fails closed here instead of resolving to an unintended model tier at
+  # runtime.
+  knownModelPolicyTasks:
+    - issue_investigator
+    - service_agent
+    - shepherd
+
+  # policyRef values an ExecutionProfile may declare. Each is a named,
+  # externally-enforced behavior policy (prompt/guardrail scope) — this
+  # catalog is the GitOps-reviewed registry of policy *names*, not their
+  # content.
+  knownPolicies:
+    - read-only-investigation
+    - production-code-author
+    - pr-shepherd
+
+  # Mutation scopes an ExecutionProfile.spec.permissions.mutationScopes
+  # entry may declare. "mutating: true" scopes require the profile's
+  # spec.approval.requiredBefore to include the mapped approval gate below
+  # — see requirements.md's "Mutation requires both a scoped permission and
+  # the applicable approval rule."
+  knownMutationScopes:
+    - name: proposal-status
+      mutating: true
+      requiresApproval: null # gitops-agents writes its own status; no human gate
+    - name: proposal-directory-write
+      mutating: true
+      requiresApproval: null # proposal drafting, not yet code/merge
+    - name: issue-comment
+      mutating: true
+      requiresApproval: null
+    - name: target-repository-branch
+      mutating: true
+      requiresApproval: code-authoring
+    - name: pull-request-create
+      mutating: true
+      requiresApproval: code-authoring
+    - name: pull-request-merge
+      mutating: true
+      requiresApproval: merge
+    - name: gitops-main-write
+      mutating: true
+      requiresApproval: gitops-main-write
+
+  # Approval gate names an ExecutionProfile.spec.approval.requiredBefore
+  # entry may reference.
+  knownApprovalGates:
+    - code-authoring
+    - merge
+    - gitops-main-write
+
+  # Approved sandbox backends and, per backend, the exact
+  # ClusterWorkflowTemplates a profile's spec.runtime.sandbox may name.
+  # Mirrors the templates actually deployed under
+  # platform-gitops/argo-workflows/cluster-templates/. An
+  # ExecutionProfile with sandbox.approved: true but a CWFT not listed
+  # here fails closed.
+  approvedSandboxes:
+    - backend: argo
+      clusterWorkflowTemplates:
+        - mctl-agents-investigate
+        - mctl-agents-implement
+        - mctl-agents-shepherd
+
+  # Evidence kinds an ExecutionProfile.spec.evidence.required entry may
+  # name.
+  knownEvidenceKinds:
+    - proposal
+    - diff
+    - tests
+    - pull-request
+    - issue-comment
