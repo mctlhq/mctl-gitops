@@ -1,8 +1,11 @@
-status: proposed
-updated_at: '2026-08-29T07:00:00Z'
-updated_by: mashkovd
+status: accepted
+updated_at: '2026-08-29T07:06:36Z'
+updated_by: mctl-agents[bot]
 source:
   type: smoke-test
   note: throwaway fixture for the mctl-agents-approve CWFT smoke (gitops#936); delete after the test
 control:
   requires_human_approval: true
+approval:
+  approved_by: 'mashkovd'
+  approved_at: '2026-08-29T07:06:36Z'
