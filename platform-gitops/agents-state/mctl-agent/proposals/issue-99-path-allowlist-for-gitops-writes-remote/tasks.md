@@ -174,3 +174,29 @@
 - Remote skills re-registered under the new HTTPS/capability rules remain
   valid after a rollback (the `Registration` struct is unchanged), so
   rollback does not require re-registering skills a second time.
+
+## Operator decisions (approve with reduced scope, 2026-08-29)
+
+- Tasks 1-9, 12, 13 (path allowlist + remote-skill URL/SSRF guard):
+  ACCEPTED. This is the core of the issue and the design is sound; the
+  three allowlist prefixes match the fixer's real write set.
+- Task 10 (capability.Context wiring in pipeline) and task 11 (builtin
+  capability declarations): DEFERRED — cut into a follow-up issue, do NOT
+  implement in this PR. Reasons, binding on the follow-up:
+  - The premise that builtins lack `RequiredCapabilities()` is factually
+    wrong — all builtin skills already implement it. The follow-up is an
+    AUDIT of declared vs actually-used capabilities, not a blanket add.
+  - Task 11 as written would grant `CapModifyGitOps` + `CapCreatePR` to
+    every builtin including notify-only skills — an inversion of
+    least-privilege. Never widen a skill's declared capabilities beyond
+    what its Diagnose/Fix path actually calls.
+  - `llm_diagnosis` declares only `CapCallLLM` but writes fixes; enabling
+    enforcement without first extending its declaration breaks it. Fix the
+    declaration explicitly in the follow-up, with a test.
+  - Already-registered remote skills on http:// or private-IP endpoints
+    will fail the new guard: inventory them before enabling, note the
+    re-registration requirement in the changelog (task 13 covers this).
+- Task 12 shrinks accordingly: only the allowlist-related signature change
+  reaches `cmd/agent/main.go` here.
+- Land order: rebase on issue-100's merge (shared `NewGitHubFixer` +
+  `main.go` wiring).
