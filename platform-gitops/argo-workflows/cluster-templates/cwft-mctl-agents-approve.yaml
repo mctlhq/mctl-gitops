@@ -179,6 +179,12 @@ spec:
           APPROVER_SAFE=$(printf '%s' "$WORKFLOW_APPROVER" | tr -cd 'A-Za-z0-9._@-' | cut -c1-64)
           [ -n "$APPROVER_SAFE" ] || APPROVER_SAFE="unknown"
           NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          # A hand-written file may lack a trailing newline; the appends
+          # below would then glue their first key onto the last scalar
+          # (`...: trueapproval:`), producing invalid YAML. Normalize once.
+          if [ -n "$(tail -c1 "$STATUS_FILE")" ]; then
+            echo >> "$STATUS_FILE"
+          fi
           # The CURRENT read above already proved a top-level `status:` line
           # exists (it parsed to "proposed"), so this sed always matches.
           sed -i "s/^status:[[:space:]].*$/status: accepted/" "$STATUS_FILE"
