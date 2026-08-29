@@ -114,9 +114,14 @@ argo-cd:
         staticClients:
         - id: argo-workflows
           name: Argo Workflows
+          # Single entry on purpose: argo-workflows presents exactly one
+          # redirect_uri, set in bootstrap/templates/core-infra/
+          # argo-workflows.yaml (sso.redirectUrl). The mctl.me twin that used
+          # to sit here went dead when the domain was retired — Cloudflare
+          # answers 410 Gone — and a redirect URI no client can ever present
+          # is config that looks load-bearing without being reachable.
           redirectURIs:
             - https://workflows.mctl.ai/oauth2/callback
-            - https://workflows.mctl.me/oauth2/callback
           secret: "$argo-workflows-sso-client-secret"
         - id: mctl-api
           name: mctl-api
