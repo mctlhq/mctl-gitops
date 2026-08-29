@@ -1,6 +1,6 @@
-status: accepted
-updated_at: '2026-08-29T22:39:19Z'
-updated_by: mashkovd
+status: implemented
+updated_at: '2026-08-29T23:34:12Z'
+updated_by: mctl-agents[bot]
 source:
   type: github_issue
   repo: mctlhq/mctl-gitops
@@ -8,3 +8,9 @@ source:
   url: https://github.com/mctlhq/mctl-gitops/issues/950
 control:
   requires_human_approval: true
+attempt:
+  id: 7489876d-3b61-48eb-af96-b4030d551afa
+  started_at: '2026-08-29T23:23:04Z'
+  expires_at: '2026-08-30T01:33:04Z'
+  finished_at: '2026-08-29T23:34:12Z'
+pr: https://github.com/mctlhq/mctl-gitops/pull/953
