@@ -148,10 +148,17 @@ spec:
           fi
 
           # ── 6. Check domain not already in ingress ────────────────────────
+          # Already-present is NOT a full no-op: a rerun after "push
+          # succeeded, Backstage callback failed" lands exactly here, and
+          # exiting early would strand the domain record in pending forever.
+          # Skip the git edit/push, but always fall through to the callback.
+          ALREADY_PRESENT=false
           if yq eval '.ingress.hosts[]' "$SVC_VALUES" 2>/dev/null | grep -qF "$DOMAIN"; then
-            echo "ℹ️  Domain ${DOMAIN} already in ingress.hosts — nothing to do"
-            exit 0
+            echo "ℹ️  Domain ${DOMAIN} already in ingress.hosts — skipping git edit, reconciling Backstage status"
+            ALREADY_PRESENT=true
           fi
+
+          if [ "$ALREADY_PRESENT" != "true" ]; then
 
           # ── 7. Add domain to ingress.hosts ────────────────────────────────
           echo "📝 Adding ${DOMAIN} to ingress.hosts..."
@@ -215,6 +222,8 @@ spec:
             echo "   (activating without the ingress commit would leave the domain 'active' with no ingress)" >&2
             exit 1
           fi
+
+          fi  # ALREADY_PRESENT — git sections skipped, callback always runs
 
           # ── 10. Callback to Backstage to activate domain ──────────────────
           # Both routes are auth-gated (mctl-portal#89): the plugin's
