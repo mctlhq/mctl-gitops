@@ -259,17 +259,17 @@ Severity parsing: claude[bot] prefixes each finding's body with a markdown badge
 
 One-line summary per finding: take the first **bold heading** (between `**`) from the comment body and trim to ~80 chars. Do NOT include the explanatory paragraph or full body — the user clicks into the PR for full context.
 
-  Format D — agy pilot findings (non-blocking, informational only — never treat as a merge gate):
+  Format D — agy findings (gating depends on the repository caller/check configuration):
 
     [agy] <repo>#<N>: K findings (X P1, Y P2, Z P3)
     https://github.com/<repo>/pull/<N>
     - Pn {file}:{line} — {one-line summary}
     ...
-    (pilot, non-blocking — does not affect merge gate)
+    (if the repository's Agy workflow is blocking/required, P1/P2 or a failed Agy check blocks merge)
 
   If agy's comment body is exactly "No significant issues found.":
 
-    [agy] <repo>#<N>: no significant issues found (pilot, non-blocking)
+    [agy] <repo>#<N>: no significant issues found
 
 ## Multiple PRs
 
@@ -297,7 +297,7 @@ If args are ambiguous, ask which PRs in one short AskUserQuestion before launchi
 - One-shot "check codex now" — for that, just call `gh api` directly. This skill is for the wait-and-notify case.
 - Reviews from bots other than `claude[bot]` / `chatgpt-codex-connector[bot]` / agy (marker-matched, see `AGY_MARKER`) — add the login (and a body marker, if the bot shares a generic login like `github-actions[bot]`) to the script. For an entirely different review surface, write a sibling skill.
 - Long-term watching across multiple `@claude review` retries — re-launch after each new trigger.
-- Treating agy findings as a merge blocker — the pilot is explicitly non-blocking (see [[project_agy_reviewer_pilot]] memory); only claude[bot] / codex P1-P2 gate a merge.
+- Assuming a fixed Agy policy across repositories. Inspect the current-head `Agy PR review` check and caller configuration: when `blocking: true` or the check is required, Agy P1/P2, malformed verdicts, and reviewer failures block merge; otherwise report them as informational.
 
 ## Anti-patterns (do not regress)
 
