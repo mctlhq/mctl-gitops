@@ -148,3 +148,9 @@
 - [ ] P7. Implement a durable proposal-scoped ownership arbiter with monotonic epochs; DevLoop claims `takeover_pending` before fallback lookup, and Reconcile/fallback require a current grant before start and immediately before remote create.
 - [ ] P8. Add an idempotent mutex-protected GitOps status activity for submission-budget exhaustion so `review-stuck` persists even when no CWFT was created.
 - [ ] P9. Test reconcile-start between DevLoop lookup and ownership publication, stale-epoch submission, duplicate terminal writes, and process restart after the terminal GitOps commit.
+
+## Claim recovery and CAS tasks
+
+- [ ] P10. Bind takeover claims to exact DevLoop workflow/run IDs; release in cleanup and reclaim only after an activity confirms that owner run is terminal. Fail closed on visibility/query errors.
+- [ ] P11. Fence the terminal status activity with expected status, exact head SHA, ownership epoch, and open/unmerged state under the repository mutex; mismatches are auditable no-ops.
+- [ ] P12. Test failed/cancelled/terminated DevLoop recovery, visibility outage, manual merge during retries, head change, status change, stale epoch, and duplicate CAS submission.
