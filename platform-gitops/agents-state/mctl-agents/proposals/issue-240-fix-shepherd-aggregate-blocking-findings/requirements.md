@@ -1,0 +1,149 @@
+# fix(shepherd): aggregate blocking findings from Claude and Agy reviews
+
+## Context
+
+The Tier 3 PR shepherd (`orchestrator/run_shepherd.py`) decides whether a PR
+is mergeable by reading exactly one review bot's signal for "has a required
+reviewer responded" (`REVIEW_BOT = "claude[bot]"`), while findings are
+collected from a hard-coded `GATING_BOTS = (REVIEW_BOT, CODEX_CONNECTOR_BOT)`
+tuple (`orchestrator/run_shepherd.py:84-91`). The repo also runs a second,
+independently-blocking review workflow — `.github/workflows/agy-review.yml`,
+which calls the reusable `mctlhq/.github` "Agy PR review" workflow with
+`blocking: true` — but `run_shepherd.py` has no awareness of it at all: Agy
+is not in `GATING_BOTS`, has no parser for its comment format, and cannot
+drive `has_responded`.
+
+On `mctlhq/mctl-agents#234` this produced a real gap: Agy reported a P1
+path-traversal finding plus three P2 findings; the shepherd's fix bundle
+(built from `read_codex_review()` + `decide()` + `apply_followup()`) only
+ever saw Claude's review and left Agy's findings unaddressed. After the
+follow-up push, Agy still reported two P2 and two P3 findings that the
+shepherd never surfaced to the implementer. `mctlhq/mctl-agents#67` set the
+precedent for widening gating beyond a single bot (adding
+`chatgpt-codex-connector[bot]` to `GATING_BOTS`), but that fix hard-coded a
+second bot rather than making the reviewer set declarative, and it did not
+address what happens when a required reviewer never responds at all. This
+proposal generalizes the gating model so every configured reviewer —
+Claude, Agy, and the existing Codex connector — contributes to one
+head-pinned, deduplicated, source-attributed finding set, and so a silent or
+failed required reviewer can never be mistaken for approval.
+
+## User stories
+
+- AS the mctl-agents platform operator I WANT every configured gating
+  reviewer's P1/P2 findings to block merge SO THAT a defect one reviewer
+  misses (like the #234 path-traversal finding Claude did not flag) still
+  stops the PR.
+- AS the mctl-agents platform operator I WANT reviewer sources declared in
+  one place instead of hard-coded bot logins SO THAT adding or removing a
+  gating reviewer (as happened for the Codex connector in #67, and now for
+  Agy) does not require re-deriving the has_responded/parsing logic from
+  scratch.
+- AS a proposal author waiting on shepherd SO THAT I never see a PR merge
+  while a required reviewer's finding on the current head is unaddressed,
+  and SO THAT I never see the shepherd stall forever because a reviewer
+  silently failed to post anything.
+- AS a human triaging a stuck PR I WANT the merge/attempt evidence to show
+  which reviewers actually responded and which findings were cleared SO
+  THAT I can tell "Agy never ran" apart from "Agy approved."
+
+## Acceptance criteria (EARS)
+
+- WHEN the shepherd evaluates a PR THE SYSTEM SHALL build the gating
+  reviewer set from a declarative registry that includes at minimum Claude
+  review (`claude[bot]`) and Agy PR review, rather than branching on one
+  hard-coded primary-bot constant.
+- WHEN the shepherd fetches PR reviews and comments THE SYSTEM SHALL parse
+  Agy's top-level marker/comment format into normalized findings carrying
+  severity, file path (when present), message, proposed fix (when present),
+  source name, source URL (the comment's `html_url`), and the head SHA the
+  finding was reviewed against.
+- WHEN any configured gating reviewer has posted a P1 or P2 finding anchored
+  to the PR's current head SHA THE SYSTEM SHALL return the `address-review`
+  decision, and THE SYSTEM SHALL forbid the `merge` decision while any such
+  finding remains.
+- WHEN the same underlying defect is reported by more than one configured
+  reviewer THE SYSTEM SHALL deduplicate it into a single finding in the
+  bundle passed to the implementer, WHILE preserving the list of reviewers
+  that reported it (source attribution is never dropped, even when merged).
+- WHEN a PR's head SHA advances past a finding's recorded head SHA (a
+  follow-up push landed) THE SYSTEM SHALL exclude that finding from the
+  current decision, mirroring the existing `findings_p1_p2(at=head_sha)`
+  behavior for Claude and the Codex connector.
+- IF a required gating reviewer's workflow fails, times out, or has not
+  posted any response for the current head THEN THE SYSTEM SHALL NOT treat
+  that silence as approval: THE SYSTEM SHALL return `wait` while the
+  no-response window is within policy, and SHALL flip the proposal to
+  `review-stuck` once that window is exceeded, exactly as an unresolved
+  P1/P2 does today for the address-review retry cap.
+- WHEN the shepherd runs `apply_followup` to build the implementer's review
+  bundle THE SYSTEM SHALL include every current-head P1/P2 blocker from
+  every required reviewer, not only Claude's.
+- WHEN the shepherd merges a PR THE SYSTEM SHALL record, alongside the
+  existing `merged_at`/`merge_commit` fields in `.status.yaml`, which
+  configured reviewers responded on the merged head and how many findings
+  from each were cleared.
+- WHILE a PR is open and under shepherd control THE SYSTEM SHALL keep
+  `decide()` a pure function of its inputs (PR snapshot, aggregated review,
+  `now`) so the new reviewer-timeout policy is testable with hand-built
+  fixtures, consistent with the existing design constraint documented at
+  `orchestrator/run_shepherd.py:1044-1056`.
+
+## Out of scope
+
+- Changing Copilot's status from observed-only/advisory to gating —
+  `read_copilot_review()` stays non-blocking (`design.md L100-108`,
+  referenced at `orchestrator/run_shepherd.py:1006-1011`).
+- Treating a green GitHub Actions workflow conclusion (e.g. the Agy job
+  simply completing) as equivalent to an approving semantic review — a
+  completed workflow with zero findings is not proof Agy actually reviewed
+  the diff; only an explicit Agy comment/marker on the current head counts.
+- Adding further gating reviewers beyond Claude, the Codex connector, and
+  Agy in this change — the registry is built for extensibility but this
+  proposal only populates it with the three real sources that exist today.
+- Any change to `MAX_REVIEW_ATTEMPTS`, the merge settle window
+  (`SHEPHERD_MERGE_SETTLE_MIN`), the dev-loop ownership sweep
+  (`_dev_loop_owns`), or the reconcile/status-projection machinery
+  (`reconcile_one`) — those are independent of reviewer aggregation.
+- Building a generic plugin API for third-party reviewer definitions
+  (config file, dynamic loading). The declarative registry is an in-module
+  Python data structure, not an externally configurable plugin system.
+
+## Open questions
+
+- Agy's exact bot/actor login (as it appears in `user.login` on
+  `gh api .../reviews`, `.../pulls/<n>/comments`, and
+  `.../issues/<n>/comments`) is not visible from this clone — the reusable
+  workflow lives in `mctlhq/.github` and PR #234's raw API payloads were not
+  available to this investigation. Recorded assumption: the implementer
+  SHALL confirm the actual login (and whether Agy posts as a review, a
+  line-anchored review comment, or a top-level issue comment) by pulling
+  the real event payloads from `mctlhq/mctl-agents#234` via `gh api` before
+  writing the parser, and SHALL treat the login as a named constant
+  (`AGY_BOT`) exactly like `REVIEW_BOT` and `CODEX_CONNECTOR_BOT`.
+- The issue does not specify Agy's literal severity-marker syntax (badge,
+  bold prefix, or a custom "top-level marker" block, per the issue's own
+  wording). Recorded assumption: the parser SHALL be written defensively —
+  reuse `_extract_severity()`'s multi-pattern approach and extend it with
+  whatever concrete markers PR #234's payload shows, rather than guessing a
+  single format.
+- The issue does not specify how long the shepherd should wait for a
+  required reviewer before flipping to `review-stuck` on a *no-response*
+  path (as opposed to the existing `MAX_REVIEW_ATTEMPTS` cap on
+  *address-review* loops). Recorded assumption: reuse the same
+  `MAX_REVIEW_ATTEMPTS`-style tick-counter pattern, scoped per head SHA, at
+  a default of 3 ticks (~15 minutes at the 5-minute cron cadence), so a
+  never-configured or perpetually-broken reviewer workflow cannot wedge a
+  proposal forever, without introducing a second unrelated timeout
+  constant family.
+- Whether Agy is meant to be `required` (gating on silence, like Claude) or
+  merely a second gating-on-findings source (like the Codex connector,
+  which gates on findings but never drives `has_responded`) is not fully
+  explicit in the issue. The issue's acceptance criteria say "a reviewer
+  workflow failure or missing response has an explicit policy" in the
+  general case, and `agy-review.yml` sets `blocking: true`. Recorded
+  assumption: Agy is configured as `required=True` (drives its own
+  no-response timeout, like Claude) since `blocking: true` is the
+  strongest available signal that the org intends Agy to be a required
+  gate, not an advisory one like Copilot or the best-effort Codex
+  connector.
