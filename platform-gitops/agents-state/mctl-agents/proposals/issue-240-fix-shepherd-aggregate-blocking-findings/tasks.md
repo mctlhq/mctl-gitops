@@ -144,3 +144,13 @@ in production and starts flipping healthy PRs to `review-stuck`:
    a full revert, `AGY_BOT`'s `required` flag can be flipped to `False`
    (demoting Agy to connector-style "gates on findings but never on
    silence") as a one-line mitigation short of a full revert.
+
+## Corrected implementation tasks (authoritative)
+
+- [ ] C1. In `mctlhq/.github`, add head SHA and run ID to success/findings/failure Agy markers; pass normal review/checks.
+- [ ] C2. Bump mctl-agents' Agy reusable-workflow pin to C1 and capture real pinned PASS/FAIL payload fixtures.
+- [ ] C3. Match actor `github-actions[bot]` plus marker; reject missing/malformed/stale SHA and require equality with current head.
+- [ ] C4. Use `reviewer_wait_head_sha` plus per-source counters, reset atomically on head change.
+- [ ] C5. Agy failure marker means wait then `review-stuck`, never approval; Actions conclusion alone is not semantic approval.
+- [ ] C6. Use exact conservative dedupe.
+- [ ] C7. Test stale/missing SHA, unrelated shared actor, overlapping runs, current-head PASS/FAIL, per-source timeout reset and merge evidence pinned to merged head.
