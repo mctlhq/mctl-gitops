@@ -147,3 +147,14 @@ failed required reviewer can never be mistaken for approval.
   strongest available signal that the org intends Agy to be a required
   gate, not an advisory one like Copilot or the best-effort Codex
   connector.
+
+## Contract corrections before acceptance (authoritative)
+
+PR #234 proves Agy currently posts a top-level `github-actions[bot]` comment with `<!-- agy-review -->`, but no `commit_id` or reviewed head SHA.
+
+- Agy SHALL NOT count as a current-head response until its machine marker carries the exact reviewed head SHA. Timestamp/latest-comment inference is forbidden.
+- First update `mctlhq/.github` so success, findings and reviewer-failure comments include `head_sha:<40-hex>` and `run_id`; then pin mctl-agents to that reviewed shared-workflow commit. This is prerequisite to `required=True`.
+- Dispatch SHALL match actor plus Agy marker because `github-actions[bot]` is shared.
+- Missing, malformed, failed or stale-head Agy evidence means wait then bounded `review-stuck`, never approval.
+- Persist `reviewer_wait_head_sha` and per-source wait counters; reset all atomically on head change.
+- Deduplicate by exact path+line+normalized message, or exact normalized-message hash when location is absent. No fuzzy collapse of unlocated findings.
