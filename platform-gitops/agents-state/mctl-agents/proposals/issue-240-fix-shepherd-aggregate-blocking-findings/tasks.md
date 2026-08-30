@@ -177,3 +177,9 @@ in production and starts flipping healthy PRs to `review-stuck`:
 - [ ] P19. Persist a unique dispatch intent and pass its correlation ID, PR number, and reviewed SHA to the trusted caller; expose the correlation ID in immutable run metadata such as `run-name`.
 - [ ] P20. Query dispatch runs without Actions `head_sha` filtering and join queued/in-progress runs to the intent using workflow/event/ref/correlation/time; join completed markers using run ID, attempt, correlation, PR, and exact reviewed SHA.
 - [ ] P21. Test queued dispatch before marker, default-branch head mismatch, unrelated concurrent dispatch, spoofed correlation, stale intent, completed marker mismatch, and coexistence with PR-triggered runs.
+
+## Markerless-run authority tasks
+
+- [ ] P22. Keep a correlated dispatch authoritative after completion even with no marker; map missing/malformed semantic output to `reviewer_error` and never reveal an older PASS.
+- [ ] P23. Retain dispatch intents until the authoritative result is consumed or superseded; join completed markerless runs using trusted run metadata plus the durable intent.
+- [ ] P24. Test newer markerless success/failure/cancelled runs over an older PASS, delayed marker arrival, malformed marker, intent retention across restart, and explicit supersession.
