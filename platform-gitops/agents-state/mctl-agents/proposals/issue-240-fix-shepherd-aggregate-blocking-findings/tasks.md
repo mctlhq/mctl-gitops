@@ -183,3 +183,10 @@ in production and starts flipping healthy PRs to `review-stuck`:
 - [ ] P22. Keep a correlated dispatch authoritative after completion even with no marker; map missing/malformed semantic output to `reviewer_error` and never reveal an older PASS.
 - [ ] P23. Retain dispatch intents until the authoritative result is consumed or superseded; join completed markerless runs using trusted run metadata plus the durable intent.
 - [ ] P24. Test newer markerless success/failure/cancelled runs over an older PASS, delayed marker arrival, malformed marker, intent retention across restart, and explicit supersession.
+
+## Pending authority and wait-key tasks
+
+- [ ] P25. Include uncorrelated current-head dispatch intents in authority selection from creation; block older PASS until correlation, explicit supersession, or durable failure resolution.
+- [ ] P26. Bound dispatch/correlation retries and retain failed/lost-response intents as `reviewer_error` evidence rather than deleting them.
+- [ ] P27. Key reviewer waits by source, head, and correlation/run identity; atomically reset that source on pending-to-run correlation, rerun, or newer attempt.
+- [ ] P28. Test dispatch response loss, delayed Actions indexing, intent supersession, same-head rerun after near-timeout, per-source isolation, and restart during correlation.
