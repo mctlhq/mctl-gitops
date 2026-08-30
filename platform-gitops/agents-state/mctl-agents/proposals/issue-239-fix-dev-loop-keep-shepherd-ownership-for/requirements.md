@@ -146,3 +146,9 @@ without an operator having to notice and re-trigger it by hand.
 - Ownership handoff SHALL be explicit: before publishing `shepherd_in_loop=True`, DevLoop cancels and awaits the proposal's fallback owner; fallback re-checks live DevLoop ownership before every tick and exits on takeover.
 - CWFT submission SHALL return a typed result. Failed submission writes no success/cooldown marker and retries without incrementing `review_attempts`.
 - Cooldown lives in durable workflow state/timers, not direct `.status.yaml` reads. The targeted shepherd re-fetches current head and preserves stale-review filtering, bounded retries and `--match-head-commit`.
+
+## P1 review corrections (authoritative)
+
+- CWFT submission uses a stable logical tick ID derived from fallback workflow ID/run, proposal slug, reviewed head SHA, and durable cycle number. Every activity retry reuses that ID; an Argo `AlreadyExists` response adopts the existing workflow instead of creating a duplicate.
+- Transport or response-loss failures that remain plausibly transient retry without consuming the review-fix budget. A classified deterministic submission failure increments a separate bounded `submission_failures` budget. Reaching that cap transitions the proposal to `review-stuck` with the tick ID and failure evidence; no submission failure may retry forever.
+- Ownership transfer is not acknowledged while an external fallback Argo tick can still mutate the proposal. On DevLoop takeover, the fallback cancels the pending submission and then aborts, drains, or adopts and awaits the already-created Argo workflow to a terminal state. Only after that barrier may DevLoop publish `shepherd_in_loop=True`.
