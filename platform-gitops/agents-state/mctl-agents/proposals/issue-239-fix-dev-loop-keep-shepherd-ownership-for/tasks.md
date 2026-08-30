@@ -166,3 +166,9 @@
 - [ ] P16. Register the terminal status activity as in-flight work in the proposal arbiter and include it in DevLoop's takeover drain.
 - [ ] P17. Post-commit revalidate GitHub state and arbiter epoch/claim; compensate on either mismatch and acknowledge completion only after repair.
 - [ ] P18. Test takeover before local commit, between commit and epoch revalidation, during compensation, and after writer restart; assert no stale `review-stuck` survives ownership publication.
+
+## Observability and rollback tasks
+
+- [ ] P19. Add an idempotent serialized decision-projection activity for every submitted/skipped fallback outcome with owner, epoch, head, reason, counters, and next-tick evidence.
+- [ ] P20. Replace the rollback procedure with grant freeze, arbiter drain, terminal verification, and coordinated rollback/disablement of Reconcile fallback, DevLoop handoff, arbiter, and projection components.
+- [ ] P21. Test duplicate projections, cooldown/takeover/transient skips, rollback with active CWFT and terminal writer, and rejection of mixed-version ownership.
