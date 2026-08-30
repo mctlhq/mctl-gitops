@@ -32,7 +32,7 @@ writes each one:
 | Status | Written by | Meaning |
 | --- | --- | --- |
 | `proposed` | investigator | Draft is written. Not yet operator-approved. |
-| `accepted` | operator | Tier 2 (implementer) will pick it up on the next run. |
+| `accepted` | approve CWFT (or operator, legacy) | Tier 2 (implementer) will pick it up on the next run. See "How `accepted` gets written" below. |
 | `in-progress` | implementer | Implementer passed GitHub preflight and holds a bounded attempt lease. |
 | `implemented` | implementer | Implementer pushed a branch and opened a PR. Tier 3 (shepherd) takes over. |
 | `error` | legacy implementer | Legacy pre-1.20 failure state; reconciler migrates it from GitHub. |
@@ -55,6 +55,26 @@ state every 15 minutes.
 Trigger for Tier 2 is only `status: accepted`. `needs-triage`, `error`, and
 `in-progress` are never force-retried. After correcting the root cause, submit
 a normal GitOps PR that moves exactly one proposal back to `accepted`.
+
+**How `accepted` gets written (changed 2026-08-29).** For a proposal driven by
+a Temporal `DevLoopWorkflow`, the operator no longer edits `.status.yaml` by
+hand. The approve signal
+(`POST /api/v1/agents/dev-loop/{workflow_id}/approve`) makes the workflow run
+the `mctl-agents-approve` CWFT, which flips `proposed → accepted` as its own
+gitops commit and records the approver in the `approval` block
+(mctl-agents#150; `cwft-mctl-agents-approve.yaml`; the stage is gated on the
+`atomic-approve` patch marker in `dev_loop.py`, so loops started before
+mctl-agents 1.30.0 still take the legacy manual-flip path). The same flip is
+available directly as the `mctl-agents-approve` operation
+(`service`, `slug`, `approver`), and it is idempotent on an already-accepted
+proposal.
+
+So a decisions-only GitOps PR that appends operator decisions to `tasks.md`
+and leaves `.status.yaml` at `proposed` is **correct, not an oversight** —
+flipping the status in that PR would only race the CWFT. Manual flips remain
+the affordance for proposals with no live workflow (a cron-driven proposal, or
+re-arming a `needs-triage` one).
+
 Trigger for Tier 3 is `status` in `{implemented, review-fixing, in-progress}`;
 missing PR URLs are recovered from `feat/agents-<slug>`.
 

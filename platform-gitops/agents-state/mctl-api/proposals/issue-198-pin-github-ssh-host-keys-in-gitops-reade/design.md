@@ -55,23 +55,37 @@ the SSH code path currently has zero test coverage.
    ConfigMap/Secret — it travels with the Go binary like any other
    compiled asset. Reference file: `internal/gitops/known_hosts.go` (new).
 
-2. **Add a `knownHostsPath` field/parameter to `Reader`.**
+2. **Add a `knownHostsPath` field/parameter to `Reader`, materialized
+   lazily** (operator decision, 2026-08-30 — see tasks.md).
    Extend `NewReader` to
-   `NewReader(repoURL, branch, localPath, token, sshKeyPath, knownHostsPath string) (*Reader, error)`.
-   - If `knownHostsPath == ""`, `NewReader` materializes the embedded
-     default into a file once (e.g.
-     `filepath.Join(os.TempDir(), "mctl-api-github-known-hosts")`, written
-     with `0o400` if it doesn't already exist with matching content) and
-     stores that resolved path on `r.knownHostsPath`. This keeps the field
-     always populated post-construction so `refresh()` never has to special
-     case "no path configured."
+   `NewReader(repoURL, branch, localPath, token, sshKeyPath, knownHostsPath string) *Reader`
+   and store `knownHostsPath` verbatim, doing **no disk I/O in the
+   constructor**.
    - If `knownHostsPath != ""` (test or explicit override), it is used
-     verbatim — this is the seam
-     `internal/gitops/reader_test.go` uses to point at a fixture file
-     containing a deliberately wrong key.
-   - Resolving/writing the embedded default at construction time (not
-     per-refresh) keeps `refresh()` a pure "run git with these already-known
-     args" function and avoids repeated disk writes on every periodic sync.
+     verbatim — this is the seam `internal/gitops/reader_test.go` uses to
+     point at a fixture file containing a deliberately wrong key.
+   - If `knownHostsPath == ""`, the embedded default is materialized on
+     first use **inside the SSH branch of `refresh()`**, to
+     `filepath.Join(os.TempDir(), "mctl-api-github-known-hosts")` with mode
+     `0o600`, skipped if a byte-identical file is already there, and cached
+     on the `Reader` (guard with `sync.Once` or the existing mutex) so
+     periodic syncs do not rewrite it.
+   - **Why lazy, and why this matters:** production runs the HTTPS/token
+     branch (`GITOPS_REPO_URL` is https and `GITOPS_SSH_KEY_PATH` is unset
+     everywhere in mctl-gitops), so `sshKeyPath == ""` and the SSH branch is
+     never taken. Writing the file eagerly in `NewReader` would put a
+     filesystem write — and a possible hard startup failure on an unwritable
+     `TMPDIR` — into the live control plane's startup path for a feature it
+     does not use. Lazy materialization keeps the blast radius of this
+     change exactly zero for the running deployment.
+   - `0o600`, not `0o400`: the file may need to be rewritten in place when
+     the embedded content changes after a binary upgrade, and a read-only
+     file owned by the same uid makes that a delete-then-write dance for no
+     security gain. The content is public data (GitHub's published host
+     keys); the mode is about integrity, not secrecy.
+   - If materialization fails (unwritable dir, I/O error), `refresh()`
+     returns the error. There is **no** fallback to `accept-new` and no
+     silent downgrade to the default `~/.ssh/known_hosts`.
 
 3. **Change the SSH command construction in `refresh()`** from:
    ```go
@@ -190,7 +204,9 @@ the SSH code path currently has zero test coverage.
     `GITOPS_SSH_KNOWN_HOSTS_PATH`, so any non-github.com deployment can
     supply its own known_hosts file; this should be called out in the
     rollout/README notes for the SSH auth option.
-  - `NewReader`'s signature changes (new trailing parameter) — this is an
+  - `NewReader`'s signature changes (new trailing parameter; it keeps
+    returning `*Reader` with no error, since the constructor no longer
+    touches the filesystem) — this is an
     internal package (`internal/gitops`), so the only call site is
     `cmd/api/main.go:79`, which this proposal updates in the same change;
     no external consumers exist.
@@ -206,9 +222,9 @@ the SSH code path currently has zero test coverage.
     path (`GitOpsToken`) as an operational escape hatch, which this change
     does not touch.
   - *Risk:* a bug in the new file-materialization logic could accidentally
-    widen permissions or write to an unexpected path. Mitigation: write
-    with `0o400`, write only once (skip if a byte-identical file already
-    exists at the resolved path) inside `NewReader` under the same pattern
-    already used elsewhere in this file for `//nolint:gosec` trusted-path
-    reads, and cover with a unit test asserting the file's permissions and
-    content.
+    widen permissions or write to an unexpected path. Mitigation: write with
+    `0o600`, write only once (skip if a byte-identical file already exists at
+    the resolved path), and cover with a unit test asserting the file's
+    permissions and content. Because materialization happens lazily in the
+    SSH branch, a bug here cannot affect the production HTTPS/token path at
+    all — including at startup.
