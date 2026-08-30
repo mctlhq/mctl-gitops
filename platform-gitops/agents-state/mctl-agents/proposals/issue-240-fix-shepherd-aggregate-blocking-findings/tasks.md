@@ -154,3 +154,10 @@ in production and starts flipping healthy PRs to `review-stuck`:
 - [ ] C5. Agy failure marker means wait then `review-stuck`, never approval; Actions conclusion alone is not semantic approval.
 - [ ] C6. Use exact conservative dedupe.
 - [ ] C7. Test stale/missing SHA, unrelated shared actor, overlapping runs, current-head PASS/FAIL, per-source timeout reset and merge evidence pinned to merged head.
+
+## P1 rollout and ordering tasks (authoritative)
+
+- [ ] P8. Add `head_sha`, `run_id`, and `run_attempt` to shared Agy success/findings/failure markers and pin the reviewed reusable-workflow commit.
+- [ ] P9. Join comments to Actions runs and select the newest non-superseded current-head run/attempt; a newer queued/in-progress run blocks and all older markers are ignored.
+- [ ] P10. Before enabling `required=True`, enumerate open PRs and dispatch/rerun pinned Agy for each current head; require a verified new-format marker. Include PR #234 as a mandatory fixture.
+- [ ] P11. Test old PASS/new FAIL, old FAIL/new PASS, rerun-attempt supersession, newer in-progress run, malformed/missing run identity, and the open-PR backfill path.
