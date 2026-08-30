@@ -271,3 +271,11 @@ without a schema change.
     re-fetches a fresh `PRSnapshot` and re-runs `decide()` itself before
     doing anything — the reconcile-side decision is only ever used to decide
     *whether to submit a tick*, never to decide what the tick actually does.
+
+## Accepted design correction (authoritative)
+
+This section supersedes the direct-tick and `last_orphan_tick` design above.
+
+Use a dedicated `FallbackReviewWorkflow` with deterministic ID `fallback-review-{service}-{slug}`. Reconcile starts/adopts it idempotently; the fallback owns one in-flight tick, cooldown timers, bounded retries and terminal exit. All PR/status/Temporal-client/CWFT operations are activities; workflow code performs no direct I/O. Existing `.status.yaml` transitions stay inside the serialized Argo GitOps commit step, so the proposed direct `proposal_state.py` metadata write is removed.
+
+Ownership handoff is bidirectional: fallback checks `Running && shepherd_in_loop` before each tick; DevLoop cancels and awaits fallback before setting `shepherd_in_loop=True`. The submission helper returns `submitted`, `already_exists`, `transient_failure` or `deterministic_failure`; only success advances cooldown. The targeted shepherd revalidates head and gates before acting. The reconcile Schedule explicitly uses non-overlap (`SKIP`).
