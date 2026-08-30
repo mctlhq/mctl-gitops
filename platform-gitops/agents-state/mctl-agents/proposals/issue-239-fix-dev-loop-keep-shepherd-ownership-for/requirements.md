@@ -182,3 +182,8 @@ without an operator having to notice and re-trigger it by hand.
 - The arbiter SHALL register a terminal status activity as in-flight fallback work. DevLoop takeover SHALL drain that activity together with CWFT submission/ticks before ownership publication.
 - After committing provisional terminal status, the activity SHALL revalidate both GitHub state and the arbiter epoch/claim. If either changed, it SHALL execute the same idempotent compensating GitOps repair before reporting completion.
 - DevLoop SHALL not publish ownership until the registered terminal writer and any required compensation are terminal. A stale fallback epoch can therefore never leave authoritative `review-stuck` state after takeover.
+
+## Observable decisions and coordinated rollback corrections
+
+- Every fallback decision — submitted or skipped for cooldown, takeover, transient failure, stale head, or exhausted budget — SHALL be projected through an idempotent serialized activity into operator-visible audit/status state. The projection SHALL include proposal, owner/epoch, PR/head SHA, decision and reason, review/submission counters, last tick, and next eligible tick. Durable workflow state remains replay-safe and is not the sole observability surface.
+- Rollback SHALL first stop new fallback grants, mark the arbiter draining, and await/cancel all registered fallback ticks, submitters, and terminal writers. Only after the drain barrier may deployment consistently disable/revert Reconcile fallback creation, DevLoop handoff integration, arbiter, and status projection together. Mixed old/new ownership components are forbidden.
