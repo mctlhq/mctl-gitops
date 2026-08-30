@@ -171,3 +171,9 @@ in production and starts flipping healthy PRs to `review-stuck`:
 - [ ] P16. Make backfill accept explicit repository, PR number, and 40-hex head SHA; verify the live head, fetch/review that exact detached commit, pass explicit target inputs to the reusable workflow, and revalidate before posting.
 - [ ] P17. Ensure dispatch never uses the default-branch `GITHUB_SHA` or assumes a `pull_request` payload. Test wrong PR, stale SHA, changed-during-review SHA, fork/head targeting, and marker destination.
 - [ ] P18. Add a cached, paginated Actions-runs lookup for the Agy workflow/current head, including queued/in-progress runs and rerun attempts; replace prior no-new-call assertions with bounded call-count and pagination tests.
+
+## Dispatch correlation tasks
+
+- [ ] P19. Persist a unique dispatch intent and pass its correlation ID, PR number, and reviewed SHA to the trusted caller; expose the correlation ID in immutable run metadata such as `run-name`.
+- [ ] P20. Query dispatch runs without Actions `head_sha` filtering and join queued/in-progress runs to the intent using workflow/event/ref/correlation/time; join completed markers using run ID, attempt, correlation, PR, and exact reviewed SHA.
+- [ ] P21. Test queued dispatch before marker, default-branch head mismatch, unrelated concurrent dispatch, spoofed correlation, stale intent, completed marker mismatch, and coexistence with PR-triggered runs.
