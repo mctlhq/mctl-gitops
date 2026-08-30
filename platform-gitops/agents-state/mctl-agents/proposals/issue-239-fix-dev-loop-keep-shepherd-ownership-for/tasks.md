@@ -130,3 +130,10 @@
 - [ ] C4. DevLoop cancels/awaits fallback before `shepherd_in_loop=True`; fallback checks live DevLoop ownership before every tick.
 - [ ] C5. Return typed submit outcome; transient submit failure advances no cooldown and consumes no review attempt.
 - [ ] C6. Test duplicate reconcile starts, replay/retry, takeover races, failed submit, current-head revalidation, second review-fix cycle and `MAX_REVIEW_ATTEMPTS` terminal behavior.
+
+## P1 follow-up tasks (authoritative)
+
+- [ ] P1. Persist a deterministic per-cycle tick ID and propagate it through mctl-api to the Argo workflow name/idempotency key; treat `AlreadyExists` as adoption.
+- [ ] P2. Classify submission errors and add a separately bounded deterministic `submission_failures` budget ending in `review-stuck`; keep transient retries bounded by Temporal retry/backoff and outside `review_attempts`.
+- [ ] P3. Implement takeover as a drain barrier for any submitted external Argo tick; DevLoop publishes ownership only after terminal cancellation/completion is observed.
+- [ ] P4. Test response loss after successful create, `AlreadyExists` adoption, deterministic failure-budget exhaustion, and takeover while an external tick is running. Assert one Argo workflow and no overlapping status writers.
