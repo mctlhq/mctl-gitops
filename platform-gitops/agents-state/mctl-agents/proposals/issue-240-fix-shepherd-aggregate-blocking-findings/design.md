@@ -339,3 +339,9 @@ On completion, the marker must repeat correlation ID, explicit reviewed SHA, PR 
 ## Markerless completed-run authority correction
 
 The authority selector first orders correlated runs, then interprets evidence. Correlation is independent of marker presence and survives run completion. Therefore a newer completed dispatch that fails before commenting remains selected through its durable intent, trusted run-name correlation, workflow identity, run ID, and attempt. Missing/malformed semantic output maps to `reviewer_error`, blocks merge, and advances the bounded reviewer-error wait policy; it never falls back to an older PASS. Only valid `clean` or `findings` markers can produce those semantic outcomes. Dispatch intent retention lasts until durable consumption or explicit supersession.
+
+## Pre-run authority and wait-key correction
+
+Authority is selected from the union of durable dispatch intents and correlated Actions runs. A newly created current-head intent immediately supersedes older runs and remains a blocking pending authority while dispatch is in flight or GitHub has not indexed the run. Bounded correlation retries either attach the run or durably classify the intent as `reviewer_error`; neither path falls back to an older PASS. Explicit supersession links the old intent to its successor before cleanup.
+
+Persist reviewer waits under `reviewer_wait_key = <source>:<head_sha>:<authority_identity>`. Pending intent uses its correlation ID; after correlation, authority identity becomes `run_id:run_attempt`. The correlation transition transfers a zeroed/full response window rather than inherited ticks. Any newer rerun/attempt atomically replaces the key and resets only that source's counter; other sources remain unchanged.
