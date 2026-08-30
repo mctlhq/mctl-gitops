@@ -184,3 +184,9 @@ PR #234 proves Agy currently posts a top-level `github-actions[bot]` comment wit
 - Authority lookup SHALL NOT filter `workflow_dispatch` runs by Actions `head_sha`, because it represents the dispatch ref rather than the reviewed PR head.
 - Each backfill dispatch SHALL carry a cryptographically unique correlation ID plus explicit PR number and reviewed head SHA. Trusted workflow metadata (for example `run-name`) SHALL expose that correlation ID before comments are posted, and a durable dispatch-intent record SHALL bind it to repository, PR, SHA, workflow identity, and creation time.
 - Queued/in-progress dispatch runs SHALL be joined to that intent by workflow identity, event type, trusted default-branch ref, correlation ID, and time window; completed results additionally require marker `run_id`, `run_attempt`, correlation ID, PR, and exact reviewed SHA. PR-triggered runs may continue to use Actions `head_sha`.
+
+## Markerless authoritative-run correction
+
+- Once a newer run is correlated to the current PR/head dispatch intent, it SHALL remain authoritative in queued, in-progress, and completed states even if it never posts a marker. It SHALL never disappear from selection and reveal an older PASS.
+- A completed correlated run without a valid semantic marker SHALL be treated as `reviewer_error`: it blocks merge and follows the bounded wait-to-`review-stuck` policy. A marker is required only to establish semantic `clean` or `findings`; absence cannot approve.
+- Correlation for a markerless completed run SHALL use the durable intent plus trusted workflow ID/event/ref/run-name correlation and run ID/attempt metadata. Cleanup of dispatch intents occurs only after the result is durably consumed or explicitly superseded by a newer correlated run.
