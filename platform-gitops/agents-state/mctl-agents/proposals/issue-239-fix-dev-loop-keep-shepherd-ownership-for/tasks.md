@@ -121,3 +121,12 @@
   consumer (`run_shepherd.py`, `run_implementer.py`, the implementer's own
   status writes) since none of them read or clear it; no data migration is
   needed to remove it if the feature is reverted.
+
+## Corrected implementation tasks (authoritative)
+
+- [ ] C1. Implement deterministic-ID `FallbackReviewWorkflow` with durable cooldown, one in-flight shepherd tick and bounded activity retries.
+- [ ] C2. Reconcile starts/adopts C1 idempotently; WorkflowAlreadyStarted is success; Schedule overlap policy is explicit `SKIP`.
+- [ ] C3. Keep all filesystem/GitHub/status/CWFT work in activities. Remove tasks 4-5's direct workflow-side `last_orphan_tick` read/write.
+- [ ] C4. DevLoop cancels/awaits fallback before `shepherd_in_loop=True`; fallback checks live DevLoop ownership before every tick.
+- [ ] C5. Return typed submit outcome; transient submit failure advances no cooldown and consumes no review attempt.
+- [ ] C6. Test duplicate reconcile starts, replay/retry, takeover races, failed submit, current-head revalidation, second review-fix cycle and `MAX_REVIEW_ATTEMPTS` terminal behavior.
