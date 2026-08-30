@@ -164,3 +164,9 @@ without an operator having to notice and re-trigger it by hand.
 - Fallback creation and DevLoop takeover SHALL be serialized by one durable proposal-scoped ownership arbiter. DevLoop first records a `takeover_pending` claim/epoch in that arbiter; only then may it look up and drain a fallback. Reconcile SHALL acquire a fallback grant from the same arbiter before starting or submitting work, and SHALL be denied once takeover is pending.
 - Every fallback submission SHALL carry the arbiter epoch and revalidate that grant immediately before remote create. A stale grant cannot create or mutate state.
 - When deterministic submission failures exhaust their bounded budget without creating an Argo tick, a dedicated idempotent Temporal activity SHALL persist `review-stuck` and evidence through the same repository mutex/serialized GitOps transaction used by existing status writers. Temporal workflow code performs no direct I/O, and the terminal write does not depend on a shepherd CWFT existing.
+
+## Claim recovery and fenced terminal-write corrections
+
+- A `takeover_pending` claim SHALL identify the owning DevLoop workflow ID and run ID and SHALL be renewable. The arbiter SHALL reclaim it only after an activity confirms that exact Temporal execution is terminal (completed, failed, terminated, or cancelled). Visibility/query failure is fail-closed and does not revoke a live claim.
+- DevLoop SHALL release or finalize its claim in normal completion/cancellation handlers; Reconcile SHALL periodically request recovery for claims whose owner is confirmed terminal, so a crashed DevLoop cannot orphan the proposal indefinitely.
+- The submission-exhaustion status activity SHALL use compare-and-set preconditions under the repository mutex: expected proposal status, expected PR head SHA, expected ownership epoch, and open/unmerged PR state. Any mismatch SHALL produce a recorded `superseded/no-op`, never overwrite newer state.
