@@ -161,3 +161,10 @@ in production and starts flipping healthy PRs to `review-stuck`:
 - [ ] P9. Join comments to Actions runs and select the newest non-superseded current-head run/attempt; a newer queued/in-progress run blocks and all older markers are ignored.
 - [ ] P10. Before enabling `required=True`, enumerate open PRs and dispatch/rerun pinned Agy for each current head; require a verified new-format marker. Include PR #234 as a mandatory fixture.
 - [ ] P11. Test old PASS/new FAIL, old FAIL/new PASS, rerun-attempt supersession, newer in-progress run, malformed/missing run identity, and the open-PR backfill path.
+
+## Executable backfill and findings tasks (authoritative)
+
+- [ ] P12. Add a permission-checked `workflow_dispatch` backfill entry point to the pinned mctl-agents Agy caller with required PR number and exact head SHA; fail closed if the head changed.
+- [ ] P13. Have the rollout enumerate open PRs, dispatch P12, and persist/verify the returned run ID, run attempt, and exact-head marker before enabling `required=True`.
+- [ ] P14. Add semantic marker outcomes `clean|findings|reviewer_error`. Route authoritative current-head findings to `address-review` even when the blocking job concludes failure; route reviewer/infrastructure errors through bounded wait-to-`review-stuck`.
+- [ ] P15. Test dispatch against a stale head, current-head backfill for PR #234, failure-with-findings, reviewer error, malformed payload, and failure without findings.
