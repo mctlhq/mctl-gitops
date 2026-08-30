@@ -345,3 +345,12 @@ The authority selector first orders correlated runs, then interprets evidence. C
 Authority is selected from the union of durable dispatch intents and correlated Actions runs. A newly created current-head intent immediately supersedes older runs and remains a blocking pending authority while dispatch is in flight or GitHub has not indexed the run. Bounded correlation retries either attach the run or durably classify the intent as `reviewer_error`; neither path falls back to an older PASS. Explicit supersession links the old intent to its successor before cleanup.
 
 Persist reviewer waits under `reviewer_wait_key = <source>:<head_sha>:<authority_identity>`. Pending intent uses its correlation ID; after correlation, authority identity becomes `run_id:run_attempt`. The correlation transition transfers a zeroed/full response window rather than inherited ticks. Any newer rerun/attempt atomically replaces the key and resets only that source's counter; other sources remain unchanged.
+
+## Exact-PR authority and durable evidence correction
+
+For `pull_request`-triggered Agy executions, matching the workflow and commit SHA is not sufficient: two pull requests can share a commit. Authority selection SHALL additionally require the target PR association and the expected head repository and ref. A run associated with another PR, repository, or ref is unrelated even when its `head_sha` is identical.
+
+A valid authoritative `findings` marker that contains no P1/P2 findings is a successful, nonblocking reviewer response. Its P3/P4 findings remain advisory evidence in the aggregate and merge record, but they neither trigger `address-review` nor consume the missing-reviewer timeout.
+
+The shepherd SHALL durably retain per-source blocking-finding history when P1/P2 findings are observed, keyed by stable exact finding identity and reviewed head. When a later current head is clean and merged, merge evidence SHALL idempotently derive `cleared_findings` records and counts from that history rather than only from the final head-filtered aggregate. Restarts and repeated reconciliation must not lose or double-count prior-head clearance evidence.
+
