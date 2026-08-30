@@ -354,3 +354,6 @@ A valid authoritative `findings` marker that contains no P1/P2 findings is a suc
 
 The shepherd SHALL durably retain per-source blocking-finding history when P1/P2 findings are observed, keyed by stable exact finding identity and reviewed head. When a later current head is clean and merged, merge evidence SHALL idempotently derive `cleared_findings` records and counts from that history rather than only from the final head-filtered aggregate. Restarts and repeated reconciliation must not lose or double-count prior-head clearance evidence.
 
+## Same-head lifecycle fence correction
+
+Authority selection includes a PR lifecycle generation derived from the latest `ready_for_review` or `reopened` timeline event. Such an event immediately supersedes prior same-head Agy evidence. Until Actions indexes a matching run created after the event, the generation is pending authority and blocks merge. The run joins only when PR number, head repository/ref/SHA, workflow identity, and creation time all match; missing correlation is bounded and fail-closed. This mirrors dispatch-intent fencing without requiring a webhook race-free Actions listing.
