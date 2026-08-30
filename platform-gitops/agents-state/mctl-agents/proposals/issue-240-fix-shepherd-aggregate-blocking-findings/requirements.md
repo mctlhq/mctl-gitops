@@ -204,3 +204,8 @@ PR #234 proves Agy currently posts a top-level `github-actions[bot]` comment wit
 - The shepherd SHALL persist exact per-source P1/P2 finding history across head changes. On a later clean merged head, `cleared_findings` identities and counts SHALL be derived idempotently from that prior-head history, not solely from the final current-head `AggregatedReview`.
 - Persisted history and clearance derivation SHALL survive restart, avoid double-counting repeated observations, and retain source attribution plus the head on which each blocker was observed and cleared.
 
+## Same-head lifecycle-event authority correction
+
+- A same-head `ready_for_review` or `reopened` lifecycle event SHALL invalidate earlier Agy authority from the event timestamp/generation, before the resulting Actions run is indexed.
+- The shepherd SHALL read the PR lifecycle timeline (or an equivalent durable event projection) and treat the newest relevant event as pending authority until a matching Agy run created after that event is visible and resolved. Older same-head PASS evidence cannot approve during this gap.
+- Event-to-run correlation SHALL include exact PR, head repository/ref/SHA, workflow identity, and run creation time after the lifecycle event. Bounded missing-run handling follows the existing fail-closed reviewer-error policy.
