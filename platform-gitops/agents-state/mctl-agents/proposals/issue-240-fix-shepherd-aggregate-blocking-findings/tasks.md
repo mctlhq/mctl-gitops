@@ -190,3 +190,11 @@ in production and starts flipping healthy PRs to `review-stuck`:
 - [ ] P26. Bound dispatch/correlation retries and retain failed/lost-response intents as `reviewer_error` evidence rather than deleting them.
 - [ ] P27. Key reviewer waits by source, head, and correlation/run identity; atomically reset that source on pending-to-run correlation, rerun, or newer attempt.
 - [ ] P28. Test dispatch response loss, delayed Actions indexing, intent supersession, same-head rerun after near-timeout, per-source isolation, and restart during correlation.
+
+## Exact-PR and clearance-evidence tasks
+
+- [ ] P29. Scope `pull_request`-triggered Agy runs to the exact target PR association plus head repository, ref, workflow identity, and SHA. Test two PRs sharing one commit, different bases, and fork/ref isolation.
+- [ ] P30. Treat a valid current-head `findings` marker containing only P3/P4 findings as a successful nonblocking response while retaining those findings as advisory merge evidence.
+- [ ] P31. Persist exact per-source P1/P2 finding history across head changes and idempotently derive merged-head `cleared_findings` records and counts from prior-head observations.
+- [ ] P32. Test blockers on an earlier head followed by a clean merged head, repeated observation deduplication, restart/reconciliation persistence, and stable source/head attribution without double-counting.
+
