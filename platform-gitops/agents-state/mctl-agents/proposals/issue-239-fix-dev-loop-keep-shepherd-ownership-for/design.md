@@ -313,3 +313,9 @@ When Temporal activity retries are exhausted for a transient transport error, th
 ## Terminal-writer arbiter barrier correction
 
 Terminal projection participates in the ownership arbiter as a registered in-flight operation for the fallback epoch. Takeover first records `takeover_pending`, which prevents new writers, and then waits for every registered writer as part of the drain barrier. The writer's post-commit phase re-queries the arbiter as well as GitHub. Epoch/claim mismatch triggers the idempotent compensating commit, and the writer acknowledges terminal completion only after compensation settles. DevLoop publishes `shepherd_in_loop=True` only after this acknowledgement.
+
+## Decision projection and coordinated rollback correction
+
+A dedicated decision-projection activity records both actions and skips using a deterministic event key `proposal:epoch:cycle:decision`. It writes through the existing serialized GitOps/audit boundary and exposes owner, exact head, decision/reason, counters, and next-tick time without requiring Temporal history inspection. Replays and duplicate reconciliations adopt the same event; the workflow itself performs no I/O.
+
+Rollback is an ownership transition. Disable new arbiter grants, enter drain mode, settle every registered external tick/submission/status writer, and verify no fallback can mutate state. Then roll back Reconcile, DevLoop handoff, arbiter, and projection code as one compatible deployment unit (or keep all enabled). The previous rollback text that reverts only Reconcile is superseded.
