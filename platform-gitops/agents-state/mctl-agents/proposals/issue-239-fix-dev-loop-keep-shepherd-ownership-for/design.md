@@ -291,3 +291,9 @@ Cancellation is a handoff protocol, not merely a Temporal child cancellation. Th
 ## Create-after-cancellation barrier correction
 
 The submission activity and deterministic remote tick ID form a two-phase handoff barrier. Cancellation does not infer absence from a single lookup. The fallback requests activity cancellation, then awaits the activity's terminal outcome (or a durable cancellation acknowledgement whose contract guarantees the remote request cannot later create). Only then does it reconcile the deterministic ID. An existing run is adopted and driven to terminal cancellation/completion. An absent run is accepted only after the activity is terminal, so a late remote create cannot appear after DevLoop takes ownership. DevLoop awaits the entire barrier before publishing `shepherd_in_loop=True`.
+
+## Proposal-scoped arbiter and terminal writer correction
+
+Introduce one deterministic proposal-scoped ownership arbiter (workflow or equivalent durable compare-and-swap service). DevLoop atomically changes its epoch to `takeover_pending` before discovering/canceling fallback work. Reconcile can create/adopt a fallback only after receiving a grant for the current epoch; fallback revalidates that grant immediately before submission. The arbiter refuses new fallback grants while takeover is pending, closing the no-fallback-found/start-between-lookup-and-publish race. After all granted work is drained, the arbiter publishes DevLoop ownership and only then allows `shepherd_in_loop=True`.
+
+A dedicated status-transition activity handles submission-budget exhaustion when no Argo run exists. It uses the existing repository mutex and serialized GitOps commit path, is keyed idempotently by proposal plus terminal tick ID, and writes `review-stuck` with failure evidence. The workflow only invokes and awaits this activity; it does not read or write repository state directly.
