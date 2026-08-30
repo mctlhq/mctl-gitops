@@ -190,3 +190,9 @@ PR #234 proves Agy currently posts a top-level `github-actions[bot]` comment wit
 - Once a newer run is correlated to the current PR/head dispatch intent, it SHALL remain authoritative in queued, in-progress, and completed states even if it never posts a marker. It SHALL never disappear from selection and reveal an older PASS.
 - A completed correlated run without a valid semantic marker SHALL be treated as `reviewer_error`: it blocks merge and follows the bounded wait-to-`review-stuck` policy. A marker is required only to establish semantic `clean` or `findings`; absence cannot approve.
 - Correlation for a markerless completed run SHALL use the durable intent plus trusted workflow ID/event/ref/run-name correlation and run ID/attempt metadata. Cleanup of dispatch intents occurs only after the result is durably consumed or explicitly superseded by a newer correlated run.
+
+## Pending-intent and reviewer-wait identity corrections
+
+- A durable current-head dispatch intent SHALL itself be newer pending authority from creation time, before an Actions run is visible. It SHALL block approval by every older PASS until correlated, explicitly superseded, or durably resolved as dispatch/reviewer failure.
+- Lost responses and delayed run visibility SHALL use bounded correlation retries. Exhaustion records a `reviewer_error` for that intent and follows bounded wait-to-`review-stuck`; it never deletes the intent and reveals an older PASS.
+- Reviewer wait state SHALL be keyed by `{source, head_sha, authority_identity}`, where authority identity is pending correlation ID or authoritative `run_id:run_attempt`. When authority changes on the same head, that source's wait counter SHALL reset atomically so the new execution receives its full bounded response window.
