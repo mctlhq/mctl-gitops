@@ -37,10 +37,7 @@
       loops plus `read_copilot_review`'s duplicate fetch into one pass that
       dispatches each review/comment by `login` to its `ReviewerSource`
       and per-source parser, producing per-source `responses: dict[str,
-      bool]` instead of one bare `has_responded` bool. — DoD: `process_one`
-      makes the same or fewer `gh api` calls per tick than before (verified
-      by counting `_gh_api_json` invocations in a test with `patch.object`
-      call-count assertions); all pre-existing #67 tests
+      bool]` instead of one bare `has_responded` bool. — DoD: `process_one` performs the existing review/comment reads plus the required cached, paginated Actions-runs lookup; tests assert bounded call counts and pagination. All pre-existing #67 tests
       (`test_connector_*`) pass against the refactored function with no
       behavior change for Claude/connector-only fixtures.
 - [ ] 6. Implement `_dedupe_findings()` (path/line key, fuzzy-text
@@ -168,3 +165,9 @@ in production and starts flipping healthy PRs to `review-stuck`:
 - [ ] P13. Have the rollout enumerate open PRs, dispatch P12, and persist/verify the returned run ID, run attempt, and exact-head marker before enabling `required=True`.
 - [ ] P14. Add semantic marker outcomes `clean|findings|reviewer_error`. Route authoritative current-head findings to `address-review` even when the blocking job concludes failure; route reviewer/infrastructure errors through bounded wait-to-`review-stuck`.
 - [ ] P15. Test dispatch against a stale head, current-head backfill for PR #234, failure-with-findings, reviewer error, malformed payload, and failure without findings.
+
+## Explicit-target and Actions-query tasks
+
+- [ ] P16. Make backfill accept explicit repository, PR number, and 40-hex head SHA; verify the live head, fetch/review that exact detached commit, pass explicit target inputs to the reusable workflow, and revalidate before posting.
+- [ ] P17. Ensure dispatch never uses the default-branch `GITHUB_SHA` or assumes a `pull_request` payload. Test wrong PR, stale SHA, changed-during-review SHA, fork/head targeting, and marker destination.
+- [ ] P18. Add a cached, paginated Actions-runs lookup for the Agy workflow/current head, including queued/in-progress runs and rerun attempts; replace prior no-new-call assertions with bounded call-count and pagination tests.
