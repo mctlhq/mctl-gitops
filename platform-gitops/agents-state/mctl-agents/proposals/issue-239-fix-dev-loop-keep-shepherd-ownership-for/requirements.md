@@ -176,3 +176,9 @@ without an operator having to notice and re-trigger it by hand.
 - A terminal status write based on GitHub state SHALL be provisional until a post-commit GitHub revalidation confirms the same PR head and open/unmerged state. If the external state changed, the activity SHALL immediately execute an idempotent compensating GitOps transaction that removes/supersedes the stale `review-stuck` evidence and projects the newer head or terminal merged/closed state.
 - Reconcile SHALL always give externally observed merged/closed/new-head state precedence over a provisional or stale submission-exhaustion status, so an external change after revalidation is repaired on the next event/cycle.
 - Exhausting bounded activity retries for a transient submission error SHALL keep the same logical tick ID and durable cycle state, schedule a workflow-level exponential-backoff timer, and retry after the timer. A separate bounded `transient_outage_windows` budget SHALL prevent endless outage loops; exhaustion uses the fenced terminal status path with operational evidence and does not increment `review_attempts`.
+
+## Terminal-writer ownership fencing correction
+
+- The arbiter SHALL register a terminal status activity as in-flight fallback work. DevLoop takeover SHALL drain that activity together with CWFT submission/ticks before ownership publication.
+- After committing provisional terminal status, the activity SHALL revalidate both GitHub state and the arbiter epoch/claim. If either changed, it SHALL execute the same idempotent compensating GitOps repair before reporting completion.
+- DevLoop SHALL not publish ownership until the registered terminal writer and any required compensation are terminal. A stale fallback epoch can therefore never leave authoritative `review-stuck` state after takeover.
