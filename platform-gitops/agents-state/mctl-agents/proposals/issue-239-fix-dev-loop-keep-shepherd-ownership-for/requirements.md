@@ -137,3 +137,12 @@ without an operator having to notice and re-trigger it by hand.
   every audit row. Assumed sufficient without a schema change; revisit if an
   operator later needs to filter executions by trigger source at the API
   layer.
+
+## Contract corrections before acceptance (authoritative)
+
+- The fallback SHALL be a durable single-owner Temporal execution (`FallbackReviewWorkflow`) with deterministic ID; `ReconcileWorkflow` only discovers and idempotently starts/adopts it.
+- The reconcile Schedule SHALL declare an explicit non-overlap policy. Workflow-ID conflict means already adopted, not a second owner.
+- Temporal workflow code SHALL perform no filesystem, GitHub, network, wall-clock or `.status.yaml` I/O. These operations and CWFT submission SHALL cross activity/child-workflow boundaries. GitOps status writes remain in the existing mutex-protected Argo path.
+- Ownership handoff SHALL be explicit: before publishing `shepherd_in_loop=True`, DevLoop cancels and awaits the proposal's fallback owner; fallback re-checks live DevLoop ownership before every tick and exits on takeover.
+- CWFT submission SHALL return a typed result. Failed submission writes no success/cooldown marker and retries without incrementing `review_attempts`.
+- Cooldown lives in durable workflow state/timers, not direct `.status.yaml` reads. The targeted shepherd re-fetches current head and preserves stale-review filtering, bounded retries and `--match-head-commit`.
