@@ -198,3 +198,8 @@ in production and starts flipping healthy PRs to `review-stuck`:
 - [ ] P31. Persist exact per-source P1/P2 finding history across head changes and idempotently derive merged-head `cleared_findings` records and counts from prior-head observations.
 - [ ] P32. Test blockers on an earlier head followed by a clean merged head, repeated observation deduplication, restart/reconciliation persistence, and stable source/head attribution without double-counting.
 
+## Same-head lifecycle fence tasks
+
+- [ ] P29. Read/project `ready_for_review` and `reopened` lifecycle generations and invalidate older same-head Agy authority immediately.
+- [ ] P30. Correlate the post-event run by exact PR, head repository/ref/SHA, workflow, and creation time; keep the event generation pending until correlated or bounded reviewer-error resolution.
+- [ ] P31. Test ready-for-review/reopen before Actions indexing, old same-head PASS, delayed run visibility, missing run, duplicate events, and unrelated PRs sharing a SHA.
