@@ -1,0 +1,24 @@
+name: Agy PR review
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+
+permissions: {}
+
+jobs:
+  agy-review:
+    uses: mctlhq/.github/.github/workflows/agy-review.yml@0ca555be1bfadf79f76f2fd56a00e91b89806ffe
+    permissions:
+      contents: read
+      pull-requests: write
+    with:
+      blocking: true
+      conventions: |
+        Focus on: GitOps correctness, Kubernetes/Argo CD manifest safety,
+        immutable and reviewed workflow pins, proposal requirements/design/tasks
+        consistency, idempotent state transitions, ownership and head-SHA
+        fencing, bounded retry behavior, and tests for changed executable
+        configuration. For documentation-only proposal changes, report only
+        concrete contradictions or missing acceptance-contract behavior; do not
+        propose unrelated architecture or broaden the issue scope.
