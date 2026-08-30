@@ -45,3 +45,26 @@ new CRITICAL finding with no immediate fix path), revert with a follow-up PR tha
 `exit-code` back to `"0"` on the same step (same branch-and-PR flow per `CLAUDE.md` — no direct
 push to `main`). This is a single-line change with no state, data, or deployed-service impact to
 unwind, since the whole change is confined to `.github/workflows/security.yml`.
+
+## Operator decisions (approve, 2026-08-30)
+
+Accepted as written, with two amendments:
+
+1. **Also widen `severity` to `HIGH,CRITICAL`.** The audit's evidence for
+   this issue is a local Trivy run showing mctl-web clean at *HIGH and
+   CRITICAL* (even with `--include-dev-deps`). Making the gate fail-closed
+   at `CRITICAL` only spends the clean baseline for less than it is worth:
+   HIGH findings would still pass silently. Keep `ignore-unfixed: true`, so
+   the gate only ever fires on findings that have an upstream fix.
+2. **The "trivial change — merge immediately" note in task 3 does not
+   apply.** The normal merge gate stands: zero unaddressed P1/P2 from
+   whichever review bots actually ran, plus an unfiltered pass over both
+   `pulls/<N>/comments` and `issues/<N>/comments` before merging.
+
+Additional test, replacing the weak form of T1/T2:
+
+- [ ] T4. Prove the gate by **mutation**, not only by a green run on a
+      clean tree: temporarily introduce a dependency (or a fixture file)
+      with a known fixable HIGH/CRITICAL advisory, confirm the `trivy` job
+      FAILS, then revert. A green check on an already-clean repository does
+      not distinguish a working fail-closed gate from a broken one.

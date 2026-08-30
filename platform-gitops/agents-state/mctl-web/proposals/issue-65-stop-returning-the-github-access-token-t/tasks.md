@@ -90,3 +90,61 @@ API entries and `__gh_session` cookies are short-lived (`SESSION_TTL_SEC =
 300` seconds) and self-expiring, there is no persistent state to clean up
 on rollback — any in-flight sessions from immediately before rollback simply
 expire naturally within 5 minutes.
+
+## Operator decisions (approve, 2026-08-30)
+
+The proposal's central open question — "does any consumer read `data.token`
+from `/api/github/session`?" — was answered by the operator against the
+sibling repositories, which this clone could not see. **The answer is yes,
+and the proposal's assumption is wrong.** Scope is rewritten accordingly.
+
+Findings (verified, not assumed):
+
+- `mctl-docs/docs/.vitepress/theme/components/McpSetup.vue:168-170` does
+  `if (data.token) setAuth(data.token, ...)`, and the same token is then
+  rendered into the Claude / Cursor / VS Code / Windsurf / Gemini / Copilot
+  MCP config snippets as `Authorization: Bearer <token>` against
+  `api.mctl.ai/mcp`. Delivering that token to the browser IS the product
+  feature of `docs.mctl.ai/mcp/connecting` — it is not an incidental leak.
+- The `tg-mcp` flow does **not** consume the session at all.
+  `labs-mctl-telegram.mctl.ai/telegram/connect` is served by
+  `mctl-telegram/internal/web/connect.go`, which runs its own local-jwt
+  OAuth and never calls `/api/github/session`.
+
+Decisions:
+
+1. **REJECT design step 1.** Do NOT remove `token: accessToken` from
+   `mcpPayload` in `handleGitHubCallback`. Removing it at the source breaks
+   the docs MCP onboarding outright.
+2. **KEEP design step 2 (allowlist), with `token` in the allowlist** for
+   the `docs` and `mcp` flows. The blocklist-destructure at
+   `index.js:699-700` is the real defect and must go: replace it with an
+   exported pure function that picks an explicit set of fields, so a future
+   field added to `mcpPayload` cannot leak by default.
+3. **Drop `token` from the `tg-mcp` flow.** That consumer provably does not
+   use it, so the allowlist is flow-conditional: `login`, `name`,
+   `avatar_url`, `html_url`, `sig` always; `token` only when the recorded
+   flow is `docs` or `mcp`. This removes one live exposure without breaking
+   anything.
+4. Put a comment next to the allowlist stating why `token` is present (it
+   is the user-facing mctl-api credential, delivered by design) and what
+   would remove it (mctl-api issuing its own scoped token — separate
+   tracker, see decision 6).
+5. Tests must cover: `token` present for `docs`/`mcp`; `token` absent for
+   `tg-mcp`; an unknown field added to the payload does not appear in the
+   response; the 401 path is unchanged.
+6. **Out of scope, filed separately by the operator:**
+   (a) `McpSetup.vue:118` persists the token in `localStorage`, which is a
+   strictly worse exposure than the JSON response this issue is about — any
+   XSS on docs.mctl.ai at any later time reads it. That is an `mctl-docs`
+   change.
+   (b) Replacing the raw GitHub token as the mctl-api bearer with a scoped,
+   revocable mctl-issued token. That is the real fix and is larger than
+   this audit.
+
+**The PR description MUST state** that issue #65's literal acceptance
+criterion ("no `token`/`access_token` field in any response reaching the
+browser") is deliberately NOT met for the `docs`/`mcp` flows, and why —
+otherwise the review gate will read the divergence as an oversight. Blast
+radius of the token is mctl-api access as that user, not merely GitHub
+`read:user`; say so plainly.
