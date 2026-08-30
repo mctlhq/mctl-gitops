@@ -158,3 +158,10 @@ PR #234 proves Agy currently posts a top-level `github-actions[bot]` comment wit
 - Missing, malformed, failed or stale-head Agy evidence means wait then bounded `review-stuck`, never approval.
 - Persist `reviewer_wait_head_sha` and per-source wait counters; reset all atomically on head change.
 - Deduplicate by exact path+line+normalized message, or exact normalized-message hash when location is absent. No fuzzy collapse of unlocated findings.
+
+## P1 rollout and run-authority corrections (authoritative)
+
+- Agy markers SHALL include exact 40-hex `head_sha`, Actions `run_id`, and `run_attempt` (or equivalent monotonically ordered attempt identity).
+- For a PR head, the authoritative Agy result SHALL be the newest non-superseded Agy workflow execution ordered by run number/ID and run attempt. A marker from an older run cannot approve or block once a newer run exists. A newer queued or in-progress run blocks merge; the newest completed failure blocks and follows the bounded wait-to-`review-stuck` policy; only the newest completed PASS whose marker identity and SHA match may approve.
+- Before Agy becomes `required=True`, the rollout SHALL enumerate every open target PR, dispatch or rerun the pinned Agy workflow for its current head, and verify a new-format current-head marker. Updating the reusable-workflow pin alone is insufficient because it does not trigger existing pull requests.
+- Legacy Agy comments without the marker identity remain non-authoritative. PR #234 is an explicit rollout fixture and must receive a current-head rerun before required gating is enabled.
