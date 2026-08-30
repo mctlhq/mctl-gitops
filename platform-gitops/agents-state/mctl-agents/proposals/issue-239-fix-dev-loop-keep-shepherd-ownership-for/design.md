@@ -279,3 +279,11 @@ This section supersedes the direct-tick and `last_orphan_tick` design above.
 Use a dedicated `FallbackReviewWorkflow` with deterministic ID `fallback-review-{service}-{slug}`. Reconcile starts/adopts it idempotently; the fallback owns one in-flight tick, cooldown timers, bounded retries and terminal exit. All PR/status/Temporal-client/CWFT operations are activities; workflow code performs no direct I/O. Existing `.status.yaml` transitions stay inside the serialized Argo GitOps commit step, so the proposed direct `proposal_state.py` metadata write is removed.
 
 Ownership handoff is bidirectional: fallback checks `Running && shepherd_in_loop` before each tick; DevLoop cancels and awaits fallback before setting `shepherd_in_loop=True`. The submission helper returns `submitted`, `already_exists`, `transient_failure` or `deterministic_failure`; only success advances cooldown. The targeted shepherd revalidates head and gates before acting. The reconcile Schedule explicitly uses non-overlap (`SKIP`).
+
+## P1 concurrency and retry correction (authoritative)
+
+Each fallback cycle allocates and persists one deterministic `tick_id = <fallback-workflow-id>-<proposal>-<head-sha>-<cycle>` before calling the submission activity. The mctl-api/CWFT boundary maps that ID to an explicit Argo workflow name or idempotency key. Activity retries never allocate another cycle or ID; `AlreadyExists` means adopt and observe the existing run. The durable cycle advances only after the tick reaches a terminal outcome.
+
+Submission errors are classified. Retryable transport errors use bounded Temporal activity retry/backoff without incrementing `review_attempts`. Deterministic validation/auth/configuration failures increment a separately persisted, bounded `submission_failures` counter; exhaustion records evidence and ends in `review-stuck`.
+
+Cancellation is a handoff protocol, not merely a Temporal child cancellation. The fallback cancellation handler determines whether the external Argo run was created. If created, it requests cancellation when supported and waits for terminal confirmation; otherwise it adopts and waits for terminal completion. DevLoop waits for that handler to finish before setting `shepherd_in_loop=True`. Thus no external fallback tick remains able to write status after ownership transfers.
