@@ -160,3 +160,9 @@
 - [ ] P13. Make terminal projection provisional, revalidate GitHub after commit, and issue an idempotent compensating GitOps commit on head/open/merged mismatch; Reconcile always projects newer external state over stale failure evidence.
 - [ ] P14. After transient activity-retry exhaustion, retain the logical tick and counters, wait on durable exponential backoff, and retry. Cap `transient_outage_windows`; terminal exhaustion uses the fenced status path without incrementing `review_attempts`.
 - [ ] P15. Test push/merge before commit, between commit and revalidation, and after revalidation; test worker restart and continue-as-new during transient backoff, eventual recovery, and outage-budget exhaustion.
+
+## Terminal ownership-fence tasks
+
+- [ ] P16. Register the terminal status activity as in-flight work in the proposal arbiter and include it in DevLoop's takeover drain.
+- [ ] P17. Post-commit revalidate GitHub state and arbiter epoch/claim; compensate on either mismatch and acknowledge completion only after repair.
+- [ ] P18. Test takeover before local commit, between commit and epoch revalidation, during compensation, and after writer restart; assert no stale `review-stuck` survives ownership publication.
