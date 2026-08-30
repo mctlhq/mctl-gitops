@@ -196,3 +196,11 @@ PR #234 proves Agy currently posts a top-level `github-actions[bot]` comment wit
 - A durable current-head dispatch intent SHALL itself be newer pending authority from creation time, before an Actions run is visible. It SHALL block approval by every older PASS until correlated, explicitly superseded, or durably resolved as dispatch/reviewer failure.
 - Lost responses and delayed run visibility SHALL use bounded correlation retries. Exhaustion records a `reviewer_error` for that intent and follows bounded wait-to-`review-stuck`; it never deletes the intent and reveals an older PASS.
 - Reviewer wait state SHALL be keyed by `{source, head_sha, authority_identity}`, where authority identity is pending correlation ID or authoritative `run_id:run_attempt`. When authority changes on the same head, that source's wait counter SHALL reset atomically so the new execution receives its full bounded response window.
+
+## Exact-PR authority and durable clearance corrections
+
+- For `pull_request`-triggered executions, authoritative Agy run selection SHALL match the exact target PR association, head repository, head ref, workflow identity, and exact reviewed `head_sha`; SHA equality alone is insufficient.
+- A valid authoritative `findings` marker containing no P1/P2 findings SHALL count as a successful, nonblocking response. P3/P4 findings SHALL remain advisory evidence but SHALL NOT trigger `address-review` or missing-reviewer timeout.
+- The shepherd SHALL persist exact per-source P1/P2 finding history across head changes. On a later clean merged head, `cleared_findings` identities and counts SHALL be derived idempotently from that prior-head history, not solely from the final current-head `AggregatedReview`.
+- Persisted history and clearance derivation SHALL survive restart, avoid double-counting repeated observations, and retain source attribution plus the head on which each blocker was observed and cleared.
+
