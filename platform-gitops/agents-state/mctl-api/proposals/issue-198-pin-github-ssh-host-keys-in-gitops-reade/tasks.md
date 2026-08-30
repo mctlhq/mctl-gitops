@@ -10,12 +10,22 @@
       file byte-for-byte.
 
 - [ ] 2. Add `knownHostsPath` field to `Reader` and extend `NewReader` to
-      `NewReader(repoURL, branch, localPath, token, sshKeyPath, knownHostsPath string) (*Reader, error)`
-      (depends on 1) — DoD: when `knownHostsPath == ""`, `NewReader`
-      materializes `githubKnownHosts` to a resolved on-disk path (written
-      with `0o400`, skipped if a byte-identical file already exists) and
-      stores that path; when `knownHostsPath != ""`, it is stored verbatim
-      with no write. `go vet`/`go build ./...` pass.
+      `NewReader(repoURL, branch, localPath, token, sshKeyPath, knownHostsPath string) *Reader`
+      (depends on 1) — DoD: the constructor stores `knownHostsPath` verbatim
+      and performs **no filesystem I/O** (so its signature keeps returning a
+      bare `*Reader`, no error). Materialization of the embedded default
+      happens lazily in task 2a. `go vet`/`go build ./...` pass.
+
+- [ ] 2a. Materialize the embedded default lazily, inside the SSH branch of
+      `refresh()` (depends on 2) — DoD: when `r.knownHostsPath == ""`, the
+      first SSH-mode refresh writes `githubKnownHosts` to
+      `filepath.Join(os.TempDir(), "mctl-api-github-known-hosts")` with mode
+      `0o600`, skips the write if a byte-identical file is already present,
+      caches the resolved path on the `Reader` so later syncs do not rewrite
+      it, and returns an error (no `accept-new` fallback, no silent use of
+      `~/.ssh/known_hosts`) if the write fails. Nothing happens on the
+      HTTPS/token path — see the operator decisions below for why this must
+      not run at construction time.
 
 - [ ] 3. Update `refresh()`'s SSH branch to build
       `ssh -i %s -o StrictHostKeyChecking=yes -o UserKnownHostsFile=%s`
@@ -82,10 +92,14 @@
       asks for.
 - [ ] T3. Unit test: matching/pinned host key allows the clone to proceed
       past host-key verification (task 9).
-- [ ] T4. Unit test: `NewReader` with `knownHostsPath == ""` materializes
-      the embedded default to disk with `0o400` permissions and expected
-      content; calling it twice does not rewrite/duplicate the file
-      (task 2).
+- [ ] T4. Unit test: `NewReader` with `knownHostsPath == ""` performs no
+      filesystem write at all (assert the target path does not exist after
+      construction, with `TMPDIR` pointed at a fresh dir) — the regression
+      guard for keeping the production startup path clean.
+- [ ] T4a. Unit test: the lazy materializer writes the embedded default with
+      `0o600` and the expected content, is a no-op when a byte-identical
+      file already exists, and returns an error rather than falling back
+      when the target directory is unwritable (task 2a).
 - [ ] T5. Regression: existing `internal/gitops` test suite
       (`TestRefreshResetsDivergedCache`, `TestReadTenant`, etc.) continues
       to pass unmodified, confirming the non-SSH paths are untouched.
@@ -146,18 +160,23 @@ Implementation constraints:
    `-o UserKnownHostsFile=<path>`, and the string `accept-new` must not
    appear anywhere in the package after this change.
 
-Test scope — read this before writing T-tasks:
+Test scope:
 
-6. The issue asks for "a test that a mismatched host key fails the clone."
-   A faithful end-to-end version needs a live SSH server, which this test
-   suite has no way to stand up (existing tests use local `file://` repos,
-   which never invoke `ssh` at all). **Do not fake one, and do not write a
-   test that pretends to exercise a path it does not.** The honest coverage
-   is: (a) a test asserting the constructed `GIT_SSH_COMMAND` for a
-   non-empty `sshKeyPath` contains `StrictHostKeyChecking=yes` and the
-   configured `UserKnownHostsFile`, and never `accept-new`; (b) a test that
-   the embedded material parses as `github.com` host-key lines for all
-   three algorithms; (c) a test that an explicitly configured
-   `knownHostsPath` is used verbatim over the default. State this deviation
-   from the issue's wording in the PR description rather than leaving the
-   reviewer to notice the acceptance criterion is unmet.
+6. **Keep tasks 7-9 and T2 — build the in-process SSH fixture and write the
+   real mismatched-host-key test.** An earlier draft of these decisions told
+   the implementer not to attempt it, on the assumption that this suite
+   cannot stand up an SSH server. That was wrong: the proposal already
+   designs a workable fixture with `golang.org/x/crypto/ssh` bound to
+   `127.0.0.1:0`, and the negative test does not need a working git
+   protocol at all — `git` aborts at host-key verification before any
+   `git-upload-pack` exchange, which is exactly the failure being asserted.
+   So the issue's acceptance criterion ("a test that a mismatched host key
+   fails the clone") is met literally, not approximated.
+
+   Two constraints on it: the fixture must bind loopback on an ephemeral
+   port and must not reach the network, so the suite stays hermetic; and
+   task 9's honest fallback stands — if faking `git-upload-pack` for a full
+   positive clone proves disproportionate, assert the *absence* of
+   host-key-failure error classes rather than fabricating a success path.
+   Assert on error classification, not on exact OpenSSH message text, which
+   varies by version.

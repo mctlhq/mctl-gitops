@@ -1,9 +1,10 @@
 # Tasks: issue-67-security-yml-fail-closed-exit-code-1-sca
 
-- [ ] 1. Edit `.github/workflows/security.yml`: change `exit-code: "0"` to `exit-code: "1"` on
-      the "Trivy filesystem scan" step, leaving `scan-type`, `scan-ref`, `severity`,
-      `ignore-unfixed`, `version`, and the pinned action SHA unchanged. — DoD: the diff touches
-      only the `exit-code` value; `git diff` shows a single changed line for this edit.
+- [ ] 1. Edit `.github/workflows/security.yml` on the "Trivy filesystem scan" step: change
+      `exit-code: "0"` to `exit-code: "1"` AND `severity: CRITICAL` to
+      `severity: "HIGH,CRITICAL"` (operator decision — see the decisions section below).
+      Leave `scan-type`, `scan-ref`, `ignore-unfixed`, `version`, and the pinned action SHA
+      unchanged. — DoD: exactly those two values changed, nothing else.
 
 - [ ] 2. (depends on 1) Remove the stale three-line inline comment
       (`# Report-only: package-lock.json already has CRITICAL findings with upstream fixes
@@ -27,12 +28,12 @@
       for this PR; the feature branch is deleted.
 
 ## Tests
-- [ ] T1. Before merging, confirm the current Trivy config (`v0.69.3`,
-      `scan-type: fs`, `scan-ref: .`, `severity: CRITICAL`, `ignore-unfixed: true`) still reports
-      zero findings against the branch's `package-lock.json` — either by observing the `trivy`
-      job succeed on the PR itself (now fail-closed, so a green check is a real pass, not just an
-      always-succeed no-op) or by re-running the local scan referenced in the issue
-      (2026-08-27 baseline) against the current lockfile.
+- [ ] T1. Before merging, confirm the new Trivy config (`v0.69.3`, `scan-type: fs`,
+      `scan-ref: .`, `severity: HIGH,CRITICAL`, `ignore-unfixed: true`) reports zero findings
+      against the branch — either by observing the `trivy` job succeed on the PR itself (now
+      fail-closed, so a green check is a real pass) or by re-running the local scan from the
+      issue's 2026-08-27 baseline. Note this is a wider gate than the old CRITICAL-only one, so
+      the baseline must be re-confirmed at HIGH rather than assumed from the issue text.
 - [ ] T2. Confirm the `trivy` job's step logs on the PR run show the scan actually executed
       (not skipped) and completed with exit code 0, i.e. the workflow is now meaningfully
       fail-closed rather than trivially green.

@@ -26,21 +26,32 @@ comments at `cloudflare-worker/index.js:572-575` and `605-608`) to keep
 `access_token` out of URLs; it should not then hand the same token to the
 browser in a fetch response body. The normal (non-fragment) landing flow
 already gets this right — its `userData` object
-(`cloudflare-worker/index.js:609-616`) never includes the token. This
-proposal brings the MCP/docs/tg-mcp session-redeem path to the same
-standard.
+(`cloudflare-worker/index.js:609-616`) never includes the token.
+
+**Correction applied at approval (2026-08-30):** the paragraphs above are
+the issue's framing, and it is only partly right. Two of the three
+fragment flows cannot be brought to the landing flow's standard, because
+for them the token is the deliverable, not a leak:
+`docs.mctl.ai/mcp/connecting` gives the user that token to paste into their
+MCP client as the `api.mctl.ai/mcp` bearer. Only `tg-mcp` — which never
+calls this endpoint — can lose it. What this proposal actually fixes is
+therefore narrower than the issue's title: drop the token for `tg-mcp`, and
+replace the blocklist response construction with an allowlist so future
+payload fields cannot leak by default. The genuinely larger problem the
+issue is circling — a GitHub credential doubling as our API bearer, with
+mctl-api's blast radius and no revocation — is mctlhq/mctl-api#218.
 
 ## User stories
 
 - AS a security-conscious operator of mctl.ai I WANT the GitHub OAuth access
-  token to never leave the Cloudflare Worker's server-side storage SO THAT an
-  XSS or malicious extension on a consuming origin cannot steal a user's
-  GitHub credentials.
-- AS a developer integrating with the `/api/github/session` endpoint (from
-  docs.mctl.ai or the Telegram MCP connector) I WANT a clearly-defined,
-  minimal response shape (login, name, avatar_url, html_url, sig) SO THAT I
-  know exactly what identity data is available client-side and am not
-  tempted to rely on a token that should not be there.
+  token to reach only the one flow that actually needs it SO THAT the
+  Telegram connect flow, which never reads it, stops carrying a live
+  credential through a cache entry, a cookie, and a JSON response for no
+  reason.
+- AS a developer integrating with the `/api/github/session` endpoint I WANT
+  a clearly-defined response shape SO THAT I know exactly what is available
+  client-side — and, for the docs MCP page, that the `token` I depend on is
+  there deliberately rather than by accident.
 - AS a future contributor to this worker I WANT the session response to be
   built from an explicit allowlist of fields SO THAT adding a new field to
   the internal session payload cannot silently leak it to the browser.
@@ -48,9 +59,17 @@ standard.
 ## Acceptance criteria (EARS)
 
 - WHEN `POST /api/github/session` successfully redeems a live session
-  (via one-time `code` or the `__gh_session` cookie) THE SYSTEM SHALL return
-  a JSON body containing only `login`, `name`, `avatar_url`, `html_url`, and
-  `sig` — no `token`, `access_token`, `sessionId`, or `exp` field.
+  (via one-time `code` or the `__gh_session` cookie) THE SYSTEM SHALL build
+  the JSON body from an explicit allowlist of `login`, `name`,
+  `avatar_url`, `html_url`, `sig`, and `token`, and SHALL NOT include any
+  field outside that list — in particular no `sessionId`, no `exp`, and no
+  field a future change adds to the internal payload.
+- WHEN the redeemed session originated from the `docs` or `mcp` flow THE
+  SYSTEM SHALL include `token`, because `docs.mctl.ai/mcp/connecting`
+  requires it as the `api.mctl.ai/mcp` bearer it hands the user.
+- WHEN the redeemed session originated from the `tg-mcp` flow THE SYSTEM
+  SHALL NOT include `token`, and the token SHALL NOT have been written to
+  the Cache API entry or the `__gh_session` cookie for that flow at all.
 - WHEN `POST /api/github/session` is called with an expired, missing, or
   already-consumed session THE SYSTEM SHALL continue to return
   `401 { error: 'Session expired or missing' }` exactly as today.
@@ -89,27 +108,16 @@ standard.
 
 ## Open questions
 
-- Does the JS on `docs.mctl.ai/mcp/connecting` or
-  `labs-mctl-telegram.mctl.ai/telegram/connect` currently read `data.token`
-  from the `/api/github/session` response and use it for anything (e.g. to
-  call the GitHub API directly from the browser, or to hand the token to an
-  MCP client config)? This clone contains only `mctl-web`, so those pages'
-  source is not visible here. Most reasonable interpretation, given (a) the
-  token's scope is only `read:user user:email` (no repo/API-acting
-  capability worth exposing), and (b) the sibling "normal landing flow"
-  never sends a token and only exposes identity fields, is that consumers
-  only need identity (`login`, `name`, `avatar_url`, `html_url`) and `sig`
-  for HMAC-verified identity linking, same as the landing flow. This
-  proposal proceeds on that assumption. If it turns out a consumer does
-  need server-side GitHub API access on behalf of the user, the correct
-  follow-up (per the issue's own guidance) is a dedicated
-  service-to-service endpoint on the worker — not exposing the raw token to
-  browser JS — coordinated as a separate cross-repo change with
-  `mctl-docs`/`mctl-telegram` maintainers.
-- Should the access token also be removed from the server-side session
-  payload entirely (i.e. never stored in the Cache API entry or the
-  encrypted `__gh_session` cookie), rather than merely filtered out of the
-  HTTP response? This proposal's design section recommends removing it at
-  the source (not just filtering on the way out) since nothing else in the
-  worker reads `payload.token` after it is fetched from GitHub — see
-  `design.md` for the reasoning.
+**Resolved by the operator before approval (2026-08-30).** Both original
+questions are answered; see the Operator decisions section in `tasks.md`
+for the full reasoning and the verified references.
+
+- *Does any consumer read `data.token`?* **Yes.**
+  `mctl-docs/docs/.vitepress/theme/components/McpSetup.vue:168-170` reads it
+  and renders it into every MCP client config snippet as the
+  `api.mctl.ai/mcp` bearer. The `tg-mcp` target does not — it never calls
+  this endpoint. Hence the flow-conditional behaviour above.
+- *Should the token also be removed from the server-side payload, not just
+  filtered from the response?* **For `tg-mcp`, yes** — it is omitted at
+  construction, so it never reaches the Cache API entry or the cookie. **For
+  `docs`/`mcp`, no** — the consumer needs it.

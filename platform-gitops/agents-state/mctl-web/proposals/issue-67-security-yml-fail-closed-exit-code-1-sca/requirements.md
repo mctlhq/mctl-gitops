@@ -18,28 +18,28 @@ toothless. This is flagged as part of the 2026-08 platform audit (P2, dependency
 
 ## User stories
 - AS a maintainer of mctl-web I WANT the Trivy scan to fail the workflow when it finds an
-  unfixed CRITICAL vulnerability SO THAT new dependency vulnerabilities block merge instead of
+  unfixed HIGH or CRITICAL vulnerability SO THAT new dependency vulnerabilities block merge instead of
   being silently reported and ignored.
 - AS a reviewer reading `security.yml` I WANT the inline comment to reflect the current, true
   state of the scan SO THAT I do not make decisions based on stale, inaccurate context.
 
 ## Acceptance criteria (EARS)
+- WHILE `.github/workflows/security.yml` exists, THE SYSTEM SHALL configure the Trivy
+  filesystem scan step with `severity: "HIGH,CRITICAL"` and `exit-code: "1"`.
 - WHEN the Trivy filesystem scan step in `.github/workflows/security.yml` runs and finds one or
-  more CRITICAL severity vulnerabilities with an available fix (`ignore-unfixed: true` still
+  more HIGH or CRITICAL severity vulnerabilities with an available fix (`ignore-unfixed: true` still
   applies), THE SYSTEM SHALL fail the `trivy` job (non-zero exit code).
-- WHEN the Trivy filesystem scan step finds no CRITICAL vulnerabilities with an available fix,
+- WHEN the Trivy filesystem scan step finds no HIGH or CRITICAL vulnerabilities with an available fix,
   THE SYSTEM SHALL succeed the `trivy` job, exactly as it does today.
 - WHILE `.github/workflows/security.yml` exists, THE SYSTEM SHALL NOT contain the stale
   inline comment referencing Nuxt DevTools / seroval findings as a reason the scan is
   report-only, since that condition no longer holds.
-- IF a future PR reintroduces a CRITICAL, fixable vulnerability THEN THE SYSTEM SHALL fail the
+- IF a future PR reintroduces a HIGH or CRITICAL, fixable vulnerability THEN THE SYSTEM SHALL fail the
   `security` workflow's `trivy` job on that PR and on the next weekly cron run, so it is visible
   in the PR checks / Actions history rather than silently passing.
 
 ## Out of scope
-- Changing `severity` (currently `CRITICAL` only) to also include `HIGH`. The issue's context
-  mentions the local scan was run for HIGH/CRITICAL, but the "Expected fix" section only asks
-  to flip `exit-code` and remove the stale comment; broadening severity is a separate policy
+- Severity levels below `HIGH` (MEDIUM, LOW, UNKNOWN). Widening past HIGH is a separate policy
   decision left for a follow-up.
 - Changing `ignore-unfixed: true`, the Trivy version pin, `scan-type`, or `scan-ref`.
 - Adding branch protection / required-status-check enforcement for the `trivy` job in GitHub
@@ -50,6 +50,8 @@ toothless. This is flagged as part of the 2026-08 platform audit (P2, dependency
   existing comment's stated remediation path.
 
 ## Open questions
-- None. The issue is fully specified: set `exit-code: "1"` and remove the stale comment. The
-  HIGH-severity scope question is recorded above as an explicit out-of-scope item rather than
-  a blocker.
+- Resolved at approval (2026-08-30): the operator widened `severity` to `HIGH,CRITICAL`.
+  The audit's own evidence is a local scan clean at HIGH *and* CRITICAL, so gating only on
+  CRITICAL spends that clean baseline for less than it is worth — HIGH findings with an
+  upstream fix would still merge silently. `ignore-unfixed: true` is unchanged, so the gate
+  still only fires on findings that have somewhere to go.
