@@ -165,3 +165,10 @@ PR #234 proves Agy currently posts a top-level `github-actions[bot]` comment wit
 - For a PR head, the authoritative Agy result SHALL be the newest non-superseded Agy workflow execution ordered by run number/ID and run attempt. A marker from an older run cannot approve or block once a newer run exists. A newer queued or in-progress run blocks merge; the newest completed failure blocks and follows the bounded wait-to-`review-stuck` policy; only the newest completed PASS whose marker identity and SHA match may approve.
 - Before Agy becomes `required=True`, the rollout SHALL enumerate every open target PR, dispatch or rerun the pinned Agy workflow for its current head, and verify a new-format current-head marker. Updating the reusable-workflow pin alone is insufficient because it does not trigger existing pull requests.
 - Legacy Agy comments without the marker identity remain non-authoritative. PR #234 is an explicit rollout fixture and must receive a current-head rerun before required gating is enabled.
+
+## Agy outcome and executable backfill corrections (authoritative)
+
+- The authoritative Agy marker SHALL distinguish `clean`, `findings`, and `reviewer_error`; gating SHALL use the marker's semantic outcome and payload, not the Actions conclusion alone.
+- A current-head authoritative `findings` marker with parseable P1/P2 findings SHALL return `address-review`, even when the blocking Actions run concludes `failure`. A `reviewer_error` marker or failed run without valid findings SHALL follow bounded wait-to-`review-stuck`. Neither case may approve.
+- The pinned mctl-agents caller workflow SHALL provide an executable, permission-checked backfill entry point (for example `workflow_dispatch` with PR number and exact head SHA). It SHALL validate that the supplied SHA is still the PR's current head before invoking the pinned reusable workflow.
+- Rollout SHALL use that entry point for every already-open PR and record the resulting run identity and exact-head marker before enabling required gating.
