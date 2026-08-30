@@ -137,3 +137,8 @@
 - [ ] P2. Classify submission errors and add a separately bounded deterministic `submission_failures` budget ending in `review-stuck`; keep transient retries bounded by Temporal retry/backoff and outside `review_attempts`.
 - [ ] P3. Implement takeover as a drain barrier for any submitted external Argo tick; DevLoop publishes ownership only after terminal cancellation/completion is observed.
 - [ ] P4. Test response loss after successful create, `AlreadyExists` adoption, deterministic failure-budget exhaustion, and takeover while an external tick is running. Assert one Argo workflow and no overlapping status writers.
+
+## Cancellation-race task correction
+
+- [ ] P5. Make takeover await the submission activity's terminal outcome before checking the deterministic Argo ID; then adopt/drain any discovered run before acknowledging handoff.
+- [ ] P6. Add race tests for cancellation before send, while the create request is in flight, after create with lost response, and after activity completion. Assert DevLoop never starts while a late-created fallback run can mutate state.
