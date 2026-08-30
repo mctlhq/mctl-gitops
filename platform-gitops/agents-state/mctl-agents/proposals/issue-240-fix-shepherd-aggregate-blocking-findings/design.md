@@ -312,3 +312,9 @@ This section supersedes assumptions that an existing Agy comment can be head-pin
 Change the reusable `mctlhq/.github/.github/workflows/agy-review.yml` first so PASS/FAIL and reviewer-error comments carry PR head SHA and run ID in the marker; bump mctl-agents' pinned reusable-workflow commit. `ReviewerSource` matches `github-actions[bot]` plus marker. Only an exact 40-hex marker SHA equal to `PRSnapshot.head_sha` satisfies Agy response; legacy comments remain visible but non-gating evidence.
 
 Persist `reviewer_wait_head_sha` and `reviewer_wait_ticks: {source: count}`. Reset on head change. Failure marker increments Agy's missing/failed counter and never approves. `decide()` remains pure. Dedup is exact and conservative, never fuzzy for unlocated findings. The mctl-agents change cannot merge until real pinned PASS and FAIL fixtures prove current-head parsing.
+
+## P1 authoritative-run and backfill design correction
+
+The reader joins marker comments to Actions runs by `run_id`, `run_attempt`, workflow identity, repository, and exact PR `head_sha`. For the current head it selects the newest non-superseded run using the Actions run ordering plus attempt number. Once a newer run is queued, in progress, or completed, comments from every older run are ignored for gating. This makes old-PASS/new-FAIL and old-FAIL/new-PASS deterministic; a rerun attempt supersedes earlier attempts of the same run.
+
+Rollout is two-phase. First merge the shared-workflow marker change and bump the pinned reusable-workflow SHA. Then enumerate all open mctl-agents PRs/proposals and explicitly dispatch or rerun that pinned workflow against each current head. A proposal may switch Agy to `required=True` only after its head has a joined new-format marker from the authoritative run. PR #234 must be exercised in this backfill. Workflow-pin changes alone do not satisfy this phase because they do not emit a `pull_request` synchronize event for existing heads.
