@@ -142,3 +142,9 @@
 
 - [ ] P5. Make takeover await the submission activity's terminal outcome before checking the deterministic Argo ID; then adopt/drain any discovered run before acknowledging handoff.
 - [ ] P6. Add race tests for cancellation before send, while the create request is in flight, after create with lost response, and after activity completion. Assert DevLoop never starts while a late-created fallback run can mutate state.
+
+## Arbiter and terminal-writer tasks
+
+- [ ] P7. Implement a durable proposal-scoped ownership arbiter with monotonic epochs; DevLoop claims `takeover_pending` before fallback lookup, and Reconcile/fallback require a current grant before start and immediately before remote create.
+- [ ] P8. Add an idempotent mutex-protected GitOps status activity for submission-budget exhaustion so `review-stuck` persists even when no CWFT was created.
+- [ ] P9. Test reconcile-start between DevLoop lookup and ownership publication, stale-epoch submission, duplicate terminal writes, and process restart after the terminal GitOps commit.
