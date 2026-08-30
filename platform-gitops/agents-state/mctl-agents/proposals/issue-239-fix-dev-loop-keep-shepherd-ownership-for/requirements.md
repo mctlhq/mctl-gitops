@@ -158,3 +158,9 @@ without an operator having to notice and re-trigger it by hand.
 - A negative pre-create lookup is not a handoff barrier. When takeover races an in-flight submission activity, the fallback SHALL first wait until that activity reaches a terminal result or cancellation acknowledgement that proves no remote create can still complete.
 - After the submission activity is terminal, the fallback SHALL reconcile the stable tick ID against Argo. If a run exists, it SHALL cancel/adopt and await the run's terminal state; only a terminal activity followed by an absent run, or a terminal run, permits ownership acknowledgement.
 - DevLoop SHALL remain blocked from publishing `shepherd_in_loop=True` throughout this protocol. Tests SHALL cover cancellation before request send, during response loss, and after remote create.
+
+## Ownership arbitration and terminal status corrections
+
+- Fallback creation and DevLoop takeover SHALL be serialized by one durable proposal-scoped ownership arbiter. DevLoop first records a `takeover_pending` claim/epoch in that arbiter; only then may it look up and drain a fallback. Reconcile SHALL acquire a fallback grant from the same arbiter before starting or submitting work, and SHALL be denied once takeover is pending.
+- Every fallback submission SHALL carry the arbiter epoch and revalidate that grant immediately before remote create. A stale grant cannot create or mutate state.
+- When deterministic submission failures exhaust their bounded budget without creating an Argo tick, a dedicated idempotent Temporal activity SHALL persist `review-stuck` and evidence through the same repository mutex/serialized GitOps transaction used by existing status writers. Temporal workflow code performs no direct I/O, and the terminal write does not depend on a shepherd CWFT existing.
