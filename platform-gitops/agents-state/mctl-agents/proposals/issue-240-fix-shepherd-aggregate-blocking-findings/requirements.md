@@ -172,3 +172,9 @@ PR #234 proves Agy currently posts a top-level `github-actions[bot]` comment wit
 - A current-head authoritative `findings` marker with parseable P1/P2 findings SHALL return `address-review`, even when the blocking Actions run concludes `failure`. A `reviewer_error` marker or failed run without valid findings SHALL follow bounded wait-to-`review-stuck`. Neither case may approve.
 - The pinned mctl-agents caller workflow SHALL provide an executable, permission-checked backfill entry point (for example `workflow_dispatch` with PR number and exact head SHA). It SHALL validate that the supplied SHA is still the PR's current head before invoking the pinned reusable workflow.
 - Rollout SHALL use that entry point for every already-open PR and record the resulting run identity and exact-head marker before enabling required gating.
+
+## Explicit review target and Actions authority corrections
+
+- A manual backfill run SHALL execute trusted workflow code from the default branch while taking explicit `repository`, `pr_number`, and exact `head_sha` inputs. It SHALL fetch and review that exact commit (for example the validated `refs/pull/<n>/head` object), never infer the target from `GITHUB_SHA` or a missing `pull_request` event.
+- The caller SHALL validate immediately before review and before publishing the marker that the PR's live head still equals the supplied SHA. The reusable workflow and reviewer receive the explicit target SHA and PR number; every comment and marker is posted to that PR and bound to that SHA.
+- Authoritative run selection SHALL query GitHub Actions run metadata, including queued/in-progress runs and rerun attempts. The additional paginated/cached Actions lookup is required and replaces any earlier same-call-count/no-new-network-call constraint.
