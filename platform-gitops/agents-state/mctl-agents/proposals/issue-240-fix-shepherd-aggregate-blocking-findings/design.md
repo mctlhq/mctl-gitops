@@ -274,8 +274,7 @@ number of gating reviewers can contribute to. Concretely, in
 - **Resource impact.** Folding `read_copilot_review`'s duplicate fetch into
   the unified pass (step 3) is a net *decrease* in `gh api` calls per tick
   (two fetches of `/reviews` and `/pulls/<n>/comments` become one each).
-  Adding Agy parsing adds no new network calls — Agy's comments already
-  arrive on the same three endpoints the shepherd already polls.
+  Agy authority adds one cached, paginated Actions-runs lookup per relevant tick so queued/in-progress runs, workflow identity, conclusions, and rerun attempts are observable.
 - **Risks + mitigations.**
   - *Wrong Agy bot login or comment shape* (flagged in requirements.md's
     Open Questions) would make the parser silently find zero findings.
@@ -324,3 +323,9 @@ Rollout is two-phase. First merge the shared-workflow marker change and bump the
 Agy posts an explicit semantic marker outcome: `clean`, `findings`, or `reviewer_error`. The aggregator first selects the authoritative current-head run/attempt, then interprets its marker. `findings` with valid P1/P2 payload drives `address-review` regardless of the blocking job's failure conclusion. `reviewer_error`, missing/malformed payload, or infrastructure failure produces bounded wait then `review-stuck`. Actions conclusion is supporting execution evidence, never a substitute for the semantic marker.
 
 The mctl-agents pinned caller gains a manual backfill path such as `workflow_dispatch(pr_number, head_sha)`. It resolves the PR through GitHub, fails closed unless `head_sha` exactly equals the live PR head, and invokes the same pinned reusable Agy workflow. The rollout enumerator dispatches this entry point for open PRs and joins each returned run ID/attempt to its marker before enabling `required=True`.
+
+## Explicit target checkout and Actions lookup correction
+
+The dispatch wrapper runs trusted YAML from the default branch but never treats the dispatch ref's `GITHUB_SHA` as the reviewed code. It resolves `pr_number`, verifies the supplied 40-hex SHA equals the API's current PR head, fetches/checks out that exact commit in detached mode for analysis, and passes explicit repository/PR/head inputs to the pinned reusable workflow. Before posting results it rechecks the live head; a changed head suppresses the marker and fails closed. Comments target the explicit PR number and markers carry the explicit reviewed SHA.
+
+Run authority requires a paginated Actions-runs query filtered to the Agy workflow and current PR head, including queued/in-progress runs and every `run_attempt`. Cache that result within one shepherd tick, then join it to marker comments by run ID/attempt. This deliberate API call supersedes the earlier same-or-fewer-call assertion and the claim that Agy adds no network calls.
