@@ -178,3 +178,9 @@ PR #234 proves Agy currently posts a top-level `github-actions[bot]` comment wit
 - A manual backfill run SHALL execute trusted workflow code from the default branch while taking explicit `repository`, `pr_number`, and exact `head_sha` inputs. It SHALL fetch and review that exact commit (for example the validated `refs/pull/<n>/head` object), never infer the target from `GITHUB_SHA` or a missing `pull_request` event.
 - The caller SHALL validate immediately before review and before publishing the marker that the PR's live head still equals the supplied SHA. The reusable workflow and reviewer receive the explicit target SHA and PR number; every comment and marker is posted to that PR and bound to that SHA.
 - Authoritative run selection SHALL query GitHub Actions run metadata, including queued/in-progress runs and rerun attempts. The additional paginated/cached Actions lookup is required and replaces any earlier same-call-count/no-new-network-call constraint.
+
+## Dispatch-run correlation correction
+
+- Authority lookup SHALL NOT filter `workflow_dispatch` runs by Actions `head_sha`, because it represents the dispatch ref rather than the reviewed PR head.
+- Each backfill dispatch SHALL carry a cryptographically unique correlation ID plus explicit PR number and reviewed head SHA. Trusted workflow metadata (for example `run-name`) SHALL expose that correlation ID before comments are posted, and a durable dispatch-intent record SHALL bind it to repository, PR, SHA, workflow identity, and creation time.
+- Queued/in-progress dispatch runs SHALL be joined to that intent by workflow identity, event type, trusted default-branch ref, correlation ID, and time window; completed results additionally require marker `run_id`, `run_attempt`, correlation ID, PR, and exact reviewed SHA. PR-triggered runs may continue to use Actions `head_sha`.
