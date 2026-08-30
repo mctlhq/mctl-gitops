@@ -15,16 +15,19 @@
       to "Report-only", "Nuxt DevTools", or "seroval" remains in `security.yml`.
 
 - [ ] 3. (depends on 1, 2) Branch and PR per `CLAUDE.md`'s Branch Strategy: create
-      `ci/security-yml-fail-closed`, commit the change, open a PR via `gh pr create`. Per
-      `CLAUDE.md`'s "Trivial changes — merge immediately" rule (config/values YAML), this PR does
-      not require waiting on the Claude Opus review gate before merge, but `claude-review.yml`
-      will still run automatically on PR open — let it complete or note it as non-blocking for
-      this trivial change. — DoD: PR opened against `main`, branch name matches the change type
+      `ci/security-yml-fail-closed`, commit the change, open a PR via `gh pr create`. The
+      `CLAUDE.md` "Trivial changes — merge immediately" rule does **not** apply here (operator
+      decision, see below): this PR changes what blocks merge for every future PR in the repo,
+      which is the opposite of trivial. Wait for the review gate — zero unaddressed P1/P2 from
+      whichever bots actually reviewed, plus an unfiltered pass over both
+      `pulls/<N>/comments` and `issues/<N>/comments`. — DoD: PR opened against `main`, review
+      gate satisfied before task 4, branch name matches the change type
       (`ci/`), CI (`build.yml`, `worker-test.yml`, and the new fail-closed `security.yml` itself)
       passes on the PR.
 
-- [ ] 4. (depends on 3) Merge via `gh pr merge <N> --merge --delete-branch`, matching the
-      required merge-commit pattern in `CLAUDE.md`. — DoD: `main`'s history shows a merge commit
+- [ ] 4. (depends on 3, and on the review gate in task 3 being satisfied) Merge via
+      `gh pr merge <N> --merge --delete-branch`, matching the required merge-commit pattern in
+      `CLAUDE.md`. — DoD: `main`'s history shows a merge commit
       for this PR; the feature branch is deleted.
 
 ## Tests

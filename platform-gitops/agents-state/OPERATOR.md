@@ -74,6 +74,7 @@ and leaves `.status.yaml` at `proposed` is **correct, not an oversight** —
 flipping the status in that PR would only race the CWFT. Manual flips remain
 the affordance for proposals with no live workflow (a cron-driven proposal, or
 re-arming a `needs-triage` one).
+
 Trigger for Tier 3 is `status` in `{implemented, review-fixing, in-progress}`;
 missing PR URLs are recovered from `feat/agents-<slug>`.
 
