@@ -1,0 +1,25 @@
+# Invalid: registryLifecycle.profile is disabled -- resolve must treat a
+# disabled version as unresolvable regardless of everything else matching.
+apiVersion: agents.mctl.ai/v1alpha2
+kind: ReleaseBindingIntent
+metadata:
+  agent: example
+  environment: shadow
+spec:
+  sourceManifest:
+    repo: mctlhq/mctl-agents
+    path: agents/_manifests/example/agent.yaml
+    gitSha: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+  bindingSource: compatibility-fixture
+  promotable: false
+  registryLifecycle:
+    definition: published
+    profile: disabled
+  definition:
+    name: example
+    version: "1"
+    profileCompatibility: ">=1.0.0 <2.0.0"
+  profile:
+    name: example
+    version: "1.0.0"
+  bindingRevision: 1

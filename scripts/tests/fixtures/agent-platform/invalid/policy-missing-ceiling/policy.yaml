@@ -1,0 +1,24 @@
+# Invalid: spec.limits.maxBudgetUsd is dropped (only maxTimeoutSeconds is
+# declared). A missing ceiling must fail closed at policy load rather than
+# leaving the budget check unconstrained -- see require_limit() in
+# scripts/validate-agent-platform.py.
+#
+# The selftest picks up this file instead of the real policy.yaml because it
+# sits at the fixture case root (case_policy_path()).
+apiVersion: agents.mctl.ai/v1alpha2
+kind: AgentPlatformPolicy
+metadata:
+  name: platform-default
+  owner: platform
+
+spec:
+  limits:
+    maxTimeoutSeconds: 7200
+  knownTools: []
+  knownSkills: []
+  knownModelPolicyTasks: []
+  knownPolicies: []
+  knownEvidenceKinds: []
+  knownMutationScopes: []
+  knownApprovalGates: []
+  approvedSandboxes: []

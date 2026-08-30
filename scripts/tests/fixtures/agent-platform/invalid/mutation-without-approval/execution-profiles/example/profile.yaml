@@ -1,0 +1,32 @@
+# Invalid: mutationScopes includes target-repository-branch, which
+# policy.yaml maps to the "code-authoring" approval gate, but
+# approval.requiredBefore is empty. Mutation requires both a scoped
+# permission and the applicable approval rule.
+apiVersion: agents.mctl.ai/v1alpha2
+kind: ExecutionProfile
+metadata:
+  name: example
+  owner: platform
+spec:
+  version: "1.0.0"
+  modelPolicyRef:
+    task: service_agent
+    compatibility: ">=1.0.0 <2.0.0"
+  skills: []
+  tools: [Read, Write, Bash]
+  policyRef: production-code-author
+  permissions:
+    repository: {read: true, branchCreate: true, commit: true, pullRequestCreate: true, merge: false}
+    kubernetes: none
+    network: approved-providers-only
+    mutationScopes: [target-repository-branch]
+  budgetUsd: 20.00
+  timeoutSeconds: 2400
+  runtime:
+    entrypoint: orchestrator.run_example:main
+    optionsBuilder: orchestrator.options:build_example_options
+    sandbox: {backend: argo, clusterWorkflowTemplate: mctl-agents-implement, approved: true}
+  approval:
+    requiredBefore: []
+  evidence:
+    required: [proposal, diff]

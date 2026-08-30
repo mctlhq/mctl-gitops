@@ -1,0 +1,34 @@
+# ReleaseBindingIntent fixture -- NOT a real registry release. There is no
+# mctl-api-published v1alpha2 issue-investigator definition or profile
+# version yet (that is #227/runtime-resolver + real registry rows, both out
+# of this issue's scope). bindingSource/promotable mark this so it can never
+# be read as production activation state. gitSha is a placeholder, not a
+# real mctlhq/mctl-agents commit.
+apiVersion: agents.mctl.ai/v1alpha2
+kind: ReleaseBindingIntent
+metadata:
+  agent: issue-investigator
+  environment: shadow
+spec:
+  sourceManifest:
+    repo: mctlhq/mctl-agents
+    path: agents/_manifests/issue-investigator/agent.yaml
+    gitSha: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+  bindingSource: compatibility-fixture
+  promotable: false
+  registryLifecycle:
+    definition: published
+    profile: published
+  definition:
+    name: issue-investigator
+    version: "1"
+    profileCompatibility: ">=1.0.0 <2.0.0"
+  profile:
+    name: issue-investigator-default
+    version: "1.0.0"
+  bindingRevision: 6
+  previousBindingRevision: 5
+  history:
+    - bindingRevision: 5
+      definition: {name: issue-investigator, version: "1"}
+      profile: {name: issue-investigator-default, version: "1.0.0"}

@@ -1,0 +1,26 @@
+# Invalid: profile.name "does-not-exist" has no matching
+# execution-profiles/*/profile.yaml in this catalog root (this fixture
+# directory deliberately has no execution-profiles/ dir at all).
+apiVersion: agents.mctl.ai/v1alpha2
+kind: ReleaseBindingIntent
+metadata:
+  agent: example
+  environment: shadow
+spec:
+  sourceManifest:
+    repo: mctlhq/mctl-agents
+    path: agents/_manifests/example/agent.yaml
+    gitSha: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+  bindingSource: compatibility-fixture
+  promotable: false
+  registryLifecycle:
+    definition: published
+    profile: published
+  definition:
+    name: example
+    version: "1"
+    profileCompatibility: ">=1.0.0 <2.0.0"
+  profile:
+    name: does-not-exist
+    version: "1.0.0"
+  bindingRevision: 1

@@ -1,0 +1,124 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://mctl.ai/schemas/agents/v1alpha2/release-binding-intent.schema.json",
+  "title": "ReleaseBindingIntent",
+  "description": "agents.mctl.ai/v1alpha2 ReleaseBindingIntent, per ADR 007. This is reviewed intent, not release history: mctl-api's registry remains the sole authority for immutable published versions and atomic environment ReleaseBinding history. A ReleaseBindingIntent pins exactly one compatible (definition, profile) pair plus the sourceManifest that grounds the canonical AgentDefinition. Every fixture checked in under this schema before real registry-backed versions exist must be marked bindingSource: compatibility-fixture and promotable: false so it can never be read as production activation state.",
+  "type": "object",
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": { "const": "agents.mctl.ai/v1alpha2" },
+    "kind": { "const": "ReleaseBindingIntent" },
+    "metadata": {
+      "type": "object",
+      "required": ["agent", "environment"],
+      "additionalProperties": false,
+      "properties": {
+        "agent": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$" },
+        "environment": { "enum": ["shadow", "production"] }
+      }
+    },
+    "spec": {
+      "type": "object",
+      "required": [
+        "sourceManifest",
+        "bindingSource",
+        "promotable",
+        "registryLifecycle",
+        "definition",
+        "profile",
+        "bindingRevision"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "sourceManifest": {
+          "type": "object",
+          "required": ["repo", "path", "gitSha"],
+          "additionalProperties": false,
+          "properties": {
+            "repo": { "type": "string", "minLength": 1 },
+            "path": { "type": "string", "minLength": 1 },
+            "gitSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" }
+          }
+        },
+        "bindingSource": {
+          "enum": ["compatibility-fixture", "registry"],
+          "description": "compatibility-fixture = checked-in test/shadow fixture (this issue). registry = resolved from a real mctl-api published version (future work, #227/runtime resolver)."
+        },
+        "promotable": {
+          "type": "boolean",
+          "description": "Must be false for any bindingSource: compatibility-fixture. Only a bindingSource: registry intent, resolved from real immutable versions, may ever be true -- and even then this file is reviewed intent, not the promotion action itself."
+        },
+        "registryLifecycle": {
+          "type": "object",
+          "required": ["definition", "profile"],
+          "additionalProperties": false,
+          "properties": {
+            "definition": { "enum": ["published", "deprecated", "disabled"] },
+            "profile": { "enum": ["published", "deprecated", "disabled"] }
+          }
+        },
+        "definition": {
+          "type": "object",
+          "required": ["name", "version", "profileCompatibility"],
+          "additionalProperties": false,
+          "properties": {
+            "name": { "type": "string", "minLength": 1 },
+            "version": { "type": "string", "minLength": 1 },
+            "profileCompatibility": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The canonical AgentDefinition's executionProfileRef.compatibility constraint, mirrored here because mctl-gitops CI cannot read the mctl-agents source file at sourceManifest.path directly. Checked against profile.version -- compatibility is never read from the profile side."
+            }
+          }
+        },
+        "profile": {
+          "type": "object",
+          "required": ["name", "version"],
+          "additionalProperties": false,
+          "properties": {
+            "name": { "type": "string", "minLength": 1 },
+            "version": { "type": "string", "minLength": 1 }
+          }
+        },
+        "bindingRevision": { "type": "integer", "minimum": 1 },
+        "previousBindingRevision": { "type": "integer", "minimum": 1 },
+        "history": {
+          "type": "array",
+          "description": "Deterministic local fixture of prior binding revisions for this (agent, environment), used only to validate exact-pair rollback semantics before a real mctl-api registry exists. Not itself a release-history store -- see requirements.md's 'must not create a second AgentDefinition body or release database.'",
+          "items": {
+            "type": "object",
+            "required": ["bindingRevision", "definition", "profile"],
+            "additionalProperties": false,
+            "properties": {
+              "bindingRevision": { "type": "integer", "minimum": 1 },
+              "definition": {
+                "type": "object",
+                "required": ["name", "version"],
+                "additionalProperties": false,
+                "properties": {
+                  "name": { "type": "string", "minLength": 1 },
+                  "version": { "type": "string", "minLength": 1 }
+                }
+              },
+              "profile": {
+                "type": "object",
+                "required": ["name", "version"],
+                "additionalProperties": false,
+                "properties": {
+                  "name": { "type": "string", "minLength": 1 },
+                  "version": { "type": "string", "minLength": 1 }
+                }
+              }
+            }
+          }
+        },
+        "rollbackOf": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Set only when this intent represents a rollback. Must equal previousBindingRevision, and this intent's (definition, profile) pair must exactly match the history entry recorded under that revision -- an independently chosen or synthetic mix of the two halves is rejected."
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,26 @@
+# Invalid: the catalog profile is version 1.0.0, but the definition's
+# profileCompatibility here demands >=2.0.0 <3.0.0 -- no version satisfies
+# both "pinned to 1.0.0" and this constraint.
+apiVersion: agents.mctl.ai/v1alpha2
+kind: ReleaseBindingIntent
+metadata:
+  agent: example
+  environment: shadow
+spec:
+  sourceManifest:
+    repo: mctlhq/mctl-agents
+    path: agents/_manifests/example/agent.yaml
+    gitSha: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+  bindingSource: compatibility-fixture
+  promotable: false
+  registryLifecycle:
+    definition: published
+    profile: published
+  definition:
+    name: example
+    version: "1"
+    profileCompatibility: ">=2.0.0 <3.0.0"
+  profile:
+    name: example
+    version: "1.0.0"
+  bindingRevision: 1

@@ -1,0 +1,29 @@
+apiVersion: agents.mctl.ai/v1alpha2
+kind: ReleaseBindingIntent
+metadata:
+  agent: rollback-example
+  environment: shadow
+spec:
+  sourceManifest:
+    repo: mctlhq/mctl-agents
+    path: agents/_manifests/rollback-example/agent.yaml
+    gitSha: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+  bindingSource: compatibility-fixture
+  promotable: false
+  registryLifecycle:
+    definition: published
+    profile: published
+  definition:
+    name: rollback-example
+    version: "1"
+    profileCompatibility: ">=1.0.0 <2.0.0"
+  profile:
+    name: rollback-example
+    version: "1.0.0"
+  bindingRevision: 6
+  previousBindingRevision: 5
+  rollbackOf: 5
+  history:
+    - bindingRevision: 5
+      definition: {name: rollback-example, version: "1"}
+      profile: {name: rollback-example, version: "1.0.0"}
