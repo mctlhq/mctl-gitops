@@ -172,3 +172,11 @@
 - [ ] P19. Add an idempotent serialized decision-projection activity for every submitted/skipped fallback outcome with owner, epoch, head, reason, counters, and next-tick evidence.
 - [ ] P20. Replace the rollback procedure with grant freeze, arbiter drain, terminal verification, and coordinated rollback/disablement of Reconcile fallback, DevLoop handoff, arbiter, and projection components.
 - [ ] P21. Test duplicate projections, cooldown/takeover/transient skips, rollback with active CWFT and terminal writer, and rejection of mixed-version ownership.
+
+## Bounded drain and projection-writer tasks
+
+- [ ] P22. Add bounded takeover-drain retries and an observable `takeover_drain_stuck` arbiter state that preserves the ownership fence.
+- [ ] P23. Add idempotent operator recovery that resumes the same drain or advances only after every registered external run/writer is proven terminal; test unavailable Argo status and a never-terminating run.
+- [ ] P24. Make decision-projection identity occurrence-aware (including reason/attempt) or atomically update the existing occurrence so repeated same-cycle decisions retain current evidence.
+- [ ] P25. Register projection writers with the arbiter and drain them during takeover and rollback; test rollback while a projection commit is in flight and assert no mixed-version late write.
+
