@@ -71,6 +71,256 @@ BOTFILTER='select(.user.login == "claude[bot]" or .user.login == "chatgpt-codex-
 # were only caught by checking `gh api .../issues/<N>/comments` by hand.
 AGY_MARKER='<!-- agy-review -->'
 
+# Security policy is read only from the trusted base/default branch. Never use
+# the PR head's caller file to decide whether Agy is required.
+AGY_REQUIRED=0
+if gh api -H "Accept: application/vnd.github.raw+json" \
+  "repos/$REPO/contents/.github/workflows/agy-review.yml" 2>/dev/null \
+  | grep -Eq '^[[:space:]]*blocking:[[:space:]]*true([[:space:]]*#.*)?
+notify() {
+  local title="$1" body="$2" sound="${3:-Glass}"
+  # osascript is macOS-only; skip it elsewhere (e.g. in-cluster Linux) so the
+  # log stays clean. The result file is the source of truth either way.
+  [ "$(uname)" = "Darwin" ] || return 0
+  osascript -e "display notification \"$body\" with title \"$title\" sound name \"$sound\"" >/dev/null 2>&1 || true
+}
+
+# Trigger baseline: prefer the latest @claude/@codex review comment if one
+# exists. But across every mctlhq repo, claude-review.yml's base trigger is
+# `pull_request: [opened, reopened, synchronize, ready_for_review]` — i.e. the
+# FIRST review always auto-fires on PR open, and re-reviews after a fix-up
+# push auto-fire too (synchronize is already in that trigger list). Only 7/16
+# repos (mctl-gitops, mctl-api, mctl-portal, mctl-web, mctl-agents, mctl-docs,
+# mctl-telegram) additionally wire up `issue_comment` as a manual rerun path;
+# the other 9 (incl. mctl-claude-remote, mctl-openclaw, mctl-design, ...) have
+# no comment listener at all, so a posted "@claude review" there is a no-op.
+# A missing trigger comment is therefore the COMMON case, not an error — fall
+# back to "now" and rely on the caller launching the watcher right after the
+# open/push event it wants to observe.
+#
+# CAVEAT: the latest trigger comment can be OLDER than the event you care
+# about (e.g. a day-old "@claude review" on a PR that just got a fix-up push
+# via the auto-fire path). Auto-detect would then match the bot's PREVIOUS
+# review and false-hit instantly. When an explicit baseline-ts (arg 5) is
+# given it wins unconditionally; the reaction check is skipped in that mode
+# (no trigger-comment ID to watch), which is fine — reviews/comments cover it.
+if [ -n "$BASE_TS" ]; then
+  TS="$BASE_TS"
+  ID=""
+  echo "[$(date -u +%FT%TZ)] using explicit baseline from arg"
+else
+  TS=$(gh api --paginate "repos/$REPO/issues/$PR/comments" --jq '[.[] | select(.body | test("@(claude|codex) review"; "i"))] | last | .created_at')
+  ID=$(gh api --paginate "repos/$REPO/issues/$PR/comments" --jq '[.[] | select(.body | test("@(claude|codex) review"; "i"))] | last | .id')
+  if [ -z "$TS" ] || [ "$TS" = "null" ]; then
+    TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    ID=""
+    echo "[$(date -u +%FT%TZ)] no trigger comment found; using launch time as baseline (auto-fire repo)"
+  fi
+fi
+echo "[$(date -u +%FT%TZ)] baseline trigger_ts=$TS trigger_id=${ID:-<none>}"
+for i in $(seq 1 10); do
+  R=$(gh api --paginate "repos/$REPO/pulls/$PR/reviews" --jq "[.[] | $BOTFILTER | select(.submitted_at > \"$TS\")] | length" 2>/dev/null || echo 0)
+  C=$(gh api --paginate "repos/$REPO/pulls/$PR/comments" --jq "[.[] | $BOTFILTER | select(.created_at > \"$TS\")] | length" 2>/dev/null || echo 0)
+  # Top-level issue comments — codex posts "no findings" results here
+  # ("Codex Review: Didn't find any major issues. Swish!") instead of as
+  # a PR review when there is nothing line-anchored to flag. Without this
+  # check the watcher times out at 30 min while codex has already
+  # responded clean within minutes (regression observed on
+  # mctlhq/mctl-gitops#91, 2026-05-01).
+  I=$(gh api --paginate "repos/$REPO/issues/$PR/comments" --jq "[.[] | $BOTFILTER | select(.created_at > \"$TS\")] | length" 2>/dev/null || echo 0)
+  # agy pilot reviewer — see AGY_MARKER note above. Independent of BOTFILTER
+  # since its login collides with unrelated github-actions[bot] comments.
+  A=$(gh api --paginate "repos/$REPO/issues/$PR/comments" --jq "[.[] | select(.user.login == \"github-actions[bot]\") | select(.body | contains(\"$AGY_MARKER\")) | select(.created_at > \"$TS\")] | length" 2>/dev/null || echo 0)
+  E=""
+  [ -n "$ID" ] && E=$(gh api --paginate "repos/$REPO/issues/comments/$ID/reactions" --jq "[.[] | $BOTFILTER | select(.created_at > \"$TS\") | .content] | last" 2>/dev/null || echo "")
+  echo "[$(date -u +%FT%TZ)] tick $i: reviews=$R comments=$C issue_comments=$I agy_comments=$A reaction=$E"
+  # Fetch the latest bot issue-comment body up front so the hit gate can tell
+  # claude-review.yml's in-progress checklist from a real verdict. The checklist
+  # has UNCHECKED boxes ("- [ ]"); a finished verdict has only "- [x]", and codex
+  # posts no checklist at all. An issue-comment-only signal that is still a
+  # checklist is NOT a response yet -> keep polling (regression: false "clean"
+  # on the progress comment, mctlhq/mctl-gitops#267, 2026-05-22).
+  # claude[bot]'s FIRST progress comment ("Claude Code is working…") has no
+  # checkboxes at all, so match its marker text too (regression: false hit
+  # on mctlhq/mctl-gitops#583, 2026-07-12).
+  ICBODY=$(gh api --paginate "repos/$REPO/issues/$PR/comments" --jq "[.[] | $BOTFILTER | select(.created_at > \"$TS\") | .body] | last // \"\"" 2>/dev/null || echo "")
+  IC_INPROGRESS=0
+  if [ "${I:-0}" -gt 0 ] && [ "${R:-0}" -eq 0 ] && [ "${C:-0}" -eq 0 ]; then
+    if printf '%s' "$ICBODY" | grep -qF -- '- [ ]' || printf '%s' "$ICBODY" | grep -qF -- 'Claude Code is working'; then
+      IC_INPROGRESS=1
+      echo "[$(date -u +%FT%TZ)] issue-comment is an in-progress checklist; still polling"
+    fi
+  fi
+  BOT_HIT=0
+  if [ "${R:-0}" -gt 0 ] || [ "${C:-0}" -gt 0 ] || { [ "${I:-0}" -gt 0 ] && [ "$IC_INPROGRESS" -eq 0 ]; } || [ "$E" = '"+1"' ] || [ "$E" = "+1" ]; then
+    BOT_HIT=1
+  fi
+  # A required Agy gate must be observed on the same watch cycle; an earlier
+  # Claude/Codex response cannot complete the watcher before Agy finishes.
+  if { [ "$BOT_HIT" -eq 1 ] || [ "${A:-0}" -gt 0 ]; } && { [ "$AGY_REQUIRED" -eq 0 ] || [ "${A:-0}" -gt 0 ]; }; then
+    echo "[$(date -u +%FT%TZ)] hit; fetching details"
+    {
+      echo "status=responded"
+      echo "trigger_ts=$TS"
+      echo "found_at=$(date -u +%FT%TZ)"
+      echo "review_count=$R"
+      echo "comment_count=$C"
+      echo "issue_comment_count=$I"
+      echo "agy_comment_count=$A"
+      echo "reaction=$E"
+      echo "---comments---"
+      gh api --paginate "repos/$REPO/pulls/$PR/comments" --jq "[.[] | $BOTFILTER | select(.created_at > \"$TS\") | {user: .user.login, path, line, original_line, body}]"
+      echo "---reviews---"
+      gh api --paginate "repos/$REPO/pulls/$PR/reviews" --jq "[.[] | $BOTFILTER | select(.submitted_at > \"$TS\") | {user: .user.login, state, body, submitted_at}]"
+      echo "---issue_comments---"
+      gh api --paginate "repos/$REPO/issues/$PR/comments" --jq "[.[] | $BOTFILTER | select(.created_at > \"$TS\") | {user: .user.login, created_at, body}]"
+      echo "---agy_comments---"
+      gh api --paginate "repos/$REPO/issues/$PR/comments" --jq "[.[] | select(.user.login == \"github-actions[bot]\") | select(.body | contains(\"$AGY_MARKER\")) | select(.created_at > \"$TS\") | {user: .user.login, created_at, body}]"
+    } > "$RESULT"
+    # "Clean" detection paths (bot signals):
+    # 1. 👍 reaction on the trigger with no line-anchored reviews/comments
+    # 2. Top-level issue comment with no line-anchored findings
+    #    (a bot posts a top-level "no issues" comment when clean)
+    CLEAN="0"
+    if { [ "$E" = '"+1"' ] || [ "$E" = "+1" ]; } && [ "${R:-0}" -eq 0 ] && [ "${C:-0}" -eq 0 ]; then
+      CLEAN="1"
+    fi
+    if [ "${I:-0}" -gt 0 ] && [ "${R:-0}" -eq 0 ] && [ "${C:-0}" -eq 0 ]; then
+      CLEAN="1"
+    fi
+    if [ "$CLEAN" = "1" ] && [ "${A:-0}" -eq 0 ]; then
+      notify "review-watch [$REPO#$PR]" "clean review (no findings)" "Glass"
+    else
+      TOTAL=$(( ${R:-0} + ${C:-0} + ${I:-0} + ${A:-0} ))
+      notify "review-watch [$REPO#$PR]" "$TOTAL response(s) — read $RESULT" "Glass"
+    fi
+    exit 0
+  fi
+  [ "$i" -lt 10 ] && sleep 180
+done
+echo "status=timeout" > "$RESULT"
+echo "trigger_ts=$TS" >> "$RESULT"
+echo "[$(date -u +%FT%TZ)] timeout"
+notify "review-watch [$REPO#$PR]" "timeout after ~30 min, no review response" "Basso"
+```
+
+> **Known caveat — claude[bot] progress checklist.** When `claude-review.yml`
+> is also active, claude[bot] posts a *progress checklist* as a top-level
+> issue comment seconds after the trigger, then edits it as it works. The hit
+> gate guards against this: an issue-comment-only signal whose body still has an
+> unchecked `- [ ]` box is treated as in-progress and the watcher keeps polling
+> (a finished verdict has only `- [x]`, and codex posts no checklist). This
+> matters for automated readers (e.g. pr-steward) that parse the result file
+> rather than eyeballing it — without the guard every tick would misread the
+> checklist as a clean review.
+
+Save with `chmod +x /tmp/review-watch.sh`.
+
+### macOS notification permission
+
+`notify` calls `osascript -e 'display notification ...'` — best-effort, fails silently if unavailable. On first use, macOS may prompt for notification permission for the parent terminal/process. If the user reports "I don't see notifications", point them to `System Settings → Notifications` and look for the host app (Terminal, iTerm2, Script Editor depending on which process invoked osascript). The result file still gets written either way; OS notification is the convenience layer, not the source of truth.
+
+## Launch a watcher
+
+For each PR (`<owner>/<repo>` and `<N>`), in a single Bash call:
+
+```bash
+nohup /tmp/review-watch.sh <owner>/<repo> <N> \
+  /tmp/review-watch-<repo-stem>-<N>.result \
+  /tmp/review-watch-<repo-stem>-<N>.log \
+  [baseline-ts] \
+  >/dev/null 2>&1 &
+PID=$!
+disown $PID 2>/dev/null
+echo "watcher pid=$PID"
+```
+
+`<repo-stem>` = repo name without owner (e.g. `mctl-openclaw`). Multiple PRs ⇒ launch each in its own `nohup ... &` invocation, all in parallel from a single Bash call.
+
+**When to pass `baseline-ts`:** whenever the review you're waiting for was triggered by a PUSH (PR open or fix-up push on an auto-fire repo), pass that push's timestamp explicitly — e.g. `git log -1 --format=%cI` converted to UTC, or `date -u +%Y-%m-%dT%H:%M:%SZ` right after pushing. Without it, auto-detect anchors on the latest `@claude review` comment, which may be days old and would false-hit on the bot's previous review. Omit the arg only when you have JUST posted a fresh `@claude review` comment (auto-detect then finds exactly it, and the 👍-reaction path stays active).
+
+## Reading results
+
+When the user later asks "did codex respond yet?" or similar, just `Read` the `.result` file:
+
+- If the file does not exist yet → watcher still polling. `Read /tmp/review-watch-<stem>-<N>.log` for current tick number to estimate.
+- If file contents start with `status=responded` → parse and report findings (Format A).
+- If `status=timeout` → Format C.
+
+## Output formats (when reporting to the user)
+
+  Format A — findings:
+
+    [claude] <repo>#<N>: K findings (X P1, Y P2, Z P3)
+    https://github.com/<repo>/pull/<N>
+    - Pn {file}:{line} — {one-line summary}
+    ...
+
+  Format B — clean (no findings, signaled by either 👍 reaction or a top-level issue comment from claude[bot] with no line-anchored comments/reviews):
+
+    [claude] <repo>#<N>: clean review (no findings)
+    https://github.com/<repo>/pull/<N>
+
+  Format C — timeout (~30 min, claude[bot] never responded):
+
+    [claude] <repo>#<N>: no claude review response after ~30 min
+    Trigger: <trigger_ts>
+    Re-post @claude review or check repo settings.
+
+Severity parsing: claude[bot] prefixes each finding's body with a markdown badge `![P2 Badge](...)` — extract the `P0` / `P1` / `P2` / `P3` token. agy writes plain `**Severity:** P1` / `- **Severity:** P1` lines instead — extract the token the same way. If absent, mark as `P?`.
+
+One-line summary per finding: take the first **bold heading** (between `**`) from the comment body and trim to ~80 chars. Do NOT include the explanatory paragraph or full body — the user clicks into the PR for full context.
+
+  Format D — agy findings (gating depends on the repository caller/check configuration):
+
+    [agy] <repo>#<N>: K findings (X P1, Y P2, Z P3)
+    https://github.com/<repo>/pull/<N>
+    - Pn {file}:{line} — {one-line summary}
+    ...
+    (if the repository's Agy workflow is blocking/required, P1/P2 or a failed Agy check blocks merge)
+
+  If agy's comment body is exactly "No significant issues found.":
+
+    [agy] <repo>#<N>: no significant issues found
+
+## Multiple PRs
+
+Single Bash call launching multiple `nohup` background processes is fine — each `&` detaches, each runs independently with its own result/log path.
+
+## Argument parsing
+
+Accepted forms from the user:
+- `mctlhq/mctl-openclaw#5`
+- `https://github.com/mctlhq/mctl-openclaw/pull/5`
+- `5` (only if the user has just opened exactly one PR in conversation context — pick the most recent)
+
+If args are ambiguous, ask which PRs in one short AskUserQuestion before launching.
+
+## Operational notes
+
+- The detached shell uses `nohup` + `disown` + stdout/stderr redirection — it survives Claude Code session boundaries. A future session can read the result file and report.
+- Codex usually responds within 1–5 minutes of `@claude review`. The 180s tick cadence catches it within the next tick. Sometimes codex takes 5–15 min when busy.
+- Result-file path convention: `/tmp/review-watch-<repo-stem>-<N>.result` — keep this stable so future sessions can find it without args.
+- If `gh api` returns 403/404, the watcher writes a status-error result and exits. No retries — auth/permission issues won't fix themselves.
+- The first `@claude review` issue comment is the trigger baseline. If the user re-triggers (posts `@claude review` again after a fix-up), launch a new watcher — the script's baseline-detection `last` filter picks up the latest trigger automatically. For push-triggered re-reviews (no fresh comment), always pass the explicit `baseline-ts` arg instead.
+
+## What this skill is NOT for
+
+- One-shot "check codex now" — for that, just call `gh api` directly. This skill is for the wait-and-notify case.
+- Reviews from bots other than `claude[bot]` / `chatgpt-codex-connector[bot]` / agy (marker-matched, see `AGY_MARKER`) — add the login (and a body marker, if the bot shares a generic login like `github-actions[bot]`) to the script. For an entirely different review surface, write a sibling skill.
+- Long-term watching across multiple `@claude review` retries — re-launch after each new trigger.
+- Assuming a fixed Agy policy across repositories. Inspect the trusted base/default-branch `Agy PR review` caller and branch-protection/check configuration. Never derive security policy from the PR head. When base-branch `blocking: true` or the check is required, Agy P1/P2, malformed verdicts, and reviewer failures block merge; otherwise report them as informational.
+
+## Anti-patterns (do not regress)
+
+1. **`Agent` + `Monitor` tool**: sub-agent runtime treats Monitor as fire-and-forget and exits in seconds without waiting. Always use detached shell instead.
+2. **Synchronous Bash in foreground**: blocks the user's session for up to 30 min, defeats the "background" goal. Always `nohup ... &` + `disown`.
+3. **Polling without baseline timestamp**: if you check `pulls/<N>/reviews` without filtering by `> $TRIGGER_TS`, you'll match codex's previous (pre-fixup) review and falsely report "responded" immediately. Always filter by the latest `@claude review` issue-comment timestamp.
+; then
+  AGY_REQUIRED=1
+fi
+echo "[$(date -u +%FT%TZ)] base-branch agy_required=$AGY_REQUIRED"
+
 notify() {
   local title="$1" body="$2" sound="${3:-Glass}"
   # osascript is macOS-only; skip it elsewhere (e.g. in-cluster Linux) so the
