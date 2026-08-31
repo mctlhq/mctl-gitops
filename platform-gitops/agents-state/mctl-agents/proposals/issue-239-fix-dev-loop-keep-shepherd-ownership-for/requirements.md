@@ -187,3 +187,11 @@ without an operator having to notice and re-trigger it by hand.
 
 - Every fallback decision — submitted or skipped for cooldown, takeover, transient failure, stale head, or exhausted budget — SHALL be projected through an idempotent serialized activity into operator-visible audit/status state. The projection SHALL include proposal, owner/epoch, PR/head SHA, decision and reason, review/submission counters, last tick, and next eligible tick. Durable workflow state remains replay-safe and is not the sole observability surface.
 - Rollback SHALL first stop new fallback grants, mark the arbiter draining, and await/cancel all registered fallback ticks, submitters, and terminal writers. Only after the drain barrier may deployment consistently disable/revert Reconcile fallback creation, DevLoop handoff integration, arbiter, and status projection together. Mixed old/new ownership components are forbidden.
+
+## Bounded drain and projection-writer corrections
+
+- Takeover drain SHALL use bounded retries and an observation deadline. Exhaustion SHALL enter an operator-visible `takeover_drain_stuck` state that preserves the no-overlap fence; it SHALL NOT grant fallback ownership or publish DevLoop ownership.
+- Recovery from `takeover_drain_stuck` SHALL be an explicit idempotent operation that resumes the same drain or advances only after all registered external work is independently proven terminal. Timeout alone is never proof of termination.
+- Decision-projection idempotency SHALL include reason and durable occurrence/attempt, or use an equivalent compare-and-update transaction, so repeated same-cycle skips/failures retain current counters and next-tick evidence.
+- The arbiter SHALL register decision-projection writers as in-flight work. Takeover and rollback SHALL drain them together with ticks, submitters, and terminal writers before ownership publication or coordinated component removal.
+
