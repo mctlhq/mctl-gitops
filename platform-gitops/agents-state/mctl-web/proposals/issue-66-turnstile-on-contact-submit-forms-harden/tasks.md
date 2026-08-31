@@ -1,22 +1,36 @@
 # Tasks: issue-66-turnstile-on-contact-submit-forms-harden
 
-- [ ] 1. Create the Turnstile widget (managed mode) via Cloudflare
-      dashboard or `turnstile-spin` skill's `widget-create.sh`, scoped to
-      `mctl.ai` + `localhost` + `127.0.0.1`. Record the sitekey and secret.
-      — DoD: sitekey obtained; secret never committed to the repo.
+- [x] 1. **DONE by the operator, 2026-08-31 — do NOT create another
+      widget.** Turnstile widget `mctl-ai-forms` exists in Cloudflare
+      account `6a09f637d20e1f66a8e9d45ebe778058`: hostname `mctl.ai`,
+      mode **Managed**, pre-clearance off.
+      **Sitekey: `0x4AAAAAAEjFjEMuTRSzlzQc`** (public by design — it ships
+      in the page and belongs in the repo).
+      `localhost` / `127.0.0.1` were deliberately NOT added to the
+      production widget's hostname list: for local development use
+      Cloudflare's documented always-passes test keys
+      (sitekey `1x00000000000000000000AA`, secret
+      `1x0000000000000000000000000000000AA`) rather than widening where
+      the production sitekey is valid.
 
-- [ ] 2. Provision `TURNSTILE_SECRET_KEY` as a Cloudflare Worker secret for
-      `mctl-landing-form` via `wrangler secret put TURNSTILE_SECRET_KEY`
-      (depends on 1). — DoD: secret set in the Worker's production
-      environment, verifiable via `wrangler secret list` (name present,
-      value not shown); done *before* task 4 deploys, so the fail-closed
-      path never fires in production for a missing secret.
+- [x] 2. **DONE by the operator, 2026-08-31.** `TURNSTILE_SECRET_KEY` is
+      set as a Worker secret on `mctl-landing-form`
+      (`wrangler secret put`, upload confirmed). The fail-closed path in
+      task 5/6 therefore cannot fire in production for a missing secret.
+      The secret value is not in this repo, not in Vault, and not in
+      gitops — Worker secrets live only in Cloudflare. Do not attempt to
+      read it back; `wrangler secret list` shows names only.
 
 - [ ] 3. Add `NUXT_PUBLIC_TURNSTILE_SITE_KEY` to `.env.example` and
       `runtimeConfig.public.turnstileSiteKey` in `nuxt.config.ts` (depends
       on 1) — DoD: `nuxt.config.ts` exposes the sitekey the same way
-      `baseUrlFront` is exposed today; `.env.example` documents the new
-      var under a new "Turnstile" section alongside existing sections.
+      `baseUrlFront` is exposed today, with the real value
+      `0x4AAAAAAEjFjEMuTRSzlzQc` as the default; `.env.example` documents
+      the new var under a new "Turnstile" section alongside existing
+      sections. **Do not put the sitekey in `wrangler.toml [vars]`** —
+      Wrangler vars reach the Worker, never the Nuxt bundle, so the widget
+      would silently fail to render and both fail-closed forms would
+      reject every submission.
 
 - [ ] 4. Add `verifyTurnstileToken(token, secret, remoteip, fetchImpl)` to
       `cloudflare-worker/index.js`, exported like `hmacVerify` /
@@ -56,11 +70,26 @@
       instead, and a challenge on every debounced keystroke is bad UX.
       — DoD: rate limit entry present and exercised by a test.
 
-- [ ] 8. Gate `handleCheckTeam` on the existing HMAC identity: require
-      `login` and `sig` (query params, or the same `github_auth` shape the
-      submit endpoint uses) and verify with
-      `hmacVerify(login, sig, env.GITHUB_OAUTH_HMAC_KEY)`, exactly as
-      `handleFormSubmit` does at `cloudflare-worker/index.js:785-789`.
+- [ ] 8. Gate `handleCheckTeam` on the existing HMAC identity, and move
+      the endpoint from `GET` to `POST` to do it. Today the route is
+      `GET /api/github/check-team?name=…` (`cloudflare-worker/index.js:124`,
+      handler at `:740`, reading `url.searchParams`). Change it to
+      `POST /api/github/check-team` with a JSON body
+      `{ name, github_auth: { login, sig } }` and verify with
+      `hmacVerify(github_auth.login, github_auth.sig,
+      env.GITHUB_OAUTH_HMAC_KEY)`, exactly as `handleFormSubmit` does at
+      `cloudflare-worker/index.js:785-789`. `handleCheckTeam`'s signature
+      changes from `(url, env, origin)` to `(request, env, origin)`.
+      **The credentials MUST NOT travel in the query string, in any form
+      — not `?sig=`, not a header-substitute crammed into the URL.** `sig`
+      is a bearer good for 8 hours; in a URL it lands in Cloudflare access
+      logs, browser history, and outbound `Referer` headers. Today no
+      credential appears in that URL at all, so a query-param design would
+      *introduce* an exposure this issue is supposed to reduce. Moving the
+      name into the body is a bonus: the queried tenant name stops being
+      logged too. (An `Authorization` header would also satisfy the rule,
+      but POST-with-body is chosen because it reuses the `github_auth`
+      shape `handleFormSubmit` already validates.)
       — DoD:
       * verified caller → today's truthful answer, unchanged
         (`{available:false}` for an existing tenant, `{available:true}`
@@ -91,14 +120,23 @@
       unchanged except for the added `turnstile_token` field in the
       payload sent by `useApi.ts`'s `submitContactForm`; a visible
       Turnstile widget renders in the form per the "gate, don't replace"
-      contract.
+      contract. **The `onSubmit` error path must call the composable's
+      `reset()` whenever the request reached the backend and failed
+      (any non-2xx, and any thrown network error after send).** Turnstile
+      tokens are single-use: without a reset, one Telegram-side 500 leaves
+      the user holding a spent token, and every retry comes back 400
+      "Verification failed" until they manually reload the page — a
+      transient backend blip turns into a dead form.
 
 - [ ] 11. Wire the Turnstile widget into `RequestAccessForm.vue` and
       thread the token through `useApi.ts`'s `submitAccessRequest` payload
-      (depends on 9) — DoD: same as 10, for the request-access form.
+      (depends on 9) — DoD: same as 10, for the request-access form,
+      including the same `reset()`-on-failure requirement.
       `useTeamValidation.ts` does **not** send a Turnstile token; instead
-      it sends the signed identity (`login` + `sig` from `useAuth`) and
-      skips the call entirely when the user is not signed in, showing
+      it switches to `POST` (per task 8) and sends
+      `{ name, github_auth: { login, sig } }` with the signed identity
+      from `useAuth` in the **body, never the query string**, and skips
+      the call entirely when the user is not signed in, showing
       "sign in with GitHub to check availability" in the field rather than
       failing silently.
 
@@ -154,7 +192,14 @@
       * stub a Backstage 500 and assert 500 still surfaces (errors are not
         swallowed into a false "available");
       * assert none of the failure responses echo or vary with the queried
-        name.
+        name;
+      * **assert the query-string path is not an accepted credential
+        channel**: a request carrying a valid `login`/`sig` only as
+        `?login=…&sig=…` (empty or absent JSON body) gets the same 401 as
+        an unauthenticated caller. This is the test that keeps the
+        credential out of access logs — without it, someone can
+        "helpfully" restore query-param support later and every review
+        after that reads green.
 
 - [ ] T5. Rate-limit test for `/api/github/check-team`: drive
       `checkRateLimit` (already exported-testable pattern, or via the
@@ -257,15 +302,19 @@ answers to them are inconsistent with each other, so read them together.
 Sequencing — this one can take the public site down if ignored:
 
 5. **`TURNSTILE_SECRET_KEY` must exist in the worker environment before
-   this merges.** Worker secrets are not in git and not in
+   this merges — ✅ SATISFIED 2026-08-31, before implementation starts.**
+   Worker secrets are not in git and not in
    `.github/workflows/deploy.yml`; `cloudflare-worker/wrangler.toml` says
    they are set via the Cloudflare dashboard or `wrangler secret put`. With
    decision 4, deploying the code before the secret exists means
    `/api/contact` and `/api/submit` both reject every request — a total
-   outage of both public forms, not a degraded mode. The Turnstile widget
-   also has to be created for the `mctl.ai` zone first to get a sitekey for
-   the frontend. Operator prerequisite, ahead of the PR: create the widget,
-   put the secret, then merge.
+   outage of both public forms, not a degraded mode. The operator has
+   therefore already created the widget (`mctl-ai-forms`, sitekey
+   `0x4AAAAAAEjFjEMuTRSzlzQc`) and uploaded the secret to
+   `mctl-landing-form`; tasks 1 and 2 are marked done above. **Do not
+   create a second widget and do not re-put the secret** — a fresh
+   `wrangler secret put` with a different value would invalidate the
+   deployed one.
 
 6. **The sitekey is public and belongs to the frontend build, not the
    Worker.** Follow the proposal's task 3 as written:
@@ -278,7 +327,33 @@ Sequencing — this one can take the public site down if ignored:
    render, no token would be issued, and the fail-closed endpoints would
    reject every submission. Commit it; do not treat it as sensitive.
 
+Added 2026-08-31 after the agy reviewer's P2/P3 on this decisions PR — both
+findings were correct and both are defects this decision introduced, not
+pre-existing ones:
+
+7. **The identity travels in a POST body, never in the URL** — decision 1
+   originally permitted "query params" as one way to pass `login`/`sig` to
+   `check-team`. That was wrong. `sig` is a bearer good for 8 hours, and
+   `check-team` is a `GET`, so query params would have written a live
+   credential into Cloudflare access logs, browser history, and outbound
+   `Referer` headers. The endpoint today carries no credential in its URL
+   at all, so this would have *created* an exposure while nominally
+   hardening the endpoint. The endpoint therefore moves `GET` → `POST`
+   with `{ name, github_auth: { login, sig } }`, reusing the shape
+   `handleFormSubmit` already validates. T4 asserts that a query-string
+   identity is rejected, so the door cannot be quietly reopened later.
+
+8. **The frontend resets the Turnstile widget when a submission fails
+   after reaching the backend.** Turnstile tokens are single-use, so
+   without a reset a transient Telegram/Backstage 500 leaves the user
+   holding a spent token: every retry returns 400 "Verification failed"
+   until they reload the page by hand. A backend blip would present as a
+   permanently broken form. Folded into tasks 10 and 11 rather than left
+   as a UX note.
+
 Out of scope, confirmed, with the follow-up filed rather than implied:
 
-7. Replacing the 8h `localStorage` HMAC with server-side session
-   re-validation stays out of scope here — see mctlhq/mctl-web#70.
+9. Replacing the 8h `localStorage` HMAC with server-side session
+   re-validation stays out of scope here — see mctlhq/mctl-web#70. Note
+   that decision 7 raises its value: with `sig` now the sole gate on a
+   third endpoint, shortening its life matters more than it did.

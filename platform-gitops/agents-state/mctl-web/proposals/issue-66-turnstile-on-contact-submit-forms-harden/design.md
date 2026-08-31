@@ -117,39 +117,41 @@
      `/api/github/check-team`'s entry (currently absent from `RATE_LIMITS`
      entirely — it has no rate limit today) to something like `{ max: 20,
      windowSec: 60 }` per IP.
-   - Add Turnstile verification to `check-team` as well, but sourced from a
-     query param (`?turnstile_token=`) since it's a GET request driven by
-     debounced keystrokes rather than a form submit. To avoid a Turnstile
-     challenge firing on every keystroke pause (UX concern raised in Open
-     Questions), the frontend obtains one Turnstile token per form-render
-     (invisible/managed mode executes once, silently, on page load in the
-     common case) and reuses it for the debounced check-team calls during
-     that session, then re-verifies+consumes a fresh token at final
-     `/api/submit` time. Token reuse across check-team calls within its
-     ~5 minute Turnstile validity window is acceptable since check-team is
-     read-only.
-   - Change the response shape so `handleCheckTeam` returns
-     `{ available: true }` (200) uniformly for both "tenant exists" and
-     "tenant does not exist" once the request passes format validation,
-     Turnstile, and rate-limit checks — i.e. stop branching on Backstage's
-     200-vs-404 for the response the anonymous caller sees. The real
-     duplicate-tenant guard remains authoritative server-side at
-     `/api/submit` (lines 806-822, unauthenticated-caller-proof since it
-     runs after HMAC verification), so removing check-team's
-     existence-leak does not reopen duplicate provisioning. `500` is still
-     returned on genuine Backstage/config errors (distinguish "we could not
-     tell" from "it doesn't exist", which is fine — a 500 leaks nothing
-     about a specific name existing).
-   - Frontend impact: `useTeamValidation.ts`'s `teamAvailable`/`teamError`
-     UX degrades gracefully — every syntactically valid name will now read
-     as "available" from check-team's perspective; actual collision is
-     still caught at submit time via `handleFormSubmit`'s 409 response
-     (`Team "${team}" is already provisioned...`, line 814-818), which
-     already exists and is unaffected. `RequestAccessForm.vue`'s
-     success-modal flow already handles a submit-time error via
-     `formStatus`, so no new frontend error path is needed — this is
-     recorded in tasks.md as a UX note for the reviewer, not a blocking
-     change.
+   - **Gate it on identity, not on Turnstile** (operator decision; the
+     Turnstile-on-check-team variant is recorded as rejected under
+     alternative 2 below). `handleCheckTeam` requires the same signed identity
+     `handleFormSubmit` already validates and verifies it with
+     `hmacVerify(login, sig, env.GITHUB_OAUTH_HMAC_KEY)`
+     (`cloudflare-worker/index.js:785-789`). An anonymous caller gets a
+     fixed **401** and learns nothing; a signed-in caller gets today's
+     truthful answer.
+   - **The endpoint moves from `GET` to `POST`** (route at
+     `cloudflare-worker/index.js:124`, handler at `:740`), taking
+     `{ name, github_auth: { login, sig } }` as a JSON body;
+     `handleCheckTeam`'s signature changes from `(url, env, origin)` to
+     `(request, env, origin)`. The credentials must never appear in the
+     query string: `sig` is a bearer valid for 8 hours, and a URL carries
+     it into Cloudflare access logs, browser history, and outbound
+     `Referer` headers. Today's URL holds no credential at all, so a
+     query-param design would introduce an exposure rather than close
+     one. Moving `name` into the body also stops the queried tenant name
+     from being logged.
+   - **The truthful `{available:true}` / `{available:false}` distinction
+     is kept** for verified callers — that is the feature, and behind an
+     identity gate it is no longer an anonymous enumeration oracle. What
+     must not vary with the queried name is the *failure* responses: the
+     401 body is fixed and name-independent, and rate-limit (429 +
+     `Retry-After`) and Backstage/config failure (500) stay distinct from
+     it and from each other. Collapsing those classes would cost a caller
+     the ability to tell "reauthenticate" from "back off" from "operator
+     outage" while revealing nothing extra about existence.
+   - The duplicate-tenant guard at `/api/submit` (lines 806-822, after
+     HMAC verification) remains the authoritative check regardless.
+   - Frontend impact: `useTeamValidation.ts` switches to `POST`, sends
+     the signed identity from `useAuth` in the body, and skips the call
+     entirely when the user is not signed in — showing "sign in with
+     GitHub to check availability" in the field rather than failing
+     silently. It sends **no** Turnstile token.
 
 4. **Config plumbing.**
    - New Worker secret `TURNSTILE_SECRET_KEY` (via `wrangler secret put`,
@@ -192,13 +194,21 @@
    deployable, and a new CORS surface for zero benefit — the existing
    Worker can call `siteverify` itself exactly like it already calls
    Backstage and Telegram.
-2. **Require full session-gating (GitHub-authenticated) on check-team**, as
-   the issue's primary suggestion. Dropped for this proposal (see Open
-   Questions) because `useTeamValidation.ts` calls check-team before OAuth
-   necessarily completes, as live-typing feedback; gating it behind a
-   session would require a frontend redesign of the request-access flow
-   order (auth-then-type vs type-then-auth) beyond what this issue's
-   "at minimum" fallback requires. Recorded as a valid stronger follow-up.
+2. **Require identity-gating (GitHub-authenticated) on check-team**, as
+   the issue's primary suggestion. **ADOPTED at approval (2026-08-31) —
+   this is now the design, see section 3 above.** The proposal had
+   dropped it, arguing `useTeamValidation.ts` calls check-team as
+   live-typing feedback before OAuth necessarily completes, so gating it
+   would force a frontend redesign of the request-access flow order. That
+   reasoning was overturned: no redesign is needed, because the composable
+   simply skips the call while the user is signed out and says so in the
+   field. Anonymous-with-Turnstile was the weaker gate, not the cheaper
+   one — see the Operator decisions section in `tasks.md`.
+   The variant this replaces — anonymous check-team hardened with a
+   Turnstile token plus a uniform `{available:true}` response — is
+   rejected: it would have destroyed the endpoint's actual usefulness
+   (every name reads as free) while still admitting unauthenticated
+   traffic, and it fires a challenge on every debounced keystroke.
 3. **Move the Cache-API rate limiter to Durable Objects / KV for
    accuracy.** Dropped: out of scope per the issue (which only asks for
    "per-IP rate limit", already structurally present via `RATE_LIMITS`);

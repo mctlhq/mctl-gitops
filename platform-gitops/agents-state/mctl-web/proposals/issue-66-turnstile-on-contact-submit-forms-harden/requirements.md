@@ -64,19 +64,32 @@ that redesign (see Acceptance criteria and Out of scope).
   unexpired Turnstile token THE SYSTEM SHALL proceed with existing
   validation and downstream behavior (Telegram notification / Backstage
   submission) unchanged from today.
-- WHEN an anonymous (unauthenticated) client calls
-  `GET /api/github/check-team` for an existing tenant THE SYSTEM SHALL
-  return the same response shape and status family as for a non-existing
-  tenant, so anonymous 200-vs-404 (or field-content) enumeration is no
-  longer possible.
+- WHILE `/api/github/check-team` exists THE SYSTEM SHALL accept it as
+  `POST` with a JSON body `{ name, github_auth: { login, sig } }` and
+  SHALL NOT accept the caller's identity (`login`, `sig`) via the query
+  string or any other part of the URL, because `sig` is a bearer valid
+  for 8 hours and a URL propagates it into access logs, browser history,
+  and `Referer` headers.
+- WHEN a client calls `/api/github/check-team` without a `github_auth`
+  block, or with one whose signature fails
+  `hmacVerify(login, sig, GITHUB_OAUTH_HMAC_KEY)`, THE SYSTEM SHALL
+  return **401** with a single fixed body that is byte-identical for an
+  existing and a non-existing name, so anonymous enumeration is no longer
+  possible.
+- WHEN a client calls `/api/github/check-team` with a valid signature THE
+  SYSTEM SHALL return today's truthful answer — `{available:false}` for
+  an existing tenant, `{available:true}` for a free name — because behind
+  the identity gate that distinction is the feature, not an oracle.
 - WHEN a request to `/api/github/check-team` is rejected for rate-limit or
-  auth reasons THE SYSTEM SHALL return a response that does not itself leak
-  whether the queried name exists.
-- IF the caller of `check-team` is not authenticated (no valid session)
-  THEN THE SYSTEM SHALL still allow the request to proceed (per the issue's
-  "at minimum Turnstile + per-IP rate limit" fallback) but SHALL apply
-  Turnstile verification and a tightened per-IP rate limit before querying
-  Backstage.
+  configuration reasons THE SYSTEM SHALL return a response that does not
+  vary with the queried name, and SHALL keep those classes distinct from
+  each other and from the 401 (429 with `Retry-After` for rate limit, 500
+  for genuine Backstage/config failure).
+- WHILE `/api/github/check-team` is identity-gated THE SYSTEM SHALL NOT
+  require a Turnstile token on that endpoint — the issue's "at minimum
+  Turnstile + per-IP rate limit" fallback applies only where no identity
+  is available, and a challenge fired on every debounced keystroke is
+  both worse UX and a weaker gate than a signature.
 - WHILE the `TURNSTILE_SECRET_KEY` (or equivalent) environment secret is
   unset or empty THE SYSTEM SHALL fail closed on `/api/contact` and
   `/api/submit` (reject with 5xx "server misconfiguration", matching the
@@ -134,17 +147,25 @@ that redesign (see Acceptance criteria and Out of scope).
   contact/request forms, this proposal assumes **managed (non-intrusive)**
   mode, consistent with the `turnstile-spin` skill's default
   recommendation. Reviewer can override.
-- Exact uniform response body for check-team is not specified by the
-  issue beyond "does not distinguish". This proposal specifies
-  `{ available: true }` unconditionally for any syntactically valid,
-  Turnstile-verified, rate-limit-passing request (see design.md) — i.e.
-  the endpoint becomes advisory-only for anonymous callers and stops being
-  a reliable existence oracle. The Backstage-side authoritative check
-  still happens at `/api/submit` time (lines 806-822), so this does not
-  weaken duplicate-tenant prevention.
-- Whether Turnstile should also gate `check-team`'s frequent debounced
-  calls (fired on every valid keystroke pause) — a per-request Turnstile
-  challenge on every keystroke-driven call is poor UX. This proposal
-  instead applies Turnstile only where the issue explicitly requires it
-  (contact, submit) and relies on a tightened rate limit + response
-  uniformity for check-team, per the issue's own "at minimum" phrasing.
+**Both resolved by the operator at approval (2026-08-31);** the acceptance
+criteria above are the authority, these entries record what changed.
+
+- *What should check-team's response body be?* The proposal answered
+  "`{available:true}` unconditionally, for everyone" — **rejected.** That
+  makes the endpoint advisory-only, i.e. it stops doing the one thing it
+  exists for (telling the user their chosen name is free), while still
+  serving unauthenticated traffic. Resolved instead by gating on identity:
+  verified callers get the truthful answer, everyone else gets a fixed
+  401. Uniformity is required *within* each failure class, not across the
+  success path. The Backstage-side authoritative check at `/api/submit`
+  (lines 806-822) remains the duplicate-tenant guard either way.
+- *Should Turnstile also gate check-team's debounced calls?* **No** — and
+  not merely for the UX reason the proposal gave. With an identity gate a
+  challenge would be redundant: a signature is the stronger check and
+  costs the user nothing per keystroke. Turnstile stays only where the
+  issue requires it, on `/api/contact` and `/api/submit`.
+- *How do the identity credentials travel?* Added at approval, after the
+  agy reviewer caught it: **body only, never the URL.** The endpoint moves
+  `GET` → `POST`. `sig` is an 8-hour bearer, and today's URL carries no
+  credential at all, so a `?sig=` design would have created a log/history/
+  `Referer` exposure this issue is meant to reduce.
