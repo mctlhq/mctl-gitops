@@ -1,6 +1,6 @@
-status: needs-triage
-updated_at: '2026-08-30T23:43:00Z'
-updated_by: mctl-agents[bot]
+status: accepted
+updated_at: '2026-08-31T06:25:00Z'
+updated_by: mashkovd
 source:
   type: github_issue
   repo: mctlhq/mctl-api
@@ -11,13 +11,18 @@ control:
 approval:
   approved_by: mashkovd
   approved_at: '2026-08-30T23:39:28Z'
-attempt:
-  id: 0f81fb16-dfe7-4294-acd5-6c1501ae7598
-  started_at: '2026-08-30T23:41:48Z'
-  expires_at: '2026-08-31T01:51:48Z'
-  finished_at: '2026-08-30T23:43:00Z'
-failure:
-  code: no-commits
-  stage: agent
-  message: implementer produced no commits
-notes: 'agent: implementer produced no commits'
+retry:
+  attempt: 2
+  previous_failure:
+    code: no-commits
+    stage: agent
+    message: implementer produced no commits
+    workflow: mctl-agents-implement-9e630443
+    root_cause: >-
+      The implementer delegated the work to a background local_agent
+      sub-agent and ended its own turn ("The implementer sub-agent is now
+      running in the background on this task. I'll wait for it to complete"),
+      so the run terminated before any commit was produced. The in-workflow
+      fallback-token retry could not recover it: by then the primary failure
+      had already moved this proposal out of accepted, so the retry reported
+      "no accepted proposals found". See mctlhq/mctl-agents#245.
