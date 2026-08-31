@@ -27,7 +27,17 @@ image:
   tag: "1.34.0"
 imagePullSecrets:
   - name: ghcr-credentials
-command: ["python", "-m", "orchestrator.temporal.worker"]
+# --role control since the queue split (ADR-008): this process runs every
+# workflow and every short activity on `mctl-dev-loop`, while
+# mctl-agents-worker-exec serves submit_and_wait on `mctl-dev-loop-exec`.
+#
+# It still registers submit_and_wait itself, deliberately — nothing routes
+# to the exec queue until the patched flip lands in mctl-agents, so a
+# control worker that dropped it would strand every Argo submit the moment
+# it rolled out.
+#
+# Requires 1.35.0 or later; older images argparse-error on --role.
+command: ["python", "-m", "orchestrator.temporal.worker", "--role", "control"]
 ingress:
   enabled: false
 # The chart's own values.yaml defaults probes.liveness/readiness to

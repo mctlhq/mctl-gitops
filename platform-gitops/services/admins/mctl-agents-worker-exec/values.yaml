@@ -1,0 +1,107 @@
+# Worker: mctl-agents-worker-exec
+# Team: admins
+# Chart: base-service (ingress disabled)
+#
+# Step 2 of the mctl-agents queue split (mctl-agents#152, ADR-008). Same
+# image as mctl-agents-worker, different --role: this process polls
+# `mctl-dev-loop-exec` and serves exactly one activity, submit_and_wait.
+#
+# The split is by HOLDING TIME, not importance. submit_and_wait polls an
+# Argo run every 15 s for up to two hours, and with 9-11 concurrent
+# DevLoops those calls filled the single default slot pool and queued
+# every short activity behind them — find_proposal_slug, get_pr_state,
+# record_execution, reconcile, issue intake. The failure mode was not "the
+# worker is slow" but "a burst of agent executions silently stops
+# reconciliation and intake".
+#
+# NOTHING SCHEDULES HERE YET. The routing flip is a later, separately
+# releasable step in mctl-agents behind workflow.patched("exec-queue"),
+# because a worker must be polling a queue before any workflow targets it
+# — otherwise the activity waits on a queue nobody reads. This deployment
+# existing and idle is the point of shipping it first.
+#
+# REQUIRES an image with the --role flag: mctl-agents 1.35.0 or later.
+# Older tags argparse-error on the unknown argument and CrashLoopBackOff.
+# The tag below is bumped by release-deploy along with the control
+# worker's — both paths are named in mctl-agents' release-please dispatch
+# (values_path takes a list since mctl-gitops#962). If you ever see this
+# file drift behind mctl-agents-worker/values.yaml, that dispatch is what
+# to check: a worker nobody bumps pins forever, which is how the shepherd
+# sat on 1.25.0 for three weeks.
+replicaCount: 1
+image:
+  repository: ghcr.io/mctlhq/mctl-agents
+  tag: "1.35.0"
+imagePullSecrets:
+  - name: ghcr-credentials
+command: ["python", "-m", "orchestrator.temporal.worker", "--role", "execution"]
+ingress:
+  enabled: false
+# See mctl-agents-worker/values.yaml for why each probe is nulled
+# individually: this is an asyncio process with no HTTP server, the chart
+# defaults httpGet /healthz, and `probes: {}` / `probes: null` both fail
+# for different reasons (deep-merge keeps the defaults; nil is
+# dereferenced by the template).
+probes:
+  liveness: null
+  readiness: null
+resources:
+  # Deliberately smaller than the control worker's. This process runs no
+  # workflows and holds no workflow-task threads — it polls one queue and
+  # serves one I/O-bound activity whose entire body is an httpx call and a
+  # sleep. The 256Mi on the control worker is sized for a five-workflow
+  # replay cache; there is nothing here that grows with loop count except
+  # the slot pool itself.
+  requests:
+    cpu: 25m
+    memory: 64Mi
+  limits:
+    cpu: 250m
+    memory: 128Mi
+automountServiceAccountToken: false
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+env:
+  TEMPORAL_ADDRESS: temporal-frontend.temporal.svc.cluster.local:7233
+  TEMPORAL_NAMESPACE: mctl-agents
+  LOG_LEVEL: info
+envFrom:
+  - secretRef:
+      name: mctl-agents-worker-exec-secrets
+# MCTL_TOKEN only, and that is the whole point of listing it explicitly.
+#
+# The control worker also carries CLAUDE_CODE_OAUTH_TOKEN and a
+# GitHub App token (mounted as a file, because it expires hourly). This
+# process needs neither: submit_and_wait's entire body is
+# POST /api/v1/operations/{op}/execute followed by polling
+# GET /api/v1/workflows/{name}, both against mctl-api with the static
+# admin service token. It clones nothing, calls no GitHub API and starts
+# no agent session.
+#
+# So the split hands us a credential reduction for free, and taking it is
+# not merely tidy: this is the deployment whose slot count will be raised
+# as Argo load grows, i.e. the one most likely to be running when
+# something goes wrong. It should not be holding a token that can write
+# to every repo in the org.
+externalSecret:
+  # Platform-scoped path — cluster store; the tenant store only resolves
+  # secret/data/teams/admins/*.
+  store: vault-backend
+  storeKind: ClusterSecretStore
+  # 1h is fine here, unlike the control worker's 15m: that interval exists
+  # for the 60-minute GitHub App token, which this Secret does not carry.
+  targetSecret: mctl-agents-worker-exec-secrets
+  data:
+    - secretKey: MCTL_TOKEN
+      remoteKey: platform/mctl-agents
+      property: mctl-token
