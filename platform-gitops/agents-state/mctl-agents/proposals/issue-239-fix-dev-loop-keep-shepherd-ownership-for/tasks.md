@@ -180,3 +180,8 @@
 - [ ] P24. Make decision-projection identity occurrence-aware (including reason/attempt) or atomically update the existing occurrence so repeated same-cycle decisions retain current evidence.
 - [ ] P25. Register projection writers with the arbiter and drain them during takeover and rollback; test rollback while a projection commit is in flight and assert no mixed-version late write.
 
+## Compensation-CAS tasks
+
+- [ ] P26. Fence compensating GitOps writes by provisional transaction ID, provisional status revision, expected head, and arbiter epoch under the repository mutex.
+- [ ] P27. Test an intervening serialized proposal write between provisional commit and compensation; assert compensation no-ops or recomputes and never overwrites newer state.
+
