@@ -16,11 +16,21 @@ provisioning API) with only shape/length validation — no CAPTCHA, no proof
 of human origin. `submit` does require a GitHub-derived HMAC signature
 (`github_auth.sig`, verified in `handleFormSubmit` via `hmacVerify`), but
 that signature is minted once at OAuth callback time and cached client-side
-in `localStorage` for 8 hours (`useAuth.ts`, `AUTH_TTL = 8 * 60 * 60 * 1000`,
+in `localStorage` (`useAuth.ts`, `AUTH_TTL = 8 * 60 * 60 * 1000`,
 `restore()`) without re-checking that the underlying GitHub session is
-still valid — a stolen or replayed `mctl_auth` localStorage blob remains a
-usable credential against `/api/submit` for up to 8 hours after the user's
-actual GitHub session may have ended.
+still valid.
+
+**Correction, 2026-08-31 (found by the codex reviewer on this proposal's
+own decisions PR; an earlier revision of this document said "8 hours"
+here and was wrong).** The signature does **not** expire. `hmacSign` signs
+the bare `login` string and nothing else — no timestamp, no nonce — and
+`hmacVerify(login, sig, secret)` recomputes over that same bare login. The
+Worker never sees `exp`. `AUTH_TTL` governs only when the *browser*
+discards its own `localStorage` copy, which an attacker who has already
+copied the value is not bound by. A leaked `sig` is therefore an
+**unbounded** bearer for that login, replayable by any HTTP client for as
+long as `GITHUB_OAUTH_HMAC_KEY` keeps its value; the only revocation is a
+key rotation, which invalidates every user's signature at once.
 
 The repo already ships a `turnstile-spin` skill
 (`.claude/skills/turnstile-spin/SKILL.md`) for wiring up Cloudflare
@@ -44,9 +54,12 @@ that redesign (see Acceptance criteria and Out of scope).
 - AS a platform operator I WANT worker tests covering submit/contact/rate-limit
   paths SO THAT this hardening does not silently regress in future changes.
 - AS a returning user with a stale browser session I WANT `/api/submit` to
-  not accept a locally-cached credential indefinitely SO THAT a leaked
-  `mctl_auth` localStorage value has a bounded blast radius consistent with
-  the documented 8h TTL and cannot be replayed after that TTL.
+  stop accepting a locally-cached credential forever SO THAT a leaked
+  `mctl_auth` value has a bounded blast radius. **Today it does not**: the
+  signature carries no expiry, so this is a statement of intent tracked in
+  mctlhq/mctl-web#70, not something this proposal delivers. Nothing here
+  may be written as if the 8h `AUTH_TTL` already bounds server-side
+  replay — it does not.
 
 ## Acceptance criteria (EARS)
 - WHEN a client POSTs to `/api/contact` without a valid Turnstile token
@@ -67,9 +80,23 @@ that redesign (see Acceptance criteria and Out of scope).
 - WHILE `/api/github/check-team` exists THE SYSTEM SHALL accept it as
   `POST` with a JSON body `{ name, github_auth: { login, sig } }` and
   SHALL NOT accept the caller's identity (`login`, `sig`) via the query
-  string or any other part of the URL, because `sig` is a bearer valid
-  for 8 hours and a URL propagates it into access logs, browser history,
-  and `Referer` headers.
+  string or any other part of the URL, because `sig` is an unbounded
+  bearer (no expiry is signed or verified) and a URL propagates it into
+  access logs, browser history, and `Referer` headers.
+- WHEN `/api/github/check-team` changes from `GET` to `POST` THE SYSTEM
+  SHALL be rolled out so that no window exists in which the deployed Nuxt
+  frontend and the deployed Worker disagree about the method. There is no
+  safe one-sided state: a new frontend POSTing at an old GET-only Worker
+  fails, and an old frontend GETting at a new POST-only Worker fails. The
+  method change SHALL therefore either ship atomically with the frontend,
+  or go out in two steps — first a Worker that accepts **both** methods
+  (the `GET` path continuing to serve today's unauthenticated behaviour,
+  and under no circumstances accepting credentials from the query string),
+  then, once the new frontend is live, a follow-up that removes `GET`.
+- WHILE a rollback of the Worker is possible THE SYSTEM SHALL NOT leave a
+  POST-only frontend deployed against a reverted GET-only Worker; the
+  rollback procedure SHALL name the frontend as part of what must be
+  reverted, or rely on the both-methods transitional Worker above.
 - WHEN a client calls `/api/github/check-team` without a `github_auth`
   block, or with one whose signature fails
   `hmacVerify(login, sig, GITHUB_OAUTH_HMAC_KEY)`, THE SYSTEM SHALL
@@ -113,7 +140,7 @@ that redesign (see Acceptance criteria and Out of scope).
   (`mcpPayload.token` / OAuth session redesign) — explicit companion issue
   per the issue body, requires mctl-api changes (see `mctlhq/mctl-api#218`
   referenced in `cloudflare-worker/index.js` comments).
-- Replacing the 8h localStorage HMAC credential with server-side session
+- Replacing the non-expiring localStorage HMAC credential with server-side session
   re-validation against a live GitHub session on every `/api/submit` call.
   That requires either a GitHub API round-trip per submit or a server-side
   session store, both bigger changes than "add Turnstile + fix check-team
@@ -130,23 +157,24 @@ that redesign (see Acceptance criteria and Out of scope).
   siteverify is called in-process instead.
 
 ## Open questions
-- The issue says check-team should "require the authenticated session (or
+- ~~The issue says check-team should "require the authenticated session (or
   at minimum Turnstile + per-IP rate limit)". Requiring the session cookie
   would break the current UX, where `useTeamValidation.ts` calls
   `check-team` live as the user types a team name *before* they have
-  necessarily completed GitHub OAuth (it's used for inline debounced
-  availability feedback in `RequestAccessForm.vue`, not gated behind auth
-  in the UI). Full session-gating would need a frontend flow change. This
-  proposal takes the "at minimum" fallback explicitly offered by the issue:
-  Turnstile + tightened per-IP rate limit + uniform response shape, without
-  requiring a session. Flagged for reviewer sign-off; full session-gating
-  is a reasonable follow-up if product wants to hide check-team from
-  logged-out visitors entirely.
+  necessarily completed GitHub OAuth. This proposal takes the "at minimum"
+  fallback: Turnstile + tightened per-IP rate limit + uniform response
+  shape, without requiring a session.~~
+  **REJECTED at approval (2026-08-31). Do not implement any of the
+  struck-through text above.** The identity gate is required, not
+  optional; there is no Turnstile on `check-team`; the response is not
+  uniform for verified callers. The UX objection does not survive
+  contact with the actual fix: the composable simply skips the call while
+  the user is signed out and says so in the field, which needs no flow
+  redesign. See the acceptance criteria above — they are the authority —
+  and Operator decisions 1-2 in `tasks.md`.
 - Whether the Turnstile widget should be "managed" (visible, adaptive
-  challenge) or "invisible" mode. Given these are low-friction
-  contact/request forms, this proposal assumes **managed (non-intrusive)**
-  mode, consistent with the `turnstile-spin` skill's default
-  recommendation. Reviewer can override.
+  challenge) or "invisible" mode. **Resolved: managed**, and the widget
+  has already been created that way (Operator decision 3).
 **Both resolved by the operator at approval (2026-08-31);** the acceptance
 criteria above are the authority, these entries record what changed.
 
@@ -166,6 +194,6 @@ criteria above are the authority, these entries record what changed.
   issue requires it, on `/api/contact` and `/api/submit`.
 - *How do the identity credentials travel?* Added at approval, after the
   agy reviewer caught it: **body only, never the URL.** The endpoint moves
-  `GET` → `POST`. `sig` is an 8-hour bearer, and today's URL carries no
+  `GET` → `POST`. `sig` is an unbounded bearer, and today's URL carries no
   credential at all, so a `?sig=` design would have created a log/history/
   `Referer` exposure this issue is meant to reduce.

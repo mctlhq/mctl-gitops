@@ -28,6 +28,7 @@
   `useAuth.ts`'s `authData` computed property sends — the OAuth-callback
   payload (`login`, `name`, `email`, `avatar_url`, `html_url`, `sig`)
   persisted client-side in `localStorage` under `mctl_auth` for 8 hours
+  (browser-side only; the signature itself never expires)
   (`AUTH_TTL`), independent of whether the user's actual GitHub session or
   browser tab is still open.
 - `handleContactForm` (lines 923-980): validates `name`/`email`/`message`
@@ -130,7 +131,8 @@
      `{ name, github_auth: { login, sig } }` as a JSON body;
      `handleCheckTeam`'s signature changes from `(url, env, origin)` to
      `(request, env, origin)`. The credentials must never appear in the
-     query string: `sig` is a bearer valid for 8 hours, and a URL carries
+     query string: `sig` is an unbounded bearer (it signs the bare login, with no
+     expiry — see requirements.md), and a URL carries
      it into Cloudflare access logs, browser history, and outbound
      `Referer` headers. Today's URL holds no credential at all, so a
      query-param design would introduce an exposure rather than close

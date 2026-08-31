@@ -82,7 +82,9 @@
       changes from `(url, env, origin)` to `(request, env, origin)`.
       **The credentials MUST NOT travel in the query string, in any form
       — not `?sig=`, not a header-substitute crammed into the URL.** `sig`
-      is a bearer good for 8 hours; in a URL it lands in Cloudflare access
+      is an unbounded bearer — `hmacSign` signs the bare login with no
+      expiry, and the 8h `AUTH_TTL` only governs the browser's own copy —
+      so in a URL it lands in Cloudflare access
       logs, browser history, and outbound `Referer` headers. Today no
       credential appears in that URL at all, so a query-param design would
       *introduce* an exposure this issue is supposed to reduce. Moving the
@@ -95,7 +97,17 @@
         (`{available:false}` for an existing tenant, `{available:true}`
         for a free name);
       * missing or invalid signature → **401**, one fixed body, identical
-        for an existing and a non-existing name;
+        for an existing and a non-existing name.
+        **This is a deliberate divergence from `handleFormSubmit`, which
+        answers 401 for a missing `github_auth` and 403 for a bad `sig`
+        — do not "align" check-team to that split.** Collapsing both into
+        one 401 here is safe for the same reason the split is safe there
+        (neither reveals anything about the queried *name*), and it is
+        preferable because check-team is the endpoint an enumerator
+        actually probes: one response means one thing to measure. On
+        `/api/submit` the 401/403 split stays as it is today — that
+        endpoint is not touched by this task, and changing its status
+        codes would be an unrelated API break;
       * the 401 body must not vary with the queried name in any way —
         no echo of the name, no length-dependent content;
       * within each other failure class the response is likewise
@@ -155,6 +167,26 @@
       documented in the PR description; no production window exists where
       old frontend builds get hard-rejected by new backend enforcement
       without a deliberate decision to accept that.
+      **The `GET` → `POST` change on `check-team` (task 8) is a separate,
+      harder case and a soft-launch flag does not cover it.** A method
+      change has no safe one-sided state: a new frontend POSTing at an old
+      GET-only Worker fails, and an old frontend GETting at a new POST-only
+      Worker fails — so "frontend first", which this task otherwise
+      permits, breaks availability checking in one direction and
+      Worker-first breaks it in the other. Pick one of:
+      * ship Worker and frontend **atomically**, if the deploy pipeline
+        can guarantee it; or
+      * make the Worker accept **both** methods in this release — `POST`
+        with the identity gate, and `GET` continuing to serve exactly
+        today's unauthenticated behaviour — then remove `GET` in a
+        follow-up PR once the new frontend is live. The transitional
+        `GET` must **not** grow query-param credential support; it keeps
+        its current anonymous semantics until it is deleted, and the
+        follow-up issue to delete it is filed as part of this task, not
+        left implicit.
+      — DoD: the chosen option is stated in the PR description, and if the
+      two-step option is taken, the follow-up issue number for removing
+      `GET` is in the description too.
 
 ## Tests
 
@@ -230,6 +262,16 @@
   `CLAUDE.md`), redeploying the previous image tag; the frontend widget
   is harmless to leave in place (it just sends an unused `turnstile_token`
   field) while the backend is rolled back.
+  **Exception — the check-team method change.** The sentence above is true
+  only for the Turnstile field, which is additive. It is *not* true for
+  task 8: a POST-only frontend left in place against a reverted GET-only
+  Worker breaks availability checking outright. If the two-step
+  both-methods rollout (task 13) was taken, this exception does not
+  apply — the reverted Worker still answers `GET`. If the atomic rollout
+  was taken, a Worker rollback **must** revert the frontend with it.
+  Whichever was chosen has to be named in the PR description precisely so
+  that whoever runs the rollback knows which of these two worlds they are
+  in.
 - No data migrations occur, so rollback carries no data-loss risk; Cache
   API rate-limit entries and Turnstile widget/sitekey can remain
   provisioned even after a code rollback with no side effects.
@@ -272,7 +314,7 @@ answers to them are inconsistent with each other, so read them together.
      a broken feature.
 
    This deliberately does **not** invent a stronger gate than the one on
-   `/api/submit`. It leans on the 8h localStorage HMAC the proposal itself
+   `/api/submit`. It leans on the localStorage HMAC the proposal itself
    flags as weak — accepted, because `check-team` is strictly less
    sensitive than `submit`, which already accepts exactly this credential.
    Hardening that credential is one problem, in one place, and it is filed
@@ -333,7 +375,8 @@ pre-existing ones:
 
 7. **The identity travels in a POST body, never in the URL** — decision 1
    originally permitted "query params" as one way to pass `login`/`sig` to
-   `check-team`. That was wrong. `sig` is a bearer good for 8 hours, and
+   `check-team`. That was wrong. `sig` is an unbounded bearer (no expiry is signed or checked; the 8h
+   `AUTH_TTL` is a browser-side convenience only), and
    `check-team` is a `GET`, so query params would have written a live
    credential into Cloudflare access logs, browser history, and outbound
    `Referer` headers. The endpoint today carries no credential in its URL
@@ -353,7 +396,25 @@ pre-existing ones:
 
 Out of scope, confirmed, with the follow-up filed rather than implied:
 
-9. Replacing the 8h `localStorage` HMAC with server-side session
-   re-validation stays out of scope here — see mctlhq/mctl-web#70. Note
-   that decision 7 raises its value: with `sig` now the sole gate on a
-   third endpoint, shortening its life matters more than it did.
+9. Replacing the non-expiring `localStorage` HMAC with server-side session
+   re-validation stays out of scope here — see mctlhq/mctl-web#70.
+
+   **Correction to this proposal's threat model, 2026-08-31, from the
+   codex reviewer.** Earlier revisions of all three files — and my own PR
+   comment — called `sig` an "8-hour bearer". That is wrong, and it
+   understated the problem. `hmacSign` signs the bare `login` and nothing
+   else; `hmacVerify(login, sig, secret)` recomputes over that same bare
+   login. No expiry is signed and none is checked. `AUTH_TTL = 8h`
+   (`useAuth.ts:6,37`) only decides when the *browser* throws away its own
+   copy — an attacker holding a copied `sig` is not bound by it. A leaked
+   signature is replayable by any HTTP client indefinitely, and the only
+   revocation is rotating `GITHUB_OAUTH_HMAC_KEY`, which logs out every
+   user at once.
+
+   Two consequences, both of which should be carried into mctl-web#70:
+   (a) decision 7 gets stronger, not weaker — putting a *permanent*
+   bearer in a URL is worse than putting an 8-hour one there; (b) #70 is
+   not the tidy-up it reads as. This task makes `sig` the sole gate on a
+   third endpoint, so the absence of any expiry or revocation is now
+   load-bearing in three places. Do not let "it expires in 8 hours"
+   survive anywhere in the eventual #70 discussion.
