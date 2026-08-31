@@ -201,3 +201,8 @@ without an operator having to notice and re-trigger it by hand.
 - If an intervening writer advanced proposal state, compensation SHALL no-op with superseded evidence or recompute from the newer snapshot; it SHALL NOT overwrite the newer state.
 - Compensation idempotency SHALL bind the original transaction and expected provisional revision. Tests SHALL cover an unrelated serialized status write between provisional commit and compensation.
 
+## Provisional-transaction retry resumption correction
+
+- The terminal status activity SHALL persist or reconstruct its phase from the provisional transaction record. On activity retry, if repository state already contains the exact activity-owned provisional transaction ID, provisional revision, expected head, and arbiter epoch, it SHALL skip the initial write and resume mandatory post-commit GitHub/arbiter revalidation and any compensation.
+- A CAS mismatch is 'superseded/no-op' only when state does not match either the expected pre-write snapshot or this activity's own exact provisional record. Retrying after a successful provisional commit can therefore never silently omit revalidation.
+- Tests SHALL crash the worker immediately after the provisional commit and before revalidation, then retry and prove that merge/head/takeover changes are revalidated and repaired exactly once.
