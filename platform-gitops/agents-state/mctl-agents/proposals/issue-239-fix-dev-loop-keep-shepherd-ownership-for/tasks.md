@@ -185,3 +185,7 @@
 - [ ] P26. Fence compensating GitOps writes by provisional transaction ID, provisional status revision, expected head, and arbiter epoch under the repository mutex.
 - [ ] P27. Test an intervening serialized proposal write between provisional commit and compensation; assert compensation no-ops or recomputes and never overwrites newer state.
 
+## Provisional retry-resume tasks
+
+- [ ] P28. Persist/reconstruct the terminal writer phase and recognize the activity's own exact provisional transaction on retry; resume at mandatory post-commit revalidation instead of classifying it as superseded.
+- [ ] P29. Test worker crash immediately after provisional commit, retry with unchanged state, and retry after concurrent merge/head/takeover changes; assert revalidation/compensation completes exactly once and never overwrites an intervening writer.
