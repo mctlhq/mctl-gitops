@@ -40,13 +40,13 @@
       bool]` instead of one bare `has_responded` bool. — DoD: `process_one` performs the existing review/comment reads plus the required cached, paginated Actions-runs lookup; tests assert bounded call counts and pagination. All pre-existing #67 tests
       (`test_connector_*`) pass against the refactored function with no
       behavior change for Claude/connector-only fixtures.
-- [ ] 6. Implement `_dedupe_findings()` (path/line key, fuzzy-text
-      fallback, keeps highest severity, merges into a `sources: list[str]`
-      field) and wire it into the aggregation path before `decide()` sees
-      the pooled findings list. — DoD: unit test with two reviewers
-      reporting the identical `(path, line)` collapses to one finding with
-      both names in `sources`; unit test with two different-path findings
-      from different reviewers stays two findings (no over-merge).
+- [ ] 6. Implement `_dedupe_findings()` with exact conservative
+      identity: exact path+line+normalized message, or exact
+      normalized-message hash when location is absent. Keep highest severity
+      and merge source names only for an exact identity match; fuzzy matching
+      is forbidden. Wire it into aggregation before `decide()`. — DoD:
+      identical findings collapse with both sources, while different paths
+      or distinct unlocated messages remain separate.
 - [ ] 7. Update `decide()` to accept per-source `responses` and a
       `reviewer_wait_ticks` figure (or equivalent), and return
       `review-stuck` (not `wait`) once a required source's silence exceeds
