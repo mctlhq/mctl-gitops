@@ -34,7 +34,7 @@ on:
         required: true
         type: string
       values_path:
-        description: "Override gitops values file path (default: platform-gitops/services/<team>/<component>/values.yaml). Use for platform bootstrap services. May be combined with values_glob to bump both in one run."
+        description: "Override gitops values file path (default: platform-gitops/services/<team>/<component>/values.yaml). Use for platform bootstrap services. May be combined with values_glob to bump both in one run. Accepts several paths separated by commas or newlines - each one must match, so a component deployed as more than one workload (e.g. a worker split across two roles) cannot have one of them silently left behind."
         required: false
         type: string
       values_glob:
@@ -170,9 +170,18 @@ jobs:
                   sys.exit(2)
               for f in files:
                   validate_allowed(f)
-          if vpath:
-              validate_allowed(vpath)
-              files.append(vpath)
+          # Several paths, comma- or newline-separated. One component can be
+          # deployed as more than one workload - mctl-agents is about to run
+          # a control worker and an execution worker off the same image
+          # (ADR-008) - and with a single path the second one is bumped by
+          # nobody and pins forever. That is the same silent drift that left
+          # the shepherd on 1.25.0 for three weeks (mctl-agents#220, #238),
+          # so the fix is to make the list expressible rather than to add
+          # another glob and hope it happens to match.
+          vpaths = [q.strip() for q in vpath.replace("\n", ",").split(",") if q.strip()]
+          for q in vpaths:
+              validate_allowed(q)
+              files.append(q)
           if not files:
               default_path = f"platform-gitops/services/{team}/{service}/values.yaml"
               validate_allowed(default_path)
@@ -240,8 +249,17 @@ jobs:
           # letting glob matches satisfy the aggregate check would report
           # success while the requested deployment silently stays on the
           # old tag.
-          if vpath and matched_per_file.get(vpath, 0) == 0:
-              print(f"ERROR: no image tag pattern for {image_name} in explicitly requested {vpath}", file=sys.stderr)
+          # Every explicitly named path must match, not just the first one:
+          # the whole point of naming them is that a miss is an error rather
+          # than a warning, and checking only one would restore exactly the
+          # silence this list exists to remove.
+          unmatched = [q for q in vpaths if matched_per_file.get(q, 0) == 0]
+          if unmatched:
+              print(
+                  f"ERROR: no image tag pattern for {image_name} in explicitly "
+                  f"requested {', '.join(unmatched)}",
+                  file=sys.stderr,
+              )
               sys.exit(3)
 
           # Hand off exactly the files this step actually rewrote to the
