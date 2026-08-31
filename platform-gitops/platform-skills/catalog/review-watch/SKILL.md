@@ -22,11 +22,17 @@ Do NOT spawn an `Agent` for this. Sub-agent runtime has a strong bias toward the
 ## Bootstrap — write `/tmp/review-watch.sh` if missing or stale
 
 Before launching watchers, check that the script is in place AND current:
-`grep -qF "# REVIEW_WATCH_POLICY_V2" /tmp/review-watch.sh` — if the file
+`grep -qF "AGY_MARKER='<!-- agy-review -->'" /tmp/review-watch.sh` — if the file
 is missing or the grep fails, (re)write it via Bash heredoc (the entire script
 body).
 
-The freshness predicate is a revision signature unique to the trusted-base policy and exact-head Agy logic. Any future behavior change must bump this signature so long-lived hosts cannot keep using a stale watcher.
+The predicate matches the marker's **value**, not just the name `AGY_MARKER`.
+Checking the name was the bug: a stale `/tmp/review-watch.sh` from before
+2026-08-28 defines `AGY_MARKER` too — with the wrong value
+`<!-- agy-review-pilot -->` — so a name-only grep declared it current and the
+host kept running the broken watcher, silently missing every agy response,
+until someone deleted the file by hand. Any future change to the script body
+must move this predicate onto something the old version cannot satisfy.
 
 ```bash
 #!/bin/bash
@@ -64,24 +70,6 @@ BOTFILTER='select(.user.login == "claude[bot]" or .user.login == "chatgpt-codex-
 # posting normally. On mctl-agent#105 that hid two real P2 findings, which
 # were only caught by checking `gh api .../issues/<N>/comments` by hand.
 AGY_MARKER='<!-- agy-review -->'
-
-# REVIEW_WATCH_POLICY_V2
-# Read security policy only from the PR's trusted base branch.
-BASE_REF=$(gh api "repos/$REPO/pulls/$PR" --jq '.base.ref' 2>/dev/null || echo "")
-HEAD_SHA=$(gh api "repos/$REPO/pulls/$PR" --jq '.head.sha' 2>/dev/null || echo "")
-AGY_REQUIRED=0
-if [ -n "$BASE_REF" ]; then
-  CALLER=$(gh api -H "Accept: application/vnd.github.raw+json" \
-    "repos/$REPO/contents/.github/workflows/agy-review.yml?ref=$BASE_REF" 2>/dev/null || echo "")
-  if printf '%s\n' "$CALLER" | grep -Eq '^[[:space:]]*blocking:[[:space:]]*true([[:space:]]*#.*)?$'; then
-    AGY_REQUIRED=1
-  fi
-fi
-if gh pr checks "$PR" --repo "$REPO" --required --json name \
-  --jq 'any(.[]; .name == "Agy PR review")' 2>/dev/null | grep -qx true; then
-  AGY_REQUIRED=1
-fi
-echo "[$(date -u +%FT%TZ)] base_ref=$BASE_REF head_sha=$HEAD_SHA agy_required=$AGY_REQUIRED"
 
 notify() {
   local title="$1" body="$2" sound="${3:-Glass}"
@@ -137,16 +125,9 @@ for i in $(seq 1 10); do
   # agy pilot reviewer — see AGY_MARKER note above. Independent of BOTFILTER
   # since its login collides with unrelated github-actions[bot] comments.
   A=$(gh api --paginate "repos/$REPO/issues/$PR/comments" --jq "[.[] | select(.user.login == \"github-actions[bot]\") | select(.body | contains(\"$AGY_MARKER\")) | select(.created_at > \"$TS\")] | length" 2>/dev/null || echo 0)
-  HEAD_SHA=$(gh api "repos/$REPO/pulls/$PR" --jq '.head.sha' 2>/dev/null || echo "")
-  AGY_DONE=0
-  if [ -n "$HEAD_SHA" ]; then
-    AGY_DONE=$(gh api -H "Accept: application/vnd.github+json" \
-      "repos/$REPO/commits/$HEAD_SHA/check-runs" \
-      --jq '[.check_runs[] | select(.name == "Agy PR review" and .status == "completed")] | length' 2>/dev/null || echo 0)
-  fi
   E=""
   [ -n "$ID" ] && E=$(gh api --paginate "repos/$REPO/issues/comments/$ID/reactions" --jq "[.[] | $BOTFILTER | select(.created_at > \"$TS\") | .content] | last" 2>/dev/null || echo "")
-  echo "[$(date -u +%FT%TZ)] tick $i: head_sha=$HEAD_SHA reviews=$R comments=$C issue_comments=$I agy_comments=$A agy_done=$AGY_DONE reaction=$E"
+  echo "[$(date -u +%FT%TZ)] tick $i: reviews=$R comments=$C issue_comments=$I agy_comments=$A reaction=$E"
   # Fetch the latest bot issue-comment body up front so the hit gate can tell
   # claude-review.yml's in-progress checklist from a real verdict. The checklist
   # has UNCHECKED boxes ("- [ ]"); a finished verdict has only "- [x]", and codex
@@ -164,11 +145,7 @@ for i in $(seq 1 10); do
       echo "[$(date -u +%FT%TZ)] issue-comment is an in-progress checklist; still polling"
     fi
   fi
-  BOT_HIT=0
-  if [ "${R:-0}" -gt 0 ] || [ "${C:-0}" -gt 0 ] || { [ "${I:-0}" -gt 0 ] && [ "$IC_INPROGRESS" -eq 0 ]; } || [ "$E" = '"+1"' ] || [ "$E" = "+1" ]; then
-    BOT_HIT=1
-  fi
-  if { [ "$BOT_HIT" -eq 1 ] || [ "${A:-0}" -gt 0 ]; } && { [ "$AGY_REQUIRED" -eq 0 ] || { [ "${A:-0}" -gt 0 ] && [ "${AGY_DONE:-0}" -gt 0 ]; }; }; then
+  if [ "${R:-0}" -gt 0 ] || [ "${C:-0}" -gt 0 ] || { [ "${I:-0}" -gt 0 ] && [ "$IC_INPROGRESS" -eq 0 ]; } || [ "${A:-0}" -gt 0 ] || [ "$E" = '"+1"' ] || [ "$E" = "+1" ]; then
     echo "[$(date -u +%FT%TZ)] hit; fetching details"
     {
       echo "status=responded"
@@ -178,8 +155,6 @@ for i in $(seq 1 10); do
       echo "comment_count=$C"
       echo "issue_comment_count=$I"
       echo "agy_comment_count=$A"
-      echo "agy_check_done=$AGY_DONE"
-      echo "head_sha=$HEAD_SHA"
       echo "reaction=$E"
       echo "---comments---"
       gh api --paginate "repos/$REPO/pulls/$PR/comments" --jq "[.[] | $BOTFILTER | select(.created_at > \"$TS\") | {user: .user.login, path, line, original_line, body}]"
