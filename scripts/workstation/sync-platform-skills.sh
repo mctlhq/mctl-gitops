@@ -17,7 +17,9 @@ shopt -s nullglob   # пустой каталог не должен давать
 
 # Под launchd нет TTY: запрос пароля к ключу или неизвестный host key повесили бы
 # fetch навсегда, причём с захваченным локом. Пусть лучше сразу падает.
-export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes}"
+# Без таймаутов повисший ssh держал бы лок бесконечно, и kill -0 считал бы его
+# живым: каждый следующий тик молча пропускал бы синк.
+export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3}"
 
 REMOTE="git@github.com:mctlhq/mctl-gitops.git"
 MIRROR="$HOME/.claude/skills-catalog"
@@ -50,15 +52,14 @@ if ! mkdir "$LOCK" 2>/dev/null; then
   HELD=$(cat "$LOCK/pid" 2>/dev/null)
   if [ -n "$HELD" ]; then
     kill -0 "$HELD" 2>/dev/null || STALE="pid $HELD мёртв"
-  elif [ -f "$LOCK/pid" ]; then
-    # Файл есть, но пуст: другой процесс ровно сейчас между созданием файла и
-    # записью pid. Это живой лок, а не осиротевший.
-    :
   elif [ "$(lock_age_seconds)" -gt 60 ]; then
+    # Пустой или отсутствующий pid-файл: свежий -- значит другой процесс прямо
+    # сейчас между созданием файла и записью pid, трогать нельзя. Старый --
+    # значит его убили в этом окне, и лок надо забрать, иначе он вечен.
     # Убитый между mkdir и записью pid оставлял лок без pid-файла, и он залипал
     # навсегда. Возраст различает это от нормального прогона, который окно между
     # mkdir и записью проходит за микросекунды, а сам живёт секунды.
-    STALE="без pid-файла и старше минуты"
+    STALE="без живого pid и старше минуты"
   fi
   if [ -n "$STALE" ]; then
     # Два прогона могут одновременно счесть лок стухшим; без атомарного шага
@@ -76,7 +77,13 @@ fi
 # Метка владельца: если наш лок кто-то перехватил как стухший, мы не должны
 # снести уже чужой каталог своим trap'ом.
 OWNER="$$-$(date +%s)-$RANDOM"
-echo "$OWNER" > "$LOCK/owner"
+# noclobber: если машина уснула между mkdir и этой строкой, лок мог быть уже
+# перехвачен как стухший -- тогда файлы существуют и перезаписывать их нельзя.
+set -C
+if ! echo "$OWNER" > "$LOCK/owner" 2>/dev/null; then
+  set +C; echo "  лок перехвачен, пока мы спали -- выхожу"; exit 0
+fi
+set +C
 echo $$ > "$LOCK/pid"
 trap '[ "$(cat "$LOCK/owner" 2>/dev/null)" = "$OWNER" ] && rm -rf "$LOCK"' EXIT
 
@@ -85,7 +92,7 @@ echo "[$(date -u +%FT%TZ)] sync start"
 MIRROR_OK=0
 if [ -d "$MIRROR/.git" ] \
    && git -C "$MIRROR" rev-parse --verify --quiet HEAD >/dev/null 2>&1 \
-   && [ "$(git -C "$MIRROR" remote get-url origin 2>/dev/null)" = "$REMOTE" ]; then
+   && [ "$(git -C "$MIRROR" config --get remote.origin.url 2>/dev/null)" = "$REMOTE" ]; then
   MIRROR_OK=1
 fi
 # Клон, оборванный после создания .git, но до настройки remote/ref'ов, иначе
@@ -96,7 +103,8 @@ if [ "$MIRROR_OK" = "0" ]; then
   rm -rf "$MIRROR"
   git clone --filter=blob:none --no-checkout --single-branch --branch main \
     "$REMOTE" "$MIRROR" || { echo "  clone FAILED"; exit 1; }
-  git -C "$MIRROR" sparse-checkout set --cone platform-gitops/platform-skills/catalog
+  git -C "$MIRROR" sparse-checkout set --cone platform-gitops/platform-skills/catalog \
+    || { echo "  sparse-checkout FAILED -- иначе checkout вытянул бы весь репозиторий"; exit 1; }
   git -C "$MIRROR" checkout main || { echo "  checkout FAILED"; exit 1; }
 fi
 
@@ -110,8 +118,9 @@ fi
 git -C "$MIRROR" reset --quiet --hard origin/main || { echo "  reset FAILED"; exit 1; }
 # reset --hard не трогает неотслеживаемое; без clean случайный каталог под
 # catalog/ был бы слинкован в ~/.claude/skills навсегда. -x нужен потому, что
-# корневой .gitignore прячет имена вроде __pycache__/ и packer_cache/.
-git -C "$MIRROR" clean -qxfd -- platform-gitops/platform-skills/catalog
+# корневой .gitignore прячет имена вроде __pycache__/ и packer_cache/, а
+# вложенный git-репозиторий под catalog/ git удаляет только при двойном -f.
+git -C "$MIRROR" clean -qxffd -- platform-gitops/platform-skills/catalog
 AFTER=$(git -C "$MIRROR" rev-parse HEAD)
 [ "$BEFORE" = "$AFTER" ] && echo "  catalog unchanged at ${AFTER:0:8}" \
                          || echo "  catalog ${BEFORE:0:8} -> ${AFTER:0:8}"
