@@ -15,6 +15,7 @@ set -uo pipefail
 shopt -s nullglob   # пустой каталог не должен давать литерал "*" в цикле
 
 
+FRESH=0   # свежесозданное зеркало считаем сменой каталога (см. инвалидацию кеша)
 MIRROR="$HOME/.claude/skills-catalog"
 CATALOG="$MIRROR/platform-gitops/platform-skills/catalog"
 SKILLS="$HOME/.claude/skills"
@@ -47,6 +48,7 @@ if [ ! -d "$MIRROR/.git" ]; then
     git@github.com:mctlhq/mctl-gitops.git "$MIRROR" || { echo "  clone FAILED"; exit 1; }
   git -C "$MIRROR" sparse-checkout set --cone platform-gitops/platform-skills/catalog
   git -C "$MIRROR" checkout main || { echo "  checkout FAILED"; exit 1; }
+  FRESH=1
 fi
 
 BEFORE=$(git -C "$MIRROR" rev-parse HEAD)
@@ -57,6 +59,9 @@ if ! git -C "$MIRROR" fetch --quiet origin main; then
   exit 1
 fi
 git -C "$MIRROR" reset --quiet --hard origin/main || { echo "  reset FAILED"; exit 1; }
+# reset --hard не трогает неотслеживаемое; без clean случайный каталог под
+# catalog/ был бы слинкован в ~/.claude/skills навсегда.
+git -C "$MIRROR" clean -qfd -- platform-gitops/platform-skills/catalog
 AFTER=$(git -C "$MIRROR" rev-parse HEAD)
 [ "$BEFORE" = "$AFTER" ] && echo "  catalog unchanged at ${AFTER:0:8}" \
                          || echo "  catalog ${BEFORE:0:8} -> ${AFTER:0:8}"
@@ -77,6 +82,19 @@ for src in "$CATALOG"/*/; do
   fi
 done
 
+# Управляемые симлинки, которых больше нет в каталоге. Цель может быть ЖИВА --
+# например ссылка в старый рабочий чекаут на скилл, удалённый из main, -- поэтому
+# проверки на висячесть недостаточно. Признак "наш": цель лежит в каком-либо
+# platform-skills/catalog/, чем личные ссылки пользователя не являются.
+for dst in "$SKILLS"/*; do
+  [ -L "$dst" ] || continue
+  name=$(basename "$dst")
+  [ -d "$CATALOG/$name" ] && continue
+  case "$(readlink "$dst")" in
+    */platform-skills/catalog/*) rm "$dst"; echo "  removed $name (no longer in catalog)" ;;
+  esac
+done
+
 # Drop symlinks whose target is gone (skill deprecated/renamed upstream).
 for dst in "$SKILLS"/*; do
   [ -L "$dst" ] || continue
@@ -91,7 +109,7 @@ done
 # /tmp/review-watch.sh is generated from the skill body and caches across
 # sessions; a catalog change makes it stale, and its freshness predicate only
 # gets consulted when the skill is invoked. Drop it so it is regenerated.
-if [ "$BEFORE" != "$AFTER" ] && [ -f /tmp/review-watch.sh ]; then
+if { [ "$BEFORE" != "$AFTER" ] || [ "$FRESH" = "1" ]; } && [ -f /tmp/review-watch.sh ]; then
   rm -f /tmp/review-watch.sh && echo "  dropped stale /tmp/review-watch.sh"
 fi
 

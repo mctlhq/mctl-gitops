@@ -42,6 +42,7 @@ the mirror is pointless — `reset --hard` discards them.
 ### Install
 
 ```bash
+mkdir -p ~/.claude/scripts ~/Library/LaunchAgents
 cp scripts/workstation/sync-platform-skills.sh ~/.claude/scripts/
 cp scripts/workstation/com.mctlhq.skills-sync.plist ~/Library/LaunchAgents/
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.mctlhq.skills-sync.plist
