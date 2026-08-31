@@ -332,3 +332,6 @@ Decision-projection activities register as in-flight arbiter work alongside tick
 
 A compensating GitOps transaction re-acquires the repository mutex and re-reads the proposal before writing. It applies only while the provisional transaction ID, provisional status revision, expected head, and arbiter epoch are still current. If any intervening writer advanced proposal state, compensation records an auditable superseded no-op or recomputes from the newer snapshot; it never overwrites that writer. The compensation idempotency key includes both the original transaction ID and the expected provisional revision.
 
+## Provisional phase-resume correction
+
+The terminal projection activity is a resumable two-phase transaction. Its durable provisional record contains transaction ID, provisional revision, expected head, arbiter epoch, and phase. An activity retry first reads that record. If it is the retry's own exact provisional write, the activity resumes at post-commit GitHub/arbiter revalidation instead of attempting the initial CAS again. Only unrelated intervening state is superseded. Compensation retains the existing mutex/CAS fence and is idempotent, so a worker crash after the provisional commit cannot strand stale 'review-stuck' evidence or apply repair twice.
