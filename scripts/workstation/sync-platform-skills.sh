@@ -47,8 +47,13 @@ lock_age_seconds() {
 }
 if ! mkdir "$LOCK" 2>/dev/null; then
   STALE=""
-  if [ -f "$LOCK/pid" ]; then
-    kill -0 "$(cat "$LOCK/pid")" 2>/dev/null || STALE="pid $(cat "$LOCK/pid") мёртв"
+  HELD=$(cat "$LOCK/pid" 2>/dev/null)
+  if [ -n "$HELD" ]; then
+    kill -0 "$HELD" 2>/dev/null || STALE="pid $HELD мёртв"
+  elif [ -f "$LOCK/pid" ]; then
+    # Файл есть, но пуст: другой процесс ровно сейчас между созданием файла и
+    # записью pid. Это живой лок, а не осиротевший.
+    :
   elif [ "$(lock_age_seconds)" -gt 60 ]; then
     # Убитый между mkdir и записью pid оставлял лок без pid-файла, и он залипал
     # навсегда. Возраст различает это от нормального прогона, который окно между
@@ -68,8 +73,12 @@ if ! mkdir "$LOCK" 2>/dev/null; then
     echo "[$(date -u +%FT%TZ)] синк уже идёт -- выхожу"; exit 0
   fi
 fi
+# Метка владельца: если наш лок кто-то перехватил как стухший, мы не должны
+# снести уже чужой каталог своим trap'ом.
+OWNER="$$-$(date +%s)-$RANDOM"
+echo "$OWNER" > "$LOCK/owner"
 echo $$ > "$LOCK/pid"
-trap 'rm -rf "$LOCK"' EXIT
+trap '[ "$(cat "$LOCK/owner" 2>/dev/null)" = "$OWNER" ] && rm -rf "$LOCK"' EXIT
 
 echo "[$(date -u +%FT%TZ)] sync start"
 
@@ -107,7 +116,7 @@ AFTER=$(git -C "$MIRROR" rev-parse HEAD)
 [ "$BEFORE" = "$AFTER" ] && echo "  catalog unchanged at ${AFTER:0:8}" \
                          || echo "  catalog ${BEFORE:0:8} -> ${AFTER:0:8}"
 
-mkdir -p "$SKILLS"
+mkdir -p "$SKILLS" || { echo "  не удалось создать $SKILLS -- выхожу"; exit 1; }
 
 # Adopt every catalog skill. Only ever touch symlinks -- a real directory in
 # ~/.claude/skills is a hand-made local skill and is left strictly alone.
@@ -152,8 +161,16 @@ done
 # gets consulted when the skill is invoked. Drop it so it is regenerated.
 if [ "$(cat "$STATE" 2>/dev/null)" != "$AFTER" ]; then
   if [ -f /tmp/review-watch.sh ]; then
-    rm -f /tmp/review-watch.sh || { echo "  не смог удалить /tmp/review-watch.sh -- состояние не фиксирую"; exit 1; }
-    echo "  dropped stale /tmp/review-watch.sh"
+    if rm -f /tmp/review-watch.sh 2>/dev/null; then
+      echo "  dropped stale /tmp/review-watch.sh"
+    else
+      # /tmp -- 1777: файл может принадлежать другому пользователю, и тогда
+      # удалить его нельзя никогда. Состояние не фиксируем (повторим на
+      # следующем тике), но и прогон не роняем: симлинки уже сведены.
+      echo "  ВНИМАНИЕ: /tmp/review-watch.sh не удаляется (чужой владелец?) -- кеш остаётся протухшим"
+      echo "[$(date -u +%FT%TZ)] sync done"
+      exit 0
+    fi
   fi
   # Пишем состояние ТОЛЬКО после успешной инвалидации, поэтому прерванный
   # прогон приводит к повтору на следующем тике, а не к молчаливому пропуску.
