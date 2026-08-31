@@ -181,11 +181,25 @@ mkdir -p "$SKILLS" || { echo "  не удалось создать $SKILLS -- в
 # заявляет только mcp/codex/openclaw и содержит инструкции вида "выполни codex
 # mcp ...", бесполезные и сбивающие с толку в Claude Code. Линкуем только те,
 # что заявили claude.
-# Значение скалярного ключа верхнего уровня.
+# Значение скалярного ключа верхнего уровня, нормализованное: без хвостового
+# комментария и без обрамляющих кавычек. YAML тут разбирается ровно настолько,
+# насколько нужно для плоского metadata.yaml из семи ключей, который CI и так
+# валидирует через yaml.safe_load. Полноценный парсер означал бы зависимость от
+# python3 с PyYAML, а скрипт ходит под launchd и должен обходиться базовой
+# системой; блочные скаляры, якоря и вложенные структуры здесь не поддержаны
+# намеренно.
 meta_scalar() { # $1 = metadata.yaml, $2 = ключ
   awk -v k="$2" '
     index($0, k ":") == 1 {
-      sub("^" k ":[[:space:]]*", ""); sub(/[[:space:]]+$/, ""); print; exit
+      sub("^" k ":[[:space:]]*", "")
+      sub(/[[:space:]]+#.*$/, "")
+      sub(/[[:space:]]+$/, "")
+      q = sprintf("%c", 39)
+      if (length($0) >= 2 &&
+          ((substr($0, 1, 1) == "\"" && substr($0, length($0), 1) == "\"") ||
+           (substr($0, 1, 1) == q    && substr($0, length($0), 1) == q)))
+        $0 = substr($0, 2, length($0) - 2)
+      print; exit
     }' "$1"
 }
 
@@ -195,9 +209,16 @@ meta_scalar() { # $1 = metadata.yaml, $2 = ключ
 # попадал в выборку и засчитывался как рантайм. awk выходит ДО печати границы.
 meta_list() { # $1 = metadata.yaml, $2 = ключ
   awk -v k="$2" '
-    index($0, k ":") == 1 { inb = 1; sub("^" k ":[[:space:]]*", ""); if ($0 != "") print; next }
-    inb && /^[[:space:]]*-/ { print; next }
-    inb && /^[[:space:]]+[^[:space:]]/ { print; next }
+    function strip(line) {
+      # Комментарий -- и хвостовой, и занимающий всю строку. Без этого
+      # "runtimes: [codex] # not for claude" давал токен claude и скилл
+      # линковался бы вопреки декларации.
+      sub(/[[:space:]]+#.*$/, "", line); sub(/^[[:space:]]*#.*$/, "", line)
+      return line
+    }
+    index($0, k ":") == 1 { inb = 1; sub("^" k ":[[:space:]]*", ""); $0 = strip($0); if ($0 != "") print; next }
+    inb && /^[[:space:]]*-/ { print strip($0); next }
+    inb && /^[[:space:]]+[^[:space:]]/ { print strip($0); next }
     inb { exit }' "$1" \
   | tr -c 'A-Za-z0-9_-' '\n' | grep -v '^$'
 }
