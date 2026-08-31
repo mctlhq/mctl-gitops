@@ -22,17 +22,20 @@ Do NOT spawn an `Agent` for this. Sub-agent runtime has a strong bias toward the
 ## Bootstrap — write `/tmp/review-watch.sh` if missing or stale
 
 Before launching watchers, check that the script is in place AND current:
-`grep -qF "AGY_MARKER='<!-- agy-review -->'" /tmp/review-watch.sh` — if the file
-is missing or the grep fails, (re)write it via Bash heredoc (the entire script
-body).
+`grep -qF 'QUOTA_RE=' /tmp/review-watch.sh` — if the file is missing or the
+grep fails, (re)write it via Bash heredoc (the entire script body).
 
-The predicate matches the marker's **value**, not just the name `AGY_MARKER`.
-Checking the name was the bug: a stale `/tmp/review-watch.sh` from before
-2026-08-28 defines `AGY_MARKER` too — with the wrong value
-`<!-- agy-review-pilot -->` — so a name-only grep declared it current and the
-host kept running the broken watcher, silently missing every agy response,
-until someone deleted the file by hand. Any future change to the script body
-must move this predicate onto something the old version cannot satisfy.
+**The predicate must be something no older version can satisfy**, and it moves
+with every change to the script body. Two regressions taught this:
+
+- Before 2026-08-28 the predicate was the *name* `AGY_MARKER`, which stale
+  scripts also defined — with the wrong value `<!-- agy-review-pilot -->`. A
+  name-only grep declared them current, so the host kept running a watcher
+  that silently missed every agy response until someone deleted the file by
+  hand. Fixed by matching the marker's value instead.
+- On 2026-08-30 the predicate was still the AGY_MARKER value, so it happily
+  accepted a script with no quota handling at all — see below. It is now
+  `QUOTA_RE=`, which only the current body defines.
 
 ```bash
 #!/bin/bash
@@ -70,6 +73,24 @@ BOTFILTER='select(.user.login == "claude[bot]" or .user.login == "chatgpt-codex-
 # posting normally. On mctl-agent#105 that hid two real P2 findings, which
 # were only caught by checking `gh api .../issues/<N>/comments` by hand.
 AGY_MARKER='<!-- agy-review -->'
+
+# A quota/rate-limit notice is NOT a review. It has burned this watcher twice,
+# from opposite directions, so it is handled explicitly rather than left to the
+# generic comment counters:
+#
+#  - claude-review.yml posts its own exhaustion warning ("the Claude reviewer
+#    hit the shared usage limit...") as github-actions[bot], its workflow
+#    identity. That login is NOT in BOTFILTER, so the notice was invisible and
+#    the watcher polled out the full 30 min reporting "in progress" while the
+#    real (non-blocking) answer had already landed — mctl-api#115, 2026-07-30.
+#  - Codex posts "You have reached your Codex usage limits for code reviews"
+#    under its OWN login, which IS in BOTFILTER. That counts as a top-level
+#    issue comment, trips the hit gate, and — having no line-anchored findings
+#    — is then classified CLEAN. On mctl-agents#243 the watcher exited 14
+#    seconds after PR open reporting a clean review, while claude and agy had
+#    not started. The in-progress guard cannot help: quota text carries no
+#    "- [ ]" checkbox and no "Claude Code is working" marker.
+QUOTA_RE='hit (your|the shared) (usage )?limit|usage limit|rate.?limit|overloaded|insufficient.*quota|credit balance|reached your Codex usage limits'
 
 notify() {
   local title="$1" body="$2" sound="${3:-Glass}"
@@ -125,9 +146,17 @@ for i in $(seq 1 10); do
   # agy pilot reviewer — see AGY_MARKER note above. Independent of BOTFILTER
   # since its login collides with unrelated github-actions[bot] comments.
   A=$(gh api --paginate "repos/$REPO/issues/$PR/comments" --jq "[.[] | select(.user.login == \"github-actions[bot]\") | select(.body | contains(\"$AGY_MARKER\")) | select(.created_at > \"$TS\")] | length" 2>/dev/null || echo 0)
+  # Real issue comments = $I minus quota notices. This is the number the hit
+  # gate and the CLEAN heuristic use; $I is kept only for the log line, so a
+  # reader can see the difference at a glance.
+  IREAL=$(gh api --paginate "repos/$REPO/issues/$PR/comments" --jq "[.[] | $BOTFILTER | select(.created_at > \"$TS\") | select((.body | test(\"$QUOTA_RE\"; \"i\")) | not)] | length" 2>/dev/null || echo 0)
+  # Quota notices from ANY login — deliberately unfiltered, because the two
+  # known emitters are a BOTFILTER bot (codex) and a non-BOTFILTER one
+  # (github-actions[bot], i.e. claude-review.yml itself).
+  Q=$(gh api --paginate "repos/$REPO/issues/$PR/comments" --jq "[.[] | select(.created_at > \"$TS\") | select(.body | test(\"$QUOTA_RE\"; \"i\"))] | length" 2>/dev/null || echo 0)
   E=""
   [ -n "$ID" ] && E=$(gh api --paginate "repos/$REPO/issues/comments/$ID/reactions" --jq "[.[] | $BOTFILTER | select(.created_at > \"$TS\") | .content] | last" 2>/dev/null || echo "")
-  echo "[$(date -u +%FT%TZ)] tick $i: reviews=$R comments=$C issue_comments=$I agy_comments=$A reaction=$E"
+  echo "[$(date -u +%FT%TZ)] tick $i: reviews=$R comments=$C issue_comments=$I (real=$IREAL) agy_comments=$A quota_notices=$Q reaction=$E"
   # Fetch the latest bot issue-comment body up front so the hit gate can tell
   # claude-review.yml's in-progress checklist from a real verdict. The checklist
   # has UNCHECKED boxes ("- [ ]"); a finished verdict has only "- [x]", and codex
@@ -137,15 +166,15 @@ for i in $(seq 1 10); do
   # claude[bot]'s FIRST progress comment ("Claude Code is working…") has no
   # checkboxes at all, so match its marker text too (regression: false hit
   # on mctlhq/mctl-gitops#583, 2026-07-12).
-  ICBODY=$(gh api --paginate "repos/$REPO/issues/$PR/comments" --jq "[.[] | $BOTFILTER | select(.created_at > \"$TS\") | .body] | last // \"\"" 2>/dev/null || echo "")
+  ICBODY=$(gh api --paginate "repos/$REPO/issues/$PR/comments" --jq "[.[] | $BOTFILTER | select(.created_at > \"$TS\") | select((.body | test(\"$QUOTA_RE\"; \"i\")) | not) | .body] | last // \"\"" 2>/dev/null || echo "")
   IC_INPROGRESS=0
-  if [ "${I:-0}" -gt 0 ] && [ "${R:-0}" -eq 0 ] && [ "${C:-0}" -eq 0 ]; then
+  if [ "${IREAL:-0}" -gt 0 ] && [ "${R:-0}" -eq 0 ] && [ "${C:-0}" -eq 0 ]; then
     if printf '%s' "$ICBODY" | grep -qF -- '- [ ]' || printf '%s' "$ICBODY" | grep -qF -- 'Claude Code is working'; then
       IC_INPROGRESS=1
       echo "[$(date -u +%FT%TZ)] issue-comment is an in-progress checklist; still polling"
     fi
   fi
-  if [ "${R:-0}" -gt 0 ] || [ "${C:-0}" -gt 0 ] || { [ "${I:-0}" -gt 0 ] && [ "$IC_INPROGRESS" -eq 0 ]; } || [ "${A:-0}" -gt 0 ] || [ "$E" = '"+1"' ] || [ "$E" = "+1" ]; then
+  if [ "${R:-0}" -gt 0 ] || [ "${C:-0}" -gt 0 ] || { [ "${IREAL:-0}" -gt 0 ] && [ "$IC_INPROGRESS" -eq 0 ]; } || [ "${A:-0}" -gt 0 ] || [ "$E" = '"+1"' ] || [ "$E" = "+1" ]; then
     echo "[$(date -u +%FT%TZ)] hit; fetching details"
     {
       echo "status=responded"
@@ -153,7 +182,8 @@ for i in $(seq 1 10); do
       echo "found_at=$(date -u +%FT%TZ)"
       echo "review_count=$R"
       echo "comment_count=$C"
-      echo "issue_comment_count=$I"
+      echo "issue_comment_count=$IREAL"
+      echo "quota_notice_count=$Q"
       echo "agy_comment_count=$A"
       echo "reaction=$E"
       echo "---comments---"
@@ -161,7 +191,9 @@ for i in $(seq 1 10); do
       echo "---reviews---"
       gh api --paginate "repos/$REPO/pulls/$PR/reviews" --jq "[.[] | $BOTFILTER | select(.submitted_at > \"$TS\") | {user: .user.login, state, body, submitted_at}]"
       echo "---issue_comments---"
-      gh api --paginate "repos/$REPO/issues/$PR/comments" --jq "[.[] | $BOTFILTER | select(.created_at > \"$TS\") | {user: .user.login, created_at, body}]"
+      gh api --paginate "repos/$REPO/issues/$PR/comments" --jq "[.[] | $BOTFILTER | select(.created_at > \"$TS\") | select((.body | test(\"$QUOTA_RE\"; \"i\")) | not) | {user: .user.login, created_at, body}]"
+      echo "---quota_notices---"
+      gh api --paginate "repos/$REPO/issues/$PR/comments" --jq "[.[] | select(.created_at > \"$TS\") | select(.body | test(\"$QUOTA_RE\"; \"i\")) | {user: .user.login, created_at, body}]"
       echo "---agy_comments---"
       gh api --paginate "repos/$REPO/issues/$PR/comments" --jq "[.[] | select(.user.login == \"github-actions[bot]\") | select(.body | contains(\"$AGY_MARKER\")) | select(.created_at > \"$TS\") | {user: .user.login, created_at, body}]"
     } > "$RESULT"
@@ -173,19 +205,41 @@ for i in $(seq 1 10); do
     if { [ "$E" = '"+1"' ] || [ "$E" = "+1" ]; } && [ "${R:-0}" -eq 0 ] && [ "${C:-0}" -eq 0 ]; then
       CLEAN="1"
     fi
-    if [ "${I:-0}" -gt 0 ] && [ "${R:-0}" -eq 0 ] && [ "${C:-0}" -eq 0 ]; then
+    if [ "${IREAL:-0}" -gt 0 ] && [ "${R:-0}" -eq 0 ] && [ "${C:-0}" -eq 0 ]; then
       CLEAN="1"
     fi
     if [ "$CLEAN" = "1" ] && [ "${A:-0}" -eq 0 ]; then
       notify "review-watch [$REPO#$PR]" "clean review (no findings)" "Glass"
     else
-      TOTAL=$(( ${R:-0} + ${C:-0} + ${I:-0} + ${A:-0} ))
+      TOTAL=$(( ${R:-0} + ${C:-0} + ${IREAL:-0} + ${A:-0} ))
       notify "review-watch [$REPO#$PR]" "$TOTAL response(s) — read $RESULT" "Glass"
     fi
     exit 0
   fi
   [ "$i" -lt 10 ] && sleep 180
 done
+# A quota notice with no real signal after the full window is a DIFFERENT
+# outcome from silence: some bot was asked and answered "not now". Reported as
+# its own status so the reader does not mistake it for either a clean review or
+# a dead trigger.
+#
+# Note it does NOT short-circuit the polling loop. An earlier design exited on
+# the first quota tick; on mctl-agents#244 that would have quit at second ~15
+# and missed codex's real review — two P2 findings — posted 5 minutes AFTER its
+# own quota notice, plus claude and agy, which had not started. Waiting out the
+# window costs 30 min of background polling and nothing else.
+if [ "${Q:-0}" -gt 0 ]; then
+  {
+    echo "status=quota_exhausted"
+    echo "trigger_ts=$TS"
+    echo "quota_notice_count=$Q"
+    echo "---quota_notices---"
+    gh api --paginate "repos/$REPO/issues/$PR/comments" --jq "[.[] | select(.created_at > \"$TS\") | select(.body | test(\"$QUOTA_RE\"; \"i\")) | {user: .user.login, created_at, body}]"
+  } > "$RESULT"
+  echo "[$(date -u +%FT%TZ)] quota_exhausted"
+  notify "review-watch [$REPO#$PR]" "reviewer hit a usage limit — NOT reviewed" "Basso"
+  exit 0
+fi
 echo "status=timeout" > "$RESULT"
 echo "trigger_ts=$TS" >> "$RESULT"
 echo "[$(date -u +%FT%TZ)] timeout"
@@ -233,7 +287,13 @@ When the user later asks "did codex respond yet?" or similar, just `Read` the `.
 
 - If the file does not exist yet → watcher still polling. `Read /tmp/review-watch-<stem>-<N>.log` for current tick number to estimate.
 - If file contents start with `status=responded` → parse and report findings (Format A).
+- If `status=quota_exhausted` → Format E. A reviewer was triggered and answered
+  "not now"; the diff was never read.
 - If `status=timeout` → Format C.
+
+`quota_notice_count` can also be non-zero on a `status=responded` result: one
+bot was rate-limited while another reviewed normally. Say which, rather than
+reporting the PR as fully reviewed.
 
 ## Output formats (when reporting to the user)
 
@@ -271,6 +331,18 @@ One-line summary per finding: take the first **bold heading** (between `**`) fro
 
     [agy] <repo>#<N>: no significant issues found (pilot, non-blocking)
 
+  Format E — quota exhausted (a reviewer was triggered but hit a usage limit and
+  never read the diff):
+
+    [<bot>] <repo>#<N>: hit a usage limit — the diff was NOT reviewed
+    https://github.com/<repo>/pull/<N>
+    Trigger: <trigger_ts>
+
+  Never report this as clean. It is not a verdict, and it does not satisfy a
+  merge gate. Re-trigger later, or — if another reviewer covered the current
+  head — surface the trade-off to the user instead of deciding alone (the
+  merge-gate rule in global CLAUDE.md still nominally wants claude[bot]).
+
 ## Multiple PRs
 
 Single Bash call launching multiple `nohup` background processes is fine — each `&` detaches, each runs independently with its own result/log path.
@@ -304,3 +376,6 @@ If args are ambiguous, ask which PRs in one short AskUserQuestion before launchi
 1. **`Agent` + `Monitor` tool**: sub-agent runtime treats Monitor as fire-and-forget and exits in seconds without waiting. Always use detached shell instead.
 2. **Synchronous Bash in foreground**: blocks the user's session for up to 30 min, defeats the "background" goal. Always `nohup ... &` + `disown`.
 3. **Polling without baseline timestamp**: if you check `pulls/<N>/reviews` without filtering by `> $TRIGGER_TS`, you'll match codex's previous (pre-fixup) review and falsely report "responded" immediately. Always filter by the latest `@claude review` issue-comment timestamp.
+4. **Counting a quota notice as a review**: see `QUOTA_RE`. Codex's notice comes from its own login and otherwise sails straight through the hit gate and out the CLEAN branch. A quota notice is an answer about capacity, not about the diff.
+5. **Exiting on the first quota tick**: a bot that just reported a usage limit can still review minutes later — observed on mctl-agents#244, where codex posted the notice and then delivered two real P2s five minutes on. Keep polling; classify at the end.
+6. **Trusting the result file as the complete account of a PR's reviews**: the watcher exits at its first hit, so anything a second bot posts afterwards never appears in any result file. Before merging, always sweep `gh api repos/<owner>/<repo>/pulls/<N>/comments` and `.../issues/<N>/comments` unfiltered, full history.
