@@ -41,6 +41,29 @@ the mirror is pointless — `reset --hard` discards them.
 
 ### Install
 
+The script runs under launchd, where there is no TTY, so it sets
+`BatchMode=yes` on ssh. BatchMode disables *every* interactive prompt,
+host-key confirmation included, while `StrictHostKeyChecking` stays at its
+default `ask`. On a machine that has never talked to GitHub over ssh, that
+combination means every run — scheduled and manual alike — fails with
+`Host key verification failed` and the sync never starts.
+
+So confirm the host key once, interactively, before installing:
+
+```bash
+ssh -T git@github.com
+```
+
+Compare the fingerprint it shows against the ones GitHub publishes at
+<https://docs.github.com/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints>
+and accept only on a match. `Hi <user>! You've successfully authenticated`
+means both the host key and your key are in place.
+
+Do not paste `ssh-keyscan` output into `known_hosts` unverified, and do not
+set `StrictHostKeyChecking=accept-new` in the script: both trust whatever
+answers on the network at that moment, which is exactly the check being
+skipped here.
+
 ```bash
 mkdir -p ~/.claude/scripts ~/Library/LaunchAgents
 cp scripts/workstation/sync-platform-skills.sh ~/.claude/scripts/

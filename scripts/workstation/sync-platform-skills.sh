@@ -38,11 +38,21 @@ exec >>"$LOG" 2>&1
 # худшем случае один делает rm -rf зеркала, пока другой в нём checkout'ится.
 # mkdir атомарен; flock(1) на macOS нет.
 LOCK="$HOME/.claude/skills-sync.lock"
-# Потолок удержания лока. Прогон -- это fetch с ConnectTimeout 15 плюс reset и
-# clean, то есть секунды; час на порядки больше любого честного случая и сильно
-# больше интервала launchd (900 с), так что перехват по возрасту не может
-# увести лок у идущего прогона.
+# Потолок удержания используется ТОЛЬКО когда личность держателя установить не
+# удалось (см. holder_id ниже). Выселять по одному лишь возрасту нельзя: если
+# ноутбук проспал час посреди синка, часы уходят вперёд, а держатель жив и
+# продолжит работу после пробуждения.
 LOCK_MAX_AGE=3600
+# Личность процесса, а не только его номер: pid плюс время старта. kill -0
+# доказывает, что номер занят, но не что занят нами -- после SIGKILL или паники
+# ОС переиспользует номер под чужой долгоживущий процесс. Время старта их
+# различает, и, в отличие от возраста лока, не врёт после сна машины.
+holder_id() {
+  local st
+  st=$(ps -p "$1" -o lstart= 2>/dev/null) || return 1
+  [ -n "$st" ] || return 1
+  printf '%s %s' "$1" "$st"
+}
 # Возраст лока. stat(1) несовместим между BSD и GNU, поэтому пробуем оба; при
 # неудаче возвращаем 0, то есть "свежий" -- лучше пропустить прогон, чем увести
 # лок у живого процесса.
@@ -54,16 +64,23 @@ lock_age_seconds() {
 }
 if ! mkdir "$LOCK" 2>/dev/null; then
   STALE=""
-  HELD=$(cat "$LOCK/pid" 2>/dev/null)
+  # В файле лежит "<pid> <время старта>" -- ровно то, что вернул holder_id.
+  RECORDED=$(cat "$LOCK/pid" 2>/dev/null)
+  HELD=${RECORDED%% *}
   AGE=$(lock_age_seconds)
   if [ -n "$HELD" ] && kill -0 "$HELD" 2>/dev/null; then
-    # kill -0 доказывает, что pid занят, но не что занят именно нами. После
-    # SIGKILL или паники (EXIT-trap не отработал) ОС переиспользует номер под
-    # чужой долгоживущий процесс, и тогда проверка живости врёт вечно: лок
-    # никогда не забирается, синк молча не идёт больше никогда. Потолок
-    # возраста -- единственное, что отличает этот случай от честного прогона.
-    [ "$AGE" -gt "$LOCK_MAX_AGE" ] \
-      && STALE="удерживается ${AGE}s (> ${LOCK_MAX_AGE}s); pid $HELD, видимо, переиспользован"
+    CURRENT=$(holder_id "$HELD") || CURRENT=""
+    if [ -n "$CURRENT" ] && [ "$CURRENT" != "$RECORDED" ]; then
+      # Номер занят, но другим процессом: держателя убили, а pid переиспользован.
+      # Без этой ветки kill -0 врал бы вечно и синк молча не шёл бы никогда.
+      STALE="pid $HELD переиспользован (запуск не совпадает с записанным)"
+    elif [ -z "$CURRENT" ] && [ "$AGE" -gt "$LOCK_MAX_AGE" ]; then
+      # ps ничего не сказал -- личность не проверить. Только здесь возраст
+      # остаётся последним доводом.
+      STALE="удерживается ${AGE}s (> ${LOCK_MAX_AGE}s), личность держателя не проверить"
+    fi
+    # Личность совпала -- держатель honest-to-god жив, и никакой возраст его не
+    # выселяет: проспавший час ноутбук не повод отнимать лок у работающего.
   elif [ -n "$HELD" ]; then
     STALE="pid $HELD мёртв"
   elif [ "$AGE" -gt 60 ]; then
@@ -97,8 +114,19 @@ set -C
 if ! echo "$OWNER" > "$LOCK/owner" 2>/dev/null; then
   set +C; echo "  лок перехвачен, пока мы спали -- выхожу"; exit 0
 fi
+# pid тоже под noclobber. Уснуть можно и МЕЖДУ двумя записями: тогда наш owner
+# уже лежит, перехватчик снёс каталог и создал свой, и слепая запись pid
+# подменила бы его запись -- оба прогона считали бы лок своим и полезли бы в
+# один git-репозиторий.
+if ! holder_id "$$" > "$LOCK/pid" 2>/dev/null; then
+  set +C; echo "  лок перехвачен между записями -- выхожу"; exit 0
+fi
 set +C
-echo $$ > "$LOCK/pid"
+# Перехватчик мог успеть создать каталог заново уже после нашей записи owner,
+# и тогда обе записи выше легли в чужой лок. Владелец -- последнее слово.
+if [ "$(cat "$LOCK/owner" 2>/dev/null)" != "$OWNER" ]; then
+  echo "  лок перехвачен, владелец сменился -- выхожу"; exit 0
+fi
 trap '[ "$(cat "$LOCK/owner" 2>/dev/null)" = "$OWNER" ] && rm -rf "$LOCK"' EXIT
 
 echo "[$(date -u +%FT%TZ)] sync start"
@@ -131,7 +159,12 @@ fi
 BEFORE=$(git -C "$MIRROR" rev-parse HEAD)
 # Hard reset rather than pull: the mirror is a read-only view of main, so local
 # divergence (a stray edit, an interrupted fetch) must never block the sync.
-if ! git -C "$MIRROR" fetch --quiet origin main; then
+# Явный refspec, а не "origin main": обновление origin/main при сокращённой
+# форме опирается на настроенный remote.origin.fetch. Если он потерян или
+# изменён, fetch всё равно возвращает 0, но трогает только FETCH_HEAD -- и
+# следующий reset --hard origin/main бесконечно возвращает старый коммит, молча
+# и без единой ошибки в логе.
+if ! git -C "$MIRROR" fetch --quiet origin +refs/heads/main:refs/remotes/origin/main; then
   echo "  fetch FAILED (offline? ssh key?) -- keeping existing content"
   exit 1
 fi
