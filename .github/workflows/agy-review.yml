@@ -13,17 +13,13 @@ jobs:
       contents: read
       pull-requests: write
     with:
-      blocking: true
+      # Staged rollout: Agy evidence is reviewed manually until proposal #240
+      # delivers exact-head markers, backfill, and repository-level gating.
+      blocking: false
       conventions: |
-        Focus on: GitOps correctness, Kubernetes/Argo CD manifest safety,
-        immutable and reviewed workflow pins, proposal requirements/design/tasks
+        Focus on GitOps correctness, Kubernetes and Argo CD manifest safety,
+        immutable reviewed workflow pins, proposal requirements/design/tasks
         consistency, idempotent state transitions, ownership and head-SHA
         fencing, bounded retry behavior, and tests for changed executable
-        configuration. For documentation-only proposal changes, report only
-        concrete contradictions or missing acceptance-contract behavior; do not
-        propose unrelated architecture or broaden the issue scope.
-        Proposal files in this PR specify future implementation. Do not report
-        the absence of tasks described by a proposal (including the #240
-        workflow_dispatch backfill path) as a defect in this PR unless the PR
-        explicitly claims to implement that task. Review the added caller only
-        for its present purpose: pull_request-triggered blocking review.
+        configuration. For documentation-only changes, report concrete
+        contradictions or missing acceptance-contract behavior.
