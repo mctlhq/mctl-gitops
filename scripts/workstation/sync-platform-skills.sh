@@ -181,19 +181,44 @@ mkdir -p "$SKILLS" || { echo "  не удалось создать $SKILLS -- в
 # заявляет только mcp/codex/openclaw и содержит инструкции вида "выполни codex
 # mcp ...", бесполезные и сбивающие с толку в Claude Code. Линкуем только те,
 # что заявили claude.
+# Значение скалярного ключа верхнего уровня.
+meta_scalar() { # $1 = metadata.yaml, $2 = ключ
+  awk -v k="$2" '
+    index($0, k ":") == 1 {
+      sub("^" k ":[[:space:]]*", ""); sub(/[[:space:]]+$/, ""); print; exit
+    }' "$1"
+}
+
+# Элементы списка верхнего уровня -- и потокового ("[a, b]"), и блочного ("- a"),
+# по одному на строку. Диапазон sed'а здесь не годится: он ВКЛЮЧАЕТ строку,
+# оборвавшую диапазон, так что идущий следом "description: ... claude ..."
+# попадал в выборку и засчитывался как рантайм. awk выходит ДО печати границы.
+meta_list() { # $1 = metadata.yaml, $2 = ключ
+  awk -v k="$2" '
+    index($0, k ":") == 1 { inb = 1; sub("^" k ":[[:space:]]*", ""); if ($0 != "") print; next }
+    inb && /^[[:space:]]*-/ { print; next }
+    inb && /^[[:space:]]+[^[:space:]]/ { print; next }
+    inb { exit }' "$1" \
+  | tr -c 'A-Za-z0-9_-' '\n' | grep -v '^$'
+}
+
 supports_claude() { # $1 = каталог скилла
-  local m="$1/metadata.yaml" section
+  local m="$1/metadata.yaml" st rt
   # Нет metadata.yaml -- линкуем: отсутствие декларации не повод прятать скилл,
   # иначе новый скилл молча не доехал бы до сессии.
   [ -f "$m" ] || return 0
-  # Список runtimes -- либо блочный ("- claude"), либо потоковый ("[claude, ...]").
-  # sed вырезает секцию до следующего ключа верхнего уровня.
-  section=$(sed -n '/^runtimes:/,/^[a-zA-Z_]/p' "$m")
+  # Пригодным платформа считает только active: validate-platform-skills.py
+  # отказывается привязывать draft и deprecated к тенантам и ролям, и рабочая
+  # станция не должна быть дырой в этом правиле.
+  st=$(meta_scalar "$m" status)
+  [ -z "$st" ] || [ "$st" = "active" ] || return 1
+  rt=$(meta_list "$m" runtimes)
   # Секции нет вовсе -- тот же случай, что и отсутствующий файл: не прячем.
-  [ -n "$section" ] || return 0
-  # Границы слова обязательны: "claude-next" -- другой рантайм, а слово claude
-  # в description не должно засчитываться (потому и режем секцию заранее).
-  printf '%s' "$section" | grep -Eq '(^|[][:space:],[])claude([[:space:],]|$)'
+  [ -n "$rt" ] || return 0
+  # Сравнение с целым токеном, а не поиск подстроки: "[mcp, claude]" даёт токен
+  # claude (скобка -- разделитель), а "claude-next" остаётся одним токеном и не
+  # засчитывается.
+  printf '%s\n' "$rt" | grep -qx claude
 }
 
 # Adopt every catalog skill. Only ever touch symlinks -- a real directory in
