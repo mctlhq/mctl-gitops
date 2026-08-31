@@ -328,3 +328,7 @@ Decision projections use an occurrence-aware identity `proposal:epoch:cycle:deci
 
 Decision-projection activities register as in-flight arbiter work alongside ticks, submitters, and terminal writers. Takeover and rollback drain them before ownership publication or component removal. Rollback tests include a projection commit already in flight and prove that no projection can land after the compatible deployment unit is disabled.
 
+## Compensating-write compare-and-set correction
+
+A compensating GitOps transaction re-acquires the repository mutex and re-reads the proposal before writing. It applies only while the provisional transaction ID, provisional status revision, expected head, and arbiter epoch are still current. If any intervening writer advanced proposal state, compensation records an auditable superseded no-op or recomputes from the newer snapshot; it never overwrites that writer. The compensation idempotency key includes both the original transaction ID and the expected provisional revision.
+
