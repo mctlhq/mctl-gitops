@@ -1,5 +1,5 @@
-status: accepted
-updated_at: '2026-08-31T22:04:23Z'
+status: implemented
+updated_at: '2026-08-31T22:17:03Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -9,5 +9,11 @@ source:
 control:
   requires_human_approval: true
 approval:
-  approved_by: 'mashkovd'
+  approved_by: mashkovd
   approved_at: '2026-08-31T22:04:23Z'
+attempt:
+  id: 16fe90fc-4a40-459c-97cc-28b6bf0d0bf0
+  started_at: '2026-08-31T22:06:40Z'
+  expires_at: '2026-09-01T00:16:40Z'
+  finished_at: '2026-08-31T22:17:03Z'
+pr: https://github.com/mctlhq/mctl-web/pull/76
