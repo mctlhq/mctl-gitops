@@ -195,3 +195,9 @@ without an operator having to notice and re-trigger it by hand.
 - Decision-projection idempotency SHALL include reason and durable occurrence/attempt, or use an equivalent compare-and-update transaction, so repeated same-cycle skips/failures retain current counters and next-tick evidence.
 - The arbiter SHALL register decision-projection writers as in-flight work. Takeover and rollback SHALL drain them together with ticks, submitters, and terminal writers before ownership publication or coordinated component removal.
 
+## Compensating-write CAS correction
+
+- A compensating GitOps transaction SHALL re-acquire the repository mutex and compare the original provisional transaction ID, provisional status revision, expected head, and arbiter epoch before writing.
+- If an intervening writer advanced proposal state, compensation SHALL no-op with superseded evidence or recompute from the newer snapshot; it SHALL NOT overwrite the newer state.
+- Compensation idempotency SHALL bind the original transaction and expected provisional revision. Tests SHALL cover an unrelated serialized status write between provisional commit and compensation.
+
