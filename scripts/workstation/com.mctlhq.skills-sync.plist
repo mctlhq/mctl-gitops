@@ -7,7 +7,7 @@
   <array>
     <string>/bin/bash</string>
     <string>-lc</string>
-    <string>$HOME/.claude/scripts/sync-platform-skills.sh</string>
+    <string>&quot;$HOME/.claude/scripts/sync-platform-skills.sh&quot;</string>
   </array>
   <key>StartInterval</key><integer>900</integer>
   <key>RunAtLoad</key><true/>

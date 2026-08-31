@@ -16,6 +16,11 @@ shopt -s nullglob   # пустой каталог не должен давать
 
 
 FRESH=0   # свежесозданное зеркало считаем сменой каталога (см. инвалидацию кеша)
+# Под launchd нет TTY: запрос пароля к ключу или неизвестный host key повесили бы
+# fetch навсегда, причём с захваченным локом. Пусть лучше сразу падает.
+export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes}"
+
+REMOTE="git@github.com:mctlhq/mctl-gitops.git"
 MIRROR="$HOME/.claude/skills-catalog"
 CATALOG="$MIRROR/platform-gitops/platform-skills/catalog"
 SKILLS="$HOME/.claude/skills"
@@ -32,15 +37,21 @@ if ! mkdir "$LOCK" 2>/dev/null; then
   STALE=""
   if [ -f "$LOCK/pid" ]; then
     kill -0 "$(cat "$LOCK/pid")" 2>/dev/null || STALE="pid $(cat "$LOCK/pid") мёртв"
-  elif [ -n "$(find "$LOCK" -maxdepth 0 -mmin +5 2>/dev/null)" ]; then
+  elif [ -n "$(find "$LOCK" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
     # Убитый между mkdir и записью pid оставлял лок без pid-файла, и он залипал
     # навсегда. Возраст различает это от нормального прогона, который окно между
     # mkdir и записью проходит за микросекунды, а сам живёт секунды.
-    STALE="без pid-файла и старше 5 мин"
+    STALE="без pid-файла и старше минуты"
   fi
   if [ -n "$STALE" ]; then
+    # Два прогона могут одновременно счесть лок стухшим; без атомарного шага
+    # второй снёс бы уже созданный локом первого каталог. Переименование
+    # выигрывает ровно один процесс.
     echo "[$(date -u +%FT%TZ)] снимаю осиротевший лок ($STALE)"
-    rm -rf "$LOCK"; mkdir "$LOCK" 2>/dev/null || { echo "  лок занят -- выхожу"; exit 0; }
+    TAKEN="$LOCK.stale.$$"
+    mv "$LOCK" "$TAKEN" 2>/dev/null || { echo "  перехват достался другому прогону -- выхожу"; exit 0; }
+    rm -rf "$TAKEN"
+    mkdir "$LOCK" 2>/dev/null || { echo "  лок занят -- выхожу"; exit 0; }
   else
     echo "[$(date -u +%FT%TZ)] синк уже идёт -- выхожу"; exit 0
   fi
@@ -50,11 +61,20 @@ trap 'rm -rf "$LOCK"' EXIT
 
 echo "[$(date -u +%FT%TZ)] sync start"
 
-if [ ! -d "$MIRROR/.git" ]; then
-  echo "  mirror missing at $MIRROR -- recreating"
+MIRROR_OK=0
+if [ -d "$MIRROR/.git" ] \
+   && git -C "$MIRROR" rev-parse --verify --quiet HEAD >/dev/null 2>&1 \
+   && [ "$(git -C "$MIRROR" remote get-url origin 2>/dev/null)" = "$REMOTE" ]; then
+  MIRROR_OK=1
+fi
+# Клон, оборванный после создания .git, но до настройки remote/ref'ов, иначе
+# считался бы валидным зеркалом вечно: fetch падал бы каждый раз, а само
+# зеркало никогда не пересоздавалось.
+if [ "$MIRROR_OK" = "0" ]; then
+  echo "  зеркало отсутствует или непригодно ($MIRROR) -- пересоздаю"
   rm -rf "$MIRROR"
   git clone --filter=blob:none --no-checkout --single-branch --branch main \
-    git@github.com:mctlhq/mctl-gitops.git "$MIRROR" || { echo "  clone FAILED"; exit 1; }
+    "$REMOTE" "$MIRROR" || { echo "  clone FAILED"; exit 1; }
   git -C "$MIRROR" sparse-checkout set --cone platform-gitops/platform-skills/catalog
   git -C "$MIRROR" checkout main || { echo "  checkout FAILED"; exit 1; }
   FRESH=1
@@ -69,8 +89,9 @@ if ! git -C "$MIRROR" fetch --quiet origin main; then
 fi
 git -C "$MIRROR" reset --quiet --hard origin/main || { echo "  reset FAILED"; exit 1; }
 # reset --hard не трогает неотслеживаемое; без clean случайный каталог под
-# catalog/ был бы слинкован в ~/.claude/skills навсегда.
-git -C "$MIRROR" clean -qfd -- platform-gitops/platform-skills/catalog
+# catalog/ был бы слинкован в ~/.claude/skills навсегда. -x нужен потому, что
+# корневой .gitignore прячет имена вроде __pycache__/ и packer_cache/.
+git -C "$MIRROR" clean -qxfd -- platform-gitops/platform-skills/catalog
 AFTER=$(git -C "$MIRROR" rev-parse HEAD)
 [ "$BEFORE" = "$AFTER" ] && echo "  catalog unchanged at ${AFTER:0:8}" \
                          || echo "  catalog ${BEFORE:0:8} -> ${AFTER:0:8}"
