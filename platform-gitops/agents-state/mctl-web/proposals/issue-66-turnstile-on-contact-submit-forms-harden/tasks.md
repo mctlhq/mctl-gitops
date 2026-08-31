@@ -51,18 +51,30 @@
       preserving today's most-specific-error-first behavior).
 
 - [ ] 7. Add `/api/github/check-team` to `RATE_LIMITS`
-      (e.g. `{ max: 20, windowSec: 60 }`) and add Turnstile verification
-      via a `?turnstile_token=` query param, sourced once per form session
-      on the frontend (depends on 4) — DoD: `handleCheckTeam` rejects
-      missing/invalid Turnstile tokens the same way contact/submit do;
-      rate limit entry present and exercised by a test.
+      (e.g. `{ max: 20, windowSec: 60 }`). **No Turnstile on this
+      endpoint** — see operator decisions 1-2: it is identity-gated
+      instead, and a challenge on every debounced keystroke is bad UX.
+      — DoD: rate limit entry present and exercised by a test.
 
-- [ ] 8. Change `handleCheckTeam`'s response to return `{available: true}`
-      uniformly (200) for both Backstage-exists and Backstage-404 cases,
-      once format validation + Turnstile + rate-limit checks pass; keep
-      500 for genuine Backstage/config errors — DoD: response body and
-      status code are identical for a known-existing tenant name and an
-      unused one, verified by a test that stubs both Backstage outcomes.
+- [ ] 8. Gate `handleCheckTeam` on the existing HMAC identity: require
+      `login` and `sig` (query params, or the same `github_auth` shape the
+      submit endpoint uses) and verify with
+      `hmacVerify(login, sig, env.GITHUB_OAUTH_HMAC_KEY)`, exactly as
+      `handleFormSubmit` does at `cloudflare-worker/index.js:785-789`.
+      — DoD:
+      * verified caller → today's truthful answer, unchanged
+        (`{available:false}` for an existing tenant, `{available:true}`
+        for a free name);
+      * missing or invalid signature → **401**, one fixed body, identical
+        for an existing and a non-existing name;
+      * the 401 body must not vary with the queried name in any way —
+        no echo of the name, no length-dependent content;
+      * within each other failure class the response is likewise
+        name-independent: rate limit stays **429 + Retry-After**, genuine
+        Backstage/config failures stay **500**. Do NOT collapse these
+        classes into one another — a caller still has to be able to tell
+        "reauthenticate" from "back off" from "operator outage", and none
+        of those distinctions reveals whether the name exists.
 
 - [ ] 9. Add a `useTurnstile` composable
       (`app/composables/useTurnstile.ts`) that injects
@@ -83,10 +95,12 @@
 
 - [ ] 11. Wire the Turnstile widget into `RequestAccessForm.vue` and
       thread the token through `useApi.ts`'s `submitAccessRequest` payload
-      (depends on 9) — DoD: same as 10, for the request-access form;
-      `useTeamValidation.ts`'s debounced `checkAvailability` call also
-      passes the current token as `?turnstile_token=` when calling
-      check-team.
+      (depends on 9) — DoD: same as 10, for the request-access form.
+      `useTeamValidation.ts` does **not** send a Turnstile token; instead
+      it sends the signed identity (`login` + `sig` from `useAuth`) and
+      skips the call entirely when the user is not signed in, showing
+      "sign in with GitHub to check availability" in the field rather than
+      failing silently.
 
 - [ ] 12. Update `useApi.ts` to accept and send `turnstile_token` in both
       `submitAccessRequest` and `submitContactForm` payloads (depends on
@@ -131,11 +145,16 @@
       behavior) even with a valid Turnstile token, confirming check order
       from task 6's DoD.
 
-- [ ] T4. `handleCheckTeam` uniform-response test: stub Backstage to
-      return 200 for name A and 404 for name B; assert both produce
-      identical `{available: true}` 200 responses once Turnstile/rate-limit
-      pass; stub a Backstage 500 and assert the endpoint still returns 500
-      (errors are not silently swallowed into a false "available").
+- [ ] T4. `handleCheckTeam` identity-gate and non-disclosure tests:
+      * verified `login`+`sig`: stub Backstage 200 for name A and 404 for
+        name B, assert the truthful `{available:false}` / `{available:true}`
+        answers — the feature still works for signed-in users;
+      * missing signature, and invalid signature: assert 401 with a body
+        byte-identical for an existing and a non-existing name;
+      * stub a Backstage 500 and assert 500 still surfaces (errors are not
+        swallowed into a false "available");
+      * assert none of the failure responses echo or vary with the queried
+        name.
 
 - [ ] T5. Rate-limit test for `/api/github/check-team`: drive
       `checkRateLimit` (already exported-testable pattern, or via the
@@ -194,9 +213,16 @@ answers to them are inconsistent with each other, so read them together.
    at OAuth callback (`index.js:588`). So:
    - `check-team` requires the same `login` + `sig` pair and verifies it the
      same way. Verified callers get the truthful answer they get today.
-   - Unverified callers get a single uniform response that reveals nothing,
-     identical for existing and non-existing names, and identical to the
-     rate-limited and misconfigured cases.
+   - Unverified callers get a single uniform 401 that reveals nothing —
+     byte-identical for existing and non-existing names.
+   - Uniformity is required *within* each failure class, not across them.
+     Rate limiting keeps its 429 + Retry-After and genuine server errors
+     keep their 500: a caller still has to be able to tell "reauthenticate"
+     from "back off" from "operator outage", and none of those distinctions
+     says anything about whether the queried name exists. (An earlier draft
+     of this decision asked for one response across all classes; that was
+     wrong and would have made the endpoint undebuggable for no privacy
+     gain.)
    - Anonymous enumeration is then closed completely rather than traded for
      a broken feature.
 
@@ -241,9 +267,16 @@ Sequencing — this one can take the public site down if ignored:
    the frontend. Operator prerequisite, ahead of the PR: create the widget,
    put the secret, then merge.
 
-6. **The sitekey is public** — it belongs in `[vars]` in `wrangler.toml` or
-   the frontend config, committed, not in a secret store. Do not
-   accidentally treat it as sensitive and add a second provisioning step.
+6. **The sitekey is public and belongs to the frontend build, not the
+   Worker.** Follow the proposal's task 3 as written:
+   `NUXT_PUBLIC_TURNSTILE_SITE_KEY` in `.env.example` and exposed through
+   `nuxt.config.ts`'s `runtimeConfig.public`. An earlier draft of this
+   decision also offered `[vars]` in `wrangler.toml` as an alternative —
+   that is wrong: Wrangler vars reach only the `mctl-landing-form` Worker,
+   and the Worker consumes only the *secret*. The sitekey put there would
+   never reach the prerendered browser bundle, the widget would never
+   render, no token would be issued, and the fail-closed endpoints would
+   reject every submission. Commit it; do not treat it as sensitive.
 
 Out of scope, confirmed, with the follow-up filed rather than implied:
 
