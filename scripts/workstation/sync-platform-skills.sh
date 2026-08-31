@@ -15,7 +15,6 @@ set -uo pipefail
 shopt -s nullglob   # пустой каталог не должен давать литерал "*" в цикле
 
 
-FRESH=0   # свежесозданное зеркало считаем сменой каталога (см. инвалидацию кеша)
 # Под launchd нет TTY: запрос пароля к ключу или неизвестный host key повесили бы
 # fetch навсегда, причём с захваченным локом. Пусть лучше сразу падает.
 export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes}"
@@ -25,6 +24,10 @@ MIRROR="$HOME/.claude/skills-catalog"
 CATALOG="$MIRROR/platform-gitops/platform-skills/catalog"
 SKILLS="$HOME/.claude/skills"
 LOG="$HOME/.claude/skills-sync.log"
+# Коммит, для которого реконсиляция ДОШЛА ДО КОНЦА. Флага в памяти не хватало:
+# прогон, убитый после ресета зеркала, но до инвалидации кеша, оставлял
+# следующему прогону BEFORE == AFTER, и протухший watcher жил дальше.
+STATE="$HOME/.claude/skills-sync.state"
 
 exec >>"$LOG" 2>&1
 
@@ -86,7 +89,6 @@ if [ "$MIRROR_OK" = "0" ]; then
     "$REMOTE" "$MIRROR" || { echo "  clone FAILED"; exit 1; }
   git -C "$MIRROR" sparse-checkout set --cone platform-gitops/platform-skills/catalog
   git -C "$MIRROR" checkout main || { echo "  checkout FAILED"; exit 1; }
-  FRESH=1
 fi
 
 BEFORE=$(git -C "$MIRROR" rev-parse HEAD)
@@ -148,8 +150,14 @@ done
 # /tmp/review-watch.sh is generated from the skill body and caches across
 # sessions; a catalog change makes it stale, and its freshness predicate only
 # gets consulted when the skill is invoked. Drop it so it is regenerated.
-if { [ "$BEFORE" != "$AFTER" ] || [ "$FRESH" = "1" ]; } && [ -f /tmp/review-watch.sh ]; then
-  rm -f /tmp/review-watch.sh && echo "  dropped stale /tmp/review-watch.sh"
+if [ "$(cat "$STATE" 2>/dev/null)" != "$AFTER" ]; then
+  if [ -f /tmp/review-watch.sh ]; then
+    rm -f /tmp/review-watch.sh || { echo "  не смог удалить /tmp/review-watch.sh -- состояние не фиксирую"; exit 1; }
+    echo "  dropped stale /tmp/review-watch.sh"
+  fi
+  # Пишем состояние ТОЛЬКО после успешной инвалидации, поэтому прерванный
+  # прогон приводит к повтору на следующем тике, а не к молчаливому пропуску.
+  echo "$AFTER" > "$STATE"
 fi
 
 echo "[$(date -u +%FT%TZ)] sync done"
