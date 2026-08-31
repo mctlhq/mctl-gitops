@@ -26,10 +26,6 @@ MIRROR="$HOME/.claude/skills-catalog"
 CATALOG="$MIRROR/platform-gitops/platform-skills/catalog"
 SKILLS="$HOME/.claude/skills"
 LOG="$HOME/.claude/skills-sync.log"
-# Коммит, для которого реконсиляция ДОШЛА ДО КОНЦА. Флага в памяти не хватало:
-# прогон, убитый после ресета зеркала, но до инвалидации кеша, оставлял
-# следующему прогону BEFORE == AFTER, и протухший watcher жил дальше.
-STATE="$HOME/.claude/skills-sync.state"
 
 exec >>"$LOG" 2>&1
 
@@ -180,11 +176,40 @@ AFTER=$(git -C "$MIRROR" rev-parse HEAD)
 
 mkdir -p "$SKILLS" || { echo "  не удалось создать $SKILLS -- выхожу"; exit 1; }
 
+# Каталог общий для нескольких клиентов, и metadata.yaml перечисляет, какие из
+# них скилл поддерживает. Часть скиллов (mctl-platform, argocd-health-remediation)
+# заявляет только mcp/codex/openclaw и содержит инструкции вида "выполни codex
+# mcp ...", бесполезные и сбивающие с толку в Claude Code. Линкуем только те,
+# что заявили claude.
+supports_claude() { # $1 = каталог скилла
+  local m="$1/metadata.yaml" section
+  # Нет metadata.yaml -- линкуем: отсутствие декларации не повод прятать скилл,
+  # иначе новый скилл молча не доехал бы до сессии.
+  [ -f "$m" ] || return 0
+  # Список runtimes -- либо блочный ("- claude"), либо потоковый ("[claude, ...]").
+  # sed вырезает секцию до следующего ключа верхнего уровня.
+  section=$(sed -n '/^runtimes:/,/^[a-zA-Z_]/p' "$m")
+  # Секции нет вовсе -- тот же случай, что и отсутствующий файл: не прячем.
+  [ -n "$section" ] || return 0
+  # Границы слова обязательны: "claude-next" -- другой рантайм, а слово claude
+  # в description не должно засчитываться (потому и режем секцию заранее).
+  printf '%s' "$section" | grep -Eq '(^|[][:space:],[])claude([[:space:],]|$)'
+}
+
 # Adopt every catalog skill. Only ever touch symlinks -- a real directory in
 # ~/.claude/skills is a hand-made local skill and is left strictly alone.
 for src in "$CATALOG"/*/; do
   name=$(basename "$src")
   dst="$SKILLS/$name"
+  if ! supports_claude "${src%/}"; then
+    # Ссылка могла быть создана раньше, до фильтра или до правки metadata.yaml.
+    if [ -L "$dst" ]; then
+      case "$(readlink "$dst")" in
+        */platform-skills/catalog/*) rm "$dst"; echo "  removed $name (не поддерживает claude)" ;;
+      esac
+    fi
+    continue
+  fi
   if [ -L "$dst" ]; then
     [ "$(readlink "$dst")" = "${src%/}" ] || { ln -sfn "${src%/}" "$dst"; echo "  repointed $name"; }
   elif [ -e "$dst" ]; then
@@ -221,22 +246,19 @@ done
 # /tmp/review-watch.sh is generated from the skill body and caches across
 # sessions; a catalog change makes it stale, and its freshness predicate only
 # gets consulted when the skill is invoked. Drop it so it is regenerated.
-if [ "$(cat "$STATE" 2>/dev/null)" != "$AFTER" ]; then
-  if [ -f /tmp/review-watch.sh ]; then
-    if rm -f /tmp/review-watch.sh 2>/dev/null; then
-      echo "  dropped stale /tmp/review-watch.sh"
-    else
-      # /tmp -- 1777: файл может принадлежать другому пользователю, и тогда
-      # удалить его нельзя никогда. Состояние не фиксируем (повторим на
-      # следующем тике), но и прогон не роняем: симлинки уже сведены.
-      echo "  ВНИМАНИЕ: /tmp/review-watch.sh не удаляется (чужой владелец?) -- кеш остаётся протухшим"
-      echo "[$(date -u +%FT%TZ)] sync done"
-      exit 0
-    fi
+# Удаляем БЕЗУСЛОВНО, а не только при смене коммита. Сессия, загрузившая старый
+# скилл до синка, может пересоздать старый кеш уже ПОСЛЕ него; при сверке с
+# сохранённым состоянием каждый следующий тик видел бы "коммит не менялся" и
+# пропускал инвалидацию, а протухший watcher жил бы до следующего коммита в
+# каталог. Удаление дешёвое: скилл пишет файл заново при первом же обращении, а
+# уже запущенный watcher держит открытый inode и снятия ссылки не замечает.
+if [ -f /tmp/review-watch.sh ]; then
+  if rm -f /tmp/review-watch.sh 2>/dev/null; then
+    echo "  dropped cached /tmp/review-watch.sh"
+  else
+    # /tmp -- 1777: файл может принадлежать другому пользователю, и тогда
+    # удалить его нельзя никогда. Прогон не роняем: симлинки уже сведены.
+    echo "  ВНИМАНИЕ: /tmp/review-watch.sh не удаляется (чужой владелец?) -- кеш остаётся протухшим"
   fi
-  # Пишем состояние ТОЛЬКО после успешной инвалидации, поэтому прерванный
-  # прогон приводит к повтору на следующем тике, а не к молчаливому пропуску.
-  echo "$AFTER" > "$STATE"
 fi
-
 echo "[$(date -u +%FT%TZ)] sync done"
