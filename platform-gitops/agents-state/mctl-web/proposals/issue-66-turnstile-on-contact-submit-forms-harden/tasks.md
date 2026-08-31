@@ -96,6 +96,16 @@
       * verified caller → today's truthful answer, unchanged
         (`{available:false}` for an existing tenant, `{available:true}`
         for a free name);
+      * **every malformed input reaches that same 401, never a 500.**
+        Parse defensively: an unparsable JSON body, a body with no
+        `github_auth` key, and a `github_auth` that is not an object or
+        lacks `login`/`sig` must all be handled before any property
+        access. Following this task's own `hmacVerify(github_auth.login,
+        …)` wording literally on `{"name":"test"}` throws a TypeError,
+        which the Workers runtime turns into a 500 — that both breaks the
+        uniformity requirement below and hands back a status-code side
+        channel, so a bare `request.json()` and a bare destructure are
+        both wrong here. Wrap the parse, check the shape, then verify;
       * missing or invalid signature → **401**, one fixed body, identical
         for an existing and a non-existing name.
         **This is a deliberate divergence from `handleFormSubmit`, which
@@ -132,18 +142,26 @@
       unchanged except for the added `turnstile_token` field in the
       payload sent by `useApi.ts`'s `submitContactForm`; a visible
       Turnstile widget renders in the form per the "gate, don't replace"
-      contract. **The `onSubmit` error path must call the composable's
-      `reset()` whenever the request reached the backend and failed
-      (any non-2xx, and any thrown network error after send).** Turnstile
-      tokens are single-use: without a reset, one Telegram-side 500 leaves
-      the user holding a spent token, and every retry comes back 400
+      contract. **`onSubmit` must call the composable's `reset()` after
+      **every** request that may have reached siteverify — success and
+      failure alike, in a `finally`, not only on the error path.**
+      Turnstile tokens are single-use and siteverify consumes one on a
+      *successful* verification too, so a 2xx leaves a spent token cached
+      in the composable exactly as a 500 does; the contact form stays
+      mounted after a successful send, so the next submission would reuse
+      it and come back `timeout-or-duplicate`. (Unmounting or fully
+      clearing the form after success satisfies this too, but `finally`
+      is the smaller change and does not depend on the form's teardown
+      behaviour.) Without it, one Telegram-side 500 — or one successful
+      send followed by a second message — leaves the user holding a spent
+      token, and every retry comes back 400
       "Verification failed" until they manually reload the page — a
       transient backend blip turns into a dead form.
 
 - [ ] 11. Wire the Turnstile widget into `RequestAccessForm.vue` and
       thread the token through `useApi.ts`'s `submitAccessRequest` payload
       (depends on 9) — DoD: same as 10, for the request-access form,
-      including the same `reset()`-on-failure requirement.
+      including the same reset-after-every-request requirement.
       `useTeamValidation.ts` does **not** send a Turnstile token; instead
       it switches to `POST` (per task 8) and sends
       `{ name, github_auth: { login, sig } }` with the signed identity
@@ -177,16 +195,35 @@
       * ship Worker and frontend **atomically**, if the deploy pipeline
         can guarantee it; or
       * make the Worker accept **both** methods in this release — `POST`
-        with the identity gate, and `GET` continuing to serve exactly
-        today's unauthenticated behaviour — then remove `GET` in a
-        follow-up PR once the new frontend is live. The transitional
-        `GET` must **not** grow query-param credential support; it keeps
-        its current anonymous semantics until it is deleted, and the
-        follow-up issue to delete it is filed as part of this task, not
-        left implicit.
-      — DoD: the chosen option is stated in the PR description, and if the
-      two-step option is taken, the follow-up issue number for removing
-      `GET` is in the description too.
+        with the identity gate, and a **compatibility-only `GET`** — then
+        remove `GET` in a follow-up PR once the new frontend is live.
+        An earlier revision of this task said the transitional `GET`
+        should "keep serving today's unauthenticated behaviour". **That
+        was wrong and is rejected**: today's behaviour *is* the anonymous
+        truthful oracle that operator decision 1 exists to close, so that
+        shim would have left the vulnerability fully open — merely
+        rate-limited — for the whole migration window, in the name of
+        deployment convenience. The transitional `GET` must instead:
+        - answer **`{available: true}` unconditionally, 200**, for any
+          syntactically valid name, without calling Backstage at all;
+        - never accept `login`/`sig` from the query string;
+        - carry a comment naming the follow-up issue and stating it is a
+          deletion-scheduled shim.
+        This is the uniform-response design rejected as an *end state* in
+        operator decision 1 — and it is the right tool *here*, for the
+        opposite reason it was rejected there. Its cost is that the
+        endpoint stops being useful (every name reads as free), which is
+        unacceptable forever and fine for days; its benefit is that the
+        oracle closes the moment the Worker deploys rather than when the
+        follow-up lands. Old frontends keep functioning in a degraded
+        state, and the authoritative duplicate check at `/api/submit`
+        (lines 806-822) still rejects a taken name at submit time, so no
+        user can actually provision a duplicate.
+      — DoD: the chosen option is stated in the PR description. If the
+      two-step option is taken, the description must also carry the
+      follow-up issue number for removing `GET` **and a date by which it
+      lands** — an unbounded "transitional" window is how a shim becomes
+      permanent.
 
 ## Tests
 
@@ -231,7 +268,15 @@
         an unauthenticated caller. This is the test that keeps the
         credential out of access logs — without it, someone can
         "helpfully" restore query-param support later and every review
-        after that reads green.
+        after that reads green;
+      * **assert malformed bodies get 401, not 500** — table-drive it
+        over at least: a non-JSON body, `{}`, `{"name":"x"}`,
+        `{"name":"x","github_auth":null}`,
+        `{"name":"x","github_auth":"str"}`, and
+        `{"name":"x","github_auth":{"login":"a"}}` (no `sig`). Assert the
+        status is 401 and the body is byte-identical to the plain
+        unauthenticated 401 in every case. A single "missing signature"
+        case would pass while the destructure still throws on the others.
 
 - [ ] T5. Rate-limit test for `/api/github/check-team`: drive
       `checkRateLimit` (already exported-testable pattern, or via the
@@ -240,6 +285,21 @@
 
 - [ ] T6. Existing `oauth.test.mjs` suite still passes unmodified (no
       regression in OAuth/session helpers from this change).
+
+- [ ] T7. Turnstile reset semantics, at the composable/component level:
+      after a **successful** submit, assert `reset()` was called (a spy on
+      the composable is enough) — i.e. the token is not left cached for a
+      second send from the still-mounted form. Pair it with the failure
+      case. Testing only the failure path would leave the more likely
+      breakage — user sends a second contact message — uncovered.
+
+- [ ] T8. If, and only if, the two-step rollout of task 13 is chosen:
+      assert the transitional `GET /api/github/check-team` returns
+      `{available: true}` for a name the Backstage stub reports as
+      **existing**, and that the Backstage stub is never called. This is
+      the test that proves the compatibility shim closed the oracle
+      rather than preserving it — the failure mode being guarded against
+      is a shim that "keeps working" by keeping the vulnerability.
 
 ## Rollback
 
@@ -386,17 +446,35 @@ pre-existing ones:
    `handleFormSubmit` already validates. T4 asserts that a query-string
    identity is rejected, so the door cannot be quietly reopened later.
 
-8. **The frontend resets the Turnstile widget when a submission fails
-   after reaching the backend.** Turnstile tokens are single-use, so
-   without a reset a transient Telegram/Backstage 500 leaves the user
-   holding a spent token: every retry returns 400 "Verification failed"
-   until they reload the page by hand. A backend blip would present as a
-   permanently broken form. Folded into tasks 10 and 11 rather than left
-   as a UX note.
+8. **The frontend resets the Turnstile widget after every submission
+   attempt that may have reached siteverify — success included, in a
+   `finally`.** Turnstile tokens are single-use, so without a reset a
+   transient Telegram/Backstage 500 leaves the user holding a spent
+   token and every retry returns 400 "Verification failed" until they
+   reload the page by hand.
+
+   An earlier revision of this decision said "when a submission fails",
+   and the codex reviewer was right that this is not enough: siteverify
+   consumes the token on a **successful** verification too, and the
+   contact form stays mounted after a successful send. So the second
+   message a user types reuses a spent token and comes back
+   `timeout-or-duplicate` — the happy path breaks itself on the second
+   use, which is the more likely occurrence of the two. Reset
+   unconditionally. Folded into tasks 10 and 11 rather than left as a UX
+   note.
+
+9. **A malformed request body must reach the same 401 as a missing
+   signature, never a 500.** Decision 1 told the implementer to call
+   `hmacVerify(github_auth.login, …)`; followed literally against
+   `{"name":"test"}` that throws, and the Workers runtime answers 500.
+   The uniformity requirement decision 1 sets up would then be defeated
+   by decision 1's own example — a caller learns something from a status
+   code that was supposed to be constant. Defensive parsing is now part
+   of task 8's DoD, not left to the implementer's judgement.
 
 Out of scope, confirmed, with the follow-up filed rather than implied:
 
-9. Replacing the non-expiring `localStorage` HMAC with server-side session
+10. Replacing the non-expiring `localStorage` HMAC with server-side session
    re-validation stays out of scope here — see mctlhq/mctl-web#70.
 
    **Correction to this proposal's threat model, 2026-08-31, from the

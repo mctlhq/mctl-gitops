@@ -89,10 +89,18 @@ that redesign (see Acceptance criteria and Out of scope).
   safe one-sided state: a new frontend POSTing at an old GET-only Worker
   fails, and an old frontend GETting at a new POST-only Worker fails. The
   method change SHALL therefore either ship atomically with the frontend,
-  or go out in two steps — first a Worker that accepts **both** methods
-  (the `GET` path continuing to serve today's unauthenticated behaviour,
-  and under no circumstances accepting credentials from the query string),
+  or go out in two steps — first a Worker that accepts **both** methods,
   then, once the new frontend is live, a follow-up that removes `GET`.
+- WHILE a transitional `GET /api/github/check-team` exists during such a
+  two-step rollout THE SYSTEM SHALL answer `{available: true}` (200)
+  unconditionally for any syntactically valid name, SHALL NOT query
+  Backstage, and SHALL NOT accept `login`/`sig` from the query string.
+  The transitional path SHALL NOT preserve today's truthful anonymous
+  answer: that answer is the enumeration oracle this proposal exists to
+  close, and leaving it live for the length of a migration window — even
+  a rate-limited one — would defer the fix rather than deliver it. The
+  authoritative duplicate-tenant check at `/api/submit` is unaffected, so
+  the degraded answer cannot cause a duplicate provision.
 - WHILE a rollback of the Worker is possible THE SYSTEM SHALL NOT leave a
   POST-only frontend deployed against a reverted GET-only Worker; the
   rollback procedure SHALL name the frontend as part of what must be
