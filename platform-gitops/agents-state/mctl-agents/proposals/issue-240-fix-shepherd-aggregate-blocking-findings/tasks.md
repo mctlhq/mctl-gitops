@@ -203,3 +203,12 @@ in production and starts flipping healthy PRs to `review-stuck`:
 - [ ] P33. Read/project `ready_for_review` and `reopened` lifecycle generations and invalidate older same-head Agy authority immediately.
 - [ ] P34. Correlate the post-event run by exact PR, head repository/ref/SHA, workflow, and creation time; keep the event generation pending until correlated or bounded reviewer-error resolution.
 - [ ] P35. Test ready-for-review/reopen before Actions indexing, old same-head PASS, delayed run visibility, missing run, duplicate events, and unrelated PRs sharing a SHA.
+
+## Trusted outcome, total-order, and rollback tasks
+
+- [ ] P36. In the trusted shared Agy workflow, publish a run-bound immutable semantic-result artifact (or equivalently integrity-protected output) containing exact repository/PR/head/run/attempt/correlation/outcome/findings; keep the exact head_sha and run_id marker comment as required operator evidence.
+- [ ] P37. Fetch the semantic payload only from the correlated trusted Actions run, validate its identity/digest, and require exact agreement with the marker; forged actor/marker, missing artifact, or disagreement is bounded reviewer_error, never approval.
+- [ ] P38. Add one serialized monotonic authority generation and lifecycle watermark across dispatch intents and reopened/ready_for_review events; correlated runs inherit their parent generation.
+- [ ] P39. Test dispatch-before-event and event-before-dispatch overlap, delayed Actions/timeline indexing, duplicate events, stale intent, and restart; only the newest generation may gate.
+- [ ] P40. Key blocking history by stable source/finding identity and retain heads/runs as observation sets; test one blocker repeated across heads clears once while distinct exact blockers remain distinct.
+- [ ] P41. Implement coordinated rollback: disable required caller/check policy, stop dispatch, drain/supersede intents and runs, persist terminal evidence, then revert parser/pin. Test rollback with pending and completed authorities and require fresh backfill before re-enable.
