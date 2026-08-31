@@ -29,8 +29,17 @@ exec >>"$LOG" 2>&1
 # mkdir атомарен; flock(1) на macOS нет.
 LOCK="$HOME/.claude/skills-sync.lock"
 if ! mkdir "$LOCK" 2>/dev/null; then
-  if [ -f "$LOCK/pid" ] && ! kill -0 "$(cat "$LOCK/pid")" 2>/dev/null; then
-    echo "[$(date -u +%FT%TZ)] снимаю осиротевший лок (pid $(cat "$LOCK/pid") мёртв)"
+  STALE=""
+  if [ -f "$LOCK/pid" ]; then
+    kill -0 "$(cat "$LOCK/pid")" 2>/dev/null || STALE="pid $(cat "$LOCK/pid") мёртв"
+  elif [ -n "$(find "$LOCK" -maxdepth 0 -mmin +5 2>/dev/null)" ]; then
+    # Убитый между mkdir и записью pid оставлял лок без pid-файла, и он залипал
+    # навсегда. Возраст различает это от нормального прогона, который окно между
+    # mkdir и записью проходит за микросекунды, а сам живёт секунды.
+    STALE="без pid-файла и старше 5 мин"
+  fi
+  if [ -n "$STALE" ]; then
+    echo "[$(date -u +%FT%TZ)] снимаю осиротевший лок ($STALE)"
     rm -rf "$LOCK"; mkdir "$LOCK" 2>/dev/null || { echo "  лок занят -- выхожу"; exit 0; }
   else
     echo "[$(date -u +%FT%TZ)] синк уже идёт -- выхожу"; exit 0
