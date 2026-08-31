@@ -1,0 +1,10 @@
+status: proposed
+updated_at: '2026-08-31T22:12:30Z'
+updated_by: mctl-agents[bot]
+source:
+  type: github_issue
+  repo: mctlhq/mctl-agent
+  issue: 101
+  url: https://github.com/mctlhq/mctl-agent/issues/101
+control:
+  requires_human_approval: true
