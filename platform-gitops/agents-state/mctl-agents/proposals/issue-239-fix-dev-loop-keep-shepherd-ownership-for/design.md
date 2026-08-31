@@ -319,3 +319,12 @@ Terminal projection participates in the ownership arbiter as a registered in-fli
 A dedicated decision-projection activity records both actions and skips using a deterministic event key `proposal:epoch:cycle:decision`. It writes through the existing serialized GitOps/audit boundary and exposes owner, exact head, decision/reason, counters, and next-tick time without requiring Temporal history inspection. Replays and duplicate reconciliations adopt the same event; the workflow itself performs no I/O.
 
 Rollback is an ownership transition. Disable new arbiter grants, enter drain mode, settle every registered external tick/submission/status writer, and verify no fallback can mutate state. Then roll back Reconcile, DevLoop handoff, arbiter, and projection code as one compatible deployment unit (or keep all enabled). The previous rollback text that reverts only Reconcile is superseded.
+
+## Bounded drain recovery and projection identity correction
+
+A takeover drain has a bounded retry and observation budget. If the external Argo run or a registered writer cannot be proven terminal within that budget, the arbiter enters an observable `takeover_drain_stuck` state, preserves the no-overlap fence, and emits operator recovery evidence. Reconcile cannot grant fallback ownership and DevLoop cannot publish ownership while this state is active. Recovery is an explicit idempotent operator action that either resumes the same drain or, after independently proving all registered work terminal, advances the same arbiter epoch; it never clears the fence merely because a timeout elapsed.
+
+Decision projections use an occurrence-aware identity `proposal:epoch:cycle:decision:reason:occurrence`, or an equivalent compare-and-update operation keyed by the durable occurrence. Repeated transient/cooldown skips in one cycle therefore update or append the newest counters, reason, and deadline without being hidden by an earlier event.
+
+Decision-projection activities register as in-flight arbiter work alongside ticks, submitters, and terminal writers. Takeover and rollback drain them before ownership publication or component removal. Rollback tests include a projection commit already in flight and prove that no projection can land after the compatible deployment unit is disabled.
+
