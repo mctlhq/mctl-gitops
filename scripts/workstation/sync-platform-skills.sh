@@ -92,12 +92,18 @@ echo "[$(date -u +%FT%TZ)] sync start"
 MIRROR_OK=0
 if [ -d "$MIRROR/.git" ] \
    && git -C "$MIRROR" rev-parse --verify --quiet HEAD >/dev/null 2>&1 \
-   && [ "$(git -C "$MIRROR" config --get remote.origin.url 2>/dev/null)" = "$REMOTE" ]; then
+   && [ "$(git -C "$MIRROR" config --get remote.origin.url 2>/dev/null)" = "$REMOTE" ] \
+   && [ "$(git -C "$MIRROR" config --get core.sparseCheckout 2>/dev/null)" = "true" ]; then
   MIRROR_OK=1
 fi
 # Клон, оборванный после создания .git, но до настройки remote/ref'ов, иначе
 # считался бы валидным зеркалом вечно: fetch падал бы каждый раз, а само
 # зеркало никогда не пересоздавалось.
+# core.sparseCheckout проверяется отдельно, потому что клон идёт с --no-checkout:
+# прогон, оборванный между clone и sparse-checkout, оставляет .git, HEAD и
+# origin в полном порядке -- три предиката выше проходят, -- но без разреженной
+# конфигурации следующий reset --hard раскладывает всё дерево и подтягивает
+# блобы всего репозитория вместо каталога скиллов.
 if [ "$MIRROR_OK" = "0" ]; then
   echo "  зеркало отсутствует или непригодно ($MIRROR) -- пересоздаю"
   rm -rf "$MIRROR"
