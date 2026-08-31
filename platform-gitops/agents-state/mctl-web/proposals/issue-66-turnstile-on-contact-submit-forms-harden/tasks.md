@@ -325,13 +325,22 @@
   **Exception — the check-team method change.** The sentence above is true
   only for the Turnstile field, which is additive. It is *not* true for
   task 8: a POST-only frontend left in place against a reverted GET-only
-  Worker breaks availability checking outright. If the two-step
-  both-methods rollout (task 13) was taken, this exception does not
-  apply — the reverted Worker still answers `GET`. If the atomic rollout
-  was taken, a Worker rollback **must** revert the frontend with it.
-  Whichever was chosen has to be named in the PR description precisely so
-  that whoever runs the rollback knows which of these two worlds they are
-  in.
+  Worker breaks availability checking outright.
+
+  An earlier revision of this exception said the two-step both-methods
+  rollout lets you off, because the reverted Worker still answers `GET`.
+  **That is wrong** — the reverted Worker answering `GET` helps only an
+  *old* frontend, and once the new frontend is live it always sends
+  `POST`. The two-step rollout protects the forward migration; it does
+  nothing for the rollback. So the rule is simply: **a Worker rollback
+  must revert the frontend with it, unless the specific Worker version
+  being restored also accepts `POST`.** That condition is only satisfiable
+  once the transitional both-methods release is itself in the rollback
+  history — i.e. after the second step has shipped, rolling back one step
+  to the both-methods Worker is safe, and rolling back two steps is not.
+  The PR description must record which Worker versions accept `POST`, so
+  whoever runs the rollback can tell how far back is safe rather than
+  discovering it from a broken form.
 - No data migrations occur, so rollback carries no data-loss risk; Cache
   API rate-limit entries and Turnstile widget/sitekey can remain
   provisioned even after a code rollback with no side effects.

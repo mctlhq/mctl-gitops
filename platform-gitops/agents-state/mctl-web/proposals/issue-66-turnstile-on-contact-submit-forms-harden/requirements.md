@@ -49,8 +49,10 @@ that redesign (see Acceptance criteria and Out of scope).
   to reject automated/bot submissions SO THAT the team's Telegram channel
   and Backstage provisioning workflow are not spammed.
 - AS a platform operator I WANT `check-team` to stop revealing which team
-  names are already provisioned SO THAT attackers cannot enumerate tenant
-  names via anonymous 200/404 probing.
+  names are already provisioned **to unauthenticated callers** SO THAT
+  attackers cannot enumerate tenant names by anonymous probing. It must
+  keep revealing them to a caller with a valid signature — that is the
+  endpoint's purpose, and behind the identity gate it is not an oracle.
 - AS a platform operator I WANT worker tests covering submit/contact/rate-limit
   paths SO THAT this hardening does not silently regress in future changes.
 - AS a returning user with a stale browser session I WANT `/api/submit` to
@@ -102,9 +104,12 @@ that redesign (see Acceptance criteria and Out of scope).
   authoritative duplicate-tenant check at `/api/submit` is unaffected, so
   the degraded answer cannot cause a duplicate provision.
 - WHILE a rollback of the Worker is possible THE SYSTEM SHALL NOT leave a
-  POST-only frontend deployed against a reverted GET-only Worker; the
-  rollback procedure SHALL name the frontend as part of what must be
-  reverted, or rely on the both-methods transitional Worker above.
+  POST-only frontend deployed against a Worker version that does not
+  accept `POST`. The rollback procedure SHALL revert the frontend
+  together with the Worker unless the specific Worker version being
+  restored also accepts `POST`. The existence of a two-step rollout does
+  NOT satisfy this: a restored `GET`-only Worker serves old frontends,
+  and the live frontend after migration is not one.
 - WHEN a client calls `/api/github/check-team` without a `github_auth`
   block, or with one whose signature fails
   `hmacVerify(login, sig, GITHUB_OAUTH_HMAC_KEY)`, THE SYSTEM SHALL
@@ -137,11 +142,18 @@ that redesign (see Acceptance criteria and Out of scope).
 - WHEN worker tests are run (`node --test cloudflare-worker/*.test.mjs`)
   THE SYSTEM SHALL exercise: missing-token rejection, invalid-token
   rejection, valid-token pass-through, and rate-limit-exceeded rejection
-  for both `/api/submit` and `/api/contact`, plus the check-team
-  uniform-response behavior.
+  for both `/api/submit` and `/api/contact`; and, for `check-team`, the
+  **identity-gate and non-disclosure** behaviour — truthful answers for a
+  verified caller, a fixed 401 for missing/invalid/malformed credentials,
+  a 401 (not a 500) for every malformed body shape, and a rejected
+  query-string identity. **Not** "uniform-response behaviour": that was
+  the rejected design, and a test suite written to it would assert the
+  opposite of what is being built.
 - IF the stored `mctl_auth` localStorage entry (`useAuth.ts`) is older than
-  its `exp` (8h TTL) THEN `restore()` SHALL continue to discard it (already
-  true today) — no regression permitted here.
+  its `exp` THEN `restore()` SHALL continue to discard it (already true
+  today) — no regression permitted here. Note this is a browser-side
+  convenience only and bounds nothing server-side; see the correction in
+  Context above.
 
 ## Out of scope
 - Removing the GitHub access token from the session payload

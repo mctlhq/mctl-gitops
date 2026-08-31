@@ -242,10 +242,26 @@
   source per `Dockerfile`/`nginx.conf` — check whether the Cloudflare
   Worker is deployed from the same image/pipeline or separately; if
   separate, coordinate the two rollouts).
+
+  **The larger compatibility break is not the additive field — it is
+  `check-team` moving `GET` → `POST`.** The `turnstile_token` bullet
+  above describes an *additive* change, where a soft-launch flag is a
+  real mitigation. A method change is not additive and a soft-launch flag
+  does nothing for it: a new frontend POSTing at an old GET-only Worker
+  fails, and an old frontend GETting at a new POST-only Worker fails, so
+  there is no safe one-sided deploy state in either direction. This is
+  the single biggest rollout risk in the proposal and it is specified in
+  tasks.md task 13 — atomic rollout, or a transitional both-methods
+  Worker whose `GET` answers `{available:true}` unconditionally without
+  calling Backstage. It is named here as well because this section is
+  where an operator scans for deploy risk, and an operator reading only
+  this section would have underestimated it.
 - **Resource impact:** one additional outbound fetch (`siteverify`) per
-  contact/submit/check-team request — Cloudflare's own dependency, same
-  trust/latency tier as the existing Backstage/Telegram calls already made
-  inline.
+  `/api/contact` and `/api/submit` request — Cloudflare's own dependency,
+  same trust/latency tier as the existing Backstage/Telegram calls already
+  made inline. **Not `check-team`**: it carries no Turnstile (operator
+  decision 2) and never calls siteverify, so it gains no new outbound
+  dependency, no added latency, and no exposure to a Turnstile outage.
 - **Risks + mitigations:**
   - *Risk:* Turnstile/siteverify outage blocks legitimate submissions
     (fail-closed design). *Mitigation:* this is the deliberate, required
@@ -254,12 +270,17 @@
     colocated with the Worker runtime, and this matches how
     `BACKSTAGE_LANDING_TOKEN`-missing is already handled as fail-closed
     500 today.
-  - *Risk:* check-team's uniform-response change silently changes contract
-    for any other consumer of `/api/github/check-team` beyond
-    `useTeamValidation.ts`. *Mitigation:* grep confirms
-    `useTeamValidation.ts` is the only caller in this repo; flag in PR
-    description for reviewers to check `mctl-api`/other repos for external
-    consumers.
+  - *Risk:* an undiscovered consumer of `/api/github/check-team` outside
+    `useTeamValidation.ts`. The adopted design is **identity-gating plus
+    a method change**, not the uniform-response change an earlier draft of
+    this bullet described, so such a caller does not see a changed
+    response *shape* — it sees its `GET` stop being routed, and, if it
+    switches to `POST` without a signature, a flat 401. It breaks harder
+    and more visibly than a shape change would. *Mitigation:* grep
+    confirms `useTeamValidation.ts` is the only caller in this repo; the
+    PR description must ask reviewers to check `mctl-api` and other repos
+    for external consumers, and if one exists it needs the signed
+    identity, which may not be something it can produce.
   - *Risk:* secret rollout — `TURNSTILE_SECRET_KEY` must be set via
     `wrangler secret put` before the code deploy that reads it goes live,
     or the fail-closed path will 500 every contact/submit request.
