@@ -169,3 +169,83 @@
 - No data migrations occur, so rollback carries no data-loss risk; Cache
   API rate-limit entries and Turnstile widget/sitekey can remain
   provisioned even after a code rollback with no side effects.
+
+## Operator decisions (approve, 2026-08-31)
+
+Open questions, resolved. The first two are linked and the proposal's
+answers to them are inconsistent with each other, so read them together.
+
+1. **`check-team`: gate it on the identity the codebase already has —
+   reject both the always-`available: true` response and a new session
+   mechanism.**
+
+   The proposal keeps `check-team` anonymous "to preserve the UX of live
+   availability feedback", and then, to stop enumeration, has it return
+   `{ available: true }` unconditionally. Those two decisions cancel out.
+   An endpoint that always says "available" does not preserve the feature;
+   it makes it lie to every user, including authenticated ones, who then
+   discover the collision at submit. A check that always says yes is worse
+   than no check, because it looks like a check.
+
+   Use the credential that already exists instead. `handleFormSubmit`
+   (`cloudflare-worker/index.js:785-789`) already requires
+   `github_auth.login` + `github_auth.sig` and verifies it with
+   `hmacVerify(login, sig, GITHUB_OAUTH_HMAC_KEY)`; the signature is minted
+   at OAuth callback (`index.js:588`). So:
+   - `check-team` requires the same `login` + `sig` pair and verifies it the
+     same way. Verified callers get the truthful answer they get today.
+   - Unverified callers get a single uniform response that reveals nothing,
+     identical for existing and non-existing names, and identical to the
+     rate-limited and misconfigured cases.
+   - Anonymous enumeration is then closed completely rather than traded for
+     a broken feature.
+
+   This deliberately does **not** invent a stronger gate than the one on
+   `/api/submit`. It leans on the 8h localStorage HMAC the proposal itself
+   flags as weak — accepted, because `check-team` is strictly less
+   sensitive than `submit`, which already accepts exactly this credential.
+   Hardening that credential is one problem, in one place, and it is filed
+   separately rather than solved twice.
+
+   Frontend change, in scope: `app/composables/useTeamValidation.ts` must
+   not call `check-team` without auth, and should say so in the field
+   ("sign in with GitHub to check availability") rather than silently
+   showing nothing. Checked before deciding: `RequestAccessSection.vue`
+   renders `GithubAuth` directly above `RequestAccessForm` and always
+   mounts the form, and `RequestAccessForm.vue`'s submit already refuses
+   with `js.submit.github_required` when `authData` is absent — so the only
+   behaviour lost is live feedback for someone typing a team name *before*
+   signing in, and signing in is already required to get any further.
+
+2. **No Turnstile on `check-team`.** Agreed with the proposal's reasoning —
+   a challenge on every debounced keystroke is bad UX — and decision 1
+   makes it moot.
+
+3. **Turnstile in managed (non-intrusive) mode.** Accepted as proposed.
+
+4. **Fail-closed behaviour accepted as written**, and it is the part most
+   worth not softening later: missing `TURNSTILE_SECRET_KEY` → reject;
+   siteverify network error or 5xx → reject. Do not add an "allow on
+   verification-service outage" path.
+
+Sequencing — this one can take the public site down if ignored:
+
+5. **`TURNSTILE_SECRET_KEY` must exist in the worker environment before
+   this merges.** Worker secrets are not in git and not in
+   `.github/workflows/deploy.yml`; `cloudflare-worker/wrangler.toml` says
+   they are set via the Cloudflare dashboard or `wrangler secret put`. With
+   decision 4, deploying the code before the secret exists means
+   `/api/contact` and `/api/submit` both reject every request — a total
+   outage of both public forms, not a degraded mode. The Turnstile widget
+   also has to be created for the `mctl.ai` zone first to get a sitekey for
+   the frontend. Operator prerequisite, ahead of the PR: create the widget,
+   put the secret, then merge.
+
+6. **The sitekey is public** — it belongs in `[vars]` in `wrangler.toml` or
+   the frontend config, committed, not in a secret store. Do not
+   accidentally treat it as sensitive and add a second provisioning step.
+
+Out of scope, confirmed, with the follow-up filed rather than implied:
+
+7. Replacing the 8h `localStorage` HMAC with server-side session
+   re-validation stays out of scope here — see mctlhq/mctl-web#70.
