@@ -200,6 +200,6 @@ in production and starts flipping healthy PRs to `review-stuck`:
 
 ## Same-head lifecycle fence tasks
 
-- [ ] P29. Read/project `ready_for_review` and `reopened` lifecycle generations and invalidate older same-head Agy authority immediately.
-- [ ] P30. Correlate the post-event run by exact PR, head repository/ref/SHA, workflow, and creation time; keep the event generation pending until correlated or bounded reviewer-error resolution.
-- [ ] P31. Test ready-for-review/reopen before Actions indexing, old same-head PASS, delayed run visibility, missing run, duplicate events, and unrelated PRs sharing a SHA.
+- [ ] P33. Read/project `ready_for_review` and `reopened` lifecycle generations and invalidate older same-head Agy authority immediately.
+- [ ] P34. Correlate the post-event run by exact PR, head repository/ref/SHA, workflow, and creation time; keep the event generation pending until correlated or bounded reviewer-error resolution.
+- [ ] P35. Test ready-for-review/reopen before Actions indexing, old same-head PASS, delayed run visibility, missing run, duplicate events, and unrelated PRs sharing a SHA.
