@@ -17,6 +17,10 @@ jobs:
       # delivers exact-head markers, backfill, and repository-level gating.
       blocking: false
       conventions: |
+        Staged rollout scope: this caller is intentionally pull_request-only
+        and blocking=false. Proposal #240, after #239, will implement and test
+        workflow_dispatch backfill, exact-head/run markers and required gating;
+        do not require those future executable tasks in this contract PR.
         Focus on GitOps correctness, Kubernetes and Argo CD manifest safety,
         immutable reviewed workflow pins, proposal requirements/design/tasks
         consistency, idempotent state transitions, ownership and head-SHA
