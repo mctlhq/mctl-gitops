@@ -121,3 +121,71 @@
   consumer (`run_shepherd.py`, `run_implementer.py`, the implementer's own
   status writes) since none of them read or clear it; no data migration is
   needed to remove it if the feature is reverted.
+
+## Corrected implementation tasks (authoritative)
+
+- [ ] C1. Implement deterministic-ID `FallbackReviewWorkflow` with durable cooldown, one in-flight shepherd tick and bounded activity retries.
+- [ ] C2. Reconcile starts/adopts C1 idempotently; WorkflowAlreadyStarted is success; Schedule overlap policy is explicit `SKIP`.
+- [ ] C3. Keep all filesystem/GitHub/status/CWFT work in activities. Remove tasks 4-5's direct workflow-side `last_orphan_tick` read/write.
+- [ ] C4. DevLoop cancels/awaits fallback before `shepherd_in_loop=True`; fallback checks live DevLoop ownership before every tick.
+- [ ] C5. Return typed submit outcome; transient submit failure advances no cooldown and consumes no review attempt.
+- [ ] C6. Test duplicate reconcile starts, replay/retry, takeover races, failed submit, current-head revalidation, second review-fix cycle and `MAX_REVIEW_ATTEMPTS` terminal behavior.
+
+## P1 follow-up tasks (authoritative)
+
+- [ ] P1. Persist a deterministic per-cycle tick ID and propagate it through mctl-api to the Argo workflow name/idempotency key; treat `AlreadyExists` as adoption.
+- [ ] P2. Classify submission errors and add a separately bounded deterministic `submission_failures` budget ending in `review-stuck`; keep transient retries bounded by Temporal retry/backoff and outside `review_attempts`.
+- [ ] P3. Implement takeover as a drain barrier for any submitted external Argo tick; DevLoop publishes ownership only after terminal cancellation/completion is observed.
+- [ ] P4. Test response loss after successful create, `AlreadyExists` adoption, deterministic failure-budget exhaustion, and takeover while an external tick is running. Assert one Argo workflow and no overlapping status writers.
+
+## Cancellation-race task correction
+
+- [ ] P5. Make takeover await the submission activity's terminal outcome before checking the deterministic Argo ID; then adopt/drain any discovered run before acknowledging handoff.
+- [ ] P6. Add race tests for cancellation before send, while the create request is in flight, after create with lost response, and after activity completion. Assert DevLoop never starts while a late-created fallback run can mutate state.
+
+## Arbiter and terminal-writer tasks
+
+- [ ] P7. Implement a durable proposal-scoped ownership arbiter with monotonic epochs; DevLoop claims `takeover_pending` before fallback lookup, and Reconcile/fallback require a current grant before start and immediately before remote create.
+- [ ] P8. Add an idempotent mutex-protected GitOps status activity for submission-budget exhaustion so `review-stuck` persists even when no CWFT was created.
+- [ ] P9. Test reconcile-start between DevLoop lookup and ownership publication, stale-epoch submission, duplicate terminal writes, and process restart after the terminal GitOps commit.
+
+## Claim recovery and CAS tasks
+
+- [ ] P10. Bind takeover claims to exact DevLoop workflow/run IDs; release in cleanup and reclaim only after an activity confirms that owner run is terminal. Fail closed on visibility/query errors.
+- [ ] P11. Fence the terminal status activity with expected status, exact head SHA, ownership epoch, and open/unmerged state under the repository mutex; mismatches are auditable no-ops.
+- [ ] P12. Test failed/cancelled/terminated DevLoop recovery, visibility outage, manual merge during retries, head change, status change, stale epoch, and duplicate CAS submission.
+
+## Repair and transient-recovery tasks
+
+- [ ] P13. Make terminal projection provisional, revalidate GitHub after commit, and issue an idempotent compensating GitOps commit on head/open/merged mismatch; Reconcile always projects newer external state over stale failure evidence.
+- [ ] P14. After transient activity-retry exhaustion, retain the logical tick and counters, wait on durable exponential backoff, and retry. Cap `transient_outage_windows`; terminal exhaustion uses the fenced status path without incrementing `review_attempts`.
+- [ ] P15. Test push/merge before commit, between commit and revalidation, and after revalidation; test worker restart and continue-as-new during transient backoff, eventual recovery, and outage-budget exhaustion.
+
+## Terminal ownership-fence tasks
+
+- [ ] P16. Register the terminal status activity as in-flight work in the proposal arbiter and include it in DevLoop's takeover drain.
+- [ ] P17. Post-commit revalidate GitHub state and arbiter epoch/claim; compensate on either mismatch and acknowledge completion only after repair.
+- [ ] P18. Test takeover before local commit, between commit and epoch revalidation, during compensation, and after writer restart; assert no stale `review-stuck` survives ownership publication.
+
+## Observability and rollback tasks
+
+- [ ] P19. Add an idempotent serialized decision-projection activity for every submitted/skipped fallback outcome with owner, epoch, head, reason, counters, and next-tick evidence.
+- [ ] P20. Replace the rollback procedure with grant freeze, arbiter drain, terminal verification, and coordinated rollback/disablement of Reconcile fallback, DevLoop handoff, arbiter, and projection components.
+- [ ] P21. Test duplicate projections, cooldown/takeover/transient skips, rollback with active CWFT and terminal writer, and rejection of mixed-version ownership.
+
+## Bounded drain and projection-writer tasks
+
+- [ ] P22. Add bounded takeover-drain retries and an observable `takeover_drain_stuck` arbiter state that preserves the ownership fence.
+- [ ] P23. Add idempotent operator recovery that resumes the same drain or advances only after every registered external run/writer is proven terminal; test unavailable Argo status and a never-terminating run.
+- [ ] P24. Make decision-projection identity occurrence-aware (including reason/attempt) or atomically update the existing occurrence so repeated same-cycle decisions retain current evidence.
+- [ ] P25. Register projection writers with the arbiter and drain them during takeover and rollback; test rollback while a projection commit is in flight and assert no mixed-version late write.
+
+## Compensation-CAS tasks
+
+- [ ] P26. Fence compensating GitOps writes by provisional transaction ID, provisional status revision, expected head, and arbiter epoch under the repository mutex.
+- [ ] P27. Test an intervening serialized proposal write between provisional commit and compensation; assert compensation no-ops or recomputes and never overwrites newer state.
+
+## Provisional retry-resume tasks
+
+- [ ] P28. Persist/reconstruct the terminal writer phase and recognize the activity's own exact provisional transaction on retry; resume at mandatory post-commit revalidation instead of classifying it as superseded.
+- [ ] P29. Test worker crash immediately after provisional commit, retry with unchanged state, and retry after concurrent merge/head/takeover changes; assert revalidation/compensation completes exactly once and never overwrites an intervening writer.

@@ -147,3 +147,72 @@ failed required reviewer can never be mistaken for approval.
   strongest available signal that the org intends Agy to be a required
   gate, not an advisory one like Copilot or the best-effort Codex
   connector.
+
+## Contract corrections before acceptance (authoritative)
+
+PR #234 proves Agy currently posts a top-level `github-actions[bot]` comment with `<!-- agy-review -->`, but no `commit_id` or reviewed head SHA.
+
+- Agy SHALL NOT count as a current-head response until its machine marker carries the exact reviewed head SHA. Timestamp/latest-comment inference is forbidden.
+- First update `mctlhq/.github` so success, findings and reviewer-failure comments include `head_sha:<40-hex>` and `run_id`; then pin mctl-agents to that reviewed shared-workflow commit. This is prerequisite to `required=True`.
+- Dispatch SHALL match actor plus Agy marker because `github-actions[bot]` is shared.
+- Missing, malformed, failed or stale-head Agy evidence means wait then bounded `review-stuck`, never approval.
+- Persist `reviewer_wait_head_sha` and per-source wait counters; reset all atomically on head change.
+- Deduplicate by exact path+line+normalized message, or exact normalized-message hash when location is absent. No fuzzy collapse of unlocated findings.
+
+## P1 rollout and run-authority corrections (authoritative)
+
+- Agy markers SHALL include exact 40-hex `head_sha`, Actions `run_id`, and `run_attempt` (or equivalent monotonically ordered attempt identity).
+- For a PR head, the authoritative Agy result SHALL be the newest non-superseded Agy workflow execution ordered by run number/ID and run attempt. A marker from an older run cannot approve or block once a newer run exists. A newer queued or in-progress run blocks merge; the newest completed failure blocks and follows the bounded wait-to-`review-stuck` policy; only the newest completed PASS whose marker identity and SHA match may approve.
+- Before Agy becomes `required=True`, the rollout SHALL enumerate every open target PR, dispatch or rerun the pinned Agy workflow for its current head, and verify a new-format current-head marker. Updating the reusable-workflow pin alone is insufficient because it does not trigger existing pull requests.
+- Legacy Agy comments without the marker identity remain non-authoritative. PR #234 is an explicit rollout fixture and must receive a current-head rerun before required gating is enabled.
+
+## Agy outcome and executable backfill corrections (authoritative)
+
+- The authoritative Agy marker SHALL distinguish `clean`, `findings`, and `reviewer_error`; gating SHALL use the marker's semantic outcome and payload, not the Actions conclusion alone.
+- A current-head authoritative `findings` marker with parseable P1/P2 findings SHALL return `address-review`, even when the blocking Actions run concludes `failure`. A `reviewer_error` marker or failed run without valid findings SHALL follow bounded wait-to-`review-stuck`. Neither case may approve.
+- The pinned mctl-agents caller workflow SHALL provide an executable, permission-checked backfill entry point (for example `workflow_dispatch` with PR number and exact head SHA). It SHALL validate that the supplied SHA is still the PR's current head before invoking the pinned reusable workflow.
+- Rollout SHALL use that entry point for every already-open PR and record the resulting run identity and exact-head marker before enabling required gating.
+
+## Explicit review target and Actions authority corrections
+
+- A manual backfill run SHALL execute trusted workflow code from the default branch while taking explicit `repository`, `pr_number`, and exact `head_sha` inputs. It SHALL fetch and review that exact commit (for example the validated `refs/pull/<n>/head` object), never infer the target from `GITHUB_SHA` or a missing `pull_request` event.
+- The caller SHALL validate immediately before review and before publishing the marker that the PR's live head still equals the supplied SHA. The reusable workflow and reviewer receive the explicit target SHA and PR number; every comment and marker is posted to that PR and bound to that SHA.
+- Authoritative run selection SHALL query GitHub Actions run metadata, including queued/in-progress runs and rerun attempts. The additional paginated/cached Actions lookup is required and replaces any earlier same-call-count/no-new-network-call constraint.
+
+## Dispatch-run correlation correction
+
+- Authority lookup SHALL NOT filter `workflow_dispatch` runs by Actions `head_sha`, because it represents the dispatch ref rather than the reviewed PR head.
+- Each backfill dispatch SHALL carry a cryptographically unique correlation ID plus explicit PR number and reviewed head SHA. Trusted workflow metadata (for example `run-name`) SHALL expose that correlation ID before comments are posted, and a durable dispatch-intent record SHALL bind it to repository, PR, SHA, workflow identity, and creation time.
+- Queued/in-progress dispatch runs SHALL be joined to that intent by workflow identity, event type, trusted default-branch ref, correlation ID, and time window; completed results additionally require marker `run_id`, `run_attempt`, correlation ID, PR, and exact reviewed SHA. PR-triggered runs may continue to use Actions `head_sha`.
+
+## Markerless authoritative-run correction
+
+- Once a newer run is correlated to the current PR/head dispatch intent, it SHALL remain authoritative in queued, in-progress, and completed states even if it never posts a marker. It SHALL never disappear from selection and reveal an older PASS.
+- A completed correlated run without a valid semantic marker SHALL be treated as `reviewer_error`: it blocks merge and follows the bounded wait-to-`review-stuck` policy. A marker is required only to establish semantic `clean` or `findings`; absence cannot approve.
+- Correlation for a markerless completed run SHALL use the durable intent plus trusted workflow ID/event/ref/run-name correlation and run ID/attempt metadata. Cleanup of dispatch intents occurs only after the result is durably consumed or explicitly superseded by a newer correlated run.
+
+## Pending-intent and reviewer-wait identity corrections
+
+- A durable current-head dispatch intent SHALL itself be newer pending authority from creation time, before an Actions run is visible. It SHALL block approval by every older PASS until correlated, explicitly superseded, or durably resolved as dispatch/reviewer failure.
+- Lost responses and delayed run visibility SHALL use bounded correlation retries. Exhaustion records a `reviewer_error` for that intent and follows bounded wait-to-`review-stuck`; it never deletes the intent and reveals an older PASS.
+- Reviewer wait state SHALL be keyed by `{source, head_sha, authority_identity}`, where authority identity is pending correlation ID or authoritative `run_id:run_attempt`. When authority changes on the same head, that source's wait counter SHALL reset atomically so the new execution receives its full bounded response window.
+
+## Exact-PR authority and durable clearance corrections
+
+- For `pull_request`-triggered executions, authoritative Agy run selection SHALL match the exact target PR association, head repository, head ref, workflow identity, and exact reviewed `head_sha`; SHA equality alone is insufficient.
+- A valid authoritative `findings` marker containing no P1/P2 findings SHALL count as a successful, nonblocking response. P3/P4 findings SHALL remain advisory evidence but SHALL NOT trigger `address-review` or missing-reviewer timeout.
+- The shepherd SHALL persist exact per-source P1/P2 finding history across head changes. On a later clean merged head, `cleared_findings` identities and counts SHALL be derived idempotently from that prior-head history, not solely from the final current-head `AggregatedReview`.
+- Persisted history and clearance derivation SHALL survive restart, avoid double-counting repeated observations, and retain source attribution plus the head on which each blocker was observed and cleared.
+
+## Same-head lifecycle-event authority correction
+
+- A same-head `ready_for_review` or `reopened` lifecycle event SHALL invalidate earlier Agy authority from the event timestamp/generation, before the resulting Actions run is indexed.
+- The shepherd SHALL read the PR lifecycle timeline (or an equivalent durable event projection) and treat the newest relevant event as pending authority until a matching Agy run created after that event is visible and resolved. Older same-head PASS evidence cannot approve during this gap.
+- Event-to-run correlation SHALL include exact PR, head repository/ref/SHA, workflow identity, and run creation time after the lifecycle event. Bounded missing-run handling follows the existing fail-closed reviewer-error policy.
+
+## Trusted outcome, authority ordering, and rollback corrections
+
+- Agy comments SHALL still contain exact reviewed head_sha, run_id, run_attempt, PR number, correlation ID where applicable, and semantic outcome for operator evidence. The comment actor/marker is not by itself trusted authorization: gating SHALL obtain the semantic verdict/findings payload from an immutable artifact (or equivalently integrity-protected output) produced by the correlated trusted reusable-workflow run, verify its digest/identity through the Actions API, and require it to agree with the comment. Missing, forged, or disagreeing evidence fails closed as reviewer_error.
+- Authority SHALL have one durable total order across lifecycle generations, dispatch intents, and correlated runs. Before allocating a dispatch intent, synchronize and persist the latest PR lifecycle watermark; the new intent is allocated in the next serialized generation. A subsequently observed reopened/ready_for_review event with a new event identity advances the generation and supersedes that intent even if Actions indexing is delayed. A delayed duplicate or event at/below the persisted watermark cannot supersede newer authority. Correlated runs inherit, never invent, their intent/event generation.
+- Blocking-finding history SHALL be keyed by stable source plus exact finding identity, independent of head. Reviewed heads/run identities are an idempotent observation set on that record. Repeated observations of one unresolved blocker across heads produce one history/clearance record; genuinely distinct exact identities remain separate.
+- Rollback SHALL first disable repository-level Agy required gating, stop new backfill dispatches, settle or explicitly supersede all pending intents/runs, and persist their terminal evidence. Only after that drain may the parser/aggregator and reusable-workflow pin be reverted. Re-enabling gating requires a new verified current-head backfill; stale pre-rollback authority is never revived.

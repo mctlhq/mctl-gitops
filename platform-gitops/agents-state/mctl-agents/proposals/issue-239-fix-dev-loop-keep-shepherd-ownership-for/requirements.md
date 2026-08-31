@@ -137,3 +137,72 @@ without an operator having to notice and re-trigger it by hand.
   every audit row. Assumed sufficient without a schema change; revisit if an
   operator later needs to filter executions by trigger source at the API
   layer.
+
+## Contract corrections before acceptance (authoritative)
+
+- The fallback SHALL be a durable single-owner Temporal execution (`FallbackReviewWorkflow`) with deterministic ID; `ReconcileWorkflow` only discovers and idempotently starts/adopts it.
+- The reconcile Schedule SHALL declare an explicit non-overlap policy. Workflow-ID conflict means already adopted, not a second owner.
+- Temporal workflow code SHALL perform no filesystem, GitHub, network, wall-clock or `.status.yaml` I/O. These operations and CWFT submission SHALL cross activity/child-workflow boundaries. GitOps status writes remain in the existing mutex-protected Argo path.
+- Ownership handoff SHALL be explicit: before publishing `shepherd_in_loop=True`, DevLoop cancels and awaits the proposal's fallback owner; fallback re-checks live DevLoop ownership before every tick and exits on takeover.
+- CWFT submission SHALL return a typed result. Failed submission writes no success/cooldown marker and retries without incrementing `review_attempts`.
+- Cooldown lives in durable workflow state/timers, not direct `.status.yaml` reads. The targeted shepherd re-fetches current head and preserves stale-review filtering, bounded retries and `--match-head-commit`.
+
+## P1 review corrections (authoritative)
+
+- CWFT submission uses a stable logical tick ID derived from fallback workflow ID/run, proposal slug, reviewed head SHA, and durable cycle number. Every activity retry reuses that ID; an Argo `AlreadyExists` response adopts the existing workflow instead of creating a duplicate.
+- Transport or response-loss failures that remain plausibly transient retry without consuming the review-fix budget. A classified deterministic submission failure increments a separate bounded `submission_failures` budget. Reaching that cap transitions the proposal to `review-stuck` with the tick ID and failure evidence; no submission failure may retry forever.
+- Ownership transfer is not acknowledged while an external fallback Argo tick can still mutate the proposal. On DevLoop takeover, the fallback cancels the pending submission and then aborts, drains, or adopts and awaits the already-created Argo workflow to a terminal state. Only after that barrier may DevLoop publish `shepherd_in_loop=True`.
+
+## Cancellation race closure (authoritative)
+
+- A negative pre-create lookup is not a handoff barrier. When takeover races an in-flight submission activity, the fallback SHALL first wait until that activity reaches a terminal result or cancellation acknowledgement that proves no remote create can still complete.
+- After the submission activity is terminal, the fallback SHALL reconcile the stable tick ID against Argo. If a run exists, it SHALL cancel/adopt and await the run's terminal state; only a terminal activity followed by an absent run, or a terminal run, permits ownership acknowledgement.
+- DevLoop SHALL remain blocked from publishing `shepherd_in_loop=True` throughout this protocol. Tests SHALL cover cancellation before request send, during response loss, and after remote create.
+
+## Ownership arbitration and terminal status corrections
+
+- Fallback creation and DevLoop takeover SHALL be serialized by one durable proposal-scoped ownership arbiter. DevLoop first records a `takeover_pending` claim/epoch in that arbiter; only then may it look up and drain a fallback. Reconcile SHALL acquire a fallback grant from the same arbiter before starting or submitting work, and SHALL be denied once takeover is pending.
+- Every fallback submission SHALL carry the arbiter epoch and revalidate that grant immediately before remote create. A stale grant cannot create or mutate state.
+- When deterministic submission failures exhaust their bounded budget without creating an Argo tick, a dedicated idempotent Temporal activity SHALL persist `review-stuck` and evidence through the same repository mutex/serialized GitOps transaction used by existing status writers. Temporal workflow code performs no direct I/O, and the terminal write does not depend on a shepherd CWFT existing.
+
+## Claim recovery and fenced terminal-write corrections
+
+- A `takeover_pending` claim SHALL identify the owning DevLoop workflow ID and run ID and SHALL be renewable. The arbiter SHALL reclaim it only after an activity confirms that exact Temporal execution is terminal (completed, failed, terminated, or cancelled). Visibility/query failure is fail-closed and does not revoke a live claim.
+- DevLoop SHALL release or finalize its claim in normal completion/cancellation handlers; Reconcile SHALL periodically request recovery for claims whose owner is confirmed terminal, so a crashed DevLoop cannot orphan the proposal indefinitely.
+- The submission-exhaustion status activity SHALL use compare-and-set preconditions under the repository mutex: expected proposal status, expected PR head SHA, expected ownership epoch, and open/unmerged PR state. Any mismatch SHALL produce a recorded `superseded/no-op`, never overwrite newer state.
+
+## External-state repair and transient-outage corrections
+
+- A terminal status write based on GitHub state SHALL be provisional until a post-commit GitHub revalidation confirms the same PR head and open/unmerged state. If the external state changed, the activity SHALL immediately execute an idempotent compensating GitOps transaction that removes/supersedes the stale `review-stuck` evidence and projects the newer head or terminal merged/closed state.
+- Reconcile SHALL always give externally observed merged/closed/new-head state precedence over a provisional or stale submission-exhaustion status, so an external change after revalidation is repaired on the next event/cycle.
+- Exhausting bounded activity retries for a transient submission error SHALL keep the same logical tick ID and durable cycle state, schedule a workflow-level exponential-backoff timer, and retry after the timer. A separate bounded `transient_outage_windows` budget SHALL prevent endless outage loops; exhaustion uses the fenced terminal status path with operational evidence and does not increment `review_attempts`.
+
+## Terminal-writer ownership fencing correction
+
+- The arbiter SHALL register a terminal status activity as in-flight fallback work. DevLoop takeover SHALL drain that activity together with CWFT submission/ticks before ownership publication.
+- After committing provisional terminal status, the activity SHALL revalidate both GitHub state and the arbiter epoch/claim. If either changed, it SHALL execute the same idempotent compensating GitOps repair before reporting completion.
+- DevLoop SHALL not publish ownership until the registered terminal writer and any required compensation are terminal. A stale fallback epoch can therefore never leave authoritative `review-stuck` state after takeover.
+
+## Observable decisions and coordinated rollback corrections
+
+- Every fallback decision — submitted or skipped for cooldown, takeover, transient failure, stale head, or exhausted budget — SHALL be projected through an idempotent serialized activity into operator-visible audit/status state. The projection SHALL include proposal, owner/epoch, PR/head SHA, decision and reason, review/submission counters, last tick, and next eligible tick. Durable workflow state remains replay-safe and is not the sole observability surface.
+- Rollback SHALL first stop new fallback grants, mark the arbiter draining, and await/cancel all registered fallback ticks, submitters, and terminal writers. Only after the drain barrier may deployment consistently disable/revert Reconcile fallback creation, DevLoop handoff integration, arbiter, and status projection together. Mixed old/new ownership components are forbidden.
+
+## Bounded drain and projection-writer corrections
+
+- Takeover drain SHALL use bounded retries and an observation deadline. Exhaustion SHALL enter an operator-visible `takeover_drain_stuck` state that preserves the no-overlap fence; it SHALL NOT grant fallback ownership or publish DevLoop ownership.
+- Recovery from `takeover_drain_stuck` SHALL be an explicit idempotent operation that resumes the same drain or advances only after all registered external work is independently proven terminal. Timeout alone is never proof of termination.
+- Decision-projection idempotency SHALL include reason and durable occurrence/attempt, or use an equivalent compare-and-update transaction, so repeated same-cycle skips/failures retain current counters and next-tick evidence.
+- The arbiter SHALL register decision-projection writers as in-flight work. Takeover and rollback SHALL drain them together with ticks, submitters, and terminal writers before ownership publication or coordinated component removal.
+
+## Compensating-write CAS correction
+
+- A compensating GitOps transaction SHALL re-acquire the repository mutex and compare the original provisional transaction ID, provisional status revision, expected head, and arbiter epoch before writing.
+- If an intervening writer advanced proposal state, compensation SHALL no-op with superseded evidence or recompute from the newer snapshot; it SHALL NOT overwrite the newer state.
+- Compensation idempotency SHALL bind the original transaction and expected provisional revision. Tests SHALL cover an unrelated serialized status write between provisional commit and compensation.
+
+## Provisional-transaction retry resumption correction
+
+- The terminal status activity SHALL persist or reconstruct its phase from the provisional transaction record. On activity retry, if repository state already contains the exact activity-owned provisional transaction ID, provisional revision, expected head, and arbiter epoch, it SHALL skip the initial write and resume mandatory post-commit GitHub/arbiter revalidation and any compensation.
+- A CAS mismatch is 'superseded/no-op' only when state does not match either the expected pre-write snapshot or this activity's own exact provisional record. Retrying after a successful provisional commit can therefore never silently omit revalidation.
+- Tests SHALL crash the worker immediately after the provisional commit and before revalidation, then retry and prove that merge/head/takeover changes are revalidated and repaired exactly once.

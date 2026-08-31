@@ -271,3 +271,67 @@ without a schema change.
     re-fetches a fresh `PRSnapshot` and re-runs `decide()` itself before
     doing anything — the reconcile-side decision is only ever used to decide
     *whether to submit a tick*, never to decide what the tick actually does.
+
+## Accepted design correction (authoritative)
+
+This section supersedes the direct-tick and `last_orphan_tick` design above.
+
+Use a dedicated `FallbackReviewWorkflow` with deterministic ID `fallback-review-{service}-{slug}`. Reconcile starts/adopts it idempotently; the fallback owns one in-flight tick, cooldown timers, bounded retries and terminal exit. All PR/status/Temporal-client/CWFT operations are activities; workflow code performs no direct I/O. Existing `.status.yaml` transitions stay inside the serialized Argo GitOps commit step, so the proposed direct `proposal_state.py` metadata write is removed.
+
+Ownership handoff is bidirectional: fallback checks `Running && shepherd_in_loop` before each tick; DevLoop cancels and awaits fallback before setting `shepherd_in_loop=True`. The submission helper returns `submitted`, `already_exists`, `transient_failure` or `deterministic_failure`; only success advances cooldown. The targeted shepherd revalidates head and gates before acting. The reconcile Schedule explicitly uses non-overlap (`SKIP`).
+
+## P1 concurrency and retry correction (authoritative)
+
+Each fallback cycle allocates and persists one deterministic `tick_id = <fallback-workflow-id>-<proposal>-<head-sha>-<cycle>` before calling the submission activity. The mctl-api/CWFT boundary maps that ID to an explicit Argo workflow name or idempotency key. Activity retries never allocate another cycle or ID; `AlreadyExists` means adopt and observe the existing run. The durable cycle advances only after the tick reaches a terminal outcome.
+
+Submission errors are classified. Retryable transport errors use bounded Temporal activity retry/backoff without incrementing `review_attempts`. Deterministic validation/auth/configuration failures increment a separately persisted, bounded `submission_failures` counter; exhaustion records evidence and ends in `review-stuck`.
+
+Cancellation is a handoff protocol, not merely a Temporal child cancellation. The fallback cancellation handler determines whether the external Argo run was created. If created, it requests cancellation when supported and waits for terminal confirmation; otherwise it adopts and waits for terminal completion. DevLoop waits for that handler to finish before setting `shepherd_in_loop=True`. Thus no external fallback tick remains able to write status after ownership transfers.
+
+## Create-after-cancellation barrier correction
+
+The submission activity and deterministic remote tick ID form a two-phase handoff barrier. Cancellation does not infer absence from a single lookup. The fallback requests activity cancellation, then awaits the activity's terminal outcome (or a durable cancellation acknowledgement whose contract guarantees the remote request cannot later create). Only then does it reconcile the deterministic ID. An existing run is adopted and driven to terminal cancellation/completion. An absent run is accepted only after the activity is terminal, so a late remote create cannot appear after DevLoop takes ownership. DevLoop awaits the entire barrier before publishing `shepherd_in_loop=True`.
+
+## Proposal-scoped arbiter and terminal writer correction
+
+Introduce one deterministic proposal-scoped ownership arbiter (workflow or equivalent durable compare-and-swap service). DevLoop atomically changes its epoch to `takeover_pending` before discovering/canceling fallback work. Reconcile can create/adopt a fallback only after receiving a grant for the current epoch; fallback revalidates that grant immediately before submission. The arbiter refuses new fallback grants while takeover is pending, closing the no-fallback-found/start-between-lookup-and-publish race. After all granted work is drained, the arbiter publishes DevLoop ownership and only then allows `shepherd_in_loop=True`.
+
+A dedicated status-transition activity handles submission-budget exhaustion when no Argo run exists. It uses the existing repository mutex and serialized GitOps commit path, is keyed idempotently by proposal plus terminal tick ID, and writes `review-stuck` with failure evidence. The workflow only invokes and awaits this activity; it does not read or write repository state directly.
+
+## Claim liveness and status fencing correction
+
+Arbiter claims carry `owner_workflow_id`, `owner_run_id`, epoch, and a renewable heartbeat deadline. Expiry alone is not proof of abandonment. Recovery crosses an activity boundary to query Temporal for the exact owner run and revokes only when that execution is terminal; query errors preserve the claim. DevLoop releases/finalizes in its cleanup path, while Reconcile periodically drives the terminal-owner recovery path. Tests cover completed, failed, terminated, and cancelled owners plus visibility outage.
+
+The terminal status activity is a compare-and-set transaction. While holding the existing repository mutex it re-reads proposal status and PR state and verifies expected status, exact head SHA, arbiter epoch, and open/unmerged state. It writes `review-stuck` only if all predicates still match; otherwise it records a superseded no-op. The idempotency key includes the expected snapshot, preventing an old tick from overwriting a merged PR, a new head, or a newer owner.
+
+## Post-commit repair and durable transient retry correction
+
+Because the repository mutex cannot lock GitHub PR mutations, terminal status projection is two-phase. The activity commits a provisional, snapshot-fenced `review-stuck` record, immediately re-fetches the PR, and confirms exact head/open state. A mismatch triggers an idempotent compensating commit keyed by the original transaction ID, projecting the newer head or merged/closed state and marking the old evidence superseded. Reconcile applies the same external-state-precedence rule on every later cycle, covering changes that occur after post-commit validation.
+
+When Temporal activity retries are exhausted for a transient transport error, the fallback workflow does not exit or allocate a new cycle. It persists the same tick ID, increments a separate `transient_outage_windows` counter, sleeps on a durable exponential-backoff timer, and resumes submission with the same idempotency key. The counter has an explicit cap; exhaustion records operational evidence through the fenced two-phase status activity and transitions to `review-stuck` without consuming the code-fix `review_attempts` budget. Continue-as-new, if used for history control, carries the tick ID, counters, epoch, and timer deadline.
+
+## Terminal-writer arbiter barrier correction
+
+Terminal projection participates in the ownership arbiter as a registered in-flight operation for the fallback epoch. Takeover first records `takeover_pending`, which prevents new writers, and then waits for every registered writer as part of the drain barrier. The writer's post-commit phase re-queries the arbiter as well as GitHub. Epoch/claim mismatch triggers the idempotent compensating commit, and the writer acknowledges terminal completion only after compensation settles. DevLoop publishes `shepherd_in_loop=True` only after this acknowledgement.
+
+## Decision projection and coordinated rollback correction
+
+A dedicated decision-projection activity records both actions and skips using a deterministic event key `proposal:epoch:cycle:decision`. It writes through the existing serialized GitOps/audit boundary and exposes owner, exact head, decision/reason, counters, and next-tick time without requiring Temporal history inspection. Replays and duplicate reconciliations adopt the same event; the workflow itself performs no I/O.
+
+Rollback is an ownership transition. Disable new arbiter grants, enter drain mode, settle every registered external tick/submission/status writer, and verify no fallback can mutate state. Then roll back Reconcile, DevLoop handoff, arbiter, and projection code as one compatible deployment unit (or keep all enabled). The previous rollback text that reverts only Reconcile is superseded.
+
+## Bounded drain recovery and projection identity correction
+
+A takeover drain has a bounded retry and observation budget. If the external Argo run or a registered writer cannot be proven terminal within that budget, the arbiter enters an observable `takeover_drain_stuck` state, preserves the no-overlap fence, and emits operator recovery evidence. Reconcile cannot grant fallback ownership and DevLoop cannot publish ownership while this state is active. Recovery is an explicit idempotent operator action that either resumes the same drain or, after independently proving all registered work terminal, advances the same arbiter epoch; it never clears the fence merely because a timeout elapsed.
+
+Decision projections use an occurrence-aware identity `proposal:epoch:cycle:decision:reason:occurrence`, or an equivalent compare-and-update operation keyed by the durable occurrence. Repeated transient/cooldown skips in one cycle therefore update or append the newest counters, reason, and deadline without being hidden by an earlier event.
+
+Decision-projection activities register as in-flight arbiter work alongside ticks, submitters, and terminal writers. Takeover and rollback drain them before ownership publication or component removal. Rollback tests include a projection commit already in flight and prove that no projection can land after the compatible deployment unit is disabled.
+
+## Compensating-write compare-and-set correction
+
+A compensating GitOps transaction re-acquires the repository mutex and re-reads the proposal before writing. It applies only while the provisional transaction ID, provisional status revision, expected head, and arbiter epoch are still current. If any intervening writer advanced proposal state, compensation records an auditable superseded no-op or recomputes from the newer snapshot; it never overwrites that writer. The compensation idempotency key includes both the original transaction ID and the expected provisional revision.
+
+## Provisional phase-resume correction
+
+The terminal projection activity is a resumable two-phase transaction. Its durable provisional record contains transaction ID, provisional revision, expected head, arbiter epoch, and phase. An activity retry first reads that record. If it is the retry's own exact provisional write, the activity resumes at post-commit GitHub/arbiter revalidation instead of attempting the initial CAS again. Only unrelated intervening state is superseded. Compensation retains the existing mutex/CAS fence and is idempotent, so a worker crash after the provisional commit cannot strand stale 'review-stuck' evidence or apply repair twice.

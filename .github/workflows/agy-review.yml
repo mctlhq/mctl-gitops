@@ -1,0 +1,22 @@
+name: Agy PR review
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+
+concurrency:
+  group: agy-review-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  agy-review:
+    uses: mctlhq/.github/.github/workflows/agy-review.yml@0ca555be1bfadf79f76f2fd56a00e91b89806ffe
+    permissions:
+      contents: read
+      pull-requests: write
+    with:
+      # Staged rollout: Agy evidence is reviewed manually until proposal #240
+      # delivers exact-head markers, backfill, and repository-level gating.
+      blocking: false
