@@ -12,7 +12,5 @@
   <key>StartInterval</key><integer>900</integer>
   <key>RunAtLoad</key><true/>
   <key>ProcessType</key><string>Background</string>
-  <key>StandardOutPath</key><string>/tmp/skills-sync.launchd.log</string>
-  <key>StandardErrorPath</key><string>/tmp/skills-sync.launchd.log</string>
 </dict>
 </plist>

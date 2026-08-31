@@ -12,6 +12,8 @@
 # hand -- skill edits go through the mctl_publish_platform_skill MCP tool, which
 # commits to main, and land here on the next run.
 set -uo pipefail
+shopt -s nullglob   # пустой каталог не должен давать литерал "*" в цикле
+
 
 MIRROR="$HOME/.claude/skills-catalog"
 CATALOG="$MIRROR/platform-gitops/platform-skills/catalog"
@@ -19,6 +21,23 @@ SKILLS="$HOME/.claude/skills"
 LOG="$HOME/.claude/skills-sync.log"
 
 exec >>"$LOG" 2>&1
+
+# launchd запускает нас каждые 15 мин, а README предлагает и ручной запуск.
+# Два одновременных прогона дерутся за один git-репозиторий (index.lock), а в
+# худшем случае один делает rm -rf зеркала, пока другой в нём checkout'ится.
+# mkdir атомарен; flock(1) на macOS нет.
+LOCK="$HOME/.claude/skills-sync.lock"
+if ! mkdir "$LOCK" 2>/dev/null; then
+  if [ -f "$LOCK/pid" ] && ! kill -0 "$(cat "$LOCK/pid")" 2>/dev/null; then
+    echo "[$(date -u +%FT%TZ)] снимаю осиротевший лок (pid $(cat "$LOCK/pid") мёртв)"
+    rm -rf "$LOCK"; mkdir "$LOCK" 2>/dev/null || { echo "  лок занят -- выхожу"; exit 0; }
+  else
+    echo "[$(date -u +%FT%TZ)] синк уже идёт -- выхожу"; exit 0
+  fi
+fi
+echo $$ > "$LOCK/pid"
+trap 'rm -rf "$LOCK"' EXIT
+
 echo "[$(date -u +%FT%TZ)] sync start"
 
 if [ ! -d "$MIRROR/.git" ]; then
@@ -61,7 +80,12 @@ done
 # Drop symlinks whose target is gone (skill deprecated/renamed upstream).
 for dst in "$SKILLS"/*; do
   [ -L "$dst" ] || continue
-  [ -e "$dst" ] || { rm "$dst"; echo "  removed $(basename "$dst") (dangling)"; }
+  [ -e "$dst" ] && continue
+  # Только наши: чужой симлинк на временно недоступную цель -- не наш мусор.
+  case "$(readlink "$dst")" in
+    "$CATALOG"/*) rm "$dst"; echo "  removed $(basename "$dst") (dangling)" ;;
+    *) echo "  KEEP $(basename "$dst") -- dangling but not ours" ;;
+  esac
 done
 
 # /tmp/review-watch.sh is generated from the skill body and caches across
