@@ -33,11 +33,20 @@ exec >>"$LOG" 2>&1
 # худшем случае один делает rm -rf зеркала, пока другой в нём checkout'ится.
 # mkdir атомарен; flock(1) на macOS нет.
 LOCK="$HOME/.claude/skills-sync.lock"
+# Возраст лока. stat(1) несовместим между BSD и GNU, поэтому пробуем оба; при
+# неудаче возвращаем 0, то есть "свежий" -- лучше пропустить прогон, чем увести
+# лок у живого процесса.
+lock_age_seconds() {
+  local m
+  m=$(stat -f %m "$LOCK" 2>/dev/null) || m=$(stat -c %Y "$LOCK" 2>/dev/null) || m=""
+  [ -n "$m" ] || { echo 0; return; }
+  echo $(( $(date +%s) - m ))
+}
 if ! mkdir "$LOCK" 2>/dev/null; then
   STALE=""
   if [ -f "$LOCK/pid" ]; then
     kill -0 "$(cat "$LOCK/pid")" 2>/dev/null || STALE="pid $(cat "$LOCK/pid") мёртв"
-  elif [ -n "$(find "$LOCK" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
+  elif [ "$(lock_age_seconds)" -gt 60 ]; then
     # Убитый между mkdir и записью pid оставлял лок без pid-файла, и он залипал
     # навсегда. Возраст различает это от нормального прогона, который окно между
     # mkdir и записью проходит за микросекунды, а сам живёт секунды.
