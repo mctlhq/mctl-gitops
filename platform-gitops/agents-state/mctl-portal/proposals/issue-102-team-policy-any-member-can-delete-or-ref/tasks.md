@@ -32,6 +32,24 @@
       (admin-template arm present); team-owned-entity behavior for
       delete/refresh is unchanged for all five other arms.
 
+- [ ] 3a. (depends on 1) **Make the missing-`action` case a deliberate,
+      commented choice.** `isReadAction` is `action === 'read'`, so a
+      catalog-entity permission that arrives with `attributes` undefined —
+      or with the field renamed by a future Backstage upgrade — is treated
+      as non-read: the admin-template arm is dropped and viewers are denied.
+      That fail-closed direction is correct and must be kept, but today it
+      would be an accident of the comparison rather than a decision, and its
+      failure mode is a silent one: members stop seeing shared templates and
+      nothing logs why. Add a short comment at the `isReadAction`
+      computation saying that undefined action deliberately falls to the
+      restrictive side, and emit one `logger.warn` when a `catalog-entity`
+      resource permission arrives with no `attributes?.action` at all (this
+      should never happen against a working Backstage; if it starts
+      happening after an upgrade, that warn is the only thing that will say
+      so). — DoD: comment present; warn fires only on the
+      genuinely-undefined case, not on any legitimate non-read action, so a
+      normal delete request does not spam the log.
+
 - [ ] 4. (depends on 2, 3) Update the doc comment block above the
       catalog-entity branch (module.ts:129-135) to state that the
       global-admin-template arm is read-only-gated, and update the
@@ -43,10 +61,16 @@
 - [ ] 5. (depends on 1, 2, 3) Add regression tests to
       `plugins/permission-backend-module-team-policy/src/module.test.ts`
       per the Tests section below — DoD: all new tests pass against the
-      fixed code and are confirmed (by temporarily reverting tasks 2-3, or
-      by inspection matching the issue's reasoning) to fail against
-      today's pre-fix code, satisfying the issue's "validate by mutation"
-      request.
+      fixed code, **and** each of T1, T2, T4, T5 is confirmed to fail
+      against the pre-fix code by actually reverting tasks 2-3 on a scratch
+      commit and running the suite. Name in the PR which tests failed and
+      how. **"Or by inspection" is not an accepted substitute** — the whole
+      point of mutation is that inspection cannot tell a real assertion
+      apart from a vacuous one, and a conditional-decision assertion is
+      exactly the shape that passes vacuously when it reaches into a
+      condition tree that does not have the field it thinks it has. If a
+      test still passes with the fix reverted, that test is wrong, not the
+      procedure.
 
 - [ ] 6. Run the plugin's test suite and lint for
       `permission-backend-module-team-policy`
@@ -96,6 +120,11 @@
       `catalog.entity.delete` on a global admin template: assert
       `{ result: AuthorizeResult.ALLOW }` (unchanged short-circuit,
       unaffected by this fix).
+- [ ] T9. (task 3a) A `catalog-entity` resource permission constructed with
+      `attributes` absent: assert the admin-template arm is absent from the
+      `anyOf` and a viewer is denied — i.e. pin the fail-closed direction so
+      a later refactor cannot flip the default to permissive without a red
+      test.
 
 ## Rollback
 

@@ -97,13 +97,16 @@ mctl-portal and are called out as a hard dependency, not implemented here.
   and the two plugins can be rotated independently) and introduces a new
   `BACKSTAGE_GITHUB_APP_CONNECT_TOKEN` env var / `Options.BackstageGithubAppConnectToken`
   field for it. See design.md Alternatives for the rejected single-token
-  option. This is a reasonable default, not a blocking question — reviewers
-  who prefer the single-token route can swap the env var back to
-  `BackstageToken` with a small diff.
+  option. **Confirmed at approval: two tokens.** This is settled, not a
+  reviewer's choice at implementation time — do not swap back to
+  `BackstageToken` to save an env var.
 - Whether the Backstage-side admin/on-behalf-of exemption for the
   `user`-param match check will accept mctl-api's service-token identity
   automatically, or needs an explicit allowlist entry, is a mctl-portal-side
-  decision not resolved here. Proceeding on the assumption that the
-  companion mctl-portal change grants the new token an identity Backstage
-  recognizes as exempt (equivalent to today's admin exemption at
-  router.ts:726-729).
+  decision not resolved here. **Decided at approval:** this assumption is
+  not carried silently — a companion mctl-portal issue must be filed and
+  cited in this PR *before* it opens, covering the token grant, the
+  identity exemption, and the Vault path. And because that dependency is
+  unresolved, this PR uses `Refs #212`, not a closing keyword: mctl-api
+  sending a header does not make sync work, and #212 is a production-broken
+  P1 that must stay open until an end-to-end sync succeeds.

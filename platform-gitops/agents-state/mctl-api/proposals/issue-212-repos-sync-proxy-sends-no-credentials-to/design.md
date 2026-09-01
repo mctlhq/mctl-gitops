@@ -110,14 +110,15 @@ unaffected by this issue.
    test-token` when the token is configured, and no `Authorization` header
    at all when it is empty.
 
-6. **Helm / deployment**: add `BACKSTAGE_GITHUB_APP_CONNECT_TOKEN` to the
-   chart's secret env wiring next to the existing `BACKSTAGE_TOKEN` entry
-   in `helm/` (values + secret template), sourced from the same Vault path
-   pattern the platform already uses for `BackstageToken`, once mctl-portal
-   has minted the token. This proposal documents the required env var; the
-   actual Vault secret provisioning and Backstage-side token minting is a
-   deployment/ops action paired with the mctl-portal change, not a Go code
-   change.
+6. **Helm / deployment**: **not part of this PR** (decided at approval, see
+   tasks.md task 6). `BACKSTAGE_GITHUB_APP_CONNECT_TOKEN` gets added to the
+   chart's secret env wiring only *after* the token has been minted in
+   Backstage and written to Vault — config that points at a missing Vault
+   key can wedge the ExternalSecret and block the release from syncing.
+   This proposal only documents the env var name and the Vault path so the
+   later gitops PR is mechanical. In exchange, the Go side logs one warn at
+   startup when the token is unset (task 6a), so the gap between "code
+   merged" and "token provisioned" is observable instead of silent.
 
 ## Alternatives
 

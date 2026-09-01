@@ -32,15 +32,15 @@
 
 ## Proposed solution
 
-1. **go.mod**: bump the `go` directive from `1.25.0` to `1.25.13` (the
-   patched line per the govulncheck DB cited in the issue). No dependency
-   version changes — chi is already at v5.3.1, which is what README needs
-   to be corrected to match, not the reverse.
+1. **go.mod**: bump the `go` directive from `1.25.0` to `1.26.6` (decided at
+   approval; see requirements.md Open questions for why 1.26.6 and not
+   1.25.13). No dependency version changes — chi is already at v5.3.1, which
+   is what README needs to be corrected to match, not the reverse.
 2. **Dockerfile**: replace the floating `FROM golang:1.26-alpine AS
    builder` with a digest-pinned `FROM
-   golang:1.25.13-alpine@sha256:<digest> AS builder`, matching go.mod's new
+   golang:1.26.6-alpine@sha256:<digest> AS builder`, matching go.mod's new
    `go` directive at the same patch level. The digest is resolved once at
-   authoring time (`docker pull golang:1.25.13-alpine && docker inspect
+   authoring time (`docker pull golang:1.26.6-alpine && docker inspect
    --format='{{index .RepoDigests 0}}'`, or the equivalent `crane digest`)
    and hardcoded, following the same pattern the issue points to in
    mctl-telegram (pin builder images by digest, not floating tag, so a
@@ -48,24 +48,26 @@
    modulo explicit re-pin). The runtime `alpine:3.24` stage is untouched —
    out of scope per requirements.md.
 3. **README.md**: update the Tech Stack table's `Language` row to `Go
-   1.25.13` and `Router` row to `go-chi/chi v5.3.1`; update the
-   Prerequisites bullet to `Go 1.25.13+` (or `Go 1.25+` — matching the
-   table's precision is preferable so the two don't drift independently
-   again; this proposal uses the exact patch version in the table and a
-   `1.25+` floor in Prerequisites, since Prerequisites is describing a
-   minimum for local dev, not a pin).
+   1.26.6` and `Router` row to `go-chi/chi v5.3.1`; update the
+   Prerequisites bullet to `Go 1.26+`. The table carries the exact patch
+   version (it documents what ships); Prerequisites carries the `1.26+`
+   floor, since it describes a minimum for local dev rather than a pin.
 4. **security.yml**: remove `continue-on-error: true` from the govulncheck
    step (line 33) and replace the now-stale justifying comment (lines
    30-32) with a short note that the job is fail-closed following the
-   1.25.13 bump. Leave the `GOTOOLCHAIN: auto` workaround for the
-   `go install ...@latest` step untouched — that is an unrelated, still-valid
-   constraint from `setup-go@v7` pinning `GOTOOLCHAIN=local`.
+   1.26.6 bump, **and** pin the `govulncheck` binary itself (see task 5a).
+   Leave the `GOTOOLCHAIN: auto` workaround for the `go install` step
+   untouched — that is an unrelated, still-valid constraint from
+   `setup-go@v7` pinning `GOTOOLCHAIN=local`.
 5. **Verification**: after the above, run `go mod tidy`, `go build ./...`,
    `go vet ./...`, `go test ./...`, and `govulncheck ./...` locally (or in
-   CI) to confirm 0 reachable vulnerabilities and no build breakage from the
-   patch bump. Go patch releases within a minor line (1.25.0 → 1.25.13) are
-   contractually backward compatible per the Go 1 compatibility promise, so
-   no source changes are expected beyond the version strings themselves.
+   CI) to confirm 0 reachable vulnerabilities and no build breakage. Unlike
+   a patch bump inside one minor line, 1.25 → 1.26 is **not** covered by a
+   "nothing can change" argument: the Go 1 compatibility promise covers the
+   language and library APIs, not `go vet`'s analyzer set or lint output.
+   CI runs vet/lint on 1.25 today, so this is the one step of this proposal
+   that can genuinely surface work. If it does, fix it or stop and report —
+   do not silence a new vet finding to keep the bump small.
 
 This is a version/config-only change — no application code in
 `internal/skill`, `internal/pipeline`, `internal/capability`, `internal/mcp`,
@@ -73,25 +75,24 @@ or `internal/api` is touched, and no new runtime behavior is introduced.
 
 ## Alternatives
 
-- **Move go.mod to `1.26.6` and pin Dockerfile to `golang:1.26.6-alpine`
-  instead.** This is the other option the issue explicitly offers, and it
-  has the appeal of matching the Dockerfile's current (if unpinned) intent
-  of using 1.26. Dropped in favor of staying on 1.25.x because: (a) it's a
-  larger version jump for a change whose only stated goal is closing 27
-  reachable CVEs, all of which are fixed by 1.25.13 alone; (b) a Go minor
-  version bump (1.25 → 1.26) carries a nonzero chance of new vet/lint
-  findings, deprecations, or runtime behavior changes that would need wider
-  validation than a security-focused proposal should carry; (c) go.mod
-  already declares 1.25.0 today, so treating the Dockerfile's 1.26 as the
-  drift to fix (rather than the target to adopt) is the smaller diff.
-  Recorded as an open question for the reviewer since it is a legitimate
-  call either way.
-- **Use a floating patch-pinned tag (`golang:1.25.13-alpine`) without a
+- **Stay on `1.25.13` and pin Dockerfile to `golang:1.25.13-alpine`.**
+  This was the proposal's original choice and was **rejected at approval**.
+  Its case rested on three claims, of which only the third survives:
+  (a) "smaller jump for closing 27 CVEs" — true but irrelevant, since both
+  lines close them; (b) "a minor bump risks new vet/lint findings" — this
+  risk exists either way and is *not* avoided by choosing 1.25.13, because
+  the production image is already built by a 1.26.x toolchain; choosing
+  1.25.13 does not skip the 1.26 risk, it merely leaves CI blind to it
+  while shipping it; (c) "smaller diff" — true, and outweighed. The
+  decisive fact is that `Dockerfile:1` floats on `golang:1.26-alpine`
+  today, so 1.25.13 would **downgrade** the toolchain that actually builds
+  the release binary. See requirements.md Open questions.
+- **Use a floating patch-pinned tag (`golang:1.26.6-alpine`) without a
   digest.** Rejected because the issue explicitly asks to "digest-pin the
   matching builder image ... following the mctl-telegram pattern," and a
   tag alone can be repointed upstream (Alpine base image rebuilds under the
   same tag), which defeats the reproducibility goal of pinning.
-- **Add a `toolchain go1.25.13` directive to go.mod in addition to bumping
+- **Add a `toolchain go1.26.6` directive to go.mod in addition to bumping
   `go`.** Considered to force an exact toolchain even under `GOTOOLCHAIN
   <different-value>`, but not adopted: `actions/setup-go@v7` already
   resolves the exact version from `go-version-file: go.mod`'s `go` line for
@@ -105,9 +106,12 @@ or `internal/api` is touched, and no new runtime behavior is introduced.
 ## Platform impact
 
 - **Migrations**: none — no data model, schema, or API surface changes.
-- **Backward compatibility**: none expected. Go 1.25.0 → 1.25.13 is a patch
-  bump under the Go 1 compatibility promise; `go build ./...` and `go test
-  ./...` are expected to pass unchanged. The image's runtime behavior
+- **Backward compatibility**: none expected at the source level — Go 1
+  guarantees the language and library APIs across 1.25 → 1.26, so `go build
+  ./...` and `go test ./...` should pass unchanged. What is *not*
+  guaranteed is tooling output: `go vet`'s analyzers and the linter may
+  report new findings on 1.26 that 1.25 did not. The image's runtime
+  behavior
   (binary entrypoint, exposed ports, `skills/custom` path handling) is
   unaffected since only the builder stage's base image changes.
 - **Resource impact**: negligible. Digest-pinning the builder image does
@@ -115,7 +119,7 @@ or `internal/api` is touched, and no new runtime behavior is introduced.
   builder stage is discarded after `go build`.
 - **Risks**:
   - Digest pin goes stale relative to upstream Alpine/Go security patches
-    within the `golang:1.25.13-alpine` tag family (Alpine package updates
+    within the `golang:1.26.6-alpine` tag family (Alpine package updates
     inside the same Go patch image). Mitigation: this is the same tradeoff
     mctl-telegram already accepted per the issue's own reference; the
     existing weekly Trivy `schedule: cron "27 4 * * 1"` scan in
@@ -128,7 +132,5 @@ or `internal/api` is touched, and no new runtime behavior is introduced.
     ordering in tasks.md runs the version bump first and confirms 0
     reachable vulnerabilities locally before flipping the CI job to
     fail-closed, so the flip only lands once verified green.
-  - If the reviewer prefers the 1.26.6 alternative, the Dockerfile digest
-    and go.mod `go` line in tasks.md below would both need to target 1.26.6
-    instead — flagged in Open questions in requirements.md so this is a
-    one-line swap, not a redesign.
+  - The 1.26.6 target is now decided, not optional; tasks.md targets it
+    directly. Do not re-open this as an implementation-time judgement call.
