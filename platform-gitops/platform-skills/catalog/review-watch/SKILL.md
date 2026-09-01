@@ -38,7 +38,10 @@ there, and since the freshness check is a grep over the body, a planted file
 merely has to contain `QUOTA_RE=` to be accepted as current and executed via
 `nohup`. The sticky bit then makes that file unremovable by us, so the watcher
 could be neither refreshed nor replaced. A stale `/tmp/review-watch.sh` may
-still be lying around; ignore it, the skills-sync script cleans it up.
+still be lying around: nothing points at it any more, and nothing removes it
+either. The skills-sync script deliberately leaves it alone, because a deletion
+landing between a pre-move session's freshness check and its `nohup` would stop
+that watcher from starting, silently. Delete it by hand if it bothers you.
 
 **The predicate must be something no older version can satisfy**, and it moves
 with every change to the script body. Two regressions taught this:
