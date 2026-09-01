@@ -53,13 +53,13 @@ fail() { # $1 = сообщение
 
 assert_log() { # $1 = подстрока, $2 = пояснение
   if ! grep -qF -- "$1" "$LOG"; then
-    fail "${2:-в логе нет} «$1»"
+    fail "${2:-в логе нет} '$1'"
   fi
 }
 
 assert_no_log() { # $1 = подстрока
   if grep -qF -- "$1" "$LOG"; then
-    fail "${2:-в логе НЕ должно быть} «$1»"
+    fail "${2:-в логе НЕ должно быть} '$1'"
   fi
 }
 
@@ -87,6 +87,16 @@ assert_is_dir() { # $1 = имя
 
 assert_exit() { # $1 = ожидаемый код
   [ "$RC" = "$1" ] || fail "код возврата $RC, ожидался $1"
+}
+
+# Прогон дошёл до конца И действительно свёл ссылки. Нужно всякий раз, когда
+# тест утверждает, что чего-то НЕТ: отсутствие -- это ещё и то, что видно после
+# прогона, упавшего на клоне, и без этой проверки такой тест зеленел бы, ни разу
+# не дойдя до проверяемой логики.
+assert_synced() {
+  assert_exit 0
+  assert_log "sync done"
+  assert_linked alpha
 }
 
 assert_file() { # $1 = путь
@@ -202,6 +212,21 @@ skip() { # $1 = имя
   case "$1" in *"$FILTER"*) return 1 ;; *) return 0 ;; esac
 }
 
+# Тот же разбор stat(1), что и в самом скрипте, и по той же причине: перебор
+# "stat -f ... || stat -c ..." в ОДНОЙ подстановке склеивает вывод обеих попыток.
+# GNU считает `-f` запросом про файловую систему, а `%i` -- именем файла: он
+# печатает многострочный блок (со счётчиком свободных блоков, который меняется
+# от записи к записи) И возвращает 1, так что запасной вызов дописывает к этому
+# блоку настоящий inode. Сравнение "до/после" тогда сравнивает не inode'ы, а
+# блоки, и на Linux расходится просто оттого, что между замерами что-то писали.
+# Ровно этот баг PR чинит в production-скрипте -- воспроизвести его в тесте,
+# который должен его ловить, было бы смешно.
+if stat -c %i . >/dev/null 2>&1; then
+  inode_of() { stat -c %i "$1" 2>/dev/null; }
+else
+  inode_of() { stat -f %i "$1" 2>/dev/null; }
+fi
+
 # Заведомо свободный pid: перебираем, пока kill -0 не перестанет его находить.
 dead_pid() {
   local p
@@ -229,6 +254,7 @@ test_bootstrap_links_catalog_skills() {
 test_bootstrap_filters_by_metadata() {
   setup bootstrap_filters_by_metadata
   run_sync
+  assert_synced           # иначе «не слинкован» верно и для упавшего прогона
   assert_absent beta
   assert_absent gamma
   finish
@@ -242,6 +268,7 @@ status: active
 runtimes: []'
   seed_commit "epsilon"
   run_sync
+  assert_synced
   assert_absent epsilon
   finish
 }
@@ -254,6 +281,7 @@ status: active
 runtimes: [codex] # not for claude'
   seed_commit "zeta"
   run_sync
+  assert_synced
   assert_absent zeta
   finish
 }
@@ -261,15 +289,14 @@ runtimes: [codex] # not for claude'
 test_second_run_reuses_mirror() {
   setup second_run_reuses_mirror
   run_sync
-  local ino_before; ino_before=$(stat -f %i "$MIRROR/.git" 2>/dev/null \
-                                || stat -c %i "$MIRROR/.git" 2>/dev/null)
+  local ino_before; ino_before=$(inode_of "$MIRROR/.git")
+  [ -n "$ino_before" ] || fail "не удалось прочитать inode зеркала"
   : > "$LOG"
   run_sync
   assert_exit 0
   assert_no_log "пересоздаю" "зеркало пересоздано на втором прогоне"
   assert_log "catalog unchanged"
-  local ino_after; ino_after=$(stat -f %i "$MIRROR/.git" 2>/dev/null \
-                              || stat -c %i "$MIRROR/.git" 2>/dev/null)
+  local ino_after; ino_after=$(inode_of "$MIRROR/.git")
   [ "$ino_before" = "$ino_after" ] || fail "каталог .git подменён без пересоздания"
   finish
 }
@@ -667,6 +694,13 @@ for t in $(declare -F | awk '{print $3}' | grep '^test_' | sort); do
 done
 
 echo
+# Фильтр, не совпавший ни с одним тестом, -- это опечатка, а не успех. Без этой
+# проверки прогон печатал "OK: 0 тестов" и возвращал 0, то есть в CI такой вызов
+# прошёл бы зелёным, ничего не проверив.
+if [ -n "$FILTER" ] && [ "$((PASSED + FAILED))" = "0" ]; then
+  echo "фильтр '$FILTER' не совпал ни с одним тестом"
+  exit 2
+fi
 if [ "$FAILED" = "0" ]; then
   echo "OK: $PASSED тестов"
   exit 0
