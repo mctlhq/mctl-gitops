@@ -23,7 +23,8 @@ export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes -o ConnectTimeou
 
 REMOTE="git@github.com:mctlhq/mctl-gitops.git"
 MIRROR="$HOME/.claude/skills-catalog"
-CATALOG="$MIRROR/platform-gitops/platform-skills/catalog"
+SPARSE_PATH="platform-gitops/platform-skills/catalog"
+CATALOG="$MIRROR/$SPARSE_PATH"
 SKILLS="$HOME/.claude/skills"
 LOG="$HOME/.claude/skills-sync.log"
 
@@ -45,7 +46,11 @@ LOCK_MAX_AGE=3600
 # различает, и, в отличие от возраста лока, не врёт после сна машины.
 holder_id() {
   local st
-  st=$(ps -p "$1" -o lstart= 2>/dev/null) || return 1
+  # TZ=UTC обязателен: ps печатает время старта в текущей зоне процесса.
+  # Ноутбук переезжает через часовые пояса; смена зоны между записью и
+  # сверкой превратила бы тот же момент старта в другую строку, живой
+  # держатель был бы объявлен "переиспользованным pid" и лок увели бы у него.
+  st=$(TZ=UTC ps -p "$1" -o lstart= 2>/dev/null) || return 1
   [ -n "$st" ] || return 1
   printf '%s %s' "$1" "$st"
 }
@@ -61,6 +66,14 @@ lock_age_seconds() {
 # inode каталога: BSD и GNU stat несовместимы, поэтому пробуем оба.
 dir_inode() { stat -f %i "$1" 2>/dev/null || stat -c %i "$1" 2>/dev/null || true; }
 if ! mkdir "$LOCK" 2>/dev/null; then
+  # mkdir падает не только из-за занятости: нет ~/.claude, каталог только для
+  # чтения, кончилось место. Без этой проверки такой отказ уходил бы в ветку
+  # конкуренции -- pid и inode пустые, возраст 0 -- и каждый тик рапортовал бы
+  # "синк уже идёт" с кодом 0, вечно и молча.
+  if [ ! -d "$LOCK" ]; then
+    echo "[$(date -u +%FT%TZ)] не удалось создать $LOCK, и его там нет -- отказ окружения (права? место? нет ~/.claude?)"
+    exit 1
+  fi
   # Запоминаем, КАКОЙ каталог осматриваем: к моменту перехвата на этом месте
   # может оказаться уже другой.
   LOCK_INO=$(dir_inode "$LOCK")
@@ -110,8 +123,20 @@ if ! mkdir "$LOCK" 2>/dev/null; then
     if [ "$(cat "$TAKEN/pid" 2>/dev/null)" != "$RECORDED" ]; then
       # Между проверкой и mv каталог успели подменить: мы унесли живой лок.
       # Возвращаем и уходим -- работает тот, кто его создал.
-      mv "$TAKEN" "$LOCK" 2>/dev/null
-      echo "  унесли не тот лок, вернул -- выхожу"; exit 0
+      # Возврат делаем НЕ через mv: пока мы разбирались, путь мог занять третий
+      # прогон, а mv в существующий каталог кладёт источник ВНУТРЬ него
+      # ($LOCK/$TAKEN), и лок оказывается ни у кого. Сначала резервируем путь
+      # собственным mkdir -- он атомарен и либо наш, либо чужой, -- и только
+      # потом переносим содержимое внутрь уже удерживаемого каталога.
+      if mkdir "$LOCK" 2>/dev/null; then
+        cp -R "$TAKEN"/. "$LOCK"/ 2>/dev/null
+        rm -rf "$TAKEN"
+        echo "  унесли не тот лок, вернул содержимое на место -- выхожу"
+      else
+        rm -rf "$TAKEN"
+        echo "  унесли не тот лок, а путь уже занят третьим прогоном -- выхожу"
+      fi
+      exit 0
     fi
     rm -rf "$TAKEN"
     mkdir "$LOCK" 2>/dev/null || { echo "  лок занят -- выхожу"; exit 0; }
@@ -149,18 +174,27 @@ MIRROR_OK=0
 if [ -d "$MIRROR/.git" ] \
    && git -C "$MIRROR" rev-parse --verify --quiet HEAD >/dev/null 2>&1 \
    && [ "$(git -C "$MIRROR" config --get remote.origin.url 2>/dev/null)" = "$REMOTE" ] \
-   && [ "$(git -C "$MIRROR" config --get core.sparseCheckout 2>/dev/null)" = "true" ]; then
+   && [ "$(git -C "$MIRROR" config --get core.sparseCheckout 2>/dev/null)" = "true" ] \
+   && git -C "$MIRROR" sparse-checkout list 2>/dev/null | grep -qxF "$SPARSE_PATH"; then
   MIRROR_OK=1
 fi
 # Клон, оборванный после создания .git, но до настройки remote/ref'ов, иначе
 # считался бы валидным зеркалом вечно: fetch падал бы каждый раз, а само
 # зеркало никогда не пересоздавалось.
+# Мало того, что разреженность включена -- в наборе должен быть НАШ путь.
+# `git sparse-checkout set scripts`, выполненный в этом зеркале руками, оставляет
+# core.sparseCheckout=true, и предикат по одному флагу принял бы зеркало, в
+# котором каталога скиллов нет вовсе. Тогда reset сохраняет чужую разреженность,
+# цикл по catalog/ не находит ничего, а финальная уборка сносит ВСЕ управляемые
+# симлинки как "исчезнувшие из каталога".
 # core.sparseCheckout проверяется отдельно, потому что клон идёт с --no-checkout:
 # прогон, оборванный между clone и sparse-checkout, оставляет .git, HEAD и
 # origin в полном порядке -- три предиката выше проходят, -- но без разреженной
 # конфигурации следующий reset --hard раскладывает всё дерево и подтягивает
 # блобы всего репозитория вместо каталога скиллов.
+MIRROR_RECREATED=0
 if [ "$MIRROR_OK" = "0" ]; then
+  MIRROR_RECREATED=1
   echo "  зеркало отсутствует или непригодно ($MIRROR) -- пересоздаю"
   # Собираем замену РЯДОМ и меняем местами только когда она готова. Снос до
   # клона означал бы, что при первом же оффлайне (или отвале ssh) все симлинки
@@ -173,7 +207,7 @@ if [ "$MIRROR_OK" = "0" ]; then
     rm -rf "$NEW_MIRROR"
     echo "  clone FAILED -- прежнее зеркало оставлено на месте"; exit 1
   fi
-  if ! git -C "$NEW_MIRROR" sparse-checkout set --cone platform-gitops/platform-skills/catalog; then
+  if ! git -C "$NEW_MIRROR" sparse-checkout set --cone "$SPARSE_PATH"; then
     rm -rf "$NEW_MIRROR"
     echo "  sparse-checkout FAILED -- иначе checkout вытянул бы весь репозиторий"; exit 1
   fi
@@ -211,7 +245,13 @@ git -C "$MIRROR" reset --quiet --hard origin/main || { echo "  reset FAILED"; ex
 # catalog/ был бы слинкован в ~/.claude/skills навсегда. -x нужен потому, что
 # корневой .gitignore прячет имена вроде __pycache__/ и packer_cache/, а
 # вложенный git-репозиторий под catalog/ git удаляет только при двойном -f.
-git -C "$MIRROR" clean -qxffd -- platform-gitops/platform-skills/catalog
+# Статус clean проверяем наравне с остальными git-командами: без set -e его
+# отказ (снятое право на запись, immutable-флаг на файле) прошёл бы молча, и
+# оставшийся мусор уехал бы в ~/.claude/skills как настоящий скилл, а прогон
+# закончился бы бодрым "sync done".
+if ! git -C "$MIRROR" clean -qxffd -- "$SPARSE_PATH"; then
+  echo "  clean FAILED -- в каталоге остался неотслеживаемый мусор, не свожу ссылки"; exit 1
+fi
 AFTER=$(git -C "$MIRROR" rev-parse HEAD)
 [ "$BEFORE" = "$AFTER" ] && echo "  catalog unchanged at ${AFTER:0:8}" \
                          || echo "  catalog ${BEFORE:0:8} -> ${AFTER:0:8}"
@@ -274,11 +314,15 @@ supports_claude() { # $1 = каталог скилла
   # Нет metadata.yaml -- линкуем: отсутствие декларации не повод прятать скилл,
   # иначе новый скилл молча не доехал бы до сессии.
   [ -f "$m" ] || return 0
-  # Пригодным платформа считает только active: validate-platform-skills.py
-  # отказывается привязывать draft и deprecated к тенантам и ролям, и рабочая
-  # станция не должна быть дырой в этом правиле.
+  # draft прячем: validate-platform-skills.py отказывается привязывать его к
+  # тенантам и ролям, и рабочая станция не должна быть дырой в этом правиле.
+  # deprecated, наоборот, оставляем: снятие с поддержки в этом репозитории --
+  # шаг НЕразрушающий (валидатор допускает существующие привязки к deprecated, а
+  # воркфлоу деприкейта продолжает отдавать содержимое, пока привязку не сняли
+  # явно). Отзывать симлинк на ближайшем тике значило бы, что скилл исчезает у
+  # работающего человека посреди сессии -- жёстче, чем поступает сама платформа.
   st=$(meta_scalar "$m" status)
-  [ -z "$st" ] || [ "$st" = "active" ] || return 1
+  [ -z "$st" ] || [ "$st" = "active" ] || [ "$st" = "deprecated" ] || return 1
   rt=$(meta_list "$m" runtimes)
   # Секции нет вовсе -- тот же случай, что и отсутствующий файл: не прячем.
   [ -n "$rt" ] || return 0
@@ -354,12 +398,18 @@ done
 # пропускал инвалидацию, а протухший watcher жил бы до следующего коммита в
 # каталог. Удаление дешёвое: скилл пишет файл заново при первом же обращении, а
 # уже запущенный watcher держит открытый inode и снятия ссылки не замечает.
-# ...но НЕ в момент, когда скилл его как раз раскладывает. Его bootstrap пишет
-# файл, затем chmod +x, затем nohup; попади удаление в этот зазор -- запуск
-# падает на отсутствующем файле и watcher не стартует вовсе. Довод про открытый
-# inode защищает уже ЗАПУЩЕННЫЙ процесс и на эту последовательность не
-# распространяется. Свежий файл (моложе CACHE_GRACE) пропускаем: протухший кеш
-# по определению старый, и его снимет этот же тик через 15 минут.
+# ...но НЕ вслепую на каждом тике. Bootstrap скилла пишет файл, затем chmod +x,
+# затем nohup; удаление, попавшее в этот зазор, роняет запуск, и watcher не
+# стартует вовсе. Довод про открытый inode защищает уже ЗАПУЩЕННЫЙ процесс и на
+# эту последовательность не распространяется.
+#
+# Возраст файла отличить запуск не может: скилл переписывает кеш только когда его
+# предикат по содержимому не сошёлся, поэтому при штатном запуске ГОДНОГО кеша
+# mtime остаётся старым всё время между проверкой и nohup. Поэтому основной
+# признак -- не возраст, а факт, что источник в каталоге действительно изменился
+# в этом самом прогоне: только тогда кеш мог протухнуть по нашей вине, и только
+# тогда его надо снимать. CACHE_GRACE остаётся вторым рубежом на случай, когда
+# изменение и запуск совпали по времени.
 CACHE_GRACE=120
 cache_age_seconds() {
   local m
@@ -367,16 +417,26 @@ cache_age_seconds() {
   [ -n "$m" ] || { echo 0; return; }
   echo $(( $(date +%s) - m ))
 }
-if [ -f /tmp/review-watch.sh ] && [ "$(cache_age_seconds /tmp/review-watch.sh)" -le "$CACHE_GRACE" ]; then
+WATCH_SKILL_CHANGED=0
+if [ "$MIRROR_RECREATED" = "1" ]; then
+  # Зеркало собрано заново -- сравнивать не с чем, считаем, что изменилось.
+  WATCH_SKILL_CHANGED=1
+elif [ "$BEFORE" != "$AFTER" ] \
+     && [ -n "$(git -C "$MIRROR" diff --name-only "$BEFORE" "$AFTER" -- "$SPARSE_PATH/review-watch" 2>/dev/null)" ]; then
+  WATCH_SKILL_CHANGED=1
+fi
+if [ ! -f /tmp/review-watch.sh ]; then
+  :
+elif [ "$WATCH_SKILL_CHANGED" = "0" ]; then
+  echo "  review-watch в каталоге не менялся -- кеш /tmp/review-watch.sh не трогаю"
+elif [ "$(cache_age_seconds /tmp/review-watch.sh)" -le "$CACHE_GRACE" ]; then
   echo "  /tmp/review-watch.sh только что записан -- не трогаю (идёт запуск watcher-а)"
-elif [ -f /tmp/review-watch.sh ]; then
-  if rm -f /tmp/review-watch.sh 2>/dev/null; then
-    echo "  dropped cached /tmp/review-watch.sh"
-  else
-    # /tmp -- 1777: файл может принадлежать другому пользователю, и тогда
-    # удалить его нельзя никогда. Прогон не роняем: симлинки уже сведены.
-    echo "  ВНИМАНИЕ: /tmp/review-watch.sh не удаляется (чужой владелец?) -- кеш остаётся протухшим"
-  fi
+elif rm -f /tmp/review-watch.sh 2>/dev/null; then
+  echo "  dropped cached /tmp/review-watch.sh (скилл обновился)"
+else
+  # /tmp -- 1777: файл может принадлежать другому пользователю, и тогда удалить
+  # его нельзя никогда. Прогон не роняем: симлинки уже сведены.
+  echo "  ВНИМАНИЕ: /tmp/review-watch.sh не удаляется (чужой владелец?) -- кеш остаётся протухшим"
 fi
 if [ "$RECONCILE_FAILED" = "1" ]; then
   echo "[$(date -u +%FT%TZ)] sync FAILED -- часть ссылок не сведена (права на $SKILLS?)"
