@@ -19,7 +19,11 @@ shopt -s nullglob   # пустой каталог не должен давать
 # fetch навсегда, причём с захваченным локом. Пусть лучше сразу падает.
 # Без таймаутов повисший ssh держал бы лок бесконечно, и kill -0 считал бы его
 # живым: каждый следующий тик молча пропускал бы синк.
-export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3}"
+# Опции ДОПИСЫВАЕМ к тому, что уже задано, а не подставляем вместо. Форма
+# ${VAR:-...} сохраняла чужое значение целиком: launchd-профиль с
+# GIT_SSH_COMMAND="ssh -i ~/.ssh/work" оставлял fetch без BatchMode и без
+# таймаутов, то есть ровно с тем поведением, которое здесь запрещено.
+export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh} -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3"
 
 REMOTE="git@github.com:mctlhq/mctl-gitops.git"
 MIRROR="$HOME/.claude/skills-catalog"
@@ -228,7 +232,12 @@ if [ "$MIRROR_OK" = "0" ]; then
     mv "$MIRROR" "$OLD_MIRROR"
   fi
   if ! mv "$NEW_MIRROR" "$MIRROR"; then
-    [ -e "$OLD_MIRROR" ] && mv "$OLD_MIRROR" "$MIRROR"
+    # -L и здесь: если зеркалом была битая ссылка, она и в $OLD_MIRROR битая,
+    # -e снова ложь, возврат молча не происходит -- а лог при этом уверяет, что
+    # прежнее возвращено.
+    if [ -e "$OLD_MIRROR" ] || [ -L "$OLD_MIRROR" ]; then
+      mv "$OLD_MIRROR" "$MIRROR"
+    fi
     rm -rf "$NEW_MIRROR"
     echo "  подмена зеркала FAILED -- прежнее возвращено"; exit 1
   fi
@@ -236,6 +245,15 @@ if [ "$MIRROR_OK" = "0" ]; then
 fi
 
 BEFORE=$(git -C "$MIRROR" rev-parse HEAD)
+# Отпечаток берём по РАБОЧЕМУ ДЕРЕВУ скилла, а не по коммиту: правку, сделанную
+# в зеркале руками, reset --hard снесёт, но HEAD при этом не сдвинется -- и
+# сравнение коммитов сочло бы, что ничего не изменилось, пока кеш watcher-а
+# продолжает исполнять код, выведенный из уже снесённой версии.
+watch_fingerprint() {
+  find "$CATALOG/review-watch" -type f -exec shasum {} + 2>/dev/null \
+    | sed "s|$MIRROR/||" | sort | shasum | cut -d" " -f1
+}
+WATCH_BEFORE=$(watch_fingerprint)
 # Hard reset rather than pull: the mirror is a read-only view of main, so local
 # divergence (a stray edit, an interrupted fetch) must never block the sync.
 # Явный refspec, а не "origin main": обновление origin/main при сокращённой
@@ -260,6 +278,7 @@ if ! git -C "$MIRROR" clean -qxffd -- "$SPARSE_PATH"; then
   echo "  clean FAILED -- в каталоге остался неотслеживаемый мусор, не свожу ссылки"; exit 1
 fi
 AFTER=$(git -C "$MIRROR" rev-parse HEAD)
+WATCH_AFTER=$(watch_fingerprint)
 [ "$BEFORE" = "$AFTER" ] && echo "  catalog unchanged at ${AFTER:0:8}" \
                          || echo "  catalog ${BEFORE:0:8} -> ${AFTER:0:8}"
 
@@ -446,8 +465,7 @@ WATCH_SKILL_CHANGED=0
 if [ "$MIRROR_RECREATED" = "1" ]; then
   # Зеркало собрано заново -- сравнивать не с чем, считаем, что изменилось.
   WATCH_SKILL_CHANGED=1
-elif [ "$BEFORE" != "$AFTER" ] \
-     && [ -n "$(git -C "$MIRROR" diff --name-only "$BEFORE" "$AFTER" -- "$SPARSE_PATH/review-watch" 2>/dev/null)" ]; then
+elif [ "$WATCH_BEFORE" != "$WATCH_AFTER" ]; then
   WATCH_SKILL_CHANGED=1
 fi
 # Долг держим в переменной, а метку -- лишь как способ пережить тик. Читать
