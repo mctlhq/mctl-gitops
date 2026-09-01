@@ -15,15 +15,30 @@ Also invoke this **proactively** (without being asked) whenever you have just po
 
 ## Implementation — detached shell, NOT subagent
 
-Use the script at `/tmp/review-watch.sh` (lazily ensure it exists; see "Bootstrap" below). Launch one **detached background shell** per PR via `nohup ... &` + `disown`. The shell process survives across Claude Code sessions and writes a result file when codex responds or after a timeout.
+Use the script at `~/.claude/tmp/review-watch.sh` (lazily ensure it exists; see "Bootstrap" below). Launch one **detached background shell** per PR via `nohup ... &` + `disown`. The shell process survives across Claude Code sessions and writes a result file when codex responds or after a timeout.
 
 Do NOT spawn an `Agent` for this. Sub-agent runtime has a strong bias toward the `Monitor` tool, which does not block the agent's completion — agents thinking they're "watching" Monitor exit in seconds without ever waiting. Two empirical attempts at agent-based watchers (with explicit "do not use Monitor" instructions) both failed in 26–39 seconds. The detached shell pattern below is what actually works.
 
-## Bootstrap — write `/tmp/review-watch.sh` if missing or stale
+## Bootstrap — write `~/.claude/tmp/review-watch.sh` if missing or stale
 
-Before launching watchers, check that the script is in place AND current:
-`grep -qF 'QUOTA_RE=' /tmp/review-watch.sh` — if the file is missing or the
-grep fails, (re)write it via Bash heredoc (the entire script body).
+Ensure the directory exists and is yours alone, then check that the script is
+in place AND current:
+
+```bash
+mkdir -p ~/.claude/tmp && chmod 700 ~/.claude/tmp
+grep -qF 'QUOTA_RE=' ~/.claude/tmp/review-watch.sh
+```
+
+If the file is missing or the grep fails, (re)write it via Bash heredoc (the
+entire script body).
+
+**Not `/tmp`.** That is where this lived until 2026-09-01 (mctl-gitops#959), and
+it is mode `1777`: any other local user could pre-create `review-watch.sh`
+there, and since the freshness check is a grep over the body, a planted file
+merely has to contain `QUOTA_RE=` to be accepted as current and executed via
+`nohup`. The sticky bit then makes that file unremovable by us, so the watcher
+could be neither refreshed nor replaced. A stale `/tmp/review-watch.sh` may
+still be lying around; ignore it, the skills-sync script cleans it up.
 
 **The predicate must be something no older version can satisfy**, and it moves
 with every change to the script body. Two regressions taught this:
@@ -37,6 +52,10 @@ with every change to the script body. Two regressions taught this:
   accepted a script with no quota handling at all — see below. It is now
   `QUOTA_RE=`, which only the current body defines.
 
+(The 2026-09-01 move out of `/tmp` did not need a new predicate: nothing has
+ever been written to the new path, so the first bootstrap there writes a fresh
+copy regardless of what the grep would have said.)
+
 ```bash
 #!/bin/bash
 # Detached PR-review watcher with macOS notification on completion.
@@ -45,8 +64,8 @@ with every change to the script body. Two regressions taught this:
 # reviewer the repo / trigger uses.
 # Args: <repo>           e.g. mctlhq/mctl-openclaw
 #       <pr>             e.g. 5
-#       <result-file>    e.g. /tmp/review-watch-mctl-openclaw-5.result
-#       <log-file>       e.g. /tmp/review-watch-mctl-openclaw-5.log
+#       <result-file>    e.g. ~/.claude/tmp/review-watch-mctl-openclaw-5.result
+#       <log-file>       e.g. ~/.claude/tmp/review-watch-mctl-openclaw-5.log
 #       [baseline-ts]    optional explicit baseline, e.g. 2026-07-12T08:04:47Z —
 #                        pass the fix-up push time to ignore everything older
 set -u
@@ -256,7 +275,7 @@ notify "review-watch [$REPO#$PR]" "timeout after ~30 min, no review response" "B
 > rather than eyeballing it — without the guard every tick would misread the
 > checklist as a clean review.
 
-Save with `chmod +x /tmp/review-watch.sh`.
+Save with `chmod +x ~/.claude/tmp/review-watch.sh`.
 
 ### macOS notification permission
 
@@ -267,9 +286,9 @@ Save with `chmod +x /tmp/review-watch.sh`.
 For each PR (`<owner>/<repo>` and `<N>`), in a single Bash call:
 
 ```bash
-nohup /tmp/review-watch.sh <owner>/<repo> <N> \
-  /tmp/review-watch-<repo-stem>-<N>.result \
-  /tmp/review-watch-<repo-stem>-<N>.log \
+nohup ~/.claude/tmp/review-watch.sh <owner>/<repo> <N> \
+  ~/.claude/tmp/review-watch-<repo-stem>-<N>.result \
+  ~/.claude/tmp/review-watch-<repo-stem>-<N>.log \
   [baseline-ts] \
   >/dev/null 2>&1 &
 PID=$!
@@ -285,7 +304,7 @@ echo "watcher pid=$PID"
 
 When the user later asks "did codex respond yet?" or similar, just `Read` the `.result` file:
 
-- If the file does not exist yet → watcher still polling. `Read /tmp/review-watch-<stem>-<N>.log` for current tick number to estimate.
+- If the file does not exist yet → watcher still polling. `Read ~/.claude/tmp/review-watch-<stem>-<N>.log` for current tick number to estimate.
 - If file contents start with `status=responded` → parse and report findings (Format A).
 - If `status=quota_exhausted` → Format E. A reviewer was triggered and answered
   "not now"; the diff was never read.
@@ -360,7 +379,7 @@ If args are ambiguous, ask which PRs in one short AskUserQuestion before launchi
 
 - The detached shell uses `nohup` + `disown` + stdout/stderr redirection — it survives Claude Code session boundaries. A future session can read the result file and report.
 - Codex usually responds within 1–5 minutes of `@claude review`. The 180s tick cadence catches it within the next tick. Sometimes codex takes 5–15 min when busy.
-- Result-file path convention: `/tmp/review-watch-<repo-stem>-<N>.result` — keep this stable so future sessions can find it without args.
+- Result-file path convention: `~/.claude/tmp/review-watch-<repo-stem>-<N>.result` — keep this stable so future sessions can find it without args. It moved out of `/tmp` on 2026-09-01 together with the script (mctl-gitops#959): the result file is what a later session reads to decide whether a PR is clean, so a world-writable location for it is the same trust problem as for the executable. Watchers launched before the move still write to `/tmp/review-watch-*.result`; check there too if a result is missing and the PR predates it.
 - If `gh api` returns 403/404, the watcher writes a status-error result and exits. No retries — auth/permission issues won't fix themselves.
 - The first `@claude review` issue comment is the trigger baseline. If the user re-triggers (posts `@claude review` again after a fix-up), launch a new watcher — the script's baseline-detection `last` filter picks up the latest trigger automatically. For push-triggered re-reviews (no fresh comment), always pass the explicit `baseline-ts` arg instead.
 
@@ -379,3 +398,4 @@ If args are ambiguous, ask which PRs in one short AskUserQuestion before launchi
 4. **Counting a quota notice as a review**: see `QUOTA_RE`. Codex's notice comes from its own login and otherwise sails straight through the hit gate and out the CLEAN branch. A quota notice is an answer about capacity, not about the diff.
 5. **Exiting on the first quota tick**: a bot that just reported a usage limit can still review minutes later — observed on mctl-agents#244, where codex posted the notice and then delivered two real P2s five minutes on. Keep polling; classify at the end.
 6. **Trusting the result file as the complete account of a PR's reviews**: the watcher exits at its first hit, so anything a second bot posts afterwards never appears in any result file. Before merging, always sweep `gh api repos/<owner>/<repo>/pulls/<N>/comments` and `.../issues/<N>/comments` unfiltered, full history.
+7. **Putting the watcher or its result files in `/tmp`**: mode `1777` means another local user can plant a `review-watch.sh` that passes the content-grep and gets executed, and the sticky bit then blocks replacing it. Keep both under `~/.claude/tmp` (mode 700) — mctl-gitops#959.
