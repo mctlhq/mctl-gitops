@@ -151,6 +151,58 @@ with tempfile.TemporaryDirectory() as d:
     r = run(tmp, f"{P1},.github/workflows/release-deploy.yaml")
     check("out-of-allowlist path in the list is refused", r.returncode == 4, f"rc={r.returncode} {r.stderr}")
 
+# 9. THE TAG IS AN INPUT. It ends up inside manifests this job commits with
+#    a token that bypasses main's protection, so a newline in it would append
+#    arbitrary YAML to a Deployment and land it unreviewed (agy P1 on #962).
+INJECTION = '1.35.0"\n  securityContext:\n    privileged: true\n  #'
+with tempfile.TemporaryDirectory() as d:
+    tmp = pathlib.Path(d)
+    fixture(tmp)
+    env_tag = INJECTION
+    r = subprocess.run(
+        [sys.executable, "-c", SCRIPT], cwd=tmp,
+        env={**os.environ, "TEAM": "admins", "SERVICE": "mctl-agents-worker",
+             "VALUES_PATH": P1, "VALUES_GLOB": "",
+             "IMAGE_NAME": "ghcr.io/mctlhq/mctl-agents", "NEW_TAG": env_tag,
+             "GITHUB_ENV": str(tmp / "e"), "GITHUB_OUTPUT": str(tmp / "o")},
+        capture_output=True, text=True,
+    )
+    check("a tag carrying YAML is refused", r.returncode == 5, f"rc={r.returncode} {r.stdout}")
+    check("nothing was written", "privileged" not in (tmp / P1).read_text(), "manifest was modified")
+
+# 10. A backslash escape in the tag must be inserted, not expanded as a
+#     group reference — a string replacement would duplicate text or fail
+#     the release with re.error.
+for bad in ('1.35.0\\1', '1.35.0\\g<0>'):
+    with tempfile.TemporaryDirectory() as d:
+        tmp = pathlib.Path(d)
+        fixture(tmp)
+        r = subprocess.run(
+            [sys.executable, "-c", SCRIPT], cwd=tmp,
+            env={**os.environ, "TEAM": "admins", "SERVICE": "mctl-agents-worker",
+                 "VALUES_PATH": P1, "VALUES_GLOB": "",
+                 "IMAGE_NAME": "ghcr.io/mctlhq/mctl-agents", "NEW_TAG": bad,
+                 "GITHUB_ENV": str(tmp / "e"), "GITHUB_OUTPUT": str(tmp / "o")},
+            capture_output=True, text=True,
+        )
+        check(f"a backslash tag ({bad!r}) is refused, not expanded",
+              r.returncode == 5, f"rc={r.returncode} {r.stdout} {r.stderr}")
+
+# 11. Ordinary tags, including pre-release and build-ish forms, still pass.
+for good in ("1.35.0", "1.35.0-rc.1", "sha-abc123", "v1.2.3"):
+    with tempfile.TemporaryDirectory() as d:
+        tmp = pathlib.Path(d)
+        fixture(tmp)
+        r = subprocess.run(
+            [sys.executable, "-c", SCRIPT], cwd=tmp,
+            env={**os.environ, "TEAM": "admins", "SERVICE": "mctl-agents-worker",
+                 "VALUES_PATH": P1, "VALUES_GLOB": "",
+                 "IMAGE_NAME": "ghcr.io/mctlhq/mctl-agents", "NEW_TAG": good,
+                 "GITHUB_ENV": str(tmp / "e"), "GITHUB_OUTPUT": str(tmp / "o")},
+            capture_output=True, text=True,
+        )
+        check(f"an ordinary tag ({good}) is accepted", r.returncode == 0, r.stderr)
+
 print()
 if failures:
     print(f"{len(failures)} FAILURE(S):")

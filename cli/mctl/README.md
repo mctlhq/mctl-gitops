@@ -6,7 +6,13 @@ Same operations as the Backstage UI, but from your terminal.
 ## Prerequisites
 
 - [gh CLI](https://cli.github.com/) installed and authenticated (`gh auth login`)
-- Go 1.21+ (for building from source)
+- Go 1.25.13+ on the 1.25 line, **or 1.26.1+ on the 1.26 line** (for building
+  from source). The `go` directive in `go.mod` is a minimum, not a pin, so a
+  newer toolchain always satisfies it — including go1.26.0, which still
+  carries the 16 reachable `crypto/x509` and related stdlib advisories that
+  this floor exists to close (verified with `govulncheck@v1.7.0`: clean under
+  `GOTOOLCHAIN=go1.25.13`, 16 reachable under go1.26.0). Being "above the
+  floor" is not the same as being patched.
 
 ## Install
 

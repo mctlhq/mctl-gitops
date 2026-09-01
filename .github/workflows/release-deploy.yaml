@@ -112,6 +112,18 @@ jobs:
           vpath = os.environ.get('VALUES_PATH', '').strip()
           vglob = os.environ.get('VALUES_GLOB', '').strip()
 
+          # The tag is a workflow_dispatch input and ends up inside the
+          # manifests this job commits — with an App token that bypasses
+          # main's protection, so nothing downstream reviews the result.
+          # A tag carrying a newline could therefore append arbitrary YAML
+          # to a Deployment (`1.2.3"\n  securityContext:\n    privileged:
+          # true\n  #`) and land it on main unreviewed. Anchored, and
+          # restricted to what a real image tag may contain
+          # (docker/distribution's grammar, minus the leading separator).
+          if not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9._-]{0,127}', new_tag):
+              print(f"ERROR: refusing tag {new_tag!r}: not a valid image tag", file=sys.stderr)
+              sys.exit(5)
+
           # The mctl-agents App token used to push this commit is on the
           # main-protection ruleset's bypass list on the understanding (see
           # CLAUDE.md's "Branch Protection Exception") that it only ever
@@ -204,9 +216,16 @@ jobs:
               with open(path) as fp:
                   content = fp.read()
               n1 = n2 = n3 = n4 = 0
+              # Replacements are CALLABLES, not strings: in a string
+              # replacement `\1` is a group reference, so a tag containing
+              # a backslash escape would be expanded rather than inserted —
+              # duplicating text, or failing the release with re.error on
+              # an invalid group. The pattern-side interpolation of
+              # image_name is re.escape'd for the same class of reason
+              # (agy P1 on #962).
               # Pattern 1: combined repository: <image>\n  tag: <old>
               p1 = re.compile(r'(repository:\s*' + re.escape(image_name) + r'\n\s+tag:)[^\n]+')
-              out, n1 = p1.subn(r'\1 "' + new_tag + '"', content)
+              out, n1 = p1.subn(lambda m: m.group(1) + ' "' + new_tag + '"', content)
               # Pattern 2: split registry/repository (Backstage Helm chart style)
               if '/' in image_name:
                   registry, repo = image_name.split('/', 1)
@@ -215,10 +234,10 @@ jobs:
                       r'\n\s+repository:\s*' + re.escape(repo) +
                       r'\n\s+tag:)[^\n]+'
                   )
-                  out, n3 = p3.subn(r'\1 ' + new_tag, out)
+                  out, n3 = p3.subn(lambda m: m.group(1) + ' ' + new_tag, out)
               # Pattern 3: inline image: <image>:<old> (CWFT style, quoted or unquoted)
               p2 = re.compile(r'(image:\s*["\']?' + re.escape(image_name) + r')["\']?:[\w.\-]+')
-              out, n2 = p2.subn(r'\1:' + new_tag, out)
+              out, n2 = p2.subn(lambda m: m.group(1) + ':' + new_tag, out)
               # Pattern 4: workflow-parameter default value: <image>:<old>
               # (Argo CWFT parameterization style — arguments.parameters[].value,
               # e.g. cwft-mctl-agents-*.yaml's agent_image param — the tag lives
@@ -226,7 +245,7 @@ jobs:
               # field is a {{workflow.parameters.*}} template reference instead
               # of a literal image:tag string.)
               p4 = re.compile(r'(value:\s*["\']?' + re.escape(image_name) + r')["\']?:[\w.\-]+')
-              out, n4 = p4.subn(r'\1:' + new_tag, out)
+              out, n4 = p4.subn(lambda m: m.group(1) + ':' + new_tag, out)
               n = n1 + n2 + n3 + n4
               matched_per_file[path] = n
               if n == 0:

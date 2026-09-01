@@ -1,0 +1,21 @@
+status: merged
+updated_at: '2026-09-01T09:01:33Z'
+updated_by: mctl-agents[bot]
+source:
+  type: github_issue
+  repo: mctlhq/mctl-api
+  issue: 199
+  url: https://github.com/mctlhq/mctl-api/issues/199
+control:
+  requires_human_approval: true
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-09-01T07:41:23Z'
+attempt:
+  id: 72d1c93b-5da6-4298-ab01-395c26e4fe27
+  started_at: '2026-09-01T07:47:41Z'
+  expires_at: '2026-09-01T09:57:41Z'
+  finished_at: '2026-09-01T07:54:58Z'
+pr: https://github.com/mctlhq/mctl-api/pull/224
+merged_at: '2026-09-01T09:01:33Z'
+merge_commit: 9cf454efae62e9086fcc4b1be6a43017042a1e92
