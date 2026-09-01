@@ -58,7 +58,12 @@ lock_age_seconds() {
   [ -n "$m" ] || { echo 0; return; }
   echo $(( $(date +%s) - m ))
 }
+# inode каталога: BSD и GNU stat несовместимы, поэтому пробуем оба.
+dir_inode() { stat -f %i "$1" 2>/dev/null || stat -c %i "$1" 2>/dev/null || true; }
 if ! mkdir "$LOCK" 2>/dev/null; then
+  # Запоминаем, КАКОЙ каталог осматриваем: к моменту перехвата на этом месте
+  # может оказаться уже другой.
+  LOCK_INO=$(dir_inode "$LOCK")
   STALE=""
   # В файле лежит "<pid> <время старта>" -- ровно то, что вернул holder_id.
   RECORDED=$(cat "$LOCK/pid" 2>/dev/null)
@@ -91,10 +96,23 @@ if ! mkdir "$LOCK" 2>/dev/null; then
   if [ -n "$STALE" ]; then
     # Два прогона могут одновременно счесть лок стухшим; без атомарного шага
     # второй снёс бы уже созданный локом первого каталог. Переименование
-    # выигрывает ровно один процесс.
+    # атомарно, но САМО ПО СЕБЕ недостаточно: если второй прогон задержался, а
+    # первый успел перехватить, пересоздать лок и уйти в работу, то mv второго
+    # унесёт уже НОВЫЙ, живой каталог -- оба окажутся в одном git-репозитории.
+    # Поэтому переносим только то, что осматривали: сверяем inode до переноса и
+    # содержимое после, а чужой каталог возвращаем на место.
     echo "[$(date -u +%FT%TZ)] снимаю осиротевший лок ($STALE)"
     TAKEN="$LOCK.stale.$$"
+    if [ -n "$LOCK_INO" ] && [ "$(dir_inode "$LOCK")" != "$LOCK_INO" ]; then
+      echo "  лок уже пересоздан другим прогоном -- выхожу"; exit 0
+    fi
     mv "$LOCK" "$TAKEN" 2>/dev/null || { echo "  перехват достался другому прогону -- выхожу"; exit 0; }
+    if [ "$(cat "$TAKEN/pid" 2>/dev/null)" != "$RECORDED" ]; then
+      # Между проверкой и mv каталог успели подменить: мы унесли живой лок.
+      # Возвращаем и уходим -- работает тот, кто его создал.
+      mv "$TAKEN" "$LOCK" 2>/dev/null
+      echo "  унесли не тот лок, вернул -- выхожу"; exit 0
+    fi
     rm -rf "$TAKEN"
     mkdir "$LOCK" 2>/dev/null || { echo "  лок занят -- выхожу"; exit 0; }
   else
@@ -144,12 +162,36 @@ fi
 # блобы всего репозитория вместо каталога скиллов.
 if [ "$MIRROR_OK" = "0" ]; then
   echo "  зеркало отсутствует или непригодно ($MIRROR) -- пересоздаю"
-  rm -rf "$MIRROR"
-  git clone --filter=blob:none --no-checkout --single-branch --branch main \
-    "$REMOTE" "$MIRROR" || { echo "  clone FAILED"; exit 1; }
-  git -C "$MIRROR" sparse-checkout set --cone platform-gitops/platform-skills/catalog \
-    || { echo "  sparse-checkout FAILED -- иначе checkout вытянул бы весь репозиторий"; exit 1; }
-  git -C "$MIRROR" checkout main || { echo "  checkout FAILED"; exit 1; }
+  # Собираем замену РЯДОМ и меняем местами только когда она готова. Снос до
+  # клона означал бы, что при первом же оффлайне (или отвале ssh) все симлинки
+  # в ~/.claude/skills повисают, и скиллы пропадают до возвращения сети --
+  # ровно та недоступность, ради устранения которой всё это писалось.
+  NEW_MIRROR="$MIRROR.new.$$"
+  rm -rf "$NEW_MIRROR"
+  if ! git clone --filter=blob:none --no-checkout --single-branch --branch main \
+       "$REMOTE" "$NEW_MIRROR"; then
+    rm -rf "$NEW_MIRROR"
+    echo "  clone FAILED -- прежнее зеркало оставлено на месте"; exit 1
+  fi
+  if ! git -C "$NEW_MIRROR" sparse-checkout set --cone platform-gitops/platform-skills/catalog; then
+    rm -rf "$NEW_MIRROR"
+    echo "  sparse-checkout FAILED -- иначе checkout вытянул бы весь репозиторий"; exit 1
+  fi
+  if ! git -C "$NEW_MIRROR" checkout main; then
+    rm -rf "$NEW_MIRROR"
+    echo "  checkout FAILED -- прежнее зеркало оставлено на месте"; exit 1
+  fi
+  # Подмена: старое в сторону, новое на место, старое снести. Симлинки указывают
+  # на путь, а не на inode, поэтому окно недоступности -- два системных вызова.
+  OLD_MIRROR="$MIRROR.old.$$"
+  rm -rf "$OLD_MIRROR"
+  [ -e "$MIRROR" ] && mv "$MIRROR" "$OLD_MIRROR"
+  if ! mv "$NEW_MIRROR" "$MIRROR"; then
+    [ -e "$OLD_MIRROR" ] && mv "$OLD_MIRROR" "$MIRROR"
+    rm -rf "$NEW_MIRROR"
+    echo "  подмена зеркала FAILED -- прежнее возвращено"; exit 1
+  fi
+  rm -rf "$OLD_MIRROR"
 fi
 
 BEFORE=$(git -C "$MIRROR" rev-parse HEAD)
@@ -175,6 +217,10 @@ AFTER=$(git -C "$MIRROR" rev-parse HEAD)
                          || echo "  catalog ${BEFORE:0:8} -> ${AFTER:0:8}"
 
 mkdir -p "$SKILLS" || { echo "  не удалось создать $SKILLS -- выхожу"; exit 1; }
+# Без set -e "ln ...; echo ..." возвращает успех группы, и провалившийся симлинк
+# уходил в лог как "repointed", а launchd записывал прогон удачным. Копим флаг и
+# честно падаем в конце -- иначе протухшая ссылка живёт молча.
+RECONCILE_FAILED=0
 
 # Каталог общий для нескольких клиентов, и metadata.yaml перечисляет, какие из
 # них скилл поддерживает. Часть скиллов (mctl-platform, argocd-health-remediation)
@@ -251,17 +297,23 @@ for src in "$CATALOG"/*/; do
     # Ссылка могла быть создана раньше, до фильтра или до правки metadata.yaml.
     if [ -L "$dst" ]; then
       case "$(readlink "$dst")" in
-        */platform-skills/catalog/*) rm "$dst"; echo "  removed $name (не поддерживает claude)" ;;
+        */platform-skills/catalog/*)
+          if rm "$dst"; then echo "  removed $name (не поддерживает claude)"
+          else echo "  rm FAILED для $name"; RECONCILE_FAILED=1; fi ;;
       esac
     fi
     continue
   fi
   if [ -L "$dst" ]; then
-    [ "$(readlink "$dst")" = "${src%/}" ] || { ln -sfn "${src%/}" "$dst"; echo "  repointed $name"; }
+    if [ "$(readlink "$dst")" != "${src%/}" ]; then
+      if ln -sfn "${src%/}" "$dst"; then echo "  repointed $name"
+      else echo "  ln FAILED для $name"; RECONCILE_FAILED=1; fi
+    fi
   elif [ -e "$dst" ]; then
     echo "  SKIP $name -- real directory, not a symlink (local skill?)"
   else
-    ln -s "${src%/}" "$dst"; echo "  linked $name (new)"
+    if ln -s "${src%/}" "$dst"; then echo "  linked $name (new)"
+    else echo "  ln FAILED для $name"; RECONCILE_FAILED=1; fi
   fi
 done
 
@@ -274,7 +326,9 @@ for dst in "$SKILLS"/*; do
   name=$(basename "$dst")
   [ -d "$CATALOG/$name" ] && continue
   case "$(readlink "$dst")" in
-    */platform-skills/catalog/*) rm "$dst"; echo "  removed $name (no longer in catalog)" ;;
+    */platform-skills/catalog/*)
+      if rm "$dst"; then echo "  removed $name (no longer in catalog)"
+      else echo "  rm FAILED для $name"; RECONCILE_FAILED=1; fi ;;
   esac
 done
 
@@ -284,7 +338,9 @@ for dst in "$SKILLS"/*; do
   [ -e "$dst" ] && continue
   # Только наши: чужой симлинк на временно недоступную цель -- не наш мусор.
   case "$(readlink "$dst")" in
-    "$CATALOG"/*) rm "$dst"; echo "  removed $(basename "$dst") (dangling)" ;;
+    "$CATALOG"/*)
+      if rm "$dst"; then echo "  removed $(basename "$dst") (dangling)"
+      else echo "  rm FAILED для $(basename "$dst")"; RECONCILE_FAILED=1; fi ;;
     *) echo "  KEEP $(basename "$dst") -- dangling but not ours" ;;
   esac
 done
@@ -298,7 +354,22 @@ done
 # пропускал инвалидацию, а протухший watcher жил бы до следующего коммита в
 # каталог. Удаление дешёвое: скилл пишет файл заново при первом же обращении, а
 # уже запущенный watcher держит открытый inode и снятия ссылки не замечает.
-if [ -f /tmp/review-watch.sh ]; then
+# ...но НЕ в момент, когда скилл его как раз раскладывает. Его bootstrap пишет
+# файл, затем chmod +x, затем nohup; попади удаление в этот зазор -- запуск
+# падает на отсутствующем файле и watcher не стартует вовсе. Довод про открытый
+# inode защищает уже ЗАПУЩЕННЫЙ процесс и на эту последовательность не
+# распространяется. Свежий файл (моложе CACHE_GRACE) пропускаем: протухший кеш
+# по определению старый, и его снимет этот же тик через 15 минут.
+CACHE_GRACE=120
+cache_age_seconds() {
+  local m
+  m=$(stat -f %m "$1" 2>/dev/null) || m=$(stat -c %Y "$1" 2>/dev/null) || m=""
+  [ -n "$m" ] || { echo 0; return; }
+  echo $(( $(date +%s) - m ))
+}
+if [ -f /tmp/review-watch.sh ] && [ "$(cache_age_seconds /tmp/review-watch.sh)" -le "$CACHE_GRACE" ]; then
+  echo "  /tmp/review-watch.sh только что записан -- не трогаю (идёт запуск watcher-а)"
+elif [ -f /tmp/review-watch.sh ]; then
   if rm -f /tmp/review-watch.sh 2>/dev/null; then
     echo "  dropped cached /tmp/review-watch.sh"
   else
@@ -306,5 +377,9 @@ if [ -f /tmp/review-watch.sh ]; then
     # удалить его нельзя никогда. Прогон не роняем: симлинки уже сведены.
     echo "  ВНИМАНИЕ: /tmp/review-watch.sh не удаляется (чужой владелец?) -- кеш остаётся протухшим"
   fi
+fi
+if [ "$RECONCILE_FAILED" = "1" ]; then
+  echo "[$(date -u +%FT%TZ)] sync FAILED -- часть ссылок не сведена (права на $SKILLS?)"
+  exit 1
 fi
 echo "[$(date -u +%FT%TZ)] sync done"
