@@ -6,7 +6,7 @@ Same operations as the Backstage UI, but from your terminal.
 ## Prerequisites
 
 - [gh CLI](https://cli.github.com/) installed and authenticated (`gh auth login`)
-- Go 1.21+ (for building from source)
+- Go 1.25.13+ (for building from source)
 
 ## Install
 
