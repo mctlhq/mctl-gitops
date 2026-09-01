@@ -482,35 +482,74 @@ extraObjects:
             mctl.me/component: local-mode-flip
         spec:
           restartPolicy: OnFailure
+          # postgres:17-alpine defaults to root. Match the canary's posture so
+          # the Job is not the one workload a Restricted Pod Security Standard
+          # would reject. 70 is the postgres user in the alpine image; psql
+          # with -c needs nothing writable.
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 70
           # postgres:17-alpine is a public Docker Hub image, so no pull secret.
           containers:
             - name: flip
               image: postgres:17-alpine
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
               command: ["sh", "-c"]
               args:
+                # libpq reads PGHOST/PGPORT/PGDATABASE/PGUSER/PGPASSWORD from
+                # the environment, so psql is invoked with no connection
+                # argument at all. Passing "$DATABASE_URL" positionally would
+                # place the password in the process argv, where anything
+                # reading /proc — an audit daemon, a node agent — can see it.
                 - |
                   set -e
                   TG_ID=8745115872
                   echo "Flipping telegram id $TG_ID to Local Bridge mode..."
-                  UID_=$(psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -tA -c "SELECT id FROM users WHERE telegram_login_id = '$TG_ID';")
+                  UID_=$(psql -v ON_ERROR_STOP=1 -tA -c "SELECT id FROM users WHERE telegram_login_id = '$TG_ID';")
                   if [ -z "$UID_" ]; then
                     echo "ERROR: no users row with telegram_login_id $TG_ID." >&2
                     exit 1
                   fi
-                  FLIPPED=$(psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -tA -c "UPDATE telegram_accounts SET mode = 'local' WHERE user_id = $UID_ AND revoked_at IS NULL RETURNING id;")
+                  FLIPPED=$(psql -v ON_ERROR_STOP=1 -tA -c "UPDATE telegram_accounts SET mode = 'local' WHERE user_id = $UID_ AND revoked_at IS NULL RETURNING id;")
                   if [ -z "$FLIPPED" ]; then
                     echo "ERROR: no active telegram_accounts row for user $UID_ — nothing was flipped." >&2
                     echo "A revoked row reports mode='hosted' regardless of this column, and /bridge refuses the daemon." >&2
                     exit 1
                   fi
                   echo "Flipped row id(s): $FLIPPED"
-                  psql "$DATABASE_URL" -c "SELECT id, mode, send_enabled, revoked_at, last_used_at FROM telegram_accounts WHERE user_id = $UID_ AND revoked_at IS NULL;"
+                  psql -c "SELECT id, mode, send_enabled, revoked_at, last_used_at FROM telegram_accounts WHERE user_id = $UID_ AND revoked_at IS NULL;"
               env:
-                - name: DATABASE_URL
+                # The chart's db ExternalSecret publishes these discrete keys
+                # alongside DATABASE_URL (helm-charts/base-service/templates/
+                # externalsecret-db.yaml), so no URL parsing is needed.
+                - name: PGHOST
                   valueFrom:
                     secretKeyRef:
                       name: labs-mctl-telegram-db-creds
-                      key: DATABASE_URL
+                      key: DB_HOST
+                - name: PGPORT
+                  valueFrom:
+                    secretKeyRef:
+                      name: labs-mctl-telegram-db-creds
+                      key: DB_PORT
+                - name: PGDATABASE
+                  valueFrom:
+                    secretKeyRef:
+                      name: labs-mctl-telegram-db-creds
+                      key: DB_NAME
+                - name: PGUSER
+                  valueFrom:
+                    secretKeyRef:
+                      name: labs-mctl-telegram-db-creds
+                      key: DB_USER
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: labs-mctl-telegram-db-creds
+                      key: DB_PASSWORD
   # labs-mctl-telegram-canary-rbac.yaml, which explains why at length. Short
   # version: the "apps" AppProject does not whitelist RBAC so ArgoCD would
   # drop them silently, and whitelisting it project-wide would let any tenant
