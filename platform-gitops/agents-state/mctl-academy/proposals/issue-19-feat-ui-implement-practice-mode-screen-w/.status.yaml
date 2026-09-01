@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-08-07T07:52:15Z'
+status: merged
+updated_at: '2026-09-01T22:27:32Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -10,6 +10,8 @@ control:
   requires_human_approval: true
 pr: https://github.com/mctlhq/mctl-academy/pull/27
 github:
-  state: open
-  observed_at: '2026-08-07T07:52:15Z'
-  head_sha: 754976bde8ea07ba3642e15a0be7f3c267645986
+  state: merged
+  head_sha: ada1829214fa8f48f7079c4d8d5e1e43c3a49105
+  observed_at: '2026-09-01T22:27:32Z'
+merged_at: '2026-09-01T22:27:32Z'
+merge_commit: c112643dff6dc3aa131b141f23ea11327e48ff98

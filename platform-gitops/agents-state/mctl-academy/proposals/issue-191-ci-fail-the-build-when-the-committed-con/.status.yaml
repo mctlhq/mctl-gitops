@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-08-17T06:41:53Z'
+status: merged
+updated_at: '2026-09-01T22:27:33Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -14,3 +14,9 @@ attempt:
   expires_at: '2026-08-17T08:49:45Z'
   finished_at: '2026-08-17T06:41:53Z'
 pr: https://github.com/mctlhq/mctl-academy/pull/195
+github:
+  state: merged
+  head_sha: 4b8b204477e68c78a805d176b03cfb3385568b2f
+  observed_at: '2026-09-01T22:27:33Z'
+merged_at: '2026-09-01T22:27:33Z'
+merge_commit: 49e2c51d97465d5522d8f36aea29d5ba9835c0aa

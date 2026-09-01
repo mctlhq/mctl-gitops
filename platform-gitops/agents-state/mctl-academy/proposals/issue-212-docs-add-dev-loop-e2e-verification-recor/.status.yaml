@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-08-29T14:14:08Z'
+status: rejected
+updated_at: '2026-09-01T22:27:37Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -17,3 +17,8 @@ attempt:
   expires_at: '2026-08-29T16:23:34Z'
   finished_at: '2026-08-29T14:14:08Z'
 pr: https://github.com/mctlhq/mctl-academy/pull/213
+github:
+  state: closed
+  head_sha: f4964284f3acaf0fe9cedbbcfd946b4dbef41bdb
+  observed_at: '2026-09-01T22:27:37Z'
+notes: PR was closed without merging.

@@ -1,6 +1,6 @@
-status: implemented
-updated_at: '2026-08-07T19:20:00Z'
-updated_by: mashkovd
+status: needs-triage
+updated_at: '2026-09-01T22:27:36Z'
+updated_by: mctl-agents[bot]
 source:
   type: github_issue
   repo: mctlhq/mctl-academy
@@ -13,4 +13,8 @@ attempt:
   started_at: '2026-08-07T15:56:37Z'
   expires_at: '2026-08-07T18:06:37Z'
   finished_at: '2026-08-07T19:20:00Z'
-notes: 'Domain 2 objectives fully covered by 20 published questions in main bank (64 total).'
+notes: 'reconcile: no canonical GitHub PR found'
+failure:
+  code: missing-pr
+  stage: reconcile
+  message: No canonical PR exists for the deterministic result branch.
