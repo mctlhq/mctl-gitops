@@ -132,3 +132,13 @@ jobs:
               -ignore-filename-pattern '(^|.*/)(values\.yaml|catalog-info\.yaml|cwft-mctl-agents-(shepherd|implement|issue-poll)\.yaml|.*_test\.yaml)$' \
               -ignore-filename-pattern '.*/vm-rules/tests/generated/.*' \
               -schema-location "$CRD_SCHEMA_LOCATION"
+
+      - name: Unit-test the release-deploy bump script
+        # The image-tag rewriter is a heredoc inside release-deploy.yaml, so
+        # it only ever runs during a real release — a bug in it is found by
+        # a broken deploy. This extracts it and exercises it against
+        # fixtures, in particular that EVERY explicitly named values_path
+        # must match: a component deployed as two workloads (ADR-008's
+        # control/execution workers) is exactly where a silent miss pins one
+        # of them forever.
+        run: python3 tests/test_release_deploy_bump.py
