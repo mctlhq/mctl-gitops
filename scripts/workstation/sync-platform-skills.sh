@@ -219,7 +219,14 @@ if [ "$MIRROR_OK" = "0" ]; then
   # на путь, а не на inode, поэтому окно недоступности -- два системных вызова.
   OLD_MIRROR="$MIRROR.old.$$"
   rm -rf "$OLD_MIRROR"
-  [ -e "$MIRROR" ] && mv "$MIRROR" "$OLD_MIRROR"
+  # -L обязателен рядом с -e: все файловые проверки, кроме -h/-L, идут ПО ссылке,
+  # поэтому битый симлинк на месте зеркала (его цель удалили) даёт -e ложь. Тогда
+  # старое имя не убирается, а следующий mv не может положить каталог поверх
+  # не-каталога -- ENOTDIR, -- и каждый следующий прогон падает там же, зеркало
+  # не восстанавливается никогда.
+  if [ -e "$MIRROR" ] || [ -L "$MIRROR" ]; then
+    mv "$MIRROR" "$OLD_MIRROR"
+  fi
   if ! mv "$NEW_MIRROR" "$MIRROR"; then
     [ -e "$OLD_MIRROR" ] && mv "$OLD_MIRROR" "$MIRROR"
     rm -rf "$NEW_MIRROR"
@@ -443,11 +450,23 @@ elif [ "$BEFORE" != "$AFTER" ] \
      && [ -n "$(git -C "$MIRROR" diff --name-only "$BEFORE" "$AFTER" -- "$SPARSE_PATH/review-watch" 2>/dev/null)" ]; then
   WATCH_SKILL_CHANGED=1
 fi
-[ "$WATCH_SKILL_CHANGED" = "1" ] && : > "$CACHE_PENDING"
+# Долг держим в переменной, а метку -- лишь как способ пережить тик. Читать
+# обратно сам файл было бы неверно: неудавшаяся запись выглядела бы как
+# "review-watch не менялся" -- ровно та потеря долга, ради которой метка и
+# заведена, -- да ещё и с этой неправдой в логе.
+CACHE_DUE=0
+[ -f "$CACHE_PENDING" ] && CACHE_DUE=1
+if [ "$WATCH_SKILL_CHANGED" = "1" ]; then
+  CACHE_DUE=1
+  if ! : > "$CACHE_PENDING"; then
+    echo "  не удалось записать $CACHE_PENDING -- долг снять кеш не переживёт этот тик"
+    RECONCILE_FAILED=1
+  fi
+fi
 if [ ! -f /tmp/review-watch.sh ]; then
   # Снимать нечего -- долг закрыт.
   rm -f "$CACHE_PENDING"
-elif [ ! -f "$CACHE_PENDING" ]; then
+elif [ "$CACHE_DUE" = "0" ]; then
   echo "  review-watch в каталоге не менялся -- кеш /tmp/review-watch.sh не трогаю"
 elif [ "$(cache_age_seconds /tmp/review-watch.sh)" -le "$CACHE_GRACE" ]; then
   # Метку НЕ снимаем: вернёмся к этому на следующем тике.
@@ -461,7 +480,7 @@ else
   echo "  ВНИМАНИЕ: /tmp/review-watch.sh не удаляется (чужой владелец?) -- кеш остаётся протухшим"
 fi
 if [ "$RECONCILE_FAILED" = "1" ]; then
-  echo "[$(date -u +%FT%TZ)] sync FAILED -- часть ссылок не сведена (права на $SKILLS?)"
+  echo "[$(date -u +%FT%TZ)] sync FAILED -- не все шаги прошли, подробности выше"
   exit 1
 fi
 echo "[$(date -u +%FT%TZ)] sync done"
