@@ -437,6 +437,119 @@ extraObjects:
   # Recreate + 1 replica stays.
   # The canary's ServiceAccount, Role and RoleBinding are NOT here. They are
   # platform-owned and live in bootstrap/templates/system/
+  # One-shot: move the pilot account to Local Bridge mode.
+  #
+  # Nothing in the application ever writes telegram_accounts.mode — there is a
+  # GetAccountMode reader and no writer — so enabling the mode is an operator
+  # UPDATE by construction (mctlhq/mctl-telegram#138). This Job is that UPDATE,
+  # done through git so the decision is reviewable rather than typed into a
+  # psql prompt.
+  #
+  # The account is 8745115872 (@mctlhq), the App-Directory demo/reviewer
+  # identity. It is deliberately NOT 924671154: that one is the production
+  # canary, and putting the canary in local mode would point its ten-minute
+  # probe at an operator machine — measuring that machine and its home uplink
+  # instead of the service, and failing every ten minutes whenever the host is
+  # unreachable. A reliable host does not fix that; the canary must keep
+  # exercising the hosted session pool, which is the path real users take.
+  #
+  # 8745115872 is safe to borrow because DEMO_REVIEWER_ENABLED is false, so
+  # both demo CronJobs are pruned and nothing automated runs against it. If
+  # another App-Directory review is scheduled, run the restore Job first — the
+  # hosted session is not destroyed by this, only left unused.
+  #
+  # send_enabled is deliberately NOT touched: proving the routing needs only a
+  # read, and the evidence is an audit_logs row with call_path='local'.
+  #
+  # RETURNING plus an explicit emptiness check makes a no-op UPDATE a failed
+  # Job in ArgoCD rather than a silent "UPDATE 0".
+  - apiVersion: batch/v1
+    kind: Job
+    metadata:
+      name: labs-mctl-telegram-local-mode-flip-1
+      labels:
+        app.kubernetes.io/name: mctl-telegram
+        app.kubernetes.io/part-of: mctl-platform
+        mctl.me/component: local-mode-flip
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 120
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: mctl-telegram
+            mctl.me/component: local-mode-flip
+        spec:
+          restartPolicy: OnFailure
+          # postgres:17-alpine defaults to root. Match the canary's posture so
+          # the Job is not the one workload a Restricted Pod Security Standard
+          # would reject. 70 is the postgres user in the alpine image; psql
+          # with -c needs nothing writable.
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 70
+          # postgres:17-alpine is a public Docker Hub image, so no pull secret.
+          containers:
+            - name: flip
+              image: postgres:17-alpine
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+              command: ["sh", "-c"]
+              args:
+                # libpq reads PGHOST/PGPORT/PGDATABASE/PGUSER/PGPASSWORD from
+                # the environment, so psql is invoked with no connection
+                # argument at all. Passing "$DATABASE_URL" positionally would
+                # place the password in the process argv, where anything
+                # reading /proc — an audit daemon, a node agent — can see it.
+                - |
+                  set -e
+                  TG_ID=8745115872
+                  echo "Flipping telegram id $TG_ID to Local Bridge mode..."
+                  UID_=$(psql -v ON_ERROR_STOP=1 -tA -c "SELECT id FROM users WHERE telegram_login_id = '$TG_ID';")
+                  if [ -z "$UID_" ]; then
+                    echo "ERROR: no users row with telegram_login_id $TG_ID." >&2
+                    exit 1
+                  fi
+                  FLIPPED=$(psql -v ON_ERROR_STOP=1 -tA -c "UPDATE telegram_accounts SET mode = 'local' WHERE user_id = $UID_ AND revoked_at IS NULL RETURNING id;")
+                  if [ -z "$FLIPPED" ]; then
+                    echo "ERROR: no active telegram_accounts row for user $UID_ — nothing was flipped." >&2
+                    echo "A revoked row reports mode='hosted' regardless of this column, and /bridge refuses the daemon." >&2
+                    exit 1
+                  fi
+                  echo "Flipped row id(s): $FLIPPED"
+                  psql -c "SELECT id, mode, send_enabled, revoked_at, last_used_at FROM telegram_accounts WHERE user_id = $UID_ AND revoked_at IS NULL;"
+              env:
+                # The chart's db ExternalSecret publishes these discrete keys
+                # alongside DATABASE_URL (helm-charts/base-service/templates/
+                # externalsecret-db.yaml), so no URL parsing is needed.
+                - name: PGHOST
+                  valueFrom:
+                    secretKeyRef:
+                      name: labs-mctl-telegram-db-creds
+                      key: DB_HOST
+                - name: PGPORT
+                  valueFrom:
+                    secretKeyRef:
+                      name: labs-mctl-telegram-db-creds
+                      key: DB_PORT
+                - name: PGDATABASE
+                  valueFrom:
+                    secretKeyRef:
+                      name: labs-mctl-telegram-db-creds
+                      key: DB_NAME
+                - name: PGUSER
+                  valueFrom:
+                    secretKeyRef:
+                      name: labs-mctl-telegram-db-creds
+                      key: DB_USER
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: labs-mctl-telegram-db-creds
+                      key: DB_PASSWORD
   # labs-mctl-telegram-canary-rbac.yaml, which explains why at length. Short
   # version: the "apps" AppProject does not whitelist RBAC so ArgoCD would
   # drop them silently, and whitelisting it project-wide would let any tenant
