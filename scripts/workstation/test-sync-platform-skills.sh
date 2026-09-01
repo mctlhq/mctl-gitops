@@ -86,6 +86,7 @@ assert_is_dir() { # $1 = имя
 }
 
 assert_exit() { # $1 = ожидаемый код
+  RC_ASSERTED=1
   [ "$RC" = "$1" ] || fail "код возврата $RC, ожидался $1"
 }
 
@@ -131,6 +132,7 @@ seed_commit() { # $1 = сообщение
 setup() { # $1 = имя теста
   CURRENT="$1"
   CURRENT_FAILED=0
+  RC_ASSERTED=0
   ROOT=$(mktemp -d "${TMPDIR:-/tmp}/skills-sync-test.XXXXXX")
   ROOTS+=("$ROOT")
   REMOTE_DIR="$ROOT/remote.git"
@@ -191,6 +193,14 @@ run_sync() {
 }
 
 finish() {
+  # Тест, не проверивший код возврата, легко зеленеет вхолостую: почти все
+  # утверждения здесь -- об ОТСУТСТВИИ чего-либо (симлинка нет, файла нет), а
+  # это верно и для прогона, упавшего на клоне, и для прогона, оборвавшегося
+  # посреди пересоздания зеркала. Ревью нашло три таких теста в трёх раундах
+  # подряд, поэтому требование вынесено в сам харнесс, а не в дисциплину автора.
+  if [ "$RC_ASSERTED" = "0" ]; then
+    fail "тест не проверил код возврата (assert_exit / assert_synced)"
+  fi
   if [ "$CURRENT_FAILED" = "0" ]; then
     PASSED=$((PASSED + 1))
     echo "  ✓ $CURRENT"
@@ -337,8 +347,10 @@ test_foreign_origin_recreated() {
   git -C "$MIRROR" remote set-url origin "https://example.invalid/other.git"
   : > "$LOG"
   run_sync
+  # Без assert_synced тест зеленел бы и при обрыве пересоздания: старое зеркало
+  # осталось бы на месте, ссылка на alpha -- годной, а "пересоздаю" уже в логе.
+  assert_synced
   assert_log "пересоздаю"
-  assert_linked alpha
   finish
 }
 
@@ -386,6 +398,8 @@ runtimes: [codex]'
   seed_commit "alpha: drop claude"
   : > "$LOG"
   run_sync
+  assert_exit 0
+  assert_log "sync done"
   assert_absent alpha
   assert_log "не поддерживает claude"
   finish
@@ -415,6 +429,7 @@ test_foreign_dangling_symlink_preserved() {
   mkdir -p "$SKILLS"
   ln -s "$ROOT/nowhere/some-skill" "$SKILLS/foreign"
   run_sync
+  assert_synced
   [ -L "$SKILLS/foreign" ] || fail "чужой висячий симлинк снесён"
   assert_log "KEEP foreign"
   finish
@@ -428,6 +443,7 @@ test_own_dangling_symlink_removed() {
   ln -s "$CATALOG/vanished" "$SKILLS/vanished"
   : > "$LOG"
   run_sync
+  assert_synced
   assert_absent vanished
   assert_log "removed vanished"
   finish
@@ -579,6 +595,7 @@ test_cache_debt_survives_to_next_tick() {
   touch -t 200001010000 "$CACHE" # кеш «состарился», каталог больше не меняется
   : > "$LOG"
   run_sync                       # тик 2: долг обязан сработать
+  assert_synced
   assert_log "dropped cached"
   assert_no_file "$CACHE"
   assert_no_file "$CACHE_PENDING"
@@ -592,6 +609,7 @@ test_cache_pending_cleared_when_cache_absent() {
   : > "$CACHE_PENDING"
   : > "$LOG"
   run_sync
+  assert_synced
   assert_no_file "$CACHE_PENDING"
   finish
 }
@@ -624,6 +642,7 @@ test_hand_edit_in_mirror_counts_as_change() {
   echo "правка руками" >> "$CATALOG/review-watch/SKILL.md"
   : > "$LOG"
   run_sync
+  assert_synced
   assert_log "dropped cached"
   assert_no_file "$CACHE"
   finish
