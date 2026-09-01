@@ -1,5 +1,24 @@
 # Tasks: issue-914-cli-mctl-go-1-25-13-bump-25-reachable-st
 
+## Approval decisions — read before starting
+
+1. **`1.25.13` is confirmed for `cli/mctl`**, even though mctl-agent (#101)
+   and mctl-api (#199) in this same wave move to `1.26.6`. That is a
+   deliberate split, not drift, and the reason should be stated in the PR so
+   nobody "fixes" the inconsistency later: those two ship container images
+   whose builders already run 1.26, so pinning them to 1.25.13 would
+   downgrade what actually builds the release binary. `cli/mctl` ships no
+   image — it is built ad hoc by whoever runs `make build`. Raising its
+   floor to 1.26 would force a toolchain download on every contributor and
+   every CI job that later builds it, for zero security benefit, since all
+   25 advisories are closed by 1.25.13.
+2. **File a follow-up issue for `cli/mctl` CI coverage** (build + vet +
+   govulncheck on push) and cite it in the PR. Adding that CI is correctly
+   out of scope here, but the consequence is that nothing in this repo will
+   ever notice the next 25 advisories — this fix is verified once, by hand,
+   and then rots. A note inside a proposal nobody re-reads is not a
+   follow-up; an issue is.
+
 - [ ] 1. Bump the `go` directive in `cli/mctl/go.mod` from `go 1.25.0` to
       `go 1.25.13` — DoD: `cli/mctl/go.mod` line 3 reads `go 1.25.13`.
 - [ ] 2. Run `go mod tidy` inside `cli/mctl` (depends on 1) — DoD:
@@ -14,10 +33,15 @@
       --help` exits 0 and prints the Cobra-generated usage text (matches
       the `Short`/`Long` strings in `cli/mctl/cmd/root.go`).
 - [ ] 5. Run `govulncheck ./...` inside `cli/mctl` (depends on 2) — DoD:
-      output reports 0 reachable vulnerabilities; save the output as
-      `govulncheck-issue-914.txt` and attach/paste it in the PR
-      description, matching the convention used in prior Go-CVE proposals
-      in this repo (e.g. `mctl-api/proposals/pgx-sqli-patch`).
+      output reports 0 reachable vulnerabilities; paste the output in the
+      PR description (do not commit a `.txt` artifact into the repo),
+      **together with the govulncheck version and the vulnerability-DB
+      date**, and with the `go version` that produced it. With no CI for
+      this module, this paste is the only evidence the fix works — and
+      evidence that does not say which tool and which database produced it
+      cannot be reproduced or compared against the 2026-08-27 baseline that
+      generated the 25 findings. Use the same pinned govulncheck version as
+      mctl-api#199 / mctl-agent#101 (`v1.7.0`) so all three are comparable.
 - [ ] 6. Check for a pinned CI Go version to bump (depends on nothing) —
       DoD: confirmed via repo-wide search that no `.github/workflows/*`
       file references `setup-go`, `go-version`, or `cli/mctl`; record this

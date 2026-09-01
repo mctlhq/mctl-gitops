@@ -6,22 +6,24 @@
       metadata; `git diff go.sum` reviewed for sanity (no unexpected
       unrelated dependency drops).
 
-- [ ] 2. Align `k8s.io/client-go` with `k8s.io/apimachinery` (depends on 1)
-      — bump the `k8s.io/client-go v0.36.1` require line in `go.mod` to a
-      version compatible with `k8s.io/apimachinery v0.36.3` (or bump both to
-      the latest mutually-compatible pair), then `go mod tidy` again to
-      reconcile `k8s.io/api` and indirect `k8s.io/*`/`sigs.k8s.io/*` lines.
-      — DoD: `go.mod`'s `k8s.io/client-go` and `k8s.io/apimachinery` versions
-      are from the same aligned release line; `go mod tidy` produces a
-      clean `go.sum`.
+- [ ] 2. **DROPPED at approval — do not do this here.** The
+      `k8s.io/client-go` ↔ `k8s.io/apimachinery` alignment moves to its own
+      issue and its own PR. Leave `k8s.io/client-go v0.36.1`,
+      `k8s.io/api v0.36.1` and `k8s.io/apimachinery v0.36.3` exactly as they
+      are; `go mod tidy` in task 1 must not be used as cover for bumping
+      them. If tidy tries to move a `k8s.io/*` line on its own, stop and say
+      so in the PR rather than letting it through.
+      — DoD: `git diff go.mod` shows a changed `go` directive and nothing
+      else in the `k8s.io/*` block.
 
 - [ ] 3. Build and test against the updated toolchain/deps (depends on 2) —
       run `go build ./...` and `go test -p 1 ./...` (matching the `-p 1`
       flag `validate.yml`'s `test` job uses for the Postgres-backed
       `internal/alerts`/`internal/api` packages) locally or in a scratch CI
-      run. — DoD: both commands exit 0; any `k8s.io/client-go` API breakage
-      surfaced by the bump in step 2 is fixed in this same task, not
-      deferred.
+      run. — DoD: both commands exit 0. With task 2 dropped there is no
+      dependency change to break a call site, so a failure here means the
+      toolchain bump itself broke something and must be investigated, not
+      worked around.
 
 - [ ] 4. Run `govulncheck ./...` against the updated toolchain/deps (depends
       on 3) — DoD: output reports 0 reachable vulnerabilities. If any of the
@@ -47,6 +49,31 @@
       job has no `continue-on-error`; a manual/CI run of the workflow on the
       updated branch completes green without the flag.
 
+- [ ] 6a. **Pin govulncheck itself** in the same job — change
+      `go install golang.org/x/vuln/cmd/govulncheck@latest` to a pinned
+      release (`@v1.7.0`, the version whose 2026-08-27 DB produced this
+      issue's findings), with a comment giving the version and why it is
+      pinned. — DoD: no `@latest` remains in the job.
+      **Why this is not optional once task 6 lands.** While the job was
+      `continue-on-error`, a surprise from `@latest` cost nothing. Fail-closed,
+      `@latest` means an upstream govulncheck release can turn every PR in
+      this repo red with no change on our side, and it makes the gate's
+      behaviour unreproducible between two runs of the same commit.
+      Note the distinction and do not "fix" it the other way: the
+      **vulnerability database** must keep floating — new CVEs failing the
+      build is the entire point of task 6 — it is the **tool binary** that
+      gets pinned. govulncheck fetches the DB at run time, so pinning the
+      binary does not freeze the data.
+
+- [ ] 6b. State plainly in the PR description that removing
+      `continue-on-error` makes the **job** fail, which is not the same as
+      making the **merge** fail. Whether `govulncheck` blocks a merge depends
+      on it being configured as a required status check in the repo ruleset,
+      which is a settings change outside this repo's files and outside this
+      issue. — DoD: the PR says which of the two this change delivers, so no
+      reviewer reads "fail-closed" as "cannot be merged past". If it is not
+      currently required, file a follow-up rather than implying it is.
+
 - [ ] 7. Full CI verification (depends on 1-6) — open the PR and confirm
       `validate.yml` (lint + test), `security.yml` (govulncheck + trivy),
       and any image-build step all pass end to end. — DoD: all required
@@ -54,8 +81,8 @@
       govulncheck job in the merged workflow file.
 
 ## Tests
-- [ ] T1. `go build ./...` succeeds against the Go 1.26.6 / aligned
-      `k8s.io/client-go` + `k8s.io/apimachinery` module graph.
+- [ ] T1. `go build ./...` succeeds against the Go 1.26.6 toolchain with
+      the `k8s.io/*` dependency set **unchanged**.
 - [ ] T2. `go test -p 1 ./...` passes (full existing suite, unchanged
       assertions — this is a dependency/toolchain bump, not a behavior
       change, so no test logic should need editing).
@@ -65,16 +92,24 @@
       `golang:1.26.6-alpine@sha256:...` builder stage, and the resulting
       image runs (`docker run --rm <image> mctl-api --help` or equivalent
       smoke invocation) without a missing-binary or exec-format error.
-- [ ] T5. A dry run of `.github/workflows/security.yml`'s `govulncheck` job
-      (e.g. via `act` or a scratch branch push) confirms the job now fails
-      the workflow if a reachable vulnerability is (re-)introduced, and
-      passes cleanly on the current tree.
+- [ ] T5. **Prove the gate by mutation, not by a green run.** On a scratch
+      branch, set `go.mod` back to `go 1.26.0`, push, and confirm the
+      `govulncheck` job **fails**; then restore 1.26.6 and confirm it
+      passes. Record both run URLs in the PR description. A green run on a
+      clean tree proves only that the job ran — it cannot distinguish a
+      working gate from one that would pass on anything, which is exactly
+      the failure this issue exists to correct. (Drop the `act` suggestion:
+      it neither reproduces `setup-go`'s `go-version-file` resolution nor
+      the network fetch of the vulnerability DB, so a green `act` run would
+      prove less than the push does.)
 
 ## Rollback
 This change is fully reversible via `git revert` of the single PR:
-- Revert `go.mod`/`go.sum` to restore `go 1.26.0` and the prior
-  `k8s.io/client-go`/`k8s.io/apimachinery` versions; run `go mod tidy` to
-  confirm the reverted graph still resolves.
+- Revert `go.mod`/`go.sum` to restore `go 1.26.0`; run `go mod tidy` to
+  confirm the reverted graph still resolves. No `k8s.io/*` version moves in
+  this PR, so there is nothing else in the module graph to unwind — which is
+  the point of splitting that work out: reverting a CVE fix should never be
+  entangled with reverting a dependency alignment.
 - Revert `Dockerfile:1` to `FROM golang:1.26-alpine AS builder`.
 - Revert `.github/workflows/security.yml` to restore the
   `continue-on-error: true` line and its comment on the `govulncheck` job.

@@ -16,7 +16,8 @@ Read directly from the clone:
 - `.github/workflows/security.yml` runs two jobs on PRs to `main` and weekly
   cron: `govulncheck` (lines 14-27) and `trivy` (lines 29-40). The
   govulncheck job resolves its Go version from `go-version-file: go.mod`
-  (line 20), installs `govulncheck@latest`, and runs `govulncheck ./...`
+  (line 20), installs `govulncheck@latest` — an unpinned tool, which becomes
+  a problem once the job is fail-closed (see task 6a) — and runs `govulncheck ./...`
   with `continue-on-error: true` (line 24) — the comment directly above it
   (lines 22-25) says this is a deliberate stopgap "until a toolchain bump,"
   i.e. this issue's fix is exactly what the comment anticipates. The `trivy`
@@ -53,17 +54,12 @@ gates the CI-strictness flip:
    (`go-version-file: go.mod`), so no CI workflow YAML needs to change to
    pick up the newer toolchain for those jobs.
 
-2. **`k8s.io/client-go` / `k8s.io/apimachinery` alignment.** While `go.mod`
-   is open for the toolchain bump, update the `k8s.io/client-go` require
-   line to the client-go release that is built/tested against
-   `k8s.io/apimachinery v0.36.3` (or bump both to whatever mutually
-   compatible pair `go mod tidy` resolves to, if a newer aligned pair exists
-   at implementation time), and let `go mod tidy` reconcile `k8s.io/api` and
-   the indirect `k8s.io/*` / `sigs.k8s.io/*` lines accordingly. Follow with
-   `go build ./...` and `go test -p 1 ./...` (matching the exact test
-   invocation `validate.yml`'s `test` job uses, including the `-p 1` flag
-   documented at that job's comment) to catch any breaking API change in
-   code under `internal/` before it reaches CI.
+2. **No dependency changes.** The `k8s.io/client-go` / `k8s.io/apimachinery`
+   alignment is out of scope (see Alternatives). `go mod tidy` after step 1
+   must move the `go` directive and nothing in the `k8s.io/*` block; if it
+   tries to, that is a signal to stop, not to accept the diff. Still run
+   `go build ./...` and `go test -p 1 ./...` (the `-p 1` flag matches
+   `validate.yml`'s `test` job) to prove the toolchain bump alone is clean.
 
 3. **Dockerfile digest pin.** Change `Dockerfile:1` from
    `FROM golang:1.26-alpine AS builder` to
@@ -122,13 +118,17 @@ before the Dockerfile pin and before flipping the CI gate).
   repo (`aquasecurity/trivy-action@ed142fd...` `# v0.36.0`) of pairing a
   digest with a readable version comment/tag for future maintainers.
 
-- **Defer the `k8s.io/client-go`/`apimachinery` alignment to a separate,
-  later change.** Considered, since it's a distinct concern from the CVE
-  fix. Rejected because the issue explicitly bundles it in ("While here:
-  align...") as a low-risk, low-cost addition to the same `go.mod` edit, and
-  splitting it into a second proposal would mean touching `go.mod` twice for
-  no added safety, given both edits are verified by the same
-  `go build && go test` gate.
+- **Bundle the `k8s.io/client-go`/`apimachinery` alignment into this PR**,
+  as the issue's "while here" phrasing invites. **REJECTED at approval —
+  the split is now the design.** The proposal's argument was that both edits
+  are covered by the same `go build && go test` gate, so bundling costs
+  nothing. That is true of the *forward* path and false of the *reverse* one.
+  This PR's job is to close 25 reachable CVEs in a control-plane service; the
+  dependency alignment is tidiness, and it is the only part of the change
+  that can break compilation. Bundled, a revert forced by a client-go problem
+  also reverts the CVE fix, and the security posture silently regresses while
+  someone debugs a Kubernetes client API. Touching `go.mod` twice is a cheap
+  price for keeping the security patch independently revertible.
 
 ## Platform impact
 - **Migrations / backward compatibility:** None. No database schema, HTTP
@@ -141,14 +141,12 @@ before the Dockerfile pin and before flipping the CI gate).
   `golang:1.26.6-alpine` family, just pinned by digest instead of floating
   tag).
 - **Risks:**
-  - The `k8s.io/client-go` version bump could pull in an API change that
-    breaks compilation somewhere under `internal/` (the module imports
-    `k8s.io/client-go`, `k8s.io/api`, `k8s.io/apimachinery` directly per
-    `go.mod`, implying real usage, e.g. for GitOps/cluster operations).
-    Mitigation: `go build ./...` and `go test -p 1 ./...` must pass locally
-    before opening the PR; if client-go's API shifted, fix the call sites in
-    the same PR (per the requirements.md acceptance criterion) rather than
-    deferring.
+  - *Removed by the scope split:* the `k8s.io/client-go` bump could have
+    broken compilation under `internal/` (the module imports `client-go`,
+    `api` and `apimachinery` directly, so usage is real). With the alignment
+    moved to its own PR, this PR carries no dependency-version risk at all —
+    which is precisely why it was split. That risk now belongs to the
+    follow-up issue, where it is not sitting on top of a CVE fix.
   - The digest resolved for `golang:1.26.6-alpine` could go stale if
     `golang:1.26.6-alpine` is later republished (rare, but Alpine base
     layers do get rebuilt for base-OS CVEs). Mitigation: this is an accepted

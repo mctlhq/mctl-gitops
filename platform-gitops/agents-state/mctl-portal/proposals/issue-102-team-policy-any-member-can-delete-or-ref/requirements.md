@@ -107,4 +107,9 @@ currently open.
   the design gates on `action !== 'read'` (deny/exclude) rather than
   enumerating `'delete'`/`'update'`, so any future non-read catalog-entity
   action is safe-by-default rather than silently falling through the old
-  behavior.
+  behavior. **Confirmed at approval**, with one addition: the same
+  comparison also makes a *missing* `attributes.action` fall to the
+  restrictive side, which is the right default but would break template
+  visibility for every member if a Backstage upgrade ever renamed or
+  dropped that field. Task 3a makes that case explicit and observable
+  rather than accidental and silent.

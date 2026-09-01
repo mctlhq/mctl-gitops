@@ -19,9 +19,14 @@ patch layer than a rebuild tomorrow.
 This proposal bumps the Go toolchain to 1.26.6 everywhere it is declared,
 digest-pins the Dockerfile builder image for reproducible builds (matching
 the pattern already used by mctl-telegram), flips the govulncheck CI job to
-fail-closed now that the scan is expected to be clean, and aligns
-`k8s.io/client-go` with `k8s.io/apimachinery` while the dependency file is
-already being touched.
+fail-closed now that the scan is expected to be clean, and pins the
+govulncheck binary so that gate is reproducible.
+
+The `k8s.io/client-go` ↔ `k8s.io/apimachinery` alignment the issue mentions
+in passing is **deliberately excluded** (operator decision at approval).
+It is the only part of the change that can break compilation, and it is not
+a security fix — bundling it would mean that reverting a dependency-alignment
+mistake also reverts the CVE patch. It gets its own issue and its own PR.
 
 ## User stories
 - AS a platform operator I WANT mctl-api's container image built from a
@@ -31,10 +36,12 @@ already being touched.
 - AS a maintainer reviewing CI I WANT the govulncheck job to fail the build
   when a reachable vulnerability is found SO THAT new stdlib/dependency CVEs
   are caught before merge instead of silently ignored.
-- AS a maintainer running `go mod tidy` I WANT `k8s.io/client-go` and
-  `k8s.io/apimachinery` on matching minor versions SO THAT the k8s client
-  dependency set is internally consistent and not carrying skew accumulated
-  from partial upgrades.
+- AS a maintainer of this repository I WANT the govulncheck gate to be
+  reproducible SO THAT an upstream release of the scanner cannot turn every
+  PR red without a change on our side — the tool binary is pinned while its
+  vulnerability database keeps floating.
+- AS a reviewer I WANT to know whether "fail-closed" means the job fails or
+  the merge is blocked SO THAT I do not assume a gate that is not configured.
 
 ## Acceptance criteria (EARS)
 - WHEN `go.mod` is inspected THE SYSTEM SHALL declare `go 1.26.6` (or higher
@@ -53,15 +60,16 @@ already being touched.
 - WHEN the `security.yml` govulncheck job runs in CI after this change
   THE SYSTEM SHALL NOT carry `continue-on-error: true`; a reachable
   vulnerability finding SHALL fail the workflow.
-- WHEN `go.mod` is inspected after the dependency alignment THE SYSTEM SHALL
-  declare `k8s.io/client-go` and `k8s.io/apimachinery` at compatible/aligned
-  minor versions (matching the target `k8s.io/apimachinery v0.36.3` line, or
-  the latest mutually-compatible pair available at implementation time).
-- IF the `k8s.io/client-go` version bump required to align with
-  `k8s.io/apimachinery` introduces a breaking API change in code under
-  `internal/` THEN THE SYSTEM SHALL surface this as a build/test failure
-  during `go build ./...` / `go test ./...`, to be fixed as part of this
-  same change (not deferred).
+- WHEN `go.mod` is inspected after this change THE SYSTEM SHALL show the
+  `k8s.io/api`, `k8s.io/apimachinery` and `k8s.io/client-go` require lines
+  **unchanged** at `v0.36.1` / `v0.36.3` / `v0.36.1`. The alignment is out of
+  scope here and must not arrive as a side effect of `go mod tidy`.
+- WHEN the `govulncheck` job installs the scanner THE SYSTEM SHALL pin it to
+  a specific release rather than `@latest`, while continuing to let the
+  vulnerability database resolve at run time.
+- WHEN the PR description describes the fail-closed change THE SYSTEM SHALL
+  distinguish a failing job from a blocked merge, and SHALL NOT claim the
+  latter unless `govulncheck` is a required status check in the ruleset.
 - WHILE the `security.yml` workflow's `trivy` job is unrelated to this change
   THE SYSTEM SHALL leave it untouched (already fail-closed on unfixed
   CRITICAL findings per `security.yml:33-40`).
@@ -74,9 +82,11 @@ already being touched.
 ## Out of scope
 - Rewriting or restructuring the `trivy` job in `security.yml` — it is
   already fail-closed and not implicated by this issue.
-- Broader dependency upgrades beyond `k8s.io/client-go` /
-  `k8s.io/apimachinery` alignment and whatever `go mod tidy` naturally pulls
-  in to close the reported CVEs (e.g. no speculative bump of
+- **The `k8s.io/client-go` / `k8s.io/apimachinery` alignment** — excluded at
+  approval, moved to its own issue and PR so the CVE fix stays independently
+  revertible. Also any broader dependency upgrade beyond whatever
+  `go mod tidy` must pull in to close the reported CVEs (e.g. no speculative
+  bump of
   `mark3labs/mcp-go`, `go.temporal.io/*`, `github.com/jackc/pgx/v5`, etc.
   unless required to resolve a reachable vulnerability).
 - Changing the final `alpine:3.24` runtime stage base image or its digest —
@@ -98,14 +108,11 @@ already being touched.
   digest into the Dockerfile. Record the resolution date in a comment next
   to the `FROM` line, mirroring how `security.yml:34` already pins the
   `trivy-action` by digest with a version comment.
-- The issue says "align k8s.io/client-go (v0.36.1) with k8s.io/apimachinery
-  (v0.36.3)" — it does not specify whether `k8s.io/client-go` should move up
-  to a `v0.36.x` release compatible with `apimachinery v0.36.3`, or whether
-  `apimachinery` should move to whatever `k8s.io/api`/`client-go` naturally
-  resolve to via `go mod tidy`. Proceeding with the more conservative reading
-  matching the issue's literal ask: bump `client-go` to align with the
-  already-newer `apimachinery v0.36.3`, letting `go mod tidy` resolve
-  `k8s.io/api` and indirect deps consistently.
+- ~~Which direction the `k8s.io/client-go` / `apimachinery` alignment should
+  go.~~ **Moot: the alignment is out of scope here** (see Out of scope). The
+  question is real and belongs on the follow-up issue, where getting the
+  direction wrong costs a revert of a tidiness change rather than a revert of
+  a security patch.
 - Whether the 25 reported govulncheck findings are fully closed by the Go
   1.26.6 stdlib bump alone, or whether one or more also require a dependency
   bump (e.g. `golang.org/x/net`, `golang.org/x/crypto`) is not verifiable

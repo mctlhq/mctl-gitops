@@ -59,12 +59,18 @@ the platform's 2026-08 dependency audit (P1).
   currently built only via `make build`/`make install` (see
   `cli/mctl/Makefile`), not through CI. Resolution: treat this acceptance
   criterion as vacuously satisfied (nothing to bump) and note the gap in
-  `design.md`/`tasks.md` rather than block on it. Whether to add CI
-  coverage for `cli/mctl` is left to a follow-up proposal, not this one.
+  `design.md`/`tasks.md` rather than block on it. **Confirmed at approval**,
+  with one requirement added: adding CI for `cli/mctl` stays out of scope,
+  but a follow-up **issue** must be filed and cited in the PR (tasks.md
+  approval decision 2). The gap is not cosmetic — with no CI, this bump is
+  verified once by hand and nothing will catch the next batch of
+  advisories, which is how the module reached 25 reachable findings in the
+  first place.
 - `cli/mctl/README.md` states "Go 1.21+ (for building from source)" as the
   documented prerequisite. Bumping to `go 1.25.13` raises the effective
   minimum (Go's toolchain directive semantics mean a `go 1.25.13` module
   requires a `go` command >= 1.25.13, or will auto-download a matching
   toolchain if `GOTOOLCHAIN=auto`, the Go default). This proposal updates
-  the README prerequisite line to stay accurate; if that's undesired, it
-  can be reverted trivially.
+  the README prerequisite line to stay accurate. **Confirmed at approval** —
+  keep the README edit; a documented prerequisite that understates the real
+  floor by four minor versions is worse than no prerequisite line at all.
