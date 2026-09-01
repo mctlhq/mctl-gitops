@@ -1,0 +1,29 @@
+name: workstation scripts
+
+# Тесты рабочей станции. Прогон на обеих системах намеренный: цель скрипта --
+# macOS под launchd, но именно расхождение stat(1) между BSD и GNU однажды
+# оказалось молчаливым (GNU разбирает `-f %m` как имя файла, печатает блок про
+# ФС и возвращает 1), и поймал его только прогон на Linux. Одна платформа этот
+# класс ошибок не ловит по определению.
+on:
+  pull_request:
+    paths:
+      - 'scripts/workstation/**'
+      - '.github/workflows/workstation-scripts.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: sync-platform-skills.sh
+        run: ./scripts/workstation/test-sync-platform-skills.sh
