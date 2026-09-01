@@ -7,6 +7,7 @@ Distinct from `scripts/`, whose contents are one-shot cluster incident helpers.
 |---|---|
 | `sync-platform-skills.sh` | Keep `~/.claude/skills` pointed at the platform-skills catalog on `main`. |
 | `com.mctlhq.skills-sync.plist` | launchd agent running the above every 15 min. |
+| `test-sync-platform-skills.sh` | Tests for the sync script — see [Tests](#tests). |
 
 ## skills sync
 
@@ -30,10 +31,14 @@ The script replaces that with a dedicated read-only mirror:
 - Symlinks are reconciled each run: new catalog skills are linked, dangling
   ones removed. A **real directory** under `~/.claude/skills` is treated as a
   hand-made local skill and left alone.
-- `/tmp/review-watch.sh` is dropped whenever the catalog commit changes. That
-  script is generated from the `review-watch` skill body and cached across
-  sessions; its own freshness check only runs when the skill is next invoked,
-  so a stale copy can otherwise outlive an update to the skill.
+- `~/.claude/tmp/review-watch.sh` is dropped whenever the `review-watch` skill
+  changes in the catalog. That script is generated from the skill body and
+  cached across sessions; its own freshness check only runs when the skill is
+  next invoked, so a stale copy can otherwise outlive an update to the skill.
+  The cache used to live at `/tmp/review-watch.sh`, which is a predictable name
+  in a mode-`1777` directory: any other local user could pre-create it, and the
+  sticky bit then makes it unremovable by us. It moved under `$HOME` in
+  mctl-gitops#959; the old path is cleaned up best-effort on each run.
 
 Skill edits still go through the `mctl_publish_platform_skill` MCP tool, which
 commits to `main`; the mirror picks them up on the next run. Editing files in
@@ -73,3 +78,26 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.mctlhq.skills-sync.p
 
 Run once by hand with `~/.claude/scripts/sync-platform-skills.sh`; log is
 `~/.claude/skills-sync.log`. Requires an SSH key with read access to this repo.
+
+`cp` is also the upgrade path: the launchd agent runs the copy under
+`~/.claude/scripts`, so a change merged here does not reach the workstation
+until it is copied over again.
+
+## Tests
+
+```bash
+./scripts/workstation/test-sync-platform-skills.sh          # all
+./scripts/workstation/test-sync-platform-skills.sh lock_    # by name substring
+```
+
+No network, no ssh, and nothing outside a temp directory: the fixture remote is
+a local bare repo, `git@github.com:mctlhq/mctl-gitops.git` is rewritten onto it
+with `url.insteadOf`, and each test runs the script under `env -i` with its own
+throwaway `HOME`. A failing test keeps its sandbox and prints the path.
+
+CI runs them on both `ubuntu-latest` and `macos-latest`. The second platform is
+not redundant: `stat(1)` differs between BSD and GNU *silently* — GNU reads
+`-f %m` as a request about a file literally named `%m`, prints a block about the
+filesystem and exits 1, so a `stat -f … || stat -c …` fallback concatenates junk
+with the real answer. That made every stale-lock takeover fail on Linux while
+macOS stayed green.

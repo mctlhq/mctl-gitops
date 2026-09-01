@@ -58,17 +58,35 @@ holder_id() {
   [ -n "$st" ] || return 1
   printf '%s %s' "$1" "$st"
 }
-# Возраст лока. stat(1) несовместим между BSD и GNU, поэтому пробуем оба; при
-# неудаче возвращаем 0, то есть "свежий" -- лучше пропустить прогон, чем увести
-# лок у живого процесса.
+# stat(1) несовместим между BSD и GNU, и перебор "одно || другое" тут не
+# работает: GNU разбирает `-f` как "сведения о ФАЙЛОВОЙ СИСТЕМЕ", то есть `stat
+# -f %m X` для него -- запрос про файл с именем "%m". Он печатает многострочный
+# блок про ФС файла X в stdout И возвращает 1, так что запасной вызов тоже
+# срабатывает и склеивает мусор с настоящим ответом. Дальше это уезжает в
+# арифметику (возраст лока превращается в ошибку разбора, то есть в "свежий")
+# и в сверку inode'ов, где блок содержит счётчик свободных блоков и потому
+# отличается от самого себя между двумя вызовами -- перехват стухшего лока
+# срывается на "лок уже пересоздан другим прогоном" каждый раз.
+# Поэтому флавор определяем один раз пробой, а не перебором на каждом вызове.
+if stat -c %Y . >/dev/null 2>&1; then
+  file_mtime() { stat -c %Y "$1" 2>/dev/null; }
+  file_inode() { stat -c %i "$1" 2>/dev/null; }
+else
+  file_mtime() { stat -f %m "$1" 2>/dev/null; }
+  file_inode() { stat -f %i "$1" 2>/dev/null; }
+fi
+# И всё же не доверяем результату вслепую: любой третий флавор stat(1) должен
+# дать "не знаю", а не строку, которую арифметика молча посчитает нулём.
+numeric() { case "${1:-}" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
+# Возраст лока; при неудаче возвращаем 0, то есть "свежий" -- лучше пропустить
+# прогон, чем увести лок у живого процесса.
 lock_age_seconds() {
-  local m
-  m=$(stat -f %m "$LOCK" 2>/dev/null) || m=$(stat -c %Y "$LOCK" 2>/dev/null) || m=""
-  [ -n "$m" ] || { echo 0; return; }
+  local m; m=$(file_mtime "$LOCK")
+  numeric "$m" || { echo 0; return; }
   echo $(( $(date +%s) - m ))
 }
-# inode каталога: BSD и GNU stat несовместимы, поэтому пробуем оба.
-dir_inode() { stat -f %i "$1" 2>/dev/null || stat -c %i "$1" 2>/dev/null || true; }
+# inode каталога; пустая строка -- "не знаю", и вызывающий это проверяет.
+dir_inode() { local i; i=$(file_inode "$1"); numeric "$i" && printf '%s' "$i"; }
 if ! mkdir "$LOCK" 2>/dev/null; then
   # mkdir падает не только из-за занятости: нет ~/.claude, каталог только для
   # чтения, кончилось место. Без этой проверки такой отказ уходил бы в ветку
@@ -436,9 +454,16 @@ for dst in "$SKILLS"/*; do
   esac
 done
 
-# /tmp/review-watch.sh is generated from the skill body and caches across
-# sessions; a catalog change makes it stale, and its freshness predicate only
-# gets consulted when the skill is invoked. Drop it so it is regenerated.
+# ~/.claude/tmp/review-watch.sh is generated from the skill body and caches
+# across sessions; a catalog change makes it stale, and its freshness predicate
+# only gets consulted when the skill is invoked. Drop it so it is regenerated.
+#
+# Путь -- под HOME, а не в /tmp: каталог /tmp имеет режим 1777, и любой другой
+# локальный пользователь мог создать там review-watch.sh сам. Скилл проверяет
+# годность кеша грепом по содержимому, то есть подложенный файл достаточно
+# снабдить нужной строкой, чтобы он был признан свежим и запущен через nohup.
+# Из-за sticky-бита чужой файл вдобавок нельзя ни удалить, ни заменить -- кеш
+# застревал бы протухшим навсегда. См. mctl-gitops#959.
 # Удаляем БЕЗУСЛОВНО, а не только при смене коммита. Сессия, загрузившая старый
 # скилл до синка, может пересоздать старый кеш уже ПОСЛЕ него; при сверке с
 # сохранённым состоянием каждый следующий тик видел бы "коммит не менялся" и
@@ -462,12 +487,17 @@ done
 # ровно тот инцидент 2026-08-31, ради которого всё это писалось. Поэтому
 # необходимость снять кеш ЗАПОМИНАЕТСЯ меткой и переживает тик: она ставится при
 # изменении и снимается только когда файл действительно удалён (или его уже нет).
+WATCH_CACHE="$HOME/.claude/tmp/review-watch.sh"
+# Единственный путь в скрипте, который не выводится из $HOME, поэтому и
+# единственный, который тест не может подменить сменой HOME. Переменная нужна
+# именно для этого: без неё прогон харнесса удалял бы кеш у живого watcher-а на
+# машине разработчика. В штатной работе она не задана.
+WATCH_CACHE_LEGACY="${SKILLS_SYNC_LEGACY_CACHE:-/tmp/review-watch.sh}"
 CACHE_PENDING="$HOME/.claude/skills-sync.cache-pending"
 CACHE_GRACE=120
 cache_age_seconds() {
-  local m
-  m=$(stat -f %m "$1" 2>/dev/null) || m=$(stat -c %Y "$1" 2>/dev/null) || m=""
-  [ -n "$m" ] || { echo 0; return; }
+  local m; m=$(file_mtime "$1")
+  numeric "$m" || { echo 0; return; }
   echo $(( $(date +%s) - m ))
 }
 WATCH_SKILL_CHANGED=0
@@ -490,21 +520,38 @@ if [ "$WATCH_SKILL_CHANGED" = "1" ]; then
     RECONCILE_FAILED=1
   fi
 fi
-if [ ! -f /tmp/review-watch.sh ]; then
+if [ ! -f "$WATCH_CACHE" ]; then
   # Снимать нечего -- долг закрыт.
   rm -f "$CACHE_PENDING"
 elif [ "$CACHE_DUE" = "0" ]; then
-  echo "  review-watch в каталоге не менялся -- кеш /tmp/review-watch.sh не трогаю"
-elif [ "$(cache_age_seconds /tmp/review-watch.sh)" -le "$CACHE_GRACE" ]; then
+  echo "  review-watch в каталоге не менялся -- кеш $WATCH_CACHE не трогаю"
+elif [ "$(cache_age_seconds "$WATCH_CACHE")" -le "$CACHE_GRACE" ]; then
   # Метку НЕ снимаем: вернёмся к этому на следующем тике.
-  echo "  /tmp/review-watch.sh только что записан -- откладываю до следующего тика"
-elif rm -f /tmp/review-watch.sh 2>/dev/null; then
+  echo "  $WATCH_CACHE только что записан -- откладываю до следующего тика"
+elif rm -f "$WATCH_CACHE" 2>/dev/null; then
   rm -f "$CACHE_PENDING"
-  echo "  dropped cached /tmp/review-watch.sh (скилл обновился)"
+  echo "  dropped cached $WATCH_CACHE (скилл обновился)"
 else
-  # /tmp -- 1777: файл может принадлежать другому пользователю, и тогда удалить
-  # его нельзя никогда. Прогон не роняем: симлинки уже сведены.
-  echo "  ВНИМАНИЕ: /tmp/review-watch.sh не удаляется (чужой владелец?) -- кеш остаётся протухшим"
+  # Путь под HOME, так что чужого владельца тут быть не должно -- но снятое право
+  # на запись у каталога или immutable-флаг всё ещё возможны. Прогон не роняем:
+  # симлинки уже сведены.
+  echo "  ВНИМАНИЕ: $WATCH_CACHE не удаляется -- кеш остаётся протухшим"
+fi
+# Одноразовая уборка кеша по старому адресу. Безусловная, но с той же отсрочкой:
+# сессия, загрузившая скилл ДО его переезда, ещё может писать файл по старому
+# пути и запускать его -- удаление, попавшее между записью и nohup, сорвало бы
+# запуск. Долгом это не оформляем: файл по этому пути больше никто не создаёт,
+# поэтому достаточно повторять попытку каждый тик, пока он не исчезнет.
+if [ -f "$WATCH_CACHE_LEGACY" ] \
+   && [ "$(cache_age_seconds "$WATCH_CACHE_LEGACY")" -gt "$CACHE_GRACE" ]; then
+  if rm -f "$WATCH_CACHE_LEGACY" 2>/dev/null; then
+    echo "  removed legacy $WATCH_CACHE_LEGACY (кеш переехал под HOME)"
+  else
+    # /tmp -- 1777: файл может принадлежать другому пользователю, и тогда удалить
+    # его нельзя никогда. Скилл по этому пути уже не ходит, так что это уборка,
+    # а не отказ: сообщаем и живём дальше.
+    echo "  legacy $WATCH_CACHE_LEGACY не удаляется (чужой владелец?) -- он больше не используется"
+  fi
 fi
 if [ "$RECONCILE_FAILED" = "1" ]; then
   echo "[$(date -u +%FT%TZ)] sync FAILED -- не все шаги прошли, подробности выше"
