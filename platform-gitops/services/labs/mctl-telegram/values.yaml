@@ -445,14 +445,21 @@ extraObjects:
   # done through git so the decision is reviewable rather than typed into a
   # psql prompt.
   #
-  # 924671154 is the canary identity; the CronJob below is suspended in the
-  # same commit for the reason stated there. Both are temporary and are
-  # reverted together.
+  # The account is 8745115872 (@mctlhq), the App-Directory demo/reviewer
+  # identity. It is deliberately NOT 924671154: that one is the production
+  # canary, and putting the canary in local mode would point its ten-minute
+  # probe at an operator machine — measuring that machine and its home uplink
+  # instead of the service, and failing every ten minutes whenever the host is
+  # unreachable. A reliable host does not fix that; the canary must keep
+  # exercising the hosted session pool, which is the path real users take.
   #
-  # send_enabled is deliberately NOT touched. The canary identity carries
-  # send_enabled=false so probes stay read-only even though ALLOW_SEND is true
-  # globally, and the pilot only needs reads to prove the routing. Verification
-  # is an audit_logs row with call_path='local'.
+  # 8745115872 is safe to borrow because DEMO_REVIEWER_ENABLED is false, so
+  # both demo CronJobs are pruned and nothing automated runs against it. If
+  # another App-Directory review is scheduled, run the restore Job first — the
+  # hosted session is not destroyed by this, only left unused.
+  #
+  # send_enabled is deliberately NOT touched: proving the routing needs only a
+  # read, and the evidence is an audit_logs row with call_path='local'.
   #
   # RETURNING plus an explicit emptiness check makes a no-op UPDATE a failed
   # Job in ArgoCD rather than a silent "UPDATE 0".
@@ -483,7 +490,7 @@ extraObjects:
               args:
                 - |
                   set -e
-                  TG_ID=924671154
+                  TG_ID=8745115872
                   echo "Flipping telegram id $TG_ID to Local Bridge mode..."
                   UID_=$(psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -tA -c "SELECT id FROM users WHERE telegram_login_id = '$TG_ID';")
                   if [ -z "$UID_" ]; then
@@ -518,16 +525,6 @@ extraObjects:
         app.kubernetes.io/part-of: mctl-platform
         mctl.me/component: canary
     spec:
-      # SUSPENDED for the Local Bridge pilot. The canary runs as 924671154,
-      # and the pilot flips that same identity to mode='local' — every probe
-      # would then be routed over the websocket bridge to an operator laptop.
-      # Left running, the canary would measure that laptop rather than the
-      # service while the daemon is up, and fail every ten minutes the moment
-      # it sleeps. Neither outcome is monitoring.
-      #
-      # This MUST be reverted together with the mode flip below. The revert PR
-      # sets this back to false and runs the -restore Job.
-      suspend: true
       schedule: "*/10 * * * *"
       concurrencyPolicy: Forbid
       startingDeadlineSeconds: 120
