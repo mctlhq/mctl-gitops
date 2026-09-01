@@ -1,5 +1,5 @@
-status: accepted
-updated_at: '2026-09-01T07:41:24Z'
+status: implemented
+updated_at: '2026-09-01T07:47:02Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -9,5 +9,11 @@ source:
 control:
   requires_human_approval: true
 approval:
-  approved_by: 'mashkovd'
+  approved_by: mashkovd
   approved_at: '2026-09-01T07:41:24Z'
+attempt:
+  id: f95de733-23bd-4ffb-b77c-3f4fa4e03a7e
+  started_at: '2026-09-01T07:44:26Z'
+  expires_at: '2026-09-01T09:54:26Z'
+  finished_at: '2026-09-01T07:47:02Z'
+pr: https://github.com/mctlhq/mctl-gitops/pull/966
