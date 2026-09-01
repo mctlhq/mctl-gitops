@@ -38,7 +38,12 @@ The script replaces that with a dedicated read-only mirror:
   The cache used to live at `/tmp/review-watch.sh`, which is a predictable name
   in a mode-`1777` directory: any other local user could pre-create it, and the
   sticky bit then makes it unremovable by us. It moved under `$HOME` in
-  mctl-gitops#959; the old path is cleaned up best-effort on each run.
+  mctl-gitops#959. A leftover at the old path is **not** removed: a session that
+  loaded the skill before the move rewrites a valid cache only when its content
+  check fails, so the file keeps an old mtime and no grace period can tell a
+  launch from an abandoned file — a deletion landing between that check and the
+  `nohup` would stop the watcher starting, silently. Nothing points at the old
+  path any more, so it is inert; delete it by hand if it bothers you.
 
 Skill edits still go through the `mctl_publish_platform_skill` MCP tool, which
 commits to `main`; the mirror picks them up on the next run. Editing files in

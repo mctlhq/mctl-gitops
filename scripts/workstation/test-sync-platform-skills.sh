@@ -142,10 +142,9 @@ setup() { # $1 = имя теста
   LOCK="$HOME_DIR/.claude/skills-sync.lock"
   CACHE="$HOME_DIR/.claude/tmp/review-watch.sh"
   CACHE_PENDING="$HOME_DIR/.claude/skills-sync.cache-pending"
-  LEGACY_CACHE="$ROOT/fake-tmp/review-watch.sh"
   SEED="$ROOT/seed"
 
-  mkdir -p "$HOME_DIR/.claude" "$ROOT/fake-tmp"
+  mkdir -p "$HOME_DIR/.claude"
   git init -q --bare "$REMOTE_DIR"
   # blobless-клон по file:// требует явного разрешения фильтров на стороне
   # отдающего; без него git clone --filter молча отдал бы всё дерево.
@@ -187,7 +186,6 @@ run_sync() {
   env -i \
     HOME="$HOME_DIR" \
     PATH="$PATH" \
-    SKILLS_SYNC_LEGACY_CACHE="$LEGACY_CACHE" \
     bash "$SUT"
   RC=$?
 }
@@ -595,25 +593,6 @@ test_cache_pending_cleared_when_cache_absent() {
   : > "$LOG"
   run_sync
   assert_no_file "$CACHE_PENDING"
-  finish
-}
-
-# Уборка кеша по старому адресу в /tmp -- с той же отсрочкой.
-test_legacy_cache_removed() {
-  setup legacy_cache_removed
-  echo "старый кеш" > "$LEGACY_CACHE"
-  touch -t 200001010000 "$LEGACY_CACHE"
-  run_sync
-  assert_log "removed legacy"
-  assert_no_file "$LEGACY_CACHE"
-  finish
-}
-
-test_legacy_cache_deferred_when_fresh() {
-  setup legacy_cache_deferred_when_fresh
-  echo "только что" > "$LEGACY_CACHE"
-  run_sync
-  assert_file "$LEGACY_CACHE"
   finish
 }
 
