@@ -52,10 +52,19 @@
   + `h.authorizeGithubAppConnect(upReq)` + `backstageReposClient.Do(upReq)`,
   preserving existing error handling (`slog.Error` + 502 on transport
   error) and response passthrough.
+  **Handle the new error return.** `http.Client.Get` returns one error;
+  `http.NewRequestWithContext` adds a *second, earlier* one and returns a
+  nil `*http.Request` alongside it. "Preserve existing error handling" is
+  not enough on its own here — the existing handling covers the transport
+  error only, and a nil `upReq` passed into `authorizeGithubAppConnect`
+  panics on `req.Header.Set`. Check the construction error first, log it
+  and return 502, and only then authorize and send. Do not write
+  `upReq, _ := ...`.
 
 - [ ] 5. Wire the helper into `GetRepoInstallURL` (depends on 2) — DoD:
   same transformation as task 4, applied to `GetRepoInstallURL`'s upstream
-  call.
+  call — including the construction-error check, which is the half of the
+  transformation that is easiest to drop.
 
 - [ ] 6. **DROPPED from this PR — do not do this here.** Wiring
   `BACKSTAGE_GITHUB_APP_CONNECT_TOKEN` into the chart before the Vault key
