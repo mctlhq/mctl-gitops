@@ -617,9 +617,18 @@ spec:
           # by a crashed implementer) is NOT what this workflow should be
           # pushing back to gitops main — fail loudly instead of silently
           # broadening the commit scope.
-          NON_STATUS_CHANGES="$(git status --porcelain -- 'platform-gitops/agents-state/' ':(exclude,glob)platform-gitops/agents-state/**/.status.yaml')"
+          #
+          # `git reset` first, and scan the WHOLE repository rather than just
+          # agents-state/ — see cwft-mctl-agents-investigate.yaml for why both
+          # are load-bearing (agy P1 on gitops#982). The agent shares this
+          # worktree and holds Bash: `git commit` commits the index, so
+          # anything it staged itself rides along regardless of what this step
+          # adds, and the old agents-state/-anchored pathspec could not see a
+          # change anywhere else in the repo.
+          git reset -q
+          NON_STATUS_CHANGES="$(git status --porcelain -- ':(exclude,glob)platform-gitops/agents-state/**/.status.yaml')"
           if [ -n "$NON_STATUS_CHANGES" ]; then
-            echo "❌ Refusing to commit non-.status.yaml changes under platform-gitops/agents-state/:"
+            echo "❌ Refusing to commit changes outside .status.yaml files under platform-gitops/agents-state/:" >&2
             printf '%s\n' "$NON_STATUS_CHANGES"
             exit 1
           fi

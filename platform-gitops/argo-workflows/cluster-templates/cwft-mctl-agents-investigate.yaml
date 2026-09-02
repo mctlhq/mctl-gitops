@@ -380,9 +380,23 @@ spec:
           # fail loudly rather than silently widening the commit. This is the
           # investigate-side equivalent of the implement template's
           # `.status.yaml`-only guard.
-          OUT_OF_SCOPE="$(git status --porcelain -- 'platform-gitops/agents-state/' ':(exclude,glob)platform-gitops/agents-state/*/proposals/*/**')"
+          #
+          # Two properties this guard MUST have, both learned the hard way
+          # (agy P1 on gitops#982, reproduced before fixing):
+          #
+          # 1. `git reset` first. The agent shares this worktree and holds
+          #    Bash, so it can `git add` a file itself. `git commit` commits
+          #    the INDEX, not the pathspec — so anything the agent staged
+          #    rides along no matter what this step adds. Clearing the index
+          #    makes the guard below the only thing that decides.
+          # 2. Scan the WHOLE repository, not just agents-state/. The
+          #    previous pathspec started at 'platform-gitops/agents-state/',
+          #    so a modification to e.g. platform-gitops/argo-workflows/ was
+          #    invisible to the check and still landed in the commit.
+          git reset -q
+          OUT_OF_SCOPE="$(git status --porcelain -- ':(exclude,glob)platform-gitops/agents-state/*/proposals/*/**')"
           if [ -n "$OUT_OF_SCOPE" ]; then
-            echo "❌ Refusing to commit changes outside a proposal directory under platform-gitops/agents-state/:"
+            echo "❌ Refusing to commit changes outside a proposal directory under platform-gitops/agents-state/:" >&2
             printf '%s\n' "$OUT_OF_SCOPE"
             exit 1
           fi

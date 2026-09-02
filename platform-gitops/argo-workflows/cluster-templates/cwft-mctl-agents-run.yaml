@@ -348,7 +348,21 @@ spec:
           git config user.name "mctl-agents[bot]"
           git config user.email "mctl-agents[bot]@users.noreply.github.com"
 
-          # Stage only agents-state (paranoia: nothing else)
+          # Stage only agents-state. "git add <dir>" alone is NOT enough to
+          # make that true: `git commit` commits the INDEX, and the agent
+          # shares this worktree with Bash, so anything it staged itself
+          # rides along. Clear the index first, then refuse outright if the
+          # worktree carries a change outside agents-state/ — this template
+          # legitimately writes digests and inbox files, so its allowed set
+          # is the whole subtree, unlike the proposal-scoped guards in
+          # cwft-mctl-agents-investigate.yaml (agy P1 on gitops#982).
+          git reset -q
+          OUT_OF_SCOPE="$(git status --porcelain -- ':(exclude)platform-gitops/agents-state/')"
+          if [ -n "$OUT_OF_SCOPE" ]; then
+            echo "❌ Refusing to commit changes outside platform-gitops/agents-state/:" >&2
+            printf '%s\n' "$OUT_OF_SCOPE" >&2
+            exit 1
+          fi
           git add platform-gitops/agents-state/
 
           if git diff --cached --quiet; then

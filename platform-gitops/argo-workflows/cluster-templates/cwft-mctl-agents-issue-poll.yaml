@@ -342,9 +342,18 @@ spec:
           # agents-state/<svc>/proposals/<slug>/. Anything else under
           # agents-state/ is not this workflow's output; fail loudly rather
           # than silently widening the commit.
-          OUT_OF_SCOPE="$(git status --porcelain -- 'platform-gitops/agents-state/' ':(exclude,glob)platform-gitops/agents-state/*/proposals/*/**')"
+          #
+          # `git reset` first, and scan the WHOLE repository rather than just
+          # agents-state/ — see the identical guard in
+          # cwft-mctl-agents-investigate.yaml for why both are load-bearing
+          # (agy P1 on gitops#982). The agent shares this worktree and holds
+          # Bash: `git commit` commits the index, so anything it staged
+          # itself rides along, and the old agents-state/-anchored pathspec
+          # could not see a change anywhere else in the repo.
+          git reset -q
+          OUT_OF_SCOPE="$(git status --porcelain -- ':(exclude,glob)platform-gitops/agents-state/*/proposals/*/**')"
           if [ -n "$OUT_OF_SCOPE" ]; then
-            echo "❌ Refusing to commit changes outside a proposal directory under platform-gitops/agents-state/:"
+            echo "❌ Refusing to commit changes outside a proposal directory under platform-gitops/agents-state/:" >&2
             printf '%s\n' "$OUT_OF_SCOPE"
             exit 1
           fi
