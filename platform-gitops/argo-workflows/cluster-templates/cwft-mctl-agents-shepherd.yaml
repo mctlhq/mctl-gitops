@@ -581,15 +581,27 @@ spec:
           # anything it staged itself rides along regardless of what this step
           # adds, and the old agents-state/-anchored pathspec could not see a
           # change anywhere else in the repo.
-          # Reset to the REMOTE tip, not to local HEAD. `git reset` alone
-          # rewinds the index to HEAD — but the agent can `git commit` in
-          # this worktree itself, and that moves HEAD, so its commit would
-          # look like clean history and ride along on `git push HEAD:main`
-          # (agy P1 on gitops#982, second round; reproduced). Resetting to
-          # the fetched remote tip unwinds any such commit back into the
-          # worktree, where the guard below sees it.
-          git fetch -q --depth=1 origin main
-          git reset -q FETCH_HEAD
+          # Reset to origin/main — the tip this pod CLONED — before the
+          # guard. Two things this is not, both learned by getting it wrong
+          # on gitops#982:
+          #
+          #  - Not a bare `git reset`. That rewinds the index to HEAD, and
+          #    the agent can `git commit` in this worktree itself, moving
+          #    HEAD; its commit would then look like clean history and ride
+          #    along on `git push HEAD:main` (agy P1, round 2).
+          #  - Not a freshly fetched remote tip. main is written constantly
+          #    (image bumps), and an agent run lasts up to two hours, so
+          #    resetting the index forward to a tip this worktree never
+          #    checked out makes every file changed upstream meanwhile show
+          #    as a local modification — tripping the guard and throwing away
+          #    the run's legitimate work (agy P2, round 3; reproduced).
+          #
+          # origin/main is set at clone time and no fetch here moves it, so it
+          # is exactly the pod's own starting point: agent commits unwind into
+          # the worktree where the guard sees them, and upstream movement is
+          # invisible. The push loop below still rebases onto whatever main
+          # has become.
+          git reset -q origin/main
           NON_STATUS_CHANGES="$(git status --porcelain -- ':(exclude,glob)platform-gitops/agents-state/**/.status.yaml')"
           if [ -n "$NON_STATUS_CHANGES" ]; then
             echo "❌ Refusing to commit changes outside .status.yaml files under platform-gitops/agents-state/:" >&2
