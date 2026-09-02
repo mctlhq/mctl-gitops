@@ -12,7 +12,7 @@ spec:
   tools:
     - Read
     - Grep
-  policyRef: read-only-investigation
+  policyRef: scoped-proposal-authoring
   permissions:
     repository:
       read: true

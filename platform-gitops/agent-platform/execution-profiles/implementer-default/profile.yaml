@@ -48,7 +48,11 @@ spec:
   timeoutSeconds: 2400
   runtime:
     entrypoint: orchestrator.run_implementer:implement
-    optionsBuilder: orchestrator.options:build_implementer_options
+    # build_implementer_options until 2026-09-02, which does not exist: the
+    # function is build_implementer_agent_options. Nothing imported this
+    # reference, so a name that resolved to nothing sat here unnoticed --
+    # mctl-agents' validate_manifest now resolves it (mctl-agents#277).
+    optionsBuilder: orchestrator.options:build_implementer_agent_options
     sandbox:
       backend: argo
       clusterWorkflowTemplate: mctl-agents-implement

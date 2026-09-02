@@ -11,7 +11,7 @@ spec:
     compatibility: ">=1.0.0 <2.0.0"
   skills: []
   tools: [Read]
-  policyRef: read-only-investigation
+  policyRef: scoped-proposal-authoring
   budgetUsd: 3.00
   timeoutSeconds: 900
   runtime:

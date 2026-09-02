@@ -257,6 +257,130 @@ def validate_profile_file(path: pathlib.Path, schema: dict, policy: Policy, erro
 
 
 # --------------------------------------------------------------------------
+# Effective values: profile vs the deployed ClusterWorkflowTemplate
+#
+# Every profile header claims to "preserve today's effective values", and
+# until now nothing checked that claim. It is the half of mctl-agents#277
+# that can be checked entirely inside this repo: budgetUsd and
+# timeoutSeconds come from the CWFT the profile itself names, not from
+# mctl-agents' Python defaults. Checking them against those defaults would
+# be wrong and would fire immediately -- implementer-default declares
+# $20.00 because cwft-mctl-agents-implement.yaml sets IMPLEMENTER_BUDGET_USD
+# to "20.00", while orchestrator/options.py defaults to $3.00.
+#
+# The tool allow-list is the other half and cannot be checked here: it needs
+# to call the real options.py builders, so it lives in mctl-agents'
+# orchestrator/validate_manifest.py.
+# --------------------------------------------------------------------------
+
+CWFT_DIR = ROOT / "platform-gitops" / "argo-workflows" / "cluster-templates"
+
+BUDGET_ENV_SUFFIX = "_BUDGET_USD"
+TIMEOUT_ENV_SUFFIX = "_TIMEOUT_SECONDS"
+
+
+def _iter_env_vars(node):
+    """Yield every (name, value) under any `env:` list anywhere in the doc.
+
+    A CWFT nests env under templates -> container/script, at a depth that
+    differs between templates, so this walks rather than indexes. Reading
+    the file as text and regexing for the var would also work until the day
+    a var name appears in a comment -- which it already does in
+    cwft-mctl-agents-run.yaml.
+    """
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "env" and isinstance(value, list):
+                for entry in value:
+                    if isinstance(entry, dict) and "name" in entry and "value" in entry:
+                        yield str(entry["name"]), entry["value"]
+            yield from _iter_env_vars(value)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _iter_env_vars(item)
+
+
+def _unique_env_by_suffix(doc, suffix: str, path: pathlib.Path):
+    """The single env var ending in `suffix`, or None.
+
+    Two different vars with the same suffix in one template is ambiguous,
+    and guessing which one the profile meant is exactly the kind of silent
+    choice this validator exists to refuse.
+    """
+    found = {name: value for name, value in _iter_env_vars(doc) if name.endswith(suffix)}
+    if len(found) > 1:
+        raise CatalogValidationError(
+            f"{path.name} declares {len(found)} {suffix} variables "
+            f"({', '.join(sorted(found))}); cannot tell which one a profile pins"
+        )
+    return next(iter(found.values()), None)
+
+
+def validate_profile_against_cwft(
+    path: pathlib.Path, doc: dict, errors: list, cwft_dir: pathlib.Path
+) -> None:
+    """Check budgetUsd/timeoutSeconds against the CWFT the profile names.
+
+    The CWFT is derived from spec.runtime.sandbox.clusterWorkflowTemplate
+    rather than from a profile->template table. A table would be a third
+    place able to drift from the other two, which is the failure this whole
+    check exists to remove.
+    """
+    spec = doc["spec"]
+    name = doc["metadata"]["name"]
+    cwft_name = spec["runtime"]["sandbox"]["clusterWorkflowTemplate"]
+    cwft_path = cwft_dir / f"cwft-{cwft_name}.yaml"
+    if not cwft_path.exists():
+        errors.append(
+            f"{path}: names sandbox.clusterWorkflowTemplate {cwft_name!r} but "
+            f"{cwft_path} does not exist"
+        )
+        return
+
+    try:
+        cwft = load_yaml(cwft_path)
+        budget = _unique_env_by_suffix(cwft, BUDGET_ENV_SUFFIX, cwft_path)
+        timeout_env = _unique_env_by_suffix(cwft, TIMEOUT_ENV_SUFFIX, cwft_path)
+    except Exception as exc:  # noqa: BLE001 - report and continue
+        errors.append(f"{path}: reading {cwft_path.name}: {exc}")
+        return
+
+    if budget is None:
+        errors.append(
+            f"{path}: profile {name!r} declares budgetUsd {spec['budgetUsd']} but "
+            f"{cwft_path.name} sets no *{BUDGET_ENV_SUFFIX} — the profile's "
+            "effective value cannot be verified against anything"
+        )
+    elif float(budget) != float(spec["budgetUsd"]):
+        errors.append(
+            f"{path}: budgetUsd {spec['budgetUsd']} does not match "
+            f"{cwft_path.name}'s {float(budget)}"
+        )
+
+    # No *_TIMEOUT_SECONDS override means the pod-level deadline IS the
+    # effective timeout, which is what the investigator and shepherd headers
+    # already say. Deliberately the workflow-level activeDeadlineSeconds,
+    # not a step-level one: cwft-mctl-agents-implement.yaml has two
+    # 300-second step deadlines that bound single steps, not the run.
+    if timeout_env is not None:
+        effective = timeout_env
+        source = f"*{TIMEOUT_ENV_SUFFIX}"
+    else:
+        effective = (cwft.get("spec") or {}).get("activeDeadlineSeconds")
+        source = "spec.activeDeadlineSeconds"
+    if effective is None:
+        errors.append(
+            f"{path}: {cwft_path.name} declares neither a *{TIMEOUT_ENV_SUFFIX} "
+            "nor spec.activeDeadlineSeconds; timeoutSeconds is unverifiable"
+        )
+    elif int(effective) != int(spec["timeoutSeconds"]):
+        errors.append(
+            f"{path}: timeoutSeconds {spec['timeoutSeconds']} does not match "
+            f"{cwft_path.name}'s {source} of {int(effective)}"
+        )
+
+
+# --------------------------------------------------------------------------
 # ReleaseBindingIntent
 # --------------------------------------------------------------------------
 
@@ -364,6 +488,7 @@ def validate_catalog(
     release_schema: dict,
     policy: Policy,
     errors: list,
+    cwft_dir: pathlib.Path | None = None,
 ):
     profiles_by_name: dict[str, list[str]] = {}
 
@@ -374,6 +499,16 @@ def validate_catalog(
             continue
         name, version = result
         profiles_by_name.setdefault(name, []).append(version)
+        # Skipped unless a template directory is supplied. A selftest
+        # fixture is a synthetic catalog whose profiles must name a real
+        # CWFT (approvedSandboxes forces that) while carrying made-up
+        # budgets, so checking it against the DEPLOYED templates would fail
+        # every fixture for the wrong reason. A fixture that wants to
+        # exercise this check ships its own cluster-templates/ instead.
+        if cwft_dir is not None:
+            validate_profile_against_cwft(
+                profile_path, load_yaml(profile_path), errors, cwft_dir
+            )
 
     # profiles_by_name maps name -> list of versions seen across every
     # execution-profiles/*/profile.yaml in this catalog root; more than one
@@ -391,7 +526,14 @@ def run(root: pathlib.Path) -> list:
         return errors
     profile_schema = load_json(SCHEMAS / "execution-profile.schema.json")
     release_schema = load_json(SCHEMAS / "release-binding-intent.schema.json")
-    validate_catalog(root, profile_schema, release_schema, policy, errors)
+    validate_catalog(
+        root,
+        profile_schema,
+        release_schema,
+        policy,
+        errors,
+        cwft_dir=CWFT_DIR if root == CATALOG else None,
+    )
     return errors
 
 
@@ -399,6 +541,18 @@ def case_policy_path(case_dir: pathlib.Path) -> pathlib.Path:
     """A fixture may ship its own policy.yaml to exercise policy loading."""
     fixture_policy = case_dir / "policy.yaml"
     return fixture_policy if fixture_policy.exists() else CATALOG / "policy.yaml"
+
+
+def case_cwft_dir(case_dir: pathlib.Path) -> pathlib.Path | None:
+    """A fixture ships cluster-templates/ to opt into the CWFT cross-check.
+
+    Without this the effective-value check would be unreachable from
+    --selftest, and a weakened version of it could be merged green. Opting
+    in per fixture keeps the other 18 cases from being checked against
+    production templates they have nothing to do with.
+    """
+    fixture_cwfts = case_dir / "cluster-templates"
+    return fixture_cwfts if fixture_cwfts.is_dir() else None
 
 
 def run_selftest() -> list:
@@ -412,7 +566,14 @@ def run_selftest() -> list:
         errors: list = []
         policy = load_policy(errors, case_policy_path(case_dir))
         if policy is not None:
-            validate_catalog(case_dir, profile_schema, release_schema, policy, errors)
+            validate_catalog(
+                case_dir,
+                profile_schema,
+                release_schema,
+                policy,
+                errors,
+                cwft_dir=case_cwft_dir(case_dir),
+            )
         if errors:
             problems.append(f"valid fixture {case_dir.name} unexpectedly failed:")
             problems.extend(f"  {e}" for e in errors)
@@ -423,7 +584,14 @@ def run_selftest() -> list:
         errors = []
         policy = load_policy(errors, case_policy_path(case_dir))
         if policy is not None:
-            validate_catalog(case_dir, profile_schema, release_schema, policy, errors)
+            validate_catalog(
+                case_dir,
+                profile_schema,
+                release_schema,
+                policy,
+                errors,
+                cwft_dir=case_cwft_dir(case_dir),
+            )
         if not errors:
             problems.append(f"invalid fixture {case_dir.name} unexpectedly passed (expected at least one error)")
 

@@ -10,7 +10,7 @@ spec:
     compatibility: ">=1.0.0 <2.0.0"
   skills: []
   tools: [Read]
-  policyRef: read-only-investigation
+  policyRef: scoped-proposal-authoring
   permissions:
     repository: {read: true, branchCreate: false, commit: false, pullRequestCreate: false, merge: false}
     kubernetes: none

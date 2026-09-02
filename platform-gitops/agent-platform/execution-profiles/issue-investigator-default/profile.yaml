@@ -2,10 +2,27 @@
 # effective values: $3.00 budget (cwft-mctl-agents-investigate.yaml
 # ISSUE_INVESTIGATOR_BUDGET_USD) and the CWFT's 7200s activeDeadlineSeconds
 # (no per-op ISSUE_INVESTIGATOR_TIMEOUT_SECONDS override exists today, so the
-# pod-level deadline is the effective timeout). Read-only against the target
-# repository: repository.commit/branchCreate/pullRequestCreate/merge are all
-# false, and the only mutation scopes are writing the proposal triplet and
-# commenting on the source issue -- neither requires a human approval gate.
+# pod-level deadline is the effective timeout).
+#
+# spec.tools omitted Write, Edit and Bash until 2026-09-02 and the profile
+# called itself read-only-investigation. build_issue_investigator_options
+# (mctl-agents orchestrator/options.py) grants all three, with
+# permission_mode="acceptEdits" -- so this file was a security claim the
+# platform did not enforce, sitting in the catalog meant to become
+# authoritative (mctl-agents#277). Corrected to describe what actually runs.
+#
+# The agent legitimately needs to write: it produces the proposal triplet
+# into a staging directory. Whether "can write" has to mean Write/Edit/Bash
+# over the whole workspace is a real question and a separate one -- tracked
+# as the narrowing issue linked from #277, alongside #261 (the agent runs as
+# the orchestrator's own uid). This PR makes the catalog honest; it does not
+# decide that.
+#
+# Still read-only against the TARGET REPOSITORY, and that part was and stays
+# true: repository.commit/branchCreate/pullRequestCreate/merge are all false
+# because the CWFT's own commit-and-push step does the writing, not the
+# agent. The only mutation scopes are the proposal triplet and an issue
+# comment -- neither requires a human approval gate.
 apiVersion: agents.mctl.ai/v1alpha2
 kind: ExecutionProfile
 metadata:
@@ -19,12 +36,19 @@ spec:
   skills: []
   tools:
     - Read
-    - Grep
+    - Write
+    - Edit
     - Glob
+    - Grep
     - WebSearch
     - WebFetch
+    - Bash
     - "mcp__mctl__*"
-  policyRef: read-only-investigation
+  # Renamed from read-only-investigation: a profile granting Write, Edit and
+  # Bash cannot carry a policy name asserting the opposite. The scope that IS
+  # read-only -- the target repository -- is stated by permissions below,
+  # where it is enforceable.
+  policyRef: scoped-proposal-authoring
   permissions:
     repository:
       read: true

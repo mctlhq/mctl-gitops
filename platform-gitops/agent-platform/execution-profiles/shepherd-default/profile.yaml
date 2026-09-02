@@ -8,6 +8,20 @@
 # this agent (mctl-agents issue-226 design.md). merge: true and the
 # pull-request-merge mutation scope are the one high-risk capability this
 # profile grants -- gated by the "merge" approval rule below.
+#
+# spec.tools was Read/Grep/Glob/Bash/WebFetch until 2026-09-02 and was never
+# checked against anything. build_shepherd_options (mctl-agents
+# orchestrator/options.py) grants exactly ["Read"], so the profile claimed
+# three tools the agent has never had -- in a catalog meant to become
+# authoritative, i.e. a claim that would have WIDENED the agent's permissions
+# the day something started reading it (mctl-agents#277).
+#
+# Note tools and permissions describe different layers, and the gap between
+# them here is deliberate rather than a leftover: the SDK agent only reads,
+# while merging is done by run_shepherd.py's own `gh` call outside the agent
+# session. merge: true is therefore correct alongside tools: [Read].
+# mctl-agents' validate_manifest now diffs this list against the builder, so
+# the two cannot drift apart again silently.
 apiVersion: agents.mctl.ai/v1alpha2
 kind: ExecutionProfile
 metadata:
@@ -21,10 +35,6 @@ spec:
   skills: []
   tools:
     - Read
-    - Grep
-    - Glob
-    - Bash
-    - WebFetch
   policyRef: pr-shepherd
   permissions:
     repository:

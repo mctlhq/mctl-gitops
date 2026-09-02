@@ -77,7 +77,12 @@ spec:
   # catalog is the GitOps-reviewed registry of policy *names*, not their
   # content.
   knownPolicies:
-    - read-only-investigation
+    # Replaced read-only-investigation on 2026-09-02: the investigator's
+    # real tool grant includes Write/Edit/Bash, so a policy name asserting
+    # read-only was false where it mattered most (mctl-agents#277). The name
+    # says what is actually scoped -- authoring a proposal, not touching the
+    # target repository, which permissions.repository states and enforces.
+    - scoped-proposal-authoring
     - production-code-author
     - pr-shepherd
 
