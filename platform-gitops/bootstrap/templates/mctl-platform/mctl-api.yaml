@@ -62,6 +62,21 @@ spec:
             # rather than an exact path because the callback path is not documented
             # and has to survive client updates.
             OAUTH_ALLOWED_REDIRECT_URIS: "https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback,http://localhost:6274/oauth/callback,http://localhost:6274/oauth/callback/debug,https://chatgpt.com/connector/oauth/*,https://antigravity.google/*"
+            # Browser origins permitted by CORS. Distinct from the redirect URIs
+            # above: those govern where the OAuth dance may hand a code back,
+            # this governs which page may read an authenticated API response.
+            #
+            # Set explicitly because the code default is not a safe production
+            # value — it allows claude.ai AND glama.ai while logging "using
+            # localhost-only defaults", so the deployment silently trusted an
+            # origin nobody chose. Anything unlisted simply gets no
+            # Access-Control-Allow-Origin header and the browser blocks it.
+            #
+            # chatgpt.com and antigravity.google are deliberately absent: both
+            # appear in OAUTH_ALLOWED_REDIRECT_URIS, but neither reads the API
+            # from a browser page — they call it server-side, where CORS does
+            # not apply. Add one only when a real preflight is observed failing.
+            ALLOWED_ORIGINS: "https://claude.ai,https://claude.com"
             # Allow git operations on emptyDir volume (owned by root, run as uid=1000)
             GIT_CONFIG_COUNT: "1"
             GIT_CONFIG_KEY_0: "safe.directory"
