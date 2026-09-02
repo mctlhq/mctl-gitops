@@ -1,0 +1,18 @@
+# Stub ClusterWorkflowTemplate for the effective-value cross-check fixture.
+#
+# Deliberately NOT a copy of the production template: only the two fields
+# validate_profile_against_cwft reads are present, so this fixture keeps
+# testing the check rather than tracking unrelated CWFT edits.
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterWorkflowTemplate
+metadata:
+  name: mctl-agents-investigate
+spec:
+  activeDeadlineSeconds: 7200
+  templates:
+    - name: run
+      container:
+        image: example
+        env:
+          - name: ISSUE_INVESTIGATOR_BUDGET_USD
+            value: "3.00"

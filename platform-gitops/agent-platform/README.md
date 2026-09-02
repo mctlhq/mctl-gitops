@@ -119,7 +119,42 @@ expectation:
 | incompatible profile version rejected | `invalid/release-incompatible-version/` |
 | disabled version rejected | `invalid/release-disabled-version/` |
 | independent-half rollback rejected | `invalid/rollback-independent-half/` |
+| effective budget/timeout match the CWFT | `invalid/cwft-budget-mismatch/` |
+| conflicting values for one CWFT variable rejected | `invalid/cwft-conflicting-budget-values/` |
+| non-numeric CWFT value degrades to a file-scoped error | `invalid/cwft-non-numeric-budget/` |
 | exact-pair rollback accepted | `valid/rollback-replay/` |
+
+### Effective values are checked against the deployed template
+
+Every profile header claims to "preserve today's effective values", and
+until 2026-09-02 nothing checked it. `budgetUsd` and `timeoutSeconds` are
+now compared against the ClusterWorkflowTemplate the profile itself names
+in `spec.runtime.sandbox.clusterWorkflowTemplate` — the template file is
+derived from that field rather than from a profile→template table, because
+a table would be a third place able to drift from the other two.
+
+The comparison is against the **CWFT**, never against mctl-agents' Python
+defaults, and that distinction is load-bearing: `implementer-default`
+correctly declares `$20.00` because `cwft-mctl-agents-implement.yaml` sets
+`IMPLEMENTER_BUDGET_USD` to `"20.00"`, while `orchestrator/options.py`
+defaults to `$3.00`. A check written against the defaults would fire
+immediately and be wrong.
+
+For timeouts: a `*_TIMEOUT_SECONDS` env var wins when present, otherwise
+the workflow-level `spec.activeDeadlineSeconds` is the effective timeout —
+which is what the investigator and shepherd headers already state.
+
+The check runs only against the real catalog, or against a fixture that
+ships its own `cluster-templates/`. The other fixtures name real CWFTs
+(`approvedSandboxes` forces that) while carrying made-up budgets, so
+checking them against the deployed templates would fail them for the wrong
+reason.
+
+**The tool allow-list is deliberately not checked here.** It has to call
+the real `orchestrator/options.py` builders, so it lives in mctl-agents'
+`orchestrator/validate_manifest.py` (mctl-agents#277). Between the two,
+every field this catalog asserts about a running agent is now compared to
+the thing that actually runs.
 
 ## Rollback
 

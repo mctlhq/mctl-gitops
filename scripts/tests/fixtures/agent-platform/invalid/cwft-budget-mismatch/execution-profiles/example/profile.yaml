@@ -1,4 +1,3 @@
-# Invalid: "made-up-task" is not in policy.yaml knownModelPolicyTasks.
 apiVersion: agents.mctl.ai/v1alpha2
 kind: ExecutionProfile
 metadata:
@@ -7,23 +6,35 @@ metadata:
 spec:
   version: "1.0.0"
   modelPolicyRef:
-    task: made-up-task
+    task: service_agent
     compatibility: ">=1.0.0 <2.0.0"
   skills: []
-  tools: [Read]
+  tools:
+    - Read
+    - Grep
   policyRef: scoped-proposal-authoring
   permissions:
-    repository: {read: true, branchCreate: false, commit: false, pullRequestCreate: false, merge: false}
+    repository:
+      read: true
+      branchCreate: false
+      commit: false
+      pullRequestCreate: false
+      merge: false
     kubernetes: none
     network: approved-providers-only
-    mutationScopes: [proposal-directory-write]
-  budgetUsd: 3.00
-  timeoutSeconds: 900
+    mutationScopes:
+      - proposal-directory-write
+  budgetUsd: 9.00
+  timeoutSeconds: 7200
   runtime:
     entrypoint: orchestrator.run_example:main
     optionsBuilder: orchestrator.options:build_example_options
-    sandbox: {backend: argo, clusterWorkflowTemplate: mctl-agents-investigate, approved: true}
+    sandbox:
+      backend: argo
+      clusterWorkflowTemplate: mctl-agents-investigate
+      approved: true
   approval:
     requiredBefore: []
   evidence:
-    required: [proposal]
+    required:
+      - proposal

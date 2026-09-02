@@ -11,7 +11,7 @@ spec:
   skills: []
   tools:
     - Read
-  policyRef: read-only-investigation
+  policyRef: scoped-proposal-authoring
   permissions:
     repository:
       read: true
