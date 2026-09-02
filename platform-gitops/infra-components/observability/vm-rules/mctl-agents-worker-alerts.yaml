@@ -81,9 +81,16 @@ spec:
         # separately (max_concurrent_workflow_tasks, deliberately unset —
         # see D3) and a LocalActivityWorker pool this repo never uses would
         # otherwise sit at its ceiling and read as healthy noise.
+        #
+        # `sum`, not `min`, across pods. Both roles are replicaCount: 1
+        # today, where the two agree — but they answer different questions
+        # once that changes, and only one of them is this alert's question.
+        # `min` fires when the WORST pod is full, which for a queue with a
+        # free sibling is not starvation at all; the queue is starved only
+        # when no worker anywhere can take work, which is `sum == 0`.
         - alert: MctlAgentsWorkerActivitySlotsExhausted
           expr: |
-            min by (task_queue) (
+            sum by (task_queue) (
               temporal_worker_task_slots_available{worker_type="ActivityWorker"}
             ) == 0
           for: 20m
@@ -107,6 +114,13 @@ spec:
         # An exporter that stops reporting looks identical to a queue that
         # is perfectly idle: both are "no series". Without this, the two
         # alerts above degrade silently into permanent green.
+        #
+        # One arm per queue, because absent() cannot be aggregated over a
+        # label value it is asserting does not exist — the whole point is
+        # that there is no series to group by. Both roles run and export
+        # today, so both arms are live now; the exec arm matters more after
+        # the routing flip (mctl-agents#251), when a silent exec worker
+        # would mean agent executions stop with nothing saying so.
         - alert: MctlAgentsWorkerMetricsMissing
           expr: |
             absent(temporal_worker_task_slots_available{task_queue="mctl-dev-loop"})
@@ -127,3 +141,23 @@ spec:
               bootstrap/templates/mctl-platform/mctl-agents-worker-monitor.yaml
               and that the pod is serving :8080/metrics (METRICS_PORT in
               orchestrator/temporal/constants.py).
+
+        - alert: MctlAgentsExecWorkerMetricsMissing
+          expr: |
+            absent(temporal_worker_task_slots_available{task_queue="mctl-dev-loop-exec"})
+          for: 30m
+          labels:
+            severity: warning
+            mctl_agent_self: "true"
+          annotations:
+            summary: no Temporal SDK metrics from the mctl-agents execution worker
+            description: |
+              temporal_worker_task_slots_available has been absent for
+              mctl-dev-loop-exec for 30m. The execution worker polls that
+              queue and exports even while idle, so absence means the pod is
+              down or unscraped — not that the queue is quiet.
+
+              Before the routing flip (mctl-agents#251) this costs nothing:
+              nothing schedules onto the exec queue yet. After it, a silent
+              exec worker means every agent execution has stopped, which is
+              exactly the class of failure this group exists to make loud.
