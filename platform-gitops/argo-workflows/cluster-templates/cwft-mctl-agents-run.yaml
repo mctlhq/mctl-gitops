@@ -404,7 +404,16 @@ spec:
               exit 0
             fi
             echo "⚠️  Push failed (attempt ${i}), rebasing..."
-            git pull --rebase origin main
+            # Guarded: `set -e` is active, so an unguarded failure here —
+            # a rebase conflict, a transient network error — kills the
+            # script on the FIRST retry instead of trying the remaining
+            # attempts, and the "failed after 5 attempts" line never prints
+            # (agy P3 on gitops#982). Abort a half-applied rebase so the
+            # next iteration starts from a clean worktree.
+            if ! git pull --rebase origin main; then
+              git rebase --abort 2>/dev/null || true
+              echo "⚠️  Rebase failed (attempt ${i}); retrying" >&2
+            fi
           done
           echo "❌ Push failed after 5 attempts"
           exit 1

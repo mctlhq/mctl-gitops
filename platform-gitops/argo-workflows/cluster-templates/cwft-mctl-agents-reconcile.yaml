@@ -220,6 +220,13 @@ spec:
           - "-c"
           - |
             set -e
+            # Built CLEAN, not just created. This directory IS the
+            # artifact, and the reconcile process runs as a child of this
+            # script in this same container — so anything it drops in here
+            # is handed to commit-and-push and laid over a trusted
+            # checkout. Only the copy loop below is supposed to fill it
+            # (agy P1 on gitops#982, round 4).
+            rm -rf /tmp/status-out
             mkdir -p /tmp/status-out
 
             # Build argv via `set --` so workflow params (injected as env)
@@ -371,8 +378,12 @@ spec:
           # by this pod's clone-gitops initContainer. An empty artifact means
           # the reconcile had nothing to repair — the common case — and the
           # "no diff" guards below then exit 0 exactly as they did before.
-          if [ -d /artifact ] && [ -n "$(ls -A /artifact 2>/dev/null)" ]; then
-            cp -a /artifact/. /workdir/mctl-gitops/
+          if [ -d /artifact/platform-gitops ] && [ -n "$(ls -A /artifact/platform-gitops 2>/dev/null)" ]; then
+            # Copy the repository subtree only, never the artifact root:
+            # `cp -a /artifact/.` would overlay a `.git/` in the artifact
+            # onto the fresh clone's own, and git executes what it finds
+            # there (hooks, core.sshCommand) as root in the next step.
+            cp -a /artifact/platform-gitops/. /workdir/mctl-gitops/platform-gitops/
             echo "applied handed-off status updates"
           else
             echo "no handed-off status updates"
@@ -450,7 +461,16 @@ spec:
               exit 0
             fi
             echo "⚠️  Push failed (attempt ${i}), rebasing..."
-            git pull --rebase origin main
+            # Guarded: `set -e` is active, so an unguarded failure here —
+            # a rebase conflict, a transient network error — kills the
+            # script on the FIRST retry instead of trying the remaining
+            # attempts, and the "failed after 5 attempts" line never prints
+            # (agy P3 on gitops#982). Abort a half-applied rebase so the
+            # next iteration starts from a clean worktree.
+            if ! git pull --rebase origin main; then
+              git rebase --abort 2>/dev/null || true
+              echo "⚠️  Rebase failed (attempt ${i}); retrying" >&2
+            fi
           done
           echo "❌ Push failed after 5 attempts"
           exit 1
