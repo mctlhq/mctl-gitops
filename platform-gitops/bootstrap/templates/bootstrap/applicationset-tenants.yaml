@@ -31,6 +31,8 @@ spec:
       annotations:
         argocd/app-name: '{{`tenant-{{ .path.basename }}`}}'
         argocd/description: '{{`Namespace provisioning for tenant: {{ .path.basename }}`}}'
+        # See applicationset-apps.yaml for why (#970).
+        argocd.argoproj.io/manifest-generate-paths: '{{`/{{ .path.path }};/platform-gitops/helm-charts/tenant`}}'
     spec:
       project: platform
       sources:

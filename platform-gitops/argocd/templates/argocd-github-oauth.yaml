@@ -52,3 +52,16 @@ spec:
         conversionStrategy: Default
         decodingStrategy: None
         metadataPolicy: None
+    # Shared secret for the GitHub push webhook on mctlhq/mctl-gitops →
+    # https://ops.mctl.ai/api/webhook. Argo CD reads exactly this key from
+    # argocd-secret (util/settings: webhook.github.secret). Until it is set
+    # the endpoint accepts unsigned POSTs; once set, unsigned deliveries are
+    # rejected with 400. The same value goes into the webhook's "Secret"
+    # field on GitHub. See #970.
+    - secretKey: webhook.github.secret
+      remoteRef:
+        key: platform/argocd/github-webhook
+        property: secret
+        conversionStrategy: Default
+        decodingStrategy: None
+        metadataPolicy: None
