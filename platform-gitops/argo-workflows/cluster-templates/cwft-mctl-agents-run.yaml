@@ -348,7 +348,41 @@ spec:
           git config user.name "mctl-agents[bot]"
           git config user.email "mctl-agents[bot]@users.noreply.github.com"
 
-          # Stage only agents-state (paranoia: nothing else)
+          # Stage only agents-state. "git add <dir>" alone is NOT enough to
+          # make that true: `git commit` commits the INDEX, and the agent
+          # shares this worktree with Bash, so anything it staged itself
+          # rides along. Clear the index first, then refuse outright if the
+          # worktree carries a change outside agents-state/ — this template
+          # legitimately writes digests and inbox files, so its allowed set
+          # is the whole subtree, unlike the proposal-scoped guards in
+          # cwft-mctl-agents-investigate.yaml (agy P1 on gitops#982).
+          # Reset to origin/main — the tip this pod CLONED — before the
+          # guard. Two things this is not, both learned by getting it wrong
+          # on gitops#982:
+          #
+          #  - Not a bare `git reset`. That rewinds the index to HEAD, and
+          #    the agent can `git commit` in this worktree itself, moving
+          #    HEAD; its commit would then look like clean history and ride
+          #    along on `git push HEAD:main` (agy P1, round 2).
+          #  - Not a freshly fetched remote tip. main is written constantly
+          #    (image bumps), and an agent run lasts up to two hours, so
+          #    resetting the index forward to a tip this worktree never
+          #    checked out makes every file changed upstream meanwhile show
+          #    as a local modification — tripping the guard and throwing away
+          #    the run's legitimate work (agy P2, round 3; reproduced).
+          #
+          # origin/main is set at clone time and no fetch here moves it, so it
+          # is exactly the pod's own starting point: agent commits unwind into
+          # the worktree where the guard sees them, and upstream movement is
+          # invisible. The push loop below still rebases onto whatever main
+          # has become.
+          git reset -q origin/main
+          OUT_OF_SCOPE="$(git status --porcelain -- ':(exclude)platform-gitops/agents-state/')"
+          if [ -n "$OUT_OF_SCOPE" ]; then
+            echo "❌ Refusing to commit changes outside platform-gitops/agents-state/:" >&2
+            printf '%s\n' "$OUT_OF_SCOPE" >&2
+            exit 1
+          fi
           git add platform-gitops/agents-state/
 
           if git diff --cached --quiet; then
@@ -370,7 +404,16 @@ spec:
               exit 0
             fi
             echo "⚠️  Push failed (attempt ${i}), rebasing..."
-            git pull --rebase origin main
+            # Guarded: `set -e` is active, so an unguarded failure here —
+            # a rebase conflict, a transient network error — kills the
+            # script on the FIRST retry instead of trying the remaining
+            # attempts, and the "failed after 5 attempts" line never prints
+            # (agy P3 on gitops#982). Abort a half-applied rebase so the
+            # next iteration starts from a clean worktree.
+            if ! git pull --rebase origin main; then
+              git rebase --abort 2>/dev/null || true
+              echo "⚠️  Rebase failed (attempt ${i}); retrying" >&2
+            fi
           done
           echo "❌ Push failed after 5 attempts"
           exit 1

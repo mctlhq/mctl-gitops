@@ -161,10 +161,17 @@ spec:
               chmod 600 ~/.ssh/id_ed25519
               printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  ConnectTimeout 15\n  ServerAliveInterval 5\n  ServerAliveCountMax 3\n' > ~/.ssh/config
               chmod 600 ~/.ssh/config
-              # Pin GitHub's host key (via ssh-keyscan over 443) instead of
-              # disabling verification, so a MITM / DNS-poison of
-              # ssh.github.com is caught rather than silently trusted
-              # (StrictHostKeyChecking no). -T 10 bounds the keyscan itself: a
+              # Learn GitHub's host key via ssh-keyscan over 443. This is
+              # trust-on-first-use at run time, NOT verification: keyscan
+              # records whatever key the endpoint presents, so an active MITM
+              # or DNS-poison of ssh.github.com during this run is trusted,
+              # not caught. This comment claimed the opposite until 2026-09-02
+              # (agy P2 on gitops#982) — it is marginally better than
+              # StrictHostKeyChecking no only in that the scan and the clone
+              # are separate connections. Real verification means pinning
+              # GitHub's published host keys; tracked in gitops#983 together
+              # with the templates that still set StrictHostKeyChecking no.
+              # -T 10 bounds the keyscan itself: a
               # stalled TCP handshake here has no other timeout and would
               # otherwise eat the workflow's whole 30-min deadline (observed
               # 2026-07-16, gitops#593 follow-up — the clone ran 31 min before
@@ -213,6 +220,13 @@ spec:
           - "-c"
           - |
             set -e
+            # Built CLEAN, not just created. This directory IS the
+            # artifact, and the reconcile process runs as a child of this
+            # script in this same container — so anything it drops in here
+            # is handed to commit-and-push and laid over a trusted
+            # checkout. Only the copy loop below is supposed to fill it
+            # (agy P1 on gitops#982, round 4).
+            rm -rf /tmp/status-out
             mkdir -p /tmp/status-out
 
             # Build argv via `set --` so workflow params (injected as env)
@@ -248,10 +262,19 @@ spec:
             # Anything else changing there is a bug, and commit-and-push still
             # refuses it independently.
             cd /workdir/mctl-gitops
-            # cut -c4- (not awk $NF): --porcelain is a fixed "XY <path>"
-            # layout, so this survives paths containing spaces. reconcile
+            # -z, then tr, then cut -c4-. WITHOUT -z, porcelain quotes and
+            # C-escapes any path with a space or a non-ASCII byte — ` M "a/my
+            # service/.status.yaml"` — and the quotes survive cut, so the
+            # `[ -f "$f" ]` check below fails and the update is silently
+            # dropped from the handoff: the flip never reaches main and the
+            # log says only "skipping (not a regular file)". The comment here
+            # claimed the opposite ("survives paths containing spaces") until
+            # 2026-09-02; measured, a plain space is enough (agy P2 on
+            # gitops#982). -z emits raw unquoted paths, NUL-separated.
+            # Residual limit, unchanged and stated rather than implied: a path
+            # containing a literal newline would still split wrongly. reconcile
             # never renames, so the "old -> new" rename form cannot appear.
-            CHANGED=$(git status --porcelain -- ':(glob)platform-gitops/agents-state/**/.status.yaml' | cut -c4-)
+            CHANGED=$(git status --porcelain -z -- ':(glob)platform-gitops/agents-state/**/.status.yaml' | tr '\0' '\n' | cut -c4-)
             if [ -z "$CHANGED" ]; then
               echo "no .status.yaml changes to hand off"
               exit 0
@@ -364,8 +387,12 @@ spec:
           # by this pod's clone-gitops initContainer. An empty artifact means
           # the reconcile had nothing to repair — the common case — and the
           # "no diff" guards below then exit 0 exactly as they did before.
-          if [ -d /artifact ] && [ -n "$(ls -A /artifact 2>/dev/null)" ]; then
-            cp -a /artifact/. /workdir/mctl-gitops/
+          if [ -d /artifact/platform-gitops ] && [ -n "$(ls -A /artifact/platform-gitops 2>/dev/null)" ]; then
+            # Copy the repository subtree only, never the artifact root:
+            # `cp -a /artifact/.` would overlay a `.git/` in the artifact
+            # onto the fresh clone's own, and git executes what it finds
+            # there (hooks, core.sshCommand) as root in the next step.
+            cp -a /artifact/platform-gitops/. /workdir/mctl-gitops/platform-gitops/
             echo "applied handed-off status updates"
           else
             echo "no handed-off status updates"
@@ -383,10 +410,39 @@ spec:
 
           # Stage only .status.yaml updates under agents-state. Anything else
           # changed there is NOT what this workflow should push — fail loudly.
-          NON_STATUS_CHANGES="$(git status --porcelain -- 'platform-gitops/agents-state/' ':(exclude,glob)platform-gitops/agents-state/**/.status.yaml')"
+          #
+          # `git reset` first, and scan the WHOLE repository rather than just
+          # agents-state/ — see cwft-mctl-agents-investigate.yaml for why both
+          # are load-bearing (agy P1 on gitops#982). The agent shares this
+          # worktree and holds Bash: `git commit` commits the index, so
+          # anything it staged itself rides along regardless of what this step
+          # adds, and the old agents-state/-anchored pathspec could not see a
+          # change anywhere else in the repo.
+          # Reset to origin/main — the tip this pod CLONED — before the
+          # guard. Two things this is not, both learned by getting it wrong
+          # on gitops#982:
+          #
+          #  - Not a bare `git reset`. That rewinds the index to HEAD, and
+          #    the agent can `git commit` in this worktree itself, moving
+          #    HEAD; its commit would then look like clean history and ride
+          #    along on `git push HEAD:main` (agy P1, round 2).
+          #  - Not a freshly fetched remote tip. main is written constantly
+          #    (image bumps), and an agent run lasts up to two hours, so
+          #    resetting the index forward to a tip this worktree never
+          #    checked out makes every file changed upstream meanwhile show
+          #    as a local modification — tripping the guard and throwing away
+          #    the run's legitimate work (agy P2, round 3; reproduced).
+          #
+          # origin/main is set at clone time and no fetch here moves it, so it
+          # is exactly the pod's own starting point: agent commits unwind into
+          # the worktree where the guard sees them, and upstream movement is
+          # invisible. The push loop below still rebases onto whatever main
+          # has become.
+          git reset -q origin/main
+          NON_STATUS_CHANGES="$(git status --porcelain -- ':(exclude,glob)platform-gitops/agents-state/**/.status.yaml')"
           if [ -n "$NON_STATUS_CHANGES" ]; then
-            echo "❌ Refusing to commit non-.status.yaml changes under platform-gitops/agents-state/:"
-            printf '%s\n' "$NON_STATUS_CHANGES"
+            echo "❌ Refusing to commit changes outside .status.yaml files under platform-gitops/agents-state/:" >&2
+            printf '%s\n' "$NON_STATUS_CHANGES" >&2
             exit 1
           fi
 
@@ -414,7 +470,16 @@ spec:
               exit 0
             fi
             echo "⚠️  Push failed (attempt ${i}), rebasing..."
-            git pull --rebase origin main
+            # Guarded: `set -e` is active, so an unguarded failure here —
+            # a rebase conflict, a transient network error — kills the
+            # script on the FIRST retry instead of trying the remaining
+            # attempts, and the "failed after 5 attempts" line never prints
+            # (agy P3 on gitops#982). Abort a half-applied rebase so the
+            # next iteration starts from a clean worktree.
+            if ! git pull --rebase origin main; then
+              git rebase --abort 2>/dev/null || true
+              echo "⚠️  Rebase failed (attempt ${i}); retrying" >&2
+            fi
           done
           echo "❌ Push failed after 5 attempts"
           exit 1
