@@ -43,6 +43,12 @@ argo-cd:
       # "sync, application, admin" tokens were silently ignored.)
       accounts.developers: apiKey, login
       accounts.mctl-api: apiKey
+      # Read-only account for .github/workflows/argocd-freshness.yml, which
+      # checks after every push that the apps tracking main resolved it
+      # (#970). Token: `argocd --core account generate-token --account
+      # ci-freshness` against the cluster kubeconfig, stored as the
+      # ARGOCD_FRESHNESS_TOKEN Actions secret of this repository.
+      accounts.ci-freshness: apiKey
 
       # Health check for ExternalSecrets
       resource.customizations.health.external-secrets.io_ExternalSecret: |
@@ -184,6 +190,8 @@ argo-cd:
 
         # mctl-api service account: read all applications for status checks
         p, mctl-api, applications, get, */*, allow
+        # argocd-freshness workflow: list applications and their revisions
+        p, ci-freshness, applications, get, */*, allow
 
         # Tenant roles: no exec. Argo CD exec is a cluster-admin-adjacent
         # shell into application pods; only role:admin retains it. New

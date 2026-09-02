@@ -1,0 +1,60 @@
+# Unit tests for mctl-alerts.yaml (group mctl.argocd).
+#
+# rule_files is resolved relative to this file. generated/ is produced by
+# scripts/check-vm-rules.sh, which extracts each VMRule's `.spec` so
+# promtool can evaluate the very rules the cluster runs.
+rule_files:
+  - generated/mctl-alerts.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # ---------------------------------------------------------------------
+  # ArgoCDGitPollingStalled
+  # ---------------------------------------------------------------------
+  - interval: 1m
+    name: a repo-server that keeps polling mctl-gitops stays quiet
+    input_series:
+      - series: 'argocd_git_request_total{request_type="ls-remote",repo="https://github.com/mctlhq/mctl-gitops.git",namespace="argocd"}'
+        values: '0+2x40'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: ArgoCDGitPollingStalled
+        exp_alerts: []
+
+  - interval: 1m
+    name: a flat ls-remote counter for 20m fires
+    input_series:
+      - series: 'argocd_git_request_total{request_type="ls-remote",repo="https://github.com/mctlhq/mctl-gitops.git",namespace="argocd"}'
+        values: '100x40'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: ArgoCDGitPollingStalled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              request_type: ls-remote
+              repo: https://github.com/mctlhq/mctl-gitops.git
+              namespace: argocd
+            exp_annotations:
+              summary: Argo CD has not polled mctl-gitops for 10m
+              description: >-
+                argocd_git_request_total{request_type="ls-remote"} for
+                mctl-gitops has not increased in 10m. Applications keep
+                reporting Synced on their last-seen revision while this holds.
+                Check the argocd-repo-server and argocd-application-controller
+                pods and logs (Loki — the controller log rotates within an hour).
+
+  - interval: 1m
+    name: a stalled fetch counter or another repo does not count as stalled polling
+    input_series:
+      - series: 'argocd_git_request_total{request_type="fetch",repo="https://github.com/mctlhq/mctl-gitops.git",namespace="argocd"}'
+        values: '100x40'
+      - series: 'argocd_git_request_total{request_type="ls-remote",repo="https://github.com/mctlhq/mctl-api.git",namespace="argocd"}'
+        values: '100x40'
+      - series: 'argocd_git_request_total{request_type="ls-remote",repo="https://github.com/mctlhq/mctl-gitops.git",namespace="argocd"}'
+        values: '0+2x40'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: ArgoCDGitPollingStalled
+        exp_alerts: []
