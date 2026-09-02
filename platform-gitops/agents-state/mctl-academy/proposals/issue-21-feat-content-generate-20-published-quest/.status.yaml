@@ -1,6 +1,6 @@
-status: needs-triage
-updated_at: '2026-09-01T22:27:36Z'
-updated_by: mctl-agents[bot]
+status: rejected
+updated_at: '2026-09-02T00:35:00Z'
+updated_by: mashkovd
 source:
   type: github_issue
   repo: mctlhq/mctl-academy
@@ -13,8 +13,16 @@ attempt:
   started_at: '2026-08-07T15:56:37Z'
   expires_at: '2026-08-07T18:06:37Z'
   finished_at: '2026-08-07T19:20:00Z'
-notes: 'reconcile: no canonical GitHub PR found'
-failure:
-  code: missing-pr
-  stage: reconcile
-  message: No canonical PR exists for the deterministic result branch.
+notes: >-
+  Operator decision: obsolete, the work was delivered outside this proposal.
+  mctlhq/mctl-academy#21 was closed as completed on 2026-08-07, the day after
+  this attempt finished, via mctl-academy#46 rather than through the dev loop.
+  Its ask — 20 published questions for domain-2 — is satisfied on main:
+  content/questions/ now holds 163 questions, 40 of them in domain-2, against
+  the 20 total (7 in domain-2) that existed when the proposal was written.
+  No canonical PR ever existed for this slug, so the reconciler had been
+  re-stamping failure.code=missing-pr every 15 minutes since. That failure was
+  accurate and not the point: the branch is missing because the proposal was
+  abandoned, not because a PR was lost. rejected is the terminal state for
+  "operator declined this proposal" and is preserved by reconcile_one without
+  a PR, which needs-triage is not.
