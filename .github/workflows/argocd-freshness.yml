@@ -45,16 +45,19 @@ jobs:
             echo "::warning::ARGOCD_FRESHNESS_TOKEN is not set; freshness check skipped"
             exit 0
           fi
-          # Webhook + 30s refs cache should land the SHA in well under a
-          # minute; the poll fallback is 3-4 min. Give it up to ~6 min in
-          # total before calling it stale.
+          # Apps whose manifest-generate-paths the push touched are refreshed
+          # by the webhook within seconds. Apps it did NOT touch only pick
+          # the new SHA up on their own poll: 3 min + up to 1 min jitter +
+          # 30 s refs cache. Observed 2026-09-02: an agents-state commit
+          # left 8 of 34 apps on the previous SHA for 5 min and all had
+          # caught up by 7 min. Budget ~8 min before calling it stale.
           sleep 45
-          for attempt in $(seq 1 10); do
+          for attempt in $(seq 1 14); do
             if .github/scripts/argocd-freshness.sh "$GITHUB_SHA"; then
               exit 0
             fi
-            echo "attempt ${attempt}/10: not there yet, retrying in 30s"
+            echo "attempt ${attempt}/14: not there yet, retrying in 30s"
             sleep 30
           done
-          echo "::error::Argo CD did not resolve ${GITHUB_SHA} on every tracked Application within ~6 min (#970)"
+          echo "::error::Argo CD did not resolve ${GITHUB_SHA} on every tracked Application within ~8 min (#970)"
           exit 1
