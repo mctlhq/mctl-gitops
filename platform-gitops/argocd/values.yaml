@@ -152,6 +152,12 @@ argo-cd:
       controller.status.processors: "5"
       controller.operation.processors: "3"
       controller.repo.server.timeout.seconds: "60"
+      # Cap concurrent manifest renders. The GitHub push webhook (#970)
+      # refreshes every affected Application within seconds of a push
+      # instead of spreading the renders over the 3-4 min poll cycle, so
+      # without a cap a broad commit fans out into dozens of parallel
+      # `helm template` children inside the repo-server's memory cgroup.
+      reposerver.parallelism.limit: "4"
 
       # Disable server-side apply for CRDs to avoid annotation size issues
       # See: https://github.com/argoproj/argo-cd/issues/9476
@@ -341,7 +347,23 @@ argo-cd:
         # get CFS-throttled. 500m→250m (2026-05-07) was too aggressive; 500m
         # still throttled ~50% (7d), so raised 500m→1000m on 2026-06-27.
         cpu: 1000m
-        memory: 256Mi
+        # Raised 256Mi→512Mi on 2026-09-02 together with the push webhook:
+        # steady state was 184Mi (72% of the old cap) and helm/git child
+        # processes count against the same cgroup. A child OOM-kill does
+        # not restart the pod — it surfaces only as "signal: killed" in the
+        # repo-server log and a failed comparison — so headroom matters
+        # more here than for the controller (#970).
+        memory: 512Mi
+    # Git refs cache TTL (default 3m). Every refresh that is not a *hard*
+    # refresh — the 3-min poll AND a webhook-triggered one — resolves
+    # `main` through this Redis-backed ls-remote cache, and with 46 apps on
+    # one repo the cache is re-populated continuously, so a push could sit
+    # unseen for up to poll (3m) + jitter (1m) + TTL (3m). That is what
+    # #970 observed as "Synced on a stale revision"; only a hard refresh
+    # bypassed it. 30s keeps ls-remote traffic trivial (≤2/min per repo)
+    # while letting the webhook actually land the new SHA.
+    extraArgs:
+      - --revision-cache-expiration=30s
     metrics:
       enabled: true
       serviceMonitor:

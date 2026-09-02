@@ -50,6 +50,8 @@ spec:
         backstage.io/kubernetes-id: '{{`{{ trunc 63 (printf "%s-openclaw-skills" (index .path.segments 2)) }}`}}'
       annotations:
         argocd/app-name: '{{`{{ index .path.segments 2 }}-openclaw-skills`}}'
+        # See applicationset-apps.yaml for why (#970).
+        argocd.argoproj.io/manifest-generate-paths: '{{`/{{ .path.path }};/platform-gitops/helm-charts/openclaw-skills`}}'
     spec:
       project: apps
       sources:

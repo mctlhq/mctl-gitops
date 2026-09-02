@@ -25,6 +25,12 @@ spec:
       annotations:
         backstage.io/kubernetes-id: '{{`{{ index .path.segments 3 }}`}}'
         argocd/app-name: '{{`{{ index .path.segments 2 }}-{{ index .path.segments 3 }}`}}'
+        # Limit webhook refreshes and manifest regeneration to commits that
+        # touch this app's own values dir or its chart. Paths starting with
+        # "/" are repo-root relative and apply to both sources. Without this
+        # every push (bot commits under agents-state/ arrive 10-20×/h) would
+        # refresh all generated apps at once (#970).
+        argocd.argoproj.io/manifest-generate-paths: '{{`/{{ .path.path }};/platform-gitops/helm-charts/base-service`}}'
     spec:
       project: apps
       sources:
