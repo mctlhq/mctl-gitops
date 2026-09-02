@@ -16,7 +16,9 @@ metadata:
         1. clone-gitops — SSH-clone mctl-gitops via the shared deploy key.
         2. run-investigator — orchestrator/run_issue_investigator.py inside
            ghcr.io/mctlhq/mctl-agents:1.14.1. The Python script reads the
-           issue via `gh`, gh-clones the target sibling repo read-only,
+           issue via `gh`, gh-clones the target sibling repo (shallow, and
+           discarded with the pod — "read-only" describes intent, not an
+           enforced permission: see mctl-agents#285),
            runs the Claude Agent SDK to write requirements/design/tasks.md,
            writes .status.yaml, and comments the proposal link on the issue.
         3. commit-and-push — commits the new proposal directory back to
@@ -320,10 +322,19 @@ spec:
     # ── 3. Commit & push back to mctl-gitops ──────────────────────────────
     # Unlike cwft-mctl-agents-implement (which only ever rewrites .status.yaml
     # and refuses anything else), the investigator CREATES a new proposal
-    # directory — requirements.md / design.md / tasks.md / .status.yaml. So
-    # this step stages the whole agents-state/ subtree. The investigator's
-    # SDK agent runs with cwd in a throwaway /tmp clone, never in the gitops
-    # worktree, so it cannot write outside agents-state/.
+    # directory — requirements.md / design.md / tasks.md / .status.yaml.
+    #
+    # What keeps that bounded is the guard below, and nothing else. An
+    # earlier version of this comment claimed the SDK agent "runs with cwd
+    # in a throwaway /tmp clone, never in the gitops worktree, so it cannot
+    # write outside agents-state/". That is false in both halves:
+    # build_issue_investigator_options passes add_dirs=[proposal_dir], which
+    # IS the gitops worktree, and the agent holds Bash, which the SDK does
+    # not scope to cwd/add_dirs at all. The conclusion happened to be right;
+    # the stated reason was not, which is the more dangerous kind of comment
+    # — it invites widening the git add glob on the belief that the agent is
+    # already confined. Whether the agent should hold those grants is
+    # mctl-agents#285; this step assumes it does.
     - name: commit-and-push
       # Same shared mutex as the other mctl-agents templates — all push to
       # mctl-gitops main.
