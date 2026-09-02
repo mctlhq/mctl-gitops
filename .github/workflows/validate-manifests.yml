@@ -92,6 +92,15 @@ jobs:
       - name: Validate Argo local workdir invariants
         run: scripts/validate-local-workdir.py
 
+      - name: Check for shell interpolation of workflow parameters
+        run: |
+          set -euo pipefail
+          # --selftest first: a checker that has never been seen to fail is
+          # not known to work. It builds a template that interpolates a
+          # parameter and asserts the detector fires on it.
+          scripts/validate-shell-param-interpolation.py --selftest
+          scripts/validate-shell-param-interpolation.py
+
       - name: Install promtool
         env:
           PROMETHEUS_VERSION: "3.5.0"

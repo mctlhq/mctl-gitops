@@ -36,12 +36,28 @@ spec:
       script:
         image: alpine/helm:3.16.4
         command: [sh]
+        env:
+          - name: PARAM_TEAM_NAME
+            value: "{{inputs.parameters.team_name}}"
+          - name: PARAM_COMPONENT_NAME
+            value: "{{inputs.parameters.component_name}}"
+          - name: PARAM_PREVIEW_ID
+            value: "{{inputs.parameters.preview_id}}"
         source: |
           set -euo pipefail
 
-          TEAM="{{inputs.parameters.team_name}}"
-          COMPONENT="{{inputs.parameters.component_name}}"
-          PREVIEW_ID="{{inputs.parameters.preview_id}}"
+          # Parameters arrive as env, never interpolated into this
+          # script's text. An Argo placeholder is substituted BEFORE sh
+          # parses the line (this comment cannot show one literally —
+          # Argo would substitute it here too), so a value containing a
+          # quote and a semicolon runs as a command, in a pod that is
+          # root with the gitops deploy key mounted. gitops#992.
+          # The whole block is bound, not just the parameters the
+          # operations registry happens to constrain: a reader should not
+          # have to cross-check the registry to know which line is safe.
+          TEAM="$PARAM_TEAM_NAME"
+          COMPONENT="$PARAM_COMPONENT_NAME"
+          PREVIEW_ID="$PARAM_PREVIEW_ID"
           RELEASE="preview-${COMPONENT}-${PREVIEW_ID}"
           NS_PREVIEW="${TEAM}-preview"
 

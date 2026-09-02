@@ -42,6 +42,13 @@ spec:
           - name: deploy-key
             mountPath: /secrets/deploy-key
             readOnly: true
+        env:
+          - name: PARAM_TEAM_NAME
+            value: "{{inputs.parameters.team_name}}"
+          - name: PARAM_COMPONENT_NAME
+            value: "{{inputs.parameters.component_name}}"
+          - name: PARAM_TARGET_TAG
+            value: "{{inputs.parameters.target_tag}}"
         source: |
           set -euo pipefail
 
@@ -80,9 +87,18 @@ spec:
           chmod 600 ~/.ssh/known_hosts
           git config --global url."ssh://git@ssh.github.com:443/".insteadOf "https://github.com/"
 
-          TEAM="{{inputs.parameters.team_name}}"
-          COMPONENT="{{inputs.parameters.component_name}}"
-          TAG="{{inputs.parameters.target_tag}}"
+          # Parameters arrive as env, never interpolated into this
+          # script's text. An Argo placeholder is substituted BEFORE sh
+          # parses the line (this comment cannot show one literally —
+          # Argo would substitute it here too), so a value containing a
+          # quote and a semicolon runs as a command, in a pod that is
+          # root with the gitops deploy key mounted. gitops#992.
+          # The whole block is bound, not just the parameters the
+          # operations registry happens to constrain: a reader should not
+          # have to cross-check the registry to know which line is safe.
+          TEAM="$PARAM_TEAM_NAME"
+          COMPONENT="$PARAM_COMPONENT_NAME"
+          TAG="$PARAM_TARGET_TAG"
           REPO="https://github.com/${GITOPS_ORG}/${GITOPS_REPO}.git"
           VALUES="platform-gitops/services/${TEAM}/${COMPONENT}/values.yaml"
 
