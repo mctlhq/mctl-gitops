@@ -2,246 +2,241 @@
 
 ## Current state
 
-`internal/workertoken/tokenhandler.go` implements `POST /api/mcp/worker-token`,
-mounted in `cmd/server/main.go` (lines ~447-467) behind
-`auth.Middleware(provider, true, m, resourceMeta)`, the same plain MCP
-`provider` mounted at `/mcp`. The handler:
+`internal/workertoken` (package doc, `tokenhandler.go:1-16`) mints bounded,
+admin-scoped bearer tokens for headless MCP workers. Two handlers, wired in
+`cmd/server/main.go:451-467` behind `auth.Middleware(provider, true, m,
+resourceMeta)` at `/mcp`'s own provider (not a dedicated bridge/agent
+provider — see the doc comment on `NewHandler`, `tokenhandler.go:74-97`):
 
-- Requires `id.HasScope("admin:users")` (line 111) — 403 otherwise.
-- Reads `mintWorkerTokenRequest{TelegramID, Scopes, TTLHours}` via
-  `decodeStrict` (`internal/workertoken/json.go`), which rejects unknown
-  fields.
-- Defaults `Scopes` to package-level `allowedReadOnlyScopes` (currently
-  `["telegram:dialogs:read", "telegram:messages:read"]`, lines 50-53) when
-  the caller omits scopes, and rejects (400) any requested scope not in
-  that list via `isAllowedReadOnlyScope` (lines 129-134, 172-179).
-- Clamps `TTLHours` between `defaultWorkerTokenTTL` (30 days) and
-  `maxWorkerTokenTTL` (90 days) (lines 136-142).
-- Mints via `localjwt.Issuer.Mint` with
-  `Audience: []string{"mcp-worker-ro", <mcpAudience if set>}` and
-  `OriginalIssuedAt: time.Now().Unix()` (lines 144-158) — this is the
-  human-in-the-loop anchor the renewal chain depends on.
-- Logs `slog.Info("worker token minted", admin_user_id, target_tg_id,
-  scopes, ttl)` (line 164) — note: TTL duration, not absolute expiry.
+- `POST /api/mcp/worker-token` (`NewHandler`, `tokenhandler.go:98-169`):
+  requires `admin:users`, target `telegram_id`, mints with
+  `aud = ["mcp-worker-ro", <mcpAudience if set>]`, scopes validated against
+  `allowedReadOnlyScopes` (`telegram:dialogs:read`, `telegram:messages:read`
+  — `tokenhandler.go:50-53`), TTL bounded by `defaultWorkerTokenTTL` (30d) /
+  `maxWorkerTokenTTL` (90d) (`tokenhandler.go:36-38`), `OriginalIssuedAt` set
+  to now (anchors the renewal chain).
+- `POST /api/mcp/worker-token/renew` (`NewRenewHandler`,
+  `renewhandler.go:73-193`): no scope required — every privilege-carrying
+  field (subject, `telegram_id`, scopes, audience) is copied from the
+  presented token's re-verified claims, never from the request body
+  (`decodeStrict` rejects unknown fields, so a client cannot smuggle in
+  different scopes). Requires `hasAudience(claims.Audience, workerAudience)`
+  (`"mcp-worker-ro"`) — this is what stops an ordinary interactive session
+  from trading itself for a headless credential
+  (`renewhandler.go:33-39,104-107`). As defense in depth, also refuses to
+  renew a presented token that carries *any* scope outside
+  `allowedReadOnlyScopes` (`renewhandler.go:112-122`) — today this branch is
+  unreachable because the mint path cannot produce such a token, which is
+  exactly the gap this proposal closes deliberately, not by accident.
+  Renewal is bounded in aggregate by `maxRenewalChain` (365d), anchored to
+  `OriginalIssuedAt` (or `IssuedAt` for tokens minted before that claim
+  existed) so a leaked token cannot be renewed forever
+  (`renewhandler.go:14-31,145-159`).
 
-`internal/workertoken/renewhandler.go` implements
-`POST /api/mcp/worker-token/renew`, mounted right after the mint endpoint
-with the same middleware but no scope requirement — it mints only for the
-identity in the bearer token already presented. It:
+Minted tokens are verified by the same `localjwt.Provider` mounted at `/mcp`
+(`internal/auth/localjwt/issuer.go`); nothing routes on the `mcp-worker-ro`
+audience value today — it exists purely for forensic/future-proofing
+identification (`tokenhandler.go:80-97`). Scopes are enforced per-tool by
+`internal/mcp/tools.go`'s `requireScope`/`id.HasScope`
+(`tools.go:1270-1278`), e.g. `send_message` requires
+`telegram:messages:send` (`media_tools.go:341`, `tools.go:1239-1240`) and
+`pin_message` requires `telegram:messages:pin` (`tools.go:659`).
 
-- Re-verifies the raw bearer via `localjwt.Verify` (lines 89-102) to recover
-  claims `auth.Identity` drops.
-- Requires `hasAudience(claims.Audience, workerAudience)` where
-  `workerAudience = "mcp-worker-ro"` (const, line 39) — 403 otherwise. This
-  is what stops an ordinary interactive session token from being renewed
-  into a long-lived credential.
-- Defense-in-depth loop (lines 115-122): rejects renewal (403) if
-  `claims.Scopes` contains anything outside `isAllowedReadOnlyScope` — i.e.
-  today, ANY non-read-only scope refuses renewal unconditionally.
-- Anchors the renewal ceiling via `originAnchor(claims)` (falls back to
-  `IssuedAt` for pre-`orig_iat` tokens) plus `maxRenewalChain` (365 days),
-  clamping (not rejecting) the requested TTL to whatever remains
-  (lines 145-159).
-- Rebuilds `Audience` from configuration the same way the mint handler does
-  (lines 161-169), preserving `claims.Scopes` unchanged (line 173).
+Local Bridge (`docs/local-bridge.md`) uses this same MCP token in two ways:
+`cmd/local`'s `connect`/`daemon` commands exchange it repeatedly at
+`POST /api/bridge/token` (`internal/bridge/tokenhandler.go`) for a 1-hour
+`aud=bridge` token used only to authenticate the daemon's websocket
+connection at `GET /bridge` (`internal/bridge/server.go:44-76`) — that
+exchange and the relay itself (`internal/bridge/hub.go`,
+`internal/bridge/protocol.go`) perform no scope checks at all. The MCP token
+is also the bearer credential the daemon's owner configures their assistant
+connector with for actual tool calls (`docs/local-bridge.md`: "The MCP token
+is issued to you by an operator... the daemon needs a credential it can keep
+re-exchanging" — an ordinary 1-hour OAuth access token cannot serve this
+role). So `id.HasScope("telegram:messages:send")` in `tools.go` is evaluated
+directly against this worker token's `scopes` claim, and today there is no
+way to mint one with `telegram:messages:send`/`telegram:messages:pin` short
+of hand-signing with `OAUTH_JWT_SIGNING_KEY` — the exact operational risk
+`#412` introduced this package to eliminate for the read-only case.
 
-Both handlers are wired in `cmd/server/main.go` only when `cfg.OAUTHJWTSecret`
-is set, using `selectAgentIssuer(cfg)` as issuer and `cfg.OAUTHJWTAudience`
-as the optional extra audience — identical wiring for both endpoints.
-
-Separately, `internal/oauth/scopes.go`'s `DCRNegotiableScopes` already lists
-all four scopes (`telegram:dialogs:read`, `telegram:messages:read`,
+`internal/oauth/scopes.go`'s `DCRNegotiableScopes` already lists all four
+scopes (`telegram:dialogs:read`, `telegram:messages:read`,
 `telegram:messages:send`, `telegram:messages:pin`) for the DCR-advertisement
-use case, and its doc comment explicitly says this list must NOT be reused
-to derive `allowedReadOnlyScopes`, to avoid a write scope silently reaching
-the read-only admin-mint allowlist if `DCRNegotiableScopes` grows one.
-
-`cmd/local/main.go`'s `connect --token` command takes an MCP JWT via
-`--token` and exchanges it at `POST /api/bridge/token`
-(`internal/bridge/tokenhandler.go`) for a 1-hour bridge token, persisted to
-`~/.config/mctl-telegram-local/bridge_token.json`. `cmd/local/daemon.go`
-re-exchanges before the bridge token expires
-(`refreshBridgeToken`, lines 58-...). Neither file changes in this proposal
-— they already work with any sufficiently-scoped, sufficiently-long-lived
-MCP JWT; today nothing produces one through a supported path.
-
-`docs/runbook.md`'s `MctlBridgeDaemonsFlapping` section already documents
-"there is no supported way to issue a long-lived MCP token today" as the
-most likely root cause of daemon flapping — this proposal is what that
-runbook entry has been waiting for.
+use case, but its own doc comment explains why `allowedReadOnlyScopes` is
+deliberately not derived from it — coupling them would let a write scope
+silently reach the read-only admin-mint allowlist if `DCRNegotiableScopes`
+ever grew one.
 
 ## Proposed solution
 
-Add a second, explicitly-named scope set and route it through a `purpose`
-field on the existing mint request, rather than widening
-`allowedReadOnlyScopes` or deriving it from `DCRNegotiableScopes` (both
-ruled out by the issue).
+Add a second, explicitly-named allowlist and a second audience marker to
+`internal/workertoken`, gated by an opt-in field on the existing mint
+request — no new endpoint, no change to the existing default behavior.
 
-### 1. `internal/workertoken/tokenhandler.go`
+**`tokenhandler.go`:**
 
-- Add `allowedBridgeScopes []string` package var, containing all four
-  `DCRNegotiableScopes` values written out explicitly (not imported from
-  `internal/oauth`), mirroring the existing doc-comment reasoning for
-  `allowedReadOnlyScopes`: keeping this package's allowlists as local,
-  literal, independently-reviewed constants means a future scope added to
-  `DCRNegotiableScopes` cannot silently become mintable here, in either
-  direction.
-- Add `Purpose string` (json `"purpose,omitempty"`) to
-  `mintWorkerTokenRequest`. Accepted values: `""` (default, today's
-  read-only behavior) and `"local-bridge"`. Any other value is a 400
-  ("unknown purpose"), matching the handler's existing fail-closed style.
-- Branch scope validation and default-scope selection on `Purpose`:
-  - `Purpose == ""`: exactly today's behavior, byte-for-byte
-    (`allowedReadOnlyScopes`, `isAllowedReadOnlyScope`).
-  - `Purpose == "local-bridge"`: default scopes become
-    `allowedBridgeScopes` (the full send+pin+read set — a Local Bridge
-    daemon needs send and pin, and there is no reason to omit read given
-    it already needs `telegram:dialogs:read`/`telegram:messages:read` for
-    its other tools); explicit `Scopes` must be a subset of
-    `allowedBridgeScopes`, checked by a parallel `isAllowedBridgeScope`.
-- Branch the `Audience` on `Purpose` too: `Purpose == "local-bridge"` mints
-  with `workerBridgeAudience = "mcp-worker-bridge"` instead of
-  `workerAudience = "mcp-worker-ro"` (plus `mcpAudience` as before). This is
-  the load-bearing decision: the renew handler's defense-in-depth check
-  needs a way to know which allowlist applies to a presented token, and the
-  audience is already the mechanism (`workerAudience` const) that marks "this
-  is a worker token" versus an ordinary session — extending it to also mark
-  "which kind" is the smallest change that keeps the renew handler's
-  guarantees intact instead of loosening them.
-- Log line gets an added `expires_at` field (absolute RFC3339 timestamp,
-  already computed for the response body) alongside the existing `ttl`
-  field, for both purposes — this is the "record the expiry somewhere an
-  operator will see" ask; `slog.Info` output is already where an admin
-  running this command watches for confirmation.
+- New var, placed immediately after `allowedReadOnlyScopes` with a comment
+  cross-referencing it (mirroring how `scopes.go` cross-references
+  `allowedReadOnlyScopes` today):
 
-### 2. `internal/workertoken/renewhandler.go`
+  ```go
+  // allowedLocalBridgeScopes is the fixed allowlist for worker tokens minted
+  // with purpose "local-bridge". Deliberately a separate literal from
+  // DCRNegotiableScopes, for the same reason allowedReadOnlyScopes is: this
+  // is an admin-mint validation list, not a DCR-advertisement list, and the
+  // two must not silently drift together.
+  var allowedLocalBridgeScopes = []string{
+      "telegram:dialogs:read",
+      "telegram:messages:read",
+      "telegram:messages:send",
+      "telegram:messages:pin",
+  }
+  ```
 
-- Replace the single `workerAudience` constant's use as the sole "is this a
-  worker token" test with a check against both `workerAudience` and the new
-  `workerBridgeAudience`, and remember which one matched.
-- Replace the flat `isAllowedReadOnlyScope` defense-in-depth loop with a
-  purpose-aware check: read-only-audience tokens keep being validated
-  against `allowedReadOnlyScopes` exactly as today; bridge-audience tokens
-  are validated against `allowedBridgeScopes`. A token whose audience
-  matches neither is rejected with the existing 403 "token is not a worker
-  token" — unchanged for anything that isn't one of these two kinds.
-- Rebuild `Audience` on renewal using whichever of the two worker audiences
-  the presented token carried (plus `mcpAudience` as before), so a renewed
-  Local Bridge token stays renewable, and a renewed read-only token still
-  cannot silently pick up send scopes it never had.
-- `maxRenewalChain` (365 days) and `maxWorkerTokenTTL` (90 days) apply
-  unchanged to both kinds — the issue is explicit that a send-capable
-  long-lived token "deserves the bounding that already exists, not less,"
-  and nothing about a 90-day-per-renewal / 365-day-chain ceiling is
-  read-only-specific.
-- Log line gets the same `expires_at`-alongside-`ttl` addition as the mint
-  handler.
+- New audience constant next to `workerAudience` (moved, or duplicated with a
+  comment — see Alternatives) in `renewhandler.go`:
+  `workerBridgeAudience = "mcp-worker-bridge"`.
 
-### 3. `cmd/server/main.go`
+- `mintWorkerTokenRequest` gains `Purpose string \`json:"purpose,omitempty"\``.
+  Empty/absent means today's read-only behavior, unchanged byte-for-byte.
+  `"local-bridge"` is the only other accepted value; anything else is a 400.
 
-No wiring change: both handlers are already constructed with `secret,
-issuer, mcpAudience` and mounted at the existing routes. The new behavior
-is entirely inside the two handler functions, reachable through the
-existing `POST /api/mcp/worker-token` and `.../renew` endpoints.
+- `NewHandler`'s body branches once, right after decoding the request, to
+  pick `(allowlist, defaultScopes, audienceMarker)` based on `req.Purpose`:
+  read-only keeps `allowedReadOnlyScopes` / `"mcp-worker-ro"`; local-bridge
+  uses `allowedLocalBridgeScopes` / `"mcp-worker-bridge"`. The existing
+  scope-validation loop, TTL bounding, and `OriginalIssuedAt` anchoring are
+  unchanged — they already operate on local variables (`scopes`, `ttl`),
+  just fed from the branch instead of being hardcoded to the read-only path.
+  `isAllowedReadOnlyScope` becomes `isAllowedScope(scope string, allowlist
+  []string) bool` (or gains a sibling `isAllowedLocalBridgeScope`; the
+  proposal prefers a parameterized helper to avoid a second near-identical
+  loop).
 
-### 4. `docs/runbook.md`
+- The `slog.Info("worker token minted", ...)` call gains an `"expires_at"`
+  field (computed the same way the response body's `ExpiresAt` already is)
+  so mint-time expiry is visible in logs without recomputing `iat + ttl` —
+  this is the concrete piece of "record the expiry somewhere an operator
+  will see" the issue asks for. Same addition to the `"worker token
+  renewed"` log line in `renewhandler.go`.
 
-Update the `MctlBridgeDaemonsFlapping` "Likely causes" bullet that currently
-reads "there is no supported way to issue a long-lived MCP token today" to
-point at the new `purpose: "local-bridge"` mint path instead, and add a
-one-line diagnostic: check the mint/renew log's `expires_at` (or re-mint)
-before assuming a different root cause. This keeps the runbook's own
-"undocumented tribal knowledge" problem (the issue's framing) from
-persisting after the fix ships.
+**`renewhandler.go`:**
+
+- `NewRenewHandler` currently hardcodes: (a) requiring `workerAudience`, and
+  (b) validating every claimed scope against `allowedReadOnlyScopes`. Both
+  become audience-driven: after re-verifying the token, check
+  `hasAudience(claims.Audience, workerAudience)` OR
+  `hasAudience(claims.Audience, workerBridgeAudience)`; reject (403,
+  unchanged message) if neither is present. Then select the matching
+  allowlist (`allowedReadOnlyScopes` for `workerAudience`,
+  `allowedLocalBridgeScopes` for `workerBridgeAudience`) for the
+  defense-in-depth per-scope check at `renewhandler.go:112-122`, and rebuild
+  the audience list on re-mint using whichever marker was present (mirroring
+  today's "always include the worker marker, rebuild mcpAudience from
+  config" comment at `renewhandler.go:161-169`).
+- `maxRenewalChain`, the `OriginalIssuedAt` anchoring, and the TTL clamp to
+  the remaining chain window are untouched and apply identically to both
+  purposes — the issue asks to *keep* this bounding for the more powerful
+  credential, not relax it, and this proposal does not introduce a separate,
+  looser chain for local-bridge tokens (see Open Questions in
+  requirements.md for whether that should change later).
+
+**Wiring (`cmd/server/main.go`):** no change. Both handlers are already
+constructed with `(secret, issuer, mcpAudience)` at `main.go:451-467`; the
+new behavior is entirely inside the request body / claims the existing
+handlers process.
+
+**Docs:** `docs/local-bridge.md`'s `connect` step and
+`docs/runbook.md`'s `MctlBridgeDaemonsFlapping` "Likely causes" /
+"Bridge-token expiry loop" section get a short pointer: mint a local-bridge
+token with `{"telegram_id": ..., "purpose": "local-bridge"}` instead of
+hand-signing, and check the mint/renew log line's `expires_at` field before
+assuming the daemon itself is broken.
 
 ## Alternatives
 
-1. **Sibling endpoint (`POST /api/mcp/worker-token/bridge`) instead of a
-   `purpose` field.** The issue offers this as an equally valid shape.
-   Rejected in favor of the `purpose` field because the two mint paths
-   share every other piece of logic (admin gate, TTL clamping, `orig_iat`
-   anchoring, response shape) — a sibling endpoint would either duplicate
-   that logic or immediately factor it into a shared internal function
-   called by two thin wrappers, which is more surface area than a single
-   `if Purpose == "local-bridge"` branch for the same net behavior. A
-   `purpose` field also keeps one endpoint to document, gate, and rate-limit
-   ops-side. The tradeoff — a reviewer scanning the handler for "can this
-   mint send scopes" has to read the branch instead of the route table — is
-   why this is recorded as an open question rather than a closed decision:
-   a reviewer who weighs that differently can redirect to the sibling-route
-   shape without changing any acceptance criterion in requirements.md.
+1. **Widen `allowedReadOnlyScopes` to include send/pin.** Explicitly
+   rejected by the issue: the existing comment block explains at length why
+   write scopes are excluded, and a read-only-intent mint should keep
+   failing closed. Also would silently grant send capability to every
+   existing/future caller of the plain (no-`purpose`) request shape — a
+   default that drifted rather than a decision made at the call site, which
+   is precisely what the issue says to avoid.
 
-2. **Widen `allowedReadOnlyScopes` to include send/pin, gated by a
-   separate scope check.** Rejected outright — the issue explicitly forbids
-   this ("Do not widen `allowedReadOnlyScopes`"), and the existing doc
-   comment's reasoning (a read-only mint must fail closed, not depend on a
-   second gate remembering to run) still holds.
+2. **A sibling endpoint, `POST /api/mcp/worker-token/local-bridge`
+   (separate handler function).** Considered because it makes the
+   capability boundary maximally visible in routing/wiring, matching the
+   issue's "a `purpose: "local-bridge"` field on the request, or a sibling
+   endpoint" phrasing. Dropped in favor of the `purpose` field because: (a)
+   the mint and renew logic (admin gate, TTL bounding, `OriginalIssuedAt`
+   anchoring, `decodeStrict`) would otherwise need to be duplicated or
+   factored into a shared internal helper anyway — a field-driven branch
+   inside the existing handler achieves the same sharing with less surface;
+   (b) `NewRenewHandler` already has to branch on which allowlist to use
+   based on the *presented token's* audience regardless of how the token was
+   minted, so a second mint endpoint would not simplify the renew side at
+   all; (c) the wiring in `main.go` stays a two-route pair
+   (`worker-token`, `worker-token/renew`), unchanged, which is one fewer
+   thing for an operator to learn about when reading the route table.
 
-3. **Derive the new send-capable allowlist from `DCRNegotiableScopes`
-   directly (`oauth.DCRNegotiableScopes` imported into `workertoken`).**
-   Rejected: `internal/oauth/scopes.go`'s own doc comment says the two
-   lists are intentionally decoupled so a future DCR-scope addition can't
-   silently reach the admin-mint allowlist. Importing it for the new
-   bridge-purpose allowlist would reintroduce exactly that coupling one
-   allowlist over from where the original comment warns about it. Keeping
-   `allowedBridgeScopes` a literal, local list costs four lines of
-   duplication and buys the same drift-safety `allowedReadOnlyScopes`
-   already has.
+3. **Derive the local-bridge allowlist from `DCRNegotiableScopes` (i.e.
+   reuse that list directly instead of a new literal).** Rejected for the
+   same reason `allowedReadOnlyScopes` itself is not derived from it today
+   (`scopes.go`'s own comment): `DCRNegotiableScopes` is scoped to the
+   DCR-advertisement use case, and coupling admin-mint validation to it
+   would let a future scope added there reach this allowlist without a
+   deliberate decision. A second small literal costs little and preserves
+   the "explicitly-named set" property the issue asks for.
 
-4. **New standalone package (e.g. `internal/bridgetoken`) instead of
-   extending `internal/workertoken`.** Rejected: the issue frames this as
-   "most of the machinery already exists" in `workertoken` and asks for a
-   second allowlist reachable through it, not a parallel implementation.
-   `tokenhandler.go`'s own package doc already explains why worker-token
-   minting is its own package separate from `internal/agentapi` and
-   `internal/bridge`'s token handlers; splitting Local Bridge minting into
-   yet another package would recreate the same "should this really be
-   separate" question the doc comment already resolved once, for no
-   security or clarity gain — the two purposes share every invariant that
-   matters (admin gate, TTL ceiling, anchored renewal).
+4. **A single unified allowlist plus a `write: bool` request field** instead
+   of a `purpose` string. Rejected because it generalizes past what is
+   needed today (there is exactly one write-capable purpose, local-bridge)
+   and a boolean does not self-document *why* write scopes are being
+   requested the way a named purpose does — the issue's own framing
+   ("granting send is a decision someone made") reads more naturally as a
+   named purpose than a flag.
 
 ## Platform impact
 
-- **Migrations**: none. No schema or persisted-state change; tokens remain
-  stateless bearer JWTs.
-- **Backward compatibility**: fully additive. `Purpose` is
-  `omitempty`/optional and defaults to today's read-only behavior; existing
-  callers (including the canary, which already uses this endpoint's
-  read-only path per its own comments in `cmd/canary/main.go` and
-  `cmd/canary/renew.go`) see no behavior change. The renew handler's
-  audience check widens from "equals `mcp-worker-ro`" to "equals
-  `mcp-worker-ro` OR `mcp-worker-bridge`" — strictly additive, no existing
-  token stops renewing.
-- **Resource impact**: negligible — no new dependencies, no new
-  goroutines, no new storage. One extra string comparison per request.
-- **Risks + mitigations**:
-  - *Risk*: a send-capable long-lived token is a materially bigger
-    credential than a read-only one; a bug in the purpose branch could let
-    a read-only request slip into the bridge allowlist or vice versa.
-    *Mitigation*: mirror the existing test structure exactly —
-    `tokenhandler_test.go` already has `TestNewHandler_RejectsWriteScope`
-    for the read-only path; add its Local Bridge-purpose counterpart
-    (`TestNewHandler_BridgePurposeAllowsSendScope`,
-    `TestNewHandler_DefaultPurposeStillRejectsSendScope`) so both branches
-    are independently pinned. Same pairing for `renewhandler_test.go`.
-  - *Risk*: the renew handler's defense-in-depth loop, once purpose-aware,
-    could regress into effectively trusting the presented token's audience
-    without validating scopes against the matching allowlist — reopening
-    the exact escalation the original loop existed to prevent.
-    *Mitigation*: keep the loop unconditional (every renewal path always
-    revalidates every scope against its matching allowlist; there is no
-    "trust the audience, skip the scope check" branch), and add a test
-    that a bridge-audience token carrying a scope outside
-    `allowedBridgeScopes` (e.g. a hypothetical future scope) is refused
-    renewal exactly like today's `TestRenew_RejectsScopeOutsideAllowlist`.
-  - *Risk*: an admin mistakenly mints a send-capable token for an account
-    that should stay read-only, because `purpose` is easy to set without
-    thinking. *Mitigation*: this is the tradeoff the issue explicitly
-    accepts ("granting send is a decision someone made rather than a
-    default that drifted") — the mitigation is that it requires a
-    deliberate non-default field, `admin:users` scope, and lands in the
-    existing structured log (`admin_user_id`, `target_tg_id`, `scopes`)
-    for audit, same as every other admin mint.
-  - *Risk*: rollout risk is low because the feature is opt-in per request;
-    a deployment upgrading to this version changes no existing behavior
-    until an admin passes `purpose: "local-bridge"`.
+- **Migrations:** none. No schema change; `internal/db` is untouched.
+- **Backward compatibility:** the default (no `purpose` field) mint and
+  renew paths are byte-for-byte unchanged — same allowlist, same audience,
+  same error messages, same defaults. Existing callers (the canary,
+  `cmd/canary/renew.go`) are unaffected. The renew handler's audience check
+  changes from `== workerAudience` to `workerAudience OR
+  workerBridgeAudience`, which only widens what is *accepted*, never what
+  was previously accepted — no existing token becomes unrenewable.
+- **Resource impact:** negligible — one more `var` slice, one more string
+  field, one more branch per request. No new dependencies, no new
+  goroutines, no new external calls.
+- **Risks + mitigations:**
+  - *Risk:* a caller sets `purpose: "local-bridge"` by mistake (e.g. copy-
+    pasted from an example) and mints a send-capable token for a worker that
+    should have stayed read-only. *Mitigation:* the field is opt-in and
+    named for its intended use; the mint response and log line surface
+    `scopes` explicitly (`tokenhandler.go:164`, unchanged) so the minted
+    scopes are visible immediately, the same review surface that exists
+    today for the read-only path.
+  - *Risk:* the renew handler's widened audience check accidentally lets a
+    read-only token be renewed as if it were local-bridge, or vice versa.
+    *Mitigation:* the allowlist used for the defense-in-depth scope check
+    and the audience rebuilt on re-mint are both selected from *which*
+    marker was present on the *presented* token, not from any caller input
+    — the same "every privilege-carrying field comes from verified claims,
+    never the request body" property `renewhandler.go`'s doc comment
+    already asserts, extended to cover which-of-two allowlists rather than
+    only whether-allowlisted.
+  - *Risk:* a send-capable worker token leaks. *Mitigation:* unchanged from
+    today's read-only case — bounded TTL (max 90 days per mint/renewal),
+    `maxRenewalChain` (365 days aggregate), and the fact that this remains
+    an admin-gated mint (`admin:users`) with an audit log line
+    (`admin_user_id`, `target_tg_id`, `scopes` — extended with
+    `expires_at`). This is a materially bigger credential than a read-only
+    worker token, which is exactly why the issue insists the same bounding
+    apply, not weaker bounding — this proposal does not invent a longer
+    leash for it.
+  - *Risk:* the new `expires_at` log field is redundant with the existing
+    `ttl` field and just adds log volume. *Mitigation:* accepted as a minor,
+    worthwhile cost — the issue specifically asks for expiry to be visible
+    to an operator without recomputation, and `ttl` alone requires reading
+    the log's own timestamp and doing arithmetic under incident pressure.

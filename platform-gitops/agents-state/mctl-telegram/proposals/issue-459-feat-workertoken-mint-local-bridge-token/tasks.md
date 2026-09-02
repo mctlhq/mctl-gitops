@@ -1,129 +1,142 @@
 # Tasks: issue-459-feat-workertoken-mint-local-bridge-token
 
-- [ ] 1. Add `allowedBridgeScopes` and `isAllowedBridgeScope` to
-      `internal/workertoken/tokenhandler.go`, listing
-      `telegram:dialogs:read`, `telegram:messages:read`,
-      `telegram:messages:send`, `telegram:messages:pin` as literal values
-      (not imported from `internal/oauth`), with a doc comment mirroring
-      the existing `allowedReadOnlyScopes` comment's drift-safety
-      reasoning — DoD: new var + helper compile, no existing symbol
-      renamed, `allowedReadOnlyScopes` untouched.
-- [ ] 2. Add `workerBridgeAudience = "mcp-worker-bridge"` constant next to
-      `workerAudience` in `internal/workertoken/renewhandler.go` (or
-      tokenhandler.go, whichever already owns `workerAudience` — check
-      before adding) — DoD: constant defined, referenced from both
-      handler files without an import cycle.
-- [ ] 3. Add `Purpose string` (`json:"purpose,omitempty"`) to
-      `mintWorkerTokenRequest` in `tokenhandler.go`, and branch
-      `NewHandler`'s scope-default/scope-validation/audience logic on
-      `Purpose` (depends on 1, 2) — DoD: `Purpose == ""` reproduces
-      today's behavior exactly (existing tests pass unmodified);
-      `Purpose == "local-bridge"` defaults to `allowedBridgeScopes`,
-      validates explicit scopes against `isAllowedBridgeScope`, and mints
-      with `Audience: []string{workerBridgeAudience, <mcpAudience if
-      set>}`; any other `Purpose` value returns 400.
-- [ ] 4. Add `expires_at` (RFC3339, from the already-computed response
-      value) to the `slog.Info("worker token minted", ...)` log line in
-      `tokenhandler.go`, alongside the existing `ttl` field (depends on 3)
-      — DoD: log line carries both `ttl` and `expires_at` for every mint,
-      regardless of purpose.
-- [ ] 5. Update `internal/workertoken/renewhandler.go`'s audience check
-      (currently `hasAudience(claims.Audience, workerAudience)`) to accept
-      either `workerAudience` or `workerBridgeAudience`, and record which
-      one matched (depends on 2) — DoD: a token with neither audience is
-      still refused 403 "token is not a worker token", unchanged.
-- [ ] 6. Replace the renew handler's flat
-      `isAllowedReadOnlyScope`-only defense-in-depth loop with a
-      purpose-aware check: read-only-audience tokens validate against
-      `allowedReadOnlyScopes`, bridge-audience tokens validate against
-      `allowedBridgeScopes` (depends on 1, 5) — DoD: a bridge-audience
-      token carrying only scopes from `allowedBridgeScopes` renews
-      successfully; a token (of either audience) carrying any scope
-      outside its matching allowlist is refused 403, matching the
-      existing `TestRenew_RejectsScopeOutsideAllowlist` semantics extended
-      to the new allowlist.
-- [ ] 7. Update the renew handler's audience-rebuild
-      (`audience := []string{workerAudience}` before minting the renewed
-      token) to reuse whichever of the two worker audiences the presented
-      token carried, not always `workerAudience` (depends on 5) — DoD: a
-      renewed bridge-purpose token keeps carrying `mcp-worker-bridge` (plus
-      `mcpAudience` if set) and stays renewable on its next cycle.
-- [ ] 8. Add `expires_at` to the renew handler's
-      `slog.Info("worker token renewed", ...)` log line, alongside the
-      existing `ttl`, `original_issued_at`, and `chain_deadline` fields
-      (depends on 3, 4) — DoD: log line for every renewal (either purpose)
-      carries the new token's absolute expiry.
-- [ ] 9. Update `docs/runbook.md`'s `MctlBridgeDaemonsFlapping` section:
-      replace the "there is no supported way to issue a long-lived MCP
-      token today" likely-cause bullet with a pointer to
-      `purpose: "local-bridge"` minting, and add a one-line diagnostic step
-      to check the mint/renew log's `expires_at` before assuming a
-      different root cause (depends on 3, 4, 8) — DoD: the section no
-      longer describes the gap this proposal closes as unresolved.
+- [ ] 1. Add `allowedLocalBridgeScopes` and `workerBridgeAudience` —
+      DoD: `internal/workertoken/tokenhandler.go` defines
+      `allowedLocalBridgeScopes = []string{"telegram:dialogs:read",
+      "telegram:messages:read", "telegram:messages:send",
+      "telegram:messages:pin"}` with a doc comment cross-referencing
+      `allowedReadOnlyScopes` (mirroring `scopes.go`'s existing
+      cross-reference); `renewhandler.go` defines `workerBridgeAudience =
+      "mcp-worker-bridge"` next to `workerAudience` with an equivalent doc
+      comment; `allowedReadOnlyScopes` itself is untouched (diff shows no
+      changes to its lines).
+
+- [ ] 2. Generalize the scope-allowlist check (depends on 1) — DoD:
+      `isAllowedReadOnlyScope(scope string) bool` is replaced by
+      `isAllowedScope(scope string, allowlist []string) bool` (or an
+      equivalent parameterized helper); both call sites in
+      `tokenhandler.go` and both call sites in `renewhandler.go` are
+      updated; `go build ./...` succeeds.
+
+- [ ] 3. Add `Purpose` to the mint request and branch `NewHandler`
+      (depends on 2) — DoD: `mintWorkerTokenRequest` gains `Purpose string
+      \`json:"purpose,omitempty"\`` with a doc comment; `NewHandler`
+      selects `(allowlist, defaultScopes, audienceMarker)` based on
+      `req.Purpose` (`""` → read-only path unchanged; `"local-bridge"` →
+      local-bridge allowlist/default/`workerBridgeAudience`; anything else
+      → 400 `"unknown purpose: <value>"`); a request with no `purpose`
+      field produces byte-identical output to today (verified by task 7's
+      regression tests).
+
+- [ ] 4. Log `expires_at` at mint (depends on 3) — DoD: the
+      `slog.Info("worker token minted", ...)` call in `NewHandler` includes
+      an `"expires_at"` field with the same RFC3339 value returned in the
+      response body.
+
+- [ ] 5. Extend `NewRenewHandler` to accept either audience marker
+      (depends on 1, 2) — DoD: the audience check at
+      `renewhandler.go:104-107` accepts `workerAudience` OR
+      `workerBridgeAudience` (rejecting neither → same 403 message,
+      unchanged); the defense-in-depth scope loop at
+      `renewhandler.go:112-122` selects its allowlist based on which
+      marker was present on the presented token; the audience rebuilt on
+      re-mint (`renewhandler.go:161-169`) preserves whichever marker was
+      present, plus `mcpAudience` if configured, exactly as today's
+      `workerAudience`-only logic does.
+
+- [ ] 6. Log `expires_at` at renewal (depends on 5) — DoD: the
+      `slog.Info("worker token renewed", ...)` call includes an
+      `"expires_at"` field, matching task 4's mint-side addition.
+
+- [ ] 7. Update `docs/local-bridge.md` and `docs/runbook.md` (depends on
+      3, 5) — DoD: `docs/local-bridge.md`'s `connect` step (or the
+      paragraph above it explaining where the MCP token comes from)
+      documents minting with `{"telegram_id": ..., "purpose":
+      "local-bridge"}` via `POST /api/mcp/worker-token` as the supported
+      path, replacing any implication that hand-signing is required;
+      `docs/runbook.md`'s `MctlBridgeDaemonsFlapping` → "Bridge-token
+      expiry loop" likely-cause entry gains a line pointing at the mint/
+      renew log's `expires_at` field as the fast way to confirm or rule
+      out this cause.
 
 ## Tests
 
-- [ ] T1. `TestNewHandler_BridgePurposeDefaultsToFullScopeSet` — POST with
-      `purpose: "local-bridge"` and no `scopes` mints a token whose
-      `Scopes` equal `allowedBridgeScopes` (send + pin + both read scopes).
-- [ ] T2. `TestNewHandler_BridgePurposeAllowsSendScope` — POST with
-      `purpose: "local-bridge"`, `scopes: ["telegram:messages:send"]`
-      succeeds (200), where today's default-purpose request with the same
-      scope is rejected (covered by existing
-      `TestNewHandler_RejectsWriteScope`).
-- [ ] T3. `TestNewHandler_DefaultPurposeStillRejectsSendScope` — regression
-      pin: omitting `purpose` (or passing `""`) and requesting
-      `telegram:messages:send` still returns 400, unchanged from today.
-- [ ] T4. `TestNewHandler_RejectsUnknownPurpose` — POST with
-      `purpose: "something-else"` returns 400.
-- [ ] T5. `TestNewHandler_BridgePurposeMintsBridgeAudience` — a
-      `purpose: "local-bridge"` mint carries `mcp-worker-bridge` (and the
-      configured `mcpAudience`, mirroring
-      `TestNewHandler_IncludesConfiguredMCPAudience`) in its audience, not
-      `mcp-worker-ro`.
-- [ ] T6. `TestNewHandler_BridgePurposeSetsOriginalIssuedAt` — a
-      `purpose: "local-bridge"` mint sets `orig_iat` the same way the
-      read-only path does.
-- [ ] T7. `TestRenew_BridgeAudienceRenewsSendScopes` — a token minted with
-      `workerBridgeAudience` and `telegram:messages:send` renews
-      successfully, preserving the scope.
-- [ ] T8. `TestRenew_BridgeAudienceRejectsScopeOutsideBridgeAllowlist` — a
-      bridge-audience token carrying a scope outside `allowedBridgeScopes`
-      is refused renewal (403), mirroring
-      `TestRenew_RejectsScopeOutsideAllowlist` for the new allowlist.
-- [ ] T9. `TestRenew_ReadOnlyAudienceStillRejectsSendScope` — regression
-      pin: a `workerAudience` (`mcp-worker-ro`) token that somehow carries
-      `telegram:messages:send` (e.g. a manually forged or legacy-bug token)
-      is still refused renewal, exactly as today's
-      `TestRenew_RejectsScopeOutsideAllowlist`.
-- [ ] T10. `TestRenew_BridgeAudiencePreservesAudienceAcrossRenewal` — a
-      renewed bridge-purpose token still carries `mcp-worker-bridge`
-      (mirroring `TestRenew_CarriesConfiguredMCPAudience` and
-      `TestRenew_PreservesOriginAnchorAcrossRenewals`), so it remains
-      renewable on a subsequent cycle.
-- [ ] T11. `TestRenew_BridgeAudienceRespectsRenewalChainCeiling` — a
-      bridge-purpose token past its 365-day `maxRenewalChain` deadline is
-      refused renewal, exactly like
-      `TestRenew_RefusesOnceChainExhausted` for the read-only path.
-- [ ] T12. Full existing suite (`go test ./internal/workertoken/...`)
-      passes unmodified for every pre-existing test — confirms the
-      default (`purpose == ""`) path is byte-for-byte unchanged.
-- [ ] T13. `go vet ./... && golangci-lint run ./internal/workertoken/...`
-      clean, per repo convention (`.claude/CLAUDE.md`).
+- [ ] T1. `TestNewHandler_LocalBridgePurposeDefaultScopes` — no `scopes`
+      field, `purpose: "local-bridge"` mints exactly
+      `allowedLocalBridgeScopes` (all four) with `aud` containing
+      `"mcp-worker-bridge"`.
+- [ ] T2. `TestNewHandler_LocalBridgePurposeExplicitSubset` — `purpose:
+      "local-bridge"` with `scopes: ["telegram:messages:send"]` (a subset)
+      is honored, mirroring the existing
+      `TestNewHandler_ExplicitSubsetScopeHonored` for the read-only path.
+- [ ] T3. `TestNewHandler_LocalBridgePurposeRejectsUnknownScope` —
+      `purpose: "local-bridge"` with a scope outside
+      `allowedLocalBridgeScopes` (e.g. `"admin:users"`) is rejected with
+      400, mirroring `TestNewHandler_RejectsWriteScope`'s shape for the
+      read-only path.
+- [ ] T4. `TestNewHandler_RejectsUnknownPurpose` — `purpose: "bogus"` is
+      rejected with 400.
+- [ ] T5. `TestNewHandler_NoPurposeUnchanged` — a request identical to
+      today's (`{"telegram_id": N}`, no `purpose` field) still yields
+      `allowedReadOnlyScopes` and `aud` containing `"mcp-worker-ro"` —
+      regression guard for backward compatibility.
+- [ ] T6. `TestNewHandler_LocalBridgePurposeRespectsTTLBounds` — TTL
+      clamping (`maxWorkerTokenTTL`) and default TTL
+      (`defaultWorkerTokenTTL`) behave identically for `purpose:
+      "local-bridge"` as for the read-only path, mirroring
+      `TestNewHandler_TTLClamp`.
+- [ ] T7. `TestRenew_LocalBridgeTokenRenewsWithSendScope` — a token minted
+      with `aud=["mcp-worker-bridge"]` and
+      `scopes=["telegram:messages:send","telegram:messages:pin"]` renews
+      successfully and the renewed token preserves those scopes — this is
+      the test that would fail against today's code (the existing
+      defense-in-depth check would reject it), proving the fix.
+- [ ] T8. `TestRenew_LocalBridgeTokenRejectsScopeOutsideBridgeAllowlist` —
+      a token carrying `aud=["mcp-worker-bridge"]` plus a scope outside
+      `allowedLocalBridgeScopes` (e.g. `"admin:users"`) is refused
+      renewal, mirroring `TestRenew_RejectsScopeOutsideAllowlist` for the
+      new allowlist.
+- [ ] T9. `TestRenew_ReadOnlyTokenStillRejectsSendScope` — regression:
+      a token with `aud=["mcp-worker-ro"]` carrying
+      `"telegram:messages:send"` is still refused renewal (proves the
+      audience-to-allowlist mapping did not accidentally cross-wire).
+- [ ] T10. `TestRenew_RejectsNonWorkerAudience` (existing test) — extend
+      the table with `{"local-bridge-shaped but wrong string",
+      []string{"mcp-worker-bridge-typo"}}` to confirm only the exact
+      marker values are accepted.
+- [ ] T11. `TestNewHandler_LogsExpiresAt` /
+      `TestRenew_LogsExpiresAt` — capture `slog` output (or refactor the
+      logger to be injectable if the existing tests do not already support
+      this) and assert `expires_at` is present and matches the response
+      body's `ExpiresAt`. If the existing test harness has no precedent
+      for asserting on log output, fall back to asserting only the
+      response-body/behavioral contract in T1-T10 and note the log
+      assertion as manual verification in the PR description.
+- [ ] T12. `go vet ./...` and `golangci-lint run` pass (repo convention,
+      per `CLAUDE.md`).
 
 ## Rollback
 
-The change is additive and gated entirely behind a new, optional `purpose`
-request field with existing default behavior on absence — there is no
-schema migration and no changed wire format for existing callers. Rollback
-is a plain revert of the commit(s) touching
-`internal/workertoken/tokenhandler.go`,
-`internal/workertoken/renewhandler.go`, and `docs/runbook.md`, followed by a
-redeploy. Any Local Bridge token already minted under
-`purpose: "local-bridge"` keeps working as a bearer JWT after rollback
-(minting is stateless — nothing to undo server-side), but it stops being
-renewable once the renew handler no longer recognizes
-`mcp-worker-bridge`/`allowedBridgeScopes` audience — the daemon holding it
-falls back to its normal expiry-driven reconnect-and-fail behavior, the
-same as any other MCP-token-expired case the runbook already covers, and an
-admin re-mints once the fix is rolled forward again.
+This is a pure additive change to an existing package with no schema
+migration and no config/env var changes — rollback is a plain revert of the
+commit(s)/PR.
+
+- If a bad mint has already produced a live send-capable token before
+  rollback: the token remains valid until its own expiry regardless of code
+  rollback (it is a self-contained signed JWT, per `SECURITY.md`'s existing
+  "access tokens are not individually revocable within their TTL" trade-off
+  applied to this token family too). An admin can force early invalidation
+  the same way any locally-issued JWT is force-invalidated today: rotating
+  `OAUTH_JWT_SECRET`/`OAUTH_JWT_SIGNING_KEY` — the blunt, whole-deployment
+  instrument this proposal exists to avoid reaching for routinely, but still
+  the correct tool for an actual incident.
+- Reverting the code change does not touch previously-minted tokens' claims
+  (nothing rewrites already-issued JWTs); it only stops new `purpose:
+  "local-bridge"` mints from succeeding (they revert to 400, since the
+  `Purpose` field and branch no longer exist) and stops
+  `aud=["mcp-worker-bridge"]` tokens from renewing (the renew handler
+  reverts to accepting `workerAudience` only) — an already-issued
+  local-bridge token would then fail to renew and expire on schedule at its
+  next TTL boundary, which is a safe failure mode (daemon reconnect loop,
+  same as today's "MCP token expired" case), not a security regression.
+- No data backfill or cleanup needed on rollback.
