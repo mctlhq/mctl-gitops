@@ -1,5 +1,5 @@
-status: accepted
-updated_at: '2026-09-02T17:02:17Z'
+status: implemented
+updated_at: '2026-09-02T17:34:13Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -8,3 +8,9 @@ source:
   url: https://github.com/mctlhq/mctl-telegram/issues/468
 control:
   requires_human_approval: true
+attempt:
+  id: f5a34836-4f3a-432b-9633-464631c29eb4
+  started_at: '2026-09-02T17:19:54Z'
+  expires_at: '2026-09-02T19:29:54Z'
+  finished_at: '2026-09-02T17:34:13Z'
+pr: https://github.com/mctlhq/mctl-telegram/pull/471
