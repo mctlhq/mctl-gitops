@@ -12,7 +12,7 @@ strategy:
   rollingUpdate: null
 image:
   repository: ghcr.io/mctlhq/mctl-telegram
-  tag: "0.55.0"
+  tag: "0.55.1"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
