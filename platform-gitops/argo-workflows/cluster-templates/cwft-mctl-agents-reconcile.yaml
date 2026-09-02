@@ -161,21 +161,12 @@ spec:
               chmod 600 ~/.ssh/id_ed25519
               printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  ConnectTimeout 15\n  ServerAliveInterval 5\n  ServerAliveCountMax 3\n' > ~/.ssh/config
               chmod 600 ~/.ssh/config
-              # Learn GitHub's host key via ssh-keyscan over 443. This is
-              # trust-on-first-use at run time, NOT verification: keyscan
-              # records whatever key the endpoint presents, so an active MITM
-              # or DNS-poison of ssh.github.com during this run is trusted,
-              # not caught. This comment claimed the opposite until 2026-09-02
-              # (agy P2 on gitops#982) — it is marginally better than
-              # StrictHostKeyChecking no only in that the scan and the clone
-              # are separate connections. Real verification means pinning
-              # GitHub's published host keys; tracked in gitops#983 together
-              # with the templates that still set StrictHostKeyChecking no.
-              # -T 10 bounds the keyscan itself: a
-              # stalled TCP handshake here has no other timeout and would
-              # otherwise eat the workflow's whole 30-min deadline (observed
-              # 2026-07-16, gitops#593 follow-up — the clone ran 31 min before
-              # the deadline killed it).
+              # ConnectTimeout / ServerAlive* above bound every SSH
+              # connection in this step. A stalled TCP handshake has no
+              # other timeout and would otherwise eat the workflow's whole
+              # 30-min deadline (observed 2026-07-16, gitops#593 follow-up —
+              # the clone ran 31 min before the deadline killed it).
+              # Host-key verification is the pinned known_hosts below.
               # GitHub's published SSH host keys, PINNED rather than trusted on
               # first use. Source: https://api.github.com/meta (.ssh_keys),
               # fetched 2026-09-02. This replaces an `ssh-keyscan` of
@@ -409,14 +400,11 @@ spec:
           printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  ConnectTimeout 15\n  ServerAliveInterval 5\n  ServerAliveCountMax 3\n' > ~/.ssh/config
           chmod 600 ~/.ssh/config
 
-          # Pin GitHub's host key (via ssh-keyscan over 443) instead of
-          # disabling verification, so a MITM / DNS-poison of ssh.github.com
-          # is caught rather than silently trusted (StrictHostKeyChecking no).
-          # -T 10 / ConnectTimeout / ServerAlive* above: bound every SSH
-          # connection in this step so a network stall fails in ~15-30s
-          # instead of silently eating the workflow's 30-min activeDeadlineSeconds
-          # (see the clone-gitops initContainer for the observed incident this
-          # fixes).
+          # ConnectTimeout / ServerAlive* above bound every SSH connection
+          # in this step so a network stall fails in ~15-30s instead of
+          # silently eating the workflow's 30-min activeDeadlineSeconds (see
+          # the clone-gitops initContainer for the observed incident).
+          # Host-key verification is the pinned known_hosts below.
           # GitHub's published SSH host keys, PINNED rather than trusted on
           # first use. Source: https://api.github.com/meta (.ssh_keys),
           # fetched 2026-09-02. This replaces an `ssh-keyscan` of

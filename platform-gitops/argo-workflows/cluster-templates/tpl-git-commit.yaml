@@ -130,7 +130,7 @@ spec:
           mkdir -p ~/.ssh
           cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          # Use port 443 (port 22 is blocked); disable strict host checking for ephemeral container
+          # Use port 443 (port 22 is blocked). Host keys are pinned below.
           printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
           # GitHub's published SSH host keys, PINNED rather than trusted on
           # first use. Source: https://api.github.com/meta (.ssh_keys),
@@ -526,7 +526,7 @@ spec:
           mkdir -p ~/.ssh
           cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          # Use port 443 (port 22 is blocked); disable strict host checking for ephemeral container
+          # Use port 443 (port 22 is blocked). Host keys are pinned below.
           printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
           # GitHub's published SSH host keys, PINNED rather than trusted on
           # first use. Source: https://api.github.com/meta (.ssh_keys),
