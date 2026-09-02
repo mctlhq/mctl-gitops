@@ -312,6 +312,28 @@ spec:
               `argocd app get {{ $labels.name }}` and the latest sync
               operationState for the actual cause.
 
+        # The repo-server resolves `main` of mctl-gitops several times a
+        # minute (46 apps on a 3-min poll, 30s refs cache). Zero ls-remote
+        # calls for 10 minutes means the controller or repo-server stopped
+        # polling altogether — a state in which every app still reports
+        # Synced, on whatever revision it last saw (#970). Complements the
+        # per-push argocd-freshness workflow, which only runs when there is
+        # a push to check.
+        - alert: ArgoCDGitPollingStalled
+          expr: |
+            increase(argocd_git_request_total{request_type="ls-remote",repo=~"https://github.com/mctlhq/mctl-gitops(\\.git)?"}[10m]) == 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: Argo CD has not polled mctl-gitops for 10m
+            description: >-
+              argocd_git_request_total{request_type="ls-remote"} for
+              mctl-gitops has not increased in 10m. Applications keep
+              reporting Synced on their last-seen revision while this holds.
+              Check the argocd-repo-server and argocd-application-controller
+              pods and logs (Loki — the controller log rotates within an hour).
+
     # MinIO PVC disk-usage alerts. The default
     # KubePersistentVolumeFillingUp alert (kube-prometheus-stack) only fires
     # at 97% over 1h or 87% over 4h, which is too late given the Loki write

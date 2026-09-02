@@ -1,0 +1,60 @@
+name: argocd-freshness
+
+# After every push to main, confirm that Argo CD has actually resolved this
+# commit on every Application tracking this repository. "Synced" alone does
+# not tell you that (#970): an app can sit Synced on the previous revision
+# for the whole poll + refs-cache window, and no metric exposes the gap.
+#
+# Not a merge gate — it runs on push, after the fact — but a failed run
+# lands in the workflow_failed channel like any other, which is the alert
+# the issue asked for.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Bot bumps arrive in bursts. Only the newest push needs checking: its
+# ancestor test covers every earlier commit as well.
+concurrency:
+  group: argocd-freshness
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Self-test the extraction
+        run: .github/scripts/argocd-freshness.sh --self-test
+
+      - name: Wait for Argo CD to pick up ${{ github.sha }}
+        env:
+          ARGOCD_SERVER: https://ops.mctl.ai
+          ARGOCD_TOKEN: ${{ secrets.ARGOCD_FRESHNESS_TOKEN }}
+        run: |
+          if [ -z "$ARGOCD_TOKEN" ]; then
+            # Documented skip, not a silent pass: the check needs the
+            # ci-freshness account token (see platform-gitops/argocd/values.yaml).
+            echo "::warning::ARGOCD_FRESHNESS_TOKEN is not set; freshness check skipped"
+            exit 0
+          fi
+          # Webhook + 30s refs cache should land the SHA in well under a
+          # minute; the poll fallback is 3-4 min. Give it up to ~6 min in
+          # total before calling it stale.
+          sleep 45
+          for attempt in $(seq 1 10); do
+            if .github/scripts/argocd-freshness.sh "$GITHUB_SHA"; then
+              exit 0
+            fi
+            echo "attempt ${attempt}/10: not there yet, retrying in 30s"
+            sleep 30
+          done
+          echo "::error::Argo CD did not resolve ${GITHUB_SHA} on every tracked Application within ~6 min (#970)"
+          exit 1

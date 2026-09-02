@@ -362,6 +362,12 @@ spec:
                     matchers:
                       - alertname =~ "ArgoCDApplicationDegraded|ArgoCDApplicationOutOfSyncLong"
                       - project =~ "default|platform"
+                  # A stalled GitOps loop needs a human: nothing deploys until
+                  # someone restarts or hard-refreshes (#970). No project
+                  # label on this one — it is about the repo, not an app.
+                  - receiver: telegram
+                    matchers:
+                      - alertname = "ArgoCDGitPollingStalled"
                   - receiver: "null"
                     matchers:
                       - alertname = "KubeJobFailed"
