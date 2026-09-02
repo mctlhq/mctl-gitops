@@ -1,0 +1,46 @@
+# Scrape the Temporal SDK metrics both mctl-agents workers now export
+# (mctl-agents#252, ADR-008 step 3).
+#
+# Native VMServiceScrape rather than monitoring.coreos.com/ServiceMonitor:
+# the VM operator auto-converts the latter and leaves the original orphaned,
+# which is the ArgoCD drift behind incidents 43d9e608 and 992434e2. Same
+# reason the Argo controller's scrape is written this way — see
+# argo-workflows/config/servicemonitor.yaml.
+#
+# `port: http` is deliberate and not a placeholder. base-service renders
+# containerPort/Service port `http` from .Values.service.port (8080)
+# unconditionally, and until mctl-agents 1.38.0 nothing listened on it; the
+# worker's exporter now binds exactly there. Enabling the chart's
+# `metrics.enabled` instead would have opened a second port AND rendered the
+# ServiceMonitor this file exists to avoid.
+#
+# One object for both roles. They are separated by the `task_queue` label,
+# not by deployment: the SDK reports `service_name="temporal-core-sdk"` for
+# both, so a per-role scrape would buy nothing a PromQL selector does not
+# already give. Queue names are in orchestrator/temporal/constants.py —
+# `mctl-dev-loop` (control) and `mctl-dev-loop-exec` (execution).
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMServiceScrape
+metadata:
+  name: mctl-agents-worker
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: base-service
+    matchExpressions:
+      - key: app.kubernetes.io/instance
+        operator: In
+        values:
+          - admins-mctl-agents-worker
+          - admins-mctl-agents-worker-exec
+  namespaceSelector:
+    matchNames:
+      - admins
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
