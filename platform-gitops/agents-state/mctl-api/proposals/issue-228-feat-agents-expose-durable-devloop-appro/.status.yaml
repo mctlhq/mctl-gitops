@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-09-02T18:16:02Z'
+status: merged
+updated_at: '2026-09-02T19:01:25Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -21,3 +21,5 @@ github:
   state: open
   head_sha: 3dee7e98bc8b56c0508dc426b434b3139d8bef28
   observed_at: '2026-09-02T18:16:02Z'
+merged_at: '2026-09-02T19:01:25Z'
+merge_commit: c0f2f56091fcaa5d4b28f8b6529e1a4bb9d08ff3
