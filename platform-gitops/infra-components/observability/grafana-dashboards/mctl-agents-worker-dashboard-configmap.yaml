@@ -1,0 +1,208 @@
+# Grafana dashboard for the mctl-agents Temporal worker queue split
+# (ADR-008, mctl-agents#252).
+#
+# Sidecar in the monitoring/grafana deployment auto-discovers ConfigMaps
+# labelled `grafana_dashboard: "1"` — same pattern as the existing
+# mctl-agent-cleanup and mctl-platform dashboards.
+#
+# The panels are arranged around one question, which is the question the
+# queue split exists to make answerable: is the control queue saturated
+# while the execution queue idles? Everything here is broken down by
+# `task_queue`, because that is the only label separating the two roles —
+# the SDK reports service_name="temporal-core-sdk" for both.
+#
+# Latencies are in seconds (the exporter sets durations_as_seconds), so the
+# unit is `s` and not the SDK's default integer milliseconds.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mctl-agents-worker-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  mctl-agents-worker.json: |
+    {
+      "title": "mctl-agents — Temporal worker queues",
+      "description": "ADR-008 control/execution split: schedule-to-start latency, slot headroom, activity failures and Argo submit rate, per task queue.",
+      "uid": "mctl-agents-worker",
+      "tags": ["mctl-agents", "temporal", "queues"],
+      "schemaVersion": 39,
+      "version": 1,
+      "editable": true,
+      "graphTooltip": 1,
+      "timezone": "browser",
+      "time": { "from": "now-6h", "to": "now" },
+      "refresh": "1m",
+      "templating": {
+        "list": [
+          {
+            "name": "datasource",
+            "type": "datasource",
+            "query": "prometheus",
+            "current": { "text": "VictoriaMetrics", "value": "VictoriaMetrics" }
+          }
+        ]
+      },
+      "panels": [
+        {
+          "type": "row",
+          "id": 100,
+          "title": "Saturation — the signal the split exists to expose",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+          "collapsed": false
+        },
+        {
+          "type": "timeseries",
+          "id": 1,
+          "title": "Activity schedule-to-start latency (mean, per queue)",
+          "description": "How long an activity waits between being scheduled and a worker picking it up. On mctl-dev-loop every activity is short, so any sustained value here is slot-pool saturation rather than slow work — this is the number that made starvation invisible before it was exported. On mctl-dev-loop-exec a nonzero value only means Argo submits are queueing behind EXECUTION_MAX_CONCURRENT_ACTIVITIES.",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 8, "w": 16, "x": 0, "y": 1 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "custom": { "drawStyle": "line", "fillOpacity": 10 },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "red", "value": 1 }
+                ]
+              }
+            }
+          },
+          "options": { "legend": { "displayMode": "table", "calcs": ["mean", "max"] } },
+          "targets": [
+            {
+              "refId": "A",
+              "legendFormat": "{{task_queue}}",
+              "expr": "sum by (task_queue) (rate(temporal_activity_schedule_to_start_latency_sum[10m])) / clamp_min(sum by (task_queue) (rate(temporal_activity_schedule_to_start_latency_count[10m])), 0.001)"
+            }
+          ]
+        },
+        {
+          "type": "stat",
+          "id": 2,
+          "title": "Free activity slots (min, per queue)",
+          "description": "Zero here is exhaustion. CONTROL_MAX_CONCURRENT_ACTIVITIES (100) and EXECUTION_MAX_CONCURRENT_ACTIVITIES (40) are the ceilings, in orchestrator/temporal/constants.py. ADR-008 D3 says to move those numbers from this panel rather than from first principles — and only after the routing flip and the soak.",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 8, "w": 8, "x": 16, "y": 1 },
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "colorMode": "value",
+            "graphMode": "area"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "red", "value": null },
+                  { "color": "yellow", "value": 5 },
+                  { "color": "green", "value": 20 }
+                ]
+              }
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "legendFormat": "{{task_queue}}",
+              "expr": "min by (task_queue) (temporal_worker_task_slots_available{worker_type=\"ActivityWorker\"})"
+            }
+          ]
+        },
+        {
+          "type": "row",
+          "id": 101,
+          "title": "Load and health",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 },
+          "collapsed": false
+        },
+        {
+          "type": "timeseries",
+          "id": 3,
+          "title": "Activity slots in use (per queue)",
+          "description": "The other side of the headroom panel, as a rate over time. Until the routing flip (mctl-agents#251) lands, the exec queue is expected to sit flat at zero — nothing schedules onto it yet, and that is the intended state, not a fault.",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 10 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": { "drawStyle": "line", "fillOpacity": 10 }
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "legendFormat": "{{task_queue}} / {{worker_type}}",
+              "expr": "sum by (task_queue, worker_type) (temporal_worker_task_slots_used)"
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "id": 4,
+          "title": "Activity completions per second (per queue)",
+          "description": "Throughput, for reading the latency panel against. A rising schedule-to-start with flat throughput is saturation; rising with rising throughput is just load.",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 10 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps",
+              "custom": { "drawStyle": "line", "fillOpacity": 10 }
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "legendFormat": "{{task_queue}}",
+              "expr": "sum by (task_queue) (rate(temporal_activity_execution_latency_count[5m]))"
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "id": 5,
+          "title": "Workflow task schedule-to-start latency (mean)",
+          "description": "Workflow tasks are bounded by max_concurrent_workflow_tasks, which ADR-008 D3 deliberately leaves unset — unset means a 500-thread pool, so any explicit value is a large step down. This panel is what a number would have to be chosen against.",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 18 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "custom": { "drawStyle": "line", "fillOpacity": 10 }
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "legendFormat": "{{task_queue}}",
+              "expr": "sum by (task_queue) (rate(temporal_workflow_task_schedule_to_start_latency_sum[10m])) / clamp_min(sum by (task_queue) (rate(temporal_workflow_task_schedule_to_start_latency_count[10m])), 0.001)"
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "id": 6,
+          "title": "Pollers (per queue and poller type)",
+          "description": "Zero pollers on a queue that should have them means the worker is up but not polling — the failure mode run_until_signalled crashes the process for, shown here in case it ever fails to.",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 18 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": { "drawStyle": "line", "fillOpacity": 10 }
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "legendFormat": "{{task_queue}} / {{poller_type}}",
+              "expr": "sum by (task_queue, poller_type) (temporal_num_pollers)"
+            }
+          ]
+        }
+      ]
+    }

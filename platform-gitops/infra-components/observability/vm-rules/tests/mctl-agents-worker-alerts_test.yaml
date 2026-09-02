@@ -1,0 +1,181 @@
+# Unit tests for mctl-agents-worker-alerts.yaml.
+#
+# rule_files is resolved relative to this file. generated/ is produced by
+# scripts/check-vm-rules.sh, which extracts each VMRule's `.spec` so
+# promtool can evaluate the very rules the cluster runs.
+#
+# These alerts guard a condition that is invisible by construction — a full
+# slot pool looks like an idle one — so the case worth testing hardest is
+# not "does it fire" but "does it stay quiet when the queue is healthy" and
+# "can it tell the two queues apart". The roles share every label except
+# task_queue (both report service_name="temporal-core-sdk"), so a selector
+# mistake there would silently merge them.
+rule_files:
+  - generated/mctl-agents-worker-alerts.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # ---------------------------------------------------------------------
+  # MctlAgentsControlQueueScheduleToStartHigh
+  # ---------------------------------------------------------------------
+  - interval: 1m
+    name: a healthy control queue picks activities up immediately and stays quiet
+    input_series:
+      # 600 activities over 30m waiting 0.6s in total => 1ms average.
+      - series: 'temporal_activity_schedule_to_start_latency_sum{task_queue="mctl-dev-loop",service_name="temporal-core-sdk",namespace="mctl-agents"}'
+        values: '0+0.02x30'
+      - series: 'temporal_activity_schedule_to_start_latency_count{task_queue="mctl-dev-loop",service_name="temporal-core-sdk",namespace="mctl-agents"}'
+        values: '0+20x30'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: MctlAgentsControlQueueScheduleToStartHigh
+        exp_alerts: []
+
+  - interval: 1m
+    name: sustained control-queue waiting fires
+    input_series:
+      # 2 activities/min each waiting 5s => 2.5s average, well over 1s.
+      - series: 'temporal_activity_schedule_to_start_latency_sum{task_queue="mctl-dev-loop",service_name="temporal-core-sdk",namespace="mctl-agents"}'
+        values: '0+10x40'
+      - series: 'temporal_activity_schedule_to_start_latency_count{task_queue="mctl-dev-loop",service_name="temporal-core-sdk",namespace="mctl-agents"}'
+        values: '0+4x40'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: MctlAgentsControlQueueScheduleToStartHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              mctl_agent_self: "true"
+            exp_annotations:
+              summary: mctl-agents control queue activities are waiting >1s to start
+              description: |
+                Activities scheduled on mctl-dev-loop are averaging over a second
+                between being scheduled and a worker picking them up, for 15m.
+                Every activity on this queue is short, so this is slot-pool
+                saturation, not slow work — reconcile and issue intake are
+                likely stalled even though the worker looks healthy.
+
+                Check temporal_worker_task_slots_available{task_queue="mctl-dev-loop"}.
+                If it is at or near zero, the control worker is holding long
+                Argo polls: CONTROL_MAX_CONCURRENT_ACTIVITIES in
+                orchestrator/temporal/constants.py is the ceiling, and the
+                routing flip (mctl-agents#251) is what moves that load off
+                this queue.
+
+  - interval: 1m
+    name: the exec queue waiting does not fire the control-queue alert
+    input_series:
+      # Identical saturation, wrong queue. submit_and_wait genuinely waits
+      # on the exec queue — hours per slot is its normal mode — so the
+      # control-queue rule must be selecting on task_queue and not merely
+      # aggregating everything the scrape returns.
+      - series: 'temporal_activity_schedule_to_start_latency_sum{task_queue="mctl-dev-loop-exec",service_name="temporal-core-sdk",namespace="mctl-agents"}'
+        values: '0+10x40'
+      - series: 'temporal_activity_schedule_to_start_latency_count{task_queue="mctl-dev-loop-exec",service_name="temporal-core-sdk",namespace="mctl-agents"}'
+        values: '0+4x40'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: MctlAgentsControlQueueScheduleToStartHigh
+        exp_alerts: []
+
+  # ---------------------------------------------------------------------
+  # MctlAgentsWorkerActivitySlotsExhausted
+  # ---------------------------------------------------------------------
+  - interval: 1m
+    name: a pool with slots left stays quiet
+    input_series:
+      - series: 'temporal_worker_task_slots_available{task_queue="mctl-dev-loop",worker_type="ActivityWorker",service_name="temporal-core-sdk"}'
+        values: '40x30'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: MctlAgentsWorkerActivitySlotsExhausted
+        exp_alerts: []
+
+  - interval: 1m
+    name: a fully occupied activity pool fires with its queue named
+    input_series:
+      - series: 'temporal_worker_task_slots_available{task_queue="mctl-dev-loop",worker_type="ActivityWorker",service_name="temporal-core-sdk"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: MctlAgentsWorkerActivitySlotsExhausted
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              mctl_agent_self: "true"
+              task_queue: mctl-dev-loop
+            exp_annotations:
+              summary: mctl-agents worker has no free activity slots on mctl-dev-loop
+              description: |
+                The activity slot pool for mctl-dev-loop has been fully
+                occupied for 20m. On mctl-dev-loop this is the starvation
+                ADR-008 exists to remove and it will be stalling reconcile and
+                intake; on mctl-dev-loop-exec it means concurrent Argo runs have
+                reached EXECUTION_MAX_CONCURRENT_ACTIVITIES and new agent
+                executions are queueing.
+
+                Both ceilings are in orchestrator/temporal/constants.py. Per
+                ADR-008 D3 they are starting values meant to be moved from
+                observed numbers — this alert is one of those numbers.
+
+  - interval: 1m
+    name: an exhausted workflow-task pool is not an activity-slot alert
+    input_series:
+      # max_concurrent_workflow_tasks is deliberately unset (ADR-008 D3), so
+      # the WorkflowWorker and LocalActivityWorker pools sitting at their
+      # own ceilings must not be read as activity starvation.
+      - series: 'temporal_worker_task_slots_available{task_queue="mctl-dev-loop",worker_type="WorkflowWorker",service_name="temporal-core-sdk"}'
+        values: '0x30'
+      - series: 'temporal_worker_task_slots_available{task_queue="mctl-dev-loop",worker_type="LocalActivityWorker",service_name="temporal-core-sdk"}'
+        values: '0x30'
+      - series: 'temporal_worker_task_slots_available{task_queue="mctl-dev-loop",worker_type="ActivityWorker",service_name="temporal-core-sdk"}'
+        values: '75x30'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: MctlAgentsWorkerActivitySlotsExhausted
+        exp_alerts: []
+
+  # ---------------------------------------------------------------------
+  # MctlAgentsWorkerMetricsMissing
+  # ---------------------------------------------------------------------
+  - interval: 1m
+    name: a silent exporter is reported rather than read as health
+    input_series:
+      - series: 'temporal_worker_task_slots_available{task_queue="mctl-dev-loop-exec",worker_type="ActivityWorker",service_name="temporal-core-sdk"}'
+        values: '40x40'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: MctlAgentsWorkerMetricsMissing
+        exp_alerts:
+          # absent() synthesises the labels of its own selector, so the
+          # alert carries task_queue="mctl-dev-loop" even though no such
+          # series exists. Useful rather than incidental: the notification
+          # names which queue went silent.
+          - exp_labels:
+              severity: warning
+              mctl_agent_self: "true"
+              task_queue: mctl-dev-loop
+            exp_annotations:
+              summary: no Temporal SDK metrics from the mctl-agents control worker
+              description: |
+                temporal_worker_task_slots_available has been absent for the
+                control queue for 30m. Either the worker is down, or the
+                exporter is not being scraped — the two saturation alerts in
+                this group cannot fire while this is true, so they are not
+                evidence of health right now.
+
+                Check the VMServiceScrape at
+                bootstrap/templates/mctl-platform/mctl-agents-worker-monitor.yaml
+                and that the pod is serving :8080/metrics (METRICS_PORT in
+                orchestrator/temporal/constants.py).
+
+  - interval: 1m
+    name: a reporting control worker keeps the absent-metrics alert quiet
+    input_series:
+      - series: 'temporal_worker_task_slots_available{task_queue="mctl-dev-loop",worker_type="ActivityWorker",service_name="temporal-core-sdk"}'
+        values: '100x40'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: MctlAgentsWorkerMetricsMissing
+        exp_alerts: []

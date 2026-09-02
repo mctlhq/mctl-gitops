@@ -1,0 +1,129 @@
+# Alerts on the mctl-agents Temporal worker queue split (ADR-008, #252).
+#
+# Metrics come from the Temporal SDK's own Prometheus exporter, scraped via
+# bootstrap/templates/mctl-platform/mctl-agents-worker-monitor.yaml.
+#
+# What these exist to catch: the starvation ADR-008 splits the queues to
+# fix was INVISIBLE. A saturated slot pool looks exactly like "nothing is
+# happening" — approvals still land (a signal is a workflow task, not an
+# activity) but everything they then need queues behind hours-long Argo
+# polls, so reconcile and issue intake stop with nothing in any log saying
+# so. Schedule-to-start latency is that condition expressed as a number.
+#
+# Metric names and labels were read off a live worker, not taken from the
+# SDK docs — see ADR-008 D5 in mctl-agents. Two consequences show up below:
+#
+#  - durations are SECONDS (the exporter sets durations_as_seconds), so the
+#    thresholds here are seconds, not the SDK's default integer ms.
+#  - the two roles are NOT distinguishable by `service_name` — both report
+#    "temporal-core-sdk". `task_queue` is the only label that separates
+#    them: mctl-dev-loop (control) vs mctl-dev-loop-exec (execution).
+#
+# severity=warning + mctl_agent_self="true" on every rule: these describe
+# mctl's own components, and the AlertManager route in
+# bootstrap/templates/observability/monitoring.yaml drops that label so
+# mctl-agent does not open tickets against itself.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: mctl-agents-worker-alerts
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: mctl-platform
+spec:
+  groups:
+    - name: mctl-agents.queue-saturation
+      rules:
+        # THE signal from ADR-008 D5. Activities on the control queue are
+        # all short — find_proposal_slug, get_pr_state, record_execution,
+        # the reconcile and intake lookups — so a healthy control queue
+        # picks them up effectively immediately. Sustained non-zero wait
+        # means the slot pool is full and the short work is stuck behind
+        # something long.
+        #
+        # The average over 10m rather than a quantile: schedule-to-start
+        # here is a histogram whose buckets were not tuned for this, and
+        # the failure being detected is a sustained shift of the whole
+        # distribution, not a tail event. 1s is far above the normal
+        # sub-millisecond case and far below the timeouts involved.
+        - alert: MctlAgentsControlQueueScheduleToStartHigh
+          expr: |
+            (
+              sum(rate(temporal_activity_schedule_to_start_latency_sum{task_queue="mctl-dev-loop"}[10m]))
+              /
+              clamp_min(sum(rate(temporal_activity_schedule_to_start_latency_count{task_queue="mctl-dev-loop"}[10m])), 0.001)
+            ) > 1
+          for: 15m
+          labels:
+            severity: warning
+            mctl_agent_self: "true"
+          annotations:
+            summary: mctl-agents control queue activities are waiting >1s to start
+            description: |
+              Activities scheduled on mctl-dev-loop are averaging over a second
+              between being scheduled and a worker picking them up, for 15m.
+              Every activity on this queue is short, so this is slot-pool
+              saturation, not slow work — reconcile and issue intake are
+              likely stalled even though the worker looks healthy.
+
+              Check temporal_worker_task_slots_available{task_queue="mctl-dev-loop"}.
+              If it is at or near zero, the control worker is holding long
+              Argo polls: CONTROL_MAX_CONCURRENT_ACTIVITIES in
+              orchestrator/temporal/constants.py is the ceiling, and the
+              routing flip (mctl-agents#251) is what moves that load off
+              this queue.
+
+        # The direct form of the same condition, and the one ADR-008 D3
+        # says to tune the limits against. Exhausted slots with no waiting
+        # yet is the state just before the alert above.
+        #
+        # ActivityWorker only: the WorkflowWorker pool is bounded
+        # separately (max_concurrent_workflow_tasks, deliberately unset —
+        # see D3) and a LocalActivityWorker pool this repo never uses would
+        # otherwise sit at its ceiling and read as healthy noise.
+        - alert: MctlAgentsWorkerActivitySlotsExhausted
+          expr: |
+            min by (task_queue) (
+              temporal_worker_task_slots_available{worker_type="ActivityWorker"}
+            ) == 0
+          for: 20m
+          labels:
+            severity: warning
+            mctl_agent_self: "true"
+          annotations:
+            summary: mctl-agents worker has no free activity slots on {{ $labels.task_queue }}
+            description: |
+              The activity slot pool for {{ $labels.task_queue }} has been fully
+              occupied for 20m. On mctl-dev-loop this is the starvation
+              ADR-008 exists to remove and it will be stalling reconcile and
+              intake; on mctl-dev-loop-exec it means concurrent Argo runs have
+              reached EXECUTION_MAX_CONCURRENT_ACTIVITIES and new agent
+              executions are queueing.
+
+              Both ceilings are in orchestrator/temporal/constants.py. Per
+              ADR-008 D3 they are starting values meant to be moved from
+              observed numbers — this alert is one of those numbers.
+
+        # An exporter that stops reporting looks identical to a queue that
+        # is perfectly idle: both are "no series". Without this, the two
+        # alerts above degrade silently into permanent green.
+        - alert: MctlAgentsWorkerMetricsMissing
+          expr: |
+            absent(temporal_worker_task_slots_available{task_queue="mctl-dev-loop"})
+          for: 30m
+          labels:
+            severity: warning
+            mctl_agent_self: "true"
+          annotations:
+            summary: no Temporal SDK metrics from the mctl-agents control worker
+            description: |
+              temporal_worker_task_slots_available has been absent for the
+              control queue for 30m. Either the worker is down, or the
+              exporter is not being scraped — the two saturation alerts in
+              this group cannot fire while this is true, so they are not
+              evidence of health right now.
+
+              Check the VMServiceScrape at
+              bootstrap/templates/mctl-platform/mctl-agents-worker-monitor.yaml
+              and that the pod is serving :8080/metrics (METRICS_PORT in
+              orchestrator/temporal/constants.py).
