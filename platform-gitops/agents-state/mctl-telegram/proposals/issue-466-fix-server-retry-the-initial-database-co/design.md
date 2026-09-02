@@ -37,9 +37,10 @@ short-lived deadline.
 in-memory DSNs and, when `TEST_DATABASE_URL` is set, a real Postgres DSN. It asserts on
 `Open`'s success and on `db.Stats()` pool settings; it does not depend on `Open` failing
 immediately on a bad DSN, so a retry loop is compatible with the existing tests
-class as long as tests that pass an already-broken DSN still eventually see an error
-(after the loop's deadline) or the wrapper is exercised in a mode with a very short
-deadline for test speed.
+class: `Open` keeps its single-attempt contract and the new wrapper is a separate
+function, so no existing test changes behavior. Tests of the wrapper itself drive the
+injected attempt function rather than a real target, so they neither wait on a
+deadline nor depend on timing.
 
 There is repo precedent for a bounded, logged reconnect loop with backoff: the Local
 Bridge daemon's `runDaemon` in `cmd/local/daemon.go:103-137` retries a lost websocket
@@ -74,10 +75,21 @@ Concretely:
        try) so `reachable after 0 retries` / `reachable after N retries` are
        distinguishable per the issue's acceptance criterion.
      - On failure, log `slog.Warn("db not reachable yet, retrying", "err", err,
-       "attempt", attempts, "wait", interval)` and wait on
-       `select { case <-time.After(interval): case <-ctx.Done(): return nil, ctx.Err() }`
+       "attempt", attempts, "wait", interval)`, **keep the error in a `lastErr`
+       variable**, and wait on `select` over `time.After(interval)` and `ctx.Done()`
        so `SIGINT`/`SIGTERM` (already wired into `ctx` in `main`) aborts the wait
        immediately instead of finishing out the poll window.
+     - Do **not** return a bare `ctx.Err()` from that branch. If the loop is bounded
+       with `context.WithTimeout`, the same branch fires both on shutdown and on the
+       deadline, and returning `ctx.Err()` would replace the real cause
+       (`password authentication failed`, `connection refused`) with
+       `context deadline exceeded` — discarding exactly the diagnostic this change
+       exists to produce. Distinguish the two:
+       - `errors.Is(ctx.Err(), context.DeadlineExceeded)` (or an explicit deadline
+         check) is the give-up case: return `lastErr` wrapped with the elapsed bound,
+         e.g. `fmt.Errorf("db not reachable after %s: %w", timeout, lastErr)`.
+       - Cancellation (shutdown) returns promptly; include `lastErr` for context if
+         one was observed, but the signal case does not need to preserve it.
      - Track elapsed time (or use a `context.WithTimeout(ctx, timeout)` derived
        context for the whole loop) so the loop gives up once `timeout` is exceeded,
        returning the last observed error wrapped with context (e.g.
@@ -90,6 +102,25 @@ Concretely:
      backoff, which exists for a long-lived reconnect loop where a persistent outage
      must not be hammered — that risk does not apply to a two-minute, then-fatal
      startup wait.
+
+   - Branch on the DSN before entering the loop: when `driverFor(dsn)` reports a
+     non-Postgres driver, call `Open` once and return its result unchanged. A `file:`
+     DSN makes no network call, so there is no netpol race to absorb, and looping
+     would convert an instant local-dev error into a wait until the deadline. See
+     "Decided: SQLite is not retried" in requirements.md.
+   - Make the per-attempt call injectable so the loop is testable without a real
+     database, **by parameter, not by package-level variable**: an unexported
+     `openWithRetry(ctx, ..., logger *slog.Logger, open func(...) (*sql.DB, error))`
+     holding the whole loop, with the exported `OpenWithRetry` calling it with `Open`
+     and `slog.Default()`. A mutable package-level `var openOnce = Open`, and likewise
+     swapping `slog.Default()` inside a test, are shared global state: any future
+     `t.Parallel()` in the package turns them into data races and interleaved output.
+     Passing both dependencies in keeps the tests independent and lets the log
+     assertion read a buffer the test owns. Tests then drive attempt outcomes
+     deterministically — fail N times, then succeed — instead of trying to
+     manufacture a target that is unreachable and then reachable on a timer. This
+     seam is the difference between a test that proves the loop retries and one that
+     merely proves a happy path still works.
 
 2. In `cmd/server/main.go`, replace the direct `db.Open` call with
    `db.OpenWithRetry(ctx, cfg.DatabaseURL, cfg.DBMaxOpenConns, cfg.DBMaxIdleConns,

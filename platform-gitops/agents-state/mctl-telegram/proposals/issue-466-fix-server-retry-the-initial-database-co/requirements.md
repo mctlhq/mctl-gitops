@@ -58,6 +58,9 @@ currently gives up.
   THE SYSTEM SHALL stop retrying and exit promptly rather than continuing to poll
   until its deadline, consistent with the `signal.NotifyContext`-derived `ctx` already
   threaded through `main`.
+- WHERE the DSN is not a Postgres DSN (`driverFor` returns `sqlite`, i.e. any
+  `file:` or unrecognized prefix) THE SYSTEM SHALL perform a single attempt with no
+  retry and no wait, returning the underlying error immediately.
 - WHERE the retry loop lives (inside `db.Open`, or a thin wrapper called from
   `cmd/server/main.go` before/around `db.Open`) THE SYSTEM SHALL NOT change `db.Open`'s
   behavior for any other caller that wants a single non-retrying attempt (e.g. tests
@@ -100,8 +103,22 @@ currently gives up.
   pgx and modernc/sqlite drivers adds complexity the issue does not ask for. A
   misconfigured DSN or bad credentials will still exhaust the deadline and exit with
   the same `ERROR` log as today, just after the bounded wait instead of immediately.
-- Whether SQLite (local-dev) callers should also go through the retry wrapper: SQLite
-  file-backed opens do not experience a NetworkPolicy-style race, so this proposal
-  applies the same code path to both dialects for simplicity (a `file:` DSN either
-  succeeds immediately or fails for a reason retries will not fix, so the loop exits
-  fast either way via the existing bounded deadline) rather than branching on driver.
+
+## Decided: SQLite is not retried
+
+The retry applies to Postgres DSNs only. `driverFor` (`internal/db/db.go`) already
+classifies the DSN, so the wrapper branches on it and falls through to a single
+`Open` for the SQLite path.
+
+Reason: the failure being absorbed here is a network-plane race — a pod's first
+outbound TCP dial leaving before its NetworkPolicy is programmed. A `file:` DSN makes
+no network call, so the race cannot occur and there is nothing for a retry to win.
+What a retry *would* do there is turn an instant, obvious local-dev error (a typo in
+the database path) into a two-minute hang with the real cause repeated in warnings.
+
+This supersedes the earlier open question, which argued the SQLite path could share
+the loop because it "exits fast either way". That reasoning was wrong and is recorded
+here so it is not re-derived: a non-retryable failure does **not** exit the loop
+early — it is retried until the deadline, exactly like an unreachable Postgres. The
+same paragraph's neighbouring claim (that a bad DSN "will still exhaust the deadline")
+is the correct one, and it is why SQLite has to be excluded rather than tolerated.
