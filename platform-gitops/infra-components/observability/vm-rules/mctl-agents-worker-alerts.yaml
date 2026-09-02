@@ -82,6 +82,14 @@ spec:
         # see D3) and a LocalActivityWorker pool this repo never uses would
         # otherwise sit at its ceiling and read as healthy noise.
         #
+        # Scoped to mctl's own queues. `temporal_worker_task_slots_available`
+        # is a generic SDK metric name, and every rule in this group carries a
+        # static mctl_agent_self="true" that the AlertManager route DROPS. So
+        # an unscoped selector does not merely mislabel another team's
+        # saturation as ours — it silences their page. Nothing else in the
+        # cluster is scraped into these series today; the guard costs one
+        # selector and removes the need to remember this when something is.
+        #
         # `sum`, not `min`, across pods. Both roles are replicaCount: 1
         # today, where the two agree — but they answer different questions
         # once that changes, and only one of them is this alert's question.
@@ -91,7 +99,10 @@ spec:
         - alert: MctlAgentsWorkerActivitySlotsExhausted
           expr: |
             sum by (task_queue) (
-              temporal_worker_task_slots_available{worker_type="ActivityWorker"}
+              temporal_worker_task_slots_available{
+                worker_type="ActivityWorker",
+                task_queue=~"mctl-dev-loop(-exec)?"
+              }
             ) == 0
           for: 20m
           labels:

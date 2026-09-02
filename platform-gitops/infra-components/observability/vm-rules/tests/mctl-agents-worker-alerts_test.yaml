@@ -272,3 +272,17 @@ tests:
       - eval_time: 40m
         alertname: MctlAgentsWorkerMetricsMissing
         exp_alerts: []
+
+  - interval: 1m
+    name: another service's exhausted Temporal queue does not fire our alert
+    input_series:
+      # temporal_* are generic SDK metric names. Every rule in this group
+      # carries a static mctl_agent_self="true" that the AlertManager route
+      # DROPS — so an unscoped selector would not merely mislabel someone
+      # else's saturation as ours, it would silence their page.
+      - series: 'temporal_worker_task_slots_available{task_queue="some-other-team-queue",worker_type="ActivityWorker"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: MctlAgentsWorkerActivitySlotsExhausted
+        exp_alerts: []
