@@ -86,16 +86,26 @@ fi
 sha="${1:?usage: $0 <sha> | --self-test}"
 : "${ARGOCD_TOKEN:?ARGOCD_TOKEN is required}"
 
-fields='items.metadata.name,items.spec.source,items.spec.sources,items.status.sync.revision,items.status.sync.revisions'
-apps=$(curl -sSf --max-time 30 \
+# No `fields=` projection: the API honours only some nested paths
+# (`items.spec` yes, `items.status.sync.revisions` no) and silently drops
+# the rest, which made the first live run report "all 0 tracked sources".
+# The full list is ~1.5 MB for 46 apps; that is fine once per push.
+apps=$(curl -sSf --max-time 60 \
   -H "Authorization: Bearer ${ARGOCD_TOKEN}" \
-  "${ARGOCD_SERVER}/api/v1/applications?fields=${fields}")
+  "${ARGOCD_SERVER}/api/v1/applications")
 
 # The revision an app reports may be NEWER than the checkout we run in
 # (bot bumps land every few minutes), so make sure those commits are local.
 git fetch -q origin main
 
 total=$(printf '%s' "$apps" | tracked_sources | wc -l | tr -d ' ')
+# Zero tracked sources cannot be right for this repository — it means the
+# response shape changed, not that everything is fresh. Fail rather than
+# pass vacuously.
+if [ "$total" -eq 0 ]; then
+  echo "no Application source tracking mctl-gitops main was found in the API response" >&2
+  exit 1
+fi
 stale=$(printf '%s' "$apps" | tracked_sources | stale_sources "$sha")
 if [ -z "$stale" ]; then
   echo "all ${total} tracked sources are at ${sha} or newer"
