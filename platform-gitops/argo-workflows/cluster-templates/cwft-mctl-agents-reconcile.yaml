@@ -262,10 +262,19 @@ spec:
             # Anything else changing there is a bug, and commit-and-push still
             # refuses it independently.
             cd /workdir/mctl-gitops
-            # cut -c4- (not awk $NF): --porcelain is a fixed "XY <path>"
-            # layout, so this survives paths containing spaces. reconcile
+            # -z, then tr, then cut -c4-. WITHOUT -z, porcelain quotes and
+            # C-escapes any path with a space or a non-ASCII byte — ` M "a/my
+            # service/.status.yaml"` — and the quotes survive cut, so the
+            # `[ -f "$f" ]` check below fails and the update is silently
+            # dropped from the handoff: the flip never reaches main and the
+            # log says only "skipping (not a regular file)". The comment here
+            # claimed the opposite ("survives paths containing spaces") until
+            # 2026-09-02; measured, a plain space is enough (agy P2 on
+            # gitops#982). -z emits raw unquoted paths, NUL-separated.
+            # Residual limit, unchanged and stated rather than implied: a path
+            # containing a literal newline would still split wrongly. reconcile
             # never renames, so the "old -> new" rename form cannot appear.
-            CHANGED=$(git status --porcelain -- ':(glob)platform-gitops/agents-state/**/.status.yaml' | cut -c4-)
+            CHANGED=$(git status --porcelain -z -- ':(glob)platform-gitops/agents-state/**/.status.yaml' | tr '\0' '\n' | cut -c4-)
             if [ -z "$CHANGED" ]; then
               echo "no .status.yaml changes to hand off"
               exit 0
