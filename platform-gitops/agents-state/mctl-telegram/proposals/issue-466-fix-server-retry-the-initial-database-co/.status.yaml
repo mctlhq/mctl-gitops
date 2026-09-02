@@ -8,6 +8,3 @@ source:
   url: https://github.com/mctlhq/mctl-telegram/issues/466
 control:
   requires_human_approval: true
-approval:
-  approved_by: 'mashkovd'
-  approved_at: '2026-09-02T16:18:01Z'
