@@ -1,0 +1,28 @@
+# Stub CWFT declaring the SAME budget variable twice with DIFFERENT values,
+# across two steps — the shape agy's P2 on mctl-gitops#981 described.
+#
+# Repeating a variable across steps is normal here (WORKFLOW_SERVICE appears
+# three times in the real cwft-mctl-agents-implement.yaml), so the check must
+# accept repeats with the same value and reject conflicting ones. Keying a
+# dict by name, as the first version did, silently kept the last occurrence:
+# the profile would then validate against "3.00" while the step that actually
+# runs the agent had "50.00".
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterWorkflowTemplate
+metadata:
+  name: mctl-agents-investigate
+spec:
+  activeDeadlineSeconds: 7200
+  templates:
+    - name: run-agent
+      container:
+        image: example
+        env:
+          - name: ISSUE_INVESTIGATOR_BUDGET_USD
+            value: "50.00"
+    - name: unrelated-later-step
+      container:
+        image: example
+        env:
+          - name: ISSUE_INVESTIGATOR_BUDGET_USD
+            value: "3.00"

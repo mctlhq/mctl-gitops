@@ -120,6 +120,7 @@ expectation:
 | disabled version rejected | `invalid/release-disabled-version/` |
 | independent-half rollback rejected | `invalid/rollback-independent-half/` |
 | effective budget/timeout match the CWFT | `invalid/cwft-budget-mismatch/` |
+| conflicting values for one CWFT variable rejected | `invalid/cwft-conflicting-budget-values/` |
 | exact-pair rollback accepted | `valid/rollback-replay/` |
 
 ### Effective values are checked against the deployed template

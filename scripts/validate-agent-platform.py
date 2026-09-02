@@ -301,19 +301,42 @@ def _iter_env_vars(node):
 
 
 def _unique_env_by_suffix(doc, suffix: str, path: pathlib.Path):
-    """The single env var ending in `suffix`, or None.
+    """The single value of the one env var ending in `suffix`, or None.
 
-    Two different vars with the same suffix in one template is ambiguous,
-    and guessing which one the profile meant is exactly the kind of silent
-    choice this validator exists to refuse.
+    Ambiguity is an error in both directions, and neither is hypothetical:
+
+    - Two different NAMES with the same suffix: cannot tell which one a
+      profile pins.
+    - One name with two different VALUES: a CWFT declares the same variable
+      in several steps (WORKFLOW_SERVICE appears three times in
+      cwft-mctl-agents-implement.yaml), so values must be collected per
+      name rather than assigned into a dict. A dict comprehension keyed by
+      name keeps only the LAST occurrence — so a template setting a real
+      budget in the step that runs the agent and a different one in a later
+      step would validate against the later value while the earlier one is
+      what executes. agy P2 on mctl-gitops#981.
+
+    Repeats with the SAME value are fine and normal — that is what the
+    duplicates above actually are.
     """
-    found = {name: value for name, value in _iter_env_vars(doc) if name.endswith(suffix)}
+    found: dict[str, set] = {}
+    for name, value in _iter_env_vars(doc):
+        if name.endswith(suffix):
+            found.setdefault(name, set()).add(str(value))
     if len(found) > 1:
         raise CatalogValidationError(
             f"{path.name} declares {len(found)} {suffix} variables "
             f"({', '.join(sorted(found))}); cannot tell which one a profile pins"
         )
-    return next(iter(found.values()), None)
+    if not found:
+        return None
+    name, values = next(iter(found.items()))
+    if len(values) > 1:
+        raise CatalogValidationError(
+            f"{path.name} declares {name} with {len(values)} different values "
+            f"({', '.join(sorted(values))}); the effective value is ambiguous"
+        )
+    return next(iter(values))
 
 
 def validate_profile_against_cwft(
