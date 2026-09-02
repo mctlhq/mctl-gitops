@@ -75,10 +75,21 @@ Concretely:
        try) so `reachable after 0 retries` / `reachable after N retries` are
        distinguishable per the issue's acceptance criterion.
      - On failure, log `slog.Warn("db not reachable yet, retrying", "err", err,
-       "attempt", attempts, "wait", interval)` and wait on
-       `select { case <-time.After(interval): case <-ctx.Done(): return nil, ctx.Err() }`
+       "attempt", attempts, "wait", interval)`, **keep the error in a `lastErr`
+       variable**, and wait on `select` over `time.After(interval)` and `ctx.Done()`
        so `SIGINT`/`SIGTERM` (already wired into `ctx` in `main`) aborts the wait
        immediately instead of finishing out the poll window.
+     - Do **not** return a bare `ctx.Err()` from that branch. If the loop is bounded
+       with `context.WithTimeout`, the same branch fires both on shutdown and on the
+       deadline, and returning `ctx.Err()` would replace the real cause
+       (`password authentication failed`, `connection refused`) with
+       `context deadline exceeded` — discarding exactly the diagnostic this change
+       exists to produce. Distinguish the two:
+       - `errors.Is(ctx.Err(), context.DeadlineExceeded)` (or an explicit deadline
+         check) is the give-up case: return `lastErr` wrapped with the elapsed bound,
+         e.g. `fmt.Errorf("db not reachable after %s: %w", timeout, lastErr)`.
+       - Cancellation (shutdown) returns promptly; include `lastErr` for context if
+         one was observed, but the signal case does not need to preserve it.
      - Track elapsed time (or use a `context.WithTimeout(ctx, timeout)` derived
        context for the whole loop) so the loop gives up once `timeout` is exceeded,
        returning the last observed error wrapped with context (e.g.
@@ -98,9 +109,14 @@ Concretely:
      would convert an instant local-dev error into a wait until the deadline. See
      "Decided: SQLite is not retried" in requirements.md.
    - Make the per-attempt call injectable so the loop is testable without a real
-     database: keep an unexported package-level `var openOnce = Open` (or an
-     unexported `openWithRetry(ctx, ..., open func(...) (*sql.DB, error))` that
-     `OpenWithRetry` calls with `Open`). Tests then drive attempt outcomes
+     database, **by parameter, not by package-level variable**: an unexported
+     `openWithRetry(ctx, ..., logger *slog.Logger, open func(...) (*sql.DB, error))`
+     holding the whole loop, with the exported `OpenWithRetry` calling it with `Open`
+     and `slog.Default()`. A mutable package-level `var openOnce = Open`, and likewise
+     swapping `slog.Default()` inside a test, are shared global state: any future
+     `t.Parallel()` in the package turns them into data races and interleaved output.
+     Passing both dependencies in keeps the tests independent and lets the log
+     assertion read a buffer the test owns. Tests then drive attempt outcomes
      deterministically — fail N times, then succeed — instead of trying to
      manufacture a target that is unreachable and then reachable on a timer. This
      seam is the difference between a test that proves the loop retries and one that
