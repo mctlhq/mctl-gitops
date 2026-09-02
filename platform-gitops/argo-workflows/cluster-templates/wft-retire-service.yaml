@@ -238,13 +238,33 @@ spec:
               git commit -m "chore: cleanup database resources for ${DB_NAME}" \
                 -m "Removed CNPG role, pg_hba, Database CRD and ExternalSecret
           for retired service ${TEAM}/${APP}."
+              PUSHED=false
               for i in $(seq 1 5); do
                 if git push origin HEAD:main; then
                   echo "✅ DB cleanup pushed"
+                  PUSHED=true
                   break
                 fi
-                git pull --rebase origin main
+                # `git pull --rebase` must not run bare under `set -e`: a conflict aborts
+                # the script mid-rebase and the retry loop never gets its second attempt,
+                # leaving a half-applied rebase behind. Abort it so the next iteration
+                # starts from a clean worktree (same shape as the agents templates,
+                # gitops#982).
+                if ! git pull --rebase origin main; then
+                  git rebase --abort 2>/dev/null || true
+                  echo "⚠️  Rebase failed (attempt ${i}); retrying" >&2
+                fi
               done
+              # An exhausted retry loop must fail loudly. Wrapping the rebase above
+              # removed the `set -e` abort that used to be the only thing stopping
+              # this loop from falling through as if it had pushed — and here that
+              # would mean: the CNPG role, pg_hba entry, Database CRD and ExternalSecret were
+              #   removed from the cluster but not from gitops, so ArgoCD will
+              #   recreate them on the next sync.
+              if [ "$PUSHED" != "true" ]; then
+                echo "❌ git push failed after 5 attempts" >&2
+                exit 1
+              fi
             fi
           else
             echo "ℹ️  No database resources found for ${DB_NAME} — nothing to clean up"

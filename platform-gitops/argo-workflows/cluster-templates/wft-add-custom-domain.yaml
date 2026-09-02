@@ -215,7 +215,15 @@ spec:
               PUSHED=true
               break
             fi
-            git pull --rebase origin main
+            # `git pull --rebase` must not run bare under `set -e`: a conflict aborts
+            # the script mid-rebase and the retry loop never gets its second attempt,
+            # leaving a half-applied rebase behind. Abort it so the next iteration
+            # starts from a clean worktree (same shape as the agents templates,
+            # gitops#982).
+            if ! git pull --rebase origin main; then
+              git rebase --abort 2>/dev/null || true
+              echo "⚠️  Rebase failed (attempt ${i}); retrying" >&2
+            fi
           done
           if [ "$PUSHED" != "true" ]; then
             echo "❌ git push failed after 5 attempts — aborting before the Backstage callback" >&2
