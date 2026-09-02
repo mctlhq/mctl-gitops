@@ -79,20 +79,66 @@ CONSTRAINED = {
 
 
 def shell_blocks(tmpl: dict):
-    """Every place this template hands text to an interpreter."""
+    """Every place this template hands text to an interpreter.
+
+    Every string in `command` and `args` is inspected, not only the
+    multi-line ones: an inline `sh -c '... {{inputs.parameters.x}} ...'`
+    is a single-line arg and carries exactly the same exposure. Scanning
+    short strings costs nothing — they contain no placeholders — while the
+    length filter this replaces would have let that shape through
+    unnoticed (claude P3 on gitops#993).
+    """
     out = []
     source = (tmpl.get("script") or {}).get("source")
     if source:
         out.append(("script.source", source))
     for key in ("container", "script"):
-        for i, arg in enumerate((tmpl.get(key) or {}).get("args") or []):
-            if isinstance(arg, str) and "\n" in arg:
-                out.append((f"{key}.args[{i}]", arg))
+        spec = tmpl.get(key) or {}
+        for field in ("command", "args"):
+            for i, arg in enumerate(spec.get(field) or []):
+                if isinstance(arg, str):
+                    out.append((f"{key}.{field}[{i}]", arg))
     for c in tmpl.get("initContainers") or []:
-        for i, arg in enumerate(c.get("args") or []):
-            if isinstance(arg, str) and "\n" in arg:
-                out.append((f"initContainers[{c.get('name')}].args[{i}]", arg))
+        for field in ("command", "args"):
+            for i, arg in enumerate(c.get(field) or []):
+                if isinstance(arg, str):
+                    out.append((f"initContainers[{c.get('name')}].{field}[{i}]", arg))
     return out
+
+
+PARAM_REF = re.compile(r"\$\{?(PARAM_[A-Z0-9_]+)")
+PARAM_PY_REF = re.compile(r"os\.environ\[\"(PARAM_[A-Z0-9_]+)\"\]")
+
+
+def check_env_bindings(directory: Path):
+    """Every PARAM_* a script reads must be defined in that template's own env.
+
+    The conversion this check accompanies is mechanical, and a mechanical
+    edit can put the `env:` entries on the neighbouring template — which is
+    exactly what happened on gitops#993 and would have broken every preview
+    deploy at the first assignment under `set -u`. A missing binding is
+    silent in YAML and only fails at run time, so it is checked here.
+    """
+    problems = []
+    for path in sorted(directory.glob("*.yaml")):
+        for doc in yaml.safe_load_all(path.read_text()):
+            if not doc:
+                continue
+            for tmpl in (doc.get("spec") or {}).get("templates") or []:
+                script = tmpl.get("script") or {}
+                source = script.get("source")
+                if not source:
+                    continue
+                defined = [e["name"] for e in script.get("env") or []]
+                used = set(PARAM_REF.findall(source)) | set(PARAM_PY_REF.findall(source))
+                for name in sorted(used - set(defined)):
+                    problems.append(
+                        f"{path.name} / {tmpl.get('name')}: reads ${name}, "
+                        f"but this template's env does not define it")
+                for name in sorted({e for e in defined if defined.count(e) > 1}):
+                    problems.append(
+                        f"{path.name} / {tmpl.get('name')}: env defines {name} twice")
+    return problems
 
 
 def scan(directory: Path):
@@ -131,7 +177,30 @@ def selftest() -> int:
     if found != [("bad.yaml", "t", "script.source", "display_name")]:
         print(f"❌ selftest: detector did not fire; got {found}", file=sys.stderr)
         return 1
-    print("✅ selftest: detector fires on an interpolated parameter")
+
+    # Single-line `command:` — the shape the old length filter missed.
+    doc_cmd = {"spec": {"templates": [{
+        "name": "t",
+        "container": {"command": ["sh", "-c", "echo {{inputs.parameters.host}}"]},
+    }]}}
+    # A script reading a PARAM_* its own env does not define.
+    doc_env = {"spec": {"templates": [{
+        "name": "t",
+        "script": {"source": 'X="$PARAM_MISSING"\n', "env": [{"name": "PARAM_OTHER"}]},
+    }]}}
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "cmd.yaml").write_text(yaml.dump(doc_cmd))
+        if not any(p == "host" for _, _, _, p in scan(Path(d))):
+            print("❌ selftest: detector missed an inline command:", file=sys.stderr)
+            return 1
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "env.yaml").write_text(yaml.dump(doc_env))
+        if not check_env_bindings(Path(d)):
+            print("❌ selftest: unbound PARAM_* not reported", file=sys.stderr)
+            return 1
+
+    print("✅ selftest: detector fires on an interpolated parameter, on an "
+          "inline command, and on an unbound PARAM_*")
     return 0
 
 
@@ -164,6 +233,15 @@ def main() -> int:
             "   and read it as \"$PARAM_EXAMPLE\". See gitops#992.\n",
             file=sys.stderr,
         )
+        return 1
+
+    unbound = check_env_bindings(TEMPLATES)
+    if unbound:
+        print("❌ PARAM_* read without an env binding in the same template:\n", file=sys.stderr)
+        for line in unbound:
+            print(f"   {line}", file=sys.stderr)
+        print("\n   Under `set -u` this fails at the first assignment, at run time.\n",
+              file=sys.stderr)
         return 1
 
     if stale:

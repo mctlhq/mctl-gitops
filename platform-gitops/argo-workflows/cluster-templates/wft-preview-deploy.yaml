@@ -120,16 +120,6 @@ spec:
             value: "{{inputs.parameters.team_name}}"
           - name: PARAM_COMPONENT_NAME
             value: "{{inputs.parameters.component_name}}"
-          - name: PARAM_TEAM_NAME
-            value: "{{inputs.parameters.team_name}}"
-          - name: PARAM_COMPONENT_NAME
-            value: "{{inputs.parameters.component_name}}"
-          - name: PARAM_IMAGE_TAG
-            value: "{{inputs.parameters.image_tag}}"
-          - name: PARAM_TTL_HOURS
-            value: "{{inputs.parameters.ttl_hours}}"
-          - name: PARAM_PORT
-            value: "{{inputs.parameters.port}}"
           - name: GITHUB_PAT
             valueFrom:
               secretKeyRef:
@@ -266,6 +256,16 @@ spec:
         image: alpine/helm:3.16.4
         command: [sh]
         env:
+          - name: PARAM_TEAM_NAME
+            value: "{{inputs.parameters.team_name}}"
+          - name: PARAM_COMPONENT_NAME
+            value: "{{inputs.parameters.component_name}}"
+          - name: PARAM_IMAGE_TAG
+            value: "{{inputs.parameters.image_tag}}"
+          - name: PARAM_TTL_HOURS
+            value: "{{inputs.parameters.ttl_hours}}"
+          - name: PARAM_PORT
+            value: "{{inputs.parameters.port}}"
           - name: ARGO_WORKFLOW_NAME
             value: "{{workflow.name}}"
         envFrom:
