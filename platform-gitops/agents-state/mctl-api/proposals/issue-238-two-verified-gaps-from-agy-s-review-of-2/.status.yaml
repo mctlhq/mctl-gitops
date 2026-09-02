@@ -1,5 +1,5 @@
-status: proposed
-updated_at: '2026-09-02T20:48:47Z'
+status: accepted
+updated_at: '2026-09-02T21:05:01Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -8,3 +8,6 @@ source:
   url: https://github.com/mctlhq/mctl-api/issues/238
 control:
   requires_human_approval: true
+approval:
+  approved_by: 'mashkovd'
+  approved_at: '2026-09-02T21:05:01Z'
