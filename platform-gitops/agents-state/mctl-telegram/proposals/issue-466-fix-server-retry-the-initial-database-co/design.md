@@ -37,9 +37,10 @@ short-lived deadline.
 in-memory DSNs and, when `TEST_DATABASE_URL` is set, a real Postgres DSN. It asserts on
 `Open`'s success and on `db.Stats()` pool settings; it does not depend on `Open` failing
 immediately on a bad DSN, so a retry loop is compatible with the existing tests
-class as long as tests that pass an already-broken DSN still eventually see an error
-(after the loop's deadline) or the wrapper is exercised in a mode with a very short
-deadline for test speed.
+class: `Open` keeps its single-attempt contract and the new wrapper is a separate
+function, so no existing test changes behavior. Tests of the wrapper itself drive the
+injected attempt function rather than a real target, so they neither wait on a
+deadline nor depend on timing.
 
 There is repo precedent for a bounded, logged reconnect loop with backoff: the Local
 Bridge daemon's `runDaemon` in `cmd/local/daemon.go:103-137` retries a lost websocket
@@ -90,6 +91,20 @@ Concretely:
      backoff, which exists for a long-lived reconnect loop where a persistent outage
      must not be hammered — that risk does not apply to a two-minute, then-fatal
      startup wait.
+
+   - Branch on the DSN before entering the loop: when `driverFor(dsn)` reports a
+     non-Postgres driver, call `Open` once and return its result unchanged. A `file:`
+     DSN makes no network call, so there is no netpol race to absorb, and looping
+     would convert an instant local-dev error into a wait until the deadline. See
+     "Decided: SQLite is not retried" in requirements.md.
+   - Make the per-attempt call injectable so the loop is testable without a real
+     database: keep an unexported package-level `var openOnce = Open` (or an
+     unexported `openWithRetry(ctx, ..., open func(...) (*sql.DB, error))` that
+     `OpenWithRetry` calls with `Open`). Tests then drive attempt outcomes
+     deterministically — fail N times, then succeed — instead of trying to
+     manufacture a target that is unreachable and then reachable on a timer. This
+     seam is the difference between a test that proves the loop retries and one that
+     merely proves a happy path still works.
 
 2. In `cmd/server/main.go`, replace the direct `db.Open` call with
    `db.OpenWithRetry(ctx, cfg.DatabaseURL, cfg.DBMaxOpenConns, cfg.DBMaxIdleConns,
