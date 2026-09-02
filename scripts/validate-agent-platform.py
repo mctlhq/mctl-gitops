@@ -362,44 +362,56 @@ def validate_profile_against_cwft(
 
     try:
         cwft = load_yaml(cwft_path)
+        if not isinstance(cwft, dict):
+            raise CatalogValidationError("not a YAML mapping")
         budget = _unique_env_by_suffix(cwft, BUDGET_ENV_SUFFIX, cwft_path)
         timeout_env = _unique_env_by_suffix(cwft, TIMEOUT_ENV_SUFFIX, cwft_path)
+
+        # No *_TIMEOUT_SECONDS override means the pod-level deadline IS the
+        # effective timeout, which is what the investigator and shepherd
+        # headers already say. Deliberately the workflow-level
+        # activeDeadlineSeconds, not a step-level one:
+        # cwft-mctl-agents-implement.yaml has two 300-second step deadlines
+        # that bound single steps, not the run.
+        if timeout_env is not None:
+            effective, source = timeout_env, f"*{TIMEOUT_ENV_SUFFIX}"
+        else:
+            effective = (cwft.get("spec") or {}).get("activeDeadlineSeconds")
+            source = "spec.activeDeadlineSeconds"
+
+        # Conversions live inside the try with everything else that can
+        # throw. A CWFT is free to express a value as an Argo template
+        # (value: "{{workflow.parameters.budget}}"), and float() on that
+        # would abort the entire run — including --selftest — with a bare
+        # traceback, where every other check in this module degrades to a
+        # file-scoped error and carries on (claude P2 on mctl-gitops#981).
+        budget_value = None if budget is None else float(budget)
+        timeout_value = None if effective is None else int(effective)
     except Exception as exc:  # noqa: BLE001 - report and continue
         errors.append(f"{path}: reading {cwft_path.name}: {exc}")
         return
 
-    if budget is None:
+    if budget_value is None:
         errors.append(
             f"{path}: profile {name!r} declares budgetUsd {spec['budgetUsd']} but "
             f"{cwft_path.name} sets no *{BUDGET_ENV_SUFFIX} — the profile's "
             "effective value cannot be verified against anything"
         )
-    elif float(budget) != float(spec["budgetUsd"]):
+    elif budget_value != float(spec["budgetUsd"]):
         errors.append(
             f"{path}: budgetUsd {spec['budgetUsd']} does not match "
-            f"{cwft_path.name}'s {float(budget)}"
+            f"{cwft_path.name}'s {budget_value}"
         )
 
-    # No *_TIMEOUT_SECONDS override means the pod-level deadline IS the
-    # effective timeout, which is what the investigator and shepherd headers
-    # already say. Deliberately the workflow-level activeDeadlineSeconds,
-    # not a step-level one: cwft-mctl-agents-implement.yaml has two
-    # 300-second step deadlines that bound single steps, not the run.
-    if timeout_env is not None:
-        effective = timeout_env
-        source = f"*{TIMEOUT_ENV_SUFFIX}"
-    else:
-        effective = (cwft.get("spec") or {}).get("activeDeadlineSeconds")
-        source = "spec.activeDeadlineSeconds"
-    if effective is None:
+    if timeout_value is None:
         errors.append(
             f"{path}: {cwft_path.name} declares neither a *{TIMEOUT_ENV_SUFFIX} "
             "nor spec.activeDeadlineSeconds; timeoutSeconds is unverifiable"
         )
-    elif int(effective) != int(spec["timeoutSeconds"]):
+    elif timeout_value != int(spec["timeoutSeconds"]):
         errors.append(
             f"{path}: timeoutSeconds {spec['timeoutSeconds']} does not match "
-            f"{cwft_path.name}'s {source} of {int(effective)}"
+            f"{cwft_path.name}'s {source} of {timeout_value}"
         )
 
 

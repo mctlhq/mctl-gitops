@@ -121,6 +121,7 @@ expectation:
 | independent-half rollback rejected | `invalid/rollback-independent-half/` |
 | effective budget/timeout match the CWFT | `invalid/cwft-budget-mismatch/` |
 | conflicting values for one CWFT variable rejected | `invalid/cwft-conflicting-budget-values/` |
+| non-numeric CWFT value degrades to a file-scoped error | `invalid/cwft-non-numeric-budget/` |
 | exact-pair rollback accepted | `valid/rollback-replay/` |
 
 ### Effective values are checked against the deployed template

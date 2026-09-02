@@ -1,0 +1,21 @@
+# Stub CWFT whose budget is an Argo template expression rather than a
+# literal — a shape a real template is free to use.
+#
+# The check must report this as a file-scoped error and carry on, the way
+# every other check in validate-agent-platform.py does. Before claude's P2
+# on mctl-gitops#981 the float() conversion sat outside the try/except, so
+# this input aborted the entire run — including --selftest — with a bare
+# traceback.
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterWorkflowTemplate
+metadata:
+  name: mctl-agents-investigate
+spec:
+  activeDeadlineSeconds: 7200
+  templates:
+    - name: run-agent
+      container:
+        image: example
+        env:
+          - name: ISSUE_INVESTIGATOR_BUDGET_USD
+            value: "{{workflow.parameters.budget}}"
