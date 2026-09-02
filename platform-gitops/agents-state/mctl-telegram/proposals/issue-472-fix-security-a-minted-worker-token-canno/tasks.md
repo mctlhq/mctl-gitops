@@ -66,8 +66,12 @@
       revocation and reference the still-available `OAUTH_JWT_SIGNING_KEY` rotation as the
       remaining full-population lever.
 
+- [ ] E1. After recording a revocation, call `Hub.Unregister(userID)` from the revoke tool so a daemon that is already connected is dropped rather than left serving calls until its socket happens to fail — record first, evict second, or the daemon reconnects with a token that is not yet revoked. Nil-guard the Hub the way tool dispatch already does, since it is nil when Local Bridge is not configured — DoD: revoking an account with a connected daemon closes that connection; revoking one with no daemon is a no-op, not an error.
+
 ## Tests
 
+- [ ] TE1. Test that revoking evicts a live connection: register a daemon on the Hub, revoke, assert the connection is gone and a call to it returns `ErrNoDaemonConnected`. **Validate by mutation**: remove the `Hub.Unregister` call and confirm this test fails. A test that only checks the revocation row was written passes without eviction and proves nothing about containment.
+- [ ] TE2. Test that a token with no `jti` (an interactive session) triggers no revocation lookup — assert on a counting fake rather than on timing, and confirm by mutation that removing the `jti == ""` short-circuit fails it.
 - [ ] T1. `internal/auth/localjwt`: a token with a revoked `jti` is rejected by
       `Provider.Authenticate` — and this test fails if the denylist check is deleted (per the
       issue's explicit acceptance criterion; do not merely assert a valid token still works).

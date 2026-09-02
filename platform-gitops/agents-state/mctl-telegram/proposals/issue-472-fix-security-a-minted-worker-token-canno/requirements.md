@@ -60,7 +60,7 @@ taken into account up to the 1-year `maxRenewalChain`) with no operator response
   THE SYSTEM SHALL NOT perform any denylist lookup for that request.
 - WHEN an admin with the `admin:users` scope revokes a token by `jti` THE SYSTEM SHALL
   record that `jti` as revoked such that any future or already-cached-stale verification of
-  a token carrying it fails within the cache's refresh interval.
+  a token carrying it fails within the bounded cache TTL (at most 15 seconds).
 - WHEN an admin with the `admin:users` scope revokes all worker tokens for a Telegram id
   THE SYSTEM SHALL record a blanket revocation for that id such that any worker token for
   that id — including ones whose `jti` the operator never learned — is rejected at `/mcp`
@@ -71,6 +71,12 @@ taken into account up to the 1-year `maxRenewalChain`) with no operator response
 - WHILE a token is revoked THE SYSTEM SHALL reject an `/api/mcp/worker-token/renew` request
   presenting that token, because the auth middleware in front of the renew handler already
   denies it before the handler runs.
+- WHEN a worker token is revoked (by `jti` or by blanket per-Telegram-id revocation) AND a
+  Local Bridge daemon for that account currently holds an open `/bridge` websocket THE
+  SYSTEM SHALL drop that connection immediately, via `Hub.Unregister`.
+- WHEN the denylist rejects a request THE SYSTEM SHALL do so within 15 seconds of the
+  revocation being recorded, bounding the cache TTL rather than leaving the propagation
+  delay to the implementer.
 - IF the revocation table cannot be reached during a `jti`-bearing token's verification THEN
   THE SYSTEM SHALL fail closed (reject the request) rather than silently skip the check,
   consistent with the codebase's existing "no panics, wrap and return" error posture.
@@ -106,14 +112,21 @@ taken into account up to the 1-year `maxRenewalChain`) with no operator response
   `set_telegram_access` / `revoke_telegram_session` pattern in `internal/mcp/tools.go`, is
   the interpretation used here, since every other `admin:users`-gated write in this codebase
   is an MCP tool rather than a bare HTTP route.
-- The issue does not say whether revoking should also affect a token's already-issued
-  1-hour bridge JWT (minted via `/api/bridge/token`) if one was derived from the worker
-  token before revocation. Resolution: out of scope for this proposal — the bridge JWT is
-  short-lived (1 hour) and expires on its own; only the `/api/mcp/worker-token` and
-  `/api/bridge/token` mint paths (which both run under `provider`, the same
-  `localjwt.Provider` gaining the denylist check) are required to reject a revoked worker
-  token going forward.
-- No specific cache refresh interval is mandated by the issue. Resolution: default to a
-  short in-process TTL cache (see design.md) in the 5-15 second range, documented as
-  configurable, trading a small worst-case revocation-propagation delay for avoiding a
-  per-request DB round trip.
+- Whether revoking must also cut a bridge connection that is already open. **Yes, and the
+  earlier reasoning here was wrong.** It said the derived one-hour bridge JWT "expires on
+  its own", which is true only for opening a *new* connection. `NewBridgeHandler`
+  (`internal/bridge/server.go`) authenticates once, before the websocket upgrade; the reader
+  and writer goroutines never re-check the token. An already-open daemon connection is
+  therefore never re-authenticated and would survive revocation indefinitely — not for an
+  hour, but until the socket happens to drop. For a feature whose entire purpose is
+  containing a leak, that leaves the leak running.
+
+  Resolution: the revoke operation calls `Hub.Unregister(userID)`. The Hub is already
+  reachable from the MCP server (`internal/mcp/server.go:28`, wired by `WithHub`), and
+  `Unregister` closes the send channel, which ends the writer goroutine and tears down the
+  connection. Re-authenticating mid-connection is deliberately not proposed: eviction is a
+  smaller change and gives a strictly faster cut-off.
+- Cache refresh interval. Decided rather than left open: default 10 seconds, hard upper
+  bound 15 seconds, configurable below that. A revocation nobody can rely on within a known
+  window is not a containment control, and "short" is not a specification — an implementer
+  reading it is entitled to pick a minute.
