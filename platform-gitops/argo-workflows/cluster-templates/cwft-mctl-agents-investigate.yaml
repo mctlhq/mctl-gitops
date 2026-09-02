@@ -397,7 +397,7 @@ spec:
           OUT_OF_SCOPE="$(git status --porcelain -- ':(exclude,glob)platform-gitops/agents-state/*/proposals/*/**')"
           if [ -n "$OUT_OF_SCOPE" ]; then
             echo "❌ Refusing to commit changes outside a proposal directory under platform-gitops/agents-state/:" >&2
-            printf '%s\n' "$OUT_OF_SCOPE"
+            printf '%s\n' "$OUT_OF_SCOPE" >&2
             exit 1
           fi
 

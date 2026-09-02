@@ -395,7 +395,7 @@ spec:
           NON_STATUS_CHANGES="$(git status --porcelain -- ':(exclude,glob)platform-gitops/agents-state/**/.status.yaml')"
           if [ -n "$NON_STATUS_CHANGES" ]; then
             echo "❌ Refusing to commit changes outside .status.yaml files under platform-gitops/agents-state/:" >&2
-            printf '%s\n' "$NON_STATUS_CHANGES"
+            printf '%s\n' "$NON_STATUS_CHANGES" >&2
             exit 1
           fi
 
