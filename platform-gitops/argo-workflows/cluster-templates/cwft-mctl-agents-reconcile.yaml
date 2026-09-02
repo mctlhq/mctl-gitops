@@ -176,7 +176,25 @@ spec:
               # otherwise eat the workflow's whole 30-min deadline (observed
               # 2026-07-16, gitops#593 follow-up — the clone ran 31 min before
               # the deadline killed it).
-              ssh-keyscan -T 10 -p 443 -H ssh.github.com >> ~/.ssh/known_hosts 2>/dev/null
+              # GitHub's published SSH host keys, PINNED rather than trusted on
+              # first use. Source: https://api.github.com/meta (.ssh_keys),
+              # fetched 2026-09-02. This replaces an `ssh-keyscan` of
+              # ssh.github.com, which is trust-on-first-use: it accepted
+              # whatever key answered, on a connection carrying a
+              # WRITE-capable deploy key. A MITM or DNS-poison was recorded
+              # as the truth and then honoured.
+              #
+              # Keyed on [ssh.github.com]:443 — ssh looks up the host and
+              # port it actually connects to, which the Host block rewrites.
+              #
+              # If GitHub rotates a host key these lines must be updated; it
+              # last happened in March 2023, when the RSA key was replaced.
+              cat > ~/.ssh/known_hosts <<'GITHUB_HOST_KEYS'
+              [ssh.github.com]:443 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
+              [ssh.github.com]:443 ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=
+              [ssh.github.com]:443 ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=
+              GITHUB_HOST_KEYS
+              chmod 600 ~/.ssh/known_hosts
               git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops
               mkdir -p /workdir/mctl-gitops/platform-gitops/agents-state
               # uid 1000 is the mctl-agents image USER (SOC F8). This init
@@ -347,7 +365,25 @@ spec:
               chmod 600 ~/.ssh/id_ed25519
               printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  ConnectTimeout 15\n  ServerAliveInterval 5\n  ServerAliveCountMax 3\n' > ~/.ssh/config
               chmod 600 ~/.ssh/config
-              ssh-keyscan -T 10 -p 443 -H ssh.github.com >> ~/.ssh/known_hosts 2>/dev/null
+              # GitHub's published SSH host keys, PINNED rather than trusted on
+              # first use. Source: https://api.github.com/meta (.ssh_keys),
+              # fetched 2026-09-02. This replaces an `ssh-keyscan` of
+              # ssh.github.com, which is trust-on-first-use: it accepted
+              # whatever key answered, on a connection carrying a
+              # WRITE-capable deploy key. A MITM or DNS-poison was recorded
+              # as the truth and then honoured.
+              #
+              # Keyed on [ssh.github.com]:443 — ssh looks up the host and
+              # port it actually connects to, which the Host block rewrites.
+              #
+              # If GitHub rotates a host key these lines must be updated; it
+              # last happened in March 2023, when the RSA key was replaced.
+              cat > ~/.ssh/known_hosts <<'GITHUB_HOST_KEYS'
+              [ssh.github.com]:443 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
+              [ssh.github.com]:443 ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=
+              [ssh.github.com]:443 ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=
+              GITHUB_HOST_KEYS
+              chmod 600 ~/.ssh/known_hosts
               git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops
               echo "gitops cloned"
           resources:
@@ -381,7 +417,25 @@ spec:
           # instead of silently eating the workflow's 30-min activeDeadlineSeconds
           # (see the clone-gitops initContainer for the observed incident this
           # fixes).
-          ssh-keyscan -T 10 -p 443 -H ssh.github.com >> ~/.ssh/known_hosts 2>/dev/null
+          # GitHub's published SSH host keys, PINNED rather than trusted on
+          # first use. Source: https://api.github.com/meta (.ssh_keys),
+          # fetched 2026-09-02. This replaces an `ssh-keyscan` of
+          # ssh.github.com, which is trust-on-first-use: it accepted
+          # whatever key answered, on a connection carrying a
+          # WRITE-capable deploy key. A MITM or DNS-poison was recorded
+          # as the truth and then honoured.
+          #
+          # Keyed on [ssh.github.com]:443 — ssh looks up the host and
+          # port it actually connects to, which the Host block rewrites.
+          #
+          # If GitHub rotates a host key these lines must be updated; it
+          # last happened in March 2023, when the RSA key was replaced.
+          cat > ~/.ssh/known_hosts <<'GITHUB_HOST_KEYS'
+          [ssh.github.com]:443 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
+          [ssh.github.com]:443 ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=
+          [ssh.github.com]:443 ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=
+          GITHUB_HOST_KEYS
+          chmod 600 ~/.ssh/known_hosts
 
           # Lay the handed-off .status.yaml files over the fresh checkout done
           # by this pod's clone-gitops initContainer. An empty artifact means
