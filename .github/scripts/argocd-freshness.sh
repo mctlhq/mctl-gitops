@@ -56,6 +56,18 @@ stale_sources() {
   done
 }
 
+# Zero tracked sources cannot be right for this repository — it means the
+# response shape changed (e.g. a `fields=` projection dropping nested
+# paths, which is how the first live run passed vacuously), not that
+# everything is fresh.
+require_tracked() {
+  local total="$1"
+  if [ "$total" -eq 0 ]; then
+    echo "no Application source tracking mctl-gitops main was found in the API response" >&2
+    return 1
+  fi
+}
+
 self_test() {
   local fixture out
   fixture='{"items":[
@@ -75,6 +87,13 @@ self_test() {
     printf '%s\n' "$out" >&2
     exit 1
   fi
+  # An empty or unexpectedly shaped response must fail, never pass.
+  local empty_total
+  empty_total=$(printf '{"items":[{"metadata":{"name":"only-name"}}]}' | tracked_sources | wc -l | tr -d ' ')
+  if [ "$empty_total" != "0" ] || require_tracked "$empty_total" 2>/dev/null; then
+    echo "self-test FAILED: a response without sources must be rejected" >&2
+    exit 1
+  fi
   echo "self-test OK"
 }
 
@@ -90,22 +109,19 @@ sha="${1:?usage: $0 <sha> | --self-test}"
 # (`items.spec` yes, `items.status.sync.revisions` no) and silently drops
 # the rest, which made the first live run report "all 0 tracked sources".
 # The full list is ~1.5 MB for 46 apps; that is fine once per push.
-apps=$(curl -sSf --max-time 60 \
+if ! apps=$(curl -sSf --max-time 60 \
   -H "Authorization: Bearer ${ARGOCD_TOKEN}" \
-  "${ARGOCD_SERVER}/api/v1/applications")
+  "${ARGOCD_SERVER}/api/v1/applications"); then
+  echo "failed to list applications from ${ARGOCD_SERVER} (network, TLS or token problem — see curl output above)" >&2
+  exit 1
+fi
 
 # The revision an app reports may be NEWER than the checkout we run in
 # (bot bumps land every few minutes), so make sure those commits are local.
 git fetch -q origin main
 
 total=$(printf '%s' "$apps" | tracked_sources | wc -l | tr -d ' ')
-# Zero tracked sources cannot be right for this repository — it means the
-# response shape changed, not that everything is fresh. Fail rather than
-# pass vacuously.
-if [ "$total" -eq 0 ]; then
-  echo "no Application source tracking mctl-gitops main was found in the API response" >&2
-  exit 1
-fi
+require_tracked "$total"
 stale=$(printf '%s' "$apps" | tracked_sources | stale_sources "$sha")
 if [ -z "$stale" ]; then
   echo "all ${total} tracked sources are at ${sha} or newer"
