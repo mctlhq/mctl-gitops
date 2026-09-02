@@ -124,7 +124,7 @@
    concerns — see Alternatives), modeled on `PeerCache`: a mutex-protected map keyed by
    `jti`, plus a separately-cached slice/set of blanket-revoked `telegram_id`s, refreshed
    from `Store.ListWorkerTokenRevocations(ctx)` (a full-table read — "expected to hold
-   single-digit rows" per the issue) on a short TTL (default 10s, configurable). A cache
+   single-digit rows" per the issue) on a short TTL (default 10s, configurable, hard upper bound 15s). A cache
    miss (unknown `jti`, not in the blanket set) is a fast in-memory `false` with no DB call;
    the DB is only hit on periodic refresh, not per-request. This is what keeps a revocation
    check cheap even though every `jti`-bearing request pays it. Fail-closed: if the refresh
@@ -152,6 +152,29 @@
    under `provider` (the plain `/mcp` provider, see `cmd/server/main.go:445-453`), so a
    revoked worker token is already rejected there once `provider` itself carries the check;
    no separate change to `bridge.NewBridgeTokenHandler` is needed.
+
+### Evicting a live bridge connection
+
+Revocation has to reach a daemon that is already connected, not only the next one that
+tries to connect. `NewBridgeHandler` (`internal/bridge/server.go`) authenticates once,
+before the websocket upgrade; the reader and writer goroutines never re-check the token,
+so an open connection is never re-authenticated. Without eviction a revoked credential
+keeps serving calls until the socket drops on its own, which for a long-lived daemon may
+be days -- and this is the exact scenario the feature exists to stop.
+
+The revoke tool therefore calls `Hub.Unregister(userID)` after recording the revocation.
+The Hub is already on the MCP server (`internal/mcp/server.go:28`, wired by `WithHub`,
+nil when Local Bridge is not configured -- so the call must be nil-guarded the way tool
+dispatch already guards it). `Unregister` closes the connection's send channel, which
+ends the writer goroutine and tears the connection down; it is idempotent, so revoking an
+account with no daemon connected is a no-op rather than an error.
+
+Order matters: record the revocation first, then evict. Evicting first leaves a window in
+which the daemon reconnects, presents its not-yet-revoked token, and is accepted.
+
+Re-authenticating mid-connection (re-checking the token on a periodic ping, say) was
+considered and not proposed: it is a larger change to the connection lifecycle for a
+strictly slower cut-off than closing the socket outright.
 
 ## Alternatives
 
