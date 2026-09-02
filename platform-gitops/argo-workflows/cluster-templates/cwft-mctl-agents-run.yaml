@@ -356,7 +356,15 @@ spec:
           # legitimately writes digests and inbox files, so its allowed set
           # is the whole subtree, unlike the proposal-scoped guards in
           # cwft-mctl-agents-investigate.yaml (agy P1 on gitops#982).
-          git reset -q
+          # Reset to the REMOTE tip, not to local HEAD. `git reset` alone
+          # rewinds the index to HEAD — but the agent can `git commit` in
+          # this worktree itself, and that moves HEAD, so its commit would
+          # look like clean history and ride along on `git push HEAD:main`
+          # (agy P1 on gitops#982, second round; reproduced). Resetting to
+          # the fetched remote tip unwinds any such commit back into the
+          # worktree, where the guard below sees it.
+          git fetch -q --depth=1 origin main
+          git reset -q FETCH_HEAD
           OUT_OF_SCOPE="$(git status --porcelain -- ':(exclude)platform-gitops/agents-state/')"
           if [ -n "$OUT_OF_SCOPE" ]; then
             echo "❌ Refusing to commit changes outside platform-gitops/agents-state/:" >&2

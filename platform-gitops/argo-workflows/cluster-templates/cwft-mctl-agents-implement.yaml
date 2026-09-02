@@ -625,7 +625,15 @@ spec:
           # anything it staged itself rides along regardless of what this step
           # adds, and the old agents-state/-anchored pathspec could not see a
           # change anywhere else in the repo.
-          git reset -q
+          # Reset to the REMOTE tip, not to local HEAD. `git reset` alone
+          # rewinds the index to HEAD — but the agent can `git commit` in
+          # this worktree itself, and that moves HEAD, so its commit would
+          # look like clean history and ride along on `git push HEAD:main`
+          # (agy P1 on gitops#982, second round; reproduced). Resetting to
+          # the fetched remote tip unwinds any such commit back into the
+          # worktree, where the guard below sees it.
+          git fetch -q --depth=1 origin main
+          git reset -q FETCH_HEAD
           NON_STATUS_CHANGES="$(git status --porcelain -- ':(exclude,glob)platform-gitops/agents-state/**/.status.yaml')"
           if [ -n "$NON_STATUS_CHANGES" ]; then
             echo "❌ Refusing to commit changes outside .status.yaml files under platform-gitops/agents-state/:" >&2
