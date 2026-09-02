@@ -459,7 +459,15 @@ spec:
             fi
             if [ $i -lt $MAX_RETRIES ]; then
               echo "⚠️  Push failed (attempt $i), rebasing..."
-              git pull --rebase origin main
+              # `git pull --rebase` must not run bare under `set -e`: a conflict aborts
+              # the script mid-rebase and the retry loop never gets its second attempt,
+              # leaving a half-applied rebase behind. Abort it so the next iteration
+              # starts from a clean worktree (same shape as the agents templates,
+              # gitops#982).
+              if ! git pull --rebase origin main; then
+                git rebase --abort 2>/dev/null || true
+                echo "⚠️  Rebase failed (attempt ${i}); retrying" >&2
+              fi
             else
               echo "❌ Push failed after $MAX_RETRIES attempts"
               exit 1
@@ -532,7 +540,15 @@ spec:
               break
             fi
             if [ $i -lt 5 ]; then
-              git pull --rebase origin main
+              # `git pull --rebase` must not run bare under `set -e`: a conflict aborts
+              # the script mid-rebase and the retry loop never gets its second attempt,
+              # leaving a half-applied rebase behind. Abort it so the next iteration
+              # starts from a clean worktree (same shape as the agents templates,
+              # gitops#982).
+              if ! git pull --rebase origin main; then
+                git rebase --abort 2>/dev/null || true
+                echo "⚠️  Rebase failed (attempt ${i}); retrying" >&2
+              fi
             else
               echo "❌ Push failed after 5 attempts"
               exit 1

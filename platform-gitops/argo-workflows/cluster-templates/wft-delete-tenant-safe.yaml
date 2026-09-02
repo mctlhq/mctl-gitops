@@ -342,13 +342,32 @@ spec:
             if ! git diff --cached --quiet; then
               git commit -m "chore(db): cleanup shared CNPG resources for tenant ${TENANT}" \
                 -m "Removed remaining tenant-owned roles, pg_hba entries, Database CRDs and ExternalSecrets before namespace deletion."
+              PUSHED=false
               for i in $(seq 1 5); do
                 if git push origin HEAD:main; then
                   echo "✅ Shared DB cleanup pushed"
+                  PUSHED=true
                   break
                 fi
-                git pull --rebase origin main
+                # `git pull --rebase` must not run bare under `set -e`: a conflict aborts
+                # the script mid-rebase and the retry loop never gets its second attempt,
+                # leaving a half-applied rebase behind. Abort it so the next iteration
+                # starts from a clean worktree (same shape as the agents templates,
+                # gitops#982).
+                if ! git pull --rebase origin main; then
+                  git rebase --abort 2>/dev/null || true
+                  echo "⚠️  Rebase failed (attempt ${i}); retrying" >&2
+                fi
               done
+              # An exhausted retry loop must fail loudly. Wrapping the rebase above
+              # removed the `set -e` abort that used to be the only thing stopping
+              # this loop from falling through as if it had pushed — and here that
+              # would mean: the shared-cluster resources were removed but not from gitops, so
+              #   ArgoCD will recreate them for a tenant that no longer exists.
+              if [ "$PUSHED" != "true" ]; then
+                echo "❌ git push failed after 5 attempts" >&2
+                exit 1
+              fi
             fi
           else
             echo "ℹ️  No remaining shared DB resources found for tenant ${TENANT}"
