@@ -44,10 +44,13 @@ spec:
         team: '{{`{{ index .path.segments 2 }}`}}'
         # Kubernetes label values are capped at 63 characters. Tenant names
         # are validated up to 63 characters upstream, so `{team}-openclaw-skills`
-        # would exceed the cap for teams longer than 47 characters; truncate to
-        # keep the ApplicationSet controller from rejecting the generated
-        # Application for long-named tenants.
-        backstage.io/kubernetes-id: '{{`{{ trunc 63 (printf "%s-openclaw-skills" (index .path.segments 2)) }}`}}'
+        # would exceed the cap for teams longer than 47 characters. Truncate
+        # the team name, not the whole label: cutting the assembled string
+        # can end exactly on the hyphen before "openclaw" (a 53-char team),
+        # and a label value ending in "-" is rejected by the API server.
+        # trimAll drops any hyphens the 47-char cut itself leaves at the end,
+        # so the value always ends in "skills" (#975).
+        backstage.io/kubernetes-id: '{{`{{ printf "%s-openclaw-skills" (trimAll "-" (trunc 47 (index .path.segments 2))) }}`}}'
       annotations:
         argocd/app-name: '{{`{{ index .path.segments 2 }}-openclaw-skills`}}'
         # See applicationset-apps.yaml for why (#970).
