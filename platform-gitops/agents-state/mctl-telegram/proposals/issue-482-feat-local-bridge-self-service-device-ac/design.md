@@ -229,13 +229,32 @@ spent the form returns the same generic message without performing a lookup.
 all users one shared budget that ordinary traffic can exhaust, turning the
 limiter into a self-inflicted outage. Trusting `X-Forwarded-For` blindly is
 the opposite failure: the client supplies it, so an attacker rotates it per
-request and the limiter counts nothing. Take the rightmost entry of
-`X-Forwarded-For` that is **not** in a configured trusted-proxy CIDR set
-(new config, defaulting to the cluster's pod/service CIDRs), and fall back to
-`r.RemoteAddr` when the header is absent or the whole chain is trusted. Same
-derivation for the consent endpoint. A test must cover both failure shapes:
-a spoofed header does not reset the budget, and two clients behind the proxy
-get separate budgets.
+request and the limiter counts nothing.
+
+Evaluate trust **from the outside in**, and in this order:
+
+1. If `r.RemoteAddr` is **not** in the configured trusted-proxy CIDR set (new
+   config, defaulting to the cluster's pod/service CIDRs), return
+   `r.RemoteAddr` and **ignore `X-Forwarded-For` entirely**.
+2. Only when the immediate peer is trusted, walk `X-Forwarded-For` right to
+   left and take the first entry outside the trusted set.
+3. Fall back to `r.RemoteAddr` when the header is absent or the whole chain
+   is trusted.
+
+Step 1 is not an optimisation, it is the whole guarantee. Inspecting the
+header before checking the peer means a client connecting directly (or via an
+untrusted proxy that forwards headers) can send
+`X-Forwarded-For: 198.51.100.1`, have the algorithm notice the address is
+untrusted, and get it used as the limiter key — rotating that value per
+request evades the limiter completely, which puts the `user_code` brute force
+and the consent endpoint back in reach and with them the lock contention the
+limiter exists to prevent. A forwarded header is only evidence when it
+arrives from something entitled to set it.
+
+Same derivation for the consent endpoint. Tests must cover both failure
+shapes: a spoofed header from an untrusted peer does not change the key or
+reset the budget, and two clients behind the trusted proxy get separate
+budgets.
 
 Sizing: the `user_code` is 8 Crockford-base32 characters (~40 bits) with a
 10-minute TTL, so even an unlimited attacker is far from a guess; the limiter

@@ -242,11 +242,14 @@
       callback never matches — which would reject every legitimate activation
       while still reading like a working defence. Assert the cookie is deleted
       afterwards. Mutation-validate by narrowing `Path`: the test must go red.
-- [ ] T19. **Rate-limit keying survives the ingress.** Two requests arriving
-      from the same trusted-proxy peer with different `X-Forwarded-For` chains
-      get separate budgets; a client rotating a spoofed `X-Forwarded-For`
-      beyond the trusted boundary does not reset its own budget. Covers both
-      the `user_code` form and the consent endpoint.
+- [ ] T19. **Rate-limit keying survives the ingress, and only trusts a
+      forwarding header from a trusted peer.** Two requests arriving from the
+      same trusted-proxy peer with different `X-Forwarded-For` chains get
+      separate budgets. A request from an **untrusted** peer carrying a forged
+      `X-Forwarded-For` is keyed on its own peer address, so rotating that
+      header does not reset the budget — assert the key directly, not just the
+      budget, so the test cannot pass by accident. Covers both the `user_code`
+      form and the consent endpoint.
 - [ ] T20. **The code form is not cross-site submittable.** A
       `POST /local-bridge/activate` carrying a valid `user_code` but no CSRF
       token, or one that does not match the form cookie, is refused before any

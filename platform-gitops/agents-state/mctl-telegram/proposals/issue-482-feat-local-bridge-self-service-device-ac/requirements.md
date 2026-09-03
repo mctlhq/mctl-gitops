@@ -96,7 +96,11 @@ have a phone and a CLI" to "I have a `telegram_accounts` row in local mode and a
   form, and SHALL derive the client identity from a configured trusted-proxy
   boundary rather than from the raw transport peer (which is the ingress, so
   all users would share one budget) or from an unvalidated client-supplied
-  forwarding header (which an attacker rotates per request).
+  forwarding header (which an attacker rotates per request). THE SYSTEM SHALL
+  consult a forwarding header ONLY when the immediate transport peer is itself
+  inside the trusted-proxy set; when it is not, the peer address SHALL be the
+  key and the header SHALL be ignored. Checking the header before the peer
+  would let a directly-connected attacker choose their own limiter key.
 - WHEN the browser is redirected to Telegram OIDC for an activation, THE
   SYSTEM SHALL bind that redirect to the browser that submitted the
   `user_code` — via a `HttpOnly`, `Secure`, `SameSite=Lax`, host-only cookie
