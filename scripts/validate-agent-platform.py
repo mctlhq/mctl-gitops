@@ -77,10 +77,20 @@ def parse_version(version: str) -> tuple:
 
 
 def parse_compatibility(constraint: str):
-    matches = COMPAT_RE.findall(constraint)
+    # findall alone is not enough: it skips whatever sits BETWEEN matches, so
+    # ">=1.0.0 GARBAGE <2.0.0" parsed as ">=1.0.0 <2.0.0" and validated
+    # green -- a constraint nobody wrote, silently honoured (agy P3 on
+    # mctl-agents#291, which found the same hole in the resolver's copy of
+    # this function). The whole string has to be consumed.
+    matches = list(COMPAT_RE.finditer(constraint))
     if not matches:
         raise CatalogValidationError(f"unparseable compatibility constraint {constraint!r}")
-    return [(op, parse_version(bound)) for op, bound in matches]
+    consumed = "".join(m.group(0) for m in matches)
+    if re.sub(r"\s+", "", constraint) != re.sub(r"\s+", "", consumed):
+        raise CatalogValidationError(
+            f"compatibility constraint {constraint!r} contains text outside its comparators"
+        )
+    return [(op, parse_version(bound)) for op, bound in (m.groups() for m in matches)]
 
 
 def _pad(a: tuple, b: tuple):
