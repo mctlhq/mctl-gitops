@@ -321,6 +321,28 @@ spec:
           REPO="https://github.com/${GITOPS_ORG}/${GITOPS_REPO}.git"
           VALUES="platform-gitops/services/${TEAM}/${COMPONENT}/values.yaml"
 
+          # Binding through env removes SHELL parsing, and nothing else.
+          # These three values are still expanded into a `sed` PROGRAM and
+          # printf'd into a YAML DOCUMENT below, each of which is its own
+          # interpreter:
+          #   - a value containing `|` closes sed's s||| delimiters and the
+          #     rest is read as further sed commands (`w` writes files);
+          #   - a value containing a newline appends arbitrary YAML keys to
+          #     values.yaml — `image:\n  repository: ...` replaces the
+          #     deployed image, and ArgoCD applies it.
+          # min_replicas, max_replicas and cpu_threshold carry no Pattern in
+          # the operations registry, so nothing upstream stops either.
+          # They are integers by definition; assert that here rather than
+          # hoping the value is well-formed (agy P1 on gitops#993).
+          for v in "${MIN}" "${MAX}" "${CPU}"; do
+            case "$v" in
+              ''|*[!0-9]*)
+                echo "❌ autoscaling values must be non-negative integers; got: min=${MIN} max=${MAX} cpu=${CPU}" >&2
+                exit 1
+                ;;
+            esac
+          done
+
           git clone --depth=1 "${REPO}" /tmp/mctl-gitops
           cd /tmp/mctl-gitops
 
