@@ -19,6 +19,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          # Full history: validate-profile-version-bumps.py diffs the changed
+          # ExecutionProfiles against the PR's base, and a depth-1 clone has
+          # no base to resolve. That script FAILS rather than skips when the
+          # base is missing, so a shallow clone here would turn the whole job
+          # red rather than quietly checking nothing -- which is the correct
+          # direction, but the fetch is what makes it actually run.
+          fetch-depth: 0
 
       - name: Install Helm
         uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.0
@@ -88,6 +96,18 @@ jobs:
           # a reference no longer failing closed) fails CI even though the
           # real platform-gitops/agent-platform/ catalog itself is fine.
           scripts/validate-agent-platform.py --selftest
+
+      - name: Check every changed ExecutionProfile bumped its version
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet pyyaml
+          # --selftest first, same reason as the interpolation check below: a
+          # detector that has never been seen to fire is not known to work. It
+          # builds a throwaway repository and asserts all four branches --
+          # unbumped edit fires, bumped edit does not, a new profile does not,
+          # and an unresolvable base RAISES instead of passing.
+          scripts/validate-profile-version-bumps.py --selftest
+          scripts/validate-profile-version-bumps.py
 
       - name: Validate Argo local workdir invariants
         run: scripts/validate-local-workdir.py
