@@ -344,6 +344,39 @@ spec:
           # Defaults
           [ -z "$DISPLAY_NAME" ] && DISPLAY_NAME="$TENANT"
 
+          # These three are free text and continue past the shell into a
+          # hand-built YAML DOCUMENT below (displayName/description/
+          # contactEmail are emitted as quoted scalars in a heredoc). Env
+          # binding stops the shell from executing them; it does not stop a
+          # value like
+          #     Foo"\n  admin: true\n  x: "
+          # from closing the quoted scalar and adding sibling keys to the
+          # tenant values.yaml that ArgoCD then applies. None of the three
+          # carries a Pattern in the operations registry.
+          #
+          # Free text cannot be constrained to a grammar the way an integer
+          # or an OCI tag can, so the two characters that can break a quoted
+          # scalar are rejected outright: a double quote and a newline. A
+          # real YAML emitter would be better and is the right fix if these
+          # fields ever need them (claude P2 on gitops#993).
+          NEWLINE="$(printf '\nx')"; NEWLINE="${NEWLINE%x}"
+          for value in "$DISPLAY_NAME" "$DESCRIPTION" "$CONTACT_EMAIL"; do
+            case "$value" in
+              *'"'* | *"$NEWLINE"* )
+                echo "❌ display_name, description and contact_email must not contain a double quote or a newline" >&2
+                exit 1
+                ;;
+            esac
+          done
+
+          # Emitted unquoted as a YAML boolean below, so it must be exactly
+          # true or false — the registry Enum says so, and this asserts it
+          # rather than trusting a second repository.
+          case "$INTERNET_EGRESS" in
+            true|false) ;;
+            *) echo "❌ allow_internet_egress must be true or false; got: ${INTERNET_EGRESS}" >&2; exit 1 ;;
+          esac
+
           # ── Setup SSH for git operations ────────────────────────────────────
           apk add --no-cache openssl curl git openssh-client ca-certificates
           mkdir -p ~/.ssh
