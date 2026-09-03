@@ -49,6 +49,11 @@ class Drift(Exception):
     pass
 
 
+def entry_repr(entry):
+    """Short, readable rendering of a manifest entry for an error message."""
+    return ", ".join(f"{k}: {v}" for k, v in entry.items()) or "(empty entry)"
+
+
 def read_manifest(path=MANIFEST):
     doc = yaml.safe_load(path.read_text()) or {}
     services = doc.get("services")
@@ -124,6 +129,15 @@ def check(services, token, grace_minutes, now=None):
     now = now or datetime.now(timezone.utc)
     grace = timedelta(minutes=grace_minutes)
     problems, watched, unmapped = [], 0, 0
+
+    # An entry without a path cannot be matched against anything, and indexing
+    # it would end the run in a traceback rather than a sentence. The premise of
+    # this file is that a malformed manifest gets reported; it should not be the
+    # one thing that takes the check down instead.
+    for i, entry in enumerate(services):
+        if not entry.get("path"):
+            problems.append(f"manifest entry #{i + 1} has no path: {entry_repr(entry)}")
+    services = [s for s in services if s.get("path")]
 
     declared = [s["path"] for s in services]
     if len(declared) != len(set(declared)):
@@ -264,6 +278,15 @@ def self_test():
                 "an entry that sets no kind at all",
                 [{"path": "a/values.yaml"}, {"path": "b/values.yaml", "unmapped": "x"}],
                 "exactly one of",
+            ),
+            (
+                "an entry with no path at all",
+                [
+                    {"unmapped": "x"},
+                    {"path": "a/values.yaml", "release_repo": "o/r"},
+                    {"path": "b/values.yaml", "unmapped": "x"},
+                ],
+                "has no path",
             ),
             (
                 "the same service declared twice",
