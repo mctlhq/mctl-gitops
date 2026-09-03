@@ -127,10 +127,16 @@ def _spec_version(document: object) -> str | None:
 
 def _version_at(rev: str, path: str, cwd: Path | None = None) -> str | None:
     """`spec.version` of `path` at `rev`, or None if the file is absent there."""
-    try:
-        blob = _git("show", f"{rev}:{path}", cwd=cwd)
-    except BaseUnavailable:
-        return None  # added in this change — nothing to compare against
+    # Absence must be established POSITIVELY, not inferred from any git
+    # failure. `_git` raises on every non-zero exit, so a corrupt repository,
+    # an unreadable object or an out-of-memory git would all have read as
+    # "this profile is new" and skipped validation silently — a check that
+    # turns an error into a skip is the failure mode this whole script exists
+    # to remove (agy P3 on gitops#1014).
+    listing = _git("ls-tree", "--name-only", rev, "--", path, cwd=cwd).strip()
+    if not listing:
+        return None  # genuinely absent at `rev` — added in this change
+    blob = _git("show", f"{rev}:{path}", cwd=cwd)
     try:
         document = yaml.safe_load(blob)
     except yaml.YAMLError as exc:
@@ -146,8 +152,21 @@ def changed_profiles(base: str, cwd: Path | None = None) -> list[str]:
     question is "what does this change do to the catalog", not "what does the
     branch history contain".
     """
-    out = _git("diff", "--name-only", base, "--", PROFILE_GLOB, cwd=cwd)
-    return sorted(line for line in out.splitlines() if line.strip())
+    # `-z` and split on NUL, never `--name-only` plus splitlines(). With
+    # core.quotePath at its default, git wraps a path containing a quote, a
+    # tab or any non-ASCII byte in double quotes and C-escapes it, so the
+    # parsed "path" is a quoted literal that no later `git show <rev>:<path>`
+    # or filesystem read can resolve. Measured, not assumed:
+    #
+    #   plain: '"platform-gitops/.../\320\277\321\200\320\276\321\204/profile.yaml"'
+    #   -z   : 'platform-gitops/.../проф/profile.yaml'
+    #
+    # A profile whose directory the resolver would reject anyway is exactly
+    # the one this check must still be able to READ, and the failure would be
+    # a skip, not an error (agy P2 on gitops#1014). Same defect class as
+    # `status --porcelain` without `-z`.
+    out = _git("diff", "-z", "--name-only", base, "--", PROFILE_GLOB, cwd=cwd)
+    return sorted(entry for entry in out.split("\0") if entry)
 
 
 def check(base: str | None = None, cwd: Path | None = None) -> list[str]:
@@ -257,6 +276,57 @@ def selftest() -> int:
             return 1
         target.write_text(yaml.safe_dump(profile), encoding="utf-8")
 
+        # 4b. a path git would QUOTE must still be read, not skipped. With
+        #     core.quotePath on (the default) a non-ASCII directory name comes
+        #     back as "\320\277..." wrapped in double quotes, and every later
+        #     `git show <rev>:<path>` against that literal fails — silently, as
+        #     a skip. The directory is committed at the base and then edited
+        #     WITHOUT a version bump, so a detector that cannot read it reports
+        #     success on a real violation.
+        quoted = repo / "platform-gitops/agent-platform/execution-profiles/проф/profile.yaml"
+        quoted.parent.mkdir(parents=True)
+        quoted.write_text(yaml.safe_dump(profile), encoding="utf-8")
+        _git("-c", "user.email=t@t", "-c", "user.name=t", "add", "-A", cwd=repo)
+        _git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "quoted", cwd=repo)
+        quoted_base = _git("rev-parse", "HEAD", cwd=repo).strip()
+        quoted.write_text(
+            yaml.safe_dump(dict(profile, spec=dict(profile["spec"], tools=["Read", "Glob"]))),
+            encoding="utf-8",
+        )
+        errors = check(base=quoted_base, cwd=repo)
+        if not any("проф" in e for e in errors):
+            print(f"❌ selftest: an edit under a quote-triggering path was not detected; got {errors}", file=sys.stderr)
+            return 1
+        quoted.write_text(yaml.safe_dump(profile), encoding="utf-8")
+
+        # 4c. a git failure that is NOT absence must propagate, not read as
+        #     "this profile is new". Induced deterministically by deleting the
+        #     blob object while leaving the tree intact: `ls-tree` still lists
+        #     the path, `git show` cannot read it.
+        #
+        #     _version_at is called DIRECTLY here, not through check(). Going
+        #     through check() proves nothing: `git diff` needs the same object
+        #     and raises first, so the case passed identically with and
+        #     without the fix — a false positive this selftest caught in its
+        #     own new branch before it shipped.
+        blob_sha = _git("rev-parse", f"{base}:{rel}", cwd=repo).strip()
+        blob_path = repo / ".git" / "objects" / blob_sha[:2] / blob_sha[2:]
+        if not blob_path.is_file():
+            print(f"❌ selftest: cannot stage the corrupt-object case; {blob_path} missing", file=sys.stderr)
+            return 1
+        saved = blob_path.read_bytes()
+        blob_path.unlink()
+        try:
+            _version_at(base, rel, cwd=repo)
+        except BaseUnavailable:
+            pass  # correct: an unreadable object is an error, not a skip
+        else:
+            print("❌ selftest: an unreadable blob was reported as an absent profile", file=sys.stderr)
+            return 1
+        finally:
+            blob_path.parent.mkdir(parents=True, exist_ok=True)
+            blob_path.write_bytes(saved)
+
         # 5. an unresolvable base must RAISE, never pass. This is the branch
         #    that decides whether the check works in CI at all.
         try:
@@ -279,7 +349,11 @@ def main(argv: list[str]) -> int:
         return selftest()
     base = None
     if "--base" in argv:
-        base = argv[argv.index("--base") + 1]
+        index = argv.index("--base")
+        if index + 1 >= len(argv):
+            print("❌ --base requires a value", file=sys.stderr)
+            return 1
+        base = argv[index + 1]
     try:
         errors = check(base=base)
     except BaseUnavailable as exc:
