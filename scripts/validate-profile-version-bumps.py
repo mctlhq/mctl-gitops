@@ -223,10 +223,22 @@ def selftest() -> int:
             print("❌ selftest: detector fired on a properly bumped edit", file=sys.stderr)
             return 1
 
-        # 3. a brand-new profile has nothing to compare against -> must pass
+        # 3. a brand-new profile has nothing to compare against -> must pass.
+        #
+        #    `git add -N` is load-bearing, not tidiness: `git diff` never lists
+        #    UNTRACKED paths, so without it changed_profiles() returns nothing
+        #    for this file and the case passes whatever check() does — a branch
+        #    that asserts emptiness while reading as coverage (claude P2 on
+        #    gitops#1014). Verified by mutation: breaking the `before is None`
+        #    guard in check() must turn this red, and with an untracked file it
+        #    does not.
         new = repo / "platform-gitops/agent-platform/execution-profiles/brand-new/profile.yaml"
         new.parent.mkdir(parents=True)
         new.write_text(yaml.safe_dump(profile), encoding="utf-8")
+        _git("add", "-N", ".", cwd=repo)
+        if not changed_profiles(base, cwd=repo):
+            print("❌ selftest: the new profile is invisible to git diff; case 3 checks nothing", file=sys.stderr)
+            return 1
         if check(base=base, cwd=repo):
             print("❌ selftest: detector fired on a newly added profile", file=sys.stderr)
             return 1
