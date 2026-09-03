@@ -97,8 +97,23 @@ have to scan every pending activation under the global `s.mu` on each
 submission — and since wrong guesses are exactly the requests an attacker
 sends in volume, that turns the brute-force attempt into a lock-contention
 attack that starves ordinary `/oauth/authorize` and `poll` traffic. Lookup is
-O(1). Eviction (`MaxPendingActivations`), resolution, and `sweep` must delete
-from **all three** maps; deleting from `activations` alone leaks the other two.
+O(1).
+
+Two removal helpers, and the distinction matters:
+
+- `unindexActivation(act)` — deletes from `activationsByState` and
+  `activationsByUserCode` only. Called on **resolution** (`done`/`denied`):
+  the browser must not be able to reach a finished activation again, but the
+  CLI still has to `poll` its `device_code` to learn the outcome and collect
+  `device_id`. Dropping the `activations` entry at resolution would make
+  `poll` answer 400 "unknown" for an activation that had just succeeded,
+  which breaks the feature outright.
+- `dropActivation(act)` — deletes from **all three**. Called only by
+  eviction (`MaxPendingActivations`) and by the TTL `sweep`, i.e. when the
+  activation is genuinely gone rather than merely finished.
+
+Removing from `activations` alone would leak the other two indexes; removing
+from all three too early loses the result. Both mistakes are silent.
 
 **New type**, `local_bridge_activate.go`:
 ```go
@@ -128,7 +143,12 @@ type localBridgeActivation struct {
     consentToken     string
     verifiedIdentity *telegramoidc.Identity
 
-    // mutated once, under s.mu, only while status is still "pending"
+    // Always mutated under s.mu, and only ever forwards along
+    //   pending -> awaiting_consent -> resolving -> done
+    // with denied reachable from any non-terminal state. Each transition is
+    // guarded on the specific state it comes from -- not on "still pending" --
+    // so a replayed request finds the wrong precondition and is a no-op.
+    // done and denied are terminal.
     status         string // "pending" | "awaiting_consent" | "resolving" | "denied" | "done"
     denialReason   string
     resultDeviceID string
@@ -191,6 +211,20 @@ Sizing: the `user_code` is 8 Crockford-base32 characters (~40 bits) with a
 10-minute TTL, so even an unlimited attacker is far from a guess; the limiter
 exists to stop the volume, not to be the only barrier.
 
+**Login-CSRF binding — without it the `user_code` step is bypassable.** On a
+match the handler sets a `HttpOnly`, `Secure`, `SameSite=Lax`, path-scoped
+cookie holding a hash of the `oidcState`, and `handleTelegramCallback` refuses
+an activation callback whose cookie is absent or does not match the `state` in
+the URL. The reason: nothing stops the attacker from typing the `user_code`
+into *their own* browser — it is their code — capturing the resulting
+`AuthCodeURL`, and forwarding *that* to the victim. Without the cookie the
+server only checks `state` against a server-side map, so the victim's sign-in
+lands on the attacker's activation and the victim is shown the consent page
+having never seen the code entry step at all. The cookie makes the OIDC leg
+non-transferable between browsers, which is what the `user_code` was supposed
+to guarantee. The consent step still stands behind this, but it must not be
+the only remaining barrier.
+
 On a match, mints a fresh `nonce`/PKCE verifier/`oidcState`
 exactly like `handleAuthorize` does (reusing the package's existing
 `randomToken`/`pkceChallenge` helpers). If the activation already carries an
@@ -245,8 +279,15 @@ behavioral change to existing logins. `finishActivation` (new function) does:
    victim's account. Signing in proves who you are; it must never by itself
    mean "yes, attach this device."
 
-4b. **`POST /local-bridge/activate/consent`** (new handler) validates the
-   `consentToken` against the activation under `s.mu` and requires
+4b. **`POST /local-bridge/activate/consent`** (new handler). The consent form
+   carries the `user_code` as a hidden field, so the handler resolves the
+   activation by **one `activationsByUserCode` lookup** and only then compares
+   `consentToken` (constant-time). Resolving by scanning for a matching
+   `consentToken` would be an O(N) walk under the global lock on every
+   submission — reachable by anyone POSTing random tokens, and not covered by
+   the `user_code` form's IP limiter, so it would be a lock-contention DoS on
+   all OAuth and poll traffic. The same limiter therefore also counts failed
+   consent submissions. Having found the activation, it requires
    `act.status == "awaiting_consent"`. **Still holding the lock**, it flips
    the status to `"resolving"` and clears `consentToken`, and only then
    releases the lock and starts the store calls. Claiming the activation
@@ -279,12 +320,13 @@ never the CLI's `device_registration_key`.
 **Sweeping**: extend the existing `Server.sweep` (`server.go:592-631`, already
 run by `StartSweeper` on a 1-minute ticker) with a loop over `s.activations`
 using the same `s.cfg.CodeTTL`-style cutoff (new `ActivationTTL` config,
-defaulted like `MaxPendingEnable`), deleting from **all three** of
-`activations`, `activationsByState` and `activationsByUserCode`, and purging
-expired entries from the failed-submission rate limiter in the same pass.
-Removal from every index belongs in one `dropActivation(act)` helper that
-eviction, resolution and the sweeper all call, so a future fourth index
-cannot be forgotten in two of the three places.
+defaulted like `MaxPendingEnable`), calling `dropActivation` — all three
+indexes — and purging expired entries from the failed-submission rate limiter
+in the same pass. The TTL must outlive a resolved activation long enough for
+the CLI's next poll to read the outcome; `ActivationTTL` is measured from
+`createdAt`, and a resolved activation is swept on the same schedule as an
+abandoned one. Resolution itself calls `unindexActivation`, never
+`dropActivation` (see above).
 
 **Config**: add `MaxPendingActivations int`, `ActivationTTL time.Duration`,
 and the failed-submission limiter's budget/window to `oauth.Config`,

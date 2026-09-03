@@ -84,10 +84,26 @@ have a phone and a CLI" to "I have a `telegram_accounts` row in local mode and a
   SHALL NOT be a per-activation counter (a wrong guess matches no activation,
   so there is nothing to decrement) nor a per-browser-session counter (an
   attacker discards the session).
-- THE SYSTEM SHALL resolve a submitted `user_code` to its activation in
-  constant time, without scanning the set of pending activations, so that
-  repeated wrong guesses cannot become lock contention against unrelated
-  OAuth and poll traffic.
+- THE SYSTEM SHALL resolve a submitted `user_code`, and likewise a submitted
+  consent form, to its activation in constant time, without scanning the set
+  of pending activations, so that repeated invalid submissions cannot become
+  lock contention against unrelated OAuth and poll traffic. The rate limit on
+  failed submissions SHALL cover the consent endpoint as well as the code
+  form.
+- WHEN the browser is redirected to Telegram OIDC for an activation, THE
+  SYSTEM SHALL bind that redirect to the browser that submitted the
+  `user_code` — via a `HttpOnly`, `Secure`, `SameSite=Lax` cookie carrying
+  the OIDC `state` (or a hash of it) — and SHALL refuse an activation
+  callback whose cookie is missing or does not match the `state` in the URL.
+  Without this the `user_code` step is bypassable: the attacker types their
+  own code in their own browser, captures the resulting Telegram
+  authorization URL, and forwards *that* to the victim, whose sign-in then
+  lands on the attacker's activation having never seen the code form.
+- WHEN an activation is resolved (`done` or `denied`), THE SYSTEM SHALL make
+  it unreachable from the browser while keeping it pollable by
+  `device_code` until its TTL expires, so the CLI can still read the outcome
+  and collect its `device_id`. A resolved activation SHALL NOT be reported to
+  `poll` as unknown.
 - WHEN the Telegram OIDC callback returns a verified identity whose
   `TelegramID` differs from the `telegram_id` the CLI claimed at `start`, THE
   SYSTEM SHALL mark the activation `denied` and SHALL NOT write, update, or

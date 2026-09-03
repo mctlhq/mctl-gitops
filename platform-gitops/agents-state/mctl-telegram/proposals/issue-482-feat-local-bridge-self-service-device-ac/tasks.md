@@ -2,10 +2,11 @@
 
 - [ ] 1. Add `localBridgeActivation` type and the three `Server` indexes
       (`activations` by device_code, `activationsByState`,
-      `activationsByUserCode`), the failed-submission rate limiter, and a
-      single `dropActivation(act)` helper that removes an activation from all
-      three indexes — eviction, resolution and `sweep` all go through it, so a
-      later index cannot be forgotten in two of three places. Plus
+      `activationsByUserCode`), the failed-submission rate limiter, and the
+      two removal helpers: `unindexActivation` (secondary indexes only, used
+      on resolution, so a finished activation stays pollable by `device_code`)
+      and `dropActivation` (all three, used only by eviction and `sweep`).
+      Getting these the wrong way round loses the CLI's result silently. Plus
       `MaxPendingActivations`, `ActivationTTL` and the limiter's
       budget/window on `oauth.Config` (defaulted in `oauth.New`
       alongside `MaxPendingAuth`/`MaxPendingEnable`) — DoD: package compiles;
@@ -41,7 +42,8 @@
       asserts the four rejection cases are byte-identical, so the page is not
       an oracle); the lookup goes through `activationsByUserCode` — a test
       asserts no scan of `s.activations` by pinning O(1) behaviour with a
-      large map; a
+      large map; the redirect sets the `HttpOnly`/`Secure`/`SameSite=Lax`
+      state-binding cookie (T16); a
       valid pending activation gets a fresh `nonce`/PKCE verifier/`oidcState`,
       is indexed into `activationsByState` after any superseded entry for that
       activation has been deleted, and the handler 302s to
@@ -68,8 +70,12 @@
       expect zero hits; that is the load-bearing property here (T2, T9).
 
 - [ ] 4b. Implement `handleActivateConsent`
-      (`POST /local-bridge/activate/consent`) (depends on 4) — DoD: validates
-      `consentToken` against the activation under `s.mu` and requires
+      (`POST /local-bridge/activate/consent`) (depends on 4) — DoD: resolves
+      the activation by the form's hidden `user_code` through
+      `activationsByUserCode` (O(1); never a scan for a matching
+      `consentToken`) and counts failures against the same IP limiter as the
+      code form; compares `consentToken` in constant time under `s.mu` and
+      requires
       `status == "awaiting_consent"`, so neither a replayed nor a
       cross-activation token is accepted; **still under `s.mu`** it flips the
       status to `resolving` and clears `consentToken` before releasing the
@@ -109,11 +115,13 @@
       templating approach.
 
 - [ ] 7. Wire the five new routes into `Server.Register(mux)` and extend
-      `Server.sweep` to purge expired activations (via `dropActivation`) and
+      `Server.sweep` to purge expired activations (via `dropActivation` —
+      resolution uses `unindexActivation` instead) and
       expired rate-limiter entries (depends on 2, 3, 5) — DoD: routes appear in
       `Register`'s doc-commented list next to the `enable_access` routes;
       `TestServer_Sweep`-style test (or a new one) asserts an
       artificially-aged activation is gone from all three maps after `sweep`,
+      and that a *resolved* one is still present in `activations`,
       matching the existing `enables`/`pending` sweep tests' shape.
 
 - [ ] 8. `cmd/local`: add the `activate` subcommand (depends on 5) — DoD:
@@ -192,21 +200,33 @@
       budget is spent, and discarding cookies/session does not reset it;
       unknown / expired / already-resolved / budget-exhausted rejections all
       render the identical message.
-- [ ] T13. **Double approval provisions once.** Two concurrent
+- [ ] T12. **Double approval provisions once.** Two concurrent
       `POST /activate/consent` with the same valid `consentToken` produce
       exactly one `telegram_accounts` row and one `local_bridge_devices` row;
       the second is refused. Run under `-race`.
-- [ ] T14. **Identity metadata survives the request boundary.** A completed
+- [ ] T13. **Identity metadata survives the request boundary.** A completed
       activation's `telegram_accounts` row carries the username and display
       name from the OIDC identity, not empty strings — the regression guard
       for splitting the callback from the consent handler.
-- [ ] T15. **No index leaks.** After eviction, resolution and `sweep`, none of
+- [ ] T14. **No index leaks.** After eviction, resolution and `sweep`, none of
       `activations`, `activationsByState`, `activationsByUserCode` retains an
       entry for the removed activation.
-- [ ] T12. **Race detector.** The whole `internal/oauth` activation suite runs
+- [ ] T15. **Race detector.** The whole `internal/oauth` activation suite runs
       under `go test -race` in CI, and at least one test drives `poll`
       concurrently with the browser leg and the sweeper against the same
       activation.
+- [ ] T16. **The OIDC leg is not transferable between browsers.** Submit the
+      `user_code` in browser A, capture the resulting Telegram authorization
+      URL, and replay the callback from browser B (no cookie, or a mismatched
+      one): the callback is refused, no consent page is shown, and nothing is
+      written. This is the login-CSRF regression guard — without it the
+      `user_code` step is decorative, since the attacker can type their own
+      code themselves and forward the URL. Mutation-validate it: drop the
+      cookie check and confirm it goes red.
+- [ ] T17. **A resolved activation stays pollable.** After a `done` (and
+      separately a `denied`) resolution, `poll` on the `device_code` still
+      returns the terminal status and, for `done`, the `device_id` — it does
+      not answer 400 "unknown". Only the TTL sweep removes it.
 
 ## Rollback
 
