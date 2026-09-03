@@ -10,7 +10,7 @@
 
 - [ ] 2. Implement `handleActivateStart` (`POST /api/local-bridge/activate/start`)
       (depends on 1) — DoD: validates `telegram_id > 0` and non-empty
-      `device_id`, returns 400 with a JSON `{"error": "..."}` body otherwise
+      `device_registration_key`, returns 400 with a JSON `{"error": "..."}` body otherwise
       (reuse the package's existing `writeAuthorizeError`-style helper or
       `bridge.writeJSONError`'s pattern); on success stores a `pending`
       activation keyed by a fresh `randomToken(32)` device_code and returns
@@ -40,7 +40,7 @@
       steps 1-7 exactly, in particular: zero `store.*` calls before the
       `identity.TelegramID == act.claimedTGID` check passes (T2 — grep the
       diff for this, it is the load-bearing property); `store.RegisterDevice`
-      is called with `act.deviceClientID` as the idempotency key (T1); a
+      is called with `act.deviceRegKey` as the idempotency key (T1); a
       `db.ErrAccountAlreadyActive` whose `GetAccountMode` is not
       `db.ModeLocal` denies with a "hosted account" reason and returns before
       any `RegisterDevice` call.
@@ -71,7 +71,7 @@
       matching the existing `enables`/`pending` sweep tests' shape.
 
 - [ ] 8. `cmd/local`: add the `activate` subcommand (depends on 5) — DoD:
-      generates/persists a local `device_id` under
+      generates/persists a local `device_registration_key` under
       `~/.config/mctl-telegram-local/` if one does not already exist (reused
       on subsequent `activate` runs, matching #481's idempotency-key
       contract); calls `/activate/start`, prints the verification URL,
@@ -92,7 +92,7 @@
 
 ## Tests
 
-- [ ] T1. Idempotent retry: calling `start` twice with the same `device_id`
+- [ ] T1. Idempotent retry: calling `start` twice with the same `device_registration_key`
       and completing the browser flow twice for the same Telegram identity
       results in exactly one `telegram_accounts` row and one
       `local_bridge_devices` row (mirrors
