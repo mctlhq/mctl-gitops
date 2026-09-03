@@ -1,5 +1,5 @@
-status: accepted
-updated_at: '2026-09-03T15:35:00Z'
+status: rejected
+updated_at: '2026-09-03T18:05:00Z'
 updated_by: mashkovd
 source:
   type: github_issue
@@ -8,3 +8,28 @@ source:
   url: https://github.com/mctlhq/mctl-telegram/issues/479
 control:
   requires_human_approval: true
+notes: >-
+  Operator decision: superseded, this proposal is split into sub-issues rather
+  than implemented as one PR. Its tasks.md is 13 implementation tasks plus 11
+  test tasks spanning a new database table, Telegram-OIDC device activation,
+  Ed25519 proof-of-possession refresh with revocation semantics, and two
+  rewritten design documents. A single implementer run produces a single PR for
+  all of it, which is not reviewable and, on failure, moves to needs-triage with
+  no automatic retry.
+
+  requirements.md, design.md and tasks.md are deliberately kept: they are the
+  contract as refined by mctl-gitops#1000, and each sub-issue cites the tasks.md
+  numbers it inherits. Only the status changes.
+
+  This also disarms a live DevLoopWorkflow. dev-loop-mctlhq-mctl-telegram-479
+  was started by the intake poller and ran issue-investigator at 2026-09-03
+  12:07Z (Argo mctl-agents-investigate-7f643514); it has been parked at its
+  approval wait ever since, because the earlier acceptance (mctl-gitops#1001)
+  edited this file by hand instead of signalling the workflow, and the workflow
+  gates on the signal, never on this file. cwft-mctl-agents-approve refuses any
+  status that is neither proposed nor accepted, so if that parked execution is
+  ever signalled it now ends without implementing, rather than firing the
+  24-task monolith.
+
+  rejected is the terminal operator-declined state and is preserved by
+  reconcile without a PR, which needs-triage is not.
