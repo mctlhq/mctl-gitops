@@ -65,7 +65,26 @@ jobs:
       team_name: ${{ inputs.team_name }}
       component_name: ${{ inputs.component_name }}
       build_id: rd-${{ github.run_id }}
-    secrets: inherit
+    # Not `inherit`. This job builds whichever repository `repo` names, from
+    # that repository's own Dockerfile, so anything in its environment is
+    # exposed to third-party build context by design. `inherit` passed all
+    # fourteen repository secrets - including KUBECONFIG, ARGOCD_TOKEN and
+    # HCLOUD_TOKEN, which are cluster and infrastructure credentials with no
+    # role in an image build (#1010).
+    #
+    # These four are every inheritable secret build-image references, and it
+    # declares them under `on: workflow_call:`. GITHUB_TOKEN is its fifth and
+    # is provided automatically - it is neither inheritable nor declarable.
+    #
+    # A name missing from this list does not fail loudly: build-image falls
+    # through to a weaker credential tier and logs which one it used. So a
+    # change here is verified by the tier lines in the build log, not by a
+    # green run - see the PR that introduced this block.
+    secrets:
+      APP_ID: ${{ secrets.APP_ID }}
+      APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
+      GHCR_PAT: ${{ secrets.GHCR_PAT }}
+      GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
 
   bump:
     needs: build
