@@ -1,0 +1,53 @@
+name: deploy-signal
+
+# Assert that every release this platform cut has actually been deployed.
+#
+# The outage in #1006 produced no job, no log and no failed step: release-deploy
+# was refused at startup, so nothing hanging off a step inside a run could have
+# noticed. Eleven hours of releases were cut, merged and believed shipped while
+# no image was built and no tag moved; it was found by checking GHCR by hand.
+#
+# Hence a schedule rather than a trigger on the deploy path: a check that only
+# runs when the pipeline runs cannot see the pipeline failing to run at all.
+# And hence comparing what the pipeline was supposed to produce — a released
+# version and the tag committed here — rather than whether a workflow was green.
+#
+# Not a gate. A failed run lands in the workflow_failed channel, the same way
+# argocd-freshness reports, which is the alert #1006 asked for.
+
+on:
+  schedule:
+    # Every 30 minutes. The grace period is 45, so a stalled deploy is reported
+    # within roughly an hour of the release rather than the next working day.
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+  # Also on changes to the checker or its coverage manifest, so a mistake in
+  # either is caught by the PR that makes it rather than by a 3am cron.
+  pull_request:
+    paths:
+      - .github/scripts/deploy-signal.py
+      - .github/deploy-signal.yaml
+      - .github/workflows/deploy-signal.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-signal-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Self-test the detector
+        # A checker that has never been seen to fail is not known to work.
+        run: python3 .github/scripts/deploy-signal.py --self-test
+
+      - name: Every release is deployed
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 .github/scripts/deploy-signal.py

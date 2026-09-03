@@ -1,0 +1,85 @@
+# Coverage manifest for .github/scripts/deploy-signal.py.
+#
+# Every values.yaml under platform-gitops/services/ that carries an image tag
+# must appear here exactly once. The checker fails when one is missing or when
+# an entry names a file that no longer exists, so adding a service forces a
+# decision about whether its deploys are watched — coverage cannot quietly
+# shrink, which is how the outage in #1006 stayed invisible for eleven hours.
+#
+# One of four kinds per service:
+#
+#   release_repo: <owner/name>  the deployed tag must equal that repo's latest
+#                               GitHub release, once the release is older than
+#                               the grace period
+#   tracks_main: true           deployed from main-<sha>, not from releases
+#   pinned_to: "<tag>"          deliberately held at a version; the pin itself
+#                               is asserted, so drifting off it also fires
+#   unmapped: <reason>          not watched, and why — counted and reported,
+#                               never silently skipped
+
+services:
+  # --- watched against a release ---
+  - path: platform-gitops/services/labs/mctl-telegram/values.yaml
+    release_repo: mctlhq/mctl-telegram
+  - path: platform-gitops/services/admins/mctl-web/values.yaml
+    release_repo: mctlhq/mctl-web
+  - path: platform-gitops/services/admins/mctl-docs/values.yaml
+    release_repo: mctlhq/mctl-docs
+  - path: platform-gitops/services/labs/mctl-academy/values.yaml
+    release_repo: mctlhq/mctl-academy
+  - path: platform-gitops/services/admins/mctl-agents-worker/values.yaml
+    release_repo: mctlhq/mctl-agents
+  - path: platform-gitops/services/admins/mctl-agents-worker-exec/values.yaml
+    release_repo: mctlhq/mctl-agents
+
+  # --- deployed from main, not from releases ---
+  - path: platform-gitops/services/labs/mctl-telegram-preview/values.yaml
+    tracks_main: true
+  - path: platform-gitops/services/labs/agent-worker-preview/values.yaml
+    tracks_main: true
+  - path: platform-gitops/services/admins/mctl-design/values.yaml
+    tracks_main: true
+    sha_only: true  # bare commit sha, no main- prefix
+
+  # --- deliberately held ---
+  - path: platform-gitops/services/ovk/mctl-academy/values.yaml
+    pinned_to: "0.1.0"
+    # The ovk tenant has never moved past 0.1.0 while labs is on 0.1.50.
+    # Whether that is deliberate is not recorded anywhere, so it is pinned
+    # here rather than declared healthy: if someone changes the deployed tag
+    # without deciding, this entry stops matching and the check fires.
+
+  # --- not watched ---
+  # These repositories publish no GitHub releases, so there is no release tag
+  # to compare a deployed tag against. Confirmed empty on 2026-09-03 via
+  # `gh api repos/mctlhq/<name>/releases` — the full list, which includes
+  # prereleases and drafts. Re-verify with that endpoint, not with
+  # /releases/latest: the latter answers only with a published, non-prerelease
+  # release, so it 404s for a repository that does release, just not stably. Mapping them needs
+  # the actual source repository and release convention for each, which is not
+  # recorded anywhere in this repository — guessing it would produce a check
+  # that fires on nothing.
+  - path: platform-gitops/services/admins/openclaw/values.yaml
+    unmapped: "mctlhq/mctl-openclaw publishes no GitHub releases"
+  - path: platform-gitops/services/labs/openclaw/values.yaml
+    unmapped: "mctlhq/mctl-openclaw publishes no GitHub releases"
+  - path: platform-gitops/services/ovk/openclaw/values.yaml
+    unmapped: "mctlhq/mctl-openclaw publishes no GitHub releases"
+  - path: platform-gitops/services/labs/claude-remote/values.yaml
+    unmapped: "mctlhq/mctl-claude-remote publishes no GitHub releases"
+  - path: platform-gitops/services/labs/genai-leader/values.yaml
+    unmapped: "no source repository recorded"
+  - path: platform-gitops/services/labs/instruments-proxy/values.yaml
+    unmapped: "no source repository recorded"
+  - path: platform-gitops/services/labs/kuptsi-app/values.yaml
+    unmapped: "no source repository recorded"
+  - path: platform-gitops/services/labs/mctl-loyalty/values.yaml
+    unmapped: "mctlhq/mctl-loyalty publishes no GitHub releases"
+  - path: platform-gitops/services/labs/mctl-pairdesk/values.yaml
+    unmapped: "mctlhq/mctl-pairdesk publishes no GitHub releases"
+  - path: platform-gitops/services/labs/payment-llm-pipelines/values.yaml
+    unmapped: "no source repository recorded"
+  - path: platform-gitops/services/labs/pelican-proxy/values.yaml
+    unmapped: "no source repository recorded"
+  - path: platform-gitops/services/labs/pfeifenpatenschaft-backend/values.yaml
+    unmapped: "no source repository recorded"
