@@ -71,8 +71,51 @@ spec:
 
           TEAM="$PARAM_TEAM"
           SERVICE="$PARAM_SERVICE"
-          DOMAIN="$PARAM_DOMAIN"
+          export DOMAIN="$PARAM_DOMAIN"
           BACKSTAGE_URL="http://backstage.backstage.svc.cluster.local:7007"
+
+          # ── Validate every parameter before it reaches yq, a path or a URL ──
+          # Two independent reasons, either of which is sufficient:
+          #
+          #  - yq's expression language is not data. A value that closes the
+          #    string literal continues the expression, and everything after
+          #    it runs against values.yaml with this pipeline's write access
+          #    — including keys nothing to do with ingress, such as the
+          #    container image. Every yq call below now passes its value
+          #    through the environment (strenv), so this validation is the
+          #    second layer rather than the only one; a future edit that
+          #    reintroduces interpolation does not silently reopen the hole.
+          #  - TEAM and SERVICE are interpolated into a filesystem path and a
+          #    Backstage query string, where "../" and "&" mean something.
+          #
+          # The domain pattern is the one wft-add-custom-domain already uses;
+          # keep the two in step. The team/service pattern is the Kubernetes
+          # name shape those values must already satisfy to name a directory
+          # and a Helm release.
+          # grep matches per LINE, so an anchored pattern alone is not a
+          # whole-string check: "ok.example.com\n<payload>" contains a line
+          # that matches and `grep -q` returns 0. Reject any multi-line value
+          # first. `printf %s` emits no trailing newline, so wc -l counts 0
+          # for a single-line value.
+          reject_multiline() {
+            if [ "$(printf '%s' "$2" | wc -l | tr -d ' ')" != "0" ]; then
+              echo "❌ ${1} must be a single line" >&2
+              exit 1
+            fi
+          }
+          reject_multiline domain "$DOMAIN"
+          echo "$DOMAIN" | grep -qE '^[a-z0-9]([a-z0-9.-]*[a-z0-9])?(\.[a-z]{2,})+$' || {
+            echo "❌ Invalid domain format: ${DOMAIN}"
+            exit 1
+          }
+          for pair in "team:${TEAM}" "service:${SERVICE}"; do
+            name="${pair#*:}"
+            reject_multiline "${pair%%:*}" "$name"
+            echo "$name" | grep -qE '^[a-z0-9]([a-z0-9-]*[a-z0-9])?$' || {
+              echo "❌ Invalid ${pair%%:*} name: ${name}"
+              exit 1
+            }
+          done
 
           # ── Set up SSH for git ─────────────────────────────────────────────
           mkdir -p ~/.ssh
@@ -114,19 +157,59 @@ spec:
 
           # ── Remove domain from ingress.hosts ───────────────────────────────
           echo "📝 Removing ${DOMAIN} from ingress.hosts..."
-          yq eval -i "del(.ingress.hosts[] | select(. == \"${DOMAIN}\"))" "$SVC_VALUES"
+          yq eval -i 'del(.ingress.hosts[] | select(. == strenv(DOMAIN)))' "$SVC_VALUES"
 
           # ── Remove domain from custom TLS hosts ────────────────────────────
-          CUSTOM_TLS_NAME="${SERVICE}-custom-tls"
-          yq eval -i "del((.ingress.tls[] | select(.secretName == \"${CUSTOM_TLS_NAME}\")).hosts[] | select(. == \"${DOMAIN}\"))" "$SVC_VALUES" 2>/dev/null || true
+          # Exported, not just assigned: strenv() reads the process
+          # environment, and a plain shell variable is not in it.
+          export CUSTOM_TLS_NAME="${SERVICE}-custom-tls"
+          yq eval -i 'del((.ingress.tls[] | select(.secretName == strenv(CUSTOM_TLS_NAME))).hosts[] | select(. == strenv(DOMAIN)))' "$SVC_VALUES" 2>/dev/null || true
 
           # If custom TLS has no more hosts, remove the entry entirely
-          REMAINING=$(yq eval "(.ingress.tls[] | select(.secretName == \"${CUSTOM_TLS_NAME}\")).hosts | length" "$SVC_VALUES" 2>/dev/null || echo "0")
-          if [ "$REMAINING" = "0" ]; then
-            yq eval -i "del(.ingress.tls[] | select(.secretName == \"${CUSTOM_TLS_NAME}\"))" "$SVC_VALUES" 2>/dev/null || true
-            # Also remove the Certificate resource
-            CERT_DIR="platform-gitops/services/${TEAM}/${SERVICE}"
-            rm -f "${CERT_DIR}/custom-domain-cert-"*.yaml 2>/dev/null || true
+          REMAINING=$(yq eval '(.ingress.tls[] | select(.secretName == strenv(CUSTOM_TLS_NAME))).hosts | length' "$SVC_VALUES" 2>/dev/null || echo "0")
+          CERT_DIR="platform-gitops/services/${TEAM}/${SERVICE}"
+          # Empty as well as "0". `|| echo "0"` only covers yq FAILING; when
+          # ingress.tls is absent entirely — the idempotent-rerun case — yq
+          # succeeds and returns an empty stream, so REMAINING is "". Treating
+          # that as "hosts remain" sent the else branch on to write a
+          # Certificate with an empty dnsNames list, which cert-manager
+          # rejects and ArgoCD reports as unhealthy.
+          if [ -z "$REMAINING" ] || [ "$REMAINING" = "0" ]; then
+            yq eval -i 'del(.ingress.tls[] | select(.secretName == strenv(CUSTOM_TLS_NAME)))' "$SVC_VALUES" 2>/dev/null || true
+            # Also remove the Certificate resource. The glob covers both the
+            # current single custom-domain-cert.yaml and the per-domain files
+            # older runs of wft-add-custom-domain left behind.
+            rm -f "${CERT_DIR}/custom-domain-cert"*.yaml 2>/dev/null || true
+          else
+            # Hosts remain, so the Certificate must be REGENERATED rather than
+            # left alone. Skipping it left the removed host in spec.dnsNames,
+            # and a Certificate renews as a unit: cert-manager's HTTP-01
+            # challenge for a name whose DNS is being decommissioned fails,
+            # and that one failure blocks renewal for every other domain on
+            # the service. The outage arrives weeks later, when the existing
+            # certificate expires, which makes it very hard to connect back to
+            # this removal.
+            CERT_FILE="${CERT_DIR}/custom-domain-cert.yaml"
+            for stale in "${CERT_DIR}"/custom-domain-cert-*.yaml; do
+              [ -e "$stale" ] && rm -f "$stale"
+            done
+            cat > "$CERT_FILE" << CERTEOF
+          apiVersion: cert-manager.io/v1
+          kind: Certificate
+          metadata:
+            name: ${CUSTOM_TLS_NAME}
+            namespace: ${TEAM}
+          spec:
+            secretName: ${CUSTOM_TLS_NAME}
+            issuerRef:
+              name: letsencrypt-http01
+              kind: ClusterIssuer
+            dnsNames:
+          CERTEOF
+            for h in $(yq eval '(.ingress.tls[] | select(.secretName == strenv(CUSTOM_TLS_NAME))).hosts[]' "$SVC_VALUES"); do
+              echo "      - ${h}" >> "$CERT_FILE"
+            done
+            echo "📝 Certificate regenerated for the ${REMAINING} remaining custom host(s)"
           fi
 
           # ── Commit and push ────────────────────────────────────────────────
@@ -172,7 +255,7 @@ spec:
           # fired at all.
           echo "📡 Notifying Backstage..."
           DOMAIN_DATA=$(curl -sSf -H "Authorization: Bearer ${BACKSTAGE_TOKEN}" "${BACKSTAGE_URL}/api/custom-domains/domains?team=${TEAM}&service=${SERVICE}")
-          DOMAIN_ID=$(echo "$DOMAIN_DATA" | yq -p=json ".domains[] | select(.domain == \"${DOMAIN}\") | .id" -)
+          DOMAIN_ID=$(echo "$DOMAIN_DATA" | yq -p=json '.domains[] | select(.domain == strenv(DOMAIN)) | .id' -)
           [ "$DOMAIN_ID" = "null" ] && DOMAIN_ID=""
           if [ -n "$DOMAIN_ID" ]; then
             # A DELETE failure stays a hard failure — the ingress change is

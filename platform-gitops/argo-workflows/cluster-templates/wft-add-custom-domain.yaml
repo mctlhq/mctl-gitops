@@ -85,16 +85,42 @@ spec:
 
           TEAM="$PARAM_TEAM"
           SERVICE="$PARAM_SERVICE"
-          DOMAIN="$PARAM_DOMAIN"
+          export DOMAIN="$PARAM_DOMAIN"
           AUTO_DOMAIN="${TEAM}-${SERVICE}.${PLATFORM_DOMAIN}"
           BACKSTAGE_URL="http://backstage.backstage.svc.cluster.local:7007"
 
           # ── 1. Validate domain format ─────────────────────────────────────
           echo "🔍 Validating domain: ${DOMAIN}"
+          # grep matches per LINE, so an anchored pattern alone is not a
+          # whole-string check: "ok.example.com\n<payload>" contains a line
+          # that matches and `grep -q` returns 0. Reject any multi-line value
+          # first. `printf %s` emits no trailing newline, so wc -l counts 0
+          # for a single-line value.
+          reject_multiline() {
+            if [ "$(printf '%s' "$2" | wc -l | tr -d ' ')" != "0" ]; then
+              echo "❌ ${1} must be a single line" >&2
+              exit 1
+            fi
+          }
+          reject_multiline domain "$DOMAIN"
           echo "$DOMAIN" | grep -qE '^[a-z0-9]([a-z0-9.-]*[a-z0-9])?(\.[a-z]{2,})+$' || {
             echo "❌ Invalid domain format: ${DOMAIN}"
             exit 1
           }
+          # TEAM and SERVICE were never validated, although SERVICE reaches yq
+          # through CUSTOM_TLS_NAME below and both name a filesystem path and
+          # a Backstage query string. Validating only the domain made this
+          # template look safe while leaving the same class of hole open one
+          # parameter over. Same pattern as wft-remove-custom-domain; keep the
+          # two in step.
+          for pair in "team:${TEAM}" "service:${SERVICE}"; do
+            name="${pair#*:}"
+            reject_multiline "${pair%%:*}" "$name"
+            echo "$name" | grep -qE '^[a-z0-9]([a-z0-9-]*[a-z0-9])?$' || {
+              echo "❌ Invalid ${pair%%:*} name: ${name}"
+              exit 1
+            }
+          done
           # Reject platform domains. PLATFORM_DOMAIN_ALT is optional (it is
           # empty since mctl.me was retired), and interpolating an empty value
           # straight into the alternation produces "\.(mctl\.ai|)$" — an empty
@@ -102,9 +128,14 @@ spec:
           # then fails the check and no custom domain can be added at all.
           # Build the pattern instead, and only add the alternation when there
           # is something to alternate with.
-          PLATFORM_PATTERN="\.${PLATFORM_DOMAIN//./\\.}$"
+          # (^|\.) rather than a required leading dot: the bare root
+          # (mctl.ai itself) is a platform domain too, and the dot-only form
+          # matched every subdomain while letting the root through. The DNS
+          # CNAME check downstream would still have caught it, but a
+          # validation rule that does not hold is not a rule.
+          PLATFORM_PATTERN="(^|\.)${PLATFORM_DOMAIN//./\\.}$"
           if [ -n "${PLATFORM_DOMAIN_ALT}" ]; then
-            PLATFORM_PATTERN="\.(${PLATFORM_DOMAIN//./\\.}|${PLATFORM_DOMAIN_ALT//./\\.})$"
+            PLATFORM_PATTERN="(^|\.)(${PLATFORM_DOMAIN//./\\.}|${PLATFORM_DOMAIN_ALT//./\\.})$"
           fi
           echo "$DOMAIN" | grep -qvE "$PLATFORM_PATTERN" || {
             echo "❌ Cannot add platform domain as custom: ${DOMAIN}"
@@ -172,7 +203,12 @@ spec:
           # exiting early would strand the domain record in pending forever.
           # Skip the git edit/push, but always fall through to the callback.
           ALREADY_PRESENT=false
-          if yq eval '.ingress.hosts[]' "$SVC_VALUES" 2>/dev/null | grep -qF "$DOMAIN"; then
+          # -x: whole-line, not substring. Without it, adding the root
+          # example.com against a service that already has api.example.com
+          # matched, so the git edit was skipped while Backstage was still
+          # told the domain was live — active in the record, unrouted in the
+          # ingress.
+          if yq eval '.ingress.hosts[]' "$SVC_VALUES" 2>/dev/null | grep -qFx "$DOMAIN"; then
             echo "ℹ️  Domain ${DOMAIN} already in ingress.hosts — skipping git edit, reconciling Backstage status"
             ALREADY_PRESENT=true
           fi
@@ -181,25 +217,42 @@ spec:
 
           # ── 7. Add domain to ingress.hosts ────────────────────────────────
           echo "📝 Adding ${DOMAIN} to ingress.hosts..."
-          yq eval -i ".ingress.hosts += [\"${DOMAIN}\"]" "$SVC_VALUES"
+          yq eval -i '.ingress.hosts += [strenv(DOMAIN)]' "$SVC_VALUES"
 
           # ── 8. Add TLS for custom domain with HTTP-01 issuer ──────────────
-          CUSTOM_TLS_NAME="${SERVICE}-custom-tls"
+          # Exported, not just assigned: strenv() reads the process
+          # environment, and a plain shell variable is not in it.
+          export CUSTOM_TLS_NAME="${SERVICE}-custom-tls"
           # Check if custom TLS entry already exists
-          EXISTING_TLS=$(yq eval ".ingress.tls[] | select(.secretName == \"${CUSTOM_TLS_NAME}\")" "$SVC_VALUES" 2>/dev/null)
+          EXISTING_TLS=$(yq eval '.ingress.tls[] | select(.secretName == strenv(CUSTOM_TLS_NAME))' "$SVC_VALUES" 2>/dev/null)
           if [ -z "$EXISTING_TLS" ]; then
             # Add a separate TLS entry for custom domains using HTTP-01
-            yq eval -i ".ingress.tls += [{\"secretName\": \"${CUSTOM_TLS_NAME}\", \"hosts\": [\"${DOMAIN}\"]}]" "$SVC_VALUES"
+            yq eval -i '.ingress.tls += [{"secretName": strenv(CUSTOM_TLS_NAME), "hosts": [strenv(DOMAIN)]}]' "$SVC_VALUES"
           else
             # Append domain to existing custom TLS entry
-            yq eval -i "(.ingress.tls[] | select(.secretName == \"${CUSTOM_TLS_NAME}\")).hosts += [\"${DOMAIN}\"]" "$SVC_VALUES"
+            yq eval -i '(.ingress.tls[] | select(.secretName == strenv(CUSTOM_TLS_NAME))).hosts += [strenv(DOMAIN)]' "$SVC_VALUES"
           fi
 
           # Use HTTP-01 issuer annotation for this ingress (cert-manager picks up all TLS hosts)
           # We need a separate Certificate resource or annotate differently
           # For simplicity, we add a Certificate resource for the custom domain
           CERT_DIR="platform-gitops/services/${TEAM}/${SERVICE}"
-          cat > "${CERT_DIR}/custom-domain-cert-${DOMAIN%%.*}.yaml" << CERTEOF
+          # ONE file, not one per domain. The manifest always lists every
+          # custom host and always declares the same metadata.name
+          # (${SERVICE}-custom-tls), so naming the file after the domain being
+          # added produced a second manifest declaring the same Certificate as
+          # soon as a service had two custom domains with different first
+          # labels — a duplicate resource that ArgoCD refuses to sync. The
+          # removal path's `rm -f custom-domain-cert-*.yaml` glob shows a
+          # single file was the intent all along.
+          CERT_FILE="${CERT_DIR}/custom-domain-cert.yaml"
+          # Sweep away any per-domain files a previous version of this
+          # template wrote, so the first add after this change converges
+          # instead of leaving the duplicate behind.
+          for stale in "${CERT_DIR}"/custom-domain-cert-*.yaml; do
+            [ -e "$stale" ] && rm -f "$stale"
+          done
+          cat > "$CERT_FILE" << CERTEOF
           apiVersion: cert-manager.io/v1
           kind: Certificate
           metadata:
@@ -214,8 +267,8 @@ spec:
           CERTEOF
 
           # Add all custom domain hosts to the Certificate
-          for h in $(yq eval "(.ingress.tls[] | select(.secretName == \"${CUSTOM_TLS_NAME}\")).hosts[]" "$SVC_VALUES"); do
-            echo "      - ${h}" >> "${CERT_DIR}/custom-domain-cert-${DOMAIN%%.*}.yaml"
+          for h in $(yq eval '(.ingress.tls[] | select(.secretName == strenv(CUSTOM_TLS_NAME))).hosts[]' "$SVC_VALUES"); do
+            echo "      - ${h}" >> "$CERT_FILE"
           done
 
           echo "✅ Custom domain TLS certificate configured"
@@ -270,7 +323,7 @@ spec:
           # yq failures (malformed JSON, bad expression) must fail the step
           # with yq's own stderr — not be swallowed into an empty DOMAIN_ID
           # that then reads as a misleading "domain not found".
-          DOMAIN_ID=$(echo "$DOMAIN_DATA" | yq -p=json ".domains[] | select(.domain == \"${DOMAIN}\") | .id" -)
+          DOMAIN_ID=$(echo "$DOMAIN_DATA" | yq -p=json '.domains[] | select(.domain == strenv(DOMAIN)) | .id' -)
           [ "$DOMAIN_ID" = "null" ] && DOMAIN_ID=""
           if [ -n "$DOMAIN_ID" ]; then
             if ! curl -sSf -X POST -H "Authorization: Bearer ${BACKSTAGE_TOKEN}" "${BACKSTAGE_URL}/api/custom-domains/domains/${DOMAIN_ID}/activate"; then
@@ -278,7 +331,7 @@ spec:
               # the ingress commit already on main. Only swallow the error
               # when the domain is in fact already active; anything else
               # (auth, outage) stays a hard failure.
-              STATUS=$(echo "$DOMAIN_DATA" | yq -p=json ".domains[] | select(.domain == \"${DOMAIN}\") | .status" -)
+              STATUS=$(echo "$DOMAIN_DATA" | yq -p=json '.domains[] | select(.domain == strenv(DOMAIN)) | .status' -)
               if [ "$STATUS" = "active" ]; then
                 echo "ℹ️  Activate call failed but domain is already active — treating as success"
               else
