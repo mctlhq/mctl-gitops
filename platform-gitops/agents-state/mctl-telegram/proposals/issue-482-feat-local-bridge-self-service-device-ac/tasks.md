@@ -1,8 +1,13 @@
 # Tasks: issue-482-feat-local-bridge-self-service-device-ac
 
-- [ ] 1. Add `localBridgeActivation` type and `Server.activations` /
-      `Server.activationsByState` maps, plus `MaxPendingActivations` and
-      `ActivationTTL` fields on `oauth.Config` (defaulted in `oauth.New`
+- [ ] 1. Add `localBridgeActivation` type and the three `Server` indexes
+      (`activations` by device_code, `activationsByState`,
+      `activationsByUserCode`), the failed-submission rate limiter, and a
+      single `dropActivation(act)` helper that removes an activation from all
+      three indexes — eviction, resolution and `sweep` all go through it, so a
+      later index cannot be forgotten in two of three places. Plus
+      `MaxPendingActivations`, `ActivationTTL` and the limiter's
+      budget/window on `oauth.Config` (defaulted in `oauth.New`
       alongside `MaxPendingAuth`/`MaxPendingEnable`) — DoD: package compiles;
       new fields have doc comments matching the style of `Server.enables` /
       `Config.MaxPendingEnable`; no behavior change yet (nothing populates or
@@ -13,11 +18,12 @@
       `device_registration_key`, returns 400 with a JSON `{"error": "..."}` body otherwise
       (reuse the package's existing `writeAuthorizeError`-style helper or
       `bridge.writeJSONError`'s pattern); on success stores a `pending`
-      activation keyed by a fresh `randomToken(32)` device_code and returns
-      `device_code`, `verification_uri`, `verification_uri_complete`,
-      `expires_in`, `interval` as JSON; enforces `MaxPendingActivations` with
-      oldest-eviction exactly like the existing `MaxPendingAuth`/
-      `MaxPendingEnable` blocks; unit tests cover the validation and the
+      activation keyed by a fresh `randomToken(32)` device_code, indexed by a
+      fresh `user_code`, and returns `device_code`, `user_code`,
+      `verification_uri`, `expires_in`, `interval` as JSON; enforces
+      `MaxPendingActivations` with oldest-eviction exactly like the existing
+      `MaxPendingAuth`/`MaxPendingEnable` blocks, evicting via
+      `dropActivation`; unit tests cover the validation and the
       shape of a successful response. The response carries `user_code` and a
       parameterless `verification_uri`, and **no `verification_uri_complete`** —
       grep the response struct and the handler for that name and for any
@@ -30,9 +36,12 @@
       DoD: the `GET` takes no query parameters, renders the `user_code` entry
       form, and makes no lookup, OIDC or store call; the `POST` resolves the
       submitted `user_code` under `s.mu` and, for unknown/expired/
-      already-resolved codes or an exhausted `codeAttempts` budget, re-renders
-      the form with one generic message (a table-driven test asserts the four
-      rejection cases are byte-identical, so the page is not an oracle); a
+      already-resolved codes, or a client IP whose failed-submission budget is
+      spent, re-renders the form with one generic message (a table-driven test
+      asserts the four rejection cases are byte-identical, so the page is not
+      an oracle); the lookup goes through `activationsByUserCode` — a test
+      asserts no scan of `s.activations` by pinning O(1) behaviour with a
+      large map; a
       valid pending activation gets a fresh `nonce`/PKCE verifier/`oidcState`,
       is indexed into `activationsByState` after any superseded entry for that
       activation has been deleted, and the handler 302s to
@@ -51,7 +60,10 @@
       suite unmodified and green); `finishActivation` follows design.md's
       steps 1-4 exactly and **makes no `store.*` call whatsoever** — on a
       verified identity that matches the claim it advances the activation to
-      `awaiting_consent`, records `verifiedTGID`, mints `consentToken`, and
+      `awaiting_consent`, records `act.verifiedIdentity` (the **whole** identity —
+      `Username` and display name are needed by the consent handler, which is
+      a separate request, and storing only the id would provision accounts
+      with empty metadata), mints `consentToken`, and
       renders the consent page. Grep the whole function for `store.` and
       expect zero hits; that is the load-bearing property here (T2, T9).
 
@@ -59,11 +71,16 @@
       (`POST /local-bridge/activate/consent`) (depends on 4) — DoD: validates
       `consentToken` against the activation under `s.mu` and requires
       `status == "awaiting_consent"`, so neither a replayed nor a
-      cross-activation token is accepted, and a second approval for an
-      already-`done` activation is a no-op rather than a second write; Deny
+      cross-activation token is accepted; **still under `s.mu`** it flips the
+      status to `resolving` and clears `consentToken` before releasing the
+      lock and making any store call, so a double-clicked Approve or two
+      concurrent POSTs with the same token produce exactly one provisioning
+      run (a store failure restores `awaiting_consent` with a fresh token);
+      Deny
       calls `denyActivation` and returns with no store call; the approve path
-      runs design.md's steps 5-8 — `EnsureUserByTelegramID(act.verifiedTGID,
-      ...)` (never the claimed id), `ProvisionLocalAccount`, then
+      runs design.md's steps 5-8 — `EnsureUserByTelegramID` and
+      `ProvisionLocalAccount` fed from `act.verifiedIdentity` (never the
+      claimed id, and never empty username/display name), then
       `RegisterDevice` with `act.deviceRegKey` as the idempotency key (T1); a
       `db.ErrAccountAlreadyActive` whose `GetAccountMode` is not
       `db.ModeLocal` denies with a "hosted account" reason and returns before
@@ -92,11 +109,11 @@
       templating approach.
 
 - [ ] 7. Wire the five new routes into `Server.Register(mux)` and extend
-      `Server.sweep` to purge expired entries from `activations` and
-      `activationsByState` (depends on 2, 3, 5) — DoD: routes appear in
+      `Server.sweep` to purge expired activations (via `dropActivation`) and
+      expired rate-limiter entries (depends on 2, 3, 5) — DoD: routes appear in
       `Register`'s doc-commented list next to the `enable_access` routes;
       `TestServer_Sweep`-style test (or a new one) asserts an
-      artificially-aged activation is gone from both maps after `sweep` runs,
+      artificially-aged activation is gone from all three maps after `sweep`,
       matching the existing `enables`/`pending` sweep tests' shape.
 
 - [ ] 8. `cmd/local`: add the `activate` subcommand (depends on 5) — DoD:
@@ -170,10 +187,22 @@
       empty, wrong, or another activation's `consentToken` writes nothing;
       approving twice with the correct token produces exactly one
       `local_bridge_devices` row.
-- [ ] T11. **`user_code` brute force is bounded.** Submitting wrong codes past
-      the attempt budget denies the activation (or refuses the session), and
+- [ ] T11. **`user_code` brute force is bounded server-side.** Wrong codes
+      from one client IP stop being processed once its failed-submission
+      budget is spent, and discarding cookies/session does not reset it;
       unknown / expired / already-resolved / budget-exhausted rejections all
       render the identical message.
+- [ ] T13. **Double approval provisions once.** Two concurrent
+      `POST /activate/consent` with the same valid `consentToken` produce
+      exactly one `telegram_accounts` row and one `local_bridge_devices` row;
+      the second is refused. Run under `-race`.
+- [ ] T14. **Identity metadata survives the request boundary.** A completed
+      activation's `telegram_accounts` row carries the username and display
+      name from the OIDC identity, not empty strings — the regression guard
+      for splitting the callback from the consent handler.
+- [ ] T15. **No index leaks.** After eviction, resolution and `sweep`, none of
+      `activations`, `activationsByState`, `activationsByUserCode` retains an
+      entry for the removed activation.
 - [ ] T12. **Race detector.** The whole `internal/oauth` activation suite runs
       under `go test -race` in CI, and at least one test drives `poll`
       concurrently with the browser leg and the sweeper against the same

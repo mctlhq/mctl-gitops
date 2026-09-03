@@ -78,10 +78,16 @@ have a phone and a CLI" to "I have a `telegram_accounts` row in local mode and a
 - IF the consent page is declined, or abandoned until the activation's TTL
   expires, THEN THE SYSTEM SHALL mark the activation `denied` and SHALL leave
   the database untouched.
-- THE SYSTEM SHALL enforce a bounded number of `user_code` submission
-  attempts per browser session and per activation, and SHALL mark an
-  activation `denied` once its attempt budget is exhausted, so that the short
-  code cannot be brute-forced within its TTL.
+- THE SYSTEM SHALL rate-limit **failed** `user_code` submissions server-side,
+  keyed by client IP, and SHALL reject further submissions from an exhausted
+  key with the same generic message it returns for a wrong code. The limit
+  SHALL NOT be a per-activation counter (a wrong guess matches no activation,
+  so there is nothing to decrement) nor a per-browser-session counter (an
+  attacker discards the session).
+- THE SYSTEM SHALL resolve a submitted `user_code` to its activation in
+  constant time, without scanning the set of pending activations, so that
+  repeated wrong guesses cannot become lock contention against unrelated
+  OAuth and poll traffic.
 - WHEN the Telegram OIDC callback returns a verified identity whose
   `TelegramID` differs from the `telegram_id` the CLI claimed at `start`, THE
   SYSTEM SHALL mark the activation `denied` and SHALL NOT write, update, or
@@ -143,8 +149,17 @@ have a phone and a CLI" to "I have a `telegram_accounts` row in local mode and a
   theoretical one.
 - THE SYSTEM SHALL resolve each activation at most once: a transition to
   `done` or `denied` SHALL be applied only if the activation is still
-  `pending` when the mutex is held, and a second browser leg arriving for an
+  unresolved when the mutex is held, and a second browser leg arriving for an
   already-resolved activation SHALL be refused without touching the database.
+- WHEN an approval is accepted, THE SYSTEM SHALL claim the activation — mark
+  it in-progress and invalidate the consent token — while still holding the
+  mutex, before performing any database call, so that a double-clicked
+  approval or a concurrently replayed token results in exactly one
+  provisioning run and one device row.
+- THE SYSTEM SHALL carry the whole OIDC-verified identity on the activation,
+  not merely the verified Telegram id, because the approval arrives as a
+  separate request; an account SHALL NOT be provisioned with empty username
+  or display name because those fields were left behind in the callback.
 - WHEN a browser leg is started for an activation that already has an
   in-flight OIDC `state`, THE SYSTEM SHALL either refuse the new leg or remove
   the superseded `activationsByState` entry before recording the new one, so
