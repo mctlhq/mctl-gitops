@@ -193,10 +193,26 @@ config field): validates `telegram_id > 0` and `device_registration_key != ""`, 
 
 **`GET /local-bridge/activate`** (unauthenticated browser page): takes **no
 parameters** and renders a form asking for the `user_code`. It performs no
-lookup, no OIDC round trip and no store call.
+lookup, no OIDC round trip and no store call. It does mint a CSRF token
+(`randomToken(32)`), set it in a short-lived `HttpOnly`, `Secure`,
+`SameSite=Lax`, `Path=/` cookie, and embed the same value as a hidden field —
+the double-submit pattern.
+
+**The form POST must be CSRF-protected, or the `user_code` step is bypassable
+without the user typing anything.** An attacker's page can hold a hidden form
+that auto-submits *the attacker's own* `user_code` cross-site. The victim's
+browser posts it, receives the state cookie, follows the 302 into Telegram
+OIDC, signs in, and lands on the consent page for the attacker's device —
+manual code entry never happened. That leaves the consent screen as the only
+barrier, which this design states explicitly it must not be. `SameSite=Lax`
+alone is not sufficient: it is a defence-in-depth default, not a guarantee
+across every browser and top-level-navigation form post, and the cost of the
+double-submit check here is one comparison.
 
 **`POST /local-bridge/activate`** (the form target): looks up the activation
-in `activationsByUserCode` under `s.mu`. Unknown, expired or already-resolved
+in `activationsByUserCode` under `s.mu` — but only after the double-submit
+CSRF check above passes; a missing or mismatched token is refused before any
+lookup, and sets no state cookie. Unknown, expired or already-resolved
 re-renders the form with a single generic "that code is not valid" message
 (no oracle distinguishing the three).
 
@@ -322,8 +338,12 @@ behavioral change to existing logins. `finishActivation` (new function) does:
    POSTs replaying the same token, a no-op for the second one instead of two
    racing provisioning runs. On a store failure the status goes back to
    `awaiting_consent` (with a fresh `consentToken`) so the user can retry.
-   A Deny, or TTL expiry with no submission, calls `denyActivation` and
-   returns; nothing is written. Everything from here on runs in this handler,
+   An explicit Deny calls `denyActivation` and
+   returns; nothing is written. An *abandoned* consent page is not a denial:
+   the activation stays `awaiting_consent` until the TTL sweep removes it, and
+   `poll` then reports expiry rather than `denied`, so the CLI can tell "the
+   user said no" from "nobody finished in time". Nothing is written either
+   way. Everything from here on runs in this handler,
    not in the OIDC callback:
 
 5. `store.EnsureUserByTelegramID(ctx, id.TelegramID, id.Username, ...)` — where

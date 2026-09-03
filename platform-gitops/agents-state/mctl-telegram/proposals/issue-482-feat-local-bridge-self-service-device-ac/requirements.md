@@ -75,9 +75,13 @@ have a phone and a CLI" to "I have a `telegram_accounts` row in local mode and a
   Completing the Telegram sign-in SHALL NOT by itself constitute approval:
   proving who you are and agreeing to register someone's device on your
   account are two separate acts, and only the second one authorises a write.
-- IF the consent page is declined, or abandoned until the activation's TTL
-  expires, THEN THE SYSTEM SHALL mark the activation `denied` and SHALL leave
-  the database untouched.
+- IF the consent page is declined, THEN THE SYSTEM SHALL mark the activation
+  `denied` and SHALL leave the database untouched.
+- IF the consent page is abandoned, THEN the activation SHALL simply reach its
+  TTL and be treated as expired by the criterion below — `poll` reports
+  expiry, not `denied`. Abandonment is not a decision, and nothing is written
+  either way; the two are distinguished so the CLI can tell "the user said no"
+  from "nobody finished in time".
 - THE SYSTEM SHALL rate-limit **failed** `user_code` submissions server-side,
   keyed by client IP, and SHALL reject further submissions from an exhausted
   key with the same generic message it returns for a wrong code. The limit

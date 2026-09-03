@@ -35,8 +35,11 @@
 - [ ] 3. Implement `handleActivateForm` (`GET /local-bridge/activate`) and
       `handleActivateVerify` (`POST /local-bridge/activate`) (depends on 2) —
       DoD: the `GET` takes no query parameters, renders the `user_code` entry
-      form, and makes no lookup, OIDC or store call; the `POST` resolves the
-      submitted `user_code` under `s.mu` and, for unknown/expired/
+      form plus a double-submit CSRF token (hidden field + short-lived
+      cookie), and makes no lookup, OIDC or store call; the `POST` resolves the
+      submitted `user_code` under `s.mu` — refusing outright, before any
+      lookup and without setting the state cookie, when the CSRF token is
+      missing or does not match the cookie (T20) — and, for unknown/expired/
       already-resolved codes, or a client IP whose failed-submission budget is
       spent, re-renders the form with one generic message (a table-driven test
       asserts the four rejection cases are byte-identical, so the page is not
@@ -110,7 +113,8 @@
       DoD: the consent page names the device label and the signed-in Telegram
       account, shows the `user_code` so the user can check it against their
       own terminal, and offers Approve and Deny as separate POST actions
-      carrying `consentToken`; no page embeds `device_code` or `user_code` in
+      carrying `consentToken` plus the `user_code` as a hidden field (the
+      handler's O(1) lookup key); no page embeds `device_code` or `user_code` in
       a link or a redirect target. Denied-page copy for "identity
       mismatch" and "hosted account" does not reveal internal error details
       (matches the generic-copy requirement in design.md's platform-impact
@@ -231,6 +235,23 @@
       separately a `denied`) resolution, `poll` on the `device_code` still
       returns the terminal status and, for `done`, the `device_id` — it does
       not answer 400 "unknown". Only the TTL sweep removes it.
+- [ ] T18. **The state cookie actually reaches the callback.** Drive
+      `POST /local-bridge/activate` and then `/oauth/telegram/callback`
+      through one `http.Client` with a `CookieJar`, asserting the activation
+      is accepted. This is the guard against scoping the cookie to a path the
+      callback never matches — which would reject every legitimate activation
+      while still reading like a working defence. Assert the cookie is deleted
+      afterwards. Mutation-validate by narrowing `Path`: the test must go red.
+- [ ] T19. **Rate-limit keying survives the ingress.** Two requests arriving
+      from the same trusted-proxy peer with different `X-Forwarded-For` chains
+      get separate budgets; a client rotating a spoofed `X-Forwarded-For`
+      beyond the trusted boundary does not reset its own budget. Covers both
+      the `user_code` form and the consent endpoint.
+- [ ] T20. **The code form is not cross-site submittable.** A
+      `POST /local-bridge/activate` carrying a valid `user_code` but no CSRF
+      token, or one that does not match the form cookie, is refused before any
+      OIDC redirect and sets no state cookie. Mutation-validate: drop the CSRF
+      check and confirm it goes red.
 
 ## Rollback
 
