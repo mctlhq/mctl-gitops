@@ -15,7 +15,7 @@ metadata:
   name: implementer-default
   owner: platform
 spec:
-  version: "1.0.0"
+  version: "1.1.0"
   modelPolicyRef:
     task: service_agent
     compatibility: ">=1.0.0 <2.0.0"

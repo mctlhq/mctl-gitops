@@ -27,10 +27,13 @@ spec:
     profileCompatibility: ">=1.0.0 <2.0.0"
   profile:
     name: implementer-default
-    version: "1.0.0"
-  bindingRevision: 13
-  previousBindingRevision: 12
+    version: "1.1.0"
+  bindingRevision: 14
+  previousBindingRevision: 13
   history:
+    - bindingRevision: 13
+      definition: {name: implementer, version: "3"}
+      profile: {name: implementer-default, version: "1.0.0"}
     - bindingRevision: 11
       definition: {name: implementer, version: "2"}
       profile: {name: implementer-default, version: "1.0.0"}
