@@ -96,7 +96,8 @@ activationsByState map[string]*localBridgeActivation // keyed by the Telegram-le
 type localBridgeActivation struct {
     deviceCode     string
     claimedTGID    int64
-    deviceClientID string // CLI-supplied device id; becomes RegisterDevice's idempotencyKey
+    deviceRegKey   string // CLI-supplied device_registration_key; ONLY ever RegisterDevice's idempotencyKey.
+                          // Never the registry device_id -- that is server-generated and lives in resultDeviceID.
     deviceLabel    string
     createdAt      time.Time
 
@@ -112,7 +113,7 @@ type localBridgeActivation struct {
 
 **`POST /api/local-bridge/activate/start`** (unauthenticated, mirrors
 `handleAuthorize`'s cap/evict pattern using a new `MaxPendingActivations`
-config field): validates `telegram_id > 0` and `device_id != ""`, mints
+config field): validates `telegram_id > 0` and `device_registration_key != ""`, mints
 `device_code := randomToken(32)`, stores a `pending`-status
 `localBridgeActivation`, returns:
 ```json
@@ -162,14 +163,15 @@ behavioral change to existing logins. `finishActivation` (new function) does:
    - `nil` → brand-new local account, continue.
    - `errors.Is(err, db.ErrAccountAlreadyActive)` → `store.GetAccountMode(ctx, uid)`; if not `db.ModeLocal`, `denyActivation(act, "hosted account")` and render — no `local_bridge_devices` write follows. If it *is* `db.ModeLocal`, this is an idempotent retry (T1): fall through without erroring.
    - any other error → internal error page, activation left `pending` so the CLI's poll keeps returning `pending` until TTL rather than falsely reporting `denied` for a transient DB error.
-6. `store.RegisterDevice(ctx, uid, act.deviceLabel, act.deviceClientID)` — `act.deviceClientID` (the CLI's own locally-learned device id) is passed as the idempotency key, so a second `start`+browser-approve for the same device on the same account collapses onto the same `local_bridge_devices` row (T1), reusing #481's existing `(user_id, idempotency_key)` uniqueness rather than reimplementing idempotency here.
+6. `store.RegisterDevice(ctx, uid, act.deviceLabel, act.deviceRegKey)` — `act.deviceRegKey` (the CLI-supplied `device_registration_key`, never a device id) is passed as the idempotency key, so a second `start`+browser-approve for the same device on the same account collapses onto the same `local_bridge_devices` row (T1), reusing #481's existing `(user_id, idempotency_key)` uniqueness rather than reimplementing idempotency here.
 7. Mark `act.status = "done"`, `act.resultDeviceID = deviceID` under `s.mu`, audit via `store.LogToolCall(ctx, uid, "local_bridge_activate", "", "ok", "", "")` (same audit call the rest of the package already uses), render a "you can close this tab" success page.
 
 **`POST /api/local-bridge/activate/poll`** (unauthenticated): looks up
 `s.activations[device_code]`; unknown/expired → HTTP 400 (a distinct error
 shape so the CLI can tell "give up and restart" from "keep polling"); else
-returns `{"status": act.status}` plus `reason` when `denied` or `device_id`
-(no other credential) when `done`.
+returns `{"status": act.status}` plus `reason` when `denied` or the server-generated registry
+`device_id` from `act.resultDeviceID` (no other credential) when `done` --
+never the CLI's `device_registration_key`.
 
 **Sweeping**: extend the existing `Server.sweep` (`server.go:592-631`, already
 run by `StartSweeper` on a 1-minute ticker) with a loop over `s.activations`
@@ -195,10 +197,10 @@ No change to `cmd/server/main.go` beyond these being covered by the existing
 Out of this proposal's core server work but needed for the feature to be
 reachable end-to-end: a new `activate` subcommand (alongside `init`, `login`,
 `connect`, `daemon`) that (a) generates or loads a persistent local
-`device_id` (a random opaque string written under
+`device_registration_key` (a random opaque string written under
 `~/.config/mctl-telegram-local/`, analogous to how `init` already persists
 `config.json`), (b) POSTs `/api/local-bridge/activate/start` with the
-Telegram id the user types in and that `device_id`, (c) prints the
+Telegram id the user types in and that key, (c) prints the
 `verification_uri_complete` for the user to open, (d) polls
 `/api/local-bridge/activate/poll` at the returned `interval` until `denied`
 (print the reason, exit non-zero) or `done` (print success + a reminder that

@@ -41,7 +41,7 @@ have a phone and a CLI" to "I have a `telegram_accounts` row in local mode and a
 
 ## Acceptance criteria (EARS)
 - WHEN a client calls `POST /api/local-bridge/activate/start` with a claimed
-  `telegram_id` and a `device_id`, and no bearer token, THE SYSTEM SHALL
+  `telegram_id` and a `device_registration_key`, and no bearer token, THE SYSTEM SHALL
   accept the request and return a `device_code`, a `verification_uri` (and a
   `verification_uri_complete` that embeds the code), an `expires_in`, and a
   poll `interval`, without requiring any worker token, bridge token, hosted
@@ -65,11 +65,19 @@ have a phone and a CLI" to "I have a `telegram_accounts` row in local mode and a
   `telegram_accounts` row with `mode='local'`, `session_encrypted=NULL`, and
   `send_enabled=false`, and exactly one `local_bridge_devices` row for that
   user.
-- WHEN the same `device_id` is used to retry `start` after a first activation
-  already completed (or after a network failure before the CLI learned the
-  outcome) for the same Telegram identity, THE SYSTEM SHALL NOT create a
+- WHEN the same `device_registration_key` is used to retry `start` after a first
+  activation already completed (or after a network failure before the CLI learned
+  the outcome) for the same Telegram identity, THE SYSTEM SHALL NOT create a
   second `telegram_accounts` row or a second `local_bridge_devices` row for
-  that device — the retry resolves to the same rows.
+  that device — the retry resolves to the same rows, and `poll` returns the
+  same `device_id` as the first activation.
+- THE SYSTEM SHALL treat `device_registration_key` and `device_id` as two
+  distinct values that are never interchangeable: `device_registration_key` is
+  chosen by the CLI and is only ever `RegisterDevice`'s idempotency key, while
+  `device_id` is the server-generated registry identifier (`dev_<32 hex>`,
+  minted inside `RegisterDevice` from `crypto/rand`) that `poll` returns. No
+  request field SHALL be named `device_id`, and no response SHALL echo the
+  client's key back under that name.
 - WHEN a client calls `POST /api/local-bridge/activate/poll` with a
   `device_code` whose activation has not yet reached a browser outcome, THE
   SYSTEM SHALL respond `{"status":"pending"}`.
@@ -79,9 +87,12 @@ have a phone and a CLI" to "I have a `telegram_accounts` row in local mode and a
   a way that would help an attacker fingerprint valid `telegram_id`s beyond
   what the hosted/local distinction already exposes.
 - WHEN a client polls a `device_code` whose activation completed, THE SYSTEM
-  SHALL respond `{"status":"done", "device_id": ...}` and SHALL NOT include
+  SHALL respond `{"status":"done", "device_id": ...}` where `device_id` is the
+  server-generated registry identifier returned by `Store.RegisterDevice` — not
+  the `device_registration_key` the CLI supplied — and SHALL NOT include
   any bearer token, worker token, or other credential capable of sending a
-  message (out of scope; see below).
+  message (out of scope; see below). This is the value the CLI persists and the
+  value issue #483 binds credentials and proof-of-possession refresh to.
 - WHILE `local-bridge/activate/start` has not been followed by a matching
   browser approval, THE SYSTEM SHALL leave `send_enabled=false` and
   `session_encrypted=NULL` for the account (no code path in this proposal
@@ -123,11 +134,15 @@ have a phone and a CLI" to "I have a `telegram_accounts` row in local mode and a
 - **Device public key.** The issue's scope line says the CLI starts activation
   with "a device id / public key". `local_bridge_devices` (issue #481) has no
   public-key column, and no Definition-of-Done item in #482 requires verifying
-  a signature anywhere in this flow. Interpretation taken here: `device_id` is
-  an opaque, CLI-chosen local identifier reused verbatim as the
-  `RegisterDevice` idempotency key (so a retried `start` collapses onto the
-  same device row); any public-key/challenge-response binding is deferred to
-  a later issue. Flagged rather than silently dropped.
+  a signature anywhere in this flow. **Resolved by the operator:** the
+  CLI-supplied value is an opaque idempotency key and is named
+  `device_registration_key` on the wire, *not* `device_id` — reusing that name
+  for two different values would hand issue #484's CLI two candidates for "the
+  device id" to persist, and #483 binds proof-of-possession to the registry id
+  specifically. The registry `device_id` stays server-generated, as
+  `RegisterDevice` already implements it on main. Any public-key /
+  challenge-response binding is deferred to #483, which also adds the
+  public-key column (`addColumnIfMissing`); nothing here verifies a signature.
 - **Redirect URI reuse.** `telegramoidc.Authenticator.AuthCodeURL` always
   redirects back to the single `RedirectURL` baked into the `telegramoidc.Client`
   at boot (`TELEGRAM_OIDC_REDIRECT_URL` today points at
