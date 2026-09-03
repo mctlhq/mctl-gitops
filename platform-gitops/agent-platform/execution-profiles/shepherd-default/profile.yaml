@@ -30,7 +30,11 @@ metadata:
 spec:
   version: "1.0.0"
   modelPolicyRef:
-    task: shepherd
+    # `shepherd` was never a model-policy task either -- run_shepherd.py uses
+    # SHEPHERD_MODEL, which config/settings.py resolves from the
+    # `review_findings_normalize` task. Same defect as the investigator
+    # profile, same PR.
+    task: review_findings_normalize
     compatibility: ">=1.0.0 <2.0.0"
   skills: []
   tools:

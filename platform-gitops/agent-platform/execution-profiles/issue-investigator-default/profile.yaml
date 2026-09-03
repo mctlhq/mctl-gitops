@@ -31,7 +31,14 @@ metadata:
 spec:
   version: "1.0.0"
   modelPolicyRef:
-    task: issue_investigator
+    # The task key config/model-policy.yaml in mctl-agents actually defines.
+    # This said `issue_investigator` until 2026-09-03, which is not a task
+    # that exists: run_issue_investigator.py resolves its model as
+    # `INVESTIGATOR_MODEL = os.getenv("ISSUE_INVESTIGATOR_MODEL",
+    # SERVICE_AGENT_MODEL)`, i.e. the `service_agent` task. resolve_model()
+    # raises ModelPolicyError on an unknown key, so the resolver would have
+    # failed closed the moment it read this file (mctl-agents#277 step 4).
+    task: service_agent
     compatibility: ">=1.0.0 <2.0.0"
   skills: []
   tools:
