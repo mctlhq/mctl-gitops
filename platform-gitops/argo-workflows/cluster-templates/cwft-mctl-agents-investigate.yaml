@@ -281,6 +281,24 @@ spec:
           # agents/<svc>/; run_issue_investigator reads STATE_DIR directly.
           - name: STATE_DIR
             value: /workdir/mctl-gitops/platform-gitops/agents-state
+          # Where orchestrator/resolver.py reads the agent-platform catalog
+          # (execution-profiles/ and releases/) under
+          # ISSUE_INVESTIGATOR_RESOLVER_MODE=declarative. Same clone STATE_DIR
+          # already points into, so this adds no volume and no new trust
+          # boundary -- only a path.
+          #
+          # It must be set explicitly: the resolver's fallback is a SIBLING of
+          # its own repo root, which is /app in the image, so the default
+          # would resolve to /mctl-gitops/platform-gitops and find nothing.
+          # Until mctl-agents#277 step 4 the resolver read a fixture baked
+          # into the image at tests/fixtures/resolver/, which is why no path
+          # was needed here before.
+          #
+          # Inert until that step ships AND the mode is switched off its
+          # `legacy` default -- this is the path being in place first, not an
+          # activation.
+          - name: MCTL_GITOPS_ROOT
+            value: /workdir/mctl-gitops/platform-gitops
           # Redirect Python's tempfile.gettempdir() onto the PVC so the
           # target-repo clone lands in PVC-backed storage.
           - name: TMPDIR
