@@ -369,6 +369,38 @@ spec:
             esac
           done
 
+          # creator_user_id is the most exposed of the free-text fields
+          # and was missed by the loop above (claude P1 on gitops#993):
+          # it is spliced into the members block UNQUOTED —
+          #     - userId: <value>
+          # — so it needs no double quote to break out. A bare newline
+          # ends the scalar and the next line is a sibling key of the
+          # tenant document ArgoCD applies. It is an identifier, not
+          # prose, so it gets a grammar rather than a character ban.
+          if [ -n "$CREATOR_USER_ID" ]; then
+            case "$CREATOR_USER_ID" in
+              *[!A-Za-z0-9._@-]* )
+                echo "❌ creator_user_id must match [A-Za-z0-9._@-]; got: ${CREATOR_USER_ID}" >&2
+                exit 1
+                ;;
+            esac
+          fi
+
+          # The five quota values land in quoted YAML scalars exactly like
+          # displayName/description/contactEmail, and carry no Pattern
+          # either (claude P2 on gitops#993). They are Kubernetes
+          # quantities — a digit followed by digits, a decimal point or a
+          # unit suffix — so, again, a grammar rather than a character ban:
+          # a value like  1" \n  admin: true  is not a quantity at all.
+          for value in "$CPU_REQ" "$CPU_LIM" "$MEM_REQ" "$MEM_LIM" "$PODS"; do
+            case "$value" in
+              "" | [!0-9]* | *[!0-9A-Za-z.]* )
+                echo "❌ quota values must be Kubernetes quantities (e.g. 4, 500m, 8Gi); got: ${value}" >&2
+                exit 1
+                ;;
+            esac
+          done
+
           # Emitted unquoted as a YAML boolean below, so it must be exactly
           # true or false — the registry Enum says so, and this asserts it
           # rather than trusting a second repository.
