@@ -1,5 +1,5 @@
 # ExecutionProfile for implementer (ADR 007). Preserves today's effective
-# values: $20.00 budget and 2400s timeout are the production
+# values: $20.00 budget and 5400s timeout are the production
 # cwft-mctl-agents-implement.yaml overrides (IMPLEMENTER_BUDGET_USD /
 # IMPLEMENTER_TIMEOUT_SECONDS), not the orchestrator/options.py Python
 # defaults ($3 / 900s) -- see requirements.md's "Migration is
@@ -45,7 +45,12 @@ spec:
       - target-repository-branch
       - pull-request-create
   budgetUsd: 20.00
-  timeoutSeconds: 2400
+  # Raised 2400 -> 5400 on 2026-09-03: 2400 killed mctl-telegram issue-482
+  # with zero output. Must stay equal to cwft-mctl-agents-implement.yaml's
+  # IMPLEMENTER_TIMEOUT_SECONDS -- validate-agent-platform.py compares the
+  # two and fails CI on drift -- and under policy.yaml's
+  # maxTimeoutSeconds: 7200 ceiling.
+  timeoutSeconds: 5400
   runtime:
     entrypoint: orchestrator.run_implementer:implement
     # build_implementer_options until 2026-09-02, which does not exist: the
