@@ -33,12 +33,17 @@
       "properties": {
         "sourceManifest": {
           "type": "object",
-          "required": ["repo", "path", "gitSha"],
+          "required": ["repo", "path", "gitSha", "contentHash"],
           "additionalProperties": false,
           "properties": {
             "repo": { "type": "string", "minLength": 1 },
             "path": { "type": "string", "minLength": 1 },
-            "gitSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" }
+            "gitSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+            "contentHash": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "description": "sha256 of the AgentDefinition file at `path`, as committed. This PINS the definition half of the binding: mctl-agents' resolver recomputes it on every resolution and fails closed when the file has drifted out from under this binding. Without it the definition floats -- the profile half is pinned by profile.version, but agent.yaml could be edited and resolved silently, which is not an atomic binding. Distinct from gitSha, which names a commit nothing can verify from inside a container with no .git."
+            }
           }
         },
         "bindingSource": {

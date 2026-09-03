@@ -1,0 +1,42 @@
+apiVersion: agents.mctl.ai/v1alpha2
+kind: ExecutionProfile
+metadata:
+  name: valid-example
+  owner: platform
+spec:
+  version: "1.0.0"
+  modelPolicyRef:
+    task: service_agent
+    # Trailing text between comparators: findall would skip it silently and
+    # validate this profile green against a constraint nobody wrote.
+    compatibility: ">=1.0.0 GARBAGE <2.0.0"
+  skills: []
+  tools:
+    - Read
+    - Grep
+  policyRef: scoped-proposal-authoring
+  permissions:
+    repository:
+      read: true
+      branchCreate: false
+      commit: false
+      pullRequestCreate: false
+      merge: false
+    kubernetes: none
+    network: approved-providers-only
+    mutationScopes:
+      - proposal-directory-write
+  budgetUsd: 3.00
+  timeoutSeconds: 900
+  runtime:
+    entrypoint: orchestrator.run_example:main
+    optionsBuilder: orchestrator.options:build_example_options
+    sandbox:
+      backend: argo
+      clusterWorkflowTemplate: mctl-agents-investigate
+      approved: true
+  approval:
+    requiredBefore: []
+  evidence:
+    required:
+      - proposal

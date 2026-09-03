@@ -14,6 +14,25 @@ spec:
     repo: mctlhq/mctl-agents
     path: agents/_manifests/issue-investigator/agent.yaml
     gitSha: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+    # sha256 of agents/_manifests/issue-investigator/agent.yaml at the commit
+    # this binding was written against. THIS is what pins the definition
+    # half: mctl-agents' resolver recomputes it every resolution and fails
+    # closed on drift.
+    #
+    # It exists because mctl-agents#291 found the definition floating. The
+    # fixture that catalog replaced pinned both halves by content hash; the
+    # catalog pinned only the profile (profile.version), and
+    # definition.version is "1" -- a registry number that names no bytes. So
+    # agent.yaml could be edited and resolved silently, which is not an
+    # atomic binding. Found independently by both PR reviewers as a P1.
+    #
+    # gitSha cannot do this job: nothing can verify a commit from inside a
+    # container with no .git, and the value above is a placeholder.
+    #
+    # Cost, stated plainly: editing agent.yaml now requires a mctl-gitops PR
+    # to re-pin. That is the atomic-binding discipline, not an accident of
+    # it.
+    contentHash: "sha256:5d021d9b64b053fee2187688b8f240c9ee18f400838d8733482c93c279602f1f"
   bindingSource: compatibility-fixture
   promotable: false
   registryLifecycle:
@@ -26,9 +45,12 @@ spec:
   profile:
     name: issue-investigator-default
     version: "1.1.0"
-  bindingRevision: 7
-  previousBindingRevision: 6
+  bindingRevision: 8
+  previousBindingRevision: 7
   history:
+    - bindingRevision: 7
+      definition: {name: issue-investigator, version: "1"}
+      profile: {name: issue-investigator-default, version: "1.1.0"}
     - bindingRevision: 6
       definition: {name: issue-investigator, version: "1"}
       profile: {name: issue-investigator-default, version: "1.0.0"}

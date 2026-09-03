@@ -4,11 +4,13 @@ metadata:
   agent: rollback-example
   environment: shadow
 spec:
+  # No contentHash: the definition half of this binding is unpinned, so
+  # agent.yaml could be edited and resolved silently. An OPTIONAL pin is
+  # not a gate -- this fixture is what proves the schema requires it.
   sourceManifest:
     repo: mctlhq/mctl-agents
     path: agents/_manifests/rollback-example/agent.yaml
     gitSha: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
-    contentHash: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
   bindingSource: compatibility-fixture
   promotable: false
   registryLifecycle:
