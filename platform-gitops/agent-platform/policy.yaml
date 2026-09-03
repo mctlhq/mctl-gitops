@@ -67,10 +67,19 @@ spec:
   # which task keys mctl-gitops profiles are allowed to point at, so a typo
   # fails closed here instead of resolving to an unintended model tier at
   # runtime.
+  # These must be keys that exist under `tasks:` in mctl-agents
+  # config/model-policy.yaml. Until 2026-09-03 this list held
+  # `issue_investigator` and `shepherd`, neither of which is a task there --
+  # so the allowlist blessed two names that make resolve_model() raise, and
+  # the comment above claiming a typo "fails closed here" was false in the
+  # only direction that mattered: nothing compared this list to the file it
+  # claims to mirror. mctl-agents' validate_manifest.py now does
+  # (check_catalog_profiles_match_builders), which is why this list can be
+  # trusted from now on rather than merely asserted.
   knownModelPolicyTasks:
-    - issue_investigator
     - service_agent
-    - shepherd
+    - mentor_digest
+    - review_findings_normalize
 
   # policyRef values an ExecutionProfile may declare. Each is a named,
   # externally-enforced behavior policy (prompt/guardrail scope) — this
