@@ -34,6 +34,7 @@ loyalty, pairdesk.
 | [access-review.md](access-review.md) | Quarterly checklist |
 | [emergency-change.md](emergency-change.md) | Hotfix / bypass / kubectl |
 | [evidence/github-org-mfa.md](evidence/github-org-mfa.md) | Org MFA probe |
+| [evidence/vendors/](evidence/vendors/) | Vendor ISO / SOC 3 files (not public) |
 
 ## Honest residuals (do not hide)
 

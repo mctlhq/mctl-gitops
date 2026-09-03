@@ -17,7 +17,7 @@ Scale: High / Medium / Low for inherent and residual.
 | R7 | Admin GitHub ruleset bypass | CC1/CC5 | High | Documented exception + emergency-change.md + quarterly review | Medium | Compensating — gitops admin bypass closed; still on api / agent / agents / web |
 | R8 | Bot writes `image.tag` to main | CC8 | Low | Scoped workflows; least-privilege token (`CLAUDE.md`) | Low | Accepted exception |
 | R9 | Open OAuth DCR | CC6 | Medium | Allowlist + rate limit + TTL; token would break MCP onboarding | Medium | Product choice |
-| R10 | No vendor SOC reports | CC9 | Medium | `vendors.md` inventory; collect Hetzner/CF/GitHub annually | Medium | Open paper |
+| R10 | No vendor SOC reports | CC9 | Medium | `vendors.md` + `evidence/vendors/`; collect Hetzner/CF/GitHub annually | Low | Partial 2026-09-04 — GitHub SOC 3 + Hetzner ISO; Cloudflare still open |
 | R11 | Incident pipeline suspended | CC7 | High | Unsuspend; last tick 2026-08-17T06:15Z `suspend=false` | Low | Closed as designed |
 | R12 | PSS still baseline | CC6 | Low | audit/warn restricted; step 2 after 29.08 not done (F18) | Low | Accepted Horizon 3 — re-checked 2026-09-04, still `enforce=baseline` |
 | R13 | Fraud / payment abuse | CC3 | Low | No platform payments; see fraud-memo.md | Low | Accepted |
