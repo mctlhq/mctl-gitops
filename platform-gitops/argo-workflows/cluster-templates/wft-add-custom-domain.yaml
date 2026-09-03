@@ -85,7 +85,7 @@ spec:
 
           TEAM="$PARAM_TEAM"
           SERVICE="$PARAM_SERVICE"
-          DOMAIN="$PARAM_DOMAIN"
+          export DOMAIN="$PARAM_DOMAIN"
           AUTO_DOMAIN="${TEAM}-${SERVICE}.${PLATFORM_DOMAIN}"
           BACKSTAGE_URL="http://backstage.backstage.svc.cluster.local:7007"
 
@@ -95,6 +95,19 @@ spec:
             echo "❌ Invalid domain format: ${DOMAIN}"
             exit 1
           }
+          # TEAM and SERVICE were never validated, although SERVICE reaches yq
+          # through CUSTOM_TLS_NAME below and both name a filesystem path and
+          # a Backstage query string. Validating only the domain made this
+          # template look safe while leaving the same class of hole open one
+          # parameter over. Same pattern as wft-remove-custom-domain; keep the
+          # two in step.
+          for pair in "team:${TEAM}" "service:${SERVICE}"; do
+            name="${pair#*:}"
+            echo "$name" | grep -qE '^[a-z0-9]([a-z0-9-]*[a-z0-9])?$' || {
+              echo "❌ Invalid ${pair%%:*} name: ${name}"
+              exit 1
+            }
+          done
           # Reject platform domains. PLATFORM_DOMAIN_ALT is optional (it is
           # empty since mctl.me was retired), and interpolating an empty value
           # straight into the alternation produces "\.(mctl\.ai|)$" — an empty
@@ -181,18 +194,20 @@ spec:
 
           # ── 7. Add domain to ingress.hosts ────────────────────────────────
           echo "📝 Adding ${DOMAIN} to ingress.hosts..."
-          yq eval -i ".ingress.hosts += [\"${DOMAIN}\"]" "$SVC_VALUES"
+          yq eval -i '.ingress.hosts += [strenv(DOMAIN)]' "$SVC_VALUES"
 
           # ── 8. Add TLS for custom domain with HTTP-01 issuer ──────────────
-          CUSTOM_TLS_NAME="${SERVICE}-custom-tls"
+          # Exported, not just assigned: strenv() reads the process
+          # environment, and a plain shell variable is not in it.
+          export CUSTOM_TLS_NAME="${SERVICE}-custom-tls"
           # Check if custom TLS entry already exists
-          EXISTING_TLS=$(yq eval ".ingress.tls[] | select(.secretName == \"${CUSTOM_TLS_NAME}\")" "$SVC_VALUES" 2>/dev/null)
+          EXISTING_TLS=$(yq eval '.ingress.tls[] | select(.secretName == strenv(CUSTOM_TLS_NAME))' "$SVC_VALUES" 2>/dev/null)
           if [ -z "$EXISTING_TLS" ]; then
             # Add a separate TLS entry for custom domains using HTTP-01
-            yq eval -i ".ingress.tls += [{\"secretName\": \"${CUSTOM_TLS_NAME}\", \"hosts\": [\"${DOMAIN}\"]}]" "$SVC_VALUES"
+            yq eval -i '.ingress.tls += [{"secretName": strenv(CUSTOM_TLS_NAME), "hosts": [strenv(DOMAIN)]}]' "$SVC_VALUES"
           else
             # Append domain to existing custom TLS entry
-            yq eval -i "(.ingress.tls[] | select(.secretName == \"${CUSTOM_TLS_NAME}\")).hosts += [\"${DOMAIN}\"]" "$SVC_VALUES"
+            yq eval -i '(.ingress.tls[] | select(.secretName == strenv(CUSTOM_TLS_NAME))).hosts += [strenv(DOMAIN)]' "$SVC_VALUES"
           fi
 
           # Use HTTP-01 issuer annotation for this ingress (cert-manager picks up all TLS hosts)
@@ -214,7 +229,7 @@ spec:
           CERTEOF
 
           # Add all custom domain hosts to the Certificate
-          for h in $(yq eval "(.ingress.tls[] | select(.secretName == \"${CUSTOM_TLS_NAME}\")).hosts[]" "$SVC_VALUES"); do
+          for h in $(yq eval '(.ingress.tls[] | select(.secretName == strenv(CUSTOM_TLS_NAME))).hosts[]' "$SVC_VALUES"); do
             echo "      - ${h}" >> "${CERT_DIR}/custom-domain-cert-${DOMAIN%%.*}.yaml"
           done
 
