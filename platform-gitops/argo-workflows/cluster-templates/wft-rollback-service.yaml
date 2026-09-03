@@ -42,6 +42,13 @@ spec:
           - name: deploy-key
             mountPath: /secrets/deploy-key
             readOnly: true
+        env:
+          - name: PARAM_TEAM_NAME
+            value: "{{inputs.parameters.team_name}}"
+          - name: PARAM_COMPONENT_NAME
+            value: "{{inputs.parameters.component_name}}"
+          - name: PARAM_TARGET_TAG
+            value: "{{inputs.parameters.target_tag}}"
         source: |
           set -euo pipefail
 
@@ -80,11 +87,41 @@ spec:
           chmod 600 ~/.ssh/known_hosts
           git config --global url."ssh://git@ssh.github.com:443/".insteadOf "https://github.com/"
 
-          TEAM="{{inputs.parameters.team_name}}"
-          COMPONENT="{{inputs.parameters.component_name}}"
-          TAG="{{inputs.parameters.target_tag}}"
+          # Parameters arrive as env, never interpolated into this
+          # script's text. An Argo placeholder is substituted BEFORE sh
+          # parses the line (this comment cannot show one literally —
+          # Argo would substitute it here too), so a value containing a
+          # quote and a semicolon runs as a command, in a pod that is
+          # root with the gitops deploy key mounted. gitops#992.
+          # The whole block is bound, not just the parameters the
+          # operations registry happens to constrain: a reader should not
+          # have to cross-check the registry to know which line is safe.
+          TEAM="$PARAM_TEAM_NAME"
+          COMPONENT="$PARAM_COMPONENT_NAME"
+          TAG="$PARAM_TARGET_TAG"
           REPO="https://github.com/${GITOPS_ORG}/${GITOPS_REPO}.git"
           VALUES="platform-gitops/services/${TEAM}/${COMPONENT}/values.yaml"
+
+          # TAG continues past the shell into a `sed` PROGRAM and a `yq`
+          # EXPRESSION below, so env binding alone does not make it safe:
+          #   - a `|` closes sed's s||| delimiters and the rest is read as
+          #     further sed commands (`w` writes files this root pod reaches);
+          #   - a `"` closes the quoted yq expression and injects arbitrary
+          #     yq operations, which ArgoCD then applies to the cluster.
+          # target_tag carries no Pattern in the operations registry. Hold it
+          # to the OCI tag grammar here (claude P1 on gitops#993).
+          case "$TAG" in
+            "" | *[!A-Za-z0-9._-]* )
+              echo "❌ target_tag must match the OCI tag grammar [A-Za-z0-9._-]; got: ${TAG}" >&2
+              exit 1
+              ;;
+          esac
+          case "$TAG" in
+            [!A-Za-z0-9_]* )
+              echo "❌ target_tag must start with a letter, digit or underscore; got: ${TAG}" >&2
+              exit 1
+              ;;
+          esac
 
           git clone --depth=1 "${REPO}" /tmp/mctl-gitops
           cd /tmp/mctl-gitops
@@ -94,7 +131,9 @@ spec:
             exit 1
           fi
 
-          # Patch image.tag using sed (safe for simple tag strings)
+          # Patch image.tag using sed. Safe because the guard above
+          # already rejected anything outside the OCI tag grammar — the
+          # sed program cannot be escaped by a value that has no `|`.
           sed -i "s|^\( *tag: *\).*|\1\"${TAG}\"|" "${VALUES}"
           # Keep any openclaw setup init container pinned to the same
           # image tag so the Layer-2 overlay bootstrap runs from the

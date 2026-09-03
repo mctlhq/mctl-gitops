@@ -108,6 +108,18 @@ spec:
           - configMapRef:
               name: mctl-platform-config
         env:
+          - name: PARAM_DOCKERFILE_REPO
+            value: "{{inputs.parameters.dockerfile_repo}}"
+          - name: PARAM_GIT_REF
+            value: "{{inputs.parameters.git_ref}}"
+          - name: PARAM_IMAGE_TAG
+            value: "{{inputs.parameters.image_tag}}"
+          - name: PARAM_DOCKERFILE_PATH
+            value: "{{inputs.parameters.dockerfile_path}}"
+          - name: PARAM_TEAM_NAME
+            value: "{{inputs.parameters.team_name}}"
+          - name: PARAM_COMPONENT_NAME
+            value: "{{inputs.parameters.component_name}}"
           - name: GITHUB_PAT
             valueFrom:
               secretKeyRef:
@@ -121,12 +133,18 @@ spec:
           GITOPS_REPO = os.environ["GITOPS_REPO"]
           API = "https://api.github.com"
 
-          dockerfile_repo = "{{inputs.parameters.dockerfile_repo}}"
-          git_ref         = "{{inputs.parameters.git_ref}}"
-          image_tag       = "{{inputs.parameters.image_tag}}"
-          dockerfile_path = "{{inputs.parameters.dockerfile_path}}"
-          team_name       = "{{inputs.parameters.team_name}}"
-          component_name  = "{{inputs.parameters.component_name}}"
+          # Parameters arrive as env, never interpolated into this
+          # script's text. This block is Python, not shell, but the
+          # exposure is identical: Argo substitutes the placeholder into
+          # the source BEFORE the interpreter parses it, so a value
+          # carrying a quote escapes the string literal and executes —
+          # in a pod holding GITHUB_PAT. gitops#992.
+          dockerfile_repo = os.environ["PARAM_DOCKERFILE_REPO"]
+          git_ref         = os.environ["PARAM_GIT_REF"]
+          image_tag       = os.environ["PARAM_IMAGE_TAG"]
+          dockerfile_path = os.environ["PARAM_DOCKERFILE_PATH"]
+          team_name       = os.environ["PARAM_TEAM_NAME"]
+          component_name  = os.environ["PARAM_COMPONENT_NAME"]
           build_id        = "{{workflow.name}}"
 
           # Image name derived from org + component — consistent with deploy-service
@@ -238,6 +256,16 @@ spec:
         image: alpine/helm:3.16.4
         command: [sh]
         env:
+          - name: PARAM_TEAM_NAME
+            value: "{{inputs.parameters.team_name}}"
+          - name: PARAM_COMPONENT_NAME
+            value: "{{inputs.parameters.component_name}}"
+          - name: PARAM_IMAGE_TAG
+            value: "{{inputs.parameters.image_tag}}"
+          - name: PARAM_TTL_HOURS
+            value: "{{inputs.parameters.ttl_hours}}"
+          - name: PARAM_PORT
+            value: "{{inputs.parameters.port}}"
           - name: ARGO_WORKFLOW_NAME
             value: "{{workflow.name}}"
         envFrom:
@@ -250,12 +278,49 @@ spec:
         source: |
           set -euo pipefail
 
-          TEAM="{{inputs.parameters.team_name}}"
-          COMPONENT="{{inputs.parameters.component_name}}"
-          TAG="{{inputs.parameters.image_tag}}"
-          TTL_HOURS="{{inputs.parameters.ttl_hours}}"
-          PORT="{{inputs.parameters.port}}"
+          # Parameters arrive as env, never interpolated into this
+          # script's text. An Argo placeholder is substituted BEFORE sh
+          # parses the line (this comment cannot show one literally —
+          # Argo would substitute it here too), so a value containing a
+          # quote and a semicolon runs as a command, in a pod that is
+          # root with the gitops deploy key mounted. gitops#992.
+          # The whole block is bound, not just the parameters the
+          # operations registry happens to constrain: a reader should not
+          # have to cross-check the registry to know which line is safe.
+          TEAM="$PARAM_TEAM_NAME"
+          COMPONENT="$PARAM_COMPONENT_NAME"
+          TAG="$PARAM_IMAGE_TAG"
+          TTL_HOURS="$PARAM_TTL_HOURS"
+          PORT="$PARAM_PORT"
           NS="${TEAM}-preview"
+
+          # TAG and PORT do not stop at the shell: both are handed to
+          # `helm --set` below, and helm's --set parser SPLITS ON COMMAS.
+          # A tag of
+          #     1.0,image.repository=attacker/evil
+          # is therefore not one value with a comma in it — it is two
+          # overrides, the second of which replaces the image of a
+          # release deployed into the tenant's preview namespace. Env
+          # binding cannot help here: the injection happens inside helm,
+          # after sh has already passed the value through intact.
+          # (claude P1 + agy finding 2 on gitops#993.)
+          #
+          # Neither carries a Pattern in the operations registry, so the
+          # grammar is asserted here. TTL_HOURS is deliberately not
+          # guarded: it reaches only the closing echo, no interpreter.
+          case "$TAG" in
+            "" | *[!A-Za-z0-9._-]* )
+              echo "❌ image_tag must match the OCI tag grammar [A-Za-z0-9._-]; got: ${TAG}" >&2
+              exit 1
+              ;;
+          esac
+          case "$PORT" in
+            "") ;;
+            *[!0-9]* )
+              echo "❌ port must be a decimal integer; got: ${PORT}" >&2
+              exit 1
+              ;;
+          esac
 
           PREVIEW_ID=$(echo "${ARGO_WORKFLOW_NAME}" | tr -cd 'a-z0-9' | tail -c 6)
           RELEASE="preview-${COMPONENT}-${PREVIEW_ID}"

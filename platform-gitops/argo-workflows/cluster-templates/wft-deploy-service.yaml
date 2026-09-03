@@ -265,6 +265,17 @@ spec:
           - name: deploy-key
             mountPath: /secrets/deploy-key
             readOnly: true
+        env:
+          - name: PARAM_TEAM_NAME
+            value: "{{workflow.parameters.team_name}}"
+          - name: PARAM_COMPONENT_NAME
+            value: "{{workflow.parameters.component_name}}"
+          - name: PARAM_MIN_REPLICAS
+            value: "{{workflow.parameters.min_replicas}}"
+          - name: PARAM_MAX_REPLICAS
+            value: "{{workflow.parameters.max_replicas}}"
+          - name: PARAM_CPU_THRESHOLD
+            value: "{{workflow.parameters.cpu_threshold}}"
         source: |
           set -euo pipefail
 
@@ -293,13 +304,44 @@ spec:
           chmod 600 ~/.ssh/known_hosts
           git config --global url."ssh://git@ssh.github.com:443/".insteadOf "https://github.com/"
 
-          TEAM="{{workflow.parameters.team_name}}"
-          COMPONENT="{{workflow.parameters.component_name}}"
-          MIN="{{workflow.parameters.min_replicas}}"
-          MAX="{{workflow.parameters.max_replicas}}"
-          CPU="{{workflow.parameters.cpu_threshold}}"
+          # Parameters arrive as env, never interpolated into this
+          # script's text. An Argo placeholder is substituted BEFORE sh
+          # parses the line (this comment cannot show one literally —
+          # Argo would substitute it here too), so a value containing a
+          # quote and a semicolon runs as a command, in a pod that is
+          # root with the gitops deploy key mounted. gitops#992.
+          # The whole block is bound, not just the parameters the
+          # operations registry happens to constrain: a reader should not
+          # have to cross-check the registry to know which line is safe.
+          TEAM="$PARAM_TEAM_NAME"
+          COMPONENT="$PARAM_COMPONENT_NAME"
+          MIN="$PARAM_MIN_REPLICAS"
+          MAX="$PARAM_MAX_REPLICAS"
+          CPU="$PARAM_CPU_THRESHOLD"
           REPO="https://github.com/${GITOPS_ORG}/${GITOPS_REPO}.git"
           VALUES="platform-gitops/services/${TEAM}/${COMPONENT}/values.yaml"
+
+          # Binding through env removes SHELL parsing, and nothing else.
+          # These three values are still expanded into a `sed` PROGRAM and
+          # printf'd into a YAML DOCUMENT below, each of which is its own
+          # interpreter:
+          #   - a value containing `|` closes sed's s||| delimiters and the
+          #     rest is read as further sed commands (`w` writes files);
+          #   - a value containing a newline appends arbitrary YAML keys to
+          #     values.yaml — `image:\n  repository: ...` replaces the
+          #     deployed image, and ArgoCD applies it.
+          # min_replicas, max_replicas and cpu_threshold carry no Pattern in
+          # the operations registry, so nothing upstream stops either.
+          # They are integers by definition; assert that here rather than
+          # hoping the value is well-formed (agy P1 on gitops#993).
+          for v in "${MIN}" "${MAX}" "${CPU}"; do
+            case "$v" in
+              ''|*[!0-9]*)
+                echo "❌ autoscaling values must be non-negative integers; got: min=${MIN} max=${MAX} cpu=${CPU}" >&2
+                exit 1
+                ;;
+            esac
+          done
 
           git clone --depth=1 "${REPO}" /tmp/mctl-gitops
           cd /tmp/mctl-gitops
@@ -386,6 +428,20 @@ spec:
           - configMapRef:
               name: mctl-platform-config
         env:
+          - name: PARAM_DOCKERFILE_REPO
+            value: "{{inputs.parameters.dockerfile_repo}}"
+          - name: PARAM_GIT_TAG
+            value: "{{inputs.parameters.git_tag}}"
+          - name: PARAM_IMAGE_NAME
+            value: "{{inputs.parameters.image_name}}"
+          - name: PARAM_IMAGE_TAG
+            value: "{{inputs.parameters.image_tag}}"
+          - name: PARAM_DOCKERFILE_PATH
+            value: "{{inputs.parameters.dockerfile_path}}"
+          - name: PARAM_TEAM_NAME
+            value: "{{inputs.parameters.team_name}}"
+          - name: PARAM_COMPONENT_NAME
+            value: "{{inputs.parameters.component_name}}"
           - name: GITHUB_PAT
             valueFrom:
               secretKeyRef:
@@ -399,13 +455,19 @@ spec:
           GITOPS_REPO = os.environ["GITOPS_REPO"]
           API = "https://api.github.com"
 
-          repo = "{{inputs.parameters.dockerfile_repo}}"
-          git_tag = "{{inputs.parameters.git_tag}}"
-          image_name = "{{inputs.parameters.image_name}}"
-          image_tag = "{{inputs.parameters.image_tag}}"
-          dockerfile_path = "{{inputs.parameters.dockerfile_path}}"
-          team_name = "{{inputs.parameters.team_name}}"
-          component_name = "{{inputs.parameters.component_name}}"
+          # Parameters arrive as env, never interpolated into this
+          # script's text. This block is Python, not shell, but the
+          # exposure is identical: Argo substitutes the placeholder into
+          # the source BEFORE the interpreter parses it, so a value
+          # carrying a quote escapes the string literal and executes —
+          # in a pod holding GITHUB_PAT. gitops#992.
+          repo = os.environ["PARAM_DOCKERFILE_REPO"]
+          git_tag = os.environ["PARAM_GIT_TAG"]
+          image_name = os.environ["PARAM_IMAGE_NAME"]
+          image_tag = os.environ["PARAM_IMAGE_TAG"]
+          dockerfile_path = os.environ["PARAM_DOCKERFILE_PATH"]
+          team_name = os.environ["PARAM_TEAM_NAME"]
+          component_name = os.environ["PARAM_COMPONENT_NAME"]
           build_id = "{{workflow.name}}"
 
           git_ref = git_tag if git_tag else "main"

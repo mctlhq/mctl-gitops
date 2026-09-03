@@ -287,24 +287,127 @@ spec:
           - name: deploy-key
             mountPath: /secrets/deploy-key
             readOnly: true
+        env:
+          - name: PARAM_TENANT_NAME
+            value: "{{inputs.parameters.tenant_name}}"
+          - name: PARAM_DISPLAY_NAME
+            value: "{{inputs.parameters.display_name}}"
+          - name: PARAM_DESCRIPTION
+            value: "{{inputs.parameters.description}}"
+          - name: PARAM_QUOTA_CPU_REQ
+            value: "{{inputs.parameters.quota_cpu_req}}"
+          - name: PARAM_QUOTA_CPU_LIM
+            value: "{{inputs.parameters.quota_cpu_lim}}"
+          - name: PARAM_QUOTA_MEMORY_REQ
+            value: "{{inputs.parameters.quota_memory_req}}"
+          - name: PARAM_QUOTA_MEMORY_LIM
+            value: "{{inputs.parameters.quota_memory_lim}}"
+          - name: PARAM_QUOTA_PODS
+            value: "{{inputs.parameters.quota_pods}}"
+          - name: PARAM_ALLOW_INTERNET_EGRESS
+            value: "{{inputs.parameters.allow_internet_egress}}"
+          - name: PARAM_CONTACT_EMAIL
+            value: "{{inputs.parameters.contact_email}}"
+          - name: PARAM_CREATOR_USER_ID
+            value: "{{inputs.parameters.creator_user_id}}"
         source: |
           set -e
 
           # ── Parameters ──────────────────────────────────────────────────────
-          TENANT="{{inputs.parameters.tenant_name}}"
-          DISPLAY_NAME="{{inputs.parameters.display_name}}"
-          DESCRIPTION="{{inputs.parameters.description}}"
-          CPU_REQ="{{inputs.parameters.quota_cpu_req}}"
-          CPU_LIM="{{inputs.parameters.quota_cpu_lim}}"
-          MEM_REQ="{{inputs.parameters.quota_memory_req}}"
-          MEM_LIM="{{inputs.parameters.quota_memory_lim}}"
-          PODS="{{inputs.parameters.quota_pods}}"
-          INTERNET_EGRESS="{{inputs.parameters.allow_internet_egress}}"
-          CONTACT_EMAIL="{{inputs.parameters.contact_email}}"
-          CREATOR_USER_ID="{{inputs.parameters.creator_user_id}}"
+          # Read every parameter from the environment, never by Argo
+          # interpolation into this script's text. An Argo parameter
+          # placeholder is substituted BEFORE sh parses the line — note
+          # this comment cannot show one literally, because Argo would
+          # substitute it here too — so a value of
+          #     "; touch /tmp/pwned; #
+          # closes the quote and runs as a command — in a pod that is root
+          # and has the gitops deploy key mounted (gitops#992, reproduced).
+          # display_name, description, contact_email, creator_user_id and
+          # every quota_* have no Pattern in the operations registry, so
+          # nothing upstream stops that value from arriving.
+          #
+          # The whole block is bound through env, not just the unvalidated
+          # half: a reader should not have to cross-check the registry to
+          # know which of these lines is safe.
+          TENANT="$PARAM_TENANT_NAME"
+          DISPLAY_NAME="$PARAM_DISPLAY_NAME"
+          DESCRIPTION="$PARAM_DESCRIPTION"
+          CPU_REQ="$PARAM_QUOTA_CPU_REQ"
+          CPU_LIM="$PARAM_QUOTA_CPU_LIM"
+          MEM_REQ="$PARAM_QUOTA_MEMORY_REQ"
+          MEM_LIM="$PARAM_QUOTA_MEMORY_LIM"
+          PODS="$PARAM_QUOTA_PODS"
+          INTERNET_EGRESS="$PARAM_ALLOW_INTERNET_EGRESS"
+          CONTACT_EMAIL="$PARAM_CONTACT_EMAIL"
+          CREATOR_USER_ID="$PARAM_CREATOR_USER_ID"
 
           # Defaults
           [ -z "$DISPLAY_NAME" ] && DISPLAY_NAME="$TENANT"
+
+          # These three are free text and continue past the shell into a
+          # hand-built YAML DOCUMENT below (displayName/description/
+          # contactEmail are emitted as quoted scalars in a heredoc). Env
+          # binding stops the shell from executing them; it does not stop a
+          # value like
+          #     Foo"\n  admin: true\n  x: "
+          # from closing the quoted scalar and adding sibling keys to the
+          # tenant values.yaml that ArgoCD then applies. None of the three
+          # carries a Pattern in the operations registry.
+          #
+          # Free text cannot be constrained to a grammar the way an integer
+          # or an OCI tag can, so the two characters that can break a quoted
+          # scalar are rejected outright: a double quote and a newline. A
+          # real YAML emitter would be better and is the right fix if these
+          # fields ever need them (claude P2 on gitops#993).
+          NEWLINE="$(printf '\nx')"; NEWLINE="${NEWLINE%x}"
+          for value in "$DISPLAY_NAME" "$DESCRIPTION" "$CONTACT_EMAIL"; do
+            case "$value" in
+              *'"'* | *"$NEWLINE"* )
+                echo "❌ display_name, description and contact_email must not contain a double quote or a newline" >&2
+                exit 1
+                ;;
+            esac
+          done
+
+          # creator_user_id is the most exposed of the free-text fields
+          # and was missed by the loop above (claude P1 on gitops#993):
+          # it is spliced into the members block UNQUOTED —
+          #     - userId: <value>
+          # — so it needs no double quote to break out. A bare newline
+          # ends the scalar and the next line is a sibling key of the
+          # tenant document ArgoCD applies. It is an identifier, not
+          # prose, so it gets a grammar rather than a character ban.
+          if [ -n "$CREATOR_USER_ID" ]; then
+            case "$CREATOR_USER_ID" in
+              *[!A-Za-z0-9._@-]* )
+                echo "❌ creator_user_id must match [A-Za-z0-9._@-]; got: ${CREATOR_USER_ID}" >&2
+                exit 1
+                ;;
+            esac
+          fi
+
+          # The five quota values land in quoted YAML scalars exactly like
+          # displayName/description/contactEmail, and carry no Pattern
+          # either (claude P2 on gitops#993). They are Kubernetes
+          # quantities — a digit followed by digits, a decimal point or a
+          # unit suffix — so, again, a grammar rather than a character ban:
+          # a value like  1" \n  admin: true  is not a quantity at all.
+          for value in "$CPU_REQ" "$CPU_LIM" "$MEM_REQ" "$MEM_LIM" "$PODS"; do
+            case "$value" in
+              "" | [!0-9]* | *[!0-9A-Za-z.]* )
+                echo "❌ quota values must be Kubernetes quantities (e.g. 4, 500m, 8Gi); got: ${value}" >&2
+                exit 1
+                ;;
+            esac
+          done
+
+          # Emitted unquoted as a YAML boolean below, so it must be exactly
+          # true or false — the registry Enum says so, and this asserts it
+          # rather than trusting a second repository.
+          case "$INTERNET_EGRESS" in
+            true|false) ;;
+            *) echo "❌ allow_internet_egress must be true or false; got: ${INTERNET_EGRESS}" >&2; exit 1 ;;
+          esac
 
           # ── Setup SSH for git operations ────────────────────────────────────
           apk add --no-cache openssl curl git openssh-client ca-certificates
