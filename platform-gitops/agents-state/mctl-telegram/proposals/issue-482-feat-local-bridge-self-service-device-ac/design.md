@@ -162,14 +162,46 @@ unsynchronised access here is a real data race. `poll` copies the fields it
 needs while holding the lock and formats its response after releasing it;
 it never hands the pointer to a caller.
 
-**Single resolution.** `denyActivation` and the success path both re-check
-`act.status` under the lock and return without effect unless it is still
-`pending`/`awaiting_consent`. A second browser leg arriving for an already
-resolved activation is refused before any store call.
+**Single resolution — and the precondition is per-transition, not global.**
+Every transition re-checks the status under the lock and returns without
+effect if the state is not the one it expects:
+
+| transition | required current state |
+|---|---|
+| → `awaiting_consent` (`finishActivation`) | `pending` |
+| → `resolving` (consent approve) | `awaiting_consent` |
+| → `done` (after the store calls) | `resolving` |
+| → `denied` from the browser leg | `pending` |
+| → `denied` from consent Deny | `awaiting_consent` |
+| → `denied` from a store refusal (hosted account) | `resolving` |
+
+Writing this as one blanket "only if still `pending`/`awaiting_consent`" —
+as an earlier draft did — **deadlocks the happy path**: the consent handler
+sets `resolving` before the store calls, so the subsequent `done` (and the
+hosted-account `denied`) would fail their own precondition, abort silently,
+and strand the activation in `resolving` until TTL while the CLI polls
+forever. A second browser leg arriving for an already-resolved activation is
+still refused before any store call; that falls out of the table rather than
+being a separate rule.
+
+**Nothing on an activation is read outside the lock, including while a
+network call is in flight.** `finishActivation` must copy `oidcVerifier` and
+`oidcNonce` into locals under `s.mu` and pass those to
+`s.tgoidc.Exchange` — the exchange itself is correctly made without the lock,
+but a concurrent form submission for the same activation (an impatient
+refresh, or a spammed endpoint) overwrites those fields while the exchange
+reads them. In Go a concurrently mutated string header is a genuine memory
+safety violation, not merely a stale value, and T15's `-race` run would
+surface it as a failure rather than a flake. The same applies anywhere else a
+field is used after the lock is dropped: copy first.
 
 **`user_code` and the absence of a complete URL.** `start` mints a short
 `user_code` (Crockford base32, `crypto/rand`, in the RFC 8628 shape
-`XXXX-XXXX`) alongside the long `device_code`. The `verification_uri` is the
+`XXXX-XXXX`) alongside the long `device_code`. Minting happens under `s.mu`
+and **regenerates on collision** with a live entry in `activationsByUserCode`
+(bounded retry, then 503): 40 bits is ample against guessing but says nothing
+about the birthday case, and a silent overwrite would either strand the first
+user or walk them into approving the second user's activation. The `verification_uri` is the
 constant `https://tg.mctl.ai/local-bridge/activate` with **no query
 parameter**: there is deliberately no `verification_uri_complete`. The CLI
 prints the `user_code`; the user types it into the page. This is the
@@ -304,9 +336,14 @@ act, isActivation := s.activationsByState[serverState]
 if isActivation {
     delete(s.activationsByState, serverState)
 }
+var verifier, nonce string
+if isActivation {
+    delete(s.activationsByState, serverState)
+    verifier, nonce = act.oidcVerifier, act.oidcNonce // copy under the lock
+}
 s.mu.Unlock()
 if isActivation {
-    s.finishActivation(w, r, act, q)
+    s.finishActivation(w, r, act, q, verifier, nonce)
     return
 }
 ```
@@ -316,7 +353,7 @@ never appears in `activationsByState`, so this is a pure addition with no
 behavioral change to existing logins. `finishActivation` (new function) does:
 
 1. `error=`/missing `code=` → `denyActivation(act, "telegram sign-in was not completed")`, render result page, **return**. No store call at all.
-2. `s.tgoidc.Exchange(ctx, code, act.oidcVerifier, act.oidcNonce)` → identity, or `err` → `denyActivation(act, "telegram verification failed")`, render, **return**. Still no store call.
+2. `s.tgoidc.Exchange(ctx, code, verifier, nonce)` — the locals copied under the lock by the caller, never `act.oidcVerifier`/`act.oidcNonce` read live while a concurrent form submission may be rewriting them — → identity, or `err` → `denyActivation(act, "telegram verification failed")`, render, **return**. Still no store call.
 3. `identity.TelegramID != act.claimedTGID` → `denyActivation(act, "telegram account mismatch")`, render a page that says the approving account did not match the device's request, **return**. This is the T2 path: the entire function up to this point has made zero `store.*` calls, satisfying "refused with no database mutation at all."
 4. Identity is proven **and** matches the claim — but that is *not* yet
    authorisation. `finishActivation` stops here: under `s.mu` (and only if the
@@ -378,9 +415,15 @@ behavioral change to existing logins. `finishActivation` (new function) does:
 **`POST /api/local-bridge/activate/poll`** (unauthenticated): looks up
 `s.activations[device_code]`; unknown/expired → HTTP 400 (a distinct error
 shape so the CLI can tell "give up and restart" from "keep polling"); else
-returns `{"status": act.status}` plus `reason` when `denied` or the server-generated registry
-`device_id` from `act.resultDeviceID` (no other credential) when `done` --
-never the CLI's `device_registration_key`.
+returns a status **mapped to the three values the CLI's contract defines**:
+`awaiting_consent` and `resolving` are internal and MUST be reported as
+`pending`, since to the client they mean exactly "not finished yet". Only
+`denied` and `done` are reported verbatim, with `reason` when `denied` and the
+server-generated registry `device_id` from `act.resultDeviceID` (no other
+credential) when `done` -- never the CLI's `device_registration_key`. Echoing
+`act.status` raw would hand the CLI two statuses its own acceptance criteria
+never mention, which is an unhandled branch in the client, not a cosmetic
+leak.
 
 **Sweeping**: extend the existing `Server.sweep` (`server.go:592-631`, already
 run by `StartSweeper` on a 1-minute ticker) with a loop over `s.activations`

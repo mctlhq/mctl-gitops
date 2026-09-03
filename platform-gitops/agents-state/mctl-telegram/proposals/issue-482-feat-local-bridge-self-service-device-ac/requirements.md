@@ -177,10 +177,22 @@ have a phone and a CLI" to "I have a `telegram_accounts` row in local mode and a
   activation is reachable concurrently from `poll`, from the browser leg, and
   from the sweeper, so an unsynchronised access is a data race, not a
   theoretical one.
-- THE SYSTEM SHALL resolve each activation at most once: a transition to
-  `done` or `denied` SHALL be applied only if the activation is still
-  unresolved when the mutex is held, and a second browser leg arriving for an
-  already-resolved activation SHALL be refused without touching the database.
+- THE SYSTEM SHALL resolve each activation at most once. Each transition
+  SHALL be guarded on the specific state it advances from — not on a blanket
+  "still unresolved" test, which would reject the very transitions that follow
+  the in-progress state and strand the activation there until TTL — and a
+  second browser leg arriving for an already-resolved activation SHALL be
+  refused without touching the database.
+- THE SYSTEM SHALL report to `poll` only the three statuses this contract
+  defines. Any internal in-progress state SHALL be reported as `pending`; the
+  client SHALL never receive a status its own acceptance criteria do not name.
+- THE SYSTEM SHALL NOT read any activation field outside the mutex, including
+  while a network call is in flight: values needed after the lock is released
+  SHALL be copied first, since a concurrent submission for the same activation
+  may rewrite them.
+- THE SYSTEM SHALL ensure a newly minted `user_code` does not collide with a
+  live one, regenerating until it is unique, so that no activation's index
+  entry is silently replaced by another's.
 - WHEN an approval is accepted, THE SYSTEM SHALL claim the activation — mark
   it in-progress and invalidate the consent token — while still holding the
   mutex, before performing any database call, so that a double-clicked

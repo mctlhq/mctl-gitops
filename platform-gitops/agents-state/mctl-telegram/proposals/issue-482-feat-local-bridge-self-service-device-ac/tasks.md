@@ -24,7 +24,7 @@
       (reuse the package's existing `writeAuthorizeError`-style helper or
       `bridge.writeJSONError`'s pattern); on success stores a `pending`
       activation keyed by a fresh `randomToken(32)` device_code, indexed by a
-      fresh `user_code`, and returns `device_code`, `user_code`,
+      fresh `user_code` regenerated on collision with a live one (T24), and returns `device_code`, `user_code`,
       `verification_uri`, `expires_in`, `interval` as JSON; enforces
       `MaxPendingActivations` with oldest-eviction exactly like the existing
       `MaxPendingAuth`/`MaxPendingEnable` blocks, evicting via
@@ -76,8 +76,11 @@
       `Username` and display name are needed by the consent handler, which is
       a separate request, and storing only the id would provision accounts
       with empty metadata), mints `consentToken`, and
-      renders the consent page. Grep the whole function for `store.` and
-      expect zero hits; that is the load-bearing property here (T2, T9).
+      renders the consent page. It receives `oidcVerifier`/`oidcNonce` as
+      arguments copied by the caller under `s.mu`, and must not read those
+      fields off `act` across the `Exchange` call (T15, T23). Grep the whole
+      function for `store.` and expect zero hits; that is the load-bearing
+      property here (T2, T9).
 
 - [ ] 4b. Implement `handleActivateConsent`
       (`POST /local-bridge/activate/consent`) (depends on 4) — DoD: resolves
@@ -90,7 +93,10 @@
       `status == "awaiting_consent"`, so neither a replayed nor a
       cross-activation token is accepted; **still under `s.mu`** it flips the
       status to `resolving` and clears `consentToken` before releasing the
-      lock and making any store call, so a double-clicked Approve or two
+      lock and making any store call — and the later `done`/`denied`
+      transitions are guarded on `resolving`, not on
+      `pending`/`awaiting_consent`, or they abort silently and strand the
+      activation (T22) — so a double-clicked Approve or two
       concurrent POSTs with the same token produce exactly one provisioning
       run (a store failure restores `awaiting_consent` with a fresh token);
       Deny
@@ -110,7 +116,9 @@
       `done` response contains no bearer/worker/bridge token field of any
       kind (grep the response struct — this is the sub-issue-3 boundary);
       table-driven test covering all three statuses plus the unknown-code
-      400.
+      400, and explicitly covering that an activation sitting in
+      `awaiting_consent` or `resolving` polls as `pending` — the CLI's contract
+      names only three statuses and must never receive an internal one (T21).
 
 - [ ] 6. Add the browser page templates — `user_code` entry form, **consent
       page**, start-over / denied / done / internal-error (depends on 4b) —
@@ -259,6 +267,22 @@
       token, or one that does not match the form cookie, is refused before any
       OIDC redirect and sets no state cookie. Mutation-validate: drop the CSRF
       check and confirm it goes red.
+- [ ] T21. **`poll` never leaks an internal status.** An activation in
+      `awaiting_consent`, and one in `resolving`, both poll as
+      `{"status":"pending"}`. Table-driven over every state the machine can be
+      in, so a state added later fails the test instead of reaching the CLI.
+- [ ] T22. **The happy path completes out of `resolving`.** A full approve
+      reaches `done` and `poll` returns the `device_id`; a hosted-account
+      refusal discovered after the claim reaches `denied`. Mutation-validate by
+      restoring the blanket `pending`/`awaiting_consent` precondition: both
+      must go red, since that bug strands the activation silently.
+- [ ] T23. **No activation field is read across the network call.** With
+      `-race`, drive a second `POST /local-bridge/activate` for the same
+      activation while the OIDC exchange is in flight; the run must be clean,
+      proving `Exchange` uses copies rather than live fields.
+- [ ] T24. **`user_code` collisions are impossible, not improbable.** With a
+      stubbed generator that returns a duplicate first, `start` regenerates
+      and both activations remain independently reachable by their own codes.
 
 ## Rollback
 
