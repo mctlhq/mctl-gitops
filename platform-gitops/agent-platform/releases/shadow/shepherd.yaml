@@ -11,6 +11,11 @@ spec:
     repo: mctlhq/mctl-agents
     path: agents/_manifests/shepherd/agent.yaml
     gitSha: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+    # sha256 of the AgentDefinition at `path`. Required since the
+    # definition-pin fix: an OPTIONAL pin is not a gate, and these two
+    # bindings validated green with the definition floating while
+    # issue-investigator was pinned (claude P2 on this PR).
+    contentHash: "sha256:c985510309726ded7d515590d3f8e509b100c22a59de9e4b358aca2808d98901"
   bindingSource: compatibility-fixture
   promotable: false
   registryLifecycle:
@@ -23,8 +28,8 @@ spec:
   profile:
     name: shepherd-default
     version: "1.0.0"
-  bindingRevision: 3
-  previousBindingRevision: 2
+  bindingRevision: 4
+  previousBindingRevision: 3
   history:
     - bindingRevision: 2
       definition: {name: shepherd, version: "1"}

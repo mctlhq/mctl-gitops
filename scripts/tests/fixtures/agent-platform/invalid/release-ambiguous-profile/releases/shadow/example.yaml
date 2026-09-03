@@ -8,6 +8,7 @@ spec:
     repo: mctlhq/mctl-agents
     path: agents/_manifests/example/agent.yaml
     gitSha: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+    contentHash: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
   bindingSource: compatibility-fixture
   promotable: false
   registryLifecycle:

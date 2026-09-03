@@ -33,7 +33,7 @@
       "properties": {
         "sourceManifest": {
           "type": "object",
-          "required": ["repo", "path", "gitSha"],
+          "required": ["repo", "path", "gitSha", "contentHash"],
           "additionalProperties": false,
           "properties": {
             "repo": { "type": "string", "minLength": 1 },

@@ -11,6 +11,11 @@ spec:
     repo: mctlhq/mctl-agents
     path: agents/_manifests/implementer/agent.yaml
     gitSha: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+    # sha256 of the AgentDefinition at `path`. Required since the
+    # definition-pin fix: an OPTIONAL pin is not a gate, and these two
+    # bindings validated green with the definition floating while
+    # issue-investigator was pinned (claude P2 on this PR).
+    contentHash: "sha256:e3e689d9e3615bbd15ba0a947cc90f2992f4d815d4462421ef120a8f5d2bad6e"
   bindingSource: compatibility-fixture
   promotable: false
   registryLifecycle:
@@ -23,8 +28,8 @@ spec:
   profile:
     name: implementer-default
     version: "1.0.0"
-  bindingRevision: 12
-  previousBindingRevision: 11
+  bindingRevision: 13
+  previousBindingRevision: 12
   history:
     - bindingRevision: 11
       definition: {name: implementer, version: "2"}
