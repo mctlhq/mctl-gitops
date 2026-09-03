@@ -16,7 +16,8 @@ gh api 'orgs/mctlhq/members?filter=2fa_disabled'
 | 2026-08-17T06:52Z | `false` | (not counted) | `PATCH /orgs/mctlhq` is a no-op; field is not writable via REST |
 | 2026-08-19T16:37Z | `true` | 2 | Owner enabled in org Authentication security UI. Also "Only allow secure two-factor methods" (authenticator / passkey / security key / GitHub Mobile; SMS disallowed). |
 | 2026-08-19T16:44Z | `true` | 0 | Owner removed the two members who had not enrolled. Do not list logins here. |
+| 2026-09-03T23:25Z | `true` | 0 | Re-probe before CPA binder refresh. Six members, one admin, zero outside collaborators. Do not list logins here. |
 
 The control is the **org requirement**, not whether one account happens to
 have TOTP. After 2026-08-19T16:44Z both the requirement and the membership
-set match: six members, none without 2FA.
+set match: six members, none without 2FA. Re-confirmed 2026-09-03T23:25Z.
