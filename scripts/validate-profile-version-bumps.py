@@ -107,6 +107,24 @@ def resolve_base(explicit: str | None = None, cwd: Path | None = None) -> str:
     )
 
 
+def _spec_version(document: object) -> str | None:
+    """`spec.version` of a parsed profile, or None if it is missing or unusable.
+
+    Deliberately shared by both sides of the comparison. A defensive read on
+    the base side and a bare `document["spec"]["version"]` on the edited side
+    means a malformed `spec` raises an `AttributeError` traceback instead of
+    this script's `❌ ...` message, and a *removed* version reads as "not the
+    same string as before" — that is, as a bump.
+    """
+    if not isinstance(document, dict):
+        return None
+    spec = document.get("spec")
+    if not isinstance(spec, dict):
+        return None
+    version = spec.get("version")
+    return version if isinstance(version, str) else None
+
+
 def _version_at(rev: str, path: str, cwd: Path | None = None) -> str | None:
     """`spec.version` of `path` at `rev`, or None if the file is absent there."""
     try:
@@ -117,13 +135,7 @@ def _version_at(rev: str, path: str, cwd: Path | None = None) -> str | None:
         document = yaml.safe_load(blob)
     except yaml.YAMLError as exc:
         raise BaseUnavailable(f"{path} at {rev} is not valid YAML: {exc}") from exc
-    if not isinstance(document, dict):
-        return None
-    spec = document.get("spec")
-    if not isinstance(spec, dict):
-        return None
-    version = spec.get("version")
-    return version if isinstance(version, str) else None
+    return _spec_version(document)
 
 
 def changed_profiles(base: str, cwd: Path | None = None) -> list[str]:
@@ -148,8 +160,20 @@ def check(base: str | None = None, cwd: Path | None = None) -> list[str]:
         after_path = (cwd or ROOT) / path
         if not after_path.is_file():
             continue  # deleted
-        document = yaml.safe_load(after_path.read_text(encoding="utf-8"))
-        after = (document or {}).get("spec", {}).get("version")
+        try:
+            document = yaml.safe_load(after_path.read_text(encoding="utf-8"))
+        except yaml.YAMLError as exc:
+            errors.append(f"{path}: is not valid YAML: {exc}")
+            continue
+        after = _spec_version(document)
+        if after is None:
+            errors.append(
+                f"{path}: content changed and spec.version is now missing or not a "
+                f"string (it was {before!r}). Dropping the version is not a bump — "
+                "the release binding that references it has nothing left to pin to. "
+                "Set spec.version to a quoted version string above the previous one."
+            )
+            continue
         if after == before:
             errors.append(
                 f"{path}: content changed but spec.version is still {before!r}. "
@@ -207,7 +231,21 @@ def selftest() -> int:
             print("❌ selftest: detector fired on a newly added profile", file=sys.stderr)
             return 1
 
-        # 4. an unresolvable base must RAISE, never pass. This is the branch
+        # 4. dropping spec.version is not a bump -> must fire, and a `spec`
+        #    that is not a mapping must reach the same clean error, not a traceback.
+        target.write_text(yaml.safe_dump(dict(profile, spec={"tools": ["Read", "Grep"]})), encoding="utf-8")
+        errors = check(base=base, cwd=repo)
+        if not errors or "missing or not a string" not in errors[0]:
+            print(f"❌ selftest: a dropped spec.version passed as a bump; got {errors}", file=sys.stderr)
+            return 1
+        target.write_text(yaml.safe_dump(dict(profile, spec="oops")), encoding="utf-8")
+        errors = check(base=base, cwd=repo)
+        if not errors or "missing or not a string" not in errors[0]:
+            print(f"❌ selftest: a non-mapping spec passed as a bump; got {errors}", file=sys.stderr)
+            return 1
+        target.write_text(yaml.safe_dump(profile), encoding="utf-8")
+
+        # 5. an unresolvable base must RAISE, never pass. This is the branch
         #    that decides whether the check works in CI at all.
         try:
             check(base="0000000000000000000000000000000000000000", cwd=repo)
@@ -218,8 +256,8 @@ def selftest() -> int:
             return 1
 
     print(
-        "✅ selftest: fires on an unbumped edit, stays quiet on a bumped one and on a "
-        "new profile, and refuses to run without a base"
+        "✅ selftest: fires on an unbumped edit and on a dropped or malformed version, "
+        "stays quiet on a bumped one and on a new profile, and refuses to run without a base"
     )
     return 0
 
