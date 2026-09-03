@@ -1,6 +1,6 @@
-status: needs-triage
-updated_at: '2026-09-03T22:39:48Z'
-updated_by: mctl-agents[bot]
+status: accepted
+updated_at: '2026-09-04T00:05:00Z'
+updated_by: mashkovd
 source:
   type: github_issue
   repo: mctlhq/mctl-telegram
@@ -11,15 +11,10 @@ control:
 approval:
   approved_by: mashkovd
   approved_at: '2026-09-03T21:57:23Z'
-attempt:
-  id: 9603dd6a-6e6e-477d-883a-d34f844558ab
-  started_at: '2026-09-03T21:59:41Z'
-  expires_at: '2026-09-04T00:09:41Z'
-  finished_at: '2026-09-03T22:39:48Z'
-failure:
-  code: operation-timeout
-  stage: runtime
-  message: 'operation timed out: operation exceeded 2400s (model stream, client construction,
-    or mctl connectivity check)'
-notes: 'runtime: operation timed out: operation exceeded 2400s (model stream, client
-  construction, or mctl connectivity check)'
+notes: 'Restored to accepted after an infrastructure failure. The 2026-09-03T21:59Z
+  implement attempt was killed at the then-current 2400s budget (operation-timeout,
+  runtime stage) and produced no branch, commit or PR, which left the proposal in
+  needs-triage. No sanctioned transition leads out of needs-triage (mctl-agents#300),
+  so the state is restored by hand here. The human approval above is the original
+  one and is unchanged; the implementer budget has since been raised to 5400s
+  (mctl-gitops#1016).'
