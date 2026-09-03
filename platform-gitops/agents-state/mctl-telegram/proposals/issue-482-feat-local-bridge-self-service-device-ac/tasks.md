@@ -7,9 +7,13 @@
       on resolution, so a finished activation stays pollable by `device_code`)
       and `dropActivation` (all three, used only by eviction and `sweep`).
       Getting these the wrong way round loses the CLI's result silently. Plus
-      `MaxPendingActivations`, `ActivationTTL` and the limiter's
-      budget/window on `oauth.Config` (defaulted in `oauth.New`
-      alongside `MaxPendingAuth`/`MaxPendingEnable`) — DoD: package compiles;
+      `MaxPendingActivations int`, `ActivationTTL time.Duration`,
+      `ActivationFailBudget int`, `ActivationFailWindow time.Duration` and
+      `TrustedProxyCIDRs []netip.Prefix` on `oauth.Config` (defaulted in
+      `oauth.New` alongside `MaxPendingAuth`/`MaxPendingEnable`;
+      `TrustedProxyCIDRs` parsed from `TRUSTED_PROXY_CIDRS`, defaulting to
+      `10.42.0.0/16` and `10.43.0.0/16`, and an empty or unparseable value
+      meaning trust nothing — never trust everything) — DoD: package compiles;
       new fields have doc comments matching the style of `Server.enables` /
       `Config.MaxPendingEnable`; no behavior change yet (nothing populates or
       reads the new maps).

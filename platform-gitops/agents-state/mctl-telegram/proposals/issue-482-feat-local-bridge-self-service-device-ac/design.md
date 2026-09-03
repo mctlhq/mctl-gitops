@@ -393,10 +393,24 @@ the CLI's next poll to read the outcome; `ActivationTTL` is measured from
 abandoned one. Resolution itself calls `unindexActivation`, never
 `dropActivation` (see above).
 
-**Config**: add `MaxPendingActivations int`, `ActivationTTL time.Duration`,
-and the failed-submission limiter's budget/window to `oauth.Config`,
-defaulted in `oauth.New` the same way `MaxPendingAuth` and
-`MaxPendingEnable` are today.
+**Config**: add these fields to `oauth.Config`, defaulted in `oauth.New` the
+same way `MaxPendingAuth` and `MaxPendingEnable` are today:
+
+- `MaxPendingActivations int`
+- `ActivationTTL time.Duration`
+- `ActivationFailBudget int` and `ActivationFailWindow time.Duration` — the
+  failed-submission limiter, shared by the `user_code` form and the consent
+  endpoint.
+- `TrustedProxyCIDRs []netip.Prefix` — the trust boundary the client-IP
+  derivation above depends on. Parsed at boot from a comma-separated
+  `TRUSTED_PROXY_CIDRS` env var; when unset it defaults to the cluster's own
+  ranges, `10.42.0.0/16` (pods) and `10.43.0.0/16` (services), which is where
+  the ingress actually sits. **An empty set must mean "trust nothing"**, so a
+  misparse or a blank value degrades to keying on `r.RemoteAddr` and ignoring
+  `X-Forwarded-For` entirely — the safe direction. Naming it explicitly here
+  is deliberate: leaving it to be invented is how the spoofing hole above
+  comes back, since a hardcoded or over-broad default silently re-admits
+  attacker-chosen limiter keys.
 
 **Wiring** (`Register(mux)`):
 ```go
