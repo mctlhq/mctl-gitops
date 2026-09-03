@@ -89,12 +89,18 @@ have a phone and a CLI" to "I have a `telegram_accounts` row in local mode and a
   of pending activations, so that repeated invalid submissions cannot become
   lock contention against unrelated OAuth and poll traffic. The rate limit on
   failed submissions SHALL cover the consent endpoint as well as the code
-  form.
+  form, and SHALL derive the client identity from a configured trusted-proxy
+  boundary rather than from the raw transport peer (which is the ingress, so
+  all users would share one budget) or from an unvalidated client-supplied
+  forwarding header (which an attacker rotates per request).
 - WHEN the browser is redirected to Telegram OIDC for an activation, THE
   SYSTEM SHALL bind that redirect to the browser that submitted the
-  `user_code` — via a `HttpOnly`, `Secure`, `SameSite=Lax` cookie carrying
-  the OIDC `state` (or a hash of it) — and SHALL refuse an activation
+  `user_code` — via a `HttpOnly`, `Secure`, `SameSite=Lax`, host-only cookie
+  carrying the OIDC `state` (or a hash of it) — and SHALL refuse an activation
   callback whose cookie is missing or does not match the `state` in the URL.
+  The cookie's `Path` SHALL cover both the page that sets it and the OIDC
+  callback that reads it, which are different non-overlapping paths; THE
+  SYSTEM SHALL delete the cookie once the callback has consumed it.
   Without this the `user_code` step is bypassable: the attacker types their
   own code in their own browser, captures the resulting Telegram
   authorization URL, and forwards *that* to the victim, whose sign-in then

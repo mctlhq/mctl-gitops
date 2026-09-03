@@ -43,7 +43,10 @@
       an oracle); the lookup goes through `activationsByUserCode` — a test
       asserts no scan of `s.activations` by pinning O(1) behaviour with a
       large map; the redirect sets the `HttpOnly`/`Secure`/`SameSite=Lax`
-      state-binding cookie (T16); a
+      state-binding cookie — `Path=/`, host-only, `HttpOnly`/`Secure`/
+      `SameSite=Lax`, since the callback that reads it back lands on the
+      unrelated path `/oauth/telegram/callback` and a default-scoped cookie
+      would never be sent there (T16, T18); a
       valid pending activation gets a fresh `nonce`/PKCE verifier/`oidcState`,
       is indexed into `activationsByState` after any superseded entry for that
       activation has been deleted, and the handler 302s to
@@ -74,7 +77,8 @@
       the activation by the form's hidden `user_code` through
       `activationsByUserCode` (O(1); never a scan for a matching
       `consentToken`) and counts failures against the same IP limiter as the
-      code form; compares `consentToken` in constant time under `s.mu` and
+      code form, using the same trusted-proxy-aware client-IP derivation
+      (T19); compares `consentToken` in constant time under `s.mu` and
       requires
       `status == "awaiting_consent"`, so neither a replayed nor a
       cross-activation token is accepted; **still under `s.mu`** it flips the

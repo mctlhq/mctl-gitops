@@ -207,13 +207,27 @@ to decrement, and a cookie-based per-session counter is bypassed by dropping
 the cookie. The limiter is a small bounded map on `Server` (failure count +
 window per IP, swept alongside the activations), and once an IP's budget is
 spent the form returns the same generic message without performing a lookup.
+
+**Deriving the client IP.** The service runs behind an ingress, so
+`r.RemoteAddr` is the proxy for every request — keying on it directly gives
+all users one shared budget that ordinary traffic can exhaust, turning the
+limiter into a self-inflicted outage. Trusting `X-Forwarded-For` blindly is
+the opposite failure: the client supplies it, so an attacker rotates it per
+request and the limiter counts nothing. Take the rightmost entry of
+`X-Forwarded-For` that is **not** in a configured trusted-proxy CIDR set
+(new config, defaulting to the cluster's pod/service CIDRs), and fall back to
+`r.RemoteAddr` when the header is absent or the whole chain is trusted. Same
+derivation for the consent endpoint. A test must cover both failure shapes:
+a spoofed header does not reset the budget, and two clients behind the proxy
+get separate budgets.
+
 Sizing: the `user_code` is 8 Crockford-base32 characters (~40 bits) with a
 10-minute TTL, so even an unlimited attacker is far from a guess; the limiter
 exists to stop the volume, not to be the only barrier.
 
 **Login-CSRF binding — without it the `user_code` step is bypassable.** On a
-match the handler sets a `HttpOnly`, `Secure`, `SameSite=Lax`, path-scoped
-cookie holding a hash of the `oidcState`, and `handleTelegramCallback` refuses
+match the handler sets a `HttpOnly`, `Secure`, `SameSite=Lax` cookie holding a
+hash of the `oidcState`, and `handleTelegramCallback` refuses
 an activation callback whose cookie is absent or does not match the `state` in
 the URL. The reason: nothing stops the attacker from typing the `user_code`
 into *their own* browser — it is their code — capturing the resulting
@@ -224,6 +238,18 @@ having never seen the code entry step at all. The cookie makes the OIDC leg
 non-transferable between browsers, which is what the `user_code` was supposed
 to guarantee. The consent step still stands behind this, but it must not be
 the only remaining barrier.
+
+**The cookie must be `Path=/`.** It is set while responding to
+`POST /local-bridge/activate`, but the leg that has to read it back lands at
+`/oauth/telegram/callback` — `s.tgoidc`'s single baked-in `RedirectURL`, a
+different and non-overlapping path. Under RFC 6265 a default-scoped cookie
+would simply not be sent there, and since the callback refuses an activation
+whose cookie is missing, a path-scoped cookie would reject every legitimate
+activation while looking like a working defence in review. Give it a
+distinctive name (e.g. `lb_act_state`), `Path=/`, no `Domain` attribute
+(host-only), and delete it — `Max-Age=0`, same attributes — as soon as the
+callback has consumed it, so a stale one cannot be replayed against a later
+activation.
 
 On a match, mints a fresh `nonce`/PKCE verifier/`oidcState`
 exactly like `handleAuthorize` does (reusing the package's existing
