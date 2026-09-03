@@ -64,6 +64,28 @@ on:
       build_id:
         required: true
         type: string
+    # Declared so the caller can pass exactly what this workflow uses instead
+    # of `secrets: inherit`. This job checks out whichever repository
+    # `inputs.repo` names and builds its Dockerfile, so every secret in the
+    # caller's environment is a secret handed to a build of third-party
+    # source. These four are the complete set this file references
+    # (mctlhq/mctl-gitops#1010).
+    #
+    # All optional: each has a documented fallback tier below, and making any
+    # of them required would turn a missing secret into a hard failure of the
+    # release path rather than the degradation it is today.
+    #
+    # GITHUB_TOKEN is deliberately absent - it is provided automatically, and
+    # GitHub rejects a `secrets:` entry whose name starts with GITHUB_.
+    secrets:
+      APP_ID:
+        required: false
+      APP_PRIVATE_KEY:
+        required: false
+      GHCR_PAT:
+        required: false
+      GH_PACKAGES_TOKEN:
+        required: false
 
 env:
   REGISTRY: ghcr.io
@@ -81,15 +103,19 @@ jobs:
       # --- Tier 1: Vault PAT via GitHub OIDC -> Vault JWT ---
       - name: Fetch Vault PAT
         id: vault_pat
-        env:
-          VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
         run: |
           set -euo pipefail
           REPO="${{ inputs.repo }}"
           echo "repo_owner=${REPO%%/*}" >> "$GITHUB_OUTPUT"
           echo "repo_name=${REPO##*/}" >> "$GITHUB_OUTPUT"
 
-          VAULT_ADDR="${VAULT_ADDR:-https://secrets.mctl.ai}"
+          # Was `${{ secrets.VAULT_ADDR }}` with this literal as a fallback,
+          # but no such secret exists in this repository or the org, so the
+          # expression was always empty and the fallback is what has run all
+          # along. A reference to a secret that does not exist reads like
+          # configuration while being dead code - the next person to change
+          # the Vault address would have changed the wrong thing (#1010).
+          VAULT_ADDR="https://secrets.mctl.ai"
           PAT=""
 
           if [[ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" || -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]]; then
