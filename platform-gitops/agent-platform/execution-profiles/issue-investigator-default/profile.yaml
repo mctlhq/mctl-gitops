@@ -29,7 +29,7 @@ metadata:
   name: issue-investigator-default
   owner: platform
 spec:
-  version: "1.0.0"
+  version: "1.1.0"
   modelPolicyRef:
     # The task key config/model-policy.yaml in mctl-agents actually defines.
     # This said `issue_investigator` until 2026-09-03, which is not a task
@@ -39,6 +39,14 @@ spec:
     # raises ModelPolicyError on an unknown key, so the resolver would have
     # failed closed the moment it read this file (mctl-agents#277 step 4).
     task: service_agent
+    # Read directly by run_issue_investigator.py as
+    #   INVESTIGATOR_MODEL = os.getenv("ISSUE_INVESTIGATOR_MODEL", SERVICE_AGENT_MODEL)
+    # which means it OUTRANKS the task above: set it and nothing this profile
+    # says about the model applies. The schema could not express this field
+    # until now, so the catalog described a model selection that could be
+    # overridden without it saying so. mctl-agents' validate_manifest.py
+    # checks this name against a real os.getenv() call in the driver.
+    legacyEnvOverride: ISSUE_INVESTIGATOR_MODEL
     compatibility: ">=1.0.0 <2.0.0"
   skills: []
   tools:
