@@ -47,7 +47,11 @@
       already-resolved codes, or a client IP whose failed-submission budget is
       spent, re-renders the form with one generic message (a table-driven test
       asserts the four rejection cases are byte-identical, so the page is not
-      an oracle); the lookup goes through `activationsByUserCode` — a test
+      an oracle); a code whose activation is already `awaiting_consent`
+      re-renders the consent page with a fresh `consentToken` instead of
+      starting a second OIDC leg — that leg's callback would fail
+      `finishActivation`'s `pending` precondition and strand the user (T26);
+      the lookup goes through `activationsByUserCode` — a test
       asserts no scan of `s.activations` by pinning O(1) behaviour with a
       large map; the redirect sets the `HttpOnly`/`Secure`/`SameSite=Lax`
       state-binding cookie — `Path=/`, host-only, `HttpOnly`/`Secure`/
@@ -294,12 +298,18 @@
 - [ ] T24. **`user_code` collisions are impossible, not improbable.** With a
       stubbed generator that returns a duplicate first, `start` regenerates
       and both activations remain independently reachable by their own codes.
+
 - [ ] T25. **A store failure leaves a usable retry.** Stub
       `ProvisionLocalAccount` to fail once: the response is the consent page
       carrying a *new* `consentToken` — assert it differs from the first and
       that submitting it succeeds — not a 500, and the activation is back in
       `awaiting_consent` rather than stranded. Then stub a non-transient
       failure and assert the activation reaches `denied` and `poll` says so.
+- [ ] T26. **Reopening the code form resumes an awaiting-consent
+      activation.** Drive an activation to `awaiting_consent`, discard the
+      browser page, then submit the same `user_code` again: the response is
+      the consent page with a fresh `consentToken` that works, no second OIDC
+      redirect happens, and the activation is never stranded.
 
 ## Rollback
 

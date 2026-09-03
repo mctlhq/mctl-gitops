@@ -319,7 +319,17 @@ distinctive name (e.g. `lb_act_state`), `Path=/`, no `Domain` attribute
 callback has consumed it, so a stale one cannot be replayed against a later
 activation.
 
-On a match, mints a fresh `nonce`/PKCE verifier/`oidcState`
+**Resubmitting a code that is already `awaiting_consent` resumes, it does not
+restart.** If the looked-up activation is in `awaiting_consent` — the user
+reached the consent page and closed the tab — the handler must NOT mint a new
+`oidcState` and send them through Telegram again: `finishActivation` requires
+`pending`, so the second callback would fail its precondition, abort silently,
+and leave the user on a blank page while the CLI polls until TTL. Instead,
+under `s.mu`, mint a fresh `consentToken` on the existing activation and
+re-render the consent page directly. The identity was already proven; it does
+not need proving twice.
+
+On a match in `pending`, mints a fresh `nonce`/PKCE verifier/`oidcState`
 exactly like `handleAuthorize` does (reusing the package's existing
 `randomToken`/`pkceChallenge` helpers). If the activation already carries an
 `oidcState` — a browser leg is in flight — the handler **deletes the
