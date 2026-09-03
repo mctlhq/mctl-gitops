@@ -1,0 +1,10 @@
+name: archify-diagrams
+title: Archify Diagrams
+description: Author and validate architecture, workflow, sequence, dataflow and lifecycle diagrams as typed JSON rendered by archify; use for docs/diagrams/archify/*.json in mctlhq repos
+visibility: public
+status: active
+owner: platform
+runtimes:
+  - mcp
+  - claude
+  - codex

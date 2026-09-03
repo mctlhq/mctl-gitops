@@ -2,3 +2,4 @@ role: platform-agent
 enabledSkills:
   - mctl-platform
   - argocd-health-remediation
+  - archify-diagrams
