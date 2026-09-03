@@ -92,12 +92,25 @@ spec:
           # keep the two in step. The team/service pattern is the Kubernetes
           # name shape those values must already satisfy to name a directory
           # and a Helm release.
+          # grep matches per LINE, so an anchored pattern alone is not a
+          # whole-string check: "ok.example.com\n<payload>" contains a line
+          # that matches and `grep -q` returns 0. Reject any multi-line value
+          # first. `printf %s` emits no trailing newline, so wc -l counts 0
+          # for a single-line value.
+          reject_multiline() {
+            if [ "$(printf '%s' "$2" | wc -l | tr -d ' ')" != "0" ]; then
+              echo "❌ ${1} must be a single line" >&2
+              exit 1
+            fi
+          }
+          reject_multiline domain "$DOMAIN"
           echo "$DOMAIN" | grep -qE '^[a-z0-9]([a-z0-9.-]*[a-z0-9])?(\.[a-z]{2,})+$' || {
             echo "❌ Invalid domain format: ${DOMAIN}"
             exit 1
           }
           for pair in "team:${TEAM}" "service:${SERVICE}"; do
             name="${pair#*:}"
+            reject_multiline "${pair%%:*}" "$name"
             echo "$name" | grep -qE '^[a-z0-9]([a-z0-9-]*[a-z0-9])?$' || {
               echo "❌ Invalid ${pair%%:*} name: ${name}"
               exit 1
