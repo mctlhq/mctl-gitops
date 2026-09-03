@@ -101,38 +101,78 @@ type localBridgeActivation struct {
     deviceLabel    string
     createdAt      time.Time
 
+    userCode       string // short, human-typable; the ONLY way a browser binds
+                          // to this activation. Never appears in any URL.
+    codeAttempts   int    // bounded; exhausting the budget denies the activation
+
     // set once the browser starts the Telegram leg
     oidcState, oidcNonce, oidcVerifier string
 
-    // mutated once, by finishActivation, under s.mu
-    status         string // "pending" | "denied" | "done"
+    // set once Telegram OIDC has proven the identity, cleared on resolution.
+    // Holding this is what makes the consent POST authorised; its presence
+    // means "identity proven, approval still outstanding".
+    consentToken   string
+    verifiedTGID   int64
+
+    // mutated once, under s.mu, only while status is still "pending"
+    status         string // "pending" | "awaiting_consent" | "denied" | "done"
     denialReason   string
     resultDeviceID string
 }
 ```
 
+**Every field above is read and written only under `s.mu`** — the same mutex
+that already guards `pending` and `enables`. `poll`, the browser leg, and the
+sweeper all reach the same `*localBridgeActivation` concurrently, so any
+unsynchronised access here is a real data race. `poll` copies the fields it
+needs while holding the lock and formats its response after releasing it;
+it never hands the pointer to a caller.
+
+**Single resolution.** `denyActivation` and the success path both re-check
+`act.status` under the lock and return without effect unless it is still
+`pending`/`awaiting_consent`. A second browser leg arriving for an already
+resolved activation is refused before any store call.
+
+**`user_code` and the absence of a complete URL.** `start` mints a short
+`user_code` (Crockford base32, `crypto/rand`, in the RFC 8628 shape
+`XXXX-XXXX`) alongside the long `device_code`. The `verification_uri` is the
+constant `https://tg.mctl.ai/local-bridge/activate` with **no query
+parameter**: there is deliberately no `verification_uri_complete`. The CLI
+prints the `user_code`; the user types it into the page. This is the
+load-bearing anti-phishing property — see requirements.md's resolved open
+question — and it must not be "simplified" back into a clickable link.
+
 **`POST /api/local-bridge/activate/start`** (unauthenticated, mirrors
 `handleAuthorize`'s cap/evict pattern using a new `MaxPendingActivations`
 config field): validates `telegram_id > 0` and `device_registration_key != ""`, mints
-`device_code := randomToken(32)`, stores a `pending`-status
-`localBridgeActivation`, returns:
+`device_code := randomToken(32)` and a short `user_code`, stores a
+`pending`-status `localBridgeActivation`, returns:
 ```json
 {
   "device_code": "...",
+  "user_code": "K7QP-3ZM4",
   "verification_uri": "https://tg.mctl.ai/local-bridge/activate",
-  "verification_uri_complete": "https://tg.mctl.ai/local-bridge/activate?device_code=...",
   "expires_in": 600,
   "interval": 5
 }
 ```
 
-**`GET /local-bridge/activate?device_code=...`** (unauthenticated browser
-page): looks up the activation; if missing/expired/already-resolved, renders a
-"start over" page (no OIDC round trip, no store call). Otherwise mints a fresh
-`nonce`/PKCE verifier/`oidcState` exactly like `handleAuthorize` does
-(reusing the package's existing `randomToken`/`pkceChallenge` helpers),
-records them on the activation, indexes it into `activationsByState`, and
-302-redirects to `s.tgoidc.AuthCodeURL(oidcState, nonce, tgChallenge)`. No
+**`GET /local-bridge/activate`** (unauthenticated browser page): takes **no
+parameters** and renders a form asking for the `user_code`. It performs no
+lookup, no OIDC round trip and no store call.
+
+**`POST /local-bridge/activate`** (the form target): looks up the activation
+by submitted `user_code` under `s.mu`. Unknown/expired/already-resolved, or
+an activation whose `codeAttempts` budget is exhausted, re-renders the form
+with a single generic "that code is not valid" message (no oracle
+distinguishing "unknown" from "expired") and increments the per-session
+attempt counter. On a match, mints a fresh `nonce`/PKCE verifier/`oidcState`
+exactly like `handleAuthorize` does (reusing the package's existing
+`randomToken`/`pkceChallenge` helpers). If the activation already carries an
+`oidcState` — a browser leg is in flight — the handler **deletes the
+superseded `activationsByState` entry before recording the new one**, so no
+orphan key survives to be cleaned up only by TTL. Then 302-redirects to
+`s.tgoidc.AuthCodeURL(oidcState, nonce, tgChallenge)`. No
 `users`/`telegram_accounts`/`local_bridge_devices` row is touched yet.
 
 **`handleTelegramCallback`** (existing function, minimally extended): right
@@ -158,13 +198,40 @@ behavioral change to existing logins. `finishActivation` (new function) does:
 1. `error=`/missing `code=` → `denyActivation(act, "telegram sign-in was not completed")`, render result page, **return**. No store call at all.
 2. `s.tgoidc.Exchange(ctx, code, act.oidcVerifier, act.oidcNonce)` → identity, or `err` → `denyActivation(act, "telegram verification failed")`, render, **return**. Still no store call.
 3. `identity.TelegramID != act.claimedTGID` → `denyActivation(act, "telegram account mismatch")`, render a page that says the approving account did not match the device's request, **return**. This is the T2 path: the entire function up to this point has made zero `store.*` calls, satisfying "refused with no database mutation at all."
-4. Only past this point — identity is proven **and** matches the claim — call `store.EnsureUserByTelegramID(ctx, identity.TelegramID, identity.Username, ...)` to get `uid`.
-5. `store.ProvisionLocalAccount(ctx, uid, identity.TelegramID, displayName, username)`:
+4. Identity is proven **and** matches the claim — but that is *not* yet
+   authorisation. `finishActivation` stops here: under `s.mu` (and only if the
+   activation is still `pending`) it records `act.verifiedTGID`, mints
+   `act.consentToken = randomToken(32)`, sets `act.status =
+   "awaiting_consent"`, and renders the **consent page**. That page names the
+   device (`act.deviceLabel`), names the Telegram account that just signed in,
+   shows the `user_code` so the user can check it against their own terminal,
+   and offers Approve / Deny — Approve being a `POST /local-bridge/activate/consent`
+   carrying `consentToken` as the CSRF token. **No `store.*` call has been made
+   at any point in `finishActivation`.**
+
+   Why this step exists: `start` is unauthenticated by design, so an attacker
+   can open an activation naming a *victim's* `telegram_id` with the
+   attacker's own `device_registration_key`. Without a consent step, the
+   victim merely completing a Telegram sign-in satisfies
+   `identity.TelegramID == act.claimedTGID` — there is no mismatch for the
+   guard in step 3 to catch — and the attacker's device is registered on the
+   victim's account. Signing in proves who you are; it must never by itself
+   mean "yes, attach this device."
+
+4b. **`POST /local-bridge/activate/consent`** (new handler) validates the
+   `consentToken` against the activation under `s.mu`, requires
+   `act.status == "awaiting_consent"`, and only then proceeds. A Deny (or TTL
+   expiry with no submission) calls `denyActivation` and returns; nothing is
+   written. Everything from here on runs in this handler, not in the OIDC
+   callback:
+
+5. `store.EnsureUserByTelegramID(ctx, act.verifiedTGID, identity.Username, ...)` to get `uid`.
+6. `store.ProvisionLocalAccount(ctx, uid, identity.TelegramID, displayName, username)`:
    - `nil` → brand-new local account, continue.
    - `errors.Is(err, db.ErrAccountAlreadyActive)` → `store.GetAccountMode(ctx, uid)`; if not `db.ModeLocal`, `denyActivation(act, "hosted account")` and render — no `local_bridge_devices` write follows. If it *is* `db.ModeLocal`, this is an idempotent retry (T1): fall through without erroring.
    - any other error → internal error page, activation left `pending` so the CLI's poll keeps returning `pending` until TTL rather than falsely reporting `denied` for a transient DB error.
-6. `store.RegisterDevice(ctx, uid, act.deviceLabel, act.deviceRegKey)` — `act.deviceRegKey` (the CLI-supplied `device_registration_key`, never a device id) is passed as the idempotency key, so a second `start`+browser-approve for the same device on the same account collapses onto the same `local_bridge_devices` row (T1), reusing #481's existing `(user_id, idempotency_key)` uniqueness rather than reimplementing idempotency here.
-7. Mark `act.status = "done"`, `act.resultDeviceID = deviceID` under `s.mu`, audit via `store.LogToolCall(ctx, uid, "local_bridge_activate", "", "ok", "", "")` (same audit call the rest of the package already uses), render a "you can close this tab" success page.
+7. `store.RegisterDevice(ctx, uid, act.deviceLabel, act.deviceRegKey)` — `act.deviceRegKey` (the CLI-supplied `device_registration_key`, never a device id) is passed as the idempotency key, so a second `start`+browser-approve for the same device on the same account collapses onto the same `local_bridge_devices` row (T1), reusing #481's existing `(user_id, idempotency_key)` uniqueness rather than reimplementing idempotency here.
+8. Mark `act.status = "done"`, `act.resultDeviceID = deviceID` under `s.mu`, audit via `store.LogToolCall(ctx, uid, "local_bridge_activate", "", "ok", "", "")` (same audit call the rest of the package already uses), render a "you can close this tab" success page.
 
 **`POST /api/local-bridge/activate/poll`** (unauthenticated): looks up
 `s.activations[device_code]`; unknown/expired → HTTP 400 (a distinct error
@@ -186,7 +253,9 @@ to `oauth.Config`, defaulted in `oauth.New` the same way `MaxPendingAuth` and
 **Wiring** (`Register(mux)`):
 ```go
 mux.Post("/api/local-bridge/activate/start", s.handleActivateStart)
-mux.Get("/local-bridge/activate", s.handleActivateVerify)
+mux.Get("/local-bridge/activate", s.handleActivateForm)     // user_code entry form
+mux.Post("/local-bridge/activate", s.handleActivateVerify)  // user_code submit -> OIDC leg
+mux.Post("/local-bridge/activate/consent", s.handleActivateConsent)
 mux.Post("/api/local-bridge/activate/poll", s.handleActivatePoll)
 ```
 No change to `cmd/server/main.go` beyond these being covered by the existing
@@ -201,7 +270,9 @@ reachable end-to-end: a new `activate` subcommand (alongside `init`, `login`,
 `~/.config/mctl-telegram-local/`, analogous to how `init` already persists
 `config.json`), (b) POSTs `/api/local-bridge/activate/start` with the
 Telegram id the user types in and that key, (c) prints the
-`verification_uri_complete` for the user to open, (d) polls
+`verification_uri` **and the `user_code`**, telling the user to open the URL
+and type the code — the CLI must not print or construct any URL that carries
+the code, (d) polls
 `/api/local-bridge/activate/poll` at the returned `interval` until `denied`
 (print the reason, exit non-zero) or `done` (print success + a reminder that
 an operator/`connect` step is still needed for a working daemon, per this
@@ -270,13 +341,32 @@ real client rather than curl in a test.
 - **Risk: unauthenticated write-adjacent endpoint.** `/activate/start` is
   unauthenticated by design (that is the point of the issue) and causes a
   `users`/`telegram_accounts`/`local_bridge_devices` write *if and only if*
-  the browser leg later proves Telegram OIDC ownership of the claimed id —
+  the browser leg later proves Telegram OIDC ownership of the claimed id
+  **and** the signed-in browser then explicitly approves the named device —
   so an attacker who only calls `/start` repeatedly can grow the
   `activations` map (mitigated by `MaxPendingActivations` + TTL, identical
   mitigation to `MaxPendingAuth`) but cannot cause any database mutation
   without also completing a real Telegram sign-in as the claimed account.
   Mitigation: cap + TTL + no store writes before identity match, as designed
   above.
+- **Risk: activation phishing (the reason the consent step and `user_code`
+  exist).** Because `/start` is unauthenticated, the claimed `telegram_id` is
+  attacker-controlled. An attacker can open an activation naming a victim's
+  Telegram id with the attacker's own `device_registration_key`. If the flow
+  ended at "the signed-in identity matches the claimed id", the victim simply
+  completing a Telegram sign-in would register the attacker's device on the
+  victim's account — the mismatch guard never fires, because there is no
+  mismatch. Escalation: issue #483 binds credentials and proof-of-possession
+  refresh to a registered `device_id`, so this would become durable account
+  takeover, not a nuisance. Mitigation, both parts load-bearing and neither
+  optional: (1) the browser can only reach an activation by the user typing a
+  `user_code` printed on their own machine, so the attacker cannot put their
+  code in front of the victim, and there is no code-carrying link to send;
+  (2) even having reached it, a successful sign-in only advances the
+  activation to `awaiting_consent` — the write requires a separate, explicit
+  approval of a page that names the device. Any future change that
+  reintroduces a `verification_uri_complete`, or that treats the OIDC
+  callback as approval, reopens this hole.
 - **Risk: single-replica assumption.** If mctl-telegram is ever scaled beyond
   one replica without externalizing `oauth.Server`'s in-memory state, an
   `/activate/start` handled by pod A followed by a browser callback landing

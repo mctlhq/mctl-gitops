@@ -18,17 +18,29 @@
       `expires_in`, `interval` as JSON; enforces `MaxPendingActivations` with
       oldest-eviction exactly like the existing `MaxPendingAuth`/
       `MaxPendingEnable` blocks; unit tests cover the validation and the
-      shape of a successful response.
+      shape of a successful response. The response carries `user_code` and a
+      parameterless `verification_uri`, and **no `verification_uri_complete`** —
+      grep the response struct and the handler for that name and for any
+      string-concatenated URL carrying `device_code`/`user_code`; its absence
+      is a security property, not a style choice (see requirements.md's
+      resolved open question).
 
-- [ ] 3. Implement `handleActivateVerify` (`GET /local-bridge/activate`)
-      (depends on 2) — DoD: unknown/expired/non-pending `device_code` renders
-      a "start over" page and makes no OIDC or store call; a valid pending
-      activation gets a fresh `nonce`/PKCE verifier/`oidcState`, is indexed
-      into `activationsByState`, and the handler 302s to
+- [ ] 3. Implement `handleActivateForm` (`GET /local-bridge/activate`) and
+      `handleActivateVerify` (`POST /local-bridge/activate`) (depends on 2) —
+      DoD: the `GET` takes no query parameters, renders the `user_code` entry
+      form, and makes no lookup, OIDC or store call; the `POST` resolves the
+      submitted `user_code` under `s.mu` and, for unknown/expired/
+      already-resolved codes or an exhausted `codeAttempts` budget, re-renders
+      the form with one generic message (a table-driven test asserts the four
+      rejection cases are byte-identical, so the page is not an oracle); a
+      valid pending activation gets a fresh `nonce`/PKCE verifier/`oidcState`,
+      is indexed into `activationsByState` after any superseded entry for that
+      activation has been deleted, and the handler 302s to
       `s.tgoidc.AuthCodeURL(oidcState, nonce, tgChallenge)`; test with a fake
       `Authenticator` (the package already has one for `oauth` tests) asserting
-      the redirect target and that `activationsByState` gained exactly one
-      entry.
+      the redirect target, that `activationsByState` gained exactly one entry,
+      and that re-submitting the same `user_code` leaves exactly one entry
+      rather than two.
 
 - [ ] 4. Extend `handleTelegramCallback` to recognize an activation `state`
       before falling into the existing `pendingAuth` path, and implement
@@ -37,10 +49,22 @@
       dispatch (`isActivation` false → identical behavior to before this
       change, verified by running the full existing `internal/oauth` test
       suite unmodified and green); `finishActivation` follows design.md's
-      steps 1-7 exactly, in particular: zero `store.*` calls before the
-      `identity.TelegramID == act.claimedTGID` check passes (T2 — grep the
-      diff for this, it is the load-bearing property); `store.RegisterDevice`
-      is called with `act.deviceRegKey` as the idempotency key (T1); a
+      steps 1-4 exactly and **makes no `store.*` call whatsoever** — on a
+      verified identity that matches the claim it advances the activation to
+      `awaiting_consent`, records `verifiedTGID`, mints `consentToken`, and
+      renders the consent page. Grep the whole function for `store.` and
+      expect zero hits; that is the load-bearing property here (T2, T9).
+
+- [ ] 4b. Implement `handleActivateConsent`
+      (`POST /local-bridge/activate/consent`) (depends on 4) — DoD: validates
+      `consentToken` against the activation under `s.mu` and requires
+      `status == "awaiting_consent"`, so neither a replayed nor a
+      cross-activation token is accepted, and a second approval for an
+      already-`done` activation is a no-op rather than a second write; Deny
+      calls `denyActivation` and returns with no store call; the approve path
+      runs design.md's steps 5-8 — `EnsureUserByTelegramID(act.verifiedTGID,
+      ...)` (never the claimed id), `ProvisionLocalAccount`, then
+      `RegisterDevice` with `act.deviceRegKey` as the idempotency key (T1); a
       `db.ErrAccountAlreadyActive` whose `GetAccountMode` is not
       `db.ModeLocal` denies with a "hosted account" reason and returns before
       any `RegisterDevice` call.
@@ -54,15 +78,20 @@
       table-driven test covering all three statuses plus the unknown-code
       400.
 
-- [ ] 6. Add the browser result page template(s) (start-over / denied / done /
-      internal-error) (depends on 4) — DoD: denied-page copy for "identity
+- [ ] 6. Add the browser page templates — `user_code` entry form, **consent
+      page**, start-over / denied / done / internal-error (depends on 4b) —
+      DoD: the consent page names the device label and the signed-in Telegram
+      account, shows the `user_code` so the user can check it against their
+      own terminal, and offers Approve and Deny as separate POST actions
+      carrying `consentToken`; no page embeds `device_code` or `user_code` in
+      a link or a redirect target. Denied-page copy for "identity
       mismatch" and "hosted account" does not reveal internal error details
       (matches the generic-copy requirement in design.md's platform-impact
       section); reuses the existing `renderEnableError`/`render*Page`
       helpers' style in `internal/oauth` rather than introducing a new
       templating approach.
 
-- [ ] 7. Wire the three new routes into `Server.Register(mux)` and extend
+- [ ] 7. Wire the five new routes into `Server.Register(mux)` and extend
       `Server.sweep` to purge expired entries from `activations` and
       `activationsByState` (depends on 2, 3, 5) — DoD: routes appear in
       `Register`'s doc-commented list next to the `enable_access` routes;
@@ -74,8 +103,10 @@
       generates/persists a local `device_registration_key` under
       `~/.config/mctl-telegram-local/` if one does not already exist (reused
       on subsequent `activate` runs, matching #481's idempotency-key
-      contract); calls `/activate/start`, prints the verification URL,
-      polls `/activate/poll` at the server-supplied interval; exits 0 and
+      contract); calls `/activate/start`, prints the verification URL **and
+      the `user_code`** with an instruction to type the code on that page —
+      and constructs no URL containing the code, asserted by a test; polls
+      `/activate/poll` at the server-supplied interval; exits 0 and
       prints a "you're activated, an operator/`connect` step is still needed"
       message on `done`; exits non-zero and prints the reason on `denied` or
       on TTL expiry; covered by `cmd/local/*_test.go`-style tests against a
@@ -126,6 +157,27 @@
       (ordinary `/oauth/authorize` login, `enable_access`) passes unmodified
       after tasks 1-7, proving the `handleTelegramCallback` branch added in
       task 4 is behavior-preserving for non-activation `state` values.
+- [ ] T9. **Phishing guard — no consent, no write.** `start` with
+      `telegram_id=V` (a victim) and the attacker's `device_registration_key`;
+      drive the browser leg to completion with Telegram OIDC verifying
+      identity `V` — i.e. the claimed id and the verified id *match* — and
+      then stop, without submitting the consent form. Assert: `poll` does not
+      return `done`, and a full snapshot of `users`, `telegram_accounts` and
+      `local_bridge_devices` is unchanged. This is the test that would have
+      failed on the pre-consent design, and it must be validated by mutation:
+      delete the consent gate and confirm it goes red.
+- [ ] T10. **Consent token cannot be forged or replayed.** Approving with an
+      empty, wrong, or another activation's `consentToken` writes nothing;
+      approving twice with the correct token produces exactly one
+      `local_bridge_devices` row.
+- [ ] T11. **`user_code` brute force is bounded.** Submitting wrong codes past
+      the attempt budget denies the activation (or refuses the session), and
+      unknown / expired / already-resolved / budget-exhausted rejections all
+      render the identical message.
+- [ ] T12. **Race detector.** The whole `internal/oauth` activation suite runs
+      under `go test -race` in CI, and at least one test drives `poll`
+      concurrently with the browser leg and the sweeper against the same
+      activation.
 
 ## Rollback
 

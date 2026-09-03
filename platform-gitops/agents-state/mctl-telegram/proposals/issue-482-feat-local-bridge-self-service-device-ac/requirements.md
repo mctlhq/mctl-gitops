@@ -35,6 +35,10 @@ have a phone and a CLI" to "I have a `telegram_accounts` row in local mode and a
   for the wrong Telegram account, and to leave zero trace when it is refused,
   SO THAT I do not have to audit failed activation attempts for data leakage
   or orphaned rows.
+- AS a Telegram user who is sent an unsolicited "connect your account" link I
+  WANT signing in to be insufficient to register anything SO THAT clicking a
+  stranger's link and logging in as myself cannot silently attach that
+  stranger's device to my account.
 - AS a user retrying a failed or interrupted activation (bad network, closed
   browser tab) I WANT to run the same CLI command again SO THAT I get exactly
   one account and one device, not duplicates.
@@ -42,15 +46,42 @@ have a phone and a CLI" to "I have a `telegram_accounts` row in local mode and a
 ## Acceptance criteria (EARS)
 - WHEN a client calls `POST /api/local-bridge/activate/start` with a claimed
   `telegram_id` and a `device_registration_key`, and no bearer token, THE SYSTEM SHALL
-  accept the request and return a `device_code`, a `verification_uri` (and a
-  `verification_uri_complete` that embeds the code), an `expires_in`, and a
-  poll `interval`, without requiring any worker token, bridge token, hosted
-  session, or authenticated MCP session.
-- WHEN a browser opens the verification URL, THE SYSTEM SHALL redirect it
-  through `internal/auth/telegramoidc.Authenticator`'s Authorization
-  Code + PKCE flow against Telegram's own OIDC provider — the identical
-  code path `internal/oauth.Server` uses for `/oauth/authorize` — rather than
-  a second, bespoke identity check.
+  accept the request and return a `device_code`, a short human-typable
+  `user_code`, a `verification_uri`, an `expires_in`, and a poll `interval`,
+  without requiring any worker token, bridge token, hosted session, or
+  authenticated MCP session.
+- THE SYSTEM SHALL NOT return, and the browser flow SHALL NOT accept, any URL
+  that carries the `device_code` or the `user_code` as a query parameter —
+  there is no `verification_uri_complete`. The `verification_uri` SHALL be a
+  constant path with no activation-identifying parameter, and the only way to
+  bind a browser session to an activation SHALL be the user typing the
+  `user_code` their own CLI printed. Rationale: a link that carries the code
+  is a link an attacker can send to a victim, which is precisely the
+  phishing vector this flow must not have.
+- WHEN a browser opens the verification URL, THE SYSTEM SHALL render a form
+  asking for the `user_code` and SHALL NOT start any Telegram OIDC leg until
+  a `user_code` matching a live `pending` activation has been submitted.
+- WHEN a submitted `user_code` matches a live `pending` activation, THE
+  SYSTEM SHALL redirect the browser through
+  `internal/auth/telegramoidc.Authenticator`'s Authorization Code + PKCE flow
+  against Telegram's own OIDC provider — the identical code path
+  `internal/oauth.Server` uses for `/oauth/authorize` — rather than a second,
+  bespoke identity check.
+- WHEN the Telegram OIDC callback returns a verified identity that matches
+  the claimed `telegram_id`, THE SYSTEM SHALL render a consent page naming
+  the device and the account, and SHALL NOT create, update, or delete any row
+  in `users`, `telegram_accounts`, or `local_bridge_devices` until the signed-in
+  browser submits an explicit, CSRF-protected approval from that page.
+  Completing the Telegram sign-in SHALL NOT by itself constitute approval:
+  proving who you are and agreeing to register someone's device on your
+  account are two separate acts, and only the second one authorises a write.
+- IF the consent page is declined, or abandoned until the activation's TTL
+  expires, THEN THE SYSTEM SHALL mark the activation `denied` and SHALL leave
+  the database untouched.
+- THE SYSTEM SHALL enforce a bounded number of `user_code` submission
+  attempts per browser session and per activation, and SHALL mark an
+  activation `denied` once its attempt budget is exhausted, so that the short
+  code cannot be brute-forced within its TTL.
 - WHEN the Telegram OIDC callback returns a verified identity whose
   `TelegramID` differs from the `telegram_id` the CLI claimed at `start`, THE
   SYSTEM SHALL mark the activation `denied` and SHALL NOT write, update, or
@@ -104,6 +135,23 @@ have a phone and a CLI" to "I have a `telegram_accounts` row in local mode and a
 - IF the Telegram OIDC exchange itself fails (network error, invalid code,
   user cancelled), THEN THE SYSTEM SHALL mark the activation `denied` with no
   database mutation beyond the activation's own transient in-memory state.
+- THE SYSTEM SHALL read and write every field of an activation's shared state
+  under the same `Server` mutex that already guards `pending` and `enables`.
+  No handler SHALL read or mutate an activation without holding it — the
+  activation is reachable concurrently from `poll`, from the browser leg, and
+  from the sweeper, so an unsynchronised access is a data race, not a
+  theoretical one.
+- THE SYSTEM SHALL resolve each activation at most once: a transition to
+  `done` or `denied` SHALL be applied only if the activation is still
+  `pending` when the mutex is held, and a second browser leg arriving for an
+  already-resolved activation SHALL be refused without touching the database.
+- WHEN a browser leg is started for an activation that already has an
+  in-flight OIDC `state`, THE SYSTEM SHALL either refuse the new leg or remove
+  the superseded `activationsByState` entry before recording the new one, so
+  that no map entry is left behind to be swept only by TTL.
+- THE SYSTEM SHALL have its activation tests run under the Go race detector
+  in CI, including at least one test that drives `poll` concurrently with the
+  browser leg.
 
 ## Out of scope
 - Minting any credential (worker token, bridge token, or otherwise) as part of
@@ -155,12 +203,26 @@ have a phone and a CLI" to "I have a `telegram_accounts` row in local mode and a
   multiple redirect URIs per client, a dedicated
   `/local-bridge/activate/telegram/callback` would be a cleaner long-term
   separation from the MCP login path — left as a follow-up, not a blocker.
-- **Short human-typable code.** RFC 8628 device flows normally pair a long
-  `device_code` (machine-to-machine) with a short `user_code` (for manual
-  entry when a QR/link isn't available). This proposal's `verification_uri_complete`
-  embeds the long `device_code` directly and does not add a separate short
-  code, to keep the surface area small. If manual entry turns out to matter in
-  practice, adding a short code is additive and does not change `poll`'s
-  contract.
+- ~~**Short human-typable code.**~~ **Resolved — the `user_code` is
+  mandatory, and `verification_uri_complete` is removed.** The earlier draft
+  of this proposal embedded the long `device_code` in a
+  `verification_uri_complete` and skipped the short code "to keep the surface
+  area small". That was wrong, and it was a security hole, not a UX
+  simplification: since `start` is unauthenticated by design, an attacker
+  could call it with a *victim's* `telegram_id` and the attacker's own
+  `device_registration_key`, then send the victim the resulting
+  `verification_uri_complete`. The victim opens it, is redirected straight
+  into Telegram OIDC, signs in successfully — and because the verified
+  identity then equals the claimed `telegram_id`, the proposal's
+  "mismatch → zero writes" guard never fires. There is no mismatch. The
+  attacker's device ends up registered on the victim's account, and once
+  issue #483 binds credentials and proof-of-possession refresh to that
+  `device_id`, that is durable account takeover.
+  The short `user_code` is the actual defence, and it is why RFC 8628 has
+  one: the code lives on the screen of the person who started the flow, so an
+  attacker cannot put their code in front of a victim. Combined with the
+  explicit consent step above (identity proof and authorisation are separate
+  acts), the flow now requires the victim to both possess the attacker's code
+  and knowingly approve an unfamiliar device. See design.md for the shape.
 - None of the above blocks implementation; each has a concrete default taken
   in design.md.
