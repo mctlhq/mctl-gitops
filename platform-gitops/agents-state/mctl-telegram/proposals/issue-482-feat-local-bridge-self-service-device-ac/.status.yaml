@@ -1,5 +1,5 @@
-status: accepted
-updated_at: '2026-09-03T21:57:23Z'
+status: needs-triage
+updated_at: '2026-09-03T22:39:48Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -9,5 +9,17 @@ source:
 control:
   requires_human_approval: true
 approval:
-  approved_by: 'mashkovd'
+  approved_by: mashkovd
   approved_at: '2026-09-03T21:57:23Z'
+attempt:
+  id: 9603dd6a-6e6e-477d-883a-d34f844558ab
+  started_at: '2026-09-03T21:59:41Z'
+  expires_at: '2026-09-04T00:09:41Z'
+  finished_at: '2026-09-03T22:39:48Z'
+failure:
+  code: operation-timeout
+  stage: runtime
+  message: 'operation timed out: operation exceeded 2400s (model stream, client construction,
+    or mctl connectivity check)'
+notes: 'runtime: operation timed out: operation exceeded 2400s (model stream, client
+  construction, or mctl connectivity check)'
