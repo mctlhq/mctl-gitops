@@ -359,16 +359,20 @@ spec:
           - name: WORKFLOW_MAX_PROPOSALS
             value: "{{workflow.parameters.max_proposals}}"
           # Wall-clock budget for one implement operation
-          # (orchestrator/options.py, default 900). 900s has now killed two
+          # (orchestrator/options.py, default 900). 900s killed two
           # legitimately-progressing large runs at ~87% done (portal
           # issue-80 retry-3 on 2026-08-28, mctl-agent issue-99 twice on
           # 2026-08-29 — the second one had both commits made and the full
-          # test suite green, and died before push). 40 min covers the
-          # largest wave-2 proposal with margin while still bounding a hung
-          # model stream; the step-level activeDeadlineSeconds continues to
-          # cap the pod as the outer safety net.
+          # test suite green, and died before push), so it was raised to 2400.
+          # 2400 then killed mctl-telegram issue-482 on 2026-09-03 with zero
+          # output: that proposal is 9 implementation tasks plus 26 tests
+          # across five new HTTP routes, a five-state machine, a consent page
+          # and a rate limiter — larger than anything the 40 min budget was
+          # sized against. 90 min covers it with margin and still bounds a
+          # hung model stream well inside the step-level
+          # activeDeadlineSeconds (7200), which remains the outer safety net.
           - name: IMPLEMENTER_TIMEOUT_SECONDS
-            value: "2400"
+            value: "5400"
           # Same STATE_DIR layout as cwft-mctl-agents-run — entrypoint.sh
           # symlinks <state>/<svc>/proposals onto /app/agents/<svc>/proposals/
           # so the SDK sees them, and run_implementer reads them directly.
