@@ -75,7 +75,7 @@ spec:
   arguments:
     parameters:
       - name: agent_image
-        value: ghcr.io/mctlhq/mctl-agents:1.38.0
+        value: ghcr.io/mctlhq/mctl-agents:1.39.0
         # Default = today's pin, so submitting without this parameter is a
         # zero-behaviour-change no-op. Overridden by the agent registry's
         # resolved image_ref once a caller starts pinning per-run.
