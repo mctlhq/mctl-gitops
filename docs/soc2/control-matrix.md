@@ -14,7 +14,7 @@ fails a design test.
 | CC6 | GitHub OAuth, Dex, Vault K8s/JWT, tenant NP, joiner/leaver WFTs, org MFA | overlays, `networkpolicy.yaml`, `evidence/github-org-mfa.md` | Probe auth; `two_factor_requirement_enabled` | MFA re-probed 2026-09-03T23:25Z `true` / `2fa_disabled` 0; open DCR is product choice |
 | CC7 | R2 backups, drills, responder CronWorkflow, api audit, k8s AuditPolicy | `restore.md`, `audit-policy.yaml`, CronWorkflow | CronJob lastSuccessful; suspend=false | audit.log node-local; no IR customer-notification SLA |
 | CC8 | No direct main; live branch protection; bot tag bumps only | GitHub rulesets; `gitops-bump.yaml`; `CLAUDE.md` | `gh api repos/.../rulesets` | Pass for design |
-| CC9 | Restore runbook; dual GitHub Apps | `restore.md`, `github-app-scope-audit.md` | Read runbook | No vendor SOC file (this `vendors.md`) |
+| CC9 | Restore runbook; dual GitHub Apps | `restore.md`, `github-app-scope-audit.md`, `evidence/vendors/` | Read runbook + vendor files | GitHub SOC 3 + Hetzner ISO on file; Cloudflare SOC 2 still dashboard-only |
 | A1 | PDBs, Vault raft 3, Traefik 3, etcd S3, single-CP runbook | `control-plane.md`, PDBs | Nodes + CronJob backup | No SLOs; replicaCount 1 on api; F21 wait is vault-backup only |
 | C1 | Edge TLS, sslmode=require, Vault+ESO, audit redaction, preview paths | overlays, `redact.go`, F2 preview | TLS at edge; Vault tls_disable=1 documented | No classification policy; F15 residual |
 
