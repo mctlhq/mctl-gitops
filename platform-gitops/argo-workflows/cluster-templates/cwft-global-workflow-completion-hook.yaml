@@ -4,8 +4,21 @@ metadata:
   name: global-workflow-completion-hook
   annotations:
     workflows.argoproj.io/description: |
-      Global completion hook that sends an instant HTTP POST event to mctl-api
-      upon workflow completion, unblocking Temporal activities without polling delay.
+      Global completion hook that runs on the completion of every workflow in
+      the cluster. Two jobs:
+        1. Log one structured line carrying the workflow's name, final phase
+           and DURATION. This is the only durable record of how long a run
+           took: workflowDefaults.ttlStrategy deletes the object 30 minutes
+           after success, the agent audit log stores the submission timestamp
+           and nothing else, and the Argo archive is reachable only through
+           the Argo Server API that no mctl operation exposes. Without this
+           line a run that stalled 30 minutes on a Multi-Attach retry is
+           indistinguishable from a healthy 3-minute one — both read
+           "succeeded", so a list of green runs proves nothing while looking
+           like it proves everything (gitops#984, and the #856 check that
+           could not be run because of it).
+        2. Send an instant HTTP POST event to mctl-api
+           upon workflow completion, unblocking Temporal activities without polling delay.
       Body is HMAC-SHA256 signed (X-MCTL-Signature: sha256=<hex>) with
       ARGO_WEBHOOK_SECRET from Vault. Unsigned calls are rejected by mctl-api 4.32.2+.
 spec:
@@ -19,6 +32,12 @@ spec:
             value: "{{workflow.name}}"
           - name: WORKFLOW_PHASE
             value: "{{workflow.status}}"
+          # Seconds, as a float string. Only meaningful in an exit handler,
+          # which is the only place this template is ever referenced.
+          - name: WORKFLOW_DURATION
+            value: "{{workflow.duration}}"
+          - name: WORKFLOW_NAMESPACE
+            value: "{{workflow.namespace}}"
           - name: ARGO_WEBHOOK_SECRET
             valueFrom:
               secretKeyRef:
@@ -28,7 +47,41 @@ spec:
         command: [python3, -c]
         args:
           - |
-            import hmac, hashlib, json, os, urllib.request
+            import hmac, hashlib, json, os, sys, urllib.request
+
+            # Emitted FIRST and outside the try, before anything that can
+            # return early. The webhook below exits 0 when ARGO_WEBHOOK_SECRET
+            # is absent, and a log line placed after that would silently stop
+            # being written the moment the secret went missing — exactly the
+            # failure mode where you most want the record.
+            #
+            # One line, JSON, on stdout, so Loki retention makes duration a
+            # queryable signal long after the workflow object is gone.
+            #
+            # Deliberately not carrying the `mctl.ai/operation` label: exactly
+            # one template in the repository sets it today, and an
+            # unresolvable {{workflow.labels.*}} reference fails the hook —
+            # which, on a GLOBAL exit hook, means failing every workflow in
+            # the cluster. The workflow name already carries the operation in
+            # its generateName prefix.
+            try:
+                duration = float(os.environ.get("WORKFLOW_DURATION") or 0)
+            except ValueError:
+                duration = -1.0
+            print(
+                json.dumps(
+                    {
+                        "msg": "workflow completed",
+                        "workflow_name": os.environ.get("WORKFLOW_NAME", ""),
+                        "workflow_namespace": os.environ.get("WORKFLOW_NAMESPACE", ""),
+                        "phase": os.environ.get("WORKFLOW_PHASE", ""),
+                        "duration_seconds": duration,
+                    },
+                    separators=(",", ":"),
+                ),
+                flush=True,
+            )
+
             try:
                 secret = os.environ.get("ARGO_WEBHOOK_SECRET") or ""
                 if not secret:
