@@ -3,7 +3,7 @@
 Draft for a SOC 2 Type I Section III. Seeded from
 `mctl-docs/docs/platform/architecture.md`,
 `infrastructure/k3s-preview/README.md`, and live cluster `mctl-preprod`
-on 2026-08-17, live tags refreshed 2026-08-24. Not customer marketing copy.
+on 2026-08-17, live tags refreshed 2026-09-04. Not customer marketing copy.
 
 ## 1. People
 
@@ -36,12 +36,12 @@ A second control plane is Horizon 2 (F11).
 
 | Component | Role | Typical image |
 |---|---|---|
-| mctl-api | REST + MCP + OAuth | `ghcr.io/mctlhq/mctl-api` (live 4.32.7 on 2026-08-19) |
-| mctl-agent | Tickets, alerts, dispatch | `ghcr.io/mctlhq/mctl-agent` (live 1.16.2 on 2026-08-24) |
-| mctl-agents | Implementer / shepherd workers | `ghcr.io/mctlhq/mctl-agents` |
-| mctl-portal | Backstage at app.mctl.ai | `ghcr.io/mctlhq/mctl-portal` |
-| mctl-web | Landing + Cloudflare Worker | `ghcr.io/mctlhq/mctl-web` |
-| mctl-docs | VitePress at docs.mctl.ai | `ghcr.io/mctlhq/mctl-docs` |
+| mctl-api | REST + MCP + OAuth | `ghcr.io/mctlhq/mctl-api` (live 4.37.0 on 2026-09-04) |
+| mctl-agent | Tickets, alerts, dispatch | `ghcr.io/mctlhq/mctl-agent` (live 2.0.1 on 2026-09-04) |
+| mctl-agents | Implementer / shepherd workers | `ghcr.io/mctlhq/mctl-agents` (live 1.39.0) |
+| mctl-portal | Backstage at app.mctl.ai | `ghcr.io/mctlhq/mctl-portal` (live 4.15.0) |
+| mctl-web | Landing + Cloudflare Worker | `ghcr.io/mctlhq/mctl-web` (live 7.5.2) |
+| mctl-docs | VitePress at docs.mctl.ai | `ghcr.io/mctlhq/mctl-docs` (live 0.1.38) |
 | mctl-gitops | Desired state | this repo |
 
 Write path: client → mctl-api → Argo Workflow → git commit in this repo →

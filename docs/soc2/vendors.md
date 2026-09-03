@@ -1,7 +1,7 @@
 # Subservice organizations
 
 No vendor SOC reports are on file as of 2026-08-24. Live privacy policy
-`https://mctl.ai/privacy` (mctl-web 7.4.0) names the processors below.
+`https://mctl.ai/privacy` (mctl-web 7.5.2, text dated 2026-08-24) names the processors below.
 
 | Org | Role | In privacy policy? | SOC report on file? |
 |---|---|---|---|

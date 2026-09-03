@@ -7,12 +7,15 @@ compensations are the design, not a claim that SoD exists.
 ## Facts
 
 - One human owner: `@mashkovd`.
-- GitHub rulesets include `bypass_actors` for repository admin
-  (PLATFORM_ASSESSMENT 2026-07). There is no documented emergency policy
-  except `emergency-change.md` in this directory.
+- GitHub rulesets still include `bypass_actors` for repository admin on
+  api / agent / agents / web. gitops `main-protection` does not
+  (`current_user_can_bypass=never` as of 2026-09-03). There is no
+  documented emergency policy except `emergency-change.md` in this
+  directory.
 - `gitops-bump.yaml` / `release-deploy.yaml` commit `image.tag` directly
   to `main` (allowed exception in `CLAUDE.md` / workspace `AGENTS.md`).
-- Core platform repos have no CODEOWNERS; academy/telegram/openclaw do.
+- CODEOWNERS (`* @MashkovD`) on api / gitops / agent; academy /
+  telegram / openclaw already had it.
 
 ## Compensations
 

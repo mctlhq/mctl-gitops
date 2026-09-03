@@ -6,12 +6,12 @@ fails a design test.
 
 | TSC | Control as designed | Evidence | Test of design (point in time) | Hole |
 |---|---|---|---|---|
-| CC1 | Solo founder + AGENTS.md + SECURITY.md + Contributor Covenant | `AGENTS.md`, `SECURITY.md`, `ROADMAP.md` | Inspect policies exist and name an owner | No org chart, no CoC ack, no CODEOWNERS on core repos |
-| CC2 | Privacy + runbooks + docs.mctl.ai | `mctl-web` privacy, `docs/runbooks/*`, this binder | Read description vs live cluster | Subprocessors live on mctl-web 7.4.0; §6 still overclaims all-in-transit TLS vs Vault east-west (F15) |
+| CC1 | Solo founder + AGENTS.md + SECURITY.md + Contributor Covenant | `AGENTS.md`, `SECURITY.md`, `ROADMAP.md`, CODEOWNERS | Inspect policies exist and name an owner | No org chart, no CoC ack; CODEOWNERS on api / gitops / agent |
+| CC2 | Privacy + runbooks + docs.mctl.ai | `mctl-web` privacy, `docs/runbooks/*`, this binder | Read description vs live cluster | Subprocessors live on mctl-web 7.5.2 (text dated 2026-08-24); §6 still overclaims all-in-transit TLS vs Vault east-west (F15) |
 | CC3 | Engineering F-register, ROADMAP, `docs/soc2/risk-register.md` | this binder | Confirm residuals are listed | Fraud memo exists; no annual signed risk assessment |
 | CC4 | Grafana / Alertmanager / VaultBackupStale | `monitoring.yaml`, `backup-alerts.yaml` | Confirm rules exist in git | Infra monitoring ≠ control monitoring; no internal audit |
 | CC5 | Branch + PR + Claude P1/P2 + GitOps | `claude-review.yml`, Argo CD apps | Open one merged PR; confirm merge commit | Pass for design |
-| CC6 | GitHub OAuth, Dex, Vault K8s/JWT, tenant NP, joiner/leaver WFTs, org MFA | overlays, `networkpolicy.yaml`, `evidence/github-org-mfa.md` | Probe auth; `two_factor_requirement_enabled` | MFA on 2026-08-19; `2fa_disabled` count 0; open DCR is product choice |
+| CC6 | GitHub OAuth, Dex, Vault K8s/JWT, tenant NP, joiner/leaver WFTs, org MFA | overlays, `networkpolicy.yaml`, `evidence/github-org-mfa.md` | Probe auth; `two_factor_requirement_enabled` | MFA re-probed 2026-09-03T23:25Z `true` / `2fa_disabled` 0; open DCR is product choice |
 | CC7 | R2 backups, drills, responder CronWorkflow, api audit, k8s AuditPolicy | `restore.md`, `audit-policy.yaml`, CronWorkflow | CronJob lastSuccessful; suspend=false | audit.log node-local; no IR customer-notification SLA |
 | CC8 | No direct main; live branch protection; bot tag bumps only | GitHub rulesets; `gitops-bump.yaml`; `CLAUDE.md` | `gh api repos/.../rulesets` | Pass for design |
 | CC9 | Restore runbook; dual GitHub Apps | `restore.md`, `github-app-scope-audit.md` | Read runbook | No vendor SOC file (this `vendors.md`) |

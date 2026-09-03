@@ -3,7 +3,7 @@
 Internal package for a point-in-time test of design. Not a report. Not a
 badge. Not on docs.mctl.ai.
 
-**As of:** 2026-08-24
+**As of:** 2026-09-04
 **System:** MCTL platform on cluster `mctl-preprod`
 **Criteria in scope:** Security (CC1–CC9), Availability (A1), Confidentiality (C1)
 **Out of scope:** Type II observation window, HIPAA, ISO 27001, tenant
@@ -41,9 +41,10 @@ Single control-plane (F11). Vault east-west `tls_disable=1` (F15). PSS
 `enforce=baseline` (F18). Open RFC 7591 DCR (product choice). docs
 `style-src 'unsafe-inline'` (rejected in nginx.conf). apiserver audit.log
 on the CP disk, not Loki (F20). `gitops-bump` / `release-deploy` write
-`image.tag` to main. GitHub rulesets allow admin bypass. Org MFA
-requirement is **on** as of 2026-08-19 (secure methods only);
-`2fa_disabled` count 0 after the same-day offboarding.
+`image.tag` to main. GitHub rulesets still allow admin bypass on
+api / agent / agents / web; gitops `main-protection` does not
+(`current_user_can_bypass=never`). Org MFA requirement is **on**
+(secure methods only); `2fa_disabled` count 0 as of 2026-09-03T23:25Z.
 
 ## What this is not
 
