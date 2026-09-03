@@ -227,7 +227,22 @@ spec:
           # We need a separate Certificate resource or annotate differently
           # For simplicity, we add a Certificate resource for the custom domain
           CERT_DIR="platform-gitops/services/${TEAM}/${SERVICE}"
-          cat > "${CERT_DIR}/custom-domain-cert-${DOMAIN%%.*}.yaml" << CERTEOF
+          # ONE file, not one per domain. The manifest always lists every
+          # custom host and always declares the same metadata.name
+          # (${SERVICE}-custom-tls), so naming the file after the domain being
+          # added produced a second manifest declaring the same Certificate as
+          # soon as a service had two custom domains with different first
+          # labels — a duplicate resource that ArgoCD refuses to sync. The
+          # removal path's `rm -f custom-domain-cert-*.yaml` glob shows a
+          # single file was the intent all along.
+          CERT_FILE="${CERT_DIR}/custom-domain-cert.yaml"
+          # Sweep away any per-domain files a previous version of this
+          # template wrote, so the first add after this change converges
+          # instead of leaving the duplicate behind.
+          for stale in "${CERT_DIR}"/custom-domain-cert-*.yaml; do
+            [ -e "$stale" ] && rm -f "$stale"
+          done
+          cat > "$CERT_FILE" << CERTEOF
           apiVersion: cert-manager.io/v1
           kind: Certificate
           metadata:
@@ -243,7 +258,7 @@ spec:
 
           # Add all custom domain hosts to the Certificate
           for h in $(yq eval '(.ingress.tls[] | select(.secretName == strenv(CUSTOM_TLS_NAME))).hosts[]' "$SVC_VALUES"); do
-            echo "      - ${h}" >> "${CERT_DIR}/custom-domain-cert-${DOMAIN%%.*}.yaml"
+            echo "      - ${h}" >> "$CERT_FILE"
           done
 
           echo "✅ Custom domain TLS certificate configured"
