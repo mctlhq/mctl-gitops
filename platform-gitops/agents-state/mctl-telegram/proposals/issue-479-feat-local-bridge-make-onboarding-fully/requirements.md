@@ -1,188 +1,178 @@
-# Local Bridge: fully self-service onboarding with zero required operator actions
+# Local Bridge: fully self-service onboarding, zero required operator actions
 
 ## Context
 
-`mctl-telegram` supports two Telegram deployment modes: "hosted" (the server
-holds an encrypted MTProto session and talks to Telegram directly) and
-"local" (Local Bridge — the MTProto session lives on the user's own machine
-inside the `mctl-telegram-local` daemon, and `tg.mctl.ai` only relays MCP
-tool calls to it over a websocket, `GET /bridge`). `internal/bridge/DESIGN.md`
-and `docs/local-bridge.md` both document this mode candidly as "beta" and
-list three operator-only actions that stand between a fresh user and a
-working daemon:
+Local Bridge (M4) lets a user run their MTProto session on their own machine
+while `tg.mctl.ai` relays MCP tool calls to it. The server half is built and
+deployed; the daemon (`cmd/local`) implements `init`, `login`, `connect`,
+`daemon`. But `docs/local-bridge.md` and `internal/bridge/DESIGN.md` both
+document that a fresh user cannot finish onboarding alone: an operator must
+call the admin-only MCP tools `provision_local_account`
+(`internal/mcp/tools.go:1093`) or `set_account_mode`
+(`internal/mcp/tools.go:1011`), hand-mint a long-lived bearer token via
+`POST /api/mcp/worker-token` (`internal/workertoken/tokenhandler.go`), and
+call `set_account_send` (`internal/mcp/tools.go:951`) before sending works.
+`internal/bridge/DESIGN.md`'s own "Remaining gaps" section already names this
+exact gap ("No self-serve enablement", "No long-lived MCP token to hand to
+connect"), so this proposal turns that gap into a concrete plan.
 
-1. `provision_local_account` (or `set_account_mode mode="local"` for an
-   existing hosted account) — an admin-only MCP tool
-   (`internal/mcp/tools.go:1088-1156`, requires `admin:users` scope) that
-   creates the `telegram_accounts` row with `mode='local'`.
-2. `POST /api/mcp/worker-token` with `purpose="local-bridge"`
-   (`internal/workertoken/tokenhandler.go`) — an admin-only HTTP endpoint
-   that hand-mints a 30-90 day bearer JWT the daemon exchanges for bridge
-   tokens. There is no MCP tool for this; an operator makes the HTTP call by
-   hand (`internal/bridge/DESIGN.md:143-150`).
-3. `set_account_send` (`internal/mcp/tools.go:948-1005`) — an admin-only MCP
-   tool that flips `telegram_accounts.send_enabled`, without which
-   `send_message` returns a silent successful dry-run instead of sending.
-
-The issue asks to remove all three from the mandatory path for a brand-new
-user, while keeping every one of them available as an operator/support
-mechanism, and without ever having the server hold an MTProto session for a
-user who never asked for hosted mode. This matters because "beta, needs an
-admin" is currently the single biggest adoption blocker for the mode the
-project's own design doc identifies (`internal/bridge/DESIGN.md:120-167`,
-"Remaining gaps... blocking a user, in the order a user hits them").
-
-The codebase already has the two building blocks a self-service flow needs,
-just not wired together for this purpose:
-
-- **Proof of Telegram identity without an MTProto session.** `POST /oauth/telegram`
-  drives `internal/auth/telegramoidc` (`internal/auth/telegramoidc/oidc.go`),
-  an OIDC Relying Party against `https://oauth.telegram.org` that verifies a
-  JWKS-signed `id_token` and yields a `TelegramID` the caller has proven
-  ownership of — no MTProto, no server-side session. This is exactly the
-  mechanism `internal/oauth/enable_access.go`'s browser wizard already uses
-  before ever touching phone/SMS/2FA (`wantTgID` in `startLoginFlow`,
-  `internal/oauth/enable_access.go:99-189`).
-- **A precedent for self-service, per-user HTTP flows with no operator in the
-  loop.** `internal/oauth/enable_access.go` is a complete, in-browser,
-  admin-free flow (`ConnectClientID = "mctl_self_connect"`,
-  `internal/oauth/server.go:446`) that already lets an authenticated Telegram
-  user opt in or out of send permission via a checkbox
-  (`stepPermissions`/`sendOptIn`, `internal/oauth/enable_access.go:257-292`)
-  before finishing. It is the shape Workstream A and B should extend, not
-  reinvent — it only currently drives a *hosted* login (phone/SMS/2FA), not
-  a local one.
+The issue asks for a local-first fresh-user path with zero mandatory operator
+steps: local Telegram login, self-service identity activation, owner-controlled
+send consent, automatic short-lived credential issuance with device-bound
+refresh, and a documentation split between the client/owner path and the
+operator support/recovery path. Existing hosted accounts, hosted->local
+migration, and manually provisioned Local Bridge installs must keep working.
 
 ## User stories
 
-- AS a fresh mctl-telegram user with no server-side account I WANT to
-  install the local daemon, log in to Telegram locally, and activate Local
-  Bridge myself SO THAT I never have to wait on or contact an operator to
-  start using it.
-- AS a privacy-conscious user I WANT my MTProto session to never leave my
-  machine when I choose Local Bridge from the start SO THAT `tg.mctl.ai`
-  never becomes a copy of my Telegram credentials.
-- AS the account owner I WANT to explicitly and separately decide whether
-  the daemon may send messages, and to revoke that later, SO THAT read-only
-  use is the safe default and sending is an informed choice.
-- AS a user running the daemon unattended I WANT it to renew its own
-  short-lived credentials without me minting or copying a long-lived token
-  SO THAT there is no permanent bearer secret sitting on disk.
-- AS an operator I WANT device/account revocation to immediately and
-  durably stop refresh and bridge connections for that device SO THAT a
-  compromised or decommissioned client cannot keep working.
-- AS an operator I WANT existing hand-provisioned Local Bridge accounts and
-  hosted accounts to keep working unmodified SO THAT this change ships
-  without a forced migration.
+- AS a new Local Bridge user I WANT to authenticate with Telegram locally and
+  activate the bridge myself SO THAT I never have to contact an operator to
+  get `telegram_id` registered or the account provisioned.
+- AS a new Local Bridge user I WANT to explicitly choose whether sending is
+  allowed during activation SO THAT I control message-sending risk without an
+  operator flipping `set_account_send` on my behalf.
+- AS a Local Bridge daemon operator (the end user running the daemon) I WANT
+  credentials to be issued and refreshed automatically SO THAT I never mint
+  or paste a long-lived bearer token.
+- AS a platform operator I WANT credential theft to be less useful than today
+  SO THAT a stolen bridge/worker credential cannot be replayed indefinitely
+  from any machine.
+- AS a platform operator I WANT to revoke a device/account and have that
+  immediately stop refresh and bridge use SO THAT abuse and leaks are
+  contained without me having to hunt down every derived token.
+- AS an existing hosted user I WANT my account and migration path to keep
+  working unmodified SO THAT this change does not regress current behavior.
 
 ## Acceptance criteria (EARS)
 
-- WHEN a Telegram id has no `telegram_accounts` row at all THE SYSTEM SHALL
-  allow a self-service activation call, authenticated only by Telegram OIDC
-  proof of that id plus a device public key, to create the row directly with
-  `mode='local'` and `session_encrypted` left `NULL`.
-- WHEN self-service activation succeeds THE SYSTEM SHALL NOT create, in that
-  same flow, any hosted MTProto session or any temporary hosted/local
-  intermediate account state.
-- WHEN self-service activation is invoked again for the same owner, device
-  public key, and Telegram id THE SYSTEM SHALL reconcile idempotently — no
-  duplicate `telegram_accounts` row, no duplicate device-binding row — and
-  return a usable credential rather than an error.
-- IF a Telegram id already has an active `telegram_accounts` row in
-  `mode='hosted'` THEN THE SYSTEM SHALL refuse to silently convert it to
-  local mode via self-service activation and SHALL point the caller at the
-  existing operator-mediated migration path (`set_account_mode`).
-- WHEN self-service activation succeeds THE SYSTEM SHALL default
-  `send_enabled=false` and SHALL require a separate, explicit owner action
-  to set it `true`; no operator call to `set_account_send` shall be required
-  for either state.
-- WHEN the owner grants or revokes send consent THE SYSTEM SHALL record who
-  granted it, when, and through which flow, in a form visible to
-  `get_my_audit_log`/`GET /api/account/audit`.
-- WHILE an activation has not granted send consent THE SYSTEM SHALL still
-  permit a fully read-only activation and daemon connection to succeed.
-- WHEN self-service activation succeeds THE SYSTEM SHALL automatically issue
-  a Local Bridge access credential to the calling device, scoped to
-  Local Bridge use, without an operator call to `POST /api/mcp/worker-token`.
-- WHILE a device's issued Local Bridge access credential is valid THE SYSTEM
-  SHALL keep its lifetime bounded to hours (not the existing 30-90 day
-  worker-token range) and SHALL provide a refresh endpoint the daemon can
-  call before expiry.
-- WHEN a device calls the refresh endpoint THE SYSTEM SHALL require proof of
-  possession of the device's bound private key (not bearer possession of the
-  access credential alone) before issuing a new short-lived credential.
-- IF a device or account is revoked THEN THE SYSTEM SHALL reject subsequent
-  refresh calls for that device and SHALL cause the bridge (`GET /bridge`)
-  to refuse or drop that device's connection.
-- WHEN any credential is issued, refreshed, or revoked THE SYSTEM SHALL log
-  an audit record of the outcome and SHALL NOT log the token/key material
-  itself, consistent with `internal/audit/redact.go`'s existing redaction
-  contract.
-- WHERE an existing hand-minted `POST /api/mcp/worker-token` credential with
-  `purpose="local-bridge"` is already in use THE SYSTEM SHALL continue to
-  accept it against `POST /api/bridge/token` unchanged, for backward
-  compatibility during the migration window.
-- WHERE an account is `mode='hosted'` THE SYSTEM SHALL continue to support
-  existing hosted login and the existing hosted-to-local `set_account_mode`
-  migration path unchanged.
-- IF an unauthenticated or OIDC-unproven caller attempts self-service
-  activation for a Telegram id THEN THE SYSTEM SHALL refuse it; activation
-  authority comes only from the OIDC-proven identity of the caller, never
-  from a caller-supplied `telegram_id` parameter.
+- WHEN a Telegram id has never completed a hosted login and its owner
+  completes local login plus self-service activation THE SYSTEM SHALL create
+  a `telegram_accounts` row with `mode='local'` and `session_encrypted=NULL`
+  without any admin-scoped tool call.
+- WHEN activation completes for an owner/device/account that already has an
+  active `local` row THE SYSTEM SHALL treat the request as idempotent and
+  SHALL NOT create a duplicate `telegram_accounts` row or duplicate device
+  binding.
+- WHEN activation binds an identity THE SYSTEM SHALL derive `telegram_id` from
+  a server-verified proof of Telegram identity (the existing
+  `internal/auth/telegramoidc` OIDC flow, the same mechanism
+  `internal/oauth/enable_access.go`'s `startLoginFlow` already uses to check
+  "the phone login must match the OIDC-proven id") rather than from an
+  operator- or client-supplied integer.
+- IF the identity a device claims does not match the identity the server
+  independently verified THEN THE SYSTEM SHALL refuse activation and SHALL
+  NOT create or modify any `telegram_accounts` row.
+- WHILE an account has not been granted send consent THE SYSTEM SHALL keep
+  `send_enabled=false` and SHALL continue returning the existing dry-run
+  preview behavior from `send_message` (per-account `send_enabled=false`).
+- WHEN the owner explicitly grants send permission during or after activation
+  THE SYSTEM SHALL record `send_enabled=true` together with an audit row
+  carrying the actor identity and timestamp, without requiring the
+  `admin:users`-scoped `set_account_send` tool.
+- WHEN the owner explicitly revokes send permission THE SYSTEM SHALL set
+  `send_enabled=false` and SHALL audit the revocation the same way.
+- IF an owner completes activation without granting send THEN THE SYSTEM
+  SHALL still complete account creation and issue Local Bridge credentials
+  scoped read-only.
+- WHEN activation succeeds THE SYSTEM SHALL automatically issue a Local
+  Bridge access credential scoped to `local-bridge` (the existing
+  `allowedLocalBridgeScopes` allowlist in `internal/workertoken/tokenhandler.go`)
+  without any call to the admin-only `POST /api/mcp/worker-token`.
+- WHEN a Local Bridge access credential is issued via self-service activation
+  THE SYSTEM SHALL set its lifetime in hours (not the current
+  `defaultWorkerTokenTTL` of 30 days), matching the issue's "short-lived,
+  hours not months" requirement.
+- WHILE a Local Bridge daemon holds a valid, unexpired, unrevoked credential
+  bound to its registered device key THE SYSTEM SHALL allow that daemon to
+  refresh the credential without operator involvement, extending the pattern
+  `internal/workertoken/renewhandler.go` already implements for admin-minted
+  tokens.
+- IF a refresh request is not accompanied by valid proof of the bound device
+  key THEN THE SYSTEM SHALL refuse the refresh.
+- WHEN an operator revokes a device or account THE SYSTEM SHALL cause all
+  subsequent refresh attempts for that device/account to fail and SHALL
+  cause the bridge (`GET /bridge`, `internal/bridge/server.go`) to reject that
+  daemon's connection.
+- WHEN a self-service-issued Local Bridge credential is minted, refreshed, or
+  revoked THE SYSTEM SHALL write an audit row through the existing
+  `internal/db/store.go` `LogToolCall`/audit chain, and SHALL NOT include the
+  token or device secret value in that row or in any log line (enforced via
+  `internal/audit/redact.go`, which must gain any new sensitive field names
+  this work introduces).
+- WHERE an account was migrated from hosted to local via the existing
+  `set_account_mode` admin tool THE SYSTEM SHALL continue to support that
+  path unchanged.
+- WHERE a Local Bridge daemon already holds a manually minted worker token
+  (purpose `local-bridge`, minted via today's `POST /api/mcp/worker-token`)
+  THE SYSTEM SHALL continue to accept it through `connect` and
+  `/api/bridge/token` for a defined migration window.
+- THE SYSTEM SHALL NOT silently migrate an existing hosted account to local
+  mode as a side effect of any new self-service flow.
+- THE SYSTEM SHALL NOT require the fresh-user path to create or store a
+  hosted MTProto session (`session_encrypted`) at any point.
 
 ## Out of scope
 
-- Removing or renaming `provision_local_account`, `set_account_mode`, or
-  `set_account_send` — they remain as operator/support/recovery tools
-  (explicitly required by the issue's "Backward compatibility" and
-  "Non-goals" sections).
-- Changing the public MCP endpoint or the bridge websocket transport
-  protocol (`internal/bridge/protocol.go`).
-- Adding always-on hosted-listener parity for local accounts (explicitly a
-  known, separate gap in `internal/bridge/DESIGN.md`).
-- Implementing the five tools that remain unsupported in local mode
+- Changing the Local Bridge websocket transport, the `/bridge` protocol
+  envelope (`internal/bridge/protocol.go`), or the public `/mcp` endpoint.
+- Forcing any existing hosted user to migrate to local mode.
+- Implementing the five tools already documented as unsupported in local mode
   (`edit_message`, `delete_messages`, `forward_messages`, `search_messages`,
-  `set_reaction`).
-- Signing the released `mctl-telegram-local` binaries (tracked separately,
-  per `internal/bridge/DESIGN.md`'s "No released binary" note).
-- Building a first-class Windows ACL story for on-disk secrets (existing
-  known gap, `cmd/local/umask_windows.go`); the new device private key
-  inherits the same on-disk protection level as `bridge_token.json` today.
-- A `mctl-portal` "connected daemons" UI (listed as optional/cross-repo in
-  `internal/bridge/DESIGN.md`).
+  `set_reaction`) or the `fetch_media=true` restriction.
+- A hosted always-on listener equivalent for local-mode accounts.
+- A mctl-portal "connected daemons" UI (tracked separately per
+  `internal/bridge/DESIGN.md`'s cross-repo notes).
+- Windows ACL hardening for on-disk secrets (tracked as its own known gap in
+  `internal/bridge/DESIGN.md`); this proposal does not make the Windows
+  on-disk story worse, but does not fix it either.
+- Removing existing admin tools (`provision_local_account`, `set_account_mode`,
+  `set_account_send`, `POST /api/mcp/worker-token`); they remain as
+  support/recovery/migration tools per the issue's non-goals.
+- A new end-to-end encryption scheme between the MCP client and the daemon;
+  the relay still sees payloads, unchanged from today's trust model.
 
 ## Open questions
 
-- Should the browser-based activation step reuse `internal/oauth/enable_access.go`'s
-  existing wizard UI/session machinery (new step type that skips phone/SMS
-  and instead confirms a device pairing code), or should it be a new,
-  separate handler that only imports `telegramoidc` directly? This proposal
-  assumes reuse of the OIDC-proof primitive and the `stepPermissions`
-  send-consent UX pattern, but a new minimal handler, to avoid coupling to
-  hosted-login state machine internals. Proceeding with a new, small
-  `internal/oauth/activate_local.go` alongside the existing file.
-- Exact device-proof cryptography (Ed25519 signature over a server-issued
-  nonce vs. a full mTLS-like scheme) is left to implementation; this
-  proposal assumes Ed25519 keypair generated at `init` time and a
-  challenge-response at `activate`/refresh, matching the issue's "Preferred
-  shape" section and the codebase's existing use of `crypto/rand` and
-  `crypto/hmac` for similar bounded-secret work (`internal/workertoken/tokenhandler.go`,
-  `internal/auth/localjwt/issuer.go`).
-- Whether the CLI subcommand is literally named `activate` (as in the
-  issue's illustrative example) or folded into `connect`. This proposal adds
-  `activate` as new, additive command and deprecates none of `init` /
-  `login` / `connect` / `daemon`, since `connect`'s current behavior
-  (exchange worker token for bridge token) remains valid for legacy users.
-- Exact short-lived credential TTL (issue says "hours, not days"). This
-  proposal assumes 4 hours, matching the existing `bridgeTokenTTL = time.Hour`
-  order of magnitude in `internal/bridge/tokenhandler.go` scaled up one step
-  for the outer (worker-token-equivalent) credential, with the daemon
-  refreshing at roughly half that interval the same way it already
-  re-exchanges before expiry (`internal/bridge/DESIGN.md:111-114`). Exact
-  number is a tuning parameter, not a correctness requirement.
-- Whether device revocation is a new admin MCP tool or reuses
-  `revoke_worker_token`'s pattern (`internal/mcp/revoke_worker_token_test.go`)
-  extended with a `device_id` argument. This proposal assumes a new
-  `revoke_local_bridge_device` tool that mirrors `revoke_worker_token`'s
-  jti/telegram_id revocation semantics but keys on `device_id`, since a
-  device row, not a single jti, is the durable revocation anchor here.
+- **How does the daemon prove Telegram identity to the server without a
+  hosted session or a full OIDC browser round trip on every activation?**
+  The issue requires the client to determine `telegram_id` locally and then
+  activate against the server. The codebase's only existing
+  server-verified Telegram identity proof is the browser-based
+  `internal/auth/telegramoidc` OIDC flow (`oauth.telegram.org`), which today
+  runs inside `internal/oauth`'s authorization-code dance. Interpretation
+  used here: activation reuses that same OIDC proof through a
+  device-authorization-style flow (daemon opens a browser to an activation
+  URL; user completes Telegram OIDC login; server matches the OIDC-proven
+  `telegram_id` against the one the daemon's local MTProto login reported)
+  — mirroring the identity-match check `internal/oauth/enable_access.go`'s
+  `startLoginFlow` already performs between OIDC identity and phone-login
+  identity. This needs product sign-off before implementation; assumed here
+  as the closest fit to existing infrastructure.
+- **What proves device possession on refresh?** The issue asks for a device
+  keypair bound at activation, with refresh requiring proof of that key
+  rather than only a bearer secret. No such primitive exists in this
+  codebase today (`internal/workertoken`'s renew path is bearer-token-only).
+  This proposal assumes a signed-challenge (proof-of-possession) scheme
+  layered on top of the existing renew handler; exact algorithm (e.g.
+  Ed25519 challenge-response) is left to implementation, per the issue's own
+  "exact crypto/protocol details can be chosen during design."
+- **Where does send-consent UI live?** The issue mentions CLI and "browser/
+  device activation step where useful" without mandating one. This proposal
+  assumes the activation web page (a sibling of `internal/oauth`'s existing
+  enable_access pages) is the natural place to collect explicit send
+  consent, with a CLI flag as a secondary path for headless setups. Needs
+  UX confirmation.
+- **Definition of "short-lived" in hours.** The issue says "hours, not a
+  manually copied permanent token" without a number. This proposal assumes
+  a default of 8 hours for the self-service-issued Local Bridge access
+  credential (short enough that a leaked, unrefreshed credential expires the
+  same day; long enough that a daemon restart within a workday does not
+  force re-activation), with automatic refresh keeping a running daemon
+  alive indefinitely subject to the device-binding and revocation checks
+  above. Needs product sign-off.
+- **Multi-device support.** The issue's device-binding model implies one
+  device key per activation. `docs/local-bridge.md` already documents "one
+  account per machine" / "one daemon per account" as a current limitation;
+  this proposal does not change that limitation, but device binding does add
+  the scaffolding (a devices table) that a future multi-device story could
+  build on. Not designed further here.

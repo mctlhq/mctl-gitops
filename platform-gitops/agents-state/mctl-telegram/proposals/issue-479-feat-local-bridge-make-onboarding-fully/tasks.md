@@ -1,166 +1,164 @@
 # Tasks: issue-479-feat-local-bridge-make-onboarding-fully
 
-- [ ] 1. Add `local_bridge_devices` table migration (sqlite + postgres
-      branches) in `internal/db/db.go`, following the existing
-      `addColumnIfMissing`/`CREATE TABLE IF NOT EXISTS` pattern used for
-      `telegram_accounts.mode`. — DoD: fresh DB and an existing DB both
-      migrate cleanly (new + upgrade test, mirroring
-      `internal/db/local_account_test.go`'s style); columns
-      `device_id, user_id, telegram_user_id, public_key, created_at,
-      last_refreshed_at, revoked_at` exist with an index on
-      `(user_id) WHERE revoked_at IS NULL`.
-
-- [ ] 2. Add `Store.ActivateLocalAccount` in `internal/db/store.go`
-      (depends on 1) — DoD: unit tests cover (a) fresh telegram id → new row
-      + new device row, `existing=false`; (b) same user+device re-run →
-      no duplicate rows, `existing=true`; (c) existing `mode='hosted'` row →
-      returns `ErrAccountAlreadyActive` unchanged; (d) existing `mode='local'`
-      row from a *different* device → device row added, account row
-      untouched. Reuses `ProvisionLocalAccount`'s `WHERE NOT EXISTS` insert
-      for the account row rather than duplicating its SQL.
-
-- [ ] 3. Add `internal/localbridgecred` package: mint/verify helpers for
-      `aud=["local-bridge-access"]` JWTs carrying `DeviceID`, scopes derived
-      from send-consent state, and hours-scale TTL, built on
-      `internal/auth/localjwt.Issuer`/`Claims` (depends on 1) — DoD: unit
-      tests for mint, verify, expiry, and scope derivation
-      (read-only vs read+send+pin), mirroring
-      `internal/workertoken/tokenhandler_test.go`'s structure.
-
-- [ ] 4. Add nonce-challenge + Ed25519 signature verification for device
-      refresh: `GET /api/local-bridge/refresh/nonce`,
-      `POST /api/local-bridge/refresh` (depends on 2, 3) — DoD: refresh
-      succeeds only with a valid signature over an unexpired, single-use
-      nonce for a non-revoked device; reused/expired/wrong-key/wrong-device
-      attempts are rejected with tests for each; scopes/telegram id on the
-      renewed token are copied forward, never widened (mirrors
-      `internal/workertoken/renewhandler_test.go`'s escalation-refusal
-      tests).
-
-- [ ] 5. Add `internal/oauth/activate_local.go`: `GET /telegram/activate`
-      (OIDC-proof + send-consent checkbox, reusing
-      `telegramoidc.Authenticator` already wired into `oauth.Server`) and
-      `POST /api/local-bridge/activate` (device pubkey + activation code →
-      calls `ActivateLocalAccount` + mints first `local-bridge-access`
-      token) (depends on 2, 3) — DoD: end-to-end handler test proves a
-      caller with only an OIDC-proven identity (no `admin:users` scope) can
-      activate; a caller attempting to activate a `telegram_id` they did not
-      prove via OIDC is rejected; re-running activation for the same
-      device is idempotent (asserts against task 2's idempotency).
-
-- [ ] 6. Add `POST /api/local-bridge/send-consent` for post-activation
-      grant/revoke, calling `Store.SetSendEnabled` under the caller's own
-      identity and writing a distinguishable audit tool_name
-      (`local:consent:grant` / `local:consent:revoke`) via
-      `Store.LogToolCall` (depends on 5) — DoD: grant and revoke both
-      round-trip through `get_my_audit_log`; a read-only activation followed
-      by no consent call leaves `send_enabled=false` and `send_message`
-      still returns the existing dry-run behavior unchanged.
-
-- [ ] 7. Add admin tool `revoke_local_bridge_device` in `internal/mcp/tools.go`,
-      following `revoke_worker_token`'s structure (depends on 1, 4) — DoD:
-      sets `local_bridge_devices.revoked_at`, denylists the device's current
-      `Jti` via the existing `internal/auth/localjwt/revocation.go` path,
-      and a subsequent refresh attempt for that device is rejected end to
-      end (test extends `internal/mcp/revoke_worker_token_test.go`'s
-      pattern).
-
-- [ ] 8. Wire all new handlers into `cmd/server/main.go` alongside the
-      existing `internal/bridge`/`internal/workertoken` mounts, behind the
-      same `auth.Middleware(provider, true, m)` chain (depends on 3, 4, 5,
-      6) — DoD: `cmd/server/main_test.go`-style smoke test confirms the
-      routes exist and reject unauthenticated requests.
-
-- [ ] 9. `cmd/local`: generate and persist an Ed25519 device keypair at
-      `init` (encrypted the same way the session DB key is; `0600`,
-      `writeFileAtomic`), add an `activate` subcommand that drives the
-      device-code exchange against `/telegram/activate` +
-      `/api/local-bridge/activate` and writes the returned
-      `local-bridge-access` token + `device_id` into `bridge_token.json`
-      (depends on 5) — DoD: `cmd/local` unit/integration tests
-      (`daemon_test.go`-style, with a fake server) cover a full
-      `init` → `activate` → token-on-disk round trip; private key file
-      permissions asserted the same way `cmd/local/perms_test.go` already
-      asserts for existing secrets.
-
-- [ ] 10. `cmd/local/daemon.go`: prefer `local-bridge-access` +
-      device-signed refresh over the legacy worker-token renewal path when
-      both are available in `bridge_token.json`; fall back to the existing
-      `POST /api/mcp/worker-token/renew` path when only a legacy worker
-      token is present (depends on 4, 9) — DoD: daemon tests cover both
-      credential shapes reconnecting/refreshing successfully, and a
-      revoked device failing to refresh and surfacing the same style of
-      explicit, actionable error `docs/local-bridge.md` already documents
-      for `local-bridge daemon not connected`.
-
-- [ ] 11. Rewrite `docs/local-bridge.md`'s "What the operator has to do"
-      section into two explicit sections, "Client / owner actions" (local
-      login, `activate`, optional send consent, `daemon`) and "Operator
-      actions" (support/recovery/revocation only), and update "Set up" to
-      show the new zero-admin sequence as the primary path while keeping
-      the existing `connect`-with-hand-minted-token flow documented as the
-      legacy/support path (depends on 9, 10) — DoD: doc no longer lists any
-      step under "before you run `connect`" as required for a fresh user;
-      `internal/bridge/DESIGN.md`'s "Remaining gaps" #5 ("No self-serve
-      enablement") entry is updated to reflect what shipped.
+- [ ] 1. Add `local_bridge_devices` table to `internal/db/db.go`
+      (`sqliteSchema()` and `pgSchema()`), plus `Store` methods
+      `RegisterDevice`, `DeviceByPubkey`, `RevokeDevice`, `TouchDeviceLastSeen`
+      — DoD: schema migrations pass on both dialects (existing DB test suite,
+      e.g. `internal/db/*_test.go` patterns), new methods unit-tested for the
+      insert/lookup/revoke/idempotent-retry paths.
+- [ ] 2. Add `device_id` (optional) claim to `localjwt.Claims`
+      (`internal/auth/localjwt/issuer.go`) and thread it through `Mint`/
+      `Verify` — DoD: existing localjwt tests (`issuer_test.go`,
+      `revocation_test.go`) still pass unmodified; a new test confirms a
+      token with no `device_id` verifies exactly as before (legacy
+      compatibility).
+- [ ] 3. Implement the OIDC-proof + local-claim identity match for
+      activation as a small internal helper (parallel to
+      `enable_access.go`'s `tgID != wantTgID` check), reusing
+      `internal/auth/telegramoidc.Authenticator` — DoD: unit test proves a
+      mismatched claimed-vs-OIDC-proven `telegram_id` is refused and writes
+      no `telegram_accounts`/`users` row change.
+- [ ] 4. Implement `POST /api/local-bridge/activate/start` and
+      `POST /api/local-bridge/activate/poll` (new file, e.g.
+      `internal/bridge/activation.go` or `internal/oauth/activate.go` —
+      implementer's call based on which package's session-map helpers are
+      more reusable) (depends on 3) — DoD: start returns a device code +
+      verification URL; poll returns pending/denied/done; a browser-facing
+      page runs the existing `telegramoidc` flow and, on match, calls
+      `EnsureUserByTelegramID` + `ProvisionLocalAccount`, treating
+      `ErrAccountAlreadyActive` as idempotent success. Table-driven handler
+      tests modeled on `internal/oauth/enable_access_test.go`.
+- [ ] 5. Add send-consent capture to the activation page (checkbox, parallel
+      to `enable_access.go`'s `stepPermissions`/`sendOptIn`) and a
+      non-admin self-service send-toggle path (endpoint or MCP tool) scoped
+      to the caller's own `user_id` via the existing `actionableAccount`
+      predicate (depends on 4) — DoD: granting/revoking send as the account
+      owner works without `admin:users`; `set_account_send` (admin path)
+      unaffected; both paths write distinguishable audit rows.
+- [ ] 6. Implement self-service Local Bridge token issuance: an internal
+      mint function reusing `workertoken`'s `allowedLocalBridgeScopes` /
+      `workerBridgeAudience` / `Jti` / `OriginalIssuedAt` machinery with a
+      new hours-scale default TTL constant, called from the activation
+      completion path (not exposed as an admin HTTP handler) (depends on 1,
+      4, 5) — DoD: activation returns a working bridge-capable worker token
+      scoped read-only when send was not granted, read+send when it was;
+      existing `POST /api/mcp/worker-token` behavior/tests untouched.
+- [ ] 7. Add device-bound signature verification to the refresh path: extend
+      `POST /api/mcp/worker-token/renew` (or add a sibling endpoint) to
+      require and verify a signed nonce against the `device_pubkey` row when
+      the presented token carries a `device_id` claim; tokens without one
+      keep today's bearer-only behavior (depends on 1, 2, 6) — DoD: a
+      forged/absent signature is refused for a device-bound token; a legacy
+      (no `device_id`) worker token renews exactly as today;
+      `renewhandler_test.go`-style table tests cover both branches.
+- [ ] 8. Wire device revocation into the refresh check and confirm the
+      existing `/bridge` gate (`internal/bridge/server.go`) already fails a
+      revoked/expired daemon closed (depends on 1, 7) — DoD: test proves
+      revoking a device stops refresh immediately and a daemon whose
+      credential subsequently expires cannot reconnect; no changes needed
+      to `internal/bridge/server.go` itself if the existing JWT-expiry gate
+      already covers it (confirm, don't assume).
+- [ ] 9. Add `cmd/local activate` subcommand: generates/persists a device
+      Ed25519 keypair (new file under `cmd/local`, `0600`, next to
+      `config.json`), calls `activate/start`, prints the verification URL,
+      polls `activate/poll`, and on success writes `bridge_token.json`
+      directly (reusing `config.go`'s existing atomic-write helpers)
+      (depends on 4, 6) — DoD: `mctl-telegram-local init && login && activate
+      && daemon` completes onboarding for a brand-new Telegram id with zero
+      operator calls, verified locally against a dev server.
+- [ ] 10. Extend `cmd/local daemon`'s existing token-renewal call site
+      (`daemon.go`) to sign the refresh nonce with the persisted device key
+      when one exists, falling back to today's bearer-only renewal for a
+      daemon set up via legacy `connect` (depends on 7, 9) — DoD: a daemon
+      set up via `activate` renews using device-bound refresh; a daemon set
+      up via legacy `connect` (no device key on disk) keeps renewing exactly
+      as today.
+- [ ] 11. Add new sensitive field/claim names introduced by this work
+      (device secret material, activation codes, nonce signatures) to
+      `internal/audit/redact.go`'s matcher — DoD: a targeted test proves
+      none of the new fields appear unredacted in a log line, matching the
+      existing redaction test pattern for this file.
+- [ ] 12. Rewrite `docs/local-bridge.md`: replace the "What the operator has
+      to do" table and the `Set up` section's steps 1-3 with the
+      `init`/`login`/`activate` self-service path; add a distinct
+      "Operator: support and recovery" section covering
+      `provision_local_account`, `set_account_mode`,
+      `POST /api/mcp/worker-token`, and revocation, explicitly marked as not
+      part of normal onboarding (depends on 9) — DoD: doc has no remaining
+      claim that a fresh user must wait on an operator for the happy path;
+      cross-checked against `internal/bridge/DESIGN.md`, which should also
+      be updated to move "No self-serve enablement" out of "Remaining gaps."
+- [ ] 13. Update `internal/bridge/DESIGN.md`'s "Remaining gaps" and
+      "Migration story" sections to reflect the new self-service path and
+      device-binding model (depends on 4-10) — DoD: the design doc no longer
+      contradicts the shipped implementation; the "Rejected — do not
+      implement" section is left intact (this proposal does not touch
+      mctl-api/mctl-web).
 
 ## Tests
 
-- [ ] T1. Unit: `ActivateLocalAccount` idempotency and hosted-refusal cases
-      (task 2's DoD, extends `internal/db/local_account_test.go`).
-- [ ] T2. Unit: `local-bridge-access` JWT mint/verify/scope-derivation
-      (task 3's DoD).
-- [ ] T3. Unit: device refresh nonce/signature verification, including
-      replay of a used nonce and signature-with-wrong-key rejection
-      (task 4's DoD).
-- [ ] T4. Integration: OIDC-proof → activation → first credential issuance,
-      asserting no `telegram_accounts.session_encrypted` value is ever
-      written during this path (direct DB assertion, satisfying the issue's
-      "E2E assertions prove no hosted Telegram session is stored" criterion)
-      (task 5's DoD).
-- [ ] T5. Integration: read-only activation (no send consent) completes
-      successfully and `send_message` still dry-runs; a later
-      `send-consent` grant flips it to a real send path (task 6's DoD).
-- [ ] T6. Integration: device revocation blocks refresh and the next bridge
-      connection attempt is refused (task 7's DoD, extends
-      `internal/bridge/server_reconnect_test.go`'s style).
-- [ ] T7. End-to-end (closest existing analogue: `cmd/canary`): fresh
-      install → local Telegram login (`cmd/local login`) → self-service
-      `activate` → a read call through the bridge → explicit send consent →
-      a send call → credential refresh → daemon reconnect after refresh —
-      covering the issue's acceptance-criteria E2E bullet in one scripted
-      run against a test server.
-- [ ] T8. Regression: existing `provision_local_account`, `set_account_mode`,
-      `set_account_send`, `POST /api/mcp/worker-token`,
-      `POST /api/mcp/worker-token/renew` test suites
-      (`internal/mcp/tools_test.go`, `internal/workertoken/*_test.go`) pass
-      unmodified, proving the operator/support path is untouched.
+- [ ] T1. Unit: `ProvisionLocalAccount` idempotency contract as consumed by
+      the activation caller — retrying activation for the same
+      `owner/device/account` triggers `ErrAccountAlreadyActive` and produces
+      no duplicate row (extends existing coverage implied by
+      `internal/bridge/provision_test.go` / `store_test.go` patterns).
+- [ ] T2. Unit: identity-mismatch refusal in activation (claimed
+      `telegram_id` != OIDC-proven `telegram_id`) writes no state change.
+- [ ] T3. Unit: self-service mint produces a token whose scopes are exactly
+      `allowedLocalBridgeScopes` filtered by consent, with an hours-scale
+      `exp` and a `device_id` claim.
+- [ ] T4. Unit: refresh with a valid device signature succeeds; refresh with
+      an invalid/missing signature on a device-bound token fails; refresh of
+      a legacy (no `device_id`) token is unaffected — extends
+      `internal/workertoken/renewhandler_test.go`.
+- [ ] T5. Unit: revoking a device causes the next refresh attempt to fail
+      with a clear, actionable error (matching this repo's existing
+      "explicit errors, not silent failures" convention, e.g.
+      `local-bridge daemon not connected`-style messaging).
+- [ ] T6. Unit: send-consent grant/revoke via the new self-service path
+      updates `send_enabled` and is scoped strictly to the caller's own
+      account (attempting it against another `user_id` fails).
+- [ ] T7. Integration/E2E (per issue's own acceptance criteria): fresh
+      install -> `init` -> local Telegram `login` -> `activate` (OIDC +
+      device binding + optional send consent) -> a read call via the bridge
+      -> explicit send consent -> a send call -> credential refresh ->
+      daemon reconnect after restart. Assert at every step that
+      `telegram_accounts.session_encrypted` stays NULL for this account.
+- [ ] T8. Regression: existing hosted fresh-user flow (`enable_access.go`)
+      and existing hosted->local migration (`set_account_mode`) pass
+      unmodified — run the existing `internal/oauth` and `internal/mcp` test
+      suites as a gate, not just new tests.
+- [ ] T9. Regression: a manually minted `POST /api/mcp/worker-token`
+      (purpose `local-bridge`) issued before this change continues to
+      `connect` and renew successfully through the end of its documented
+      migration window.
+- [ ] T10. Audit: activation, consent grant/revoke, device
+      registration/revocation, and credential mint/refresh/revoke each
+      produce a distinct, non-secret-leaking audit row (assert via
+      `internal/audit` redaction tests plus an `audit_logs` content check).
 
 ## Rollback
 
-Every change here is additive: a new table, new handler files, a new CLI
-subcommand, and fallback-preserving changes to `daemon.go`. Nothing modifies
-the schema or behavior of `provision_local_account`, `set_account_mode`,
-`set_account_send`, or the existing worker-token mint/renew endpoints.
+Every new code path is additive and gated behind the new `activate`
+subcommand / `activate/start`-`/poll` endpoints:
 
-- **Application-level rollback**: redeploy the previous image. The new
-  `local_bridge_devices` table and any rows in it are simply unused by the
-  old binary; no destructive migration needs reverting. Daemons that already
-  upgraded to `activate`-based credentials keep a `local-bridge-access`
-  token that the old server binary's `/mcp` provider still accepts as an
-  ordinary JWT for read/send scopes (audience checking remains opt-in, same
-  as today's worker-token audiences) — but the old binary cannot refresh it
-  once it expires (hours-scale), so an operator must fall back to minting a
-  legacy worker token via `POST /api/mcp/worker-token` and running
-  `cmd/local connect` for any daemon that was mid-migration at rollback
-  time. This is the same "manual operator mint" path that exists today, not
-  a new failure mode.
-- **Partial rollback (disable self-service only)**: gate the new
-  `/telegram/activate` and `/api/local-bridge/*` routes behind a config flag
-  in `cmd/server/main.go` (consistent with how other optional wiring in this
-  codebase is toggled) so they can be turned off without a redeploy, leaving
-  the operator-mediated path as the only route while the schema/handlers
-  stay in place for a follow-up retry.
-- **Data cleanup**: revoking a device (`revoke_local_bridge_device`, task 7)
-  is non-destructive (`revoked_at` timestamp, row retained for audit) and
-  needs no special rollback handling.
+- If the self-service mint or device-binding refresh path misbehaves in
+  production, disable the new HTTP routes (feature-flag or simply not
+  mounting them, matching the existing pattern of conditionally mounting
+  `/api/mcp/worker-token` only `if cfg.WorkerTokenEnabled`-style checks
+  already used in `cmd/server/main.go` for the worker-token/agent routes) —
+  daemons already onboarded via legacy `connect` are unaffected, since their
+  renewal path (`renewhandler.go`) is untouched for tokens with no
+  `device_id`.
+- If a specific device/account activation is wrong (e.g. bound to an
+  incorrect identity due to an OIDC edge case), an operator revokes the
+  device row and/or the account via the existing `set_account_mode`/manual
+  revocation tools — no data migration is needed to undo a single bad
+  activation.
+- The `local_bridge_devices` table and `device_id` claim are purely additive;
+  rolling back the code that writes them leaves existing accounts and tokens
+  unaffected (unknown/absent `device_id` was always the legacy-compatible
+  case, not an error case).
+- `docs/local-bridge.md` and `internal/bridge/DESIGN.md` changes are
+  reverted with the code change in the same PR/revert to avoid documenting a
+  flow that no longer exists.
