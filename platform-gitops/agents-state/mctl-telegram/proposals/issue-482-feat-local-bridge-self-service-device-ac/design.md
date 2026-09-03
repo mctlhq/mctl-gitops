@@ -174,6 +174,7 @@ effect if the state is not the one it expects:
 | → `denied` from the browser leg | `pending` |
 | → `denied` from consent Deny | `awaiting_consent` |
 | → `denied` from a store refusal (hosted account) | `resolving` |
+| → `awaiting_consent` again (transient store failure, retry) | `resolving` |
 
 Writing this as one blanket "only if still `pending`/`awaiting_consent`" —
 as an earlier draft did — **deadlocks the happy path**: the consent handler
@@ -333,9 +334,6 @@ after extracting `serverState := q.Get("state")`, before the existing
 ```go
 s.mu.Lock()
 act, isActivation := s.activationsByState[serverState]
-if isActivation {
-    delete(s.activationsByState, serverState)
-}
 var verifier, nonce string
 if isActivation {
     delete(s.activationsByState, serverState)
@@ -343,10 +341,26 @@ if isActivation {
 }
 s.mu.Unlock()
 if isActivation {
+    // Login-CSRF binding: this callback is only honoured for the browser that
+    // submitted the user_code. Without this check the user_code step is
+    // bypassable -- see "Login-CSRF binding" above. Refuse, do not fall
+    // through to the pendingAuth path.
+    c, err := r.Cookie(activationStateCookie) // "lb_act_state"
+    if err != nil || !hmac.Equal([]byte(c.Value), []byte(hashState(serverState))) {
+        s.denyActivation(act, "verification link was opened in a different browser")
+        s.clearActivationStateCookie(w)
+        s.renderActivationError(w, "start over")
+        return
+    }
+    s.clearActivationStateCookie(w) // single use
     s.finishActivation(w, r, act, q, verifier, nonce)
     return
 }
 ```
+The cookie check belongs **in the snippet, not only in the prose above it**:
+this document is executed literally, and an implementer copying a block that
+verifies only `serverState` would ship the phishing hole the whole `user_code`
+design exists to close. Compare with `hmac.Equal`, not `==`.
 Everything below this (the existing `pendingAuth`/`enable_access`/auth-code
 path) is untouched — a request whose `state` was minted by `handleAuthorize`
 never appears in `activationsByState`, so this is a pure addition with no
@@ -393,7 +407,14 @@ behavioral change to existing logins. `finishActivation` (new function) does:
    design had it — is what makes a double-clicked Approve, or two concurrent
    POSTs replaying the same token, a no-op for the second one instead of two
    racing provisioning runs. On a store failure the status goes back to
-   `awaiting_consent` (with a fresh `consentToken`) so the user can retry.
+   `awaiting_consent` **and the handler re-renders the consent page carrying
+   the fresh `consentToken`, with an error banner** — it must not return a
+   generic 500. Minting a new token into a response the browser never shows
+   would leave the user submitting the old one, failing the CSRF check
+   forever: the activation sits in `awaiting_consent` until TTL while the CLI
+   polls `pending` and nobody can make progress. If the failure is not
+   plausibly transient, transition to `denied` instead so the CLI reports it
+   and exits, rather than hanging.
    An explicit Deny calls `denyActivation` and
    returns; nothing is written. An *abandoned* consent page is not a denial:
    the activation stays `awaiting_consent` until the TTL sweep removes it, and

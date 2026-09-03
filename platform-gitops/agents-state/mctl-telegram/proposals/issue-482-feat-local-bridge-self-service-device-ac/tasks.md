@@ -69,8 +69,13 @@
       thing in the function after reading `serverState`, is a pure early
       dispatch (`isActivation` false → identical behavior to before this
       change, verified by running the full existing `internal/oauth` test
-      suite unmodified and green); `finishActivation` follows design.md's
-      steps 1-4 exactly and **makes no `store.*` call whatsoever** — on a
+      suite unmodified and green); **the branch verifies the `lb_act_state`
+      login-CSRF cookie before anything else** — absent or non-matching (via
+      `hmac.Equal`, not `==`) means refuse and render "start over", never fall
+      through to `pendingAuth` — and clears the cookie once consumed (T16,
+      T18). This check must exist in the code, not only in a comment: without
+      it the `user_code` step is decorative and the phishing vector is open.
+      `finishActivation` then follows design.md's steps 1-4 exactly and **makes no `store.*` call whatsoever** — on a
       verified identity that matches the claim it advances the activation to
       `awaiting_consent`, records `act.verifiedIdentity` (the **whole** identity —
       `Username` and display name are needed by the consent handler, which is
@@ -98,7 +103,12 @@
       `pending`/`awaiting_consent`, or they abort silently and strand the
       activation (T22) — so a double-clicked Approve or two
       concurrent POSTs with the same token produce exactly one provisioning
-      run (a store failure restores `awaiting_consent` with a fresh token);
+      run; a transient store failure restores `awaiting_consent` and
+      **re-renders the consent page carrying the fresh `consentToken`** with an
+      error banner, never a bare 500 — a new token the browser never receives
+      leaves the user resubmitting the stale one, failing CSRF forever while
+      the activation sits until TTL and the CLI polls `pending` (T25); a
+      non-transient failure goes to `denied` so the CLI reports and exits;
       Deny
       calls `denyActivation` and returns with no store call; the approve path
       runs design.md's steps 5-8 — `EnsureUserByTelegramID` and
@@ -267,6 +277,7 @@
       token, or one that does not match the form cookie, is refused before any
       OIDC redirect and sets no state cookie. Mutation-validate: drop the CSRF
       check and confirm it goes red.
+
 - [ ] T21. **`poll` never leaks an internal status.** An activation in
       `awaiting_consent`, and one in `resolving`, both poll as
       `{"status":"pending"}`. Table-driven over every state the machine can be
@@ -283,6 +294,12 @@
 - [ ] T24. **`user_code` collisions are impossible, not improbable.** With a
       stubbed generator that returns a duplicate first, `start` regenerates
       and both activations remain independently reachable by their own codes.
+- [ ] T25. **A store failure leaves a usable retry.** Stub
+      `ProvisionLocalAccount` to fail once: the response is the consent page
+      carrying a *new* `consentToken` — assert it differs from the first and
+      that submitting it succeeds — not a 500, and the activation is back in
+      `awaiting_consent` rather than stranded. Then stub a non-transient
+      failure and assert the activation reaches `denied` and `poll` says so.
 
 ## Rollback
 
