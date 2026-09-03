@@ -67,11 +67,20 @@ def deployed_tag(values_path):
 
 
 def services_on_disk():
-    return sorted(
-        str(p.relative_to(REPO_ROOT))
-        for p in REPO_ROOT.glob(SERVICES_GLOB)
-        if (yaml.safe_load(p.read_text()) or {}).get("image", {}).get("tag") is not None
-    )
+    """Every values.yaml that actually deploys an image.
+
+    `or {}` rather than a `.get(key, {})` default on both levels: a chart can
+    disable a component with a bare `image:`, which YAML reads as None, and a
+    default only applies to a *missing* key. This function decides what
+    coverage is measured against, so a crash here would take out the check
+    over a service that is not even deployed.
+    """
+    out = []
+    for path in REPO_ROOT.glob(SERVICES_GLOB):
+        doc = yaml.safe_load(path.read_text()) or {}
+        if (doc.get("image") or {}).get("tag") is not None:
+            out.append(str(path.relative_to(REPO_ROOT)))
+    return sorted(out)
 
 
 def latest_release(repo, token):
@@ -94,6 +103,12 @@ def latest_release(repo, token):
             body = json.load(resp)
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
+            # /releases/latest is narrower than it looks: it answers only with a
+            # published, non-prerelease, non-draft release, so a 404 means
+            # either "no releases at all" or "only prereleases and drafts".
+            # The caller reports the difference, because a repository that
+            # releases only prereleases needs a different manifest entry, not
+            # the same "publishes no releases" note.
             return None
         raise Drift(f"{repo}: GitHub API returned {exc.code} for the latest release")
     except urllib.error.URLError as exc:
@@ -115,6 +130,19 @@ def check(services, token, grace_minutes, now=None):
         dupes = sorted({p for p in declared if declared.count(p) > 1})
         problems.append(f"manifest lists the same service twice: {', '.join(dupes)}")
 
+    KINDS = ("release_repo", "tracks_main", "pinned_to", "unmapped")
+    malformed = set()
+    for svc in services:
+        kinds = [k for k in KINDS if k in svc]
+        if len(kinds) != 1:
+            malformed.add(svc.get("path"))
+            problems.append(
+                f"{svc.get('path', '<no path>')}: an entry must set exactly one of "
+                f"release_repo, tracks_main, pinned_to, unmapped — found {kinds or 'none'}. "
+                "Resolution below is by fixed priority, so a second kind would be silently "
+                "ignored and the service would read as covered while never being checked."
+            )
+
     on_disk = set(services_on_disk())
     for missing in sorted(on_disk - set(declared)):
         problems.append(
@@ -126,7 +154,9 @@ def check(services, token, grace_minutes, now=None):
 
     for svc in services:
         path = svc["path"]
-        if path not in on_disk:
+        # Already reported as malformed above; resolving it further would just
+        # crash on the key it is missing.
+        if path not in on_disk or path in malformed:
             continue
         tag = deployed_tag(path)
 
@@ -156,8 +186,9 @@ def check(services, token, grace_minutes, now=None):
         release = latest_release(repo, token)
         if release is None:
             problems.append(
-                f"{path}: manifest points at {repo}, which publishes no releases, "
-                "so this entry can never detect anything"
+                f"{path}: manifest points at {repo}, which publishes no release that "
+                "/releases/latest will return — either none at all, or only prereleases "
+                "and drafts. Either way this entry can never detect anything."
             )
             continue
         release_tag, published = release
@@ -222,6 +253,19 @@ def self_test():
                 "declared as tracking main",
             ),
             (
+                "an entry that sets two kinds at once",
+                [
+                    {"path": "a/values.yaml", "release_repo": "o/r", "unmapped": "x"},
+                    {"path": "b/values.yaml", "unmapped": "x"},
+                ],
+                "exactly one of",
+            ),
+            (
+                "an entry that sets no kind at all",
+                [{"path": "a/values.yaml"}, {"path": "b/values.yaml", "unmapped": "x"}],
+                "exactly one of",
+            ),
+            (
                 "the same service declared twice",
                 [
                     {"path": "a/values.yaml", "unmapped": "x"},
@@ -262,6 +306,32 @@ def self_test():
         print("  stays silent while a fresh release is still deploying")
     finally:
         g["services_on_disk"], g["deployed_tag"], g["latest_release"] = real_disk, real_tag, real_release
+
+    # A chart can disable a component with a bare `image:`, which YAML reads as
+    # None. services_on_disk decides what coverage is measured against, so it
+    # has to survive that rather than crash the whole check.
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        for name, body in (
+            ("deployed", "image:\n  repository: ghcr.io/x/y\n  tag: \"1.0.0\"\n"),
+            ("disabled", "image:\n"),
+            ("nothing", "replicas: 1\n"),
+        ):
+            d = root / "platform-gitops" / "services" / "t" / name
+            d.mkdir(parents=True)
+            (d / "values.yaml").write_text(body)
+        real_root = g["REPO_ROOT"]
+        try:
+            g["REPO_ROOT"] = root
+            found = services_on_disk()
+        finally:
+            g["REPO_ROOT"] = real_root
+    if found != ["platform-gitops/services/t/deployed/values.yaml"]:
+        print(f"SELF-TEST FAILED: a null image block must be skipped, not crash; got {found}")
+        return 1
+    print("  survives a values.yaml whose image block is null")
 
     print("self-test passed")
     return 0

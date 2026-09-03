@@ -51,8 +51,11 @@ services:
 
   # --- not watched ---
   # These repositories publish no GitHub releases, so there is no release tag
-  # to compare a deployed tag against. Confirmed empty via
-  # `gh api repos/mctlhq/<name>/releases` on 2026-09-03. Mapping them needs
+  # to compare a deployed tag against. Confirmed empty on 2026-09-03 via
+  # `gh api repos/mctlhq/<name>/releases` — the full list, which includes
+  # prereleases and drafts. Re-verify with that endpoint, not with
+  # /releases/latest: the latter answers only with a published, non-prerelease
+  # release, so it 404s for a repository that does release, just not stably. Mapping them needs
   # the actual source repository and release convention for each, which is not
   # recorded anywhere in this repository — guessing it would produce a check
   # that fires on nothing.
