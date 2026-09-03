@@ -24,6 +24,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -55,16 +56,45 @@ def entry_repr(entry):
 
 
 def read_manifest(path=MANIFEST):
-    doc = yaml.safe_load(path.read_text()) or {}
+    """Load the manifest and reject anything the rest of the pass cannot walk.
+
+    Structural validation lives here rather than in check(), because check()
+    is not the only caller that iterates the list — main() prints a summary
+    from it too, and a guard that only one of them applies is not a guard.
+    """
+    doc = yaml.safe_load(path.read_text())
+    if not isinstance(doc, dict):
+        raise Drift(f"{path} does not parse as a mapping")
     services = doc.get("services")
     if not services:
         raise Drift(f"{path} declares no services; refusing to pass on an empty manifest")
+    if not isinstance(services, list):
+        raise Drift(f"{path}: services must be a list, got {type(services).__name__}")
+    for i, entry in enumerate(services):
+        if not isinstance(entry, dict):
+            raise Drift(f"{path}: entry #{i + 1} is a {type(entry).__name__}, not a mapping")
+        if not entry.get("path"):
+            raise Drift(f"{path}: entry #{i + 1} has no path: {entry_repr(entry)}")
     return services
 
 
+def image_block(doc):
+    """The image mapping of a parsed values.yaml, or {} for anything else.
+
+    A chart may disable a component with a bare `image:` (None), and nothing
+    stops a file from setting `image:` to a scalar or the whole document to a
+    list. None of those deploy an image, and none of them should end the run
+    in an AttributeError.
+    """
+    if not isinstance(doc, dict):
+        return {}
+    image = doc.get("image")
+    return image if isinstance(image, dict) else {}
+
+
 def deployed_tag(values_path):
-    doc = yaml.safe_load((REPO_ROOT / values_path).read_text()) or {}
-    image = doc.get("image") or {}
+    doc = yaml.safe_load((REPO_ROOT / values_path).read_text())
+    image = image_block(doc)
     tag = image.get("tag")
     if tag is None:
         raise Drift(f"{values_path} has no image.tag")
@@ -82,8 +112,7 @@ def services_on_disk():
     """
     out = []
     for path in REPO_ROOT.glob(SERVICES_GLOB):
-        doc = yaml.safe_load(path.read_text()) or {}
-        if (doc.get("image") or {}).get("tag") is not None:
+        if image_block(yaml.safe_load(path.read_text())).get("tag") is not None:
             out.append(str(path.relative_to(REPO_ROOT)))
     return sorted(out)
 
@@ -129,15 +158,6 @@ def check(services, token, grace_minutes, now=None):
     now = now or datetime.now(timezone.utc)
     grace = timedelta(minutes=grace_minutes)
     problems, watched, unmapped = [], 0, 0
-
-    # An entry without a path cannot be matched against anything, and indexing
-    # it would end the run in a traceback rather than a sentence. The premise of
-    # this file is that a malformed manifest gets reported; it should not be the
-    # one thing that takes the check down instead.
-    for i, entry in enumerate(services):
-        if not entry.get("path"):
-            problems.append(f"manifest entry #{i + 1} has no path: {entry_repr(entry)}")
-    services = [s for s in services if s.get("path")]
 
     declared = [s["path"] for s in services]
     if len(declared) != len(set(declared)):
@@ -227,14 +247,14 @@ def self_test():
     release case is the one that matters: it is the shape of #1006.
     """
     now = datetime(2026, 9, 3, 12, 0, tzinfo=timezone.utc)
-    old = (now - timedelta(hours=11)).isoformat().replace("+00:00", "Z")
+    old_ts = (now - timedelta(hours=11)).isoformat().replace("+00:00", "Z")
 
     real_disk, real_tag, real_release = services_on_disk, deployed_tag, latest_release
     g = globals()
     try:
         g["services_on_disk"] = lambda: ["a/values.yaml", "b/values.yaml"]
         g["deployed_tag"] = lambda p: {"a/values.yaml": "0.58.0", "b/values.yaml": "0.1.0"}[p]
-        g["latest_release"] = lambda repo, token: ("0.59.0", datetime.fromisoformat(old.replace("Z", "+00:00")))
+        g["latest_release"] = lambda repo, token: ("0.59.0", datetime.fromisoformat(old_ts.replace("Z", "+00:00")))
 
         cases = [
             (
@@ -280,15 +300,6 @@ def self_test():
                 "exactly one of",
             ),
             (
-                "an entry with no path at all",
-                [
-                    {"unmapped": "x"},
-                    {"path": "a/values.yaml", "release_repo": "o/r"},
-                    {"path": "b/values.yaml", "unmapped": "x"},
-                ],
-                "has no path",
-            ),
-            (
                 "the same service declared twice",
                 [
                     {"path": "a/values.yaml", "unmapped": "x"},
@@ -304,6 +315,36 @@ def self_test():
                 print(f"SELF-TEST FAILED: {name}: expected {expected!r}, got {problems}")
                 return 1
             print(f"  detects {name}")
+
+        # A release_repo with nothing for /releases/latest to return is an
+        # error, not cover: the entry looks like coverage and can never fire.
+        g["latest_release"] = lambda repo, token: None
+        problems, _, _ = check(
+            [{"path": "a/values.yaml", "release_repo": "o/r"}, {"path": "b/values.yaml", "unmapped": "x"}],
+            None, DEFAULT_GRACE_MINUTES, now=now,
+        )
+        if not any("can never detect anything" in p for p in problems):
+            print(f"SELF-TEST FAILED: a repo with no returnable release must be reported, got {problems}")
+            return 1
+        print("  reports a release_repo with no release to compare against")
+
+        # An unreachable API must stop the run, not let it report health it
+        # never verified.
+        def unreachable(repo, token):
+            raise Drift(f"{repo}: could not reach the GitHub API (simulated)")
+
+        g["latest_release"] = unreachable
+        try:
+            check(
+                [{"path": "a/values.yaml", "release_repo": "o/r"}, {"path": "b/values.yaml", "unmapped": "x"}],
+                None, DEFAULT_GRACE_MINUTES, now=now,
+            )
+        except Drift:
+            print("  refuses to pass when the GitHub API cannot be reached")
+        else:
+            print("SELF-TEST FAILED: an unreachable API must not be reported as healthy")
+            return 1
+        g["latest_release"] = lambda repo, token: ("0.59.0", datetime.fromisoformat(old_ts.replace("Z", "+00:00")))
 
         # And the converse: a healthy platform must not fire, or the alert is noise.
         g["deployed_tag"] = lambda p: {"a/values.yaml": "0.59.0", "b/values.yaml": "0.1.0"}[p]
@@ -333,8 +374,6 @@ def self_test():
     # A chart can disable a component with a bare `image:`, which YAML reads as
     # None. services_on_disk decides what coverage is measured against, so it
     # has to survive that rather than crash the whole check.
-    import tempfile
-
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         for name, body in (
@@ -356,6 +395,53 @@ def self_test():
         return 1
     print("  survives a values.yaml whose image block is null")
 
+    # read_manifest owns structural validation now, so it is tested through
+    # real files rather than through check().
+    with tempfile.TemporaryDirectory() as tmp:
+        manifest_cases = [
+            ("an entry with no path", "services:\n  - unmapped: x\n", "has no path"),
+            ("an entry that is not a mapping", "services:\n  - just-a-string\n", "not a mapping"),
+            ("services that is not a list", "services:\n  nope: 1\n", "must be a list"),
+            ("an empty manifest", "services: []\n", "declares no services"),
+            ("a manifest that is not a mapping", "- a\n- b\n", "does not parse as a mapping"),
+        ]
+        for name, body, expected in manifest_cases:
+            f = Path(tmp) / "m.yaml"
+            f.write_text(body)
+            try:
+                read_manifest(f)
+            except Drift as exc:
+                if expected not in str(exc):
+                    print(f"SELF-TEST FAILED: {name}: expected {expected!r}, got {exc}")
+                    return 1
+                print(f"  rejects {name}")
+            else:
+                print(f"SELF-TEST FAILED: {name} was accepted")
+                return 1
+
+    # The case above proves check() propagates a Drift, but it replaces
+    # latest_release wholesale, so it never touches the real URLError branch —
+    # a mutation that turned that branch into `return None` survived it. Patch
+    # the network instead of the function, so the mapping itself is covered.
+    def boom(*_a, **_kw):
+        raise urllib.error.URLError("simulated network failure")
+
+    real_urlopen = urllib.request.urlopen
+    try:
+        urllib.request.urlopen = boom
+        try:
+            latest_release("o/r", None)
+        except Drift as exc:
+            if "could not reach" not in str(exc):
+                print(f"SELF-TEST FAILED: unreachable API reported as {exc!r}")
+                return 1
+            print("  turns an unreachable API into a failure, not a None")
+        else:
+            print("SELF-TEST FAILED: an unreachable API must not be treated as 'no release'")
+            return 1
+    finally:
+        urllib.request.urlopen = real_urlopen
+
     print("self-test passed")
     return 0
 
@@ -370,8 +456,15 @@ def main():
         return self_test()
 
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
-    services = read_manifest()
-    problems, watched, unmapped = check(services, token, args.grace_minutes)
+    try:
+        services = read_manifest()
+        problems, watched, unmapped = check(services, token, args.grace_minutes)
+    except Drift as exc:
+        # Everything this script refuses to continue past is a finding about
+        # the platform or its own configuration, and a finding deserves a
+        # sentence in the log rather than a stack trace above it.
+        print(f"::error::{exc}")
+        return 1
 
     print(f"watched: {watched}   unmapped: {unmapped}   total: {len(services)}")
     if unmapped:
