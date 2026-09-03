@@ -168,7 +168,13 @@ spec:
           # If custom TLS has no more hosts, remove the entry entirely
           REMAINING=$(yq eval '(.ingress.tls[] | select(.secretName == strenv(CUSTOM_TLS_NAME))).hosts | length' "$SVC_VALUES" 2>/dev/null || echo "0")
           CERT_DIR="platform-gitops/services/${TEAM}/${SERVICE}"
-          if [ "$REMAINING" = "0" ]; then
+          # Empty as well as "0". `|| echo "0"` only covers yq FAILING; when
+          # ingress.tls is absent entirely — the idempotent-rerun case — yq
+          # succeeds and returns an empty stream, so REMAINING is "". Treating
+          # that as "hosts remain" sent the else branch on to write a
+          # Certificate with an empty dnsNames list, which cert-manager
+          # rejects and ArgoCD reports as unhealthy.
+          if [ -z "$REMAINING" ] || [ "$REMAINING" = "0" ]; then
             yq eval -i 'del(.ingress.tls[] | select(.secretName == strenv(CUSTOM_TLS_NAME)))' "$SVC_VALUES" 2>/dev/null || true
             # Also remove the Certificate resource. The glob covers both the
             # current single custom-domain-cert.yaml and the per-domain files

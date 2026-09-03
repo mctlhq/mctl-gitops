@@ -128,9 +128,14 @@ spec:
           # then fails the check and no custom domain can be added at all.
           # Build the pattern instead, and only add the alternation when there
           # is something to alternate with.
-          PLATFORM_PATTERN="\.${PLATFORM_DOMAIN//./\\.}$"
+          # (^|\.) rather than a required leading dot: the bare root
+          # (mctl.ai itself) is a platform domain too, and the dot-only form
+          # matched every subdomain while letting the root through. The DNS
+          # CNAME check downstream would still have caught it, but a
+          # validation rule that does not hold is not a rule.
+          PLATFORM_PATTERN="(^|\.)${PLATFORM_DOMAIN//./\\.}$"
           if [ -n "${PLATFORM_DOMAIN_ALT}" ]; then
-            PLATFORM_PATTERN="\.(${PLATFORM_DOMAIN//./\\.}|${PLATFORM_DOMAIN_ALT//./\\.})$"
+            PLATFORM_PATTERN="(^|\.)(${PLATFORM_DOMAIN//./\\.}|${PLATFORM_DOMAIN_ALT//./\\.})$"
           fi
           echo "$DOMAIN" | grep -qvE "$PLATFORM_PATTERN" || {
             echo "❌ Cannot add platform domain as custom: ${DOMAIN}"
@@ -198,7 +203,12 @@ spec:
           # exiting early would strand the domain record in pending forever.
           # Skip the git edit/push, but always fall through to the callback.
           ALREADY_PRESENT=false
-          if yq eval '.ingress.hosts[]' "$SVC_VALUES" 2>/dev/null | grep -qF "$DOMAIN"; then
+          # -x: whole-line, not substring. Without it, adding the root
+          # example.com against a service that already has api.example.com
+          # matched, so the git edit was skipped while Backstage was still
+          # told the domain was live — active in the record, unrouted in the
+          # ingress.
+          if yq eval '.ingress.hosts[]' "$SVC_VALUES" 2>/dev/null | grep -qFx "$DOMAIN"; then
             echo "ℹ️  Domain ${DOMAIN} already in ingress.hosts — skipping git edit, reconciling Backstage status"
             ALREADY_PRESENT=true
           fi
