@@ -44,6 +44,17 @@ on:
 
 jobs:
   build:
+    # A called workflow can never hold more than the job that calls it, and
+    # the default GITHUB_TOKEN permission for this org is read. build-image
+    # asks for packages: write (push to GHCR) and id-token: write (the OIDC
+    # token it trades for a Vault PAT), so without this block the call is
+    # refused before any job starts — startup_failure, no jobs, no logs, and
+    # GitHub will not even re-run it. Granting it here is not a widening:
+    # these are the permissions build-image already declares for itself.
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
     uses: ./.github/workflows/build-image.yaml
     with:
       repo: ${{ inputs.repo }}
