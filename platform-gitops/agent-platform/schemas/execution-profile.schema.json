@@ -46,7 +46,12 @@
           "additionalProperties": false,
           "properties": {
             "task": { "type": "string", "minLength": 1 },
-            "compatibility": { "type": "string", "minLength": 1 }
+            "compatibility": { "type": "string", "minLength": 1 },
+            "legacyEnvOverride": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Environment variable the agent's own driver module reads DIRECTLY as its highest-priority model override, bypassing config/model_policy.py (e.g. ISSUE_INVESTIGATOR_MODEL in run_issue_investigator.py). Optional -- most agents have none. Where one exists it OUTRANKS `task`, so a profile omitting it describes a model selection that can be overridden without the catalog saying so. mctl-agents' validate_manifest.py checks the declared name against a real os.getenv() call in the driver, in both directions."
+            }
           }
         },
         "skills": {
