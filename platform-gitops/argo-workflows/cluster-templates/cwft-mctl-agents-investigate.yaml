@@ -227,8 +227,20 @@ spec:
           #
           # The directory is built unconditionally below, so collection never
           # fails on a run that produced nothing.
+          #
+          # `optional: true` is load-bearing, not tidiness. Both attempts write
+          # this ONE key, so an attempt that produced nothing must upload
+          # nothing: otherwise a fallback that crashes early archives an empty
+          # directory over a partial proposal the primary already handed off,
+          # commit-and-push sees an empty artifact, and the partial output this
+          # design exists to preserve is lost silently. The script below
+          # therefore leaves /tmp/proposal-out ABSENT unless it has files to
+          # put there. Raised independently by claude[bot] and agy on #1042,
+          # and confirmed on a canary: with `optional: true` and no directory
+          # the step uploads nothing and the earlier object survives intact.
           - name: proposal
             path: /tmp/proposal-out
+            optional: true
             s3:
               key: "{{workflow.name}}/proposal.tgz"
       initContainers:
@@ -329,13 +341,13 @@ spec:
             printf ' %s' "$@"
             printf '\n'
 
-            # Built CLEAN, not merely created. This directory IS the artifact
-            # handed to commit-and-push and laid over a trusted checkout, and
-            # the investigator runs as a child of this script in this very
-            # container — so only the copy loop below may fill it (same
-            # reasoning as agy P1 on gitops#982, round 4).
+            # Anything the agent left in the handoff directory is not a
+            # handoff, so it is cleared unconditionally — and recreated below
+            # ONLY if there is something legitimate to put in it. A run that
+            # produced nothing therefore leaves no directory at all, which is
+            # what makes the `optional: true` output artifact upload nothing
+            # and leave a previous attempt's object intact (P2 above).
             rm -rf /tmp/proposal-out
-            mkdir -p /tmp/proposal-out
 
             # Deliberately NOT `exec`, and deliberately not fatal — the same
             # shape as run-reconcile in cwft-mctl-agents-reconcile.yaml.
@@ -351,36 +363,72 @@ spec:
             set -e
             echo "investigator exited ${RC}"
 
-            # Collect exactly what commit-and-push is allowed to push: files
-            # inside a proposal directory that actually changed.
+            # Collect exactly what commit-and-push is allowed to push.
             #
-            # -uall is load-bearing here in a way it is not for reconcile: the
-            # investigator CREATES directories, and without it porcelain
-            # collapses a whole new proposal dir into ONE entry ending in `/`.
-            # The `[ -f ]` test below would then skip it and the handoff would
-            # ship nothing at all — silently, on the happy path.
+            # Parsed in Python, NOT in the shell. `git status -z` emits paths
+            # RAW — that is what -z is for — so a filename containing a literal
+            # newline splits a `tr` + `cut -c4-` pipeline into two entries, and
+            # the second one is then entirely attacker-chosen. The SDK agent
+            # holds Bash in this worktree and can create such a name: an entry
+            # ending in a newline followed by `XX .git/hooks/pre-commit` yields
+            # the path `.git/hooks/pre-commit`, which the old loop copied into
+            # the handoff. commit-and-push would then lay it inside its own
+            # pristine `.git/`, where `git status` cannot see it, and run it as
+            # root with the deploy key mounted — agy P1 on #1042, i.e. the exact
+            # primitive this template set out to remove, reintroduced by another
+            # route. An earlier revision of this comment named the newline case
+            # and dismissed it as unreachable because "the investigator never
+            # renames"; the agent's Bash grant is what makes it reachable.
+            # Splitting on NUL in Python has no such ambiguity.
             #
-            # -z, then tr, then cut -c4-: without -z, porcelain quotes and
-            # C-escapes any path holding a space or a non-ASCII byte, the
-            # quotes survive cut, and the file is silently dropped (agy P2 on
-            # gitops#982 — measured, a plain space is enough). Residual limit,
-            # stated rather than implied: a path containing a literal newline
-            # would still split wrongly. The investigator never renames, so the
-            # "old -> new" rename form cannot appear.
-            cd /workdir/mctl-gitops
-            CHANGED=$(git status --porcelain -z -uall -- ':(glob)platform-gitops/agents-state/*/proposals/*/**' | tr '\0' '\n' | cut -c4-)
-            if [ -z "$CHANGED" ]; then
-              echo "no proposal files to hand off"
-              exit $RC
-            fi
-            printf '%s\n' "$CHANGED" | while IFS= read -r f; do
-              # A deletion would leave a porcelain entry with no file on disk.
-              [ -f "$f" ] || { echo "skipping ${f} (not a regular file)"; continue; }
-              mkdir -p "/tmp/proposal-out/$(dirname "$f")"
-              cp -a "$f" "/tmp/proposal-out/$f"
-              echo "handing off $f"
-            done
-            exit $RC
+            # Paths are also matched against the allowed shape, and a mismatch is
+            # FATAL rather than skipped: a path this step cannot explain is a bug
+            # or an attack, and either way it must not be dropped quietly from a
+            # handoff that then reports success.
+            python - "$RC" <<'COLLECT'
+            import os
+            import re
+            import shutil
+            import subprocess
+            import sys
+
+            ROOT = "/workdir/mctl-gitops"
+            OUT = "/tmp/proposal-out"
+            ALLOWED = re.compile(r"^platform-gitops/agents-state/[^/]+/proposals/[^/]+/[^/]+")
+            rc = int(sys.argv[1])
+
+            raw = subprocess.run(
+                ["git", "-C", ROOT, "status", "--porcelain=v1", "-z", "-uall", "--",
+                 ":(glob)platform-gitops/agents-state/*/proposals/*/**"],
+                capture_output=True, check=True).stdout
+
+            # porcelain -z entries are "XY <path>", joined by NUL. A rename would add a
+            # second NUL-separated field; the investigator never renames, and an entry
+            # that does not match ALLOWED is refused below rather than guessed at.
+            paths = [e[3:].decode("utf-8", "surrogateescape") for e in raw.split(b"\x00") if e]
+            if not paths:
+                print("no proposal files to hand off")
+                sys.exit(rc)
+
+            bad = [p for p in paths if not ALLOWED.match(p) or ".." in p.split("/")]
+            if bad:
+                sys.stderr.write("refusing to hand off paths outside a proposal directory:\n")
+                for p in bad:
+                    sys.stderr.write("  %r\n" % p)
+                sys.exit(1)
+
+            os.makedirs(OUT, exist_ok=True)
+            for rel in paths:
+                src = os.path.join(ROOT, rel)
+                if os.path.islink(src) or not os.path.isfile(src):
+                    print("skipping %s (not a regular file)" % rel)
+                    continue
+                dst = os.path.join(OUT, rel)
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                shutil.copy2(src, dst)
+                print("handing off %s" % rel)
+            sys.exit(rc)
+            COLLECT
         env:
           # Workflow param injected as an env var so the shell layer can
           # quote it safely. Direct workflow.parameters.* interpolation in
@@ -622,7 +670,33 @@ spec:
             echo "ℹ️  No proposal files handed off — nothing to commit."
             exit 0
           fi
-          cp -a /artifact/. /workdir/mctl-gitops/
+          # Validate the handoff BEFORE any of it touches the checkout. This,
+          # not the git-status guard below, is the boundary that matters:
+          # `git status` cannot see inside `.git/`, so a file smuggled to
+          # `.git/hooks/pre-commit` or `.git/config` (core.fsmonitor) would be
+          # invisible to that guard and would then run as root, with the deploy
+          # key mounted, on the very next git command — agy P1 on #1042. The
+          # producer parses its file list in Python so such a path cannot be
+          # fabricated in the first place; this check is what has to hold even
+          # if the producer is wrong, which is why it inspects the extracted
+          # bytes rather than trusting where they came from.
+          #
+          # `cp -a /artifact/. /workdir/mctl-gitops/` — an unconditional
+          # whole-tree overlay — is what made that reachable, so the copy below
+          # is narrowed to the one subtree this workflow may write.
+          if [ -n "$(find /artifact -mindepth 1 ! -type d ! -type f -print -quit)" ]; then
+            echo "❌ Refusing a handoff containing a symlink or special file:" >&2
+            find /artifact -mindepth 1 ! -type d ! -type f >&2
+            exit 1
+          fi
+          BAD="$(cd /artifact && find . -type f | sed 's|^\./||' | grep -vE '^platform-gitops/agents-state/[^/]+/proposals/[^/]+/' || true)"
+          if [ -n "$BAD" ]; then
+            echo "❌ Refusing a handoff with paths outside a proposal directory:" >&2
+            printf '%s\n' "$BAD" >&2
+            exit 1
+          fi
+          mkdir -p /workdir/mctl-gitops/platform-gitops/agents-state
+          cp -a /artifact/platform-gitops/agents-state/. /workdir/mctl-gitops/platform-gitops/agents-state/
 
           # Scope guard: only files INSIDE a proposal directory —
           # agents-state/<svc>/proposals/<slug>/ — may be committed. Anything
