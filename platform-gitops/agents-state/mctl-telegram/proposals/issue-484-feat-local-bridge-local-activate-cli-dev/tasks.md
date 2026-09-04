@@ -176,9 +176,14 @@
       that used to produce a mismatch — two `activate` runs, and a daemon
       refresh completing after `activate` rotated the identity — and assert
       the record on disk always names one device consistently, whichever run
-      wrote last. Validate by mutation: splitting the record back into two
-      files reproduces the mismatch in both interleavings, which is the class
-      the single record exists to remove.
+      wrote last. Validate by mutation TWICE, because the record shape and
+      the re-validation are independent defences and each fails differently:
+      splitting the record back into two files reproduces the mismatch, and
+      keeping one record but dropping the identity re-validation still lands
+      a credential for device A on top of key B — the interleaving this DoD
+      names. A mutation that only exercises the file split would let an
+      implementation missing the re-validation pass while still producing the
+      record this test exists to catch.
 - [ ] T21. `activate` is serialised where it touches files and NOWHERE else:
       a lock held briefly by a daemon refresh makes `activate` WAIT and then
       succeed, not fail; a lock held past the timeout makes it exit non-zero

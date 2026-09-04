@@ -248,11 +248,28 @@ In `cmd/local/activate.go`:
      a reason the user cannot act on. Report "another activation is already
      running" only after the timeout.
 
-     The daemon takes the same lock around its own read-modify-write, and
-     merges only the credential fields — it never touches the key material,
-     and it never rotates. Rotation registers a new device, and a background
-     service silently re-registering the machine is not its decision; on
-     unusable key material it stops with a message naming `activate`.
+     **Every writer re-validates the identity before merging.** One record
+     stops the two halves being written to different files; it does not stop
+     a writer merging a credential into a record whose key material has since
+     been replaced. So before merging, each writer compares the `public_key`
+     now on disk against the one whose private half signed the operation it
+     is carrying, and abandons the write if they differ. Concretely: a daemon
+     signs a `/refresh` with key A, a concurrent `activate` completes a full
+     bootstrap and stores `{key B, credential B}`, and the daemon's late
+     write must NOT land credential A's fields on top — that leaves
+     `{key B, device A}`, a credential naming a device the stored key was
+     never registered for, rejected by the server forever. The daemon
+     discards its result and reloads; `activate` writes its own complete,
+     self-consistent record or yields to the newer run.
+
+     The lock orders these writes; this check is what makes a late one
+     correct. Neither substitutes for the other.
+
+     The daemon merges only the credential fields — it never touches the key
+     material, and it never rotates. Rotation registers a new device, and a
+     background service silently re-registering the machine is not its
+     decision; on unusable key material it stops with a message naming
+     `activate`.
 
      Do not overwrite a record whose credential is usable, names the SAME
      device, and expires later than the one being written. A record naming a

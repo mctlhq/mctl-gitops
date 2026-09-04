@@ -84,8 +84,13 @@ of the pre-#483 one.
   THE SYSTEM SHALL exit non-zero without writing a credential file.
 - WHILE a device is configured on a machine THE SYSTEM SHALL keep its signing
   key material and its issued credential in ONE record written atomically, so
-  that no sequence of runs, refreshes or interruptions can leave a credential
-  naming a device whose key is not the one stored beside it.
+  a reader always observes a complete record rather than two halves written
+  apart.
+- WHEN a writer is about to merge a credential into the stored record THE
+  SYSTEM SHALL confirm the key material on disk is still the material whose
+  private half signed the operation being merged, and SHALL abandon the write
+  otherwise. Mutual exclusion alone does not establish this: it orders the
+  writes without making a late one correct.
 - IF a stored credential names a different device than the one being written,
   or is not usable, THEN THE SYSTEM SHALL replace it regardless of its
   recorded expiry, so stale data cannot veto what supersedes it.
