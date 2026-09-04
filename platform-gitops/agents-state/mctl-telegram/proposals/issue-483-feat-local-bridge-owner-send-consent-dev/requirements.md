@@ -94,6 +94,10 @@ rather than inventing a parallel mechanism.
 - IF a signature does not verify against the `device_id`'s stored public key
   THEN THE SYSTEM SHALL reject the request, regardless of whether the nonce
   itself was valid.
+- IF the stored public key for a `device_id` is absent, of the wrong length,
+  or of an unrecognised algorithm THEN THE SYSTEM SHALL reject the request
+  with the same generic failure as any other invalid device, and SHALL NOT
+  pass the value to a verification primitive that panics on a malformed key.
 - WHEN a device presents a valid nonce and a valid Ed25519 signature over it
   for PoP refresh THE SYSTEM SHALL load the device's current revocation
   state and the account's current `send_enabled` value from the database at

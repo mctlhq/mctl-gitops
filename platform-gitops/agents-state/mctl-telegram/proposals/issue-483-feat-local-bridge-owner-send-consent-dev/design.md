@@ -244,6 +244,16 @@ authorizes the mint and what scopes come out:
   called with `Scopes` computed by the caller rather than left to the
   purpose default, still going through the same TTL ceiling and `DeviceID`
   stamping as issuance.
+- **The stored public key is length-checked before it reaches
+  `ed25519.Verify`.** Go's `ed25519.Verify` *panics* when the key is not
+  exactly `ed25519.PublicKeySize` bytes — it does not return false — so a
+  row whose `device_pubkey` is NULL or malformed would take down the
+  handler rather than reject the request, reachable by anyone who can name a
+  `device_id`. Verify the length (and the `device_pubkey_algo`) first and
+  refuse with the same generic "invalid or revoked device" as every other
+  failure on this path. Task 1 makes the column mandatory going forward, so
+  this is a guard against a row that should not exist, which is exactly the
+  kind of row a panic must not be the response to.
 - Rejection cases map directly to T4's list: missing nonce/signature (400),
   wrong key (signature verification fails — 403, generic message, no
   "your key doesn't match" oracle), wrong device (nonce belongs to a
@@ -348,6 +358,41 @@ and `EvictDevice` would match nothing — failing closed in appearance
 full hour. Add `DeviceID: id.DeviceID` alongside the existing two, for the
 same stated reason the other two are there: the child is a delegation of the
 parent and must inherit what the parent is revoked by.
+
+**Two things that look like gaps here and are not — recorded so they are not
+"fixed" into real ones.**
+
+*Revoking send consent already takes effect on the next send, not the next
+refresh.* It is tempting to read "a revoke takes effect at the device's next
+refresh" as meaning a compromised daemon keeps sending for up to the six-hour
+credential TTL, and to reach for denylisting the device's lineage on
+send-consent revoke. It does not, and that fix would be actively harmful.
+The send path already re-reads the account row on every send:
+`evaluateSendGate` calls `store.IsSendEnabled` per call
+(`internal/mcp/tools.go:1553`), as does `cmd/server/agentsendgate.go:52`.
+Scope in the token is the coarse gate; live `send_enabled` is the decisive
+one, which is the same "state-driven, never token-driven" rule this issue
+states, applied at the point of use. Refresh dropping the scope is
+defence in depth, not the mechanism.
+
+And denylisting the lineage to strip send would **permanently brick the
+device**: the `jti` is carried forward by every refresh, so the credential
+minted by the next refresh would carry the denylisted `jti` too, and no
+sequence of client actions could recover — first issuance cannot re-run,
+because its slot is claimed. Denylisting the lineage is device revocation's
+job and only device revocation's job.
+
+*The new audience marker does not require an auth-middleware change.*
+`localjwt.CheckAudience` passes when **any** entry of the token's `aud`
+equals the expected value (`issuer.go:173-189`), and `MintForDevice` builds
+`aud` the way `Mint` does: the purpose marker plus the configured
+`mcpAudience`. The device credential therefore still satisfies the MCP
+middleware and `/api/bridge/token` unchanged. What matters is the inverse
+property, which is the whole point of the distinct marker: `NewRenewHandler`
+switches on the *marker* specifically and matches neither `workerAudience`
+nor `workerBridgeAudience` for it. An implementer who stamps ONLY the marker
+and drops `mcpAudience` breaks every consumer at once — hence 9b's DoD
+asserts both directions.
 
 **Revocation SLA (the explicit either/or the issue asks for).** This design
 picks **active Hub disconnect as the primary mechanism**, not merely a

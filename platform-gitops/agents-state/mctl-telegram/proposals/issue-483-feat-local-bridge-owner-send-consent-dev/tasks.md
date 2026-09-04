@@ -74,11 +74,15 @@
       requests reaching the same process.
 - [ ] 9b. Give `MintForDevice` its own audience marker
       (`workerDeviceAudience = "mcp-worker-device"`) instead of
-      `workerBridgeAudience` (depends on 6) — DoD: `POST
-      /api/mcp/worker-token/renew` presented with a device credential
-      answers 403 "token is not a worker token", proven by a test; the renew
-      handler itself is unmodified; the `/bridge` token path and the MCP
-      auth middleware still accept the device credential.
+      `workerBridgeAudience`, keeping the configured `mcpAudience` alongside
+      it exactly as `Mint` does (depends on 6) — DoD, both directions:
+      `POST /api/mcp/worker-token/renew` presented with a device credential
+      answers 403 "token is not a worker token", proven by a test; AND the
+      MCP auth middleware and `POST /api/bridge/token` still accept it,
+      proven by a test — `localjwt.CheckAudience` passes on any matching
+      `aud` entry, so dropping `mcpAudience` in favour of the marker alone
+      would break every consumer at once. The renew handler itself is
+      unmodified.
 - [ ] 10. Add `DeviceID` to `auth.Identity` (`internal/auth/identity.go`)
       and set it from `Claims.DeviceID` in
       `localjwt.Provider.Authenticate` (`internal/auth/localjwt/issuer.go`,
@@ -178,6 +182,12 @@
 - [ ] T5e. Issuance racing revocation: revoke the device between the PoP
       check and the claim — the conditional UPDATE's `revoked_at IS NULL`
       predicate must make the issuance lose, with no credential minted.
+- [ ] T4b. Malformed stored key: a device row whose `device_pubkey` is NULL,
+      truncated, over-long, or carries an unknown `device_pubkey_algo` makes
+      `/credential` and `/refresh` return the generic rejection — and the
+      handler does not panic. Validate by mutation: calling `ed25519.Verify`
+      without the length guard turns this test into a panic, which is the
+      failure it exists to catch.
 - [ ] T5g. Refresh before issuance: call `/refresh` on a device that has
       never called `/credential` — refused with 409 and nothing minted.
       Validate by mutation: dropping the `current_jti IS NULL` check yields
