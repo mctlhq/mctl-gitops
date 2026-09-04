@@ -139,14 +139,21 @@ spec:
           # image tag so the Layer-2 overlay bootstrap runs from the
           # same release the main container serves. noop on services
           # that don't define a setup init in .initContainers.
-          REPO=$(yq eval '.image.repository' "${VALUES}")
+          # Exported: strenv() reads the process environment, and a plain
+          # shell variable is not in it.
+          export REPO="$(yq eval '.image.repository' "${VALUES}")"
           # Only touch setup init image on openclaw-style overlay tenants
           # (setup already uses the same repo as main). Legacy busybox
           # bootstrap setups are left alone.
           CURRENT_SETUP=$(yq eval '(.initContainers[]? | select(.name == "setup") | .image) // ""' "${VALUES}")
           case "$CURRENT_SETUP" in
             "${REPO}:"*)
-              yq eval -i "(.initContainers[]? | select(.name == \"setup\") | .image) = \"${REPO}:${TAG}\"" "${VALUES}"
+              # TAG is held to the OCI tag grammar above and REPO is read out
+              # of the file, but the values still reach yq as data rather than
+              # as expression text — so a regression in either check cannot
+              # turn into an arbitrary yq program (gitops#997).
+              export TAG
+              yq eval -i '(.initContainers[]? | select(.name == "setup") | .image) = strenv(REPO) + ":" + strenv(TAG)' "${VALUES}"
               ;;
           esac
 

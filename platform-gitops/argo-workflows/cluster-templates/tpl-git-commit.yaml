@@ -121,6 +121,51 @@ spec:
           fi
           SKIP_HEALTH="{{inputs.parameters.skip_health_check}}"
 
+          # ── 0a. Validate everything that reaches a yq expression ──────────────
+          # Second layer, not the only one: every yq call below now passes its
+          # values through the environment (strenv), so an injection payload is
+          # data rather than expression text. This block exists so that a future
+          # edit which reintroduces interpolation does not silently reopen the
+          # hole (gitops#997, same reasoning as #995).
+          #
+          # An anchored grep -E matches PER LINE, so "ok\n<payload>" passes
+          # '^...$' happily. Every value here is checked for embedded newlines
+          # first (the bug fixed in 397fa765 on the custom-domain pair).
+          reject_multiline() {
+            if [ "$(printf '%s' "$2" | wc -l)" -ne 0 ]; then
+              echo "❌ ${1} must be a single line"
+              exit 1
+            fi
+          }
+
+          for pair in "team_name:${TEAM}" "component_name:${SERVICE}"; do
+            name="${pair#*:}"
+            reject_multiline "${pair%%:*}" "$name"
+            echo "$name" | grep -qE '^[a-z0-9]([a-z0-9-]*[a-z0-9])?$' || {
+              echo "❌ Invalid ${pair%%:*}: ${name}"; exit 1; }
+          done
+
+          if [ -n "$HOST" ] && [ "$HOST" != "none" ] && [ "$HOST" != "auto" ]; then
+            reject_multiline "host" "$HOST"
+            echo "$HOST" | grep -qE '^[a-z0-9]([a-z0-9.-]*[a-z0-9])?(\.[a-z]{2,})+$' || {
+              echo "❌ Invalid host: ${HOST}"; exit 1; }
+          fi
+
+          if [ -n "$TAG" ]; then
+            reject_multiline "image_tag" "$TAG"
+            # docker/distribution's tag grammar, minus the leading separator -
+            # the same shape release-deploy.yaml enforces before committing a
+            # tag into a manifest.
+            echo "$TAG" | grep -qE '^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$' || {
+              echo "❌ Invalid image_tag: ${TAG}"; exit 1; }
+          fi
+
+          if [ -n "$REPO" ]; then
+            reject_multiline "dockerfile_repo" "$REPO"
+            echo "$REPO" | grep -qE '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$' || {
+              echo "❌ Invalid dockerfile_repo: ${REPO}"; exit 1; }
+          fi
+
           # ── 0. Install dependencies ───────────────────────────────────────────
           apk add --no-cache openssl curl git ca-certificates openssh-client
           curl -fsSL --retry 5 --retry-delay 3 --retry-max-time 60 \
@@ -223,11 +268,14 @@ spec:
                 esac
               fi
               if [ -n "$MIRROR" ]; then
-                yq eval -i ".ingress.hosts += [\"${MIRROR}\"]" "${DIR}/values.yaml"
+                # Exported, not just assigned: strenv() reads the process
+                # environment, and a plain shell variable is not in it.
+                export MIRROR
+                yq eval -i '.ingress.hosts += [strenv(MIRROR)]' "${DIR}/values.yaml"
               fi
-              TLS_NAME="${SERVICE}-tls"
-              yq eval -i ".ingress.annotations.\"cert-manager.io/cluster-issuer\" = \"letsencrypt-prod\"" "${DIR}/values.yaml"
-              yq eval -i ".ingress.tls = [{\"secretName\": \"${TLS_NAME}\", \"hosts\": .ingress.hosts}]" "${DIR}/values.yaml"
+              export TLS_NAME="${SERVICE}-tls"
+              yq eval -i '.ingress.annotations."cert-manager.io/cluster-issuer" = "letsencrypt-prod"' "${DIR}/values.yaml"
+              yq eval -i '.ingress.tls = [{"secretName": strenv(TLS_NAME), "hosts": .ingress.hosts}]' "${DIR}/values.yaml"
             fi
 
             # Override probe path if requested. Runs before the
@@ -245,11 +293,11 @@ spec:
 
             # Database secret injection
             if [ "$PROVISION_DB" = "true" ]; then
-              DB_SECRET="${TEAM}-${SERVICE}-db-creds"
-              VAULT_PATH="teams/${TEAM}/${SERVICE}/database"
-              yq eval -i ".envFrom = ((.envFrom // []) | map(select(.secretRef.name != \"${DB_SECRET}\")) + [{\"secretRef\": {\"name\": \"${DB_SECRET}\"}}])" "${DIR}/values.yaml"
-              yq eval -i ".dbSecret.vaultPath = \"${VAULT_PATH}\"" "${DIR}/values.yaml"
-              yq eval -i ".dbSecret.secretName = \"${DB_SECRET}\"" "${DIR}/values.yaml"
+              export DB_SECRET="${TEAM}-${SERVICE}-db-creds"
+              export VAULT_PATH="teams/${TEAM}/${SERVICE}/database"
+              yq eval -i '.envFrom = ((.envFrom // []) | map(select(.secretRef.name != strenv(DB_SECRET))) + [{"secretRef": {"name": strenv(DB_SECRET)}}])' "${DIR}/values.yaml"
+              yq eval -i '.dbSecret.vaultPath = strenv(VAULT_PATH)' "${DIR}/values.yaml"
+              yq eval -i '.dbSecret.secretName = strenv(DB_SECRET)' "${DIR}/values.yaml"
             fi
 
             # env_vars
@@ -260,7 +308,16 @@ spec:
                 key=$(echo "$key" | xargs)
                 value=$(echo "$rest" | xargs)
                 [ -z "$key" ] && continue
-                yq eval -i ".env.${key} = \"${value}\"" "${DIR}/values.yaml"
+                # The key lands in an expression PATH, where strenv() does not
+                # substitute - `.env.${key}` with a key of `x = 1 | .image.tag =
+                # "pwned" #` rewrites the image a service runs. So the key is
+                # both shape-checked here and passed as data via the [strenv()]
+                # subscript below (gitops#997).
+                reject_multiline "env var name" "$key"
+                echo "$key" | grep -qE '^[A-Za-z_][A-Za-z0-9_]*$' || {
+                  echo "❌ Invalid env var name: ${key}"; exit 1; }
+                export KEY="$key" VALUE="$value"
+                yq eval -i '.env[strenv(KEY)] = strenv(VALUE)' "${DIR}/values.yaml"
               done << 'ENVEOF'
           {{inputs.parameters.env_vars}}
           ENVEOF
@@ -268,18 +325,23 @@ spec:
 
             # secret_env_vars → ExternalSecret config
             if [ -n "$SECRET_VARS" ]; then
-              yq eval -i ".externalSecret.targetSecret = \"${SERVICE}-secrets\"" "${DIR}/values.yaml"
+              export SECRET_NAME="${SERVICE}-secrets"
+              yq eval -i '.externalSecret.targetSecret = strenv(SECRET_NAME)' "${DIR}/values.yaml"
               yq eval -i '.externalSecret.data = []' "${DIR}/values.yaml"
               while IFS='=' read -r key rest; do
                 [ -z "$key" ] && continue
                 echo "$key" | grep -q '^#' && continue
                 key=$(echo "$key" | xargs)
                 [ -z "$key" ] && continue
-                yq eval -i ".externalSecret.data += [{\"secretKey\": \"${key}\", \"remoteKey\": \"teams/${TEAM}/${SERVICE}\", \"property\": \"${key}\"}]" "${DIR}/values.yaml"
+                reject_multiline "secret env var name" "$key"
+                echo "$key" | grep -qE '^[A-Za-z_][A-Za-z0-9_]*$' || {
+                  echo "❌ Invalid secret env var name: ${key}"; exit 1; }
+                export KEY="$key" REMOTE_KEY="teams/${TEAM}/${SERVICE}"
+                yq eval -i '.externalSecret.data += [{"secretKey": strenv(KEY), "remoteKey": strenv(REMOTE_KEY), "property": strenv(KEY)}]' "${DIR}/values.yaml"
               done << 'SECRETEOF'
           {{inputs.parameters.secret_env_vars}}
           SECRETEOF
-              yq eval -i ".envFrom = ((.envFrom // []) | map(select(.secretRef.name != \"${SERVICE}-secrets\")) + [{\"secretRef\": {\"name\": \"${SERVICE}-secrets\"}}])" "${DIR}/values.yaml"
+              yq eval -i '.envFrom = ((.envFrom // []) | map(select(.secretRef.name != strenv(SECRET_NAME))) + [{"secretRef": {"name": strenv(SECRET_NAME)}}])' "${DIR}/values.yaml"
             fi
 
             # catalog-info.yaml
@@ -297,7 +359,8 @@ spec:
             fi
 
             if [ -n "$HOST" ]; then
-              yq eval -i ".metadata.links += [{\"url\": \"https://${HOST}\", \"title\": \"Service URL\", \"icon\": \"web\"}]" "${DIR}/catalog-info.yaml"
+              export HOST
+              yq eval -i '.metadata.links += [{"url": "https://" + strenv(HOST), "title": "Service URL", "icon": "web"}]' "${DIR}/catalog-info.yaml"
             fi
 
             # vault-cleanup.yaml
@@ -326,13 +389,14 @@ spec:
             git commit -m "feat: onboard ${TEAM}/${SERVICE} (${TAG})"
 
           elif [ "$ACTION" = "deploy" ]; then
-            yq eval -i ".image.tag = \"${TAG}\"" "${DIR}/values.yaml"
+            export TAG
+            yq eval -i '.image.tag = strenv(TAG)' "${DIR}/values.yaml"
             # Keep any openclaw setup init container pinned to the same
             # image tag so the Layer-2 overlay copy (/app/mctl-skills +
             # /app/mctl-identity) runs from the same code the main
             # container serves. noop on services that don't define a
             # setup init in .initContainers.
-            REPO=$(yq eval '.image.repository' "${DIR}/values.yaml")
+            export REPO="$(yq eval '.image.repository' "${DIR}/values.yaml")"
             # Only sync the setup init image when it already uses the
             # same repository as the main container (openclaw Layer-2
             # overlay tenants). A legacy setup init using busybox or
@@ -342,7 +406,7 @@ spec:
             CURRENT_SETUP=$(yq eval '(.initContainers[]? | select(.name == "setup") | .image) // ""' "${DIR}/values.yaml")
             case "$CURRENT_SETUP" in
               "${REPO}:"*)
-                yq eval -i "(.initContainers[]? | select(.name == \"setup\") | .image) = \"${REPO}:${TAG}\"" "${DIR}/values.yaml"
+                yq eval -i '(.initContainers[]? | select(.name == "setup") | .image) = strenv(REPO) + ":" + strenv(TAG)' "${DIR}/values.yaml"
                 ;;
             esac
 
@@ -357,8 +421,11 @@ spec:
             # release-deploy GH workflow stay equivalent.
             # yq v4 lacks startswith(); use test() with `.` escaped so a
             # repo like ghcr.io/... doesn't accidentally match ghcr_io/...
-            REPO_RE="${REPO//./\\.}"
-            yq eval -i "(.extraContainers[]? | select(.image // \"\" | test(\"^${REPO_RE}:\")) | .image) = \"${REPO}:${TAG}\"" "${DIR}/values.yaml"
+            # ${REPO//./\.} is a bashism and this script runs under alpine's
+            # ash, where it expands to nothing - the regex then matched every
+            # image. sed is portable and does the same escaping.
+            export REPO_RE="$(printf '%s' "$REPO" | sed 's/\./\\./g')"
+            yq eval -i '(.extraContainers[]? | select(.image // "" | test("^" + strenv(REPO_RE) + ":")) | .image) = strenv(REPO) + ":" + strenv(TAG)' "${DIR}/values.yaml"
 
             # Clear env vars if sentinel __CLEAR__ was set
             if [ "$CLEAR_ENV" = "true" ]; then
@@ -371,7 +438,16 @@ spec:
                 key=$(echo "$key" | xargs)
                 value=$(echo "$rest" | xargs)
                 [ -z "$key" ] && continue
-                yq eval -i ".env.${key} = \"${value}\"" "${DIR}/values.yaml"
+                # The key lands in an expression PATH, where strenv() does not
+                # substitute - `.env.${key}` with a key of `x = 1 | .image.tag =
+                # "pwned" #` rewrites the image a service runs. So the key is
+                # both shape-checked here and passed as data via the [strenv()]
+                # subscript below (gitops#997).
+                reject_multiline "env var name" "$key"
+                echo "$key" | grep -qE '^[A-Za-z_][A-Za-z0-9_]*$' || {
+                  echo "❌ Invalid env var name: ${key}"; exit 1; }
+                export KEY="$key" VALUE="$value"
+                yq eval -i '.env[strenv(KEY)] = strenv(VALUE)' "${DIR}/values.yaml"
               done << 'ENVEOF3'
           {{inputs.parameters.env_vars}}
           ENVEOF3
@@ -383,8 +459,12 @@ spec:
               yq eval -i '.envFrom = []' "${DIR}/values.yaml"
               echo "Cleared all secret env vars"
             elif [ -n "$SECRET_VARS" ]; then
-              yq eval -i ".externalSecret.targetSecret = \"${SERVICE}-secrets\"" "${DIR}/values.yaml"
-              if yq eval '.externalSecret.data' "${DIR}/values.yaml" | grep -q 'null'; then
+              export SECRET_NAME="${SERVICE}-secrets"
+              yq eval -i '.externalSecret.targetSecret = strenv(SECRET_NAME)' "${DIR}/values.yaml"
+              # `| grep -q null` matched the literal text anywhere in the
+              # rendered block, so a data entry whose value happened to contain
+              # "null" re-emptied the list. Compare the parsed value instead.
+              if [ "$(yq eval '.externalSecret.data | type' "${DIR}/values.yaml")" != "!!seq" ]; then
                 yq eval -i '.externalSecret.data = []' "${DIR}/values.yaml"
               fi
               while IFS='=' read -r key rest; do
@@ -392,14 +472,18 @@ spec:
                 echo "$key" | grep -q '^#' && continue
                 key=$(echo "$key" | xargs)
                 [ -z "$key" ] && continue
-                EXISTS=$(yq ".externalSecret.data[] | select(.secretKey == \"${key}\")" "${DIR}/values.yaml")
+                reject_multiline "secret env var name" "$key"
+                echo "$key" | grep -qE '^[A-Za-z_][A-Za-z0-9_]*$' || {
+                  echo "❌ Invalid secret env var name: ${key}"; exit 1; }
+                export KEY="$key" REMOTE_KEY="teams/${TEAM}/${SERVICE}"
+                EXISTS=$(yq '.externalSecret.data[] | select(.secretKey == strenv(KEY))' "${DIR}/values.yaml")
                 if [ -z "$EXISTS" ]; then
-                  yq eval -i ".externalSecret.data += [{\"secretKey\": \"${key}\", \"remoteKey\": \"teams/${TEAM}/${SERVICE}\", \"property\": \"${key}\"}]" "${DIR}/values.yaml"
+                  yq eval -i '.externalSecret.data += [{"secretKey": strenv(KEY), "remoteKey": strenv(REMOTE_KEY), "property": strenv(KEY)}]' "${DIR}/values.yaml"
                 fi
               done << 'SECRETEOF3'
           {{inputs.parameters.secret_env_vars}}
           SECRETEOF3
-              yq eval -i ".envFrom = ((.envFrom // []) | map(select(.secretRef.name != \"${SERVICE}-secrets\")) + [{\"secretRef\": {\"name\": \"${SERVICE}-secrets\"}}])" "${DIR}/values.yaml"
+              yq eval -i '.envFrom = ((.envFrom // []) | map(select(.secretRef.name != strenv(SECRET_NAME))) + [{"secretRef": {"name": strenv(SECRET_NAME)}}])' "${DIR}/values.yaml"
             fi
 
             git add "${DIR}/values.yaml"
@@ -423,7 +507,16 @@ spec:
                 key=$(echo "$key" | xargs)
                 value=$(echo "$rest" | xargs)
                 [ -z "$key" ] && continue
-                yq eval -i ".env.${key} = \"${value}\"" "${DIR}/values.yaml"
+                # The key lands in an expression PATH, where strenv() does not
+                # substitute - `.env.${key}` with a key of `x = 1 | .image.tag =
+                # "pwned" #` rewrites the image a service runs. So the key is
+                # both shape-checked here and passed as data via the [strenv()]
+                # subscript below (gitops#997).
+                reject_multiline "env var name" "$key"
+                echo "$key" | grep -qE '^[A-Za-z_][A-Za-z0-9_]*$' || {
+                  echo "❌ Invalid env var name: ${key}"; exit 1; }
+                export KEY="$key" VALUE="$value"
+                yq eval -i '.env[strenv(KEY)] = strenv(VALUE)' "${DIR}/values.yaml"
               done << 'ENVEOF2'
           {{inputs.parameters.env_vars}}
           ENVEOF2
@@ -436,8 +529,12 @@ spec:
               echo "Cleared all secret env vars"
               CHANGED=true
             elif [ -n "$SECRET_VARS" ]; then
-              yq eval -i ".externalSecret.targetSecret = \"${SERVICE}-secrets\"" "${DIR}/values.yaml"
-              if yq eval '.externalSecret.data' "${DIR}/values.yaml" | grep -q 'null'; then
+              export SECRET_NAME="${SERVICE}-secrets"
+              yq eval -i '.externalSecret.targetSecret = strenv(SECRET_NAME)' "${DIR}/values.yaml"
+              # `| grep -q null` matched the literal text anywhere in the
+              # rendered block, so a data entry whose value happened to contain
+              # "null" re-emptied the list. Compare the parsed value instead.
+              if [ "$(yq eval '.externalSecret.data | type' "${DIR}/values.yaml")" != "!!seq" ]; then
                 yq eval -i '.externalSecret.data = []' "${DIR}/values.yaml"
               fi
               while IFS='=' read -r key rest; do
@@ -445,18 +542,41 @@ spec:
                 echo "$key" | grep -q '^#' && continue
                 key=$(echo "$key" | xargs)
                 [ -z "$key" ] && continue
-                EXISTS=$(yq ".externalSecret.data[] | select(.secretKey == \"${key}\")" "${DIR}/values.yaml")
+                reject_multiline "secret env var name" "$key"
+                echo "$key" | grep -qE '^[A-Za-z_][A-Za-z0-9_]*$' || {
+                  echo "❌ Invalid secret env var name: ${key}"; exit 1; }
+                export KEY="$key" REMOTE_KEY="teams/${TEAM}/${SERVICE}"
+                EXISTS=$(yq '.externalSecret.data[] | select(.secretKey == strenv(KEY))' "${DIR}/values.yaml")
                 if [ -z "$EXISTS" ]; then
-                  yq eval -i ".externalSecret.data += [{\"secretKey\": \"${key}\", \"remoteKey\": \"teams/${TEAM}/${SERVICE}\", \"property\": \"${key}\"}]" "${DIR}/values.yaml"
+                  yq eval -i '.externalSecret.data += [{"secretKey": strenv(KEY), "remoteKey": strenv(REMOTE_KEY), "property": strenv(KEY)}]' "${DIR}/values.yaml"
                 fi
               done << 'SECRETEOF2'
           {{inputs.parameters.secret_env_vars}}
           SECRETEOF2
-              yq eval -i ".envFrom = ((.envFrom // []) | map(select(.secretRef.name != \"${SERVICE}-secrets\")) + [{\"secretRef\": {\"name\": \"${SERVICE}-secrets\"}}])" "${DIR}/values.yaml"
+              yq eval -i '.envFrom = ((.envFrom // []) | map(select(.secretRef.name != strenv(SECRET_NAME))) + [{"secretRef": {"name": strenv(SECRET_NAME)}}])' "${DIR}/values.yaml"
               CHANGED=true
             fi
 
+            # config_patch is a raw yq PROGRAM, not a value: there is no
+            # strenv() shape for it, because the expression itself is the
+            # parameter. Its only intended producer is mctl-api's OpenClaw
+            # resource-profile handler, which builds it server-side.
+            #
+            # mctl-api now drops parameters an operation does not declare, and
+            # config_patch is not declared on deploy-service, so it can no
+            # longer arrive from a request body (mctlhq/mctl-api#246). This is
+            # the second layer: the patch may only touch the configMaps subtree
+            # the OpenClaw profile owns, so a regression on the API side cannot
+            # rewrite .image or .externalSecret from here.
             if [ -n "$CONFIG_PATCH" ]; then
+              reject_multiline "config_patch" "$CONFIG_PATCH"
+              case "$CONFIG_PATCH" in
+                '.configMaps['*) ;;
+                *)
+                  echo "❌ config_patch may only patch .configMaps[...]: ${CONFIG_PATCH}"
+                  exit 1
+                  ;;
+              esac
               yq eval -i "$CONFIG_PATCH" "${DIR}/values.yaml"
               CHANGED=true
             fi
