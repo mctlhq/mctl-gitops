@@ -260,12 +260,22 @@ Restructure around the split the issue asks for:
   ALLOW_SEND, the send scope, per-account send_enabled, and the per-peer rate
   limit all pass"). The scope carried by the credential is the coarse gate;
   live `send_enabled` is the decisive one, which is the same state-driven
-  rule #483 applies at mint, applied at the point of use. Turning consent ON
-  is the direction that waits for the next scheduled refresh, because the
-  credential must acquire the scope before the gate can pass.
+  rule #483 applies at mint, applied at the point of use.
 
-  Do not document this the other way round, and do not "fix" it by evicting
-  the daemon's websocket on a consent revoke: an owner who revokes send
+  Turning consent ON is the direction that needs the credential to move
+  first, because the gate cannot pass until the credential carries the scope.
+  That acquisition is PROMPT, not scheduled: the daemon performs an
+  out-of-band `/refresh` as soon as it observes a send refused for want of
+  scope, and retries. Waiting for the hours-scale scheduled refresh would
+  mean an owner grants consent and then waits hours for their first message —
+  which is not zero-admin onboarding, only a slower kind of waiting, and it
+  would make the sequence in this issue's own Definition of Done untrue.
+
+  Do not document this the other way round — a revoke that is described as
+  waiting for a refresh understates the protection an owner actually has, and
+  a grant that is described as instant without the out-of-band refresh
+  overstates what the credential can do. And do not "fix" the revoke
+  direction by evicting the daemon's websocket: an owner who revokes send
   consent is already protected on the very next call, and revoking a device's
   credential lineage is device revocation's job, which under #483's
   carried-forward `jti` rule would brick the device if used here.
