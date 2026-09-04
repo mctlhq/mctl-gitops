@@ -75,6 +75,17 @@ of the pre-#483 one.
   send from an already-running daemon succeed without the owner waiting for
   a scheduled credential refresh, restarting the daemon, or re-running
   `activate`.
+- WHILE send consent is not granted THE SYSTEM SHALL bound the daemon's
+  out-of-band refresh to at most one per refused send, and SHALL retry the
+  send only when the refreshed credential actually gained the scope, so a
+  refusal cannot be turned into an unbounded refresh loop by whoever caused
+  the send attempt.
+- IF the repair path's refresh does not return a well-formed credential THEN
+  THE SYSTEM SHALL exit non-zero without writing a credential file.
+- WHEN device signing key material is regenerated THE SYSTEM SHALL also
+  rotate the device registration key, so re-registration produces a new
+  device rather than returning the existing row bound to the old public
+  key.
 - IF a device identity file exists without USABLE signing key material —
   absent, undecodable, or of the wrong length — THEN THE SYSTEM SHALL
   regenerate it in place rather than treating either the file's presence or

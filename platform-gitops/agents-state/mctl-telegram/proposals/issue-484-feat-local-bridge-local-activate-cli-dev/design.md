@@ -118,7 +118,18 @@ for PoP). Concretely, in `cmd/local/config.go`:
   passes a mere presence check and then panics inside `ed25519.Sign`, which
   validates length by panicking rather than returning an error. Anything that
   fails the check is treated exactly as absent: regenerated in place and the
-  file rewritten. Anyone who ran `activate` from #482
+  file rewritten.
+
+  **Regenerating the keypair MUST also rotate `device_registration_key`.**
+  The two are not independent: that key is `RegisterDevice`'s idempotency
+  key, so re-running `activate` with the old one returns the EXISTING device
+  row — the one holding the OLD public key — and every PoP signature made
+  with the new private key fails against it, permanently, with no way to
+  re-register. Keeping the registration key while replacing the keys it
+  identifies produces a device that can never authenticate. Rotating it makes
+  `activate` register a genuinely new device, which is the honest outcome:
+  the old key material is gone, so the old device is gone, and its row stays
+  revocable by its owner. Anyone who ran `activate` from #482
   already has this file, holding only the opaque
   `device_registration_key`; keying generation on the file's existence would
   skip it for exactly those users and then hand an empty seed to
@@ -168,11 +179,27 @@ In `cmd/local/activate.go`:
 
      So: if the credential file exists, print that the device is already
      activated and exit 0. If it does not, run the PoP refresh flow
-     (`/nonce` → sign → `/refresh`, which needs no existing credential),
-     persist what comes back, and exit 0 having actually repaired the state.
+     (`/nonce` → sign → `/refresh`, which needs no existing credential).
+     Persist only a `200` whose body parses into the expected credential
+     shape; on any other status, or an unparseable body, exit NON-ZERO
+     naming what failed. Writing an error body into the credential file and
+     exiting 0 would report a repair that did not happen and hide the real
+     failure behind a daemon that cannot connect — the same "success over a
+     broken machine" this step exists to prevent, one level down. Only a
+     genuine repair exits 0.
      Refresh is the only path that can, and it is available precisely because
      it authenticates by possession of the device key rather than by any
      credential. Covered by T15.
+
+     Two `activate` runs racing on one machine cannot corrupt the server
+     state: the lineage claim is atomic and refresh reuses the same `jti`, so
+     neither run's credential invalidates the other's and both stay valid to
+     their own expiry. The only exposure is on disk, where a slower process
+     can write an older credential over a newer one — costing an earlier
+     refresh and nothing else, and self-healing because refresh needs no
+     credential. Write through the existing `writeFileAtomic` helper so a
+     reader never sees a half-written file, and do not overwrite a credential
+     whose `expires_at` is later than the one being written.
   6. On any other failure, exit non-zero with a message that names the
      device as already activated (so the user does not re-run `activate`
      from scratch and orphan the device row) and says the credential step
@@ -274,7 +301,19 @@ Restructure around the split the issue asks for:
   first, because the gate cannot pass until the credential carries the scope.
   That acquisition is PROMPT, not scheduled: the daemon performs an
   out-of-band `/refresh` as soon as it observes a send refused for want of
-  scope, and retries. Waiting for the hours-scale scheduled refresh would
+  scope, and retries — **at most once per send, and only when the refreshed
+  credential actually gained the scope**.
+
+  Both bounds are load-bearing. A refusal for want of scope is reachable by
+  anyone who can cause the daemon to attempt a send, and while consent is
+  simply off, every refresh returns a credential without the scope: an
+  unbounded "refresh then retry" is then an infinite loop against the server,
+  driven remotely, for as long as consent stays off. So the daemon compares
+  the scopes it got back before retrying, retries only if they changed in the
+  way that matters, and otherwise reports the dry-run exactly as it does
+  today. Repeated refusals must not each cost another refresh: rate-limit the
+  out-of-band refresh per device the way any other self-triggered network
+  call is bounded. Waiting for the hours-scale scheduled refresh would
   mean an owner grants consent and then waits hours for their first message —
   which is not zero-admin onboarding, only a slower kind of waiting, and it
   would make the sequence in this issue's own Definition of Done untrue.

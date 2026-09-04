@@ -168,6 +168,23 @@
       retries. Validate by mutation: removing the out-of-band refresh leaves
       the send a dry-run until the scheduled refresh, which is the wait this
       test exists to prevent.
+- [ ] T18. The out-of-band refresh is bounded: with consent OFF, a send
+      refused for want of scope triggers at most ONE `/refresh` and is then
+      reported as a dry-run; repeated refusals do not each trigger another.
+      Validate by mutation: refreshing and retrying unconditionally loops
+      forever, and the loop is reachable by anyone who can make the daemon
+      attempt a send.
+- [ ] T19. The 409 repair flow fails loudly: make `/refresh` answer 500
+      during the repair — `activate` must exit non-zero, write no credential
+      file, and name the failure. Validate by mutation: persisting the
+      response body regardless of status writes an error payload into the
+      credential file and exits 0.
+- [ ] T20. Regenerating a corrupted keypair rotates the registration key:
+      corrupt `private_key` on an already-activated device, re-run
+      `activate`, and assert a NEW device row is registered rather than the
+      old one being returned by idempotency. Validate by mutation: keeping
+      the old registration key returns the existing row with the old public
+      key, and every later PoP signature fails against it permanently.
 - [ ] T13. Private key file permissions: assert the persisted device
       identity file is `0600` immediately after creation on a
       POSIX-permission-respecting filesystem (mirrors the existing
