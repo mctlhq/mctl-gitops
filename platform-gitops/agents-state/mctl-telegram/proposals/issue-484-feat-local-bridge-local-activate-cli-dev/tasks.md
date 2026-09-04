@@ -4,9 +4,13 @@
       Extend the existing device identity artifact with `private_key` and
       `public_key` alongside `device_registration_key`. Generate once with
       `ed25519.GenerateKey`, write atomically at `0600`, and reuse on every
-      later `activate` run. — DoD: repeated activation uses identical public
-      key bytes and registration key; private material never leaves the
-      machine.
+      later `activate` run. Persist the device credential returned by first
+      issuance and every refresh (`worker_token`, `expires_at`, `jti`,
+      `device_id`) at `0600` through the same atomic-write helper, whether it
+      shares the identity artifact or has its own. — DoD: repeated activation
+      uses identical public key bytes and registration key; private material
+      never leaves the machine; no file carrying `worker_token` is written
+      with default permissions.
 
 - [ ] 2. Send `device_pubkey` on activation start (depends on 1).
       Add the base64 Ed25519 public key to `activateStartRequest`. — DoD: a
@@ -120,9 +124,10 @@
       forced refreshes and assert newly issued credentials reflect current DB
       state while old credentials are not mutated.
 
-- [ ] T15. Private key permissions: assert the device identity/private-key
-      artifact is `0600` on a POSIX-permission-respecting filesystem and is
-      reused after restart.
+- [ ] T15. Local secret permissions: assert the device identity/private-key
+      artifact AND the persisted device credential artifact (the file carrying
+      `worker_token`) are `0600` on a POSIX-permission-respecting filesystem
+      and are reused after restart.
 
 ## Rollback
 

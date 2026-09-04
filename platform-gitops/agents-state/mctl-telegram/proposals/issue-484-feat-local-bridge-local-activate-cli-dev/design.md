@@ -36,6 +36,7 @@ Keep the existing registration idempotency key and extend the same local identit
 - Generate with `ed25519.GenerateKey(rand.Reader)` on first use.
 - Persist `device_registration_key`, `private_key`, and `public_key` together.
 - Store private key material at `0600` using the existing atomic write and process umask helpers.
+- Store the device credential returned by first issuance and every refresh (`worker_token`, `expires_at`, `jti`, `device_id`) at `0600` through the same helpers, whether it lives in the identity artifact or in a separate credential artifact: `worker_token` is a bearer secret, same class as the legacy `bridge_token.json`.
 - Reuse the identity verbatim on later `activate` runs.
 - Never transmit the private key; only the public key and signatures leave the machine.
 
@@ -224,9 +225,9 @@ Issue a device credential, expire/advance beyond its JWT expiry, then prove that
 
 Toggle owner send consent, force device refresh, and verify new credential scopes reflect current DB state while the old credential remains unchanged.
 
-### T15 local key permissions
+### T15 local secret permissions
 
-Private identity artifact is `0600` and reused on restart.
+Private identity artifact and the device credential artifact (bearer `worker_token`) are both `0600`; both are reused on restart.
 
 ## Rollback
 

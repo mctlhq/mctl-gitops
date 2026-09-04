@@ -30,7 +30,7 @@ This proposal closes all of those gaps together because #484 is the final gate b
 ### Activation and device identity
 
 - WHEN `mctl-telegram-local activate --telegram-id <id>` runs for the first time THE SYSTEM SHALL generate an Ed25519 keypair locally, persist the private material at `0600`, retain the existing idempotency registration key, and send the base64-encoded public key as `device_pubkey` on activation start.
-- WHEN activation polling reports `status: "done"` THE SYSTEM SHALL obtain a nonce, sign `device_id + "." + nonce`, call the first-issuance credential endpoint, and persist the resulting device credential metadata before returning success.
+- WHEN activation polling reports `status: "done"` THE SYSTEM SHALL obtain a nonce, sign `device_id + "." + nonce`, call the first-issuance credential endpoint, and persist the resulting device credential (`worker_token`, `expires_at`, `jti`, `device_id`) at `0600` before returning success. The worker token is a bearer secret of the same class as the legacy `bridge_token.json`; whether it is stored alongside the device identity or in a separate artifact, the file that carries it SHALL be `0600`.
 - IF credential bootstrap fails after browser activation succeeded THEN THE SYSTEM SHALL report that the device is already activated, preserve the local identity, exit non-zero, and make retry possible without creating an orphaned/new device identity.
 - WHEN `activate` is re-run with the same local identity THE SYSTEM SHALL reuse the same registration key and Ed25519 keypair. A server response indicating the credential lineage already exists SHALL be treated as an already-activated condition and the client SHALL proceed through the refresh path rather than requiring operator recovery.
 - THE private key SHALL never leave the machine; only the public key and signatures SHALL cross the network.
@@ -75,7 +75,7 @@ This proposal closes all of those gaps together because #484 is the final gate b
 - T12 lifecycle-race regression: deterministic concurrent `Hub.Call` + eviction/replacement/unregister coverage, plus `go test -race` for the affected bridge package/path.
 - T13 expired-access regression: expire the current device access JWT, obtain PoP nonce, refresh, exchange bridge token, and reconnect with no operator/admin action.
 - T14 consent refresh regression: changing owner send consent changes scopes on the next device refresh and never retroactively mutates an already-issued credential.
-- T15 private-key permissions: persisted device identity/private key remains `0600` on POSIX-permission-respecting filesystems.
+- T15 local secret permissions: the persisted device identity/private key AND the persisted device credential (the file carrying `worker_token`/`expires_at`/`jti`/`device_id`) are both `0600` on POSIX-permission-respecting filesystems.
 
 ## Out of scope
 
