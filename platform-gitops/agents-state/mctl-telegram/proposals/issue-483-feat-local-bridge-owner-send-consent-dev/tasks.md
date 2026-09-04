@@ -59,15 +59,19 @@
       missing, wrong-key, wrong-device, expired-nonce, nonce-replay) and T5
       (grant adds send on next refresh, revoke removes it on next refresh)
       pass.
-- [ ] 9. Write `current_jti` back to `local_bridge_devices` at FIRST
-      issuance only, and have every refresh read it and stamp the same value
-      (depends on 6, 7, 8) — DoD: a device that has issued once and
+- [ ] 9. Claim `current_jti` and `credential_issued_at` with ONE conditional
+      UPDATE at first issuance (`WHERE device_id = ? AND current_jti IS NULL
+      AND revoked_at IS NULL`, 0 rows affected -> 409), and have every
+      refresh read both and stamp the same values (depends on 6, 7, 8) —
+      DoD: a device that has issued once and
       refreshed several times still has exactly one jti across all its live
       credentials, and revoking it denylists every one of them; a test
       asserts that a credential obtained BEFORE a refresh is rejected by the
       revocation denylist after the device is revoked. Concurrent refreshes
-      are safe by construction because they all stamp the same stored value,
-      so there is no last-write-wins question to document.
+      are safe by construction because they all stamp the same stored value;
+      concurrent FIRST issuances are made safe by the conditional claim, not
+      by assumption — the row is the lock, so nothing depends on both
+      requests reaching the same process.
 - [ ] 9b. Give `MintForDevice` its own audience marker
       (`workerDeviceAudience = "mcp-worker-device"`) instead of
       `workerBridgeAudience` (depends on 6) — DoD: `POST
@@ -125,8 +129,14 @@
 ## Tests
 
 - [ ] T1. Activation approval with a submitted `device_pubkey` persists it
-      on the `local_bridge_devices` row; activation without one is rejected
-      at `activate/start` (400).
+      on the `local_bridge_devices` row; activation WITHOUT one is rejected
+      at `activate/start` with 400 AND an error message that names the
+      required client upgrade. Assert on the message, not only the status:
+      a generic 400 satisfies the status check while leaving the user with
+      no idea why their working client stopped working, which is the whole
+      point of accepting this as a breaking change deliberately. Validate by
+      mutation: replacing the message with a generic one makes this test
+      fail.
 - [ ] T2. `set_send_consent` grant/revoke: succeeds for the caller's own
       account with no `admin:users` scope; produces an audit row with
       `tool_name = "set_send_consent"` distinct from `"set_account_send"`;
@@ -153,6 +163,19 @@
 - [ ] T5c. One lineage per device: issue, refresh twice, then revoke the
       device — the credential from BEFORE the refreshes must be rejected by
       the revocation denylist, not merely the newest one.
+- [ ] T5d. Concurrent first issuance: fire two `/credential` requests for the
+      same freshly activated device at once — exactly one succeeds, the other
+      gets 409 with nothing minted, and the device's row names the jti of the
+      credential that was actually handed out. Validate by mutation:
+      replacing the conditional claim with read-then-write makes this test
+      fail with two live credentials and one of them unnamed.
+- [ ] T5e. Issuance racing revocation: revoke the device between the PoP
+      check and the claim — the conditional UPDATE's `revoked_at IS NULL`
+      predicate must make the issuance lose, with no credential minted.
+- [ ] T5f. `OriginalIssuedAt` survives refresh: issue, refresh, and assert
+      the refreshed credential carries the SAME `OriginalIssuedAt` as the
+      first one, read back from `credential_issued_at`. Validate by
+      mutation: stamping `time.Now()` on refresh makes this test fail.
 - [ ] T6. Revocation: refresh for a revoked device fails immediately
       (same request cycle as the revoke call, not merely within a TTL);
       `POST /api/bridge/token` and `POST /api/mcp/worker-token/renew`

@@ -109,6 +109,12 @@ rather than inventing a parallel mechanism.
   subsequent PoP issuance/refresh for that `device_id`, and immediately
   reject that device's worker-token lineage (jti) for every other endpoint
   that consults the worker-token revocation denylist.
+- WHEN two first-issuance requests for the same `device_id` are handled
+  concurrently THE SYSTEM SHALL admit exactly one of them: the `jti` slot
+  SHALL be claimed by a single conditional write predicated on the slot
+  being unclaimed and the device unrevoked, and a request that loses the
+  claim SHALL be refused (409) with no credential minted, rather than
+  minting a second credential the revocation path cannot name.
 - WHILE a device is registered THE SYSTEM SHALL keep exactly ONE credential
   lineage for it: the `jti` minted at first issuance SHALL be carried
   forward unchanged by every subsequent PoP refresh, so that

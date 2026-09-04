@@ -143,7 +143,29 @@ activation. Two new unauthenticated-but-`device_id`-scoped endpoints:
   issuance `MintForDevice` generates a `jti` (as `Mint` does) and writes it
   to a new `local_bridge_devices.current_jti` column. Every later PoP
   refresh for that device REUSES that stored value rather than generating a
-  new one. This is not a detail: `Mint`'s own comment states the property
+  new one.
+
+  **First issuance claims the slot atomically, or loses.** Reading
+  `current_jti`, finding it empty and then writing a freshly generated one is
+  a check-then-act: two concurrent first-issuance requests for the same
+  device both see NULL, both mint, and whichever write lands second orphans
+  the other credential for the rest of its TTL -- exactly the unrevocable
+  credential this section exists to prevent, reintroduced at the one
+  boundary where `current_jti` is not yet set. Issuance therefore claims the
+  slot with a single conditional statement:
+
+  ```sql
+  UPDATE local_bridge_devices
+     SET current_jti = $1, credential_issued_at = $2
+   WHERE device_id = $3 AND current_jti IS NULL AND revoked_at IS NULL
+  ```
+
+  Zero rows affected means the slot was already claimed (or the device was
+  revoked in the meantime, which the same predicate catches -- closing the
+  issuance-versus-revocation race along with it) and the request is refused
+  with 409; the device retries and takes the refresh path, which is
+  idempotent with respect to the stored `jti`. The row is the lock: nothing
+  here relies on the two requests reaching the same process. This is not a detail: `Mint`'s own comment states the property
   the whole revocation story rests on — "Jti is generated here and carried
   forward unchanged by every renewal, so revoking it revokes the whole
   lineage" (`minter.go:123-124`). A refresh that minted a fresh `jti` would
@@ -155,8 +177,14 @@ activation. Two new unauthenticated-but-`device_id`-scoped endpoints:
   the caller passes the stored one on refresh and the newly generated one
   only at first issuance.
 
-  **`OriginalIssuedAt` is likewise set once, at first issuance**, so a
-  derived bridge token keeps pointing at the same anchor. It does NOT gate
+  **`OriginalIssuedAt` is likewise set once, at first issuance**, and is
+  persisted next to the `jti` as `local_bridge_devices.credential_issued_at`
+  so a derived bridge token keeps pointing at the same anchor. It has to be
+  stored, not recovered: PoP refresh presents no previous JWT to read it
+  back from, so without a column the only two things an implementer can do
+  are invent one anyway or quietly reset the anchor to `time.Now()` on every
+  refresh -- which would leave the claim looking correct while meaning
+  nothing. It does NOT gate
   PoP refresh: `maxRenewalChain` exists because a human admin is in the loop
   at mint time for worker tokens, and this credential's continued validity is
   gated by live device and account state instead, which is a stronger check
@@ -356,11 +384,16 @@ so a future reviewer does not "fix" it into the redaction set by reflex.
 - `local_bridge_devices.device_pubkey_algo` (TEXT, default `'ed25519'`) —
   future-proofs the "or an equivalent reviewed primitive" allowance without
   a second migration if that ever changes.
-- `local_bridge_devices.current_jti` (TEXT, nullable) — the jti of the most
-  recently issued/refreshed credential for this device, written by
-  `MintForDevice`'s caller after a successful mint. Used only by
-  `revoke_local_bridge_device` to find what to denylist; not consulted on
-  any hot read path.
+- `local_bridge_devices.current_jti` (TEXT, nullable) — the ONE jti of this
+  device's credential lineage, claimed atomically at first issuance (see the
+  conditional UPDATE above) and thereafter read, not written, by refresh.
+  Used by `revoke_local_bridge_device` to find what to denylist, and by
+  refresh to stamp the credential it mints.
+- `local_bridge_devices.credential_issued_at` (TIMESTAMP, nullable) — the
+  `OriginalIssuedAt` anchor for that lineage, written in the same
+  conditional UPDATE as `current_jti` and read by every refresh. Refresh
+  presents no previous JWT, so this column is the only place the anchor can
+  come from.
 
 Both `internal/oauth/local_bridge_activate.go`'s `activateStartRequest` (add
 `device_pubkey`) and `RegisterDevice`'s signature (add a `pubkey []byte`
