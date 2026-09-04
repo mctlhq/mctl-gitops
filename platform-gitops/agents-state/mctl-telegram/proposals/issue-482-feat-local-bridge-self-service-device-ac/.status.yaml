@@ -1,6 +1,6 @@
-status: accepted
-updated_at: '2026-09-04T03:00:00Z'
-updated_by: mashkovd
+status: implemented
+updated_at: '2026-09-04T03:48:54Z'
+updated_by: mctl-agents[bot]
 source:
   type: github_issue
   repo: mctlhq/mctl-telegram
@@ -11,12 +11,9 @@ control:
 approval:
   approved_by: mashkovd
   approved_at: '2026-09-03T21:57:23Z'
-notes: 'Restored to accepted after a second infrastructure failure. The
-  2026-09-03T23:25Z implement attempt was cut off by quota exhaustion, not by
-  anything wrong with the proposal: the run log ends with "You have hit your
-  session limit - resets 1am (UTC)", api_error_status=429,
-  terminal_reason=api_error, at 1264s of a 5400s budget. It had written 2442
-  lines across 15 files, all discarded (mctl-agents#298), and the failure was
-  recorded as code: no-commits / stage: agent, which reads as an agent-quality
-  problem rather than the quota window it was. The quota window has since
-  reset. The human approval above is the original one and is unchanged.'
+attempt:
+  id: 5a778567-4941-43cd-bcef-3f12cb96bede
+  started_at: '2026-09-04T03:02:30Z'
+  expires_at: '2026-09-04T05:12:30Z'
+  finished_at: '2026-09-04T03:48:54Z'
+pr: https://github.com/mctlhq/mctl-telegram/pull/493
