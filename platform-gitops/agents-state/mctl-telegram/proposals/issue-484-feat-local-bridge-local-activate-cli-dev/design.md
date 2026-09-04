@@ -2,309 +2,192 @@
 
 ## Current state
 
-**Server side is done and ahead of the client.** Reading the clone in order
-of the flow:
+The server-side self-service primitives from #481-#483 exist, but #484 is not only a client/docs wiring issue anymore.
 
-- `internal/db/local_bridge_devices.go` — `local_bridge_devices` rows carry
-  `device_pubkey`/`device_pubkey_algo` (Ed25519, written once at
-  registration, `RegisterDevice`), `current_jti`/`credential_issued_at`
-  (claimed atomically at first issuance by `ClaimDeviceCredentialLineage`,
-  carried forward unchanged by every refresh), and `revoked_at`/
-  `revoked_reason` (`RevokeDevice`, `RevokeDeviceAndDenylist`).
-- `internal/oauth/local_bridge_activate.go` — `POST /api/local-bridge/
-  activate/start` (`handleActivateStart`, line 631) now *requires*
-  `device_pubkey`: a base64-encoded 32-byte Ed25519 public key, rejected with
-  a named `devicePubkeyRequiredMessage` if absent or malformed
-  (line 654-658). The rest of the flow (browser `user_code` entry, Telegram
-  OIDC-gated consent screen, `POST /api/local-bridge/activate/poll`) is
-  unchanged from #482 and already consumed correctly by `cmd/local/
-  activate.go`'s poll loop.
-- `internal/oauth/local_bridge_credential.go` — three endpoints scoped by
-  `device_id` and gated by Ed25519 proof-of-possession, not by a bearer
-  token: `POST /api/local-bridge/devices/{device_id}/nonce` mints a
-  single-use nonce; `POST .../credential` is first issuance — verifies a
-  signature over `device_id + "." + nonce`, atomically claims the device's
-  one credential lineage slot, and mints an **always read-only** hours-scale
-  worker token via `workertoken.Minter.MintForDevice`; `POST .../refresh` is
-  every later call — same PoP check, but re-derives scopes from a **live**
-  `IsSendEnabled` read every time (line 408-420) and carries the *original*
-  `jti`/`credential_issued_at` forward unchanged, which is what lets a single
-  `RevokeDeviceAndDenylist` call kill every credential the device has ever
-  held (design comment, `local_bridge_devices.go:211-243`).
-- `internal/workertoken/minter.go` — `MintForDevice` stamps
-  `aud=[workerDeviceAudience("mcp-worker-bridge"), mcpAudience]` and
-  `Claims.DeviceID`. That audience is **not** `"bridge"`, so a device
-  credential cannot dial `/bridge` directly.
-- `internal/bridge/tokenhandler.go` — `POST /api/bridge/token`
-  (`NewBridgeTokenHandler`) is the exchange step: takes any credential the
-  auth middleware accepts (including a `mcp-worker-bridge`-audience device
-  credential — `derivedAudiences`/`workerBridgeAudience` in
-  `internal/auth/localjwt/issuer.go:311-333`) and mints a 1-hour `aud=bridge`
-  token, explicitly forwarding `DeviceID`/`Jti`/`OriginalIssuedAt` from the
-  presented credential into the child (comment at `tokenhandler.go:86-95`) —
-  this is precisely so a device revocation reaches the bridge token too, not
-  just the worker token.
-- `internal/bridge/server.go` / `hub.go` — the websocket handler registers a
-  connecting daemon by `(userID, deviceID)`; `Hub.EvictDevice(userID,
-  deviceID)` force-closes a live connection for that device, which is what
-  gives revocation an immediate effect on an already-connected daemon rather
-  than waiting out the 1-hour bridge-token TTL.
-- `internal/mcp/tools.go` — `set_send_consent` (owner-callable, gated on
-  `account:manage`, *not* an admin-only tool — see
-  `internal/mcp/local_bridge_owner_tools_test.go:43-98`) and
-  `revoke_local_bridge_device` (owner-callable with the same gate,
-  `local_bridge_owner_tools_test.go:100-201`) are both already shipped. The
-  old admin-only `set_account_send` (`tools.go:1080`) still exists
-  side-by-side — this proposal does not touch either.
+### Shipped primitives
 
-**Client side has not caught up**, and in one place is outright broken
-against the server code in this same clone:
+- `local_bridge_devices` stores device public key, credential lineage, and revocation state.
+- `POST /api/local-bridge/activate/start` requires a base64 Ed25519 `device_pubkey`.
+- `/api/local-bridge/devices/{device_id}/nonce`, `/credential`, and `/refresh` implement PoP-gated first issuance and refresh.
+- Refresh derives scopes from current `send_enabled`; first issuance remains read-only.
+- Device credentials use the device audience and are excluded from legacy bearer renew.
+- `/api/bridge/token` derives the websocket token and carries `DeviceID`, lineage JTI, and original-issued-at state forward.
+- `set_send_consent` and `revoke_local_bridge_device` are owner-callable.
+- Revocation deny-lists the lineage and attempts live bridge eviction by exact `(userID, deviceID)`.
 
-- `cmd/local/config.go:66-158` — `deviceKeyFile{DeviceRegistrationKey
-  string}` and `loadOrCreateDeviceKey()` generate and persist a 32-byte
-  **opaque** random value, used only as an idempotency key. There is no
-  Ed25519 keypair anywhere in `cmd/local` today: no private key generation,
-  no signing capability, no public key to send.
-- `cmd/local/activate.go:193-201` — `activateStartRequest`'s JSON body sends
-  `telegram_id`, `device_registration_key`, `device_label`. It does not send
-  `device_pubkey`. Given `handleActivateStart` above, every real call from
-  today's client returns HTTP 400 with `devicePubkeyRequiredMessage`.
-  `cmd/local/activate_test.go` exercises `runActivateFlow` only against an
-  `httptest` fake that does not enforce the field, so the test suite is
-  green while the feature is broken end to end — this is exactly the gap
-  #484 exists to close.
-- `cmd/local/activate.go:106-119` (`runActivate`) — on a successful poll it
-  prints `"Device activated (device_id=%s)."` followed by `"An operator
-  still needs to issue this device a token..."` and exits. It never calls
-  `/nonce` or `/credential`. The whole self-service credential path #483
-  built is unused by the CLI.
-- `cmd/local/daemon.go:57-138` — `refreshBridgeToken`/`runDaemon` only know
-  one refresh mechanism: re-POST the stored `bt.MCPToken` (a bearer JWT
-  obtained once via `connect --token`, itself sourced from an operator
-  running `mint_worker_token`) to `/api/bridge/token`. Nothing signs a nonce
-  or calls `/refresh`.
-- `docs/local-bridge.md` and `internal/bridge/DESIGN.md` both already
-  mention `activate` (#482 shipped first), but both describe it exactly as
-  the current, unfixed code behaves: activation alone, then an operator
-  step for the token, then another operator step (`set_account_send`) for
-  send. `DESIGN.md`'s "Remaining gaps" item 5 ("No self-serve enablement")
-  and item 4 ("No long-lived MCP token to hand to `connect`") are both
-  already partially stale — #483 closed the long-lived-token problem for
-  the self-service path — but nothing in the client exercises that closure
-  yet, so the docs are not wrong so much as describing the wrong half of a
-  now-mixed system.
+### Client/product gaps
+
+- `cmd/local/config.go` currently persists only an opaque `device_registration_key`; there is no Ed25519 signing identity.
+- `cmd/local/activate.go` does not send `device_pubkey` and therefore cannot complete against the current server contract.
+- `activate` stops after browser activation and still tells the user an operator must mint a token.
+- `daemon` only knows the legacy bearer-to-bridge-token exchange and never performs PoP refresh.
+- Product/docs still teach the operator-first setup path.
+
+### Remaining merged runtime defect from #483
+
+`internal/bridge/hub.go` still has a connection-lifecycle race. `Hub.Call` obtains a `*daemonConn` while holding `h.mu`, releases the mutex, and later sends to `dc.send`. `EvictDevice`, `Register` replacement, `Unregister`, or `UnregisterSend` can close that same channel after the reference escapes the lock. A concurrent `Call` can therefore panic with `send on closed channel` and crash the process. This is a correctness/security availability blocker for final Local Bridge completion and is part of #484 now.
 
 ## Proposed solution
 
-### 1. `cmd/local activate` (task 9)
+### 1. Persist a real device identity
 
-Replace the opaque `device_registration_key`-only scheme with a real device
-identity, persisted alongside (not instead of) the existing idempotency key,
-since the server's `RegisterDevice` still treats them as separate concepts
-(`device_registration_key` for idempotent re-registration, `device_pubkey`
-for PoP). Concretely, in `cmd/local/config.go`:
+Keep the existing registration idempotency key and extend the same local identity artifact to include an Ed25519 keypair.
 
-- Extend the persisted device-identity file (rename the concept from
-  "device key" to "device identity" internally, keep the JSON file at the
-  same path for a smooth upgrade) to hold `device_registration_key`
-  (unchanged), `private_key` (Ed25519 seed, base64), and `public_key`
-  (Ed25519 public key, base64). Generate both key halves together with
-  `ed25519.GenerateKey(rand.Reader)` the first time the file does not exist,
-  exactly where `loadOrCreateDeviceKey` already generates the opaque key
-  today, and write the file atomically at `0600` via the existing
-  `writeFileAtomic` helper — no new file-permission code path.
-- A device identity, once generated, is loaded and reused on every later
-  `activate` run, mirroring the existing idempotency-key reuse rationale
-  (`config.go:115-120`): a retried `activate` must resolve to the *same*
-  device row and the *same* keypair, or the server's first-issuance-then-
-  refresh distinction (`ClaimDeviceCredentialLineage`) sees a second,
-  unrelated public key show up for a device_id it already trusts.
+- Generate with `ed25519.GenerateKey(rand.Reader)` on first use.
+- Persist `device_registration_key`, `private_key`, and `public_key` together.
+- Store private key material at `0600` using the existing atomic write and process umask helpers.
+- Reuse the identity verbatim on later `activate` runs.
+- Never transmit the private key; only the public key and signatures leave the machine.
 
-In `cmd/local/activate.go`:
+This keeps server registration idempotency and PoP identity as distinct concepts while binding repeated activation attempts to the same device identity.
 
-- `activateStartRequest`'s JSON body gains
-  `"device_pubkey": base64.StdEncoding.EncodeToString(pub)`.
-- After `runActivateFlow` returns a `device_id` (poll status `"done"`), add a
-  bootstrap step, `bootstrapDeviceCredential(ctx, server, deviceID,
-  privateKey)`, that:
-  1. `POST /api/local-bridge/devices/{device_id}/nonce` (unauthenticated,
-     device_id-scoped — no credential needed yet).
-  2. Signs `deviceID + "." + nonce` with `ed25519.Sign(priv, msg)`, base64
-     (standard) encodes it, matching `verifyDevicePoP`'s exact expected wire
-     format (`local_bridge_credential.go:266-267`).
-  3. `POST /api/local-bridge/devices/{device_id}/credential` with
-     `{nonce, signature}`.
-  4. On `200`, persists `{device_id, worker_token, expires_at, jti}` to a
-     new file (see "Alternatives" for why not reusing `bridge_token.json`).
-  5. On `409` (lineage already claimed — a re-run of `activate` after a
-     credential already exists, e.g. the process died between activation
-     and credential issuance on a previous attempt), treat it as success:
-     print that the device is already activated and that `daemon` will
-     refresh its own credential, and exit 0. This is the natural
-     consequence of the idempotent device identity above: re-running
-     `activate` after full success must not be an error.
-  6. On any other failure, exit non-zero with a message that names the
-     device as already activated (so the user does not re-run `activate`
-     from scratch and orphan the device row) and says the credential step
-     can be retried by running `activate` again.
-- Success message changes from "An operator still needs to issue this device
-  a token..." to something reflecting the new reality — the device is fully
-  usable, `daemon` is the next command.
+### 2. Make `activate` finish credential bootstrap
 
-### 2. `cmd/local daemon` (task 10)
+`activateStartRequest` gains `device_pubkey`.
 
-Add a second refresh mechanism and pick between it and the existing one by
-what is present on disk, so the two paths never have to agree on a shared
-mutable file:
+After browser consent/poll returns `device_id`, the CLI performs:
 
-- New helper `refreshDeviceCredential(ctx, cfg, deviceID, priv)` in
-  `daemon.go`, structurally parallel to `refreshBridgeToken`: nonce → sign →
-  `POST /api/local-bridge/devices/{device_id}/refresh` → gets a fresh
-  `worker_token` → immediately exchanges it via the *existing*
-  `refreshBridgeToken`-style call to `POST /api/bridge/token` (bearer =
-  the fresh `worker_token`) to get the `aud=bridge` token the websocket
-  actually dials with. This reuses `POST /api/bridge/token` unchanged — the
-  only new code is minting the *input* to that exchange via PoP instead of
-  via a static bearer token.
-- `runDaemon`'s per-attempt refresh check
-  (`daemon.go:106-118`) becomes: if a device identity + device credential
-  file exist, refresh via the device-signed path; else fall back to
-  `refreshBridgeToken` exactly as today. Both paths converge on the same
-  `bridgeTokenFile{BridgeToken, ExpiresAt}` shape that `daemonSession`
-  already dials with, so `daemonSession` itself needs no changes.
-- `runDaemonCmd`'s startup refresh-if-stale check (`main.go:305-337`) gets
-  the same branch.
-- This is the concrete mechanism behind the "keeps the existing bearer-only
-  renewal path as a legacy fallback" requirement in the issue: the fallback
-  is not a flag or a mode switch, it is simply "device files present or
-  not," so an account onboarded before this change (only `bridge_token.json`
-  on disk, no device identity file) keeps working with zero migration step.
+1. request a nonce for the device;
+2. sign `device_id + "." + nonce` with the persisted Ed25519 private key;
+3. call `/credential` with `{nonce, signature}`;
+4. persist `{device_id, worker_token, expires_at, jti}` in a device-specific credential artifact;
+5. print the next user action (`daemon`) rather than an operator step.
 
-### 3. `docs/local-bridge.md` (task 12)
+If activation succeeded but credential bootstrap fails, keep the local identity and report a retryable post-activation error. On an already-claimed lineage, transition to the device refresh path rather than treating it as an unrecoverable error.
 
-Restructure around the split the issue asks for:
+A separate device-credential artifact is preferred over overloading the existing legacy `bridge_token.json`, because the two credential lineages have different refresh semantics and downgrade behavior must remain explicit.
 
-- **Client / owner actions**: `init`, `login`, `activate` (now genuinely
-  zero-operator, ending in a connected-ready credential), `daemon`, and
-  `set_send_consent` as the self-service way to turn sending on (replacing
-  the current "operator runs `set_account_send`" framing — `set_send_consent`
-  is owner-gated, per `local_bridge_owner_tools_test.go`, not admin-gated).
-  Document that a device's send scope is derived fresh on every `/refresh`
-  call, so toggling `set_send_consent` takes effect on the daemon's next
-  scheduled refresh without restarting it or re-running `activate`.
-- **Operator: support and recovery only**: `connect --token` fed by a
-  manually minted `mint_worker_token`/`POST /api/mcp/worker-token` credential
-  (kept, documented as the migration/recovery path — not the default),
-  `set_account_mode` (migrating an existing hosted account — activation does
-  not do this), `provision_local_account` is removed from the happy path
-  entirely since `activate` now provisions the account itself, and
-  `revoke_local_bridge_device` as the operator's/owner's device-kill switch,
-  with its `EvictDevice`-then-denylist semantics spelled out.
-- Read-only-by-default activation: state plainly that first issuance is
-  **always** read-only regardless of `send_enabled` (`local_bridge_
-  credential.go:352-356`), and that send capability requires the separate
-  `set_send_consent` step — mirroring the design rationale that activation
-  and consent are deliberately two different actions, not one.
-- Hours-scale credential TTL + automatic refresh, device binding (the
-  private key never leaves the machine — signature only), revocation
-  behavior (denylist stops any new `/refresh` or reconnect; `EvictDevice`
-  drops an already-connected daemon immediately), and the legacy
-  manually-minted-worker-token path reframed explicitly as "compatibility
-  only," matching the issue's constraint that the documented happy path
-  never points at behavior that is unavailable.
-- Update the "Two things that are no longer operator steps" callout (already
-  present, currently describing #468) to add a third: minting the first
-  credential and turning on send are no longer operator steps either, for an
-  account onboarded through `activate`.
+### 3. Device-signed daemon refresh, including expired-access recovery
 
-### 4. `internal/bridge/DESIGN.md` (task 13)
+For the device path, `daemon` must treat possession of the device private key as the durable refresh authority. The previous access JWT is an output/cache of that authority, not a prerequisite for re-establishing it.
 
-- Remove "No self-serve enablement" from "Remaining gaps," and fold its
-  substance (self-service issuance existed at the *server* layer since #483
-  but had no client) into a short "Closed by #484" note, matching the
-  existing pattern for gaps 1 and 2.
-- Rewrite gap 4 ("No long-lived MCP token to hand to `connect`") the same
-  way: closed for the self-service path (`activate` never hands the user a
-  token to paste), explicitly still open for the legacy `connect --token`
-  path, which is deliberately retained.
-- Add a "Device-bound credential lifecycle" section describing, in order:
-  bootstrap trust boundary (device generates the keypair locally; only the
-  public key and signatures ever cross the network; the server never
-  possesses the private key and cannot forge a signature), first-issuance
-  vs. refresh (first issuance is always read-only; refresh re-derives scope
-  from live `send_enabled` state every call), the one-lineage-per-device
-  invariant (`current_jti` claimed once, carried forward, denylisting it
-  kills every credential the device has held), and revocation SLA
-  (immediate for an already-connected daemon via `Hub.EvictDevice`; for any
-  future connect/refresh attempt, immediate once `RevokeDeviceAndDenylist`'s
-  transaction commits, since the denylist is consulted at every
-  `needsRevocationCheck` credential verification).
-- Note the legacy worker-token path (`mint_worker_token`,
-  `POST /api/mcp/worker-token`, 30-90 day TTL, `/renew`) as
-  compatibility-only, kept for accounts onboarded before this change and for
-  operator-driven recovery, not for new onboarding.
+Device refresh flow:
 
-## Alternatives
+1. obtain `/nonce` using only `device_id`;
+2. sign the challenge locally;
+3. call `/refresh` with PoP;
+4. receive a fresh device worker credential with scopes derived from live consent state;
+5. exchange it at `/api/bridge/token`;
+6. connect/reconnect websocket with the new bridge token.
 
-- **Fold the device-signed credential into `bridge_token.json`** instead of
-  a new file. Rejected: `bridge_token.json`'s shape
-  (`MCPToken`/`BridgeToken`/`ExpiresAt`) is the legacy path's contract, and
-  `refreshBridgeToken` already writes it unconditionally on every legacy
-  refresh. Reusing it for the device-signed path means every write from
-  either path has to avoid clobbering fields the other path depends on, and
-  "does this file mean legacy or device-signed" becomes an inference from
-  which fields happen to be populated rather than which file exists. A
-  second, purpose-specific file makes "which path is this daemon on" a
-  single, unambiguous filesystem check, which is exactly the branch
-  `runDaemon` needs to make on every startup and refresh.
-- **Have `daemon` always try the device-signed path first and silently swap
-  to legacy on any failure**, instead of gating on file presence. Rejected:
-  this would mask a broken device-signed refresh (revoked device, corrupted
-  private key file) as a silent downgrade to a bearer token that might not
-  even exist, producing a confusing failure far from its cause. Gating on
-  "which files are actually present" fails loudly and specifically instead.
-- **Ship a `rotate-device-key` subcommand as part of this issue** for a
-  device whose local private key file is suspected compromised. Rejected as
-  out of scope: the issue's task list stops at 9/10/12/13, and the existing
-  `revoke_local_bridge_device` + a fresh `activate` run already gets a user
-  to a new device_id and a new keypair, just without reusing the old
-  device_id. Recorded as a follow-up, not silently dropped — see "Out of
-  scope."
+The flow must work even when the prior device access JWT is already expired. If the current implementation accidentally requires a valid access bearer for nonce or refresh, adjust that server boundary narrowly so PoP remains the authentication mechanism. Preserve indistinguishable failure behavior for unknown/revoked/bad-signature devices and do not reopen the nonce-capacity DoS fixed after #483.
 
-## Platform impact
+Legacy fallback remains file/lineage based:
 
-- **Migrations**: none. All schema (`local_bridge_devices.device_pubkey`,
-  `current_jti`, etc.) already exists and is populated by server code that
-  predates this proposal; this proposal only changes `cmd/local` and the two
-  documents.
-- **Backward compatibility**: the explicit design goal. An operator-minted
-  legacy worker token, exchanged via `connect --token` and refreshed via the
-  unchanged bearer-only `refreshBridgeToken`, must keep working (T9). A
-  config directory from before this change (no device identity file) falls
-  back to the legacy path automatically, with no migration step and no
-  behavior change for that user.
-- **Resource impact**: negligible — a handful of extra HTTP round trips
-  during `activate` (once) and during each `daemon` refresh (already
-  happens on the existing bearer path; the device-signed path adds one
-  extra round trip, the `/nonce` call, before the refresh call).
-- **Risks + mitigations**:
-  - *Risk*: a device's private key file leaks. *Mitigation*: unchanged from
-    the existing threat model for `bridge_token.json` — `0600` permissions,
-    `restrictUmask()` at process start, and `revoke_local_bridge_device`
-    (already shipped) as the response, which now also has an immediate
-    effect on a live connection via `EvictDevice`.
-  - *Risk*: `activate` dies between successful device activation and
-    successful credential issuance (network drop, process killed), leaving
-    a device row with no usable credential and a user unsure whether to
-    re-run `activate`. *Mitigation*: the credential-bootstrap step is
-    designed to be safely re-run — a repeat `activate` reuses the same
-    persisted keypair and device_registration_key, resolves to the same
-    device_id, and a second `/credential` call either succeeds (if the
-    first one never landed) or returns 409 (if it did), which the client
-    treats as success. No manual recovery step is needed.
-  - *Risk*: documentation drift recurs (the exact failure mode that created
-    this proposal). *Mitigation*: task 13 explicitly ties `DESIGN.md`'s
-    "Remaining gaps" section to what actually shipped in each sub-issue, the
-    same pattern the file already uses for gaps 1/2, so the next reader can
-    tell a closed gap from an open one without cross-referencing the git
-    log.
+- device identity + device credential present -> device PoP path only;
+- only legacy bearer artifacts present -> existing bearer-only bridge token renewal unchanged;
+- device path present but revoked/corrupt -> fail explicitly; never silently downgrade to legacy.
+
+### 4. Fix Hub connection lifecycle instead of recovering panics
+
+Replace channel-close ownership with a lifecycle model that is safe for concurrent senders.
+
+Recommended shape:
+
+- `daemonConn` owns a dedicated `done`/cancellation signal.
+- Transport teardown closes/cancels `done` exactly once.
+- `Hub.Call` selects between enqueueing work and connection completion; it never sends to a channel that another goroutine may close underneath it.
+- Outbound queue ownership must be single-owner or remain unclosed; closure signaling belongs to `done`/context.
+- `Register` replacement, `Unregister`, `UnregisterSend`, and `EvictDevice` all use the same teardown primitive.
+- Pending call cleanup happens when the connection is canceled so callers do not hang indefinitely.
+- `EvictDevice` keeps exact device targeting and immediate revocation semantics.
+
+Do not use `recover` as the primary fix. The invariant is: once a connection is retired, new/in-flight calls observe cancellation or a normal error, never process panic or delivery to a superseded daemon.
+
+### 5. Product onboarding becomes self-service first
+
+Update the user-facing Local Bridge landing/connect/onboarding surface, not only markdown docs.
+
+Primary path shown to a fresh user:
+
+`init -> login -> activate -> daemon`
+
+Then explain:
+
+- first device credential is read-only;
+- owner explicitly grants send through `set_send_consent`;
+- daemon picks up send scopes on next PoP refresh;
+- revocation kills future refresh/reconnect and evicts the live device connection;
+- no hosted MTProto session is created/stored for the self-service path.
+
+Operator/manual-token steps are moved under support/recovery/migration. The UI must not imply `provision_local_account`, `set_account_mode`, `set_account_send`, or manual worker-token minting is required for a fresh Local Bridge user.
+
+### 6. Documentation alignment
+
+`docs/local-bridge.md`:
+
+- split **Client / owner actions** from **Operator: support and recovery only**;
+- make self-service setup the first path;
+- document device key, PoP refresh, expired-access recovery, owner send consent, revocation, legacy compatibility, and no hosted session;
+- keep every command/flag/route aligned with actual CLI behavior.
+
+`internal/bridge/DESIGN.md`:
+
+- close "No self-serve enablement";
+- distinguish device-bound self-service credentials from legacy manually minted worker tokens;
+- document bootstrap trust, first issuance vs refresh, stable lineage, live-state scope derivation, derived bridge tokens, denylist and live eviction;
+- explicitly document the safe `daemonConn` lifecycle after the Hub race fix;
+- state the final revocation SLA and failure semantics.
+
+## Security invariants
+
+1. Device private key never leaves the client machine.
+2. Unknown/revoked/bad-signature PoP failures stay externally indistinguishable.
+3. Bogus device IDs cannot consume bounded pending nonce state or evict legitimate nonces.
+4. Device refresh scopes are derived from current DB state, never copied from stale JWT scopes.
+5. Device audience cannot use the legacy bearer renew endpoint.
+6. Credential lineage JTI remains stable across device refresh so one revocation kills the full lineage.
+7. DeviceID propagates into bridge token and websocket registration so revocation targets the correct live daemon.
+8. Hub teardown cannot race with `Call` into `send on closed channel` or route to a superseded connection.
+9. Device-signed refresh remains possible after prior access JWT expiry.
+10. Fresh self-service onboarding never creates/stores a hosted MTProto session.
+
+## Tests
+
+### T7 zero-admin E2E
+
+Fresh config -> `init` -> local Telegram `login` -> `activate` -> read -> owner `set_send_consent` -> forced refresh -> send -> daemon reconnect/restart. Assert `telegram_accounts.session_encrypted IS NULL` throughout and assert no operator/admin endpoints/tools are invoked.
+
+### T8 hosted/migration regression
+
+Existing hosted fresh-user and hosted->local migration behavior remains unchanged.
+
+### T9 legacy bearer regression
+
+Operator-minted legacy worker token still supports `connect`, daemon bridge-token refresh, and reconnect.
+
+### T10 activation idempotency
+
+Repeated activation reuses the same registration key/keypair/device and handles already-claimed lineage via refresh semantics.
+
+### T11 product/docs contract
+
+CLI examples are executable/flag-valid and the landing/connect/onboarding surface presents self-service first. Legacy/admin content is support/migration only.
+
+### T12 Hub lifecycle race
+
+Add deterministic concurrency tests for `Hub.Call` racing each close/replace path (`EvictDevice`, `Register` replacement, `Unregister`, `UnregisterSend`). No panic, no send-to-closed, no stuck pending call, no request delivered to a retired connection. Run affected package under `go test -race`.
+
+### T13 expired-access PoP refresh
+
+Issue a device credential, expire/advance beyond its JWT expiry, then prove that nonce -> signed refresh -> bridge-token exchange -> reconnect succeeds with no valid old bearer and no operator action.
+
+### T14 live consent scope derivation
+
+Toggle owner send consent, force device refresh, and verify new credential scopes reflect current DB state while the old credential remains unchanged.
+
+### T15 local key permissions
+
+Private identity artifact is `0600` and reused on restart.
+
+## Rollback
+
+- Protocol changes should remain additive.
+- Reverting #484 may remove the new CLI/device path; legacy bearer recovery remains available.
+- No DB rollback is expected unless the narrow expired-access fix requires an additive server change; such a change must remain backward-compatible.
+- Documentation/product onboarding rolls back with the code to avoid advertising unavailable behavior.
+- The Hub lifecycle fix is safe to retain independently because it corrects a general process-crash race shared by existing close paths.
+
+## Closure
+
+#484 is not complete until T7, T11, T12, and T13 are green. #479 must remain open until #484 is merged and the final zero-admin E2E is green.
