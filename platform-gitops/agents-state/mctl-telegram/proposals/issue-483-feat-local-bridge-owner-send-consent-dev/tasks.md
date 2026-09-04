@@ -63,8 +63,8 @@
       request with scopes outside `allowedLocalBridgeScopes` is rejected
       exactly like `Mint`'s existing check; and that two calls given the
       same `Jti`/`OriginalIssuedAt` produce credentials carrying them
-      unchanged. DoD includes T5b (renew refuses a device credential) and
-      T5c (one lineage per device).
+      unchanged. DoD includes T5b (renew refuses a device credential) —
+      and NOT T5c, which needs refresh and revocation to exist first.
 - [ ] 7. Add `internal/oauth/local_bridge_credential.go`: in-memory,
       TTL-bounded, capacity-bounded nonce store
       (`POST /api/local-bridge/devices/{device_id}/nonce`); Ed25519
@@ -74,8 +74,11 @@
       (initial credential is hours-scale, device-bound, read-only) passes;
       unknown/revoked `device_id` and bad signature both return the same
       generic rejection (no oracle); a malformed or absent stored public key
-      is rejected, not panicked on. DoD includes T4b, T5d (concurrent first
-      issuance) and T5e (issuance racing revocation).
+      is rejected, not panicked on. DoD includes T4b. The lineage-claim
+      tests T5d/T5e belong to task 9, which introduces the conditional
+      UPDATE they are mutation-validated against and which depends on this
+      task — citing them here would make this DoD unsatisfiable in
+      dependency order.
 - [ ] 8. Add `POST /api/local-bridge/devices/{device_id}/refresh` in the
       same file, sharing the nonce/signature verification from task 7 but
       deriving scopes from a live `store.IsSendEnabled` read every call,
@@ -98,7 +101,8 @@
       are safe by construction because they all stamp the same stored value;
       concurrent FIRST issuances are made safe by the conditional claim, not
       by assumption — the row is the lock, so nothing depends on both
-      requests reaching the same process.
+      requests reaching the same process. DoD includes T5d (concurrent
+      first issuance) and T5e (issuance racing revocation).
 - [ ] 9b. Give `MintForDevice` its own audience marker
       (`workerDeviceAudience = "mcp-worker-device"`) instead of
       `workerBridgeAudience`, keeping the configured `mcpAudience` alongside
@@ -146,8 +150,10 @@
       belongs to a different user) is refused without confirming whether
       the id exists. DoD also includes T6b (atomic and repeatable), T6c
       (`device_id` reaches the bridge token, so eviction matches), T6d
-      (revocation racing first issuance) and T6e (revoking a device that
-      never issued).
+      (revocation racing first issuance), T6e (revoking a device that
+      never issued) and T5c (one lineage per device) — this is the first
+      task at which issue, refresh and revoke all exist, so it is the first
+      task whose DoD T5c can belong to.
       Gated on `account:manage` (task 5a) in addition to the ownership
       check: without it a compromised device could revoke its owner's other
       devices. DoD includes T2b.
