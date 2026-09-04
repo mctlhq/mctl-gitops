@@ -25,6 +25,14 @@
       activation tests (`T1-T26` per `local_bridge_activate.go`'s own
       references) remain green with an additional pubkey-presence
       assertion.
+- [ ] 5a. Add an `account:manage` scope: include it in
+      `DCRNegotiableScopes` (`internal/oauth/scopes.go`) so an owner's own
+      session can negotiate it, and leave it OUT of both
+      `allowedReadOnlyScopes` and `allowedLocalBridgeScopes`
+      (`internal/workertoken/tokenhandler.go:61,71`) so no worker or device
+      credential can ever be minted with it — DoD: a test asserts a minted
+      device credential does not carry it and that
+      `POST /api/mcp/worker-token` refuses to mint it.
 - [ ] 5. Add `set_send_consent` MCP tool in `internal/mcp/tools.go`, acting
       only on `auth.From(ctx).UserID`, wrapping `s.Store.SetSendEnabled`,
       audited under tool name `"set_send_consent"` (depends on nothing) —
@@ -147,6 +155,13 @@
       point of accepting this as a breaking change deliberately. Validate by
       mutation: replacing the message with a generic one makes this test
       fail.
+- [ ] T2b. A device credential cannot use the owner tools: authenticate with
+      a credential minted by `/credential` or `/refresh` and call
+      `set_send_consent(enabled=true)` and `revoke_local_bridge_device` —
+      both refused for want of `account:manage`. Validate by mutation:
+      dropping the scope check lets a stolen device credential re-grant
+      itself send consent immediately after its owner revoked it, which is
+      the bypass this test exists to catch.
 - [ ] T2. `set_send_consent` grant/revoke: succeeds for the caller's own
       account with no `admin:users` scope; produces an audit row with
       `tool_name = "set_send_consent"` distinct from `"set_account_send"`;

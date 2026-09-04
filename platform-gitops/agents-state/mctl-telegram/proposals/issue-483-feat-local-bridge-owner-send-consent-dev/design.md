@@ -89,8 +89,37 @@ release, issue #483)."
 Add a new, non-admin MCP tool, `set_send_consent`, in `internal/mcp/tools.go`
 next to `toolSetAccountSend`. Unlike `set_account_send` it takes **no
 `telegram_id` argument** — it always acts on `auth.From(ctx).UserID`, the
-caller's own account, so there is no target to get wrong and no scope check
-beyond "authenticated at all". Implementation is a thin wrapper over the
+caller's own account, so there is no target to get wrong.
+
+**But "authenticated at all" is not a sufficient gate, and getting this wrong
+makes the whole consent design circular.** A device credential authenticates
+as its owner's `UserID` — that is the point of it. If `set_send_consent`
+accepted any authenticated identity, a stolen device credential could call it
+with `enabled=true` and re-grant itself the very capability its owner had just
+taken away, then refresh to pick the scope back up. The same identity could
+call `revoke_local_bridge_device` and shut down the owner's other, legitimate
+devices. The owner-consent step would be a gate the attacker holds the key to.
+
+Both owner tools therefore require a scope that a device credential can never
+carry: a new `account:manage`, added to `DCRNegotiableScopes`
+(`internal/oauth/scopes.go`) so an owner's own session can negotiate it, and
+deliberately absent from BOTH `allowedReadOnlyScopes` and
+`allowedLocalBridgeScopes` (`internal/workertoken/tokenhandler.go:61,71`).
+Those two literals are the complete set of scopes any worker or device
+credential can be minted with, and `NewRenewHandler`'s defence-in-depth loop
+already refuses a presented token holding anything outside them — so the
+separation is enforced at mint, at renew, and at use, not by convention.
+This is the same distinction `admin:users` already draws for the admin tools,
+one privilege level down: `account:manage` says "a human is acting on their
+own account", not "a program is acting on the account's behalf".
+
+Rollout consequence, stated rather than discovered: a session established
+before this scope exists will not hold it, so an owner has to re-authorise
+once before the consent tools become available to them. That is the correct
+trade-off — the alternative is a gate every device credential already
+satisfies.
+
+Implementation is otherwise a thin wrapper over the
 already-target-agnostic `s.Store.SetSendEnabled(ctx, id.UserID, enabled)` —
 no new Store method, no schema change. Every call is audited under the tool
 name `"set_send_consent"`, distinct from `"set_account_send"`, satisfying

@@ -74,6 +74,12 @@ rather than inventing a parallel mechanism.
   invokes the send-consent path THEN THE SYSTEM SHALL refuse it; the path
   SHALL NOT accept a `telegram_id` parameter naming a different account (no
   admin-style "target" argument exists on this tool).
+- IF the send-consent path or the device-revocation path is invoked by an
+  identity whose credential is a device-bound or worker credential THEN THE
+  SYSTEM SHALL refuse it. These tools SHALL require a privilege that no
+  worker or device credential can be minted with, so that a compromised
+  device cannot re-grant itself send consent after its owner revokes it, and
+  cannot revoke the owner's other devices.
 - WHILE `set_account_send` is unmodified in behavior, scope gate
   (`admin:users`), and tests THE SYSTEM SHALL continue to serve it as the
   admin support/recovery path.
