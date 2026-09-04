@@ -89,8 +89,37 @@ release, issue #483)."
 Add a new, non-admin MCP tool, `set_send_consent`, in `internal/mcp/tools.go`
 next to `toolSetAccountSend`. Unlike `set_account_send` it takes **no
 `telegram_id` argument** — it always acts on `auth.From(ctx).UserID`, the
-caller's own account, so there is no target to get wrong and no scope check
-beyond "authenticated at all". Implementation is a thin wrapper over the
+caller's own account, so there is no target to get wrong.
+
+**But "authenticated at all" is not a sufficient gate, and getting this wrong
+makes the whole consent design circular.** A device credential authenticates
+as its owner's `UserID` — that is the point of it. If `set_send_consent`
+accepted any authenticated identity, a stolen device credential could call it
+with `enabled=true` and re-grant itself the very capability its owner had just
+taken away, then refresh to pick the scope back up. The same identity could
+call `revoke_local_bridge_device` and shut down the owner's other, legitimate
+devices. The owner-consent step would be a gate the attacker holds the key to.
+
+Both owner tools therefore require a scope that a device credential can never
+carry: a new `account:manage`, added to `DCRNegotiableScopes`
+(`internal/oauth/scopes.go`) so an owner's own session can negotiate it, and
+deliberately absent from BOTH `allowedReadOnlyScopes` and
+`allowedLocalBridgeScopes` (`internal/workertoken/tokenhandler.go:61,71`).
+Those two literals are the complete set of scopes any worker or device
+credential can be minted with, and `NewRenewHandler`'s defence-in-depth loop
+already refuses a presented token holding anything outside them — so the
+separation is enforced at mint, at renew, and at use, not by convention.
+This is the same distinction `admin:users` already draws for the admin tools,
+one privilege level down: `account:manage` says "a human is acting on their
+own account", not "a program is acting on the account's behalf".
+
+Rollout consequence, stated rather than discovered: a session established
+before this scope exists will not hold it, so an owner has to re-authorise
+once before the consent tools become available to them. That is the correct
+trade-off — the alternative is a gate every device credential already
+satisfies.
+
+Implementation is otherwise a thin wrapper over the
 already-target-agnostic `s.Store.SetSendEnabled(ctx, id.UserID, enabled)` —
 no new Store method, no schema change. Every call is audited under the tool
 name `"set_send_consent"`, distinct from `"set_account_send"`, satisfying
@@ -137,9 +166,74 @@ activation. Two new unauthenticated-but-`device_id`-scoped endpoints:
   (`defaultDeviceCredentialTTL = 6h`, `maxDeviceCredentialTTL = 24h`,
   distinct constants from `defaultWorkerTokenTTL`/`maxWorkerTokenTTL`), and
   it sets `Claims.DeviceID = device.DeviceID` — the field #481 added and
-  left unused for exactly this. The minted token's `jti` is written back to
-  a new `local_bridge_devices.current_jti` column (see below) so device
-  revocation can find and denylist it later.
+  left unused for exactly this.
+
+  **The `jti` is minted once per device and then carried forward.** At first
+  issuance `MintForDevice` generates a `jti` (as `Mint` does) and writes it
+  to a new `local_bridge_devices.current_jti` column. Every later PoP
+  refresh for that device REUSES that stored value rather than generating a
+  new one.
+
+  **First issuance claims the slot atomically, or loses.** Reading
+  `current_jti`, finding it empty and then writing a freshly generated one is
+  a check-then-act: two concurrent first-issuance requests for the same
+  device both see NULL, both mint, and whichever write lands second orphans
+  the other credential for the rest of its TTL -- exactly the unrevocable
+  credential this section exists to prevent, reintroduced at the one
+  boundary where `current_jti` is not yet set. Issuance therefore claims the
+  slot with a single conditional statement:
+
+  ```sql
+  UPDATE local_bridge_devices
+     SET current_jti = $1, credential_issued_at = $2
+   WHERE device_id = $3 AND current_jti IS NULL AND revoked_at IS NULL
+  ```
+
+  Zero rows affected means the slot was already claimed (or the device was
+  revoked in the meantime, which the same predicate catches -- closing the
+  issuance-versus-revocation race along with it) and the request is refused
+  with 409; the device retries and takes the refresh path, which is
+  idempotent with respect to the stored `jti`. The row is the lock: nothing
+  here relies on the two requests reaching the same process. This is not a detail: `Mint`'s own comment states the property
+  the whole revocation story rests on — "Jti is generated here and carried
+  forward unchanged by every renewal, so revoking it revokes the whole
+  lineage" (`minter.go:123-124`). A refresh that minted a fresh `jti` would
+  break it. The previous credential would remain valid for the rest of its
+  six-hour TTL, would no longer be named by `current_jti`, and could
+  therefore be used to open a NEW `/bridge` websocket after the owner
+  revoked the device — Hub eviction only closes connections that are already
+  open. `MintForDevice` therefore takes the `jti` to stamp as an input, and
+  the caller passes the stored one on refresh and the newly generated one
+  only at first issuance.
+
+  **`OriginalIssuedAt` is likewise set once, at first issuance**, and is
+  persisted next to the `jti` as `local_bridge_devices.credential_issued_at`
+  so a derived bridge token keeps pointing at the same anchor. It has to be
+  stored, not recovered: PoP refresh presents no previous JWT to read it
+  back from, so without a column the only two things an implementer can do
+  are invent one anyway or quietly reset the anchor to `time.Now()` on every
+  refresh -- which would leave the claim looking correct while meaning
+  nothing. It does NOT gate
+  PoP refresh: `maxRenewalChain` exists because a human admin is in the loop
+  at mint time for worker tokens, and this credential's continued validity is
+  gated by live device and account state instead, which is a stronger check
+  than a one-year wall clock.
+
+  **The device credential must not be renewable through
+  `POST /api/mcp/worker-token/renew`.** That handler accepts any token
+  carrying `workerAudience` or `workerBridgeAudience`, and deliberately
+  copies identity and scopes forward from the presented token —
+  "identity and privileges are copied from the presented token and cannot be
+  influenced by the caller" (`renewhandler.go:51-55`) — with
+  `allowedLocalBridgeScopes` including `telegram:messages:send`. If a device
+  credential carried `workerBridgeAudience`, a device whose owner has just
+  revoked send consent could keep that scope indefinitely by calling renew
+  instead of refresh, and every state-driven guarantee in this design would
+  be reachable around. `MintForDevice` therefore stamps a distinct audience
+  marker (`workerDeviceAudience = "mcp-worker-device"`), which
+  `NewRenewHandler`'s audience switch does not match, so renew answers 403
+  "token is not a worker token" and PoP refresh is the only way forward for
+  a device. The renew handler itself is not modified.
 
 This never touches `POST /api/mcp/worker-token` or its handler, satisfying
 "the admin worker-token mint endpoint is not reachable by an end user
@@ -161,6 +255,15 @@ authorizes the mint and what scopes come out:
   against the `device_pubkey` on file for `device_id`. This sidesteps the
   "copy scopes forward from a presented JWT" bug class structurally: there
   is no presented JWT in the refresh request to copy anything from.
+- **Refresh refuses a device that has never issued.** If `current_jti` is
+  NULL the handler rejects with 409 and mints nothing. Without that check a
+  client can simply skip `/credential` and call `/refresh` first: both
+  `current_jti` and `credential_issued_at` are still NULL, so the credential
+  would be stamped with an empty `jti` and an empty anchor — and
+  `revoke_local_bridge_device`, which denylists `current_jti` when set,
+  would silently skip the denylist step and leave that credential valid and
+  unrevocable for its whole TTL. First issuance is the only path that claims
+  the slot, so it is the only path that may create a lineage.
 - On each refresh, the handler does a **live** `store.GetDevice` (revoked
   check) and `store.IsSendEnabled(ctx, device.UserID)` read, and derives
   scopes fresh every time: `allowedReadOnlyScopes` always, plus
@@ -170,6 +273,16 @@ authorizes the mint and what scopes come out:
   called with `Scopes` computed by the caller rather than left to the
   purpose default, still going through the same TTL ceiling and `DeviceID`
   stamping as issuance.
+- **The stored public key is length-checked before it reaches
+  `ed25519.Verify`.** Go's `ed25519.Verify` *panics* when the key is not
+  exactly `ed25519.PublicKeySize` bytes — it does not return false — so a
+  row whose `device_pubkey` is NULL or malformed would take down the
+  handler rather than reject the request, reachable by anyone who can name a
+  `device_id`. Verify the length (and the `device_pubkey_algo`) first and
+  refuse with the same generic "invalid or revoked device" as every other
+  failure on this path. Task 1 makes the column mandatory going forward, so
+  this is a guard against a row that should not exist, which is exactly the
+  kind of row a panic must not be the response to.
 - Rejection cases map directly to T4's list: missing nonce/signature (400),
   wrong key (signature verification fails — 403, generic message, no
   "your key doesn't match" oracle), wrong device (nonce belongs to a
@@ -191,12 +304,48 @@ different account — then performs, in order:
    subsequent nonce/issuance/refresh call for this `device_id` fails the
    live `GetDevice` check added in step 3 above, **immediately** (no cache,
    no TTL — satisfies "refresh must fail immediately after revocation").
+
+   **The `jti` to denylist is read INSIDE that transaction, not before it.**
+   The ownership check earlier in the tool reads the device row, but a
+   concurrent first issuance can claim the lineage slot between that read
+   and the transaction; denylisting the value read earlier would then
+   denylist nothing (it was NULL) while the freshly minted six-hour
+   credential goes unlisted, and the tool would report success. The revoke
+   statement therefore returns the value it is revoking —
+   `UPDATE local_bridge_devices SET revoked_at = ... WHERE device_id = ...
+   RETURNING current_jti` — and the denylist insert uses that. The row is
+   again the serialisation point.
+
+   **A device that never issued has no lineage, and revoking it must still
+   work.** When the returned `current_jti` is empty the denylist step is
+   skipped, deliberately: there is nothing to denylist, and passing an empty
+   jti would at best insert a meaningless row and at worst violate a
+   constraint, roll the transaction back, and leave a registered device
+   permanently unrevocable. Skipping is not a silent success — the revoked
+   row is still committed, which is the whole of what revocation means for a
+   device that holds no credential.
+
+   **Steps 1 and 2 are one database transaction, and the whole path is
+   idempotent.** Marking the row revoked and denylisting its `jti` are two
+   halves of one decision: if a crash or a transient error lands between
+   them, the device is revoked while its live credential is not denylisted,
+   which is the worst of both states — the owner is told the device is gone
+   and it can still open connections until its TTL lapses. Worse, a retry
+   would find the device already revoked and could reasonably treat the
+   whole call as a no-op, wedging that state permanently. So: both writes
+   commit together, and re-running the tool on an ALREADY-revoked device
+   still denylists `current_jti`, still forces the cache refresh, and still
+   evicts — it repairs a partial failure rather than reporting success over
+   one. Steps 3 and 4 are outside the transaction by necessity (a cache and
+   a websocket are not transactional) and are therefore written to be safe
+   to repeat.
 2. If the device row's new `current_jti` column is non-empty,
    `store.RevokeWorkerToken(ctx, jti, telegramID, reason, revokedBy)` — this
-   denylists the specific credential lineage this device has been
-   refreshing (renewal/derivation always carries `jti` forward, so this one
-   call also covers any bridge token minted from it, since
-   `bridge.tokenhandler` copies `Jti`/`OriginalIssuedAt` into the child).
+   denylists the device's entire credential lineage in one call, which is
+   sound only because the `jti` is carried forward by every refresh rather
+   than regenerated (see the issuance section above); it also covers any
+   bridge token minted from it, since `bridge.tokenhandler` copies
+   `Jti`/`OriginalIssuedAt` into the child (`tokenhandler.go:87`).
    Then call `localjwt.RevocationCache.Refresh(ctx)` synchronously (not
    waiting for the TTL) — the exact mechanism `RevocationCache.Refresh`'s
    doc comment already names this scenario for.
@@ -224,6 +373,55 @@ requires the connecting identity to carry it: add `DeviceID string` to
 not copied today) — a one-line addition next to the existing `Jti`/
 `OriginalIssuedAt` copy at `issuer.go:297-307`. `internal/bridge/server.go`
 then calls `hub.Register(id.UserID, id.DeviceID)`.
+
+**`bridge.tokenhandler` must copy `DeviceID` into the child token too**, and
+without that line the entire active-disconnect mechanism silently does
+nothing. The daemon does not connect to the Hub with its device credential;
+it exchanges that credential for a bridge token at `POST /api/bridge/token`
+and connects with the bridge token. That handler today copies exactly
+`Jti` and `OriginalIssuedAt` into the child (`tokenhandler.go:87-88`) and
+nothing else new, so the bridge token would carry no `DeviceID`, `id.DeviceID`
+would be empty at the websocket, `hub.Register` would store an empty string,
+and `EvictDevice` would match nothing — failing closed in appearance
+(revocation "succeeded") while the revoked daemon stays connected for the
+full hour. Add `DeviceID: id.DeviceID` alongside the existing two, for the
+same stated reason the other two are there: the child is a delegation of the
+parent and must inherit what the parent is revoked by.
+
+**Two things that look like gaps here and are not — recorded so they are not
+"fixed" into real ones.**
+
+*Revoking send consent already takes effect on the next send, not the next
+refresh.* It is tempting to read "a revoke takes effect at the device's next
+refresh" as meaning a compromised daemon keeps sending for up to the six-hour
+credential TTL, and to reach for denylisting the device's lineage on
+send-consent revoke. It does not, and that fix would be actively harmful.
+The send path already re-reads the account row on every send:
+`evaluateSendGate` calls `store.IsSendEnabled` per call
+(`internal/mcp/tools.go:1553`), as does `cmd/server/agentsendgate.go:52`.
+Scope in the token is the coarse gate; live `send_enabled` is the decisive
+one, which is the same "state-driven, never token-driven" rule this issue
+states, applied at the point of use. Refresh dropping the scope is
+defence in depth, not the mechanism.
+
+And denylisting the lineage to strip send would **permanently brick the
+device**: the `jti` is carried forward by every refresh, so the credential
+minted by the next refresh would carry the denylisted `jti` too, and no
+sequence of client actions could recover — first issuance cannot re-run,
+because its slot is claimed. Denylisting the lineage is device revocation's
+job and only device revocation's job.
+
+*The new audience marker does not require an auth-middleware change.*
+`localjwt.CheckAudience` passes when **any** entry of the token's `aud`
+equals the expected value (`issuer.go:173-189`), and `MintForDevice` builds
+`aud` the way `Mint` does: the purpose marker plus the configured
+`mcpAudience`. The device credential therefore still satisfies the MCP
+middleware and `/api/bridge/token` unchanged. What matters is the inverse
+property, which is the whole point of the distinct marker: `NewRenewHandler`
+switches on the *marker* specifically and matches neither `workerAudience`
+nor `workerBridgeAudience` for it. An implementer who stamps ONLY the marker
+and drops `mcpAudience` breaks every consumer at once — hence 9b's DoD
+asserts both directions.
 
 **Revocation SLA (the explicit either/or the issue asks for).** This design
 picks **active Hub disconnect as the primary mechanism**, not merely a
@@ -302,14 +500,32 @@ so a future reviewer does not "fix" it into the redaction set by reflex.
   one — validated by rejecting such `activate/start` requests once this
   ships, same style as the existing field-length/positivity checks in
   `handleActivateStart`.
+
+  **Making the field mandatory is a breaking change for an already-shipped
+  client, and is accepted deliberately.** #482 is merged, so a
+  `mctl-telegram-local` binary already exists that calls `activate/start`
+  without a `device_pubkey`; once this validation lands, that binary's
+  activation fails outright. That is the correct trade-off — a device row
+  with no public key can never obtain a credential, so admitting it only
+  moves the failure later and leaves an unusable row behind — but it must be
+  surfaced, not discovered: the rejection SHALL name the required client
+  upgrade rather than returning a generic 400, and the release notes for
+  this change SHALL state that `activate` requires the matching client
+  version. Any device row registered by the older client is unusable and its
+  owner re-runs `activate`; there are no such rows in production today.
 - `local_bridge_devices.device_pubkey_algo` (TEXT, default `'ed25519'`) —
   future-proofs the "or an equivalent reviewed primitive" allowance without
   a second migration if that ever changes.
-- `local_bridge_devices.current_jti` (TEXT, nullable) — the jti of the most
-  recently issued/refreshed credential for this device, written by
-  `MintForDevice`'s caller after a successful mint. Used only by
-  `revoke_local_bridge_device` to find what to denylist; not consulted on
-  any hot read path.
+- `local_bridge_devices.current_jti` (TEXT, nullable) — the ONE jti of this
+  device's credential lineage, claimed atomically at first issuance (see the
+  conditional UPDATE above) and thereafter read, not written, by refresh.
+  Used by `revoke_local_bridge_device` to find what to denylist, and by
+  refresh to stamp the credential it mints.
+- `local_bridge_devices.credential_issued_at` (TIMESTAMP, nullable) — the
+  `OriginalIssuedAt` anchor for that lineage, written in the same
+  conditional UPDATE as `current_jti` and read by every refresh. Refresh
+  presents no previous JWT, so this column is the only place the anchor can
+  come from.
 
 Both `internal/oauth/local_bridge_activate.go`'s `activateStartRequest` (add
 `device_pubkey`) and `RegisterDevice`'s signature (add a `pubkey []byte`

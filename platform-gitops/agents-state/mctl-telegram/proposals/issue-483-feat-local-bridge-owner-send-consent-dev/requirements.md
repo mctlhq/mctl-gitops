@@ -74,6 +74,12 @@ rather than inventing a parallel mechanism.
   invokes the send-consent path THEN THE SYSTEM SHALL refuse it; the path
   SHALL NOT accept a `telegram_id` parameter naming a different account (no
   admin-style "target" argument exists on this tool).
+- IF the send-consent path or the device-revocation path is invoked by an
+  identity whose credential is a device-bound or worker credential THEN THE
+  SYSTEM SHALL refuse it. These tools SHALL require a privilege that no
+  worker or device credential can be minted with, so that a compromised
+  device cannot re-grant itself send consent after its owner revokes it, and
+  cannot revoke the owner's other devices.
 - WHILE `set_account_send` is unmodified in behavior, scope gate
   (`admin:users`), and tests THE SYSTEM SHALL continue to serve it as the
   admin support/recovery path.
@@ -94,6 +100,10 @@ rather than inventing a parallel mechanism.
 - IF a signature does not verify against the `device_id`'s stored public key
   THEN THE SYSTEM SHALL reject the request, regardless of whether the nonce
   itself was valid.
+- IF the stored public key for a `device_id` is absent, of the wrong length,
+  or of an unrecognised algorithm THEN THE SYSTEM SHALL reject the request
+  with the same generic failure as any other invalid device, and SHALL NOT
+  pass the value to a verification primitive that panics on a malformed key.
 - WHEN a device presents a valid nonce and a valid Ed25519 signature over it
   for PoP refresh THE SYSTEM SHALL load the device's current revocation
   state and the account's current `send_enabled` value from the database at
@@ -109,6 +119,48 @@ rather than inventing a parallel mechanism.
   subsequent PoP issuance/refresh for that `device_id`, and immediately
   reject that device's worker-token lineage (jti) for every other endpoint
   that consults the worker-token revocation denylist.
+- IF a PoP refresh is requested for a device that has never completed first
+  issuance (its credential lineage slot is unclaimed) THEN THE SYSTEM SHALL
+  refuse it and mint nothing, so that no credential can exist outside a
+  lineage the revocation path can name.
+- WHEN a bridge token is minted from a device-bound credential THE SYSTEM
+  SHALL carry the `device_id` into the child token, so that the identity
+  presented on the `/bridge` websocket names the device and can be evicted.
+- WHEN device revocation determines which credential lineage to denylist THE
+  SYSTEM SHALL read that lineage identifier within the same transaction that
+  records the revocation, so that a credential issued concurrently with the
+  revocation cannot escape the denylist.
+- IF the revoked device holds no credential lineage THEN THE SYSTEM SHALL
+  still record the revocation successfully, skipping only the denylist step.
+- WHEN device revocation is recorded THE SYSTEM SHALL commit the row's
+  revoked state and its credential lineage's denylist entry together, and
+  SHALL remain safe to re-run against an already-revoked device — a repeat
+  invocation SHALL still denylist the lineage, refresh the revocation cache
+  and evict live connections, so that a partially applied revocation is
+  repaired by retrying rather than being reported as already done.
+- WHEN two first-issuance requests for the same `device_id` are handled
+  concurrently THE SYSTEM SHALL admit exactly one of them: the `jti` slot
+  SHALL be claimed by a single conditional write predicated on the slot
+  being unclaimed and the device unrevoked, and a request that loses the
+  claim SHALL be refused (409) with no credential minted, rather than
+  minting a second credential the revocation path cannot name.
+- WHILE a device is registered THE SYSTEM SHALL keep exactly ONE credential
+  lineage for it: the `jti` minted at first issuance SHALL be carried
+  forward unchanged by every subsequent PoP refresh, so that
+  `local_bridge_devices.current_jti` names the device's entire live
+  credential set and denylisting it revokes all of them. THE SYSTEM SHALL
+  NOT mint a fresh `jti` per refresh — a refresh that did so would orphan
+  the previous credential, which stays valid for the rest of its TTL, is no
+  longer named by any column, and can therefore still open a NEW `/bridge`
+  connection after the device is revoked.
+- IF a device-bound credential is presented to
+  `POST /api/mcp/worker-token/renew` THEN THE SYSTEM SHALL refuse it. That
+  handler copies scopes forward from the presented token by design, so
+  accepting a device credential there would let a device keep a send scope
+  the owner has since revoked, simply by renewing instead of refreshing —
+  the exact token-driven derivation this issue exists to forbid. Device
+  credentials SHALL therefore be distinguishable from admin-minted worker
+  tokens at that handler's audience check.
 - WHEN the revoked device has a live `/bridge` websocket connection THE
   SYSTEM SHALL actively disconnect it through the Hub as part of handling
   the revocation, rather than waiting for the connection's bridge-token TTL
