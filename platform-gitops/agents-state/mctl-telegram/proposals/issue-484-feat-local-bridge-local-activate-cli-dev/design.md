@@ -136,13 +136,29 @@ In `cmd/local/activate.go`:
      `{nonce, signature}`.
   4. On `200`, persists `{device_id, worker_token, expires_at, jti}` to a
      new file (see "Alternatives" for why not reusing `bridge_token.json`).
-  5. On `409` (lineage already claimed — a re-run of `activate` after a
-     credential already exists, e.g. the process died between activation
-     and credential issuance on a previous attempt), treat it as success:
-     print that the device is already activated and that `daemon` will
-     refresh its own credential, and exit 0. This is the natural
-     consequence of the idempotent device identity above: re-running
-     `activate` after full success must not be an error.
+  5. On `409` (lineage already claimed), do NOT simply exit 0 — check
+     whether the credential file is on disk first, and only then decide.
+
+     The 409 has two causes that look identical from here and end very
+     differently. Either the credential really was issued and persisted, and
+     re-running `activate` should be a no-op; or the server claimed the
+     lineage and the client never got the response — a timeout, a crash, a
+     closed lid between the claim and the write. In that second case the
+     device row is claimed, the disk has no credential, and there is no way
+     back: first issuance cannot re-run (the slot is taken, by construction —
+     see #483's atomic claim), `daemon` has no device credential to refresh
+     from, and its legacy fallback needs a `bridge_token.json` that a
+     self-service onboarding never produced. Exiting 0 would report success
+     over a machine that can never connect, recoverable only by wiping the
+     config directory — which also orphans the device row.
+
+     So: if the credential file exists, print that the device is already
+     activated and exit 0. If it does not, run the PoP refresh flow
+     (`/nonce` → sign → `/refresh`, which needs no existing credential),
+     persist what comes back, and exit 0 having actually repaired the state.
+     Refresh is the only path that can, and it is available precisely because
+     it authenticates by possession of the device key rather than by any
+     credential. Covered by T15.
   6. On any other failure, exit non-zero with a message that names the
      device as already activated (so the user does not re-run `activate`
      from scratch and orphan the device row) and says the credential step
@@ -230,9 +246,23 @@ Restructure around the split the issue asks for:
   `set_send_consent` as the self-service way to turn sending on (replacing
   the current "operator runs `set_account_send`" framing — `set_send_consent`
   is owner-gated, per `local_bridge_owner_tools_test.go`, not admin-gated).
-  Document that a device's send scope is derived fresh on every `/refresh`
-  call, so toggling `set_send_consent` takes effect on the daemon's next
-  scheduled refresh without restarting it or re-running `activate`.
+  Document what actually gates a send, in this order, because getting it
+  wrong in either direction is harmful. Turning consent OFF takes effect on
+  the daemon's **next send**, not its next refresh: `evaluateSendGate` reads
+  `send_enabled` from the account row on every call and is authoritative
+  (`internal/mcp/tools.go:387,1702` — "a real send happens only when
+  ALLOW_SEND, the send scope, per-account send_enabled, and the per-peer rate
+  limit all pass"). The scope carried by the credential is the coarse gate;
+  live `send_enabled` is the decisive one, which is the same state-driven
+  rule #483 applies at mint, applied at the point of use. Turning consent ON
+  is the direction that waits for the next scheduled refresh, because the
+  credential must acquire the scope before the gate can pass.
+
+  Do not document this the other way round, and do not "fix" it by evicting
+  the daemon's websocket on a consent revoke: an owner who revokes send
+  consent is already protected on the very next call, and revoking a device's
+  credential lineage is device revocation's job, which under #483's
+  carried-forward `jti` rule would brick the device if used here.
 - **Operator: support and recovery only**: `connect --token` fed by a
   manually minted `mint_worker_token`/`POST /api/mcp/worker-token` credential
   (kept, documented as the migration/recovery path — not the default),

@@ -71,6 +71,13 @@ of the pre-#483 one.
 
 ## Acceptance criteria (EARS)
 
+- IF `activate` receives a lineage-already-claimed response and no device
+  credential is present on disk THEN THE SYSTEM SHALL obtain one through the
+  proof-of-possession refresh path and persist it before reporting success,
+  and SHALL NOT exit successfully leaving the machine unable to connect.
+- WHEN the account owner revokes send consent THE SYSTEM SHALL refuse the
+  next real send from that account, without waiting for any credential to
+  expire or refresh, and the documentation SHALL describe it that way.
 - WHEN this work ships THE SYSTEM SHALL contain no user-facing page that
   states Local Bridge requires an operator to enable it per account, or that
   it is not self-serve. Those claims become false with this change, and they

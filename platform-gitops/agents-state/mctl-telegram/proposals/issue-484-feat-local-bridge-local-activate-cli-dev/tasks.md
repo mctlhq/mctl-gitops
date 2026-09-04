@@ -114,15 +114,24 @@
       `/security`, which asserted `session_encrypted` was NULL long after
       that stopped being true. Validate by mutation: restoring either
       sentence fails the test.
+- [ ] T15. `activate` repairs a half-claimed lineage: claim the lineage
+      server-side, delete the client's credential file to simulate the crash
+      between the claim and the write, re-run `activate` — it must obtain a
+      credential through `/refresh` and persist it, and `daemon` must then
+      start. Validate by mutation: exiting 0 on the 409 without checking the
+      file leaves `daemon` unable to start, which is the bricked state this
+      test exists to catch.
 - [ ] T11. Docs regression: every command and flag shown in
       `docs/local-bridge.md` matches `cmd/local`'s actual flag set (a
       table-driven or scripted check against `flag.NewFlagSet` definitions
       is acceptable), and the zero-admin sequence documented there is the
       one T7 exercises.
-- [ ] T12. Device-signed refresh picks up a `set_send_consent` change: grant
-      send consent, force a refresh, and assert the daemon's next
-      credential carries `telegram:messages:send`/`telegram:messages:pin`
-      without re-running `activate`.
+- [ ] T12. Consent changes take effect in the right direction and at the
+      right moment: revoking `set_send_consent` makes the very NEXT send from
+      an already-connected daemon a dry-run preview, with no refresh,
+      reconnect or restart in between (the live `evaluateSendGate` read is
+      what makes this true); granting it adds send/pin scope on the device's
+      next scheduled refresh.
 - [ ] T13. Private key file permissions: assert the persisted device
       identity file is `0600` immediately after creation on a
       POSIX-permission-respecting filesystem (mirrors the existing
