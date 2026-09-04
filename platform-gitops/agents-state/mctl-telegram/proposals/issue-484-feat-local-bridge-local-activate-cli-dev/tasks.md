@@ -189,17 +189,24 @@
       human who walked away, and failing fast instead of waiting makes a
       routine refresh abort an activation for a reason the user cannot act
       on.
+      And the pairing it protects: with the lock in place, a run that
+      regenerates the identity cannot leave a credential from another run
+      beside it. Validate by mutation: dropping the lock lets an interleaved
+      pair write private key B next to a credential for device_id A, and the
+      daemon then signs with a key the server does not hold for that device.
 - [ ] T23. The daemon refuses a corrupt identity instead of panicking or
       rotating: corrupt `private_key` and start `daemon` — it exits with a
       message naming `activate` as the fix, does not reach `ed25519.Sign`,
       and does NOT register a new device. Validate by mutation: loading
       without the usable check panics; rotating in the daemon silently
       re-registers the machine as a new device.
-      And the pairing it protects: with the lock in place, a run that
-      regenerates the identity cannot leave a credential from another run
-      beside it. Validate by mutation: dropping the lock lets an interleaved
-      pair write private key B next to a credential for device_id A, and the
-      daemon then signs with a key the server does not hold for that device.
+- [ ] T24. Half-matching key material is treated as corrupt: an identity file
+      whose `private_key` and `public_key` are both well-formed and correctly
+      sized but do NOT belong to each other is regenerated (and the
+      registration key rotated with it), rather than being used to sign.
+      Validate by mutation: checking only the lengths accepts the mismatched
+      pair, and every signature it makes is then rejected by the server
+      forever.
 - [ ] T18. The out-of-band refresh is bounded: with consent OFF, a send
       refused for want of scope triggers at most ONE `/refresh` and is then
       reported as a dry-run; repeated refusals do not each trigger another.
