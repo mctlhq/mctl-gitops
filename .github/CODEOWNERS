@@ -1,1 +1,62 @@
+# Code owners for mctl-gitops.
+#
+# GitHub applies the LAST matching pattern, so the specific entries below
+# override the repository-wide default rather than adding to it.
+#
+# This file ROUTES review; it does not require it. `main-protection` has
+# `require_code_owner_review: false`, deliberately: mashkovd is the only
+# account with write access to this repository, and GitHub does not count a
+# pull request author's own review. Turning enforcement on would mean the
+# only person who can open a status-flip PR is also the only person who
+# cannot approve one, so every such PR would need `gh pr merge --admin`. A
+# gate that is bypassed every time it fires teaches the bypass; it does not
+# add a reviewer.
+#
+# What it does today is put matching pull requests in the owner's review
+# queue automatically — for anyone other than the author. What it does later
+# is start gating for real the moment a second account has write access,
+# with no edit to this file. Revisit `require_code_owner_review` then.
+#
+# Scope is deliberately narrow. This file is not an attempt to put a
+# reviewer on everything in a repository that machines write to all day —
+# it exists for the one class of change where "a machine wrote it" and "a
+# human decided it" are indistinguishable from the diff alone.
+
+# ---------------------------------------------------------------------------
+# Repository default
+# ---------------------------------------------------------------------------
+# Everything, unless a more specific rule below says otherwise. Keep this
+# line first: removing it would silently drop ownership of every path this
+# file does not name.
 * @MashkovD
+
+# ---------------------------------------------------------------------------
+# Proposal status files
+# ---------------------------------------------------------------------------
+# `.status.yaml` is the file the Tier 2 implementer reads to decide whether a
+# proposal is runnable. `status: accepted` plus an `approval` block naming a
+# person is what authorises an agent to open a PR against a service repo, so
+# an edit to this file is an authorisation decision wearing the clothes of a
+# configuration change (gitops#986).
+#
+# The repository-wide rule above already routes these files; this entry does
+# not add a reviewer that was missing. What it adds is the reason, at the
+# path it applies to, so that narrowing the default later does not quietly
+# take the proposal status files with it — and so that the one question
+# worth asking here has a written answer.
+#
+# It reaches ONLY the human path, and that is the point:
+#
+#   - The agents write these files by pushing directly to main with
+#     `mctl-gitops-deploy-key`, and DeployKey is a bypass actor on the
+#     `main-protection` ruleset. Every `chore(agents): …` commit reaches main
+#     without a pull request, so nothing here slows the loop down.
+#   - A person cannot push to main. The ruleset requires a pull request, so a
+#     hand-edited status flip — the shape of PR #1022, an operator restoring
+#     a proposal to `accepted` after a quota failure — is exactly and only
+#     what this line catches.
+#
+# What it does not cover: anyone holding the deploy key writes as the
+# machines do, unreviewed. That is the ruleset's DeployKey bypass, not
+# something a CODEOWNERS entry can reach.
+platform-gitops/agents-state/*/proposals/*/.status.yaml @mashkovd
