@@ -109,10 +109,9 @@
       who has just granted consent waits hours before their first message
       leaves — which is not "zero-admin onboarding", it is a slower kind of
       waiting. Do not reorder the test to accommodate that; make the
-      sequence true. The daemon acquires the granted scope promptly (an
-      immediate refresh on observing that a send was refused for want of
-      scope, or an equivalent mechanism), and the docs describe whichever is
-      built. Revoking consent already needs no such step: the live
+      sequence true: the daemon performs an out-of-band `/refresh` on
+      observing a send refused for want of scope, and retries — see
+      design.md's consent section, which specifies the same mechanism. Revoking consent already needs no such step: the live
       `evaluateSendGate` read refuses the next send outright.
 - [ ] T16. Branch selection is on the credential, not the identity: a config
       directory holding a device identity file but no device credential (an
@@ -160,8 +159,12 @@
       right moment: revoking `set_send_consent` makes the very NEXT send from
       an already-connected daemon a dry-run preview, with no refresh,
       reconnect or restart in between (the live `evaluateSendGate` read is
-      what makes this true); granting it adds send/pin scope on the device's
-      next scheduled refresh.
+      what makes this true); granting it makes a send succeed promptly,
+      without the owner waiting for the scheduled refresh — the daemon
+      performs an out-of-band `/refresh` on observing a scope refusal and
+      retries. Validate by mutation: removing the out-of-band refresh leaves
+      the send a dry-run until the scheduled refresh, which is the wait this
+      test exists to prevent.
 - [ ] T13. Private key file permissions: assert the persisted device
       identity file is `0600` immediately after creation on a
       POSIX-permission-respecting filesystem (mirrors the existing
