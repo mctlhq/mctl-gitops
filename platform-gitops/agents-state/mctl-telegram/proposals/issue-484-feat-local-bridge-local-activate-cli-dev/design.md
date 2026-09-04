@@ -157,6 +157,13 @@ Add a second refresh mechanism and pick between it and the existing one by
 what is present on disk, so the two paths never have to agree on a shared
 mutable file:
 
+- The device-signed path deliberately depends on NO live credential. The
+  `/nonce`, `/credential` and `/refresh` routes are registered without auth
+  middleware (`internal/oauth/server.go:985-987`) and are gated by proof of
+  possession alone, so a daemon whose worker token expired while the machine
+  was asleep still refreshes normally. Do not add a "refresh only while the
+  current credential is valid" guard: it would turn a laptop lid into a
+  bootstrap deadlock that only re-running `activate` could clear.
 - New helper `refreshDeviceCredential(ctx, cfg, deviceID, priv)` in
   `daemon.go`, structurally parallel to `refreshBridgeToken`: nonce → sign →
   `POST /api/local-bridge/devices/{device_id}/refresh` → gets a fresh
@@ -180,7 +187,41 @@ mutable file:
   not," so an account onboarded before this change (only `bridge_token.json`
   on disk, no device identity file) keeps working with zero migration step.
 
-### 3. `docs/local-bridge.md` (task 12)
+### 2b. The claims the public site makes about this mode
+
+`docs/local-bridge.md` is not the only place that tells users an operator has
+to be involved, and the other two are worse because they are the pages a
+prospective user reads first:
+
+- `internal/web/landing.html:411` (the FAQ entry for Local Bridge): *"an
+  operator enables it per account — it is not self-serve yet."*
+- `internal/web/docs.html:263`: *"It costs you a machine that stays on and an
+  operator has to enable it per account, so it is not part of the standard
+  install path"*, and the sentence after it points at *"what the operator
+  still does."*
+
+Both become false the moment this ships. Leaving them is not a documentation
+backlog item, it is the site asserting the opposite of the shipped behaviour
+to the exact audience the change is for — and this repository has already paid
+for that once: `internal/web/localbridge.go`'s own comment records that
+`/security` claimed `session_encrypted` was NULL for local-mode accounts long
+after it stopped being true, and calls a guide that quietly disagrees with the
+repository "the same failure with a longer fuse."
+
+So both pages are edited in this PR, not after it. What replaces them is the
+narrow, still-true residue: Local Bridge costs you a machine that stays on,
+and migrating an *existing hosted* account still needs `set_account_mode`.
+Everything else about operator involvement goes.
+
+`internal/web/local-bridge.md` is a generated mirror of `docs/local-bridge.md`
+(`go:embed` cannot reach outside the package), and
+`TestLocalBridgeMarkdownMatchesDocs` fails the build when they drift — so the
+docs rewrite is followed by `cp docs/local-bridge.md
+internal/web/local-bridge.md`. The test catches a forgotten copy; naming the
+step here means the implementer does not have to discover that from a red
+build.
+
+### 3. `docs/local-bridge.md`### 3. `docs/local-bridge.md` (task 12)
 
 Restructure around the split the issue asks for:
 

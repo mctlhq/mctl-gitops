@@ -71,6 +71,14 @@ of the pre-#483 one.
 
 ## Acceptance criteria (EARS)
 
+- WHEN this work ships THE SYSTEM SHALL contain no user-facing page that
+  states Local Bridge requires an operator to enable it per account, or that
+  it is not self-serve. Those claims become false with this change, and they
+  are currently made on the public landing page and the public docs page —
+  not only in the setup guide the issue names.
+- WHILE `docs/local-bridge.md` is the single source THE SYSTEM SHALL keep
+  `internal/web/local-bridge.md` byte-identical to it, since that mirror is
+  what the site actually serves.
 - WHEN `mctl-telegram-local activate --telegram-id <id>` runs for the first
   time THE SYSTEM SHALL generate an Ed25519 keypair, persist the private key
   at `0600`, and send the base64-encoded public key as `device_pubkey` on

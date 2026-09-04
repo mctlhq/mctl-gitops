@@ -66,6 +66,17 @@
       in the file describes a step this proposal made self-service as an
       operator step; every CLI example matches actual flags (feeds T11).
 
+- [ ] 6b. Mirror the rewritten guide into the package the site serves:
+      `cp docs/local-bridge.md internal/web/local-bridge.md` (depends on 6) —
+      DoD: `TestLocalBridgeMarkdownMatchesDocs` passes. `go:embed` cannot
+      reach outside the package, which is why the copy exists at all.
+- [ ] 6c. Correct the two public pages that state this mode is not
+      self-serve (depends on 1-5): `internal/web/landing.html:411` ("an
+      operator enables it per account — it is not self-serve yet") and
+      `internal/web/docs.html:263` ("an operator has to enable it per
+      account ... what the operator still does"). Keep only what stays
+      true — a machine that stays on, and `set_account_mode` for migrating
+      an EXISTING hosted account — DoD: T14 passes.
 - [ ] 7. Update `internal/bridge/DESIGN.md` (depends on 1-6, same PR as the
       code per the issue's constraint). Close "No self-serve enablement";
       revise "No long-lived MCP token to hand to `connect`" to distinguish
@@ -95,6 +106,14 @@
       against the same config directory. Second run reuses the same
       keypair and device_id, and the credential-issuance 409 is handled as
       success (not surfaced as an error).
+- [ ] T14. No shipped page claims an operator gate that no longer exists:
+      assert the rendered `/` and `/docs` pages contain neither "not
+      self-serve" nor an "operator enables it per account" claim for Local
+      Bridge. This is a content assertion on purpose — the same class of
+      staleness `internal/web/localbridge.go`'s comment records for
+      `/security`, which asserted `session_encrypted` was NULL long after
+      that stopped being true. Validate by mutation: restoring either
+      sentence fails the test.
 - [ ] T11. Docs regression: every command and flag shown in
       `docs/local-bridge.md` matches `cmd/local`'s actual flag set (a
       table-driven or scripted check against `flag.NewFlagSet` definitions
