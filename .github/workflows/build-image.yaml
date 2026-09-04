@@ -64,6 +64,28 @@ on:
       build_id:
         required: true
         type: string
+    # Declared so the caller can pass exactly what this workflow uses instead
+    # of `secrets: inherit`. This job checks out whichever repository
+    # `inputs.repo` names and builds its Dockerfile, so every secret in the
+    # caller's environment is a secret handed to a build of third-party
+    # source. These four are the complete set this file references
+    # (mctlhq/mctl-gitops#1010).
+    #
+    # All optional: each has a documented fallback tier below, and making any
+    # of them required would turn a missing secret into a hard failure of the
+    # release path rather than the degradation it is today.
+    #
+    # GITHUB_TOKEN is deliberately absent - it is provided automatically, and
+    # GitHub rejects a `secrets:` entry whose name starts with GITHUB_.
+    secrets:
+      APP_ID:
+        required: false
+      APP_PRIVATE_KEY:
+        required: false
+      GHCR_PAT:
+        required: false
+      GH_PACKAGES_TOKEN:
+        required: false
 
 env:
   REGISTRY: ghcr.io
@@ -81,15 +103,54 @@ jobs:
       # --- Tier 1: Vault PAT via GitHub OIDC -> Vault JWT ---
       - name: Fetch Vault PAT
         id: vault_pat
+        # Bound through env rather than interpolated into the script text.
+        # `${{ inputs.x }}` is substituted BEFORE bash parses the line, so a
+        # value carrying a quote and a semicolon runs as a command on a runner
+        # that holds an OIDC token, a Vault token, the retrieved PAT and a
+        # GITHUB_TOKEN with packages: write. These inputs are not
+        # operator-only: Argo dispatches this workflow from wft-deploy-service
+        # with `dockerfile_repo`, which carries no Pattern in mctl-api's
+        # operations registry (agy P1).
         env:
-          VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
+          INPUT_REPO: ${{ inputs.repo }}
+          INPUT_TEAM_NAME: ${{ inputs.team_name }}
+          INPUT_COMPONENT_NAME: ${{ inputs.component_name }}
         run: |
           set -euo pipefail
-          REPO="${{ inputs.repo }}"
+          REPO="$INPUT_REPO"
+
+          # Shape-checked as well as env-bound, for two reasons: it is the
+          # second layer if a future edit reintroduces interpolation, and it
+          # is what stops a newline from smuggling extra keys into
+          # $GITHUB_OUTPUT below — `repo_owner=foo\nkey=value` would define a
+          # second output that later steps read as trusted (agy P2). A grep
+          # anchored with ^...$ matches per line, so the newline check is
+          # separate and comes first.
+          for pair in "repo:${REPO}" "team_name:${INPUT_TEAM_NAME}" "component_name:${INPUT_COMPONENT_NAME}"; do
+            name="${pair#*:}"
+            if [ "$(printf '%s' "$name" | wc -l)" -ne 0 ]; then
+              echo "::error::${pair%%:*} must be a single line"
+              exit 1
+            fi
+          done
+          echo "$REPO" | grep -qE '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$' || {
+            echo "::error::repo must be owner/name, got: ${REPO}"; exit 1; }
+          for pair in "team_name:${INPUT_TEAM_NAME}" "component_name:${INPUT_COMPONENT_NAME}"; do
+            name="${pair#*:}"
+            echo "$name" | grep -qE '^[a-z0-9]([a-z0-9-]*[a-z0-9])?$' || {
+              echo "::error::invalid ${pair%%:*}: ${name}"; exit 1; }
+          done
+
           echo "repo_owner=${REPO%%/*}" >> "$GITHUB_OUTPUT"
           echo "repo_name=${REPO##*/}" >> "$GITHUB_OUTPUT"
 
-          VAULT_ADDR="${VAULT_ADDR:-https://secrets.mctl.ai}"
+          # Was `${{ secrets.VAULT_ADDR }}` with this literal as a fallback,
+          # but no such secret exists in this repository or the org, so the
+          # expression was always empty and the fallback is what has run all
+          # along. A reference to a secret that does not exist reads like
+          # configuration while being dead code - the next person to change
+          # the Vault address would have changed the wrong thing (#1010).
+          VAULT_ADDR="https://secrets.mctl.ai"
           PAT=""
 
           if [[ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" || -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]]; then
@@ -121,7 +182,7 @@ jobs:
                 echo "Vault JWT login failed; skipping Vault PAT"
               else
                 echo "::add-mask::${VAULT_TOKEN}"
-                VAULT_URL="${VAULT_ADDR}/v1/secret/data/teams/${{ inputs.team_name }}/${{ inputs.component_name }}/repo-pat"
+                VAULT_URL="${VAULT_ADDR}/v1/secret/data/teams/${INPUT_TEAM_NAME}/${INPUT_COMPONENT_NAME}/repo-pat"
                 HTTP_CODE=$(curl -sS -o /tmp/vault-resp.json -w "%{http_code}" \
                   -H "X-Vault-Token: ${VAULT_TOKEN}" \
                   "$VAULT_URL" || echo "000")
@@ -246,12 +307,22 @@ jobs:
             ${{ inputs.image_name }}:latest
 
       - name: Summary
+        # Same reason as the Vault step: these land in a shell command, so
+        # they are bound rather than interpolated. The step summary is
+        # rendered as markdown on the run page, so an interpolated value also
+        # gets to write that page's content.
+        env:
+          INPUT_REPO: ${{ inputs.repo }}
+          INPUT_GIT_REF: ${{ inputs.git_ref }}
+          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
+          INPUT_IMAGE_TAG: ${{ inputs.image_tag }}
+          INPUT_BUILD_ID: ${{ inputs.build_id }}
         run: |
           echo "## ✅ Image Built" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| **Repo** | \`${{ inputs.repo }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Ref** | \`${{ inputs.git_ref }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Image** | \`${{ inputs.image_name }}:${{ inputs.image_tag }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Build ID** | \`${{ inputs.build_id }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Repo** | \`${INPUT_REPO}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Ref** | \`${INPUT_GIT_REF}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Image** | \`${INPUT_IMAGE_NAME}:${INPUT_IMAGE_TAG}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Build ID** | \`${INPUT_BUILD_ID}\` |" >> $GITHUB_STEP_SUMMARY
