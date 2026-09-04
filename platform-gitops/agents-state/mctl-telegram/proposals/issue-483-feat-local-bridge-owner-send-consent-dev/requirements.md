@@ -109,6 +109,23 @@ rather than inventing a parallel mechanism.
   subsequent PoP issuance/refresh for that `device_id`, and immediately
   reject that device's worker-token lineage (jti) for every other endpoint
   that consults the worker-token revocation denylist.
+- WHILE a device is registered THE SYSTEM SHALL keep exactly ONE credential
+  lineage for it: the `jti` minted at first issuance SHALL be carried
+  forward unchanged by every subsequent PoP refresh, so that
+  `local_bridge_devices.current_jti` names the device's entire live
+  credential set and denylisting it revokes all of them. THE SYSTEM SHALL
+  NOT mint a fresh `jti` per refresh — a refresh that did so would orphan
+  the previous credential, which stays valid for the rest of its TTL, is no
+  longer named by any column, and can therefore still open a NEW `/bridge`
+  connection after the device is revoked.
+- IF a device-bound credential is presented to
+  `POST /api/mcp/worker-token/renew` THEN THE SYSTEM SHALL refuse it. That
+  handler copies scopes forward from the presented token by design, so
+  accepting a device credential there would let a device keep a send scope
+  the owner has since revoked, simply by renewing instead of refreshing —
+  the exact token-driven derivation this issue exists to forbid. Device
+  credentials SHALL therefore be distinguishable from admin-minted worker
+  tokens at that handler's audience check.
 - WHEN the revoked device has a live `/bridge` websocket connection THE
   SYSTEM SHALL actively disconnect it through the Hub as part of handling
   the revocation, rather than waiting for the connection's bridge-token TTL

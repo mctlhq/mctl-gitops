@@ -59,11 +59,22 @@
       missing, wrong-key, wrong-device, expired-nonce, nonce-replay) and T5
       (grant adds send on next refresh, revoke removes it on next refresh)
       pass.
-- [ ] 9. Write `current_jti` back to `local_bridge_devices` after every
-      successful issuance/refresh mint (depends on 6, 7, 8) — DoD: a
-      device's row reflects its latest credential's jti after each call;
-      concurrent refreshes from the same device don't corrupt the column
-      (last-write-wins is acceptable — documented, not silently assumed).
+- [ ] 9. Write `current_jti` back to `local_bridge_devices` at FIRST
+      issuance only, and have every refresh read it and stamp the same value
+      (depends on 6, 7, 8) — DoD: a device that has issued once and
+      refreshed several times still has exactly one jti across all its live
+      credentials, and revoking it denylists every one of them; a test
+      asserts that a credential obtained BEFORE a refresh is rejected by the
+      revocation denylist after the device is revoked. Concurrent refreshes
+      are safe by construction because they all stamp the same stored value,
+      so there is no last-write-wins question to document.
+- [ ] 9b. Give `MintForDevice` its own audience marker
+      (`workerDeviceAudience = "mcp-worker-device"`) instead of
+      `workerBridgeAudience` (depends on 6) — DoD: `POST
+      /api/mcp/worker-token/renew` presented with a device credential
+      answers 403 "token is not a worker token", proven by a test; the renew
+      handler itself is unmodified; the `/bridge` token path and the MCP
+      auth middleware still accept the device credential.
 - [ ] 10. Add `DeviceID` to `auth.Identity` (`internal/auth/identity.go`)
       and set it from `Claims.DeviceID` in
       `localjwt.Provider.Authenticate` (`internal/auth/localjwt/issuer.go`,
@@ -133,6 +144,15 @@
       a refresh in between two grants never reflects a scope from the
       credential presented to trigger it (there is none — refresh takes no
       bearer token, only PoP).
+- [ ] T5b. Renew is not a way around state-derived scopes: mint a device
+      credential while `send_enabled` is true, revoke send consent, then
+      present that credential to `POST /api/mcp/worker-token/renew` — it
+      MUST be refused, not renewed with the stale send scope carried
+      forward. Validate by mutation: stamping `workerBridgeAudience` instead
+      of the device marker makes this test fail.
+- [ ] T5c. One lineage per device: issue, refresh twice, then revoke the
+      device — the credential from BEFORE the refreshes must be rejected by
+      the revocation denylist, not merely the newest one.
 - [ ] T6. Revocation: refresh for a revoked device fails immediately
       (same request cycle as the revoke call, not merely within a TTL);
       `POST /api/bridge/token` and `POST /api/mcp/worker-token/renew`

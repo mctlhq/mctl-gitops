@@ -137,9 +137,46 @@ activation. Two new unauthenticated-but-`device_id`-scoped endpoints:
   (`defaultDeviceCredentialTTL = 6h`, `maxDeviceCredentialTTL = 24h`,
   distinct constants from `defaultWorkerTokenTTL`/`maxWorkerTokenTTL`), and
   it sets `Claims.DeviceID = device.DeviceID` — the field #481 added and
-  left unused for exactly this. The minted token's `jti` is written back to
-  a new `local_bridge_devices.current_jti` column (see below) so device
-  revocation can find and denylist it later.
+  left unused for exactly this.
+
+  **The `jti` is minted once per device and then carried forward.** At first
+  issuance `MintForDevice` generates a `jti` (as `Mint` does) and writes it
+  to a new `local_bridge_devices.current_jti` column. Every later PoP
+  refresh for that device REUSES that stored value rather than generating a
+  new one. This is not a detail: `Mint`'s own comment states the property
+  the whole revocation story rests on — "Jti is generated here and carried
+  forward unchanged by every renewal, so revoking it revokes the whole
+  lineage" (`minter.go:123-124`). A refresh that minted a fresh `jti` would
+  break it. The previous credential would remain valid for the rest of its
+  six-hour TTL, would no longer be named by `current_jti`, and could
+  therefore be used to open a NEW `/bridge` websocket after the owner
+  revoked the device — Hub eviction only closes connections that are already
+  open. `MintForDevice` therefore takes the `jti` to stamp as an input, and
+  the caller passes the stored one on refresh and the newly generated one
+  only at first issuance.
+
+  **`OriginalIssuedAt` is likewise set once, at first issuance**, so a
+  derived bridge token keeps pointing at the same anchor. It does NOT gate
+  PoP refresh: `maxRenewalChain` exists because a human admin is in the loop
+  at mint time for worker tokens, and this credential's continued validity is
+  gated by live device and account state instead, which is a stronger check
+  than a one-year wall clock.
+
+  **The device credential must not be renewable through
+  `POST /api/mcp/worker-token/renew`.** That handler accepts any token
+  carrying `workerAudience` or `workerBridgeAudience`, and deliberately
+  copies identity and scopes forward from the presented token —
+  "identity and privileges are copied from the presented token and cannot be
+  influenced by the caller" (`renewhandler.go:51-55`) — with
+  `allowedLocalBridgeScopes` including `telegram:messages:send`. If a device
+  credential carried `workerBridgeAudience`, a device whose owner has just
+  revoked send consent could keep that scope indefinitely by calling renew
+  instead of refresh, and every state-driven guarantee in this design would
+  be reachable around. `MintForDevice` therefore stamps a distinct audience
+  marker (`workerDeviceAudience = "mcp-worker-device"`), which
+  `NewRenewHandler`'s audience switch does not match, so renew answers 403
+  "token is not a worker token" and PoP refresh is the only way forward for
+  a device. The renew handler itself is not modified.
 
 This never touches `POST /api/mcp/worker-token` or its handler, satisfying
 "the admin worker-token mint endpoint is not reachable by an end user
@@ -193,10 +230,11 @@ different account — then performs, in order:
    no TTL — satisfies "refresh must fail immediately after revocation").
 2. If the device row's new `current_jti` column is non-empty,
    `store.RevokeWorkerToken(ctx, jti, telegramID, reason, revokedBy)` — this
-   denylists the specific credential lineage this device has been
-   refreshing (renewal/derivation always carries `jti` forward, so this one
-   call also covers any bridge token minted from it, since
-   `bridge.tokenhandler` copies `Jti`/`OriginalIssuedAt` into the child).
+   denylists the device's entire credential lineage in one call, which is
+   sound only because the `jti` is carried forward by every refresh rather
+   than regenerated (see the issuance section above); it also covers any
+   bridge token minted from it, since `bridge.tokenhandler` copies
+   `Jti`/`OriginalIssuedAt` into the child (`tokenhandler.go:87`).
    Then call `localjwt.RevocationCache.Refresh(ctx)` synchronously (not
    waiting for the TTL) — the exact mechanism `RevocationCache.Refresh`'s
    doc comment already names this scenario for.
@@ -302,6 +340,19 @@ so a future reviewer does not "fix" it into the redaction set by reflex.
   one — validated by rejecting such `activate/start` requests once this
   ships, same style as the existing field-length/positivity checks in
   `handleActivateStart`.
+
+  **Making the field mandatory is a breaking change for an already-shipped
+  client, and is accepted deliberately.** #482 is merged, so a
+  `mctl-telegram-local` binary already exists that calls `activate/start`
+  without a `device_pubkey`; once this validation lands, that binary's
+  activation fails outright. That is the correct trade-off — a device row
+  with no public key can never obtain a credential, so admitting it only
+  moves the failure later and leaves an unusable row behind — but it must be
+  surfaced, not discovered: the rejection SHALL name the required client
+  upgrade rather than returning a generic 400, and the release notes for
+  this change SHALL state that `activate` requires the matching client
+  version. Any device row registered by the older client is unusable and its
+  owner re-runs `activate`; there are no such rows in production today.
 - `local_bridge_devices.device_pubkey_algo` (TEXT, default `'ed25519'`) —
   future-proofs the "or an equivalent reviewed primitive" allowance without
   a second migration if that ever changes.
