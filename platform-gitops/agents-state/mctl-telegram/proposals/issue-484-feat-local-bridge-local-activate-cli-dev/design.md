@@ -221,7 +221,7 @@ internal/web/local-bridge.md`. The test catches a forgotten copy; naming the
 step here means the implementer does not have to discover that from a red
 build.
 
-### 3. `docs/local-bridge.md`### 3. `docs/local-bridge.md` (task 12)
+### 3. `docs/local-bridge.md` (task 12)
 
 Restructure around the split the issue asks for:
 
