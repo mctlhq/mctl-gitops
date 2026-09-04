@@ -45,13 +45,20 @@
       `/bridge` without any `bridge_token.json`/`MCPToken` on disk.
 
 - [ ] 5. Branch `runDaemon` and `runDaemonCmd` on which credential files are
-      present (depends on 4). Device identity + device credential file
-      present → device-signed refresh path; only legacy `bridge_token.json`
-      present → existing bearer-only `refreshBridgeToken`, unchanged. —
+      present (depends on 4). The branch is on the DEVICE CREDENTIAL, not on
+      the device identity: a usable device credential file present →
+      device-signed refresh path; otherwise → existing bearer-only
+      `refreshBridgeToken`, unchanged. A legacy user who tries the new
+      `activate` and does not finish it ends up with a device identity file
+      AND their working `bridge_token.json`; branching on the identity would
+      send that daemon down a path with no credential to refresh and break a
+      setup that worked five minutes earlier. The identity file alone means
+      "activation was attempted", never "the device is provisioned". —
       DoD: a config directory containing only legacy files behaves exactly
       as before this change (existing daemon tests pass unmodified); a
-      config directory containing device files uses the new path
-      exclusively.
+      config directory with a device identity but NO device credential still
+      uses the legacy path and keeps working; a config directory with a
+      device credential uses the new path exclusively. Covered by T16.
 
 - [ ] 6. Rewrite `docs/local-bridge.md` (depends on 1-5). Split **Client /
       owner actions** (`init`, `login`, `activate`, `daemon`,
@@ -89,12 +96,35 @@
 
 ## Tests
 
-- [ ] T7. End-to-end (new): fresh install → `init` → local Telegram
-      `login` → `activate` → a read call succeeds → explicit
-      `set_send_consent` grant → a send call succeeds → credential refresh
-      (forced, e.g. by shortening TTL in test config) → daemon reconnects
-      with the refreshed credential. Assert `telegram_accounts
-      .session_encrypted IS NULL` throughout.
+- [ ] T7. End-to-end (new), in exactly this order, because it is the
+      issue's Definition of Done and the product promise it encodes: fresh
+      install → `init` → local Telegram `login` → `activate` → a read call
+      succeeds → explicit `set_send_consent` grant → **a send call
+      succeeds** → credential refresh (forced, e.g. by shortening TTL in
+      test config) → daemon reconnects with the refreshed credential.
+      Assert `telegram_accounts.session_encrypted IS NULL` throughout.
+
+      The send step comes BEFORE the forced refresh on purpose. If a grant
+      cannot take effect until the daemon's next scheduled refresh, an owner
+      who has just granted consent waits hours before their first message
+      leaves — which is not "zero-admin onboarding", it is a slower kind of
+      waiting. Do not reorder the test to accommodate that; make the
+      sequence true. The daemon acquires the granted scope promptly (an
+      immediate refresh on observing that a send was refused for want of
+      scope, or an equivalent mechanism), and the docs describe whichever is
+      built. Revoking consent already needs no such step: the live
+      `evaluateSendGate` read refuses the next send outright.
+- [ ] T16. Branch selection is on the credential, not the identity: a config
+      directory holding a device identity file but no device credential (an
+      `activate` that was interrupted) still refreshes through the legacy
+      bearer path and the daemon keeps working. Validate by mutation:
+      branching on the identity file makes this test fail with a daemon that
+      cannot start.
+- [ ] T17. A device identity file written by #482's `activate` — opaque
+      registration key only, no Ed25519 halves — is completed in place on
+      the next `activate` run, and signing works afterwards. Validate by
+      mutation: generating only when the file is absent makes this test
+      panic in `ed25519.Sign`.
 - [ ] T8. Regression: existing hosted fresh-user flow and hosted→local
       migration (`set_account_mode`) pass unmodified — no behavior change
       for either.

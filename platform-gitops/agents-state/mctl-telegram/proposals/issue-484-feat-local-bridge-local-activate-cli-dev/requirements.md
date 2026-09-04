@@ -71,6 +71,17 @@ of the pre-#483 one.
 
 ## Acceptance criteria (EARS)
 
+- WHEN the account owner grants send consent THE SYSTEM SHALL let the next
+  send from an already-running daemon succeed without the owner waiting for
+  a scheduled credential refresh, restarting the daemon, or re-running
+  `activate`.
+- IF a device identity file exists without its signing key material THEN THE
+  SYSTEM SHALL complete it in place rather than treating the file's presence
+  as proof the identity is usable.
+- WHILE a configuration directory holds a device identity but no device
+  credential THE SYSTEM SHALL continue to use the legacy bearer refresh
+  path, so an interrupted activation never breaks a daemon that was
+  working.
 - IF `activate` receives a lineage-already-claimed response and no device
   credential is present on disk THEN THE SYSTEM SHALL obtain one through the
   proof-of-possession refresh path and persist it before reporting success,

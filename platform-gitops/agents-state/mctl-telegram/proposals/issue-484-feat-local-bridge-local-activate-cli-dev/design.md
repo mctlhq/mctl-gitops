@@ -108,10 +108,16 @@ for PoP). Concretely, in `cmd/local/config.go`:
   "device key" to "device identity" internally, keep the JSON file at the
   same path for a smooth upgrade) to hold `device_registration_key`
   (unchanged), `private_key` (Ed25519 seed, base64), and `public_key`
-  (Ed25519 public key, base64). Generate both key halves together with
-  `ed25519.GenerateKey(rand.Reader)` the first time the file does not exist,
-  exactly where `loadOrCreateDeviceKey` already generates the opaque key
-  today, and write the file atomically at `0600` via the existing
+  (Ed25519 public key, base64). Generate the key halves with
+  `ed25519.GenerateKey(rand.Reader)` when they are MISSING FROM THE FILE —
+  not merely when the file is absent. Anyone who ran `activate` from #482
+  already has this file, holding only the opaque
+  `device_registration_key`; keying generation on the file's existence would
+  skip it for exactly those users and then hand an empty seed to
+  `ed25519.Sign`, which panics on a wrong-length key rather than returning an
+  error. The check is on the fields, and a file missing either half is
+  completed in place and rewritten. Otherwise generation happens exactly
+  where `loadOrCreateDeviceKey` generates the opaque key today, and write the file atomically at `0600` via the existing
   `writeFileAtomic` helper — no new file-permission code path.
 - A device identity, once generated, is loaded and reused on every later
   `activate` run, mirroring the existing idempotency-key reuse rationale
