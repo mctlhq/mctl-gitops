@@ -109,6 +109,16 @@ rather than inventing a parallel mechanism.
   subsequent PoP issuance/refresh for that `device_id`, and immediately
   reject that device's worker-token lineage (jti) for every other endpoint
   that consults the worker-token revocation denylist.
+- IF a PoP refresh is requested for a device that has never completed first
+  issuance (its credential lineage slot is unclaimed) THEN THE SYSTEM SHALL
+  refuse it and mint nothing, so that no credential can exist outside a
+  lineage the revocation path can name.
+- WHEN device revocation is recorded THE SYSTEM SHALL commit the row's
+  revoked state and its credential lineage's denylist entry together, and
+  SHALL remain safe to re-run against an already-revoked device — a repeat
+  invocation SHALL still denylist the lineage, refresh the revocation cache
+  and evict live connections, so that a partially applied revocation is
+  repaired by retrying rather than being reported as already done.
 - WHEN two first-issuance requests for the same `device_id` are handled
   concurrently THE SYSTEM SHALL admit exactly one of them: the `jti` slot
   SHALL be claimed by a single conditional write predicated on the slot

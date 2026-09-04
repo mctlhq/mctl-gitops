@@ -226,6 +226,15 @@ authorizes the mint and what scopes come out:
   against the `device_pubkey` on file for `device_id`. This sidesteps the
   "copy scopes forward from a presented JWT" bug class structurally: there
   is no presented JWT in the refresh request to copy anything from.
+- **Refresh refuses a device that has never issued.** If `current_jti` is
+  NULL the handler rejects with 409 and mints nothing. Without that check a
+  client can simply skip `/credential` and call `/refresh` first: both
+  `current_jti` and `credential_issued_at` are still NULL, so the credential
+  would be stamped with an empty `jti` and an empty anchor — and
+  `revoke_local_bridge_device`, which denylists `current_jti` when set,
+  would silently skip the denylist step and leave that credential valid and
+  unrevocable for its whole TTL. First issuance is the only path that claims
+  the slot, so it is the only path that may create a lineage.
 - On each refresh, the handler does a **live** `store.GetDevice` (revoked
   check) and `store.IsSendEnabled(ctx, device.UserID)` read, and derives
   scopes fresh every time: `allowedReadOnlyScopes` always, plus
@@ -256,6 +265,21 @@ different account — then performs, in order:
    subsequent nonce/issuance/refresh call for this `device_id` fails the
    live `GetDevice` check added in step 3 above, **immediately** (no cache,
    no TTL — satisfies "refresh must fail immediately after revocation").
+
+   **Steps 1 and 2 are one database transaction, and the whole path is
+   idempotent.** Marking the row revoked and denylisting its `jti` are two
+   halves of one decision: if a crash or a transient error lands between
+   them, the device is revoked while its live credential is not denylisted,
+   which is the worst of both states — the owner is told the device is gone
+   and it can still open connections until its TTL lapses. Worse, a retry
+   would find the device already revoked and could reasonably treat the
+   whole call as a no-op, wedging that state permanently. So: both writes
+   commit together, and re-running the tool on an ALREADY-revoked device
+   still denylists `current_jti`, still forces the cache refresh, and still
+   evicts — it repairs a partial failure rather than reporting success over
+   one. Steps 3 and 4 are outside the transaction by necessity (a cache and
+   a websocket are not transactional) and are therefore written to be safe
+   to repeat.
 2. If the device row's new `current_jti` column is non-empty,
    `store.RevokeWorkerToken(ctx, jti, telegramID, reason, revokedBy)` — this
    denylists the device's entire credential lineage in one call, which is

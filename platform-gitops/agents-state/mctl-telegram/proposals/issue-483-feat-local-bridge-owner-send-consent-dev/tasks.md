@@ -99,9 +99,12 @@
 - [ ] 12. Add `revoke_local_bridge_device` MCP tool in
       `internal/mcp/tools.go`: verify device ownership via
       `store.GetDevice`, then `store.RevokeDevice` →
-      `store.RevokeWorkerToken` (using the device's `current_jti`, when
-      set) → `localjwt.RevocationCache.Refresh` (synchronous, not
-      TTL-bound) → `hub.EvictDevice` (depends on 9, 11) — DoD: T6 passes
+      `store.RevokeWorkerToken` (using the device's `current_jti`) IN ONE
+      TRANSACTION, then `localjwt.RevocationCache.Refresh` (synchronous, not
+      TTL-bound) → `hub.EvictDevice` outside it (depends on 9, 11). The tool
+      is idempotent: invoked on an already-revoked device it still denylists,
+      refreshes and evicts, so a partially applied revocation is repaired by
+      retrying — DoD: T6 passes
       (revocation stops refresh immediately — verified against task 8's
       live `GetDevice` check; refuses new connections; a live websocket for
       the revoked device is closed within the same request, not merely
@@ -172,6 +175,19 @@
 - [ ] T5e. Issuance racing revocation: revoke the device between the PoP
       check and the claim — the conditional UPDATE's `revoked_at IS NULL`
       predicate must make the issuance lose, with no credential minted.
+- [ ] T5g. Refresh before issuance: call `/refresh` on a device that has
+      never called `/credential` — refused with 409 and nothing minted.
+      Validate by mutation: dropping the `current_jti IS NULL` check yields
+      a credential with an empty jti that survives
+      `revoke_local_bridge_device`, which is the failure this test exists to
+      catch.
+- [ ] T6b. Revocation is atomic and repeatable: with the denylist write
+      forced to fail, the device row must NOT come back revoked (the
+      transaction rolls both back); and invoking the tool a second time on a
+      device whose row is already revoked must still denylist its jti, force
+      the cache refresh and evict — asserted by a credential that was still
+      usable after the first, partial attempt becoming unusable after the
+      second.
 - [ ] T5f. `OriginalIssuedAt` survives refresh: issue, refresh, and assert
       the refreshed credential carries the SAME `OriginalIssuedAt` as the
       first one, read back from `credential_issued_at`. Validate by
