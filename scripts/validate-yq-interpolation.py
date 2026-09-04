@@ -46,7 +46,14 @@ YQ_CALL = re.compile(r"(?<![\w./-])yq\b(.*)$")
 # Options that take no value, so the token after them may still be the
 # expression. `-i`/`--inplace` and the eval/eval-all subcommands.
 SKIPPABLE = {"eval", "eval-all", "e", "ea", "-i", "--inplace", "-N", "--no-doc",
-             "-r", "--raw-output", "-o", "--output-format", "-P", "--prettyPrint"}
+             "-r", "--raw-output", "-P", "--prettyPrint"}
+
+# Options that CONSUME the next token. Listing these among SKIPPABLE would
+# make `yq eval -o json "$EXPR" f.yaml` report `json` as the expression —
+# which contains no `$`, so the real one is never inspected and the check
+# passes silently (agy P2 on gitops#1025).
+VALUE_FLAGS = {"-o", "--output-format", "-I", "--indent", "-p", "--input-format",
+               "-C", "--split-exp", "--from-file"}
 
 # (file, template, expression) that may keep a variable, each with a reason.
 # Shrink this list, never grow it.
@@ -55,8 +62,10 @@ BASELINE: set[tuple[str, str, str]] = {
     # strenv() shape for a caller-supplied yq *program*. It is defended
     # differently: mctl-api drops parameters an operation does not declare
     # (config_patch is not declared on deploy-service, mctlhq/mctl-api#246),
-    # and the call site restricts it to the .configMaps subtree its only
-    # intended producer writes.
+    # and the call site checks every `|`-separated segment against the
+    # roots its only intended producer writes (.resources, .env,
+    # .configMaps), rejecting `(`, `)` and `,` because those re-root the
+    # expression regardless of the prefix a segment carries.
     ("tpl-git-commit.yaml", "commit-service", '"$CONFIG_PATCH"'),
 }
 
@@ -102,7 +111,14 @@ def expression_of(line: str) -> str | None:
     m = YQ_CALL.search(line)
     if not m:
         return None
+    skip_next = False
     for tok in tokenize(m.group(1)):
+        if skip_next:
+            skip_next = False
+            continue
+        if tok in VALUE_FLAGS:
+            skip_next = True
+            continue
         if tok in SKIPPABLE or tok.startswith("-"):
             continue
         return tok
@@ -118,6 +134,11 @@ def scan(directory: Path):
                 source = (tmpl.get("script") or {}).get("source")
                 if not source:
                     continue
+                # A yq call split across lines with a trailing backslash
+                # would otherwise be scanned as two fragments, neither of
+                # which matches — the expression line alone carries no `yq`
+                # (agy P2 on gitops#1025).
+                source = source.replace("\\\n", " ")
                 for line in source.splitlines():
                     expr = expression_of(line)
                     if expr and "$" in expr:
@@ -160,6 +181,41 @@ spec:
         source: |
           yq eval -i ".foo == \\" ${INJECT} \\"" values.yaml
 """
+    # `-o json` consumes its argument; a naive skip returns `json` as the
+    # expression and the real one is never seen.
+    value_flag = """
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterWorkflowTemplate
+metadata: {name: selftest}
+spec:
+  templates:
+    - name: t
+      script:
+        source: |
+          yq eval -o json ".image.tag = \\"${TAG}\\"" values.yaml
+"""
+    # The same call split over two lines with a trailing backslash.
+    continued = """
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterWorkflowTemplate
+metadata: {name: selftest}
+spec:
+  templates:
+    - name: t
+      script:
+        source: |
+          yq eval -i \\
+            ".image.tag = \\"${TAG}\\"" \\
+            values.yaml
+"""
+    for name, doc in (("value_flag.yaml", value_flag), ("continued.yaml", continued)):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / name).write_text(doc)
+            if not list(scan(Path(d))):
+                print(f"❌ selftest: {name} hid the interpolation from the "
+                      "detector", file=sys.stderr)
+                return 1
+
     with tempfile.TemporaryDirectory() as d:
         tmp = Path(d)
         (tmp / "escaped.yaml").write_text(escaped)

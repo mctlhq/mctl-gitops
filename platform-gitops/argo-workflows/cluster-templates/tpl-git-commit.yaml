@@ -160,12 +160,34 @@ spec:
           #
           # `|=` pipelines are deliberately not supported: their right-hand
           # side is not an assignment root, and nothing produces one today.
+          #
+          # Splitting on `|` alone is also not enough, because two other yq
+          # operators re-root an expression inside a segment that still opens
+          # with an allowed prefix, both verified against yq v4.47.1:
+          #
+          #   .env.bypass = (.image.tag = "pwned")   parentheses evaluate the
+          #                                          inner assignment against
+          #                                          the ROOT document
+          #   .env.a = "x", .image.tag = "pwned"     `,` unions two independent
+          #                                          expressions
+          #
+          # Both rewrote .image.tag on a fixture. `(`, `)` and `,` are therefore
+          # rejected outright; the only producer (mctl-api's
+          # openClawConfigPatch) emits neither (agy P1 on this PR).
           validate_config_patch() {
             reject_multiline "config_patch" "$1"
             # No escapes into the environment, the filesystem, or a subshell.
             case "$1" in
               *'$'* | *'`'* | *env\(* | *strenv\(* | *load* | *eval*)
                 echo "❌ config_patch may not reference env, files or subshells: ${1}"
+                exit 1
+                ;;
+            esac
+            # Structural operators that re-root the expression regardless of
+            # the prefix each segment carries. See the note above.
+            case "$1" in
+              *'('* | *')'* | *','*)
+                echo "❌ config_patch may not use ( ) or , — they re-root the expression: ${1}"
                 exit 1
                 ;;
             esac

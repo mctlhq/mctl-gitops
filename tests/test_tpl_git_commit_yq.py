@@ -202,9 +202,25 @@ for hostile in (
     '.image.tag = "pwned"',
     '.env.A = strenv(HOME)',
     '.env.A = "$(id)"',
+    # Re-rooting operators inside a segment that opens with an allowed
+    # prefix. Both are proven below to rewrite .image.tag when unguarded.
+    '.env.bypass = (.image.tag = "pwned")',
+    '.env.a = "x", .image.tag = "pwned"',
 ):
     check(f"config_patch rejects: {hostile[:46]}",
           validate_patch(hostile).returncode != 0, hostile)
+
+# A guard is only worth its lines if what it rejects would otherwise land.
+# Run the two re-rooting payloads through real yq and confirm each one does
+# rewrite .image.tag — otherwise the checks above pass vacuously.
+for payload in ('.env.bypass = (.image.tag = "pwned")',
+                '.env.a = "x", .image.tag = "pwned"'):
+    with tempfile.TemporaryDirectory() as d:
+        values = pathlib.Path(d) / "values.yaml"
+        values.write_text('image:\n  tag: "1.0.0"\nenv:\n  EXISTING: "1"\n')
+        subprocess.run(["yq", "eval", "-i", payload, str(values)], check=True)
+        check(f"unguarded, this payload DOES rewrite .image.tag: {payload[:40]}",
+              'pwned' in values.read_text(), values.read_text())
 
 check("config_patch rejects a multi-line payload",
       validate_patch('.resources.requests.cpu = "1"\n.image.tag = "pwned"').returncode != 0)
