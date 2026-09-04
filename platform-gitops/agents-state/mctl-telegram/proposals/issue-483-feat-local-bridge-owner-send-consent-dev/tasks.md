@@ -46,8 +46,14 @@
       stolen credential re-grant itself the send consent its owner just
       revoked. DoD includes T2b.
 - [ ] 6. Add `workertoken.MintForDevice` in `internal/workertoken/minter.go`:
-      shares `allowedLocalBridgeScopes`/`allowedReadOnlyScopes` and the
-      `Claims` construction with `Mint`, but uses new
+      shares `allowedLocalBridgeScopes`/`allowedReadOnlyScopes` and most of
+      the `Claims` construction with `Mint`, but takes `Jti` and
+      `OriginalIssuedAt` as CALLER-SUPPLIED inputs rather than generating
+      them internally the way `Mint` does — refresh has to stamp the
+      lineage values stored on the device row, and a `MintForDevice` that
+      generated its own would silently reintroduce a fresh jti per refresh,
+      which is the "previous credential survives revocation for its
+      remaining TTL" bug this whole contract exists to prevent. Uses new
       `defaultDeviceCredentialTTL`/`maxDeviceCredentialTTL` constants
       (hours-scale, e.g. 6h/24h) instead of `defaultWorkerTokenTTL`/
       `maxWorkerTokenTTL`, always sets `Claims.DeviceID`, and takes an
@@ -55,7 +61,10 @@
       decides read-only-only vs. state-derived) — DoD: unit tests confirm
       the TTL ceiling differs from `Mint`'s, `DeviceID` is set, and a
       request with scopes outside `allowedLocalBridgeScopes` is rejected
-      exactly like `Mint`'s existing check.
+      exactly like `Mint`'s existing check; and that two calls given the
+      same `Jti`/`OriginalIssuedAt` produce credentials carrying them
+      unchanged. DoD includes T5b (renew refuses a device credential) and
+      T5c (one lineage per device).
 - [ ] 7. Add `internal/oauth/local_bridge_credential.go`: in-memory,
       TTL-bounded, capacity-bounded nonce store
       (`POST /api/local-bridge/devices/{device_id}/nonce`); Ed25519
@@ -64,14 +73,16 @@
       read-only scopes, ignores `send_enabled`) (depends on 4, 6) — DoD: T3
       (initial credential is hours-scale, device-bound, read-only) passes;
       unknown/revoked `device_id` and bad signature both return the same
-      generic rejection (no oracle).
+      generic rejection (no oracle); a malformed or absent stored public key
+      is rejected, not panicked on. DoD includes T4b, T5d (concurrent first
+      issuance) and T5e (issuance racing revocation).
 - [ ] 8. Add `POST /api/local-bridge/devices/{device_id}/refresh` in the
       same file, sharing the nonce/signature verification from task 7 but
       deriving scopes from a live `store.IsSendEnabled` read every call,
       never from a presented token (depends on 7) — DoD: T4 (valid,
       missing, wrong-key, wrong-device, expired-nonce, nonce-replay) and T5
       (grant adds send on next refresh, revoke removes it on next refresh)
-      pass.
+      pass, as do T4b and T5f (`OriginalIssuedAt` survives refresh).
       Refuses with 409 when the device's lineage slot is unclaimed, so no
       credential can exist outside a lineage the revocation path can name.
       DoD includes T5g.
@@ -133,7 +144,10 @@
       the revoked device is closed within the same request, not merely
       within the documented 15s/1h backstop). Ownership mismatch (device
       belongs to a different user) is refused without confirming whether
-      the id exists.
+      the id exists. DoD also includes T6b (atomic and repeatable), T6c
+      (`device_id` reaches the bridge token, so eviction matches), T6d
+      (revocation racing first issuance) and T6e (revoking a device that
+      never issued).
       Gated on `account:manage` (task 5a) in addition to the ownership
       check: without it a compromised device could revoke its owner's other
       devices. DoD includes T2b.
