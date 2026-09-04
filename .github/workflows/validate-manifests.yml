@@ -121,6 +121,16 @@ jobs:
           scripts/validate-shell-param-interpolation.py --selftest
           scripts/validate-shell-param-interpolation.py
 
+      - name: Check for shell interpolation of yq expressions
+        run: |
+          set -euo pipefail
+          # Sibling invariant to the check above: yq's expression language is
+          # not data either, so a value that closes the string literal keeps
+          # running against values.yaml with the pipeline's write access
+          # (gitops#990, #995, #997). --selftest first, same reason.
+          scripts/validate-yq-interpolation.py --selftest
+          scripts/validate-yq-interpolation.py
+
       - name: Install promtool
         env:
           PROMETHEUS_VERSION: "3.5.0"
@@ -171,3 +181,11 @@ jobs:
         # control/execution workers) is exactly where a silent miss pins one
         # of them forever.
         run: python3 tests/test_release_deploy_bump.py
+
+      - name: Unit-test tpl-git-commit's yq handling
+        # The static check above proves no yq expression interpolates a shell
+        # variable. This proves the shape that replaced it actually resists
+        # the payloads — a key that closes the expression PATH, and a value
+        # that closes the string literal — by running the template's own
+        # extracted loop against a fixture with real yq.
+        run: python3 tests/test_tpl_git_commit_yq.py
