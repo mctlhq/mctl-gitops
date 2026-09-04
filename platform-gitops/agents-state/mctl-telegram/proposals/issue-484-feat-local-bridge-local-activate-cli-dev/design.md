@@ -106,19 +106,76 @@ for PoP). Concretely, in `cmd/local/config.go`:
 
 - Extend the persisted device-identity file (rename the concept from
   "device key" to "device identity" internally, keep the JSON file at the
-  same path for a smooth upgrade) to hold `device_registration_key`
-  (unchanged), `private_key` (Ed25519 seed, base64), and `public_key`
-  (Ed25519 public key, base64). Generate both key halves together with
-  `ed25519.GenerateKey(rand.Reader)` the first time the file does not exist,
-  exactly where `loadOrCreateDeviceKey` already generates the opaque key
-  today, and write the file atomically at `0600` via the existing
-  `writeFileAtomic` helper — no new file-permission code path.
-- A device identity, once generated, is loaded and reused on every later
-  `activate` run, mirroring the existing idempotency-key reuse rationale
-  (`config.go:115-120`): a retried `activate` must resolve to the *same*
-  device row and the *same* keypair, or the server's first-issuance-then-
-  refresh distinction (`ClaimDeviceCredentialLineage`) sees a second,
-  unrelated public key show up for a device_id it already trusts.
+  same path for a smooth upgrade) into ONE record holding everything about
+  this device: `device_registration_key` (unchanged), `private_key`
+  (Ed25519 **seed**, 32 bytes, base64), `public_key` (Ed25519 public key,
+  base64) — and, once issued, the credential fields `device_id`,
+  `worker_token`, `expires_at` and `jti`.
+
+  **One file, deliberately.** Three review rounds on this contract produced
+  the same defect in three disguises: an identity and a credential that name
+  different devices, because they live in two files that can be written
+  independently — by two `activate` runs, by a daemon refresh racing an
+  `activate`, or by a rotation that replaced one and not the other. Each was
+  patched with another qualifier (match the device id, match under the lock,
+  match before overwriting). That is a class, not three bugs, and it exists
+  only because the pair can be written apart. Keeping them in one record
+  written through `writeFileAtomic` removes it: a reader sees the previous
+  complete record or the next one, and a credential can never name a device
+  whose key is not in the same file. What survives of the locking is
+  ordinary read-modify-write ordering, and a lost update is now just an older
+  complete record, which the next refresh replaces.
+
+  Generate the key halves with `ed25519.GenerateKey(rand.Reader)` and persist
+  `priv.Seed()` when the record does not carry a USABLE pair — not merely
+  when the file is absent, and not merely when the fields are empty. Usable
+  means: present, base64-decodable, exactly `ed25519.SeedSize` /
+  `ed25519.PublicKeySize` bytes after decoding (the seed is 32 bytes;
+  `ed25519.PrivateKeySize` is 64 and would reject the very value this design
+  says to store, regenerating and rotating the registration key on every run
+  and orphaning a device row each time),
+  AND the two halves belonging to each other — derive the public key from the
+  private one and compare. Two well-formed, correctly-sized halves that are
+  not a pair pass every length check and then produce signatures the server
+  rejects forever, with nothing on the client suggesting why; the device is
+  unrecoverable without deleting the file by hand. Deriving costs one
+  operation at startup and turns that dead end into an ordinary
+  regeneration.
+  A field that is present but truncated, over-long or not valid base64 —
+  a half-written file, a hand-edited one, a partially synced directory —
+  passes a mere presence check and then panics inside `ed25519.Sign`, which
+  validates length by panicking rather than returning an error. Anything that
+  fails the check is treated exactly as absent: regenerated in place and the
+  file rewritten.
+
+  **Regenerating the keypair MUST also rotate `device_registration_key`.**
+  The two are not independent: that key is `RegisterDevice`'s idempotency
+  key, so re-running `activate` with the old one returns the EXISTING device
+  row — the one holding the OLD public key — and every PoP signature made
+  with the new private key fails against it, permanently, with no way to
+  re-register. Keeping the registration key while replacing the keys it
+  identifies produces a device that can never authenticate. Rotating it makes
+  `activate` register a genuinely new device, which is the honest outcome:
+  the old key material is gone, so the old device is gone, and its row stays
+  revocable by its owner.
+
+  The #482 case is the exception, and for a reason worth stating rather than
+  leaving to be inferred: a record written by #482's `activate` carries no
+  Ed25519 fields at all, so its `device_registration_key` was never bound to
+  a public key. Completing it in place binds that key for the first time —
+  there is no existing row holding a DIFFERENT pubkey for the same
+  registration key, which is the collision rotation exists to avoid. Rotation
+  applies when key material is being REPLACED, not when it is being supplied
+  for the first time. Anyone who ran `activate` from #482
+  already has this file, holding only the opaque
+  `device_registration_key`; keying generation on the file's existence would
+  skip it for exactly those users and then hand an empty seed to
+  `ed25519.Sign`, which panics on a wrong-length key rather than returning an
+  error. The check is on the fields, and a file missing either half is
+  completed in place and rewritten. Otherwise generation happens exactly where
+  `loadOrCreateDeviceKey` generates the opaque key today, and the file is
+  written atomically at `0600` via the existing `writeFileAtomic` helper — no
+  new file-permission code path.
 
 In `cmd/local/activate.go`:
 
@@ -134,15 +191,97 @@ In `cmd/local/activate.go`:
      format (`local_bridge_credential.go:266-267`).
   3. `POST /api/local-bridge/devices/{device_id}/credential` with
      `{nonce, signature}`.
-  4. On `200`, persists `{device_id, worker_token, expires_at, jti}` to a
-     new file (see "Alternatives" for why not reusing `bridge_token.json`).
-  5. On `409` (lineage already claimed — a re-run of `activate` after a
-     credential already exists, e.g. the process died between activation
-     and credential issuance on a previous attempt), treat it as success:
-     print that the device is already activated and that `daemon` will
-     refresh its own credential, and exit 0. This is the natural
-     consequence of the idempotent device identity above: re-running
-     `activate` after full success must not be an error.
+  4. On `200`, merges `{device_id, worker_token, expires_at, jti}` into the
+     device record alongside the key material and writes the whole record
+     atomically (see "Alternatives" for why not reusing `bridge_token.json`,
+     and the "one file" rule above for why not a second file of its own).
+  5. On `409` (lineage already claimed), do NOT simply exit 0 — check
+     whether the record already carries a usable credential FOR THE DEVICE
+     THIS RUN JUST ACTIVATED, and only then decide. A credential naming some
+     earlier device is not a reason to skip the bootstrap; it is stale data
+     the run supersedes.
+
+     The 409 has two causes that look identical from here and end very
+     differently. Either the credential really was issued and persisted USABLY —
+     present, parseable, carrying the fields the daemon needs — and
+     re-running `activate` should be a no-op; or the server claimed the
+     lineage and the client has nothing usable to show for it — a timeout, a crash, a
+     closed lid between the claim and the write. In that second case the
+     device row is claimed, the disk has no credential, and there is no way
+     back: first issuance cannot re-run (the slot is taken, by construction —
+     see #483's atomic claim), `daemon` has no device credential to refresh
+     from, and its legacy fallback needs a `bridge_token.json` that a
+     self-service onboarding never produced. Exiting 0 would report success
+     over a machine that can never connect, recoverable only by wiping the
+     config directory — which also orphans the device row.
+
+     So: if the credential file is USABLE, print that the device is already
+     activated and exit 0. Present-but-unusable — truncated, empty, invalid
+     JSON, missing `device_id` — counts as absent, for the same reason a
+     present-but-malformed key does: the daemon cannot start from it either
+     way, and the only thing a presence check achieves is that `activate`
+     declines to repair the one case it could have. If it is not usable, run
+     the PoP refresh flow
+     (`/nonce` → sign → `/refresh`, which needs no existing credential).
+     Persist only a `200` whose body parses into the expected credential
+     shape; on any other status, or an unparseable body, exit NON-ZERO
+     naming what failed. Writing an error body into the credential file and
+     exiting 0 would report a repair that did not happen and hide the real
+     failure behind a daemon that cannot connect — the same "success over a
+     broken machine" this step exists to prevent, one level down. Only a
+     genuine repair exits 0.
+     Refresh is the only path that can, and it is available precisely because
+     it authenticates by possession of the device key rather than by any
+     credential. Covered by T15.
+
+     **`activate` serialises its record writes.** Two runs, or a run and a
+     daemon refresh, can still lose an update to each other — one reading the
+     record, the other writing it, the first writing back what it read. With
+     one record that is no longer a correctness problem (nothing can end up
+     mismatched) but it is still a wasted round trip, so take an exclusive
+     lock on a lockfile in the config directory around each read-modify-write
+     of the record, and NOT across the browser wait in between. That wait is
+     unbounded by design — it ends when a human finishes signing in, or never
+     — and holding a cross-process lock across it would let an abandoned
+     `activate` starve the running daemon's refresh until its token expired
+     and its connection dropped.
+
+     Acquire by WAITING, with a short timeout, not by failing when held: both
+     holders keep it only for local file I/O, so waiting is bounded, while
+     failing fast would make a routine daemon refresh abort an activation for
+     a reason the user cannot act on. Report "another activation is already
+     running" only after the timeout.
+
+     **Every writer re-validates the identity before merging.** One record
+     stops the two halves being written to different files; it does not stop
+     a writer merging a credential into a record whose key material has since
+     been replaced. So before merging, each writer compares the `public_key`
+     now on disk against the one whose private half signed the operation it
+     is carrying, and abandons the write if they differ. Concretely: a daemon
+     signs a `/refresh` with key A, a concurrent `activate` completes a full
+     bootstrap and stores `{key B, credential B}`, and the daemon's late
+     write must NOT land credential A's fields on top — that leaves
+     `{key B, device A}`, a credential naming a device the stored key was
+     never registered for, rejected by the server forever. The daemon
+     discards its result and reloads; `activate` writes its own complete,
+     self-consistent record or yields to the newer run.
+
+     The lock orders these writes; this check is what makes a late one
+     correct. Neither substitutes for the other.
+
+     The daemon merges only the credential fields — it never touches the key
+     material, and it never rotates. Rotation registers a new device, and a
+     background service silently re-registering the machine is not its
+     decision; on unusable key material it stops with a message naming
+     `activate`.
+
+     Do not overwrite a record whose credential is usable, names the SAME
+     device, and expires later than the one being written. A record naming a
+     different device, or carrying no usable credential, is replaced
+     unconditionally — otherwise stale data could veto the write that
+     supersedes it, which is how a freshness guard turns into the bug it was
+     added to prevent.
+
   6. On any other failure, exit non-zero with a message that names the
      device as already activated (so the user does not re-run `activate`
      from scratch and orphan the device row) and says the credential step
@@ -157,6 +296,13 @@ Add a second refresh mechanism and pick between it and the existing one by
 what is present on disk, so the two paths never have to agree on a shared
 mutable file:
 
+- The device-signed path deliberately depends on NO live credential. The
+  `/nonce`, `/credential` and `/refresh` routes are registered without auth
+  middleware (`internal/oauth/server.go:985-987`) and are gated by proof of
+  possession alone, so a daemon whose worker token expired while the machine
+  was asleep still refreshes normally. Do not add a "refresh only while the
+  current credential is valid" guard: it would turn a laptop lid into a
+  bootstrap deadlock that only re-running `activate` could clear.
 - New helper `refreshDeviceCredential(ctx, cfg, deviceID, priv)` in
   `daemon.go`, structurally parallel to `refreshBridgeToken`: nonce → sign →
   `POST /api/local-bridge/devices/{device_id}/refresh` → gets a fresh
@@ -180,6 +326,40 @@ mutable file:
   not," so an account onboarded before this change (only `bridge_token.json`
   on disk, no device identity file) keeps working with zero migration step.
 
+### 2b. The claims the public site makes about this mode
+
+`docs/local-bridge.md` is not the only place that tells users an operator has
+to be involved, and the other two are worse because they are the pages a
+prospective user reads first:
+
+- `internal/web/landing.html:411` (the FAQ entry for Local Bridge): *"an
+  operator enables it per account — it is not self-serve yet."*
+- `internal/web/docs.html:263`: *"It costs you a machine that stays on and an
+  operator has to enable it per account, so it is not part of the standard
+  install path"*, and the sentence after it points at *"what the operator
+  still does."*
+
+Both become false the moment this ships. Leaving them is not a documentation
+backlog item, it is the site asserting the opposite of the shipped behaviour
+to the exact audience the change is for — and this repository has already paid
+for that once: `internal/web/localbridge.go`'s own comment records that
+`/security` claimed `session_encrypted` was NULL for local-mode accounts long
+after it stopped being true, and calls a guide that quietly disagrees with the
+repository "the same failure with a longer fuse."
+
+So both pages are edited in this PR, not after it. What replaces them is the
+narrow, still-true residue: Local Bridge costs you a machine that stays on,
+and migrating an *existing hosted* account still needs `set_account_mode`.
+Everything else about operator involvement goes.
+
+`internal/web/local-bridge.md` is a generated mirror of `docs/local-bridge.md`
+(`go:embed` cannot reach outside the package), and
+`TestLocalBridgeMarkdownMatchesDocs` fails the build when they drift — so the
+docs rewrite is followed by `cp docs/local-bridge.md
+internal/web/local-bridge.md`. The test catches a forgotten copy; naming the
+step here means the implementer does not have to discover that from a red
+build.
+
 ### 3. `docs/local-bridge.md` (task 12)
 
 Restructure around the split the issue asks for:
@@ -189,9 +369,45 @@ Restructure around the split the issue asks for:
   `set_send_consent` as the self-service way to turn sending on (replacing
   the current "operator runs `set_account_send`" framing — `set_send_consent`
   is owner-gated, per `local_bridge_owner_tools_test.go`, not admin-gated).
-  Document that a device's send scope is derived fresh on every `/refresh`
-  call, so toggling `set_send_consent` takes effect on the daemon's next
-  scheduled refresh without restarting it or re-running `activate`.
+  Document what actually gates a send, in this order, because getting it
+  wrong in either direction is harmful. Turning consent OFF takes effect on
+  the daemon's **next send**, not its next refresh: `evaluateSendGate` reads
+  `send_enabled` from the account row on every call and is authoritative
+  (`internal/mcp/tools.go:387,1702` — "a real send happens only when
+  ALLOW_SEND, the send scope, per-account send_enabled, and the per-peer rate
+  limit all pass"). The scope carried by the credential is the coarse gate;
+  live `send_enabled` is the decisive one, which is the same state-driven
+  rule #483 applies at mint, applied at the point of use.
+
+  Turning consent ON is the direction that needs the credential to move
+  first, because the gate cannot pass until the credential carries the scope.
+  That acquisition is PROMPT, not scheduled: the daemon performs an
+  out-of-band `/refresh` as soon as it observes a send refused for want of
+  scope, and retries — **at most once per send, and only when the refreshed
+  credential actually gained the scope**.
+
+  Both bounds are load-bearing. A refusal for want of scope is reachable by
+  anyone who can cause the daemon to attempt a send, and while consent is
+  simply off, every refresh returns a credential without the scope: an
+  unbounded "refresh then retry" is then an infinite loop against the server,
+  driven remotely, for as long as consent stays off. So the daemon compares
+  the scopes it got back before retrying, retries only if they changed in the
+  way that matters, and otherwise reports the dry-run exactly as it does
+  today. Repeated refusals must not each cost another refresh: rate-limit the
+  out-of-band refresh per device the way any other self-triggered network
+  call is bounded. Waiting for the hours-scale scheduled refresh would
+  mean an owner grants consent and then waits hours for their first message —
+  which is not zero-admin onboarding, only a slower kind of waiting, and it
+  would make the sequence in this issue's own Definition of Done untrue.
+
+  Do not document this the other way round — a revoke that is described as
+  waiting for a refresh understates the protection an owner actually has, and
+  a grant that is described as instant without the out-of-band refresh
+  overstates what the credential can do. And do not "fix" the revoke
+  direction by evicting the daemon's websocket: an owner who revokes send
+  consent is already protected on the very next call, and revoking a device's
+  credential lineage is device revocation's job, which under #483's
+  carried-forward `jti` rule would brick the device if used here.
 - **Operator: support and recovery only**: `connect --token` fed by a
   manually minted `mint_worker_token`/`POST /api/mcp/worker-token` credential
   (kept, documented as the migration/recovery path — not the default),

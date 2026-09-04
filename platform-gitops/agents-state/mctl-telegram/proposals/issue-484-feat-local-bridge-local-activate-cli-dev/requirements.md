@@ -71,6 +71,72 @@ of the pre-#483 one.
 
 ## Acceptance criteria (EARS)
 
+- WHEN the account owner grants send consent THE SYSTEM SHALL let the next
+  send from an already-running daemon succeed without the owner waiting for
+  a scheduled credential refresh, restarting the daemon, or re-running
+  `activate`.
+- WHILE send consent is not granted THE SYSTEM SHALL bound the daemon's
+  out-of-band refresh to at most one per refused send, and SHALL retry the
+  send only when the refreshed credential actually gained the scope, so a
+  refusal cannot be turned into an unbounded refresh loop by whoever caused
+  the send attempt.
+- IF the repair path's refresh does not return a well-formed credential THEN
+  THE SYSTEM SHALL exit non-zero without writing a credential file.
+- WHILE a device is configured on a machine THE SYSTEM SHALL keep its signing
+  key material and its issued credential in ONE record written atomically, so
+  a reader always observes a complete record rather than two halves written
+  apart.
+- WHEN a writer is about to merge a credential into the stored record THE
+  SYSTEM SHALL confirm the key material on disk is still the material whose
+  private half signed the operation being merged, and SHALL abandon the write
+  otherwise. Mutual exclusion alone does not establish this: it orders the
+  writes without making a late one correct.
+- IF a stored credential names a different device than the one being written,
+  or is not usable, THEN THE SYSTEM SHALL replace it regardless of its
+  recorded expiry, so stale data cannot veto what supersedes it.
+- IF the daemon finds device signing key material it cannot use THEN THE
+  SYSTEM SHALL stop with a message naming the command that repairs it, and
+  SHALL NOT regenerate the identity itself — re-registering a device is the
+  owner's action, not a background service's.
+- WHILE an activation is in progress on a machine THE SYSTEM SHALL refuse to
+  start a second one on the same configuration directory, and SHALL hold the
+  same exclusion against a running daemon's record write, while neither holds
+  that exclusion across a wait for human interaction. This exclusion orders
+  the writes and nothing more — what prevents a mismatched one is the
+  re-validation criterion above, so the device
+  identity and the credential issued against it cannot be written by
+  different runs and left mismatched.
+- WHEN device signing key material is regenerated THE SYSTEM SHALL also
+  rotate the device registration key, so re-registration produces a new
+  device rather than returning the existing row bound to the old public
+  key.
+- IF a device identity file exists without USABLE signing key material —
+  absent, undecodable, of the wrong length, or two halves that are not a
+  matching pair — THEN THE SYSTEM SHALL
+  regenerate it in place rather than treating either the file's presence or
+  the field's presence as proof the identity is usable, and SHALL NOT pass
+  unvalidated key material to a primitive that panics on a malformed key.
+- WHILE a configuration directory holds a device identity but no device
+  credential THE SYSTEM SHALL continue to use the legacy bearer refresh
+  path, so an interrupted activation never breaks a daemon that was
+  working.
+- IF `activate` receives a lineage-already-claimed response and the stored
+  record carries no USABLE credential for the device this run activated —
+  absent, unparseable, missing fields the daemon needs, or naming an earlier
+  device — THEN THE SYSTEM SHALL obtain one through the
+  proof-of-possession refresh path and persist it before reporting success,
+  and SHALL NOT exit successfully leaving the machine unable to connect.
+- WHEN the account owner revokes send consent THE SYSTEM SHALL refuse the
+  next real send from that account, without waiting for any credential to
+  expire or refresh, and the documentation SHALL describe it that way.
+- WHEN this work ships THE SYSTEM SHALL contain no user-facing page that
+  states Local Bridge requires an operator to enable it per account, or that
+  it is not self-serve. Those claims become false with this change, and they
+  are currently made on the public landing page and the public docs page —
+  not only in the setup guide the issue names.
+- WHILE `docs/local-bridge.md` is the single source THE SYSTEM SHALL keep
+  `internal/web/local-bridge.md` byte-identical to it, since that mirror is
+  what the site actually serves.
 - WHEN `mctl-telegram-local activate --telegram-id <id>` runs for the first
   time THE SYSTEM SHALL generate an Ed25519 keypair, persist the private key
   at `0600`, and send the base64-encoded public key as `device_pubkey` on
