@@ -147,8 +147,10 @@
       that stopped being true. Validate by mutation: restoring either
       sentence fails the test.
 - [ ] T15. `activate` repairs a half-claimed lineage, table-driven over a
-      credential file that is absent, empty, truncated, invalid JSON, and
-      valid JSON missing `device_id`: claim the lineage server-side, put the
+      credential file that is absent, empty, truncated, invalid JSON, valid
+      JSON missing `device_id`, and unusable-but-carrying-a-later
+      `expires_at` (the last proves the freshness guard cannot veto a
+      repair): claim the lineage server-side, put the
       file in each of those states, re-run `activate` — it must obtain a
       credential through `/refresh` and persist it, and `daemon` must then
       start. Validate by mutation: exiting 0 on the 409 without checking the
@@ -174,8 +176,12 @@
       OLD `device_id` on top of the new one. Validate by mutation: locking
       only in `activate` lets the daemon's late write leave an identity and a
       credential that name different devices.
-- [ ] T21. `activate` is serialised: hold the lockfile and run `activate` —
-      it exits non-zero naming the concurrent run rather than proceeding.
+- [ ] T21. `activate` is serialised where it touches files and NOWHERE else:
+      hold the lockfile and run `activate` — it exits non-zero naming the
+      concurrent run rather than proceeding; and an `activate` parked in its
+      browser wait does NOT block a daemon credential refresh. Validate by
+      mutation: holding the lock across the wait makes the daemon's refresh
+      block behind a human who walked away.
       And the pairing it protects: with the lock in place, a run that
       regenerates the identity cannot leave a credential from another run
       beside it. Validate by mutation: dropping the lock lets an interleaved

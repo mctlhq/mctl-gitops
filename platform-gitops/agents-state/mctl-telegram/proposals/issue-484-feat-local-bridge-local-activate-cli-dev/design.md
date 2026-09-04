@@ -207,10 +207,26 @@ In `cmd/local/activate.go`:
      at write time; `daemon` simply signs with a key the server does not
      have for that `device_id` and can never connect.
 
-     Take an exclusive lock on a lockfile in the config directory for the
-     whole of `activate` — acquire it before reading the identity, hold it
-     past the credential write — and exit with a clear "another activation is
-     already running" if it is held. `activate` is an interactive setup
+     Take an exclusive lock on a lockfile in the config directory around the
+     two file-touching phases — the identity read-or-rotate, and the
+     credential write — and NOT across the browser wait in between. That wait
+     is unbounded by design: it ends when a human finishes signing in, or
+     never, if they close the laptop and go to lunch. Holding a cross-process
+     lock across it would let an abandoned `activate` starve the running
+     daemon's credential refresh until its token expired and its connection
+     dropped — an interactive command taking the background service down by
+     being walked away from.
+
+     Releasing across the wait leaves one window: another run could rotate
+     the identity while this one polls. So on re-acquiring the lock for the
+     write, re-read the identity and confirm it is still the one this run
+     activated for; if it is not, abort without writing rather than pair a
+     credential with a key that no longer matches it. The invariant being
+     protected is that the two files name the same device — not that
+     `activate` runs alone.
+
+     Exit with a clear "another activation is already running" if the lock is
+     held. `activate` is an interactive setup
      command; serialising it costs nothing and removes the whole class.
      There is no lock helper in `cmd/local` today, so this is new — and it
      must be **build-tagged, not `syscall.Flock`**. `Flock` does not exist in
@@ -229,8 +245,9 @@ In `cmd/local/activate.go`:
      carrying the OLD `device_id` over the new one — the same
      identity/credential mismatch, reached from the other side. The daemon
      holds it only across the read-modify-write of the credential file, not
-     for its whole run, so a long-lived daemon never blocks an `activate` for
-     more than that window. Covered by T22.
+     for its whole run — and since `activate` does not hold it across the
+     browser wait either, neither ever blocks the other for longer than a
+     file write. Covered by T22.
 
      With that lock held, two `activate` runs cannot corrupt the server
      state either: the lineage claim is atomic and refresh reuses the same `jti`, so
@@ -239,8 +256,14 @@ In `cmd/local/activate.go`:
      can write an older credential over a newer one — costing an earlier
      refresh and nothing else, and self-healing because refresh needs no
      credential. Write through the existing `writeFileAtomic` helper so a
-     reader never sees a half-written file, and do not overwrite a credential
-     whose `expires_at` is later than the one being written.
+     reader never sees a half-written file, and do not overwrite a USABLE
+     credential whose `expires_at` is later than the one being written. The
+     qualifier is load-bearing: an unusable file can still carry a
+     later-looking `expires_at` — a truncated write that kept that field, a
+     hand-edited one, a legacy long-lived token — and letting that timestamp
+     veto the repair write would leave the machine broken while `activate`
+     exits 0, which is exactly what the repair path exists to prevent. An
+     unusable credential is overwritten unconditionally.
   6. On any other failure, exit non-zero with a message that names the
      device as already activated (so the user does not re-run `activate`
      from scratch and orphan the device row) and says the credential step
