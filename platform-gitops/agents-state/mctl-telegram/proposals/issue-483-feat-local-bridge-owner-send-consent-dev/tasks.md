@@ -1,8 +1,9 @@
 # Tasks: issue-483-feat-local-bridge-owner-send-consent-dev
 
 - [ ] 1. Add `local_bridge_devices` columns `device_pubkey` (BLOB/BYTEA,
-      nullable), `device_pubkey_algo` (TEXT, default `'ed25519'`), and
-      `current_jti` (TEXT, nullable) via `addColumnIfMissing` in
+      nullable), `device_pubkey_algo` (TEXT, default `'ed25519'`),
+      `current_jti` (TEXT, nullable) and `credential_issued_at` (TIMESTAMP,
+      nullable) via `addColumnIfMissing` in
       `internal/db/db.go`, both SQLite and Postgres schema blocks — DoD:
       migration runs clean on an existing local dev DB and a fresh one;
       `store_migration_test.go`-style coverage confirms idempotent re-run.
@@ -40,6 +41,10 @@
       no `admin:users` scope and no `telegram_id` argument exists on the
       tool; `set_account_send`'s existing tests are unmodified and still
       pass.
+      Gated on `account:manage` (task 5a), NOT on "authenticated at all": a
+      device credential authenticates as its owner, so an open tool lets a
+      stolen credential re-grant itself the send consent its owner just
+      revoked. DoD includes T2b.
 - [ ] 6. Add `workertoken.MintForDevice` in `internal/workertoken/minter.go`:
       shares `allowedLocalBridgeScopes`/`allowedReadOnlyScopes` and the
       `Claims` construction with `Mint`, but uses new
@@ -126,6 +131,9 @@
       within the documented 15s/1h backstop). Ownership mismatch (device
       belongs to a different user) is refused without confirming whether
       the id exists.
+      Gated on `account:manage` (task 5a) in addition to the ownership
+      check: without it a compromised device could revoke its owner's other
+      devices. DoD includes T2b.
 - [ ] 13. Add `"user_code"`, `"device_code"`, `"consent_token"`, `"nonce"`,
       `"signature"`, `"device_registration_key"`, `"worker_token"`,
       `"bridge_token"` to `sensitiveKeys` in `internal/audit/redact.go`
