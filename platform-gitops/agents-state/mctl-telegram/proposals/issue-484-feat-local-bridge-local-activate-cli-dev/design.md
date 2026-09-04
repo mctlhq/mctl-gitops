@@ -111,8 +111,15 @@ for PoP). Concretely, in `cmd/local/config.go`:
   (Ed25519 public key, base64). Generate the key halves with
   `ed25519.GenerateKey(rand.Reader)` when the file does not carry a USABLE
   pair — not merely when the file is absent, and not merely when the fields
-  are empty. Usable means: present, base64-decodable, and exactly
-  `ed25519.PrivateKeySize` / `ed25519.PublicKeySize` bytes after decoding.
+  are empty. Usable means: present, base64-decodable, exactly
+  `ed25519.PrivateKeySize` / `ed25519.PublicKeySize` bytes after decoding,
+  AND the two halves belonging to each other — derive the public key from the
+  private one and compare. Two well-formed, correctly-sized halves that are
+  not a pair pass every length check and then produce signatures the server
+  rejects forever, with nothing on the client suggesting why; the device is
+  unrecoverable without deleting the file by hand. Deriving costs one
+  operation at startup and turns that dead end into an ordinary
+  regeneration.
   A field that is present but truncated, over-long or not valid base64 —
   a half-written file, a hand-edited one, a partially synced directory —
   passes a mere presence check and then panics inside `ed25519.Sign`, which

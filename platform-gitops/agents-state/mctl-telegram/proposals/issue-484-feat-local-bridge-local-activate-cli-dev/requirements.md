@@ -102,7 +102,8 @@ of the pre-#483 one.
   device rather than returning the existing row bound to the old public
   key.
 - IF a device identity file exists without USABLE signing key material —
-  absent, undecodable, or of the wrong length — THEN THE SYSTEM SHALL
+  absent, undecodable, of the wrong length, or two halves that are not a
+  matching pair — THEN THE SYSTEM SHALL
   regenerate it in place rather than treating either the file's presence or
   the field's presence as proof the identity is usable, and SHALL NOT pass
   unvalidated key material to a primitive that panics on a malformed key.
