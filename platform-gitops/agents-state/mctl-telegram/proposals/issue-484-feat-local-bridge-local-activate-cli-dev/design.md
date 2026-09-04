@@ -247,7 +247,16 @@ In `cmd/local/activate.go`:
      holds it only across the read-modify-write of the credential file, not
      for its whole run — and since `activate` does not hold it across the
      browser wait either, neither ever blocks the other for longer than a
-     file write. Covered by T22.
+     file write.
+
+     And the daemon re-validates under that lock exactly as `activate` does:
+     re-read the identity, confirm it is still the one whose key signed the
+     refresh now completing, and abort the write if it is not. The lock alone
+     only orders the two writes; it does not make a late one correct. A
+     daemon that signed with key A while `activate` rotated to B and finished
+     first would otherwise take the lock and lay a credential for device A
+     over B's — the same mismatch, arrived at by waiting politely. Both
+     writers check the same thing for the same reason. Covered by T22.
 
      With that lock held, two `activate` runs cannot corrupt the server
      state either: the lineage claim is atomic and refresh reuses the same `jti`, so

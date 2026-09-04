@@ -171,11 +171,14 @@
       retries. Validate by mutation: removing the out-of-band refresh leaves
       the send a dry-run until the scheduled refresh, which is the wait this
       test exists to prevent.
-- [ ] T22. The daemon's credential write takes the same lock: a refresh in
-      flight while `activate` re-registers must not land a credential for the
-      OLD `device_id` on top of the new one. Validate by mutation: locking
-      only in `activate` lets the daemon's late write leave an identity and a
-      credential that name different devices.
+- [ ] T22. The daemon's credential write takes the same lock AND
+      re-validates the identity under it: a refresh signed with the old key,
+      completing after `activate` rotated the identity, must abort rather
+      than land a credential for the OLD `device_id` on top of the new one.
+      Validate by mutation twice, because these are two separate defects:
+      dropping the daemon's lock lets the writes interleave, and keeping the
+      lock but skipping the re-read still writes the mismatched pair — the
+      lock orders the writes, it does not make a late one correct.
 - [ ] T21. `activate` is serialised where it touches files and NOWHERE else:
       hold the lockfile and run `activate` — it exits non-zero naming the
       concurrent run rather than proceeding; and an `activate` parked in its
