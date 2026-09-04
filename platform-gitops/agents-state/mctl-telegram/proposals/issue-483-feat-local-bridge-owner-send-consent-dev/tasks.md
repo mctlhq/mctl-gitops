@@ -72,6 +72,9 @@
       missing, wrong-key, wrong-device, expired-nonce, nonce-replay) and T5
       (grant adds send on next refresh, revoke removes it on next refresh)
       pass.
+      Refuses with 409 when the device's lineage slot is unclaimed, so no
+      credential can exist outside a lineage the revocation path can name.
+      DoD includes T5g.
 - [ ] 9. Claim `current_jti` and `credential_issued_at` with ONE conditional
       UPDATE at first issuance (`WHERE device_id = ? AND current_jti IS NULL
       AND revoked_at IS NULL`, 0 rows affected -> 409), and have every
