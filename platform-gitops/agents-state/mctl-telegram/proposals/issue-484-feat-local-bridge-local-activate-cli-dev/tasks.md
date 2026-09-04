@@ -119,11 +119,14 @@
       bearer path and the daemon keeps working. Validate by mutation:
       branching on the identity file makes this test fail with a daemon that
       cannot start.
-- [ ] T17. A device identity file written by #482's `activate` — opaque
-      registration key only, no Ed25519 halves — is completed in place on
-      the next `activate` run, and signing works afterwards. Validate by
-      mutation: generating only when the file is absent makes this test
-      panic in `ed25519.Sign`.
+- [ ] T17. Device identity files that are not usable are repaired in place,
+      table-driven over: #482's shape (opaque registration key only, no
+      Ed25519 halves), an empty `private_key`, a truncated one, an
+      over-long one, and one that is not valid base64. Each must end with a
+      working signature and no panic. Validate by mutation twice, because
+      these are two different bugs: generating only when the FILE is absent
+      makes the #482 case panic, and checking only that the field is
+      non-empty makes the truncated and undecodable cases panic.
 - [ ] T8. Regression: existing hosted fresh-user flow and hosted→local
       migration (`set_account_mode`) pass unmodified — no behavior change
       for either.

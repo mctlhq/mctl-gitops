@@ -75,9 +75,11 @@ of the pre-#483 one.
   send from an already-running daemon succeed without the owner waiting for
   a scheduled credential refresh, restarting the daemon, or re-running
   `activate`.
-- IF a device identity file exists without its signing key material THEN THE
-  SYSTEM SHALL complete it in place rather than treating the file's presence
-  as proof the identity is usable.
+- IF a device identity file exists without USABLE signing key material —
+  absent, undecodable, or of the wrong length — THEN THE SYSTEM SHALL
+  regenerate it in place rather than treating either the file's presence or
+  the field's presence as proof the identity is usable, and SHALL NOT pass
+  unvalidated key material to a primitive that panics on a malformed key.
 - WHILE a configuration directory holds a device identity but no device
   credential THE SYSTEM SHALL continue to use the legacy bearer refresh
   path, so an interrupted activation never breaks a daemon that was

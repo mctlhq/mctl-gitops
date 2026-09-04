@@ -109,8 +109,16 @@ for PoP). Concretely, in `cmd/local/config.go`:
   same path for a smooth upgrade) to hold `device_registration_key`
   (unchanged), `private_key` (Ed25519 seed, base64), and `public_key`
   (Ed25519 public key, base64). Generate the key halves with
-  `ed25519.GenerateKey(rand.Reader)` when they are MISSING FROM THE FILE —
-  not merely when the file is absent. Anyone who ran `activate` from #482
+  `ed25519.GenerateKey(rand.Reader)` when the file does not carry a USABLE
+  pair — not merely when the file is absent, and not merely when the fields
+  are empty. Usable means: present, base64-decodable, and exactly
+  `ed25519.PrivateKeySize` / `ed25519.PublicKeySize` bytes after decoding.
+  A field that is present but truncated, over-long or not valid base64 —
+  a half-written file, a hand-edited one, a partially synced directory —
+  passes a mere presence check and then panics inside `ed25519.Sign`, which
+  validates length by panicking rather than returning an error. Anything that
+  fails the check is treated exactly as absent: regenerated in place and the
+  file rewritten. Anyone who ran `activate` from #482
   already has this file, holding only the opaque
   `device_registration_key`; keying generation on the file's existence would
   skip it for exactly those users and then hand an empty seed to
