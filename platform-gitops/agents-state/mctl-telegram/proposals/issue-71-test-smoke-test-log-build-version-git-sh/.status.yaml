@@ -1,5 +1,5 @@
 status: needs-triage
-updated_at: '2026-07-29T11:17:45Z'
+updated_at: '2026-09-04T05:02:26Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -9,7 +9,10 @@ source:
 control:
   requires_human_approval: true
 failure:
-  code: missing-pr
+  code: source-resolved
   stage: reconcile
-  message: No canonical PR exists for the deterministic result branch.
-notes: 'reconcile: no canonical GitHub PR found'
+  message: No canonical PR exists for the deterministic result branch, and the source
+    issue mctlhq/mctl-telegram#71 is closed as completed. The branch is missing because
+    this proposal was abandoned, not because a PR was lost. Retire it with a terminal
+    status (agents-state/OPERATOR.md) or reopen the issue.
+notes: 'reconcile: no canonical GitHub PR found, source issue closed (source-resolved)'
