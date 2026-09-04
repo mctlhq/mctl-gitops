@@ -82,6 +82,10 @@ of the pre-#483 one.
   the send attempt.
 - IF the repair path's refresh does not return a well-formed credential THEN
   THE SYSTEM SHALL exit non-zero without writing a credential file.
+- WHILE an activation is in progress on a machine THE SYSTEM SHALL refuse to
+  start a second one on the same configuration directory, so the device
+  identity and the credential issued against it cannot be written by
+  different runs and left mismatched.
 - WHEN device signing key material is regenerated THE SYSTEM SHALL also
   rotate the device registration key, so re-registration produces a new
   device rather than returning the existing row bound to the old public

@@ -191,8 +191,27 @@ In `cmd/local/activate.go`:
      it authenticates by possession of the device key rather than by any
      credential. Covered by T15.
 
-     Two `activate` runs racing on one machine cannot corrupt the server
-     state: the lineage claim is atomic and refresh reuses the same `jti`, so
+     **`activate` serialises itself.** The device identity and the device
+     credential live in two files, and the credential names the `device_id`
+     the identity's key must sign for. Two concurrent runs can therefore
+     leave the pair mismatched: one run regenerates the identity (a corrupt
+     key, per the rule above) while the other is mid-flight with the old
+     one, and the disk ends up holding the new private key next to a
+     credential issued for the old device. Nothing rejects that combination
+     at write time; `daemon` simply signs with a key the server does not
+     have for that `device_id` and can never connect.
+
+     Take an exclusive lock on a lockfile in the config directory for the
+     whole of `activate` — acquire it before reading the identity, hold it
+     past the credential write — and exit with a clear "another activation is
+     already running" if it is held. `activate` is an interactive setup
+     command; serialising it costs nothing and removes the whole class.
+     There is no lock helper in `cmd/local` today, so this is new but small:
+     `syscall.Flock` on an `O_CREATE` file next to the existing
+     `writeFileAtomic` helper. Covered by T21.
+
+     With that lock held, two `activate` runs cannot corrupt the server
+     state either: the lineage claim is atomic and refresh reuses the same `jti`, so
      neither run's credential invalidates the other's and both stay valid to
      their own expiry. The only exposure is on disk, where a slower process
      can write an older credential over a newer one — costing an earlier

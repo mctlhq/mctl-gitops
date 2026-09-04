@@ -168,6 +168,13 @@
       retries. Validate by mutation: removing the out-of-band refresh leaves
       the send a dry-run until the scheduled refresh, which is the wait this
       test exists to prevent.
+- [ ] T21. `activate` is serialised: hold the lockfile and run `activate` —
+      it exits non-zero naming the concurrent run rather than proceeding.
+      And the pairing it protects: with the lock in place, a run that
+      regenerates the identity cannot leave a credential from another run
+      beside it. Validate by mutation: dropping the lock lets an interleaved
+      pair write private key B next to a credential for device_id A, and the
+      daemon then signs with a key the server does not hold for that device.
 - [ ] T18. The out-of-band refresh is bounded: with consent OFF, a send
       refused for want of scope triggers at most ONE `/refresh` and is then
       reported as a dry-run; repeated refusals do not each trigger another.
