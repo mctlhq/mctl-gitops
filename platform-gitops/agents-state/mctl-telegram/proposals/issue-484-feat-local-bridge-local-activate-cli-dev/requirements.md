@@ -87,6 +87,12 @@ This proposal closes all of those gaps together because #484 is the final gate b
 - Removing the legacy `connect --token` path during this issue.
 - Device-key rotation as a first-class subcommand.
 
+## Open questions
+
+No unresolved architectural questions remain for approval.
+
+- **Resolved — proactive refresh at daemon startup:** for the device-bound path, `daemon` performs one PoP refresh during startup before deriving the bridge token and connecting. This is intentional: the device key is the durable refresh authority, the refresh re-derives scopes from current consent state, and it proves recovery does not depend on a still-valid previous access JWT. The legacy bearer-only path retains its existing behavior.
+
 ## Non-negotiable closure gate
 
 #484 SHALL NOT be marked complete, and #479 SHALL NOT close, until the Hub lifecycle race is no longer reproducible, expired-access PoP refresh is proven, the zero-admin E2E is green, and the user-facing onboarding/docs surface presents the self-service path as primary.
