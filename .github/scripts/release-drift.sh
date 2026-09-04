@@ -99,7 +99,7 @@ image_block_fields() {
   awk -v org="$ORG" '
     /^image:[[:space:]]*$/ { inblock = 1; next }
     inblock && /^[^[:space:]#]/ { inblock = 0 }
-    inblock && /^[[:space:]]+repository:/ { repo = $2 }
+    inblock && /^[[:space:]]+repository:/ { repo = $2; gsub(/["'"'"']/, "", repo) }
     inblock && /^[[:space:]]+tag:/ { tag = $2; gsub(/["'"'"']/, "", tag) }
     END {
       if (repo ~ ("^ghcr\\.io/" org "/")) printf "%s\t%s\n", repo, tag
@@ -241,7 +241,7 @@ sidecar:
     repository: ghcr.io/mctlhq/other
     tag: "9.9.9"
 image:
-  repository: ghcr.io/mctlhq/svc
+  repository: "ghcr.io/mctlhq/svc"
   # release-drift: ignore
   tag: "1.2.3"
   pullPolicy: IfNotPresent
