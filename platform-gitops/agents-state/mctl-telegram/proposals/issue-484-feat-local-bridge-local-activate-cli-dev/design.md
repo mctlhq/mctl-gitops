@@ -70,6 +70,8 @@ Device refresh flow:
 5. exchange it at `/api/bridge/token`;
 6. connect/reconnect websocket with the new bridge token.
 
+For the device-bound path, `daemon` performs this PoP refresh once at startup before bridge-token derivation, and again when refresh is needed during runtime. This resolves the prior open question explicitly and guarantees startup does not depend on the previous access JWT still being valid.
+
 The flow must work even when the prior device access JWT is already expired. If the current implementation accidentally requires a valid access bearer for nonce or refresh, adjust that server boundary narrowly so PoP remains the authentication mechanism. Preserve indistinguishable failure behavior for unknown/revoked/bad-signature devices and do not reopen the nonce-capacity DoS fixed after #483.
 
 Legacy fallback remains file/lineage based:
@@ -128,6 +130,52 @@ Operator/manual-token steps are moved under support/recovery/migration. The UI m
 - document bootstrap trust, first issuance vs refresh, stable lineage, live-state scope derivation, derived bridge tokens, denylist and live eviction;
 - explicitly document the safe `daemonConn` lifecycle after the Hub race fix;
 - state the final revocation SLA and failure semantics.
+
+## Alternatives
+
+### Keep the operator-minted worker token as the primary Local Bridge path
+
+Rejected. It preserves the current support burden and directly conflicts with #479's zero-admin onboarding goal. The manual-token path remains only for compatibility, migration, and recovery.
+
+### Reuse the previous device access JWT as authorization for nonce/refresh
+
+Rejected. It creates a circular recovery dependency: an expired credential would be required to mint its replacement. Device PoP is the durable authority and must remain sufficient after access-JWT expiry.
+
+### Always try device refresh and silently fall back to any legacy bearer token
+
+Rejected. Silent downgrade would hide revoked/corrupt device state and weaken the trust boundary. Credential lineage selection is explicit: a configured device path either succeeds via PoP or fails visibly; only legacy-only configurations use the bearer path.
+
+### Guard `Hub.Call` with panic recovery
+
+Rejected as the primary fix. `recover` may mask process crashes but does not repair connection ownership, delivery-to-retired-daemon behavior, or pending-call cleanup. Teardown must be made concurrency-safe.
+
+## Platform impact
+
+### Migrations
+
+No destructive DB migration is expected. The implementation should prefer additive client/config and narrow server changes. If expired-access refresh requires adjusting authorization on nonce/refresh endpoints, that change must preserve existing stored device rows and credential lineages.
+
+### Backward compatibility
+
+- Existing hosted users and hosted-to-local migration remain covered by T8.
+- Existing manually minted Local Bridge worker tokens remain supported through the legacy path and are covered by T9.
+- Existing device-bound credentials and stable lineage/JTI semantics from #483 remain valid.
+- The new device path must not silently consume legacy credentials when a device configuration is present but broken/revoked.
+- CLI/config evolution must tolerate legacy-only installations without requiring an immediate re-activation.
+
+### Resource impact
+
+- A device-path daemon performs one PoP refresh at startup, adding a bounded nonce/refresh request pair per daemon start; subsequent refresh frequency remains expiry-driven.
+- The Hub lifecycle fix adds a per-connection cancellation/done primitive but should not create unbounded goroutines, channels, or pending-call state.
+- Nonce handling must retain the post-#483 capacity protections so unauthenticated bogus device IDs cannot exhaust pending nonce storage.
+
+### Risks and mitigations
+
+- **Risk: startup refresh increases nonce traffic.** Mitigation: one bounded refresh per device daemon start; retain nonce capacity/TTL protections and deterministic tests.
+- **Risk: server auth changes for expired-access recovery could make refresh enumerable or weaken device verification.** Mitigation: PoP remains mandatory; unknown/revoked/bad-signature failures stay indistinguishable; T13 covers recovery without old bearer.
+- **Risk: Hub teardown rewrite introduces deadlocks, double-close, stuck callers, or delivery to a superseded daemon.** Mitigation: use a single lifecycle primitive across all teardown paths, add deterministic interleaving tests and `go test -race` under T12.
+- **Risk: legacy bearer users regress during CLI refactor.** Mitigation: explicit lineage selection and T9 regression coverage.
+- **Risk: product/docs advertise zero-admin before runtime behavior is complete.** Mitigation: code, UX, and docs ship together and #479 cannot close until T7/T11/T12/T13 are green.
 
 ## Security invariants
 
