@@ -73,18 +73,38 @@ unreleased_from_compare() {
   printf '%s\t%s\n' "$count" "$oldest"
 }
 
-# "<path>\t<image-repo>\t<tag>" for every values.yaml under SERVICES_DIR that
-# pins a ghcr.io/<org>/<repo> image. Preview and non-release pins are kept in
-# the list so the report can say why they were skipped.
+# "<path>\t<image-repo>\t<tag>" for every values.yaml under SERVICES_DIR whose
+# top-level `image:` block pins a ghcr.io/<org>/<repo> image. Only that
+# block is read: `repository:` and `tag:` keys elsewhere in the file (a
+# sidecar, a label, an init container) are neither paired with it nor
+# reported. The service chart has exactly one `image:` block per values.yaml
+# today; a second image would need its own block name here, not a wider
+# grep. Preview and non-release pins are kept in the list so the report can
+# say why they were skipped.
 pinned_images() {
   local f img tag
   for f in "$SERVICES_DIR"/*/*/values.yaml; do
     [ -f "$f" ] || continue
-    img=$(grep -m1 -E "^\s*repository:\s*ghcr\.io/$ORG/" "$f" | awk '{print $2}' || true)
+    IFS=$'\t' read -r img tag < <(image_block_fields "$f")
     [ -n "$img" ] || continue
-    tag=$(grep -m1 -E '^\s*tag:' "$f" | awk '{print $2}' | tr -d '"'"'" || true)
     printf '%s\t%s\t%s\n' "$f" "${img#ghcr.io/$ORG/}" "$tag"
   done
+}
+
+# stdin/file: a values.yaml. stdout: "<repository>\t<tag>" from the top-level
+# `image:` block only, empty when the file has none or the repository is not
+# under ghcr.io/<org>/. Block scope = the lines indented under `image:` up to
+# the next top-level key.
+image_block_fields() {
+  awk -v org="$ORG" '
+    /^image:[[:space:]]*$/ { inblock = 1; next }
+    inblock && /^[^[:space:]#]/ { inblock = 0 }
+    inblock && /^[[:space:]]+repository:/ { repo = $2 }
+    inblock && /^[[:space:]]+tag:/ { tag = $2; gsub(/["'"'"']/, "", tag) }
+    END {
+      if (repo ~ ("^ghcr\\.io/" org "/")) printf "%s\t%s\n", repo, tag
+    }
+  ' "$1"
 }
 
 # "<tag>\t<date>" of the newest release of <repo>: the GitHub release when
@@ -124,6 +144,8 @@ check_image() {
     printf '%s\t%s\t%s\t-\t-\t-\t-\t-\tskip: non-release pin\n' "$path" "$repo" "$deployed"
     return
   fi
+  # File-level on purpose: one image block per values.yaml (see
+  # image_block_fields), so the marker cannot hide a second image.
   if grep -qE '^\s*#\s*release-drift:\s*ignore' "$path"; then
     printf '%s\t%s\t%s\t-\t-\t-\t-\t-\tskip: release-drift: ignore\n' "$path" "$repo" "$deployed"
     return
@@ -134,8 +156,15 @@ check_image() {
     return
   fi
 
+  # A compare that cannot be read is a verdict of its own, never an "ok":
+  # defaulting to zero commits would turn a rate limit or a renamed default
+  # branch into a silent pass, the exact failure this check exists to end.
   local cmp count oldest
-  cmp=$(gh api "repos/$ORG/$repo/compare/$released...main" 2>/dev/null || echo '{"commits":[]}')
+  if ! cmp=$(gh api "repos/$ORG/$repo/compare/$released...main" 2>/dev/null); then
+    printf '%s\t%s\t%s\t%s\t%s\t-\t-\t-\tCOMPARE_FAILED_%s...main\n' \
+      "$path" "$repo" "$deployed" "$released" "$released_at" "$released"
+    return
+  fi
   IFS=$'\t' read -r count oldest < <(unreleased_from_compare <<<"$cmp")
 
   # Last release-please run on main; "n/a" for repos that tag by hand.
@@ -203,6 +232,24 @@ JSON
   [ "$out" = $'2\t2026-09-03T18:35:00Z' ] || { echo "self-test: compare classification got '$out'"; return 1; }
   out=$(unreleased_from_compare <<<'{"commits":[]}')
   [ "$out" = $'0\t' ] || { echo "self-test: empty compare got '$out'"; return 1; }
+  # Image block parser: only the top-level image: block, not a sidecar's
+  # repository/tag or a tag: key under another mapping.
+  local fixture; fixture=$(mktemp)
+  cat >"$fixture" <<'YAML'
+sidecar:
+  image:
+    repository: ghcr.io/mctlhq/other
+    tag: "9.9.9"
+image:
+  repository: ghcr.io/mctlhq/svc
+  # release-drift: ignore
+  tag: "1.2.3"
+  pullPolicy: IfNotPresent
+labels:
+  tag: nope
+YAML
+  out=$(image_block_fields "$fixture"); rm -f "$fixture"
+  [ "$out" = $'ghcr.io/mctlhq/svc\t1.2.3' ] || { echo "self-test: image block parse got '$out'"; return 1; }
   echo "self-test: ok"
 }
 
