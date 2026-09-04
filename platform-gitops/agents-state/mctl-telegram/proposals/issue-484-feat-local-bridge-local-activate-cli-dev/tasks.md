@@ -146,9 +146,10 @@
       `/security`, which asserted `session_encrypted` was NULL long after
       that stopped being true. Validate by mutation: restoring either
       sentence fails the test.
-- [ ] T15. `activate` repairs a half-claimed lineage: claim the lineage
-      server-side, delete the client's credential file to simulate the crash
-      between the claim and the write, re-run `activate` — it must obtain a
+- [ ] T15. `activate` repairs a half-claimed lineage, table-driven over a
+      credential file that is absent, empty, truncated, invalid JSON, and
+      valid JSON missing `device_id`: claim the lineage server-side, put the
+      file in each of those states, re-run `activate` — it must obtain a
       credential through `/refresh` and persist it, and `daemon` must then
       start. Validate by mutation: exiting 0 on the 409 without checking the
       file leaves `daemon` unable to start, which is the bricked state this
@@ -168,6 +169,11 @@
       retries. Validate by mutation: removing the out-of-band refresh leaves
       the send a dry-run until the scheduled refresh, which is the wait this
       test exists to prevent.
+- [ ] T22. The daemon's credential write takes the same lock: a refresh in
+      flight while `activate` re-registers must not land a credential for the
+      OLD `device_id` on top of the new one. Validate by mutation: locking
+      only in `activate` lets the daemon's late write leave an identity and a
+      credential that name different devices.
 - [ ] T21. `activate` is serialised: hold the lockfile and run `activate` —
       it exits non-zero naming the concurrent run rather than proceeding.
       And the pairing it protects: with the lock in place, a run that

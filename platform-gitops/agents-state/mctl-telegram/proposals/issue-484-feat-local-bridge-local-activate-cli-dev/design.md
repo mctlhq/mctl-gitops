@@ -165,9 +165,10 @@ In `cmd/local/activate.go`:
      whether the credential file is on disk first, and only then decide.
 
      The 409 has two causes that look identical from here and end very
-     differently. Either the credential really was issued and persisted, and
+     differently. Either the credential really was issued and persisted USABLY —
+     present, parseable, carrying the fields the daemon needs — and
      re-running `activate` should be a no-op; or the server claimed the
-     lineage and the client never got the response — a timeout, a crash, a
+     lineage and the client has nothing usable to show for it — a timeout, a crash, a
      closed lid between the claim and the write. In that second case the
      device row is claimed, the disk has no credential, and there is no way
      back: first issuance cannot re-run (the slot is taken, by construction —
@@ -177,8 +178,13 @@ In `cmd/local/activate.go`:
      over a machine that can never connect, recoverable only by wiping the
      config directory — which also orphans the device row.
 
-     So: if the credential file exists, print that the device is already
-     activated and exit 0. If it does not, run the PoP refresh flow
+     So: if the credential file is USABLE, print that the device is already
+     activated and exit 0. Present-but-unusable — truncated, empty, invalid
+     JSON, missing `device_id` — counts as absent, for the same reason a
+     present-but-malformed key does: the daemon cannot start from it either
+     way, and the only thing a presence check achieves is that `activate`
+     declines to repair the one case it could have. If it is not usable, run
+     the PoP refresh flow
      (`/nonce` → sign → `/refresh`, which needs no existing credential).
      Persist only a `200` whose body parses into the expected credential
      shape; on any other status, or an unparseable body, exit NON-ZERO
@@ -206,9 +212,25 @@ In `cmd/local/activate.go`:
      past the credential write — and exit with a clear "another activation is
      already running" if it is held. `activate` is an interactive setup
      command; serialising it costs nothing and removes the whole class.
-     There is no lock helper in `cmd/local` today, so this is new but small:
-     `syscall.Flock` on an `O_CREATE` file next to the existing
-     `writeFileAtomic` helper. Covered by T21.
+     There is no lock helper in `cmd/local` today, so this is new — and it
+     must be **build-tagged, not `syscall.Flock`**. `Flock` does not exist in
+     `syscall` on Windows, and `windows/amd64` is one of the five targets
+     release-please cross-compiles (`release-please.yml:91`), so naming it
+     directly breaks the build for a platform this CLI ships to. Two small
+     files next to `writeFileAtomic`: `syscall.Flock` under
+     `//go:build !windows`, and `LockFileEx` from `golang.org/x/sys/windows`
+     under `//go:build windows` — that module is already in `go.mod` as an
+     indirect dependency, so this promotes it rather than adding one.
+     Covered by T21, and by the cross-compile the release workflow runs.
+
+     **`daemon` takes the same lock around its credential write.** The lock
+     is not only about two `activate` runs. A daemon refresh in flight while
+     the user re-runs `activate` finishes afterwards and writes a credential
+     carrying the OLD `device_id` over the new one — the same
+     identity/credential mismatch, reached from the other side. The daemon
+     holds it only across the read-modify-write of the credential file, not
+     for its whole run, so a long-lived daemon never blocks an `activate` for
+     more than that window. Covered by T22.
 
      With that lock held, two `activate` runs cannot corrupt the server
      state either: the lineage claim is atomic and refresh reuses the same `jti`, so

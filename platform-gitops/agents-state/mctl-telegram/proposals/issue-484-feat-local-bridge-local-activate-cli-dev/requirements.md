@@ -83,7 +83,8 @@ of the pre-#483 one.
 - IF the repair path's refresh does not return a well-formed credential THEN
   THE SYSTEM SHALL exit non-zero without writing a credential file.
 - WHILE an activation is in progress on a machine THE SYSTEM SHALL refuse to
-  start a second one on the same configuration directory, so the device
+  start a second one on the same configuration directory, and SHALL hold the
+  same exclusion against a running daemon's credential write, so the device
   identity and the credential issued against it cannot be written by
   different runs and left mismatched.
 - WHEN device signing key material is regenerated THE SYSTEM SHALL also
@@ -99,9 +100,10 @@ of the pre-#483 one.
   credential THE SYSTEM SHALL continue to use the legacy bearer refresh
   path, so an interrupted activation never breaks a daemon that was
   working.
-- IF `activate` receives a lineage-already-claimed response and no device
-  credential is present on disk THEN THE SYSTEM SHALL obtain one through the
-  proof-of-possession refresh path and persist it before reporting success,
+- IF `activate` receives a lineage-already-claimed response and no USABLE
+  device credential is on disk — absent, or present but unparseable or
+  missing the fields the daemon needs — THEN THE SYSTEM SHALL obtain one
+  through the proof-of-possession refresh path and persist it before reporting success,
   and SHALL NOT exit successfully leaving the machine unable to connect.
 - WHEN the account owner revokes send consent THE SYSTEM SHALL refuse the
   next real send from that account, without waiting for any credential to
