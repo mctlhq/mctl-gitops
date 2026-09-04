@@ -65,7 +65,35 @@ jobs:
       team_name: ${{ inputs.team_name }}
       component_name: ${{ inputs.component_name }}
       build_id: rd-${{ github.run_id }}
-    secrets: inherit
+    # Not `inherit`. This job checks out whichever repository `repo` names and
+    # builds that repository's own Dockerfile, so it is the job in this
+    # workflow that handles third-party content - and `inherit` gave it all
+    # fourteen repository secrets, including KUBECONFIG, ARGOCD_TOKEN and
+    # HCLOUD_TOKEN: cluster and infrastructure credentials with no role in an
+    # image build (#1010).
+    #
+    # To be precise about the threat, since it decides which names belong
+    # here: the docker build receives only what is handed to it - the
+    # APP_VERSION build-arg and, for three allow-listed repos, the
+    # GH_PACKAGES_TOKEN BuildKit secret. A Dockerfile cannot read the runner
+    # environment, so the job env is not itself "exposed to the build". What
+    # this narrowing reduces is the blast radius of a compromise of the
+    # workflow or the runner, and the standing cost of holding credentials a
+    # build has no use for.
+    #
+    # These four are every inheritable secret build-image references, and it
+    # declares them under `on: workflow_call:`. GITHUB_TOKEN is its fifth and
+    # is provided automatically - it is neither inheritable nor declarable.
+    #
+    # A name missing from this list does not fail loudly: build-image falls
+    # through to a weaker credential tier and logs which one it used. So a
+    # change here is verified by the tier lines in the build log, not by a
+    # green run - see the PR that introduced this block.
+    secrets:
+      APP_ID: ${{ secrets.APP_ID }}
+      APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
+      GHCR_PAT: ${{ secrets.GHCR_PAT }}
+      GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
 
   bump:
     needs: build
