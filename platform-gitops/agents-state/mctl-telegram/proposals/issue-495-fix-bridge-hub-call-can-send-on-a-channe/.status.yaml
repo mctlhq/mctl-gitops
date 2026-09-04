@@ -1,6 +1,6 @@
-status: proposed
-updated_at: '2026-09-04T11:36:39Z'
-updated_by: mctl-agents[bot]
+status: rejected
+updated_at: '2026-09-04T12:20:00Z'
+updated_by: mashkovd
 source:
   type: github_issue
   repo: mctlhq/mctl-telegram
@@ -8,3 +8,24 @@ source:
   url: https://github.com/mctlhq/mctl-telegram/issues/495
 control:
   requires_human_approval: true
+notes: >-
+  Operator decision: superseded by a hand-written fix. mctl-telegram#497
+  (branch fix/issue-495-hub-lifecycle) was opened before the investigator
+  reported, and closes the race with a different shape than tasks.md here
+  proposes: instead of a done channel that every teardown path closes and a
+  changed Register signature, each daemon connection gets an outbound queue
+  and a single pump goroutine that is the only writer and the only closer of
+  the transport-facing send channel; teardown retires the connection through
+  done and waits for the pump synchronously. Reviewed clean by claude and agy,
+  passes go test -race, and its lifecycle test was tightened after a mutation
+  check showed the enqueue-side done case was not covered.
+
+  requirements.md, design.md and tasks.md are kept as the record of the
+  alternative that was considered. Only the status changes.
+
+  This also disarms the live DevLoopWorkflow dev-loop-mctlhq-mctl-telegram-495,
+  parked at its approval wait since the investigator ran at 2026-09-04
+  11:36Z. cwft-mctl-agents-approve refuses any status that is neither
+  proposed nor accepted, so if that parked execution is ever signalled it
+  ends without implementing, rather than opening a second PR for a race
+  that #497 already closes. Same mechanism as the #479 rejection.
