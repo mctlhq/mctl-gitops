@@ -1,0 +1,57 @@
+name: release-drift
+
+# Once a day, put the three states that "merged" hides side by side for
+# every service image this repo pins: merged (releasable commits on main
+# with no tag), released (the source repo's newest release), deployed (the
+# tag in values.yaml). Fail when they disagree for longer than a release
+# should take, so the gap lands in the workflow_failed channel.
+#
+# Why: mctl-telegram release-please failed on seven consecutive pushes after
+# 0.59.0 (2026-09-03/04) and nobody noticed for a day: every merge was
+# green, preview tracked main, and neither Argo CD nor release-please has a
+# signal for "main is ahead of the last tag" (mctl-telegram#498).
+#
+# Not a gate. A tenant deliberately held on an older release opts out with
+# the comment `# release-drift: ignore` in its values.yaml.
+
+on:
+  schedule:
+    - cron: "17 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-drift
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Self-test the classifiers
+        run: .github/scripts/release-drift.sh --self-test
+
+      # Reads across every mctlhq source repository (releases, tags, compare,
+      # release-please runs). GITHUB_TOKEN is scoped to this repo, so mint a
+      # read-only token from the mctl-agents App, which is installed on all
+      # of them.
+      - name: Generate read token
+        id: app
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.AGENTS_APP_ID }}
+          private-key: ${{ secrets.AGENTS_APP_PRIVATE_KEY }}
+          owner: mctlhq
+          permission-contents: read
+          permission-actions: read
+          permission-metadata: read
+
+      - name: Compare merged / released / deployed
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: .github/scripts/release-drift.sh
