@@ -67,7 +67,7 @@ This proposal closes all of those gaps together because #484 is the final gate b
 
 ## Required tests
 
-- T7 zero-admin E2E: fresh install -> `init` -> local Telegram `login` -> `activate` -> read call -> explicit owner send grant -> send call -> forced device refresh -> daemon reconnect; assert `session_encrypted IS NULL` throughout.
+- T7 zero-admin E2E: fresh install -> `init` -> local Telegram `login` -> `activate` -> read call -> explicit owner send grant -> forced device refresh -> send call -> daemon reconnect; assert `session_encrypted IS NULL` throughout.
 - T8 regression: existing hosted fresh-user flow and hosted->local migration remain working.
 - T9 regression: manually minted legacy worker tokens still authenticate, connect, and renew through the legacy path.
 - T10 activation idempotency: repeated activation reuses the same local identity/device and recovers cleanly from already-claimed credential lineage.
