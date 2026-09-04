@@ -101,7 +101,9 @@ of the pre-#483 one.
 - WHILE an activation is in progress on a machine THE SYSTEM SHALL refuse to
   start a second one on the same configuration directory, and SHALL hold the
   same exclusion against a running daemon's record write, while neither holds
-  that exclusion across a wait for human interaction, so the device
+  that exclusion across a wait for human interaction. This exclusion orders
+  the writes and nothing more — what prevents a mismatched one is the
+  re-validation criterion above, so the device
   identity and the credential issued against it cannot be written by
   different runs and left mismatched.
 - WHEN device signing key material is regenerated THE SYSTEM SHALL also

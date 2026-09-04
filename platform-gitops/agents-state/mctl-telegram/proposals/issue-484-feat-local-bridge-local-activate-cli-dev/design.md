@@ -157,21 +157,25 @@ for PoP). Concretely, in `cmd/local/config.go`:
   identifies produces a device that can never authenticate. Rotating it makes
   `activate` register a genuinely new device, which is the honest outcome:
   the old key material is gone, so the old device is gone, and its row stays
-  revocable by its owner. Anyone who ran `activate` from #482
+  revocable by its owner.
+
+  The #482 case is the exception, and for a reason worth stating rather than
+  leaving to be inferred: a record written by #482's `activate` carries no
+  Ed25519 fields at all, so its `device_registration_key` was never bound to
+  a public key. Completing it in place binds that key for the first time —
+  there is no existing row holding a DIFFERENT pubkey for the same
+  registration key, which is the collision rotation exists to avoid. Rotation
+  applies when key material is being REPLACED, not when it is being supplied
+  for the first time. Anyone who ran `activate` from #482
   already has this file, holding only the opaque
   `device_registration_key`; keying generation on the file's existence would
   skip it for exactly those users and then hand an empty seed to
   `ed25519.Sign`, which panics on a wrong-length key rather than returning an
   error. The check is on the fields, and a file missing either half is
-  completed in place and rewritten. Otherwise generation happens exactly
-  where `loadOrCreateDeviceKey` generates the opaque key today, and write the file atomically at `0600` via the existing
-  `writeFileAtomic` helper — no new file-permission code path.
-- A device identity, once generated, is loaded and reused on every later
-  `activate` run, mirroring the existing idempotency-key reuse rationale
-  (`config.go:115-120`): a retried `activate` must resolve to the *same*
-  device row and the *same* keypair, or the server's first-issuance-then-
-  refresh distinction (`ClaimDeviceCredentialLineage`) sees a second,
-  unrelated public key show up for a device_id it already trusts.
+  completed in place and rewritten. Otherwise generation happens exactly where
+  `loadOrCreateDeviceKey` generates the opaque key today, and the file is
+  written atomically at `0600` via the existing `writeFileAtomic` helper — no
+  new file-permission code path.
 
 In `cmd/local/activate.go`:
 
