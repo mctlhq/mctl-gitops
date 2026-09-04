@@ -149,8 +149,9 @@
 - [ ] T15. `activate` repairs a half-claimed lineage, table-driven over a
       credential file that is absent, empty, truncated, invalid JSON, valid
       JSON missing `device_id`, and unusable-but-carrying-a-later
-      `expires_at` (the last proves the freshness guard cannot veto a
-      repair): claim the lineage server-side, put the
+      `expires_at`, and a USABLE credential belonging to a DIFFERENT
+      `device_id` with a later `expires_at` (the last two prove the freshness
+      guard can veto neither a repair nor a post-rotation write): claim the lineage server-side, put the
       file in each of those states, re-run `activate` — it must obtain a
       credential through `/refresh` and persist it, and `daemon` must then
       start. Validate by mutation: exiting 0 on the 409 without checking the
@@ -180,11 +181,20 @@
       lock but skipping the re-read still writes the mismatched pair — the
       lock orders the writes, it does not make a late one correct.
 - [ ] T21. `activate` is serialised where it touches files and NOWHERE else:
-      hold the lockfile and run `activate` — it exits non-zero naming the
-      concurrent run rather than proceeding; and an `activate` parked in its
-      browser wait does NOT block a daemon credential refresh. Validate by
-      mutation: holding the lock across the wait makes the daemon's refresh
-      block behind a human who walked away.
+      a lock held briefly by a daemon refresh makes `activate` WAIT and then
+      succeed, not fail; a lock held past the timeout makes it exit non-zero
+      naming the concurrent run; and an `activate` parked in its browser wait
+      does NOT block a daemon credential refresh. Validate by mutation twice:
+      holding the lock across the browser wait blocks the daemon behind a
+      human who walked away, and failing fast instead of waiting makes a
+      routine refresh abort an activation for a reason the user cannot act
+      on.
+- [ ] T23. The daemon refuses a corrupt identity instead of panicking or
+      rotating: corrupt `private_key` and start `daemon` — it exits with a
+      message naming `activate` as the fix, does not reach `ed25519.Sign`,
+      and does NOT register a new device. Validate by mutation: loading
+      without the usable check panics; rotating in the daemon silently
+      re-registers the machine as a new device.
       And the pairing it protects: with the lock in place, a run that
       regenerates the identity cannot leave a credential from another run
       beside it. Validate by mutation: dropping the lock lets an interleaved

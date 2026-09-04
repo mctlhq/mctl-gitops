@@ -82,6 +82,13 @@ of the pre-#483 one.
   the send attempt.
 - IF the repair path's refresh does not return a well-formed credential THEN
   THE SYSTEM SHALL exit non-zero without writing a credential file.
+- IF a credential already on disk names a different device than the one being
+  written THEN THE SYSTEM SHALL replace it regardless of its recorded expiry,
+  so a stale credential cannot veto the credential that supersedes it.
+- IF the daemon finds device signing key material it cannot use THEN THE
+  SYSTEM SHALL stop with a message naming the command that repairs it, and
+  SHALL NOT regenerate the identity itself — re-registering a device is the
+  owner's action, not a background service's.
 - WHILE an activation is in progress on a machine THE SYSTEM SHALL refuse to
   start a second one on the same configuration directory, and SHALL hold the
   same exclusion against a running daemon's credential write, while neither

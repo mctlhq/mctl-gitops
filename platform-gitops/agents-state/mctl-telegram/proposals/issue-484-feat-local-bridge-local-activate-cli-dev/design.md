@@ -225,8 +225,13 @@ In `cmd/local/activate.go`:
      protected is that the two files name the same device — not that
      `activate` runs alone.
 
-     Exit with a clear "another activation is already running" if the lock is
-     held. `activate` is an interactive setup
+     Acquire the lock by WAITING for it, with a short timeout — not by
+     failing when it is held. Both holders now keep it only for local file
+     I/O measured in microseconds, so waiting is bounded in practice, while
+     failing fast means a perfectly routine daemon refresh makes `activate`
+     abort for no reason the user can act on. Report "another activation is
+     already running" only after the wait times out, which is the case it was
+     written for. `activate` is an interactive setup
      command; serialising it costs nothing and removes the whole class.
      There is no lock helper in `cmd/local` today, so this is new — and it
      must be **build-tagged, not `syscall.Flock`**. `Flock` does not exist in
@@ -249,6 +254,15 @@ In `cmd/local/activate.go`:
      browser wait either, neither ever blocks the other for longer than a
      file write.
 
+     The daemon loads the identity through the same usable-not-present check
+     `activate` uses — a corrupt or truncated private key must fail the
+     daemon's startup with a clear message telling the user to re-run
+     `activate`, never reach `ed25519.Sign`, which panics on a wrong-length
+     key rather than returning an error. The daemon does NOT rotate the
+     identity: it is a background service, rotation registers a new device,
+     and a service silently re-registering hardware is not a decision it gets
+     to make. It refuses and says what to run.
+
      And the daemon re-validates under that lock exactly as `activate` does:
      re-read the identity, confirm it is still the one whose key signed the
      refresh now completing, and abort the write if it is not. The lock alone
@@ -266,7 +280,15 @@ In `cmd/local/activate.go`:
      refresh and nothing else, and self-healing because refresh needs no
      credential. Write through the existing `writeFileAtomic` helper so a
      reader never sees a half-written file, and do not overwrite a USABLE
-     credential whose `expires_at` is later than the one being written. The
+     credential FOR THE SAME `device_id` whose `expires_at` is later than the
+     one being written. Both qualifiers matter, and the device one is the
+     sharper of the two: after an identity rotation the credential on disk
+     belongs to the OLD device, so comparing expiries across the two is
+     comparing unrelated things. A stale credential that happens to outlive
+     the fresh one would veto its own replacement, leaving the new identity
+     paired with the old device's credential — the mismatch this section
+     exists to prevent, produced by the guard meant to protect it. A
+     credential naming a different device is always overwritten. The
      qualifier is load-bearing: an unusable file can still carry a
      later-looking `expires_at` — a truncated write that kept that field, a
      hand-edited one, a legacy long-lived token — and letting that timestamp
