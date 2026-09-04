@@ -147,11 +147,11 @@
       that stopped being true. Validate by mutation: restoring either
       sentence fails the test.
 - [ ] T15. `activate` repairs a half-claimed lineage, table-driven over a
-      credential file that is absent, empty, truncated, invalid JSON, valid
-      JSON missing `device_id`, and unusable-but-carrying-a-later
-      `expires_at`, and a USABLE credential belonging to a DIFFERENT
-      `device_id` with a later `expires_at` (the last two prove the freshness
-      guard can veto neither a repair nor a post-rotation write): claim the lineage server-side, put the
+      stored credential that is absent, empty, truncated, invalid JSON,
+      missing `device_id`, unusable-but-carrying-a-later `expires_at`, and
+      usable but naming a DIFFERENT device with a later `expires_at` (the
+      last two prove the freshness guard can veto neither a repair nor a
+      post-rotation write): claim the lineage server-side, put the
       file in each of those states, re-run `activate` — it must obtain a
       credential through `/refresh` and persist it, and `daemon` must then
       start. Validate by mutation: exiting 0 on the 409 without checking the
@@ -172,14 +172,13 @@
       retries. Validate by mutation: removing the out-of-band refresh leaves
       the send a dry-run until the scheduled refresh, which is the wait this
       test exists to prevent.
-- [ ] T22. The daemon's credential write takes the same lock AND
-      re-validates the identity under it: a refresh signed with the old key,
-      completing after `activate` rotated the identity, must abort rather
-      than land a credential for the OLD `device_id` on top of the new one.
-      Validate by mutation twice, because these are two separate defects:
-      dropping the daemon's lock lets the writes interleave, and keeping the
-      lock but skipping the re-read still writes the mismatched pair — the
-      lock orders the writes, it does not make a late one correct.
+- [ ] T22. Identity and credential cannot disagree: run the interleavings
+      that used to produce a mismatch — two `activate` runs, and a daemon
+      refresh completing after `activate` rotated the identity — and assert
+      the record on disk always names one device consistently, whichever run
+      wrote last. Validate by mutation: splitting the record back into two
+      files reproduces the mismatch in both interleavings, which is the class
+      the single record exists to remove.
 - [ ] T21. `activate` is serialised where it touches files and NOWHERE else:
       a lock held briefly by a daemon refresh makes `activate` WAIT and then
       succeed, not fail; a lock held past the timeout makes it exit non-zero
@@ -200,6 +199,13 @@
       and does NOT register a new device. Validate by mutation: loading
       without the usable check panics; rotating in the daemon silently
       re-registers the machine as a new device.
+- [ ] T25. A seed round-trips through its own check: run `activate` twice
+      with no corruption in between and assert the second run REUSES the
+      stored identity — same `device_registration_key`, same device row, no
+      rotation. Validate by mutation: validating the seed against
+      `ed25519.PrivateKeySize` (64) instead of `ed25519.SeedSize` (32)
+      rejects the value this design stores, so every run regenerates,
+      rotates, and orphans a device row.
 - [ ] T24. Half-matching key material is treated as corrupt: an identity file
       whose `private_key` and `public_key` are both well-formed and correctly
       sized but do NOT belong to each other is regenerated (and the

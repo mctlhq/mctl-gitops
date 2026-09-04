@@ -82,19 +82,21 @@ of the pre-#483 one.
   the send attempt.
 - IF the repair path's refresh does not return a well-formed credential THEN
   THE SYSTEM SHALL exit non-zero without writing a credential file.
-- IF a credential already on disk names a different device than the one being
-  written THEN THE SYSTEM SHALL replace it regardless of its recorded expiry,
-  so a stale credential cannot veto the credential that supersedes it.
+- WHILE a device is configured on a machine THE SYSTEM SHALL keep its signing
+  key material and its issued credential in ONE record written atomically, so
+  that no sequence of runs, refreshes or interruptions can leave a credential
+  naming a device whose key is not the one stored beside it.
+- IF a stored credential names a different device than the one being written,
+  or is not usable, THEN THE SYSTEM SHALL replace it regardless of its
+  recorded expiry, so stale data cannot veto what supersedes it.
 - IF the daemon finds device signing key material it cannot use THEN THE
   SYSTEM SHALL stop with a message naming the command that repairs it, and
   SHALL NOT regenerate the identity itself — re-registering a device is the
   owner's action, not a background service's.
 - WHILE an activation is in progress on a machine THE SYSTEM SHALL refuse to
   start a second one on the same configuration directory, and SHALL hold the
-  same exclusion against a running daemon's credential write, while neither
-  holds that exclusion across a wait for human interaction, and each writer
-  re-reads the device identity under that exclusion and abandons its write if
-  the identity is no longer the one it acted for, so the device
+  same exclusion against a running daemon's record write, while neither holds
+  that exclusion across a wait for human interaction, so the device
   identity and the credential issued against it cannot be written by
   different runs and left mismatched.
 - WHEN device signing key material is regenerated THE SYSTEM SHALL also
@@ -111,10 +113,11 @@ of the pre-#483 one.
   credential THE SYSTEM SHALL continue to use the legacy bearer refresh
   path, so an interrupted activation never breaks a daemon that was
   working.
-- IF `activate` receives a lineage-already-claimed response and no USABLE
-  device credential is on disk — absent, or present but unparseable or
-  missing the fields the daemon needs — THEN THE SYSTEM SHALL obtain one
-  through the proof-of-possession refresh path and persist it before reporting success,
+- IF `activate` receives a lineage-already-claimed response and the stored
+  record carries no USABLE credential for the device this run activated —
+  absent, unparseable, missing fields the daemon needs, or naming an earlier
+  device — THEN THE SYSTEM SHALL obtain one through the
+  proof-of-possession refresh path and persist it before reporting success,
   and SHALL NOT exit successfully leaving the machine unable to connect.
 - WHEN the account owner revokes send consent THE SYSTEM SHALL refuse the
   next real send from that account, without waiting for any credential to

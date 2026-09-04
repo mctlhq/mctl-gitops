@@ -106,13 +106,34 @@ for PoP). Concretely, in `cmd/local/config.go`:
 
 - Extend the persisted device-identity file (rename the concept from
   "device key" to "device identity" internally, keep the JSON file at the
-  same path for a smooth upgrade) to hold `device_registration_key`
-  (unchanged), `private_key` (Ed25519 seed, base64), and `public_key`
-  (Ed25519 public key, base64). Generate the key halves with
-  `ed25519.GenerateKey(rand.Reader)` when the file does not carry a USABLE
-  pair — not merely when the file is absent, and not merely when the fields
-  are empty. Usable means: present, base64-decodable, exactly
-  `ed25519.PrivateKeySize` / `ed25519.PublicKeySize` bytes after decoding,
+  same path for a smooth upgrade) into ONE record holding everything about
+  this device: `device_registration_key` (unchanged), `private_key`
+  (Ed25519 **seed**, 32 bytes, base64), `public_key` (Ed25519 public key,
+  base64) — and, once issued, the credential fields `device_id`,
+  `worker_token`, `expires_at` and `jti`.
+
+  **One file, deliberately.** Three review rounds on this contract produced
+  the same defect in three disguises: an identity and a credential that name
+  different devices, because they live in two files that can be written
+  independently — by two `activate` runs, by a daemon refresh racing an
+  `activate`, or by a rotation that replaced one and not the other. Each was
+  patched with another qualifier (match the device id, match under the lock,
+  match before overwriting). That is a class, not three bugs, and it exists
+  only because the pair can be written apart. Keeping them in one record
+  written through `writeFileAtomic` removes it: a reader sees the previous
+  complete record or the next one, and a credential can never name a device
+  whose key is not in the same file. What survives of the locking is
+  ordinary read-modify-write ordering, and a lost update is now just an older
+  complete record, which the next refresh replaces.
+
+  Generate the key halves with `ed25519.GenerateKey(rand.Reader)` and persist
+  `priv.Seed()` when the record does not carry a USABLE pair — not merely
+  when the file is absent, and not merely when the fields are empty. Usable
+  means: present, base64-decodable, exactly `ed25519.SeedSize` /
+  `ed25519.PublicKeySize` bytes after decoding (the seed is 32 bytes;
+  `ed25519.PrivateKeySize` is 64 and would reject the very value this design
+  says to store, regenerating and rotating the registration key on every run
+  and orphaning a device row each time),
   AND the two halves belonging to each other — derive the public key from the
   private one and compare. Two well-formed, correctly-sized halves that are
   not a pair pass every length check and then produce signatures the server
@@ -166,10 +187,15 @@ In `cmd/local/activate.go`:
      format (`local_bridge_credential.go:266-267`).
   3. `POST /api/local-bridge/devices/{device_id}/credential` with
      `{nonce, signature}`.
-  4. On `200`, persists `{device_id, worker_token, expires_at, jti}` to a
-     new file (see "Alternatives" for why not reusing `bridge_token.json`).
+  4. On `200`, merges `{device_id, worker_token, expires_at, jti}` into the
+     device record alongside the key material and writes the whole record
+     atomically (see "Alternatives" for why not reusing `bridge_token.json`,
+     and the "one file" rule above for why not a second file of its own).
   5. On `409` (lineage already claimed), do NOT simply exit 0 — check
-     whether the credential file is on disk first, and only then decide.
+     whether the record already carries a usable credential FOR THE DEVICE
+     THIS RUN JUST ACTIVATED, and only then decide. A credential naming some
+     earlier device is not a reason to skip the bootstrap; it is stale data
+     the run supersedes.
 
      The 409 has two causes that look identical from here and end very
      differently. Either the credential really was issued and persisted USABLY —
@@ -204,104 +230,37 @@ In `cmd/local/activate.go`:
      it authenticates by possession of the device key rather than by any
      credential. Covered by T15.
 
-     **`activate` serialises itself.** The device identity and the device
-     credential live in two files, and the credential names the `device_id`
-     the identity's key must sign for. Two concurrent runs can therefore
-     leave the pair mismatched: one run regenerates the identity (a corrupt
-     key, per the rule above) while the other is mid-flight with the old
-     one, and the disk ends up holding the new private key next to a
-     credential issued for the old device. Nothing rejects that combination
-     at write time; `daemon` simply signs with a key the server does not
-     have for that `device_id` and can never connect.
+     **`activate` serialises its record writes.** Two runs, or a run and a
+     daemon refresh, can still lose an update to each other — one reading the
+     record, the other writing it, the first writing back what it read. With
+     one record that is no longer a correctness problem (nothing can end up
+     mismatched) but it is still a wasted round trip, so take an exclusive
+     lock on a lockfile in the config directory around each read-modify-write
+     of the record, and NOT across the browser wait in between. That wait is
+     unbounded by design — it ends when a human finishes signing in, or never
+     — and holding a cross-process lock across it would let an abandoned
+     `activate` starve the running daemon's refresh until its token expired
+     and its connection dropped.
 
-     Take an exclusive lock on a lockfile in the config directory around the
-     two file-touching phases — the identity read-or-rotate, and the
-     credential write — and NOT across the browser wait in between. That wait
-     is unbounded by design: it ends when a human finishes signing in, or
-     never, if they close the laptop and go to lunch. Holding a cross-process
-     lock across it would let an abandoned `activate` starve the running
-     daemon's credential refresh until its token expired and its connection
-     dropped — an interactive command taking the background service down by
-     being walked away from.
+     Acquire by WAITING, with a short timeout, not by failing when held: both
+     holders keep it only for local file I/O, so waiting is bounded, while
+     failing fast would make a routine daemon refresh abort an activation for
+     a reason the user cannot act on. Report "another activation is already
+     running" only after the timeout.
 
-     Releasing across the wait leaves one window: another run could rotate
-     the identity while this one polls. So on re-acquiring the lock for the
-     write, re-read the identity and confirm it is still the one this run
-     activated for; if it is not, abort without writing rather than pair a
-     credential with a key that no longer matches it. The invariant being
-     protected is that the two files name the same device — not that
-     `activate` runs alone.
+     The daemon takes the same lock around its own read-modify-write, and
+     merges only the credential fields — it never touches the key material,
+     and it never rotates. Rotation registers a new device, and a background
+     service silently re-registering the machine is not its decision; on
+     unusable key material it stops with a message naming `activate`.
 
-     Acquire the lock by WAITING for it, with a short timeout — not by
-     failing when it is held. Both holders now keep it only for local file
-     I/O measured in microseconds, so waiting is bounded in practice, while
-     failing fast means a perfectly routine daemon refresh makes `activate`
-     abort for no reason the user can act on. Report "another activation is
-     already running" only after the wait times out, which is the case it was
-     written for. `activate` is an interactive setup
-     command; serialising it costs nothing and removes the whole class.
-     There is no lock helper in `cmd/local` today, so this is new — and it
-     must be **build-tagged, not `syscall.Flock`**. `Flock` does not exist in
-     `syscall` on Windows, and `windows/amd64` is one of the five targets
-     release-please cross-compiles (`release-please.yml:91`), so naming it
-     directly breaks the build for a platform this CLI ships to. Two small
-     files next to `writeFileAtomic`: `syscall.Flock` under
-     `//go:build !windows`, and `LockFileEx` from `golang.org/x/sys/windows`
-     under `//go:build windows` — that module is already in `go.mod` as an
-     indirect dependency, so this promotes it rather than adding one.
-     Covered by T21, and by the cross-compile the release workflow runs.
+     Do not overwrite a record whose credential is usable, names the SAME
+     device, and expires later than the one being written. A record naming a
+     different device, or carrying no usable credential, is replaced
+     unconditionally — otherwise stale data could veto the write that
+     supersedes it, which is how a freshness guard turns into the bug it was
+     added to prevent.
 
-     **`daemon` takes the same lock around its credential write.** The lock
-     is not only about two `activate` runs. A daemon refresh in flight while
-     the user re-runs `activate` finishes afterwards and writes a credential
-     carrying the OLD `device_id` over the new one — the same
-     identity/credential mismatch, reached from the other side. The daemon
-     holds it only across the read-modify-write of the credential file, not
-     for its whole run — and since `activate` does not hold it across the
-     browser wait either, neither ever blocks the other for longer than a
-     file write.
-
-     The daemon loads the identity through the same usable-not-present check
-     `activate` uses — a corrupt or truncated private key must fail the
-     daemon's startup with a clear message telling the user to re-run
-     `activate`, never reach `ed25519.Sign`, which panics on a wrong-length
-     key rather than returning an error. The daemon does NOT rotate the
-     identity: it is a background service, rotation registers a new device,
-     and a service silently re-registering hardware is not a decision it gets
-     to make. It refuses and says what to run.
-
-     And the daemon re-validates under that lock exactly as `activate` does:
-     re-read the identity, confirm it is still the one whose key signed the
-     refresh now completing, and abort the write if it is not. The lock alone
-     only orders the two writes; it does not make a late one correct. A
-     daemon that signed with key A while `activate` rotated to B and finished
-     first would otherwise take the lock and lay a credential for device A
-     over B's — the same mismatch, arrived at by waiting politely. Both
-     writers check the same thing for the same reason. Covered by T22.
-
-     With that lock held, two `activate` runs cannot corrupt the server
-     state either: the lineage claim is atomic and refresh reuses the same `jti`, so
-     neither run's credential invalidates the other's and both stay valid to
-     their own expiry. The only exposure is on disk, where a slower process
-     can write an older credential over a newer one — costing an earlier
-     refresh and nothing else, and self-healing because refresh needs no
-     credential. Write through the existing `writeFileAtomic` helper so a
-     reader never sees a half-written file, and do not overwrite a USABLE
-     credential FOR THE SAME `device_id` whose `expires_at` is later than the
-     one being written. Both qualifiers matter, and the device one is the
-     sharper of the two: after an identity rotation the credential on disk
-     belongs to the OLD device, so comparing expiries across the two is
-     comparing unrelated things. A stale credential that happens to outlive
-     the fresh one would veto its own replacement, leaving the new identity
-     paired with the old device's credential — the mismatch this section
-     exists to prevent, produced by the guard meant to protect it. A
-     credential naming a different device is always overwritten. The
-     qualifier is load-bearing: an unusable file can still carry a
-     later-looking `expires_at` — a truncated write that kept that field, a
-     hand-edited one, a legacy long-lived token — and letting that timestamp
-     veto the repair write would leave the machine broken while `activate`
-     exits 0, which is exactly what the repair path exists to prevent. An
-     unusable credential is overwritten unconditionally.
   6. On any other failure, exit non-zero with a message that names the
      device as already activated (so the user does not re-run `activate`
      from scratch and orphan the device row) and says the credential step
