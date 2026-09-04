@@ -341,14 +341,6 @@ spec:
             printf ' %s' "$@"
             printf '\n'
 
-            # Anything the agent left in the handoff directory is not a
-            # handoff, so it is cleared unconditionally — and recreated below
-            # ONLY if there is something legitimate to put in it. A run that
-            # produced nothing therefore leaves no directory at all, which is
-            # what makes the `optional: true` output artifact upload nothing
-            # and leave a previous attempt's object intact (P2 above).
-            rm -rf /tmp/proposal-out
-
             # Deliberately NOT `exec`, and deliberately not fatal — the same
             # shape as run-reconcile in cwft-mctl-agents-reconcile.yaml.
             # run_issue_investigator writes the requirements/design/tasks
@@ -397,6 +389,19 @@ spec:
             ALLOWED = re.compile(r"^platform-gitops/agents-state/[^/]+/proposals/[^/]+/[^/]+")
             rc = int(sys.argv[1])
 
+            # Cleared HERE, after the agent has exited, and owned by this script alone.
+            # Doing it in the shell before the agent ran was a hole: the agent holds Bash
+            # in this container for up to activeDeadlineSeconds, so it could recreate and
+            # fill /tmp/proposal-out afterwards. This script would then exit early on a run
+            # with no git changes WITHOUT removing it, and Argo would upload the agent's
+            # own directory as the handoff — clobbering a previous attempt's object on the
+            # shared key, which is exactly the guarantee `optional: true` exists to give
+            # (agy P2 on #1042, round 2).
+            #
+            # So the invariant is stated once, in one place: this directory exists at exit
+            # if and only if the loop below put something in it.
+            shutil.rmtree(OUT, ignore_errors=True)
+
             raw = subprocess.run(
                 ["git", "-C", ROOT, "status", "--porcelain=v1", "-z", "-uall", "--",
                  ":(glob)platform-gitops/agents-state/*/proposals/*/**"],
@@ -410,7 +415,23 @@ spec:
                 print("no proposal files to hand off")
                 sys.exit(rc)
 
-            bad = [p for p in paths if not ALLOWED.match(p) or ".." in p.split("/")]
+            # A control character is never a legitimate proposal filename, and
+            # newline specifically is the character this rewrite is about: a
+            # crafted directory name carrying one is what split the old shell
+            # pipeline. Splitting on NUL already makes such a path harmless
+            # HERE — it stays one path, inside the proposal directory, so it
+            # can no longer name the repository's real `.git/`. It is refused
+            # anyway rather than passed on, because the only thing that would
+            # then reject it downstream is commit-and-push's `find | grep`
+            # splitting on the very newline that caused the problem. Correct
+            # by accident is the shape of reasoning that produced the original
+            # bug.
+            bad = [
+                p for p in paths
+                if not ALLOWED.match(p)
+                or ".." in p.split("/")
+                or any(c in p for c in "\n\r\t")
+            ]
             if bad:
                 sys.stderr.write("refusing to hand off paths outside a proposal directory:\n")
                 for p in bad:
