@@ -266,6 +266,26 @@ different account — then performs, in order:
    live `GetDevice` check added in step 3 above, **immediately** (no cache,
    no TTL — satisfies "refresh must fail immediately after revocation").
 
+   **The `jti` to denylist is read INSIDE that transaction, not before it.**
+   The ownership check earlier in the tool reads the device row, but a
+   concurrent first issuance can claim the lineage slot between that read
+   and the transaction; denylisting the value read earlier would then
+   denylist nothing (it was NULL) while the freshly minted six-hour
+   credential goes unlisted, and the tool would report success. The revoke
+   statement therefore returns the value it is revoking —
+   `UPDATE local_bridge_devices SET revoked_at = ... WHERE device_id = ...
+   RETURNING current_jti` — and the denylist insert uses that. The row is
+   again the serialisation point.
+
+   **A device that never issued has no lineage, and revoking it must still
+   work.** When the returned `current_jti` is empty the denylist step is
+   skipped, deliberately: there is nothing to denylist, and passing an empty
+   jti would at best insert a meaningless row and at worst violate a
+   constraint, roll the transaction back, and leave a registered device
+   permanently unrevocable. Skipping is not a silent success — the revoked
+   row is still committed, which is the whole of what revocation means for a
+   device that holds no credential.
+
    **Steps 1 and 2 are one database transaction, and the whole path is
    idempotent.** Marking the row revoked and denylisting its `jti` are two
    halves of one decision: if a crash or a transient error lands between
@@ -314,6 +334,20 @@ requires the connecting identity to carry it: add `DeviceID string` to
 not copied today) — a one-line addition next to the existing `Jti`/
 `OriginalIssuedAt` copy at `issuer.go:297-307`. `internal/bridge/server.go`
 then calls `hub.Register(id.UserID, id.DeviceID)`.
+
+**`bridge.tokenhandler` must copy `DeviceID` into the child token too**, and
+without that line the entire active-disconnect mechanism silently does
+nothing. The daemon does not connect to the Hub with its device credential;
+it exchanges that credential for a bridge token at `POST /api/bridge/token`
+and connects with the bridge token. That handler today copies exactly
+`Jti` and `OriginalIssuedAt` into the child (`tokenhandler.go:87-88`) and
+nothing else new, so the bridge token would carry no `DeviceID`, `id.DeviceID`
+would be empty at the websocket, `hub.Register` would store an empty string,
+and `EvictDevice` would match nothing — failing closed in appearance
+(revocation "succeeded") while the revoked daemon stays connected for the
+full hour. Add `DeviceID: id.DeviceID` alongside the existing two, for the
+same stated reason the other two are there: the child is a delegation of the
+parent and must inherit what the parent is revoked by.
 
 **Revocation SLA (the explicit either/or the issue asks for).** This design
 picks **active Hub disconnect as the primary mechanism**, not merely a

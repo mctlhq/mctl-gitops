@@ -99,8 +99,11 @@
 - [ ] 12. Add `revoke_local_bridge_device` MCP tool in
       `internal/mcp/tools.go`: verify device ownership via
       `store.GetDevice`, then `store.RevokeDevice` →
-      `store.RevokeWorkerToken` (using the device's `current_jti`) IN ONE
-      TRANSACTION, then `localjwt.RevocationCache.Refresh` (synchronous, not
+      `store.RevokeWorkerToken` IN ONE TRANSACTION, taking the `current_jti`
+      from the revoke statement's own `RETURNING` clause rather than from
+      the earlier ownership read, and skipping the denylist insert when it
+      comes back empty (a device that never issued has no lineage, and
+      passing an empty jti must not roll the revocation back), then `localjwt.RevocationCache.Refresh` (synchronous, not
       TTL-bound) → `hub.EvictDevice` outside it (depends on 9, 11). The tool
       is idempotent: invoked on an already-revoked device it still denylists,
       refreshes and evicts, so a partially applied revocation is repaired by
@@ -181,6 +184,20 @@
       a credential with an empty jti that survives
       `revoke_local_bridge_device`, which is the failure this test exists to
       catch.
+- [ ] T6c. A bridge token minted from a device credential carries the
+      `device_id`, and a `/bridge` connection made with it is evicted by
+      `revoke_local_bridge_device`. Validate by mutation: dropping the
+      `DeviceID` copy in `bridge.tokenhandler` leaves the connection open,
+      which is the failure this test exists to catch — the revoke call still
+      reports success.
+- [ ] T6d. Revocation racing first issuance: claim the lineage slot
+      concurrently with the revoke call — the credential minted by that
+      claim must end up denylisted, which only holds if the jti is read
+      inside the revoking transaction. Mutation: reading it from the earlier
+      ownership check instead leaves the new credential live.
+- [ ] T6e. Revoking a device that never issued succeeds: the row comes back
+      revoked, no denylist row is written, and the transaction is not rolled
+      back by the empty jti.
 - [ ] T6b. Revocation is atomic and repeatable: with the denylist write
       forced to fail, the device row must NOT come back revoked (the
       transaction rolls both back); and invoking the tool a second time on a

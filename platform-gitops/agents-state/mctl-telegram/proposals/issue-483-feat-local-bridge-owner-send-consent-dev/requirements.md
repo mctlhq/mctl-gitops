@@ -113,6 +113,15 @@ rather than inventing a parallel mechanism.
   issuance (its credential lineage slot is unclaimed) THEN THE SYSTEM SHALL
   refuse it and mint nothing, so that no credential can exist outside a
   lineage the revocation path can name.
+- WHEN a bridge token is minted from a device-bound credential THE SYSTEM
+  SHALL carry the `device_id` into the child token, so that the identity
+  presented on the `/bridge` websocket names the device and can be evicted.
+- WHEN device revocation determines which credential lineage to denylist THE
+  SYSTEM SHALL read that lineage identifier within the same transaction that
+  records the revocation, so that a credential issued concurrently with the
+  revocation cannot escape the denylist.
+- IF the revoked device holds no credential lineage THEN THE SYSTEM SHALL
+  still record the revocation successfully, skipping only the denylist step.
 - WHEN device revocation is recorded THE SYSTEM SHALL commit the row's
   revoked state and its credential lineage's denylist entry together, and
   SHALL remain safe to re-run against an already-revoked device — a repeat
