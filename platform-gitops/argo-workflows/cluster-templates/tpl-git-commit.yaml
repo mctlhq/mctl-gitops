@@ -121,7 +121,7 @@ spec:
           fi
           SKIP_HEALTH="{{inputs.parameters.skip_health_check}}"
 
-          # ── 0a. Validate everything that reaches a yq expression ──────────────
+          # ── 0a. Validate everything that reaches a yq or sed program ──────────
           # Second layer, not the only one: every yq call below now passes its
           # values through the environment (strenv), so an injection payload is
           # data rather than expression text. This block exists so that a future
@@ -136,6 +136,61 @@ spec:
               echo "❌ ${1} must be a single line"
               exit 1
             fi
+          }
+
+          # config_patch is a raw yq PROGRAM, not a value: there is no strenv()
+          # shape for it, because the expression itself is the parameter. Its
+          # only producer is mctl-api's OpenClaw resource-profile handler,
+          # which builds it server-side as a pipeline of plain assignments:
+          #
+          #   .resources.requests.cpu = "500m" | ... | .env.NODE_OPTIONS = "..."
+          #
+          # mctl-api now drops parameters an operation does not declare, and
+          # config_patch is not declared on deploy-service, so it can no longer
+          # arrive from a request body (mctlhq/mctl-api#246). This is the
+          # second layer, so that a regression there cannot rewrite .image or
+          # .externalSecret from here.
+          #
+          # Checking only that the expression STARTS with an allowed root is
+          # not enough: `|` chains independent top-level assignments, an idiom
+          # this file uses itself, so `.resources.x = "y" | .image.tag =
+          # "pwned"` would pass a prefix check and still rewrite the image
+          # (claude P1 on the PR that introduced this). Every segment is
+          # therefore checked, not just the first.
+          #
+          # `|=` pipelines are deliberately not supported: their right-hand
+          # side is not an assignment root, and nothing produces one today.
+          validate_config_patch() {
+            reject_multiline "config_patch" "$1"
+            # No escapes into the environment, the filesystem, or a subshell.
+            case "$1" in
+              *'$'* | *'`'* | *env\(* | *strenv\(* | *load* | *eval*)
+                echo "❌ config_patch may not reference env, files or subshells: ${1}"
+                exit 1
+                ;;
+            esac
+            _rest="$1"
+            while [ -n "$_rest" ]; do
+              case "$_rest" in
+                *"|"*) _seg="${_rest%%|*}"; _rest="${_rest#*|}" ;;
+                *)     _seg="$_rest";      _rest="" ;;
+              esac
+              # Strip leading blanks without xargs, which would also strip the
+              # quotes and fail outright on an unbalanced one.
+              while :; do
+                case "$_seg" in
+                  " "*|"	"*) _seg="${_seg#?}" ;;
+                  *) break ;;
+                esac
+              done
+              case "$_seg" in
+                .resources.*|.env.*|.configMaps[*) ;;
+                *)
+                  echo "❌ config_patch segment must assign into .resources, .env or .configMaps: ${_seg}"
+                  exit 1
+                  ;;
+              esac
+            done
           }
 
           for pair in "team_name:${TEAM}" "component_name:${SERVICE}"; do
@@ -165,6 +220,46 @@ spec:
             echo "$REPO" | grep -qE '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$' || {
               echo "❌ Invalid dockerfile_repo: ${REPO}"; exit 1; }
           fi
+
+          # The values below reach a `sed` PROGRAM rather than a yq expression:
+          #
+          #   sed -e "s|__PORT__|${PORT}|g" ...
+          #
+          # `|` is the substitution delimiter, so a value containing one closes
+          # the s/// and everything after it is read as further sed commands -
+          # `s|.*|<anything>|g` rewrites the whole rendered manifest, which is
+          # a strictly larger blast radius than the yq holes this change is
+          # about. `port` carries no Pattern in the operations registry and is
+          # not checked by tpl-validate-tenant either, so it arrives exactly as
+          # a caller sent it (agy P1 on this PR).
+          #
+          # default_model and the telegram owner ids are not declared on
+          # deploy-service at all, so after mctlhq/mctl-api#246 they can only be
+          # set server-side by the OpenClaw handler - checked here anyway,
+          # because "only an internal caller sets it" is a claim about a call
+          # chain rather than about this line.
+          reject_multiline "port" "$PORT"
+          echo "$PORT" | grep -qE '^[0-9]{1,5}$' || {
+            echo "❌ Invalid port: ${PORT}"; exit 1; }
+
+          if [ -n "$DEFAULT_MODEL" ]; then
+            reject_multiline "default_model" "$DEFAULT_MODEL"
+            echo "$DEFAULT_MODEL" | grep -qE '^[A-Za-z0-9._/-]+$' || {
+              echo "❌ Invalid default_model: ${DEFAULT_MODEL}"; exit 1; }
+          fi
+
+          if [ -n "$TELEGRAM_OWNER_ID" ]; then
+            reject_multiline "telegram_owner_id" "$TELEGRAM_OWNER_ID"
+            echo "$TELEGRAM_OWNER_ID" | grep -qE '^[0-9]+$' || {
+              echo "❌ Invalid telegram_owner_id: ${TELEGRAM_OWNER_ID}"; exit 1; }
+          fi
+
+          # The EFFECTIVE value, not the raw parameter: it is what reaches the
+          # sed program, and validating only the input would miss the branch
+          # that builds the array from TELEGRAM_OWNER_ID.
+          reject_multiline "telegram_owner_ids_json" "$TELEGRAM_OWNER_IDS_EFFECTIVE"
+          echo "$TELEGRAM_OWNER_IDS_EFFECTIVE" | grep -qE '^\[("[0-9]+"(,"[0-9]+")*)?\]$' || {
+            echo "❌ Invalid telegram_owner_ids_json: ${TELEGRAM_OWNER_IDS_EFFECTIVE}"; exit 1; }
 
           # ── 0. Install dependencies ───────────────────────────────────────────
           apk add --no-cache openssl curl git ca-certificates openssh-client
@@ -569,14 +664,7 @@ spec:
             # the OpenClaw profile owns, so a regression on the API side cannot
             # rewrite .image or .externalSecret from here.
             if [ -n "$CONFIG_PATCH" ]; then
-              reject_multiline "config_patch" "$CONFIG_PATCH"
-              case "$CONFIG_PATCH" in
-                '.configMaps['*) ;;
-                *)
-                  echo "❌ config_patch may only patch .configMaps[...]: ${CONFIG_PATCH}"
-                  exit 1
-                  ;;
-              esac
+              validate_config_patch "$CONFIG_PATCH"
               yq eval -i "$CONFIG_PATCH" "${DIR}/values.yaml"
               CHANGED=true
             fi

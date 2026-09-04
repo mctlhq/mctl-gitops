@@ -26,6 +26,7 @@ import tempfile
 import pathlib
 
 import yaml
+from shlex import quote as shlex_quote
 
 TPL = pathlib.Path(
     "platform-gitops/argo-workflows/cluster-templates/tpl-git-commit.yaml")
@@ -167,6 +168,83 @@ with tempfile.TemporaryDirectory() as d:
 check("the subscript form itself resists a hostile key", tag == "1.0.0",
       f"tag={tag} env={env} err={proc.stderr}")
 check("the hostile key is stored as a literal key", '"x | .image.tag": "pwned4"' in env, env)
+
+# --- config_patch ----------------------------------------------------------
+# config_patch is the one parameter that IS an expression, so it has no
+# strenv() shape and is defended by an allowlist instead. Extracted and run
+# the same way, because a prefix-only check looks correct and is not: `|`
+# chains independent top-level assignments, an idiom this very file uses.
+m = re.search(r"^(validate_config_patch\(\) \{\n.*?\n\})$", SOURCE, re.S | re.M)
+assert m, "could not extract validate_config_patch() from the template"
+VALIDATOR = m.group(1)
+
+# What mctl-api's openClawConfigPatch() actually emits — the only producer.
+REAL_PATCH = ('.resources.requests.cpu = "500m" | .resources.requests.memory = "1Gi" | '
+              '.resources.limits.cpu = "2" | .resources.limits.memory = "4Gi" | '
+              '.env.NODE_OPTIONS = "--max-old-space-size=3072"')
+
+
+def validate_patch(patch):
+    script = f"set -e\n{HELPER}\n{VALIDATOR}\nvalidate_config_patch \"$1\"\n"
+    return subprocess.run(["sh", "-c", script, "sh", patch],
+                          capture_output=True, text=True)
+
+
+check("the real OpenClaw resource-profile patch is accepted",
+      validate_patch(REAL_PATCH).returncode == 0,
+      validate_patch(REAL_PATCH).stdout + validate_patch(REAL_PATCH).stderr)
+
+# The bypass a prefix-only check allows: it DOES start with an allowed root.
+for hostile in (
+    '.configMaps[0].x = "y" | .image.tag = "pwned"',
+    '.resources.requests.cpu = "1" | .image.tag = "pwned"',
+    '.resources.requests.cpu = "1" | .externalSecret.targetSecret = "theirs"',
+    '.image.tag = "pwned"',
+    '.env.A = strenv(HOME)',
+    '.env.A = "$(id)"',
+):
+    check(f"config_patch rejects: {hostile[:46]}",
+          validate_patch(hostile).returncode != 0, hostile)
+
+check("config_patch rejects a multi-line payload",
+      validate_patch('.resources.requests.cpu = "1"\n.image.tag = "pwned"').returncode != 0)
+
+# --- sed-bound parameters --------------------------------------------------
+# Not every sink in this file is yq. PORT, DEFAULT_MODEL and the telegram
+# owner ids are interpolated into a `sed` PROGRAM whose substitution delimiter
+# is `|`, so a value carrying one closes the s/// and the remainder is read as
+# further sed commands — `s|.*|x|g` rewrites the whole rendered manifest.
+# `port` carries no Pattern in the operations registry (agy P1 on this PR).
+GUARDS = re.search(r"^(# The values below reach a `sed` PROGRAM.*?"
+                   r"Invalid telegram_owner_ids_json.*?\n)",
+                   SOURCE, re.S | re.M)
+assert GUARDS, "could not extract the sed-bound parameter guards"
+
+
+def validate_sed_params(port="8080", model="", owner="", owners="[]"):
+    script = (f"set -e\n{HELPER}\n"
+              f'PORT={shlex_quote(port)}\nDEFAULT_MODEL={shlex_quote(model)}\n'
+              f'TELEGRAM_OWNER_ID={shlex_quote(owner)}\n'
+              f'TELEGRAM_OWNER_IDS_EFFECTIVE={shlex_quote(owners)}\n'
+              + GUARDS.group(1))
+    return subprocess.run(["sh", "-c", script], capture_output=True, text=True)
+
+
+check("a normal port is accepted", validate_sed_params().returncode == 0,
+      validate_sed_params().stderr)
+check("a port that closes the sed substitution is rejected",
+      validate_sed_params(port='8080|g; s|.*|pwned|g').returncode != 0)
+check("a non-numeric port is rejected", validate_sed_params(port="80a").returncode != 0)
+check("a real default_model is accepted",
+      validate_sed_params(model="openai-codex/gpt-5.4").returncode == 0,
+      validate_sed_params(model="openai-codex/gpt-5.4").stderr)
+check("a default_model carrying a sed delimiter is rejected",
+      validate_sed_params(model="a|g; s|.*|pwned|g").returncode != 0)
+check("a real owner id list is accepted",
+      validate_sed_params(owners='["123","456"]').returncode == 0,
+      validate_sed_params(owners='["123","456"]').stderr)
+check("an owner id list carrying a sed delimiter is rejected",
+      validate_sed_params(owners='["1"]|g; s|.*|pwned|g').returncode != 0)
 
 if failures:
     print("\n".join(["", "FAILURES:"] + failures), file=sys.stderr)

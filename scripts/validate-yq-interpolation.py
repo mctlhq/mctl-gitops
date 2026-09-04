@@ -62,9 +62,23 @@ BASELINE: set[tuple[str, str, str]] = {
 
 
 def tokenize(line: str) -> list[str]:
-    """Split a shell line into tokens, keeping quotes so `$` stays visible."""
-    tokens, cur, quote = [], "", None
+    """Split a shell line into tokens, keeping quotes so `$` stays visible.
+
+    Backslash escapes are honoured. Without that, `".foo == \\" ${X} \\""`
+    reads the `\\"` as a CLOSING quote, splits at the following space, and
+    leaves `expression_of` inspecting only `".foo == \\"` — which contains no
+    `$`, so an interpolated call would pass this check unseen (agy P2).
+    """
+    tokens, cur, quote, escaped = [], "", None, False
     for ch in line:
+        if escaped:
+            cur += ch
+            escaped = False
+            continue
+        if ch == "\\":
+            cur += ch
+            escaped = True
+            continue
         if quote:
             cur += ch
             if ch == quote:
@@ -135,8 +149,25 @@ spec:
           export DOMAIN
           yq eval -i '.ingress.hosts += [strenv(DOMAIN)]' "${DIR}/values.yaml"
 """
+    escaped = """
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterWorkflowTemplate
+metadata: {name: selftest}
+spec:
+  templates:
+    - name: t
+      script:
+        source: |
+          yq eval -i ".foo == \\" ${INJECT} \\"" values.yaml
+"""
     with tempfile.TemporaryDirectory() as d:
         tmp = Path(d)
+        (tmp / "escaped.yaml").write_text(escaped)
+        if not list(scan(tmp)):
+            print("❌ selftest: an escaped quote split the token and hid the "
+                  "interpolation from the detector", file=sys.stderr)
+            return 1
+        (tmp / "escaped.yaml").unlink()
         (tmp / "bad.yaml").write_text(bad)
         if not list(scan(tmp)):
             print("❌ selftest: detector did not fire on an interpolated yq call",
