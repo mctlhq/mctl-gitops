@@ -109,6 +109,17 @@ jobs:
           scripts/validate-profile-version-bumps.py --selftest
           scripts/validate-profile-version-bumps.py
 
+      - name: Check openclaw image.tag and OPENCLAW_VERSION stay in sync
+        run: |
+          set -euo pipefail
+          # --selftest first, same reason as the other detectors in this job:
+          # a checker that has never been seen to fire is not known to work.
+          # gitops#1037: admins/labs had image.tag bumped without the paired
+          # OPENCLAW_VERSION env update, per the "Image bump recipe" in
+          # k8s.md ("both must stay in sync on every bump").
+          scripts/validate-openclaw-version-pin.py --selftest
+          scripts/validate-openclaw-version-pin.py
+
       - name: Validate Argo local workdir invariants
         run: scripts/validate-local-workdir.py
 
