@@ -3,6 +3,19 @@ name: Validate Manifests
 on:
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review]
+  # Also run on main itself. The openclaw version-pin check below exists
+  # because of a drift (#1037) that arrives by a path with no pull request in
+  # it at all: gitops-bump.yaml and release-deploy.yaml's bump job commit tag
+  # bumps DIRECTLY to main under the main-protection ruleset bypass, and their
+  # rewrite patterns touch only the image reference, never a mirrored
+  # env.OPENCLAW_VERSION. A pull_request-only trigger therefore never sees the
+  # thing it was added to catch.
+  #
+  # This detects rather than prevents — the commit has already landed by the
+  # time it runs — so it is the complement to fixing the bump itself, tracked
+  # as #1057, not a replacement for it.
+  push:
+    branches: [main]
 
 permissions:
   contents: read
