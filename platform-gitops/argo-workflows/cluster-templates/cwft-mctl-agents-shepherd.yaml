@@ -1302,10 +1302,20 @@ spec:
           if [ "$WORKFLOW_STATUS" = "Succeeded" ] && [ "$WORKFLOW_ACTIVITY" = "none" ]; then
             echo "ℹ️  Succeeded with no activity (no proposal transitions) — skipping Telegram leg."
           elif [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
+            # JSON-encoded with jq, not shell interpolation. $TEXT carries the
+            # slug, the service name and the degraded-app list, so a double
+            # quote or a backslash in any of them produced malformed JSON, the
+            # API answered 400, and the alert was dropped — visible only as an
+            # http= line in a log nobody reads, with the step still green
+            # (agy P2 on gitops#1048). The incident leg below has always built
+            # its body this way, and so does cwft-mctl-agents-investigate; this
+            # leg was the odd one out.
+            TG_BODY=$(jq -nc --arg chat "$TG_CHAT_ID" --arg text "$TEXT" \
+              '{chat_id: $chat, text: $text, disable_web_page_preview: true}')
             curl -s -o /dev/null -w 'telegram http=%{http_code}\n' \
               -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
               -H "Content-Type: application/json" \
-              -d "{\"chat_id\":\"${TG_CHAT_ID}\",\"text\":\"${TEXT}\",\"disable_web_page_preview\":true}"
+              -d "$TG_BODY"
           else
             echo "ℹ️  TG_BOT_TOKEN or TG_CHAT_ID not set; skipping Telegram leg."
           fi
