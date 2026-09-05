@@ -64,17 +64,22 @@ spec:
         # audit trail (#150); "unknown" when the caller predates the field.
         value: "unknown"
 
-  volumeClaimTemplates:
-    - metadata:
-        name: workdir
-      spec:
-        accessModes: ["ReadWriteOnce"]
-        resources:
-          requests:
-            # Only a --depth=1 clone of mctl-gitops lives here — no sibling
-            # repos, no Go cache. Smallest Hetzner CSI volume tier.
-            storage: 1Gi
+  # ── No PVC ──────────────────────────────────────────────────────────────
+  # Was a 1Gi `volumeClaimTemplates` entry, which Argo provisions as a Hetzner
+  # Cloud volume per run — and Hetzner rounds any request up to its 10Gi
+  # minimum, so a workdir holding one shallow clone and one edited
+  # `.status.yaml` churned a 10Gi volume every approve. The steps are separate
+  # pods spread across nodes, so that RWO volume also had to move between
+  # nodes mid-run; a wedged detach leaves a pod Pending while it holds
+  # `mctl-gitops-main-writes` (mctl-gitops#856).
+  #
+  # Nothing here was durable, so each pod now clones for itself and the single
+  # flipped file travels as an Argo artifact. sizeLimit because, unlike a PVC,
+  # emptyDir counts toward kubelet's ephemeral-storage accounting.
   volumes:
+    - name: workdir
+      emptyDir:
+        sizeLimit: 1Gi
     - name: deploy-key
       secret:
         secretName: mctl-gitops-deploy-key
@@ -83,64 +88,89 @@ spec:
   templates:
     - name: approve-proposal
       steps:
-        - - name: clone
-            template: clone-gitops
+        # No `clone` step: with emptyDir there is no shared volume for one
+        # step to clone into on another's behalf, so each pod that needs the
+        # checkout takes its own as an initContainer.
         - - name: flip
             template: flip-status
         - - name: commit
             template: commit-and-push
+            arguments:
+              artifacts:
+                # `from` belongs on the STEP, not on the template's
+                # inputs.artifacts — Argo rejects the whole spec otherwise
+                # ("from not valid in inputs"), which a canary caught before
+                # this landed. Same shape as cwft-mctl-agents-reconcile.
+                - name: status-update
+                  from: "{{steps.flip.outputs.artifacts.status-update}}"
             # Skip the mutex-holding commit entirely when flip-status found
             # the proposal already accepted (idempotent retry / rebase race).
             when: "{{steps.flip.outputs.result}} == flipped"
-
-    # ── 1. SSH-clone mctl-gitops into shared volume ───────────────────────
-    - name: clone-gitops
-      script:
-        image: alpine/git:2.43.0
-        command: [sh]
-        source: |
-          set -e
-          apk add --no-cache openssh-client ca-certificates
-          mkdir -p ~/.ssh
-          cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
-          # GitHub's published SSH host keys, PINNED rather than trusted on
-          # first use. Source: https://api.github.com/meta (.ssh_keys),
-          # fetched 2026-09-02. This replaces StrictHostKeyChecking=no,
-          # which accepted whatever key answered on a connection that
-          # carries a WRITE-capable deploy key: a MITM or a DNS-poison of
-          # ssh.github.com was handed that key with no complaint.
-          #
-          # Keyed on [ssh.github.com]:443, not github.com. The Host block
-          # above rewrites hostname and port, and ssh looks up what it
-          # actually connects to — a github.com entry would silently miss.
-          #
-          # If GitHub rotates a host key these lines must be updated; it
-          # last happened in March 2023, when the RSA key was replaced.
-          cat > ~/.ssh/known_hosts <<'GITHUB_HOST_KEYS'
-          [ssh.github.com]:443 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
-          [ssh.github.com]:443 ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=
-          [ssh.github.com]:443 ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=
-          GITHUB_HOST_KEYS
-          chmod 600 ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/config
-          git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops
-          echo "✓ gitops cloned"
-        resources:
-          requests: { cpu: 50m, memory: 128Mi }
-          limits:   { cpu: 500m, memory: 512Mi }
-        volumeMounts:
-          - name: workdir
-            mountPath: /workdir
-          - name: deploy-key
-            mountPath: /secrets/deploy-key
 
     # ── 2. Flip proposed → accepted ───────────────────────────────────────
     # stdout is EXACTLY "flipped" or "noop" — Argo captures the script's
     # whole stdout as outputs.result, and the step-list `when` compares it
     # verbatim, so every log line here goes to stderr instead.
     - name: flip-status
+      outputs:
+        artifacts:
+          # Exactly the one `.status.yaml` this step flipped, at its
+          # repo-relative path — the handoff that replaces the shared PVC.
+          #
+          # `optional: true` with the directory built ONLY on the flipped
+          # path: on a `noop` the commit step is skipped by its `when`, and an
+          # empty archive should not exist at all rather than be uploaded and
+          # then ignored.
+          #
+          # No parsing of `git status` here, deliberately. The path is
+          # constructed from the two validated parameters, so the newline /
+          # control-character hazard that the investigate template has to
+          # defend against cannot arise in this one.
+          - name: status-update
+            path: /tmp/status-out
+            optional: true
+      initContainers:
+        - name: clone-gitops
+          image: alpine/git:2.43.0
+          command: [sh, -c]
+          args:
+            - |
+              set -e
+              apk add --no-cache openssh-client ca-certificates
+              mkdir -p ~/.ssh
+              cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
+              chmod 600 ~/.ssh/id_ed25519
+              printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
+              # GitHub's published SSH host keys, PINNED rather than trusted on
+              # first use. Source: https://api.github.com/meta (.ssh_keys),
+              # fetched 2026-09-02. This replaces StrictHostKeyChecking=no,
+              # which accepted whatever key answered on a connection that
+              # carries a WRITE-capable deploy key: a MITM or a DNS-poison of
+              # ssh.github.com was handed that key with no complaint.
+              #
+              # Keyed on [ssh.github.com]:443, not github.com. The Host block
+              # above rewrites hostname and port, and ssh looks up what it
+              # actually connects to — a github.com entry would silently miss.
+              #
+              # If GitHub rotates a host key these lines must be updated; it
+              # last happened in March 2023, when the RSA key was replaced.
+              cat > ~/.ssh/known_hosts <<'GITHUB_HOST_KEYS'
+              [ssh.github.com]:443 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
+              [ssh.github.com]:443 ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=
+              [ssh.github.com]:443 ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=
+              GITHUB_HOST_KEYS
+              chmod 600 ~/.ssh/known_hosts
+              chmod 600 ~/.ssh/config
+              git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops
+              echo "✓ gitops cloned"
+          resources:
+            requests: { cpu: 50m, memory: 64Mi, ephemeral-storage: 1Gi }
+            limits:   { cpu: 500m, memory: 256Mi, ephemeral-storage: 2Gi }
+          volumeMounts:
+            - name: workdir
+              mountPath: /workdir
+            - name: deploy-key
+              mountPath: /secrets/deploy-key
       script:
         image: alpine/git:2.43.0
         command: [sh]
@@ -236,11 +266,25 @@ spec:
             echo "❌ Post-edit check failed: ${STATUS_FILE} does not read 'status: accepted'" >&2
             exit 1
           fi
+          # Hand the flipped file to commit-and-push, at its repo-relative
+          # path. Built only here, on the verified-flipped path, so a `noop`
+          # run leaves /tmp/status-out absent and the `optional: true` output
+          # artifact uploads nothing at all.
+          #
+          # Everything on this line is derived from STATUS_FILE, which is
+          # built from the two parameters the guard at the top of this script
+          # already constrained to plain directory names — so no `git status`
+          # output is parsed and no attacker-shaped path can enter the
+          # handoff.
+          REL="platform-gitops/agents-state/${WORKFLOW_SERVICE}/proposals/${WORKFLOW_SLUG}/.status.yaml"
+          mkdir -p "/tmp/status-out/$(dirname "$REL")"
+          cp -a "$STATUS_FILE" "/tmp/status-out/$REL"
+
           echo "✅ ${WORKFLOW_SERVICE}/${WORKFLOW_SLUG}: proposed → accepted (by ${APPROVER_SAFE})" >&2
           echo -n "flipped"
         resources:
-          requests: { cpu: 50m, memory: 64Mi }
-          limits:   { cpu: 200m, memory: 256Mi }
+          requests: { cpu: 50m, memory: 64Mi, ephemeral-storage: 1Gi }
+          limits:   { cpu: 200m, memory: 256Mi, ephemeral-storage: 2Gi }
         volumeMounts:
           - name: workdir
             mountPath: /workdir
@@ -251,6 +295,62 @@ spec:
     # mutex is on this template only, not the workflow spec). Stages exactly
     # the one file flip-status edited.
     - name: commit-and-push
+      inputs:
+        artifacts:
+          # The single flipped `.status.yaml`, at its repo-relative path,
+          # unpacked here and copied over this pod's OWN fresh clone.
+          #
+          # A plain step reference is fine in this template — `flip` always
+          # runs, so unlike investigate's primary/fallback pair there is no
+          # skipped step whose artifact would fail to resolve. `optional: true`
+          # still matters: the `when` on this step means a `noop` should never
+          # get here, and if it somehow does, an absent handoff must be a
+          # clean no-op rather than a step failure.
+          - name: status-update
+            path: /artifact
+            optional: true
+      initContainers:
+        - name: clone-gitops
+          image: alpine/git:2.43.0
+          command: [sh, -c]
+          args:
+            - |
+              set -e
+              apk add --no-cache openssh-client ca-certificates
+              mkdir -p ~/.ssh
+              cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
+              chmod 600 ~/.ssh/id_ed25519
+              printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
+              # GitHub's published SSH host keys, PINNED rather than trusted on
+              # first use. Source: https://api.github.com/meta (.ssh_keys),
+              # fetched 2026-09-02. This replaces StrictHostKeyChecking=no,
+              # which accepted whatever key answered on a connection that
+              # carries a WRITE-capable deploy key: a MITM or a DNS-poison of
+              # ssh.github.com was handed that key with no complaint.
+              #
+              # Keyed on [ssh.github.com]:443, not github.com. The Host block
+              # above rewrites hostname and port, and ssh looks up what it
+              # actually connects to — a github.com entry would silently miss.
+              #
+              # If GitHub rotates a host key these lines must be updated; it
+              # last happened in March 2023, when the RSA key was replaced.
+              cat > ~/.ssh/known_hosts <<'GITHUB_HOST_KEYS'
+              [ssh.github.com]:443 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
+              [ssh.github.com]:443 ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=
+              [ssh.github.com]:443 ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=
+              GITHUB_HOST_KEYS
+              chmod 600 ~/.ssh/known_hosts
+              chmod 600 ~/.ssh/config
+              git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops
+              echo "✓ gitops cloned"
+          resources:
+            requests: { cpu: 50m, memory: 64Mi, ephemeral-storage: 1Gi }
+            limits:   { cpu: 500m, memory: 256Mi, ephemeral-storage: 2Gi }
+          volumeMounts:
+            - name: workdir
+              mountPath: /workdir
+            - name: deploy-key
+              mountPath: /secrets/deploy-key
       synchronization:
         mutex:
           name: mctl-gitops-main-writes
@@ -303,19 +403,43 @@ spec:
           chmod 600 ~/.ssh/known_hosts
           chmod 600 ~/.ssh/config
 
-          git config --global --add safe.directory /workdir/mctl-gitops
+          # This worktree came from THIS pod's own initContainer clone, so
+          # nothing has touched it. `safe.directory` is gone with the shared
+          # volume: it existed only because the old clone step chowned
+          # /workdir for another uid, and disabling git's ownership check is
+          # not something to keep for no reason (gitops#983 P1).
           cd /workdir/mctl-gitops
           git config user.name "mctl-agents[bot]"
           git config user.email "mctl-agents[bot]@users.noreply.github.com"
 
           STATUS_PATH="platform-gitops/agents-state/${WORKFLOW_SERVICE}/proposals/${WORKFLOW_SLUG}/.status.yaml"
-          # Guard: this workflow must only ever change the one status file.
-          OTHER_CHANGES="$(git status --porcelain | grep -v -F " ${STATUS_PATH}" || true)"
-          if [ -n "$OTHER_CHANGES" ]; then
-            echo "❌ Refusing to commit — worktree has changes beyond ${STATUS_PATH}:" >&2
-            printf '%s\n' "$OTHER_CHANGES" >&2
+
+          # The `when` on this step should keep a `noop` away, but an absent
+          # handoff is treated as a clean no-op rather than assumed impossible.
+          if [ ! -f "/artifact/${STATUS_PATH}" ]; then
+            echo "ℹ️  No flipped .status.yaml handed off — nothing to commit."
+            exit 0
+          fi
+
+          # Guard on the DATA, before any of it reaches the checkout. The old
+          # guard ran `git status` over a worktree the flip step had written
+          # and compared its output with `grep -v -F`, which is a substring
+          # match against unquoted porcelain output. Copying exactly one
+          # known path into a pristine clone removes the comparison entirely:
+          # nothing else can be present to refuse.
+          BAD="$(cd /artifact && find . -type f | sed 's|^\./||' | grep -vxF "$STATUS_PATH" || true)"
+          if [ -n "$BAD" ]; then
+            echo "❌ Refusing a handoff carrying anything but ${STATUS_PATH}:" >&2
+            printf '%s\n' "$BAD" >&2
             exit 1
           fi
+          if [ -n "$(find /artifact -mindepth 1 ! -type d ! -type f -print -quit)" ]; then
+            echo "❌ Refusing a handoff containing a symlink or special file." >&2
+            exit 1
+          fi
+
+          mkdir -p "$(dirname "$STATUS_PATH")"
+          cp -a "/artifact/${STATUS_PATH}" "$STATUS_PATH"
           git add -- "$STATUS_PATH"
           if git diff --cached --quiet; then
             echo "ℹ️  No staged change — nothing to commit."
@@ -352,8 +476,8 @@ spec:
           echo "❌ Push failed after 5 attempts"
           exit 1
         resources:
-          requests: { cpu: 50m, memory: 128Mi }
-          limits:   { cpu: 500m, memory: 512Mi }
+          requests: { cpu: 50m, memory: 128Mi, ephemeral-storage: 1Gi }
+          limits:   { cpu: 500m, memory: 512Mi, ephemeral-storage: 2Gi }
         volumeMounts:
           - name: workdir
             mountPath: /workdir

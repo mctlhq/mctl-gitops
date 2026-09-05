@@ -92,11 +92,18 @@ spec:
   # not shared — that is the whole reason the PVC existed). Cross-step state
   # now travels as an Argo artifact instead; see `run-reconcile` below.
   #
-  # sizeLimit + ephemeral-storage limits are the other half of the win: unlike
-  # a PVC, emptyDir counts toward kubelet's ephemeral-storage accounting, so a
-  # runaway write evicts THIS pod instead of driving the node into
-  # DiskPressure and evicting whatever else happens to share it (vault,
+  # sizeLimit + ephemeral-storage requests/limits are the other half of the
+  # win: unlike a PVC, emptyDir counts toward kubelet's ephemeral-storage
+  # accounting, so a runaway write evicts THIS pod instead of driving the node
+  # into DiskPressure and evicting whatever else happens to share it (vault,
   # shared-pg live on the same three CX43 workers).
+  #
+  # This comment claimed both halves from #677 onward while only sizeLimit
+  # existed — no agent template declared ephemeral-storage at all until
+  # 2026-09-05. sizeLimit caps ONE volume and evicts the pod that overruns it;
+  # it tells the SCHEDULER nothing, so several agent pods could still be packed
+  # onto one node with no accounting for the gigabytes each intended to use.
+  # The requests on the workdir-mounting steps are what actually reserve it.
   volumes:
     - name: workdir
       emptyDir:
@@ -194,8 +201,8 @@ spec:
               chown -R 1000:1000 /workdir
               echo "gitops cloned"
           resources:
-            requests: { cpu: 50m, memory: 64Mi }
-            limits:   { cpu: 500m, memory: 256Mi }
+            requests: { cpu: 50m, memory: 64Mi, ephemeral-storage: 2Gi }
+            limits:   { cpu: 500m, memory: 256Mi, ephemeral-storage: 3Gi }
           volumeMounts:
             - name: workdir
               mountPath: /workdir
@@ -319,8 +326,8 @@ spec:
                 name: mctl-agents-secrets
                 key: github-token
         resources:
-          requests: { cpu: 100m, memory: 256Mi }
-          limits:   { cpu: 1000m, memory: 1Gi }
+          requests: { cpu: 100m, memory: 256Mi, ephemeral-storage: 2Gi }
+          limits:   { cpu: 1000m, memory: 1Gi, ephemeral-storage: 3Gi }
         volumeMounts:
           - name: workdir
             mountPath: /workdir
@@ -378,8 +385,8 @@ spec:
               git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops
               echo "gitops cloned"
           resources:
-            requests: { cpu: 50m, memory: 64Mi }
-            limits:   { cpu: 500m, memory: 256Mi }
+            requests: { cpu: 50m, memory: 64Mi, ephemeral-storage: 2Gi }
+            limits:   { cpu: 500m, memory: 256Mi, ephemeral-storage: 3Gi }
           volumeMounts:
             - name: workdir
               mountPath: /workdir
@@ -389,8 +396,8 @@ spec:
         image: alpine/git:2.43.0
         command: [sh]
         resources:
-          requests: { cpu: 50m, memory: 64Mi }
-          limits:   { cpu: 500m, memory: 256Mi }
+          requests: { cpu: 50m, memory: 64Mi, ephemeral-storage: 2Gi }
+          limits:   { cpu: 500m, memory: 256Mi, ephemeral-storage: 3Gi }
         source: |
           set -e
           apk add --no-cache openssh-client ca-certificates
