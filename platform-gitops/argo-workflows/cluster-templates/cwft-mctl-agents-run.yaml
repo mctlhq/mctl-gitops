@@ -73,7 +73,7 @@ spec:
         # Required only when mode=single-service. Validated by the Python
         # orchestrator against config/settings.py SERVICES (exit 1 on mismatch).
       - name: agent_image
-        value: ghcr.io/mctlhq/mctl-agents:1.39.1
+        value: ghcr.io/mctlhq/mctl-agents:1.40.0
         # Default = today's pin, so submitting without this parameter is a
         # zero-behaviour-change no-op. Overridden by the agent registry's
         # resolved image_ref once a caller starts pinning per-run.
