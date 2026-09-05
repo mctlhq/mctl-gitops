@@ -68,7 +68,7 @@ strategy:
 terminationGracePeriodSeconds: 60
 env:
   APP_ENV: production
-  OPENCLAW_VERSION: "2026.5.14-beta.1"
+  OPENCLAW_VERSION: "2026.7.11-beta.2"
   OPENCLAW_BUNDLED_SKILLS_DIR: /home/node/.openclaw/bundled-skills
   OPENCLAW_GITHUB_ALLOWED_REPOS: "mctlhq/mctl-gitops"
   PATH: "/whisper-storage:/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games"
