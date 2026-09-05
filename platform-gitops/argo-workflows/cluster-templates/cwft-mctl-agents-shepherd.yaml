@@ -400,6 +400,16 @@ spec:
           - "-c"
           - |
             set -e
+            # FIRST, before any branch that writes into it. /tmp/onexit is the
+            # onExit channel, collected as an `optional: true` artifact — and
+            # the fallback-token guard just below writes `failed` into it and
+            # exits. With `set -e` active and the directory missing, that write
+            # itself fails and the status is never recorded, so onExit reports
+            # "unknown" instead of "failed": the exact bug this template's
+            # `set +e` fix exists to remove, relocated one branch earlier
+            # (claude P1 on gitops#1048).
+            mkdir -p /tmp/onexit
+
             # Fallback-token guard, mirroring cwft-mctl-agents-run's
             # run-orchestrator: on the account-2 retry an unseeded token-2
             # (empty env via optional:true below) must fail non-zero so the
@@ -453,12 +463,6 @@ spec:
             # tell a masked run-shepherd failure apart from a genuine clean
             # run — same pattern as poller_status on cwft-mctl-agents-
             # issue-poll's run-poller.
-            # /tmp/onexit is the onExit channel and must exist before the
-            # first write: it is collected as an `optional: true` artifact, so
-            # an absent directory simply means notify-telegram falls through to
-            # "unknown" rather than the step failing.
-            mkdir -p /tmp/onexit
-
             # `set +e` around the attempt, and it is load-bearing rather than
             # stylistic. `set -e` is active from line 1, so a bare `"$@"` that
             # fails aborts the script IMMEDIATELY — `RC=$?` and the
@@ -745,13 +749,6 @@ spec:
               chmod 600 ~/.ssh/config
               git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops
               mkdir -p /workdir/mctl-gitops/platform-gitops/agents-state
-              # Pre-create a PVC-backed scratch dir for the implementer
-              # subprocess's `gh repo clone` targets (address-review path).
-              # The orchestrator picks up `tempfile.gettempdir()` which
-              # honors TMPDIR — see run-shepherd env below. Without this,
-              # clones would land on the pod's ephemeral storage and the
-              # 8Gi PVC sizing would be ineffective for multi-repo runs.
-              mkdir -p /workdir/clones
               echo "✓ gitops cloned (fresh checkout, never touched by the agent)"
           resources:
             requests: { cpu: 50m, memory: 64Mi, ephemeral-storage: 8Gi }
@@ -1012,7 +1009,6 @@ spec:
         # global output parameter sourced from a different step broke Argo's static
         # validator workflow-wide (2026-07-06 incident). This step and notify-telegram
         # are different steps, so the same landmine applies here.
-        volumeMounts:
         source: |
           set -uo pipefail
 
@@ -1231,15 +1227,15 @@ spec:
           # the list from workflow logs.
           - name: WORKFLOW_DEGRADED_APPS
             value: "{{workflow.outputs.parameters.degraded_apps}}"
-        volumeMounts:
         source: |
           set +e
           apk add --no-cache curl ca-certificates jq >/dev/null 2>&1
 
           # "none" when commit-and-push had nothing to commit (steady-state
-          # hourly tick with no proposal transitions). Read off the shared
-          # workdir PVC rather than a workflow output parameter — see the
-          # note on the shepherd-proposals template's degraded_apps output.
+          # hourly tick with no proposal transitions). Read from the artifact
+          # mounted at /onexit/commit rather than a workflow output parameter
+          # — see the note on the shepherd-proposals template's degraded_apps
+          # output for why a second parameter is not available here.
           WORKFLOW_ACTIVITY=$(cat /onexit/commit/activity 2>/dev/null || echo "unknown")
 
           # If termination happens before verify exists, Argo can pass the
