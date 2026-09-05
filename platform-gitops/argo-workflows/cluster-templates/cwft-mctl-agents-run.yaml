@@ -375,7 +375,18 @@ spec:
             for rel in copies:
                 dst = os.path.join(TREE, rel)
                 os.makedirs(os.path.dirname(dst), exist_ok=True)
-                shutil.copy2(os.path.join(ROOT, rel), dst)
+                # follow_symlinks=False, and it is a secret-leak guard rather than
+                # tidiness. The islink() check happens in the classification loop
+                # above and the copy here — two passes — and the SDK agent can leave
+                # a background process alive past its own exit, so a path checked as
+                # a regular file can be a symlink by the time it is copied. copy2
+                # DEREFERENCES by default, so that would read the target — e.g. the
+                # GitHub token mounted at /var/run/gh — and land its contents in the
+                # handoff as an ORDINARY FILE, which commit-and-push's `! -type f`
+                # check then cannot tell from a legitimate one, and it reaches main.
+                # Copying the LINK keeps it a symlink, which that check does catch
+                # (agy P1 on gitops#1048).
+                shutil.copy2(os.path.join(ROOT, rel), dst, follow_symlinks=False)
                 print("handing off %s" % rel)
 
             # Newline-separated is unambiguous here precisely because the check above
