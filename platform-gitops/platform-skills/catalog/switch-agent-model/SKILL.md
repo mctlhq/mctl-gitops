@@ -18,7 +18,7 @@ Example: `/switch-agent-model claude-sonnet-6`
    ```
 2. Classifies each hit:
    - **Live runtime code** — verify it's actually wired in before editing
-     (reverse-import grep; see dead-code carve-out below). Editing an
+     (reverse-import grep). Editing an
      unimported file has zero runtime effect and just adds noise to the diff.
    - **CI review-bot tiering** (`claude-review.yml`'s "Classify PR
      complexity and pick model" step) — collapse to the new model and delete
@@ -39,18 +39,7 @@ Example: `/switch-agent-model claude-sonnet-6`
 4. Posts `@claude review` and watches both PRs with `review-watch` instead
    of polling manually.
 5. Re-runs the verification grep to confirm no stale model strings remain
-   outside documented dead-code carve-outs.
-
-## Known dead-code carve-out
-
-- `mctl-agent/internal/diagnosis/analyzer.go` — unimported, not wired into
-  `cmd/agent/main.go` or `internal/skill/builtin/register.go`. Confirm before
-  every run with:
-  ```
-  grep -rln "internal/diagnosis" mctl-agent --include="*.go"
-  ```
-  If that ever comes back non-empty (someone wires the package in), it must
-  be edited too on the next migration — don't blindly skip it forever.
+   anywhere in either repo.
 
 ## Tiering removal — CI review bot
 
@@ -102,8 +91,7 @@ found (`grep -n "_MODEL=" .env`) and tell them what to change by hand.
 grep -rn "<old-model-id-patterns>" mctl-agent mctl-agents \
   --include="*.go" --include="*.py" --include="*.yml" --include="*.yaml" --include="*.example"
 ```
-Expected sole remaining hits: documented dead-code carve-outs (see above).
-Everything else must show the new model ID. Each PR's own `@claude review`
+There should be no remaining hits — every match must show the new model ID. Each PR's own `@claude review`
 run exercises the newly-edited `claude_args` path live — a successful bot
 review is de facto proof the workflow YAML is valid and the model ID is
 accepted.
