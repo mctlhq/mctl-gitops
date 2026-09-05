@@ -1,3 +1,10 @@
+# FROZEN 2026-09-05: the source repository mctlhq/pfeifenpatenschaft-backend
+# is archived, which disables its Actions. release-deploy.yml can no longer
+# run there, so no new image tag will ever be pushed and no dispatch will
+# arrive here. This service is not broken -- it keeps serving the tag pinned
+# below -- but the tag is now the last one there will be. Un-archiving the
+# repository is the only way to resume deploys.
+#
 # Service: pfeifenpatenschaft-backend
 # Team: labs
 

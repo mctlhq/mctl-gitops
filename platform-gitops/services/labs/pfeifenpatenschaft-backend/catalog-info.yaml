@@ -3,7 +3,7 @@ kind: Component
 metadata:
   name: pfeifenpatenschaft-backend
   namespace: labs
-  description: "pfeifenpatenschaft-backend service"
+  description: "pfeifenpatenschaft-backend service (FROZEN: source repository archived 2026-09-05; no further deploys)"
   annotations:
     backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=labs-pfeifenpatenschaft-backend
     backstage.io/kubernetes-id: pfeifenpatenschaft-backend
