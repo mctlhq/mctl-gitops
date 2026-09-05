@@ -66,6 +66,10 @@ workflows push straight to `main`.
 
 ## Consumers
 
+For who can *read* the `AGENTS_APP_ID` / `AGENTS_APP_PRIVATE_KEY` secrets
+in the first place (a distinct gap from the App-permission narrowing this
+document covers), see `docs/runbooks/agents-app-secret-exposure.md`.
+
 ### MCTL App — the only legitimate uses
 
 | Consumer | Needs |
