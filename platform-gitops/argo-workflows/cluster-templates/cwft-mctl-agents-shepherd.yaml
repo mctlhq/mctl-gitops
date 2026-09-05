@@ -530,14 +530,19 @@ spec:
                 i += 1
                 status = _text(entry[:2])
                 path = _text(entry[3:])
-                if status[0] in ("R", "C"):
+                # Both status columns, matching cwft-mctl-agents-run and
+                # -investigate. A plain `mv` produces no rename entry at all
+                # (measured: `" D old"` + `"?? new"`), so the Y column is not
+                # reachable in practice here — but a missed pair would desync the
+                # NUL walk for every entry after it, and that fails silently.
+                if "R" in status or "C" in status:
                     if i >= len(fields):
                         sys.stderr.write("malformed rename entry: missing original path\n")
                         sys.exit(1)
                     original = _text(fields[i])
                     i += 1
                     # A rename removes the old path; a copy leaves it in place.
-                    if status[0] == "R":
+                    if "R" in status:
                         deletions.append(original)
                 src = os.path.join(ROOT, path)
                 if os.path.islink(src):
@@ -1286,12 +1291,22 @@ spec:
             SUBJECT="shepherd (all open PRs)"
           fi
           UI_URL="https://workflows.mctl.ai/workflows/argo-workflows/${WORKFLOW_NAME}"
-          TEXT="${ICON} mctl-agents: ${SUBJECT} — ${WORKFLOW_STATUS} (${WORKFLOW_DURATION}s)\n${UI_URL}"
+          # Built with printf so the separator is a REAL newline. It used to be
+          # a literal `\n` inside a double-quoted string, which worked only
+          # because the payload below was assembled by shell interpolation
+          # straight into a JSON string literal, where `\n` IS the escape.
+          # Encoding the body with jq (as it now is) escapes that backslash,
+          # so the message would have shown a literal `\n` instead of a line
+          # break — a regression introduced by the jq fix itself, caught in
+          # review (claude P2 on gitops#1048). cwft-mctl-agents-investigate's
+          # equivalent leg has always used printf for this reason.
+          TEXT=$(printf '%s mctl-agents: %s — %s (%ss)\n%s' \
+            "$ICON" "$SUBJECT" "$WORKFLOW_STATUS" "$WORKFLOW_DURATION" "$UI_URL")
           if [ -n "$WORKFLOW_DEGRADED_APPS" ]; then
             # The verify step writes either "kubectl-failed (rc=N)" or
             # the space-separated list of namespace/name pairs. Both
             # cases are operator-relevant — surface verbatim.
-            TEXT="${TEXT}\n⚠️ post-deploy-verify flagged: ${WORKFLOW_DEGRADED_APPS}"
+            TEXT=$(printf '%s\n⚠️ post-deploy-verify flagged: %s' "$TEXT" "$WORKFLOW_DEGRADED_APPS")
           fi
 
           # Telegram leg. Skip a Succeeded run that transitioned nothing —
