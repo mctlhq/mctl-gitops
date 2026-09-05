@@ -117,7 +117,7 @@ latest_release() {
     jq -r '[.tag_name, .published_at] | @tsv' <<<"$rel"
     return 0
   fi
-  tags=$(gh api "repos/$ORG/$repo/tags?per_page=100" --jq '.[].name' 2>/dev/null) || return 1
+  tags=$(gh api --paginate "repos/$ORG/$repo/tags?per_page=100" --jq '.[].name' 2>/dev/null) || return 1
   # Newest version wins, pre-release or not: a repo that only ever cuts
   # pre-releases is "released" at its newest one, and a stable tag sorts
   # above the pre-releases of the same version anyway.
@@ -250,6 +250,51 @@ labels:
 YAML
   out=$(image_block_fields "$fixture"); rm -f "$fixture"
   [ "$out" = $'ghcr.io/mctlhq/svc\t1.2.3' ] || { echo "self-test: image block parse got '$out'"; return 1; }
+  # latest_release: gh api --paginate is required to see tags past page 1. A
+  # fake gh stub simulates a repo with 105 tags where the newest, 9.9.9,
+  # only exists on page 2; without --paginate the tags call truncates at
+  # 100 and never sees it, so the best-tag scan would land on 0.0.100.
+  local ghstub; ghstub=$(mktemp -d)
+  cat >"$ghstub/gh" <<'GHSTUB'
+#!/usr/bin/env bash
+argstr="$*"
+jqexpr=""
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "--jq" ]; then
+    jqexpr="$a"
+  fi
+  prev="$a"
+done
+case "$argstr" in
+  *"releases/latest"*)
+    exit 1
+    ;;
+  *"commits/9.9.9"*)
+    json='{"commit":{"committer":{"date":"2026-08-01T00:00:00Z"}}}'
+    if [ -n "$jqexpr" ]; then
+      printf '%s' "$json" | jq -r "$jqexpr"
+    else
+      printf '%s' "$json"
+    fi
+    ;;
+  *"tags?per_page=100"*)
+    if [[ "$argstr" == *"--paginate"* ]]; then
+      for i in $(seq 1 104); do printf '0.0.%d\n' "$i"; done
+      echo "9.9.9"
+    else
+      for i in $(seq 1 100); do printf '0.0.%d\n' "$i"; done
+    fi
+    ;;
+  *)
+    exit 1
+    ;;
+esac
+GHSTUB
+  chmod +x "$ghstub/gh"
+  out=$(PATH="$ghstub:$PATH" latest_release "paginated-fixture") || out="<failed>"
+  rm -rf "$ghstub"
+  [ "$out" = $'9.9.9\t2026-08-01T00:00:00Z' ] || { echo "self-test: paginated tag lookup got '$out'"; return 1; }
   echo "self-test: ok"
 }
 
