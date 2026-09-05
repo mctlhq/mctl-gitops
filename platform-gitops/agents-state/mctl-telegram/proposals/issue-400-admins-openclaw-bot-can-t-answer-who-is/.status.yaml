@@ -1,5 +1,5 @@
-status: proposed
-updated_at: '2026-08-19T00:05:41Z'
+status: accepted
+updated_at: '2026-09-05T12:51:01Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -8,3 +8,6 @@ source:
   url: https://github.com/mctlhq/mctl-telegram/issues/400
 control:
   requires_human_approval: true
+approval:
+  approved_by: 'mashkovd'
+  approved_at: '2026-09-05T12:51:01Z'
