@@ -91,13 +91,25 @@ unreleased_from_compare() {
 # API's file list can be truncated or missing entirely, and defaulting an
 # unusable list to "nothing to worry about" would silently suppress a real
 # drift signal instead of falling back to today's subject-only behavior.
+# The compare API caps `.files` at 300 entries and gives no explicit
+# truncation flag, so a list AT the cap is indistinguishable from a longer
+# one that was cut off. Reading such a list to the end and concluding
+# "metadata-only" would suppress the drift signal for every file past the
+# 300th -- a 400-file diff whose first 300 happen to be under .github/ would
+# report clean. A list at the cap is therefore treated as unusable, the same
+# way an empty or absent one is.
+COMPARE_FILES_CAP=300
+
 is_metadata_only_diff() {
-  local p seen=0
+  local p seen=0 payload count
+  payload=$(cat)
+  count=$(jq -r '(.files | length?) // 0' <<<"$payload")
+  [ "$count" -ge "$COMPARE_FILES_CAP" ] && return 1
   while IFS= read -r p; do
     [ -z "$p" ] && continue
     seen=1
     is_metadata_path "$p" || return 1
-  done < <(jq -r '.files[]?.filename')
+  done < <(jq -r '.files[]?.filename' <<<"$payload")
   [ "$seen" -eq 1 ]
 }
 
@@ -281,6 +293,18 @@ JSON
     && { echo "self-test: empty files list should not be metadata-only"; return 1; }
   is_metadata_only_diff <<<'{"commits":[]}' \
     && { echo "self-test: missing files key should not be metadata-only"; return 1; }
+  # A files list at the API cap is truncation-indistinguishable: even when
+  # every entry read IS metadata, the unread remainder is unknown.
+  local capped
+  capped=$(jq -nc --argjson n "$COMPARE_FILES_CAP" \
+    '{files: [range($n) | {filename: ".github/workflows/w\(.).yml"}]}')
+  is_metadata_only_diff <<<"$capped" \
+    && { echo "self-test: a files list at the $COMPARE_FILES_CAP cap should not be metadata-only"; return 1; }
+  local under_cap
+  under_cap=$(jq -nc --argjson n "$((COMPARE_FILES_CAP - 1))" \
+    '{files: [range($n) | {filename: ".github/workflows/w\(.).yml"}]}')
+  is_metadata_only_diff <<<"$under_cap" \
+    || { echo "self-test: a metadata-only list below the cap should still be metadata-only"; return 1; }
   # Image block parser: only the top-level image: block, not a sidecar's
   # repository/tag or a tag: key under another mapping.
   local fixture; fixture=$(mktemp)
