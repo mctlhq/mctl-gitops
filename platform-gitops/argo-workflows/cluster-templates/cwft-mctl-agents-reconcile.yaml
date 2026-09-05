@@ -447,47 +447,32 @@ spec:
             echo "no handed-off status updates"
           fi
 
-          # clone-gitops chowns /workdir to uid 1000 (the mctl-agents image
-          # USER, SOC F8). This container runs as root, so git's
-          # dubious-ownership check would otherwise refuse the repo — the
-          # first local `git config` then dies with "fatal: not in a git
-          # directory" (incident 2026-08-14 23:02, hourly shepherd failures).
-          git config --global --add safe.directory /workdir/mctl-gitops
+          # No `safe.directory` here, deliberately. That line existed because
+          # the SHARED clone step chowned /workdir to uid 1000 for the agent,
+          # leaving this root container facing git's dubious-ownership refusal
+          # (incident 2026-08-14 23:02). #677 replaced that with the
+          # initContainer above: it clones as root into this pod's own
+          # emptyDir, the script container is root too, so the ownership check
+          # passes on its own and stays armed. The comment survived the change
+          # and described a chown that no longer happens.
           cd /workdir/mctl-gitops
           git config user.name "mctl-agents[bot]"
           git config user.email "mctl-agents[bot]@users.noreply.github.com"
 
           # Stage only .status.yaml updates under agents-state. Anything else
           # changed there is NOT what this workflow should push — fail loudly.
+          # The scan still covers the WHOLE repository rather than just
+          # agents-state/, because the old agents-state/-anchored pathspec
+          # could not see a change anywhere else in the repo (agy P1 on #982).
           #
-          # `git reset` first, and scan the WHOLE repository rather than just
-          # agents-state/ — see cwft-mctl-agents-investigate.yaml for why both
-          # are load-bearing (agy P1 on gitops#982). The agent shares this
-          # worktree and holds Bash: `git commit` commits the index, so
-          # anything it staged itself rides along regardless of what this step
-          # adds, and the old agents-state/-anchored pathspec could not see a
-          # change anywhere else in the repo.
-          # Reset to origin/main — the tip this pod CLONED — before the
-          # guard. Two things this is not, both learned by getting it wrong
-          # on gitops#982:
-          #
-          #  - Not a bare `git reset`. That rewinds the index to HEAD, and
-          #    the agent can `git commit` in this worktree itself, moving
-          #    HEAD; its commit would then look like clean history and ride
-          #    along on `git push HEAD:main` (agy P1, round 2).
-          #  - Not a freshly fetched remote tip. main is written constantly
-          #    (image bumps), and an agent run lasts up to two hours, so
-          #    resetting the index forward to a tip this worktree never
-          #    checked out makes every file changed upstream meanwhile show
-          #    as a local modification — tripping the guard and throwing away
-          #    the run's legitimate work (agy P2, round 3; reproduced).
-          #
-          # origin/main is set at clone time and no fetch here moves it, so it
-          # is exactly the pod's own starting point: agent commits unwind into
-          # the worktree where the guard sees them, and upstream movement is
-          # invisible. The push loop below still rebases onto whatever main
-          # has become.
-          git reset -q origin/main
+          # No `git reset -q origin/main` before it, though. That existed to
+          # unwind what the SDK agent might have staged or committed in a
+          # worktree it SHARED with this step — the reasoning that made it
+          # neither a bare `git reset` nor a fresh fetch. Since #677 this pod
+          # clones for itself and the agent never touches this checkout: the
+          # index is at origin/main already, nothing is staged, and the reset
+          # was a no-op whose comment claimed a hazard the template no longer
+          # has.
           NON_STATUS_CHANGES="$(git status --porcelain -- ':(exclude,glob)platform-gitops/agents-state/**/.status.yaml')"
           if [ -n "$NON_STATUS_CHANGES" ]; then
             echo "❌ Refusing to commit changes outside .status.yaml files under platform-gitops/agents-state/:" >&2
