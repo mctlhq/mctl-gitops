@@ -48,7 +48,6 @@ AGENT_TEMPLATES = (
     "cwft-mctl-agents-reconcile.yaml",
     "cwft-mctl-agents-implement.yaml",
     "cwft-mctl-agents-investigate.yaml",
-    "cwft-mctl-agents-issue-poll.yaml",
     "cwft-mctl-agents-run.yaml",
     "cwft-mctl-agents-shepherd.yaml",
 )
