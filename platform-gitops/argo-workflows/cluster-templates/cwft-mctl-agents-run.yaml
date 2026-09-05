@@ -658,7 +658,14 @@ spec:
           if [ -s /artifact/deleted.lst ]; then
             while IFS= read -r rel; do
               [ -n "$rel" ] || continue
-              git rm -q --ignore-unmatch -- "$rel"
+              # `:(literal)` is load-bearing: without it $rel is a git
+              # PATHSPEC, so a filename carrying `*`, `?` or `[...]` globs
+              # instead of matching itself. Reproduced — `git rm` on a path
+              # named `a*.md` also removed the neighbouring `a.md`. The
+              # OUT_OF_SCOPE guard below cannot catch that, because it
+              # deliberately EXCLUDES agents-state from its check, so the
+              # over-deletion would be committed silently (claude P1 on #1046).
+              git rm -q --ignore-unmatch -- ":(literal)$rel"
               echo "removed ${rel}"
             done < /artifact/deleted.lst
           fi
