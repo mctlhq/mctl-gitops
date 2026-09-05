@@ -4,15 +4,23 @@ metadata:
   name: mctl-agents-run
   annotations:
     workflows.argoproj.io/description: |
-      Cluster-wide template for the mctl-agents pipeline. Three steps run
-      sequentially through a 1Gi PVC `workdir`:
-        1. clone-gitops — SSH-clone mctl-gitops via the shared deploy key
-        2. run-orchestrator — ghcr.io/mctlhq/mctl-agents:<tag> with
+      Cluster-wide template for the mctl-agents pipeline. There is no shared
+      volume: each pod SSH-clones mctl-gitops for itself in an initContainer,
+      and cross-step state travels as an Argo artifact.
+        1. run-orchestrator — ghcr.io/mctlhq/mctl-agents:<tag> with
            STATE_DIR pointing at agents-state/. RUN_MODE / RUN_SERVICE env
            vars (from workflow parameters) tell the Python orchestrator
-           whether to do full / mentor-only / single-service.
-        3. commit-and-push — commit any agents-state diff, push to main
-           with rebase-on-conflict (5 retries).
+           whether to do full / mentor-only / single-service. Retried once on
+           a second OAuth account; both attempts write the same artifact key.
+           The artifact carries `tree/` (files to add or update) and
+           `deleted.lst` (paths to remove) — deletions have to travel
+           explicitly because the consumer overlays onto a fresh clone.
+        2. commit-and-push — takes its OWN clone, applies the handoff, and
+           pushes to main with rebase-on-conflict (5 retries). It never
+           touches the worktree the agent held (gitops#983 P1).
+
+      See the "No PVC" note on spec.volumes for what that replaced
+      (mctl-gitops#856).
 
       Triggered by:
         - cron via CronWorkflow `mctl-agents-daily` (mode=full, weekly Sat 00:00 UTC)
@@ -216,8 +224,8 @@ spec:
               chown -R 1000:1000 /workdir
               echo "✓ gitops cloned"
           resources:
-            requests: { cpu: 50m, memory: 64Mi }
-            limits:   { cpu: 500m, memory: 256Mi }
+            requests: { cpu: 50m, memory: 64Mi, ephemeral-storage: 1Gi }
+            limits:   { cpu: 500m, memory: 256Mi, ephemeral-storage: 2Gi }
           volumeMounts:
             - name: workdir
               mountPath: /workdir
@@ -290,48 +298,87 @@ spec:
 
             ROOT = "/workdir/mctl-gitops"
             OUT = "/tmp/state-out"
+            TREE = os.path.join(OUT, "tree")
+            DELETED = os.path.join(OUT, "deleted.lst")
             ALLOWED = re.compile(r"^platform-gitops/agents-state/.+")
+            PATHSPEC = "platform-gitops/agents-state/"
             rc = int(sys.argv[1])
 
-            # Cleared HERE, after the orchestrator has exited, and owned by this script
-            # alone: it runs as a child of this shell in this same container and could
-            # otherwise leave a directory behind that Argo would upload as the handoff.
-            # The invariant is stated once — this directory exists at exit if and only if
-            # the loop below put something in it.
+            # Cleared HERE, after the agent has exited, and owned by this script alone.
+            # The agent holds Bash in this container, so a reset before it ran would let
+            # it plant a directory that Argo then uploads as the handoff. The invariant is
+            # stated once: this directory exists at exit iff this script filled it.
             shutil.rmtree(OUT, ignore_errors=True)
 
             raw = subprocess.run(
-                ["git", "-C", ROOT, "status", "--porcelain=v1", "-z", "-uall", "--",
-                 "platform-gitops/agents-state/"],
+                ["git", "-C", ROOT, "status", "--porcelain=v1", "-z", "-uall", "--", PATHSPEC],
                 capture_output=True, check=True).stdout
 
-            paths = [e[3:].decode("utf-8", "surrogateescape") for e in raw.split(b"\x00") if e]
-            if not paths:
-                print("no agents-state changes to hand off")
-                sys.exit(rc)
+
+            def _text(b):
+                return b.decode("utf-8", "surrogateescape")
+
+
+            # porcelain -z is NOT one record per NUL-separated field. A rename or copy is
+            # emitted as `XY new\0old\0` — the status prefix is on the FIRST field only, so
+            # slicing [3:] off every field chops three real characters off the old path
+            # (claude P2 on #1046). Walk the fields with an index and consume the extra one.
+            fields = [f for f in raw.split(b"\x00") if f != b""]
+            copies, deletions = [], []
+            i = 0
+            while i < len(fields):
+                entry = fields[i]
+                i += 1
+                status = _text(entry[:2])
+                path = _text(entry[3:])
+                if status[0] in ("R", "C"):
+                    if i >= len(fields):
+                        sys.stderr.write("malformed rename entry: missing original path\n")
+                        sys.exit(1)
+                    original = _text(fields[i])
+                    i += 1
+                    # A rename removes the old path; a copy leaves it in place.
+                    if status[0] == "R":
+                        deletions.append(original)
+                src = os.path.join(ROOT, path)
+                if os.path.islink(src):
+                    print("skipping %s (symlink)" % path)
+                    continue
+                # A path git reports that no longer exists on disk is a DELETION, and it
+                # has to travel too: commit-and-push lays this handoff over a fresh clone,
+                # which is purely additive, so a removal the agent made would otherwise
+                # never reach main (claude P1 on #1046).
+                (copies if os.path.isfile(src) else deletions).append(path)
 
             bad = [
-                p for p in paths
-                if not ALLOWED.match(p)
-                or ".." in p.split("/")
-                or any(c in p for c in "\n\r\t")
+                p for p in copies + deletions
+                if not ALLOWED.match(p) or ".." in p.split("/") or any(c in p for c in "\n\r\t")
             ]
             if bad:
-                sys.stderr.write("refusing to hand off paths outside agents-state:\n")
+                sys.stderr.write("refusing to hand off paths outside the allowed subtree:\n")
                 for p in bad:
                     sys.stderr.write("  %r\n" % p)
                 sys.exit(1)
 
-            os.makedirs(OUT, exist_ok=True)
-            for rel in paths:
-                src = os.path.join(ROOT, rel)
-                if os.path.islink(src) or not os.path.isfile(src):
-                    print("skipping %s (not a regular file)" % rel)
-                    continue
-                dst = os.path.join(OUT, rel)
+            if not copies and not deletions:
+                print("nothing to hand off")
+                sys.exit(rc)
+
+            os.makedirs(TREE, exist_ok=True)
+            for rel in copies:
+                dst = os.path.join(TREE, rel)
                 os.makedirs(os.path.dirname(dst), exist_ok=True)
-                shutil.copy2(src, dst)
+                shutil.copy2(os.path.join(ROOT, rel), dst)
                 print("handing off %s" % rel)
+
+            # Newline-separated is unambiguous here precisely because the check above
+            # already refused any path carrying a control character.
+            if deletions:
+                with open(DELETED, "w", encoding="utf-8") as fh:
+                    for rel in deletions:
+                        fh.write(rel + "\n")
+                        print("handing off DELETION of %s" % rel)
+
             sys.exit(rc)
             COLLECT
         env:
@@ -408,8 +455,8 @@ spec:
           - name: INCIDENT_RESPONDER_MODEL
             value: "claude-haiku-4-5"
         resources:
-          requests: { cpu: 200m, memory: 512Mi }
-          limits:   { cpu: 2000m, memory: 2Gi }
+          requests: { cpu: 200m, memory: 512Mi, ephemeral-storage: 1Gi }
+          limits:   { cpu: 2000m, memory: 2Gi, ephemeral-storage: 2Gi }
         volumeMounts:
           - name: workdir
             mountPath: /workdir
@@ -468,8 +515,8 @@ spec:
               mkdir -p /workdir/mctl-gitops/platform-gitops/agents-state
               echo "✓ gitops cloned (fresh checkout, never touched by the agent)"
           resources:
-            requests: { cpu: 50m, memory: 64Mi }
-            limits:   { cpu: 500m, memory: 256Mi }
+            requests: { cpu: 50m, memory: 64Mi, ephemeral-storage: 1Gi }
+            limits:   { cpu: 500m, memory: 256Mi, ephemeral-storage: 2Gi }
           volumeMounts:
             - name: workdir
               mountPath: /workdir
@@ -557,7 +604,9 @@ spec:
           # Nothing was handed off. `optional: true` on the input makes a missing
           # object a clean skip rather than a step failure, so this is the normal
           # path when the attempt produced no agents-state changes.
-          if [ ! -d /artifact ] || [ -z "$(find /artifact -type f -print -quit)" ]; then
+          if [ ! -d /artifact ] \
+             || { [ -z "$(find /artifact/tree -type f -print -quit 2>/dev/null)" ] \
+                  && [ ! -s /artifact/deleted.lst ]; }; then
             echo "ℹ️  No agents-state changes handed off — nothing to commit."
             exit 0
           fi
@@ -572,14 +621,40 @@ spec:
             find /artifact -mindepth 1 ! -type d ! -type f >&2
             exit 1
           fi
-          BAD="$(cd /artifact && find . -type f | sed 's|^\./||' | grep -vE '^platform-gitops/agents-state/' || true)"
+          BAD="$(cd /artifact/tree 2>/dev/null && find . -type f | sed 's|^\./||' | grep -vE '^platform-gitops/agents-state/' || true)"
           if [ -n "$BAD" ]; then
             echo "❌ Refusing a handoff with paths outside platform-gitops/agents-state/:" >&2
             printf '%s\n' "$BAD" >&2
             exit 1
           fi
-          mkdir -p /workdir/mctl-gitops/platform-gitops/agents-state
-          cp -a /artifact/platform-gitops/agents-state/. /workdir/mctl-gitops/platform-gitops/agents-state/
+          # The deletion list gets the SAME check. Newline-separated is
+          # unambiguous only because the collector refuses any path carrying a
+          # control character before writing this file.
+          if [ -s /artifact/deleted.lst ]; then
+            BAD_DEL="$(grep -vE '^platform-gitops/agents-state/' /artifact/deleted.lst || true)"
+            if [ -n "$BAD_DEL" ]; then
+              echo "❌ Refusing a deletion list with paths outside platform-gitops/agents-state/:" >&2
+              printf '%s\n' "$BAD_DEL" >&2
+              exit 1
+            fi
+          fi
+
+          if [ -d /artifact/tree/platform-gitops/agents-state ]; then
+            mkdir -p /workdir/mctl-gitops/platform-gitops/agents-state
+            cp -a /artifact/tree/platform-gitops/agents-state/. /workdir/mctl-gitops/platform-gitops/agents-state/
+          fi
+          # Deletions must be applied explicitly: the copy above overlays onto
+          # a FRESH clone and is purely additive, so a path the orchestrator
+          # removed would otherwise stay on main forever (claude P1 on #1046).
+          # --ignore-unmatch because a path already absent from main is a
+          # no-op, not an error.
+          if [ -s /artifact/deleted.lst ]; then
+            while IFS= read -r rel; do
+              [ -n "$rel" ] || continue
+              git rm -q --ignore-unmatch -- "$rel"
+              echo "removed ${rel}"
+            done < /artifact/deleted.lst
+          fi
 
           # Second layer, on the checkout: the same expression the PVC era used, but
           # now against a pristine clone holding only what the copy above laid down.
@@ -625,6 +700,14 @@ spec:
           done
           echo "❌ Push failed after 5 attempts"
           exit 1
+        # No resources were declared on this step at all until now — it was
+        # unbounded on cpu and memory as well as on disk. ephemeral-storage
+        # is the one that matters here: the workdir is an emptyDir, so an
+        # unaccounted pod can pack onto a node beside vault and shared-pg and
+        # push it into DiskPressure.
+        resources:
+          requests: { cpu: 50m, memory: 64Mi, ephemeral-storage: 1Gi }
+          limits:   { cpu: 500m, memory: 256Mi, ephemeral-storage: 2Gi }
         volumeMounts:
           - name: workdir
             mountPath: /workdir
