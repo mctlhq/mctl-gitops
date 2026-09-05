@@ -1,0 +1,160 @@
+name: Approve a reviewer self-edit PR
+
+# A pull request that edits `.github/workflows/claude-review.yml` cannot
+# be reviewed by claude[bot]. `claude-code-action` runs only when the
+# workflow file that invoked it is identical to the copy on the default
+# branch — deliberately, so that a pull request cannot rewrite its own
+# reviewer — so on such a PR it refuses and no verdict is ever submitted.
+#
+# In this repository that is a dead end rather than an inconvenience. `main`
+# requires one approving review; the `main-protection` ruleset carries no
+# admin bypass, deliberately, since 2026-08-25; and GitHub refuses to let an
+# author approve their own pull request. With a single account holding write
+# access, the three conditions leave no legal path to merge.
+#
+# The escape used on #1060 was to drop `required_approving_review_count` to 0,
+# merge, and put it back. That works, and it removes review protection from
+# `main` for everyone and for every change during the window — to land a
+# two-line pin bump. This workflow replaces it with something narrower: an
+# approving review, from the mctl-agents App, on one named pull request, only
+# when that pull request is provably in the dead end described above.
+#
+# It is a bypass and is not dressed up as review. What it buys over the ruleset
+# window is that protection is never lifted, the approval is attributable and
+# recorded on the pull request, and the guards below make it inapplicable to
+# anything except the case it exists for.
+#
+# The mctl-agents App is already a bypass actor on `main-protection`, so it
+# could merge such a PR outright. Approving instead is the point: an approval
+# is a row in the PR's review history that says who asked and why, where a
+# bypassed merge says nothing at all.
+#
+# It does not, and must not, override a verdict. A CHANGES_REQUESTED
+# review from claude[bot] still blocks the merge — an extra approval does
+# not clear one — so this cannot be used to wave through a change a
+# reviewer objected to.
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number
+        required: true
+        type: string
+      reason:
+        description: Why this needs to merge (recorded in the review body)
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  approve:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+
+    steps:
+      - name: Verify the PR is exactly a reviewer self-edit
+        id: verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ inputs.pr }}
+        run: |
+          set -euo pipefail
+
+          state=$(gh pr view "$PR" --repo "$REPO" --json state -q .state)
+          if [ "$state" != "OPEN" ]; then
+            echo "::error::PR #$PR is $state."
+            exit 1
+          fi
+
+          head_sha=$(gh pr view "$PR" --repo "$REPO" --json headRefOid -q .headRefOid)
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+
+          # Guard 1 — the whole diff is the reviewer's own entry workflow.
+          # This is what keeps the workflow from becoming a general-purpose
+          # bypass: a PR carrying so much as one manifest line alongside the
+          # workflow edit is refused, and prod manifests are the reason `main`
+          # is protected in the first place.
+          files=$(gh pr view "$PR" --repo "$REPO" --json files -q '.files[].path' | sort)
+          if [ "$files" != ".github/workflows/claude-review.yml" ]; then
+            echo "::error::PR #$PR changes more than the reviewer workflow:"
+            printf '%s\n' "$files"
+            exit 1
+          fi
+
+          # Guard 2 — the refusal actually happened for THIS commit. Read it
+          # from the run log rather than from a PR comment or a check
+          # conclusion: the log line comes from the action itself and is
+          # therefore true regardless of which revision of the shared
+          # reviewer workflow this repository happens to be pinned to.
+          runs=$(gh api \
+            "repos/$REPO/actions/workflows/claude-review.yml/runs?head_sha=$head_sha&status=completed" \
+            -q '.workflow_runs[].id')
+          if [ -z "$runs" ]; then
+            echo "::error::no completed claude-review run for $head_sha."
+            exit 1
+          fi
+
+          found=false
+          for id in $runs; do
+            # No pipe into grep: under pipefail an early `grep -q` exit can
+            # SIGPIPE the producer and turn a hit into a failed pipeline.
+            gh run view "$id" --repo "$REPO" --log > "run-$id.log" 2>/dev/null || continue
+            if grep -qF "Skipping action due to workflow validation" "run-$id.log"; then
+              found=true
+              echo "run_url=$GITHUB_SERVER_URL/$REPO/actions/runs/$id" >> "$GITHUB_OUTPUT"
+              break
+            fi
+          done
+
+          if [ "$found" != "true" ]; then
+            echo "::error::claude-review ran for $head_sha without hitting the workflow-validation refusal — this PR is not in the dead end this workflow exists for."
+            exit 1
+          fi
+
+      # Least privilege on both axes: pull-requests only, this repository only.
+      # Same App as the other automation here, for the reason spelled out in
+      # gitops-bump.yaml — the user-facing MCTL App must not gain this.
+      - name: Generate GitHub App token
+        id: app_token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        with:
+          app-id: ${{ secrets.AGENTS_APP_ID }}
+          private-key: ${{ secrets.AGENTS_APP_PRIVATE_KEY }}
+          owner: mctlhq
+          repositories: mctl-gitops
+          permission-pull-requests: write
+
+      - name: Approve
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ inputs.pr }}
+          HEAD_SHA: ${{ steps.verify.outputs.head_sha }}
+          RUN_URL: ${{ steps.verify.outputs.run_url }}
+          REASON: ${{ inputs.reason }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+
+          body=$(printf '%s\n' \
+            "Approved to unblock a reviewer self-edit: this PR changes only" \
+            "\`.github/workflows/claude-review.yml\`, so \`claude-code-action\` refused to" \
+            "run on it ([run]($RUN_URL)) and no verdict from \`claude[bot]\` is possible." \
+            "" \
+            "Requested by @$ACTOR: $REASON" \
+            "" \
+            "This is a bypass, not a review. It does not override a verdict — a" \
+            "CHANGES_REQUESTED review still blocks the merge.")
+
+          # Bound to the commit that was verified above: a later push both
+          # dismisses this approval and invalidates the evidence for it.
+          gh api "repos/$REPO/pulls/$PR/reviews" --method POST \
+            -f commit_id="$HEAD_SHA" \
+            -f event="APPROVE" \
+            -f body="$body"
