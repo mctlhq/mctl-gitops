@@ -57,6 +57,17 @@ is_releasable_subject() {
   [[ "$1" =~ $RELEASABLE_RE ]] || [[ "$1" =~ $BREAKING_RE ]]
 }
 
+# A path that can never affect what a service ships: repo/CI metadata only.
+# Deliberately tiny (see requirements.md) -- docs/**, README*, and other
+# config paths are excluded on purpose so they keep surfacing as drift.
+is_metadata_path() {
+  case "$1" in
+    .github/*) return 0 ;;
+    CLAUDE.md) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # stdin: the GitHub compare payload for <tag>...main.
 # stdout: "<count>\t<oldest-releasable-commit-date-or-empty>".
 unreleased_from_compare() {
@@ -71,6 +82,23 @@ unreleased_from_compare() {
     fi
   done < <(jq -r '.commits[]? | [.commit.committer.date, (.commit.message | split("\n")[0])] | @tsv')
   printf '%s\t%s\n' "$count" "$oldest"
+}
+
+# stdin: the same GitHub compare payload for <tag>...main already used by
+# unreleased_from_compare. Success iff the aggregate changed-path set is
+# non-empty and every path in it is a metadata path. An empty or absent
+# `files` list is treated as NOT metadata-only (fail safe): the compare
+# API's file list can be truncated or missing entirely, and defaulting an
+# unusable list to "nothing to worry about" would silently suppress a real
+# drift signal instead of falling back to today's subject-only behavior.
+is_metadata_only_diff() {
+  local p seen=0
+  while IFS= read -r p; do
+    [ -z "$p" ] && continue
+    seen=1
+    is_metadata_path "$p" || return 1
+  done < <(jq -r '.files[]?.filename')
+  [ "$seen" -eq 1 ]
 }
 
 # "<path>\t<image-repo>\t<tag>" for every values.yaml under SERVICES_DIR whose
@@ -174,20 +202,24 @@ check_image() {
     rp_run="n/a"
   fi
 
-  local verdict="" now
+  local verdict="" metadata_note="" now
   now=$(now_epoch)
   if [ "$rp_run" = "failure" ]; then
     verdict="RELEASE_PLEASE_FAILED"
   fi
   if [ "$count" -gt 0 ] && [ $((now - $(to_epoch "$oldest"))) -gt $((RELEASE_LAG_HOURS * 3600)) ]; then
-    verdict="${verdict:+$verdict,}UNRELEASED_${count}_commits_since_${oldest}"
+    if is_metadata_only_diff <<<"$cmp"; then
+      metadata_note="ok: metadata-only changes (${count} commits since ${oldest})"
+    else
+      verdict="${verdict:+$verdict,}UNRELEASED_${count}_commits_since_${oldest}"
+    fi
   fi
   if [ "$(strip_v "$deployed")" != "$(strip_v "$released")" ] \
      && [ $((now - $(to_epoch "$released_at"))) -gt $((DEPLOY_LAG_HOURS * 3600)) ]; then
     verdict="${verdict:+$verdict,}NOT_DEPLOYED_released_${released}_pinned_${deployed}"
   fi
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$path" "$repo" "$deployed" "$released" "$released_at" "$count" "${oldest:--}" "$rp_run" "${verdict:-ok}"
+    "$path" "$repo" "$deployed" "$released" "$released_at" "$count" "${oldest:--}" "$rp_run" "${verdict:-${metadata_note:-ok}}"
 }
 
 report() {
@@ -199,7 +231,7 @@ report() {
   while IFS=$'\t' read -r path repo deployed released released_at count oldest rp verdict; do
     line="| \`${path#$SERVICES_DIR/}\` | $repo | $deployed | $released | $count | $rp | $verdict |"
     echo "$line" | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
-    case "$verdict" in ok|skip:*) ;; *) failed=1; echo "::error::$repo: $verdict ($path)";; esac
+    case "$verdict" in ok|ok:*|skip:*) ;; *) failed=1; echo "::error::$repo: $verdict ($path)";; esac
   done < <(pinned_images | while IFS=$'\t' read -r p r t; do check_image "$p" "$r" "$t"; done)
   return $failed
 }
@@ -232,6 +264,23 @@ JSON
   [ "$out" = $'2\t2026-09-03T18:35:00Z' ] || { echo "self-test: compare classification got '$out'"; return 1; }
   out=$(unreleased_from_compare <<<'{"commits":[]}')
   [ "$out" = $'0\t' ] || { echo "self-test: empty compare got '$out'"; return 1; }
+  # Metadata paths: repo/CI-only paths, deliberately not docs/README/source.
+  for p in ".github/workflows/x.yml" "CLAUDE.md"; do
+    is_metadata_path "$p" || { echo "self-test: '$p' should be a metadata path"; return 1; }
+  done
+  for p in "docs/api/index.md" "README.md" "src/app.py"; do
+    is_metadata_path "$p" && { echo "self-test: '$p' should not be a metadata path"; return 1; }
+  done
+  # Aggregate-diff classifier: metadata-only, one runtime file added, and
+  # the fail-safe cases (empty/missing files list).
+  is_metadata_only_diff <<<'{"files":[{"filename":".github/workflows/claude-review.yml"},{"filename":"CLAUDE.md"}]}' \
+    || { echo "self-test: .github/** + CLAUDE.md should be metadata-only"; return 1; }
+  is_metadata_only_diff <<<'{"files":[{"filename":".github/workflows/claude-review.yml"},{"filename":"CLAUDE.md"},{"filename":"src/app.py"}]}' \
+    && { echo "self-test: adding src/app.py should not be metadata-only"; return 1; }
+  is_metadata_only_diff <<<'{"files":[]}' \
+    && { echo "self-test: empty files list should not be metadata-only"; return 1; }
+  is_metadata_only_diff <<<'{"commits":[]}' \
+    && { echo "self-test: missing files key should not be metadata-only"; return 1; }
   # Image block parser: only the top-level image: block, not a sidecar's
   # repository/tag or a tag: key under another mapping.
   local fixture; fixture=$(mktemp)
