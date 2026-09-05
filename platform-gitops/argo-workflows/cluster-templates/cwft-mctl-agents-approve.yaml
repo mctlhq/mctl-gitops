@@ -164,8 +164,8 @@ spec:
               git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops
               echo "✓ gitops cloned"
           resources:
-            requests: { cpu: 50m, memory: 64Mi }
-            limits:   { cpu: 500m, memory: 256Mi }
+            requests: { cpu: 50m, memory: 64Mi, ephemeral-storage: 1Gi }
+            limits:   { cpu: 500m, memory: 256Mi, ephemeral-storage: 2Gi }
           volumeMounts:
             - name: workdir
               mountPath: /workdir
@@ -283,8 +283,8 @@ spec:
           echo "✅ ${WORKFLOW_SERVICE}/${WORKFLOW_SLUG}: proposed → accepted (by ${APPROVER_SAFE})" >&2
           echo -n "flipped"
         resources:
-          requests: { cpu: 50m, memory: 64Mi }
-          limits:   { cpu: 200m, memory: 256Mi }
+          requests: { cpu: 50m, memory: 64Mi, ephemeral-storage: 1Gi }
+          limits:   { cpu: 200m, memory: 256Mi, ephemeral-storage: 2Gi }
         volumeMounts:
           - name: workdir
             mountPath: /workdir
@@ -344,8 +344,8 @@ spec:
               git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops
               echo "✓ gitops cloned"
           resources:
-            requests: { cpu: 50m, memory: 64Mi }
-            limits:   { cpu: 500m, memory: 256Mi }
+            requests: { cpu: 50m, memory: 64Mi, ephemeral-storage: 1Gi }
+            limits:   { cpu: 500m, memory: 256Mi, ephemeral-storage: 2Gi }
           volumeMounts:
             - name: workdir
               mountPath: /workdir
@@ -476,8 +476,8 @@ spec:
           echo "❌ Push failed after 5 attempts"
           exit 1
         resources:
-          requests: { cpu: 50m, memory: 128Mi }
-          limits:   { cpu: 500m, memory: 512Mi }
+          requests: { cpu: 50m, memory: 128Mi, ephemeral-storage: 1Gi }
+          limits:   { cpu: 500m, memory: 512Mi, ephemeral-storage: 2Gi }
         volumeMounts:
           - name: workdir
             mountPath: /workdir
