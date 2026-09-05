@@ -36,10 +36,23 @@ def mismatches(directory: Path):
     keys are present and disagree."""
     for path in sorted(directory.glob(GLOB)):
         doc = yaml.safe_load(path.read_text())
-        if not doc:
+        # `or {}` guards None but not a wrong TYPE: a values.yaml whose root is
+        # a list, or whose `image`/`env` is a string or a list, parses fine and
+        # then raises AttributeError on .get(). That would not fail this one
+        # tenant -- it would crash the whole run, and this check is wired into
+        # `Validate Manifests`, which is a required check AND (since the
+        # push: [main] trigger) also runs on main. One malformed tenant file
+        # would therefore block every pull request in the repo.
+        #
+        # A shape this check does not understand is out of scope for it, the
+        # same way a file with only one of the two keys is: skip, do not crash,
+        # and leave schema validation to kubeconform in the same workflow.
+        if not isinstance(doc, dict):
             continue
-        image_tag = (doc.get("image") or {}).get("tag")
-        openclaw_version = (doc.get("env") or {}).get("OPENCLAW_VERSION")
+        image = doc.get("image")
+        env = doc.get("env")
+        image_tag = image.get("tag") if isinstance(image, dict) else None
+        openclaw_version = env.get("OPENCLAW_VERSION") if isinstance(env, dict) else None
         if image_tag is None or openclaw_version is None:
             # Only one of the two keys present is out of scope for this check.
             continue
@@ -63,7 +76,23 @@ def selftest() -> int:
         root = Path(d)
         _write_tenant(root, "matched", "2026.7.11-beta.2", "2026.7.11-beta.2")
         _write_tenant(root, "drifted", "2026.7.11-beta.2", "2026.5.14-beta.1")
-        found = list(mismatches(root / "platform-gitops/services"))
+        # Malformed shapes must be skipped, not crash the run. Each of these
+        # raised AttributeError before the isinstance guards above.
+        for team, body in (
+            ("str-image", 'image: "ghcr.io/mctlhq/mctl-openclaw:1.2.3"\nenv:\n  OPENCLAW_VERSION: "1.2.3"\n'),
+            ("list-env", 'image:\n  tag: "1.2.3"\nenv:\n  - name: OPENCLAW_VERSION\n'),
+            ("list-root", '- image:\n    tag: "1.2.3"\n'),
+            ("str-root", "just-a-string\n"),
+        ):
+            d_ = root / "platform-gitops/services" / team / "openclaw"
+            d_.mkdir(parents=True)
+            (d_ / "values.yaml").write_text(body)
+
+        try:
+            found = list(mismatches(root / "platform-gitops/services"))
+        except AttributeError as exc:
+            print(f"selftest FAIL: malformed tenant crashed the scan: {exc}", file=sys.stderr)
+            return 1
 
     if len(found) != 1:
         print(f"selftest FAIL: expected exactly one mismatch, got {found}", file=sys.stderr)
@@ -76,7 +105,10 @@ def selftest() -> int:
         print(f"selftest FAIL: wrong values reported: {image_tag} / {openclaw_version}", file=sys.stderr)
         return 1
 
-    print("selftest OK: detector fires on a mismatched tenant, stays quiet on a matched one")
+    print(
+        "selftest OK: detector fires on a mismatched tenant, stays quiet on a "
+        "matched one, and skips malformed ones without crashing"
+    )
     return 0
 
 
