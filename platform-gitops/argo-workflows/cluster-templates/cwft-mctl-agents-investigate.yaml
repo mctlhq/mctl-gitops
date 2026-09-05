@@ -419,14 +419,21 @@ spec:
                 i += 1
                 status = _text(entry[:2])
                 path = _text(entry[3:])
-                if status[0] in ("R", "C"):
+                # Both status columns, not just the index one. A plain `mv` does NOT
+                # produce a rename entry at all — measured on git 2.50: it comes back as
+                # `" D old"` plus `"?? new"`, because pairing needs both sides in the
+                # index and the new path is untracked. That case is already handled
+                # correctly below (the missing file becomes a deletion, the untracked one
+                # a copy). Matching Y as well costs nothing and removes the need to be
+                # right about which column a rename can appear in.
+                if "R" in status or "C" in status:
                     if i >= len(fields):
                         sys.stderr.write("malformed rename entry: missing original path\n")
                         sys.exit(1)
                     original = _text(fields[i])
                     i += 1
                     # A rename removes the old path; a copy leaves it in place.
-                    if status[0] == "R":
+                    if "R" in status:
                         deletions.append(original)
                 src = os.path.join(ROOT, path)
                 if os.path.islink(src):
