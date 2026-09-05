@@ -78,15 +78,20 @@ spec:
         # consumed by the orchestrator. Left blank by any caller not yet
         # using the registry.
 
-  volumeClaimTemplates:
-    - metadata:
-        name: workdir
-      spec:
-        accessModes: ["ReadWriteOnce"]
-        resources:
-          requests:
-            storage: 1Gi
+  # ── No PVC ──────────────────────────────────────────────────────────────
+  # Was a 1Gi `volumeClaimTemplates` entry. This template runs 24x/day — more
+  # than every other agent workflow combined — so it was the single largest
+  # source of Hetzner attach/detach cycles, and the wedge risk those carry is
+  # per-run rather than per-gigabyte (mctl-gitops#856). Hetzner also rounds any
+  # request up to its 10Gi minimum, so the declared 1Gi bought nothing.
+  #
+  # Each pod now clones for itself and cross-step state travels as an Argo
+  # artifact. sizeLimit because, unlike a PVC, emptyDir counts toward
+  # kubelet's ephemeral-storage accounting.
   volumes:
+    - name: workdir
+      emptyDir:
+        sizeLimit: 1Gi
     - name: deploy-key
       secret:
         secretName: mctl-gitops-deploy-key
@@ -95,8 +100,8 @@ spec:
   templates:
     - name: run-agents
       steps:
-        - - name: clone
-            template: clone-gitops
+        # No `clone` step: with emptyDir there is no shared volume for one
+        # step to clone into on another's behalf.
         - - name: run
             template: run-orchestrator
             arguments:
@@ -146,53 +151,78 @@ spec:
                 - name: fallback
                   value: "{{steps.run-fallback.status}}"
 
-    # ── 1. SSH-clone mctl-gitops into shared volume ───────────────────────
-    - name: clone-gitops
-      script:
-        image: alpine/git:2.43.0
-        command: [sh]
-        source: |
-          set -e
-          apk add --no-cache openssh-client ca-certificates
-          mkdir -p ~/.ssh
-          cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
-          # GitHub's published SSH host keys, PINNED rather than trusted on
-          # first use. Source: https://api.github.com/meta (.ssh_keys),
-          # fetched 2026-09-02. This replaces StrictHostKeyChecking=no,
-          # which accepted whatever key answered on a connection that
-          # carries a WRITE-capable deploy key: a MITM or a DNS-poison of
-          # ssh.github.com was handed that key with no complaint.
-          #
-          # Keyed on [ssh.github.com]:443, not github.com. The Host block
-          # above rewrites hostname and port, and ssh looks up what it
-          # actually connects to — a github.com entry would silently miss.
-          #
-          # If GitHub rotates a host key these lines must be updated; it
-          # last happened in March 2023, when the RSA key was replaced.
-          cat > ~/.ssh/known_hosts <<'GITHUB_HOST_KEYS'
-          [ssh.github.com]:443 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
-          [ssh.github.com]:443 ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=
-          [ssh.github.com]:443 ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=
-          GITHUB_HOST_KEYS
-          chmod 600 ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/config
-          git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops
-          mkdir -p /workdir/mctl-gitops/platform-gitops/agents-state
-          # uid 1000 is the mctl-agents image USER (SOC F8). This clone step
-          # runs as root in alpine/git; without the handoff the next step
-          # cannot write STATE_DIR.
-          chown -R 1000:1000 /workdir
-          echo "✓ gitops cloned"
-        volumeMounts:
-          - name: workdir
-            mountPath: /workdir
-          - name: deploy-key
-            mountPath: /secrets/deploy-key
 
     # ── 2. Run mctl-agents orchestrator with state mounted ────────────────
     - name: run-orchestrator
+      outputs:
+        artifacts:
+          # Whatever under agents-state THIS attempt changed, at repo-relative
+          # paths. Replaces the shared workdir PVC as the channel to
+          # commit-and-push.
+          #
+          # Fixed, workflow-scoped S3 key rather than Argo's default per-pod
+          # key, and commit-and-push reads that literal key instead of
+          # `{{steps.<step>.outputs.artifacts.changes}}`: exactly one of the
+          # primary/fallback pair is skipped on every happy run, and a
+          # reference to a skipped step does not resolve. Both attempts write
+          # this one key, so there is no step reference to break; when both
+          # run the fallback goes second and wins.
+          #
+          # `optional: true` with the directory created only once there is
+          # something to put in it, so an attempt that produced nothing
+          # uploads nothing and leaves a previous attempt's object intact.
+          - name: changes
+            path: /tmp/state-out
+            optional: true
+            s3:
+              key: "{{workflow.name}}/agents-state.tgz"
+      initContainers:
+        - name: clone-gitops
+          image: alpine/git:2.43.0
+          command: [sh, -c]
+          args:
+            - |
+              set -e
+              apk add --no-cache openssh-client ca-certificates
+              mkdir -p ~/.ssh
+              cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
+              chmod 600 ~/.ssh/id_ed25519
+              printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
+              # GitHub's published SSH host keys, PINNED rather than trusted on
+              # first use. Source: https://api.github.com/meta (.ssh_keys),
+              # fetched 2026-09-02. This replaces StrictHostKeyChecking=no,
+              # which accepted whatever key answered on a connection that
+              # carries a WRITE-capable deploy key: a MITM or a DNS-poison of
+              # ssh.github.com was handed that key with no complaint.
+              #
+              # Keyed on [ssh.github.com]:443, not github.com. The Host block
+              # above rewrites hostname and port, and ssh looks up what it
+              # actually connects to — a github.com entry would silently miss.
+              #
+              # If GitHub rotates a host key these lines must be updated; it
+              # last happened in March 2023, when the RSA key was replaced.
+              cat > ~/.ssh/known_hosts <<'GITHUB_HOST_KEYS'
+              [ssh.github.com]:443 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
+              [ssh.github.com]:443 ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=
+              [ssh.github.com]:443 ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=
+              GITHUB_HOST_KEYS
+              chmod 600 ~/.ssh/known_hosts
+              chmod 600 ~/.ssh/config
+              git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops
+              mkdir -p /workdir/mctl-gitops/platform-gitops/agents-state
+              # uid 1000 is the mctl-agents image USER (SOC F8). This clone step
+              # runs as root in alpine/git; without the handoff the next step
+              # cannot write STATE_DIR.
+              chown -R 1000:1000 /workdir
+              echo "✓ gitops cloned"
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits:   { cpu: 500m, memory: 256Mi }
+          volumeMounts:
+            - name: workdir
+              mountPath: /workdir
+            - name: deploy-key
+              mountPath: /secrets/deploy-key
       inputs:
         parameters:
           # Which Vault key under mctl-agents-secrets holds the OAuth token for
@@ -228,7 +258,82 @@ spec:
               fi
               echo "↻ Primary attempt did not succeed — retrying on fallback OAuth token (account 2)."
             fi
-            exec python -m orchestrator.run_all
+                        # Deliberately NOT `exec`, and deliberately not fatal — the same
+                        # shape as run-reconcile and run-investigator. The orchestrator
+                        # writes state under agents-state before any later failure path,
+                        # and that work must still reach main. It used to fall out of
+                        # `continueOn` plus a shared PVC; with an artifact handoff this
+                        # script collects the files itself before exiting, so the exit
+                        # code is captured and re-raised at the end.
+                        set +e
+                        python -m orchestrator.run_all
+                        RC=$?
+                        set -e
+                        echo "orchestrator exited ${RC}"
+
+                        # Collect exactly what commit-and-push may push.
+                        #
+                        # Parsed in Python, NOT in the shell. `git status -z` emits paths
+                        # RAW, so a directory name carrying a literal newline splits a
+                        # `tr` + `cut -c4-` pipeline into two entries and the second is
+                        # attacker-chosen — the path-smuggling hole found on #1042. The
+                        # SDK agent holds Bash in this worktree, so such a name is
+                        # reachable. Splitting on NUL in Python has no such ambiguity, and
+                        # a path outside agents-state, containing `..`, or carrying a
+                        # control character is FATAL rather than skipped.
+                        python - "$RC" <<'COLLECT'
+            import os
+            import re
+            import shutil
+            import subprocess
+            import sys
+
+            ROOT = "/workdir/mctl-gitops"
+            OUT = "/tmp/state-out"
+            ALLOWED = re.compile(r"^platform-gitops/agents-state/.+")
+            rc = int(sys.argv[1])
+
+            # Cleared HERE, after the orchestrator has exited, and owned by this script
+            # alone: it runs as a child of this shell in this same container and could
+            # otherwise leave a directory behind that Argo would upload as the handoff.
+            # The invariant is stated once — this directory exists at exit if and only if
+            # the loop below put something in it.
+            shutil.rmtree(OUT, ignore_errors=True)
+
+            raw = subprocess.run(
+                ["git", "-C", ROOT, "status", "--porcelain=v1", "-z", "-uall", "--",
+                 "platform-gitops/agents-state/"],
+                capture_output=True, check=True).stdout
+
+            paths = [e[3:].decode("utf-8", "surrogateescape") for e in raw.split(b"\x00") if e]
+            if not paths:
+                print("no agents-state changes to hand off")
+                sys.exit(rc)
+
+            bad = [
+                p for p in paths
+                if not ALLOWED.match(p)
+                or ".." in p.split("/")
+                or any(c in p for c in "\n\r\t")
+            ]
+            if bad:
+                sys.stderr.write("refusing to hand off paths outside agents-state:\n")
+                for p in bad:
+                    sys.stderr.write("  %r\n" % p)
+                sys.exit(1)
+
+            os.makedirs(OUT, exist_ok=True)
+            for rel in paths:
+                src = os.path.join(ROOT, rel)
+                if os.path.islink(src) or not os.path.isfile(src):
+                    print("skipping %s (not a regular file)" % rel)
+                    continue
+                dst = os.path.join(OUT, rel)
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                shutil.copy2(src, dst)
+                print("handing off %s" % rel)
+            sys.exit(rc)
+            COLLECT
         env:
           - name: IS_FALLBACK
             value: "{{inputs.parameters.is-fallback}}"
@@ -311,6 +416,65 @@ spec:
 
     # ── 3. Commit & push back to mctl-gitops ──────────────────────────────
     - name: commit-and-push
+      inputs:
+        artifacts:
+          # The agents-state files whichever attempt ran handed off, unpacked
+          # here and copied over this pod's OWN fresh clone.
+          #
+          # Addressed by literal S3 key, not by
+          # `{{steps.run.outputs.artifacts.changes}}`: one of the
+          # primary/fallback pair is always skipped and a reference to a
+          # skipped step does not resolve. `optional: true` covers the case
+          # where neither attempt uploaded anything — the script treats an
+          # absent or empty handoff as a clean no-op.
+          - name: changes
+            path: /artifact
+            optional: true
+            s3:
+              key: "{{workflow.name}}/agents-state.tgz"
+      initContainers:
+        - name: clone-gitops
+          image: alpine/git:2.43.0
+          command: [sh, -c]
+          args:
+            - |
+              set -e
+              apk add --no-cache openssh-client ca-certificates
+              mkdir -p ~/.ssh
+              cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
+              chmod 600 ~/.ssh/id_ed25519
+              printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
+              # GitHub's published SSH host keys, PINNED rather than trusted on
+              # first use. Source: https://api.github.com/meta (.ssh_keys),
+              # fetched 2026-09-02. This replaces StrictHostKeyChecking=no,
+              # which accepted whatever key answered on a connection that
+              # carries a WRITE-capable deploy key: a MITM or a DNS-poison of
+              # ssh.github.com was handed that key with no complaint.
+              #
+              # Keyed on [ssh.github.com]:443, not github.com. The Host block
+              # above rewrites hostname and port, and ssh looks up what it
+              # actually connects to — a github.com entry would silently miss.
+              #
+              # If GitHub rotates a host key these lines must be updated; it
+              # last happened in March 2023, when the RSA key was replaced.
+              cat > ~/.ssh/known_hosts <<'GITHUB_HOST_KEYS'
+              [ssh.github.com]:443 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
+              [ssh.github.com]:443 ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=
+              [ssh.github.com]:443 ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=
+              GITHUB_HOST_KEYS
+              chmod 600 ~/.ssh/known_hosts
+              chmod 600 ~/.ssh/config
+              git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops
+              mkdir -p /workdir/mctl-gitops/platform-gitops/agents-state
+              echo "✓ gitops cloned (fresh checkout, never touched by the agent)"
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits:   { cpu: 500m, memory: 256Mi }
+          volumeMounts:
+            - name: workdir
+              mountPath: /workdir
+            - name: deploy-key
+              mountPath: /secrets/deploy-key
       # Serialize with every other workflow that pushes to mctl-gitops main
       # (wft-delete-tenant, the other mctl-agents templates). Same mutex name
       # so they share one lock.
@@ -376,46 +540,52 @@ spec:
           chmod 600 ~/.ssh/known_hosts
           chmod 600 ~/.ssh/config
 
-          # clone-gitops chowns /workdir to uid 1000 (the mctl-agents image
-          # USER, SOC F8). This container runs as root, so git's
-          # dubious-ownership check would otherwise refuse the repo — the
-          # first local `git config` then dies with "fatal: not in a git
-          # directory" (incident 2026-08-14 23:02, hourly shepherd failures).
-          git config --global --add safe.directory /workdir/mctl-gitops
+          # This worktree came from THIS pod's own initContainer clone, so nothing
+          # has touched it. That is the point (gitops#983 P1): git executes
+          # repository-supplied config and hooks, this container runs as root, and
+          # the write-capable deploy key is mounted here — running git inside the
+          # agent's worktree put a root-privileged push one planted hook away.
+          #
+          # It also lets `safe.directory` go: that line existed only because the old
+          # clone step chowned /workdir to uid 1000 for the agent (incident
+          # 2026-08-14 23:02). Nothing chowns this checkout, so git's ownership
+          # check stays armed instead of being switched off.
           cd /workdir/mctl-gitops
           git config user.name "mctl-agents[bot]"
           git config user.email "mctl-agents[bot]@users.noreply.github.com"
 
-          # Stage only agents-state. "git add <dir>" alone is NOT enough to
-          # make that true: `git commit` commits the INDEX, and the agent
-          # shares this worktree with Bash, so anything it staged itself
-          # rides along. Clear the index first, then refuse outright if the
-          # worktree carries a change outside agents-state/ — this template
-          # legitimately writes digests and inbox files, so its allowed set
-          # is the whole subtree, unlike the proposal-scoped guards in
-          # cwft-mctl-agents-investigate.yaml (agy P1 on gitops#982).
-          # Reset to origin/main — the tip this pod CLONED — before the
-          # guard. Two things this is not, both learned by getting it wrong
-          # on gitops#982:
-          #
-          #  - Not a bare `git reset`. That rewinds the index to HEAD, and
-          #    the agent can `git commit` in this worktree itself, moving
-          #    HEAD; its commit would then look like clean history and ride
-          #    along on `git push HEAD:main` (agy P1, round 2).
-          #  - Not a freshly fetched remote tip. main is written constantly
-          #    (image bumps), and an agent run lasts up to two hours, so
-          #    resetting the index forward to a tip this worktree never
-          #    checked out makes every file changed upstream meanwhile show
-          #    as a local modification — tripping the guard and throwing away
-          #    the run's legitimate work (agy P2, round 3; reproduced).
-          #
-          # origin/main is set at clone time and no fetch here moves it, so it
-          # is exactly the pod's own starting point: agent commits unwind into
-          # the worktree where the guard sees them, and upstream movement is
-          # invisible. The push loop below still rebases onto whatever main
-          # has become.
-          git reset -q origin/main
-          OUT_OF_SCOPE="$(git status --porcelain -- ':(exclude)platform-gitops/agents-state/')"
+          # Nothing was handed off. `optional: true` on the input makes a missing
+          # object a clean skip rather than a step failure, so this is the normal
+          # path when the attempt produced no agents-state changes.
+          if [ ! -d /artifact ] || [ -z "$(find /artifact -type f -print -quit)" ]; then
+            echo "ℹ️  No agents-state changes handed off — nothing to commit."
+            exit 0
+          fi
+
+          # Validate the handoff BEFORE any of it touches the checkout. This, not the
+          # git-status guard below, is the boundary that matters: `git status` cannot
+          # see inside `.git/`, so a file smuggled to `.git/hooks/pre-commit` or
+          # `.git/config` would be invisible to it and would then run as root with the
+          # deploy key mounted, on the very next git command (agy P1 on #1042).
+          if [ -n "$(find /artifact -mindepth 1 ! -type d ! -type f -print -quit)" ]; then
+            echo "❌ Refusing a handoff containing a symlink or special file:" >&2
+            find /artifact -mindepth 1 ! -type d ! -type f >&2
+            exit 1
+          fi
+          BAD="$(cd /artifact && find . -type f | sed 's|^\./||' | grep -vE '^platform-gitops/agents-state/' || true)"
+          if [ -n "$BAD" ]; then
+            echo "❌ Refusing a handoff with paths outside platform-gitops/agents-state/:" >&2
+            printf '%s\n' "$BAD" >&2
+            exit 1
+          fi
+          mkdir -p /workdir/mctl-gitops/platform-gitops/agents-state
+          cp -a /artifact/platform-gitops/agents-state/. /workdir/mctl-gitops/platform-gitops/agents-state/
+
+          # Second layer, on the checkout: the same expression the PVC era used, but
+          # now against a pristine clone holding only what the copy above laid down.
+          # No index to clear and no agent commit to unwind, so `git reset -q
+          # origin/main` and its whole rationale go with it.
+          OUT_OF_SCOPE="$(git status --porcelain -z -uall -- ':(exclude)platform-gitops/agents-state/' | tr '\0' '\n' | cut -c4-)"
           if [ -n "$OUT_OF_SCOPE" ]; then
             echo "❌ Refusing to commit changes outside platform-gitops/agents-state/:" >&2
             printf '%s\n' "$OUT_OF_SCOPE" >&2
