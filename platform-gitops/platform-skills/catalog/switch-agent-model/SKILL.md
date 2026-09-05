@@ -18,8 +18,10 @@ Example: `/switch-agent-model claude-sonnet-6`
    ```
 2. Classifies each hit:
    - **Live runtime code** — verify it's actually wired in before editing
-     (reverse-import grep). Editing an
-     unimported file has zero runtime effect and just adds noise to the diff.
+     (reverse-import grep). Editing an unimported file has zero runtime
+     effect and just adds noise to the diff — but a file you skip on those
+     grounds must be reported in the PR body (see step 5), not skipped
+     silently.
    - **CI review-bot tiering** (`claude-review.yml`'s "Classify PR
      complexity and pick model" step) — collapse to the new model and delete
      the classify step, unless told to preserve tiering.
@@ -38,8 +40,11 @@ Example: `/switch-agent-model claude-sonnet-6`
    branch name.
 4. Posts `@claude review` and watches both PRs with `review-watch` instead
    of polling manually.
-5. Re-runs the verification grep to confirm no stale model strings remain
-   anywhere in either repo.
+5. Re-runs the verification grep. Every remaining hit must be justified,
+   and the only admissible justification is the step-2 one: the file is
+   unimported dead code. There is no standing carve-out list any more — if
+   a hit survives, name the file and its reverse-import evidence in the PR
+   body, so the next run inherits a decision rather than a silent skip.
 
 ## Tiering removal — CI review bot
 
@@ -91,7 +96,10 @@ found (`grep -n "_MODEL=" .env`) and tell them what to change by hand.
 grep -rn "<old-model-id-patterns>" mctl-agent mctl-agents \
   --include="*.go" --include="*.py" --include="*.yml" --include="*.yaml" --include="*.example"
 ```
-There should be no remaining hits — every match must show the new model ID. Each PR's own `@claude review`
+Every match must show the new model ID, with one admissible exception:
+a file that step 2 classified as unimported dead code. Such a hit is not a
+failure, but it must be named explicitly in the PR body together with the
+reverse-import grep that proves it dead — an unexplained remaining hit is. Each PR's own `@claude review`
 run exercises the newly-edited `claude_args` path live — a successful bot
 review is de facto proof the workflow YAML is valid and the model ID is
 accepted.
