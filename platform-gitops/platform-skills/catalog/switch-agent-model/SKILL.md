@@ -19,9 +19,17 @@ Example: `/switch-agent-model claude-sonnet-6`
 2. Classifies each hit:
    - **Live runtime code** — verify it's actually wired in before editing
      (reverse-import grep). Editing an unimported file has zero runtime
-     effect and just adds noise to the diff — but a file you skip on those
-     grounds must be reported in the PR body (see step 5), not skipped
-     silently.
+     effect and just adds noise to the diff.
+
+     **The reverse-import grep does not judge two kinds of file**, because
+     nothing imports them by design: **entrypoints** (Go `main` packages,
+     executable `run_*.py`, anything a CWFT or Dockerfile invokes directly)
+     and **tests** (`*_test.go`, `tests/test_*.py`). A zero-importer result
+     there means nothing — always update them. Reach for the heuristic only
+     for a library-shaped file that claims to be imported and isn't.
+
+     A file you do skip on dead-code grounds must be appended to the
+     carve-out list below in the same PR (see step 5), not skipped silently.
    - **CI review-bot tiering** (`claude-review.yml`'s "Classify PR
      complexity and pick model" step) — collapse to the new model and delete
      the classify step, unless told to preserve tiering.
@@ -42,9 +50,31 @@ Example: `/switch-agent-model claude-sonnet-6`
    of polling manually.
 5. Re-runs the verification grep. Every remaining hit must be justified,
    and the only admissible justification is the step-2 one: the file is
-   unimported dead code. There is no standing carve-out list any more — if
-   a hit survives, name the file and its reverse-import evidence in the PR
-   body, so the next run inherits a decision rather than a silent skip.
+   unimported dead code, and it is neither an entrypoint nor a test. Record
+   such a file in the **carve-out list in this document** — a note in the PR
+   body does not carry: a future run reads `SKILL.md` and the codebase, it
+   does not dig through closed PRs. If the list is empty, no hit may
+   survive.
+
+## Dead-code carve-out list
+
+Files that carry a model ID, are genuinely unimported, and are neither an
+entrypoint nor a test. A migration may leave these on the old model; anything
+not listed here must be updated.
+
+**The list is currently empty.** `mctl-agent/internal/diagnosis/analyzer.go`
+used to be its sole entry and was deleted outright in mctl-agent#123, so today
+every model-ID hit in either repo is live and must change.
+
+When you add an entry, record the reverse-import grep that proved it dead, so
+the next run can re-verify the claim instead of trusting it:
+
+```
+grep -rln "<import path>" <repo> --include="*.go"
+```
+
+If that ever comes back non-empty, the file is no longer dead — drop it from
+this list and edit it like any other live file.
 
 ## Tiering removal — CI review bot
 
@@ -96,10 +126,10 @@ found (`grep -n "_MODEL=" .env`) and tell them what to change by hand.
 grep -rn "<old-model-id-patterns>" mctl-agent mctl-agents \
   --include="*.go" --include="*.py" --include="*.yml" --include="*.yaml" --include="*.example"
 ```
-Every match must show the new model ID, with one admissible exception:
-a file that step 2 classified as unimported dead code. Such a hit is not a
-failure, but it must be named explicitly in the PR body together with the
-reverse-import grep that proves it dead — an unexplained remaining hit is. Each PR's own `@claude review`
+Every match must show the new model ID, with one admissible exception: a file
+listed in the carve-out section above. A hit that is dead code but *not* yet
+listed is not a pass — add it to the list in this same PR, with the
+reverse-import grep that proves it dead. An unexplained remaining hit fails. Each PR's own `@claude review`
 run exercises the newly-edited `claude_args` path live — a successful bot
 review is de facto proof the workflow YAML is valid and the model ID is
 accepted.
