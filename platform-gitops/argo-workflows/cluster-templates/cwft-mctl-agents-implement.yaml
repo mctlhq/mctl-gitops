@@ -92,10 +92,21 @@ spec:
         accessModes: ["ReadWriteOnce"]
         resources:
           requests:
-            # Bigger than cwft-mctl-agents-run because the implementer also
-            # gh-clones each target sibling repo into /tmp inside the same pod.
-            # Worst case: ~10 sibling clones × ~500 MB = 5 GiB.
-            storage: 8Gi
+            # 10Gi because that is what Hetzner provisions regardless — its CSI
+            # rounds ANY request up to a 10Gi minimum. Confirmed live on
+            # 2026-09-04: five concurrent investigations each showed `10Gi` in
+            # `kubectl get pvc` against the 4Gi their template requested.
+            #
+            # This is the last agent template still on a PVC (mctl-gitops#1047);
+            # every other one is on emptyDir. Declaring 8Gi changed nothing
+            # about what was created and only made the manifest describe a
+            # volume that never existed, so the number is corrected to the real
+            # one rather than left as a smaller-looking fiction.
+            #
+            # Sizing rationale, unchanged and still the reason 10Gi is not
+            # generous: the implementer gh-clones each target sibling repo into
+            # /tmp inside the same pod — worst case ~10 clones × ~500 MB.
+            storage: 10Gi
   volumes:
     - name: deploy-key
       secret:
