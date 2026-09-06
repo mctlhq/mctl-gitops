@@ -21,7 +21,18 @@ spec:
               # optimizer needs a 14-day observation window to compute
               # right-sizing recommendations directly from VM history
               # (its own SQLite/PG rollups only accumulate going forward).
-              retentionPeriod: "14d"
+              #
+              # Raised 14d→28d on 2026-09-06: mctl-telegram's rolling-28d
+              # compliance SLIs (vm-rules/mctl-telegram-slo.yaml) feed the
+              # error-budget merge-freeze policy in that repo's docs/slo.md.
+              # Raw samples beyond retention are dropped, so at 14d those
+              # rules could never see more than half their window and the
+              # "rolling-28-day SLI" would have been a <=14-day one forever —
+              # an incident would age out of the budget two weeks early and
+              # the freeze could lift while the budget was still spent.
+              # Measured before raising: 4.2G used of 24.5G at 14d, so ~8.4G
+              # at 28d on the existing 25Gi volume. No resize needed.
+              retentionPeriod: "28d"
               resources:
                 requests:
                   cpu: 100m
@@ -422,6 +433,27 @@ spec:
                   - receiver: telegram
                     matchers:
                       - alertname =~ "NodeCordoned|K3sUpgradeJobFailed"
+                  # SLO fast-burn alerts are the "page" tier of the Beta SLOs
+                  # (mctl-telegram docs/slo.md): the error budget is being
+                  # consumed 14.4x faster than the objective allows. mctl-agent
+                  # cannot remediate a burning budget — the response is a human
+                  # deciding whether to roll back, and the error-budget policy's
+                  # merge freeze — so these go to Telegram. continue: true,
+                  # PLUS the three alertnames added to the mctl-agent catch-all
+                  # below, so the incident is still raised. Both halves are
+                  # required: continue: true alone only lets sibling routes be
+                  # evaluated, it does not re-enable the root default receiver
+                  # (which fires only when no child route matched at all). The
+                  # ArgoCD platform-app route above works for exactly that
+                  # reason — the catch-all names it explicitly.
+                  #
+                  # The SlowBurn siblings are deliberately absent: they are
+                  # ticket-severity in the SLO doc and are meant to be picked up
+                  # in working hours, not to wake anyone.
+                  - receiver: telegram
+                    continue: true
+                    matchers:
+                      - alertname =~ "MctlTelegramToolAvailabilityFastBurn|MctlTelegramOAuthAvailabilityFastBurn|MctlTelegramSessionBorrowFastBurn"
                   # Local Argo workdirs are node-affine. These need an operator
                   # to restore the worker or terminate and rerun the workflow.
                   - receiver: telegram
@@ -433,7 +465,7 @@ spec:
                       - namespace = "monitoring"
                   - receiver: mctl-agent
                     matchers:
-                      - alertname =~ "PodCrashLooping|KubePodCrashLooping|KubePodNotReady|PodNotReady|TenantCPUQuotaHigh|TenantMemoryQuotaHigh|ArgoWorkflowFailed|ArgoWorkflowHighFailureRate|CPUThrottlingHigh|KubeJobNotCompleted|KubePersistentVolumeFillingUp|KubeStatefulSetReplicasMismatch|NodeHighCPU|NodeHighMemory|NodeLowMemoryAvailable|NodeDiskPressure|NodeDiskSpaceHigh|VaultSealed|MinioBucketUsageHigh|MinioBucketUsageCritical|ArgoCDApplicationDegraded|ArgoCDApplicationOutOfSyncLong|OpenclawCodexTokenRefreshFailed|MctlTelegramCanary.*"
+                      - alertname =~ "PodCrashLooping|KubePodCrashLooping|KubePodNotReady|PodNotReady|TenantCPUQuotaHigh|TenantMemoryQuotaHigh|ArgoWorkflowFailed|ArgoWorkflowHighFailureRate|CPUThrottlingHigh|KubeJobNotCompleted|KubePersistentVolumeFillingUp|KubeStatefulSetReplicasMismatch|NodeHighCPU|NodeHighMemory|NodeLowMemoryAvailable|NodeDiskPressure|NodeDiskSpaceHigh|VaultSealed|MinioBucketUsageHigh|MinioBucketUsageCritical|ArgoCDApplicationDegraded|ArgoCDApplicationOutOfSyncLong|OpenclawCodexTokenRefreshFailed|MctlTelegramCanary.*|MctlTelegramToolAvailabilityFastBurn|MctlTelegramOAuthAvailabilityFastBurn|MctlTelegramSessionBorrowFastBurn"
               receivers:
                 - name: "null"
                 - name: mctl-agent
