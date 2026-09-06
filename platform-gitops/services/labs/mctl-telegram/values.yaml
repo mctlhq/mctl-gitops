@@ -122,6 +122,16 @@ env:
   # ALLOW_SEND is true globally.
   DEMO_REVIEWER_ENABLED: "false"
   DEMO_REVIEWER_TG_ID: "8745115872"
+# Downward-API identity for the mctl_telegram_replica_id info gauge. The
+# service resolves replica_id as REPLICA_ID > POD_NAME > "unknown"
+# (internal/config/config.go), so without this the gauge is published with
+# replica_id="unknown" and cannot tell one replica's series from another's.
+# Harmless at the current replicaCount of 1; it is a prerequisite for reading
+# anything at all once mctl-telegram runs more than one pod.
+envValueFrom:
+  POD_NAME:
+    fieldRef:
+      fieldPath: metadata.name
 ingress:
   enabled: true
   hosts:
