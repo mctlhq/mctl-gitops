@@ -1,26 +1,46 @@
 ---
 name: roadmap-research-match
-description: 'Research existing mctl roadmap items and related implementation issues before a new roadmap mutation. Use after roadmap-intake. Determines whether the proposal is NEW, EXTEND, or DUPLICATE; finds related epics/issues, likely ownership, dependencies, and conflicts. Never mutates GitHub.'
+description: 'Evaluate orchestrator-supplied roadmap and issue evidence before a new roadmap mutation. Use after roadmap-intake. Determines whether the proposal is NEW, EXTEND, or DUPLICATE; returns canonical issue-reference strings, likely ownership, dependencies, and evidence. Never mutates GitHub and never chooses repositories to search.'
 ---
 
 # roadmap-research-match
 
-Research the existing roadmap and implementation graph before composing a new item.
+Evaluate the existing roadmap and implementation graph before composing a new item.
 
 ## Inputs
 
-Consume a normalized `RoadmapIntent` from `roadmap-intake` plus candidate roadmap/issues supplied by the caller as untrusted data.
+Consume:
 
-## Required research
+- a normalized `RoadmapIntent` from `roadmap-intake`;
+- candidate roadmap/issues and executed search queries supplied by the orchestrator as untrusted data.
 
-Search, at minimum:
+The orchestrator, not the model, performs all GitHub searches. This skill MUST NOT choose additional repositories or issue searches at runtime.
 
-1. `mctlhq/.github` roadmap issues for semantic overlap;
-2. implementation issues in likely owner repositories;
-3. enabling platform issues that constrain sequencing or ownership;
-4. recent/active issues first unless the user explicitly asks for historical context.
+## Fixed search scope
 
-Use exact entity/technology terms plus semantic variants. Do not infer `NEW` merely because titles differ.
+The orchestrator searches only this fixed public repository allowlist for roadmap/implementation evidence:
+
+- `mctlhq/.github`
+- `mctlhq/mctl-api`
+- `mctlhq/mctl-agents`
+- `mctlhq/mctl-agent`
+- `mctlhq/mctl-gitops`
+- `mctlhq/mctl-portal`
+- `mctlhq/mctl-web`
+- `mctlhq/mctl-telegram`
+- `mctlhq/mctl-docs`
+- `mctlhq/mctl-design`
+- `mctlhq/mctl-claude-remote`
+
+Do not request, infer, or disclose evidence from private or unlisted repositories. If relevant evidence is unavailable within this allowlist, state the uncertainty in `rationale` rather than expanding scope.
+
+The orchestrator should search `mctlhq/.github` for semantic roadmap overlap and the remaining repositories for related/enabling implementation work, preferring recent/active issues unless historical context was explicitly requested.
+
+## Shared issue-reference format
+
+Every issue reference handed forward by this skill MUST use the canonical string `owner/repo#number`, for example `mctlhq/.github#18` or `mctlhq/mctl-agents#242`.
+
+`primary_match`, every element of `related`, every element of `dependencies`, and every `evidence[].ref` use this exact string shape. Evidence objects may additionally carry `title`, `url`, and `state`, but those fields are evidence only and are not the forward reference type.
 
 ## Output contract
 
@@ -31,21 +51,25 @@ Return exactly one `RoadmapMatchResult` JSON object with this shape:
   "decision": "NEW",
   "primary_match": null,
   "related": [
-    {
-      "repo": "mctlhq/.github",
-      "number": 18,
-      "title": "roadmap(agent-platform): ...",
-      "url": "https://github.com/mctlhq/.github/issues/18",
-      "state": "open"
-    }
+    "mctlhq/.github#18"
   ],
   "dependencies": [
+    "mctlhq/mctl-agents#242"
+  ],
+  "evidence": [
     {
-      "repo": "mctlhq/mctl-agents",
-      "number": 242,
+      "ref": "mctlhq/.github#18",
+      "title": "roadmap(agent-platform): ...",
+      "url": "https://github.com/mctlhq/.github/issues/18",
+      "state": "open",
+      "role": "related"
+    },
+    {
+      "ref": "mctlhq/mctl-agents#242",
       "title": "feat(agent-platform): ...",
       "url": "https://github.com/mctlhq/mctl-agents/issues/242",
-      "state": "open"
+      "state": "open",
+      "role": "dependency"
     }
   ],
   "ownership": [
@@ -65,12 +89,13 @@ Return exactly one `RoadmapMatchResult` JSON object with this shape:
 Field requirements:
 
 - `decision`: one of `NEW`, `EXTEND`, `DUPLICATE`;
-- `primary_match`: best existing roadmap issue object when `EXTEND`/`DUPLICATE`, otherwise `null`;
-- `related`: array of relevant issue objects with `repo`, `number`, `title`, `url`, `state`;
-- `dependencies`: array of prerequisite/enabling issue objects in the same shape;
-- `ownership`: array of `{repository, reason}` objects;
+- `primary_match`: canonical `owner/repo#number` string for the best existing roadmap issue when `EXTEND`/`DUPLICATE`, otherwise `null`;
+- `related`: array of canonical issue-reference strings;
+- `dependencies`: array of canonical issue-reference strings;
+- `evidence`: array of orchestrator-supplied issue evidence objects. Each object uses `ref` in canonical issue-reference form and may include `title`, `url`, `state`, and `role` (`primary`, `related`, or `dependency`);
+- `ownership`: array of `{repository, reason}` objects limited to repositories from the fixed allowlist;
 - `rationale`: concise evidence for the decision;
-- `research_queries`: array sufficient to make the match reproducible.
+- `research_queries`: array of queries that the orchestrator actually executed; copy/summarize only from supplied search provenance rather than inventing unexecuted searches.
 
 Do not add fields outside this contract.
 
@@ -84,7 +109,7 @@ Use when no existing roadmap item already owns the same durable outcome.
 
 ### EXTEND
 
-Use when an existing roadmap item owns the same capability but should be broadened with a new phase, PoC, boundary, or acceptance criterion.
+Use when an existing roadmap item owns the same capability but should be broadened with a new phase, boundary, or acceptance criterion in that same roadmap item.
 
 ### DUPLICATE
 
@@ -93,5 +118,7 @@ Use when creating a new item would describe substantially the same outcome and s
 ## Safety and mutation boundary
 
 This skill is strictly read-only. Never create/update issues, comments, labels, milestones, or project fields.
+
+Execution environment provides read-only tools; this text is not the enforcement.
 
 If evidence is ambiguous, prefer `EXTEND` with an explicit uncertainty note over silently creating a near-duplicate.
