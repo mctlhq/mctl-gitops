@@ -1,0 +1,275 @@
+# Beta SLO recording rules and multi-window burn-rate alerts for
+# mctl-telegram.
+#
+# Source of truth for the objectives, windows, multipliers and the
+# error-budget policy is docs/slo.md in mctlhq/mctl-telegram:
+# https://github.com/mctlhq/mctl-telegram/blob/main/docs/slo.md
+#
+# This file is the DEPLOYED form of those alerts. mctl-telegram also carries
+# deploy/alerts/mctl-telegram.rules.yaml, which is a PrometheusRule and is not
+# reconciled by anything: the cluster runs the VictoriaMetrics operator, whose
+# rule CRD is VMRule (kube-prometheus-stack is deployed with prometheus
+# disabled, operator kept for CRDs only). That file stays in the source repo as
+# a non-deployed reference for the alerts NOT ported here; see
+# mctlhq/mctl-telegram#546.
+#
+# What is ported: the three burn-rate SLOs (MCP tool availability, OAuth
+# token-endpoint availability, session-borrow success) plus the recording
+# rules their SLIs need. What is deliberately NOT ported: the pool-capacity,
+# flood-wait, OAuth-pending, Local Bridge and communication-agent alerts that
+# also sit in that file — those are not SLO burn rates, are not deployed
+# anywhere today, and wiring them is a separate decision.
+#
+# Metric provenance (every series below was checked against the registrations
+# in mctl-telegram internal/metrics/metrics.go, not against the source YAML):
+#   mctl_tool_invocations_total{tool,status}          metrics.go New() — status is "ok"|"error"
+#   mctl_http_requests_total{method,route,status_code} metrics.go New() — route is the chi
+#                                                      pattern; /oauth/token and
+#                                                      /oauth/telegram/callback are registered
+#                                                      as exact routes in oauth.Server.Register,
+#                                                      on the same mux that carries
+#                                                      m.HTTPMiddleware()
+#   mctl_sessions_borrow_total{result}                 metrics.go New() — result is
+#                                                      "ok"|"error"|"expired_idle"|"expired_absolute"
+#
+# Aggregation: sum by (job, namespace). An SLO is a property of the service,
+# not of a pod, so the ratios must not be computed per replica — with several
+# replicas a pod that served three calls and failed one would read as a 33%
+# error rate and page. This is a deliberate difference from HighToolErrorRate
+# in mctl-telegram-alerts.yaml, which keeps `instance` to separate the preview
+# deployment; that separation is unnecessary here because the VMServiceScrape
+# (bootstrap/templates/mctl-platform/mctl-telegram-monitor.yaml) selects
+# app.kubernetes.io/instance=labs-mctl-telegram and so never scrapes preview at
+# all.
+#
+# Known property, not a bug: on a low-traffic service a 1h window holds few
+# invocations, so a couple of errors can cross a burn threshold. docs/slo.md
+# prescribes no minimum-volume guard and none is invented here; the thresholds
+# are exactly the ones the SLO doc decided. Tune with observed traffic rather
+# than by guessing, and note that a total outage is covered by
+# ServiceUnavailable and the canary alerts, not by these.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: mctl-telegram-slo
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: mctl-platform
+    app.kubernetes.io/component: mctl-telegram
+spec:
+  groups:
+    # Short-window SLI ratios. Recorded rather than inlined so the burn-rate
+    # alerts, the Grafana panels and any ad-hoc query all read the same
+    # definition, and so a change to an SLI denominator happens in one place.
+    - name: mctl-telegram-slo-sli
+      interval: 1m
+      rules:
+        # --- MCP tool availability (99.5% objective) ---
+        - record: mctl_telegram:tool_errors:ratio_rate1h
+          expr: |
+            sum by (job, namespace) (rate(mctl_tool_invocations_total{status="error"}[1h]))
+            /
+            sum by (job, namespace) (rate(mctl_tool_invocations_total[1h]))
+        - record: mctl_telegram:tool_errors:ratio_rate6h
+          expr: |
+            sum by (job, namespace) (rate(mctl_tool_invocations_total{status="error"}[6h]))
+            /
+            sum by (job, namespace) (rate(mctl_tool_invocations_total[6h]))
+
+        # --- OAuth token-endpoint availability (99.9% objective) ---
+        # Route set is the one docs/slo.md names: the token exchange and the
+        # Telegram OIDC callback. /oauth/authorize is deliberately absent — it
+        # is a browser entry point, not part of the token-issuance SLO.
+        - record: mctl_telegram:oauth_5xx:ratio_rate1h
+          expr: |
+            sum by (job, namespace) (
+              rate(mctl_http_requests_total{route=~"/oauth/token|/oauth/telegram/callback",status_code=~"5.."}[1h])
+            )
+            /
+            sum by (job, namespace) (
+              rate(mctl_http_requests_total{route=~"/oauth/token|/oauth/telegram/callback"}[1h])
+            )
+        - record: mctl_telegram:oauth_5xx:ratio_rate6h
+          expr: |
+            sum by (job, namespace) (
+              rate(mctl_http_requests_total{route=~"/oauth/token|/oauth/telegram/callback",status_code=~"5.."}[6h])
+            )
+            /
+            sum by (job, namespace) (
+              rate(mctl_http_requests_total{route=~"/oauth/token|/oauth/telegram/callback"}[6h])
+            )
+
+        # --- Session borrow success (99% objective) ---
+        # The denominator is result=~"ok|error", NOT the whole counter.
+        # expired_idle and expired_absolute are TTL expirations — expected
+        # user-side state after 30/90 days of inactivity, not a service
+        # failure — and docs/slo.md excludes them from the SLI explicitly.
+        # Summing the bare counter here would let a wave of dormant users
+        # silently inflate the denominator and hide a real regression.
+        - record: mctl_telegram:session_borrow_errors:ratio_rate1h
+          expr: |
+            sum by (job, namespace) (rate(mctl_sessions_borrow_total{result="error"}[1h]))
+            /
+            sum by (job, namespace) (rate(mctl_sessions_borrow_total{result=~"ok|error"}[1h]))
+        - record: mctl_telegram:session_borrow_errors:ratio_rate6h
+          expr: |
+            sum by (job, namespace) (rate(mctl_sessions_borrow_total{result="error"}[6h]))
+            /
+            sum by (job, namespace) (rate(mctl_sessions_borrow_total{result=~"ok|error"}[6h]))
+
+    # Rolling-28d compliance. These are what the error-budget policy in
+    # docs/slo.md is written against ("freeze non-critical merges when the
+    # rolling-28-day SLI drops below target", "resume once it is back above
+    # target with >=50% budget left"). They do not alert — a burnt budget is a
+    # process decision, not a page — but without them that policy has nothing
+    # to read. 28d is the doc's cache-friendly approximation of 30 days.
+    #
+    # Separate group at a 5m interval on purpose: a 28d range query is far
+    # more expensive than the 1h/6h ones above and does not need per-minute
+    # resolution to answer a merge-freeze question.
+    - name: mctl-telegram-slo-compliance
+      interval: 5m
+      rules:
+        - record: mctl_telegram:tool_availability:ratio_rate28d
+          expr: |
+            sum by (job, namespace) (rate(mctl_tool_invocations_total{status="ok"}[28d]))
+            /
+            sum by (job, namespace) (rate(mctl_tool_invocations_total[28d]))
+        - record: mctl_telegram:oauth_availability:ratio_rate28d
+          expr: |
+            1 - (
+              sum by (job, namespace) (
+                rate(mctl_http_requests_total{route=~"/oauth/token|/oauth/telegram/callback",status_code=~"5.."}[28d])
+              )
+              /
+              sum by (job, namespace) (
+                rate(mctl_http_requests_total{route=~"/oauth/token|/oauth/telegram/callback"}[28d])
+              )
+            )
+        - record: mctl_telegram:session_borrow_success:ratio_rate28d
+          expr: |
+            sum by (job, namespace) (rate(mctl_sessions_borrow_total{result="ok"}[28d]))
+            /
+            sum by (job, namespace) (rate(mctl_sessions_borrow_total{result=~"ok|error"}[28d]))
+
+    # Multi-window burn-rate alerts. Thresholds are the burn multiplier times
+    # the objective's error budget, exactly as tabulated in docs/slo.md:
+    #
+    #   objective   budget   1h @ 14.4x   6h @ 6x
+    #   99.5%       0.5%     7.200%       3.000%
+    #   99.9%       0.1%     1.440%       0.600%
+    #   99%         1%       14.400%      6.000%
+    #
+    # for: 0m throughout, per docs/slo.md: the burn window IS the
+    # stabilization period, and adding a `for:` on top would delay every page
+    # by a second window and mask fast incidents.
+    #
+    # Severity: docs/slo.md writes these as "page" and "ticket". The cluster's
+    # convention — every other VMRule here, and what the Grafana/Alertmanager
+    # views are built around — is critical/warning, so page maps to critical
+    # and ticket to warning. Alertmanager routes on alertname rather than
+    # severity, so the FastBurn names are added to the telegram receiver's
+    # matcher list in bootstrap/templates/observability/monitoring.yaml; the
+    # SlowBurn pair falls through to the default mctl-agent receiver.
+    - name: mctl-telegram-slo-burn
+      interval: 1m
+      rules:
+        - alert: MctlTelegramToolAvailabilityFastBurn
+          expr: mctl_telegram:tool_errors:ratio_rate1h > 0.072
+          for: 0m
+          labels:
+            severity: critical
+            service: mctl-telegram
+          annotations:
+            summary: "mctl-telegram: MCP tool availability fast burn (14.4x, 1h)"
+            description: >-
+              The MCP tool error rate over the last 1h is
+              {{ $value | humanizePercentage }}, above the 7.2% fast-burn
+              threshold — 14.4x the 99.5% availability objective's budget. At
+              this rate the 30-day error budget is gone in about two days.
+              Page the on-call engineer.
+              SLO and error-budget policy:
+              https://github.com/mctlhq/mctl-telegram/blob/main/docs/slo.md
+
+        - alert: MctlTelegramToolAvailabilitySlowBurn
+          expr: mctl_telegram:tool_errors:ratio_rate6h > 0.030
+          for: 0m
+          labels:
+            severity: warning
+            service: mctl-telegram
+          annotations:
+            summary: "mctl-telegram: MCP tool availability slow burn (6x, 6h)"
+            description: >-
+              The MCP tool error rate over the last 6h is
+              {{ $value | humanizePercentage }}, above the 3.0% slow-burn
+              threshold — 6x the 99.5% availability objective's budget.
+              Sustained for the full 6h this erodes roughly a third of the
+              monthly budget. File a reliability ticket; no page.
+              SLO and error-budget policy:
+              https://github.com/mctlhq/mctl-telegram/blob/main/docs/slo.md
+
+        - alert: MctlTelegramOAuthAvailabilityFastBurn
+          expr: mctl_telegram:oauth_5xx:ratio_rate1h > 0.01440
+          for: 0m
+          labels:
+            severity: critical
+            service: mctl-telegram
+          annotations:
+            summary: "mctl-telegram: OAuth token endpoint fast burn (14.4x, 1h)"
+            description: >-
+              The 5xx rate on /oauth/token and /oauth/telegram/callback over the
+              last 1h is {{ $value | humanizePercentage }}, above the 1.440%
+              fast-burn threshold — 14.4x the 99.9% objective's budget. New
+              clients cannot complete the OAuth exchange. Page the on-call
+              engineer.
+              SLO and error-budget policy:
+              https://github.com/mctlhq/mctl-telegram/blob/main/docs/slo.md
+
+        - alert: MctlTelegramOAuthAvailabilitySlowBurn
+          expr: mctl_telegram:oauth_5xx:ratio_rate6h > 0.00600
+          for: 0m
+          labels:
+            severity: warning
+            service: mctl-telegram
+          annotations:
+            summary: "mctl-telegram: OAuth token endpoint slow burn (6x, 6h)"
+            description: >-
+              The 5xx rate on /oauth/token and /oauth/telegram/callback over the
+              last 6h is {{ $value | humanizePercentage }}, above the 0.600%
+              slow-burn threshold — 6x the 99.9% objective's budget. File a
+              reliability ticket; no page.
+              SLO and error-budget policy:
+              https://github.com/mctlhq/mctl-telegram/blob/main/docs/slo.md
+
+        - alert: MctlTelegramSessionBorrowFastBurn
+          expr: mctl_telegram:session_borrow_errors:ratio_rate1h > 0.144
+          for: 0m
+          labels:
+            severity: critical
+            service: mctl-telegram
+          annotations:
+            summary: "mctl-telegram: session borrow fast burn (14.4x, 1h)"
+            description: >-
+              The Pool.Borrow() error rate over the last 1h, excluding expected
+              TTL expirations, is {{ $value | humanizePercentage }} — above the
+              14.4% fast-burn threshold (14.4x the 99% objective's budget).
+              Tool calls are failing before they reach Telegram. Page the
+              on-call engineer.
+              SLO and error-budget policy:
+              https://github.com/mctlhq/mctl-telegram/blob/main/docs/slo.md
+
+        - alert: MctlTelegramSessionBorrowSlowBurn
+          expr: mctl_telegram:session_borrow_errors:ratio_rate6h > 0.060
+          for: 0m
+          labels:
+            severity: warning
+            service: mctl-telegram
+          annotations:
+            summary: "mctl-telegram: session borrow slow burn (6x, 6h)"
+            description: >-
+              The Pool.Borrow() error rate over the last 6h, excluding expected
+              TTL expirations, is {{ $value | humanizePercentage }} — above the
+              6.0% slow-burn threshold (6x the 99% objective's budget). File a
+              reliability ticket; no page.
+              SLO and error-budget policy:
+              https://github.com/mctlhq/mctl-telegram/blob/main/docs/slo.md

@@ -389,6 +389,22 @@ spec:
                   - receiver: telegram
                     matchers:
                       - alertname =~ "NodeCordoned|K3sUpgradeJobFailed"
+                  # SLO fast-burn alerts are the "page" tier of the Beta SLOs
+                  # (mctl-telegram docs/slo.md): the error budget is being
+                  # consumed 14.4x faster than the objective allows. mctl-agent
+                  # cannot remediate a burning budget — the response is a human
+                  # deciding whether to roll back, and the error-budget policy's
+                  # merge freeze — so these go to Telegram. continue: true so
+                  # the catch-all below still raises the incident, matching the
+                  # ArgoCD platform-app route above.
+                  #
+                  # The SlowBurn siblings are deliberately absent: they are
+                  # ticket-severity in the SLO doc and are meant to be picked up
+                  # in working hours, not to wake anyone.
+                  - receiver: telegram
+                    continue: true
+                    matchers:
+                      - alertname =~ "MctlTelegramToolAvailabilityFastBurn|MctlTelegramOAuthAvailabilityFastBurn|MctlTelegramSessionBorrowFastBurn"
                   # Local Argo workdirs are node-affine. These need an operator
                   # to restore the worker or terminate and rerun the workflow.
                   - receiver: telegram
