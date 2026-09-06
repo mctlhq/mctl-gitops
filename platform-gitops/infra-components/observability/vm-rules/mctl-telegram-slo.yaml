@@ -6,11 +6,14 @@
 # https://github.com/mctlhq/mctl-telegram/blob/main/docs/slo.md
 #
 # This file is the DEPLOYED form of those alerts. mctl-telegram also carries
-# deploy/alerts/mctl-telegram.rules.yaml, which is a PrometheusRule and is not
-# reconciled by anything: the cluster runs the VictoriaMetrics operator, whose
-# rule CRD is VMRule (kube-prometheus-stack is deployed with prometheus
-# disabled, operator kept for CRDs only). That file stays in the source repo as
-# a non-deployed reference for the alerts NOT ported here; see
+# deploy/alerts/mctl-telegram.rules.yaml, which nothing applies: it sits in a
+# source repo, no GitOps path references it, and this directory is the only one
+# ArgoCD reconciles alerting rules from. (It is also written as a
+# PrometheusRule, whereas the rules this cluster evaluates are VMRules —
+# kube-prometheus-stack is deployed with prometheus disabled and the operator
+# kept for CRDs only. That is a second difference, not the reason it is
+# undeployed; the reason is that nobody applies it.) It stays in the source
+# repo as a non-deployed reference for the alerts NOT ported here; see
 # mctlhq/mctl-telegram#546.
 #
 # What is ported: the three burn-rate SLOs (MCP tool availability, OAuth
