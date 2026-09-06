@@ -96,8 +96,9 @@ tests:
               description: >-
                 The MCP tool error rate over the last 6h is 4%, above the 3.0%
                 slow-burn threshold — 6x the 99.5% availability objective's
-                budget. Sustained for the full 6h this erodes roughly a third of
-                the monthly budget. File a reliability ticket; no page. SLO and
+                budget. Sustained for the full 6h this consumes about 5% of
+                the monthly budget (6x x 6h / 720h). File a reliability ticket;
+                no page. SLO and
                 error-budget policy:
                 https://github.com/mctlhq/mctl-telegram/blob/main/docs/slo.md
 
@@ -188,3 +189,75 @@ tests:
       - eval_time: 90m
         alertname: MctlTelegramSessionBorrowFastBurn
         exp_alerts: []
+
+  # --- Rolling-28d compliance recording rules ---------------------------
+  #
+  # These are what the error-budget merge-freeze policy reads, and until now
+  # nothing tested them — the burn-rate alerts above cover only the 1h/6h
+  # rules. Each case below fails against the pre-zero-fill expressions: an
+  # empty numerator makes the whole division empty, so the rule records NO
+  # series exactly at the two extremes the policy most needs, and "0%
+  # availability" becomes indistinguishable from "never measured".
+  - interval: 1m
+    name: tool availability compliance records 0, not nothing, when every call fails
+    input_series:
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="a",tool="send_message",status="error"}'
+        values: "0+1x120"
+    promql_expr_test:
+      - expr: mctl_telegram:tool_availability:ratio_rate28d
+        eval_time: 120m
+        exp_samples:
+          - labels: 'mctl_telegram:tool_availability:ratio_rate28d{job="mctl-telegram",namespace="labs"}'
+            value: 0
+
+  - interval: 1m
+    name: tool availability compliance records the mixed ratio (0.5, exactly representable)
+    input_series:
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="a",tool="send_message",status="ok"}'
+        values: "0+1x120"
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="a",tool="send_message",status="error"}'
+        values: "0+1x120"
+    promql_expr_test:
+      - expr: mctl_telegram:tool_availability:ratio_rate28d
+        eval_time: 120m
+        exp_samples:
+          - labels: 'mctl_telegram:tool_availability:ratio_rate28d{job="mctl-telegram",namespace="labs"}'
+            value: 0.5
+
+  # The healthy case is the one the subtractive `1 - (5xx / total)` form got
+  # wrong: with no 5xx series at all the rule recorded nothing.
+  - interval: 1m
+    name: oauth availability compliance records 1 when there is no 5xx series at all
+    input_series:
+      - series: 'mctl_http_requests_total{job="mctl-telegram",namespace="labs",route="/oauth/token",status_code="200"}'
+        values: "0+1x120"
+    promql_expr_test:
+      - expr: mctl_telegram:oauth_availability:ratio_rate28d
+        eval_time: 120m
+        exp_samples:
+          - labels: 'mctl_telegram:oauth_availability:ratio_rate28d{job="mctl-telegram",namespace="labs"}'
+            value: 1
+
+  - interval: 1m
+    name: oauth availability compliance records 0 when every request 5xxs
+    input_series:
+      - series: 'mctl_http_requests_total{job="mctl-telegram",namespace="labs",route="/oauth/token",status_code="503"}'
+        values: "0+1x120"
+    promql_expr_test:
+      - expr: mctl_telegram:oauth_availability:ratio_rate28d
+        eval_time: 120m
+        exp_samples:
+          - labels: 'mctl_telegram:oauth_availability:ratio_rate28d{job="mctl-telegram",namespace="labs"}'
+            value: 0
+
+  - interval: 1m
+    name: session borrow compliance records 0 when every borrow fails
+    input_series:
+      - series: 'mctl_sessions_borrow_total{job="mctl-telegram",namespace="labs",result="error"}'
+        values: "0+1x120"
+    promql_expr_test:
+      - expr: mctl_telegram:session_borrow_success:ratio_rate28d
+        eval_time: 120m
+        exp_samples:
+          - labels: 'mctl_telegram:session_borrow_success:ratio_rate28d{job="mctl-telegram",namespace="labs"}'
+            value: 0

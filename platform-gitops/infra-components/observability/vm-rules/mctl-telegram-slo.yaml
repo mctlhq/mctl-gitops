@@ -133,25 +133,54 @@ spec:
     - name: mctl-telegram-slo-compliance
       interval: 5m
       rules:
+        # The `or 0 *` zero-fill on every numerator below is load-bearing, not
+        # defensive noise. A selector that matches no series yields an EMPTY
+        # vector, not zero, and an empty operand makes the whole division
+        # empty — so the naive form silently stops recording exactly at the
+        # extremes the merge-freeze policy most needs to see. For the success
+        # numerators that extreme is a window in which everything failed
+        # (0% availability reads as "no data"); it is reachable on a fresh
+        # deployment whose first invocations all error. Multiplying the
+        # denominator by 0 fills the gap with a genuine zero carrying the
+        # right (job, namespace) labels.
         - record: mctl_telegram:tool_availability:ratio_rate28d
           expr: |
-            sum by (job, namespace) (rate(mctl_tool_invocations_total{status="ok"}[28d]))
+            (
+              sum by (job, namespace) (rate(mctl_tool_invocations_total{status="ok"}[28d]))
+              or
+              0 * sum by (job, namespace) (rate(mctl_tool_invocations_total[28d]))
+            )
             /
             sum by (job, namespace) (rate(mctl_tool_invocations_total[28d]))
+        # Counts successes directly rather than `1 - (5xx / total)`. The
+        # subtractive form breaks in the HEALTHY case: with traffic served and
+        # no 5xx at all, the `status_code=~"5.."` selector matches nothing, the
+        # numerator is empty, and `1 - empty` is empty — so the series would
+        # vanish precisely when OAuth is perfect, and the policy could not tell
+        # that from "never measured". Same zero-fill as above for the mirror
+        # case where every request 5xxs.
         - record: mctl_telegram:oauth_availability:ratio_rate28d
           expr: |
-            1 - (
+            (
               sum by (job, namespace) (
-                rate(mctl_http_requests_total{route=~"/oauth/token|/oauth/telegram/callback",status_code=~"5.."}[28d])
+                rate(mctl_http_requests_total{route=~"/oauth/token|/oauth/telegram/callback",status_code!~"5.."}[28d])
               )
-              /
-              sum by (job, namespace) (
+              or
+              0 * sum by (job, namespace) (
                 rate(mctl_http_requests_total{route=~"/oauth/token|/oauth/telegram/callback"}[28d])
               )
             )
+            /
+            sum by (job, namespace) (
+              rate(mctl_http_requests_total{route=~"/oauth/token|/oauth/telegram/callback"}[28d])
+            )
         - record: mctl_telegram:session_borrow_success:ratio_rate28d
           expr: |
-            sum by (job, namespace) (rate(mctl_sessions_borrow_total{result="ok"}[28d]))
+            (
+              sum by (job, namespace) (rate(mctl_sessions_borrow_total{result="ok"}[28d]))
+              or
+              0 * sum by (job, namespace) (rate(mctl_sessions_borrow_total{result=~"ok|error"}[28d]))
+            )
             /
             sum by (job, namespace) (rate(mctl_sessions_borrow_total{result=~"ok|error"}[28d]))
 
@@ -206,8 +235,8 @@ spec:
               The MCP tool error rate over the last 6h is
               {{ $value | humanizePercentage }}, above the 3.0% slow-burn
               threshold — 6x the 99.5% availability objective's budget.
-              Sustained for the full 6h this erodes roughly a third of the
-              monthly budget. File a reliability ticket; no page.
+              Sustained for the full 6h this consumes about 5% of the monthly
+              budget (6x x 6h / 720h). File a reliability ticket; no page.
               SLO and error-budget policy:
               https://github.com/mctlhq/mctl-telegram/blob/main/docs/slo.md
 
