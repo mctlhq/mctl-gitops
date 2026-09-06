@@ -106,6 +106,26 @@ externalSecret:
     - secretKey: SEERRSENSE_ENCRYPTION_KEY
       remoteKey: teams/labs/seerrsense
       property: SEERRSENSE_ENCRYPTION_KEY
+    # Cloudflare Zero Trust service token for reaching a Seerr that sits behind
+    # Access. Both are optional in the app (src/core/config.ts:20-21); the Seerr
+    # client only sends the CF-Access-Client-* headers when both are set.
+    #
+    # Precondition: teams/labs/seerrsense must already carry both properties.
+    # ESO fails the whole ExternalSecret when a referenced property is missing,
+    # which would stop every other key in seerrsense-secrets from refreshing —
+    # not just these two.
+    #
+    # Adding mappings changes no workload, so nothing rolls on sync. There is no
+    # reloader in this cluster and the chart writes no secret checksum, so the
+    # running pod keeps the environment it started with: restart the deployment
+    # once ESO has copied the keys, or the credentials stay invisible to the
+    # process until an unrelated rollout happens.
+    - secretKey: CF_ACCESS_CLIENT_ID
+      remoteKey: teams/labs/seerrsense
+      property: CF_ACCESS_CLIENT_ID
+    - secretKey: CF_ACCESS_CLIENT_SECRET
+      remoteKey: teams/labs/seerrsense
+      property: CF_ACCESS_CLIENT_SECRET
 envFrom:
   # One list. mctl_provision_database appends its own `envFrom:` block to the
   # end of the file, which made this key appear twice — and Helm's loader keeps
