@@ -9,14 +9,34 @@ Turn a raw idea into a normalized roadmap intent before research or publishing.
 
 ## Output contract
 
-Return a `RoadmapIntent` with:
+Return exactly one `RoadmapIntent` JSON object with this shape:
+
+```json
+{
+  "kind": "POC",
+  "summary": "Evaluate whether the proposed integration works end-to-end in the real mctl environment.",
+  "goal": "Prove the smallest useful integration path and produce a go/no-go decision.",
+  "constraints": [
+    "Preserve existing consumer behavior",
+    "Keep authorization outside prompts/skills"
+  ],
+  "success_signal": "The bounded proof succeeds with documented limitations and a clear next decision.",
+  "next_step": "roadmap-research-match"
+}
+```
+
+Field requirements:
 
 - `kind`: one of `POC`, `SPIKE`, `EPIC`, `IMPLEMENTATION`;
 - `summary`: one-sentence normalized intent;
 - `goal`: what must be proven, enabled, or delivered;
-- `constraints`: explicit boundaries from the user or platform architecture;
+- `constraints`: array of explicit boundaries from the user or platform architecture; use `[]` when none are known;
 - `success_signal`: what would justify proceeding;
 - `next_step`: normally `roadmap-research-match`.
+
+Do not add fields outside this contract.
+
+Emit a single JSON object matching the contract above. Nothing else.
 
 ## Classification rules
 
