@@ -17,6 +17,9 @@ jobs:
       contents: read
       pull-requests: write
     with:
-      # Staged rollout: Agy evidence is reviewed manually until proposal #240
-      # delivers exact-head markers, backfill, and repository-level gating.
-      blocking: false
+      # Aggregated by review-gate.yml (#1040), which evaluates Agy's verdict
+      # for merge-readiness -- no longer "reviewed manually until #240"
+      # (that proposal is the Tier 3 shepherd's own, separate Agy-gating gap
+      # in a different repo and does not block this). blocking: true keeps
+      # this reusable workflow's own signal in agreement with review-gate's.
+      blocking: true
