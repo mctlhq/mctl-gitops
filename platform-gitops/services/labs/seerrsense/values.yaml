@@ -5,7 +5,7 @@
 
 image:
   repository: ghcr.io/mctlhq/seerrsense
-  tag: "0.1.0"
+  tag: "1.0.1"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
@@ -50,3 +50,4 @@ externalSecret:
 envFrom:
   - secretRef:
       name: seerrsense-secrets
+extraContainers: []
