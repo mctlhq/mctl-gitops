@@ -1,11 +1,11 @@
 ---
 name: roadmap-intake
-description: 'Normalize a raw product/platform idea into a roadmap proposal type and scope before any mutation. Use when the user asks to add something to the roadmap, create an epic, run a PoC/spike, or formalize an implementation proposal. Produces a structured RoadmapIntent with kind, goal, constraints, expected outcome, and recommended next step. Never creates or updates GitHub issues.'
+description: 'Normalize a raw product/platform idea into a roadmap proposal type and scope before any mutation. Use when the user asks to add something to the roadmap, create an epic, run a PoC/spike, or formalize an implementation proposal. Produces a structured RoadmapIntent with the original request, normalized intent, optional structured details, and a fixed next step. Never creates or updates GitHub issues.'
 ---
 
 # roadmap-intake
 
-Turn a raw idea into a normalized roadmap intent before research or publishing.
+Turn a raw idea into a normalized roadmap intent before research or publishing while preserving the user's original request exactly.
 
 ## Output contract
 
@@ -13,6 +13,7 @@ Return exactly one `RoadmapIntent` JSON object with this shape:
 
 ```json
 {
+  "source_request": "Evaluate whether Cloudflare MCP Gateway fits mctl Enterprise and keep the existing consumer endpoint unchanged.",
   "kind": "POC",
   "summary": "Evaluate whether the proposed integration works end-to-end in the real mctl environment.",
   "goal": "Prove the smallest useful integration path and produce a go/no-go decision.",
@@ -21,22 +22,46 @@ Return exactly one `RoadmapIntent` JSON object with this shape:
     "Keep authorization outside prompts/skills"
   ],
   "success_signal": "The bounded proof succeeds with documented limitations and a clear next decision.",
+  "details": {
+    "context": "Enterprise customers need an outer MCP access-policy layer.",
+    "phases": [
+      "Validate OAuth compatibility",
+      "Run a read-only Portal PoC"
+    ],
+    "deliverables": [
+      "Compatibility matrix",
+      "Go/no-go recommendation"
+    ],
+    "acceptance_criteria": [
+      "The PoC works without weakening mctl authorization"
+    ],
+    "non_goals": [
+      "Replacing the existing consumer endpoint"
+    ],
+    "exact_title": "roadmap(enterprise-mcp): Cloudflare MCP Gateway PoC"
+  },
   "next_step": "roadmap-research-match"
 }
 ```
 
 Field requirements:
 
+- `source_request`: the user's original request text verbatim; do not summarize, normalize, translate, or rewrite it;
 - `kind`: one of `POC`, `SPIKE`, `EPIC`, `IMPLEMENTATION`;
 - `summary`: one-sentence normalized intent;
 - `goal`: what must be proven, enabled, or delivered;
 - `constraints`: array of explicit boundaries from the user or platform architecture; use `[]` when none are known;
 - `success_signal`: what would justify proceeding;
-- `next_step`: normally `roadmap-research-match`.
+- `details`: optional object for structured requirements explicitly present in the request. It may contain only the optional fields `context`, `phases`, `deliverables`, `acceptance_criteria`, `non_goals`, and `exact_title`. Omit fields the user did not provide rather than inventing them;
+- `next_step`: MUST be exactly the constant string `roadmap-research-match`.
 
 Do not add fields outside this contract.
 
 Emit a single JSON object matching the contract above. Nothing else.
+
+## Shared issue-reference format
+
+Whenever an issue reference is produced or normalized anywhere in this workflow, its handoff form is the string `owner/repo#number`, for example `mctlhq/.github#18`. Do not use numeric-only issue identifiers or issue objects as forward handoff references.
 
 ## Classification rules
 
@@ -53,5 +78,7 @@ Prefer the smallest honest type. Do not upgrade a PoC into an Epic only because 
 ## Safety and mutation boundary
 
 This skill is read/transform only. It MUST NOT create, update, label, close, or otherwise mutate roadmap/issues.
+
+Execution environment provides read-only tools; this text is not the enforcement.
 
 If the user's request also says to publish immediately, still produce the normalized intent first. Publishing belongs to a separate governed operation.
