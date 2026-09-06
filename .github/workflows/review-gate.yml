@@ -33,6 +33,13 @@ on:
 permissions:
   contents: read
   pull-requests: read
+  # agy_verdict() reads the verdict marker via
+  # GET /repos/{repo}/issues/{pr}/comments. That endpoint is gated by the
+  # Issues permission even when the number is a pull request, and
+  # pull-requests: read does not grant it. Without this the call 403s in
+  # both `evaluate` and `sweep`, so neither ever reaches post_status and
+  # review-gate stays pending forever -- fatal once it is a required check.
+  issues: read
   actions: read
   statuses: write
 
