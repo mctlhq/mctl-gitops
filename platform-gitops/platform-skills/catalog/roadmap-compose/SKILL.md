@@ -9,26 +9,53 @@ Compose a reviewable roadmap draft from `RoadmapIntent` and `RoadmapMatchResult`
 
 ## Preconditions
 
-Do not compose a new item when the match decision is `DUPLICATE`; instead return the matching item and explain why publishing should stop.
+For `EXTEND`, compose an addendum/comment against the existing roadmap item rather than a parallel item unless the user explicitly requires a separate child PoC/spike.
 
-For `EXTEND`, compose an update/addendum against the existing roadmap item rather than a parallel item unless the user explicitly requires a separate child PoC/spike.
+For `DUPLICATE`, produce a non-publishable draft that points to the matching item and explains why publication must stop.
 
-## Canonical output
+## Output contract
 
-Return a `RoadmapDraft` containing:
+Return exactly one `RoadmapDraft` JSON object with this shape:
 
-- `kind`: `POC`, `SPIKE`, `EPIC`, or `IMPLEMENTATION`;
-- `decision`: `NEW` or `EXTEND`;
+```json
+{
+  "kind": "POC",
+  "decision": "NEW",
+  "target_repo": "mctlhq/.github",
+  "target_issue": null,
+  "title": "roadmap(example): bounded proof of concept",
+  "body": "## Context\n...\n\n## Goal\n...",
+  "related": [
+    "mctlhq/.github#18"
+  ],
+  "dependencies": [
+    "mctlhq/mctl-agents#242"
+  ],
+  "source_research": "No existing roadmap item owns the same durable outcome; related control-plane work is listed above.",
+  "warnings": []
+}
+```
+
+Field requirements:
+
+- `kind`: one of `POC`, `SPIKE`, `EPIC`, `IMPLEMENTATION`;
+- `decision`: one of `NEW`, `EXTEND`, `DUPLICATE`;
 - `target_repo`: normally `mctlhq/.github` for platform roadmap items;
-- `target_issue`: required for `EXTEND`;
-- `title`;
-- `body`;
-- `related` issue references;
-- `dependencies`;
-- `source_research` summary;
-- `warnings` / known limitations.
+- `target_issue`: required for `EXTEND` and `DUPLICATE`, otherwise `null`;
+- `title`: proposed issue title for `NEW`; for `EXTEND`/`DUPLICATE`, use the existing roadmap item title or a concise addendum title;
+- `body`: exact publishable issue body for `NEW`, exact comment body for `EXTEND`, and a concise non-publishable duplicate explanation for `DUPLICATE`;
+- `related`: array of issue references;
+- `dependencies`: array of issue references;
+- `source_research`: concise summary of the match evidence used to compose the draft;
+- `warnings`: array of known limitations/uncertainties; use `[]` when none are known.
 
-The body should use this baseline structure when applicable:
+Do not add fields outside this contract.
+
+Emit a single JSON object matching the contract above. Nothing else.
+
+## Canonical body structure
+
+For `NEW`, the body should use this baseline structure when applicable:
 
 ```markdown
 ## Context
@@ -42,6 +69,10 @@ The body should use this baseline structure when applicable:
 ```
 
 Do not add empty sections just to satisfy the template.
+
+For `EXTEND`, the `body` is the exact comment/addendum text to be posted to the existing issue. Do not rewrite the existing roadmap issue body in the MVP.
+
+For `DUPLICATE`, the draft is explicitly non-publishable. `body` should explain the match and direct the caller to the existing item; the privileged publish operation must reject this decision.
 
 ## Type-specific guidance
 
