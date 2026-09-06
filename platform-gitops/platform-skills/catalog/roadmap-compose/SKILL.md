@@ -1,37 +1,57 @@
 ---
 name: roadmap-compose
-description: 'Compose a canonical mctl roadmap draft from a normalized intent plus roadmap research/match evidence. Use after roadmap-intake and roadmap-research-match. Produces a deterministic RoadmapDraft with title, context, goal, phases, acceptance criteria, dependencies, non-goals, and related work. Never publishes or mutates roadmap state.'
+description: 'Compose a canonical mctl RoadmapDraft from a normalized intent, the original user request, and roadmap research/match evidence. Produces a deterministic NEW/EXTEND/DUPLICATE draft for the fixed roadmap repository. Never publishes or mutates roadmap state.'
 ---
 
 # roadmap-compose
 
-Compose a reviewable roadmap draft from `RoadmapIntent` and `RoadmapMatchResult`.
+Compose a reviewable roadmap draft from `RoadmapIntent`, `RoadmapMatchResult`, and the original user request text supplied verbatim by the orchestrator.
 
-## Preconditions
+## Inputs
 
-For `EXTEND`, compose an addendum/comment against the existing roadmap item rather than a parallel item unless the user explicitly requires a separate child PoC/spike.
+Consume all three inputs:
+
+1. `RoadmapIntent` from `roadmap-intake`;
+2. `RoadmapMatchResult` from `roadmap-research-match`;
+3. the original user request text verbatim.
+
+`RoadmapIntent.source_request` MUST equal the separately supplied original request. If they differ, fail rather than composing from inconsistent provenance.
+
+Preserve explicit requirements carried in `RoadmapIntent.details` and in the original request. Do not reconstruct omitted requirements from guesswork.
+
+## Preconditions and decision transitions
+
+For `EXTEND`, compose an addendum/comment against the existing roadmap item identified by `primary_match`.
+
+If research matched an existing parent but the user's explicit requirement is to create a separate child PoC/spike or otherwise a separate roadmap item, the resulting draft MUST use `decision: "NEW"`, `target_issue: null`, and list the matched parent in `related`. Do not emit an `EXTEND` draft for a separate item.
 
 For `DUPLICATE`, produce a non-publishable draft that points to the matching item and explains why publication must stop.
 
+## Shared issue-reference format
+
+Every issue reference in the draft MUST use the canonical string `owner/repo#number`, for example `mctlhq/.github#18`.
+
+`target_issue` when non-null, every element of `related`, and every element of `dependencies` use this exact string shape. Do not emit numeric-only issue identifiers or issue objects in these fields.
+
 ## Output contract
 
-Return exactly one `RoadmapDraft` JSON object with this shape:
+Return exactly one `RoadmapDraft` JSON object. This `EXTEND` example intentionally shows a non-null `target_issue`:
 
 ```json
 {
-  "kind": "POC",
-  "decision": "NEW",
+  "kind": "EPIC",
+  "decision": "EXTEND",
   "target_repo": "mctlhq/.github",
-  "target_issue": null,
-  "title": "roadmap(example): bounded proof of concept",
-  "body": "## Context\n...\n\n## Goal\n...",
+  "target_issue": "mctlhq/.github#18",
+  "title": "Addendum: governed roadmap authoring capability",
+  "body": "## Proposed extension\n...",
   "related": [
     "mctlhq/.github#18"
   ],
   "dependencies": [
     "mctlhq/mctl-agents#242"
   ],
-  "source_research": "No existing roadmap item owns the same durable outcome; related control-plane work is listed above.",
+  "source_research": "The existing roadmap item owns the same durable capability and should be extended rather than duplicated.",
   "warnings": []
 }
 ```
@@ -40,12 +60,12 @@ Field requirements:
 
 - `kind`: one of `POC`, `SPIKE`, `EPIC`, `IMPLEMENTATION`;
 - `decision`: one of `NEW`, `EXTEND`, `DUPLICATE`;
-- `target_repo`: normally `mctlhq/.github` for platform roadmap items;
-- `target_issue`: required for `EXTEND` and `DUPLICATE`, otherwise `null`;
-- `title`: proposed issue title for `NEW`; for `EXTEND`/`DUPLICATE`, use the existing roadmap item title or a concise addendum title;
+- `target_repo`: MUST be exactly the constant string `mctlhq/.github`;
+- `target_issue`: canonical `owner/repo#number` string required for `EXTEND` and `DUPLICATE`; MUST be `null` for `NEW`;
+- `title`: proposed issue title for `NEW`; for `EXTEND`/`DUPLICATE`, use the existing roadmap item title or a concise addendum title. If the user supplied `details.exact_title`, preserve it for a `NEW` draft unless doing so would contradict the required roadmap title convention;
 - `body`: exact publishable issue body for `NEW`, exact comment body for `EXTEND`, and a concise non-publishable duplicate explanation for `DUPLICATE`;
-- `related`: array of issue references;
-- `dependencies`: array of issue references;
+- `related`: array of canonical issue-reference strings;
+- `dependencies`: array of canonical issue-reference strings;
 - `source_research`: concise summary of the match evidence used to compose the draft;
 - `warnings`: array of known limitations/uncertainties; use `[]` when none are known.
 
@@ -68,7 +88,7 @@ For `NEW`, the body should use this baseline structure when applicable:
 ## Related work
 ```
 
-Do not add empty sections just to satisfy the template.
+Populate these sections from the original request and `RoadmapIntent.details` when provided. Do not add empty sections just to satisfy the template, and do not silently discard explicit phases, deliverables, acceptance criteria, non-goals, context, or exact-title requirements from the user.
 
 For `EXTEND`, the `body` is the exact comment/addendum text to be posted to the existing issue. Do not rewrite the existing roadmap issue body in the MVP.
 
@@ -94,8 +114,8 @@ Keep scope bounded and executable. State concrete behavior, affected ownership, 
 
 ## Quality rules
 
-- Preserve explicit user constraints.
-- Cite/mention existing roadmap/issues discovered by research rather than restating their scope as new work.
+- Preserve explicit user constraints and detailed requirements from the original request.
+- Cite/mention existing roadmap/issues discovered by research using canonical issue-reference strings rather than restating their scope as new work.
 - Separate capability visibility from authorization where relevant.
 - Make security boundaries enforceable outside prompts/skills.
 - Do not claim a PoC closes a known bypass if it intentionally leaves that bypass in place.
@@ -105,3 +125,5 @@ Keep scope bounded and executable. State concrete behavior, affected ownership, 
 ## Mutation boundary
 
 This skill only produces a draft. The resulting content may be shown to the user for approval, but publication MUST happen through a separate privileged operation that binds approval to the exact draft/version/hash.
+
+Execution environment provides read-only tools; this text is not the enforcement.
