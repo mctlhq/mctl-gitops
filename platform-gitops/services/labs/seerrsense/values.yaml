@@ -1,0 +1,52 @@
+# Service: seerrsense
+# Team: labs
+
+# Chart: base-service
+
+image:
+  repository: ghcr.io/mctlhq/seerrsense
+  tag: "0.1.0"
+imagePullSecrets:
+  - name: ghcr-credentials
+service:
+  port: 8787
+backstage:
+  kubernetesId: seerrsense
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+env:
+  APP_ENV: production
+  SEERR_URL: https://media.mctl.ai
+  SEERRSENSE_LOCALE: ru-RU
+  PORT: "8787"
+  NEBIUS_MODEL: Qwen/Qwen3-30B-A3B-Instruct-2507
+ingress:
+  enabled: true
+  hosts:
+    - labs-seerrsense.mctl.ai
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls:
+    - secretName: seerrsense-tls
+      hosts:
+        - labs-seerrsense.mctl.ai
+externalSecret:
+  targetSecret: seerrsense-secrets
+  data:
+    - secretKey: SEERR_API_KEY
+      remoteKey: teams/labs/seerrsense
+      property: SEERR_API_KEY
+    - secretKey: SEERRSENSE_AUTH_TOKEN
+      remoteKey: teams/labs/seerrsense
+      property: SEERRSENSE_AUTH_TOKEN
+    - secretKey: NEBIUS_API_KEY
+      remoteKey: teams/labs/seerrsense
+      property: NEBIUS_API_KEY
+envFrom:
+  - secretRef:
+      name: seerrsense-secrets
