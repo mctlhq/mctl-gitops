@@ -47,6 +47,12 @@ externalSecret:
     - secretKey: NEBIUS_API_KEY
       remoteKey: teams/labs/seerrsense
       property: NEBIUS_API_KEY
+    - secretKey: CF_ACCESS_CLIENT_ID
+      remoteKey: teams/labs/seerrsense
+      property: CF_ACCESS_CLIENT_ID
+    - secretKey: CF_ACCESS_CLIENT_SECRET
+      remoteKey: teams/labs/seerrsense
+      property: CF_ACCESS_CLIENT_SECRET
 envFrom:
   - secretRef:
       name: seerrsense-secrets
