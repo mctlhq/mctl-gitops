@@ -17,6 +17,7 @@ jobs:
       contents: read
       pull-requests: write
     with:
-      # Staged rollout: Agy evidence is reviewed manually until proposal #240
-      # delivers exact-head markers, backfill, and repository-level gating.
-      blocking: false
+      # P1/P2 findings are merge-blocking. The reusable reviewer emits an
+      # exact machine-readable verdict and fails closed on reviewer failure or
+      # a malformed verdict, so the auto-merge gate can trust this check.
+      blocking: true
