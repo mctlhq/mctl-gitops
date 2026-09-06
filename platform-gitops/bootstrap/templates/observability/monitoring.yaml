@@ -344,6 +344,32 @@ spec:
                   - receiver: telegram
                     matchers:
                       - alertname = "MctlAgentsPipelineStale"
+                  # The mctl-telegram synthetic canary is the only end-to-end
+                  # check that the MCP surface still answers from outside the
+                  # cluster, so a human has to hear it. Until now none of its
+                  # alerts matched a route and all fell through to the default
+                  # mctl-agent receiver — the canary was observed solely through
+                  # the pipeline it is supposed to be independent of, the same
+                  # coupling that hid a missing Vault backup for 11h on
+                  # 2026-08-16. Delivery through this route is what
+                  # mctlhq/mctl-telegram#213 asks to verify.
+                  #
+                  # continue: true keeps mctl-agent's ticket: the agent path is
+                  # useful, it just must not be the only path.
+                  #
+                  # Prefix match, not the five current alertnames, and
+                  # deliberately so. The defect being fixed is not "these
+                  # alerts are unrouted" but "a canary alert defaults to
+                  # agent-only"; an enumeration would let the next alert added
+                  # to the VMRule reintroduce it silently. Every alert in
+                  # mctl-telegram-canary.yaml needs an operator by
+                  # construction — the token ones (TokenExpiring,
+                  # TokenRenewalFailing) explicitly require a human with an
+                  # admin:users login to remint the credential.
+                  - receiver: telegram
+                    continue: true
+                    matchers:
+                      - alertname =~ "MctlTelegramCanary.*"
                   # Platform/infra Applications (projects default + platform)
                   # also page a human, in ADDITION to mctl-agent — hence
                   # continue: true, which lets the catch-all route below still
