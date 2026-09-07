@@ -1,0 +1,224 @@
+# Operational (non-SLO) alert rules for mctl-telegram.
+#
+# This file completes the port that mctl-telegram#546 deliberately left half
+# done. #546 moved the three burn-rate SLOs into mctl-telegram-slo.yaml and
+# recorded that the pool-capacity, flood-wait, OAuth-pending, Local Bridge and
+# communication-agent alerts were "a separate decision". This is that decision;
+# see mctlhq/mctl-telegram#555.
+#
+# The source form still lives in mctl-telegram as
+# deploy/alerts/mctl-telegram.rules.yaml, which nothing applies — it is a
+# PrometheusRule in a source repo, and this directory is the only path ArgoCD
+# reconciles alerting rules from. Alert names are carried over UNCHANGED
+# (unlike the SLO port, which prefixed them) because docs/runbook.md keys its
+# per-alert sections off exactly these names and every runbook_url below is an
+# anchor into it. Renaming would have silently broken all six links.
+#
+# Metric provenance — every series below was checked twice: against the
+# registrations in mctl-telegram internal/metrics/metrics.go, AND against the
+# series VictoriaMetrics actually holds, queried live on 2026-09-07. A rule
+# whose metric is never emitted is worse than no rule, because it reads as
+# coverage. Results:
+#
+#   mctl_telegram_client_pool_size        gauge, metrics.go:196     1 series, live
+#   mctl_telegram_pool_capacity           gauge, metrics.go:207     1 series, value -1
+#   mctl_telegram_flood_wait_events_total counter{tool}, :212       0 series (see below)
+#   mctl_oauth_pending_auth_size          gauge, metrics.go:217     1 series, live
+#   mctl_bridge_connections_total         counter{user_id}, :266    1 series, live
+#   mctl_agent_dead_letter_total          counter, metrics.go:288   1 series, live
+#   mctl_agent_actions_executing_stuck    gauge, metrics.go:293     1 series, live
+#
+# Two of the seven are dormant, for two DIFFERENT reasons, and neither is a
+# missing metric:
+#
+#  1. mctl_telegram_pool_capacity reads -1, which cmd/server/main.go:279 sets
+#     when TELEGRAM_MAX_SESSIONS is 0 or unset — the pool is uncapped. Both
+#     MctlTelegramPoolNearCapacity rules already carry `and
+#     mctl_telegram_pool_capacity > 0`, so they evaluate to an empty vector
+#     and cannot fire. That guard is the point: the alert is inert by
+#     construction while uncapped, and starts working the moment an operator
+#     sets a cap. It is deployed now so that setting the cap is a one-line
+#     config change and not also an alerting change. Until then, treat pool
+#     saturation as UNMONITORED — this rule is not covering it.
+#     (The cap itself is a product decision, not an ops one: at the ceiling
+#     the pool refuses to allocate a client. See mctl-telegram#145.)
+#
+#  2. mctl_telegram_flood_wait_events_total has no series because it is a
+#     CounterVec and a labelled counter publishes nothing until its first
+#     increment — not because nothing emits it. internal/mcp/tools.go:81
+#     increments it on every FloodWait observed by borrowWithRetry. Zero
+#     series means no FLOOD_WAIT has ever been observed on this deployment,
+#     which is the healthy state for an event counter. The series appears,
+#     and the rule starts evaluating, the first time Telegram rate-limits us.
+#
+# Routing is configured in bootstrap/templates/observability/monitoring.yaml,
+# on alertname — see the comment on the MctlAgentDeadLetter route there for
+# why the two communication-agent alerts must not reach an operator through
+# the agent pipeline alone.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: mctl-telegram-ops
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: mctl-platform
+    app.kubernetes.io/component: mctl-telegram
+spec:
+  groups:
+    - name: mctl-telegram-capacity
+      rules:
+        # Two rules share the alertname and differ only in band and severity:
+        # the warning form is bounded above at 0.95 so that a pool over 95%
+        # raises the critical form alone rather than both at once.
+        #
+        # The bands are gapless on purpose: the warning form excludes 0.95 and
+        # the critical form INCLUDES it (>=, not >). With > on both sides a
+        # pool sitting at exactly 0.95 matched neither rule and alerted nobody
+        # until it drifted off the boundary. Same reasoning for the flood-wait
+        # pair below, where critical is >= 2.
+        - alert: MctlTelegramPoolNearCapacity
+          expr: |
+            (mctl_telegram_client_pool_size / mctl_telegram_pool_capacity) > 0.85
+            and (mctl_telegram_client_pool_size / mctl_telegram_pool_capacity) < 0.95
+            and mctl_telegram_pool_capacity > 0
+          for: 5m
+          labels:
+            severity: warning
+            service: mctl-telegram
+          annotations:
+            summary: "mctl-telegram session pool above 85% capacity"
+            description: >-
+              The session pool utilization is at {{ $value | humanizePercentage }}.
+              Consider increasing the replica count or raising TELEGRAM_MAX_SESSIONS
+              if headroom permits.
+            runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctltelegramnearcapacity"
+
+        - alert: MctlTelegramPoolNearCapacity
+          expr: |
+            (mctl_telegram_client_pool_size / mctl_telegram_pool_capacity) >= 0.95
+            and mctl_telegram_pool_capacity > 0
+          for: 2m
+          labels:
+            severity: critical
+            service: mctl-telegram
+          annotations:
+            summary: "mctl-telegram session pool above 95% capacity"
+            description: >-
+              The session pool utilization is at {{ $value | humanizePercentage }}.
+              The pool is critically full. Scale out immediately or raise
+              TELEGRAM_MAX_SESSIONS if headroom permits.
+            runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctltelegramnearcapacity"
+
+        - alert: MctlTelegramFloodWaitSpike
+          expr: |
+            sum(rate(mctl_telegram_flood_wait_events_total[5m])) > 0.5
+            and sum(rate(mctl_telegram_flood_wait_events_total[5m])) < 2
+          for: 2m
+          labels:
+            severity: warning
+            service: mctl-telegram
+          annotations:
+            summary: "mctl-telegram flood-wait rate above 0.5 events/s"
+            description: >-
+              Telegram flood-wait events are arriving at {{ $value | humanize }} per
+              second. This indicates rate-limit pressure from Telegram. Reduce
+              request fan-out or add backoff logic.
+            runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctltelegramfloodwaitspike"
+
+        - alert: MctlTelegramFloodWaitSpike
+          expr: sum(rate(mctl_telegram_flood_wait_events_total[5m])) >= 2
+          for: 2m
+          labels:
+            severity: critical
+            service: mctl-telegram
+          annotations:
+            summary: "mctl-telegram flood-wait rate above 2 events/s"
+            description: >-
+              Telegram flood-wait events are arriving at {{ $value | humanize }} per
+              second. Heavy rate-limit pressure detected. Reduce request fan-out or
+              add backoff logic immediately.
+            runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctltelegramfloodwaitspike"
+
+        - alert: MctlTelegramOAuthPendingStuck
+          expr: mctl_oauth_pending_auth_size > 100
+          for: 15m
+          labels:
+            severity: warning
+            service: mctl-telegram
+          annotations:
+            summary: "mctl-telegram OAuth pending authorizations above 100"
+            description: >-
+              There are {{ $value | humanize }} in-flight OAuth authorization flows. A
+              sustained high value with no corresponding traffic suggests abandoned
+              flows or bot-scan traffic against /oauth/authorize.
+            runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctltelegramoauthpendingstuck"
+
+    - name: mctl-telegram-bridge
+      rules:
+        # Counts registrations per daemon, not transitions of a shared gauge.
+        # The earlier form, changes(mctl_bridge_active_daemons[10m]) > 20, could
+        # not fire for a flapping daemon: the reconnect ladder in
+        # cmd/local/daemon.go caps at 60s and only resets after a session
+        # lasting 60s, so a genuinely flapping daemon settles at ~10 cycles per
+        # 10 minutes = 20 changes, which is not > 20. It therefore fired for the
+        # first two minutes, while the backoff was still climbing, and RESOLVED
+        # ITSELF once the flap became permanent — reading to an operator as
+        # "it recovered". See mctl-telegram#467.
+        #
+        # The threshold is derived from the mechanics rather than guessed: a
+        # healthy daemon registers exactly once per server rollout, so 4 or more
+        # registrations in 10 minutes means a reconnect loop or an implausible
+        # burst of deploys. A 60s-cycle flap produces ~10 and fires comfortably.
+        #
+        # user_id is mctl-telegram's own database key, not a Telegram user id,
+        # and its cardinality is bounded by the number of local-mode accounts an
+        # operator flips deliberately. It is what makes the alert per-daemon
+        # rather than a single fleet-wide counter. Whether it belongs in an
+        # annotation that is delivered to Telegram is being reviewed separately
+        # in mctl-telegram#560; if that review removes the label, this rule
+        # degrades to fleet-wide and the summary must drop the interpolation.
+        - alert: MctlBridgeDaemonsFlapping
+          expr: increase(mctl_bridge_connections_total[10m]) > 3
+          for: 0m
+          labels:
+            severity: warning
+            service: mctl-telegram
+          annotations:
+            summary: "mctl-telegram Local Bridge daemon {{ $labels.user_id }} is reconnecting in a loop"
+            description: >-
+              Local Bridge daemon for user {{ $labels.user_id }} registered
+              {{ $value | humanize }} times in the last 10 minutes. A healthy daemon
+              registers once per server rollout. This may signal a looping reconnect,
+              a token rotation problem, or network instability on the daemon host.
+            runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlbridgedaemonsflapping"
+
+    - name: mctl-telegram-agent
+      rules:
+        - alert: MctlAgentDeadLetter
+          expr: increase(mctl_agent_dead_letter_total[15m]) > 0
+          for: 0m
+          labels:
+            severity: warning
+            service: mctl-telegram
+          annotations:
+            summary: "Communication-agent job reached dead letter"
+            description: >-
+              {{ $value | humanize }} communication-agent jobs exhausted their
+              attempts in the last 15 minutes. Keep the test window closed if
+              failures are unexplained and follow the dead-letter procedure.
+            runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#communication-agent-operations"
+
+        - alert: MctlAgentActionsExecutingStuck
+          expr: mctl_agent_actions_executing_stuck > 0
+          for: 5m
+          labels:
+            severity: critical
+            service: mctl-telegram
+          annotations:
+            summary: "Communication-agent actions remain stuck in executing"
+            description: >-
+              {{ $value | humanize }} actions are past the executor recovery
+              grace window. Close the agent window before investigating; do
+              not manually resend because Telegram may have accepted the
+              original random_id.
+            runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#communication-agent-operations"
