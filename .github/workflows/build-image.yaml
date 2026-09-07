@@ -140,7 +140,7 @@ jobs:
 
       - name: Check out image-name policy
         if: steps.caller.outputs.direct == 'true'
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: ${{ github.repository }}
           ref: main
@@ -464,7 +464,7 @@ jobs:
       # credential may be left in it. Nothing after this step runs git
       # against the remote.
       - name: Checkout source repo
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: ${{ inputs.repo }}
           ref: ${{ inputs.git_ref }}
