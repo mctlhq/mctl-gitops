@@ -16,6 +16,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
+    secrets: inherit
     with:
       # P1/P2 findings are merge-blocking. The reusable reviewer emits an
       # exact machine-readable verdict and fails closed on reviewer failure or

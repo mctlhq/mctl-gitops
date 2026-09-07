@@ -1,14 +1,24 @@
 name: Auto Review and Merge
 
 on:
-  # Run only after one of the automated reviewers finishes. The merge job
-  # then waits for every PR check on the current head, so path-specific CI
-  # that is still running is included without maintaining a hard-coded list.
+  # Re-evaluate the gate whenever a reviewer or any current PR CI workflow
+  # finishes. This means retrying a failed CI job can unblock a PR without
+  # requiring a reviewer rerun. A manual @claude review is covered by the
+  # pull_request_review event emitted when Claude submits its replacement
+  # verdict.
   workflow_run:
     workflows:
       - Claude PR review
       - Agy PR review
+      - Validate Manifests
+      - yamllint
+      - security
+      - no-root-yaml
+      - terraform
+      - workstation-scripts
     types: [completed]
+  pull_request_review:
+    types: [submitted]
 
 permissions:
   actions: read
@@ -18,21 +28,21 @@ permissions:
   statuses: read
 
 concurrency:
-  group: auto-merge-${{ github.repository }}-${{ github.event.workflow_run.pull_requests[0].number || github.run_id }}
+  group: auto-merge-${{ github.repository }}-${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number || github.run_id }}
   cancel-in-progress: true
 
 jobs:
   auto-merge:
     if: >-
-      github.event.workflow_run.event == 'pull_request' &&
-      github.event.workflow_run.pull_requests[0] != null
+      (github.event_name == 'workflow_run' && github.event.workflow_run.pull_requests[0] != null) ||
+      (github.event_name == 'pull_request_review' && github.event.pull_request != null)
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       REPO: ${{ github.repository }}
-      PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
-      TRIGGER_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+      PR_NUMBER: ${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number }}
+      TRIGGER_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.workflow_run.head_sha }}
     steps:
       - name: Require green CI, exact-head approval, and no P1/P2 findings
         shell: bash
@@ -62,7 +72,21 @@ jobs:
           fi
 
           if [ "$TRIGGER_HEAD_SHA" != "$head_sha" ]; then
-            echo "Stale workflow_run: triggered for $TRIGGER_HEAD_SHA, current head is $head_sha."
+            echo "Stale event: triggered for $TRIGGER_HEAD_SHA, current head is $head_sha."
+            exit 0
+          fi
+
+          # Agy is part of the governed gate, so fail closed if its current-head
+          # run is absent, still running, failed, or malformed. gh pr checks
+          # cannot detect a reviewer workflow that never started at all.
+          agy_runs=$(
+            gh api --paginate \
+              "repos/$REPO/actions/workflows/agy-review.yml/runs?event=pull_request&head_sha=$head_sha&per_page=100" \
+              --jq '.workflow_runs[]'
+          )
+          agy_conclusion=$(jq -sr 'sort_by(.created_at) | last | .conclusion // ""' <<<"$agy_runs")
+          if [ "$agy_conclusion" != "success" ]; then
+            echo "Merge gate blocked: current-head Agy review is not successful (latest conclusion: ${agy_conclusion:-none})."
             exit 0
           fi
 
@@ -72,68 +96,91 @@ jobs:
             --watch \
             --interval 10 \
             --fail-fast; then
-            echo "Merge gate blocked: at least one PR check is not green."
+            echo "Merge gate blocked: at least one PR check is not green. A rerun of any listed PR CI workflow will re-evaluate the gate."
             exit 0
           fi
 
-          # Reviews are not dismissed on push in the repository ruleset, so a
-          # historical approval is insufficient. Require Claude's approval to
-          # be explicitly bound to the exact head we are about to merge.
-          reviews=$(gh api "repos/$REPO/pulls/$PR_NUMBER/reviews?per_page=100")
-          claude_state=$(jq -r --arg head "$head_sha" '
+          # Fetch every page: long-lived PRs can exceed GitHub's 100-item page.
+          reviews=$(
+            gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/reviews?per_page=100" --jq '.[]' | jq -s '.'
+          )
+          review_comments=$(
+            gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/comments?per_page=100" --jq '.[]' | jq -s '.'
+          )
+
+          # Only the configured GitHub App identity can satisfy the approval
+          # requirement. The latest exact-head Claude verdict must be APPROVED.
+          latest_claude=$(jq -c --arg head "$head_sha" '
             [
               .[]
-              | select((.user.login == "claude[bot]" or .user.login == "claude") and .commit_id == $head)
+              | select(.user.login == "claude[bot]" and .commit_id == $head)
             ]
             | sort_by(.submitted_at)
-            | last
-            | .state // ""
+            | last // {}
           ' <<<"$reviews")
+          claude_state=$(jq -r '.state // ""' <<<"$latest_claude")
+          claude_body=$(jq -r '.body // ""' <<<"$latest_claude")
 
           if [ "$claude_state" != "APPROVED" ]; then
-            echo "Merge gate blocked: no exact-head Claude APPROVED review for $head_sha (latest state: ${claude_state:-none})."
+            echo "Merge gate blocked: no exact-head claude[bot] APPROVED review for $head_sha (latest state: ${claude_state:-none})."
             exit 0
           fi
 
-          # Codex is not required to run on every head. If it (or Claude)
-          # did review this exact head, however, current-head P1/P2 inline
-          # findings are blocking. Old-commit findings are intentionally not
-          # considered here; a new head must earn a fresh clean gate.
-          review_comments=$(gh api "repos/$REPO/pulls/$PR_NUMBER/comments?per_page=100")
-          blockers=$(jq -r --arg head "$head_sha" '
+          # A review body can itself carry a P1/P2 finding. Do not let an
+          # approval body that explicitly says "No P1/P2 findings" trip this.
+          claude_body_blocker=$(jq -nr --arg body "$claude_body" '
+            if ($body | test("No P1/P2 findings"; "i")) then 0
+            elif (($body | test("P1 Badge|P2 Badge"; "i")) or
+                  ($body | test("(^|\\n)[[:space:]]*\\*{0,2}P[12]([[:space:]]|[—:-])"; "i")) or
+                  ($body | test("Has P1/P2 findings"; "i"))) then 1
+            else 0 end
+          ')
+          if [ "$claude_body_blocker" -ne 0 ]; then
+            echo "Merge gate blocked: latest exact-head Claude approval body still contains a P1/P2 finding."
+            exit 0
+          fi
+
+          # Codex is best-effort and does not run on every head. If it did
+          # review this exact head, P1/P2 findings in either its top-level
+          # review body or inline comments are blocking. Match the formats the
+          # connector actually emits, including Markdown emphasis around P1/P2.
+          codex_review_blockers=$(jq -r --arg head "$head_sha" '
             [
               .[]
-              | select(.commit_id == $head)
+              | select(.user.login == "chatgpt-codex-connector[bot]" and .commit_id == $head)
+              | (.body // "")
               | select(
-                  .user.login == "claude[bot]" or
-                  .user.login == "claude" or
-                  .user.login == "chatgpt-codex-connector[bot]" or
-                  .user.login == "chatgpt-codex-connector"
+                  (test("P1 Badge|P2 Badge"; "i")) or
+                  (test("(^|\\n)[[:space:]]*\\*{0,2}P[12]([[:space:]]|[—:-])"; "i")) or
+                  ((test("P1/P2 findings"; "i")) and (test("No P1/P2 findings"; "i") | not))
                 )
+            ]
+            | length
+          ' <<<"$reviews")
+
+          codex_inline_blockers=$(jq -r --arg head "$head_sha" '
+            [
+              .[]
+              | select(.user.login == "chatgpt-codex-connector[bot]" and .commit_id == $head)
+              | (.body // "")
               | select(
-                  (.body | test("P1 Badge|P2 Badge"; "i")) or
-                  (.body | test("(^|\\n)P[12][[:space:]]*[—:-]"; "i")) or
-                  (.body | test("Severity[^\\n]*P[12]"; "i"))
+                  (test("P1 Badge|P2 Badge"; "i")) or
+                  (test("(^|\\n)[[:space:]]*\\*{0,2}P[12]([[:space:]]|[—:-])"; "i")) or
+                  ((test("P1/P2 findings"; "i")) and (test("No P1/P2 findings"; "i") | not))
                 )
             ]
             | length
           ' <<<"$review_comments")
 
+          blockers=$((codex_review_blockers + codex_inline_blockers))
           if [ "$blockers" -ne 0 ]; then
-            echo "Merge gate blocked: found $blockers current-head P1/P2 review comment(s)."
+            echo "Merge gate blocked: found $blockers current-head Codex P1/P2 finding(s)."
             exit 0
           fi
 
-          # Re-read the PR immediately before mutation so a push cannot race
-          # the checks/review evaluation above.
-          current_head=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json headRefOid --jq '.headRefOid')
-          if [ "$current_head" != "$head_sha" ]; then
-            echo "Head moved from $head_sha to $current_head while evaluating the gate; not merging."
-            exit 0
-          fi
-
-          echo "Merge gate clean: all checks green, exact-head Claude approval present, no current-head P1/P2 findings."
+          echo "Merge gate clean: all checks green, exact-head Claude approval present, Agy passed, and no current-head Codex P1/P2 findings."
           gh pr merge "$PR_NUMBER" \
             --merge \
             --delete-branch \
+            --match-head-commit "$head_sha" \
             --repo "$REPO"
