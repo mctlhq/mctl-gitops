@@ -138,7 +138,14 @@ spec:
             PLATFORM_PATTERN="(^|\.)(${PLATFORM_DOMAIN//./\\.}|${PLATFORM_DOMAIN_ALT//./\\.})$"
           fi
           echo "$DOMAIN" | grep -qvE "$PLATFORM_PATTERN" || {
-            echo "❌ Cannot add platform domain as custom: ${DOMAIN}"
+            echo "❌ ${DOMAIN} is inside the platform domain (${PLATFORM_DOMAIN})."
+            echo "   Custom domains are for a tenant's own domain, e.g. api.mycompany.com."
+            echo "   A hostname under ${PLATFORM_DOMAIN} is an operator change: add it to"
+            echo "   ingress.hosts and to the matching ingress.tls[].hosts entry in"
+            echo "   platform-gitops/services/${TEAM}/${SERVICE}/values.yaml, the same way"
+            echo "   tg.mctl.ai and ui.mctl.ai are declared, and open a PR."
+            echo "   DNS proves nothing here either: every proxied name in the zone answers"
+            echo "   with the same Cloudflare edge addresses, and the platform owns the zone."
             exit 1
           }
           echo "✅ Domain format valid"
