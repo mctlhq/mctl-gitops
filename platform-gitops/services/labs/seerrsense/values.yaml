@@ -27,13 +27,20 @@ env:
   NEBIUS_MODEL: Qwen/Qwen3-30B-A3B-Instruct-2507
 ingress:
   enabled: true
+  # seerrsense.mctl.ai is the canonical public hostname (seerrsense#7); the
+  # generated labs- name stays valid. Added here rather than through
+  # mctl_add_custom_domain because that path returns 401 and its DNS check
+  # rejects Cloudflare-proxied records — see mctl-api#262. Same pattern as
+  # tg.mctl.ai in services/labs/mctl-telegram/values.yaml.
   hosts:
+    - seerrsense.mctl.ai
     - labs-seerrsense.mctl.ai
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
   tls:
     - secretName: seerrsense-tls
       hosts:
+        - seerrsense.mctl.ai
         - labs-seerrsense.mctl.ai
 externalSecret:
   targetSecret: seerrsense-secrets
