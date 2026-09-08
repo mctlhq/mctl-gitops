@@ -1,5 +1,5 @@
-status: accepted
-updated_at: '2026-09-08T22:30:04Z'
+status: implemented
+updated_at: '2026-09-08T22:49:35Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -9,5 +9,11 @@ source:
 control:
   requires_human_approval: true
 approval:
-  approved_by: 'mashkovd'
+  approved_by: mashkovd
   approved_at: '2026-09-08T22:30:04Z'
+attempt:
+  id: aa407720-e09a-47a0-8219-106d6d5de509
+  started_at: '2026-09-08T22:47:14Z'
+  expires_at: '2026-09-09T00:57:14Z'
+  finished_at: '2026-09-08T22:49:35Z'
+pr: https://github.com/mctlhq/mctl-telegram/pull/577
