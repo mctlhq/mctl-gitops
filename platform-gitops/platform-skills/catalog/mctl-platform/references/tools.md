@@ -48,6 +48,16 @@ Complete reference for all `mctl_*` tools.
 | `mctl_list_domains` | `team_name` | All domains + status |
 | `mctl_remove_custom_domain` | `team_name, service_name, domain` | Remove domain |
 
+### Hostnames under the platform domain
+
+`mctl_add_custom_domain` is for a tenant's **own** domain (`api.mycompany.com`).
+A hostname inside the platform domain — anything ending in `.mctl.ai`, and the
+bare root — is rejected by the workflow on purpose. Those are operator changes:
+add the host to `ingress.hosts` and to the matching `ingress.tls[].hosts` entry
+in `platform-gitops/services/{team}/{service}/values.yaml` and open a PR. That is
+how `tg.mctl.ai`, `ui.mctl.ai` and `docs.mctl.ai` are declared; no custom domain
+has ever been registered through the tool.
+
 ## Database
 
 | Tool | Parameters | Description |

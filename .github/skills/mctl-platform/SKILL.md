@@ -96,6 +96,11 @@ gateway config (LAN bind, token auth, trusted K8s proxies), Control UI enabled.
 | `mctl_list_domains(team)` | All domains + status |
 | `mctl_remove_custom_domain(team, service, domain)` | Remove domain |
 
+Custom domains are for a tenant's own domain. A hostname under the platform
+domain (`*.mctl.ai`) is rejected by the workflow: add it to `ingress.hosts` and
+`ingress.tls[].hosts` in `platform-gitops/services/{team}/{service}/values.yaml`
+and open a PR, the way `tg.mctl.ai` is declared.
+
 ### Database
 | Tool | Description |
 |------|-------------|
