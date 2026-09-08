@@ -27,6 +27,8 @@ services:
     release_repo: mctlhq/mctl-docs
   - path: platform-gitops/services/labs/mctl-academy/values.yaml
     release_repo: mctlhq/mctl-academy
+  - path: platform-gitops/services/labs/seerrsense/values.yaml
+    release_repo: mctlhq/seerrsense
   - path: platform-gitops/services/admins/mctl-agents-worker/values.yaml
     release_repo: mctlhq/mctl-agents
   - path: platform-gitops/services/admins/mctl-agents-worker-exec/values.yaml
@@ -67,17 +69,6 @@ services:
     unmapped: "mctlhq/mctl-openclaw publishes no GitHub releases"
   - path: platform-gitops/services/labs/claude-remote/values.yaml
     unmapped: "mctlhq/mctl-claude-remote publishes no GitHub releases"
-  # Deployed since 2026-08 but never listed here, which is why this check has
-  # been failing on every run. seerrsense had no release pipeline at all: its
-  # CI release job passed a secret that exists nowhere in the org and died at
-  # checkout on all seven pushes to main, and every deploy was an operator
-  # running mctl_deploy_service by hand. mctlhq/seerrsense#11 puts it on
-  # release-please + release-deploy.yaml; once that cuts the first release,
-  # this entry becomes `release_repo: mctlhq/seerrsense`. It cannot be that
-  # today — an entry naming a repo with no releases is reported as a manifest
-  # error, which is the same red for a different reason.
-  - path: platform-gitops/services/labs/seerrsense/values.yaml
-    unmapped: "mctlhq/seerrsense publishes no GitHub releases yet — switch to release_repo after seerrsense#11 cuts the first one"
   - path: platform-gitops/services/labs/genai-leader/values.yaml
     unmapped: "no source repository recorded"
   - path: platform-gitops/services/labs/instruments-proxy/values.yaml
