@@ -554,8 +554,31 @@ spec:
                 name: mctl-agents-secrets
                 key: mctl-token
                 optional: true
+          # The investigator authors the requirements/design/tasks triplet the
+          # implementer then treats as its specification, so its output quality
+          # compounds through every downstream step. Pinned to Opus here rather
+          # than in mctl-agents' config/model-policy.yaml because
+          # run_issue_investigator.py reads this env var directly as its
+          # highest-priority override -- so the change needs no mctl-agents
+          # release and no agent_image bump, and reverting this PR restores
+          # claude-sonnet-5 from the `service_agent` task's `balanced` profile.
+          # The implementer deliberately stays on Sonnet for now: its recent
+          # failures were infrastructural (a missing platform contract, a cold
+          # Go toolchain exhausting the cap), not model quality, and changing
+          # both at once would make the next run unattributable.
+          - name: ISSUE_INVESTIGATOR_MODEL
+            value: "claude-opus-5"
+          # Raised 3.00 -> 8.00 alongside the model above: $3 was already tight
+          # on Sonnet (see the 8Gi memory bump below, same class of headroom
+          # problem on the largest repos) and Opus spends more per equivalent
+          # investigation. Kept well under agent-platform/policy.yaml's
+          # maxBudgetUsd ceiling of 25.00.
+          #
+          # issue-investigator-default/profile.yaml's budgetUsd MUST be changed
+          # in the same commit: scripts/validate-agent-platform.py compares the
+          # profile's declared value against this env var and fails on drift.
           - name: ISSUE_INVESTIGATOR_BUDGET_USD
-            value: "3.00"
+            value: "8.00"
         resources:
           # memory bumped 4Gi -> 8Gi: on the largest target repos (e.g.
           # mctl-openclaw — a ~500 MB shallow clone over a 100k-file monorepo)
