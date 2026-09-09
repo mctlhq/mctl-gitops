@@ -89,9 +89,9 @@ not exist yet.
 
 | Workflow | Trigger | Behaviour |
 | --- | --- | --- |
-| `cloudflare-plan.yml` | `pull_request` | fmt, validate, plan per root. A failure fails the check — there is no `continue-on-error`. Destructive changes are called out in the summary. |
+| `cloudflare-plan.yml` | `pull_request` | fmt, validate, plan per root. A failure fails the check — there is no `continue-on-error`. Destructive changes are called out in the summary. The `cloudflare-plan` job is the stable context to mark required: it runs on every pull request, including ones that touch nothing here. |
 | `cloudflare-drift.yml` | schedule | plan per root; any difference from Git fails the run and notifies. It never applies. |
-| `opentofu-state-backup.yml` | schedule | copies every state object to a dated prefix in `mctl-db-backups`. |
+| `opentofu-state-backup.yml` | schedule | copies every state object to a dated prefix in the **same** bucket, under `_backups/` — see the limitation noted above. |
 
 Apply is deliberately not automated. Drift fails closed and requires a reviewed
 decision rather than a blind reconcile.
