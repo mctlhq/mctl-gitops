@@ -1,0 +1,10 @@
+status: proposed
+updated_at: '2026-09-09T21:06:42Z'
+updated_by: mctl-agents[bot]
+source:
+  type: github_issue
+  repo: mctlhq/mctl-portal
+  issue: 122
+  url: https://github.com/mctlhq/mctl-portal/issues/122
+control:
+  requires_human_approval: true
