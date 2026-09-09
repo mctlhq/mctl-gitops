@@ -121,10 +121,16 @@ jobs:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       # Drift only reads. It uses the same Object-Read-only state credential as
       # the plan workflow, which is why it also passes -lock=false: taking the
-      # lock would be a write this credential cannot perform. Safe while nothing
-      # applies from CI — when an apply job exists, it will need the writable
-      # credential and real locking, and this job should be revisited so the two
-      # cannot read a state mid-write.
+      # lock would be a write this credential cannot perform.
+      #
+      # An apply job now exists (cloudflare-apply.yml), and this job was
+      # deliberately NOT changed to exclude it — see the concurrency comment
+      # above. Drift and apply may overlap: apply takes OpenTofu's lock and this
+      # job takes none, and R2 object writes are atomic, so a plan reading
+      # mid-apply sees the old state or the new one, never a torn one. The cost
+      # is a possible spurious drift alert during the minutes an apply runs,
+      # which fails closed. The alternative was blocking the detector for the
+      # length of a human approval, which is worse.
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_PLAN_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_PLAN_SECRET_ACCESS_KEY }}
     steps:

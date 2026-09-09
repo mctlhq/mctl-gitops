@@ -19,13 +19,23 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 ROOT="${1:?usage: $0 <root>}"
 
 # Rejected rather than stripped, so this script, cloudflare-assert-backend.sh
-# and the token chain in the workflow all reason about the same string. A
-# trailing slash otherwise walks past the .local-state-roots check below —
-# `grep -qxF` is a whole-line match — and makes assert-backend.sh derive
-# `cloudflare/account//terraform.tfstate` for a perfectly good root, which
-# fails with a message about the backend rather than about the dispatch.
+# and the token chain in the workflow all reason about the same string.
+#
+# The .local-state-roots check below is `grep -qxF`, a whole-line match, so ANY
+# non-canonical spelling of a path walks past it — a trailing slash is only the
+# most obvious. `.../mctl-ru/.` and `.../cloudflare//zones/mctl-ru` reach the
+# same place: the prefix test passes, there is no `..`, the versions.tf probe
+# resolves through the extra separators, and then the string does not equal the
+# list entry, so the one root that list exists to refuse is accepted. The same
+# spellings make assert-backend.sh derive a key like
+# `cloudflare/account//terraform.tfstate` and refuse a perfectly good root with
+# a message about the backend rather than about the dispatch form.
+#
+# So this rejects the class, not the one spelling that was reported.
 case "$ROOT" in
-  */) echo "::error::name the root without a trailing slash: ${ROOT%/}"; exit 1 ;;
+  */ | */. | */./* | *//* | ./*)
+    echo "::error::name the root in canonical form — no trailing slash, no './' or '/.', no doubled separator: $ROOT"
+    exit 1 ;;
 esac
 
 case "$ROOT" in
