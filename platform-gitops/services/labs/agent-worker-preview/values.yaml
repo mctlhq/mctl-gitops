@@ -110,6 +110,22 @@ probes:
 env:
   AGENT_API_BASE_URL: "http://labs-mctl-telegram-preview-base-service:8080/api/agent/v1"
   AGENT_MAX_BUDGET_USD: "0.50"
+  # AGENT_CREDENTIAL_DOMAIN_ID names, in non-secret form, the quota domain the
+  # worker's `claude` CLI bills against — the Vault path of the dedicated
+  # Claude Code OAuth credential below, NOT the credential. It is exported as
+  # the `domain_id` label on mctl_agent_credential_domain, so a worker can be
+  # attributed to a quota pool from metrics alone; the binary bounds it to
+  # [A-Za-z0-9._:/-]{1,128} precisely so a pasted secret cannot become a label
+  # value.
+  #
+  # This MUST land before the image that reads it. mctl-telegram's
+  # preview-deploy.yml bumps this deployment's tag on every push to main, and
+  # the new binary reads the variable through requireEnv — a deliberate
+  # fail-fast so no worker ever runs unattributable. Unset, the pod
+  # crash-loops. replicaCount here is 1 and has been running continuously
+  # since 2026-07-31, so this is not a dormant deployment that would absorb
+  # the gap unnoticed.
+  AGENT_CREDENTIAL_DOMAIN_ID: "platform/labs/agent-worker-preview/anthropic"
   AGENT_SYSTEM_PROMPT: >-
     You are the owner's communication agent for incoming Telegram direct messages, currently handling the HR/recruiter scenario: classifying inbound DMs, extracting job-opportunity details, and replying on the owner's behalf. You are running in GUARDED mode, which means some of your replies are sent for real with nobody checking them first: a propose_reply whose intent is "discovery" or "schedule" is delivered to the actual recipient immediately. Write those as finished messages you would be willing to send under the owner's name, not as drafts someone will polish. Every other intent still returns require_approval and waits for the owner, and that is expected, not a failure. Do not add a sign-off identifying yourself as an assistant — a disclosure line is appended automatically after your text, and writing your own produces it twice.
 
