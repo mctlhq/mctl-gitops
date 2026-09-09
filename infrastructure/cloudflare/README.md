@@ -90,9 +90,45 @@ drift, and reconciling back to the empty list would undo it.
 for the whole of Hetzner — every Hetzner customer, on every `mctl.ai` hostname
 including the `*.mctl.ai` wildcard that serves every tenant. It exists because
 the platform's own cluster — which is hosted in `AS24940` — was being
-classified as bot traffic on its server-to-server calls. Narrowed to the
-hostnames that actually need it rather than removed; the bypass itself is
-legitimate, its breadth was not.
+classified as bot traffic on its server-to-server calls. The bypass itself is
+legitimate; its breadth was not. Narrowed to the hostnames that actually need
+it:
+
+```
+(ip.src.asnum eq 24940 and http.host in
+  {"secrets.mctl.ai" "ops.mctl.ai" "app.mctl.ai"
+   "api.mctl.ai" "media.mctl.ai" "tg.mctl.ai"})
+```
+
+The list is not a guess. Cloudflare analytics cannot produce it on this plan —
+`clientAsn` is not an accessible dimension, the firewall-events datasets are
+either unavailable or empty, and a `skip` emits no firewall event in any case —
+so it was derived from the platform side: the hostnames that in-cluster
+workloads actually fetch server-side, as opposed to the many `*.mctl.ai` URLs
+that are only displayed to users or received as inbound webhooks.
+
+What each one is for, because the reason is what makes the entry safe to remove
+later:
+
+| host | caller |
+| --- | --- |
+| `app.mctl.ai` | Traefik `ForwardAuth`, on **every** request to openclaw, claude-remote and temporal-web; also `mctl-api` creating tenants |
+| `secrets.mctl.ai` | `mctl-api` and `mctl-portal` Vault logins, and every service's Vault-cleanup PreDelete job |
+| `ops.mctl.ai` | `mctl-api` (ArgoCD API and Dex OIDC discovery) and Grafana's OAuth token/userinfo calls |
+| `api.mctl.ai` | openclaw's MCP proxy, `mctl-agents` (`MCTL_MCP_URL`, hardcoded) and its Temporal workers |
+| `media.mctl.ai` | `seerrsense` → Overseerr, with the Access service token |
+| `tg.mctl.ai` | the `mctl-telegram` canary CronJob, deliberately probing from outside |
+
+**The failure mode is worth knowing before editing this rule.** A host that
+belongs on the list and is missing does not fail loudly at the edge: Super Bot
+Fight Mode challenges or blocks the call, and it surfaces as an unexplained
+`403` inside whichever service made it. Reverting is one API call — put the
+expression back to `(ip.src.asnum eq 24940)` — so widening first and diagnosing
+afterwards is the right order if something breaks.
+
+Several of these calls leave the cluster only to come straight back in through
+the edge. Moving them to in-cluster DNS, which is what most of the codebase
+already does, would shrink this list rather than manage it.
 
 **Worker ownership (9).** `cloudflare_workers_route` is owned here; the script
 and its seven runtime secrets stay in Wrangler. OpenTofu does not deploy Worker
