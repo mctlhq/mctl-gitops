@@ -8,8 +8,13 @@ Two DNS records:
 
 | Resource | Record |
 | --- | --- |
-| `cloudflare_dns_record.apex` | `A mctl.ru` → `91.98.10.188`, proxied |
-| `cloudflare_dns_record.wildcard` | `A *.mctl.ru` → `91.98.10.188`, proxied |
+| `module.baseline.cloudflare_dns_record.apex` | `A mctl.ru` → `91.98.10.188`, proxied |
+| `module.baseline.cloudflare_dns_record.wildcard` | `A *.mctl.ru` → `91.98.10.188`, proxied |
+
+Both rulesets — the apex redirect and the `.php` block — moved into
+`../../modules/zone-baseline` with #1103 and are managed now, together with the
+apex and wildcard records. This zone and `mctl.me` describe the same four
+baseline objects through the same module.
 
 Deliberately **not** managed here:
 
@@ -17,8 +22,6 @@ Deliberately **not** managed here:
   certificate issuer. Pinning it in Git would let a later write-capable apply
   restore a stale digest over a live challenge and break renewal. Leaving it
   out of the configuration is safe: OpenTofu only destroys what it tracks.
-- rulesets `http_request_dynamic_redirect` (301 apex → `https://mctl.ai`) and
-  `http_request_firewall_custom` (block `.php`)
 - worker routes `mctl.ru/*` and `*.mctl.ru/*` → `mctl-landing-form`.
   The ownership question is **settled** (#1089 item 9, 2026-09-09): the routes
   belong here, the script and its secrets stay in Wrangler, because OpenTofu
