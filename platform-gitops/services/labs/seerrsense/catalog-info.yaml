@@ -25,7 +25,7 @@ metadata:
     - url: https://workflows.mctl.ai
       title: Argo Workflows
       icon: github
-    - url: https://labs-seerrsense.mctl.ai
+    - url: https://seerrsense.mctl.ai
       title: Service URL
       icon: web
   labels:
