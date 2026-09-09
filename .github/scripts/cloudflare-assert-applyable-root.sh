@@ -22,19 +22,30 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 # guard that ran inside an `if` and swallowed errexit, the list path resolved
 # against the caller's cwd, and the canonical-form case that closed `*/` while
 # `*/.` and `*//*` walked past it. None were found by running the script.
-if [ "${1:-}" = "--self-test" ]; then
+# Gated on an environment variable, NOT on $1. Both call sites pass the
+# dispatched root as the first argument, so a flag here would share a namespace
+# with the least trustworthy string in the workflow: dispatching
+# `root: --self-test` would reach this branch before ROOT is assigned, run the
+# suite, print OK and exit 0 — a step called "Validate the root" passing having
+# validated nothing. As an ordinary argument, --self-test is now rejected by the
+# canonical-form/prefix arm like any other bad name, and the suite asserts that.
+if [ "${CLOUDFLARE_GUARD_SELF_TEST:-}" = "1" ]; then
   self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
   repo="$(cd "$(dirname "$self")/../.." && pwd)"
   fail=0
-  expect() { # expect <accept|reject> <root> <label>
-    local want="$1" root="$2" label="$3" rc=0
-    ( cd "$repo" && "$self" "$root" ) >/dev/null 2>&1 || rc=$?
+  expect_from() { # expect_from <cwd> <accept|reject> <root> <label>
+    local where="$1" want="$2" root="$3" label="$4" rc=0
+    # The gate is an environment variable, so it is INHERITED. Clearing it for
+    # the call under test is what stops each case re-entering the suite —
+    # without it this function forks itself until the process table is gone.
+    ( cd "$where" && CLOUDFLARE_GUARD_SELF_TEST= "$self" "$root" ) >/dev/null 2>&1 || rc=$?
     if [ "$want" = accept ] && [ "$rc" -ne 0 ]; then
       echo "self-test FAILED: $label — expected accept, got exit $rc" >&2; fail=1
     elif [ "$want" = reject ] && [ "$rc" -eq 0 ]; then
       echo "self-test FAILED: $label — expected reject, was ACCEPTED" >&2; fail=1
     fi
   }
+  expect() { expect_from "$repo" "$@"; }
 
   expect accept "infrastructure/cloudflare/account"          "a real root on the remote backend"
   # The root on .local-state-roots — the case that list exists to refuse.
@@ -52,10 +63,23 @@ if [ "${1:-}" = "--self-test" ]; then
   expect reject "infrastructure/cloudflare/../../etc"        "parent traversal"
   expect reject "infrastructure/cloudflare/modules/zone-baseline" "a module is not a root"
   # A directory that exists but carries no versions.tf.
+  # Has to live under infrastructure/cloudflare/ for the versions.tf arm to be
+  # the one that fires, so it cannot go in a temp dir elsewhere — hence a trap
+  # rather than a bare rmdir, so an aborted run leaves nothing in the tree.
   tmp_root="infrastructure/cloudflare/.self-test-not-a-root"
   mkdir -p "$repo/$tmp_root"
-  expect reject "$tmp_root"                                  "directory with no versions.tf"
-  rmdir "$repo/$tmp_root"
+  trap 'rmdir "$repo/$tmp_root" 2>/dev/null || true' EXIT
+  expect reject "$tmp_root" "directory with no versions.tf"
+
+  # No longer an entrypoint, so it must be refused like any other bad name.
+  expect reject "--self-test" "the self-test flag as a root name"
+
+  # From a foreign cwd — the case the first version of this suite was missing.
+  # Every check ran from the repository root, which is the one directory where
+  # the caller-relative list path resolved correctly, so the suite could not
+  # fail on the cwd defect it names above.
+  expect_from /tmp reject "infrastructure/cloudflare/zones/mctl-ru" "listed root, foreign cwd"
+  expect_from /tmp accept "infrastructure/cloudflare/account"       "real root, foreign cwd"
 
   [ "$fail" -eq 0 ] || exit 1
   echo "self-test OK"

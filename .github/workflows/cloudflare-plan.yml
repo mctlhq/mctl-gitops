@@ -545,9 +545,13 @@ jobs:
         with:
           persist-credentials: false
       - name: Root guard
-        run: .github/scripts/cloudflare-assert-applyable-root.sh --self-test
+        env:
+          CLOUDFLARE_GUARD_SELF_TEST: '1'
+        run: .github/scripts/cloudflare-assert-applyable-root.sh
       - name: Backend assertion
-        run: .github/scripts/cloudflare-assert-backend.sh --self-test
+        env:
+          CLOUDFLARE_GUARD_SELF_TEST: '1'
+        run: .github/scripts/cloudflare-assert-backend.sh
 
   # The single stable context to mark required in the branch ruleset. It runs on
   # every pull request, including ones that touch nothing here, so it always has

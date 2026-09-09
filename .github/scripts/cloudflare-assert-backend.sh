@@ -20,7 +20,10 @@ set -euo pipefail
 # Same reason as the sibling script: this code fails by ACCEPTING, and its
 # endpoint check was a substring match until review caught that
 # https://attacker.example/?q=<expected host> satisfied it.
-if [ "${1:-}" = "--self-test" ]; then
+# Environment-gated for the same reason as the sibling script: $1 here is the
+# dispatched root, and a flag sharing that namespace makes this guard exit 0 on
+# an input it should refuse.
+if [ "${CLOUDFLARE_GUARD_SELF_TEST:-}" = "1" ]; then
   self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
   tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
   mkdir -p "$tmp/dd"
@@ -33,7 +36,7 @@ if [ "${1:-}" = "--self-test" ]; then
   }
   expect() { # expect <accept|reject> <root> <label>
     local want="$1" root="$2" label="$3" rc=0
-    "$self" "$root" "$tmp/dd" >/dev/null 2>&1 || rc=$?
+    CLOUDFLARE_GUARD_SELF_TEST= "$self" "$root" "$tmp/dd" >/dev/null 2>&1 || rc=$?
     if [ "$want" = accept ] && [ "$rc" -ne 0 ]; then
       echo "self-test FAILED: $label — expected accept, got exit $rc" >&2; fail=1
     elif [ "$want" = reject ] && [ "$rc" -eq 0 ]; then
