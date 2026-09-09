@@ -46,6 +46,25 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
   exit 1
 fi
 
+# A leftover tfvars file silently wins over everything below. Terraform ranks
+# environment variables LOWEST among variable sources, under terraform.tfvars
+# and *.auto.tfvars -- measured, not assumed: with `probe = "FROM_TFVARS_FILE"`
+# on disk and TF_VAR_probe=FROM_ENV_VAR exported, the output is
+# FROM_TFVARS_FILE, and it becomes FROM_ENV_VAR only once the file is deleted.
+# So a stale terraform.tfvars from before the Keychain move -- the exact file
+# this replaced -- would quietly keep supplying its plaintext values with no
+# error and no warning, and this script's success message would be a lie.
+_mctl_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+for _mctl_f in "$_mctl_dir"/terraform.tfvars "$_mctl_dir"/*.auto.tfvars "$_mctl_dir"/*.auto.tfvars.json; do
+  [ -e "$_mctl_f" ] || continue
+  echo "tfenv.sh: $_mctl_f exists and OVERRIDES these exports -- Terraform ranks" >&2
+  echo "tfenv.sh: environment variables below tfvars files. Move its values into" >&2
+  echo "tfenv.sh: the Keychain and delete it; see README.md." >&2
+  unset _mctl_dir _mctl_f
+  return 1 2>/dev/null || exit 1
+done
+unset _mctl_dir _mctl_f
+
 _mctl_kc() {
   local service="$1" account="$2" value
   if ! value=$(security find-generic-password -s "$service" -a "$account" -w 2>/dev/null); then
