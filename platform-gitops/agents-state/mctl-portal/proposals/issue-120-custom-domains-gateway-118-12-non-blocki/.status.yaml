@@ -1,5 +1,5 @@
-status: proposed
-updated_at: '2026-09-09T17:32:31Z'
+status: implemented
+updated_at: '2026-09-09T17:55:14Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -8,3 +8,12 @@ source:
   url: https://github.com/mctlhq/mctl-portal/issues/120
 control:
   requires_human_approval: true
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-09-09T17:40:38Z'
+attempt:
+  id: 0fea47ff-067b-4b2c-bd2c-6356a744c5b6
+  started_at: '2026-09-09T17:43:20Z'
+  expires_at: '2026-09-09T19:53:20Z'
+  finished_at: '2026-09-09T17:55:14Z'
+pr: https://github.com/mctlhq/mctl-portal/pull/121

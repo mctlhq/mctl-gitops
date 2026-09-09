@@ -220,6 +220,107 @@ ingress:
       hosts:
         - tg-preview.mctl.ai
 extraContainers: []
+
+# Deny /metrics at the edge — mctlhq/mctl-telegram#588.
+#
+# The Prometheus exposition was reachable anonymously from the public internet
+# on every ingressed hostname (verified 2026-09-09: HTTP 200, 71 mctl_* samples
+# here and 185 on each stable host). base-service's Ingress template renders
+# exactly one path per host, `/` Prefix, so every route the app serves is
+# published — /metrics included.
+#
+# METRICS_ALLOW_CIDR does NOT close this, and setting it would look like it
+# had. That guard compares the real TCP socket peer captured by ConnContext
+# rather than r.RemoteAddr, which is correct for its purpose — a forged
+# X-Forwarded-For cannot bypass it — but behind an L7 ingress controller the
+# socket peer of every proxied request is traefik's own pod, inside the pod
+# CIDR. An allowlist covering the cluster would admit internet traffic arriving
+# through the ingress while correctly admitting the scrape, indistinguishable
+# at the handler. The same reasoning is recorded at the scrape definition in
+# bootstrap/templates/mctl-platform/mctl-telegram-agent-preview-monitor.yaml.
+#
+# So the block belongs at the edge, where the real client address is what
+# traefik sees. An IngressRoute claims Host && PathPrefix(`/metrics`) at a
+# priority far above the chart Ingress's `/` route, and hands it to a
+# Middleware whose allowlist is a range nothing can originate from.
+#
+# Scraping is untouched: the VMServiceScrape targets the Service directly,
+# in-cluster, and never traverses traefik.
+extraObjects:
+  # ipAllowList with an unroutable range is how traefik v3 spells "deny": there
+  # is no first-class 403 middleware. 192.0.2.0/24 is TEST-NET-1 (RFC 5737),
+  # reserved for documentation and not routable on the internet, so no client
+  # can ever match it. Note the v3 spelling — the installed CRD group is
+  # traefik.io (traefik v3.7.10); v2's traefik.containo.us called this
+  # ipWhiteList, and that name silently does nothing here.
+  #
+  # Labels are literal rather than `include "base-service.labels"`. A values
+  # file must parse as YAML BEFORE extra-objects.yaml runs tpl over it, so a
+  # bare `{{- include ... | nindent 8 }}` line is a values parse error
+  # ("did not find expected node content"), not a template. Only quoted
+  # scalars can carry templates here, which is why the names below do and the
+  # label maps do not. app.kubernetes.io/instance is included by hand so
+  # ArgoCD resource tracking and label selectors still find these two.
+  - apiVersion: traefik.io/v1alpha1
+    kind: Middleware
+    metadata:
+      name: '{{ include "base-service.fullname" . }}-deny-metrics'
+      labels:
+        app.kubernetes.io/name: base-service
+        app.kubernetes.io/instance: labs-mctl-telegram-preview
+        app.kubernetes.io/part-of: mctl-platform
+        app.kubernetes.io/managed-by: Helm
+        mctl.me/component: metrics-edge-deny
+    spec:
+      ipAllowList:
+        sourceRange:
+          - 192.0.2.0/24
+  - apiVersion: traefik.io/v1alpha1
+    kind: IngressRoute
+    metadata:
+      name: '{{ include "base-service.fullname" . }}-metrics-deny'
+      labels:
+        app.kubernetes.io/name: base-service
+        app.kubernetes.io/instance: labs-mctl-telegram-preview
+        app.kubernetes.io/part-of: mctl-platform
+        app.kubernetes.io/managed-by: Helm
+        mctl.me/component: metrics-edge-deny
+    spec:
+      # websecure only, and that is complete rather than a gap. The `web`
+      # entrypoint carries a GLOBAL redirect to https, set in traefik's STATIC
+      # config by the kube-hetzner module rather than anywhere in this repo:
+      #   --entryPoints.web.http.redirections.entryPoint.to=:443
+      #   --entryPoints.web.http.redirections.entryPoint.scheme=https
+      #   --entryPoints.web.http.redirections.entryPoint.permanent=true
+      # An entrypoint-level redirection is applied before any router matches,
+      # so a plain-HTTP request never reaches a backend on :80 — verified:
+      # `curl http://tg-preview.mctl.ai/metrics` answers 301 to the https URL,
+      # and the retried request arrives on websecure where this route applies.
+      entryPoints:
+        - websecure
+      routes:
+        # Explicit priority rather than trusting traefik's default, which is
+        # derived from rule length. This rule IS longer than the chart
+        # Ingress's `Host(...) && PathPrefix(/)` and would win on its own, but
+        # that is an implementation detail of the router and not something to
+        # rest a security control on: any future change to the chart's path
+        # could silently reorder them.
+        - match: Host(`tg-preview.mctl.ai`) && PathPrefix(`/metrics`)
+          kind: Rule
+          priority: 1000
+          middlewares:
+            - name: '{{ include "base-service.fullname" . }}-deny-metrics'
+          # A route needs a backend even when nothing reaches it; the
+          # middleware rejects before the service is dialled.
+          services:
+            - name: '{{ include "base-service.fullname" . }}'
+              # Literal, because a values file must parse as YAML before tpl
+              # runs — a bare {{ }} here is a parse error, and quoting it would
+              # make traefik read "8080" as a port NAME. Keep in sync with
+              # service.port above.
+              port: 8080
+      tls:
+        secretName: mctl-telegram-preview-tls
 dbSecret:
   vaultPath: "teams/labs/mctl-telegram-preview/database"
   secretName: "labs-mctl-telegram-preview-db-creds"
