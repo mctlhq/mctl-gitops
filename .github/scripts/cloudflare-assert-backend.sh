@@ -16,7 +16,12 @@
 # Usage: cloudflare-assert-backend.sh <root> <tf-data-dir>
 set -euo pipefail
 
-# --self-test builds synthetic resolved-backend files and checks each arm.
+# Usage:  CLOUDFLARE_GUARD_SELF_TEST=1 cloudflare-assert-backend.sh
+#
+# NOT --self-test: $1 here is the dispatched root, so the flag would share a
+# namespace with it and is refused like any other bad name.
+#
+# The suite builds synthetic resolved-backend files and checks each arm.
 # Same reason as the sibling script: this code fails by ACCEPTING, and its
 # endpoint check was a substring match until review caught that
 # https://attacker.example/?q=<expected host> satisfied it.

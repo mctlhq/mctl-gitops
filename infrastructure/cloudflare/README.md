@@ -61,20 +61,32 @@ Nothing is committed. CI reads:
 - `R2_CF_STATE_ACCESS_KEY_ID` / `R2_CF_STATE_SECRET_ACCESS_KEY` — Object Read &
   Write on `mctl-cloudflare-state` alone, used by the backup workflow.
 - `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` — writable on
-  `mctl-terraform-state`, used only to back that bucket up. Never exposed to a
-  job that plans unreviewed pull-request code.
+  `mctl-terraform-state` **and** `mctl-etcd-snapshots`. Not a backup-only
+  credential: `.github/workflows/terraform.yml` uses it as the state backend
+  for `infrastructure/k3s-preview` and passes it into the cluster as
+  `TF_VAR_etcd_s3_*`, so it has consumers outside this directory entirely.
+  Never exposed to a job that plans unreviewed pull-request code.
 - `CLOUDFLARE_API_TOKEN` — plan identity, **read-only across all zones**
   (`Cache Rules`, `DNS`, `Zone`, `Zone Settings`, `Zone WAF`, `Single Redirect`,
   `Page Rules`, `Access: Apps and Policies`, `Email Routing Rules`,
   `Workers Routes`, all `Read`). Verified read-only: a `POST` to create a DNS
   record is rejected. It is never given to `cloudflare-apply.yml`.
 
-Everything above is a **repository** secret. The two writable ones among them —
-`R2_CF_STATE_*` and `R2_ACCESS_KEY_ID`/`R2_SECRET_ACCESS_KEY` — should not be,
-and #1118 tracks moving them to the `state-backup` environment: that
-environment's branch policy currently protects `opentofu-state-backup.yml`
-rather than the credentials it uses, because a repository secret is readable by
-any workflow in the repository.
+Everything above is a **repository** secret. `R2_CF_STATE_*` should not be:
+it has exactly one consumer, `opentofu-state-backup.yml`, whose `state-backup`
+environment currently protects the workflow file rather than the credential —
+because a repository secret is readable by any workflow in the repository.
+#1118 tracks moving it.
+
+`R2_ACCESS_KEY_ID`/`R2_SECRET_ACCESS_KEY` is **not** part of that move, however
+similar it looks. `terraform.yml` reads the same pair with no `environment:` at
+all, so scoping it to `state-backup` and dropping it from repository scope —
+which is what the paragraph below prescribes for the apply credentials — would
+leave that workflow with an empty `AWS_ACCESS_KEY_ID`, break `terraform init`
+against R2, and fail every push touching `infrastructure/k3s-preview/**`.
+Loudly rather than dangerously, but it is a different subsystem's deploy path,
+broken by following this page. Moving it means giving `terraform.yml` an
+environment first.
 
 The apply credentials below are **environment secrets on `cloudflare-apply`,
 not repository secrets**, for exactly that reason — storing them at repository

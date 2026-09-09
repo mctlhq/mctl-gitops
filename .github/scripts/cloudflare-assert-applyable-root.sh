@@ -16,8 +16,15 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-# --self-test exercises every arm of this file against the real tree plus one
-# temporary fixture. It exists because these checks fail by ACCEPTING, and each
+# Usage:  CLOUDFLARE_GUARD_SELF_TEST=1 cloudflare-assert-applyable-root.sh
+#
+# NOT --self-test. The sibling scripts in this directory take that flag, but
+# here $1 is the dispatched root, so a flag would share a namespace with it —
+# see the gate below. `--self-test` as an argument is now deliberately refused,
+# and the suite asserts it.
+#
+# The suite exercises every arm of this file against the real tree plus two
+# temporary fixtures. It exists because these checks fail by ACCEPTING, and each
 # of them has been silently wrong at least once while reading as correct: the
 # guard that ran inside an `if` and swallowed errexit, the list path resolved
 # against the caller's cwd, and the canonical-form case that closed `*/` while
@@ -82,9 +89,12 @@ if [ "${CLOUDFLARE_GUARD_SELF_TEST:-}" = "1" ]; then
   # has to be built.
   #
   # SCRIPT_DIR and REPO_ROOT both derive from BASH_SOURCE, so the guard is run
-  # from a copy in a fake tree: its helper exits non-zero, and the root it is
-  # asked about is one the list would have refused had the helper worked.
+  # from a copy in a fake tree whose helper exits non-zero. The fixture list is
+  # empty, so the root asked about is one the guard would otherwise ACCEPT —
+  # that is what makes a refusal attributable to the helper failure alone, and
+  # it is what the control below pins down. The root name is incidental.
   stub="$(mktemp -d)"
+  trap 'rm -rf "$stub"' EXIT
   mkdir -p "$stub/.github/scripts" "$stub/infrastructure/cloudflare/zones/mctl-ru"
   cp "$self" "$stub/.github/scripts/"
   : > "$stub/infrastructure/cloudflare/zones/mctl-ru/versions.tf"
@@ -110,6 +120,14 @@ if [ "${CLOUDFLARE_GUARD_SELF_TEST:-}" = "1" ]; then
   rm -rf "$stub"
 
   # From a foreign cwd — the case the first version of this suite was missing.
+  #
+  # DO NOT DELETE THE `reject` CASE WHEN .local-state-roots EMPTIES. Only that
+  # half can fail on the cwd defect: with the list path resolved against the
+  # caller, an unresolvable list yields empty output and exit 0, so the paired
+  # `accept` passes either way. It is the one case whose expected verdict comes
+  # from the list, and #1103 exists to take `zones/mctl-ru` off that list. When
+  # it goes, replace this case against whatever root is listed then — or, if
+  # none is, with a fixture tree like the failing-helper case above.
   # Every check ran from the repository root, which is the one directory where
   # the caller-relative list path resolved correctly, so the suite could not
   # fail on the cwd defect it names above.
