@@ -29,11 +29,30 @@
 # allows everything. Same trap is documented in
 # platform-gitops/services/labs/mctl-telegram/values.yaml.
 #
+# Namespace traefik, not kube-system, because that is where the ingress
+# controller runs and this object is its configuration -- the sibling
+# traefik-helmchartconfig.yaml.tpl is in kube-system only because a
+# HelmChartConfig must share a namespace with its HelmChart, which is a
+# requirement rather than a convention. Traefik's kubernetescrd provider is
+# started with no namespace restriction, so it would find this object either
+# way; the placement is about where it belongs, not about whether it works.
+#
+# The namespace is not an undeclared dependency. kube-hetzner's
+# templates/traefik_ingress.yaml.tpl declares `kind: Namespace` alongside the
+# HelmChart, and that manifest is applied by `kubectl apply -k
+# /var/post_install` (init.tf) -- which then waits for the traefik namespace's
+# deployments to become Available and for the load balancer to get an IP.
+# The user kustomization that applies THIS file runs later:
+# kustomization_user.tf declares `depends_on = [terraform_data.kustomization]`,
+# i.e. on that same post-install step. A from-zero rebuild therefore has the
+# namespace, and a running Traefik, before this manifest is applied.
+#
 # Source: https://api.cloudflare.com/client/v4/ips
 # Fetched 2026-09-09, etag 38f79d050aa027e3be3865e495dcc9bc.
-# .github/workflows/cloudflare-origin-allowlist.yml re-checks this daily and
-# fails when it drifts. Do not hand-edit: regenerate from the API and keep the
-# etag comment in sync.
+# A daily check that this list still matches the API ships with the follow-up
+# pull request that references the middleware from the entrypoint. Until then
+# the list is unguarded. Do not hand-edit: regenerate from the API and keep
+# the etag comment in sync.
 apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
