@@ -100,71 +100,109 @@ jobs:
           }
           echo "no committed .terraform paths"
 
-      # A root is discovered by walking the pull request's own tree, so a root
-      # deleted by the pull request is invisible to `discover`: the matrix
-      # simply omits it, every remaining root plans clean, and the required
-      # check goes green. Nothing in the plan says that the resources the
-      # deleted root managed are about to become unmanaged — they stay live in
-      # Cloudflare, and cloudflare-drift.yml stops watching them for the same
-      # reason. If the root held Zero Trust policies, the policies survive
-      # their own removal from Git, unwatched.
+      # `discover` keys on versions.tf in the pull request's own tree, so a
+      # root the pull request removes is simply absent from the matrix: the
+      # remaining roots plan clean and the required check goes green, while the
+      # objects that root managed stay live in Cloudflare and drop out of
+      # cloudflare-drift.yml's identical tree-walk. If the root held Zero Trust
+      # policies, the policies outlive their own removal from Git, unwatched.
       #
-      # There is no plan that can show this: planning the base revision of a
-      # deleted root reports "in sync", which is true and beside the point.
-      # So the guard blocks instead of reporting, and the escape hatch is a
-      # label — a deliberate, reviewer-visible act rather than a silent one.
-      - name: Guard against silently removed roots
+      # No plan can show this — planning the base revision of a removed root
+      # reports "in sync", which is true and beside the point — so this blocks
+      # rather than reports, and the escape hatch is a label: a deliberate,
+      # reviewer-visible act. Three shapes reach the same end state and are all
+      # treated alike: the root stops being discovered, it keeps versions.tf but
+      # loses its backend, or configuration is added that no root covers.
+      - name: Guard root coverage
         env:
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
         run: |
           set -euo pipefail
-          # workflow_dispatch carries neither of those payload fields, so an
-          # early "no base, nothing to check" exit would hand out a green
-          # cloudflare-plan on any SHA on demand: dispatch a manual run against
-          # the head of a pull request this guard just failed, and the newer
-          # check run replaces the red one under the same required context. The
-          # base is therefore derived rather than assumed. A manual run also has
-          # no labels, so a legitimately labelled removal fails here — that is
-          # the intended direction to fail in.
+          # workflow_dispatch carries neither payload field, and an early
+          # "no base, nothing to check" exit would hand out a green
+          # cloudflare-plan on demand: dispatch a manual run against the head of
+          # a pull request this guard just failed, and the newer check run
+          # replaces the red one under the same required context. So the base is
+          # derived rather than assumed. A manual run has no labels either, so a
+          # legitimately labelled removal fails there — the direction to fail in.
           if [ -z "${BASE:-}" ]; then
             git fetch --no-tags --quiet origin "$DEFAULT_BRANCH"
             BASE=$(git merge-base "origin/$DEFAULT_BRANCH" HEAD)
             echo "no event base ref; derived from origin/$DEFAULT_BRANCH: $BASE"
           fi
-          # --diff-filter=D and not DR, deliberately. Rename detection is on,
-          # but the pathspec limits it: git only pairs a deletion with an
-          # addition that also matches, so the two rename shapes that DO lose
-          # coverage still arrive here as D. Measured on a scratch repository:
-          #
-          #   versions.tf -> versions.tf.bak      D  (new name not a root)
-          #   root moved out of the tree          D  (new path not a root)
-          #   root dir renamed in place           R  (not reported here)
-          #   root deleted                        D
-          #
-          # The one case that is not reported is the one where nothing is lost:
-          # the root is still under infrastructure/cloudflare, `discover` still
-          # walks it, and its backend key moved with it, so plan and drift keep
-          # covering exactly the same resources. Adding R would only block a
-          # legitimate directory rename. If rename detection is ever off or
-          # over its limit, that case degrades to D+A and blocks instead —
-          # fail-closed, which is the right direction.
-          removed=$(git -c core.quotePath=false diff -z --name-only --diff-filter=D \
-                      "$BASE"...HEAD -- 'infrastructure/cloudflare/**/versions.tf' \
-                    | tr '\0' '\n')
-          [ -n "$removed" ] || { echo "no roots removed"; exit 0; }
+          set -euo pipefail
+
+          # Root and backend sets are read straight out of the two trees. An earlier
+          # version of this guard diffed versions.tf paths instead and was wrong twice
+          # over, because git pairs a deletion with an addition by CONTENT similarity,
+          # not by path: one pull request that drops root A and adds unrelated root B is
+          # reported as a single R100 rename of A to B, since every versions.tf is
+          # mostly the same required_providers boilerplate. Reproduced — the diff-based
+          # guard saw nothing at all. Comparing sets has no heuristic in it.
+          roots_at() {
+            git -c core.quotePath=false ls-tree -r -z --name-only "$1" -- infrastructure/cloudflare \
+              | tr '\0' '\n' \
+              | awk -F/ 'NF >= 4 && $NF == "versions.tf" { sub("/versions\\.tf$", ""); print }' \
+              | sort -u
+          }
+          backends_at() {
+            git -c core.quotePath=false ls-tree -r -z --name-only "$1" -- infrastructure/cloudflare \
+              | tr '\0' '\n' \
+              | awk -F/ 'NF >= 4 && $NF == "backend.tf" { print }' \
+              | sort -u
+          }
+
+          problems=""
+
+          # 1. A root that stops being discoverable — deleted, renamed, moved out of the
+          #    tree, or its versions.tf renamed — is never planned again, and
+          #    cloudflare-drift.yml stops watching it for the same reason, while its
+          #    resources stay live in Cloudflare.
+          gone=$(comm -23 <(roots_at "$BASE") <(roots_at HEAD) || true)
+          [ -z "$gone" ] || problems="${problems}roots no longer discovered:\n$gone\n"
+
+          # 2. A root that keeps its versions.tf but loses backend.tf silently falls back
+          #    to the local backend. On a fresh runner that means an empty state, so the
+          #    plan is an ordinary create-only plan and the check goes green while the
+          #    root has been detached from its real state in R2. Only roots that survive
+          #    are checked; a root that is gone is already reported above.
+          for r in $(comm -12 <(roots_at "$BASE") <(roots_at HEAD)); do
+            if grep -qxF "$r/backend.tf" <<< "$(backends_at "$BASE")" \
+               && ! grep -qxF "$r/backend.tf" <<< "$(backends_at HEAD)"; then
+              problems="${problems}root detached from its remote backend: $r\n"
+            fi
+          done
+
+          # 3. Configuration that belongs to no discovered root is never planned or
+          #    watched at all: `discover` keys on versions.tf, so a directory with
+          #    backend.tf and resources but no versions.tf is simply invisible. Shared
+          #    modules are the one legitimate case of .tf files outside a root.
+          orphans=""
+          while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            case "$f" in infrastructure/cloudflare/modules/*) continue ;; esac
+            d=$(dirname "$f"); inside=no
+            while [ "$d" != "infrastructure/cloudflare" ] && [ "$d" != "." ]; do
+              if grep -qxF "$d" <<< "$(roots_at HEAD)"; then inside=yes; break; fi
+              d=$(dirname "$d")
+            done
+            [ "$inside" = yes ] || orphans="${orphans}$f\n"
+          done <<< "$(git -c core.quotePath=false ls-tree -r -z --name-only HEAD -- infrastructure/cloudflare | tr '\0' '\n' | grep '\.tf$' || true)"
+          [ -z "$orphans" ] || problems="${problems}.tf files outside any discovered root:\n${orphans}"
+
+          [ -n "$problems" ] || { echo "every root at $BASE is still discovered, backed and complete"; exit 0; }
 
           if jq -e 'if type == "array" then index("cloudflare-root-removal") else null end' \
                <<< "${LABELS:-[]}" > /dev/null; then
-            echo "::notice::root removal acknowledged by the cloudflare-root-removal label"
-            echo "$removed"
+            echo "::notice::acknowledged by the cloudflare-root-removal label"
+            printf "%b" "$problems"
             exit 0
           fi
-
-          echo "::error::this pull request deletes a Cloudflare root; its resources would stay live in Cloudflare but leave both plan and drift coverage"
-          echo "$removed"
-          echo "Destroy the root's resources first (empty its .tf files, apply, remove its state key), then delete the directory. To remove the directory without destroying — an intentional hand-off of ownership — label this pull request cloudflare-root-removal."
+          echo "::error::a Cloudflare root would leave plan and drift coverage while its resources stay live"
+          printf "%b" "$problems"
+          echo "Give every root a versions.tf and a backend.tf, and destroy a root's resources before removing it (empty its .tf files, apply, remove its state key). To hand ownership over deliberately instead, label this pull request cloudflare-root-removal."
           exit 1
 
   discover:
@@ -183,8 +221,16 @@ jobs:
       - id: find
         run: |
           set -euo pipefail
-          roots=$(find infrastructure/cloudflare -name versions.tf -mindepth 2 \
-                    -exec dirname {} \; | sort | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          # find exits 1 on a missing start directory, which under set -e would
+          # abort discovery and fail the required check — permanently, with no
+          # way to merge the pull request that removed the last root, label or
+          # not. An absent directory is a legitimate state: no roots.
+          if [ -d infrastructure/cloudflare ]; then
+            roots=$(find infrastructure/cloudflare -name versions.tf -mindepth 2 \
+                      -exec dirname {} \; | sort | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          else
+            roots='[]'
+          fi
           echo "roots=$roots" >> "$GITHUB_OUTPUT"
           echo "count=$(echo "$roots" | jq 'length')" >> "$GITHUB_OUTPUT"
           echo "Discovered roots: $roots"
@@ -292,7 +338,11 @@ jobs:
         run: |
           set -euo pipefail
           destroy=$(jq '[.resource_changes[]? | select(.change.actions | index("delete"))] | length' plan.json)
-          create=$(jq '[.resource_changes[]? | select(.change.actions == ["create"])] | length' plan.json)
+          # index("create"), not == ["create"]: a replacement is represented as
+          # ["delete","create"] (or the reverse), and an equality test drops it
+          # from this column while the destroy column below still counts it —
+          # a table that contradicts itself and understates the work.
+          create=$(jq '[.resource_changes[]? | select(.change.actions | index("create"))] | length' plan.json)
           update=$(jq '[.resource_changes[]? | select(.change.actions == ["update"])] | length' plan.json)
           imports=$(jq '[.resource_changes[]? | select(.change.importing != null)] | length' plan.json)
           {

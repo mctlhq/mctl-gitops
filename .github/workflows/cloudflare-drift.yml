@@ -32,8 +32,16 @@ jobs:
       - id: find
         run: |
           set -euo pipefail
-          roots=$(find infrastructure/cloudflare -name versions.tf -mindepth 2 \
-                    -exec dirname {} \; | sort | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          # find exits 1 on a missing start directory, which under set -e would
+          # abort discovery and fail the required check — permanently, with no
+          # way to merge the pull request that removed the last root, label or
+          # not. An absent directory is a legitimate state: no roots.
+          if [ -d infrastructure/cloudflare ]; then
+            roots=$(find infrastructure/cloudflare -name versions.tf -mindepth 2 \
+                      -exec dirname {} \; | sort | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          else
+            roots='[]'
+          fi
           echo "roots=$roots" >> "$GITHUB_OUTPUT"
           echo "count=$(echo "$roots" | jq 'length')" >> "$GITHUB_OUTPUT"
 
