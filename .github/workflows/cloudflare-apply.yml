@@ -36,12 +36,24 @@ permissions:
   contents: read
 
 concurrency:
-  # Same group as cloudflare-drift.yml, and cancel-in-progress: false. Drift and
-  # apply contend for the same state lock, and this workflow — unlike drift —
-  # takes it for real. Cancelling mid-apply is how a lock outlives the run that
-  # held it. The group covers both jobs, so nothing else touches the state
-  # between a plan and the apply that approves it.
-  group: cloudflare-tofu
+  # Per root, not one group for the whole control plane. Each root has its own
+  # state key and its own lock, so serialising two different roots against each
+  # other buys nothing — and it costs something real now that this workflow
+  # waits for a human.
+  #
+  # A run holds its group from the moment `plan` starts until `apply` finishes,
+  # and `apply` sits in `waiting` on the environment reviewer for as long as
+  # that takes (GitHub allows up to 30 days). GitHub cancels a *previously
+  # pending* run when a new one queues in the same group; cancel-in-progress:
+  # false protects the run that is executing, not the one queued behind it. With
+  # a single shared group that means a queued nightly drift run, or a second
+  # queued apply, is dropped with no signal beyond a cancelled run among green
+  # ones — and for an apply, the operator would have no way to tell their change
+  # never landed.
+  #
+  # cloudflare-drift.yml carries the matching per-root group so apply and drift
+  # still serialise where it actually matters: on the same root's state.
+  group: cloudflare-tofu-${{ inputs.root }}
   cancel-in-progress: false
 
 jobs:

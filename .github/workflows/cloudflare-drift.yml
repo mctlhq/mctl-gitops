@@ -15,11 +15,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  # Never race an apply or another drift run for the same state lock.
-  group: cloudflare-tofu
-  cancel-in-progress: false
-
 jobs:
   discover:
     name: discover roots
@@ -99,6 +94,17 @@ jobs:
       fail-fast: false
       matrix:
         root: ${{ fromJson(needs.discover.outputs.roots) }}
+
+    # Per root, matching cloudflare-apply.yml, so a drift plan never races an
+    # apply for the same state lock — and so that waiting on one root's apply
+    # cannot hold up, or silently cancel, drift on every other root. This was a
+    # single workflow-level group until cloudflare-apply.yml grew a human
+    # approval step: a run holds its group while waiting for a reviewer, and
+    # GitHub cancels whatever is pending behind it.
+    concurrency:
+      group: cloudflare-tofu-${{ matrix.root }}
+      cancel-in-progress: false
+
     defaults:
       run:
         working-directory: ${{ matrix.root }}

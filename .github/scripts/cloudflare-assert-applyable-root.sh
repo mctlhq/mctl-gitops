@@ -10,6 +10,11 @@
 # question, answered in the apply job where that credential is in scope.
 set -euo pipefail
 
+# Resolved from this script's own location, not the caller's cwd. Two jobs call
+# it now, and a relative path would make its correctness depend on both of them
+# having cd'd to the workspace first — true today, enforced by nothing.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 ROOT="${1:?usage: $0 <root>}"
 
 case "$ROOT" in
@@ -37,7 +42,14 @@ fi
 # computed from nothing and proposes creating everything the root describes.
 # That is the most destructive shape this workflow could take, and it is
 # silent — the plan looks ordinary.
-if .github/scripts/cloudflare-local-state-roots.sh | grep -qxF -- "$ROOT"; then
+#
+# The helper runs in an assignment rather than inside the `if`. Bash suspends
+# errexit for a command evaluated as a condition, so `if helper | grep -q` would
+# read every failure of the helper — renamed, not executable, unreadable list —
+# as "not listed", and accept the root. That is the same silent-acceptance shape
+# the check exists to prevent. cloudflare-drift.yml already does it this way.
+local_roots="$("$SCRIPT_DIR/cloudflare-local-state-roots.sh")"
+if printf '%s\n' "$local_roots" | grep -qxF -- "$ROOT"; then
   echo "::error::'$ROOT' is listed in .local-state-roots — it has no remote state to apply against"
   exit 1
 fi
