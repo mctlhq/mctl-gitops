@@ -6,7 +6,7 @@ Access one — different roots, different blockers.
 
 ## Scope
 
-21 objects: 12 DNS records, the `http_request_firewall_custom` ruleset, seven
+22 objects: 13 DNS records, the `http_request_firewall_custom` ruleset, seven
 Email Routing forward rules and the catch-all.
 
 `A *.mctl.ai` is the path every tenant host resolves through. Nothing else in
@@ -52,4 +52,14 @@ again — with the read-only plan identity:
 Plan: 21 to import, 0 to add, 0 to change, 0 to destroy.
 Apply complete! Resources: 21 imported, 0 added, 0 changed, 0 destroyed.
 tofu plan -> No changes.
+```
+
+The counts above are what the import run itself printed and are left as they
+were. The 22nd object arrived afterwards: the Google Search Console TXT record
+at the apex, created through the API because this root cannot apply, then
+pinned here with an `import` block so the plan stays empty. CI re-proved it on
+that change:
+
+```
+Plan: 22 to import, 0 to add, 0 to change, 0 to destroy.
 ```
