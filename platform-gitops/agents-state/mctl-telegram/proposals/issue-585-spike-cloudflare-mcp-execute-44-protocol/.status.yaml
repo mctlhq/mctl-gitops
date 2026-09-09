@@ -1,6 +1,6 @@
-status: needs-triage
-updated_at: '2026-09-09T22:07:15Z'
-updated_by: mctl-agents[bot]
+status: accepted
+updated_at: '2026-09-09T22:57:32Z'
+updated_by: mashkovd
 source:
   type: github_issue
   repo: mctlhq/mctl-telegram
@@ -11,13 +11,3 @@ control:
 approval:
   approved_by: mashkovd
   approved_at: '2026-09-09T22:03:18Z'
-attempt:
-  id: 9fc2cb63-5ea1-4719-834e-f55959b730f9
-  started_at: '2026-09-09T22:05:51Z'
-  expires_at: '2026-09-10T00:15:51Z'
-  finished_at: '2026-09-09T22:07:15Z'
-failure:
-  code: no-commits
-  stage: agent
-  message: implementer produced no commits
-notes: 'agent: implementer produced no commits'
