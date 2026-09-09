@@ -60,19 +60,28 @@ Nothing is committed. CI reads:
   `-lock=false`, because taking the state lock is itself a write.
 - `R2_CF_STATE_ACCESS_KEY_ID` / `R2_CF_STATE_SECRET_ACCESS_KEY` — Object Read &
   Write on `mctl-cloudflare-state` alone, used by the backup workflow.
+- `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` — writable on
+  `mctl-terraform-state`, used only to back that bucket up. Never exposed to a
+  job that plans unreviewed pull-request code.
 - `CLOUDFLARE_API_TOKEN` — plan identity, **read-only across all zones**
   (`Cache Rules`, `DNS`, `Zone`, `Zone Settings`, `Zone WAF`, `Single Redirect`,
   `Page Rules`, `Access: Apps and Policies`, `Email Routing Rules`,
   `Workers Routes`, all `Read`). Verified read-only: a `POST` to create a DNS
   record is rejected. It is never given to `cloudflare-apply.yml`.
 
-The six apply credentials below are **environment secrets on `cloudflare-apply`,
-not repository secrets**. A repository secret is readable by any workflow in the
-repository, so storing them there would let a branch carrying a new workflow read
-them while omitting `environment:` — the branch policy protects the workflow file,
-not the credential. Verify with
-`gh api repos/mctlhq/mctl-gitops/environments/cloudflare-apply/secrets`; they must
-not appear in `gh secret list`.
+Everything above is a **repository** secret. The two writable ones among them —
+`R2_CF_STATE_*` and `R2_ACCESS_KEY_ID`/`R2_SECRET_ACCESS_KEY` — should not be,
+and #1118 tracks moving them to the `state-backup` environment: that
+environment's branch policy currently protects `opentofu-state-backup.yml`
+rather than the credentials it uses, because a repository secret is readable by
+any workflow in the repository.
+
+The apply credentials below are **environment secrets on `cloudflare-apply`,
+not repository secrets**, for exactly that reason — storing them at repository
+scope would let a branch carrying a new workflow read them while omitting
+`environment:` entirely. Verify with
+`gh api repos/mctlhq/mctl-gitops/environments/cloudflare-apply/secrets`; they
+must not appear in `gh secret list`.
 
 - `CF_APPLY_TOKEN_ACCOUNT`, `CF_APPLY_TOKEN_MCTL_RU`, `CF_APPLY_TOKEN_MCTL_ME`,
   `CF_APPLY_TOKEN_MCTL_AI` — apply identities, **one per root**, each scoped to
@@ -83,9 +92,6 @@ not appear in `gh secret list`.
   on `mctl-cloudflare-state` alone, used by apply and by nothing else.
   Deliberately not the backup workflow's `R2_CF_STATE_*`: rotating or revoking
   one must not disturb the other.
-- `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` — writable on
-  `mctl-terraform-state`, used only to back that bucket up. Never exposed to a
-  job that plans unreviewed pull-request code.
 
 Mirror copies live in Vault under `secret/platform/cloudflare/`.
 
