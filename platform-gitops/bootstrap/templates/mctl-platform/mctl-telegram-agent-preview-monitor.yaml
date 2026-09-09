@@ -79,3 +79,31 @@ spec:
       path: /metrics
       interval: 30s
       scrapeTimeout: 10s
+      # Keep ONLY the communication-agent series. Without this the preview
+      # server's whole exposition is imported — mctl_tool_*, mctl_http_*,
+      # mctl_sessions_* — and that is not merely noise, it pages people.
+      #
+      # The SLO recording rules in vm-rules/mctl-telegram-slo.yaml aggregate
+      # with `sum by (job, namespace)`, so preview arrives as its own job
+      # rather than corrupting production's ratio. But the burn-rate alerts
+      # that consume those recordings are bare comparisons with no job
+      # selector — e.g. `mctl_telegram:oauth_5xx:ratio_rate1h > 0.01440`.
+      # Preview carries a trickle of traffic, so a couple of 5xx on
+      # /oauth/token puts its ratio far above a threshold sized for
+      # production volume, and the resulting page is labelled exactly like a
+      # production one. The same applies to HighToolErrorRate in
+      # mctl-telegram-alerts.yaml and to the capacity alerts in
+      # mctl-telegram-ops.yaml.
+      #
+      # Filtering here rather than adding a job selector to every existing
+      # rule keeps the blast radius of this PR to the thing it introduces.
+      # Narrowing the rules instead is defensible, but it is a change to
+      # production alerting and belongs in its own PR.
+      #
+      # `up`, `scrape_duration_seconds` and the other synthetic series are
+      # added by the scraper after metric relabeling and are unaffected, so
+      # target health for these two workloads stays observable.
+      metricRelabelConfigs:
+        - sourceLabels: [__name__]
+          regex: "mctl_agent_.*"
+          action: keep
