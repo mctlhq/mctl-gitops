@@ -1,5 +1,5 @@
-status: accepted
-updated_at: '2026-09-09T01:00:58Z'
+status: implemented
+updated_at: '2026-09-09T01:10:06Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -9,5 +9,11 @@ source:
 control:
   requires_human_approval: true
 approval:
-  approved_by: 'mashkovd'
+  approved_by: mashkovd
   approved_at: '2026-09-09T01:00:58Z'
+attempt:
+  id: 2f93ac73-346e-4d22-a25e-ce51f042dd5a
+  started_at: '2026-09-09T01:03:20Z'
+  expires_at: '2026-09-09T03:13:20Z'
+  finished_at: '2026-09-09T01:10:06Z'
+pr: https://github.com/mctlhq/mctl-gitops/pull/1095
