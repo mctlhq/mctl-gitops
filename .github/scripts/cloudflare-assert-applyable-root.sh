@@ -18,6 +18,16 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 ROOT="${1:?usage: $0 <root>}"
 
+# Rejected rather than stripped, so this script, cloudflare-assert-backend.sh
+# and the token chain in the workflow all reason about the same string. A
+# trailing slash otherwise walks past the .local-state-roots check below —
+# `grep -qxF` is a whole-line match — and makes assert-backend.sh derive
+# `cloudflare/account//terraform.tfstate` for a perfectly good root, which
+# fails with a message about the backend rather than about the dispatch.
+case "$ROOT" in
+  */) echo "::error::name the root without a trailing slash: ${ROOT%/}"; exit 1 ;;
+esac
+
 case "$ROOT" in
   infrastructure/cloudflare/*) ;;
   *) echo "::error::'$ROOT' is not under infrastructure/cloudflare/"; exit 1 ;;

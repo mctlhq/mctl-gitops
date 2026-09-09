@@ -52,10 +52,16 @@ key=$(jq -r '.backend.config.key // empty' "$state")
 [ "$key" = "$EXPECTED_KEY" ] || say "backend key is '${key:-<none>}', expected '$EXPECTED_KEY' for root '$ROOT'"
 
 # Accept either shape the s3 backend records the endpoint in.
+#
+# Matched exactly, not as a substring. `*"$EXPECTED_ENDPOINT_HOST"*` would
+# accept https://attacker.example/?q=<expected host>, and an apply pointed
+# there hands SigV4-signed requests carrying the write credential to that
+# server and then plans against whatever state it returns — a fabricated
+# baseline is enough to make the real Cloudflare API calls destructive.
 endpoint=$(jq -r '.backend.config.endpoints.s3 // .backend.config.endpoint // empty' "$state")
 case "$endpoint" in
-  *"$EXPECTED_ENDPOINT_HOST"*) ;;
-  *) say "backend endpoint is '${endpoint:-<none>}', expected the R2 endpoint for this account" ;;
+  "https://$EXPECTED_ENDPOINT_HOST" | "https://$EXPECTED_ENDPOINT_HOST/") ;;
+  *) say "backend endpoint is '${endpoint:-<none>}', expected exactly https://$EXPECTED_ENDPOINT_HOST" ;;
 esac
 
 # Native S3 conditional-write locking. Without it an apply takes no lock at
