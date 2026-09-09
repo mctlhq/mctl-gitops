@@ -253,13 +253,23 @@ extraObjects:
   # can ever match it. Note the v3 spelling — the installed CRD group is
   # traefik.io (traefik v3.7.10); v2's traefik.containo.us called this
   # ipWhiteList, and that name silently does nothing here.
+  #
+  # Labels are literal rather than `include "base-service.labels"`. A values
+  # file must parse as YAML BEFORE extra-objects.yaml runs tpl over it, so a
+  # bare `{{- include ... | nindent 8 }}` line is a values parse error
+  # ("did not find expected node content"), not a template. Only quoted
+  # scalars can carry templates here, which is why the names below do and the
+  # label maps do not. app.kubernetes.io/instance is included by hand so
+  # ArgoCD resource tracking and label selectors still find these two.
   - apiVersion: traefik.io/v1alpha1
     kind: Middleware
     metadata:
       name: '{{ include "base-service.fullname" . }}-deny-metrics'
       labels:
-        app.kubernetes.io/name: mctl-telegram
+        app.kubernetes.io/name: base-service
+        app.kubernetes.io/instance: labs-mctl-telegram-preview
         app.kubernetes.io/part-of: mctl-platform
+        app.kubernetes.io/managed-by: Helm
         mctl.me/component: metrics-edge-deny
     spec:
       ipAllowList:
@@ -270,10 +280,22 @@ extraObjects:
     metadata:
       name: '{{ include "base-service.fullname" . }}-metrics-deny'
       labels:
-        app.kubernetes.io/name: mctl-telegram
+        app.kubernetes.io/name: base-service
+        app.kubernetes.io/instance: labs-mctl-telegram-preview
         app.kubernetes.io/part-of: mctl-platform
+        app.kubernetes.io/managed-by: Helm
         mctl.me/component: metrics-edge-deny
     spec:
+      # websecure only, and that is complete rather than a gap. The `web`
+      # entrypoint carries a GLOBAL redirect to https, set in traefik's STATIC
+      # config by the kube-hetzner module rather than anywhere in this repo:
+      #   --entryPoints.web.http.redirections.entryPoint.to=:443
+      #   --entryPoints.web.http.redirections.entryPoint.scheme=https
+      #   --entryPoints.web.http.redirections.entryPoint.permanent=true
+      # An entrypoint-level redirection is applied before any router matches,
+      # so a plain-HTTP request never reaches a backend on :80 — verified:
+      # `curl http://tg-preview.mctl.ai/metrics` answers 301 to the https URL,
+      # and the retried request arrives on websecure where this route applies.
       entryPoints:
         - websecure
       routes:
