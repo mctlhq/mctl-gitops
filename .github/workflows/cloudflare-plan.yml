@@ -5,21 +5,54 @@ name: Cloudflare Plan
 # Deliberately separate from terraform.yml: that workflow plans on push to main
 # with continue-on-error, which reports but does not gate. This one runs on the
 # pull request and fails the check when anything is wrong.
+#
+# There is intentionally NO `paths:` filter on the trigger. A required status
+# check that only runs on some pull requests never reports on the others, and
+# those pull requests sit blocked on a check that will never arrive. Instead the
+# workflow runs everywhere, decides for itself whether anything relevant
+# changed, and always publishes the `cloudflare-plan` job as its verdict.
 
 on:
   pull_request:
-    paths:
-      - 'infrastructure/cloudflare/**'
-      - '.github/workflows/cloudflare-plan.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
-  pull-requests: write
 
 jobs:
+  changes:
+    name: detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.diff.outputs.changed }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+
+      - id: diff
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BASE:-}" ]; then
+            echo "no base ref (manual run) — treating as changed"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files=$(git diff --name-only "$BASE"...HEAD)
+          if echo "$files" | grep -qE '^(infrastructure/cloudflare/|\.github/workflows/cloudflare-plan\.yml$)'; then
+            changed=true
+          else
+            changed=false
+          fi
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+          echo "relevant files changed: $changed"
+
   discover:
     name: discover roots
+    needs: changes
+    if: needs.changes.outputs.changed == 'true'
     runs-on: ubuntu-latest
     outputs:
       roots: ${{ steps.find.outputs.roots }}
@@ -40,8 +73,8 @@ jobs:
 
   plan:
     name: plan
-    needs: discover
-    if: needs.discover.outputs.count != '0'
+    needs: [changes, discover]
+    if: needs.changes.outputs.changed == 'true' && needs.discover.outputs.count != '0'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -74,7 +107,6 @@ jobs:
         run: tofu validate
 
       - name: Plan
-        id: plan
         run: |
           set -euo pipefail
           tofu plan -input=false -no-color -lock-timeout=5m -out=tfplan | tee plan.txt
@@ -82,7 +114,7 @@ jobs:
 
       # Creating or updating is normal in a PR; destroying is the thing that
       # should never pass unnoticed. Surface it loudly rather than failing —
-      # a legitimate removal exists, it just has to be seen by a reviewer.
+      # legitimate removals exist, they just have to be seen by a reviewer.
       - name: Summarize
         run: |
           set -euo pipefail
@@ -117,3 +149,40 @@ jobs:
       - name: Scrub
         if: always()
         run: rm -f tfplan plan.json plan.txt
+
+  # The single stable context to mark required in the branch ruleset. It runs on
+  # every pull request, including ones that touch nothing here, so it always has
+  # a verdict to publish.
+  cloudflare-plan:
+    name: cloudflare-plan
+    needs: [changes, discover, plan]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verdict
+        run: |
+          set -euo pipefail
+          changed='${{ needs.changes.outputs.changed }}'
+          discover='${{ needs.discover.result }}'
+          plan='${{ needs.plan.result }}'
+          echo "changed=$changed discover=$discover plan=$plan"
+
+          if [ "${{ needs.changes.result }}" != "success" ]; then
+            echo "::error::change detection itself failed — cannot vouch for this PR"
+            exit 1
+          fi
+
+          if [ "$changed" != "true" ]; then
+            echo "No Cloudflare IaC files touched; nothing to plan."
+            exit 0
+          fi
+
+          # 'skipped' here means there are no roots yet, which is a legitimate
+          # state while the layout is still being filled in.
+          for r in "$discover" "$plan"; do
+            case "$r" in
+              success|skipped) ;;
+              *) echo "::error::a plan job did not succeed (discover=$discover plan=$plan)"; exit 1 ;;
+            esac
+          done
+          echo "All Cloudflare roots planned successfully."
