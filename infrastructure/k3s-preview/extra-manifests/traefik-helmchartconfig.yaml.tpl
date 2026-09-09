@@ -28,12 +28,30 @@ spec:
     # this one in kustomization.yaml and applied in an earlier terraform apply.
     # Break-glass: infrastructure/k3s-preview/README.md.
     #
+    # The `http:` level is NOT a typo, even though the sibling keys this file
+    # merges over (proxyProtocol, forwardedHeaders) are flat. Rendered against
+    # the chart, `ports.websecure.http.middlewares` produces
+    # --entryPoints.websecure.http.middlewares=..., while the flat spelling is
+    # rejected outright: "ports.websecure: Additional property middlewares is
+    # not allowed". The chart ships values.schema.json with
+    # additionalProperties: false, so guessing here does not degrade quietly,
+    # it fails the HelmChart install. Asked and answered in review on #1141.
+    #
     # This MERGES over the base HelmChart's ports.websecure (proxyProtocol and
     # forwardedHeaders trustedIPs) rather than replacing it -- helm-controller
-    # deep-merges valuesContent. Verify after an apply that all three arguments
-    # are present on the deployment: if trustedIPs were lost, Traefik would see
+    # deep-merges valuesContent. Verified by rendering the chart with the
+    # module's base values and this file together: all four arguments survive
+    # (middlewares, websecure proxyProtocol and forwardedHeaders trustedIPs, and
+    # the web -> websecure redirect). If trustedIPs were lost, Traefik would see
     # the load balancer's private address as the client and the allowlist would
     # refuse ALL traffic.
+    #
+    # The `render` job in .github/workflows/cloudflare-origin-allowlist.yml
+    # re-runs exactly that check on every pull request touching this file. It
+    # exists because the failure mode here is silence: a values path that stops
+    # producing the argument leaves the origin open with nothing in any log to
+    # say so. Validated by mutation -- the flat spelling and a removed reference
+    # both fail it.
     #
     # web deliberately does not get this middleware, for three reasons:
     #   1. It would protect nothing. The http->https redirection is in the

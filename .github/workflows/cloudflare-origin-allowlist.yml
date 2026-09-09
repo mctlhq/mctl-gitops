@@ -27,6 +27,7 @@ on:
   pull_request:
     paths:
       - 'infrastructure/k3s-preview/extra-manifests/cloudflare-origin-allowlist.yaml.tpl'
+      - 'infrastructure/k3s-preview/extra-manifests/traefik-helmchartconfig.yaml.tpl'
       - '.github/workflows/cloudflare-origin-allowlist.yml'
   workflow_dispatch:
 
@@ -101,3 +102,75 @@ jobs:
             The committed ranges no longer match api.cloudflare.com/client/v4/ips.
             Traffic from an added range is being refused at the origin.
             Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+  render:
+    name: the entrypoint actually gets the middleware
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      # The failure this guards against is silence. If the values path in
+      # traefik-helmchartconfig.yaml.tpl stops producing
+      # --entryPoints.websecure.http.middlewares -- a chart major renaming the
+      # key, or an edit that flattens it -- Helm does not complain, the upgrade
+      # succeeds, and the origin is wide open with nothing in any log to say so.
+      # Rendering the real chart is the only way to see it before an apply.
+      #
+      # The chart version is deliberately not pinned here: the cluster's
+      # HelmChart has no version either, so it installs whatever is current.
+      # Tracking latest is what makes this an early warning rather than a
+      # restatement of what we already committed.
+      - name: Render Traefik with the module's base values plus ours
+        run: |
+          set -euo pipefail
+          helm repo add traefik https://traefik.github.io/charts >/dev/null
+          helm repo update traefik >/dev/null
+
+          # The kube-hetzner module's rendered values for this cluster, reduced
+          # to the entrypoint keys ours merges over. helm-controller deep-merges
+          # HelmChartConfig.valuesContent on top of HelmChart.valuesContent, and
+          # two -f files is the closest local equivalent.
+          cat > /tmp/base.yaml <<'BASE'
+          ports:
+            web:
+              http:
+                redirections:
+                  entryPoint: {to: websecure, scheme: https, permanent: true}
+              proxyProtocol: {trustedIPs: ["127.0.0.1/32", "10.0.0.0/8"]}
+              forwardedHeaders: {trustedIPs: ["127.0.0.1/32", "10.0.0.0/8"]}
+            websecure:
+              proxyProtocol: {trustedIPs: ["127.0.0.1/32", "10.0.0.0/8"]}
+              forwardedHeaders: {trustedIPs: ["127.0.0.1/32", "10.0.0.0/8"]}
+          BASE
+
+          python3 -c "
+          import yaml, sys
+          d = yaml.safe_load(open('infrastructure/k3s-preview/extra-manifests/traefik-helmchartconfig.yaml.tpl'))
+          sys.stdout.write(d['spec']['valuesContent'])
+          " > /tmp/ours.yaml
+
+          helm template t traefik/traefik -f /tmp/base.yaml -f /tmp/ours.yaml > /tmp/rendered.yaml
+
+          fail=0
+          check() {
+            if grep -qF -- "$1" /tmp/rendered.yaml; then
+              echo "ok: $1"
+            else
+              echo "::error::missing from the rendered Traefik args: $1"
+              fail=1
+            fi
+          }
+          # The reference itself.
+          check '--entryPoints.websecure.http.middlewares=traefik-cloudflare-origin@kubernetescrd'
+          # And the two the merge must not flatten away. Without them Traefik
+          # sees the load balancer's private address as the client and the
+          # allowlist refuses every request.
+          check '--entryPoints.websecure.proxyProtocol.trustedIPs=127.0.0.1/32,10.0.0.0/8'
+          check '--entryPoints.websecure.forwardedHeaders.trustedIPs=127.0.0.1/32,10.0.0.0/8'
+          # web deliberately carries no middleware; if one appears, someone
+          # added it without reading why it is absent.
+          if grep -qF -- '--entryPoints.web.http.middlewares' /tmp/rendered.yaml; then
+            echo "::error::the web entrypoint gained a middleware -- see the comment in traefik-helmchartconfig.yaml.tpl"
+            fail=1
+          fi
+          exit "$fail"
