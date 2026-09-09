@@ -92,7 +92,11 @@ jobs:
       - name: Reject committed provider caches
         run: |
           set -euo pipefail
-          tracked=$(git ls-files -- '**/.terraform/**' '.terraform/**' || true)
+          # The entry itself as well as its contents: a .terraform committed as a
+          # SYMLINK to another tracked directory is a single tracked file, so a
+          # contents-only pathspec never sees it. Reproduced before fixing.
+          tracked=$(git ls-files -- '**/.terraform' '.terraform' \
+                                    '**/.terraform/**' '.terraform/**' || true)
           [ -z "$tracked" ] || {
             echo "::error::.terraform is a build artifact and must not be committed"
             echo "$tracked"
@@ -154,6 +158,7 @@ jobs:
           # form exits 128.
           base_paths=$(tree_paths "$BASE")
           head_paths=$(tree_paths HEAD)
+          local_state_roots=$(grep -v '^\s*\(#.*\)\?$' infrastructure/cloudflare/.local-state-roots || true)
 
           # OpenTofu loads JSON configuration too, so versions.tf.json marks a root
           # exactly as versions.tf does; discovery accepts both for the same
@@ -190,19 +195,20 @@ jobs:
           #    Checking every head root, not just ones that lost a file, because a
           #    newly added root and a root switched to local reach the same place.
           #
-          #    zones/mctl-ru is the one acknowledged exception: the import pilot
-          #    (#1096) deliberately kept local state, and giving it a backend is a
-          #    state migration that belongs to #1103, not to a CI guard. It is listed
-          #    here rather than left implicit so the gap is visible in the gate that
-          #    would otherwise catch it.
+          #    This only checks that a backend is declared. WHICH backend it is
+          #    cannot be settled by reading the file: grep has no notion of HCL
+          #    comments or dead blocks, so a stray `# switch to backend "s3" later`
+          #    next to a live `backend "local"` would satisfy any text match. The
+          #    plan job answers that question with what OpenTofu actually resolved
+          #    after init instead.
+          #
+          #    Roots knowingly off the shared backend are listed in
+          #    infrastructure/cloudflare/.local-state-roots, which both checks read.
           while IFS= read -r r; do
             [ -n "$r" ] || continue
-            case "$r" in infrastructure/cloudflare/zones/mctl-ru) continue ;; esac
-            if ! grep -qxF -- "$r/backend.tf" <<< "$head_paths"; then
-              problems="${problems}root declares no backend: $r\n"
-            elif ! git show "HEAD:$r/backend.tf" | grep -q 'backend "s3"'; then
-              problems="${problems}root does not use the s3 backend: $r\n"
-            fi
+            grep -qxF -- "$r" <<< "$local_state_roots" && continue
+            grep -qxF -- "$r/backend.tf" <<< "$head_paths" \
+              || problems="${problems}root declares no backend: $r\n"
           done <<< "$head_roots"
 
           # 3. Configuration that belongs to no discovered root is never planned or
@@ -332,6 +338,10 @@ jobs:
     # program, the http data source) fail at init before plan is reached.
 
     env:
+      # Outside the workspace on purpose: whatever a pull request commits as
+      # .terraform is then simply not the directory OpenTofu uses, so the
+      # rejection above is a second line rather than the only one.
+      TF_DATA_DIR: ${{ runner.temp }}/tofu-data
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_PLAN_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_PLAN_SECRET_ACCESS_KEY }}
@@ -366,6 +376,32 @@ jobs:
       # under a root nobody re-reviewed.
       - name: Init
         run: tofu init -input=false -lockfile=readonly
+
+      # What backend a root actually uses cannot be read off backend.tf — grep
+      # matches comments and dead blocks alike. init records what it resolved:
+      # .terraform/terraform.tfstate carries backend.type, and a root on the
+      # local backend produces either type "local" or no file at all. Measured
+      # both. A root on local state plans against nothing on a fresh runner, so
+      # its plan says nothing about Cloudflare and drift cannot watch it.
+      #
+      # Only the plan job needs this: nothing reaches main, and therefore the
+      # drift workflow, without passing here first.
+      - name: Assert remote backend
+        env:
+          ROOT: ${{ matrix.root }}
+        run: |
+          set -euo pipefail
+          if grep -qxF -- "$ROOT" "$GITHUB_WORKSPACE/infrastructure/cloudflare/.local-state-roots"; then
+            echo "::warning::$ROOT is on local state by exception; its plan does not reflect live Cloudflare"
+            exit 0
+          fi
+          record="${TF_DATA_DIR:-.terraform}/terraform.tfstate"
+          [ -f "$record" ] \
+            || { echo "::error::$ROOT resolved no remote backend — it is planning against empty local state"; exit 1; }
+          type=$(jq -r '.backend.type // "none"' "$record")
+          [ "$type" = "s3" ] \
+            || { echo "::error::$ROOT resolved backend '$type', expected s3"; exit 1; }
+          echo "$ROOT is on the s3 backend"
 
       - name: Validate
         run: tofu validate
