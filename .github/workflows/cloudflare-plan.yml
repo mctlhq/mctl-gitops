@@ -67,7 +67,13 @@ jobs:
           # SIGPIPE, and 141 becomes the pipeline status. Inside `if` that reads
           # as "no match", so a Cloudflare change would be recorded as
           # changed=false and the required job would pass without planning it.
-          if grep -qE '^(infrastructure/cloudflare/|\.github/workflows/cloudflare-plan\.yml$)' <<< "$files"; then
+          # The gate has to watch everything it is made of, not just the
+          # configuration it inspects. .github/scripts/cloudflare-local-state-roots.sh
+          # decides which roots are excused from the backend requirement, so a
+          # pull request editing only that file could otherwise excuse a root
+          # without a single check running. cloudflare-drift.yml is here for the
+          # same reason: it shares the discovery and the exception list.
+          if grep -qE '^(infrastructure/cloudflare/|\.github/scripts/cloudflare-local-state-roots\.sh$|\.github/workflows/cloudflare-(plan|drift)\.yml$)' <<< "$files"; then
             changed=true
           else
             changed=false
@@ -230,6 +236,21 @@ jobs:
             grep -qxF -- "$(dirname "$f")" <<< "$head_roots" \
               || problems="${problems}configuration in no root's own directory: $f\n"
           done <<< "$head_paths"
+
+          # Checked in the other direction too, and NOT through $problems: an
+          # entry naming no root excuses nothing, and the only place that used
+          # to notice was drift — on a schedule, after the merge, on main. That
+          # is the very shape this list exists to remove, moved up one level
+          # into the list itself. It is also not something the removal label
+          # should be able to wave through: the label says "this root loses
+          # coverage deliberately", not "this line is a typo".
+          while IFS= read -r excluded; do
+            [ -n "$excluded" ] || continue
+            grep -qxF -- "$excluded" <<< "$head_roots" && continue
+            echo "::error::.local-state-roots lists '$excluded', which is not a discovered root"
+            echo "discovered roots:"; printf '%s\n' "$head_roots"
+            exit 1
+          done <<< "$local_state_roots"
 
           [ -n "$problems" ] || { echo "every root at $BASE is still discovered, backed and complete"; exit 0; }
 
