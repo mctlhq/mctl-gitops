@@ -49,6 +49,76 @@ the easiest of the three to import by accident.
 Managing the same object from two states is what #47 explicitly forbids: both
 sides would fight over it, and a plan in one would propose undoing the other.
 
+## Pre-import decisions (#1089)
+
+The account carried objects that were stale, duplicated, or broader than
+intended. Importing them would have made each one look deliberate the moment it
+landed in Git, so every one was decided first. Decisions taken 2026-09-09;
+evidence and reasoning in #1089.
+
+| # | Object | Decision |
+| --- | --- | --- |
+| 1 | Access app `media` | **keep** — repointed to `media.mctl.ai`; the live gate in front of Overseerr |
+| 2 | Access apps `Temporal`, `News AI` (`*.mbank.space`) | **delete** |
+| 3 | Access app `vault` → `mashkoffdmitry-openclaw.mctl.ai` | **keep, rename** to match the host it protects |
+| 4 | Access org `auth_domain: mbank.cloudflareaccess.com` | **keep** |
+| 5 | Page rules `*.mctl.me/*`, `*.mctl.ru/*` | **delete** — unreachable, see below |
+| 6 | In-zone `NS launch1/launch2.spaceship.net` in `mctl.me` | **delete** |
+| 7 | Disabled catch-all `drop` in `mctl.ai` Email Routing | **enable** |
+| 8 | Rule `seerr` in `mctl.ai/http_request_firewall_custom` | **keep, narrowed** by hostname |
+| 9 | `mctl-landing-form` and its 5 worker routes | **split** — routes here, script and secrets in Wrangler |
+| 10 | Zone `dmitriimashkov.com` | **intentionally unmanaged** |
+
+Four of these are kept rather than removed, and each is kept for a reason that
+is not obvious from the object itself.
+
+**`auth_domain` (4).** It reads like leftover naming from a previous project,
+and it is — but it is a single per-account Zero Trust value that appears in
+every application's login redirect regardless of zone. Renaming it invalidates
+every live Access session at once. Kept deliberately, not overlooked.
+
+**`allowed_idps` (part of 1 and 3).** Every application now pins
+`allowed_idps: [Google]`. An empty list does not mean "no restriction beyond the
+policy" — it means *all* providers, which made the account-level `onetimepin`
+reachable next to Google on `media` and `jellyfin`. The policies required
+`login_method == Google`, so there was no authorization hole, but the OTP flow
+was reachable far enough to mail a code to an arbitrary address before refusing.
+Pinned 2026-09-09. **Import the pinned state as-is** — it is hardening, not
+drift, and reconciling back to the empty list would undo it.
+
+**The `seerr` bypass (8).** `(ip.src.asnum eq 24940)` skips Super Bot Fight Mode
+for the whole of Hetzner — every Hetzner customer, on every `mctl.ai` hostname
+including the `*.mctl.ai` wildcard that serves every tenant. It exists because
+the platform's own cluster (origin `91.98.10.188`, `AS24940`) was being
+classified as bot traffic on its server-to-server calls. Narrowed to the
+hostnames that actually need it rather than removed; the bypass itself is
+legitimate, its breadth was not.
+
+**Worker ownership (9).** `cloudflare_workers_route` is owned here; the script
+and its seven runtime secrets stay in Wrangler. OpenTofu does not deploy Worker
+code, so owning the script here would split one deployable across two owners.
+The route patterns are part of the worker's contract — change them in one place.
+
+### Redirects: what actually serves them
+
+Worth stating because the wrong answer is the intuitive one. `mctl.me` and
+`mctl.ru` redirect to `mctl.ai` through **two** mechanisms, and the page rules
+are neither:
+
+- **apex** — the `http_request_dynamic_redirect` ruleset, one rule per zone
+  (`http.host eq "mctl.me"` → 301 `concat("https://mctl.ai", http.request.uri)`);
+- **subdomains** — the worker `mctl-landing-form`, in code
+  (`REDIRECT_SUFFIXES = [".mctl.me", ".mctl.ru"]`).
+
+The page rules match the same subdomains but never fire: the worker runs first
+and returns. The proof is that the same URL answers differently on User-Agent
+alone — the worker's bot filter returns `410` for `curl/`, while a browser gets
+`301` — which no page rule can do. Hence decision 5.
+
+So a change to worker routes moves the subdomain redirect. Whatever PR touches
+them has to re-check subdomain redirects; no zone-level configuration here will
+catch that regression.
+
 ## Credentials
 
 Nothing is committed. CI reads:
