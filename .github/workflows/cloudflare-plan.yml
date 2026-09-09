@@ -133,6 +133,23 @@ jobs:
             BASE=$(git merge-base "origin/$DEFAULT_BRANCH" HEAD)
             echo "no event base ref; derived from origin/$DEFAULT_BRANCH: $BASE"
           fi
+          # --diff-filter=D and not DR, deliberately. Rename detection is on,
+          # but the pathspec limits it: git only pairs a deletion with an
+          # addition that also matches, so the two rename shapes that DO lose
+          # coverage still arrive here as D. Measured on a scratch repository:
+          #
+          #   versions.tf -> versions.tf.bak      D  (new name not a root)
+          #   root moved out of the tree          D  (new path not a root)
+          #   root dir renamed in place           R  (not reported here)
+          #   root deleted                        D
+          #
+          # The one case that is not reported is the one where nothing is lost:
+          # the root is still under infrastructure/cloudflare, `discover` still
+          # walks it, and its backend key moved with it, so plan and drift keep
+          # covering exactly the same resources. Adding R would only block a
+          # legitimate directory rename. If rename detection is ever off or
+          # over its limit, that case degrades to D+A and blocks instead —
+          # fail-closed, which is the right direction.
           removed=$(git -c core.quotePath=false diff -z --name-only --diff-filter=D \
                       "$BASE"...HEAD -- 'infrastructure/cloudflare/**/versions.tf' \
                     | tr '\0' '\n')
