@@ -1,0 +1,117 @@
+name: review-gate
+
+# Aggregates Claude and Agy's per-PR review verdicts into one commit status
+# (context: review-gate) so main-protection can require a single check
+# instead of making each heterogeneous reviewer workflow its own
+# branch-protection contract. See .github/scripts/review_gate.py for the
+# verdict logic; this file only wires its three triggers to that script.
+#
+# mctl-gitops#1038 merged on Claude's one approving review while Agy (async,
+# wired via agy-review.yml) found a real P2 four minutes later, after merge.
+# Neither reviewer's completion nor verdict fed branch protection before
+# this (#1040).
+#
+# Not yet a required check: registering review-gate on main-protection's
+# ruleset is an explicit owner/admin action taken after this is observed
+# green on real PRs (out of scope here — see requirements.md).
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+  workflow_run:
+    workflows: ["Claude PR review", "Agy PR review"]
+    types: [completed]
+  schedule:
+    # Timeout sweep: a reviewer workflow that never starts or never finishes
+    # produces no workflow_run event at all, so only a schedule (not the
+    # triggers above) can notice a wedged pending and fail it closed instead
+    # of leaving it stuck forever. Same rationale as deploy-signal.yml's own
+    # "a check that only runs when the pipeline runs cannot see the pipeline
+    # failing to run at all".
+    - cron: "*/10 * * * *"
+
+permissions:
+  contents: read
+  pull-requests: read
+  # agy_verdict() reads the verdict marker via
+  # GET /repos/{repo}/issues/{pr}/comments. That endpoint is gated by the
+  # Issues permission even when the number is a pull request, and
+  # pull-requests: read does not grant it. Without this the call 403s in
+  # both `evaluate` and `sweep`, so neither ever reaches post_status and
+  # review-gate stays pending forever -- fatal once it is a required check.
+  issues: read
+  actions: read
+  statuses: write
+
+concurrency:
+  group: review-gate-${{ github.event.pull_request.number || github.event.workflow_run.id || 'sweep' }}
+  cancel-in-progress: false
+
+jobs:
+  pending:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Self-test the aggregator
+        # A checker that has never been seen to fail is not known to work.
+        run: python3 .github/scripts/review_gate.py --selftest
+
+      - name: Post pending for the new head
+        # Re-arms the check for the new head immediately, so a stale
+        # success from a previous head is explicitly superseded rather than
+        # silently reused (new-push invalidation).
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 .github/scripts/review_gate.py --action pending \
+            --repo "${{ github.repository }}" \
+            --pr "${{ github.event.pull_request.number }}"
+
+  evaluate:
+    if: github.event_name == 'workflow_run'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve the PR for this run's head
+        id: pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # workflow_run does not reliably populate pull_requests[] for every
+          # trigger shape (design.md, Risks) -- resolve via the commit instead.
+          number=$(gh api "repos/${{ github.repository }}/commits/${{ github.event.workflow_run.head_sha }}/pulls" \
+            --jq '.[0].number // empty')
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+          if [ -z "$number" ]; then
+            echo "no open PR for head ${{ github.event.workflow_run.head_sha }}; nothing to evaluate"
+          fi
+
+      - name: Evaluate and post the verdict
+        if: steps.pr.outputs.number != ''
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 .github/scripts/review_gate.py --action evaluate \
+            --repo "${{ github.repository }}" \
+            --pr "${{ steps.pr.outputs.number }}" \
+            --event-head-sha "${{ github.event.workflow_run.head_sha }}"
+
+  sweep:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Flip timed-out pending checks to failure
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 .github/scripts/review_gate.py --action sweep \
+            --repo "${{ github.repository }}"
