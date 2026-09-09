@@ -36,6 +36,14 @@ env:
   # Google account sign in — and while the Google app is still in testing, the
   # address must also be on its test-user list.
   SEERRSENSE_ALLOWED_EMAILS: mashkoffdmitry@gmail.com,moonqua@gmail.com
+  # Who may reach the shared SEERR_URL instance when they have attached nothing
+  # of their own. Fail-closed like the allowlist: unset offers the household to
+  # no signed-in subject, so this MUST be present before the image that reads it
+  # is deployed, or the owner loses their own working setup on rollout. The
+  # legacy shared token and stdio mode are unaffected — they have no address to
+  # check. Setting it on an image that does not yet read it is a no-op, which is
+  # why this lands first (seerrsense#44).
+  SEERRSENSE_HOUSEHOLD_EMAILS: mashkoffdmitry@gmail.com
   # The pre-OAuth shared token is no longer accepted: every caller signs in
   # with Google and gets an access token of its own. Until now one secret
   # opened every tool for anybody who held it, with no identity behind it, no
