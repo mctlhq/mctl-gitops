@@ -8,3 +8,11 @@ source:
   url: https://github.com/mctlhq/mctl-telegram/issues/591
 control:
   requires_human_approval: true
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-09-09T17:30:00Z'
+notes: >-
+  Accepted after implementation. Scope grew during review of
+  mctlhq/mctl-telegram#593 to four metric families / 118 series; see
+  requirements.md "Scope expanded during implementation". Already implemented —
+  do not schedule an implementer attempt against this proposal.
