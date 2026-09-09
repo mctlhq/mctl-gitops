@@ -10,19 +10,40 @@
 # and it is false here (4 nodes, klipper off). Traefik is the first thing on the
 # path that can refuse the request, so the control lives in Traefik.
 #
-# Traefik is also the stronger place for it. A pod dialling a public IP does not
-# traverse the cloud firewall -- kube.tf says so, and nodePublicCIDRs in
-# platform-gitops/helm-charts/tenant/values.yaml is the compensating control --
-# but the load balancer's address is not in that list, because it is not a node.
-# Until this landed, any tenant pod could reach the origin with an arbitrary
-# Host header and skip the edge from inside the cluster. A cloud-firewall
-# allowlist could never have closed that path; this does.
+# What the match is based on. The hcloud LB is annotated uses-proxyprotocol=true
+# and the websecure entrypoint trusts PROXY from 10.0.0.0/8, so for traffic
+# arriving through the load balancer RemoteAddr is the Cloudflare edge address
+# rather than the LB's. ipAllowList with no ipStrategy matches on RemoteAddr and
+# NOT on X-Forwarded-For, which a client controls. Do not add an ipStrategy
+# here: that would make the decision depend on a header.
 #
-# The match is unspoofable. The hcloud LB is annotated uses-proxyprotocol=true
-# and the websecure entrypoint trusts PROXY from 10.0.0.0/8, so RemoteAddr is
-# the Cloudflare edge address rather than the LB's. ipAllowList with no
-# ipStrategy matches on RemoteAddr and NOT on X-Forwarded-For, which a client
-# controls. Do not add an ipStrategy here.
+# Be precise about what this does and does not close.
+#
+# CLOSED -- the public path, including from inside the cluster. A request to
+# 91.98.10.188 (or the LB's public IPv6) with a platform Host header now gets
+# 403 instead of reaching a backend. That covers a pod dialling the LB's public
+# address: it egresses through a node's public IP -- which is why the cloud
+# firewall never saw it, and why the LB address is absent from nodePublicCIDRs
+# in platform-gitops/helm-charts/tenant/values.yaml -- and arrives with a
+# genuine PROXY header naming that public address, which is not Cloudflare.
+#
+# NOT CLOSED -- a pod connecting DIRECTLY to the Traefik ClusterIP or a Traefik
+# pod IP on :8443. Pod CIDR 10.42.0.0/16 and service CIDR 10.43.0.0/16 both sit
+# inside the trusted 10.0.0.0/8, so such a client can send its own PROXY header
+# claiming a Cloudflare source and this middleware would honour it. That is a
+# property of the entrypoint's trustedIPs, not of this object; it predates this
+# file and applies to every other ipAllowList in the cluster, the metrics-deny
+# middlewares included. Narrowing trustedIPs is a separate and riskier change --
+# the LB reaches Traefik from 10.0.255.254 and, with externalTrafficPolicy
+# Cluster, from any node's private address, so too narrow a list breaks every
+# request -- and is tracked on its own. Raised by agy on #1135.
+#
+# NOT CLOSED -- another Cloudflare customer. The allowlist trusts all of
+# Cloudflare, so someone can point their own zone at this origin and reach it
+# from a legitimate Cloudflare address, skipping this zone's WAF rules. Closing
+# that needs Authenticated Origin Pull, or a secret header injected by this zone
+# alone; both are recorded as follow-ups on #1119. This allowlist is the floor,
+# not the ceiling.
 #
 # v3 spelling: the installed CRD group is traefik.io (traefik v3.7.10). v2's
 # traefik.containo.us called this ipWhiteList; that name parses and silently

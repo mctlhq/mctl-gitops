@@ -5,11 +5,13 @@ resources:
   - letsencrypt-prod.yaml
   - letsencrypt-staging.yaml
   - cert-manager-helmchartconfig.yaml
-  # Must precede traefik-helmchartconfig.yaml: that file references this
-  # Middleware from the websecure entrypoint, and a reference to a
-  # Middleware that does not exist takes down every router on it.
-  # Ordering within a single apply is the second line of defence -- the
-  # first is that the two land in separate terraform applies (#1119).
+  # traefik-helmchartconfig.yaml references this Middleware from the websecure
+  # entrypoint, and a reference to a Middleware that does not exist takes down
+  # every router on it. Listing this file first does NOT enforce that order:
+  # kustomize sorts by kind and ignores the order of this list. Measured --
+  # `kubectl kustomize` emits HelmChartConfig before Middleware with either
+  # listing. The ordering guarantee comes only from the two landing in separate
+  # `terraform apply` runs (#1119); this position is documentation of intent.
   - cloudflare-origin-allowlist.yaml
   - traefik-helmchartconfig.yaml
   - kured.yaml
