@@ -65,7 +65,8 @@ unset _mctl_sourced
 # shell. Checked against the current directory, because that is where Terraform
 # looks for tfvars -- the documented usage is `cd` here first.
 _mctl_stray=$(find . -maxdepth 1 \
-  \( -name 'terraform.tfvars' -o -name '*.auto.tfvars' -o -name '*.auto.tfvars.json' \) \
+  \( -name 'terraform.tfvars' -o -name 'terraform.tfvars.json' \
+     -o -name '*.auto.tfvars' -o -name '*.auto.tfvars.json' \) \
   2>/dev/null | head -1)
 if [ -n "$_mctl_stray" ]; then
   echo "tfenv.sh: $_mctl_stray exists and OVERRIDES these exports -- Terraform ranks" >&2
