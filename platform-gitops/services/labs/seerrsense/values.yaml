@@ -35,7 +35,7 @@ env:
   # Fail-closed: empty admits nobody, not everybody. An address here lets that
   # Google account sign in — and while the Google app is still in testing, the
   # address must also be on its test-user list.
-  SEERRSENSE_ALLOWED_EMAILS: mashkoffdmitry@gmail.com
+  SEERRSENSE_ALLOWED_EMAILS: mashkoffdmitry@gmail.com,moonqua@gmail.com
   # The pre-OAuth shared token is no longer accepted: every caller signs in
   # with Google and gets an access token of its own. Until now one secret
   # opened every tool for anybody who held it, with no identity behind it, no
