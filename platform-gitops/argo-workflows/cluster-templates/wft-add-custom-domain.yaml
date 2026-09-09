@@ -366,7 +366,11 @@ spec:
             echo "❌ ${DOMAIN} is not registered in the mctl-api domains registry" >&2
             exit 1
           fi
-          curl -sSf --max-time 30 -X PATCH \
+          # --retry as on every other mctl-api call here: without it a
+          # transient network error after the server already applied the
+          # PATCH exits this step non-zero, firing the report-failure exit
+          # handler against a domain that is in fact active.
+          curl -sSf --max-time 30 --retry 3 --retry-connrefused -X PATCH \
             -H "Authorization: Bearer ${MCTL_API_TOKEN}" \
             -H 'Content-Type: application/json' \
             --data-binary '{"status":"active"}' \
@@ -438,8 +442,17 @@ spec:
                 "${MCTL_API_URL}/api/v1/domains?team=${TEAM}&service=${SERVICE}")
               DOMAIN_ID=$(echo "$DOMAIN_DATA" | yq -p=json -r '.domains[] | select(.domain == strenv(DOMAIN)) | .id' -)
               [ "$DOMAIN_ID" = "null" ] && DOMAIN_ID=""
+              # Read the status from the same response rather than assuming
+              # the workflow's failure means the domain never went live: the
+              # activate PATCH can succeed server-side while the client sees
+              # a transient error, which exits do-add-domain non-zero and
+              # lands here. Overwriting "active" with "failed" would report a
+              # working domain (ingress + cert already pushed) as broken.
+              DOMAIN_STATUS=$(echo "$DOMAIN_DATA" | yq -p=json -r '.domains[] | select(.domain == strenv(DOMAIN)) | .status' -)
 
-              if [ -n "$DOMAIN_ID" ]; then
+              if [ "$DOMAIN_STATUS" = "active" ]; then
+                echo "ℹ️  ${DOMAIN} is already active; leaving status untouched"
+              elif [ -n "$DOMAIN_ID" ]; then
                 export ERROR_MSG="${WORKFLOW_STATUS}: ${WORKFLOW_FAILURES}"
                 PATCH_BODY=$(yq -n -o=json '{"status": "failed", "error": strenv(ERROR_MSG)}')
                 curl -sSf --max-time 30 -X PATCH \
