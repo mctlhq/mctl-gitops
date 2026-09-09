@@ -61,6 +61,12 @@ spec:
           curl -fsSL --retry 5 --retry-delay 3 --retry-max-time 60 \
             -o /usr/local/bin/yq \
             "https://github.com/mikefarah/yq/releases/download/v4.52.4/yq_linux_amd64"
+          # Verified before it is made executable. This pod runs as
+          # argo-workflow-sa and holds a Vault token, so an altered binary here
+          # is not a broken build, it is code execution next to the platform's
+          # credentials. Pinning the tag is not enough on its own: a release
+          # asset can be replaced under a tag that never moves.
+          echo "0c4d965ea944b64b8fddaf7f27779ee3034e5693263786506ccd1c120f184e8c  /usr/local/bin/yq" | sha256sum -c - >/dev/null
           chmod +x /usr/local/bin/yq
 
           TEAM="{{inputs.parameters.team_name}}"

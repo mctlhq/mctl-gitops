@@ -138,7 +138,26 @@ check("re-running does not duplicate the db secretRef",
       == ["demo-secrets", "demo-extra", "labs-demo-db-creds"],
       yaml.safe_load(text)["envFrom"])
 
-# 4. The guard is what stops a future regression from reaching main at all,
+# 4. The incident's own file, fed through the whole block rather than the guard
+#    alone. yq could plausibly collapse a duplicate key on its read/write round
+#    trip, which would leave the guard with nothing to find and quietly repair a
+#    file that ArgoCD is already serving from. It does not: yq preserves both
+#    occurrences and appends to the last, so the file stays duplicated and the
+#    guard stops the commit. Asserting on that is the only way the guard is
+#    known to cover the shape it exists for.
+DUPLICATED = WITH_ENVFROM + """envFrom:
+  - secretRef:
+      name: labs-demo-db-creds
+"""
+proc, text, _ = run(DUPLICATED)
+check("an already-duplicated values.yaml fails the run rather than being "
+      "silently rewritten",
+      proc.returncode != 0 and "duplicate top-level keys" in proc.stderr,
+      f"rc={proc.returncode} err={proc.stderr}")
+check("the duplicate is still visible to the guard after yq has run",
+      top_level_keys(text).count("envFrom") == 2, top_level_keys(text))
+
+# 5. The guard is what stops a future regression from reaching main at all,
 #    so exercise it on a file it must reject rather than trusting it by reading.
 GUARD = re.search(r"^(  DUPES=.*?\n  fi)$", SOURCE, re.S | re.M)
 assert GUARD, "could not extract the duplicate-key guard from the template"
@@ -160,7 +179,7 @@ with tempfile.TemporaryDirectory() as d:
 check("the guard accepts a clean file", guard.returncode == 0,
       f"rc={guard.returncode} err={guard.stderr}")
 
-# 5. The shape that caused the incident must not come back by another route.
+# 6. The shape that caused the incident must not come back by another route.
 check("the template no longer appends to values.yaml",
       '>> "$SVC_VALUES"' not in SOURCE,
       "something still text-appends to the service values file")
