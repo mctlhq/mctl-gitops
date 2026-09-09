@@ -479,6 +479,22 @@ spec:
                   # does not re-enable the root default receiver, which fires
                   # only when no child route matched at all.
                   #
+                  # MctlAgentClaudeUsageLimit joins the two above for the
+                  # same reason and in the same two-part shape: it fires when
+                  # the worker's dedicated Claude credential pool is
+                  # exhausted, and Worker.Loop is sequential, so every
+                  # subsequent job hits the same wall until the quota window
+                  # resets. Leaving it agent-only would ask a stopped pipeline
+                  # to report that it has stopped.
+                  #
+                  # Its two siblings from mctl-telegram#589 —
+                  # MctlAgentPolicyDenialRateHigh and MctlAgentJobCostHigh —
+                  # are deliberately NOT added. A high denial share or an
+                  # expensive job is a condition the agent can still triage:
+                  # jobs keep being claimed and completed, so the pipeline
+                  # reporting the problem is not the problem. That is the same
+                  # criterion applied below, not an oversight.
+                  #
                   # The other four alerts ported in mctl-telegram#555 —
                   # PoolNearCapacity, FloodWaitSpike, OAuthPendingStuck,
                   # BridgeDaemonsFlapping — are deliberately agent-only. They
@@ -495,7 +511,7 @@ spec:
                   - receiver: telegram
                     continue: true
                     matchers:
-                      - alertname =~ "MctlAgentDeadLetter|MctlAgentActionsExecutingStuck"
+                      - alertname =~ "MctlAgentDeadLetter|MctlAgentActionsExecutingStuck|MctlAgentClaudeUsageLimit"
                   # Local Argo workdirs are node-affine. These need an operator
                   # to restore the worker or terminate and rerun the workflow.
                   - receiver: telegram
@@ -507,7 +523,7 @@ spec:
                       - namespace = "monitoring"
                   - receiver: mctl-agent
                     matchers:
-                      - alertname =~ "PodCrashLooping|KubePodCrashLooping|KubePodNotReady|PodNotReady|TenantCPUQuotaHigh|TenantMemoryQuotaHigh|ArgoWorkflowFailed|ArgoWorkflowHighFailureRate|CPUThrottlingHigh|KubeJobNotCompleted|KubePersistentVolumeFillingUp|KubeStatefulSetReplicasMismatch|NodeHighCPU|NodeHighMemory|NodeLowMemoryAvailable|NodeDiskPressure|NodeDiskSpaceHigh|VaultSealed|MinioBucketUsageHigh|MinioBucketUsageCritical|ArgoCDApplicationDegraded|ArgoCDApplicationOutOfSyncLong|OpenclawCodexTokenRefreshFailed|MctlTelegramCanary.*|MctlTelegramToolAvailabilityFastBurn|MctlTelegramOAuthAvailabilityFastBurn|MctlTelegramSessionBorrowFastBurn|MctlAgentDeadLetter|MctlAgentActionsExecutingStuck"
+                      - alertname =~ "PodCrashLooping|KubePodCrashLooping|KubePodNotReady|PodNotReady|TenantCPUQuotaHigh|TenantMemoryQuotaHigh|ArgoWorkflowFailed|ArgoWorkflowHighFailureRate|CPUThrottlingHigh|KubeJobNotCompleted|KubePersistentVolumeFillingUp|KubeStatefulSetReplicasMismatch|NodeHighCPU|NodeHighMemory|NodeLowMemoryAvailable|NodeDiskPressure|NodeDiskSpaceHigh|VaultSealed|MinioBucketUsageHigh|MinioBucketUsageCritical|ArgoCDApplicationDegraded|ArgoCDApplicationOutOfSyncLong|OpenclawCodexTokenRefreshFailed|MctlTelegramCanary.*|MctlTelegramToolAvailabilityFastBurn|MctlTelegramOAuthAvailabilityFastBurn|MctlTelegramSessionBorrowFastBurn|MctlAgentDeadLetter|MctlAgentActionsExecutingStuck|MctlAgentClaudeUsageLimit"
               receivers:
                 - name: "null"
                 - name: mctl-agent

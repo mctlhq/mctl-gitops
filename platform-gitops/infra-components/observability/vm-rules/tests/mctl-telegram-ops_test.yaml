@@ -319,3 +319,171 @@ tests:
                 sustained high value with no corresponding traffic suggests abandoned
                 flows or bot-scan traffic against /oauth/authorize.
               runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctltelegramoauthpendingstuck"
+
+  # ------------------------------------------------------- communication agent
+  #
+  # Ported from mctlhq/mctl-telegram#589 together with the three rules above.
+  # The mctl-telegram copy of these rules is a non-deployed mirror kept only so
+  # runbook_links_test.go can check the anchors; this file is the one the
+  # cluster runs, so the cases are repeated here rather than trusted there.
+
+  - interval: 1m
+    name: a usage-limit result error raises the quota alert
+    input_series:
+      - series: 'mctl_agent_claude_result_errors_total{class="usage_limit"}'
+        values: '0+1x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: MctlAgentClaudeUsageLimit
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: mctl-telegram
+            exp_annotations:
+              summary: "Communication-agent Claude credential hit its usage limit"
+              description: "The agent-worker's dedicated Claude credential (mctl_agent_claude_result_errors_total{class=\"usage_limit\"}) reported a usage-limit/quota error in the last 15 minutes. Worker.Loop processes jobs sequentially, so every job after this one blocks on the same exhausted pool until the quota window resets."
+              runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlagentclaudeusagelimit"
+
+  # The class selector is load-bearing: a rule that dropped it would fire here,
+  # since {class="other"} is clearly incrementing.
+  - interval: 1m
+    name: a non-quota result error stays silent
+    input_series:
+      - series: 'mctl_agent_claude_result_errors_total{class="other"}'
+        values: '0+1x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: MctlAgentClaudeUsageLimit
+        exp_alerts: []
+
+  - interval: 1m
+    name: denials at half of claimed jobs raise the denial-rate alert
+    input_series:
+      - series: 'mctl_agent_jobs_total{status="processing"}'
+        values: '0+2x40'
+      - series: 'mctl_agent_policy_denials_total{reason="unknown"}'
+        values: '0+1x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: MctlAgentPolicyDenialRateHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: mctl-telegram
+              reason: "unknown"
+            exp_annotations:
+              summary: "Communication-agent policy-denial share is high for reason unknown"
+              description: "unknown denials are above 20% of claimed agent jobs over the last 30 minutes, with at least 5 denials in the window. Check agent_actions.policy_reasons to decide whether this is the guarded system working as designed or a new/runaway denial reason."
+              runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlagentpolicydenialratehigh"
+
+  # A guarded account denying a steady tenth of replies is the normal operating
+  # condition; this is what a lowered share threshold would break.
+  - interval: 1m
+    name: a normal denial share at real volume stays silent
+    input_series:
+      - series: 'mctl_agent_jobs_total{status="processing"}'
+        values: '0+10x40'
+      - series: 'mctl_agent_policy_denials_total{reason="autopilot_paused"}'
+        values: '0+1x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: MctlAgentPolicyDenialRateHigh
+        exp_alerts: []
+
+  # Three denials against six claims: the share is 50%, far above the 0.20
+  # threshold, so ONLY the absolute floor keeps this silent. Relaxing that
+  # clause makes this case fire, which is what makes it a test of the floor
+  # rather than of the threshold.
+  #
+  # Both series must keep rising inside the window. An earlier version of this
+  # case stepped once at t=1m and then stayed flat, which looks like a quiet
+  # window but is not a test: increase()/rate() evaluate a half-open range, so
+  # at eval_time 30m the t=0 sample falls outside it, both counters read as
+  # constant, both rates are 0, and 0/0 is NaN. NaN fails every comparison, so
+  # that input stayed silent with the floor clause removed too — it passed
+  # whether or not the rule was correct.
+  - interval: 1m
+    name: denials below the absolute floor stay silent despite a high share
+    input_series:
+      - series: 'mctl_agent_jobs_total{status="processing"}'
+        values: '0 0 1 1 2 2 3 3 4 4 5 5 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6'
+      - series: 'mctl_agent_policy_denials_total{reason="unknown"}'
+        values: '0 0 0 0 0 1 1 1 1 1 2 2 2 2 2 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: MctlAgentPolicyDenialRateHigh
+        exp_alerts: []
+
+  # Owner-facing denials never go through Queue.Claim, so denials can climb
+  # with no claims series in existence at all. sum() over an absent series is
+  # an empty vector, so without `or vector(0)` the scalar() is NaN and the
+  # comparison is false — this case is what pins that guard.
+  - interval: 1m
+    name: denials with no claims series at all still alert
+    input_series:
+      - series: 'mctl_agent_policy_denials_total{reason="global_kill"}'
+        values: '0+1x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: MctlAgentPolicyDenialRateHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: mctl-telegram
+              reason: "global_kill"
+            exp_annotations:
+              summary: "Communication-agent policy-denial share is high for reason global_kill"
+              description: "global_kill denials are above 20% of claimed agent jobs over the last 30 minutes, with at least 5 denials in the window. Check agent_actions.policy_reasons to decide whether this is the guarded system working as designed or a new/runaway denial reason."
+              runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlagentpolicydenialratehigh"
+
+  - interval: 1m
+    name: a dollar per completed job raises the cost alert
+    input_series:
+      - series: 'mctl_agent_job_cost_usd_total{result="success"}'
+        values: '0+1x60'
+      - series: 'mctl_agent_jobs_total{status="completed"}'
+        values: '0+1x60'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: MctlAgentJobCostHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: mctl-telegram
+            exp_annotations:
+              summary: "Communication-agent spend per completed job is high"
+              description: "Claude spend per completed communication-agent job over the last hour is above $0.50, with total spend in the window above $0.50. This is dollars per delivered outcome, not per attempt — a retry storm that spends without completing jobs raises this ratio. May render as +Inf when spend occurred with zero completions in the window; that is intended."
+              runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlagentjobcosthigh"
+
+  - interval: 3m
+    name: ordinary spend per completed job stays silent
+    input_series:
+      - series: 'mctl_agent_job_cost_usd_total{result="success"}'
+        values: '0+1x20'
+      - series: 'mctl_agent_jobs_total{status="completed"}'
+        values: '0+5x20'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: MctlAgentJobCostHigh
+        exp_alerts: []
+
+  # The rule's headline scenario: spend continues while nothing completes, so
+  # the status="completed" label is never emitted and the series is absent.
+  # Without `or vector(0)` the division yields an empty vector and the alert is
+  # silent exactly when it should fire.
+  - interval: 1m
+    name: spend with no completions series at all still alerts
+    input_series:
+      - series: 'mctl_agent_job_cost_usd_total{result="error"}'
+        values: '0+1x60'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: MctlAgentJobCostHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: mctl-telegram
+            exp_annotations:
+              summary: "Communication-agent spend per completed job is high"
+              description: "Claude spend per completed communication-agent job over the last hour is above $0.50, with total spend in the window above $0.50. This is dollars per delivered outcome, not per attempt — a retry storm that spends without completing jobs raises this ratio. May render as +Inf when spend occurred with zero completions in the window; that is intended."
+              runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlagentjobcosthigh"
