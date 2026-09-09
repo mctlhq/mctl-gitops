@@ -96,8 +96,8 @@ it:
 
 ```
 (ip.src.asnum eq 24940 and http.host in
-  {"secrets.mctl.ai" "ops.mctl.ai" "app.mctl.ai"
-   "api.mctl.ai" "media.mctl.ai" "tg.mctl.ai"})
+  {"secrets.mctl.ai" "ops.mctl.ai" "app.mctl.ai" "api.mctl.ai"
+   "media.mctl.ai" "tg.mctl.ai" "workflows.mctl.ai"})
 ```
 
 The list is not a guess. Cloudflare analytics cannot produce it on this plan —
@@ -118,11 +118,20 @@ later:
 | `api.mctl.ai` | openclaw's MCP proxy, `mctl-agents` (`MCTL_MCP_URL`, hardcoded) and its Temporal workers |
 | `media.mctl.ai` | `seerrsense` → Overseerr, with the Access service token |
 | `tg.mctl.ai` | the `mctl-telegram` canary CronJob, deliberately probing from outside |
+| `workflows.mctl.ai` | Backstage's backend submitting Argo workflows (`argoWorkflows.baseUrl`) |
 
-**The failure mode is worth knowing before editing this rule.** A host that
-belongs on the list and is missing does not fail loudly at the edge: Super Bot
-Fight Mode challenges or blocks the call, and it surfaces as an unexplained
-`403` inside whichever service made it. Reverting is one API call — put the
+**The failure mode is worth knowing before editing this rule**, and it has
+already caught us once. `workflows.mctl.ai` was first classified as
+display-only — it appears in `cwft-mctl-agents-*.yaml` as a `UI_URL` pasted
+into pull-request comments, which is exactly what a display-only entry looks
+like. It is also `argoWorkflows.baseUrl` in
+`platform-gitops/bootstrap/templates/mctl-platform/mctl-portal.yaml`, which
+Backstage's backend fetches server-side on every workflow submission. Same
+hostname, two roles, and the harmless one is the one you find first.
+
+A host that belongs on the list and is missing does not fail loudly at the
+edge: Super Bot Fight Mode challenges or blocks the call, and it surfaces as an
+unexplained `403` inside whichever service made it. Reverting is one API call — put the
 expression back to `(ip.src.asnum eq 24940)` — so widening first and diagnosing
 afterwards is the right order if something breaks.
 
@@ -131,7 +140,8 @@ the edge. Moving them to in-cluster DNS, which is what most of the codebase
 already does, would shrink this list rather than manage it.
 
 **Worker ownership (9).** `cloudflare_workers_route` is owned here; the script
-and its seven runtime secrets stay in Wrangler. OpenTofu does not deploy Worker
+and its eight runtime secrets stay in Wrangler — the seven original
+bindings plus `TURNSTILE_SECRET_KEY`, added 2026-08-31. OpenTofu does not deploy Worker
 code, so owning the script here would split one deployable across two owners.
 The route patterns are part of the worker's contract — change them in one place.
 

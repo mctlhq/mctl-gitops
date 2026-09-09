@@ -18,7 +18,7 @@ User prompt → Claude → MCP tool call → mctl-api → Argo Workflow → GitO
 - **Builds:** GitHub Actions (docker build+push to ghcr.io/mctlhq/)
 - **Config:** Helm values in git → ArgoCD auto-sync
 - **Secrets:** HashiCorp Vault → ExternalSecrets → K8s Secrets
-- **Domains:** auto `{team}-{service}.mctl.ai` (primary only — the `.mctl.me` mirror was retired 2026-08-28; that domain now answers 410 Gone)
+- **Domains:** auto `{team}-{service}.mctl.ai` (primary only — the `.mctl.me` mirror was retired 2026-08-28. That domain does not simply answer 410: a browser gets a 301 to the matching `.mctl.ai` host, and only bot-like User-Agents get 410, because the redirect is performed by the `mctl-landing-form` worker rather than by a zone rule)
 - **Logs:** Loki (query via `mctl_get_service_logs`)
 
 ## Quick Start
