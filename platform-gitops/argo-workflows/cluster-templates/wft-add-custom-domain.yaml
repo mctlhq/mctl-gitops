@@ -360,7 +360,7 @@ spec:
           # yq failures (malformed JSON, bad expression) must fail the step
           # with yq's own stderr — not be swallowed into an empty DOMAIN_ID
           # that then reads as a misleading "domain not found".
-          DOMAIN_ID=$(echo "$DOMAIN_DATA" | yq -p=json -r '.domains[] | select(.domain == strenv(DOMAIN)) | .id' -)
+          DOMAIN_ID=$(printf '%s\n' "$DOMAIN_DATA" | yq -p=json -r '.domains[] | select(.domain == strenv(DOMAIN)) | .id' -)
           [ "$DOMAIN_ID" = "null" ] && DOMAIN_ID=""
           if [ -z "$DOMAIN_ID" ]; then
             echo "❌ ${DOMAIN} is not registered in the mctl-api domains registry" >&2
@@ -436,6 +436,30 @@ spec:
             SERVICE="$PARAM_SERVICE"
             export DOMAIN="$PARAM_DOMAIN"
 
+            # do-add-domain rejects a malformed team_name/service_name
+            # before ever reaching mctl-api, but that validation lives in
+            # its own script's shell function and isn't available to this
+            # handler's separate container. Without an equivalent check
+            # here, a crafted parameter like
+            # "myteam&team=target-team" would fail do-add-domain (exit 1)
+            # but still reach this handler with the raw, unvalidated
+            # workflow.parameters — building a query string with a
+            # duplicate "team=" that can resolve server-side to an
+            # attacker-chosen team (HTTP parameter pollution), letting one
+            # workflow submission fail another tenant's pending domain.
+            # Skip the report — don't `exit 1` — on a mismatch: this block
+            # cannot safely hard-exit internally, since a bare `exit` would
+            # terminate the whole script before the `|| true` / final
+            # `exit 0` this handler's contract depends on ever runs.
+            TEAM_VALID=""
+            if [ "$(printf '%s' "$TEAM" | wc -l | tr -d ' ')" = "0" ] && echo "$TEAM" | grep -qE '^[a-z0-9]([a-z0-9-]*[a-z0-9])?$'; then
+              TEAM_VALID=1
+            fi
+            SERVICE_VALID=""
+            if [ "$(printf '%s' "$SERVICE" | wc -l | tr -d ' ')" = "0" ] && echo "$SERVICE" | grep -qE '^[a-z0-9]([a-z0-9-]*[a-z0-9])?$'; then
+              SERVICE_VALID=1
+            fi
+
             # ${MCTL_API_TOKEN:-} — not ${MCTL_API_TOKEN}: this runs under
             # `set -u`, and MCTL_API_TOKEN's secretKeyRef is optional:true,
             # so Kubernetes omits the env var entirely (not empty-string)
@@ -443,11 +467,11 @@ spec:
             # nounset aborts the shell immediately, bypassing the `|| true`
             # this handler's exit-0 guarantee depends on — exactly in the
             # missing-secret case this check exists to tolerate.
-            if [ -n "${MCTL_API_TOKEN:-}" ]; then
+            if [ -n "${MCTL_API_TOKEN:-}" ] && [ -n "$TEAM_VALID" ] && [ -n "$SERVICE_VALID" ]; then
               DOMAIN_DATA=$(curl -sSf --max-time 30 --retry 3 --retry-connrefused \
                 -H "Authorization: Bearer ${MCTL_API_TOKEN}" \
                 "${MCTL_API_URL}/api/v1/domains?team=${TEAM}&service=${SERVICE}")
-              DOMAIN_ID=$(echo "$DOMAIN_DATA" | yq -p=json -r '.domains[] | select(.domain == strenv(DOMAIN)) | .id' -)
+              DOMAIN_ID=$(printf '%s\n' "$DOMAIN_DATA" | yq -p=json -r '.domains[] | select(.domain == strenv(DOMAIN)) | .id' -)
               [ "$DOMAIN_ID" = "null" ] && DOMAIN_ID=""
               # Read the status from the same response rather than assuming
               # the workflow's failure means the domain never went live: the
@@ -455,7 +479,7 @@ spec:
               # a transient error, which exits do-add-domain non-zero and
               # lands here. Overwriting "active" with "failed" would report a
               # working domain (ingress + cert already pushed) as broken.
-              DOMAIN_STATUS=$(echo "$DOMAIN_DATA" | yq -p=json -r '.domains[] | select(.domain == strenv(DOMAIN)) | .status' -)
+              DOMAIN_STATUS=$(printf '%s\n' "$DOMAIN_DATA" | yq -p=json -r '.domains[] | select(.domain == strenv(DOMAIN)) | .status' -)
 
               if [ "$DOMAIN_STATUS" = "active" ]; then
                 echo "ℹ️  ${DOMAIN} is already active; leaving status untouched"
