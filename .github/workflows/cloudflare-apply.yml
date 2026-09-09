@@ -1,0 +1,250 @@
+name: Cloudflare Apply
+
+# The only workflow here that writes to Cloudflare (.github#47 Phase 3, #1111).
+#
+# Deliberately manual. Merging a pull request does not change Cloudflare: a
+# human picks a root and dispatches this run, the same way a production release
+# is a Redeploy click rather than a merge. That keeps "this configuration is
+# reviewed" and "this configuration is live" as two separate decisions, so a
+# rollback is a decision too and not a race with the next merge.
+#
+# It is also not a reconciler. cloudflare-drift.yml fails closed on purpose;
+# blind reconciliation would silently erase whatever a human did during an
+# incident. This workflow applies a plan someone asked for, nothing else.
+
+on:
+  workflow_dispatch:
+    inputs:
+      root:
+        description: 'Root to apply, e.g. infrastructure/cloudflare/account'
+        required: true
+        type: string
+      allow_destroy:
+        description: 'Permit a plan that destroys resources (off by default)'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  # Same group as cloudflare-drift.yml, and cancel-in-progress: false. Drift and
+  # apply contend for the same state lock, and this job — unlike drift — takes
+  # it for real. Cancelling mid-apply is how a lock outlives the run that held
+  # it.
+  group: cloudflare-tofu
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    name: apply ${{ inputs.root }}
+    runs-on: ubuntu-latest
+
+    # Two layers, the same pair opentofu-state-backup.yml uses and for the same
+    # reason: workflow_dispatch accepts a ref, so without them a rewritten copy
+    # of this file on any branch would run with the writable credentials.
+    #
+    #   * the `if` is visible in review but lives in YAML a branch controls, so
+    #     a rewritten copy can simply drop it;
+    #   * the cloudflare-apply environment's deployment-branch policy allows
+    #     `main` alone and lives in repository settings, outside that branch's
+    #     reach — but it is not verifiable from this file, and GitHub silently
+    #     creates a referenced environment *unprotected* if it does not exist.
+    #
+    # Verify both are real, do not assume:
+    #   gh api repos/mctlhq/mctl-gitops/environments/cloudflare-apply/deployment-branch-policies
+    #   gh api repos/mctlhq/mctl-gitops/environments/cloudflare-apply --jq .protection_rules
+    # Expected: exactly one policy named "main", and a required reviewer.
+    if: github.ref == 'refs/heads/main'
+    environment: cloudflare-apply
+
+    defaults:
+      run:
+        working-directory: ${{ inputs.root }}
+
+    env:
+      # One write token per root (#1111): an apply against a zone must not be
+      # able to touch another zone, and the account root must not be able to
+      # touch DNS at all. Secrets cannot be indexed by a variable, so the
+      # mapping is this explicit chain — which is also the allowlist. A root
+      # with no entry resolves to the empty string and is rejected below,
+      # rather than falling back to some other root's credential.
+      CLOUDFLARE_API_TOKEN: >-
+        ${{ inputs.root == 'infrastructure/cloudflare/account'       && secrets.CF_APPLY_TOKEN_ACCOUNT
+         || inputs.root == 'infrastructure/cloudflare/zones/mctl-ru' && secrets.CF_APPLY_TOKEN_MCTL_RU
+         || inputs.root == 'infrastructure/cloudflare/zones/mctl-me' && secrets.CF_APPLY_TOKEN_MCTL_ME
+         || inputs.root == 'infrastructure/cloudflare/zones/mctl-ai' && secrets.CF_APPLY_TOKEN_MCTL_AI
+         || '' }}
+      # Apply's own R2 credential, Object Read & Write on mctl-cloudflare-state
+      # alone — not the backup workflow's. Rotating or revoking one must not
+      # disturb the other, and the writable state credential is not shared
+      # between two jobs.
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_APPLY_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_APPLY_SECRET_ACCESS_KEY }}
+      TF_IN_AUTOMATION: '1'
+
+    steps:
+      # defaults.run.working-directory applies only to `run` steps, so this
+      # one is unaffected by a dispatch naming a directory that does not exist
+      # — the validation step below is what produces the error message for it.
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      # ROOT goes through the environment, never through ${{ }} expansion into a
+      # script body: this one is typed by whoever dispatches the run, so it is
+      # the least trustworthy string in the workflow. Splicing it would let a
+      # dispatcher run shell as this job, with the write credentials in scope.
+      - name: Validate the root
+        working-directory: ${{ github.workspace }}
+        env:
+          ROOT: ${{ inputs.root }}
+        run: |
+          set -euo pipefail
+          case "$ROOT" in
+            infrastructure/cloudflare/*) ;;
+            *) echo "::error::'$ROOT' is not under infrastructure/cloudflare/"; exit 1 ;;
+          esac
+          case "$ROOT" in
+            *..*) echo "::error::'$ROOT' contains a parent reference"; exit 1 ;;
+          esac
+          # A shared module is not a root: planning one fails on its required
+          # inputs, and applying one is meaningless.
+          case "$ROOT" in
+            infrastructure/cloudflare/modules/*)
+              echo "::error::'$ROOT' is a module, not a root"; exit 1 ;;
+          esac
+          if [ ! -f "$ROOT/versions.tf" ] && [ ! -f "$ROOT/versions.tf.json" ]; then
+            echo "::error::'$ROOT' is not a root — no versions.tf"; exit 1
+          fi
+          # A root on local state has nothing to apply against from a fresh
+          # runner: its state is empty here, so the plan would propose creating
+          # everything the root describes. That is the single most destructive
+          # shape this workflow could take, and it is silent.
+          if .github/scripts/cloudflare-local-state-roots.sh | grep -qxF -- "$ROOT"; then
+            echo "::error::'$ROOT' is listed in .local-state-roots — it has no remote state to apply against"
+            exit 1
+          fi
+          # Tested for emptiness, never printed or compared against a literal.
+          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
+            echo "::error::no write token is mapped for '$ROOT' — add one to the chain in this workflow and to repository secrets"
+            exit 1
+          fi
+
+      # Both paths stay out of the workspace on purpose: whatever the tree
+      # contains under those names is then simply not what OpenTofu reads.
+      # RUNNER_TEMP is exported here rather than declared in the job env block —
+      # the runner context does not exist at that level, and referencing it
+      # there makes the whole workflow fail to parse.
+      - name: Point OpenTofu outside the workspace
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          {
+            echo "TF_DATA_DIR=$RUNNER_TEMP/tofu-data"
+            echo "TF_CLI_CONFIG_FILE=$RUNNER_TEMP/opentofu-ci.tfrc"
+          } >> "$GITHUB_ENV"
+
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: 1.12.6
+          tofu_wrapper: false
+
+      - name: Restrict provider installation
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          cat > "$TF_CLI_CONFIG_FILE" <<'TFRC'
+          provider_installation {
+            direct {
+              include = ["registry.opentofu.org/cloudflare/cloudflare"]
+            }
+          }
+          TFRC
+          grep -q 'cloudflare/cloudflare' "$TF_CLI_CONFIG_FILE"
+
+      # -lockfile=readonly for the same reason as the other two workflows: a
+      # root with no committed lock file would otherwise get one minted here and
+      # thrown away, and this job is the one that writes to Cloudflare with it.
+      - name: Init
+        run: tofu init -input=false -lockfile=readonly
+
+      # Which backend a root uses is decided by what init resolved, not by
+      # reading backend.tf — a comment mentioning backend "s3" next to a live
+      # backend "local" satisfies any text match. Belt and braces with the
+      # .local-state-roots check above: that one catches a root we know is
+      # local, this one catches a root nobody declared.
+      - name: Assert remote backend
+        run: |
+          set -euo pipefail
+          type=$(jq -r '.backend.type' "$TF_DATA_DIR/terraform.tfstate")
+          if [ "$type" != 's3' ]; then
+            echo "::error::backend resolved to '$type', not s3 — refusing to apply"
+            exit 1
+          fi
+
+      # No -lock=false anywhere in this job. Taking the state lock is itself a
+      # write, which is exactly why plan and drift cannot take it and this job
+      # must. An apply that skipped the lock could interleave with the nightly
+      # drift run and write a state computed from a stale read.
+      - name: Plan
+        run: |
+          set -euo pipefail
+          tofu plan -input=false -no-color -out=tfplan | tee plan.txt
+          tofu show -no-color -json tfplan > plan.json
+
+      - name: Summarize
+        id: summary
+        env:
+          ROOT: ${{ inputs.root }}
+        run: |
+          set -euo pipefail
+          destroy=$(jq '[.resource_changes[]? | select(.change.actions | index("delete"))] | length' plan.json)
+          create=$(jq '[.resource_changes[]? | select(.change.actions | index("create"))] | length' plan.json)
+          update=$(jq '[.resource_changes[]? | select(.change.actions == ["update"])] | length' plan.json)
+          imports=$(jq '[.resource_changes[]? | select(.change.importing != null)] | length' plan.json)
+          {
+            echo "### apply \`$ROOT\`"
+            echo
+            echo "| import | create | update | **destroy** |"
+            echo "| --- | --- | --- | --- |"
+            echo "| $imports | $create | $update | **$destroy** |"
+            echo
+            echo "<details><summary>Full plan</summary>"
+            echo
+            echo '```terraform'
+            cat plan.txt
+            echo '```'
+            echo
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "destroy=$destroy" >> "$GITHUB_OUTPUT"
+
+      # cloudflare-plan.yml surfaces destroys and lets the reviewer decide,
+      # because a plan changes nothing. Here it is the last checkpoint before
+      # the change is real, so the default is refusal: a destroy has to have
+      # been asked for at dispatch time, before its contents were known.
+      - name: Refuse an unrequested destroy
+        if: steps.summary.outputs.destroy != '0' && inputs.allow_destroy != true
+        env:
+          DESTROY: ${{ steps.summary.outputs.destroy }}
+        run: |
+          set -euo pipefail
+          echo "::error::this plan destroys $DESTROY resource(s) and the run was dispatched without allow_destroy"
+          jq -r '.resource_changes[]? | select(.change.actions | index("delete")) | "- " + .address' plan.json
+          echo "Re-dispatch with allow_destroy if every address above is meant to go."
+          exit 1
+
+      # The saved plan file, not a fresh one: apply what the summary above
+      # described. Re-planning here would apply something nobody looked at, and
+      # OpenTofu would not complain.
+      - name: Apply
+        run: tofu apply -input=false -no-color tfplan
+
+      # Nothing is uploaded as an artifact. plan.json carries every attribute
+      # of every managed resource, which for this root set includes Access
+      # configuration.
+      - name: Scrub
+        if: always()
+        run: rm -f tfplan plan.json plan.txt

@@ -64,8 +64,16 @@ Nothing is committed. CI reads:
   (`Cache Rules`, `DNS`, `Zone`, `Zone Settings`, `Zone WAF`, `Single Redirect`,
   `Page Rules`, `Access: Apps and Policies`, `Email Routing Rules`,
   `Workers Routes`, all `Read`). Verified read-only: a `POST` to create a DNS
-  record is rejected. Apply will need a separate, narrower write identity —
-  it does not exist yet, and no workflow here performs an apply.
+  record is rejected. It is never given to `cloudflare-apply.yml`.
+- `CF_APPLY_TOKEN_ACCOUNT`, `CF_APPLY_TOKEN_MCTL_RU`, `CF_APPLY_TOKEN_MCTL_ME`,
+  `CF_APPLY_TOKEN_MCTL_AI` — apply identities, **one per root**, each scoped to
+  that root's zone (or to Access for the account root) and to nothing else, so
+  an apply against one zone cannot touch another. A root with no token here
+  cannot be applied: the mapping in `cloudflare-apply.yml` is the allowlist.
+- `R2_APPLY_ACCESS_KEY_ID` / `R2_APPLY_SECRET_ACCESS_KEY` — Object Read & Write
+  on `mctl-cloudflare-state` alone, used by apply and by nothing else.
+  Deliberately not the backup workflow's `R2_CF_STATE_*`: rotating or revoking
+  one must not disturb the other.
 - `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` — writable on
   `mctl-terraform-state`, used only to back that bucket up. Never exposed to a
   job that plans unreviewed pull-request code.
@@ -99,10 +107,14 @@ for it.
 | --- | --- | --- |
 | `cloudflare-plan.yml` | `pull_request` | fmt, validate, plan per root. A failure fails the check — there is no `continue-on-error`. Destructive changes are called out in the summary. The `cloudflare-plan` job is the stable context to mark required: it runs on every pull request, including ones that touch nothing here. Losing root coverage is blocked, in all three shapes that reach it: a root that stops being discovered; a root with no `s3` backend, which silently plans against empty local state; and configuration that sits in no root's own directory — a subdirectory of a root included, since OpenTofu loads only the files directly in the working directory. `versions.tf.json` counts as a root marker exactly as `versions.tf` does, and `modules/` is exempt on both sides: a shared module is not a root and its files are not orphans. Which backend a root actually uses is not decided by reading `backend.tf` — a comment mentioning `backend "s3"` next to a live `backend "local"` would satisfy any text match — but by what `tofu init` resolved: the plan job reads `backend.type` out of the data directory it wrote. Roots knowingly off the shared backend are listed in `infrastructure/cloudflare/.local-state-roots`, which both checks read; today that is `zones/mctl-ru`, left on local state by the import pilot, whose migration belongs to #1103. In each case the resources stay live in Cloudflare while leaving both plan and drift. Fix the root, or label the pull request `cloudflare-root-removal` to hand ownership over deliberately — labelling re-runs the check, which is why the trigger lists `labeled`/`unlabeled`. |
 | `cloudflare-drift.yml` | schedule | plan per root; any difference from Git fails the run and notifies. It never applies. Roots listed in `.local-state-roots` are skipped: with no remote state to compare against, such a root reports its whole content as pending every night — a false alarm that would train everyone to ignore the real one. Skipping it is not coverage; it is the absence of coverage, stated out loud. |
+| `cloudflare-apply.yml` | `workflow_dispatch` | the only workflow here that writes to Cloudflare. Takes one root as input, refuses anything that is not a discovered root, is listed in `.local-state-roots` (no remote state to apply against — from a fresh runner such a root plans as "create everything"), or has no write token mapped to it. Plans first, publishes the same import/create/update/destroy table the pull-request gate does, and applies **that saved plan file** rather than re-planning, so what runs is what the summary showed. A plan that destroys anything is refused unless the run was dispatched with `allow_destroy` — asked for before its contents were known. Unlike plan and drift it never passes `-lock=false`: taking the state lock is itself a write, which is precisely why the other two cannot. Restricted to `main` by the `cloudflare-apply` environment's branch policy and by an `if` on the job, for the same reason as the backup workflow: `workflow_dispatch` accepts a ref. |
 | `opentofu-state-backup.yml` | schedule | copies every state object in both state buckets to a dated prefix under `_backups/` in the same bucket — see the limitation noted above. Restricted to `main` by the `state-backup` environment's branch policy, since `workflow_dispatch` would otherwise run a rewritten copy of this file from any branch with the writable credential. |
 
-Apply is deliberately not automated. Drift fails closed and requires a reviewed
-decision rather than a blind reconcile.
+Apply is manual on purpose. Merging a pull request does not change Cloudflare —
+someone dispatches `cloudflare-apply.yml` against one named root, the same way a
+production release is a Redeploy click rather than a merge. Drift stays
+fail-closed: it reports, and a human decides whether the out-of-band change
+should be imported or reverted. Neither workflow reconciles.
 
 ### What CI trusts, and what a reviewer still has to check
 
