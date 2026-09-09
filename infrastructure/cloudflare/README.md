@@ -65,6 +65,14 @@ Nothing is committed. CI reads:
   `Page Rules`, `Access: Apps and Policies`, `Email Routing Rules`,
   `Workers Routes`, all `Read`). Verified read-only: a `POST` to create a DNS
   record is rejected. It is never given to `cloudflare-apply.yml`.
+The six apply credentials below are **environment secrets on `cloudflare-apply`,
+not repository secrets**. A repository secret is readable by any workflow in the
+repository, so storing them there would let a branch carrying a new workflow read
+them while omitting `environment:` — the branch policy protects the workflow file,
+not the credential. Verify with
+`gh api repos/mctlhq/mctl-gitops/environments/cloudflare-apply/secrets`; they must
+not appear in `gh secret list`.
+
 - `CF_APPLY_TOKEN_ACCOUNT`, `CF_APPLY_TOKEN_MCTL_RU`, `CF_APPLY_TOKEN_MCTL_ME`,
   `CF_APPLY_TOKEN_MCTL_AI` — apply identities, **one per root**, each scoped to
   that root's zone (or to Access for the account root) and to nothing else, so
