@@ -16,3 +16,7 @@
 # zones/mctl-ru — the import pilot (#1096) deliberately kept local state.
 #                 Moving it to R2 is a state migration and belongs to #1103.
 infrastructure/cloudflare/zones/mctl-ru
+
+# zones/mctl-ai arrives with #1115 on local state, same reason as the others:
+# the zero-diff proof needs only read access, the R2 migration needs #1111.
+infrastructure/cloudflare/zones/mctl-ai
