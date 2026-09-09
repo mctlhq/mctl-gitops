@@ -18,7 +18,7 @@
 
 - [ ] 9. Add three-row evidence model — DoD: output supports `in-process-current-main`, `direct-deployed`, and `cloudflare-portal`. CI produces only the in-process row; deployed/Portal rows are operator evidence and can be `PENDING-OPERATOR`. Each row records protocol mode/version and evidence timestamp/ref where known.
 
-- [ ] 10. Add structured `OAUTH_PREREGISTERED_CLIENTS` configuration — DoD: parse JSON records containing `client_id` and exact `redirect_uris`; seed them into the existing registered-client map with static/non-expiring semantics. No client-secret field is added. Unset means no behavior change.
+- [ ] 10. Add structured `OAUTH_PREREGISTERED_CLIENTS` configuration — DoD: `internal/config` parses JSON records containing `client_id` and exact `redirect_uris`; `cmd/server` passes those records through `oauth.Config` (or an explicit constructor option); `internal/oauth.New` seeds its private `s.clients` map with zero-`CreatedAt` static registrations alongside the built-in self-connect client. No client-secret field is added and `cmd/server` does not reach into OAuth internals. Unset means no behavior change.
 
 - [ ] 11. Prove exact redirect matching — DoD: a configured public client using a synthetic callback such as `https://portal.example.test/servers-callback` is accepted with exact URI and rejected for path/query/port variants. The flow does not call `/oauth/register` and works with `AllowImplicitClient=false`.
 
