@@ -78,7 +78,7 @@ resource "cloudflare_dns_record" "gh_org_verify" {
 }
 
 resource "cloudflare_dns_record" "wildcard" {
-  content = "91.98.10.188"
+  content = local.origin_ip
   name    = "*.mctl.ai"
   proxied = true
   ttl     = 1
@@ -87,7 +87,7 @@ resource "cloudflare_dns_record" "wildcard" {
 }
 
 resource "cloudflare_dns_record" "apex" {
-  content = "91.98.10.188"
+  content = local.origin_ip
   name    = "mctl.ai"
   proxied = true
   ttl     = 1
