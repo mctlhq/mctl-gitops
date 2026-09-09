@@ -1,0 +1,119 @@
+name: Cloudflare Plan
+
+# Merge gate for the Cloudflare IaC roots (.github#47, #1093).
+#
+# Deliberately separate from terraform.yml: that workflow plans on push to main
+# with continue-on-error, which reports but does not gate. This one runs on the
+# pull request and fails the check when anything is wrong.
+
+on:
+  pull_request:
+    paths:
+      - 'infrastructure/cloudflare/**'
+      - '.github/workflows/cloudflare-plan.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  discover:
+    name: discover roots
+    runs-on: ubuntu-latest
+    outputs:
+      roots: ${{ steps.find.outputs.roots }}
+      count: ${{ steps.find.outputs.count }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      # A root is any directory holding versions.tf. Discovering them keeps this
+      # workflow unchanged as zones are added one import slice at a time.
+      - id: find
+        run: |
+          set -euo pipefail
+          roots=$(find infrastructure/cloudflare -name versions.tf -mindepth 2 \
+                    -exec dirname {} \; | sort | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          echo "roots=$roots" >> "$GITHUB_OUTPUT"
+          echo "count=$(echo "$roots" | jq 'length')" >> "$GITHUB_OUTPUT"
+          echo "Discovered roots: $roots"
+
+  plan:
+    name: plan
+    needs: discover
+    if: needs.discover.outputs.count != '0'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        root: ${{ fromJson(needs.discover.outputs.roots) }}
+    defaults:
+      run:
+        working-directory: ${{ matrix.root }}
+    env:
+      # Read-only across all zones. Verified: a POST to create a DNS record is
+      # rejected, so this workflow cannot change Cloudflare even if asked to.
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: 1.12.6
+          tofu_wrapper: false
+
+      - name: Format check
+        run: tofu fmt -check -diff
+
+      - name: Init
+        run: tofu init -input=false
+
+      - name: Validate
+        run: tofu validate
+
+      - name: Plan
+        id: plan
+        run: |
+          set -euo pipefail
+          tofu plan -input=false -no-color -lock-timeout=5m -out=tfplan | tee plan.txt
+          tofu show -no-color -json tfplan > plan.json
+
+      # Creating or updating is normal in a PR; destroying is the thing that
+      # should never pass unnoticed. Surface it loudly rather than failing —
+      # a legitimate removal exists, it just has to be seen by a reviewer.
+      - name: Summarize
+        run: |
+          set -euo pipefail
+          destroy=$(jq '[.resource_changes[]? | select(.change.actions | index("delete"))] | length' plan.json)
+          create=$(jq '[.resource_changes[]? | select(.change.actions == ["create"])] | length' plan.json)
+          update=$(jq '[.resource_changes[]? | select(.change.actions == ["update"])] | length' plan.json)
+          imports=$(jq '[.resource_changes[]? | select(.change.importing != null)] | length' plan.json)
+          {
+            echo "### \`${{ matrix.root }}\`"
+            echo
+            echo "| import | create | update | **destroy** |"
+            echo "| --- | --- | --- | --- |"
+            echo "| $imports | $create | $update | **$destroy** |"
+            if [ "$destroy" -gt 0 ]; then
+              echo
+              echo "> [!WARNING]"
+              echo "> This plan destroys $destroy resource(s). Confirm that is intended before approving."
+              jq -r '.resource_changes[]? | select(.change.actions | index("delete")) | "- `" + .address + "`"' plan.json
+            fi
+            echo
+            echo "<details><summary>Full plan</summary>"
+            echo
+            echo '```terraform'
+            cat plan.txt
+            echo '```'
+            echo
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The plan file can contain resource attribute values. Nothing here is
+      # uploaded as an artifact for that reason.
+      - name: Scrub
+        if: always()
+        run: rm -f tfplan plan.json plan.txt

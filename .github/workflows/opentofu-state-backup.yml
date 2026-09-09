@@ -1,0 +1,111 @@
+name: OpenTofu State Backup
+
+# R2 has no object versioning: GET /accounts/{id}/r2/buckets/{b}/versioning
+# returns 10015 "No route matches this url", and the feature does not exist.
+# The standard S3 answer — turn on bucket versioning — is unavailable, and
+# before this workflow existed there was no copy of any state file anywhere.
+#
+# The gap is wider than Cloudflare: mctl-terraform-state also holds
+# k3s-preview/terraform.tfstate, the state of the preprod cluster.
+#
+# KNOWN LIMITATION — snapshots land in the SAME bucket, under _backups/.
+# The R2 credential in R2_ACCESS_KEY_ID is scoped to mctl-terraform-state and
+# is refused (AccessDenied) on mctl-db-backups, so a cross-bucket copy is not
+# possible with the credentials that exist today. This still protects against
+# the failure that actually happens — a state file corrupted by a bad apply, an
+# accidental `state rm`, a botched import — but it does NOT protect against
+# deletion of the bucket itself or compromise of this credential. Moving
+# snapshots to a separate bucket with its own write-only token is tracked as a
+# follow-up and needs a credential that does not exist yet.
+#
+# .github#47 requires a tested restore before Git-only operation is declared
+# authoritative. Procedure: docs/runbooks/opentofu-state-restore.md
+
+on:
+  schedule:
+    - cron: '30 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: opentofu-state-backup
+  cancel-in-progress: false
+
+env:
+  R2_ENDPOINT: https://6a09f637d20e1f66a8e9d45ebe778058.r2.cloudflarestorage.com
+  BUCKET: mctl-terraform-state
+  BACKUP_PREFIX: _backups
+  RETENTION_DAYS: '30'
+
+jobs:
+  backup:
+    name: snapshot state to a dated prefix
+    runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      # R2 rejects the newer default checksum headers the AWS CLI sends.
+      AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+      AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+    steps:
+      - name: Snapshot
+        run: |
+          set -euo pipefail
+          stamp="$(date -u +%Y-%m-%dT%H-%M-%SZ)"
+          dest="s3://${BUCKET}/${BACKUP_PREFIX}/${stamp}/"
+
+          # Excluding the backup prefix matters: without it each run would copy
+          # every previous snapshot into the new one and the bucket would grow
+          # geometrically.
+          aws s3 sync "s3://${BUCKET}/" "$dest" \
+            --endpoint-url "$R2_ENDPOINT" \
+            --exclude '*' \
+            --include '*.tfstate' \
+            --include '*.tfstate.backup' \
+            --exclude "${BACKUP_PREFIX}/*"
+
+          # A backup that silently copies nothing is worse than no backup,
+          # because it looks healthy on the dashboard. Fail loudly instead.
+          copied=$(aws s3 ls "$dest" --recursive --endpoint-url "$R2_ENDPOINT" | wc -l)
+          echo "objects copied: $copied"
+          if [ "$copied" -eq 0 ]; then
+            echo "::error::state backup copied 0 objects — check credentials and bucket contents"
+            exit 1
+          fi
+
+          {
+            echo "### State snapshot"
+            echo
+            echo "- destination: \`${BACKUP_PREFIX}/${stamp}/\`"
+            echo "- objects: $copied"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Prune old snapshots
+        run: |
+          set -euo pipefail
+          cutoff=$(date -u -d "-${RETENTION_DAYS} days" +%Y-%m-%d)
+          aws s3 ls "s3://${BUCKET}/${BACKUP_PREFIX}/" --endpoint-url "$R2_ENDPOINT" \
+            | awk '{print $2}' | tr -d '/' | while read -r snap; do
+              [ -n "$snap" ] || continue
+              # Snapshot directories are named by UTC timestamp, so comparing
+              # the date part as a string is a correct age test.
+              if [[ "${snap%%T*}" < "$cutoff" ]]; then
+                echo "pruning $snap"
+                aws s3 rm "s3://${BUCKET}/${BACKUP_PREFIX}/${snap}/" \
+                  --recursive --endpoint-url "$R2_ENDPOINT"
+              fi
+            done
+
+      - name: Notify Telegram on failure
+        if: failure()
+        uses: appleboy/telegram-action@390cf7345777cd821dba28c72f436a78bce19cc5 # master 2026-05
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          message: |
+            *OpenTofu state backup failed*
+            There is no other copy of the state — R2 has no object versioning.
+            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

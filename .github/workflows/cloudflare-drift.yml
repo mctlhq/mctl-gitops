@@ -1,0 +1,97 @@
+name: Cloudflare Drift
+
+# Reports Cloudflare configuration that no longer matches Git (.github#47 Phase 3).
+#
+# This workflow never applies. Drift fails closed: a run goes red and stays red
+# until someone decides whether the out-of-band change should be imported or
+# reverted. Blind reconciliation would silently erase whatever a human did
+# during an incident.
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Never race an apply or another drift run for the same state lock.
+  group: cloudflare-tofu
+  cancel-in-progress: false
+
+jobs:
+  discover:
+    name: discover roots
+    runs-on: ubuntu-latest
+    outputs:
+      roots: ${{ steps.find.outputs.roots }}
+      count: ${{ steps.find.outputs.count }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - id: find
+        run: |
+          set -euo pipefail
+          roots=$(find infrastructure/cloudflare -name versions.tf -mindepth 2 \
+                    -exec dirname {} \; | sort | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          echo "roots=$roots" >> "$GITHUB_OUTPUT"
+          echo "count=$(echo "$roots" | jq 'length')" >> "$GITHUB_OUTPUT"
+
+  drift:
+    name: drift
+    needs: discover
+    if: needs.discover.outputs.count != '0'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        root: ${{ fromJson(needs.discover.outputs.roots) }}
+    defaults:
+      run:
+        working-directory: ${{ matrix.root }}
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: 1.12.6
+          tofu_wrapper: false
+
+      - name: Init
+        run: tofu init -input=false
+
+      # -detailed-exitcode: 0 = no changes, 1 = error, 2 = drift.
+      # Both 1 and 2 are failures here, but they mean different things, so the
+      # summary says which one happened.
+      - name: Plan
+        id: plan
+        run: |
+          set +e
+          tofu plan -input=false -no-color -lock-timeout=5m -detailed-exitcode | tee plan.txt
+          code=${PIPESTATUS[0]}
+          set -e
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          case "$code" in
+            0) echo "### \`${{ matrix.root }}\` — in sync" >> "$GITHUB_STEP_SUMMARY" ;;
+            2) { echo "### \`${{ matrix.root }}\` — DRIFT";
+                 echo; echo '```terraform'; cat plan.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY" ;;
+            *) echo "### \`${{ matrix.root }}\` — plan failed (exit $code)" >> "$GITHUB_STEP_SUMMARY" ;;
+          esac
+          rm -f plan.txt
+          exit "$code"
+
+      - name: Notify Telegram
+        if: failure()
+        uses: appleboy/telegram-action@390cf7345777cd821dba28c72f436a78bce19cc5 # master 2026-05
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          message: |
+            *Cloudflare drift* — `${{ matrix.root }}`
+            Exit code `${{ steps.plan.outputs.code }}` (2 = drift, 1 = plan error)
+            Cloudflare no longer matches Git, or the plan could not run.
+            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
