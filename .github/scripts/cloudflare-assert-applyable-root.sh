@@ -73,9 +73,18 @@ if [ "${CLOUDFLARE_GUARD_SELF_TEST:-}" = "1" ]; then
   # Has to live under infrastructure/cloudflare/ for the versions.tf arm to be
   # the one that fires, so it cannot go in a temp dir elsewhere — hence a trap
   # rather than a bare rmdir, so an aborted run leaves nothing in the tree.
+  # ONE handler for everything this suite creates. Bash keeps a single EXIT
+  # trap per shell, so a second `trap ... EXIT` later in the block would
+  # silently replace this one and leak whatever the first was cleaning up —
+  # which is exactly what happened when $stub got its own.
   tmp_root="infrastructure/cloudflare/.self-test-not-a-root"
+  stub=""
+  cleanup() {
+    [ -n "$stub" ] && rm -rf "$stub"
+    rmdir "$repo/$tmp_root" 2>/dev/null || true
+  }
+  trap cleanup EXIT
   mkdir -p "$repo/$tmp_root"
-  trap 'rmdir "$repo/$tmp_root" 2>/dev/null || true' EXIT
   expect reject "$tmp_root" "directory with no versions.tf"
 
   # No longer an entrypoint, so it must be refused like any other bad name.
@@ -94,7 +103,6 @@ if [ "${CLOUDFLARE_GUARD_SELF_TEST:-}" = "1" ]; then
   # that is what makes a refusal attributable to the helper failure alone, and
   # it is what the control below pins down. The root name is incidental.
   stub="$(mktemp -d)"
-  trap 'rm -rf "$stub"' EXIT
   mkdir -p "$stub/.github/scripts" "$stub/infrastructure/cloudflare/zones/mctl-ru"
   cp "$self" "$stub/.github/scripts/"
   : > "$stub/infrastructure/cloudflare/zones/mctl-ru/versions.tf"
@@ -117,7 +125,7 @@ if [ "${CLOUDFLARE_GUARD_SELF_TEST:-}" = "1" ]; then
   if [ "$rc" -ne 0 ]; then
     echo "self-test FAILED: healthy helper in the fixture tree — expected accept, got exit $rc" >&2; fail=1
   fi
-  rm -rf "$stub"
+  rm -rf "$stub"; stub=""
 
   # From a foreign cwd — the case the first version of this suite was missing.
   #
