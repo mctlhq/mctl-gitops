@@ -89,7 +89,7 @@ drift, and reconciling back to the empty list would undo it.
 **The `seerr` bypass (8).** `(ip.src.asnum eq 24940)` skips Super Bot Fight Mode
 for the whole of Hetzner — every Hetzner customer, on every `mctl.ai` hostname
 including the `*.mctl.ai` wildcard that serves every tenant. It exists because
-the platform's own cluster (origin `91.98.10.188`, `AS24940`) was being
+the platform's own cluster — which is hosted in `AS24940` — was being
 classified as bot traffic on its server-to-server calls. Narrowed to the
 hostnames that actually need it rather than removed; the bypass itself is
 legitimate, its breadth was not.
