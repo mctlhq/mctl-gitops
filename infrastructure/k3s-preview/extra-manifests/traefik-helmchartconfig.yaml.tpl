@@ -75,7 +75,8 @@ spec:
     # has no middleware, but HTTPS traffic then arrives on websecure from
     # ordinary client addresses and gets 403. The verifier in
     # wft-add-custom-domain.yaml accepts that shape today; making it reject the
-    # direct-A case is tracked separately. Raised by Codex on #1141.
+    # direct-A case is #1146, which is a change to mctl-api's
+    # /api/v1/domains/verify rather than to this file. Raised by Codex on #1141.
     ports:
       websecure:
         http:
