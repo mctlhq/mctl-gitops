@@ -1,0 +1,199 @@
+name: Cloudflare origin allowlist
+
+# Guards the Cloudflare IP ranges that gate the origin (#1119) against going
+# stale.
+#
+# infrastructure/k3s-preview/extra-manifests/cloudflare-origin-allowlist.yaml.tpl
+# is a Traefik Middleware that refuses any request whose source is outside
+# Cloudflare's published ranges. Cloudflare adds ranges from time to time; a
+# range we do not know about is traffic we 403 for no reason. This job
+# re-fetches the published list daily and fails when it no longer matches Git.
+#
+# It does NOT reconcile, and it does not open a pull request. Reaching the
+# cluster needs a manual `terraform.yml` dispatch with apply: true, so a bot PR
+# would save nothing and add a review. A red run plus a Telegram message is the
+# right shape for "legitimate traffic is being refused right now".
+#
+# It is deliberately not a job inside cloudflare-drift.yml: that workflow's
+# contract is OpenTofu roots versus live Cloudflare, and its discovery and
+# matrix are built around root discovery. This is a k3s concern that happens to
+# read a Cloudflare endpoint.
+
+on:
+  schedule:
+    # 20 minutes after cloudflare-drift, so the two land in the same window
+    # without competing for attention.
+    - cron: '20 6 * * *'
+  pull_request:
+    paths:
+      - 'infrastructure/k3s-preview/extra-manifests/cloudflare-origin-allowlist.yaml.tpl'
+      - 'infrastructure/k3s-preview/extra-manifests/traefik-helmchartconfig.yaml.tpl'
+      - '.github/workflows/cloudflare-origin-allowlist.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-origin-allowlist
+  cancel-in-progress: false
+
+jobs:
+  compare:
+    name: committed ranges vs api.cloudflare.com
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Fetch Cloudflare's published ranges
+        run: |
+          set -euo pipefail
+          # --retry covers a transient blip. The success check matters more: a
+          # 200 carrying an error envelope, or a schema change, must fail as
+          # itself rather than masquerade as drift. A false drift alarm trains
+          # people to ignore the real one.
+          curl -fsS --retry 3 --retry-delay 5 --max-time 30 \
+            https://api.cloudflare.com/client/v4/ips > api.json
+          test "$(jq -r '.success' api.json)" = "true" \
+            || { echo "::error::api.cloudflare.com/client/v4/ips did not return success=true"; cat api.json; exit 1; }
+          jq -r '.result.ipv4_cidrs[], .result.ipv6_cidrs[]' api.json | sort > api.txt
+          test -s api.txt \
+            || { echo "::error::the API returned no CIDRs"; exit 1; }
+          jq -r '.result.etag' api.json > api.etag
+
+      - name: Read the committed ranges
+        run: |
+          set -euo pipefail
+          # Explicit, matching validate-manifests.yml: PyYAML is not guaranteed
+          # on the runner image, and a ModuleNotFoundError here would leave the
+          # guard permanently red for a reason that has nothing to do with drift.
+          python3 -m pip install --quiet pyyaml
+          python3 - <<'PY' > git.txt
+          import yaml
+          m = yaml.safe_load(open(
+              "infrastructure/k3s-preview/extra-manifests/"
+              "cloudflare-origin-allowlist.yaml.tpl"))
+          for cidr in sorted(m["spec"]["ipAllowList"]["sourceRange"]):
+              print(cidr)
+          PY
+          test -s git.txt \
+            || { echo "::error::the manifest yielded no sourceRange entries"; exit 1; }
+
+      - name: Compare
+        id: compare
+        run: |
+          set -euo pipefail
+          echo "API etag:       $(cat api.etag)"
+          echo "manifest etag:  $(grep -o 'etag [0-9a-f]\{32\}' \
+            infrastructure/k3s-preview/extra-manifests/cloudflare-origin-allowlist.yaml.tpl \
+            | head -1 | cut -d' ' -f2)"
+          if diff -u git.txt api.txt; then
+            echo "in sync: $(wc -l < git.txt) ranges"
+            exit 0
+          fi
+          # Only a real difference sets this. Everything above -- checkout, the
+          # API call, the success assertion, the YAML parse -- can fail too, and
+          # those are workflow failures, not drift. Saying "traffic is being
+          # refused" for a transient curl error is how an alert gets ignored.
+          echo "drift=true" >> "$GITHUB_OUTPUT"
+          echo "::error::the committed allowlist no longer matches Cloudflare's published ranges."
+          echo "::error::Traffic from an added range is being refused at the origin right now."
+          echo "::error::Update the manifest and its etag comment, then dispatch terraform.yml with apply: true."
+          exit 1
+
+      - name: Notify Telegram — real drift
+        if: failure() && github.event_name == 'schedule' && steps.compare.outputs.drift == 'true'
+        uses: appleboy/telegram-action@390cf7345777cd821dba28c72f436a78bce19cc5 # master 2026-05
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          message: |
+            ⚠️ *Cloudflare origin allowlist is stale*
+            The committed ranges no longer match api.cloudflare.com/client/v4/ips.
+            Traffic from an added range is being refused at the origin.
+            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      - name: Notify Telegram — the check itself failed
+        if: failure() && github.event_name == 'schedule' && steps.compare.outputs.drift != 'true'
+        uses: appleboy/telegram-action@390cf7345777cd821dba28c72f436a78bce19cc5 # master 2026-05
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          message: |
+            🔧 *Cloudflare allowlist check could not run*
+            It did not get as far as comparing, so this says nothing about the
+            allowlist — the API call, the parse or the runner failed.
+            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+  render:
+    name: the entrypoint actually gets the middleware
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      # The failure this guards against is silence. If the values path in
+      # traefik-helmchartconfig.yaml.tpl stops producing
+      # --entryPoints.websecure.http.middlewares -- a chart major renaming the
+      # key, or an edit that flattens it -- Helm does not complain, the upgrade
+      # succeeds, and the origin is wide open with nothing in any log to say so.
+      # Rendering the real chart is the only way to see it before an apply.
+      #
+      # The chart version is deliberately not pinned here: the cluster's
+      # HelmChart has no version either, so it installs whatever is current.
+      # Tracking latest is what makes this an early warning rather than a
+      # restatement of what we already committed.
+      - name: Render Traefik with the module's base values plus ours
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet pyyaml
+          helm repo add traefik https://traefik.github.io/charts >/dev/null
+          helm repo update traefik >/dev/null
+
+          # The kube-hetzner module's rendered values for this cluster, reduced
+          # to the entrypoint keys ours merges over. helm-controller deep-merges
+          # HelmChartConfig.valuesContent on top of HelmChart.valuesContent, and
+          # two -f files is the closest local equivalent.
+          cat > /tmp/base.yaml <<'BASE'
+          ports:
+            web:
+              http:
+                redirections:
+                  entryPoint: {to: websecure, scheme: https, permanent: true}
+              proxyProtocol: {trustedIPs: ["127.0.0.1/32", "10.0.0.0/8"]}
+              forwardedHeaders: {trustedIPs: ["127.0.0.1/32", "10.0.0.0/8"]}
+            websecure:
+              proxyProtocol: {trustedIPs: ["127.0.0.1/32", "10.0.0.0/8"]}
+              forwardedHeaders: {trustedIPs: ["127.0.0.1/32", "10.0.0.0/8"]}
+          BASE
+
+          python3 -c "
+          import yaml, sys
+          d = yaml.safe_load(open('infrastructure/k3s-preview/extra-manifests/traefik-helmchartconfig.yaml.tpl'))
+          sys.stdout.write(d['spec']['valuesContent'])
+          " > /tmp/ours.yaml
+
+          helm template t traefik/traefik -f /tmp/base.yaml -f /tmp/ours.yaml > /tmp/rendered.yaml
+
+          fail=0
+          check() {
+            if grep -qF -- "$1" /tmp/rendered.yaml; then
+              echo "ok: $1"
+            else
+              echo "::error::missing from the rendered Traefik args: $1"
+              fail=1
+            fi
+          }
+          # The reference itself.
+          check '--entryPoints.websecure.http.middlewares=traefik-cloudflare-origin@kubernetescrd'
+          # And the two the merge must not flatten away. Without them Traefik
+          # sees the load balancer's private address as the client and the
+          # allowlist refuses every request.
+          check '--entryPoints.websecure.proxyProtocol.trustedIPs=127.0.0.1/32,10.0.0.0/8'
+          check '--entryPoints.websecure.forwardedHeaders.trustedIPs=127.0.0.1/32,10.0.0.0/8'
+          # web deliberately carries no middleware; if one appears, someone
+          # added it without reading why it is absent.
+          if grep -qF -- '--entryPoints.web.http.middlewares' /tmp/rendered.yaml; then
+            echo "::error::the web entrypoint gained a middleware -- see the comment in traefik-helmchartconfig.yaml.tpl"
+            fail=1
+          fi
+          exit "$fail"

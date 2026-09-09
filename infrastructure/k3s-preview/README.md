@@ -107,6 +107,9 @@ k3s-preview/
 ├── audit-policy.yaml          # k3s apiserver audit policy (SOC F20; not kubectl-applied)
 └── extra-manifests/           # Additional K8s resources applied post-cluster:
     ├── letsencrypt-*.yaml.tpl # cert-manager ClusterIssuers (prod + staging + http01)
+    ├── cert-manager-helmchartconfig.yaml.tpl
+    ├── cloudflare-origin-allowlist.yaml.tpl  # Traefik Middleware: Cloudflare-only ingress (#1119)
+    ├── traefik-helmchartconfig.yaml.tpl      # Traefik PDB + the websecure entrypoint reference
     ├── kured.yaml.tpl         # Automated node reboots after OS upgrades
     └── metrics-server-*.tpl   # metrics-server resource patches
 ```
@@ -167,6 +170,66 @@ ArgoCD server, so it works before any connector exists. Plain
 `kubectl -n argocd get application` works too; `--core` is only nicer for
 sync/health detail. Once `argocd-self-managed` is `Synced`, the Backstage
 connector is live and the UI at `ops.mctl.ai` behaves normally.
+
+## Origin allowlist (Cloudflare-only ingress)
+
+Traffic reaches the platform through Cloudflare, then the Hetzner Cloud Load
+Balancer for `svc/traefik`, then Traefik. Until #1119 the origin also answered
+anyone who held its address — measured, `app.mctl.ai` and `ops.mctl.ai` both
+returned `200` to a request sent straight at it — so every Cloudflare-layer
+control was out of the path for anyone who read the (public) repository.
+
+The load balancer cannot be firewalled: Hetzner cloud firewalls attach to
+servers, and the CCM ignores `spec.loadBalancerSourceRanges`. The nodes have
+nothing to close either, since kube-hetzner only opens 80/443 on them when
+`using_klipper_lb` is true. It closes the origin's *public* address and nothing
+else — a pod talking to Traefik's ClusterIP directly can still supply its own
+PROXY header, because the entrypoint trusts `10.0.0.0/8` and the pod and service
+CIDRs are inside it (gitops#1138). So the control is the `Middleware`
+`traefik/cloudflare-origin` (`extra-manifests/cloudflare-origin-allowlist.yaml.tpl`),
+referenced from the `websecure` entrypoint in
+`extra-manifests/traefik-helmchartconfig.yaml.tpl`. Traefik sees the real client
+address because the LB speaks PROXY protocol and the entrypoint trusts it from
+`10.0.0.0/8`.
+
+`.github/workflows/cloudflare-origin-allowlist.yml` re-checks the committed
+ranges against `https://api.cloudflare.com/client/v4/ips` daily.
+
+### Break-glass
+
+A wrong or missing allowlist takes out every host on `:443` at once. It is a
+`Middleware` object rather than a static entrypoint argument precisely so the
+first level of recovery is one command with no restart.
+
+```bash
+# kubectl still works when the ingress does not: the kubeconfig points at the
+# control-plane NODE on :6443, which is not behind the load balancer.
+export KUBECONFIG=infrastructure/k3s-preview/kubeconfig.yaml
+
+# Level 0 — locked out of app.mctl.ai / ops.mctl.ai. Widen the allowlist to
+# everything. The kubernetescrd provider watches the object; effective in
+# seconds, no helm upgrade, no pod restart.
+kubectl -n traefik patch middleware cloudflare-origin --type=merge \
+  -p '{"spec":{"ipAllowList":{"sourceRange":["0.0.0.0/0","::/0"]}}}'
+
+# Level 1 — the Middleware itself is broken or gone, so every router on
+# websecure is down. Remove the reference; helm-controller re-runs the upgrade
+# job (~1-2 min).
+kubectl -n kube-system edit helmchartconfig traefik   # delete the ports: block
+kubectl -n kube-system get jobs -w | grep helm-install-traefik
+
+# Level 2 — the API server is unreachable. SSH is open on the nodes.
+ssh root@<control-plane-node>
+```
+
+Two things to know before you use it:
+
+- A level-0 or level-1 patch is **undone by the next `terraform apply`**, which
+  re-renders both manifests from Git. It must be followed by a pull request —
+  the same discipline as the break-glass section in
+  `infrastructure/cloudflare/README.md`.
+- `kubectl apply -k` never prunes, so removing the manifest from
+  `kustomization.yaml` does **not** delete the live `Middleware`.
 
 ## Security notes
 

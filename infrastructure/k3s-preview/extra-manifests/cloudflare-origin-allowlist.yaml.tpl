@@ -1,10 +1,14 @@
 # Cloudflare-only ingress on the websecure entrypoint (#1119).
 #
-# NOT IN FORCE YET. This object exists on its own so it can be applied and
-# verified before anything depends on it; the websecure entrypoint starts
-# referencing it in the follow-up pull request, and until then nothing
-# consults this allowlist and no traffic changes. Everything below describes
-# the state after that reference lands.
+# IN FORCE. The websecure entrypoint references this object
+# (traefik-helmchartconfig.yaml.tpl), so every HTTPS request is matched against
+# the list below before it reaches a router. Deleting or emptying this object
+# does not "open up" -- a reference to a Middleware that does not exist takes
+# down every router on the entrypoint. Break-glass is in
+# infrastructure/k3s-preview/README.md and is a single kubectl patch.
+#
+# It shipped on its own first, unreferenced, so that it could be applied and
+# verified before anything depended on it.
 #
 # Why the control is here and not on the cloud firewall, which is what #1119
 # originally asked for. 91.98.10.188 is the Hetzner Cloud LOAD BALANCER for

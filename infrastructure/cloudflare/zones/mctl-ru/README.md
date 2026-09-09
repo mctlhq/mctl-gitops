@@ -8,8 +8,13 @@ Two DNS records:
 
 | Resource | Record |
 | --- | --- |
-| `module.baseline.cloudflare_dns_record.apex` | `A mctl.ru` → `91.98.10.188`, proxied |
-| `module.baseline.cloudflare_dns_record.wildcard` | `A *.mctl.ru` → `91.98.10.188`, proxied |
+| `module.baseline.cloudflare_dns_record.apex` | `A mctl.ru` → the shared origin, proxied |
+| `module.baseline.cloudflare_dns_record.wildcard` | `A *.mctl.ru` → the shared origin, proxied |
+
+The address itself is `local.origin_ip` in `dns.tf`, deliberately: it is the
+record content and cannot leave the configuration. Why that is acceptable, and
+what closes the origin to traffic that did not come through Cloudflare, is in
+`../../README.md` (#1119). Repeating it here as prose bought nothing.
 
 Both rulesets — the apex redirect and the `.php` block — moved into
 `../../modules/zone-baseline` with #1103 and are managed now, together with the
