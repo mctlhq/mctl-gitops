@@ -64,6 +64,18 @@ spec:
     #   3. It would break ACME HTTP-01 for tenant custom domains
     #      (wft-add-custom-domain.yaml attaches letsencrypt-http01): Let's
     #      Encrypt's validation servers are not in Cloudflare's ranges.
+    #
+    # Consequence for tenant custom domains, which is real even though nothing
+    # exercises it yet (measured: zero non-mctl ingress hosts, zero
+    # letsencrypt-http01 certificates). A custom domain must reach the platform
+    # THROUGH Cloudflare -- an unproxied CNAME to <team>-<service>.mctl.ai
+    # resolves to the edge, which is fine. What no longer works is proving
+    # ownership by TXT and then pointing an A record straight at the origin:
+    # certificates still issue, because HTTP-01 arrives on `web` and `web`
+    # has no middleware, but HTTPS traffic then arrives on websecure from
+    # ordinary client addresses and gets 403. The verifier in
+    # wft-add-custom-domain.yaml accepts that shape today; making it reject the
+    # direct-A case is tracked separately. Raised by Codex on #1141.
     ports:
       websecure:
         http:

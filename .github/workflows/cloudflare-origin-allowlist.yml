@@ -64,6 +64,10 @@ jobs:
       - name: Read the committed ranges
         run: |
           set -euo pipefail
+          # Explicit, matching validate-manifests.yml: PyYAML is not guaranteed
+          # on the runner image, and a ModuleNotFoundError here would leave the
+          # guard permanently red for a reason that has nothing to do with drift.
+          python3 -m pip install --quiet pyyaml
           python3 - <<'PY' > git.txt
           import yaml
           m = yaml.safe_load(open(
@@ -76,6 +80,7 @@ jobs:
             || { echo "::error::the manifest yielded no sourceRange entries"; exit 1; }
 
       - name: Compare
+        id: compare
         run: |
           set -euo pipefail
           echo "API etag:       $(cat api.etag)"
@@ -86,13 +91,18 @@ jobs:
             echo "in sync: $(wc -l < git.txt) ranges"
             exit 0
           fi
+          # Only a real difference sets this. Everything above -- checkout, the
+          # API call, the success assertion, the YAML parse -- can fail too, and
+          # those are workflow failures, not drift. Saying "traffic is being
+          # refused" for a transient curl error is how an alert gets ignored.
+          echo "drift=true" >> "$GITHUB_OUTPUT"
           echo "::error::the committed allowlist no longer matches Cloudflare's published ranges."
           echo "::error::Traffic from an added range is being refused at the origin right now."
           echo "::error::Update the manifest and its etag comment, then dispatch terraform.yml with apply: true."
           exit 1
 
-      - name: Notify Telegram on failure
-        if: failure() && github.event_name == 'schedule'
+      - name: Notify Telegram — real drift
+        if: failure() && github.event_name == 'schedule' && steps.compare.outputs.drift == 'true'
         uses: appleboy/telegram-action@390cf7345777cd821dba28c72f436a78bce19cc5 # master 2026-05
         with:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -101,6 +111,18 @@ jobs:
             ⚠️ *Cloudflare origin allowlist is stale*
             The committed ranges no longer match api.cloudflare.com/client/v4/ips.
             Traffic from an added range is being refused at the origin.
+            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      - name: Notify Telegram — the check itself failed
+        if: failure() && github.event_name == 'schedule' && steps.compare.outputs.drift != 'true'
+        uses: appleboy/telegram-action@390cf7345777cd821dba28c72f436a78bce19cc5 # master 2026-05
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          message: |
+            🔧 *Cloudflare allowlist check could not run*
+            It did not get as far as comparing, so this says nothing about the
+            allowlist — the API call, the parse or the runner failed.
             Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
   render:
@@ -123,6 +145,7 @@ jobs:
       - name: Render Traefik with the module's base values plus ours
         run: |
           set -euo pipefail
+          python3 -m pip install --quiet pyyaml
           helm repo add traefik https://traefik.github.io/charts >/dev/null
           helm repo update traefik >/dev/null
 
