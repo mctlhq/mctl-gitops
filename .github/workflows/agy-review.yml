@@ -4,9 +4,11 @@ on:
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review]
 
-concurrency:
-  group: agy-review-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+# No workflow-level concurrency here on purpose: a caller-level group governs
+# the whole run, including the job that `uses:` the reusable workflow, so
+# `cancel-in-progress: true` here would kill in-flight reviews on every push
+# before the callee's own per-repo group (cancel-in-progress: false) applies.
+# Concurrency for agy lives in the reusable workflow.
 
 permissions: {}
 
