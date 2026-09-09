@@ -108,10 +108,17 @@ jobs:
     #     can redirect the provider and the token follows it — the exposure is
     #     disclosure of configuration, not control of it.
     #   * R2_PLAN_ACCESS_KEY_ID is Object Read only and scoped to the
-    #     mctl-terraform-state bucket alone. Verified: PutObject, DeleteObject
-    #     and reads of any other bucket all return AccessDenied. That is why
-    #     plan runs with -lock=false — acquiring the state lock is itself a
-    #     write, and this credential deliberately cannot perform one.
+    #     mctl-cloudflare-state bucket alone. Verified: PutObject and
+    #     DeleteObject return AccessDenied, and so does any read of
+    #     mctl-terraform-state — the bucket holding k3s-preview state, which
+    #     contains an OpenSSH private key and kubeconfig credentials. That
+    #     separation is the point: R2 tokens scope to a bucket, not a prefix,
+    #     so Cloudflare state had to move to its own bucket before this
+    #     credential could honestly be called low-value.
+    #
+    #     It is also why plan runs with -lock=false — acquiring the state lock
+    #     is itself a write, and this credential deliberately cannot perform
+    #     one.
     #
     # The writable R2 credential (R2_ACCESS_KEY_ID) is never exposed to a job
     # that plans unreviewed code. It belongs to the backup workflow, and to a

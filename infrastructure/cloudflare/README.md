@@ -84,15 +84,14 @@ depends entirely on `opentofu-state-backup.yml`, which snapshots every state
 object daily into `_backups/<UTC timestamp>/` and keeps 30 days. Restore
 procedure: `docs/runbooks/opentofu-state-restore.md`.
 
-Snapshots currently live in the **same bucket** as the state they protect. That
-is a limitation, not a design preference: the `R2_ACCESS_KEY_ID` credential is
-scoped to `mctl-terraform-state` and is refused (`AccessDenied`) on
-`mctl-db-backups`, so a cross-bucket copy is impossible with the credentials
-that exist today. The snapshots do protect against the failure that actually
-occurs — state corrupted by a bad apply, an accidental `state rm`, a botched
-import — but not against loss of the bucket itself or compromise of that one
-credential. Moving them to a separate bucket needs a write-only token that does
-not exist yet.
+Snapshots live in the **same bucket** as the state they protect, under
+`_backups/`. That is a limitation, not a design preference: each backup
+credential is scoped to a single bucket, so a genuine off-bucket copy is still
+not possible. The snapshots do protect against the failure that actually occurs
+— state corrupted by a bad apply, an accidental `state rm`, a botched import —
+but not against loss of a bucket itself or compromise of the credential that
+writes to it. Closing that would need a third bucket and a write-only token
+for it.
 
 ## Workflows
 

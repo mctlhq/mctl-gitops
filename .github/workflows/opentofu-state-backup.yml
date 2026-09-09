@@ -5,18 +5,25 @@ name: OpenTofu State Backup
 # The standard S3 answer — turn on bucket versioning — is unavailable, and
 # before this workflow existed there was no copy of any state file anywhere.
 #
-# The gap is wider than Cloudflare: mctl-terraform-state also holds
+# The gap is wider than Cloudflare: mctl-terraform-state holds
 # k3s-preview/terraform.tfstate, the state of the preprod cluster.
 #
-# KNOWN LIMITATION — snapshots land in the SAME bucket, under _backups/.
-# The R2 credential in R2_ACCESS_KEY_ID is scoped to mctl-terraform-state and
-# is refused (AccessDenied) on mctl-db-backups, so a cross-bucket copy is not
-# possible with the credentials that exist today. This still protects against
-# the failure that actually happens — a state file corrupted by a bad apply, an
-# accidental `state rm`, a botched import — but it does NOT protect against
-# deletion of the bucket itself or compromise of this credential. Moving
-# snapshots to a separate bucket with its own write-only token is tracked as a
-# follow-up and needs a credential that does not exist yet.
+# Two buckets, two credentials, one leg each:
+#
+#   mctl-terraform-state   R2_ACCESS_KEY_ID          (k3s-preview)
+#   mctl-cloudflare-state  R2_CF_STATE_ACCESS_KEY_ID (Cloudflare roots)
+#
+# Each credential is scoped to its own bucket, so neither leg can read or
+# damage the other's state. That split exists because R2 tokens scope to a
+# bucket rather than a prefix, and the k3s state contains an OpenSSH private
+# key and kubeconfig credentials that Cloudflare CI must not be able to read.
+#
+# KNOWN LIMITATION — snapshots land in the SAME bucket as their source, under
+# _backups/. Neither credential can write to a third bucket, so a genuine
+# off-bucket copy is still not possible. This protects against the failure that
+# actually happens — state corrupted by a bad apply, an accidental `state rm`,
+# a botched import — but NOT against deletion of a bucket or compromise of the
+# credential that writes to it.
 #
 # .github#47 requires a tested restore before Git-only operation is declared
 # authoritative. Procedure: docs/runbooks/opentofu-state-restore.md

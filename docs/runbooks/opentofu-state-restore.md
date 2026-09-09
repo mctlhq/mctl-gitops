@@ -13,13 +13,13 @@ the product. The usual S3 safety net does not apply, so a deleted or corrupted
 state file is unrecoverable unless a copy exists elsewhere.
 
 `.github/workflows/opentofu-state-backup.yml` makes that copy daily into
-`mctl-terraform-state/_backups/<UTC timestamp>/`, keeping 30 days.
+`<bucket>/_backups/<UTC timestamp>/` for both buckets, keeping 30 days.
 
-Note the snapshots sit in the same bucket as the originals. The R2 credential
-available to CI is scoped to `mctl-terraform-state` and cannot write anywhere
-else, so this protects against a bad apply or an accidental `state rm` but not
-against losing the bucket. Treat "the bucket is gone" as a different, harder
-incident than the one this runbook covers.
+Note the snapshots sit in the same bucket as their originals — each backup
+credential is scoped to one bucket and cannot write anywhere else. So this
+protects against a bad apply or an accidental `state rm`, but not against
+losing a bucket. Treat "the bucket is gone" as a different, harder incident
+than the one this runbook covers.
 
 Losing state does not destroy infrastructure, but it does mean OpenTofu no
 longer knows the infrastructure exists — the next plan proposes creating
