@@ -1,5 +1,5 @@
-status: accepted
-updated_at: '2026-09-09T13:57:50Z'
+status: implemented
+updated_at: '2026-09-09T14:17:01Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -9,5 +9,11 @@ source:
 control:
   requires_human_approval: true
 approval:
-  approved_by: 'mashkovd'
+  approved_by: mashkovd
   approved_at: '2026-09-09T13:57:50Z'
+attempt:
+  id: 9d90089c-3166-4526-9d5b-2a5178ce83aa
+  started_at: '2026-09-09T14:00:15Z'
+  expires_at: '2026-09-09T16:10:15Z'
+  finished_at: '2026-09-09T14:17:01Z'
+pr: https://github.com/mctlhq/mctl-portal/pull/118
