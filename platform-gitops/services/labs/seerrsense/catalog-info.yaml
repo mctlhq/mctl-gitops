@@ -5,6 +5,9 @@ metadata:
   namespace: labs
   description: "seerrsense service"
   annotations:
+    platform.mctl.me/database: "true"
+    platform.mctl.me/database-team: "labs"
+    platform.mctl.me/database-app: "seerrsense"
     backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=labs-seerrsense
     backstage.io/kubernetes-id: seerrsense
     backstage.io/kubernetes-namespace: labs

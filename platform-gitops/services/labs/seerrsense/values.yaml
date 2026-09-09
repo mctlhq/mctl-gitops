@@ -100,3 +100,18 @@ envFrom:
   - secretRef:
       name: seerrsense-secrets
 extraContainers: []
+
+dbSecret:
+  vaultPath: "teams/labs/seerrsense/database"
+  secretName: "labs-seerrsense-db-creds"
+dbInitJob:
+  enabled: false
+  database: "labs-seerrsense"
+  waitTable: "identities"
+  sql: |
+    INSERT INTO identities (provider, provider_id, status, metadata)
+    VALUES ('telegram', '__TELEGRAM_ID__', 'approved', '{}')
+    ON CONFLICT (provider, provider_id) DO UPDATE SET status = 'approved';
+envFrom:
+  - secretRef:
+      name: "labs-seerrsense-db-creds"
