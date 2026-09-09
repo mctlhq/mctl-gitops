@@ -22,8 +22,12 @@ losing a bucket. Treat "the bucket is gone" as a different, harder incident
 than the one this runbook covers.
 
 Losing state does not destroy infrastructure, but it does mean OpenTofu no
-longer knows the infrastructure exists — the next plan proposes creating
-everything from scratch. **Never apply such a plan.** Restore first.
+longer knows the infrastructure exists. What the next plan proposes depends on
+the root: one without `import` blocks proposes **creating everything from
+scratch**, which would duplicate or collide with what is already live. A root
+that still carries its `import` blocks proposes re-importing instead, which
+looks reassuringly harmless — do not read that as "state loss is fine".
+**Never apply a plan you reached by losing state.** Restore first.
 
 ## Prerequisites
 
@@ -113,4 +117,5 @@ Record the drill date and outcome here:
 
 | Date | Root | Outcome |
 | --- | --- | --- |
-| 2026-09-09 | — (snapshot side only) | First snapshot taken manually while writing this workflow: 2 objects copied to `_backups/2026-09-09T01-32-51Z/`, and `k3s-preview/cluster-bootstrap/terraform.tfstate` parsed back cleanly (`serial=1`, lineage intact, 1 resource). The **restore** half — steps 3 and 4 — has not been drilled yet. |
+| 2026-09-09 | snapshot side | 2 objects copied to `_backups/2026-09-09T01-32-51Z/`; `k3s-preview/cluster-bootstrap/terraform.tfstate` parsed back cleanly (`serial=1`, lineage intact). |
+| 2026-09-09 | full restore, `mctl.ru` config on a scratch key | **Passed.** Ran end to end against a `_drill/mctl-ru/terraform.tfstate` key rather than live state, so a failed drill could not have damaged anything: imported 2 records (`serial=1`, `lineage=9cdd58de…`), snapshotted, **deleted the live key**, confirmed the loss was real (`head_object` gone, plan no longer clean), restored from the snapshot, and got `No changes.` Scratch keys deleted afterwards; the bucket is empty again. Cloudflare itself was never mutated — every step was import or plan. |
