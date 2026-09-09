@@ -155,7 +155,15 @@ jobs:
           base_paths=$(tree_paths "$BASE")
           head_paths=$(tree_paths HEAD)
 
-          roots_of() { awk -F/ 'NF >= 4 && $NF == "versions.tf" { sub("/versions\\.tf$", ""); print }' | sort -u; }
+          # OpenTofu loads JSON configuration too, so versions.tf.json marks a root
+          # exactly as versions.tf does; discovery accepts both for the same
+          # reason. modules/ is excluded here as it is there — a shared module
+          # carrying its own versions.tf is not a root.
+          roots_of() {
+            awk -F/ '$0 !~ /^infrastructure\/cloudflare\/modules\// && NF >= 4 \
+                     && ($NF == "versions.tf" || $NF == "versions.tf.json") \
+                     { sub("/versions\\.tf(\\.json)?$", ""); print }' | sort -u
+          }
           base_roots=$(roots_of <<< "$base_paths")
           head_roots=$(roots_of <<< "$head_paths")
 
@@ -175,18 +183,27 @@ jobs:
               || problems="${problems}root no longer discovered: $r\n"
           done <<< "$base_roots"
 
-          # 2. A root that keeps its versions.tf but loses backend.tf silently falls back
-          #    to the local backend. On a fresh runner that means empty state, so the plan
-          #    is an ordinary create-only plan and the check goes green while the root is
-          #    detached from its real state in R2. Only roots that survive are checked; a
-          #    root that is gone is already reported above.
+          # 2. A root without a remote backend silently uses the local one. On a fresh
+          #    runner that is empty state, so the plan is an ordinary create-only plan
+          #    and the check goes green while the root is detached from what is
+          #    actually live in R2 — and after merge, drift compares against nothing.
+          #    Checking every head root, not just ones that lost a file, because a
+          #    newly added root and a root switched to local reach the same place.
+          #
+          #    zones/mctl-ru is the one acknowledged exception: the import pilot
+          #    (#1096) deliberately kept local state, and giving it a backend is a
+          #    state migration that belongs to #1103, not to a CI guard. It is listed
+          #    here rather than left implicit so the gap is visible in the gate that
+          #    would otherwise catch it.
           while IFS= read -r r; do
             [ -n "$r" ] || continue
-            grep -qxF -- "$r" <<< "$head_roots" || continue
-            grep -qxF -- "$r/backend.tf" <<< "$base_paths" || continue
-            grep -qxF -- "$r/backend.tf" <<< "$head_paths" \
-              || problems="${problems}root detached from its remote backend: $r\n"
-          done <<< "$base_roots"
+            case "$r" in infrastructure/cloudflare/zones/mctl-ru) continue ;; esac
+            if ! grep -qxF -- "$r/backend.tf" <<< "$head_paths"; then
+              problems="${problems}root declares no backend: $r\n"
+            elif ! git show "HEAD:$r/backend.tf" | grep -q 'backend "s3"'; then
+              problems="${problems}root does not use the s3 backend: $r\n"
+            fi
+          done <<< "$head_roots"
 
           # 3. Configuration that belongs to no discovered root is never planned or
           #    watched at all: discovery keys on versions.tf, so a directory holding
@@ -195,16 +212,17 @@ jobs:
           while IFS= read -r f; do
             [ -n "$f" ] || continue
             case "$f" in
-              *.tf) ;;
+              *.tf|*.tf.json) ;;
               *) continue ;;
             esac
             case "$f" in infrastructure/cloudflare/modules/*) continue ;; esac
-            d=$(dirname "$f")
-            while [ "$d" != "infrastructure/cloudflare" ] && [ "$d" != "." ] && [ "$d" != "/" ]; do
-              grep -qxF -- "$d" <<< "$head_roots" && continue 2
-              d=$(dirname "$d")
-            done
-            problems="${problems}.tf file outside any discovered root: $f\n"
+            # The file's OWN directory, not an ancestor. OpenTofu loads only the
+            # .tf files sitting directly in the working directory, so
+            # account/resources/foo.tf is never evaluated by a plan of account —
+            # an ancestor test would call it covered while both the gate and
+            # drift ignore it.
+            grep -qxF -- "$(dirname "$f")" <<< "$head_roots" \
+              || problems="${problems}configuration in no root's own directory: $f\n"
           done <<< "$head_paths"
 
           [ -n "$problems" ] || { echo "every root at $BASE is still discovered, backed and complete"; exit 0; }
@@ -240,9 +258,22 @@ jobs:
           # abort discovery and fail the required check — permanently, with no
           # way to merge the pull request that removed the last root, label or
           # not. An absent directory is a legitimate state: no roots.
+          # -path .../modules -prune: a shared module can carry its own
+          # versions.tf, and planning one as a root fails on its required
+          # inputs — on every pull request and every scheduled drift run.
+          # versions.tf.json is included because OpenTofu loads JSON
+          # configuration too, so a root written that way would otherwise be
+          # invisible to discovery while the check reported success.
           if [ -d infrastructure/cloudflare ]; then
-            roots=$(find infrastructure/cloudflare -name versions.tf -mindepth 2 \
-                      -exec dirname {} \; | sort | jq -R -s -c 'split("\n") | map(select(length > 0))')
+            # The prune pattern has to match BELOW modules/, not modules/
+            # itself: -mindepth 2 stops find from applying the expression to
+            # depth-1 entries at all, so pruning the directory by name never
+            # fires. Measured — the module was still discovered as a root.
+            roots=$(find infrastructure/cloudflare -mindepth 2 \
+                      -path 'infrastructure/cloudflare/modules/*' -prune -o \
+                      \( -name versions.tf -o -name versions.tf.json \) -print \
+                    | sed 's#/[^/]*$##' | sort -u \
+                    | jq -R -s -c 'split("\n") | map(select(length > 0))')
           else
             roots='[]'
           fi
@@ -328,8 +359,13 @@ jobs:
       - name: Format check
         run: tofu fmt -check -diff
 
+      # -lockfile=readonly: without it, a root that committed no
+      # .terraform.lock.hcl gets one minted on the runner and thrown away, so
+      # the gate passes without anyone reviewing which provider build it ran
+      # against — and a later release matching ~> 5.0 can change behaviour
+      # under a root nobody re-reviewed.
       - name: Init
-        run: tofu init -input=false
+        run: tofu init -input=false -lockfile=readonly
 
       - name: Validate
         run: tofu validate

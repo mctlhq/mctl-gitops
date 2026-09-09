@@ -36,9 +36,22 @@ jobs:
           # abort discovery and fail the required check — permanently, with no
           # way to merge the pull request that removed the last root, label or
           # not. An absent directory is a legitimate state: no roots.
+          # -path .../modules -prune: a shared module can carry its own
+          # versions.tf, and planning one as a root fails on its required
+          # inputs — on every pull request and every scheduled drift run.
+          # versions.tf.json is included because OpenTofu loads JSON
+          # configuration too, so a root written that way would otherwise be
+          # invisible to discovery while the check reported success.
           if [ -d infrastructure/cloudflare ]; then
-            roots=$(find infrastructure/cloudflare -name versions.tf -mindepth 2 \
-                      -exec dirname {} \; | sort | jq -R -s -c 'split("\n") | map(select(length > 0))')
+            # The prune pattern has to match BELOW modules/, not modules/
+            # itself: -mindepth 2 stops find from applying the expression to
+            # depth-1 entries at all, so pruning the directory by name never
+            # fires. Measured — the module was still discovered as a root.
+            roots=$(find infrastructure/cloudflare -mindepth 2 \
+                      -path 'infrastructure/cloudflare/modules/*' -prune -o \
+                      \( -name versions.tf -o -name versions.tf.json \) -print \
+                    | sed 's#/[^/]*$##' | sort -u \
+                    | jq -R -s -c 'split("\n") | map(select(length > 0))')
           else
             roots='[]'
           fi
@@ -90,8 +103,13 @@ jobs:
           }
           TFRC
 
+      # -lockfile=readonly: without it, a root that committed no
+      # .terraform.lock.hcl gets one minted on the runner and thrown away, so
+      # the gate passes without anyone reviewing which provider build it ran
+      # against — and a later release matching ~> 5.0 can change behaviour
+      # under a root nobody re-reviewed.
       - name: Init
-        run: tofu init -input=false
+        run: tofu init -input=false -lockfile=readonly
 
       # -detailed-exitcode: 0 = no changes, 1 = error, 2 = drift.
       # Both 1 and 2 are failures here, but they mean different things, so the

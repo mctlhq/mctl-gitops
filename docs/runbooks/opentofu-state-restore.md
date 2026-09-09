@@ -95,10 +95,19 @@ Derive the directory from the key you just restored, rather than pasting a path
 — the point is to verify *what was restored*, not a root that happens to be
 mentioned in an example:
 
+The engine is not the same for every key. The Cloudflare roots are OpenTofu;
+`k3s-preview` is Terraform 1.14 — its `versions.tf` requires `>= 1.14.0`, which
+the OpenTofu pinned here (1.12.6) refuses outright, so running `tofu` there
+stops at the version check instead of verifying the restore.
+
 ```sh
 cd "infrastructure/${KEY%/terraform.tfstate}"   # e.g. infrastructure/cloudflare/account
-tofu init -reconfigure
-tofu plan
+case "$KEY" in
+  k3s-preview/*) tf=terraform ;;
+  *)             tf=tofu ;;
+esac
+"$tf" init -reconfigure
+"$tf" plan
 ```
 
 Expected: **`No changes.`**
