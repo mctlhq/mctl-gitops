@@ -465,13 +465,21 @@ spec:
           # likely root cause for this failure class as a whole).
           - name: INCIDENT_RESPONDER_BUDGET_USD
             value: "20.00"
-          # Incident-responder only (run_incident_responder.py's
-          # INCIDENT_RESPONDER_MODEL override) — routine diagnosis/proposal
-          # writing doesn't need Sonnet-tier reasoning on every one of the
-          # 24 daily cron ticks. Bare alias to match the convention in
-          # mctl-agents/config/settings.py (SERVICE_AGENT_MODEL etc.).
-          - name: INCIDENT_RESPONDER_MODEL
-            value: "claude-haiku-4-5"
+          # INCIDENT_RESPONDER_MODEL is deliberately NOT set: with no override
+          # run_incident_responder.py:53 falls back to SERVICE_AGENT_MODEL,
+          # which model-policy resolves through task `service_agent` ->
+          # profile `balanced` -> claude-sonnet-5. The env hook stays in the
+          # code as an escape hatch; putting a value here is what took the
+          # responder off policy.
+          #
+          # It used to pin claude-haiku-4-5 to save on 24 daily cron ticks.
+          # The responder does not transcribe, it decides: it assigns a root
+          # cause and writes the proposal an operator then approves. Two of
+          # its haiku-era proposals were guesses stated as findings — the
+          # "assert-attempt 429" root cause, and incident-d683e015, whose own
+          # comment above records LOW confidence and names a different likely
+          # cause. Cheap judgement is not cheap when a human has to re-derive
+          # it, and most ticks find nothing to diagnose and cost nothing.
         resources:
           requests: { cpu: 200m, memory: 512Mi, ephemeral-storage: 1Gi }
           limits:   { cpu: 2000m, memory: 2Gi, ephemeral-storage: 2Gi }

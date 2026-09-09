@@ -203,3 +203,14 @@ spec:
   cluster:
     name: shared-pg
   databaseReclaimPolicy: retain
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: labs-seerrsense-db
+spec:
+  name: "labs-seerrsense"
+  owner: "labs-seerrsense"
+  cluster:
+    name: shared-pg
+  databaseReclaimPolicy: retain

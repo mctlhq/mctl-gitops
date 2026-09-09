@@ -44,9 +44,27 @@ Complete reference for all `mctl_*` tools.
 | Tool | Parameters | Description |
 |------|-----------|-------------|
 | `mctl_add_custom_domain` | `team_name, service_name, domain` | Add custom domain |
-| `mctl_verify_domain` | `team_name, service_name` | Check CNAME configuration |
+| `mctl_verify_domain` | `team_name, service_name` | Check DNS verification (TXT challenge, CNAME fallback) |
 | `mctl_list_domains` | `team_name` | All domains + status |
 | `mctl_remove_custom_domain` | `team_name, service_name, domain` | Remove domain |
+
+### DNS verification
+
+Verification checks a TXT record at `_mctl-challenge.<domain>` first — this
+works even when the domain is proxied through Cloudflare, which rewrites
+A/CNAME answers but never TXT. An unproxied CNAME to
+`{team}-{service}.mctl.ai` is still accepted as a fast path when no proxy
+sits in front of the domain.
+
+### Hostnames under the platform domain
+
+`mctl_add_custom_domain` is for a tenant's **own** domain (`api.mycompany.com`).
+A hostname inside the platform domain — anything ending in `.mctl.ai`, and the
+bare root — is rejected by the workflow on purpose. Those are operator changes:
+add the host to `ingress.hosts` and to the matching `ingress.tls[].hosts` entry
+in `platform-gitops/services/{team}/{service}/values.yaml` and open a PR. That is
+how `tg.mctl.ai`, `ui.mctl.ai` and `docs.mctl.ai` are declared; no custom domain
+has ever been registered through the tool.
 
 ## Database
 

@@ -1,0 +1,504 @@
+name: Cloudflare Plan
+
+# Merge gate for the Cloudflare IaC roots (.github#47, #1093).
+#
+# Deliberately separate from terraform.yml: that workflow plans on push to main
+# with continue-on-error, which reports but does not gate. This one runs on the
+# pull request and fails the check when anything is wrong.
+#
+# There is intentionally NO `paths:` filter on the trigger. A required status
+# check that only runs on some pull requests never reports on the others, and
+# those pull requests sit blocked on a check that will never arrive. Instead the
+# workflow runs everywhere, decides for itself whether anything relevant
+# changed, and always publishes the `cloudflare-plan` job as its verdict.
+
+on:
+  # `labeled`/`unlabeled` are here for one reason: the removed-root guard below
+  # can only be cleared by a label, and the default type set
+  # (opened, synchronize, reopened) does not fire on a label change. Without
+  # them the documented escape hatch is unreachable — the check stays red after
+  # labelling, and re-running the failed job does not help either, because a
+  # re-run replays the original event payload and therefore the labels as they
+  # were at push time. The cost is that every label change on any pull request
+  # starts this workflow; for a pull request that touches nothing here that is
+  # the `changes` job alone.
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  workflow_dispatch:
+
+# Nothing here writes to the GitHub API — the plan summary goes to
+# GITHUB_STEP_SUMMARY, not to a PR comment.
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.diff.outputs.changed }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+
+      - id: diff
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BASE:-}" ]; then
+            echo "no base ref (manual run) — treating as changed"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # -z, because `git diff --name-only` QUOTES any path with a special
+          # or non-ASCII character: infrastructure/cloudflare/évil.tf comes out
+          # as "infrastructure/cloudflare/\303\251vil.tf", with a leading double
+          # quote. The anchored pattern below would not match it, the job would
+          # record changed=false, and the required check would go green without
+          # planning the change — a bypass of the gate this workflow exists to
+          # provide. Reproduced before fixing; -z emits raw paths, and tr turns
+          # the NUL separators into newlines for grep. (tr consumes its whole
+          # input, so unlike grep -q it cannot cause a SIGPIPE truncation.)
+          files=$(git -c core.quotePath=false diff -z --name-only "$BASE"...HEAD | tr '\0' '\n')
+          # Here-string, not a pipe. With pipefail, `echo ... | grep -q` can
+          # report failure on a *match*: grep exits at the first hit, echo takes
+          # SIGPIPE, and 141 becomes the pipeline status. Inside `if` that reads
+          # as "no match", so a Cloudflare change would be recorded as
+          # changed=false and the required job would pass without planning it.
+          if grep -qE '^(infrastructure/cloudflare/|\.github/workflows/cloudflare-plan\.yml$)' <<< "$files"; then
+            changed=true
+          else
+            changed=false
+          fi
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+          echo "relevant files changed: $changed"
+
+      # A .terraform directory is a build artifact and is never legitimately
+      # committed. The Antigravity review argued that one could carry a
+      # malicious provider binary past the allowlist below, since OpenTofu
+      # prefers what is already installed locally. That did not reproduce on
+      # 1.12.6: with a valid provider package pre-placed in
+      # .terraform/providers and its own matching .terraform.lock.hcl, `tofu
+      # init` under a tfrc whose direct.include omits that provider still fails
+      # with "was not found in any of the search locations" — the installer
+      # consults the configured methods regardless of the local cache. This
+      # check is therefore belt-and-braces rather than a fix for a demonstrated
+      # hole: the behaviour it relies on is undocumented, the credentials in
+      # the plan job are worth more than one `git ls-files`, and rejecting
+      # rather than deleting keeps an attempt visible instead of tidying it
+      # away.
+      - name: Reject committed provider caches
+        run: |
+          set -euo pipefail
+          # The entry itself as well as its contents: a .terraform committed as a
+          # SYMLINK to another tracked directory is a single tracked file, so a
+          # contents-only pathspec never sees it. Reproduced before fixing.
+          tracked=$(git ls-files -- '**/.terraform' '.terraform' \
+                                    '**/.terraform/**' '.terraform/**' || true)
+          [ -z "$tracked" ] || {
+            echo "::error::.terraform is a build artifact and must not be committed"
+            echo "$tracked"
+            exit 1
+          }
+          echo "no committed .terraform paths"
+
+      # `discover` keys on versions.tf in the pull request's own tree, so a
+      # root the pull request removes is simply absent from the matrix: the
+      # remaining roots plan clean and the required check goes green, while the
+      # objects that root managed stay live in Cloudflare and drop out of
+      # cloudflare-drift.yml's identical tree-walk. If the root held Zero Trust
+      # policies, the policies outlive their own removal from Git, unwatched.
+      #
+      # No plan can show this — planning the base revision of a removed root
+      # reports "in sync", which is true and beside the point — so this blocks
+      # rather than reports, and the escape hatch is a label: a deliberate,
+      # reviewer-visible act. Three shapes reach the same end state and are all
+      # treated alike: the root stops being discovered, it keeps versions.tf but
+      # loses its backend, or configuration is added that no root covers.
+      - name: Guard root coverage
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
+        run: |
+          set -euo pipefail
+          # workflow_dispatch carries neither payload field, and an early
+          # "no base, nothing to check" exit would hand out a green
+          # cloudflare-plan on demand: dispatch a manual run against the head of
+          # a pull request this guard just failed, and the newer check run
+          # replaces the red one under the same required context. So the base is
+          # derived rather than assumed. A manual run has no labels either, so a
+          # legitimately labelled removal fails there — the direction to fail in.
+          if [ -z "${BASE:-}" ]; then
+            git fetch --no-tags --quiet origin "$DEFAULT_BRANCH"
+            BASE=$(git merge-base "origin/$DEFAULT_BRANCH" HEAD)
+            echo "no event base ref; derived from origin/$DEFAULT_BRANCH: $BASE"
+          fi
+
+          # Root and backend sets are read straight out of the two trees. An earlier
+          # version diffed versions.tf paths instead and was wrong twice over, because
+          # git pairs a deletion with an addition by CONTENT similarity, not by path: one
+          # pull request that drops root A and adds unrelated root B is reported as a
+          # single R100 rename of A to B, since every versions.tf is mostly the same
+          # required_providers boilerplate. Comparing sets has no heuristic in it.
+          tree_paths() {
+            git -c core.quotePath=false ls-tree -r -z --name-only "$1" -- infrastructure/cloudflare \
+              | tr '\0' '\n'
+          }
+
+          # Every set below is captured by a plain assignment, and every membership test
+          # is a here-string over a variable. Both matter: bash's set -e does NOT
+          # propagate a failure out of a process substitution or out of a command
+          # substitution used as an argument, so `comm -23 <(roots_at "$BASE") ...` would
+          # treat a git failure — a bad base SHA, a shallow clone, a transient error — as
+          # "the base had no roots" and wave every removal through. Verified: the
+          # process-substitution form exits 0 after `git ls-tree` fatals; the assignment
+          # form exits 128.
+          base_paths=$(tree_paths "$BASE")
+          head_paths=$(tree_paths HEAD)
+          local_state_roots=$(grep -v '^\s*\(#.*\)\?$' infrastructure/cloudflare/.local-state-roots || true)
+
+          # OpenTofu loads JSON configuration too, so versions.tf.json marks a root
+          # exactly as versions.tf does; discovery accepts both for the same
+          # reason. modules/ is excluded here as it is there — a shared module
+          # carrying its own versions.tf is not a root.
+          roots_of() {
+            awk -F/ '$0 !~ /^infrastructure\/cloudflare\/modules\// && NF >= 4 \
+                     && ($NF == "versions.tf" || $NF == "versions.tf.json") \
+                     { sub("/versions\\.tf(\\.json)?$", ""); print }' | sort -u
+          }
+          base_roots=$(roots_of <<< "$base_paths")
+          head_roots=$(roots_of <<< "$head_paths")
+
+          problems=""
+
+          # 1. A root that stops being discoverable — deleted, renamed, moved out of the
+          #    tree, or its versions.tf renamed — is never planned again, and
+          #    cloudflare-drift.yml stops watching it for the same reason, while its
+          #    resources stay live in Cloudflare.
+          #
+          #    Read line by line, never `for r in $(...)`: that splits on $IFS, so a root
+          #    directory containing a space — trivially created through the web UI — would
+          #    be torn into fragments that match nothing.
+          while IFS= read -r r; do
+            [ -n "$r" ] || continue
+            grep -qxF -- "$r" <<< "$head_roots" \
+              || problems="${problems}root no longer discovered: $r\n"
+          done <<< "$base_roots"
+
+          # 2. A root without a remote backend silently uses the local one. On a fresh
+          #    runner that is empty state, so the plan is an ordinary create-only plan
+          #    and the check goes green while the root is detached from what is
+          #    actually live in R2 — and after merge, drift compares against nothing.
+          #    Checking every head root, not just ones that lost a file, because a
+          #    newly added root and a root switched to local reach the same place.
+          #
+          #    This only checks that a backend is declared. WHICH backend it is
+          #    cannot be settled by reading the file: grep has no notion of HCL
+          #    comments or dead blocks, so a stray `# switch to backend "s3" later`
+          #    next to a live `backend "local"` would satisfy any text match. The
+          #    plan job answers that question with what OpenTofu actually resolved
+          #    after init instead.
+          #
+          #    Roots knowingly off the shared backend are listed in
+          #    infrastructure/cloudflare/.local-state-roots, which both checks read.
+          while IFS= read -r r; do
+            [ -n "$r" ] || continue
+            grep -qxF -- "$r" <<< "$local_state_roots" && continue
+            grep -qxF -- "$r/backend.tf" <<< "$head_paths" \
+              || problems="${problems}root declares no backend: $r\n"
+          done <<< "$head_roots"
+
+          # 3. Configuration that belongs to no discovered root is never planned or
+          #    watched at all: discovery keys on versions.tf, so a directory holding
+          #    backend.tf and resources but no versions.tf is simply invisible. Shared
+          #    modules are the one legitimate case of .tf files outside a root.
+          while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            case "$f" in
+              *.tf|*.tf.json) ;;
+              *) continue ;;
+            esac
+            case "$f" in infrastructure/cloudflare/modules/*) continue ;; esac
+            # The file's OWN directory, not an ancestor. OpenTofu loads only the
+            # .tf files sitting directly in the working directory, so
+            # account/resources/foo.tf is never evaluated by a plan of account —
+            # an ancestor test would call it covered while both the gate and
+            # drift ignore it.
+            grep -qxF -- "$(dirname "$f")" <<< "$head_roots" \
+              || problems="${problems}configuration in no root's own directory: $f\n"
+          done <<< "$head_paths"
+
+          [ -n "$problems" ] || { echo "every root at $BASE is still discovered, backed and complete"; exit 0; }
+
+          if jq -e 'if type == "array" then index("cloudflare-root-removal") else null end' \
+               <<< "${LABELS:-[]}" > /dev/null; then
+            echo "::notice::acknowledged by the cloudflare-root-removal label"
+            printf "%b" "$problems"
+            exit 0
+          fi
+          echo "::error::a Cloudflare root would leave plan and drift coverage while its resources stay live"
+          printf "%b" "$problems"
+          echo "Give every root a versions.tf and a backend.tf, and destroy a root's resources before removing it (empty its .tf files, apply, remove its state key). To hand ownership over deliberately instead, label this pull request cloudflare-root-removal."
+          exit 1
+
+  discover:
+    name: discover roots
+    needs: changes
+    if: needs.changes.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      roots: ${{ steps.find.outputs.roots }}
+      count: ${{ steps.find.outputs.count }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      # A root is any directory holding versions.tf. Discovering them keeps this
+      # workflow unchanged as zones are added one import slice at a time.
+      - id: find
+        run: |
+          set -euo pipefail
+          # find exits 1 on a missing start directory, which under set -e would
+          # abort discovery and fail the required check — permanently, with no
+          # way to merge the pull request that removed the last root, label or
+          # not. An absent directory is a legitimate state: no roots.
+          # -path .../modules -prune: a shared module can carry its own
+          # versions.tf, and planning one as a root fails on its required
+          # inputs — on every pull request and every scheduled drift run.
+          # versions.tf.json is included because OpenTofu loads JSON
+          # configuration too, so a root written that way would otherwise be
+          # invisible to discovery while the check reported success.
+          if [ -d infrastructure/cloudflare ]; then
+            # The prune pattern has to match BELOW modules/, not modules/
+            # itself: -mindepth 2 stops find from applying the expression to
+            # depth-1 entries at all, so pruning the directory by name never
+            # fires. Measured — the module was still discovered as a root.
+            roots=$(find infrastructure/cloudflare -mindepth 2 \
+                      -path 'infrastructure/cloudflare/modules/*' -prune -o \
+                      \( -name versions.tf -o -name versions.tf.json \) -print \
+                    | sed 's#/[^/]*$##' | sort -u \
+                    | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          else
+            roots='[]'
+          fi
+          echo "roots=$roots" >> "$GITHUB_OUTPUT"
+          echo "count=$(echo "$roots" | jq 'length')" >> "$GITHUB_OUTPUT"
+          echo "Discovered roots: $roots"
+
+  plan:
+    name: plan
+    needs: [changes, discover]
+    if: needs.changes.outputs.changed == 'true' && needs.discover.outputs.count != '0'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        root: ${{ fromJson(needs.discover.outputs.roots) }}
+    defaults:
+      run:
+        working-directory: ${{ matrix.root }}
+
+    # Threat model for this job, stated plainly because it is not obvious.
+    #
+    # Roots are discovered by walking the pull request's own tree, and OpenTofu
+    # configures providers and evaluates data sources during plan. So a pull
+    # request that adds a root is, in effect, submitting code that CI runs with
+    # these credentials present. This repository is public, so forks get no
+    # secrets — but branches in the repository do, and several are opened by
+    # automation rather than by a person.
+    #
+    # Both credentials here are therefore chosen so that running hostile code
+    # with them is not worth much:
+    #
+    #   * CLOUDFLARE_API_TOKEN is read-only across the four zones. Note that
+    #     `base_url` is an optional, non-sensitive provider attribute, so a root
+    #     can redirect the provider and the token follows it — the exposure is
+    #     disclosure of configuration, not control of it.
+    #   * R2_PLAN_ACCESS_KEY_ID is Object Read only and scoped to the
+    #     mctl-cloudflare-state bucket alone. Verified: PutObject and
+    #     DeleteObject return AccessDenied, and so does any read of
+    #     mctl-terraform-state — the bucket holding k3s-preview state, which
+    #     contains an OpenSSH private key and kubeconfig credentials. That
+    #     separation is the point: R2 tokens scope to a bucket, not a prefix,
+    #     so Cloudflare state had to move to its own bucket before this
+    #     credential could honestly be called low-value.
+    #
+    #     It is also why plan runs with -lock=false — acquiring the state lock
+    #     is itself a write, and this credential deliberately cannot perform
+    #     one.
+    #
+    # The writable R2 credential (R2_ACCESS_KEY_ID) is never exposed to a job
+    # that plans unreviewed code. It belongs to the backup workflow, and to a
+    # future apply.
+    #
+    # Provider installation is additionally restricted to cloudflare/cloudflare,
+    # so the usual code-execution vectors (hashicorp/external with a shell
+    # program, the http data source) fail at init before plan is reached.
+
+    env:
+      # Outside the workspace on purpose: whatever a pull request commits as
+      # .terraform is then simply not the directory OpenTofu uses, so the
+      # rejection above is a second line rather than the only one.
+      TF_DATA_DIR: ${{ runner.temp }}/tofu-data
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_PLAN_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_PLAN_SECRET_ACCESS_KEY }}
+      TF_CLI_CONFIG_FILE: ${{ runner.temp }}/opentofu-ci.tfrc
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: 1.12.6
+          tofu_wrapper: false
+
+      # Written under RUNNER_TEMP, never in the workspace. A pull request that
+      # commits .opentofu-ci.tfrc as a symlink to /dev/null would otherwise have
+      # this heredoc follow it — the write succeeds, the file reads back empty,
+      # and OpenTofu falls back to unrestricted provider installation with the
+      # allowlist apparently in place. Reproduced before fixing.
+      - name: Restrict provider installation
+        run: |
+          set -euo pipefail
+          cat > "$TF_CLI_CONFIG_FILE" <<'TFRC'
+          provider_installation {
+            direct {
+              include = ["registry.opentofu.org/cloudflare/cloudflare"]
+            }
+          }
+          TFRC
+          grep -q 'cloudflare/cloudflare' "$TF_CLI_CONFIG_FILE"
+
+      - name: Format check
+        run: tofu fmt -check -diff
+
+      # -lockfile=readonly: without it, a root that committed no
+      # .terraform.lock.hcl gets one minted on the runner and thrown away, so
+      # the gate passes without anyone reviewing which provider build it ran
+      # against — and a later release matching ~> 5.0 can change behaviour
+      # under a root nobody re-reviewed.
+      - name: Init
+        run: tofu init -input=false -lockfile=readonly
+
+      # What backend a root actually uses cannot be read off backend.tf — grep
+      # matches comments and dead blocks alike. init records what it resolved:
+      # .terraform/terraform.tfstate carries backend.type, and a root on the
+      # local backend produces either type "local" or no file at all. Measured
+      # both. A root on local state plans against nothing on a fresh runner, so
+      # its plan says nothing about Cloudflare and drift cannot watch it.
+      #
+      # Only the plan job needs this: nothing reaches main, and therefore the
+      # drift workflow, without passing here first.
+      - name: Assert remote backend
+        env:
+          ROOT: ${{ matrix.root }}
+        run: |
+          set -euo pipefail
+          if grep -qxF -- "$ROOT" "$GITHUB_WORKSPACE/infrastructure/cloudflare/.local-state-roots"; then
+            echo "::warning::$ROOT is on local state by exception; its plan does not reflect live Cloudflare"
+            exit 0
+          fi
+          record="${TF_DATA_DIR:-.terraform}/terraform.tfstate"
+          [ -f "$record" ] \
+            || { echo "::error::$ROOT resolved no remote backend — it is planning against empty local state"; exit 1; }
+          type=$(jq -r '.backend.type // "none"' "$record")
+          [ "$type" = "s3" ] \
+            || { echo "::error::$ROOT resolved backend '$type', expected s3"; exit 1; }
+          echo "$ROOT is on the s3 backend"
+
+      - name: Validate
+        run: tofu validate
+
+      - name: Plan
+        run: |
+          set -euo pipefail
+          tofu plan -input=false -no-color -lock=false -out=tfplan | tee plan.txt
+          tofu show -no-color -json tfplan > plan.json
+
+      # Creating or updating is normal in a PR; destroying is the thing that
+      # should never pass unnoticed. Surface it loudly rather than failing —
+      # legitimate removals exist, they just have to be seen by a reviewer.
+      - name: Summarize
+        # ROOT goes through the environment, never through ${{ }} expansion into
+        # the script body. Root names are directory names walked out of the pull
+        # request's own tree, so a directory crafted to contain shell syntax
+        # would otherwise be spliced into this script before bash parses it.
+        env:
+          ROOT: ${{ matrix.root }}
+        run: |
+          set -euo pipefail
+          destroy=$(jq '[.resource_changes[]? | select(.change.actions | index("delete"))] | length' plan.json)
+          # index("create"), not == ["create"]: a replacement is represented as
+          # ["delete","create"] (or the reverse), and an equality test drops it
+          # from this column while the destroy column below still counts it —
+          # a table that contradicts itself and understates the work.
+          create=$(jq '[.resource_changes[]? | select(.change.actions | index("create"))] | length' plan.json)
+          update=$(jq '[.resource_changes[]? | select(.change.actions == ["update"])] | length' plan.json)
+          imports=$(jq '[.resource_changes[]? | select(.change.importing != null)] | length' plan.json)
+          {
+            echo "### \`$ROOT\`"
+            echo
+            echo "| import | create | update | **destroy** |"
+            echo "| --- | --- | --- | --- |"
+            echo "| $imports | $create | $update | **$destroy** |"
+            if [ "$destroy" -gt 0 ]; then
+              echo
+              echo "> [!WARNING]"
+              echo "> This plan destroys $destroy resource(s). Confirm that is intended before approving."
+              jq -r '.resource_changes[]? | select(.change.actions | index("delete")) | "- `" + .address + "`"' plan.json
+            fi
+            echo
+            echo "<details><summary>Full plan</summary>"
+            echo
+            echo '```terraform'
+            cat plan.txt
+            echo '```'
+            echo
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The plan file can contain resource attribute values. Nothing here is
+      # uploaded as an artifact for that reason.
+      - name: Scrub
+        if: always()
+        run: rm -f tfplan plan.json plan.txt
+
+  # The single stable context to mark required in the branch ruleset. It runs on
+  # every pull request, including ones that touch nothing here, so it always has
+  # a verdict to publish.
+  cloudflare-plan:
+    name: cloudflare-plan
+    needs: [changes, discover, plan]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verdict
+        run: |
+          set -euo pipefail
+          changed='${{ needs.changes.outputs.changed }}'
+          discover='${{ needs.discover.result }}'
+          plan='${{ needs.plan.result }}'
+          echo "changed=$changed discover=$discover plan=$plan"
+
+          if [ "${{ needs.changes.result }}" != "success" ]; then
+            echo "::error::change detection itself failed — cannot vouch for this PR"
+            exit 1
+          fi
+
+          if [ "$changed" != "true" ]; then
+            echo "No Cloudflare IaC files touched; nothing to plan."
+            exit 0
+          fi
+
+          # 'skipped' here means there are no roots yet, which is a legitimate
+          # state while the layout is still being filled in.
+          for r in "$discover" "$plan"; do
+            case "$r" in
+              success|skipped) ;;
+              *) echo "::error::a plan job did not succeed (discover=$discover plan=$plan)"; exit 1 ;;
+            esac
+          done
+          echo "All Cloudflare roots planned successfully."
