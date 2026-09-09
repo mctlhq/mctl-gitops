@@ -11,6 +11,13 @@ name: Cloudflare Apply
 # It is also not a reconciler. cloudflare-drift.yml fails closed on purpose;
 # blind reconciliation would silently erase whatever a human did during an
 # incident. This workflow applies a plan someone asked for, nothing else.
+#
+# Two jobs, and the split is the point. `plan` runs unprivileged and publishes
+# what it would do; `apply` waits for a human to approve *that*, then proves the
+# plan has not changed underneath before writing. A single gated job would put
+# the approval before the plan existed, which means approving an intention
+# rather than a change — and out-of-band drift arriving between merge and
+# dispatch would be applied without anyone having seen it.
 
 on:
   workflow_dispatch:
@@ -30,15 +37,172 @@ permissions:
 
 concurrency:
   # Same group as cloudflare-drift.yml, and cancel-in-progress: false. Drift and
-  # apply contend for the same state lock, and this job — unlike drift — takes
-  # it for real. Cancelling mid-apply is how a lock outlives the run that held
-  # it.
+  # apply contend for the same state lock, and this workflow — unlike drift —
+  # takes it for real. Cancelling mid-apply is how a lock outlives the run that
+  # held it. The group covers both jobs, so nothing else touches the state
+  # between a plan and the apply that approves it.
   group: cloudflare-tofu
   cancel-in-progress: false
 
 jobs:
+  plan:
+    name: plan ${{ inputs.root }}
+    runs-on: ubuntu-latest
+
+    # No environment, and only the read-only credentials. This job exists to be
+    # looked at, so it has to run before anyone approves anything.
+    if: github.ref == 'refs/heads/main'
+
+    defaults:
+      run:
+        working-directory: ${{ inputs.root }}
+
+    outputs:
+      digest: ${{ steps.summary.outputs.digest }}
+
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_PLAN_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_PLAN_SECRET_ACCESS_KEY }}
+      TF_IN_AUTOMATION: '1'
+
+    steps:
+      # defaults.run.working-directory applies only to `run` steps, so this one
+      # is unaffected by a dispatch naming a directory that does not exist — the
+      # validation step below is what produces the error message for it.
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      # ROOT goes through the environment, never through ${{ }} expansion into a
+      # script body: it is typed by whoever dispatches the run, so it is the
+      # least trustworthy string in the workflow.
+      - name: Validate the root
+        working-directory: ${{ github.workspace }}
+        env:
+          ROOT: ${{ inputs.root }}
+        run: .github/scripts/cloudflare-assert-applyable-root.sh "$ROOT"
+
+      - name: Point OpenTofu outside the workspace
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          {
+            echo "TF_DATA_DIR=$RUNNER_TEMP/tofu-data"
+            echo "TF_CLI_CONFIG_FILE=$RUNNER_TEMP/opentofu-ci.tfrc"
+          } >> "$GITHUB_ENV"
+
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: 1.12.6
+          tofu_wrapper: false
+
+      - name: Restrict provider installation
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          cat > "$TF_CLI_CONFIG_FILE" <<'TFRC'
+          provider_installation {
+            direct {
+              include = ["registry.opentofu.org/cloudflare/cloudflare"]
+            }
+          }
+          TFRC
+          grep -q 'cloudflare/cloudflare' "$TF_CLI_CONFIG_FILE"
+
+      - name: Init
+        run: tofu init -input=false -lockfile=readonly
+
+      - name: Assert remote backend
+        run: |
+          set -euo pipefail
+          type=$(jq -r '.backend.type' "$TF_DATA_DIR/terraform.tfstate")
+          if [ "$type" != 's3' ]; then
+            echo "::error::backend resolved to '$type', not s3 — refusing"
+            exit 1
+          fi
+
+      # -lock=false here and nowhere else in this file: the plan credential is
+      # Object-Read-only on the state bucket, and taking the lock is a write.
+      - name: Plan
+        run: |
+          set -euo pipefail
+          tofu plan -input=false -no-color -lock=false -out=tfplan | tee plan.txt
+          tofu show -no-color -json tfplan > plan.json
+
+      - name: Summarize
+        id: summary
+        env:
+          ROOT: ${{ inputs.root }}
+        run: |
+          set -euo pipefail
+          destroy=$(jq '[.resource_changes[]? | select(.change.actions | index("delete"))] | length' plan.json)
+          create=$(jq '[.resource_changes[]? | select(.change.actions | index("create"))] | length' plan.json)
+          update=$(jq '[.resource_changes[]? | select(.change.actions == ["update"])] | length' plan.json)
+          imports=$(jq '[.resource_changes[]? | select(.change.importing != null)] | length' plan.json)
+
+          # The digest is what crosses the job boundary — the plan itself never
+          # does. Persisting tfplan as an artifact would leave a full
+          # description of the account, Access configuration included,
+          # downloadable afterwards; a hash proves the apply job is about to do
+          # the same thing without publishing what that thing is.
+          #
+          # Only .resource_changes is hashed, sorted by address: the top level
+          # of plan.json carries a timestamp and provider metadata that differ
+          # between two otherwise identical plans.
+          digest=$(jq -S -c '[.resource_changes[]?
+                     | {address, actions: .change.actions,
+                        before: .change.before, after: .change.after}]
+                     | sort_by(.address)' plan.json | sha256sum | cut -d' ' -f1)
+
+          {
+            echo "### plan \`$ROOT\`"
+            echo
+            echo "| import | create | update | **destroy** |"
+            echo "| --- | --- | --- | --- |"
+            echo "| $imports | $create | $update | **$destroy** |"
+            echo
+            echo "Plan digest \`${digest:0:16}\` — apply refuses if the plan has changed by then."
+            if [ "$destroy" -gt 0 ]; then
+              echo
+              echo "> [!WARNING]"
+              echo "> This plan destroys $destroy resource(s)."
+              jq -r '.resource_changes[]? | select(.change.actions | index("delete")) | "- \`" + .address + "\`"' plan.json
+            fi
+            echo
+            echo "<details><summary>Full plan</summary>"
+            echo
+            echo '```terraform'
+            cat plan.txt
+            echo '```'
+            echo
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "destroy=$destroy" >> "$GITHUB_OUTPUT"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      # Refused before approval, so an unintended destroy costs nobody a
+      # review. The apply job checks again against its own plan, which is the
+      # one that decides.
+      - name: Refuse an unrequested destroy
+        if: steps.summary.outputs.destroy != '0' && inputs.allow_destroy != true
+        env:
+          DESTROY: ${{ steps.summary.outputs.destroy }}
+        run: |
+          set -euo pipefail
+          echo "::error::this plan destroys $DESTROY resource(s) and the run was dispatched without allow_destroy"
+          jq -r '.resource_changes[]? | select(.change.actions | index("delete")) | "- " + .address' plan.json
+          echo "Re-dispatch with allow_destroy if every address above is meant to go."
+          exit 1
+
+      - name: Scrub
+        if: always()
+        run: rm -f tfplan plan.json plan.txt
+
   apply:
     name: apply ${{ inputs.root }}
+    needs: plan
     runs-on: ubuntu-latest
 
     # Two layers, the same pair opentofu-state-backup.yml uses and for the same
@@ -59,22 +223,6 @@ jobs:
     if: github.ref == 'refs/heads/main'
     environment: cloudflare-apply
 
-    # Known and accepted: the environment gates the whole job, so the required
-    # reviewer approves "apply this root" before the plan exists. Only the
-    # destroy check below re-verifies anything once it does, which means a
-    # non-destructive change is applied without a human having seen its
-    # contents here.
-    #
-    # Splitting into an ungated plan job and a gated apply job would fix that,
-    # but only by persisting tfplan between jobs as an artifact — and the plan
-    # is the one thing this workflow deliberately does not persist. Trading a
-    # stored plan for an earlier look at it is not obviously the better deal.
-    #
-    # What makes the trade acceptable is that this is not the first sight of
-    # the plan: cloudflare-plan.yml already produced one for the same
-    # configuration on the pull request, and that is what review approved.
-    # Revisit if apply ever stops being reached only through a merged change —
-    # a drift-driven apply would have no such prior plan behind it.
 
     defaults:
       run:
@@ -132,30 +280,7 @@ jobs:
           ROOT: ${{ inputs.root }}
         run: |
           set -euo pipefail
-          case "$ROOT" in
-            infrastructure/cloudflare/*) ;;
-            *) echo "::error::'$ROOT' is not under infrastructure/cloudflare/"; exit 1 ;;
-          esac
-          case "$ROOT" in
-            *..*) echo "::error::'$ROOT' contains a parent reference"; exit 1 ;;
-          esac
-          # A shared module is not a root: planning one fails on its required
-          # inputs, and applying one is meaningless.
-          case "$ROOT" in
-            infrastructure/cloudflare/modules/*)
-              echo "::error::'$ROOT' is a module, not a root"; exit 1 ;;
-          esac
-          if [ ! -f "$ROOT/versions.tf" ] && [ ! -f "$ROOT/versions.tf.json" ]; then
-            echo "::error::'$ROOT' is not a root — no versions.tf"; exit 1
-          fi
-          # A root on local state has nothing to apply against from a fresh
-          # runner: its state is empty here, so the plan would propose creating
-          # everything the root describes. That is the single most destructive
-          # shape this workflow could take, and it is silent.
-          if .github/scripts/cloudflare-local-state-roots.sh | grep -qxF -- "$ROOT"; then
-            echo "::error::'$ROOT' is listed in .local-state-roots — it has no remote state to apply against"
-            exit 1
-          fi
+          .github/scripts/cloudflare-assert-applyable-root.sh "$ROOT"
           # Tested for emptiness, never printed or compared against a literal.
           if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
             echo "::error::no write token is mapped for '$ROOT' — add one to the chain in this workflow and to the cloudflare-apply ENVIRONMENT secrets (not repository secrets)"
@@ -224,6 +349,31 @@ jobs:
           tofu plan -input=false -no-color -out=tfplan | tee plan.txt
           tofu show -no-color -json tfplan > plan.json
 
+      # The approval was given against the plan job's summary. This proves the
+      # plan about to be applied is still that one — same addresses, same
+      # values — without either job having persisted the plan anywhere
+      # downloadable.
+      #
+      # A mismatch is not necessarily an attack; the ordinary cause is
+      # out-of-band drift arriving between the two jobs. Either way the answer
+      # is the same: stop and let a human look at the new plan. Re-dispatching
+      # produces a fresh summary to approve on its own terms.
+      - name: Assert the approved plan is still the plan
+        env:
+          EXPECTED: ${{ needs.plan.outputs.digest }}
+        run: |
+          set -euo pipefail
+          actual=$(jq -S -c '[.resource_changes[]?
+                     | {address, actions: .change.actions,
+                        before: .change.before, after: .change.after}]
+                     | sort_by(.address)' plan.json | sha256sum | cut -d' ' -f1)
+          if [ "$actual" != "$EXPECTED" ]; then
+            echo "::error::the plan changed after approval (approved ${EXPECTED:0:16}, now ${actual:0:16}) — refusing to apply"
+            echo "Cloudflare most likely changed out of band between the plan job and this one."
+            exit 1
+          fi
+          echo "plan digest matches the approved one (${actual:0:16})"
+
       - name: Summarize
         id: summary
         env:
@@ -251,10 +401,9 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           echo "destroy=$destroy" >> "$GITHUB_OUTPUT"
 
-      # cloudflare-plan.yml surfaces destroys and lets the reviewer decide,
-      # because a plan changes nothing. Here it is the last checkpoint before
-      # the change is real, so the default is refusal: a destroy has to have
-      # been asked for at dispatch time, before its contents were known.
+      # Checked again on this job's own plan. The plan job refused before
+      # approval and against a different plan object; this is the check that
+      # decides, because this is the plan being written.
       - name: Refuse an unrequested destroy
         if: steps.summary.outputs.destroy != '0' && inputs.allow_destroy != true
         env:
@@ -280,7 +429,7 @@ jobs:
       # machine-readable form carrying every attribute of every managed
       # resource, and there is no reason to leave it lying in the workspace.
       # If the plan's contents ever need to be genuinely restricted, the
-      # summary is what would have to change, in all three workflows at once.
+      # summary is what would have to change, in every workflow at once.
       - name: Scrub
         if: always()
         run: rm -f tfplan plan.json plan.txt
