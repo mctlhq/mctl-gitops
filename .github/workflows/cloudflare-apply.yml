@@ -59,6 +59,23 @@ jobs:
     if: github.ref == 'refs/heads/main'
     environment: cloudflare-apply
 
+    # Known and accepted: the environment gates the whole job, so the required
+    # reviewer approves "apply this root" before the plan exists. Only the
+    # destroy check below re-verifies anything once it does, which means a
+    # non-destructive change is applied without a human having seen its
+    # contents here.
+    #
+    # Splitting into an ungated plan job and a gated apply job would fix that,
+    # but only by persisting tfplan between jobs as an artifact — and the plan
+    # is the one thing this workflow deliberately does not persist. Trading a
+    # stored plan for an earlier look at it is not obviously the better deal.
+    #
+    # What makes the trade acceptable is that this is not the first sight of
+    # the plan: cloudflare-plan.yml already produced one for the same
+    # configuration on the pull request, and that is what review approved.
+    # Revisit if apply ever stops being reached only through a merged change —
+    # a drift-driven apply would have no such prior plan behind it.
+
     defaults:
       run:
         working-directory: ${{ inputs.root }}
