@@ -25,6 +25,16 @@ env:
   SEERRSENSE_LOCALE: ru-RU
   PORT: "8787"
   NEBIUS_MODEL: Qwen/Qwen3-30B-A3B-Instruct-2507
+  # OAuth 2.1 with Google as the identity provider (seerrsense#8). The issuer
+  # is the canonical hostname and is baked into every token and every discovery
+  # document, so changing it invalidates all of them — it must stay put.
+  SEERRSENSE_PUBLIC_URL: https://seerrsense.mctl.ai
+  # Fail-closed: an empty value admits nobody, not everybody. Add an address
+  # here to let that Google account sign in.
+  SEERRSENSE_ALLOWED_EMAILS: mashkoffdmitry@gmail.com
+  # The pre-OAuth shared token still works while clients migrate. Set to
+  # "false" to turn it off; that is the switch that ends the transition.
+  SEERRSENSE_LEGACY_TOKEN_ENABLED: "true"
 ingress:
   enabled: true
   # seerrsense.mctl.ai is the canonical public hostname (seerrsense#7); the
@@ -54,6 +64,24 @@ externalSecret:
     - secretKey: NEBIUS_API_KEY
       remoteKey: teams/labs/seerrsense
       property: NEBIUS_API_KEY
+    # Google OAuth client "seerrsense-mcp", project seerrsense. Its redirect URI
+    # is https://seerrsense.mctl.ai/oauth/google/callback and must match
+    # SEERRSENSE_PUBLIC_URL above.
+    - secretKey: GOOGLE_OAUTH_CLIENT_ID
+      remoteKey: teams/labs/seerrsense
+      property: GOOGLE_OAUTH_CLIENT_ID
+    - secretKey: GOOGLE_OAUTH_CLIENT_SECRET
+      remoteKey: teams/labs/seerrsense
+      property: GOOGLE_OAUTH_CLIENT_SECRET
+    # Signs access tokens and browser sessions. Rotating it signs everyone out.
+    - secretKey: SEERRSENSE_OAUTH_JWT_SIGNING_KEY
+      remoteKey: teams/labs/seerrsense
+      property: SEERRSENSE_OAUTH_JWT_SIGNING_KEY
+    # Seals the Seerr API keys people attach on /account. Rotating it makes
+    # every stored key unreadable and detaches everyone.
+    - secretKey: SEERRSENSE_ENCRYPTION_KEY
+      remoteKey: teams/labs/seerrsense
+      property: SEERRSENSE_ENCRYPTION_KEY
 envFrom:
   - secretRef:
       name: seerrsense-secrets
