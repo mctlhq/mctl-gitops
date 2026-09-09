@@ -61,6 +61,11 @@ import {
 }
 
 import {
+  to = cloudflare_dns_record.google_site_verify
+  id = "${local.zone_id}/4fb35c9c2a04d0279820e805b85e499d"
+}
+
+import {
   to = cloudflare_ruleset.firewall_custom
   id = "zones/${local.zone_id}/4bdd5c0da7004933b40aae8fd0d5ce78"
 }

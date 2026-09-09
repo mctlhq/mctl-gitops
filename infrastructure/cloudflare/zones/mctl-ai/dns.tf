@@ -77,6 +77,16 @@ resource "cloudflare_dns_record" "gh_org_verify" {
   zone_id = local.zone_id
 }
 
+resource "cloudflare_dns_record" "google_site_verify" {
+  comment = "Google Search Console domain verification for the SeerrSense OAuth consent screen"
+  content = "google-site-verification=PDyWF0YAfDGp6iUSZXwkYN2N19L_sEUyRAh_PY3gUXQ"
+  name    = "mctl.ai"
+  proxied = false
+  ttl     = 1
+  type    = "TXT"
+  zone_id = local.zone_id
+}
+
 resource "cloudflare_dns_record" "wildcard" {
   content = local.origin_ip
   name    = "*.mctl.ai"
