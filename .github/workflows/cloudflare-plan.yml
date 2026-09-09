@@ -132,27 +132,32 @@ jobs:
             BASE=$(git merge-base "origin/$DEFAULT_BRANCH" HEAD)
             echo "no event base ref; derived from origin/$DEFAULT_BRANCH: $BASE"
           fi
-          set -euo pipefail
 
           # Root and backend sets are read straight out of the two trees. An earlier
-          # version of this guard diffed versions.tf paths instead and was wrong twice
-          # over, because git pairs a deletion with an addition by CONTENT similarity,
-          # not by path: one pull request that drops root A and adds unrelated root B is
-          # reported as a single R100 rename of A to B, since every versions.tf is
-          # mostly the same required_providers boilerplate. Reproduced — the diff-based
-          # guard saw nothing at all. Comparing sets has no heuristic in it.
-          roots_at() {
+          # version diffed versions.tf paths instead and was wrong twice over, because
+          # git pairs a deletion with an addition by CONTENT similarity, not by path: one
+          # pull request that drops root A and adds unrelated root B is reported as a
+          # single R100 rename of A to B, since every versions.tf is mostly the same
+          # required_providers boilerplate. Comparing sets has no heuristic in it.
+          tree_paths() {
             git -c core.quotePath=false ls-tree -r -z --name-only "$1" -- infrastructure/cloudflare \
-              | tr '\0' '\n' \
-              | awk -F/ 'NF >= 4 && $NF == "versions.tf" { sub("/versions\\.tf$", ""); print }' \
-              | sort -u
+              | tr '\0' '\n'
           }
-          backends_at() {
-            git -c core.quotePath=false ls-tree -r -z --name-only "$1" -- infrastructure/cloudflare \
-              | tr '\0' '\n' \
-              | awk -F/ 'NF >= 4 && $NF == "backend.tf" { print }' \
-              | sort -u
-          }
+
+          # Every set below is captured by a plain assignment, and every membership test
+          # is a here-string over a variable. Both matter: bash's set -e does NOT
+          # propagate a failure out of a process substitution or out of a command
+          # substitution used as an argument, so `comm -23 <(roots_at "$BASE") ...` would
+          # treat a git failure — a bad base SHA, a shallow clone, a transient error — as
+          # "the base had no roots" and wave every removal through. Verified: the
+          # process-substitution form exits 0 after `git ls-tree` fatals; the assignment
+          # form exits 128.
+          base_paths=$(tree_paths "$BASE")
+          head_paths=$(tree_paths HEAD)
+
+          roots_of() { awk -F/ 'NF >= 4 && $NF == "versions.tf" { sub("/versions\\.tf$", ""); print }' | sort -u; }
+          base_roots=$(roots_of <<< "$base_paths")
+          head_roots=$(roots_of <<< "$head_paths")
 
           problems=""
 
@@ -160,37 +165,47 @@ jobs:
           #    tree, or its versions.tf renamed — is never planned again, and
           #    cloudflare-drift.yml stops watching it for the same reason, while its
           #    resources stay live in Cloudflare.
-          gone=$(comm -23 <(roots_at "$BASE") <(roots_at HEAD) || true)
-          [ -z "$gone" ] || problems="${problems}roots no longer discovered:\n$gone\n"
+          #
+          #    Read line by line, never `for r in $(...)`: that splits on $IFS, so a root
+          #    directory containing a space — trivially created through the web UI — would
+          #    be torn into fragments that match nothing.
+          while IFS= read -r r; do
+            [ -n "$r" ] || continue
+            grep -qxF -- "$r" <<< "$head_roots" \
+              || problems="${problems}root no longer discovered: $r\n"
+          done <<< "$base_roots"
 
           # 2. A root that keeps its versions.tf but loses backend.tf silently falls back
-          #    to the local backend. On a fresh runner that means an empty state, so the
-          #    plan is an ordinary create-only plan and the check goes green while the
-          #    root has been detached from its real state in R2. Only roots that survive
-          #    are checked; a root that is gone is already reported above.
-          for r in $(comm -12 <(roots_at "$BASE") <(roots_at HEAD)); do
-            if grep -qxF "$r/backend.tf" <<< "$(backends_at "$BASE")" \
-               && ! grep -qxF "$r/backend.tf" <<< "$(backends_at HEAD)"; then
-              problems="${problems}root detached from its remote backend: $r\n"
-            fi
-          done
+          #    to the local backend. On a fresh runner that means empty state, so the plan
+          #    is an ordinary create-only plan and the check goes green while the root is
+          #    detached from its real state in R2. Only roots that survive are checked; a
+          #    root that is gone is already reported above.
+          while IFS= read -r r; do
+            [ -n "$r" ] || continue
+            grep -qxF -- "$r" <<< "$head_roots" || continue
+            grep -qxF -- "$r/backend.tf" <<< "$base_paths" || continue
+            grep -qxF -- "$r/backend.tf" <<< "$head_paths" \
+              || problems="${problems}root detached from its remote backend: $r\n"
+          done <<< "$base_roots"
 
           # 3. Configuration that belongs to no discovered root is never planned or
-          #    watched at all: `discover` keys on versions.tf, so a directory with
+          #    watched at all: discovery keys on versions.tf, so a directory holding
           #    backend.tf and resources but no versions.tf is simply invisible. Shared
           #    modules are the one legitimate case of .tf files outside a root.
-          orphans=""
           while IFS= read -r f; do
             [ -n "$f" ] || continue
+            case "$f" in
+              *.tf) ;;
+              *) continue ;;
+            esac
             case "$f" in infrastructure/cloudflare/modules/*) continue ;; esac
-            d=$(dirname "$f"); inside=no
-            while [ "$d" != "infrastructure/cloudflare" ] && [ "$d" != "." ]; do
-              if grep -qxF "$d" <<< "$(roots_at HEAD)"; then inside=yes; break; fi
+            d=$(dirname "$f")
+            while [ "$d" != "infrastructure/cloudflare" ] && [ "$d" != "." ] && [ "$d" != "/" ]; do
+              grep -qxF -- "$d" <<< "$head_roots" && continue 2
               d=$(dirname "$d")
             done
-            [ "$inside" = yes ] || orphans="${orphans}$f\n"
-          done <<< "$(git -c core.quotePath=false ls-tree -r -z --name-only HEAD -- infrastructure/cloudflare | tr '\0' '\n' | grep '\.tf$' || true)"
-          [ -z "$orphans" ] || problems="${problems}.tf files outside any discovered root:\n${orphans}"
+            problems="${problems}.tf file outside any discovered root: $f\n"
+          done <<< "$head_paths"
 
           [ -n "$problems" ] || { echo "every root at $BASE is still discovered, backed and complete"; exit 0; }
 
