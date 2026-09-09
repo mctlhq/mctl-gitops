@@ -165,6 +165,71 @@ So a change to worker routes moves the subdomain redirect. Whatever PR touches
 them has to re-check subdomain redirects; no zone-level configuration here will
 catch that regression.
 
+## The origin address in Git (#1119)
+
+`91.98.10.188` stays in `zones/*/dns.tf`. It is `cloudflare_dns_record.content`
+for the apex and wildcard of all three zones — the address *is* the record, and
+OpenTofu has to know it. Sourcing it from a variable at plan time was considered
+and rejected: it has been in the git history of a public repository since the
+pilot, so hiding it now changes nothing an attacker can do. Decision taken
+2026-09-09. The prose copy in `zones/mctl-ru/README.md` was removed, because a
+value repeated for narration earns nothing.
+
+**What makes the disclosure acceptable.** Publishing the address was only
+dangerous because the origin answered for platform hostnames. It no longer
+does: `infrastructure/k3s-preview/extra-manifests/cloudflare-origin-allowlist.yaml.tpl`
+is a Traefik `Middleware` on the `websecure` entrypoint that refuses any request
+whose source is outside Cloudflare's published ranges. A direct request with a
+platform `Host` header gets `403`. Measured before the change: `app.mctl.ai` and
+`ops.mctl.ai` both answered `200` to a `--resolve` straight at the origin.
+
+**Why the control is in Traefik and not on the cloud firewall**, which is what
+#1119 asked for. `91.98.10.188` is the Hetzner Cloud **Load Balancer** for
+`svc/traefik`, not a node — only 80 and 443 answer on it; 22 and 6443 do not.
+Hetzner cloud firewalls attach to servers, and hcloud-cloud-controller-manager
+ignores `spec.loadBalancerSourceRanges`, so there is no firewall object in front
+of this address to write a rule on. There is nothing to close on the nodes
+either: kube-hetzner opens 80/443 there only when `using_klipper_lb` is true,
+and it is false. The remediation as written was not implementable.
+
+Traefik is also the stronger place for it. A pod dialling a public IP does not
+traverse the cloud firewall — `kube.tf` says so, and `nodePublicCIDRs` in
+`platform-gitops/helm-charts/tenant/values.yaml` is the compensating control —
+but the load balancer's address is not in that list, because it is not a node.
+Until this landed, a tenant pod could reach the origin's public address with an
+arbitrary `Host` header and skip the edge. It now gets `403`: the pod egresses
+through a node's public IP, so the load balancer hands Traefik a PROXY header
+naming that address, which is not Cloudflare. A cloud-firewall allowlist could
+not have closed that path. Nor could it have covered the load balancer's public
+IPv6, which no `AAAA` record advertises and no firewall rule would reach.
+
+**What it does not close.** Two things, both deliberate and both recorded rather
+than implied.
+
+*Another Cloudflare customer.* The allowlist trusts *all* of Cloudflare, so
+someone can point their own zone at this origin and arrive from a legitimate
+Cloudflare address, skipping this zone's WAF rules — the same breadth problem as
+the `asnum eq 24940` bypass in decision 8, one layer down. Authenticated Origin
+Pull (an mTLS client certificate the edge presents, which also survives
+Cloudflare adding a range) or a secret header injected by this zone alone is
+what closes it; a Cloudflare Tunnel removes the inbound listener altogether.
+Both are strictly better and both are larger changes.
+
+*A pod talking to Traefik directly.* The `websecure` entrypoint trusts the PROXY
+protocol from `10.0.0.0/8`, which contains the pod CIDR `10.42.0.0/16` and the
+service CIDR `10.43.0.0/16`. A pod connecting to Traefik's ClusterIP on `:8443`
+can therefore supply its own PROXY header naming a Cloudflare source, and this
+allowlist would honour it. That predates this change and applies to every
+`ipAllowList` in the cluster, the `metrics-deny` middlewares included; narrowing
+`trustedIPs` is dangerous enough to need its own rollout and is tracked in
+gitops#1138. Raised by agy while reviewing #1135.
+
+**The list of ranges goes stale.**
+`.github/workflows/cloudflare-origin-allowlist.yml` re-fetches
+`https://api.cloudflare.com/client/v4/ips` daily and fails, with a Telegram
+notification, when the committed list differs. It does not reconcile: the fix
+needs a `terraform.yml` apply against the cluster, which is manual.
+
 ## Credentials
 
 Nothing is committed. CI reads:

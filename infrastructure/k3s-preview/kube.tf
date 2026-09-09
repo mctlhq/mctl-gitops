@@ -101,6 +101,15 @@ module "kube-hetzner" {
   # would be recoverable only through the Hetzner console. Revisit if a static
   # address or a bastion appears.
   #
+  # 80/443 are absent from this reasoning because they are absent from the
+  # nodes. kube-hetzner opens them on servers only when using_klipper_lb is
+  # true; it is false here, so the nodes refuse them. Public HTTP arrives at
+  # the Hetzner Cloud Load Balancer for svc/traefik instead — a different
+  # object, which cloud firewalls cannot be attached to and to which the CCM
+  # does not apply loadBalancerSourceRanges. The Cloudflare-only restriction
+  # on that path therefore lives in Traefik, not here:
+  # extra-manifests/cloudflare-origin-allowlist.yaml.tpl (#1119).
+  #
   # Pods reaching a node's public IP bypass this firewall entirely; that path is
   # closed by tenant.networking.nodePublicCIDRs in the tenant chart.
 

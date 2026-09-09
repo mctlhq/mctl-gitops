@@ -1,0 +1,103 @@
+name: Cloudflare origin allowlist
+
+# Guards the Cloudflare IP ranges that gate the origin (#1119) against going
+# stale.
+#
+# infrastructure/k3s-preview/extra-manifests/cloudflare-origin-allowlist.yaml.tpl
+# is a Traefik Middleware that refuses any request whose source is outside
+# Cloudflare's published ranges. Cloudflare adds ranges from time to time; a
+# range we do not know about is traffic we 403 for no reason. This job
+# re-fetches the published list daily and fails when it no longer matches Git.
+#
+# It does NOT reconcile, and it does not open a pull request. Reaching the
+# cluster needs a manual `terraform.yml` dispatch with apply: true, so a bot PR
+# would save nothing and add a review. A red run plus a Telegram message is the
+# right shape for "legitimate traffic is being refused right now".
+#
+# It is deliberately not a job inside cloudflare-drift.yml: that workflow's
+# contract is OpenTofu roots versus live Cloudflare, and its discovery and
+# matrix are built around root discovery. This is a k3s concern that happens to
+# read a Cloudflare endpoint.
+
+on:
+  schedule:
+    # 20 minutes after cloudflare-drift, so the two land in the same window
+    # without competing for attention.
+    - cron: '20 6 * * *'
+  pull_request:
+    paths:
+      - 'infrastructure/k3s-preview/extra-manifests/cloudflare-origin-allowlist.yaml.tpl'
+      - '.github/workflows/cloudflare-origin-allowlist.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-origin-allowlist
+  cancel-in-progress: false
+
+jobs:
+  compare:
+    name: committed ranges vs api.cloudflare.com
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Fetch Cloudflare's published ranges
+        run: |
+          set -euo pipefail
+          # --retry covers a transient blip. The success check matters more: a
+          # 200 carrying an error envelope, or a schema change, must fail as
+          # itself rather than masquerade as drift. A false drift alarm trains
+          # people to ignore the real one.
+          curl -fsS --retry 3 --retry-delay 5 --max-time 30 \
+            https://api.cloudflare.com/client/v4/ips > api.json
+          test "$(jq -r '.success' api.json)" = "true" \
+            || { echo "::error::api.cloudflare.com/client/v4/ips did not return success=true"; cat api.json; exit 1; }
+          jq -r '.result.ipv4_cidrs[], .result.ipv6_cidrs[]' api.json | sort > api.txt
+          test -s api.txt \
+            || { echo "::error::the API returned no CIDRs"; exit 1; }
+          jq -r '.result.etag' api.json > api.etag
+
+      - name: Read the committed ranges
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' > git.txt
+          import yaml
+          m = yaml.safe_load(open(
+              "infrastructure/k3s-preview/extra-manifests/"
+              "cloudflare-origin-allowlist.yaml.tpl"))
+          for cidr in sorted(m["spec"]["ipAllowList"]["sourceRange"]):
+              print(cidr)
+          PY
+          test -s git.txt \
+            || { echo "::error::the manifest yielded no sourceRange entries"; exit 1; }
+
+      - name: Compare
+        run: |
+          set -euo pipefail
+          echo "API etag:       $(cat api.etag)"
+          echo "manifest etag:  $(grep -o 'etag [0-9a-f]\{32\}' \
+            infrastructure/k3s-preview/extra-manifests/cloudflare-origin-allowlist.yaml.tpl \
+            | head -1 | cut -d' ' -f2)"
+          if diff -u git.txt api.txt; then
+            echo "in sync: $(wc -l < git.txt) ranges"
+            exit 0
+          fi
+          echo "::error::the committed allowlist no longer matches Cloudflare's published ranges."
+          echo "::error::Traffic from an added range is being refused at the origin right now."
+          echo "::error::Update the manifest and its etag comment, then dispatch terraform.yml with apply: true."
+          exit 1
+
+      - name: Notify Telegram on failure
+        if: failure() && github.event_name == 'schedule'
+        uses: appleboy/telegram-action@390cf7345777cd821dba28c72f436a78bce19cc5 # master 2026-05
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          message: |
+            ⚠️ *Cloudflare origin allowlist is stale*
+            The committed ranges no longer match api.cloudflare.com/client/v4/ips.
+            Traffic from an added range is being refused at the origin.
+            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
