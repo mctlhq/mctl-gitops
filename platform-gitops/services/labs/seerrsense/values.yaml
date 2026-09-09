@@ -36,9 +36,19 @@ env:
   # Google account sign in — and while the Google app is still in testing, the
   # address must also be on its test-user list.
   SEERRSENSE_ALLOWED_EMAILS: mashkoffdmitry@gmail.com
-  # The pre-OAuth shared token keeps working while clients migrate. Setting
-  # this to "false" is what ends the transition.
-  SEERRSENSE_LEGACY_TOKEN_ENABLED: "true"
+  # The pre-OAuth shared token is no longer accepted: every caller signs in
+  # with Google and gets an access token of its own. Until now one secret
+  # opened every tool for anybody who held it, with no identity behind it, no
+  # way to revoke one holder, and no way to attribute a request.
+  #
+  # Ending the transition needed the database that landed first. Refresh tokens
+  # lived in process memory, so a restart signed everyone out and the shared
+  # token was the only way back in.
+  #
+  # SEERRSENSE_AUTH_TOKEN stays in the Secret. The server still requires it to
+  # be present before it will serve HTTP; this flag governs whether it is
+  # accepted as a credential, and stdio mode still uses it.
+  SEERRSENSE_LEGACY_TOKEN_ENABLED: "false"
 ingress:
   enabled: true
   # seerrsense.mctl.ai is the canonical public hostname (seerrsense#7); the
