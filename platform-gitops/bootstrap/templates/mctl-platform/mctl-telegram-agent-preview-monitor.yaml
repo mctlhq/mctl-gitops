@@ -33,7 +33,22 @@
 # its app port, the worker on its health-probe port
 # (cmd/agent-worker/health_server.go). Each endpoint has an optional CIDR
 # guard (METRICS_ALLOW_CIDR and AGENT_METRICS_ALLOW_CIDR); neither is set in
-# values.yaml, so both are open and the in-cluster scrape is not blocked.
+# values.yaml, so both are open and this scrape is not blocked.
+#
+# "Open" is not a design statement here, and this scrape is not what makes it
+# so. The server half is publicly reachable today: mctl-telegram-preview has
+# ingress.enabled with host tg-preview.mctl.ai, so
+# https://tg-preview.mctl.ai/metrics answers 200 anonymously. That predates
+# this file and is tracked in mctlhq/mctl-telegram#588 — do NOT close it by
+# setting METRICS_ALLOW_CIDR. Both handlers compare the real TCP socket peer
+# (netctx.Peer, chosen so a forged X-Forwarded-For cannot bypass the check),
+# and behind the ingress controller (traefik, per base-service's default
+# ingress.className) that peer is the controller's own pod, whose address is
+# inside the pod CIDR. A CIDR allowlist would therefore admit internet
+# traffic arriving through the ingress while looking like a fix.
+#
+# The worker half is not exposed: agent-worker-preview sets
+# ingress.enabled: false.
 #
 # Native VMServiceScrape rather than monitoring.coreos.com/ServiceMonitor, for
 # the reason spelled out in mctl-agents-worker-monitor.yaml: the VM operator
