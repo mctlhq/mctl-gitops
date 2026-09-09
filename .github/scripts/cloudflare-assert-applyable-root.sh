@@ -14,6 +14,7 @@ set -euo pipefail
 # it now, and a relative path would make its correctness depend on both of them
 # having cd'd to the workspace first — true today, enforced by nothing.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 ROOT="${1:?usage: $0 <root>}"
 
@@ -33,7 +34,7 @@ case "$ROOT" in
     echo "::error::'$ROOT' is a module, not a root"; exit 1 ;;
 esac
 
-if [ ! -f "$ROOT/versions.tf" ] && [ ! -f "$ROOT/versions.tf.json" ]; then
+if [ ! -f "$REPO_ROOT/$ROOT/versions.tf" ] && [ ! -f "$REPO_ROOT/$ROOT/versions.tf.json" ]; then
   echo "::error::'$ROOT' is not a root — no versions.tf"
   exit 1
 fi
@@ -48,7 +49,15 @@ fi
 # read every failure of the helper — renamed, not executable, unreadable list —
 # as "not listed", and accept the root. That is the same silent-acceptance shape
 # the check exists to prevent. cloudflare-drift.yml already does it this way.
-local_roots="$("$SCRIPT_DIR/cloudflare-local-state-roots.sh")"
+# The list path is passed explicitly, absolute. The helper defaults it to a
+# path relative to the CALLER's cwd and treats a missing file as "no local
+# roots" with exit 0 — so from the wrong directory the helper is found, reads
+# nothing, succeeds, and the root is accepted. Resolving the helper by
+# BASH_SOURCE fixed how it is found, not what it reads; this fixes the rest.
+# An absent list is still legitimate and still means no local-state roots —
+# what is removed is the possibility of looking in the wrong place for it.
+local_roots="$("$SCRIPT_DIR/cloudflare-local-state-roots.sh" \
+                 "$REPO_ROOT/infrastructure/cloudflare/.local-state-roots")"
 if printf '%s\n' "$local_roots" | grep -qxF -- "$ROOT"; then
   echo "::error::'$ROOT' is listed in .local-state-roots — it has no remote state to apply against"
   exit 1

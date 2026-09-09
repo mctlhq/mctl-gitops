@@ -65,6 +65,7 @@ Nothing is committed. CI reads:
   `Page Rules`, `Access: Apps and Policies`, `Email Routing Rules`,
   `Workers Routes`, all `Read`). Verified read-only: a `POST` to create a DNS
   record is rejected. It is never given to `cloudflare-apply.yml`.
+
 The six apply credentials below are **environment secrets on `cloudflare-apply`,
 not repository secrets**. A repository secret is readable by any workflow in the
 repository, so storing them there would let a branch carrying a new workflow read
