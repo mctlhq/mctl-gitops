@@ -1,5 +1,11 @@
 # Cloudflare-only ingress on the websecure entrypoint (#1119).
 #
+# NOT IN FORCE YET. This object exists on its own so it can be applied and
+# verified before anything depends on it; the websecure entrypoint starts
+# referencing it in the follow-up pull request, and until then nothing
+# consults this allowlist and no traffic changes. Everything below describes
+# the state after that reference lands.
+#
 # Why the control is here and not on the cloud firewall, which is what #1119
 # originally asked for. 91.98.10.188 is the Hetzner Cloud LOAD BALANCER for
 # svc/traefik, not a node -- only 80 and 443 answer on it; 22 and 6443 do not.
@@ -20,8 +26,8 @@
 # Be precise about what this does and does not close.
 #
 # CLOSED -- the public path, including from inside the cluster. A request to
-# 91.98.10.188 (or the LB's public IPv6) with a platform Host header now gets
-# 403 instead of reaching a backend. That covers a pod dialling the LB's public
+# 91.98.10.188 (or the LB's public IPv6) with a platform Host header gets 403
+# instead of reaching a backend. That covers a pod dialling the LB's public
 # address: it egresses through a node's public IP -- which is why the cloud
 # firewall never saw it, and why the LB address is absent from nodePublicCIDRs
 # in platform-gitops/helm-charts/tenant/values.yaml -- and arrives with a
