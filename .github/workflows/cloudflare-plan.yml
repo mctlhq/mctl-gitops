@@ -43,7 +43,12 @@ jobs:
             exit 0
           fi
           files=$(git diff --name-only "$BASE"...HEAD)
-          if echo "$files" | grep -qE '^(infrastructure/cloudflare/|\.github/workflows/cloudflare-plan\.yml$)'; then
+          # Here-string, not a pipe. With pipefail, `echo ... | grep -q` can
+          # report failure on a *match*: grep exits at the first hit, echo takes
+          # SIGPIPE, and 141 becomes the pipeline status. Inside `if` that reads
+          # as "no match", so a Cloudflare change would be recorded as
+          # changed=false and the required job would pass without planning it.
+          if grep -qE '^(infrastructure/cloudflare/|\.github/workflows/cloudflare-plan\.yml$)' <<< "$files"; then
             changed=true
           else
             changed=false
@@ -160,6 +165,12 @@ jobs:
       # should never pass unnoticed. Surface it loudly rather than failing —
       # legitimate removals exist, they just have to be seen by a reviewer.
       - name: Summarize
+        # ROOT goes through the environment, never through ${{ }} expansion into
+        # the script body. Root names are directory names walked out of the pull
+        # request's own tree, so a directory crafted to contain shell syntax
+        # would otherwise be spliced into this script before bash parses it.
+        env:
+          ROOT: ${{ matrix.root }}
         run: |
           set -euo pipefail
           destroy=$(jq '[.resource_changes[]? | select(.change.actions | index("delete"))] | length' plan.json)
@@ -167,7 +178,7 @@ jobs:
           update=$(jq '[.resource_changes[]? | select(.change.actions == ["update"])] | length' plan.json)
           imports=$(jq '[.resource_changes[]? | select(.change.importing != null)] | length' plan.json)
           {
-            echo "### \`${{ matrix.root }}\`"
+            echo "### \`$ROOT\`"
             echo
             echo "| import | create | update | **destroy** |"
             echo "| --- | --- | --- | --- |"

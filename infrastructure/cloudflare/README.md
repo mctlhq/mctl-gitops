@@ -54,25 +54,27 @@ sides would fight over it, and a plan in one would propose undoing the other.
 Nothing is committed. CI reads:
 
 - `R2_PLAN_ACCESS_KEY_ID` / `R2_PLAN_SECRET_ACCESS_KEY` — state access for plan
-  and drift. **Object Read only, scoped to `mctl-terraform-state` alone**;
-  verified that `PutObject`, `DeleteObject` and any other bucket all return
-  `AccessDenied`. Both jobs therefore pass `-lock=false`, because taking the
-  state lock is itself a write.
+  and drift. **Object Read only, scoped to `mctl-cloudflare-state` alone.**
+  Verified: `PutObject`, `DeleteObject`, and any other bucket — including
+  `mctl-terraform-state` — all return `AccessDenied`. Both jobs pass
+  `-lock=false`, because taking the state lock is itself a write.
+- `R2_CF_STATE_ACCESS_KEY_ID` / `R2_CF_STATE_SECRET_ACCESS_KEY` — Object Read &
+  Write on `mctl-cloudflare-state` alone, used by the backup workflow.
 - `CLOUDFLARE_API_TOKEN` — plan identity, **read-only across all zones**
   (`Cache Rules`, `DNS`, `Zone`, `Zone Settings`, `Zone WAF`, `Single Redirect`,
   `Page Rules`, `Access: Apps and Policies`, `Email Routing Rules`,
   `Workers Routes`, all `Read`). Verified read-only: a `POST` to create a DNS
   record is rejected. Apply will need a separate, narrower write identity —
   it does not exist yet, and no workflow here performs an apply.
-- `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` — the writable state credential.
-  Used only by the backup workflow, which runs from `main`. It is deliberately
-  never exposed to a job that plans unreviewed pull-request code.
+- `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` — writable on
+  `mctl-terraform-state`, used only to back that bucket up. Never exposed to a
+  job that plans unreviewed pull-request code.
 
 Mirror copies live in Vault under `secret/platform/cloudflare/`.
 
 ## State
 
-Bucket `mctl-terraform-state` on R2, one key per root, `use_lockfile = true`
+Bucket **`mctl-cloudflare-state`** on R2, one key per root, `use_lockfile = true`
 (native S3 conditional-write locking — no DynamoDB equivalent needed).
 
 **R2 has no object versioning.** `GET /accounts/{id}/r2/buckets/{b}/versioning`
@@ -98,7 +100,7 @@ not exist yet.
 | --- | --- | --- |
 | `cloudflare-plan.yml` | `pull_request` | fmt, validate, plan per root. A failure fails the check — there is no `continue-on-error`. Destructive changes are called out in the summary. The `cloudflare-plan` job is the stable context to mark required: it runs on every pull request, including ones that touch nothing here. |
 | `cloudflare-drift.yml` | schedule | plan per root; any difference from Git fails the run and notifies. It never applies. |
-| `opentofu-state-backup.yml` | schedule | copies every state object to a dated prefix in the **same** bucket, under `_backups/` — see the limitation noted above. |
+| `opentofu-state-backup.yml` | schedule | copies every state object in both state buckets to a dated prefix under `_backups/` in the same bucket — see the limitation noted above. Restricted to `main` by the `state-backup` environment's branch policy, since `workflow_dispatch` would otherwise run a rewritten copy of this file from any branch with the writable credential. |
 
 Apply is deliberately not automated. Drift fails closed and requires a reviewed
 decision rather than a blind reconcile.
@@ -116,7 +118,15 @@ Provider installation is therefore restricted to `cloudflare/cloudflare`
 vectors — `hashicorp/external` with a shell `program`, the `http` data source
 and friends — at init, before plan runs.
 
-What it does not remove, worth a glance in any PR touching a root:
+**Why Cloudflare state lives in its own bucket.** `mctl-terraform-state` holds
+`k3s-preview/terraform.tfstate`, which contains an OpenSSH private key and
+kubeconfig `client-key-data` for the preprod cluster — confirmed by reading it.
+R2 tokens scope to a bucket, not a prefix, so any credential able to read
+Cloudflare state in that bucket could also read the cluster's. Splitting the
+buckets is what makes the plan credential genuinely low-value; without it,
+"read-only" would still have meant "can fetch the cluster's SSH key".
+
+What the allowlist does not remove, worth a glance in any PR touching a root:
 
 - **`provider "cloudflare" { base_url = … }`** — `base_url` is an optional,
   non-sensitive provider attribute, so a root can point the provider at an
@@ -127,9 +137,14 @@ What it does not remove, worth a glance in any PR touching a root:
   Object-Read-only on a single bucket, what leaks is the identity of a key that
   cannot write anything.
 
-Both are now failures of confidentiality at worst. Neither can change Cloudflare
-or the state bucket, because no credential capable of doing so is present in a
-job that runs unreviewed code.
+Both are failures of confidentiality at worst, and only of Cloudflare
+configuration: what leaks is a read-only zone token and the identity of a key
+that can read one bucket of Cloudflare state and write nothing.
+
+Note also that a root can produce output from arbitrary OpenTofu expressions —
+`base64encode(file("/proc/self/environ"))` defeats exact-value secret masking.
+The allowlist does not stop that, which is precisely why the credentials in the
+job are chosen to be worth stealing as little as possible.
 
 ## Break-glass
 

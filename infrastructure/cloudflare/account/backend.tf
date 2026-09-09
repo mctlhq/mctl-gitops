@@ -3,7 +3,7 @@ terraform {
     endpoints = {
       s3 = "https://6a09f637d20e1f66a8e9d45ebe778058.r2.cloudflarestorage.com"
     }
-    bucket = "mctl-terraform-state"
+    bucket = "mctl-cloudflare-state"
     key    = "cloudflare/account/terraform.tfstate"
     region = "auto"
 

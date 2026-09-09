@@ -2,8 +2,11 @@
 
 ## Why this exists
 
-State for every IaC root in this repository lives in the R2 bucket
-`mctl-terraform-state`. **R2 does not support object versioning** — the API
+State for the IaC roots in this repository lives in two R2 buckets:
+`mctl-cloudflare-state` (the Cloudflare roots) and `mctl-terraform-state`
+(`k3s-preview`). They are separate because R2 tokens scope to a bucket rather
+than a prefix, and the k3s state contains an OpenSSH private key and kubeconfig
+credentials that Cloudflare CI has no business being able to read. **R2 does not support object versioning** — the API
 returns `10015: No route matches this url` for
 `/accounts/{id}/r2/buckets/{bucket}/versioning`, and the feature is absent from
 the product. The usual S3 safety net does not apply, so a deleted or corrupted
@@ -31,12 +34,15 @@ export AWS_DEFAULT_REGION=auto
 export R2=https://6a09f637d20e1f66a8e9d45ebe778058.r2.cloudflarestorage.com
 ```
 
-Both values are in Vault at `secret/platform/terraform/r2-state`.
+Credentials are in Vault: `secret/platform/terraform/r2-state` for
+`mctl-terraform-state`, `secret/platform/terraform/r2-cloudflare-state-rw` for
+`mctl-cloudflare-state`. The `-readonly` entries cannot restore — they are what
+CI uses to plan.
 
 ## 1. Find the snapshot
 
 ```sh
-aws s3 ls s3://mctl-terraform-state/_backups/ --endpoint-url "$R2"
+aws s3 ls s3://mctl-cloudflare-state/_backups/ --endpoint-url "$R2"   # or mctl-terraform-state
 ```
 
 Directories are named by UTC timestamp, newest last. Pick the most recent one
@@ -49,7 +55,7 @@ the damage.
 SNAP=2026-09-09T03-30-00Z
 KEY=cloudflare/zones/mctl-ru/terraform.tfstate
 
-aws s3 cp "s3://mctl-terraform-state/_backups/$SNAP/$KEY" ./restore.tfstate \
+aws s3 cp "s3://mctl-cloudflare-state/_backups/$SNAP/$KEY" ./restore.tfstate \
   --endpoint-url "$R2"
 
 jq '{serial, lineage, resources: [.resources[].type] | unique}' restore.tfstate
@@ -62,14 +68,14 @@ further.
 ## 3. Restore
 
 ```sh
-aws s3 cp ./restore.tfstate "s3://mctl-terraform-state/$KEY" --endpoint-url "$R2"
+aws s3 cp ./restore.tfstate "s3://mctl-cloudflare-state/$KEY" --endpoint-url "$R2"
 ```
 
 If a stale lock blocks the next operation, remove it only after confirming no
 apply is running:
 
 ```sh
-aws s3 rm "s3://mctl-terraform-state/$KEY.tflock" --endpoint-url "$R2"
+aws s3 rm "s3://mctl-cloudflare-state/$KEY.tflock" --endpoint-url "$R2"
 ```
 
 ## 4. Verify — this step is the whole point

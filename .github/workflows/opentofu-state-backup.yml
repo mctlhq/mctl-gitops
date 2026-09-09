@@ -35,7 +35,6 @@ concurrency:
 
 env:
   R2_ENDPOINT: https://6a09f637d20e1f66a8e9d45ebe778058.r2.cloudflarestorage.com
-  BUCKET: mctl-terraform-state
   BACKUP_PREFIX: _backups
   RETENTION_DAYS: '30'
 
@@ -43,9 +42,27 @@ jobs:
   backup:
     name: snapshot state to a dated prefix
     runs-on: ubuntu-latest
+
+    # workflow_dispatch accepts a --ref, and the dispatched run executes THAT
+    # branch's copy of this file. A repository writer could therefore point a
+    # rewritten version of this workflow at the writable state credential
+    # without review. The environment's deployment-branch policy allows only
+    # `main`, so the secrets are released to a run from main and nowhere else —
+    # the restriction lives outside the YAML the branch controls.
+    environment: state-backup
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Each bucket has its own credential, scoped to that bucket alone, so
+        # neither snapshot job can reach the other's state.
+        bucket:
+          - mctl-terraform-state
+          - mctl-cloudflare-state
     env:
-      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      BUCKET: ${{ matrix.bucket }}
+      AWS_ACCESS_KEY_ID: ${{ matrix.bucket == 'mctl-terraform-state' && secrets.R2_ACCESS_KEY_ID || secrets.R2_CF_STATE_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ matrix.bucket == 'mctl-terraform-state' && secrets.R2_SECRET_ACCESS_KEY || secrets.R2_CF_STATE_SECRET_ACCESS_KEY }}
       AWS_DEFAULT_REGION: auto
       # R2 rejects the newer default checksum headers the AWS CLI sends.
       AWS_REQUEST_CHECKSUM_CALCULATION: when_required

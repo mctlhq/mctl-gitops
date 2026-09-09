@@ -90,6 +90,11 @@ jobs:
       # summary says which one happened.
       - name: Plan
         id: plan
+        # Same reason as in cloudflare-plan.yml: never expand a discovered path
+        # into the script body. A root only has to be merged once for every
+        # later scheduled run to re-execute whatever its name contains.
+        env:
+          ROOT: ${{ matrix.root }}
         run: |
           set +e
           tofu plan -input=false -no-color -lock=false -detailed-exitcode | tee plan.txt
@@ -97,10 +102,10 @@ jobs:
           set -e
           echo "code=$code" >> "$GITHUB_OUTPUT"
           case "$code" in
-            0) echo "### \`${{ matrix.root }}\` — in sync" >> "$GITHUB_STEP_SUMMARY" ;;
-            2) { echo "### \`${{ matrix.root }}\` — DRIFT";
+            0) echo "### \`$ROOT\` — in sync" >> "$GITHUB_STEP_SUMMARY" ;;
+            2) { echo "### \`$ROOT\` — DRIFT";
                  echo; echo '```terraform'; cat plan.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY" ;;
-            *) echo "### \`${{ matrix.root }}\` — plan failed (exit $code)" >> "$GITHUB_STEP_SUMMARY" ;;
+            *) echo "### \`$ROOT\` — plan failed (exit $code)" >> "$GITHUB_STEP_SUMMARY" ;;
           esac
           rm -f plan.txt
           exit "$code"
