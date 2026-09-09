@@ -50,11 +50,10 @@ jobs:
           # Watching a root that cannot be watched is not a safety property; it
           # is a nightly false alarm that trains people to ignore the real one.
           # These roots are listed, with their reason, in .local-state-roots.
-          grep -v '^\s*\(#.*\)\?$' infrastructure/cloudflare/.local-state-roots \
-            > infrastructure/cloudflare/.local-state-roots.paths || true
-          if [ -s infrastructure/cloudflare/.local-state-roots.paths ]; then
+          .github/scripts/cloudflare-local-state-roots.sh > "$RUNNER_TEMP/local-state-roots"
+          if [ -s "$RUNNER_TEMP/local-state-roots" ]; then
             echo "not watched (local state, see .local-state-roots):"
-            cat infrastructure/cloudflare/.local-state-roots.paths
+            cat "$RUNNER_TEMP/local-state-roots"
           fi
           if [ -d infrastructure/cloudflare ]; then
             # The prune pattern has to match BELOW modules/, not modules/
@@ -69,8 +68,21 @@ jobs:
             # when every root is excluded, and under pipefail that would kill
             # discovery and fail the run — the same shape as find exiting 1 on a
             # missing directory. Excluding everything is a legitimate state.
+            # An entry that matches no discovered root excepts nothing, and
+            # silently: drift would go on failing every night on the root the
+            # entry was meant to cover. The list is short and hand-edited, so a
+            # non-matching line is either a typo or stale — both worth stopping
+            # for, and both fixed by one edit.
+            while IFS= read -r excluded; do
+              [ -n "$excluded" ] || continue
+              grep -qxF -- "$excluded" <<< "$found" || {
+                echo "::error::.local-state-roots lists '$excluded', which is not a discovered root"
+                echo "discovered roots:"; printf '%s\n' "$found"
+                exit 1
+              }
+            done < "$RUNNER_TEMP/local-state-roots"
             kept=$(printf '%s\n' "$found" \
-                   | grep -vxF -f infrastructure/cloudflare/.local-state-roots.paths) || true
+                   | grep -vxF -f "$RUNNER_TEMP/local-state-roots") || true
             roots=$(printf '%s\n' "$kept" | jq -R -s -c 'split("\n") | map(select(length > 0))')
           else
             roots='[]'

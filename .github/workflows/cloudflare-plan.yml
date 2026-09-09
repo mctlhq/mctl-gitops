@@ -158,7 +158,7 @@ jobs:
           # form exits 128.
           base_paths=$(tree_paths "$BASE")
           head_paths=$(tree_paths HEAD)
-          local_state_roots=$(grep -v '^\s*\(#.*\)\?$' infrastructure/cloudflare/.local-state-roots || true)
+          local_state_roots=$(.github/scripts/cloudflare-local-state-roots.sh)
 
           # OpenTofu loads JSON configuration too, so versions.tf.json marks a root
           # exactly as versions.tf does; discovery accepts both for the same
@@ -410,7 +410,9 @@ jobs:
           ROOT: ${{ matrix.root }}
         run: |
           set -euo pipefail
-          if grep -qxF -- "$ROOT" "$GITHUB_WORKSPACE/infrastructure/cloudflare/.local-state-roots"; then
+          if "$GITHUB_WORKSPACE/.github/scripts/cloudflare-local-state-roots.sh" \
+               "$GITHUB_WORKSPACE/infrastructure/cloudflare/.local-state-roots" \
+             | grep -qxF -- "$ROOT"; then
             echo "::warning::$ROOT is on local state by exception; its plan does not reflect live Cloudflare"
             exit 0
           fi
