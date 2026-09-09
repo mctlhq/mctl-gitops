@@ -42,16 +42,36 @@ jobs:
           # versions.tf.json is included because OpenTofu loads JSON
           # configuration too, so a root written that way would otherwise be
           # invisible to discovery while the check reported success.
+          # A root on local state has no remote state to compare against: on a
+          # fresh runner its plan is computed from nothing, so it reports the
+          # whole root as pending work every single night. Measured on the first
+          # dispatch after the gate landed — zones/mctl-ru returned
+          # "Plan: 2 to import" and exit 2, which is drift's failure signal.
+          # Watching a root that cannot be watched is not a safety property; it
+          # is a nightly false alarm that trains people to ignore the real one.
+          # These roots are listed, with their reason, in .local-state-roots.
+          grep -v '^\s*\(#.*\)\?$' infrastructure/cloudflare/.local-state-roots \
+            > infrastructure/cloudflare/.local-state-roots.paths || true
+          if [ -s infrastructure/cloudflare/.local-state-roots.paths ]; then
+            echo "not watched (local state, see .local-state-roots):"
+            cat infrastructure/cloudflare/.local-state-roots.paths
+          fi
           if [ -d infrastructure/cloudflare ]; then
             # The prune pattern has to match BELOW modules/, not modules/
             # itself: -mindepth 2 stops find from applying the expression to
             # depth-1 entries at all, so pruning the directory by name never
             # fires. Measured — the module was still discovered as a root.
-            roots=$(find infrastructure/cloudflare -mindepth 2 \
+            found=$(find infrastructure/cloudflare -mindepth 2 \
                       -path 'infrastructure/cloudflare/modules/*' -prune -o \
                       \( -name versions.tf -o -name versions.tf.json \) -print \
-                    | sed 's#/[^/]*$##' | sort -u \
-                    | jq -R -s -c 'split("\n") | map(select(length > 0))')
+                    | sed 's#/[^/]*$##' | sort -u)
+            # `|| true` on its own line, not inside the pipeline: grep exits 1
+            # when every root is excluded, and under pipefail that would kill
+            # discovery and fail the run — the same shape as find exiting 1 on a
+            # missing directory. Excluding everything is a legitimate state.
+            kept=$(printf '%s\n' "$found" \
+                   | grep -vxF -f infrastructure/cloudflare/.local-state-roots.paths) || true
+            roots=$(printf '%s\n' "$kept" | jq -R -s -c 'split("\n") | map(select(length > 0))')
           else
             roots='[]'
           fi
