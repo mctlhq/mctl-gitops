@@ -74,6 +74,41 @@ if [ "${CLOUDFLARE_GUARD_SELF_TEST:-}" = "1" ]; then
   # No longer an entrypoint, so it must be refused like any other bad name.
   expect reject "--self-test" "the self-test flag as a root name"
 
+  # The errexit case, and the only one that separates the assignment form from
+  # `if helper | grep`. With a healthy helper the two are identical: the root
+  # matches or it does not. They diverge only when the helper FAILS, which is
+  # the whole defect — the `if` form reads any failure as "not listed" and
+  # accepts. Nothing in the real tree makes the helper fail, so a failing one
+  # has to be built.
+  #
+  # SCRIPT_DIR and REPO_ROOT both derive from BASH_SOURCE, so the guard is run
+  # from a copy in a fake tree: its helper exits non-zero, and the root it is
+  # asked about is one the list would have refused had the helper worked.
+  stub="$(mktemp -d)"
+  mkdir -p "$stub/.github/scripts" "$stub/infrastructure/cloudflare/zones/mctl-ru"
+  cp "$self" "$stub/.github/scripts/"
+  : > "$stub/infrastructure/cloudflare/zones/mctl-ru/versions.tf"
+  : > "$stub/infrastructure/cloudflare/.local-state-roots"
+  stub_guard="$stub/.github/scripts/$(basename "$self")"
+
+  printf '#!/bin/sh\nexit 3\n' > "$stub/.github/scripts/cloudflare-local-state-roots.sh"
+  chmod +x "$stub/.github/scripts/cloudflare-local-state-roots.sh"
+  rc=0
+  ( CLOUDFLARE_GUARD_SELF_TEST= "$stub_guard" "infrastructure/cloudflare/zones/mctl-ru" ) >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    echo "self-test FAILED: failing helper — the guard accepted instead of aborting" >&2; fail=1
+  fi
+
+  # Control: the same fake tree with a working helper and an empty list must
+  # accept, or the case above would pass for the wrong reason.
+  printf '#!/bin/sh\nexit 0\n' > "$stub/.github/scripts/cloudflare-local-state-roots.sh"
+  rc=0
+  ( CLOUDFLARE_GUARD_SELF_TEST= "$stub_guard" "infrastructure/cloudflare/zones/mctl-ru" ) >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "self-test FAILED: healthy helper in the fixture tree — expected accept, got exit $rc" >&2; fail=1
+  fi
+  rm -rf "$stub"
+
   # From a foreign cwd — the case the first version of this suite was missing.
   # Every check ran from the repository root, which is the one directory where
   # the caller-relative list path resolved correctly, so the suite could not

@@ -74,6 +74,11 @@ if [ "${CLOUDFLARE_GUARD_SELF_TEST:-}" = "1" ]; then
   fixture s3 mctl-cloudflare-state "$good_key" "https://$host/" true
   expect accept "infrastructure/cloudflare/account" "endpoint with a trailing slash"
 
+  # The flag is no longer an entrypoint here either, so it has to be refused
+  # like any other bad root name — same claim the header of this file makes.
+  fixture s3 mctl-cloudflare-state "$good_key" "https://$host" true
+  expect reject "--self-test" "the self-test flag as a root name"
+
   rm -f "$tmp/dd/terraform.tfstate"
   expect reject "infrastructure/cloudflare/account" "no resolved backend at all"
 
