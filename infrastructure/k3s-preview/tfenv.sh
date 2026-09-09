@@ -40,11 +40,17 @@
 
 # Executed rather than sourced, the exports land in a subshell and vanish, but
 # the success message below would still print -- so refuse instead of lying.
-# BASH_SOURCE[0] equals $0 only when this file IS the running script.
-if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+# Sourced, this file runs in whatever interactive shell the reader has, which
+# on this machine is zsh, so nothing below may rely on bash-only behaviour.
+_mctl_sourced=0
+[ -n "${BASH_VERSION:-}" ] && [ "${BASH_SOURCE[0]:-}" != "$0" ] && _mctl_sourced=1
+case "${ZSH_EVAL_CONTEXT:-}" in *:file*) _mctl_sourced=1 ;; esac
+if [ "$_mctl_sourced" -ne 1 ]; then
+  unset _mctl_sourced
   echo "tfenv.sh: source this file, do not run it:  source ./tfenv.sh" >&2
   exit 1
 fi
+unset _mctl_sourced
 
 # A leftover tfvars file silently wins over everything below. Terraform ranks
 # environment variables LOWEST among variable sources, under terraform.tfvars
@@ -54,16 +60,21 @@ fi
 # So a stale terraform.tfvars from before the Keychain move -- the exact file
 # this replaced -- would quietly keep supplying its plaintext values with no
 # error and no warning, and this script's success message would be a lie.
-_mctl_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-for _mctl_f in "$_mctl_dir"/terraform.tfvars "$_mctl_dir"/*.auto.tfvars "$_mctl_dir"/*.auto.tfvars.json; do
-  [ -e "$_mctl_f" ] || continue
-  echo "tfenv.sh: $_mctl_f exists and OVERRIDES these exports -- Terraform ranks" >&2
+# `find` rather than a glob: an unmatched glob expands to itself in bash but is
+# a fatal error in zsh (nomatch), and this file is sourced into the reader's
+# shell. Checked against the current directory, because that is where Terraform
+# looks for tfvars -- the documented usage is `cd` here first.
+_mctl_stray=$(find . -maxdepth 1 \
+  \( -name 'terraform.tfvars' -o -name '*.auto.tfvars' -o -name '*.auto.tfvars.json' \) \
+  2>/dev/null | head -1)
+if [ -n "$_mctl_stray" ]; then
+  echo "tfenv.sh: $_mctl_stray exists and OVERRIDES these exports -- Terraform ranks" >&2
   echo "tfenv.sh: environment variables below tfvars files. Move its values into" >&2
   echo "tfenv.sh: the Keychain and delete it; see README.md." >&2
-  unset _mctl_dir _mctl_f
+  unset _mctl_stray
   return 1 2>/dev/null || exit 1
-done
-unset _mctl_dir _mctl_f
+fi
+unset _mctl_stray
 
 _mctl_kc() {
   local service="$1" account="$2" value
