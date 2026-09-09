@@ -16,6 +16,52 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
+# --self-test exercises every arm of this file against the real tree plus one
+# temporary fixture. It exists because these checks fail by ACCEPTING, and each
+# of them has been silently wrong at least once while reading as correct: the
+# guard that ran inside an `if` and swallowed errexit, the list path resolved
+# against the caller's cwd, and the canonical-form case that closed `*/` while
+# `*/.` and `*//*` walked past it. None were found by running the script.
+if [ "${1:-}" = "--self-test" ]; then
+  self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+  repo="$(cd "$(dirname "$self")/../.." && pwd)"
+  fail=0
+  expect() { # expect <accept|reject> <root> <label>
+    local want="$1" root="$2" label="$3" rc=0
+    ( cd "$repo" && "$self" "$root" ) >/dev/null 2>&1 || rc=$?
+    if [ "$want" = accept ] && [ "$rc" -ne 0 ]; then
+      echo "self-test FAILED: $label — expected accept, got exit $rc" >&2; fail=1
+    elif [ "$want" = reject ] && [ "$rc" -eq 0 ]; then
+      echo "self-test FAILED: $label — expected reject, was ACCEPTED" >&2; fail=1
+    fi
+  }
+
+  expect accept "infrastructure/cloudflare/account"          "a real root on the remote backend"
+  # The root on .local-state-roots — the case that list exists to refuse.
+  expect reject "infrastructure/cloudflare/zones/mctl-ru"    "root listed in .local-state-roots"
+  # Non-canonical spellings the whole-line list match would not recognise.
+  expect reject "infrastructure/cloudflare/account/"         "trailing slash"
+  expect reject "infrastructure/cloudflare/account/."        "trailing /."
+  expect reject "infrastructure/cloudflare//account"         "doubled separator"
+  expect reject "./infrastructure/cloudflare/account"        "leading ./"
+  expect reject "infrastructure/cloudflare/zones/mctl-ru/"   "listed root, trailing slash"
+  expect reject "infrastructure/cloudflare/zones/mctl-ru/."  "listed root, trailing /."
+  expect reject "infrastructure/cloudflare//zones/mctl-ru"   "listed root, doubled separator"
+  # Outside the tree, parent traversal, a module rather than a root.
+  expect reject "../etc"                                     "outside infrastructure/cloudflare"
+  expect reject "infrastructure/cloudflare/../../etc"        "parent traversal"
+  expect reject "infrastructure/cloudflare/modules/zone-baseline" "a module is not a root"
+  # A directory that exists but carries no versions.tf.
+  tmp_root="infrastructure/cloudflare/.self-test-not-a-root"
+  mkdir -p "$repo/$tmp_root"
+  expect reject "$tmp_root"                                  "directory with no versions.tf"
+  rmdir "$repo/$tmp_root"
+
+  [ "$fail" -eq 0 ] || exit 1
+  echo "self-test OK"
+  exit 0
+fi
+
 ROOT="${1:?usage: $0 <root>}"
 
 # Rejected rather than stripped, so this script, cloudflare-assert-backend.sh

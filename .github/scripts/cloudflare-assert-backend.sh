@@ -16,6 +16,69 @@
 # Usage: cloudflare-assert-backend.sh <root> <tf-data-dir>
 set -euo pipefail
 
+# --self-test builds synthetic resolved-backend files and checks each arm.
+# Same reason as the sibling script: this code fails by ACCEPTING, and its
+# endpoint check was a substring match until review caught that
+# https://attacker.example/?q=<expected host> satisfied it.
+if [ "${1:-}" = "--self-test" ]; then
+  self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+  tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+  mkdir -p "$tmp/dd"
+  fail=0
+  host="6a09f637d20e1f66a8e9d45ebe778058.r2.cloudflarestorage.com"
+
+  fixture() { # fixture <type> <bucket> <key> <endpoint> <use_lockfile-json>
+    printf '{"version":3,"backend":{"type":"%s","config":{"bucket":"%s","key":"%s","endpoints":{"s3":"%s"},"use_lockfile":%s}}}\n' \
+      "$1" "$2" "$3" "$4" "$5" > "$tmp/dd/terraform.tfstate"
+  }
+  expect() { # expect <accept|reject> <root> <label>
+    local want="$1" root="$2" label="$3" rc=0
+    "$self" "$root" "$tmp/dd" >/dev/null 2>&1 || rc=$?
+    if [ "$want" = accept ] && [ "$rc" -ne 0 ]; then
+      echo "self-test FAILED: $label — expected accept, got exit $rc" >&2; fail=1
+    elif [ "$want" = reject ] && [ "$rc" -eq 0 ]; then
+      echo "self-test FAILED: $label — expected reject, was ACCEPTED" >&2; fail=1
+    fi
+  }
+
+  good_key="cloudflare/account/terraform.tfstate"
+  fixture s3 mctl-cloudflare-state "$good_key" "https://$host" true
+  expect accept "infrastructure/cloudflare/account" "the correct backend"
+  fixture s3 mctl-cloudflare-state "cloudflare/zones/mctl-me/terraform.tfstate" "https://$host" true
+  expect accept "infrastructure/cloudflare/zones/mctl-me" "a nested zone root"
+
+  fixture s3 mctl-cloudflare-state "cloudflare/acount/terraform.tfstate" "https://$host" true
+  expect reject "infrastructure/cloudflare/account" "mistyped key plans from empty state"
+  fixture s3 mctl-cloudflare-state "$good_key" "https://$host" true
+  expect reject "infrastructure/cloudflare/zones/mctl-ru" "key belonging to a different root"
+  fixture s3 mctl-terraform-state "$good_key" "https://$host" true
+  expect reject "infrastructure/cloudflare/account" "wrong bucket (the k3s state)"
+  fixture local "" "" "https://$host" true
+  expect reject "infrastructure/cloudflare/account" "backend is not s3"
+  fixture s3 mctl-cloudflare-state "$good_key" "https://$host" false
+  expect reject "infrastructure/cloudflare/account" "use_lockfile explicitly false"
+  printf '{"version":3,"backend":{"type":"s3","config":{"bucket":"mctl-cloudflare-state","key":"%s","endpoints":{"s3":"https://%s"}}}}\n' \
+    "$good_key" "$host" > "$tmp/dd/terraform.tfstate"
+  expect reject "infrastructure/cloudflare/account" "use_lockfile absent"
+
+  # The endpoint arm. A substring match accepted all three of these.
+  fixture s3 mctl-cloudflare-state "$good_key" "https://attacker.example/?q=$host" true
+  expect reject "infrastructure/cloudflare/account" "expected host as a query parameter"
+  fixture s3 mctl-cloudflare-state "$good_key" "https://evil-$host" true
+  expect reject "infrastructure/cloudflare/account" "expected host as a suffix"
+  fixture s3 mctl-cloudflare-state "$good_key" "https://$host.evil.example" true
+  expect reject "infrastructure/cloudflare/account" "expected host as a prefix"
+  fixture s3 mctl-cloudflare-state "$good_key" "https://$host/" true
+  expect accept "infrastructure/cloudflare/account" "endpoint with a trailing slash"
+
+  rm -f "$tmp/dd/terraform.tfstate"
+  expect reject "infrastructure/cloudflare/account" "no resolved backend at all"
+
+  [ "$fail" -eq 0 ] || exit 1
+  echo "self-test OK"
+  exit 0
+fi
+
 ROOT="${1:?usage: $0 <root> <tf-data-dir>}"
 DATA_DIR="${2:?usage: $0 <root> <tf-data-dir>}"
 
