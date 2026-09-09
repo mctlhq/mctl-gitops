@@ -21,25 +21,39 @@ Uses the [`kube-hetzner`](https://github.com/kube-hetzner/terraform-hcloud-kube-
 ## Prerequisites
 
 - Terraform >= 1.14
-- `terraform.tfvars` with `hcloud_token` (not committed — see `.gitignore`)
-- Cloudflare R2 credentials set as env vars:
+- Terraform variables from the macOS Keychain: `source ./tfenv.sh`. It exports
+  `TF_VAR_hcloud_token`, `TF_VAR_etcd_s3_access_key` and
+  `TF_VAR_etcd_s3_secret_key` from the Keychain items it documents. There is no
+  `terraform.tfvars` any more — it held the same values in plaintext on disk,
+  and CI never used it (`terraform.yml` passes `TF_VAR_*` from Actions secrets),
+  so local and CI runs now read the same variables from different stores.
+  The etcd R2 token must also cover the `mctl-etcd-snapshots` bucket. All three
+  are required: `kube.tf` treats the etcd pair as optional (`etcd_s3_backup =
+  var.etcd_s3_access_key == "" ? {} : {...}`), which is true only for a cluster
+  that never had snapshots. This one has them, so leaving the pair blank does not
+  mean "snapshots stay off" — measured, it plans a **replacement of
+  `terraform_data.control_plane_config`**, rewriting k3s configuration on the
+  single control-plane node. `tfenv.sh` therefore refuses to continue when any of
+  the three is missing, on purpose.
+  Restore procedure: `docs/runbooks/restore.md` at the repo root.
+- Cloudflare R2 credentials for the **state backend**, as env vars. These are a
+  different credential from the etcd one (bucket `mctl-terraform-state`;
+  Keychain service `mctl-terraform-state-local`) and `terraform init` needs them
+  before any variable is read, which is why `tfenv.sh` does not set them:
   ```bash
-  export AWS_ACCESS_KEY_ID=...
-  export AWS_SECRET_ACCESS_KEY=...
+  export AWS_ACCESS_KEY_ID=$(security find-generic-password -s mctl-terraform-state-local -a access-key-id -w)
+  export AWS_SECRET_ACCESS_KEY=$(security find-generic-password -s mctl-terraform-state-local -a secret-access-key -w)
   ```
 - SSH key at `~/.ssh/id_ed25519`
-- For etcd S3 snapshots: `TF_VAR_etcd_s3_access_key` / `TF_VAR_etcd_s3_secret_key`
-  (R2 token must also cover the `mctl-etcd-snapshots` bucket — create it once in
-  the Cloudflare dashboard; left unset, snapshots simply stay disabled).
-  Restore procedure: `docs/runbooks/restore.md` at the repo root.
 
 ## First-time setup
 
 ```bash
 cd infrastructure/k3s-preview
+source ./tfenv.sh
 terraform init
-terraform plan -var-file=terraform.tfvars
-terraform apply -var-file=terraform.tfvars
+terraform plan
+terraform apply
 ```
 
 After apply, save the kubeconfig locally (git-ignored):
@@ -51,11 +65,13 @@ chmod 600 kubeconfig.yaml
 ## Day-to-day operations
 
 ```bash
+source ./tfenv.sh
+
 # Plan only (safe, no changes)
-terraform plan -var-file=terraform.tfvars
+terraform plan
 
 # Apply changes
-terraform apply -var-file=terraform.tfvars
+terraform apply
 ```
 
 The `terraform.yml` GitHub Actions workflow runs `terraform plan` automatically
@@ -154,6 +170,10 @@ connector is live and the UI at `ops.mctl.ai` behaves normally.
 
 ## Security notes
 
-- `terraform.tfvars` contains the Hetzner API token — git-ignored, never commit
+- Terraform credentials live in the macOS Keychain, not on disk. `tfenv.sh`
+  reads them; there is no `terraform.tfvars`. If you recreate one, `.gitignore`
+  still covers `*.tfvars`, but a plaintext token in the working tree is exactly
+  what the Keychain move removed — and note that any tool which prints a diff of
+  that file (`terraform fmt -diff` does) will echo the token.
 - `kubeconfig.yaml` contains cluster admin credentials — git-ignored
-- Keep file permissions tight: `chmod 600 terraform.tfvars kubeconfig.yaml`
+- Keep file permissions tight: `chmod 600 kubeconfig.yaml`

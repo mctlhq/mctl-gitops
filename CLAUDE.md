@@ -93,7 +93,8 @@ signing key (`AGENTS_APP_ID` / `AGENTS_APP_PRIVATE_KEY`), see
 ## Terraform (k3s-preview cluster)
 
 See `infrastructure/k3s-preview/README.md` for full runbook.
-Quick ops: `terraform plan -var-file=terraform.tfvars` then `terraform apply`.
+Quick ops: `source ./tfenv.sh` (exports `TF_VAR_*` from the macOS Keychain;
+there is no `terraform.tfvars`) then `terraform plan` / `terraform apply`.
 State backend: Cloudflare R2 bucket `mctl-terraform-state`, key `k3s-preview/terraform.tfstate`.
 
 ## Testing & Validation

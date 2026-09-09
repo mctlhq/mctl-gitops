@@ -1,6 +1,19 @@
-hcloud_token               = "<your-hetzner-api-token>"
-ssh_public_key             = "~/.ssh/id_ed25519.pub"
-ssh_private_key            = "~/.ssh/id_ed25519"
-
-# All other secrets managed by Vault + ExternalSecrets
+# Kept as documentation of the variables this root takes. Do NOT create a real
+# terraform.tfvars from it: the values are read from the macOS Keychain by
+# ./tfenv.sh instead, so that no credential sits in plaintext in the working
+# tree. See "Prerequisites" in README.md.
+#
+# hcloud_token       -> Keychain mctl-hcloud-token/api-token
+# etcd_s3_access_key -> Keychain mctl-r2-etcd-snapshots/access-key-id
+# etcd_s3_secret_key -> Keychain mctl-r2-etcd-snapshots/secret-access-key
+#
+# ssh_public_key / ssh_private_key are NOT variables of this root -- kube.tf
+# calls file("~/.ssh/id_ed25519.pub") directly. They used to appear here, and
+# in the real tfvars, where Terraform ignored them with a warning.
+#
+# All other secrets are managed by Vault + ExternalSecrets.
 # See: platform-gitops/apps/templates/
+
+hcloud_token       = "<your-hetzner-api-token>"
+etcd_s3_access_key = "<r2-access-key-id>"
+etcd_s3_secret_key = "<r2-secret-access-key>"
