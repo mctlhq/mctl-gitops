@@ -5,6 +5,18 @@ on:
     paths:
       - 'platform-gitops/**'
       - '.github/workflows/yamllint.yml'
+  # Also on push, because the things most likely to write a malformed values
+  # file never open a PR: the provision-database and gitops-bump workflows
+  # commit straight to main. `relaxed` keeps key-duplicates at error level, so
+  # this job is what would have caught the duplicate `envFrom:` in
+  # services/labs/seerrsense/values.yaml (gitops#1102) — it simply never ran.
+  # validate-manifests does run on that push, but `helm template` accepts
+  # duplicate keys silently (last one wins), so it cannot catch this class.
+  push:
+    branches: [main]
+    paths:
+      - 'platform-gitops/**'
+      - '.github/workflows/yamllint.yml'
 
 permissions:
   contents: read

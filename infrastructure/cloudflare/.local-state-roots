@@ -1,0 +1,15 @@
+# Roots that are knowingly NOT on the shared R2 backend, one path per line.
+#
+# Every other root must declare `backend "s3"`, and cloudflare-plan.yml enforces
+# that twice: the coverage guard requires a backend.tf to exist, and the plan job
+# checks what OpenTofu actually resolved after init — `.terraform/terraform.tfstate`
+# records `backend.type`, which no comment or dead block can fake.
+#
+# A root listed here plans against empty local state on a fresh runner, so its
+# plan says nothing about what is live in Cloudflare and drift cannot watch it.
+# That is a gap, not a configuration style; the list exists so the gap is
+# visible in the gate rather than absent from it.
+#
+# zones/mctl-ru — the import pilot (#1096) deliberately kept local state.
+#                 Moving it to R2 is a state migration and belongs to #1103.
+infrastructure/cloudflare/zones/mctl-ru
