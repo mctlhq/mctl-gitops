@@ -27,6 +27,8 @@ services:
     release_repo: mctlhq/mctl-docs
   - path: platform-gitops/services/labs/mctl-academy/values.yaml
     release_repo: mctlhq/mctl-academy
+  - path: platform-gitops/services/labs/seerrsense/values.yaml
+    release_repo: mctlhq/seerrsense
   - path: platform-gitops/services/admins/mctl-agents-worker/values.yaml
     release_repo: mctlhq/mctl-agents
   - path: platform-gitops/services/admins/mctl-agents-worker-exec/values.yaml

@@ -92,9 +92,20 @@ gateway config (LAN bind, token auth, trusted K8s proxies), Control UI enabled.
 | Tool | Description |
 |------|-------------|
 | `mctl_add_custom_domain(team, service, domain)` | Add custom domain |
-| `mctl_verify_domain(team, service)` | Check CNAME config |
+| `mctl_verify_domain(team, service)` | Check DNS verification (TXT challenge, CNAME fallback) |
 | `mctl_list_domains(team)` | All domains + status |
 | `mctl_remove_custom_domain(team, service, domain)` | Remove domain |
+
+Verification checks a TXT record at `_mctl-challenge.<domain>` first — this
+works even when the domain is proxied through Cloudflare, which rewrites
+A/CNAME answers but never TXT. An unproxied CNAME to
+`{team}-{service}.mctl.ai` is still accepted as a fast path when no proxy
+sits in front of the domain.
+
+Custom domains are for a tenant's own domain. A hostname under the platform
+domain (`*.mctl.ai`) is rejected by the workflow: add it to `ingress.hosts` and
+`ingress.tls[].hosts` in `platform-gitops/services/{team}/{service}/values.yaml`
+and open a PR, the way `tg.mctl.ai` is declared.
 
 ### Database
 | Tool | Description |
