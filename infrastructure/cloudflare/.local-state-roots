@@ -22,3 +22,7 @@ infrastructure/cloudflare/zones/mctl-ru
 # exist yet (#1111), so the migration is that issue's follow-on rather than
 # this one's.
 infrastructure/cloudflare/zones/mctl-me
+
+# zones/mctl-ai arrives with #1115 on local state, same reason as the others:
+# the zero-diff proof needs only read access, the R2 migration needs #1111.
+infrastructure/cloudflare/zones/mctl-ai
