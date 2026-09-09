@@ -102,8 +102,16 @@ jobs:
           # that until the first Cloudflare resource is imported. Without this,
           # the guard below would fail every night and page for a
           # working-as-intended state.
+          # The key column has no leading slash — `aws s3 ls --recursive`
+          # prints "<date> <time> <size> _backups/<stamp>/<key>" — so filtering
+          # on "/${BACKUP_PREFIX}/" matched nothing and counted every previous
+          # snapshot as source state. Strip the three metadata columns first,
+          # then anchor at the start of the key. awk (rather than a field index)
+          # keeps keys containing spaces intact.
           source_count=$(aws s3 ls "s3://${BUCKET}/" --recursive --endpoint-url "$R2_ENDPOINT" \
-                          | grep -v "/${BACKUP_PREFIX}/" | grep -c '\.tfstate' || true)
+                          | awk '{ $1=""; $2=""; $3=""; sub(/^[[:space:]]+/, ""); print }' \
+                          | grep -v "^${BACKUP_PREFIX}/" \
+                          | grep -c '\.tfstate' || true)
           echo "state objects in source: $source_count"
           if [ "$source_count" -eq 0 ]; then
             echo "no state files in ${BUCKET} yet — nothing to snapshot" >> "$GITHUB_STEP_SUMMARY"

@@ -42,7 +42,16 @@ jobs:
             echo "changed=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          files=$(git diff --name-only "$BASE"...HEAD)
+          # -z, because `git diff --name-only` QUOTES any path with a special
+          # or non-ASCII character: infrastructure/cloudflare/évil.tf comes out
+          # as "infrastructure/cloudflare/\303\251vil.tf", with a leading double
+          # quote. The anchored pattern below would not match it, the job would
+          # record changed=false, and the required check would go green without
+          # planning the change — a bypass of the gate this workflow exists to
+          # provide. Reproduced before fixing; -z emits raw paths, and tr turns
+          # the NUL separators into newlines for grep. (tr consumes its whole
+          # input, so unlike grep -q it cannot cause a SIGPIPE truncation.)
+          files=$(git -c core.quotePath=false diff -z --name-only "$BASE"...HEAD | tr '\0' '\n')
           # Here-string, not a pipe. With pipefail, `echo ... | grep -q` can
           # report failure on a *match*: grep exits at the first hit, echo takes
           # SIGPIPE, and 141 becomes the pipeline status. Inside `if` that reads
