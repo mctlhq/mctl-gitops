@@ -25,6 +25,20 @@ env:
   SEERRSENSE_LOCALE: ru-RU
   PORT: "8787"
   NEBIUS_MODEL: Qwen/Qwen3-30B-A3B-Instruct-2507
+  # Turns OAuth on. Safe to roll now: the four secret values are already in
+  # seerrsense-secrets, so the pod this change replaces starts from a complete
+  # configuration rather than a half-set one, which it would refuse to run.
+  #
+  # The issuer is baked into every token and both discovery documents, so it
+  # cannot move afterwards without invalidating them.
+  SEERRSENSE_PUBLIC_URL: https://seerrsense.mctl.ai
+  # Fail-closed: empty admits nobody, not everybody. An address here lets that
+  # Google account sign in — and while the Google app is still in testing, the
+  # address must also be on its test-user list.
+  SEERRSENSE_ALLOWED_EMAILS: mashkoffdmitry@gmail.com
+  # The pre-OAuth shared token keeps working while clients migrate. Setting
+  # this to "false" is what ends the transition.
+  SEERRSENSE_LEGACY_TOKEN_ENABLED: "true"
 ingress:
   enabled: true
   # seerrsense.mctl.ai is the canonical public hostname (seerrsense#7); the
