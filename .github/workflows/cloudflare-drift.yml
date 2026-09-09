@@ -81,7 +81,7 @@ jobs:
       # cannot read a state mid-write.
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_PLAN_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_PLAN_SECRET_ACCESS_KEY }}
-      TF_CLI_CONFIG_FILE: ${{ github.workspace }}/.opentofu-ci.tfrc
+      TF_CLI_CONFIG_FILE: ${{ runner.temp }}/opentofu-ci.tfrc
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
@@ -93,16 +93,22 @@ jobs:
       # This one runs from main, so the roots are reviewed code — but the same
       # restriction costs nothing and keeps the two workflows honest about
       # which providers are allowed to run in CI.
+      # Written under RUNNER_TEMP, never in the workspace. A pull request that
+      # commits .opentofu-ci.tfrc as a symlink to /dev/null would otherwise have
+      # this heredoc follow it — the write succeeds, the file reads back empty,
+      # and OpenTofu falls back to unrestricted provider installation with the
+      # allowlist apparently in place. Reproduced before fixing.
       - name: Restrict provider installation
-        working-directory: ${{ github.workspace }}
         run: |
-          cat > .opentofu-ci.tfrc <<'TFRC'
+          set -euo pipefail
+          cat > "$TF_CLI_CONFIG_FILE" <<'TFRC'
           provider_installation {
             direct {
               include = ["registry.opentofu.org/cloudflare/cloudflare"]
             }
           }
           TFRC
+          grep -q 'cloudflare/cloudflare' "$TF_CLI_CONFIG_FILE"
 
       # -lockfile=readonly: without it, a root that committed no
       # .terraform.lock.hcl gets one minted on the runner and thrown away, so
