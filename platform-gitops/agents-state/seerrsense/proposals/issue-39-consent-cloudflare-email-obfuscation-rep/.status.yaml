@@ -1,0 +1,10 @@
+status: proposed
+updated_at: '2026-09-09T15:29:23Z'
+updated_by: mctl-agents[bot]
+source:
+  type: github_issue
+  repo: mctlhq/seerrsense
+  issue: 39
+  url: https://github.com/mctlhq/seerrsense/issues/39
+control:
+  requires_human_approval: true
