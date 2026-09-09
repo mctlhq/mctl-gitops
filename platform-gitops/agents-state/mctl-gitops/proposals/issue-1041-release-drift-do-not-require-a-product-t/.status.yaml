@@ -1,5 +1,5 @@
-status: proposed
-updated_at: '2026-09-04T19:39:02Z'
+status: merged
+updated_at: '2026-09-05T14:20:23Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -8,3 +8,18 @@ source:
   url: https://github.com/mctlhq/mctl-gitops/issues/1041
 control:
   requires_human_approval: true
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-09-05T13:25:15Z'
+attempt:
+  id: 7962071f-98cd-424f-b9de-2728631c65fa
+  started_at: '2026-09-05T13:44:39Z'
+  expires_at: '2026-09-05T15:54:39Z'
+  finished_at: '2026-09-05T13:46:58Z'
+pr: https://github.com/mctlhq/mctl-gitops/pull/1061
+github:
+  state: merged
+  head_sha: 679d4c5b0348fd4228174d0d1bf444b4c054dc2f
+  observed_at: '2026-09-05T14:20:23Z'
+merged_at: '2026-09-05T14:20:23Z'
+merge_commit: 5a2b658dd0b67e63412c6b013a3bf29d85abc256

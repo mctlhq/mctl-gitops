@@ -18,8 +18,18 @@ Example: `/switch-agent-model claude-sonnet-6`
    ```
 2. Classifies each hit:
    - **Live runtime code** — verify it's actually wired in before editing
-     (reverse-import grep; see dead-code carve-out below). Editing an
-     unimported file has zero runtime effect and just adds noise to the diff.
+     (reverse-import grep). Editing an unimported file has zero runtime
+     effect and just adds noise to the diff.
+
+     **The reverse-import grep does not judge two kinds of file**, because
+     nothing imports them by design: **entrypoints** (Go `main` packages,
+     executable `run_*.py`, anything a CWFT or Dockerfile invokes directly)
+     and **tests** (`*_test.go`, `tests/test_*.py`). A zero-importer result
+     there means nothing — always update them. Reach for the heuristic only
+     for a library-shaped file that claims to be imported and isn't.
+
+     A file you do skip on dead-code grounds must be appended to the
+     carve-out list below in the same PR (see step 5), not skipped silently.
    - **CI review-bot tiering** (`claude-review.yml`'s "Classify PR
      complexity and pick model" step) — collapse to the new model and delete
      the classify step, unless told to preserve tiering.
@@ -38,19 +48,33 @@ Example: `/switch-agent-model claude-sonnet-6`
    branch name.
 4. Posts `@claude review` and watches both PRs with `review-watch` instead
    of polling manually.
-5. Re-runs the verification grep to confirm no stale model strings remain
-   outside documented dead-code carve-outs.
+5. Re-runs the verification grep. Every remaining hit must be justified,
+   and the only admissible justification is the step-2 one: the file is
+   unimported dead code, and it is neither an entrypoint nor a test. Record
+   such a file in the **carve-out list in this document** — a note in the PR
+   body does not carry: a future run reads `SKILL.md` and the codebase, it
+   does not dig through closed PRs. If the list is empty, no hit may
+   survive.
 
-## Known dead-code carve-out
+## Dead-code carve-out list
 
-- `mctl-agent/internal/diagnosis/analyzer.go` — unimported, not wired into
-  `cmd/agent/main.go` or `internal/skill/builtin/register.go`. Confirm before
-  every run with:
-  ```
-  grep -rln "internal/diagnosis" mctl-agent --include="*.go"
-  ```
-  If that ever comes back non-empty (someone wires the package in), it must
-  be edited too on the next migration — don't blindly skip it forever.
+Files that carry a model ID, are genuinely unimported, and are neither an
+entrypoint nor a test. A migration may leave these on the old model; anything
+not listed here must be updated.
+
+**The list is currently empty.** `mctl-agent/internal/diagnosis/analyzer.go`
+used to be its sole entry and was deleted outright in mctl-agent#123, so today
+every model-ID hit in either repo is live and must change.
+
+When you add an entry, record the reverse-import grep that proved it dead, so
+the next run can re-verify the claim instead of trusting it:
+
+```
+grep -rln "<import path>" <repo> --include="*.go"
+```
+
+If that ever comes back non-empty, the file is no longer dead — drop it from
+this list and edit it like any other live file.
 
 ## Tiering removal — CI review bot
 
@@ -102,8 +126,10 @@ found (`grep -n "_MODEL=" .env`) and tell them what to change by hand.
 grep -rn "<old-model-id-patterns>" mctl-agent mctl-agents \
   --include="*.go" --include="*.py" --include="*.yml" --include="*.yaml" --include="*.example"
 ```
-Expected sole remaining hits: documented dead-code carve-outs (see above).
-Everything else must show the new model ID. Each PR's own `@claude review`
+Every match must show the new model ID, with one admissible exception: a file
+listed in the carve-out section above. A hit that is dead code but *not* yet
+listed is not a pass — add it to the list in this same PR, with the
+reverse-import grep that proves it dead. An unexplained remaining hit fails. Each PR's own `@claude review`
 run exercises the newly-edited `claude_args` path live — a successful bot
 review is de facto proof the workflow YAML is valid and the model ID is
 accepted.

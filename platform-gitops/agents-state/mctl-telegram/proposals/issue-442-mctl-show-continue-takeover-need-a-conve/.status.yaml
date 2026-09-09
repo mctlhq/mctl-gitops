@@ -1,5 +1,5 @@
-status: proposed
-updated_at: '2026-09-01T15:41:27Z'
+status: merged
+updated_at: '2026-09-05T17:35:26Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -8,3 +8,13 @@ source:
   url: https://github.com/mctlhq/mctl-telegram/issues/442
 control:
   requires_human_approval: true
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-09-05T13:25:23Z'
+pr: https://github.com/mctlhq/mctl-telegram/pull/513
+github:
+  state: merged
+  head_sha: bfd44e2137626b619387878d5993e0ea1610fe87
+  observed_at: '2026-09-05T17:35:26Z'
+merged_at: '2026-09-05T17:35:26Z'
+merge_commit: 4de71961a997217f7ecc0abad25b2085dd3711b9

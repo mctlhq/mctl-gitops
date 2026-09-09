@@ -213,3 +213,11 @@ jobs:
         # that closes the string literal — by running the template's own
         # extracted loop against a fixture with real yq.
         run: python3 tests/test_tpl_git_commit_yq.py
+
+      - name: Unit-test wft-provision-database's values.yaml patch
+        # The provisioner commits straight to main, so no PR check sees the
+        # file it writes, and `helm template` above accepts duplicate keys
+        # silently. This runs the template's own extracted block against a
+        # values file that already declares envFrom — the shape that lost
+        # every application secret in gitops#1102.
+        run: python3 tests/test_wft_provision_database_values.py

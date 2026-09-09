@@ -54,6 +54,20 @@ spec:
         source: |
           set -e
           apk add --no-cache curl openssl git openssh-client > /dev/null 2>&1
+          # Same version tpl-git-commit pins. The values.yaml patch below is a
+          # structured edit, not a text append: gitops#1102 was a blind
+          # `printf >>` that wrote a second top-level `envFrom:` into a file
+          # that already had one, and Helm keeps the last duplicate.
+          curl -fsSL --retry 5 --retry-delay 3 --retry-max-time 60 \
+            -o /usr/local/bin/yq \
+            "https://github.com/mikefarah/yq/releases/download/v4.52.4/yq_linux_amd64"
+          # Verified before it is made executable. This pod runs as
+          # argo-workflow-sa and holds a Vault token, so an altered binary here
+          # is not a broken build, it is code execution next to the platform's
+          # credentials. Pinning the tag is not enough on its own: a release
+          # asset can be replaced under a tag that never moves.
+          echo "0c4d965ea944b64b8fddaf7f27779ee3034e5693263786506ccd1c120f184e8c  /usr/local/bin/yq" | sha256sum -c - >/dev/null
+          chmod +x /usr/local/bin/yq
 
           TEAM="{{inputs.parameters.team_name}}"
           APP="{{inputs.parameters.app_name}}"
@@ -278,13 +292,51 @@ spec:
           fi  # end if [ "$DB_EXISTS" = "false" ]
 
           # ── Always: inject dbSecret into service values.yaml ──────────────
+          # Structured edits, not a text append. The append this replaced was
+          # guarded only on `dbSecret:` being absent, so a service that already
+          # declared `envFrom:` got a second top-level `envFrom:` — Helm's
+          # loader keeps the last one, the pod lost every application secret and
+          # crashlooped (gitops#1102, seerrsense 2026-09-09). It also carried
+          # mctl-telegram's `dbInitJob` SQL hardcoded into every service that
+          # has no `identities` table; the chart already defaults that block
+          # (helm-charts/base-service/values.yaml) so nothing needs it emitted.
+          #
+          # A service that already declares `dbSecret` is already wired for a
+          # database and is left completely alone. That was the intent of the
+          # old `grep -q dbSecret:` guard, and it has to stay: kuptsi-app
+          # declares `dbSecret.vaultPath` with no `secretName`, so the chart
+          # defaults the target Secret to `<fullname>-db-creds` — the exact
+          # name its temporal-worker sidecar's envFrom references. Writing a
+          # secretName here would repoint the ExternalSecret and leave that
+          # sidecar reading a Secret nothing refreshes any more.
+          #
+          # When it is absent, the db secretRef goes FIRST. Later entries in
+          # envFrom win on key collision, and both the generated db secret and
+          # an app's own secret can define DATABASE_URL — kuptsi-app's is
+          # templated with the `postgresql+asyncpg://` scheme its driver
+          # requires, while the chart's db secret emits plain `postgresql://`
+          # (helm-charts/base-service/templates/externalsecret-db.yaml). Last
+          # place would silently hand the app a URL it cannot connect with, so
+          # the service's own secrets must be the ones that win.
           SVC_VALUES="platform-gitops/services/${TEAM}/${APP}/values.yaml"
           if [ -f "$SVC_VALUES" ]; then
-            DB_SECRET="${TEAM}-${APP}-db-creds"
-            # Only append if dbSecret not already present
-            if ! grep -q "dbSecret:" "$SVC_VALUES"; then
-              printf '\ndbSecret:\n  vaultPath: "%s"\n  secretName: "%s"\ndbInitJob:\n  enabled: false\n  database: "%s"\n  waitTable: "identities"\n  sql: |\n    INSERT INTO identities (provider, provider_id, status, metadata)\n    VALUES ('\''telegram'\'', '\''__TELEGRAM_ID__'\'', '\''approved'\'', '\''{}'\'')\n    ON CONFLICT (provider, provider_id) DO UPDATE SET status = '\''approved'\'';\nenvFrom:\n  - secretRef:\n      name: "%s"\n' \
-                "$VAULT_PATH" "$DB_SECRET" "$DB_NAME" "$DB_SECRET" >> "$SVC_VALUES"
+            export DB_SECRET="${TEAM}-${APP}-db-creds"
+            export VAULT_PATH
+            if [ "$(yq eval 'has("dbSecret")' "$SVC_VALUES")" = "true" ]; then
+              echo "ℹ️  ${SVC_VALUES} already declares dbSecret — left untouched"
+            else
+              yq eval -i '.envFrom = ([{"secretRef": {"name": strenv(DB_SECRET)}}] + ((.envFrom // []) | map(select(.secretRef.name != strenv(DB_SECRET)))))' "$SVC_VALUES"
+              yq eval -i '.dbSecret.vaultPath = strenv(VAULT_PATH)' "$SVC_VALUES"
+              yq eval -i '.dbSecret.secretName = strenv(DB_SECRET)' "$SVC_VALUES"
+            fi
+
+            # Fail before the commit, not after ArgoCD has synced it. This bot
+            # pushes straight to main, so no PR check ever sees the file.
+            DUPES=$(grep -E '^[A-Za-z_][A-Za-z0-9_-]*:' "$SVC_VALUES" \
+              | sed 's/:.*//' | sort | uniq -d)
+            if [ -n "$DUPES" ]; then
+              echo "❌ duplicate top-level keys in ${SVC_VALUES}: ${DUPES}" >&2
+              exit 1
             fi
 
             git add "$SVC_VALUES"

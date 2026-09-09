@@ -1,0 +1,109 @@
+# Scrape the communication agent's metrics.
+#
+# Both workloads that emit mctl_agent_* run in labs as preview instances, and
+# neither was scraped until this file existed:
+#
+#   labs-mctl-telegram-preview   the server process. It emits
+#                                mctl_agent_policy_denials_total (from
+#                                internal/agentapi and internal/agent/executor),
+#                                mctl_agent_dead_letter_total and
+#                                mctl_agent_actions_executing_stuck. The agent
+#                                is enabled ONLY here — services/labs/
+#                                mctl-telegram/values.yaml sets no AGENT_* at
+#                                all — and mctl-telegram-monitor.yaml pins
+#                                itself to the labs-mctl-telegram instance,
+#                                deliberately excluding this one.
+#
+#   labs-agent-worker-preview    the job runner. It emits
+#                                mctl_agent_job_cost_usd_total,
+#                                mctl_agent_claude_result_errors_total and the
+#                                mctl_agent_credential_domain info gauge
+#                                (mctlhq/mctl-telegram#580, merged as #583).
+#                                It has never had a scrape of any kind.
+#
+# The consequence was not merely missing dashboards: MctlAgentDeadLetter and
+# MctlAgentActionsExecutingStuck have been deployed in
+# infra-components/observability/vm-rules/mctl-telegram-ops.yaml since the
+# communication-agent rollout and could never fire, because the series they
+# evaluate were not being collected from anywhere.
+#
+# port: http is correct for both. base-service only renders a separate
+# `metrics` port when metrics.enabled is true, which neither service sets, and
+# both binaries serve /metrics on their main listener anyway — the server on
+# its app port, the worker on its health-probe port
+# (cmd/agent-worker/health_server.go). Each endpoint has an optional CIDR
+# guard (METRICS_ALLOW_CIDR and AGENT_METRICS_ALLOW_CIDR); neither is set in
+# values.yaml, so both are open and this scrape is not blocked.
+#
+# "Open" is not a design statement here, and this scrape is not what makes it
+# so. The server half is publicly reachable today: mctl-telegram-preview has
+# ingress.enabled with host tg-preview.mctl.ai, so
+# https://tg-preview.mctl.ai/metrics answers 200 anonymously. That predates
+# this file and is tracked in mctlhq/mctl-telegram#588 — do NOT close it by
+# setting METRICS_ALLOW_CIDR. Both handlers compare the real TCP socket peer
+# (netctx.Peer, chosen so a forged X-Forwarded-For cannot bypass the check),
+# and behind the ingress controller (traefik, per base-service's default
+# ingress.className) that peer is the controller's own pod, whose address is
+# inside the pod CIDR. A CIDR allowlist would therefore admit internet
+# traffic arriving through the ingress while looking like a fix.
+#
+# The worker half is not exposed: agent-worker-preview sets
+# ingress.enabled: false.
+#
+# Native VMServiceScrape rather than monitoring.coreos.com/ServiceMonitor, for
+# the reason spelled out in mctl-agents-worker-monitor.yaml: the VM operator
+# auto-converts the latter and leaves the original orphaned, producing ArgoCD
+# drift.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMServiceScrape
+metadata:
+  name: mctl-telegram-agent-preview
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: base-service
+    matchExpressions:
+      - key: app.kubernetes.io/instance
+        operator: In
+        values:
+          - labs-mctl-telegram-preview
+          - labs-agent-worker-preview
+  namespaceSelector:
+    matchNames:
+      - labs
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+      # Keep ONLY the communication-agent series. Without this the preview
+      # server's whole exposition is imported — mctl_tool_*, mctl_http_*,
+      # mctl_sessions_* — and that is not merely noise, it pages people.
+      #
+      # The SLO recording rules in vm-rules/mctl-telegram-slo.yaml aggregate
+      # with `sum by (job, namespace)`, so preview arrives as its own job
+      # rather than corrupting production's ratio. But the burn-rate alerts
+      # that consume those recordings are bare comparisons with no job
+      # selector — e.g. `mctl_telegram:oauth_5xx:ratio_rate1h > 0.01440`.
+      # Preview carries a trickle of traffic, so a couple of 5xx on
+      # /oauth/token puts its ratio far above a threshold sized for
+      # production volume, and the resulting page is labelled exactly like a
+      # production one. The same applies to HighToolErrorRate in
+      # mctl-telegram-alerts.yaml and to the capacity alerts in
+      # mctl-telegram-ops.yaml.
+      #
+      # Filtering here rather than adding a job selector to every existing
+      # rule keeps the blast radius of this PR to the thing it introduces.
+      # Narrowing the rules instead is defensible, but it is a change to
+      # production alerting and belongs in its own PR.
+      #
+      # `up`, `scrape_duration_seconds` and the other synthetic series are
+      # added by the scraper after metric relabeling and are unaffected, so
+      # target health for these two workloads stays observable.
+      metricRelabelConfigs:
+        - sourceLabels: [__name__]
+          regex: "mctl_agent_.*"
+          action: keep

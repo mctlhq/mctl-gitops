@@ -1,5 +1,5 @@
-status: accepted
-updated_at: '2026-09-05T12:50:58Z'
+status: merged
+updated_at: '2026-09-05T16:35:31Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -9,5 +9,17 @@ source:
 control:
   requires_human_approval: true
 approval:
-  approved_by: 'mashkovd'
+  approved_by: mashkovd
   approved_at: '2026-09-05T12:50:58Z'
+attempt:
+  id: 794c933b-94e7-4cd1-a578-68f0b7fee44e
+  started_at: '2026-09-05T13:22:53Z'
+  expires_at: '2026-09-05T15:32:53Z'
+  finished_at: '2026-09-05T13:31:44Z'
+pr: https://github.com/mctlhq/mctl-telegram/pull/509
+github:
+  state: merged
+  head_sha: 029ace7c45d18a2269e70794fed07046ac5b0af8
+  observed_at: '2026-09-05T16:35:31Z'
+merged_at: '2026-09-05T16:35:31Z'
+merge_commit: be20ca7459f06cf98237ba52600025484ec1621a

@@ -288,6 +288,9 @@ spec:
           curl -fsSL --retry 5 --retry-delay 3 --retry-max-time 60 \
             -o /usr/local/bin/yq \
             "https://github.com/mikefarah/yq/releases/download/v4.52.4/yq_linux_amd64"
+          # Same unverified download as wft-provision-database had; see the
+          # note there. This pod carries the gitops deploy key.
+          echo "0c4d965ea944b64b8fddaf7f27779ee3034e5693263786506ccd1c120f184e8c  /usr/local/bin/yq" | sha256sum -c - >/dev/null
           chmod +x /usr/local/bin/yq
           mkdir -p ~/.ssh
           cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519

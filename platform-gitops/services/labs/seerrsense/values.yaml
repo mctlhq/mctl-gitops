@@ -1,0 +1,146 @@
+# Service: seerrsense
+# Team: labs
+
+# Chart: base-service
+
+image:
+  repository: ghcr.io/mctlhq/seerrsense
+  tag: "1.4.5"
+imagePullSecrets:
+  - name: ghcr-credentials
+service:
+  port: 8787
+backstage:
+  kubernetesId: seerrsense
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+env:
+  APP_ENV: production
+  SEERR_URL: https://media.mctl.ai
+  SEERRSENSE_LOCALE: ru-RU
+  PORT: "8787"
+  NEBIUS_MODEL: Qwen/Qwen3-30B-A3B-Instruct-2507
+  # Turns OAuth on. Safe to roll now: the four secret values are already in
+  # seerrsense-secrets, so the pod this change replaces starts from a complete
+  # configuration rather than a half-set one, which it would refuse to run.
+  #
+  # The issuer is baked into every token and both discovery documents, so it
+  # cannot move afterwards without invalidating them.
+  SEERRSENSE_PUBLIC_URL: https://seerrsense.mctl.ai
+  # Fail-closed: empty admits nobody, not everybody. An address here lets that
+  # Google account sign in — and while the Google app is still in testing, the
+  # address must also be on its test-user list.
+  SEERRSENSE_ALLOWED_EMAILS: mashkoffdmitry@gmail.com
+  # The pre-OAuth shared token is no longer accepted: every caller signs in
+  # with Google and gets an access token of its own. Until now one secret
+  # opened every tool for anybody who held it, with no identity behind it, no
+  # way to revoke one holder, and no way to attribute a request.
+  #
+  # Ending the transition needed the database that landed first. Refresh tokens
+  # lived in process memory, so a restart signed everyone out and the shared
+  # token was the only way back in.
+  #
+  # SEERRSENSE_AUTH_TOKEN stays in the Secret. The server still requires it to
+  # be present before it will serve HTTP; this flag governs whether it is
+  # accepted as a credential, and stdio mode still uses it.
+  SEERRSENSE_LEGACY_TOKEN_ENABLED: "false"
+ingress:
+  enabled: true
+  # seerrsense.mctl.ai is the canonical public hostname (seerrsense#7); the
+  # generated labs- name stays valid. Added here rather than through
+  # mctl_add_custom_domain because that path returns 401 and its DNS check
+  # rejects Cloudflare-proxied records — see mctl-api#262. Same pattern as
+  # tg.mctl.ai in services/labs/mctl-telegram/values.yaml.
+  hosts:
+    - seerrsense.mctl.ai
+    - labs-seerrsense.mctl.ai
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls:
+    - secretName: seerrsense-tls
+      hosts:
+        - seerrsense.mctl.ai
+        - labs-seerrsense.mctl.ai
+externalSecret:
+  targetSecret: seerrsense-secrets
+  data:
+    - secretKey: SEERR_API_KEY
+      remoteKey: teams/labs/seerrsense
+      property: SEERR_API_KEY
+    - secretKey: SEERRSENSE_AUTH_TOKEN
+      remoteKey: teams/labs/seerrsense
+      property: SEERRSENSE_AUTH_TOKEN
+    - secretKey: NEBIUS_API_KEY
+      remoteKey: teams/labs/seerrsense
+      property: NEBIUS_API_KEY
+    # Google OAuth client "seerrsense-mcp", project seerrsense. Its redirect URI
+    # is https://seerrsense.mctl.ai/oauth/google/callback and must match the
+    # SEERRSENSE_PUBLIC_URL that a follow-up change adds to env.
+    #
+    # Deliberately landing before that env change and not with it. The plain env
+    # values would alter the Deployment and roll a new pod immediately, while
+    # ESO copies these properties into the Secret on its own schedule
+    # (refreshInterval 1h) with no ordering between the two and no reloader in
+    # this cluster. The pod would then snapshot a Secret missing the OAuth keys
+    # while already carrying SEERRSENSE_PUBLIC_URL — a partial configuration,
+    # which seerrsense refuses to start on. That is a crashloop, not a degraded
+    # start. Adding only the mappings changes no workload, so nothing rolls
+    # until the keys are actually in the Secret.
+    - secretKey: GOOGLE_OAUTH_CLIENT_ID
+      remoteKey: teams/labs/seerrsense
+      property: GOOGLE_OAUTH_CLIENT_ID
+    - secretKey: GOOGLE_OAUTH_CLIENT_SECRET
+      remoteKey: teams/labs/seerrsense
+      property: GOOGLE_OAUTH_CLIENT_SECRET
+    # Signs access tokens and browser sessions. Rotating it signs everyone out.
+    - secretKey: SEERRSENSE_OAUTH_JWT_SIGNING_KEY
+      remoteKey: teams/labs/seerrsense
+      property: SEERRSENSE_OAUTH_JWT_SIGNING_KEY
+    # Seals the Seerr API keys people attach on /account. Rotating it makes
+    # every stored key unreadable and detaches everyone.
+    - secretKey: SEERRSENSE_ENCRYPTION_KEY
+      remoteKey: teams/labs/seerrsense
+      property: SEERRSENSE_ENCRYPTION_KEY
+    # Cloudflare Zero Trust service token for reaching a Seerr that sits behind
+    # Access. Both are optional in the app (src/core/config.ts:20-21); the Seerr
+    # client only sends the CF-Access-Client-* headers when both are set.
+    #
+    # Precondition: teams/labs/seerrsense must already carry both properties.
+    # ESO fails the whole ExternalSecret when a referenced property is missing,
+    # which would stop every other key in seerrsense-secrets from refreshing —
+    # not just these two.
+    #
+    # Adding mappings changes no workload, so nothing rolls on sync. There is no
+    # reloader in this cluster and the chart writes no secret checksum, so the
+    # running pod keeps the environment it started with: restart the deployment
+    # once ESO has copied the keys, or the credentials stay invisible to the
+    # process until an unrelated rollout happens.
+    - secretKey: CF_ACCESS_CLIENT_ID
+      remoteKey: teams/labs/seerrsense
+      property: CF_ACCESS_CLIENT_ID
+    - secretKey: CF_ACCESS_CLIENT_SECRET
+      remoteKey: teams/labs/seerrsense
+      property: CF_ACCESS_CLIENT_SECRET
+envFrom:
+  # One list. mctl_provision_database appends its own `envFrom:` block to the
+  # end of the file, which made this key appear twice — and Helm's loader keeps
+  # the last one, so the pod started with the database credentials and nothing
+  # else. It crashlooped on "SEERRSENSE_AUTH_TOKEN is required when running the
+  # HTTP server" while the previous pod kept serving, which is why the outage
+  # was a stuck rollout rather than a visible one.
+  - secretRef:
+      name: seerrsense-secrets
+  # DATABASE_URL, assembled by the chart from teams/labs/seerrsense/database.
+  # Its presence is what moves OAuth codes, refresh tokens and the Seerr each
+  # person attaches out of process memory, where a restart lost them.
+  - secretRef:
+      name: labs-seerrsense-db-creds
+extraContainers: []
+dbSecret:
+  vaultPath: "teams/labs/seerrsense/database"
+  secretName: "labs-seerrsense-db-creds"

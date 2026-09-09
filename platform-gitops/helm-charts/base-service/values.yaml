@@ -42,6 +42,22 @@ env: {}
 # -- Optional: environment variables from ConfigMaps/Secrets
 envFrom: []
 
+# -- Optional: environment variables whose value comes from a `valueFrom`
+# source rather than a literal. Map of env var name -> the valueFrom block,
+# passed through verbatim, so any source the Kubernetes API accepts works
+# (fieldRef, resourceFieldRef, configMapKeyRef, secretKeyRef).
+#
+# `env:` above cannot express these — it renders every value as a literal
+# string — and the downward API is the only way a pod can learn its own
+# identity. Example, which is what mctl-telegram's mctl_telegram_replica_id
+# gauge reads:
+#
+#   envValueFrom:
+#     POD_NAME:
+#       fieldRef:
+#         fieldPath: metadata.name
+envValueFrom: {}
+
 # -- Optional: image pull secrets for private registries
 imagePullSecrets: []
 

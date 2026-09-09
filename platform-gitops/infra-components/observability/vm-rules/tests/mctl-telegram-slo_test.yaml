@@ -1,0 +1,263 @@
+# Unit tests for mctl-telegram-slo.yaml.
+#
+# rule_files is resolved relative to this file. generated/ is produced by
+# scripts/check-vm-rules.sh, which extracts each VMRule's `.spec` — a plain
+# Prometheus rule-group document — so promtool evaluates the very rules the
+# cluster runs, recording rules included.
+#
+# Each test below is written so that it FAILS under a specific plausible
+# mistake, not merely so that it passes: the SLI denominators and the
+# aggregation level are the two places where a burn-rate rule silently stops
+# meaning what its name says.
+rule_files:
+  - generated/mctl-telegram-slo.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # --- MCP tool availability -------------------------------------------
+  - interval: 1m
+    name: tool availability fast burn stays quiet at a 3% error rate
+    input_series:
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="a",tool="send_message",status="error"}'
+        values: "0+0.03x90"
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="a",tool="send_message",status="ok"}'
+        values: "0+0.97x90"
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: MctlTelegramToolAvailabilityFastBurn
+        exp_alerts: []
+
+  - interval: 1m
+    name: tool availability fast burn fires at a 20% error rate
+    input_series:
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="a",tool="send_message",status="error"}'
+        values: "0+0.2x90"
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="a",tool="send_message",status="ok"}'
+        values: "0+0.8x90"
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: MctlTelegramToolAvailabilityFastBurn
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: mctl-telegram
+              job: mctl-telegram
+              namespace: labs
+            exp_annotations:
+              summary: "mctl-telegram: MCP tool availability fast burn (14.4x, 1h)"
+              description: >-
+                The MCP tool error rate over the last 1h is 20%, above the 7.2%
+                fast-burn threshold — 14.4x the 99.5% availability objective's
+                budget. At this rate the 30-day error budget is gone in about
+                two days. Page the on-call engineer. SLO and error-budget
+                policy:
+                https://github.com/mctlhq/mctl-telegram/blob/main/docs/slo.md
+
+  # An SLO is a property of the service, not of a replica. Aggregating by
+  # (job, namespace) is what makes that true: one small replica failing half
+  # its handful of calls must not page while the service as a whole is at
+  # ~1.9%. Under a per-pod aggregation this test fires and fails.
+  - interval: 1m
+    name: one bad replica does not page when the service is healthy
+    input_series:
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="a",tool="send_message",status="error"}'
+        values: "0+1x90"
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="a",tool="send_message",status="ok"}'
+        values: "0+1x90"
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="b",tool="list_dialogs",status="ok"}'
+        values: "0+50x90"
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: MctlTelegramToolAvailabilityFastBurn
+        exp_alerts: []
+
+  - interval: 1m
+    name: tool availability slow burn fires at 4% over 6h and fast burn does not
+    input_series:
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="a",tool="send_message",status="error"}'
+        values: "0+0.04x420"
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="a",tool="send_message",status="ok"}'
+        values: "0+0.96x420"
+    alert_rule_test:
+      - eval_time: 420m
+        alertname: MctlTelegramToolAvailabilityFastBurn
+        exp_alerts: []
+      - eval_time: 420m
+        alertname: MctlTelegramToolAvailabilitySlowBurn
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: mctl-telegram
+              job: mctl-telegram
+              namespace: labs
+            exp_annotations:
+              summary: "mctl-telegram: MCP tool availability slow burn (6x, 6h)"
+              description: >-
+                The MCP tool error rate over the last 6h is 4%, above the 3.0%
+                slow-burn threshold — 6x the 99.5% availability objective's
+                budget. Sustained for the full 6h this consumes about 5% of
+                the monthly budget (6x x 6h / 720h). File a reliability ticket;
+                no page. SLO and
+                error-budget policy:
+                https://github.com/mctlhq/mctl-telegram/blob/main/docs/slo.md
+
+  # --- OAuth token endpoint --------------------------------------------
+  # The SLO covers the token exchange and the Telegram callback, nothing else.
+  # Drop the route selector and this test fires: the 500s here are on an
+  # unrelated API route, and a 99.9% objective is tight enough that borrowing
+  # another endpoint's failures would page on the wrong incident.
+  - interval: 1m
+    name: 5xx on an unrelated route does not burn the OAuth budget
+    input_series:
+      - series: 'mctl_http_requests_total{job="mctl-telegram",namespace="labs",pod="a",method="POST",route="/api/account/{action}",status_code="500"}'
+        values: "0+10x90"
+      - series: 'mctl_http_requests_total{job="mctl-telegram",namespace="labs",pod="a",method="POST",route="/oauth/token",status_code="200"}'
+        values: "0+10x90"
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: MctlTelegramOAuthAvailabilityFastBurn
+        exp_alerts: []
+
+  - interval: 1m
+    name: OAuth fast burn fires at a 2% 5xx rate on the token endpoint
+    input_series:
+      - series: 'mctl_http_requests_total{job="mctl-telegram",namespace="labs",pod="a",method="POST",route="/oauth/token",status_code="503"}'
+        values: "0+0.02x90"
+      - series: 'mctl_http_requests_total{job="mctl-telegram",namespace="labs",pod="a",method="POST",route="/oauth/token",status_code="200"}'
+        values: "0+0.98x90"
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: MctlTelegramOAuthAvailabilityFastBurn
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: mctl-telegram
+              job: mctl-telegram
+              namespace: labs
+            exp_annotations:
+              summary: "mctl-telegram: OAuth token endpoint fast burn (14.4x, 1h)"
+              description: >-
+                The 5xx rate on /oauth/token and /oauth/telegram/callback over
+                the last 1h is 2%, above the 1.440% fast-burn threshold — 14.4x
+                the 99.9% objective's budget. New clients cannot complete the
+                OAuth exchange. Page the on-call engineer. SLO and error-budget
+                policy:
+                https://github.com/mctlhq/mctl-telegram/blob/main/docs/slo.md
+
+  # --- Session borrow ---------------------------------------------------
+  # The exclusion is the whole point of this SLI. 1 error in 5 real borrows is
+  # a 20% failure rate and must page; 95 dormant users whose sessions aged out
+  # must not dilute it to 1% and silence the alert. Replace the
+  # result=~"ok|error" denominator with the bare counter and this test fails.
+  - interval: 1m
+    name: TTL expirations do not dilute the session-borrow SLI
+    input_series:
+      - series: 'mctl_sessions_borrow_total{job="mctl-telegram",namespace="labs",pod="a",result="error"}'
+        values: "0+1x90"
+      - series: 'mctl_sessions_borrow_total{job="mctl-telegram",namespace="labs",pod="a",result="ok"}'
+        values: "0+4x90"
+      - series: 'mctl_sessions_borrow_total{job="mctl-telegram",namespace="labs",pod="a",result="expired_idle"}'
+        values: "0+95x90"
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: MctlTelegramSessionBorrowFastBurn
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: mctl-telegram
+              job: mctl-telegram
+              namespace: labs
+            exp_annotations:
+              summary: "mctl-telegram: session borrow fast burn (14.4x, 1h)"
+              description: >-
+                The Pool.Borrow() error rate over the last 1h, excluding
+                expected TTL expirations, is 20% — above the 14.4% fast-burn
+                threshold (14.4x the 99% objective's budget). Tool calls are
+                failing before they reach Telegram. Page the on-call engineer.
+                SLO and error-budget policy:
+                https://github.com/mctlhq/mctl-telegram/blob/main/docs/slo.md
+
+  - interval: 1m
+    name: session borrow fast burn stays quiet at a 10% error rate
+    input_series:
+      - series: 'mctl_sessions_borrow_total{job="mctl-telegram",namespace="labs",pod="a",result="error"}'
+        values: "0+0.1x90"
+      - series: 'mctl_sessions_borrow_total{job="mctl-telegram",namespace="labs",pod="a",result="ok"}'
+        values: "0+0.9x90"
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: MctlTelegramSessionBorrowFastBurn
+        exp_alerts: []
+
+  # --- Rolling-28d compliance recording rules ---------------------------
+  #
+  # These are what the error-budget merge-freeze policy reads, and until now
+  # nothing tested them — the burn-rate alerts above cover only the 1h/6h
+  # rules. Each case below fails against the pre-zero-fill expressions: an
+  # empty numerator makes the whole division empty, so the rule records NO
+  # series exactly at the two extremes the policy most needs, and "0%
+  # availability" becomes indistinguishable from "never measured".
+  - interval: 1m
+    name: tool availability compliance records 0, not nothing, when every call fails
+    input_series:
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="a",tool="send_message",status="error"}'
+        values: "0+1x120"
+    promql_expr_test:
+      - expr: mctl_telegram:tool_availability:ratio_rate28d
+        eval_time: 120m
+        exp_samples:
+          - labels: 'mctl_telegram:tool_availability:ratio_rate28d{job="mctl-telegram",namespace="labs"}'
+            value: 0
+
+  - interval: 1m
+    name: tool availability compliance records the mixed ratio (0.5, exactly representable)
+    input_series:
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="a",tool="send_message",status="ok"}'
+        values: "0+1x120"
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="a",tool="send_message",status="error"}'
+        values: "0+1x120"
+    promql_expr_test:
+      - expr: mctl_telegram:tool_availability:ratio_rate28d
+        eval_time: 120m
+        exp_samples:
+          - labels: 'mctl_telegram:tool_availability:ratio_rate28d{job="mctl-telegram",namespace="labs"}'
+            value: 0.5
+
+  # The healthy case is the one the subtractive `1 - (5xx / total)` form got
+  # wrong: with no 5xx series at all the rule recorded nothing.
+  - interval: 1m
+    name: oauth availability compliance records 1 when there is no 5xx series at all
+    input_series:
+      - series: 'mctl_http_requests_total{job="mctl-telegram",namespace="labs",route="/oauth/token",status_code="200"}'
+        values: "0+1x120"
+    promql_expr_test:
+      - expr: mctl_telegram:oauth_availability:ratio_rate28d
+        eval_time: 120m
+        exp_samples:
+          - labels: 'mctl_telegram:oauth_availability:ratio_rate28d{job="mctl-telegram",namespace="labs"}'
+            value: 1
+
+  - interval: 1m
+    name: oauth availability compliance records 0 when every request 5xxs
+    input_series:
+      - series: 'mctl_http_requests_total{job="mctl-telegram",namespace="labs",route="/oauth/token",status_code="503"}'
+        values: "0+1x120"
+    promql_expr_test:
+      - expr: mctl_telegram:oauth_availability:ratio_rate28d
+        eval_time: 120m
+        exp_samples:
+          - labels: 'mctl_telegram:oauth_availability:ratio_rate28d{job="mctl-telegram",namespace="labs"}'
+            value: 0
+
+  - interval: 1m
+    name: session borrow compliance records 0 when every borrow fails
+    input_series:
+      - series: 'mctl_sessions_borrow_total{job="mctl-telegram",namespace="labs",result="error"}'
+        values: "0+1x120"
+    promql_expr_test:
+      - expr: mctl_telegram:session_borrow_success:ratio_rate28d
+        eval_time: 120m
+        exp_samples:
+          - labels: 'mctl_telegram:session_borrow_success:ratio_rate28d{job="mctl-telegram",namespace="labs"}'
+            value: 0
