@@ -19,8 +19,13 @@ set -euo pipefail
 file="${1:-infrastructure/cloudflare/.local-state-roots}"
 [ -f "$file" ] || exit 0
 
+# awk 'NF' rather than grep -v '^$': an empty result is the normal end state of
+# this list — the last root finishes its migration, its line goes, the comments
+# stay — and grep exits 1 when it prints nothing, which under the callers' `set
+# -euo pipefail` would fail every workflow that reads the list. awk exits 0
+# whether or not it printed anything.
 tr -d '\r' < "$file" \
   | sed -e 's/#.*$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
-  | grep -v '^$' \
+  | awk 'NF' \
   | sed -e 's#^infrastructure/cloudflare/##' -e 's#^#infrastructure/cloudflare/#' \
   | sort -u
