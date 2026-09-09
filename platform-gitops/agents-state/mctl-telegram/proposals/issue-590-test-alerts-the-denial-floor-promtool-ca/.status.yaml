@@ -1,5 +1,5 @@
-status: accepted
-updated_at: '2026-09-09T15:17:44Z'
+status: implemented
+updated_at: '2026-09-09T15:22:52Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -9,5 +9,11 @@ source:
 control:
   requires_human_approval: true
 approval:
-  approved_by: 'mashkovd'
+  approved_by: mashkovd
   approved_at: '2026-09-09T15:17:44Z'
+attempt:
+  id: 0bbfaa5f-5691-47e9-a70c-0503e19ad1a3
+  started_at: '2026-09-09T15:20:13Z'
+  expires_at: '2026-09-09T17:30:13Z'
+  finished_at: '2026-09-09T15:22:52Z'
+pr: https://github.com/mctlhq/mctl-telegram/pull/592
