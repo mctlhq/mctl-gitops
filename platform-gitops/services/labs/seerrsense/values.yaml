@@ -97,21 +97,20 @@ externalSecret:
       remoteKey: teams/labs/seerrsense
       property: SEERRSENSE_ENCRYPTION_KEY
 envFrom:
+  # One list. mctl_provision_database appends its own `envFrom:` block to the
+  # end of the file, which made this key appear twice — and Helm's loader keeps
+  # the last one, so the pod started with the database credentials and nothing
+  # else. It crashlooped on "SEERRSENSE_AUTH_TOKEN is required when running the
+  # HTTP server" while the previous pod kept serving, which is why the outage
+  # was a stuck rollout rather than a visible one.
   - secretRef:
       name: seerrsense-secrets
+  # DATABASE_URL, assembled by the chart from teams/labs/seerrsense/database.
+  # Its presence is what moves OAuth codes, refresh tokens and the Seerr each
+  # person attaches out of process memory, where a restart lost them.
+  - secretRef:
+      name: labs-seerrsense-db-creds
 extraContainers: []
-
 dbSecret:
   vaultPath: "teams/labs/seerrsense/database"
   secretName: "labs-seerrsense-db-creds"
-dbInitJob:
-  enabled: false
-  database: "labs-seerrsense"
-  waitTable: "identities"
-  sql: |
-    INSERT INTO identities (provider, provider_id, status, metadata)
-    VALUES ('telegram', '__TELEGRAM_ID__', 'approved', '{}')
-    ON CONFLICT (provider, provider_id) DO UPDATE SET status = 'approved';
-envFrom:
-  - secretRef:
-      name: "labs-seerrsense-db-creds"
