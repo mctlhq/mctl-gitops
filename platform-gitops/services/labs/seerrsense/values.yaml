@@ -32,9 +32,22 @@ env:
   # The issuer is baked into every token and both discovery documents, so it
   # cannot move afterwards without invalidating them.
   SEERRSENSE_PUBLIC_URL: https://seerrsense.mctl.ai
-  # Fail-closed: empty admits nobody, not everybody. An address here lets that
-  # Google account sign in — and while the Google app is still in testing, the
-  # address must also be on its test-user list.
+  # Public mode. Only the exact string "true" opens signup; TRUE, 1 and yes all
+  # read as closed (seerrsense src/auth/config.ts:121), so a typo shuts the door
+  # rather than opening it.
+  #
+  # The Google OAuth client is published to Production and its branding is
+  # verified, so an account that has never been near this project reaches a
+  # normal consent screen instead of a test-user refusal. That ordering is
+  # deliberate: flipping this first would have admitted people to a sign-in
+  # Google itself would then block.
+  #
+  # This is the switch, and it is the whole switch. Removing the line closes
+  # signup again on the next sync, with no release and no image change.
+  SEERRSENSE_OPEN_SIGNUP: "true"
+  # Now ignored while OPEN_SIGNUP is true, and deliberately kept: it is what the
+  # server falls back to the moment the flag above goes away, and an empty
+  # allowlist at that moment would lock everyone out including the owner.
   SEERRSENSE_ALLOWED_EMAILS: mashkoffdmitry@gmail.com,moonqua@gmail.com
   # Who may reach the shared SEERR_URL instance when they have attached nothing
   # of their own. Fail-closed like the allowlist: unset offers the household to
