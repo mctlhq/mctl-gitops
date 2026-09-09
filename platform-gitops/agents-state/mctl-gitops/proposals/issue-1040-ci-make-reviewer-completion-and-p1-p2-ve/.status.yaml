@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-09-05T13:20:18Z'
+updated_at: '2026-09-08T23:20:35Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -19,5 +19,5 @@ attempt:
 pr: https://github.com/mctlhq/mctl-gitops/pull/1059
 github:
   state: open
-  head_sha: 0e254f874cbab748c479d317a56cb0ba087900cb
-  observed_at: '2026-09-05T13:20:18Z'
+  head_sha: 1ac85245f1c4a02372e58ac7e6d4f124e2e7039a
+  observed_at: '2026-09-08T23:20:35Z'

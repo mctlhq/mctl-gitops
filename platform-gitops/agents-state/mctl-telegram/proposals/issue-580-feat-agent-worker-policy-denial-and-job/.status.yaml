@@ -1,0 +1,26 @@
+status: merged
+updated_at: '2026-09-09T08:36:01Z'
+updated_by: mctl-agents[bot]
+source:
+  type: github_issue
+  repo: mctlhq/mctl-telegram
+  issue: 580
+  url: https://github.com/mctlhq/mctl-telegram/issues/580
+control:
+  requires_human_approval: true
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-09-09T00:09:33Z'
+attempt:
+  id: 6fb66a57-539e-4ce5-8034-140a4a074d61
+  started_at: '2026-09-09T00:12:01Z'
+  expires_at: '2026-09-09T02:22:01Z'
+  finished_at: '2026-09-09T00:41:31Z'
+pr: https://github.com/mctlhq/mctl-telegram/pull/583
+github:
+  state: merged
+  head_sha: 8bb92115a8594942567756cc9ce63a8ace8e2db0
+  observed_at: '2026-09-09T08:36:01Z'
+notes: 'reconcile: open PR has a merge conflict'
+merged_at: '2026-09-09T08:36:01Z'
+merge_commit: b41b16c0d97ca926e011b00698860d5d608da322
