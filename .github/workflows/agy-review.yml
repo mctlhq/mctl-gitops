@@ -22,3 +22,38 @@ jobs:
       # Staged rollout: Agy evidence is reviewed manually until proposal #240
       # delivers exact-head markers, backfill, and repository-level gating.
       blocking: false
+      conventions: |
+        This repository is the GitOps source of truth: Helm charts and service
+        values under platform-gitops/, Argo Workflows cluster templates, ArgoCD
+        Applications, ExternalSecrets backed by Vault, and OpenTofu for
+        Cloudflare under infrastructure/. Nothing here runs in CI only — a bad
+        merge reaches the cluster.
+
+        Weigh these failure classes first. Each has actually happened here:
+
+        - Silent last-wins overwrites in Helm values. Duplicate top-level keys
+          in a values.yaml are valid YAML; Helm keeps the last one. A second
+          `envFrom:` appended to a service's values dropped every application
+          secret and only surfaced as CrashLoopBackOff. Order matters too:
+          within one `envFrom` list, later entries win.
+        - Generators that write YAML. Argo Workflow templates that emit or patch
+          service values must be idempotent and must merge, never append blindly.
+          Check the extracted shell, not just the surrounding template.
+        - ExternalSecrets that name a Vault key which does not exist. ESO fails
+          the whole secret, not the missing field, so an unrelated key typo takes
+          the entire workload down.
+        - Fail-closed configuration merged in the wrong order. Config that makes
+          the code refuse to start must land here before the code that reads it.
+        - Workflow-level `concurrency` in a caller. It governs the whole run,
+          including a job that `uses:` a reusable workflow, and silently defeats
+          the callee's own concurrency policy.
+        - Cloudflare OpenTofu: resources imported into one root while another
+          contour still owns them, and plan/apply running under identities with
+          different permissions.
+
+        Also the standing ones: secrets in plain text, overly permissive RBAC,
+        missing NetworkPolicies, resource request/limit mismatches, missing
+        health checks, malformed Argo step dependencies, and changed behaviour
+        with no test under tests/.
+
+        Do not report formatting or YAML style — yamllint gates that already.
