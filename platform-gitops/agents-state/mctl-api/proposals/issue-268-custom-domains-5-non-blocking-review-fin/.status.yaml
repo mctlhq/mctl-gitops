@@ -1,6 +1,6 @@
-status: accepted
-updated_at: '2026-09-09T01:30:00Z'
-updated_by: mashkovd
+status: implemented
+updated_at: '2026-09-09T01:44:18Z'
+updated_by: mctl-agents[bot]
 source:
   type: github_issue
   repo: mctlhq/mctl-api
@@ -18,12 +18,16 @@ retry:
     stage: agent
     message: implementer produced no commits
     workflow: mctl-agents-implement-4b51e087
-    root_cause: >-
-      The implementer delegated the work to a background Agent sub-agent
-      and ended its own turn ("The implementer sub-agent is now working
-      through the full spec in the background ... I'll report back once it
-      finishes"), so the CWFT (one-shot, no later turn to resume into)
-      terminated before any commit was produced. implement-fallback also ran
-      and also produced no commits. Same bug class as mctlhq/mctl-agents#245,
-      recurring despite the prompt-level fix in mctl-agents#130 -- this
-      instance used a real background tool call, not just prose.
+    root_cause: The implementer delegated the work to a background Agent sub-agent
+      and ended its own turn ("The implementer sub-agent is now working through the
+      full spec in the background ... I'll report back once it finishes"), so the
+      CWFT (one-shot, no later turn to resume into) terminated before any commit was
+      produced. implement-fallback also ran and also produced no commits. Same bug
+      class as mctlhq/mctl-agents#245, recurring despite the prompt-level fix in mctl-agents#130
+      -- this instance used a real background tool call, not just prose.
+attempt:
+  id: 74ac0f83-4bc6-4f6b-bffa-635224f03412
+  started_at: '2026-09-09T01:26:47Z'
+  expires_at: '2026-09-09T03:36:47Z'
+  finished_at: '2026-09-09T01:44:18Z'
+pr: https://github.com/mctlhq/mctl-api/pull/269
