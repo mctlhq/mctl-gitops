@@ -436,7 +436,14 @@ spec:
             SERVICE="$PARAM_SERVICE"
             export DOMAIN="$PARAM_DOMAIN"
 
-            if [ -n "${MCTL_API_TOKEN}" ]; then
+            # ${MCTL_API_TOKEN:-} — not ${MCTL_API_TOKEN}: this runs under
+            # `set -u`, and MCTL_API_TOKEN's secretKeyRef is optional:true,
+            # so Kubernetes omits the env var entirely (not empty-string)
+            # when the secret is absent. An unset-parameter reference under
+            # nounset aborts the shell immediately, bypassing the `|| true`
+            # this handler's exit-0 guarantee depends on — exactly in the
+            # missing-secret case this check exists to tolerate.
+            if [ -n "${MCTL_API_TOKEN:-}" ]; then
               DOMAIN_DATA=$(curl -sSf --max-time 30 --retry 3 --retry-connrefused \
                 -H "Authorization: Bearer ${MCTL_API_TOKEN}" \
                 "${MCTL_API_URL}/api/v1/domains?team=${TEAM}&service=${SERVICE}")
