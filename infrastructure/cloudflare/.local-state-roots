@@ -1,4 +1,7 @@
 # Roots that are knowingly NOT on the shared R2 backend, one path per line.
+# Either form works — `zones/mctl-ru` or `infrastructure/cloudflare/zones/mctl-ru`
+# — and an entry naming no real root stops the drift run rather than quietly
+# excepting nothing. See .github/scripts/cloudflare-local-state-roots.sh.
 #
 # Every other root must declare `backend "s3"`, and cloudflare-plan.yml enforces
 # that twice: the coverage guard requires a backend.tf to exist, and the plan job

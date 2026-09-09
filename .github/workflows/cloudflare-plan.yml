@@ -67,7 +67,13 @@ jobs:
           # SIGPIPE, and 141 becomes the pipeline status. Inside `if` that reads
           # as "no match", so a Cloudflare change would be recorded as
           # changed=false and the required job would pass without planning it.
-          if grep -qE '^(infrastructure/cloudflare/|\.github/workflows/cloudflare-plan\.yml$)' <<< "$files"; then
+          # The gate has to watch everything it is made of, not just the
+          # configuration it inspects. .github/scripts/cloudflare-local-state-roots.sh
+          # decides which roots are excused from the backend requirement, so a
+          # pull request editing only that file could otherwise excuse a root
+          # without a single check running. cloudflare-drift.yml is here for the
+          # same reason: it shares the discovery and the exception list.
+          if grep -qE '^(infrastructure/cloudflare/|\.github/scripts/cloudflare-local-state-roots\.sh$|\.github/workflows/cloudflare-(plan|drift)\.yml$)' <<< "$files"; then
             changed=true
           else
             changed=false
@@ -158,7 +164,7 @@ jobs:
           # form exits 128.
           base_paths=$(tree_paths "$BASE")
           head_paths=$(tree_paths HEAD)
-          local_state_roots=$(grep -v '^\s*\(#.*\)\?$' infrastructure/cloudflare/.local-state-roots || true)
+          local_state_roots=$(.github/scripts/cloudflare-local-state-roots.sh)
 
           # OpenTofu loads JSON configuration too, so versions.tf.json marks a root
           # exactly as versions.tf does; discovery accepts both for the same
@@ -230,6 +236,21 @@ jobs:
             grep -qxF -- "$(dirname "$f")" <<< "$head_roots" \
               || problems="${problems}configuration in no root's own directory: $f\n"
           done <<< "$head_paths"
+
+          # Checked in the other direction too, and NOT through $problems: an
+          # entry naming no root excuses nothing, and the only place that used
+          # to notice was drift — on a schedule, after the merge, on main. That
+          # is the very shape this list exists to remove, moved up one level
+          # into the list itself. It is also not something the removal label
+          # should be able to wave through: the label says "this root loses
+          # coverage deliberately", not "this line is a typo".
+          while IFS= read -r excluded; do
+            [ -n "$excluded" ] || continue
+            grep -qxF -- "$excluded" <<< "$head_roots" && continue
+            echo "::error::.local-state-roots lists '$excluded', which is not a discovered root"
+            echo "discovered roots:"; printf '%s\n' "$head_roots"
+            exit 1
+          done <<< "$local_state_roots"
 
           [ -n "$problems" ] || { echo "every root at $BASE is still discovered, backed and complete"; exit 0; }
 
@@ -410,11 +431,36 @@ jobs:
           ROOT: ${{ matrix.root }}
         run: |
           set -euo pipefail
-          if grep -qxF -- "$ROOT" "$GITHUB_WORKSPACE/infrastructure/cloudflare/.local-state-roots"; then
+          record="${TF_DATA_DIR:-.terraform}/terraform.tfstate"
+          # Into a variable, then a here-string. `script | grep -q` lets grep
+          # close the pipe at the first match, and with pipefail a SIGPIPE'd
+          # producer makes the whole pipeline 141 — read as "no match" inside
+          # `if`, which would send a legitimately excepted root down the failure
+          # path. It needs an output larger than the pipe buffer to bite (~2000
+          # entries here; five do not), so this list will never reach it — but
+          # the same shape has already produced one real false negative in this
+          # file, and the correct form costs a line.
+          excepted=$("$GITHUB_WORKSPACE/.github/scripts/cloudflare-local-state-roots.sh" \
+                       "$GITHUB_WORKSPACE/infrastructure/cloudflare/.local-state-roots")
+          if grep -qxF -- "$ROOT" <<< "$excepted"; then
+            # The list means "this root has no remote state". Anything init
+            # actually resolved has to agree, so the test is on local, not on
+            # s3: a listed root moved to any other remote backend — http,
+            # anything — is watchable again while drift goes on skipping it,
+            # and naming only s3 would let that through. Local state leaves no
+            # record at all, which is why an absent one is the other pass.
+            # This is the last step of #1103, so the check exists to name it
+            # rather than let it pass.
+            if [ -f "$record" ]; then
+              resolved=$(jq -r '.backend.type // "none"' "$record")
+              if [ "$resolved" != "local" ]; then
+                echo "::error::$ROOT resolved the '$resolved' backend but is still listed in .local-state-roots — remove the entry so drift watches it again"
+                exit 1
+              fi
+            fi
             echo "::warning::$ROOT is on local state by exception; its plan does not reflect live Cloudflare"
             exit 0
           fi
-          record="${TF_DATA_DIR:-.terraform}/terraform.tfstate"
           [ -f "$record" ] \
             || { echo "::error::$ROOT resolved no remote backend — it is planning against empty local state"; exit 1; }
           type=$(jq -r '.backend.type // "none"' "$record")
