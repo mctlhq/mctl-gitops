@@ -107,7 +107,14 @@ Add optional structured configuration for one or more pre-registered OAuth clien
 ]
 ```
 
-No secret field is added in this spike. Seed configured clients into the existing registered-client map with non-expiring/static semantics equivalent to the built-in self-connect client.
+No secret field is added in this spike.
+
+Implementation boundary:
+
+- `internal/config` parses and validates the structured configuration;
+- `cmd/server` passes the parsed records into `oauth.Config` (or an equivalent explicit constructor option);
+- `internal/oauth.New` seeds them into its private `s.clients` registry with `CreatedAt` zero/static semantics, exactly where the built-in `mctl_self_connect` client is already seeded;
+- `cmd/server` must not reach into `oauth.Server` internals directly.
 
 This path uses exact redirect URI comparison. It does **not** use the implicit redirect-host allow-list and does not call `/oauth/register`.
 
