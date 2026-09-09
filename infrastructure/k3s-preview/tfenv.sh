@@ -20,6 +20,15 @@
 # lived in the Keychain before this script existed, and terraform.tfvars was
 # a second copy of it.
 #
+# All three are REQUIRED, including the etcd pair. kube.tf reads it as
+# optional -- `etcd_s3_backup = var.etcd_s3_access_key == "" ? {} : {...}` --
+# which is true for a cluster that never had snapshots. This one has them, so
+# an empty value is not "snapshots stay off", it is "turn snapshots off":
+# measured, a plan with the pair blank proposes replacing
+# module.kube-hetzner.terraform_data.control_plane_config, which rewrites the
+# k3s configuration on the single control-plane node. Failing loudly here is
+# the safer behaviour, and is deliberate.
+#
 # The first read of each item may raise a Keychain prompt. Grant "Always
 # Allow" if you would rather not see it on every plan.
 #
@@ -28,6 +37,14 @@
 # Keychain service mctl-terraform-state-local) and `terraform init` needs them
 # before any variable is read. Export them yourself, or add them here if you
 # get tired of doing so.
+
+# Executed rather than sourced, the exports land in a subshell and vanish, but
+# the success message below would still print -- so refuse instead of lying.
+# BASH_SOURCE[0] equals $0 only when this file IS the running script.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  echo "tfenv.sh: source this file, do not run it:  source ./tfenv.sh" >&2
+  exit 1
+fi
 
 _mctl_kc() {
   local service="$1" account="$2" value

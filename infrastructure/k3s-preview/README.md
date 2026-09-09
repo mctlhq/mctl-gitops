@@ -27,8 +27,14 @@ Uses the [`kube-hetzner`](https://github.com/kube-hetzner/terraform-hcloud-kube-
   `terraform.tfvars` any more — it held the same values in plaintext on disk,
   and CI never used it (`terraform.yml` passes `TF_VAR_*` from Actions secrets),
   so local and CI runs now read the same variables from different stores.
-  The etcd R2 token must also cover the `mctl-etcd-snapshots` bucket — create it
-  once in the Cloudflare dashboard; left unset, snapshots simply stay disabled.
+  The etcd R2 token must also cover the `mctl-etcd-snapshots` bucket. All three
+  are required: `kube.tf` treats the etcd pair as optional (`etcd_s3_backup =
+  var.etcd_s3_access_key == "" ? {} : {...}`), which is true only for a cluster
+  that never had snapshots. This one has them, so leaving the pair blank does not
+  mean "snapshots stay off" — measured, it plans a **replacement of
+  `terraform_data.control_plane_config`**, rewriting k3s configuration on the
+  single control-plane node. `tfenv.sh` therefore refuses to continue when any of
+  the three is missing, on purpose.
   Restore procedure: `docs/runbooks/restore.md` at the repo root.
 - Cloudflare R2 credentials for the **state backend**, as env vars. These are a
   different credential from the etcd one (bucket `mctl-terraform-state`;
