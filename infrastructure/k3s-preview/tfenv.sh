@@ -43,10 +43,23 @@ _mctl_kc() {
   printf '%s' "$value"
 }
 
-TF_VAR_hcloud_token=$(_mctl_kc mctl-hcloud-token api-token) || return 1 2>/dev/null || exit 1
-TF_VAR_etcd_s3_access_key=$(_mctl_kc mctl-r2-etcd-snapshots access-key-id) || return 1 2>/dev/null || exit 1
-TF_VAR_etcd_s3_secret_key=$(_mctl_kc mctl-r2-etcd-snapshots secret-access-key) || return 1 2>/dev/null || exit 1
-export TF_VAR_hcloud_token TF_VAR_etcd_s3_access_key TF_VAR_etcd_s3_secret_key
+# Collect every failure before giving up, so a fresh machine is told about all
+# three missing items at once rather than one per run. The cleanup below then
+# runs on the failure path too -- an early `return` would leave _mctl_kc defined
+# in the caller's shell.
+_mctl_rc=0
+TF_VAR_hcloud_token=$(_mctl_kc mctl-hcloud-token api-token) || _mctl_rc=1
+TF_VAR_etcd_s3_access_key=$(_mctl_kc mctl-r2-etcd-snapshots access-key-id) || _mctl_rc=1
+TF_VAR_etcd_s3_secret_key=$(_mctl_kc mctl-r2-etcd-snapshots secret-access-key) || _mctl_rc=1
 unset -f _mctl_kc
+
+if [ "$_mctl_rc" -ne 0 ]; then
+  unset _mctl_rc TF_VAR_hcloud_token TF_VAR_etcd_s3_access_key TF_VAR_etcd_s3_secret_key
+  # `return` when sourced, `exit` when run directly.
+  return 1 2>/dev/null || exit 1
+fi
+unset _mctl_rc
+
+export TF_VAR_hcloud_token TF_VAR_etcd_s3_access_key TF_VAR_etcd_s3_secret_key
 
 echo "tfenv.sh: exported TF_VAR_hcloud_token, TF_VAR_etcd_s3_access_key, TF_VAR_etcd_s3_secret_key"
