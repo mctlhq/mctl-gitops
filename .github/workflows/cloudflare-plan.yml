@@ -432,9 +432,17 @@ jobs:
         run: |
           set -euo pipefail
           record="${TF_DATA_DIR:-.terraform}/terraform.tfstate"
-          if "$GITHUB_WORKSPACE/.github/scripts/cloudflare-local-state-roots.sh" \
-               "$GITHUB_WORKSPACE/infrastructure/cloudflare/.local-state-roots" \
-             | grep -qxF -- "$ROOT"; then
+          # Into a variable, then a here-string. `script | grep -q` lets grep
+          # close the pipe at the first match, and with pipefail a SIGPIPE'd
+          # producer makes the whole pipeline 141 — read as "no match" inside
+          # `if`, which would send a legitimately excepted root down the failure
+          # path. It needs an output larger than the pipe buffer to bite (~2000
+          # entries here; five do not), so this list will never reach it — but
+          # the same shape has already produced one real false negative in this
+          # file, and the correct form costs a line.
+          excepted=$("$GITHUB_WORKSPACE/.github/scripts/cloudflare-local-state-roots.sh" \
+                       "$GITHUB_WORKSPACE/infrastructure/cloudflare/.local-state-roots")
+          if grep -qxF -- "$ROOT" <<< "$excepted"; then
             # Listed AND on s3 is a contradiction, and the expensive kind: the
             # root is watchable again, but drift goes on skipping it because the
             # line outlived the migration it documented. This is the last step
