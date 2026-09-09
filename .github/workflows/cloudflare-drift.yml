@@ -105,7 +105,10 @@ jobs:
             0) echo "### \`$ROOT\` — in sync" >> "$GITHUB_STEP_SUMMARY" ;;
             2) { echo "### \`$ROOT\` — DRIFT";
                  echo; echo '```terraform'; cat plan.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY" ;;
-            *) echo "### \`$ROOT\` — plan failed (exit $code)" >> "$GITHUB_STEP_SUMMARY" ;;
+            *) { echo "### \`$ROOT\` — plan failed (exit $code)";
+                 echo; echo '```terraform';
+                 cat plan.txt 2>/dev/null || echo "(no plan output captured)";
+                 echo '```'; } >> "$GITHUB_STEP_SUMMARY" ;;
           esac
           rm -f plan.txt
           exit "$code"
@@ -118,6 +121,6 @@ jobs:
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           message: |
             *Cloudflare drift* — `${{ matrix.root }}`
-            Exit code `${{ steps.plan.outputs.code }}` (2 = drift, 1 = plan error)
+            Exit code `${{ steps.plan.outputs.code || format('none — plan {0}', steps.plan.conclusion) }}` (2 = drift, 1 = plan error)
             Cloudflare no longer matches Git, or the plan could not run.
             Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

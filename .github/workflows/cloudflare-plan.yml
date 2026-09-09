@@ -65,6 +65,43 @@ jobs:
           echo "changed=$changed" >> "$GITHUB_OUTPUT"
           echo "relevant files changed: $changed"
 
+      # A root is discovered by walking the pull request's own tree, so a root
+      # deleted by the pull request is invisible to `discover`: the matrix
+      # simply omits it, every remaining root plans clean, and the required
+      # check goes green. Nothing in the plan says that the resources the
+      # deleted root managed are about to become unmanaged — they stay live in
+      # Cloudflare, and cloudflare-drift.yml stops watching them for the same
+      # reason. If the root held Zero Trust policies, the policies survive
+      # their own removal from Git, unwatched.
+      #
+      # There is no plan that can show this: planning the base revision of a
+      # deleted root reports "in sync", which is true and beside the point.
+      # So the guard blocks instead of reporting, and the escape hatch is a
+      # label — a deliberate, reviewer-visible act rather than a silent one.
+      - name: Guard against silently removed roots
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
+        run: |
+          set -euo pipefail
+          [ -n "${BASE:-}" ] || { echo "no base ref — guard not applicable"; exit 0; }
+          removed=$(git -c core.quotePath=false diff -z --name-only --diff-filter=D \
+                      "$BASE"...HEAD -- 'infrastructure/cloudflare/**/versions.tf' \
+                    | tr '\0' '\n')
+          [ -n "$removed" ] || { echo "no roots removed"; exit 0; }
+
+          if jq -e 'if type == "array" then index("cloudflare-root-removal") else null end' \
+               <<< "${LABELS:-[]}" > /dev/null; then
+            echo "::notice::root removal acknowledged by the cloudflare-root-removal label"
+            echo "$removed"
+            exit 0
+          fi
+
+          echo "::error::this pull request deletes a Cloudflare root; its resources would stay live in Cloudflare but leave both plan and drift coverage"
+          echo "$removed"
+          echo "Destroy the root's resources first (empty its .tf files, apply, remove its state key), then delete the directory. To remove the directory without destroying — an intentional hand-off of ownership — label this pull request cloudflare-root-removal."
+          exit 1
+
   discover:
     name: discover roots
     needs: changes

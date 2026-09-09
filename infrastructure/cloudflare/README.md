@@ -97,7 +97,7 @@ for it.
 
 | Workflow | Trigger | Behaviour |
 | --- | --- | --- |
-| `cloudflare-plan.yml` | `pull_request` | fmt, validate, plan per root. A failure fails the check — there is no `continue-on-error`. Destructive changes are called out in the summary. The `cloudflare-plan` job is the stable context to mark required: it runs on every pull request, including ones that touch nothing here. |
+| `cloudflare-plan.yml` | `pull_request` | fmt, validate, plan per root. A failure fails the check — there is no `continue-on-error`. Destructive changes are called out in the summary. The `cloudflare-plan` job is the stable context to mark required: it runs on every pull request, including ones that touch nothing here. Deleting a root is blocked: a root the pull request removes is never discovered, so nothing plans it and its resources stay live in Cloudflare while leaving both plan and drift coverage. Destroy them first, or label the pull request `cloudflare-root-removal` to hand ownership over deliberately. |
 | `cloudflare-drift.yml` | schedule | plan per root; any difference from Git fails the run and notifies. It never applies. |
 | `opentofu-state-backup.yml` | schedule | copies every state object in both state buckets to a dated prefix under `_backups/` in the same bucket — see the limitation noted above. Restricted to `main` by the `state-backup` environment's branch policy, since `workflow_dispatch` would otherwise run a rewritten copy of this file from any branch with the writable credential. |
 
