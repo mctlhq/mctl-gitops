@@ -53,9 +53,21 @@ jobs:
     # workflow_dispatch accepts a --ref, and the dispatched run executes THAT
     # branch's copy of this file. A repository writer could therefore point a
     # rewritten version of this workflow at the writable state credential
-    # without review. The environment's deployment-branch policy allows only
-    # `main`, so the secrets are released to a run from main and nowhere else —
-    # the restriction lives outside the YAML the branch controls.
+    # without review.
+    #
+    # Two layers, because each covers the other's blind spot:
+    #
+    #   * the `if` below is visible in review but lives in the YAML a branch
+    #     controls, so a rewritten copy can simply drop it;
+    #   * the state-backup environment's deployment-branch policy allows `main`
+    #     alone and lives in repository settings, outside that branch's reach —
+    #     but it is not verifiable from this file, and GitHub silently creates a
+    #     referenced environment *unprotected* if it does not already exist.
+    #
+    # Verify the policy is real, do not assume it:
+    #   gh api repos/mctlhq/mctl-gitops/environments/state-backup/deployment-branch-policies
+    # Expected: exactly one policy, name "main".
+    if: github.ref == 'refs/heads/main'
     environment: state-backup
 
     strategy:
@@ -84,6 +96,20 @@ jobs:
           # Excluding the backup prefix matters: without it each run would copy
           # every previous snapshot into the new one and the bucket would grow
           # geometrically.
+          # Count what is actually there before deciding what "copied nothing"
+          # means. A root with no resources never writes a state file, so a
+          # bucket can legitimately be empty — mctl-cloudflare-state is exactly
+          # that until the first Cloudflare resource is imported. Without this,
+          # the guard below would fail every night and page for a
+          # working-as-intended state.
+          source_count=$(aws s3 ls "s3://${BUCKET}/" --recursive --endpoint-url "$R2_ENDPOINT" \
+                          | grep -v "/${BACKUP_PREFIX}/" | grep -c '\.tfstate' || true)
+          echo "state objects in source: $source_count"
+          if [ "$source_count" -eq 0 ]; then
+            echo "no state files in ${BUCKET} yet — nothing to snapshot" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
           aws s3 sync "s3://${BUCKET}/" "$dest" \
             --endpoint-url "$R2_ENDPOINT" \
             --exclude '*' \
@@ -91,12 +117,13 @@ jobs:
             --include '*.tfstate.backup' \
             --exclude "${BACKUP_PREFIX}/*"
 
-          # A backup that silently copies nothing is worse than no backup,
-          # because it looks healthy on the dashboard. Fail loudly instead.
+          # A backup that silently copies nothing when there IS something to
+          # copy is worse than no backup, because it looks healthy on the
+          # dashboard. That case still fails loudly.
           copied=$(aws s3 ls "$dest" --recursive --endpoint-url "$R2_ENDPOINT" | wc -l)
           echo "objects copied: $copied"
           if [ "$copied" -eq 0 ]; then
-            echo "::error::state backup copied 0 objects — check credentials and bucket contents"
+            echo "::error::${BUCKET} holds $source_count state object(s) but the snapshot copied 0 — check credentials"
             exit 1
           fi
 

@@ -28,10 +28,17 @@ everything from scratch. **Never apply such a plan.** Restore first.
 ## Prerequisites
 
 ```sh
-export AWS_ACCESS_KEY_ID=…        # R2_ACCESS_KEY_ID
-export AWS_SECRET_ACCESS_KEY=…    # R2_SECRET_ACCESS_KEY
+export AWS_ACCESS_KEY_ID=…        # see below for which credential
+export AWS_SECRET_ACCESS_KEY=…
 export AWS_DEFAULT_REGION=auto
 export R2=https://6a09f637d20e1f66a8e9d45ebe778058.r2.cloudflarestorage.com
+
+# Required, not optional. R2 rejects the checksum headers recent AWS CLI
+# versions send by default; without these, the cp/ls commands below fail with
+# an opaque error at the worst possible moment. The backup workflow sets the
+# same two variables for the same reason.
+export AWS_REQUEST_CHECKSUM_CALCULATION=when_required
+export AWS_RESPONSE_CHECKSUM_VALIDATION=when_required
 ```
 
 Credentials are in Vault: `secret/platform/terraform/r2-state` for
@@ -53,7 +60,7 @@ the damage.
 
 ```sh
 SNAP=2026-09-09T03-30-00Z
-KEY=cloudflare/zones/mctl-ru/terraform.tfstate
+KEY=cloudflare/account/terraform.tfstate   # a key that actually exists
 
 aws s3 cp "s3://mctl-cloudflare-state/_backups/$SNAP/$KEY" ./restore.tfstate \
   --endpoint-url "$R2"
@@ -80,8 +87,12 @@ aws s3 rm "s3://mctl-cloudflare-state/$KEY.tflock" --endpoint-url "$R2"
 
 ## 4. Verify — this step is the whole point
 
+Derive the directory from the key you just restored, rather than pasting a path
+— the point is to verify *what was restored*, not a root that happens to be
+mentioned in an example:
+
 ```sh
-cd infrastructure/cloudflare/zones/mctl-ru
+cd "infrastructure/${KEY%/terraform.tfstate}"   # e.g. infrastructure/cloudflare/account
 tofu init -reconfigure
 tofu plan
 ```
