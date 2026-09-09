@@ -12,6 +12,10 @@ on:
         description: "Run terraform apply (default: plan only)"
         type: boolean
         default: false
+      allow_destroy:
+        description: "Permit a plan that destroys non-bookkeeping resources"
+        type: boolean
+        default: false
 
 jobs:
   terraform:
@@ -29,17 +33,61 @@ jobs:
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       TF_VAR_hcloud_token: ${{ secrets.HCLOUD_TOKEN }}
-      # etcd S3 snapshots reuse the R2 token; it must also grant access to
-      # the mctl-etcd-snapshots bucket
-      TF_VAR_etcd_s3_access_key: ${{ secrets.R2_ACCESS_KEY_ID }}
-      TF_VAR_etcd_s3_secret_key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      # The etcd snapshot credential is NOT the state-backend credential, which
+      # is what this used to pass. They are separate R2 tokens for separate
+      # buckets, and the etcd pair is part of local.k3s-config: feeding the
+      # wrong one makes CI render a k3s configuration that differs from the
+      # live node, so terraform_data.control_plane_config plans as a
+      # replacement and its provisioner rewrites /etc/rancher/k3s/config.yaml
+      # and restarts k3s on the SINGLE control-plane node. A local plan with
+      # the right credential reports "No changes"; the drift was between CI and
+      # reality, not between Git and reality. Found while applying #1119.
+      TF_VAR_etcd_s3_access_key: ${{ secrets.ETCD_S3_ACCESS_KEY_ID }}
+      TF_VAR_etcd_s3_secret_key: ${{ secrets.ETCD_S3_SECRET_ACCESS_KEY }}
     
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       
-      # SSH keys are only needed for terraform apply (modifying cluster).
-      # On push (plan only) we skip this — secrets may not be set.
+      # Everything an apply needs, checked BEFORE Terraform runs.
+      #
+      # This exists because Terraform destroys before it creates. On
+      # 2026-09-09 an apply reached hcloud_ssh_key with an empty
+      # SSH_PUBLIC_KEY, destroyed the live key, and then failed to recreate it
+      # ("Must not begin with a whitespace character" -- the file held the lone
+      # newline that printf writes for an empty secret). Neither SSH secret
+      # existed at all, so the apply path could never have worked; it simply
+      # had not been exercised. A cheap check here turns that into a job that
+      # stops before touching anything.
+      - name: Preflight the apply credentials
+        if: inputs.apply == true
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_PUBLIC_KEY: ${{ secrets.SSH_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          fail=0
+          require() {
+            if [ -z "$2" ]; then
+              echo "::error::$1 is empty or not set -- an apply needs it"
+              fail=1
+            fi
+          }
+          require SSH_PRIVATE_KEY "$SSH_PRIVATE_KEY"
+          require SSH_PUBLIC_KEY  "$SSH_PUBLIC_KEY"
+          require HCLOUD_TOKEN    "$TF_VAR_hcloud_token"
+          # Empty etcd credentials are not "snapshots stay off" on this
+          # cluster, they are "turn snapshots off" -- and that rewrites the
+          # control-plane k3s config. Refuse rather than plan it by accident.
+          require ETCD_S3_ACCESS_KEY_ID     "$TF_VAR_etcd_s3_access_key"
+          require ETCD_S3_SECRET_ACCESS_KEY "$TF_VAR_etcd_s3_secret_key"
+          case "$SSH_PUBLIC_KEY" in
+            ssh-*) ;;
+            *) echo "::error::SSH_PUBLIC_KEY does not start with 'ssh-'; Hetzner will reject it and the existing key is destroyed first"
+               fail=1 ;;
+          esac
+          exit "$fail"
+
       - name: Setup SSH keys
         if: inputs.apply == true
         run: |
@@ -66,13 +114,44 @@ jobs:
       - name: Terraform Validate
         run: terraform validate
       
+      # -out, so the apply below executes the plan that was printed here
+      # rather than computing a second one nobody saw. The previous shape --
+      # an advisory plan with continue-on-error, then a bare
+      # `terraform apply -auto-approve` -- meant the destructive plan of
+      # 2026-09-09 was never shown before it ran.
+      #
+      # continue-on-error is gone with it: a plan that cannot be produced is a
+      # failure, not a note.
       - name: Terraform Plan
-        run: terraform plan -no-color
-        continue-on-error: true
-      
+        run: terraform plan -no-color -input=false -out=tfplan
+
+      # A cluster root should not be destroying anything during a routine
+      # apply. terraform_data and local_file are bookkeeping -- they carry
+      # provisioner runs and generated files, and replacing them is normal.
+      # Anything else being destroyed means the plan is not what was intended,
+      # and the run stops so a person can look.
+      - name: Refuse to destroy real infrastructure
+        if: inputs.apply == true
+        run: |
+          set -euo pipefail
+          terraform show -json tfplan > tfplan.json
+          doomed=$(jq -r '
+            [ .resource_changes[]?
+              | select(.change.actions | index("delete"))
+              | select(.type | test("^(terraform_data|local_file|local_sensitive_file)$") | not)
+              | "\(.address) (\(.change.actions | join(",")))"
+            ] | .[]' tfplan.json)
+          if [ -n "$doomed" ]; then
+            echo "::error::this plan destroys resources that are not bookkeeping:"
+            printf '%s\n' "$doomed"
+            echo "::error::re-run with allow_destroy: true only if that is genuinely intended"
+            [ "${{ inputs.allow_destroy }}" = "true" ] || exit 1
+            echo "::warning::allow_destroy was set; continuing"
+          fi
+
       - name: Terraform Apply
         if: inputs.apply == true
-        run: terraform apply -auto-approve
+        run: terraform apply -no-color -input=false tfplan
 
       - name: Notify Telegram on failure
         if: failure()

@@ -61,6 +61,23 @@ terraform apply -var-file=terraform.tfvars
 The `terraform.yml` GitHub Actions workflow runs `terraform plan` automatically
 on every push to `infrastructure/k3s-preview/**`. Apply requires manual dispatch with `apply: true`.
 
+**Applying from CI needs secrets that do not exist yet.** The apply path had never
+been exercised until 2026-09-09, when it destroyed the cluster's `hcloud_ssh_key`
+and could not recreate it — `SSH_PRIVATE_KEY` and `SSH_PUBLIC_KEY` are referenced
+by the workflow but are not set, in this repository or the organisation, so the
+job wrote a lone newline and Hetzner refused it. The workflow now refuses the
+apply up front instead, and applies run locally until someone decides to put a
+node SSH key into Actions secrets. Four secrets gate it:
+
+| Secret | Purpose |
+| --- | --- |
+| `HCLOUD_TOKEN` | exists |
+| `SSH_PRIVATE_KEY` / `SSH_PUBLIC_KEY` | **absent** — the module drives node configuration over SSH, so an apply cannot work without them. Putting a node's private key in a repository secret makes it readable by every workflow in the repo (see #1118); that is a decision, not an oversight. |
+| `ETCD_S3_ACCESS_KEY_ID` / `ETCD_S3_SECRET_ACCESS_KEY` | **absent** — the snapshots-bucket token. Until 2026-09-09 the workflow passed the *state-backend* token here instead, which made every CI plan propose replacing `terraform_data.control_plane_config` and restarting k3s on the single control-plane node. |
+
+See #1139. Local applies read all of these from the Keychain via `tfenv.sh` and
+are unaffected.
+
 ## Updating the kube-hetzner module
 
 The module version is pinned in `kube.tf`:
