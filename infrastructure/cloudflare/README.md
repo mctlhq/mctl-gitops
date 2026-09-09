@@ -53,13 +53,20 @@ sides would fight over it, and a plan in one would propose undoing the other.
 
 Nothing is committed. CI reads:
 
+- `R2_PLAN_ACCESS_KEY_ID` / `R2_PLAN_SECRET_ACCESS_KEY` — state access for plan
+  and drift. **Object Read only, scoped to `mctl-terraform-state` alone**;
+  verified that `PutObject`, `DeleteObject` and any other bucket all return
+  `AccessDenied`. Both jobs therefore pass `-lock=false`, because taking the
+  state lock is itself a write.
 - `CLOUDFLARE_API_TOKEN` — plan identity, **read-only across all zones**
   (`Cache Rules`, `DNS`, `Zone`, `Zone Settings`, `Zone WAF`, `Single Redirect`,
   `Page Rules`, `Access: Apps and Policies`, `Email Routing Rules`,
   `Workers Routes`, all `Read`). Verified read-only: a `POST` to create a DNS
   record is rejected. Apply will need a separate, narrower write identity —
   it does not exist yet, and no workflow here performs an apply.
-- `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` — state backend access.
+- `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` — the writable state credential.
+  Used only by the backup workflow, which runs from `main`. It is deliberately
+  never exposed to a job that plans unreviewed pull-request code.
 
 Mirror copies live in Vault under `secret/platform/cloudflare/`.
 
@@ -109,19 +116,20 @@ Provider installation is therefore restricted to `cloudflare/cloudflare`
 vectors — `hashicorp/external` with a shell `program`, the `http` data source
 and friends — at init, before plan runs.
 
-Two things it does not remove, worth a glance in any PR touching a root:
+What it does not remove, worth a glance in any PR touching a root:
 
 - **`provider "cloudflare" { base_url = … }`** — `base_url` is an optional,
   non-sensitive provider attribute, so a root can point the provider at an
   arbitrary host and the API token follows. That token is read-only across the
   four zones, so the loss is disclosure of configuration rather than control.
 - **a `backend "s3"` block with its own `endpoints`** — the R2 access key id and
-  a SigV4 signature would be sent there. The secret itself is not transmitted,
-  but this is the credential that can write to the state bucket.
+  a SigV4 signature would be sent there. Since the plan credential is
+  Object-Read-only on a single bucket, what leaks is the identity of a key that
+  cannot write anything.
 
-The durable fix for both is a separate read-only R2 token for pull-request plans
-(with `-lock=false`), leaving the writable credential to drift and apply. It does
-not exist yet.
+Both are now failures of confidentiality at worst. Neither can change Cloudflare
+or the state bucket, because no credential capable of doing so is present in a
+job that runs unreviewed code.
 
 ## Break-glass
 

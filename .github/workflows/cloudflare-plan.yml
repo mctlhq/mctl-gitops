@@ -91,43 +91,35 @@ jobs:
     # Roots are discovered by walking the pull request's own tree, and OpenTofu
     # configures providers and evaluates data sources during plan. So a pull
     # request that adds a root is, in effect, submitting code that CI runs with
-    # these credentials in the environment. This repository is public, so forks
-    # get no secrets — but branches in the repository do, and several are opened
-    # by automation rather than by a person.
+    # these credentials present. This repository is public, so forks get no
+    # secrets — but branches in the repository do, and several are opened by
+    # automation rather than by a person.
     #
-    # The defence is the provider allowlist below: nothing but the Cloudflare
-    # provider can be installed, so the usual code-execution vectors
-    # (hashicorp/external with a shell program, the http data source, and so on)
-    # fail at init before plan is reached.
+    # Both credentials here are therefore chosen so that running hostile code
+    # with them is not worth much:
     #
-    # What that does NOT cover, and what a reviewer should therefore watch for
-    # in any PR that adds or edits a root:
+    #   * CLOUDFLARE_API_TOKEN is read-only across the four zones. Note that
+    #     `base_url` is an optional, non-sensitive provider attribute, so a root
+    #     can redirect the provider and the token follows it — the exposure is
+    #     disclosure of configuration, not control of it.
+    #   * R2_PLAN_ACCESS_KEY_ID is Object Read only and scoped to the
+    #     mctl-terraform-state bucket alone. Verified: PutObject, DeleteObject
+    #     and reads of any other bucket all return AccessDenied. That is why
+    #     plan runs with -lock=false — acquiring the state lock is itself a
+    #     write, and this credential deliberately cannot perform one.
     #
-    #   * `provider "cloudflare" { base_url = ... }` — base_url is an optional,
-    #     non-sensitive provider attribute, so a root can point the provider at
-    #     an arbitrary host and the API token goes there. That token is
-    #     read-only across the four zones, which limits the damage to
-    #     disclosure of configuration.
-    #   * a `backend "s3"` block with its own `endpoints` — the R2 access key id
-    #     and a SigV4 signature would be sent to that host. The secret itself is
-    #     not transmitted, but this is the credential that can write to the
-    #     state bucket, so it is the one worth protecting properly.
+    # The writable R2 credential (R2_ACCESS_KEY_ID) is never exposed to a job
+    # that plans unreviewed code. It belongs to the backup workflow, and to a
+    # future apply.
     #
-    # The durable fix for both is a separate, read-only R2 token for pull-request
-    # plans (with -lock=false), leaving the writable credential to drift and
-    # apply. That token does not exist yet.
+    # Provider installation is additionally restricted to cloudflare/cloudflare,
+    # so the usual code-execution vectors (hashicorp/external with a shell
+    # program, the http data source) fail at init before plan is reached.
 
     env:
-      # Read-only across all zones. Verified: a POST to create a DNS record is
-      # rejected, so this workflow cannot change Cloudflare even if asked to.
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-
-      # Second line of defence, independent of the approval above: refuse to
-      # install any provider other than Cloudflare. A malicious root cannot
-      # reach for hashicorp/external (or anything else that runs code at plan
-      # time) because init fails before plan is ever reached.
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_PLAN_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_PLAN_SECRET_ACCESS_KEY }}
       TF_CLI_CONFIG_FILE: ${{ github.workspace }}/.opentofu-ci.tfrc
 
     steps:
@@ -161,7 +153,7 @@ jobs:
       - name: Plan
         run: |
           set -euo pipefail
-          tofu plan -input=false -no-color -lock-timeout=5m -out=tfplan | tee plan.txt
+          tofu plan -input=false -no-color -lock=false -out=tfplan | tee plan.txt
           tofu show -no-color -json tfplan > plan.json
 
       # Creating or updating is normal in a PR; destroying is the thing that
