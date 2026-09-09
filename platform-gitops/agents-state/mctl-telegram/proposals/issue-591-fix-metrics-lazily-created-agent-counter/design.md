@@ -216,3 +216,17 @@ first denial cannot fire it anyway.
   retroactively repair a series already created above zero. An operator wanting the baseline
   immediately can restart the worker pod, which is safe (`Worker.Loop` claim fencing is
   attempt-based; see `verifyJobCompleted` in `claudeinvoker.go:209-217`).
+
+
+## Amendment — 2026-09-09, after implementation review
+
+This design's scope (two counters, four series, `mctl_agent_jobs_total` explicitly
+left untouched and `or vector(0)`-guarded) was widened during review of
+mctlhq/mctl-telegram#593 to four families and 118 series. The reasoning is recorded
+in `requirements.md` under "Scope expanded during implementation"; read that section
+before treating any scope statement above as current.
+
+What did **not** change: no alert expression was touched by that PR, in the mirror
+or in `mctl-gitops`, and the `or vector(0)` guard on `MctlAgentJobCostHigh` stays —
+a zero baseline only helps once it has actually been scraped, so the guard still
+covers older images, a scrape gap, and a total loss of the emitting target.

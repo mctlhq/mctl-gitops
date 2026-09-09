@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-09-09T16:20:53Z'
+status: merged
+updated_at: '2026-09-09T17:20:47Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -18,6 +18,8 @@ attempt:
   finished_at: '2026-09-09T14:17:01Z'
 pr: https://github.com/mctlhq/mctl-portal/pull/118
 github:
-  state: open
-  head_sha: 25fdbb265002aad071318f624fff45b3b763c370
-  observed_at: '2026-09-09T16:20:53Z'
+  state: merged
+  head_sha: ec45d4a0558331990379bffa333fbc6af65e154e
+  observed_at: '2026-09-09T17:20:47Z'
+merged_at: '2026-09-09T17:20:47Z'
+merge_commit: 5d875293f197371c2d3020c08262ef381153773c

@@ -19,9 +19,15 @@ Deliberately **not** managed here:
   out of the configuration is safe: OpenTofu only destroys what it tracks.
 - rulesets `http_request_dynamic_redirect` (301 apex → `https://mctl.ai`) and
   `http_request_firewall_custom` (block `.php`)
-- page rule `*.mctl.ru/*` → 301 `https://$1.mctl.ai/$2`
-- worker routes `mctl.ru/*` and `*.mctl.ru/*` → `mctl-landing-form`
-  (blocked on the OpenTofu-vs-Wrangler ownership decision, #1089)
+- worker routes `mctl.ru/*` and `*.mctl.ru/*` → `mctl-landing-form`.
+  The ownership question is **settled** (#1089 item 9, 2026-09-09): the routes
+  belong here, the script and its secrets stay in Wrangler, because OpenTofu
+  does not deploy Worker code. They are still absent from this pilot only
+  because importing them is #1103's work, not because anything is undecided.
+  Do not read this entry as licence to skip them in the next slice.
+- page rules — **deleted**, not deferred. They matched the same subdomains as
+  the worker routes but never fired; the worker answers first. See the
+  redirect subsection in `infrastructure/cloudflare/README.md`.
 
 ## Running the pilot
 

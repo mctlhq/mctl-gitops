@@ -49,6 +49,122 @@ the easiest of the three to import by accident.
 Managing the same object from two states is what #47 explicitly forbids: both
 sides would fight over it, and a plan in one would propose undoing the other.
 
+## Pre-import decisions (#1089)
+
+The account carried objects that were stale, duplicated, or broader than
+intended. Importing them would have made each one look deliberate the moment it
+landed in Git, so every one was decided first. Decisions taken 2026-09-09;
+evidence and reasoning in #1089.
+
+| # | Object | Decision |
+| --- | --- | --- |
+| 1 | Access app `media` | **keep** — repointed to `media.mctl.ai`; the live gate in front of Overseerr |
+| 2 | Access apps `Temporal`, `News AI` (`*.mbank.space`) | **delete** |
+| 3 | Access app `vault` → `mashkoffdmitry-openclaw.mctl.ai` | **keep, rename** to match the host it protects |
+| 4 | Access org `auth_domain: mbank.cloudflareaccess.com` | **keep** |
+| 5 | Page rules `*.mctl.me/*`, `*.mctl.ru/*` | **delete** — unreachable, see below |
+| 6 | In-zone `NS launch1/launch2.spaceship.net` in `mctl.me` | **delete** |
+| 7 | Disabled catch-all `drop` in `mctl.ai` Email Routing | **enable** |
+| 8 | Rule `seerr` in `mctl.ai/http_request_firewall_custom` | **keep, narrowed** by hostname |
+| 9 | `mctl-landing-form` and its 5 worker routes | **split** — routes here, script and secrets in Wrangler |
+| 10 | Zone `dmitriimashkov.com` | **intentionally unmanaged** |
+
+Four of these are kept rather than removed, and each is kept for a reason that
+is not obvious from the object itself.
+
+**`auth_domain` (4).** It reads like leftover naming from a previous project,
+and it is — but it is a single per-account Zero Trust value that appears in
+every application's login redirect regardless of zone. Renaming it invalidates
+every live Access session at once. Kept deliberately, not overlooked.
+
+**`allowed_idps` (part of 1 and 3).** Every application now pins
+`allowed_idps: [Google]`. An empty list does not mean "no restriction beyond the
+policy" — it means *all* providers, which made the account-level `onetimepin`
+reachable next to Google on `media` and `jellyfin`. The policies required
+`login_method == Google`, so there was no authorization hole, but the OTP flow
+was reachable far enough to mail a code to an arbitrary address before refusing.
+Pinned 2026-09-09. **Import the pinned state as-is** — it is hardening, not
+drift, and reconciling back to the empty list would undo it.
+
+**The `seerr` bypass (8).** `(ip.src.asnum eq 24940)` skips Super Bot Fight Mode
+for the whole of Hetzner — every Hetzner customer, on every `mctl.ai` hostname
+including the `*.mctl.ai` wildcard that serves every tenant. It exists because
+the platform's own cluster — which is hosted in `AS24940` — was being
+classified as bot traffic on its server-to-server calls. The bypass itself is
+legitimate; its breadth was not. Narrowed to the hostnames that actually need
+it:
+
+```
+(ip.src.asnum eq 24940 and http.host in
+  {"secrets.mctl.ai" "ops.mctl.ai" "app.mctl.ai" "api.mctl.ai"
+   "media.mctl.ai" "tg.mctl.ai" "workflows.mctl.ai"})
+```
+
+The list is not a guess. Cloudflare analytics cannot produce it on this plan —
+`clientAsn` is not an accessible dimension, the firewall-events datasets are
+either unavailable or empty, and a `skip` emits no firewall event in any case —
+so it was derived from the platform side: the hostnames that in-cluster
+workloads actually fetch server-side, as opposed to the many `*.mctl.ai` URLs
+that are only displayed to users or received as inbound webhooks.
+
+What each one is for, because the reason is what makes the entry safe to remove
+later:
+
+| host | caller |
+| --- | --- |
+| `app.mctl.ai` | Traefik `ForwardAuth`, on **every** request to openclaw, claude-remote and temporal-web; also `mctl-api` creating tenants |
+| `secrets.mctl.ai` | `mctl-api` and `mctl-portal` Vault logins, and every service's Vault-cleanup PreDelete job |
+| `ops.mctl.ai` | `mctl-api` (ArgoCD API and Dex OIDC discovery) and Grafana's OAuth token/userinfo calls |
+| `api.mctl.ai` | openclaw's MCP proxy, `mctl-agents` (`MCTL_MCP_URL`, hardcoded) and its Temporal workers |
+| `media.mctl.ai` | `seerrsense` → Overseerr, with the Access service token |
+| `tg.mctl.ai` | the `mctl-telegram` canary CronJob, deliberately probing from outside |
+| `workflows.mctl.ai` | Backstage's backend submitting Argo workflows (`argoWorkflows.baseUrl`) |
+
+**The failure mode is worth knowing before editing this rule**, and it has
+already caught us once. `workflows.mctl.ai` was first classified as
+display-only — it appears in `cwft-mctl-agents-*.yaml` as a `UI_URL` pasted
+into pull-request comments, which is exactly what a display-only entry looks
+like. It is also `argoWorkflows.baseUrl` in
+`platform-gitops/bootstrap/templates/mctl-platform/mctl-portal.yaml`, which
+Backstage's backend fetches server-side on every workflow submission. Same
+hostname, two roles, and the harmless one is the one you find first.
+
+A host that belongs on the list and is missing does not fail loudly at the
+edge: Super Bot Fight Mode challenges or blocks the call, and it surfaces as an
+unexplained `403` inside whichever service made it. Reverting is one API call — put the
+expression back to `(ip.src.asnum eq 24940)` — so widening first and diagnosing
+afterwards is the right order if something breaks.
+
+Several of these calls leave the cluster only to come straight back in through
+the edge. Moving them to in-cluster DNS, which is what most of the codebase
+already does, would shrink this list rather than manage it.
+
+**Worker ownership (9).** `cloudflare_workers_route` is owned here; the script
+and its eight runtime secrets stay in Wrangler — the seven original
+bindings plus `TURNSTILE_SECRET_KEY`, added 2026-08-31. OpenTofu does not deploy Worker
+code, so owning the script here would split one deployable across two owners.
+The route patterns are part of the worker's contract — change them in one place.
+
+### Redirects: what actually serves them
+
+Worth stating because the wrong answer is the intuitive one. `mctl.me` and
+`mctl.ru` redirect to `mctl.ai` through **two** mechanisms, and the page rules
+are neither:
+
+- **apex** — the `http_request_dynamic_redirect` ruleset, one rule per zone
+  (`http.host eq "mctl.me"` → 301 `concat("https://mctl.ai", http.request.uri)`);
+- **subdomains** — the worker `mctl-landing-form`, in code
+  (`REDIRECT_SUFFIXES = [".mctl.me", ".mctl.ru"]`).
+
+The page rules match the same subdomains but never fire: the worker runs first
+and returns. The proof is that the same URL answers differently on User-Agent
+alone — the worker's bot filter returns `410` for `curl/`, while a browser gets
+`301` — which no page rule can do. Hence decision 5.
+
+So a change to worker routes moves the subdomain redirect. Whatever PR touches
+them has to re-check subdomain redirects; no zone-level configuration here will
+catch that regression.
+
 ## Credentials
 
 Nothing is committed. CI reads:

@@ -169,6 +169,17 @@ jobs:
       # -detailed-exitcode: 0 = no changes, 1 = error, 2 = drift.
       # Both 1 and 2 are failures here, but they mean different things, so the
       # summary says which one happened.
+      #
+      # Exit 0 has two meanings, and only one of them is coverage. OpenTofu
+      # reports drift for resources it has in state, so a root whose state is
+      # empty cannot produce exit 2 no matter what happens in Cloudflare — it
+      # reports "in sync" forever, which is a green check with no subject.
+      # That is not hypothetical: infrastructure/cloudflare/account/ held no
+      # resources while Access changed materially underneath it (an app
+      # repointed, a service token and a non-identity policy added,
+      # allowed_idps pinned from empty to [Google]), and every scheduled run
+      # said success. Exit 0 is therefore split below by whether the root
+      # describes anything.
       - name: Plan
         id: plan
         # Same reason as in cloudflare-plan.yml: never expand a discovered path
@@ -182,8 +193,45 @@ jobs:
           code=${PIPESTATUS[0]}
           set -e
           echo "code=$code" >> "$GITHUB_OUTPUT"
+
+          # Counted only for exit 0, where the distinction matters. `tofu state
+          # list` on an empty state prints nothing and exits 0, so an empty
+          # count is the answer rather than an error — but its failure is still
+          # caught, because an unreadable state is not the same as an empty one
+          # and must not be reported as either.
+          # `grep -c .` exits 1 when it counts nothing, so it cannot be the
+          # command whose status decides whether the count succeeded — an empty
+          # state would look like a failed lookup, which is the one distinction
+          # this block exists to make. The lookup's status is taken from
+          # `tofu state list` alone; the counting is separate and always
+          # succeeds.
+          resources=""
+          if [ "$code" = "0" ]; then
+            if state_list=$(tofu state list 2>/dev/null); then
+              resources=$(printf '%s' "$state_list" | grep -c . || true)
+            fi
+          fi
+
           case "$code" in
-            0) echo "### \`$ROOT\` — in sync" >> "$GITHUB_STEP_SUMMARY" ;;
+            0) if [ "$resources" = "0" ]; then
+                 # Deliberately not a failure. account/ will hold zero
+                 # resources until #1088 imports Access, and a scheduled
+                 # workflow that is red every night is one people stop reading
+                 # — which is the same disease as a green check nobody can
+                 # trust. It is loud in the annotations and in the summary, and
+                 # should be tightened to a failure once no root is legitimately
+                 # empty.
+                 echo "::warning title=Cloudflare drift::\`$ROOT\` describes no resources — this run watched nothing"
+                 { echo "### \`$ROOT\` — DESCRIBES NOTHING";
+                   echo;
+                   echo "> [!WARNING]";
+                   echo "> This root's state holds no resources, so drift cannot report on it.";
+                   echo "> \`No changes\` here means the root is empty, not that Cloudflare matches Git."; } >> "$GITHUB_STEP_SUMMARY"
+               elif [ -z "$resources" ]; then
+                 echo "### \`$ROOT\` — in sync (resource count unavailable)" >> "$GITHUB_STEP_SUMMARY"
+               else
+                 echo "### \`$ROOT\` — in sync ($resources resources)" >> "$GITHUB_STEP_SUMMARY"
+               fi ;;
             2) { echo "### \`$ROOT\` — DRIFT";
                  echo; echo '```terraform'; cat plan.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY" ;;
             *) { echo "### \`$ROOT\` — plan failed (exit $code)";
