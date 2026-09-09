@@ -108,7 +108,18 @@ jobs:
           # snapshot as source state. Strip the three metadata columns first,
           # then anchor at the start of the key. awk (rather than a field index)
           # keeps keys containing spaces intact.
-          source_count=$(aws s3 ls "s3://${BUCKET}/" --recursive --endpoint-url "$R2_ENDPOINT" \
+          # The listing is captured on its own line, deliberately: with the
+          # count pipeline ending in `|| true`, a failing `aws s3 ls` — expired
+          # or revoked credentials, a permission change — would be swallowed,
+          # yield an empty list, count 0, and take the "nothing to snapshot"
+          # exit. The job would go green while the backup was broken, which is
+          # the exact failure this workflow exists to prevent. Here `set -e`
+          # catches it instead.
+          raw_list=$(aws s3 ls "s3://${BUCKET}/" --recursive --endpoint-url "$R2_ENDPOINT")
+
+          # `|| true` is still needed on this one: grep -c exits 1 when the
+          # count is zero, which is a legitimate answer, not an error.
+          source_count=$(echo "$raw_list" \
                           | awk '{ $1=""; $2=""; $3=""; sub(/^[[:space:]]+/, ""); print }' \
                           | grep -v "^${BACKUP_PREFIX}/" \
                           | grep -c '\.tfstate' || true)
