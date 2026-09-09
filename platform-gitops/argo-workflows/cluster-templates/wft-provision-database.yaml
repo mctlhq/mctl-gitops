@@ -301,16 +301,34 @@ spec:
           # has no `identities` table; the chart already defaults that block
           # (helm-charts/base-service/values.yaml) so nothing needs it emitted.
           #
-          # These three expressions are the ones tpl-git-commit already uses on
-          # the service-creation path; the merge is idempotent and appends the
-          # db secretRef last, so application secrets keep winning on conflict.
+          # A service that already declares `dbSecret` is already wired for a
+          # database and is left completely alone. That was the intent of the
+          # old `grep -q dbSecret:` guard, and it has to stay: kuptsi-app
+          # declares `dbSecret.vaultPath` with no `secretName`, so the chart
+          # defaults the target Secret to `<fullname>-db-creds` — the exact
+          # name its temporal-worker sidecar's envFrom references. Writing a
+          # secretName here would repoint the ExternalSecret and leave that
+          # sidecar reading a Secret nothing refreshes any more.
+          #
+          # When it is absent, the db secretRef goes FIRST. Later entries in
+          # envFrom win on key collision, and both the generated db secret and
+          # an app's own secret can define DATABASE_URL — kuptsi-app's is
+          # templated with the `postgresql+asyncpg://` scheme its driver
+          # requires, while the chart's db secret emits plain `postgresql://`
+          # (helm-charts/base-service/templates/externalsecret-db.yaml). Last
+          # place would silently hand the app a URL it cannot connect with, so
+          # the service's own secrets must be the ones that win.
           SVC_VALUES="platform-gitops/services/${TEAM}/${APP}/values.yaml"
           if [ -f "$SVC_VALUES" ]; then
             export DB_SECRET="${TEAM}-${APP}-db-creds"
             export VAULT_PATH
-            yq eval -i '.envFrom = ((.envFrom // []) | map(select(.secretRef.name != strenv(DB_SECRET))) + [{"secretRef": {"name": strenv(DB_SECRET)}}])' "$SVC_VALUES"
-            yq eval -i '.dbSecret.vaultPath = strenv(VAULT_PATH)' "$SVC_VALUES"
-            yq eval -i '.dbSecret.secretName = strenv(DB_SECRET)' "$SVC_VALUES"
+            if [ "$(yq eval 'has("dbSecret")' "$SVC_VALUES")" = "true" ]; then
+              echo "ℹ️  ${SVC_VALUES} already declares dbSecret — left untouched"
+            else
+              yq eval -i '.envFrom = ([{"secretRef": {"name": strenv(DB_SECRET)}}] + ((.envFrom // []) | map(select(.secretRef.name != strenv(DB_SECRET)))))' "$SVC_VALUES"
+              yq eval -i '.dbSecret.vaultPath = strenv(VAULT_PATH)' "$SVC_VALUES"
+              yq eval -i '.dbSecret.secretName = strenv(DB_SECRET)' "$SVC_VALUES"
+            fi
 
             # Fail before the commit, not after ArgoCD has synced it. This bot
             # pushes straight to main, so no PR check ever sees the file.

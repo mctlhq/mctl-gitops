@@ -106,11 +106,12 @@ check("patching a file that already has envFrom succeeds",
 check("exactly one top-level envFrom survives",
       top_level_keys(text).count("envFrom") == 1, top_level_keys(text))
 names = yaml.safe_load(text)["envFrom"]
-check("the pre-existing secretRefs are kept",
-      [e["secretRef"]["name"] for e in names[:2]] == ["demo-secrets", "demo-extra"],
+check("the pre-existing secretRefs are kept, in order, after it",
+      [e["secretRef"]["name"] for e in names[1:]] == ["demo-secrets", "demo-extra"],
       names)
-check("the db secretRef is appended last, so app secrets keep winning",
-      names[-1]["secretRef"]["name"] == "labs-demo-db-creds", names)
+check("the db secretRef goes first, so the service's own secrets win a key "
+      "collision — later envFrom entries override earlier ones",
+      names[0]["secretRef"]["name"] == "labs-demo-db-creds", names)
 check("dbSecret is written",
       yaml.safe_load(text)["dbSecret"] == {
           "vaultPath": "teams/labs/demo/database",
@@ -135,8 +136,34 @@ proc, text, first = run(WITH_ENVFROM, runs=3)
 check("re-running is a no-op", text == first, f"first={first!r} then={text!r}")
 check("re-running does not duplicate the db secretRef",
       [e["secretRef"]["name"] for e in yaml.safe_load(text)["envFrom"]]
-      == ["demo-secrets", "demo-extra", "labs-demo-db-creds"],
+      == ["labs-demo-db-creds", "demo-secrets", "demo-extra"],
       yaml.safe_load(text)["envFrom"])
+
+# 3b. A service that already declares dbSecret is wired for a database on its
+#     own terms and must not be touched at all. kuptsi-app is the live example:
+#     it sets `dbSecret.vaultPath` and no `secretName`, so the chart defaults
+#     the target Secret to `<fullname>-db-creds` — the name its temporal-worker
+#     sidecar's envFrom references. Writing a secretName would repoint the
+#     ExternalSecret and leave that sidecar reading a Secret nothing refreshes.
+#     Its main container also gets DATABASE_URL from its own templated secret
+#     with the `postgresql+asyncpg://` scheme, which the chart's db secret
+#     would shadow with a plain `postgresql://` the driver cannot use.
+ALREADY_WIRED = """image:
+  repository: ghcr.io/mctlhq/demo
+  tag: "1.0.0"
+dbSecret:
+  vaultPath: teams/labs/demo/database
+envFrom:
+  - secretRef:
+      name: demo-secrets
+"""
+proc, text, _ = run(ALREADY_WIRED)
+check("a values.yaml that already declares dbSecret is left byte-identical",
+      proc.returncode == 0 and text == ALREADY_WIRED,
+      f"rc={proc.returncode} err={proc.stderr}\n{text!r}")
+check("no secretName is invented for a service relying on the chart default",
+      "secretName" not in yaml.safe_load(text)["dbSecret"],
+      yaml.safe_load(text)["dbSecret"])
 
 # 4. The incident's own file, fed through the whole block rather than the guard
 #    alone. yq could plausibly collapse a duplicate key on its read/write round
