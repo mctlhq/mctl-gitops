@@ -54,9 +54,12 @@ not a false alarm: nothing currently mis-fires.
 - WHEN `ClaudeInvoker.recordCost` records the first job's spend THE SYSTEM SHALL add
   it to a child that already existed at `0`, so both clauses of
   `MctlAgentJobCostHigh` observe the full amount as an increase.
-- WHILE no agent job has been processed THE SYSTEM SHALL leave
-  `mctl_agent_policy_denials_total` with no children, so its 18 x 6 = 108-series label
-  space is not materialized.
+- WHEN `metrics.New()` returns THE SYSTEM SHALL also have created every child of
+  `mctl_agent_jobs_total` (six statuses) and of `mctl_agent_policy_denials_total`
+  (18 reasons x 6 surfaces), each with value `0` — 118 series in total across the
+  four families. **Superseded criterion:** this originally read "SHALL leave
+  `mctl_agent_policy_denials_total` with no children"; see "Scope expanded during
+  implementation" below for why that was reversed.
 - IF a future label value is added to the `class` or `result` label THEN THE SYSTEM
   SHALL take its zero baseline from the same exported, single-source-of-truth list
   that `countResultError` and `recordCost` select their label value from.
@@ -68,10 +71,6 @@ not a false alarm: nothing currently mis-fires.
 
 ## Out of scope
 
-- `mctl_agent_policy_denials_total` (`AgentPolicyDenialsTotal`). Its label space is
-  108 compile-time-fixed series; pre-initializing all of them would materialize
-  reason/surface combinations that cannot occur, and `MctlAgentPolicyDenialRateHigh`
-  carries an `and ... > 4` floor, so a single first denial would not fire it anyway.
 - Any change to alert expressions, `for:` durations, thresholds, or annotations in
   `deploy/alerts/mctl-telegram.rules.yaml` (a mirror; see the comment at line 199) or
   in the deployed copy in `mctl-gitops`
@@ -98,3 +97,32 @@ not a false alarm: nothing currently mis-fires.
   cannot see it. Treated as out of scope here: such a case asserts a non-firing alert
   for a state the emitter can no longer produce, and the DoD asks for a registry-level
   test instead.
+
+## Scope expanded during implementation (2026-09-09)
+
+Two counters this document had placed out of scope were brought back in during
+review of the implementing PR, mctlhq/mctl-telegram#593. Both exclusions rested on
+reasoning that did not survive contact with a reviewer, and this section records
+the reversal so the shipped code and this document do not disagree.
+
+**`mctl_agent_jobs_total` (six statuses).** Never mentioned here, because this
+issue was framed around the two agent-worker counters. But it is the *denominator*
+of `MctlAgentJobCostHigh`, and a lazily created denominator makes the first
+finished job after a server restart read as zero finished jobs — the guarded ratio
+becomes `+Inf` and the rule can fire on ordinary spend. Raised as a P2 by the Codex
+reviewer; fixed in commit `d4b47ea`.
+
+**`mctl_agent_policy_denials_total` (108 combinations).** The exclusion argued
+that `MctlAgentPolicyDenialRateHigh`'s `> 4` floor means one first denial cannot
+fire the rule anyway. True, and it answers a different question: if the first
+*five* denials for one reason land between two scrapes, the series is first
+observed at `5`, every later sample reads `5`, `increase()` over the window is `0`,
+and the rule misses its own documented "at least 5 denials" case — in exactly the
+burst scenario ("worker hammering a paused account") it exists for. Raised as a P2
+by the Codex reviewer; fixed in commit `f6db8cf`. 108 zero series is a cheap price
+for the floor meaning what it says.
+
+The "byte-identical alert expressions" criterion held throughout: `git diff --stat
+deploy/` on the implementing branch is empty. The separate change to
+`MctlAgentJobCostHigh`'s denominator and thresholds is
+mctlhq/mctl-telegram#596, and is not part of this proposal.

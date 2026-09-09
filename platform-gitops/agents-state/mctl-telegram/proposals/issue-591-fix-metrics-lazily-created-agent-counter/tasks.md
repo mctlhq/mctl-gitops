@@ -14,8 +14,11 @@
       and over `jobCostResults` calling `r.AgentJobCostUSDTotal.WithLabelValues(result).Add(0)`,
       inserted after the `MustRegister` block (metrics.go:390-421) and before
       `return r`. Include the explanatory comment: why a non-zero first sample makes
-      `increase()` read 0, that it is issue #591, and that `AgentPolicyDenialsTotal`
-      is deliberately excluded (108 series, `> 4` alert floor).
+      `increase()` read 0, and that it is issue #591. **Amended:** also loop over
+      the six `mctl_agent_jobs_total` statuses and all 18 x 6 = 108
+      `AgentPolicyDenialsTotal` combinations — 118 series across four families.
+      See requirements.md, "Scope expanded during implementation", for why the
+      original exclusion of those two counters was reversed.
       — DoD: a fresh `metrics.New()` gathers metric families
       `mctl_agent_claude_result_errors_total` and `mctl_agent_job_cost_usd_total`,
       each with exactly two children at value 0, with no job ever processed.
@@ -61,9 +64,14 @@
       string dump (issue DoD).
       — DoD: fails if either loop is removed from `New()` or a label value is renamed.
 
-- [ ] T2. Same test (or a sibling) asserts `mctl_agent_policy_denials_total` is ABSENT
-      from a freshly gathered `New()` registry, locking in the explicit out-of-scope
-      decision so a later well-meaning change cannot quietly materialize 108 series.
+- [ ] T2. **Superseded.** Originally: assert `mctl_agent_policy_denials_total` is
+      ABSENT from a freshly gathered `New()` registry. That decision was reversed
+      during review — see requirements.md, "Scope expanded during implementation".
+      The replacement asserts the opposite: all 108 children present at `0`, plus a
+      guard that the label space is still 18 x 6 so the documented bound and the
+      code cannot drift. A drift test in `internal/agent/policy` pins the reason
+      list against the `DenyCode` constants, mirroring what `internal/db` does for
+      the job statuses.
 
 - [ ] T3. `TestCountResultError_FirstOccurrenceIsARealIncrease` in
       `internal/agentworker/claudeinvoker_test.go`: build `m := metrics.New()`, assert
@@ -102,3 +110,12 @@ is to move the two pre-init loops out of `New()` and into a worker-only initiali
 called from `cmd/agent-worker/main.go` next to the existing
 `AgentCredentialDomain.WithLabelValues(...).Set(1)` (design.md alternative A) — that
 preserves the fix where it matters while removing the four series from `cmd/server`.
+
+## Amendment — 2026-09-09
+
+Tasks 2 and T2 above are amended in place rather than rewritten, so the reversal
+stays legible. Anything in this file that still reads as though
+`AgentPolicyDenialsTotal` or `mctl_agent_jobs_total` are out of scope is
+superseded by requirements.md's "Scope expanded during implementation" section.
+Implemented in mctlhq/mctl-telegram#593; do not re-run an implementer against
+this proposal.
