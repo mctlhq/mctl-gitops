@@ -26,3 +26,6 @@ data:
   PLATFORM_DOMAIN_ALT: ""
   # Container registry prefix (images are pushed as {CONTAINER_REGISTRY}/{component}:{tag})
   CONTAINER_REGISTRY: "ghcr.io/mctlhq"
+  # In-cluster base URL for mctl-api. wft-add-custom-domain calls
+  # /api/v1/domains/verify and /api/v1/domains/{id} through this.
+  MCTL_API_URL: "http://mctl-api.mctl-api.svc.cluster.local:8080"

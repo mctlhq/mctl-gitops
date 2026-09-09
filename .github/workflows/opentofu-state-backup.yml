@@ -1,0 +1,181 @@
+name: OpenTofu State Backup
+
+# R2 has no object versioning: GET /accounts/{id}/r2/buckets/{b}/versioning
+# returns 10015 "No route matches this url", and the feature does not exist.
+# The standard S3 answer — turn on bucket versioning — is unavailable, and
+# before this workflow existed there was no copy of any state file anywhere.
+#
+# The gap is wider than Cloudflare: mctl-terraform-state holds
+# k3s-preview/terraform.tfstate, the state of the preprod cluster.
+#
+# Two buckets, two credentials, one leg each:
+#
+#   mctl-terraform-state   R2_ACCESS_KEY_ID          (k3s-preview)
+#   mctl-cloudflare-state  R2_CF_STATE_ACCESS_KEY_ID (Cloudflare roots)
+#
+# Each credential is scoped to its own bucket, so neither leg can read or
+# damage the other's state. That split exists because R2 tokens scope to a
+# bucket rather than a prefix, and the k3s state contains an OpenSSH private
+# key and kubeconfig credentials that Cloudflare CI must not be able to read.
+#
+# KNOWN LIMITATION — snapshots land in the SAME bucket as their source, under
+# _backups/. Neither credential can write to a third bucket, so a genuine
+# off-bucket copy is still not possible. This protects against the failure that
+# actually happens — state corrupted by a bad apply, an accidental `state rm`,
+# a botched import — but NOT against deletion of a bucket or compromise of the
+# credential that writes to it.
+#
+# .github#47 requires a tested restore before Git-only operation is declared
+# authoritative. Procedure: docs/runbooks/opentofu-state-restore.md
+
+on:
+  schedule:
+    - cron: '30 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: opentofu-state-backup
+  cancel-in-progress: false
+
+env:
+  R2_ENDPOINT: https://6a09f637d20e1f66a8e9d45ebe778058.r2.cloudflarestorage.com
+  BACKUP_PREFIX: _backups
+  RETENTION_DAYS: '30'
+
+jobs:
+  backup:
+    name: snapshot state to a dated prefix
+    runs-on: ubuntu-latest
+
+    # workflow_dispatch accepts a --ref, and the dispatched run executes THAT
+    # branch's copy of this file. A repository writer could therefore point a
+    # rewritten version of this workflow at the writable state credential
+    # without review.
+    #
+    # Two layers, because each covers the other's blind spot:
+    #
+    #   * the `if` below is visible in review but lives in the YAML a branch
+    #     controls, so a rewritten copy can simply drop it;
+    #   * the state-backup environment's deployment-branch policy allows `main`
+    #     alone and lives in repository settings, outside that branch's reach —
+    #     but it is not verifiable from this file, and GitHub silently creates a
+    #     referenced environment *unprotected* if it does not already exist.
+    #
+    # Verify the policy is real, do not assume it:
+    #   gh api repos/mctlhq/mctl-gitops/environments/state-backup/deployment-branch-policies
+    # Expected: exactly one policy, name "main".
+    if: github.ref == 'refs/heads/main'
+    environment: state-backup
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Each bucket has its own credential, scoped to that bucket alone, so
+        # neither snapshot job can reach the other's state.
+        bucket:
+          - mctl-terraform-state
+          - mctl-cloudflare-state
+    env:
+      BUCKET: ${{ matrix.bucket }}
+      AWS_ACCESS_KEY_ID: ${{ matrix.bucket == 'mctl-terraform-state' && secrets.R2_ACCESS_KEY_ID || secrets.R2_CF_STATE_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ matrix.bucket == 'mctl-terraform-state' && secrets.R2_SECRET_ACCESS_KEY || secrets.R2_CF_STATE_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      # R2 rejects the newer default checksum headers the AWS CLI sends.
+      AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+      AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+    steps:
+      - name: Snapshot
+        run: |
+          set -euo pipefail
+          stamp="$(date -u +%Y-%m-%dT%H-%M-%SZ)"
+          dest="s3://${BUCKET}/${BACKUP_PREFIX}/${stamp}/"
+
+          # Excluding the backup prefix matters: without it each run would copy
+          # every previous snapshot into the new one and the bucket would grow
+          # geometrically.
+          # Count what is actually there before deciding what "copied nothing"
+          # means. A root with no resources never writes a state file, so a
+          # bucket can legitimately be empty — mctl-cloudflare-state is exactly
+          # that until the first Cloudflare resource is imported. Without this,
+          # the guard below would fail every night and page for a
+          # working-as-intended state.
+          # The key column has no leading slash — `aws s3 ls --recursive`
+          # prints "<date> <time> <size> _backups/<stamp>/<key>" — so filtering
+          # on "/${BACKUP_PREFIX}/" matched nothing and counted every previous
+          # snapshot as source state. Strip the three metadata columns first,
+          # then anchor at the start of the key. awk (rather than a field index)
+          # keeps keys containing spaces intact.
+          # The listing is captured on its own line, deliberately: with the
+          # count pipeline ending in `|| true`, a failing `aws s3 ls` — expired
+          # or revoked credentials, a permission change — would be swallowed,
+          # yield an empty list, count 0, and take the "nothing to snapshot"
+          # exit. The job would go green while the backup was broken, which is
+          # the exact failure this workflow exists to prevent. Here `set -e`
+          # catches it instead.
+          raw_list=$(aws s3 ls "s3://${BUCKET}/" --recursive --endpoint-url "$R2_ENDPOINT")
+
+          # `|| true` is still needed on this one: grep -c exits 1 when the
+          # count is zero, which is a legitimate answer, not an error.
+          source_count=$(echo "$raw_list" \
+                          | awk '{ $1=""; $2=""; $3=""; sub(/^[[:space:]]+/, ""); print }' \
+                          | grep -v "^${BACKUP_PREFIX}/" \
+                          | grep -c '\.tfstate' || true)
+          echo "state objects in source: $source_count"
+          if [ "$source_count" -eq 0 ]; then
+            echo "no state files in ${BUCKET} yet — nothing to snapshot" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          aws s3 sync "s3://${BUCKET}/" "$dest" \
+            --endpoint-url "$R2_ENDPOINT" \
+            --exclude '*' \
+            --include '*.tfstate' \
+            --include '*.tfstate.backup' \
+            --exclude "${BACKUP_PREFIX}/*"
+
+          # A backup that silently copies nothing when there IS something to
+          # copy is worse than no backup, because it looks healthy on the
+          # dashboard. That case still fails loudly.
+          copied=$(aws s3 ls "$dest" --recursive --endpoint-url "$R2_ENDPOINT" | wc -l)
+          echo "objects copied: $copied"
+          if [ "$copied" -eq 0 ]; then
+            echo "::error::${BUCKET} holds $source_count state object(s) but the snapshot copied 0 — check credentials"
+            exit 1
+          fi
+
+          {
+            echo "### State snapshot"
+            echo
+            echo "- destination: \`${BACKUP_PREFIX}/${stamp}/\`"
+            echo "- objects: $copied"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Prune old snapshots
+        run: |
+          set -euo pipefail
+          cutoff=$(date -u -d "-${RETENTION_DAYS} days" +%Y-%m-%d)
+          aws s3 ls "s3://${BUCKET}/${BACKUP_PREFIX}/" --endpoint-url "$R2_ENDPOINT" \
+            | awk '{print $2}' | tr -d '/' | while read -r snap; do
+              [ -n "$snap" ] || continue
+              # Snapshot directories are named by UTC timestamp, so comparing
+              # the date part as a string is a correct age test.
+              if [[ "${snap%%T*}" < "$cutoff" ]]; then
+                echo "pruning $snap"
+                aws s3 rm "s3://${BUCKET}/${BACKUP_PREFIX}/${snap}/" \
+                  --recursive --endpoint-url "$R2_ENDPOINT"
+              fi
+            done
+
+      - name: Notify Telegram on failure
+        if: failure()
+        uses: appleboy/telegram-action@390cf7345777cd821dba28c72f436a78bce19cc5 # master 2026-05
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          message: |
+            *OpenTofu state backup failed*
+            There is no other copy of the state — R2 has no object versioning.
+            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

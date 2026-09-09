@@ -1,0 +1,163 @@
+name: Cloudflare Drift
+
+# Reports Cloudflare configuration that no longer matches Git (.github#47 Phase 3).
+#
+# This workflow never applies. Drift fails closed: a run goes red and stays red
+# until someone decides whether the out-of-band change should be imported or
+# reverted. Blind reconciliation would silently erase whatever a human did
+# during an incident.
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Never race an apply or another drift run for the same state lock.
+  group: cloudflare-tofu
+  cancel-in-progress: false
+
+jobs:
+  discover:
+    name: discover roots
+    runs-on: ubuntu-latest
+    outputs:
+      roots: ${{ steps.find.outputs.roots }}
+      count: ${{ steps.find.outputs.count }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - id: find
+        run: |
+          set -euo pipefail
+          # find exits 1 on a missing start directory, which under set -e would
+          # abort discovery and fail the required check — permanently, with no
+          # way to merge the pull request that removed the last root, label or
+          # not. An absent directory is a legitimate state: no roots.
+          # -path .../modules -prune: a shared module can carry its own
+          # versions.tf, and planning one as a root fails on its required
+          # inputs — on every pull request and every scheduled drift run.
+          # versions.tf.json is included because OpenTofu loads JSON
+          # configuration too, so a root written that way would otherwise be
+          # invisible to discovery while the check reported success.
+          if [ -d infrastructure/cloudflare ]; then
+            # The prune pattern has to match BELOW modules/, not modules/
+            # itself: -mindepth 2 stops find from applying the expression to
+            # depth-1 entries at all, so pruning the directory by name never
+            # fires. Measured — the module was still discovered as a root.
+            roots=$(find infrastructure/cloudflare -mindepth 2 \
+                      -path 'infrastructure/cloudflare/modules/*' -prune -o \
+                      \( -name versions.tf -o -name versions.tf.json \) -print \
+                    | sed 's#/[^/]*$##' | sort -u \
+                    | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          else
+            roots='[]'
+          fi
+          echo "roots=$roots" >> "$GITHUB_OUTPUT"
+          echo "count=$(echo "$roots" | jq 'length')" >> "$GITHUB_OUTPUT"
+
+  drift:
+    name: drift
+    needs: discover
+    if: needs.discover.outputs.count != '0'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        root: ${{ fromJson(needs.discover.outputs.roots) }}
+    defaults:
+      run:
+        working-directory: ${{ matrix.root }}
+    env:
+      TF_DATA_DIR: ${{ runner.temp }}/tofu-data
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      # Drift only reads. It uses the same Object-Read-only state credential as
+      # the plan workflow, which is why it also passes -lock=false: taking the
+      # lock would be a write this credential cannot perform. Safe while nothing
+      # applies from CI — when an apply job exists, it will need the writable
+      # credential and real locking, and this job should be revisited so the two
+      # cannot read a state mid-write.
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_PLAN_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_PLAN_SECRET_ACCESS_KEY }}
+      TF_CLI_CONFIG_FILE: ${{ runner.temp }}/opentofu-ci.tfrc
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: 1.12.6
+          tofu_wrapper: false
+
+      # This one runs from main, so the roots are reviewed code — but the same
+      # restriction costs nothing and keeps the two workflows honest about
+      # which providers are allowed to run in CI.
+      # Written under RUNNER_TEMP, never in the workspace. A pull request that
+      # commits .opentofu-ci.tfrc as a symlink to /dev/null would otherwise have
+      # this heredoc follow it — the write succeeds, the file reads back empty,
+      # and OpenTofu falls back to unrestricted provider installation with the
+      # allowlist apparently in place. Reproduced before fixing.
+      - name: Restrict provider installation
+        run: |
+          set -euo pipefail
+          cat > "$TF_CLI_CONFIG_FILE" <<'TFRC'
+          provider_installation {
+            direct {
+              include = ["registry.opentofu.org/cloudflare/cloudflare"]
+            }
+          }
+          TFRC
+          grep -q 'cloudflare/cloudflare' "$TF_CLI_CONFIG_FILE"
+
+      # -lockfile=readonly: without it, a root that committed no
+      # .terraform.lock.hcl gets one minted on the runner and thrown away, so
+      # the gate passes without anyone reviewing which provider build it ran
+      # against — and a later release matching ~> 5.0 can change behaviour
+      # under a root nobody re-reviewed.
+      - name: Init
+        run: tofu init -input=false -lockfile=readonly
+
+      # -detailed-exitcode: 0 = no changes, 1 = error, 2 = drift.
+      # Both 1 and 2 are failures here, but they mean different things, so the
+      # summary says which one happened.
+      - name: Plan
+        id: plan
+        # Same reason as in cloudflare-plan.yml: never expand a discovered path
+        # into the script body. A root only has to be merged once for every
+        # later scheduled run to re-execute whatever its name contains.
+        env:
+          ROOT: ${{ matrix.root }}
+        run: |
+          set +e
+          tofu plan -input=false -no-color -lock=false -detailed-exitcode | tee plan.txt
+          code=${PIPESTATUS[0]}
+          set -e
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          case "$code" in
+            0) echo "### \`$ROOT\` — in sync" >> "$GITHUB_STEP_SUMMARY" ;;
+            2) { echo "### \`$ROOT\` — DRIFT";
+                 echo; echo '```terraform'; cat plan.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY" ;;
+            *) { echo "### \`$ROOT\` — plan failed (exit $code)";
+                 echo; echo '```terraform';
+                 cat plan.txt 2>/dev/null || echo "(no plan output captured)";
+                 echo '```'; } >> "$GITHUB_STEP_SUMMARY" ;;
+          esac
+          rm -f plan.txt
+          exit "$code"
+
+      - name: Notify Telegram
+        if: failure()
+        uses: appleboy/telegram-action@390cf7345777cd821dba28c72f436a78bce19cc5 # master 2026-05
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          # HTML, not the default Markdown: root names are directory names, and
+          # an unpaired _ in one of them makes Telegram reject the whole message
+          # with a 400 — losing the drift alert exactly when it matters.
+          format: html
+          message: |
+            <b>Cloudflare drift</b> — <code>${{ matrix.root }}</code>
+            Exit code <code>${{ steps.plan.outputs.code || format('none — plan {0}', steps.plan.conclusion) }}</code> (2 = drift, 1 = plan error)
+            Cloudflare no longer matches Git, or the plan could not run.
+            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

@@ -454,6 +454,48 @@ spec:
                     continue: true
                     matchers:
                       - alertname =~ "MctlTelegramToolAvailabilityFastBurn|MctlTelegramOAuthAvailabilityFastBurn|MctlTelegramSessionBorrowFastBurn"
+                  # The two communication-agent alerts are the one case in
+                  # this file where agent-only routing is not merely
+                  # suboptimal but circular: both fire precisely when the
+                  # communication agent has stopped completing work, so the
+                  # pipeline expected to raise the ticket is the subject of
+                  # the alert. MctlAgentDeadLetter means jobs exhausted their
+                  # attempts; MctlAgentActionsExecutingStuck means actions are
+                  # past the executor recovery window and must not be resent
+                  # by hand, because Telegram may already have accepted the
+                  # original random_id. Neither is safe to leave to the
+                  # component that is failing.
+                  #
+                  # mctl-telegram#213 measured what agent-only delivery
+                  # actually produces: on the 2026-09-07 canary trip the agent
+                  # filed a ticket reading "No skill matched ... Manual review
+                  # required" and attributed it to an unrelated pod. That is
+                  # the outcome an operator would get for a dead-lettered job
+                  # today.
+                  #
+                  # Same two-part shape as the routes above: continue: true
+                  # here, AND both names in the mctl-agent catch-all below.
+                  # continue: true only lets sibling routes be evaluated; it
+                  # does not re-enable the root default receiver, which fires
+                  # only when no child route matched at all.
+                  #
+                  # The other four alerts ported in mctl-telegram#555 —
+                  # PoolNearCapacity, FloodWaitSpike, OAuthPendingStuck,
+                  # BridgeDaemonsFlapping — are deliberately agent-only. They
+                  # describe load and capacity conditions the agent can
+                  # triage, and none of them implicates the agent itself.
+                  # They are NOT listed in the catch-all below, and must not
+                  # be added "for symmetry": matching no child route at all,
+                  # they already reach mctl-agent through the root default
+                  # receiver, and the catch-all route carries no grouping or
+                  # timing of its own. Verified with `amtool config routes
+                  # test`: mctl-agent before the change and after it, in both
+                  # forms. An entry would read as a routing decision while
+                  # changing nothing.
+                  - receiver: telegram
+                    continue: true
+                    matchers:
+                      - alertname =~ "MctlAgentDeadLetter|MctlAgentActionsExecutingStuck"
                   # Local Argo workdirs are node-affine. These need an operator
                   # to restore the worker or terminate and rerun the workflow.
                   - receiver: telegram
@@ -465,7 +507,7 @@ spec:
                       - namespace = "monitoring"
                   - receiver: mctl-agent
                     matchers:
-                      - alertname =~ "PodCrashLooping|KubePodCrashLooping|KubePodNotReady|PodNotReady|TenantCPUQuotaHigh|TenantMemoryQuotaHigh|ArgoWorkflowFailed|ArgoWorkflowHighFailureRate|CPUThrottlingHigh|KubeJobNotCompleted|KubePersistentVolumeFillingUp|KubeStatefulSetReplicasMismatch|NodeHighCPU|NodeHighMemory|NodeLowMemoryAvailable|NodeDiskPressure|NodeDiskSpaceHigh|VaultSealed|MinioBucketUsageHigh|MinioBucketUsageCritical|ArgoCDApplicationDegraded|ArgoCDApplicationOutOfSyncLong|OpenclawCodexTokenRefreshFailed|MctlTelegramCanary.*|MctlTelegramToolAvailabilityFastBurn|MctlTelegramOAuthAvailabilityFastBurn|MctlTelegramSessionBorrowFastBurn"
+                      - alertname =~ "PodCrashLooping|KubePodCrashLooping|KubePodNotReady|PodNotReady|TenantCPUQuotaHigh|TenantMemoryQuotaHigh|ArgoWorkflowFailed|ArgoWorkflowHighFailureRate|CPUThrottlingHigh|KubeJobNotCompleted|KubePersistentVolumeFillingUp|KubeStatefulSetReplicasMismatch|NodeHighCPU|NodeHighMemory|NodeLowMemoryAvailable|NodeDiskPressure|NodeDiskSpaceHigh|VaultSealed|MinioBucketUsageHigh|MinioBucketUsageCritical|ArgoCDApplicationDegraded|ArgoCDApplicationOutOfSyncLong|OpenclawCodexTokenRefreshFailed|MctlTelegramCanary.*|MctlTelegramToolAvailabilityFastBurn|MctlTelegramOAuthAvailabilityFastBurn|MctlTelegramSessionBorrowFastBurn|MctlAgentDeadLetter|MctlAgentActionsExecutingStuck"
               receivers:
                 - name: "null"
                 - name: mctl-agent

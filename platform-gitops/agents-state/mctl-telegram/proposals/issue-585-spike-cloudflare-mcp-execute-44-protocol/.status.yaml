@@ -1,0 +1,10 @@
+status: proposed
+updated_at: '2026-09-09T07:14:09Z'
+updated_by: mctl-agents[bot]
+source:
+  type: github_issue
+  repo: mctlhq/mctl-telegram
+  issue: 585
+  url: https://github.com/mctlhq/mctl-telegram/issues/585
+control:
+  requires_human_approval: true

@@ -29,7 +29,7 @@ metadata:
   name: issue-investigator-default
   owner: platform
 spec:
-  version: "1.1.0"
+  version: "1.2.0"
   modelPolicyRef:
     # The task key config/model-policy.yaml in mctl-agents actually defines.
     # This said `issue_investigator` until 2026-09-03, which is not a task
@@ -47,6 +47,13 @@ spec:
     # overridden without it saying so. mctl-agents' validate_manifest.py
     # checks this name against a real os.getenv() call in the driver.
     legacyEnvOverride: ISSUE_INVESTIGATOR_MODEL
+    # And it IS set: cwft-mctl-agents-investigate.yaml pins
+    # ISSUE_INVESTIGATOR_MODEL=claude-opus-5, so the `task` above describes the
+    # fallback this agent no longer takes, not the model it runs on. Recorded
+    # here because a reader who trusts `task: service_agent` alone would
+    # conclude claude-sonnet-5, which is what the implementer runs, not this
+    # agent. Unset the CWFT env var and the task's `balanced` profile applies
+    # again.
     compatibility: ">=1.0.0 <2.0.0"
   skills: []
   tools:
@@ -76,7 +83,7 @@ spec:
     mutationScopes:
       - proposal-directory-write
       - issue-comment
-  budgetUsd: 3.00
+  budgetUsd: 8.00
   timeoutSeconds: 7200
   runtime:
     entrypoint: orchestrator.run_issue_investigator:investigate
