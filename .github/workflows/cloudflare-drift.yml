@@ -15,11 +15,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  # Never race an apply or another drift run for the same state lock.
-  group: cloudflare-tofu
-  cancel-in-progress: false
-
 jobs:
   discover:
     name: discover roots
@@ -99,6 +94,26 @@ jobs:
       fail-fast: false
       matrix:
         root: ${{ fromJson(needs.discover.outputs.roots) }}
+
+    # Per root, and deliberately NOT the group cloudflare-apply.yml uses.
+    #
+    # This was one workflow-level group shared with apply until that workflow
+    # grew a human approval step. A run holds its group while waiting for a
+    # reviewer — up to 30 days — and GitHub replaces whatever is pending behind
+    # it, so each nightly run cancelled the previous pending one and a root
+    # under an unapproved apply got no drift detection at all for the wait.
+    #
+    # So drift and apply no longer serialise against each other. What keeps the
+    # state consistent is OpenTofu's own lock, which apply takes and this job
+    # does not, plus atomic R2 object writes: a plan reading mid-apply sees the
+    # old state or the new one, never a torn one. The cost is a possible
+    # spurious drift alert during the minutes an apply runs, which fails closed.
+    #
+    # Per root here still keeps two drift runs for the same root from overlapping.
+    concurrency:
+      group: cloudflare-tofu-${{ matrix.root }}
+      cancel-in-progress: false
+
     defaults:
       run:
         working-directory: ${{ matrix.root }}
@@ -106,10 +121,16 @@ jobs:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       # Drift only reads. It uses the same Object-Read-only state credential as
       # the plan workflow, which is why it also passes -lock=false: taking the
-      # lock would be a write this credential cannot perform. Safe while nothing
-      # applies from CI — when an apply job exists, it will need the writable
-      # credential and real locking, and this job should be revisited so the two
-      # cannot read a state mid-write.
+      # lock would be a write this credential cannot perform.
+      #
+      # An apply job now exists (cloudflare-apply.yml), and this job was
+      # deliberately NOT changed to exclude it — see the concurrency comment
+      # above. Drift and apply may overlap: apply takes OpenTofu's lock and this
+      # job takes none, and R2 object writes are atomic, so a plan reading
+      # mid-apply sees the old state or the new one, never a torn one. The cost
+      # is a possible spurious drift alert during the minutes an apply runs,
+      # which fails closed. The alternative was blocking the detector for the
+      # length of a human approval, which is worse.
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_PLAN_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_PLAN_SECRET_ACCESS_KEY }}
     steps:

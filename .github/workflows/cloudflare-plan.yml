@@ -525,12 +525,40 @@ jobs:
         if: always()
         run: rm -f tfplan plan.json plan.txt
 
+  # The apply workflow's guards are the only code in this directory whose
+  # failure mode is ACCEPTANCE, and until this job existed nothing ever ran
+  # them: cloudflare-apply.yml is workflow_dispatch-only, so their first
+  # execution would have been a real dispatch on main with the per-root write
+  # token and the writable R2 credential in scope. Five defects in those two
+  # files were found by reading them and none by running them.
+  #
+  # Deliberately unconditional and outside the `changes` gate. Adding these
+  # paths there would drag a full per-root `tofu plan` along with every edit to
+  # the apply workflow, which is not what that gate is for; and a check that
+  # only runs on some pull requests cannot vouch for the others. It costs
+  # seconds and needs no credentials.
+  assert-scripts:
+    name: self-test the apply guards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+      - name: Root guard
+        env:
+          CLOUDFLARE_GUARD_SELF_TEST: '1'
+        run: .github/scripts/cloudflare-assert-applyable-root.sh
+      - name: Backend assertion
+        env:
+          CLOUDFLARE_GUARD_SELF_TEST: '1'
+        run: .github/scripts/cloudflare-assert-backend.sh
+
   # The single stable context to mark required in the branch ruleset. It runs on
   # every pull request, including ones that touch nothing here, so it always has
   # a verdict to publish.
   cloudflare-plan:
     name: cloudflare-plan
-    needs: [changes, discover, plan]
+    needs: [changes, discover, plan, assert-scripts]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -544,6 +572,14 @@ jobs:
 
           if [ "${{ needs.changes.result }}" != "success" ]; then
             echo "::error::change detection itself failed — cannot vouch for this PR"
+            exit 1
+          fi
+
+          # Checked before the `changed` short-circuit below: the guards are
+          # not Cloudflare configuration, so a pull request that touches
+          # nothing here must still not be able to break them.
+          if [ "${{ needs.assert-scripts.result }}" != "success" ]; then
+            echo "::error::the apply guards failed their self-test"
             exit 1
           fi
 
