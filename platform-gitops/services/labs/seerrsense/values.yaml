@@ -44,6 +44,14 @@ env:
   # check. Setting it on an image that does not yet read it is a no-op, which is
   # why this lands first (seerrsense#44).
   SEERRSENSE_HOUSEHOLD_EMAILS: mashkoffdmitry@gmail.com
+  # How many proxy hops in front of the pod to believe when deriving the client
+  # address for the per-IP rate limits. The code defaults to 0 — trust no
+  # forwarding header — because a directly exposed container has nothing in
+  # front of it and would otherwise accept a caller's own X-Forwarded-For. Here
+  # traefik terminates and adds exactly one hop, so 1 is the real number; any
+  # larger value would let a caller forge the address and get a fresh bucket
+  # from every limit (seerrsense#44).
+  SEERRSENSE_TRUSTED_PROXY_HOPS: "1"
   # The pre-OAuth shared token is no longer accepted: every caller signs in
   # with Google and gets an access token of its own. Until now one secret
   # opened every tool for anybody who held it, with no identity behind it, no
