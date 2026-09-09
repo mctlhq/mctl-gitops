@@ -1,5 +1,5 @@
-status: accepted
-updated_at: '2026-09-09T21:15:20Z'
+status: implemented
+updated_at: '2026-09-09T21:27:44Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -9,5 +9,11 @@ source:
 control:
   requires_human_approval: true
 approval:
-  approved_by: 'mashkovd'
+  approved_by: mashkovd
   approved_at: '2026-09-09T21:15:20Z'
+attempt:
+  id: e378b68f-64f5-46fe-99e2-dc74a2b8a3cf
+  started_at: '2026-09-09T21:17:48Z'
+  expires_at: '2026-09-09T23:27:48Z'
+  finished_at: '2026-09-09T21:27:44Z'
+pr: https://github.com/mctlhq/mctl-portal/pull/123
