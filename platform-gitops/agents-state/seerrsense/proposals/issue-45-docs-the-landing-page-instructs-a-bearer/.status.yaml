@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-09-09T19:23:26Z'
+status: merged
+updated_at: '2026-09-09T19:36:24Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -17,3 +17,9 @@ attempt:
   expires_at: '2026-09-09T21:28:07Z'
   finished_at: '2026-09-09T19:23:26Z'
 pr: https://github.com/mctlhq/seerrsense/pull/46
+github:
+  state: merged
+  head_sha: 2c1418c0703c234ea55b7973741398e9496d62a6
+  observed_at: '2026-09-09T19:36:24Z'
+merged_at: '2026-09-09T19:36:24Z'
+merge_commit: 534f7c223158f108bd339d01730fa20533e67493
