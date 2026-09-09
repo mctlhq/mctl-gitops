@@ -95,12 +95,21 @@ jobs:
       matrix:
         root: ${{ fromJson(needs.discover.outputs.roots) }}
 
-    # Per root, matching cloudflare-apply.yml, so a drift plan never races an
-    # apply for the same state lock — and so that waiting on one root's apply
-    # cannot hold up, or silently cancel, drift on every other root. This was a
-    # single workflow-level group until cloudflare-apply.yml grew a human
-    # approval step: a run holds its group while waiting for a reviewer, and
-    # GitHub cancels whatever is pending behind it.
+    # Per root, and deliberately NOT the group cloudflare-apply.yml uses.
+    #
+    # This was one workflow-level group shared with apply until that workflow
+    # grew a human approval step. A run holds its group while waiting for a
+    # reviewer — up to 30 days — and GitHub replaces whatever is pending behind
+    # it, so each nightly run cancelled the previous pending one and a root
+    # under an unapproved apply got no drift detection at all for the wait.
+    #
+    # So drift and apply no longer serialise against each other. What keeps the
+    # state consistent is OpenTofu's own lock, which apply takes and this job
+    # does not, plus atomic R2 object writes: a plan reading mid-apply sees the
+    # old state or the new one, never a torn one. The cost is a possible
+    # spurious drift alert during the minutes an apply runs, which fails closed.
+    #
+    # Per root here still keeps two drift runs for the same root from overlapping.
     concurrency:
       group: cloudflare-tofu-${{ matrix.root }}
       cancel-in-progress: false

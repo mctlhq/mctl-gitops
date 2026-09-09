@@ -78,8 +78,12 @@ jobs:
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_PLAN_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_PLAN_SECRET_ACCESS_KEY }}
       TF_IN_AUTOMATION: '1'
-      # One definition for both jobs. Two copies of this expression would be two
-      # chances for the digests to quietly stop meaning the same thing.
+      # Two copies, one per job, because Actions cannot share an env value
+      # across jobs — no YAML anchors in workflows, and `env` at workflow level
+      # is not visible to `jobs.<id>.env`. They MUST stay identical: the whole
+      # point of the digest is that both jobs project the plan the same way, so
+      # editing one without the other silently turns the comparison into a
+      # comparison of two different things. Change both, or neither.
       PLAN_PROJECTION: >-
         {resource_changes: (.resource_changes // [] | sort_by(.address)),
          output_changes: (.output_changes // {})}
@@ -282,8 +286,12 @@ jobs:
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_APPLY_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_APPLY_SECRET_ACCESS_KEY }}
       TF_IN_AUTOMATION: '1'
-      # One definition for both jobs. Two copies of this expression would be two
-      # chances for the digests to quietly stop meaning the same thing.
+      # Two copies, one per job, because Actions cannot share an env value
+      # across jobs — no YAML anchors in workflows, and `env` at workflow level
+      # is not visible to `jobs.<id>.env`. They MUST stay identical: the whole
+      # point of the digest is that both jobs project the plan the same way, so
+      # editing one without the other silently turns the comparison into a
+      # comparison of two different things. Change both, or neither.
       PLAN_PROJECTION: >-
         {resource_changes: (.resource_changes // [] | sort_by(.address)),
          output_changes: (.output_changes // {})}
