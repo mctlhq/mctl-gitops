@@ -86,20 +86,36 @@ jobs:
       run:
         working-directory: ${{ matrix.root }}
 
-    # Secrets are gated behind a human approval per run.
+    # Threat model for this job, stated plainly because it is not obvious.
     #
     # Roots are discovered by walking the pull request's own tree, and OpenTofu
-    # evaluates data sources and configures providers during plan. A pull
-    # request that adds a root containing, say, a `data "external"` block would
-    # therefore execute arbitrary code with these credentials in the
-    # environment — and R2_ACCESS_KEY_ID can overwrite or delete objects in the
-    # state bucket. Forks get no secrets, but branches in this repository do,
-    # and several of them are opened by automation rather than by a person.
+    # configures providers and evaluates data sources during plan. So a pull
+    # request that adds a root is, in effect, submitting code that CI runs with
+    # these credentials in the environment. This repository is public, so forks
+    # get no secrets — but branches in the repository do, and several are opened
+    # by automation rather than by a person.
     #
-    # The environment holds the release of those secrets until a reviewer has
-    # looked at the diff. See docs/runbooks/agents-app-secret-exposure.md for
-    # the same pattern in another workflow.
-    environment: cloudflare-plan
+    # The defence is the provider allowlist below: nothing but the Cloudflare
+    # provider can be installed, so the usual code-execution vectors
+    # (hashicorp/external with a shell program, the http data source, and so on)
+    # fail at init before plan is reached.
+    #
+    # What that does NOT cover, and what a reviewer should therefore watch for
+    # in any PR that adds or edits a root:
+    #
+    #   * `provider "cloudflare" { base_url = ... }` — base_url is an optional,
+    #     non-sensitive provider attribute, so a root can point the provider at
+    #     an arbitrary host and the API token goes there. That token is
+    #     read-only across the four zones, which limits the damage to
+    #     disclosure of configuration.
+    #   * a `backend "s3"` block with its own `endpoints` — the R2 access key id
+    #     and a SigV4 signature would be sent to that host. The secret itself is
+    #     not transmitted, but this is the credential that can write to the
+    #     state bucket, so it is the one worth protecting properly.
+    #
+    # The durable fix for both is a separate, read-only R2 token for pull-request
+    # plans (with -lock=false), leaving the writable credential to drift and
+    # apply. That token does not exist yet.
 
     env:
       # Read-only across all zones. Verified: a POST to create a DNS record is

@@ -96,6 +96,33 @@ not exist yet.
 Apply is deliberately not automated. Drift fails closed and requires a reviewed
 decision rather than a blind reconcile.
 
+### What CI trusts, and what a reviewer still has to check
+
+A pull request that adds or edits a root is code that CI runs with the plan
+credentials in its environment — roots are discovered from the pull request's
+own tree, and OpenTofu configures providers and evaluates data sources during
+plan. Forks get no secrets; branches in this repository do, including the ones
+opened by automation.
+
+Provider installation is therefore restricted to `cloudflare/cloudflare`
+(`TF_CLI_CONFIG_FILE` in both workflows). That removes the usual code-execution
+vectors — `hashicorp/external` with a shell `program`, the `http` data source
+and friends — at init, before plan runs.
+
+Two things it does not remove, worth a glance in any PR touching a root:
+
+- **`provider "cloudflare" { base_url = … }`** — `base_url` is an optional,
+  non-sensitive provider attribute, so a root can point the provider at an
+  arbitrary host and the API token follows. That token is read-only across the
+  four zones, so the loss is disclosure of configuration rather than control.
+- **a `backend "s3"` block with its own `endpoints`** — the R2 access key id and
+  a SigV4 signature would be sent there. The secret itself is not transmitted,
+  but this is the credential that can write to the state bucket.
+
+The durable fix for both is a separate read-only R2 token for pull-request plans
+(with `-lock=false`), leaving the writable credential to drift and apply. It does
+not exist yet.
+
 ## Break-glass
 
 A dashboard change is permitted only to recover from an outage. It must be
