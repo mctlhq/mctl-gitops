@@ -431,13 +431,21 @@ jobs:
           ROOT: ${{ matrix.root }}
         run: |
           set -euo pipefail
+          record="${TF_DATA_DIR:-.terraform}/terraform.tfstate"
           if "$GITHUB_WORKSPACE/.github/scripts/cloudflare-local-state-roots.sh" \
                "$GITHUB_WORKSPACE/infrastructure/cloudflare/.local-state-roots" \
              | grep -qxF -- "$ROOT"; then
+            # Listed AND on s3 is a contradiction, and the expensive kind: the
+            # root is watchable again, but drift goes on skipping it because the
+            # line outlived the migration it documented. This is the last step
+            # of #1103, so the check exists to name it rather than let it pass.
+            if [ -f "$record" ] && [ "$(jq -r '.backend.type // "none"' "$record")" = "s3" ]; then
+              echo "::error::$ROOT is on the s3 backend but is still listed in .local-state-roots — remove the entry so drift watches it again"
+              exit 1
+            fi
             echo "::warning::$ROOT is on local state by exception; its plan does not reflect live Cloudflare"
             exit 0
           fi
-          record="${TF_DATA_DIR:-.terraform}/terraform.tfstate"
           [ -f "$record" ] \
             || { echo "::error::$ROOT resolved no remote backend — it is planning against empty local state"; exit 1; }
           type=$(jq -r '.backend.type // "none"' "$record")
