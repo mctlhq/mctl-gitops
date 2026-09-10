@@ -103,6 +103,21 @@ spec:
               # the next daily run. Re-publishing heals that within one cycle.
               containers:
                 - name: vmbackup
+                  # This tag is Alpine-based and DOES have a shell. Two
+                  # automated reviewers independently flagged the opposite —
+                  # that the default (non -alpine) vmbackup image is built FROM
+                  # scratch, so command: ["/bin/sh", ...] would fail to exec and
+                  # CrashLoopBackOff — which would be a serious finding if it
+                  # were true. It is not, for this image. Measured by running
+                  # the exact tag on this cluster
+                  # (sha256:ba728f716e27b7a4c9a0878f8eb7ed00b5fc0cd5bfd12d81df040580545fe709):
+                  #
+                  #   /bin/sh -> /bin/busybox
+                  #   PRETTY_NAME="Alpine Linux v3.20"
+                  #   /bin/date  /usr/bin/wget  /vmbackup-prod
+                  #
+                  # Do not "fix" this to :v1.106.1-alpine on the strength of the
+                  # general claim. Re-run the check above first.
                   image: victoriametrics/vmbackup:v1.106.1
                   command: ["/bin/sh", "-c"]
                   args:
