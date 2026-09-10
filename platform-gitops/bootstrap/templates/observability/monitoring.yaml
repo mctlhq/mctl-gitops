@@ -83,6 +83,13 @@ spec:
               #   6. no exit-code check, so any of the above printed "Done" and
               #      slept 24h. A container that never crashes cannot be caught
               #      by PodCrashLooping.
+              #   7. the snapshot URLs used `localhost`. This image is Alpine,
+              #      busybox resolves localhost to ::1 first, and vmsingle
+              #      listens on IPv4 only — so every backup would have died on
+              #      `dial tcp [::1]:8428: connect: connection refused`, for
+              #      ever. Found by watching the first real rollout, not by
+              #      reading: 127.0.0.1:8428/health answers OK from the sidecar
+              #      while localhost:8428 is refused. Hence 127.0.0.1 below.
               #
               # On why there is still no `set -e` here, which looks like the
               # obvious fix and is not: this is a SIDECAR. A container in
@@ -125,14 +132,22 @@ spec:
                       PUSH="http://prometheus-pushgateway.monitoring.svc.cluster.local:9091/metrics/job/vmbackup/instance/vmsingle"
                       LAST_SUCCESS=0
                       NEXT_RUN=0
+                      # Wait for vmsingle in the same pod before the first
+                      # backup. Containers start together, so without this the
+                      # first attempt loses the race and the retry is an hour
+                      # away — observed on the very first rollout.
+                      while ! wget -q -O /dev/null "http://127.0.0.1:8428/health"; do
+                        echo "[vmbackup] waiting for vmsingle on 127.0.0.1:8428"
+                        sleep 5
+                      done
                       while true; do
                         NOW=$(date +%s)
                         if [ "$NOW" -ge "$NEXT_RUN" ]; then
                           echo "[vmbackup] starting backup to s3://${BUCKET}/victoria-metrics"
                           /vmbackup-prod \
                             -storageDataPath=/victoria-metrics-data \
-                            -snapshot.createURL=http://localhost:8428/snapshot/create \
-                            -snapshot.deleteURL=http://localhost:8428/snapshot/delete \
+                            -snapshot.createURL=http://127.0.0.1:8428/snapshot/create \
+                            -snapshot.deleteURL=http://127.0.0.1:8428/snapshot/delete \
                             -dst="s3://${BUCKET}/victoria-metrics" \
                             -customS3Endpoint="${S3_ENDPOINT}"
                           RC=$?
