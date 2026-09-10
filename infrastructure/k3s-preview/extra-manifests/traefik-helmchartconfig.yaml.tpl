@@ -82,3 +82,41 @@ spec:
         http:
           middlewares:
             - traefik-cloudflare-origin@kubernetescrd
+
+    # #1153: stop presenting a self-signed placeholder to Cloudflare.
+    #
+    # Traefik answers with `CN=TRAEFIK DEFAULT CERT` whenever SNI matches no
+    # configured certificate, which was every hostname except the mctl.ai and
+    # mctl.ru apexes -- cert-manager only issues for Ingresses that ask for
+    # TLS. Cloudflare's SSL mode was therefore pinned at `full`, which encrypts
+    # the edge-to-origin hop but validates nothing; `strict` would have
+    # answered 526 for platform.mctl.me and every tenant subdomain.
+    #
+    # traefik-origin-ca is a Cloudflare Origin CA certificate covering all
+    # three apexes and all three wildcards, valid to 2041. It is signed by a CA
+    # only Cloudflare trusts, so it authenticates this origin to the edge and
+    # is worthless anywhere else. The Secret is owned by ArgoCD
+    # (platform-gitops/bootstrap/templates/core-infra/traefik-origin-cert.yaml,
+    # sourced from Vault platform/traefik/origin-ca) and landed BEFORE this
+    # reference: unlike the Middleware above, a missing default certificate
+    # fails soft -- Traefik falls back to the placeholder -- so the ordering is
+    # about being able to tell the two states apart, not about avoiding an
+    # outage.
+    #
+    # This does NOT displace the cert-manager certificates. A defaultCertificate
+    # is only consulted when SNI matches nothing else, so the apexes keep their
+    # Let's Encrypt certificate and every future Ingress with its own TLS block
+    # keeps whatever cert-manager issues for it.
+    #
+    # Verified by rendering chart 41.5.0 with the module's base values and this
+    # file together: the schema accepts the key (values.schema.json has
+    # additionalProperties: false, so a wrong path fails the HelmChart install
+    # rather than degrading quietly), a TLSStore named `default` is emitted
+    # carrying this secretName, and all four entrypoint invariants above
+    # survive the merge. The `render` job in
+    # .github/workflows/cloudflare-origin-allowlist.yml re-runs that check on
+    # every pull request touching this file.
+    tlsStore:
+      default:
+        defaultCertificate:
+          secretName: traefik-origin-ca

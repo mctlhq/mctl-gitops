@@ -196,4 +196,20 @@ jobs:
             echo "::error::the web entrypoint gained a middleware -- see the comment in traefik-helmchartconfig.yaml.tpl"
             fail=1
           fi
+          # #1153: the default certificate. Same failure shape as the
+          # middleware -- a values path that stops producing the TLSStore
+          # leaves Traefik answering with its self-signed placeholder, which
+          # Cloudflare accepts silently under ssl=full and rejects with 526
+          # under strict. Nothing in any log says so, so it is checked here.
+          if python3 -c "
+          import sys, yaml
+          docs = [d for d in yaml.safe_load_all(open('/tmp/rendered.yaml')) if d]
+          st = [d for d in docs if d.get('kind') == 'TLSStore' and d['metadata']['name'] == 'default']
+          sys.exit(0 if len(st) == 1 and st[0]['spec'].get('defaultCertificate', {}).get('secretName') == 'traefik-origin-ca' else 1)
+          "; then
+            echo "ok: TLSStore/default -> secretName traefik-origin-ca"
+          else
+            echo "::error::the rendered chart no longer emits TLSStore/default with secretName traefik-origin-ca -- see the tlsStore comment in traefik-helmchartconfig.yaml.tpl"
+            fail=1
+          fi
           exit "$fail"
