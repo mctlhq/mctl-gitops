@@ -83,8 +83,11 @@ scheduled run until someone got round to it.
 So the plan stays zero-diff and the rule above never bends:
 
 ```
-Plan: 24 to import, 0 to add, 0 to change, 0 to destroy.
+Plan: 25 to import, 0 to add, 0 to change, 0 to destroy.
 ```
+
+(Twenty-five: the twenty-two from the import run and the Search Console record,
+plus the MCP Portal record from #1092 and these two settings.)
 
 `ssl` is not declared. It is `full` on this zone and cannot be raised to
 `strict` while the origin presents `TRAEFIK DEFAULT CERT` for every name except

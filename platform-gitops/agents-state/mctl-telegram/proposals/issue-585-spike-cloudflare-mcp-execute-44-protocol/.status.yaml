@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-09-09T23:32:13Z'
+status: rejected
+updated_at: '2026-09-10T07:06:15Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -17,3 +17,8 @@ attempt:
   expires_at: '2026-09-10T01:12:07Z'
   finished_at: '2026-09-09T23:32:13Z'
 pr: https://github.com/mctlhq/mctl-telegram/pull/603
+notes: PR was closed without merging.
+github:
+  state: closed
+  head_sha: 51ad00bbaf380227ab1921bfb4078debd3c1b1ff
+  observed_at: '2026-09-10T07:06:15Z'
