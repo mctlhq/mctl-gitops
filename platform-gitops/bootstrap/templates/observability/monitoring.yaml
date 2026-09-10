@@ -590,6 +590,15 @@ spec:
       targetRevision: main
       path: platform-gitops/infra-components/observability/pushgateway
 
+    # blackbox-exporter and the VMProbe objects that use it. This is the only
+    # component here that watches the platform from OUTSIDE its own ingress:
+    # the probes target public hostnames, so the path under test runs out
+    # through Cloudflare and back. Cloudflare cannot do this itself — Health
+    # Checks are Pro-and-up and every zone is on Free.
+    - repoURL: https://github.com/mctlhq/mctl-gitops.git
+      targetRevision: main
+      path: platform-gitops/infra-components/observability/blackbox
+
   ignoreDifferences:
     - group: operator.victoriametrics.com
       kind: VMSingle

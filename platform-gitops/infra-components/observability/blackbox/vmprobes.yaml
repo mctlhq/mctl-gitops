@@ -1,0 +1,76 @@
+# The probe targets. One VMProbe per job label, because the job label is what
+# the alert rules match on and what makes a page legible at 03:00.
+#
+# vmagent runs with selectAllByDefault: true, so these are picked up without a
+# selector on either side. The prober URL is the in-cluster Service; only the
+# probe TARGET leaves the cluster.
+---
+# Reserved job name. mctl-telegram-alerts.yaml has carried a ServiceUnavailable
+# alert on probe_success{job="mctl-telegram-healthz"} since it was written, and
+# its comment says outright that it "requires a blackbox-exporter probe
+# configured with job=mctl-telegram-healthz". Until now that probe did not
+# exist, so the series did not exist, so the alert could never fire — a
+# critical alert that had been silently inert. This is that probe; the rule is
+# left untouched and starts working.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMProbe
+metadata:
+  name: mctl-telegram-healthz
+  namespace: monitoring
+spec:
+  jobName: mctl-telegram-healthz
+  interval: 60s
+  module: http_2xx
+  vmProberSpec:
+    url: blackbox-exporter.monitoring.svc.cluster.local:9115
+  targets:
+    staticConfig:
+      targets:
+        - https://tg.mctl.ai/healthz
+---
+# The platform's public front doors. mctl.ai is the zone that actually serves
+# content — 750 757 of the account's 864 480 requests in the week of
+# 2026-09-03 — and secrets.mctl.ai is Vault, whose unavailability breaks every
+# ExternalSecret refresh in the cluster.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMProbe
+metadata:
+  name: platform-public-endpoints
+  namespace: monitoring
+spec:
+  jobName: platform-public
+  interval: 60s
+  module: http_2xx
+  vmProberSpec:
+    url: blackbox-exporter.monitoring.svc.cluster.local:9115
+  targets:
+    staticConfig:
+      targets:
+        - https://mctl.ai/
+        - https://secrets.mctl.ai/v1/sys/health
+---
+# The two redirect zones. Their entire job is to answer 301 to mctl.ai, so the
+# success condition is the 301 itself (module http_redirect, follow_redirects
+# false). A 200 here would mean the apex redirect ruleset stopped firing.
+#
+# This is worth probing specifically. The weekly audit briefly and wrongly
+# concluded these redirects were broken; the page rules that looked like they
+# served them had been deleted as unreachable (#1089 decision 5) and the real
+# mechanism is the apex ruleset plus the mctl-landing-form worker. Nothing was
+# watching either mechanism. Now something is.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMProbe
+metadata:
+  name: redirect-zones
+  namespace: monitoring
+spec:
+  jobName: redirect-zones
+  interval: 300s
+  module: http_redirect
+  vmProberSpec:
+    url: blackbox-exporter.monitoring.svc.cluster.local:9115
+  targets:
+    staticConfig:
+      targets:
+        - https://mctl.me/
+        - https://mctl.ru/
