@@ -123,11 +123,16 @@ spec:
                           RC=$?
                           if [ "$RC" -eq 0 ]; then
                             LAST_SUCCESS=$(date +%s)
+                            NEXT_RUN=$((NOW + 86400))
                             echo "[vmbackup] backup ok at ${LAST_SUCCESS}"
                           else
-                            echo "[vmbackup] ERROR: backup failed, exit ${RC}. Not publishing a success timestamp; VictoriaMetricsBackupStale fires once the last success is 25h old." >&2
+                            # Retry in an hour, not tomorrow. A blip talking to
+                            # R2 should not cost a whole day of backup age —
+                            # the stale alert would still page at 25h, but by
+                            # then the gap is real rather than transient.
+                            NEXT_RUN=$((NOW + 3600))
+                            echo "[vmbackup] ERROR: backup failed, exit ${RC}. Retrying in 1h; no success timestamp published, so VictoriaMetricsBackupStale fires once the last success is 25h old." >&2
                           fi
-                          NEXT_RUN=$((NOW + 86400))
                         fi
                         if [ "$LAST_SUCCESS" -gt 0 ]; then
                           printf 'vmbackup_last_success_timestamp_seconds %s\n' "$LAST_SUCCESS" > /tmp/vmbackup.prom
@@ -715,13 +720,21 @@ spec:
       - ServerSideApply=true
       - RespectIgnoreDifferences=true
       # VictoriaMetrics operator CRDs (VMSingle, VMAlert, ...) declare an
-      # incomplete schema that omits some pass-through fields like
-      # `VMSingle.spec.extraContainers`. Once cluster-wide
-      # `controller.diff.server.side: "true"` is set, ArgoCD's SSA
-      # dry-run rejects the diff with `failed to create typed patch
-      # object: .spec.extraContainers: field not declared in schema` and
-      # the app stays Sync=Unknown. Opt this app out so it falls back to
-      # the legacy client-side diff.
+      # incomplete schema that omits some pass-through fields. Once cluster-wide
+      # `controller.diff.server.side: "true"` is set, ArgoCD's SSA dry-run
+      # rejects the diff with `field not declared in schema` and the app stays
+      # Sync=Unknown. Opt this app out so it falls back to the legacy
+      # client-side diff.
+      #
+      # The field originally named here was `VMSingle.spec.extraContainers`,
+      # and it is gone as of #1071 — it was never a real CRD field, which is
+      # exactly why the SSA dry-run rejected it. So the specific cause this
+      # opt-out was added for no longer exists. It is kept anyway rather than
+      # removed in the same change: whether any OTHER pass-through field in
+      # this app still trips the dry-run can only be established by turning it
+      # back on and watching, and doing that while also rewiring the backup
+      # sidecar would confuse two failures into one. Worth revisiting on its
+      # own.
       - ServerSideDiff=false
     retry:
       limit: 5
