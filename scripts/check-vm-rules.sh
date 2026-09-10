@@ -36,7 +36,8 @@ fail=0
 for f in "$RULES_DIR"/*.yaml; do
   kind=$(yq '.kind // ""' "$f")
   if [ "$kind" != "VMRule" ]; then
-    echo "skip (kind=$kind): $(basename "$f")"
+    echo "::error file=${f#"$ROOT"/}::non-VMRule object (kind=$kind) found under vm-rules/; move it to infra-components/observability/<component>/ instead"
+    fail=1
     continue
   fi
   out="$GEN_DIR/$(basename "$f")"

@@ -10,6 +10,21 @@
 #      unnamed -> even on a match, the port would not resolve.
 # Fixed by labelling + naming the Service port (see pushgateway.yaml) and
 # referencing that port name here.
+#
+# This is the ONLY scrape of the pushgateway, deliberately. A pod-level
+# VMPodScrape (`vm-rules/pushgateway-podscrape.yaml`) briefly existed to bypass
+# the unlabelled Service above; once the Service was fixed, that podScrape
+# scraped the same target a second time, so every metric pushed to the gateway
+# landed as two series and every rule over it fired twice (issue #1159,
+# VMPodScrape removed 2026-09). If this pool ever selects zero targets again,
+# fix the Service (labels/port name), do not add a second scrape.
+#
+# honorLabels: true is load-bearing: it preserves the job/instance labels
+# pushed to the gateway rather than overwriting them with the scrape's own
+# labels. MctlTelegramCanaryStale keys off
+# push_time_seconds{job="mctl_telegram_canary"} and the backup rules key off
+# {job="vmbackup"} — without honorLabels those series would silently stop
+# matching and the alerts would go absent instead of firing.
 apiVersion: operator.victoriametrics.com/v1beta1
 kind: VMServiceScrape
 metadata:
