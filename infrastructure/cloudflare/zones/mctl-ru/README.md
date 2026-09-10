@@ -91,7 +91,7 @@ scheduled run until someone got round to it.
 So the plan stays zero-diff and the rule above never bends:
 
 ```
-Plan: 6 to import, 0 to add, 0 to change, 0 to destroy.
+Plan: 7 to import, 0 to add, 0 to change, 0 to destroy.
 ```
 
 (Six, not the "2 to import" quoted earlier in this file: that figure is from the

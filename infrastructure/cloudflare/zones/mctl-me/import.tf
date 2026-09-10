@@ -85,3 +85,8 @@ import {
   to = module.baseline.cloudflare_zone_setting.always_use_https
   id = "${local.zone_id}/always_use_https"
 }
+
+import {
+  to = module.baseline.cloudflare_zone_setting.ssl
+  id = "${local.zone_id}/ssl"
+}

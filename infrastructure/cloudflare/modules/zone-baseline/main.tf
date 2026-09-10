@@ -102,10 +102,17 @@ resource "cloudflare_ruleset" "firewall_custom" {
 # either way; declaring it makes the edge answer :80 with a 301 before the
 # redirect ruleset runs, rather than serving that first hop in the clear.
 #
-# ssl is deliberately NOT declared. It is "full" on every zone and cannot be
-# raised to "strict" today: the origin presents TRAEFIK DEFAULT CERT for every
-# name except the mctl.ai and mctl.ru apexes, so strict would answer 526 for
-# platform.mctl.me and every wildcard subdomain. Tracked in #1153.
+# ssl was "full" until 2026-09-10 and could not be raised, because the origin
+# presented TRAEFIK DEFAULT CERT for every name except the mctl.ai and mctl.ru
+# apexes — strict would have answered 526 for platform.mctl.me and every
+# wildcard subdomain. #1153 fixed the cause rather than the symptom: Traefik now
+# serves a Cloudflare Origin CA certificate covering all three apexes and all
+# three wildcards as its default (platform-gitops core-infra/traefik-origin-cert.yaml
+# and infrastructure/k3s-preview/extra-manifests/traefik-helmchartconfig.yaml.tpl).
+#
+# "full" accepts any certificate at all, including the self-signed placeholder
+# it was in fact accepting, so the edge-to-origin hop was encrypted but not
+# authenticated. "strict" is what makes it authenticated.
 resource "cloudflare_zone_setting" "min_tls_version" {
   zone_id    = var.zone_id
   setting_id = "min_tls_version"
@@ -116,4 +123,10 @@ resource "cloudflare_zone_setting" "always_use_https" {
   zone_id    = var.zone_id
   setting_id = "always_use_https"
   value      = "on"
+}
+
+resource "cloudflare_zone_setting" "ssl" {
+  zone_id    = var.zone_id
+  setting_id = "ssl"
+  value      = "strict"
 }

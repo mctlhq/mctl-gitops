@@ -80,7 +80,7 @@ scheduled run until someone got round to it.
 So the plan stays zero-diff and the rule above never bends:
 
 ```
-Plan: 13 to import, 0 to add, 0 to change, 0 to destroy.
+Plan: 14 to import, 0 to add, 0 to change, 0 to destroy.
 ```
 
 (Thirteen: eleven from the original import plus these two.)
