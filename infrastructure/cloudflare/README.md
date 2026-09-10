@@ -186,13 +186,17 @@ reach would leave `cloudflare-drift.yml`, which fails closed, red on every
 scheduled run until someone applied by hand. Import first, mutate never: each
 root's README records the zero-diff plan it should print.
 
-Two settings are deliberately left out:
+`ssl` joined them on 2026-09-10 and is `strict` on all three managed zones.
+It was `full` because the origin presented `TRAEFIK DEFAULT CERT` for every
+name except the mctl.ai and mctl.ru apexes, so strict would have answered 526
+for `platform.mctl.me` and every wildcard subdomain. #1153 fixed the cause:
+Traefik now serves a Cloudflare Origin CA certificate covering all three
+apexes and all three wildcards as its default. `full` accepts any certificate
+at all — including the placeholder it was in fact accepting — so the hop was
+encrypted but not authenticated; `strict` is what authenticates it.
 
-- **`ssl`** stays `full` on every zone. It cannot be raised to `strict` while
-  the origin presents `TRAEFIK DEFAULT CERT` for every name except the mctl.ai
-  and mctl.ru apexes; strict would answer 526 for `platform.mctl.me` and every
-  wildcard subdomain. Tracked in #1153, which continues the Origin CA and
-  Authenticated Origin Pull thread from the origin section below.
+One setting is deliberately left out:
+
 - **`security_level`** is `medium` on mctl.ai and dmitriimashkov.com and `high`
   on mctl.me and mctl.ru. That difference looks accidental too, but unlike a
   TLS floor it changes how visitors are challenged, and nothing measured here

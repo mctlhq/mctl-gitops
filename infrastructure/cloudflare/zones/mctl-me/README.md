@@ -67,7 +67,7 @@ procedure can mutate Cloudflare.
 ## Zone settings
 
 `min_tls_version` and `always_use_https` are declared in the shared baseline as
-of #1154. Zone settings always exist at Cloudflare — there is no unset, only a
+of #1154, and `ssl` as of #1153. Zone settings always exist at Cloudflare — there is no unset, only a
 default — so they import rather than create.
 
 The values were applied through the Cloudflare API **before** this landed, the
@@ -80,7 +80,7 @@ scheduled run until someone got round to it.
 So the plan stays zero-diff and the rule above never bends:
 
 ```
-Plan: 13 to import, 0 to add, 0 to change, 0 to destroy.
+Plan: 14 to import, 0 to add, 0 to change, 0 to destroy.
 ```
 
-(Thirteen: eleven from the original import plus these two.)
+(Fourteen: eleven from the original import plus these three settings.)

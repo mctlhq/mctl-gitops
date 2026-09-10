@@ -17,10 +17,14 @@
 # only rewrites subresource URLs inside HTML — it does nothing for the first
 # request.
 #
-# ssl stays "full" for the reason recorded in #1153: the origin presents
-# TRAEFIK DEFAULT CERT for every name except this zone's apex, so "strict"
-# would answer 526 for www.mctl.ai and every tenant subdomain under the
-# wildcard.
+# ssl was "full" until 2026-09-10 for the reason recorded in #1153: the origin
+# presented TRAEFIK DEFAULT CERT for every name except this zone's apex. That
+# is fixed — Traefik serves a Cloudflare Origin CA certificate covering the
+# apex and the wildcard as its default — so "strict" is now both possible and
+# correct. Verified through the edge for www.mctl.ai, tg.mctl.ai,
+# secrets.mctl.ai, mcp.mctl.ai and a wildcard miss before it was declared here;
+# the two tunnel-routed hosts (jellyfin, media) are unaffected because their
+# origin is the tunnel, not this address.
 resource "cloudflare_zone_setting" "min_tls_version" {
   zone_id    = local.zone_id
   setting_id = "min_tls_version"
@@ -31,4 +35,10 @@ resource "cloudflare_zone_setting" "always_use_https" {
   zone_id    = local.zone_id
   setting_id = "always_use_https"
   value      = "on"
+}
+
+resource "cloudflare_zone_setting" "ssl" {
+  zone_id    = local.zone_id
+  setting_id = "ssl"
+  value      = "strict"
 }
