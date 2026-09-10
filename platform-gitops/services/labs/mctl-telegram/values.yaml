@@ -73,7 +73,10 @@ env:
   # the Cloudflare API resolves for portal `mcp` / server `tg`
   # (effective-redirect-uri, source=per_portal), not a guess. Malformed JSON or
   # an unknown key fails startup closed, so validate with the config parser
-  # before changing it. Refs mctlhq/.github#35, #44.
+  # before changing it. Same yq caveat as ALLOWED_ORIGINS above, and worse:
+  # this value is JSON full of colons and quotes, so after any automated
+  # rewrite of this file diff it against git before the pod restarts, or the
+  # server will refuse to start. Refs mctlhq/.github#35, #44.
   OAUTH_PREREGISTERED_CLIENTS: '[{"client_id":"cloudflare-portal-mcp","client_name":"Cloudflare MCP Portal (mcp.mctl.ai)","redirect_uris":["https://mcp.mctl.ai/servers-callback"]}]'
   # Raised from the 10m default: the in-browser enable_access flow (phone -> SMS
   # -> 2FA) is bounded by this same TTL (lookupEnable), and 10m is too tight for
