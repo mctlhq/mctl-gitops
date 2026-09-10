@@ -27,15 +27,21 @@
 # delete the old one by id — Traefik needs no change because the CA does not
 # move.
 #
-# Ordering, and why this file carries no TLSOption yet. The Cloudflare side was
-# enabled first and is a no-op on its own: in TLS a client sends a certificate
-# only when the server asks, and Traefik does not ask until a TLSOption tells
-# it to. That TLSOption is a separate change, landing only once the Secret
-# below is confirmed present — a `default` TLSOption naming a Secret that has
-# not synced yet would be read by Traefik before ESO has written it, and it
-# applies to every HTTPS router in the cluster. Raised by the agy reviewer,
-# which was right: the same two-step shape was used for the Origin CA
-# certificate in #1165/#1166 and should not have been abandoned here.
+# Ordering. Three steps, each with a checkpoint, because every one of them is
+# capable of taking the whole ingress down if the one before it did not land:
+#
+#   1. Cloudflare side enabled — a no-op alone, since in TLS a client sends a
+#      certificate only when the server asks, and Traefik did not ask.
+#   2. The ExternalSecret below (#1172) — the CA reaches the cluster. Still no
+#      behaviour change: nothing referenced it.
+#   3. The TLSOption at the bottom of this file — Traefik starts asking. This
+#      is the enforcing step.
+#
+# 2 and 3 were split rather than shipped together because a `default` TLSOption
+# naming a Secret ESO had not written yet would be read by Traefik before the
+# Secret existed, and it applies to every HTTPS router in the cluster. Raised by
+# the agy reviewer, which was right: the same two-step shape was used for the
+# Origin CA certificate in #1165/#1166 and should not have been abandoned.
 #
 # Before enabling, it was verified that nothing inside the cluster talks to
 # Traefik directly on :8443, since such a client has no certificate and would
@@ -53,9 +59,10 @@
 # hostname with this exact TLSOption answered 200 through Cloudflare and failed
 # the TLS handshake when addressed directly at the origin.
 #
-# Rollback, once the TLSOption exists, is deleting it: Traefik stops asking
-# within a sync and the origin is back to accepting any Cloudflare address.
-# Rolling back THIS object alone changes nothing, because nothing reads it yet.
+# Rollback is deleting the TLSOption below: Traefik stops asking within a sync
+# and the origin is back to accepting any Cloudflare address. Reverting the
+# ExternalSecret alone would not undo enforcement — it would break it, leaving
+# a TLSOption pointing at a Secret that no longer exists.
 apiVersion: external-secrets.io/v1beta1
 kind: ExternalSecret
 metadata:
@@ -78,3 +85,24 @@ spec:
       remoteRef:
         key: platform/traefik/origin-pull
         property: ca.crt
+---
+# A TLSOption named `default` in Traefik's own namespace applies to every router
+# that does not name another one, which is all of them. This is the object that
+# makes Traefik ask for, and verify, the client certificate.
+#
+# Only clientAuth is set. Every other TLS parameter is deliberately absent so it
+# keeps Traefik's built-in default — there was no TLSOption here before, so
+# anything spelled out now would be a second, unrelated change riding along.
+apiVersion: traefik.io/v1alpha1
+kind: TLSOption
+metadata:
+  name: default
+  namespace: traefik
+spec:
+  clientAuth:
+    secretNames:
+      - traefik-origin-pull-ca
+    # RequireAndVerifyClientCert, not VerifyClientCertIfGiven: the latter lets a
+    # client that presents nothing through, which is precisely the traffic this
+    # exists to refuse.
+    clientAuthType: RequireAndVerifyClientCert
