@@ -490,6 +490,17 @@ spec:
                     continue: true
                     matchers:
                       - alertname =~ "MctlTelegramCanary.*"
+                  # seerrsense's ChatGPT plugin-directory review: a reviewer
+                  # connecting, or a tool failing on them, is news for the
+                  # operator and nothing mctl-agent can act on — so Telegram
+                  # only, no ticket. Prefix match for the same reason as the
+                  # canary route above. Both alerts live in
+                  # vm-rules/seerrsense-alerts.yaml; remove this route together
+                  # with that file once the listing is published and the
+                  # informational alert has done its job.
+                  - receiver: telegram
+                    matchers:
+                      - alertname =~ "SeerrSense.*"
                   # Platform/infra Applications (projects default + platform)
                   # also page a human, in ADDITION to mctl-agent — hence
                   # continue: true, which lets the catch-all route below still

@@ -150,6 +150,39 @@ spec:
                               config:
                                 match_all: false
                                 action: inc
+                        # seerrsense (labs): the ChatGPT plugin-directory
+                        # review needs a human to hear when a reviewer connects
+                        # or when a tool fails on them, and the server exposes
+                        # no /metrics. Two log shapes carry that:
+                        #  - Fastify's request line for the consent POST — the
+                        #    last hop of every OAuth sign-in, so one increment =
+                        #    one new connection (any account; the server logs
+                        #    no identity, by design).
+                        #  - the error line describeError() writes when a tool
+                        #    fails for a reason the caller was not told — the
+                        #    tunnel timeouts seen during the demo recording.
+                        # Pino's req object serialises method before url, so the
+                        # adjacent pair is stable to match on.
+                        - regex:
+                            expression: '(?P<seerr_consent>"method":"POST","url":"/oauth/consent")'
+                        - metrics:
+                            seerrsense_oauth_consent_total:
+                              type: Counter
+                              description: "seerrsense OAuth consent POSTs (one per completed sign-in)"
+                              source: seerr_consent
+                              config:
+                                match_all: false
+                                action: inc
+                        - regex:
+                            expression: '(?P<seerr_tool_failed>a tool call failed for a reason the caller was not told)'
+                        - metrics:
+                            seerrsense_tool_failures_total:
+                              type: Counter
+                              description: "seerrsense MCP tool calls that failed with the generic error"
+                              source: seerr_tool_failed
+                              config:
+                                match_all: false
+                                action: inc
                 kubernetes_sd_configs:
                   - role: pod
                 relabel_configs:
