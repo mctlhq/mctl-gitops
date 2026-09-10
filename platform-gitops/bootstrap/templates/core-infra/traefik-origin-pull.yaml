@@ -53,8 +53,9 @@
 # hostname with this exact TLSOption answered 200 through Cloudflare and failed
 # the TLS handshake when addressed directly at the origin.
 #
-# Rollback is deleting this TLSOption; Traefik stops asking within a sync and
-# the origin is back to accepting any Cloudflare address.
+# Rollback, once the TLSOption exists, is deleting it: Traefik stops asking
+# within a sync and the origin is back to accepting any Cloudflare address.
+# Rolling back THIS object alone changes nothing, because nothing reads it yet.
 apiVersion: external-secrets.io/v1beta1
 kind: ExternalSecret
 metadata:
