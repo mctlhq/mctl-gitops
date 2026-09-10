@@ -46,8 +46,9 @@ spec:
               1 793 responses with status 521 without anything firing.
 
         - alert: RedirectZoneNotRedirecting
-          # The redirect zones answer 301 or they are broken. Slower interval
-          # (300s probe) so `for` is correspondingly longer.
+          # The redirect zones answer 301 or they are broken. Probed every
+          # 120s; 15m is seven or eight consecutive failures, which is right
+          # for something that is a config regression rather than an outage.
           expr: probe_success{job="redirect-zones"} == 0
           for: 15m
           labels:
