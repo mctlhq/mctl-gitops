@@ -248,31 +248,14 @@ IPv6, which no `AAAA` record advertises and no firewall rule would reach.
 **What it does not close.** Two things, both deliberate and both recorded rather
 than implied.
 
-*Another Cloudflare customer.* **Closed 2026-09-10 by Authenticated Origin
-Pulls.** The allowlist trusts *all* of Cloudflare, so someone could point their
-own zone at this origin and arrive from a legitimate Cloudflare address,
-skipping this zone's WAF rules — the same breadth problem as the `asnum eq
-24940` bypass in decision 8, one layer down. An IP allowlist cannot tell one
-Cloudflare customer from another; a client certificate can.
-
-The edge now presents a certificate issued by an account-exclusive CA
-(`CN=mctl Cloudflare origin-pull CA`, key in Vault `platform/traefik/origin-pull`,
-uploaded per zone through `/zones/{id}/origin_tls_client_auth`), and Traefik
-refuses any TLS handshake without it — `TLSOption/default` in the `traefik`
-namespace, `RequireAndVerifyClientCert`, from
-`platform-gitops/bootstrap/templates/core-infra/traefik-origin-pull.yaml`.
-
-Cloudflare's *global* AOP certificate would not have closed this: it proves
-"from Cloudflare", which is what the allowlist already proved and what the
-attacker in this scenario also has. The certificate had to be ours.
-
-The allowlist stays, as the second of two independent checks. It is now the
-*later* of the two: client-certificate verification happens during the TLS
-handshake, before any HTTP middleware runs, so an unauthenticated caller is
-dropped before Traefik ever reads a header. The allowlist still earns its place
-— it is what remains if the TLSOption is ever removed or misconfigured, and it
-is the check that produces a readable 403 for a caller that got past the
-handshake.
+*Another Cloudflare customer.* The allowlist trusts *all* of Cloudflare, so
+someone can point their own zone at this origin and arrive from a legitimate
+Cloudflare address, skipping this zone's WAF rules — the same breadth problem as
+the `asnum eq 24940` bypass in decision 8, one layer down. Authenticated Origin
+Pull (an mTLS client certificate the edge presents, which also survives
+Cloudflare adding a range) or a secret header injected by this zone alone is
+what closes it; a Cloudflare Tunnel removes the inbound listener altogether.
+Both are strictly better and both are larger changes.
 
 *A pod talking to Traefik directly.* The `websecure` entrypoint trusts the PROXY
 protocol from `10.0.0.0/8`, which contains the pod CIDR `10.42.0.0/16` and the
