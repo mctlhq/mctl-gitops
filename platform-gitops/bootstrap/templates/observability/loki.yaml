@@ -111,95 +111,101 @@ spec:
           config:
             clients:
               - url: http://loki-stack:3100/loki/api/v1/push
-            scrape_configs:
-              - job_name: kubernetes-pods
-                pipeline_stages:
-                  - docker: {}
-                  - match:
-                      selector: '{namespace=~"labs|admins|ovk"}'
-                      stages:
-                        - regex:
-                            expression: '(?P<token_refresh_failed>\[openai-codex\] Token refresh failed)'
-                        - metrics:
-                            openclaw_token_refresh_failed_total:
-                              type: Counter
-                              description: "openai-codex token refresh failure count"
-                              source: token_refresh_failed
-                              config:
-                                match_all: false
-                                action: inc
-                        # Catches the broader "no usable credentials" case: never
-                        # connected, expired-then-purged, or explicitly
-                        # disconnected — none of which produce a "Token refresh
-                        # failed" line above. See mctlhq/mctl-gitops#556.
-                        # Named capture group (?P<provider>...) is kept only so
-                        # the extracted value could be promoted to a Loki label
-                        # via a `labels` stage; Promtail's `metrics` stage itself
-                        # does not attach per-value labels to the Counter it
-                        # exposes (metrics stage output has no dynamic labels,
-                        # only what's already on the log stream) — so this is a
-                        # single unlabeled total across all providers, same
-                        # shape as openclaw_token_refresh_failed_total above.
-                        - regex:
-                            expression: '(?P<missing_api_key>Missing API key for provider "(?P<provider>[^"]+)")'
-                        - metrics:
-                            openclaw_provider_missing_api_key_total:
-                              type: Counter
-                              description: "gateway 'Missing API key for provider' occurrence count (any provider)"
-                              source: missing_api_key
-                              config:
-                                match_all: false
-                                action: inc
-                        # seerrsense (labs): the ChatGPT plugin-directory
-                        # review needs a human to hear when a reviewer connects
-                        # or when a tool fails on them, and the server exposes
-                        # no /metrics. Two log shapes carry that:
-                        #  - Fastify's request line for the consent POST — the
-                        #    last hop of every OAuth sign-in, so one increment =
-                        #    one new connection (any account; the server logs
-                        #    no identity, by design).
-                        #  - the error line describeError() writes when a tool
-                        #    fails for a reason the caller was not told — the
-                        #    tunnel timeouts seen during the demo recording.
-                        # Pino's req object serialises method before url, so the
-                        # adjacent pair is stable to match on.
-                        - regex:
-                            expression: '(?P<seerr_consent>"method":"POST","url":"/oauth/consent")'
-                        - metrics:
-                            seerrsense_oauth_consent_total:
-                              type: Counter
-                              description: "seerrsense OAuth consent POSTs (one per completed sign-in)"
-                              source: seerr_consent
-                              config:
-                                match_all: false
-                                action: inc
-                        - regex:
-                            expression: '(?P<seerr_tool_failed>a tool call failed for a reason the caller was not told)'
-                        - metrics:
-                            seerrsense_tool_failures_total:
-                              type: Counter
-                              description: "seerrsense MCP tool calls that failed with the generic error"
-                              source: seerr_tool_failed
-                              config:
-                                match_all: false
-                                action: inc
-                kubernetes_sd_configs:
-                  - role: pod
-                relabel_configs:
-                  - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
-                    action: drop
-                    regex: "false"
-                  - source_labels: [__meta_kubernetes_namespace]
-                    target_label: namespace
-                  - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
-                    target_label: app
-                  - source_labels: [__meta_kubernetes_pod_label_mctl_ai_team]
-                    target_label: team
-                  - source_labels: [__meta_kubernetes_pod_label_mctl_ai_component]
-                    target_label: component
-                  - source_labels: [__meta_kubernetes_pod_name]
-                    target_label: pod
-
+            # Everything below `snippets` is what the promtail-6.x subchart
+            # actually renders into promtail.yaml (config.file templates
+            # `snippets.pipelineStages`, `snippets.common` and
+            # `snippets.extraRelabelConfigs` — see `helm show values
+            # grafana/promtail`). A raw `scrape_configs:` key under `config`
+            # sat here from the first metrics stage until 2026-09-10 and was
+            # silently ignored by the chart: the running Promtail carried the
+            # chart's default pipeline (`cri: {}` only) and default labels, so
+            # no metrics stage ever executed and openclaw_token_refresh_failed_total
+            # / openclaw_provider_missing_api_key_total never existed anywhere,
+            # which is the full explanation for mctlhq/mctl-gitops#556. The
+            # chart's own relabels already produce namespace, app, instance,
+            # component, pod, container, node_name, job and filename; only the
+            # two mctl-specific bits are re-added under extraRelabelConfigs.
+            snippets:
+              pipelineStages:
+                # k3s writes CRI-format logs; the old block said `docker: {}`,
+                # which would have mangled every line had it ever been applied.
+                - cri: {}
+                - match:
+                    selector: '{namespace=~"labs|admins|ovk"}'
+                    stages:
+                      - regex:
+                          expression: '(?P<token_refresh_failed>\[openai-codex\] Token refresh failed)'
+                      - metrics:
+                          openclaw_token_refresh_failed_total:
+                            type: Counter
+                            description: "openai-codex token refresh failure count"
+                            source: token_refresh_failed
+                            config:
+                              match_all: false
+                              action: inc
+                      # Catches the broader "no usable credentials" case: never
+                      # connected, expired-then-purged, or explicitly
+                      # disconnected — none of which produce a "Token refresh
+                      # failed" line above. See mctlhq/mctl-gitops#556.
+                      # Named capture group (?P<provider>...) is kept only so
+                      # the extracted value could be promoted to a Loki label
+                      # via a `labels` stage; Promtail's `metrics` stage itself
+                      # does not attach per-value labels to the Counter it
+                      # exposes (metrics stage output has no dynamic labels,
+                      # only what's already on the log stream) — so this is a
+                      # single unlabeled total across all providers, same
+                      # shape as openclaw_token_refresh_failed_total above.
+                      - regex:
+                          expression: '(?P<missing_api_key>Missing API key for provider "(?P<provider>[^"]+)")'
+                      - metrics:
+                          openclaw_provider_missing_api_key_total:
+                            type: Counter
+                            description: "gateway 'Missing API key for provider' occurrence count (any provider)"
+                            source: missing_api_key
+                            config:
+                              match_all: false
+                              action: inc
+                      # seerrsense (labs): the ChatGPT plugin-directory
+                      # review needs a human to hear when a reviewer connects
+                      # or when a tool fails on them, and the server exposes
+                      # no /metrics. Two log shapes carry that:
+                      #  - Fastify's request line for the consent POST — the
+                      #    last hop of every OAuth sign-in, so one increment =
+                      #    one new connection (any account; the server logs
+                      #    no identity, by design).
+                      #  - the error line describeError() writes when a tool
+                      #    fails for a reason the caller was not told — the
+                      #    tunnel timeouts seen during the demo recording.
+                      # Pino's req object serialises method before url, so the
+                      # adjacent pair is stable to match on.
+                      - regex:
+                          expression: '(?P<seerr_consent>"method":"POST","url":"/oauth/consent")'
+                      - metrics:
+                          seerrsense_oauth_consent_total:
+                            type: Counter
+                            description: "seerrsense OAuth consent POSTs (one per completed sign-in)"
+                            source: seerr_consent
+                            config:
+                              match_all: false
+                              action: inc
+                      - regex:
+                          expression: '(?P<seerr_tool_failed>a tool call failed for a reason the caller was not told)'
+                      - metrics:
+                          seerrsense_tool_failures_total:
+                            type: Counter
+                            description: "seerrsense MCP tool calls that failed with the generic error"
+                            source: seerr_tool_failed
+                            config:
+                              match_all: false
+                              action: inc
+              extraRelabelConfigs:
+                # Pods that opt out of scraping opt out of log collection too,
+                # as before.
+                - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+                  action: drop
+                  regex: "false"
+                - source_labels: [__meta_kubernetes_pod_label_mctl_ai_team]
+                  target_label: team
         grafana:
           # Grafana is managed by kube-prometheus-stack; only add Loki datasource via sidecar.
           enabled: false
