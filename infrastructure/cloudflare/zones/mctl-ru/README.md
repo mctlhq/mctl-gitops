@@ -87,9 +87,14 @@ Zone settings always exist at Cloudflare; there is no unset, only a default.
 They therefore import rather than create, and both differ here:
 
 ```
-Expect: 4 to import, 0 to add, 2 to change, 0 to destroy.
+Expect: 6 to import, 0 to add, 2 to change, 0 to destroy.
         ~ cloudflare_zone_setting.min_tls_version   value: "1.0" -> "1.2"
         ~ cloudflare_zone_setting.always_use_https  value: "off" -> "on"
 ```
+
+(Six, not four: the "2 to import" figure earlier in this file is from the
+original zero-diff pilot, when the root held only the apex and the wildcard.
+It has since grown the two rulesets from the shared baseline, so the count
+before this change is four.)
 
 After that apply the plan is `No changes` again and the rule is back in force.
