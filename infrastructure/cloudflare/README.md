@@ -266,9 +266,13 @@ Cloudflare's *global* AOP certificate would not have closed this: it proves
 "from Cloudflare", which is what the allowlist already proved and what the
 attacker in this scenario also has. The certificate had to be ours.
 
-The allowlist stays. It is now the cheaper of two independent checks rather
-than the only one, and it fails a request earlier — at the HTTP layer with a
-403 rather than at the TLS handshake.
+The allowlist stays, as the second of two independent checks. It is now the
+*later* of the two: client-certificate verification happens during the TLS
+handshake, before any HTTP middleware runs, so an unauthenticated caller is
+dropped before Traefik ever reads a header. The allowlist still earns its place
+— it is what remains if the TLSOption is ever removed or misconfigured, and it
+is the check that produces a readable 403 for a caller that got past the
+handshake.
 
 *A pod talking to Traefik directly.* The `websecure` entrypoint trusts the PROXY
 protocol from `10.0.0.0/8`, which contains the pod CIDR `10.42.0.0/16` and the

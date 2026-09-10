@@ -27,10 +27,15 @@
 # delete the old one by id — Traefik needs no change because the CA does not
 # move.
 #
-# Ordering. The Cloudflare side was enabled first and is a no-op on its own: in
-# TLS a client sends a certificate only when the server asks, and Traefik did
-# not ask. This object is what makes it ask, so this is the change that starts
-# enforcing.
+# Ordering, and why this file carries no TLSOption yet. The Cloudflare side was
+# enabled first and is a no-op on its own: in TLS a client sends a certificate
+# only when the server asks, and Traefik does not ask until a TLSOption tells
+# it to. That TLSOption is a separate change, landing only once the Secret
+# below is confirmed present — a `default` TLSOption naming a Secret that has
+# not synced yet would be read by Traefik before ESO has written it, and it
+# applies to every HTTPS router in the cluster. Raised by the agy reviewer,
+# which was right: the same two-step shape was used for the Origin CA
+# certificate in #1165/#1166 and should not have been abandoned here.
 #
 # Before enabling, it was verified that nothing inside the cluster talks to
 # Traefik directly on :8443, since such a client has no certificate and would
@@ -72,23 +77,3 @@ spec:
       remoteRef:
         key: platform/traefik/origin-pull
         property: ca.crt
----
-# A TLSOption named `default` in Traefik's own namespace applies to every router
-# that does not name another one, which is all of them.
-#
-# Only clientAuth is set. Every other TLS parameter is deliberately left absent
-# so it keeps Traefik's built-in default — there was no TLSOption here before,
-# so anything spelled out now would be a second, unrelated change riding along.
-apiVersion: traefik.io/v1alpha1
-kind: TLSOption
-metadata:
-  name: default
-  namespace: traefik
-spec:
-  clientAuth:
-    secretNames:
-      - traefik-origin-pull-ca
-    # RequireAndVerifyClientCert, not VerifyClientCertIfGiven: the latter lets a
-    # client that presents nothing through, which is precisely the traffic this
-    # is meant to refuse.
-    clientAuthType: RequireAndVerifyClientCert
