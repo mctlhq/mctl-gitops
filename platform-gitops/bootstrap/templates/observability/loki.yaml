@@ -123,8 +123,10 @@ spec:
             # / openclaw_provider_missing_api_key_total never existed anywhere,
             # which is the full explanation for mctlhq/mctl-gitops#556. The
             # chart's own relabels already produce namespace, app, instance,
-            # component, pod, container, node_name, job and filename; only the
-            # two mctl-specific bits are re-added under extraRelabelConfigs.
+            # component (from app.kubernetes.io/component), pod, container,
+            # node_name, job and filename; the mctl-specific bits — the
+            # scrape-annotation opt-out and the mctl.ai/team and
+            # mctl.ai/component labels — are re-added under extraRelabelConfigs.
             snippets:
               pipelineStages:
                 # k3s writes CRI-format logs; the old block said `docker: {}`,
@@ -206,6 +208,13 @@ spec:
                   regex: "false"
                 - source_labels: [__meta_kubernetes_pod_label_mctl_ai_team]
                   target_label: team
+                # mctl.ai/component (set on the retire-service Workflow pods)
+                # overrides the chart's component label only when present:
+                # without the (.+) guard an unset source would replace the
+                # chart's value with an empty string on every other pod.
+                - source_labels: [__meta_kubernetes_pod_label_mctl_ai_component]
+                  regex: (.+)
+                  target_label: component
         grafana:
           # Grafana is managed by kube-prometheus-stack; only add Loki datasource via sidecar.
           enabled: false
