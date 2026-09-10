@@ -157,21 +157,22 @@ module "kube-hetzner" {
 
   # --- etcd snapshots to R2 ---
   # With a single control-plane node, S3 snapshots are the only off-node copy
-  # of cluster state. Every 6h, 28 kept = 7 days. Bucket must pre-exist in R2
-  # (same account as terraform-state); restore procedure: docs/runbooks/restore.md.
+  # of cluster state. Every 12h, 28 kept = 14 days — still matches the CNPG
+  # backup window (platform-gitops/infra-components/data/cnpg/shared/cluster.yaml,
+  # retentionPolicy: 14d). Bucket must pre-exist in R2 (same account as
+  # terraform-state); restore procedure: docs/runbooks/restore.md.
   #
-  # Retention was 56 (14 days), picked to match the CNPG backup window
-  # (platform-gitops/infra-components/data/cnpg/shared/cluster.yaml,
-  # retentionPolicy: 14d). Halved to reclaim R2 storage: the account holds
-  # ~13.6 GB against a 10 GB free allowance, and this bucket alone was 5.14 GB
-  # in 57 objects on 2026-09-10, growing ~0.4 GB a week at a flat object count
-  # — the snapshots themselves are getting bigger, the rotation works.
+  # Was 6h / 56 kept: the same 14 days at twice the objects. Halving the
+  # schedule rather than the retention reclaims R2 storage without shortening
+  # the recovery window. The account holds ~13.6 GB against a 10 GB free
+  # allowance, and this bucket alone was 5.14 GB in 57 objects on 2026-09-10,
+  # growing ~0.4 GB a week at a flat object count — the snapshots themselves
+  # are getting bigger, the rotation works. Expected reclaim ~2.5 GB.
   #
-  # The two windows now differ on purpose. A recovery point between 7 and 14
-  # days old still has a Postgres backup but no cluster state to pair it with;
-  # anything older than 14 days had neither before this change and still does
-  # not. Restoring further back than 7 days means rebuilding the cluster and
-  # replaying GitOps rather than restoring etcd.
+  # What this does cost is granularity: worst-case loss on an etcd restore
+  # goes from 6h to 12h. Acceptable here because most cluster state is
+  # reconstructible by replaying GitOps — the snapshot covers what is not,
+  # and that changes on the scale of days rather than hours.
   etcd_s3_backup = var.etcd_s3_access_key == "" ? {} : {
     etcd-s3-endpoint            = "6a09f637d20e1f66a8e9d45ebe778058.r2.cloudflarestorage.com"
     etcd-s3-access-key          = var.etcd_s3_access_key
@@ -179,7 +180,7 @@ module "kube-hetzner" {
     etcd-s3-bucket              = "mctl-etcd-snapshots"
     etcd-s3-region              = "auto"
     etcd-s3-folder              = "k3s-preview"
-    etcd-snapshot-schedule-cron = "0 */6 * * *"
+    etcd-snapshot-schedule-cron = "0 */12 * * *"
     etcd-snapshot-retention     = "28"
   }
 
