@@ -78,7 +78,7 @@ not mean apply and re-import.
 ## Zone settings
 
 `min_tls_version` and `always_use_https` are declared in the shared baseline as
-of #1154. Zone settings always exist at Cloudflare — there is no unset, only a
+of #1154, and `ssl` as of #1153. Zone settings always exist at Cloudflare — there is no unset, only a
 default — so they import rather than create.
 
 The values were applied through the Cloudflare API **before** this landed, the
@@ -94,6 +94,7 @@ So the plan stays zero-diff and the rule above never bends:
 Plan: 7 to import, 0 to add, 0 to change, 0 to destroy.
 ```
 
-(Six, not the "2 to import" quoted earlier in this file: that figure is from the
-original zero-diff pilot, when the root held only the apex and the wildcard. It
-has since grown the two rulesets from the shared baseline.)
+(Seven, not the "2 to import" quoted earlier in this file: that figure is from
+the original zero-diff pilot, when the root held only the apex and the wildcard.
+It has since grown the two rulesets and the three zone settings from the shared
+baseline.)

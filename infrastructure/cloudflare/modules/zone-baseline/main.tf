@@ -107,7 +107,7 @@ resource "cloudflare_ruleset" "firewall_custom" {
 # apexes — strict would have answered 526 for platform.mctl.me and every
 # wildcard subdomain. #1153 fixed the cause rather than the symptom: Traefik now
 # serves a Cloudflare Origin CA certificate covering all three apexes and all
-# three wildcards as its default (platform-gitops core-infra/traefik-origin-cert.yaml
+# three wildcards as its default (platform-gitops/bootstrap/templates/core-infra/traefik-origin-cert.yaml
 # and infrastructure/k3s-preview/extra-manifests/traefik-helmchartconfig.yaml.tpl).
 #
 # "full" accepts any certificate at all, including the self-signed placeholder
