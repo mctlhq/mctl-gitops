@@ -74,3 +74,22 @@ Unchanged timestamps are what proves nothing was written.
 
 A plan containing create, update or destroy means stop and investigate. It does
 not mean apply and re-import.
+
+## Zone settings — the one place this root is not zero-diff
+
+`min_tls_version` and `always_use_https` are declared in the shared baseline as
+of #1154. They are the first objects in this root whose live value the
+configuration deliberately disagrees with, so the rule above — a plan
+containing an update means stop and investigate — does not apply to them, once,
+on that change.
+
+Zone settings always exist at Cloudflare; there is no unset, only a default.
+They therefore import rather than create, and both differ here:
+
+```
+Expect: 4 to import, 0 to add, 2 to change, 0 to destroy.
+        ~ cloudflare_zone_setting.min_tls_version   value: "1.0" -> "1.2"
+        ~ cloudflare_zone_setting.always_use_https  value: "off" -> "on"
+```
+
+After that apply the plan is `No changes` again and the rule is back in force.

@@ -109,3 +109,16 @@ import {
   to = cloudflare_email_routing_catch_all.default
   id = local.zone_id
 }
+
+# Zone settings are objects that always exist — Cloudflare has no notion of an
+# unset setting, only its default. So these import rather than create, and the
+# plan shows a change on the ones whose live value differs from the baseline.
+import {
+  to = cloudflare_zone_setting.min_tls_version
+  id = "${local.zone_id}/min_tls_version"
+}
+
+import {
+  to = cloudflare_zone_setting.always_use_https
+  id = "${local.zone_id}/always_use_https"
+}

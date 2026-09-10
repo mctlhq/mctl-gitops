@@ -63,3 +63,26 @@ that change:
 ```
 Plan: 22 to import, 0 to add, 0 to change, 0 to destroy.
 ```
+
+## Zone settings — the one place this root is not zero-diff
+
+`min_tls_version` and `always_use_https` are declared in `tls.tf` as of #1154.
+This root does not use `modules/zone-baseline`, so it carries its own copy;
+the values are the same on purpose.
+
+They are the first objects here whose live value the configuration deliberately
+disagrees with. Zone settings always exist at Cloudflare — there is no unset,
+only a default — so they import rather than create, and both differ:
+
+```
+Expect: 24 to import, 0 to add, 2 to change, 0 to destroy.
+        ~ cloudflare_zone_setting.min_tls_version   value: "1.0" -> "1.2"
+        ~ cloudflare_zone_setting.always_use_https  value: "off" -> "on"
+```
+
+After that apply the plan is `No changes` again and the zero-diff expectation
+above is back in force.
+
+`ssl` is not declared. It is `full` on this zone and cannot be raised to
+`strict` while the origin presents `TRAEFIK DEFAULT CERT` for every name except
+the apex — see #1153.

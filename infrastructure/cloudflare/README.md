@@ -165,6 +165,36 @@ So a change to worker routes moves the subdomain redirect. Whatever PR touches
 them has to re-check subdomain redirects; no zone-level configuration here will
 catch that regression.
 
+## Zone settings
+
+Zone settings were outside the #1089 import programme entirely — not considered
+and deferred, simply never on the list — so all four zones ran on Cloudflare's
+defaults until #1154. Two are now declared: `min_tls_version = "1.2"` and
+`always_use_https = "on"`, in `modules/zone-baseline` for mctl.me and mctl.ru
+and in `zones/mctl-ai/tls.tf` for mctl.ai.
+
+Unlike DNS records and rulesets, a zone setting always exists. Cloudflare has
+no notion of an unset setting, only of its default, so these import rather than
+create, and the change shows as an update on the ones whose live value differs.
+Each root's README records what its plan should print.
+
+Two settings are deliberately left out:
+
+- **`ssl`** stays `full` on every zone. It cannot be raised to `strict` while
+  the origin presents `TRAEFIK DEFAULT CERT` for every name except the mctl.ai
+  and mctl.ru apexes; strict would answer 526 for `platform.mctl.me` and every
+  wildcard subdomain. Tracked in #1153, which continues the Origin CA and
+  Authenticated Origin Pull thread from the origin section below.
+- **`security_level`** is `medium` on mctl.ai and dmitriimashkov.com and `high`
+  on mctl.me and mctl.ru. That difference looks accidental too, but unlike a
+  TLS floor it changes how visitors are challenged, and nothing measured here
+  says which value is right. Left alone rather than normalised on a guess.
+
+`dmitriimashkov.com` has no root (decision 10) and so is not covered. Its
+settings were set through the API instead. That is a standing exception rather
+than drift: while the zone is intentionally unmanaged, anything applied to it
+is applied by hand.
+
 ## The origin address in Git (#1119)
 
 `91.98.10.188` stays in `zones/*/dns.tf`. It is `cloudflare_dns_record.content`

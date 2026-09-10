@@ -63,3 +63,21 @@ tofu plan -> No changes.
 The token used was the read-only plan identity, negative-control verified: a
 `POST` creating a DNS record in this zone is refused (`10000`). Nothing in this
 procedure can mutate Cloudflare.
+
+## Zone settings — the one place this root is not zero-diff
+
+`min_tls_version` and `always_use_https` are declared in the shared baseline as
+of #1154. They are the first objects in this root whose live value the
+configuration deliberately disagrees with, so the rule above — a plan with a
+change means stop — does not apply to them, once, on that change.
+
+Zone settings always exist at Cloudflare; there is no unset, only a default.
+They therefore import rather than create. `always_use_https` was already `on`
+here, so only the TLS floor moves:
+
+```
+Expect: 13 to import, 0 to add, 1 to change, 0 to destroy.
+        ~ cloudflare_zone_setting.min_tls_version  value: "1.0" -> "1.2"
+```
+
+After that apply the plan is `No changes` again and the rule is back in force.
