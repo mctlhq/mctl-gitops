@@ -109,3 +109,8 @@ import {
   to = cloudflare_email_routing_catch_all.default
   id = local.zone_id
 }
+
+import {
+  to = cloudflare_dns_record.mcp_portal
+  id = "${local.zone_id}/d2234121ecacf056358c9b937e47715a"
+}
