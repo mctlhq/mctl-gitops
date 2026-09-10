@@ -163,11 +163,22 @@ module "kube-hetzner" {
   # terraform-state); restore procedure: docs/runbooks/restore.md.
   #
   # Was 6h / 56 kept: the same 14 days at twice the objects. Halving the
-  # schedule rather than the retention reclaims R2 storage without shortening
-  # the recovery window. The account holds ~13.6 GB against a 10 GB free
+  # schedule rather than the retention is what keeps the window at 14 days in
+  # the steady state. The account holds ~13.6 GB against a 10 GB free
   # allowance, and this bucket alone was 5.14 GB in 57 objects on 2026-09-10,
   # growing ~0.4 GB a week at a flat object count — the snapshots themselves
   # are getting bigger, the rotation works. Expected reclaim ~2.5 GB.
+  #
+  # The steady state is not immediate. k3s retention is a count, not an age,
+  # so the first snapshot after this applies prunes the bucket to the 28
+  # newest — and those are still 6h apart, which is 7 days, not 14. The window
+  # then grows back to 14 days over the following two weeks as 12h snapshots
+  # replace them. Snapshots from days 8-14 are deleted at that moment and are
+  # not recoverable. Accepted rather than staged behind a follow-up PR: an
+  # etcd snapshot more than a week old is not something anyone restores — by
+  # then the divergence is large enough that replaying GitOps onto a fresh
+  # cluster is the better move — and staging it would hold the R2 overage open
+  # for another two weeks to protect backups nobody would use.
   #
   # What this does cost is granularity: worst-case loss on an etcd restore
   # goes from 6h to 12h. Acceptable here because most cluster state is
