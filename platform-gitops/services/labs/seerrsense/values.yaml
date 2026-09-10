@@ -48,7 +48,16 @@ env:
   # Now ignored while OPEN_SIGNUP is true, and deliberately kept: it is what the
   # server falls back to the moment the flag above goes away, and an empty
   # allowlist at that moment would lock everyone out including the owner.
-  SEERRSENSE_ALLOWED_EMAILS: mashkoffdmitry@gmail.com,moonqua@gmail.com
+  SEERRSENSE_ALLOWED_EMAILS: mashkoffdmitry@gmail.com,moonqua@gmail.com,mashkovdm.dm@gmail.com
+  # The private aggregate portal mcp.mctl.ai (Cloudflare MCP Server Portal,
+  # mctlhq/.github#35) reaches this server as a pre-registered public OAuth
+  # client: token_endpoint_auth_method none, PKCE S256, exact redirect match.
+  # The callback is the portal's effective-redirect-uri for the "seerrsense"
+  # server as returned by the Cloudflare API on 2026-09-10 (source per_portal),
+  # not a guess; if the portal ever switches to the shared Cloudflare
+  # callback, this value changes and the server refuses the old one.
+  # Format: client_id=redirect_uri[,redirect_uri];... (seerrsense#54).
+  SEERRSENSE_OAUTH_CLIENTS: cloudflare-portal-mcp=https://mcp.mctl.ai/servers-callback
   # Who may reach the shared SEERR_URL instance when they have attached nothing
   # of their own. Fail-closed like the allowlist: unset offers the household to
   # no signed-in subject, so this MUST be present before the image that reads it
