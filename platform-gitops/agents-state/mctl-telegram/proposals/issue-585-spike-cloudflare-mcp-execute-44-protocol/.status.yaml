@@ -17,3 +17,4 @@ attempt:
   expires_at: '2026-09-10T01:12:07Z'
   finished_at: '2026-09-09T23:32:13Z'
 pr: https://github.com/mctlhq/mctl-telegram/pull/603
+notes: 'accepted artifact is mctl-telegram#604 (merge 2afa713); the pr field above records the DevLoop-authored #603, closed superseded -- see outcome.md'
