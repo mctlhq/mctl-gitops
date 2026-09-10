@@ -72,7 +72,10 @@ env:
   # legacy shared token and stdio mode are unaffected — they have no address to
   # check. Setting it on an image that does not yet read it is a no-op, which is
   # why this lands first (seerrsense#44).
-  SEERRSENSE_HOUSEHOLD_EMAILS: mashkoffdmitry@gmail.com
+  # mctlhq@gmail.com is the ChatGPT plugin-directory reviewer account: it reaches
+  # the household Seerr without attaching anything, and its requests land as
+  # pending approval because the matching Overseerr user has REQUEST only.
+  SEERRSENSE_HOUSEHOLD_EMAILS: mashkoffdmitry@gmail.com,mctlhq@gmail.com
   # How many proxy hops in front of the pod to believe when deriving the client
   # address for the per-IP rate limits. The code defaults to 0 — trust no
   # forwarding header — because a directly exposed container has nothing in
