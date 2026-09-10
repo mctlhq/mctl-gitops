@@ -62,6 +62,17 @@ spec:
             # rather than an exact path because the callback path is not documented
             # and has to survive client updates.
             OAUTH_ALLOWED_REDIRECT_URIS: "https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback,http://localhost:6274/oauth/callback,http://localhost:6274/oauth/callback/debug,https://chatgpt.com/connector/oauth/*,https://antigravity.google/*"
+            # The private aggregate portal mcp.mctl.ai (Cloudflare MCP Server
+            # Portal, mctlhq/.github#35) stores one client id per upstream at
+            # configuration time and cannot re-register after a pod restart, so
+            # it is a static public client (token_endpoint_auth_method none,
+            # PKCE S256, exact callback) seeded at startup rather than a DCR
+            # entry in the in-memory registry (mctlhq/mctl-api#278). The
+            # callback is the portal's effective-redirect-uri for the "api"
+            # server as returned by the Cloudflare API on 2026-09-10, not a
+            # guess. Read by 1.x images that carry #278; older images ignore
+            # it, newer ones refuse to boot on a malformed value.
+            OAUTH_PREREGISTERED_CLIENTS: '[{"client_id":"cloudflare-portal-mcp","client_name":"Cloudflare MCP Portal (mcp.mctl.ai)","redirect_uris":["https://mcp.mctl.ai/servers-callback"]}]'
             # Browser origins permitted by CORS. Distinct from the redirect URIs
             # above: those govern where the OAuth dance may hand a code back,
             # this governs which page may read an authenticated API response.
