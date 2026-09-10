@@ -132,3 +132,17 @@ resource "cloudflare_dns_record" "send_mx" {
   type     = "MX"
   zone_id  = local.zone_id
 }
+
+# MCP Server Portal origin. The portal is Cloudflare-hosted; a proxied CNAME to
+# gateway.agents.cloudflare.com is what routes mcp.mctl.ai to it, overriding the
+# wildcard A for this one name. Created through the API (this root cannot apply,
+# #1111) and pinned below by import, like the Search Console TXT. mctlhq/.github#35.
+resource "cloudflare_dns_record" "mcp_portal" {
+  comment = "MCP portal origin; pinned via import in mctl-gitops (.github#35)"
+  content = "gateway.agents.cloudflare.com"
+  name    = "mcp.mctl.ai"
+  proxied = true
+  ttl     = 1
+  type    = "CNAME"
+  zone_id = local.zone_id
+}

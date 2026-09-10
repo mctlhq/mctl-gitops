@@ -66,6 +66,18 @@ env:
   # Loopback hosts are accepted regardless of this list. Same yq caveat as
   # ALLOWED_ORIGINS above: no colons here, but verify after any rewrite.
   OAUTH_ALLOWED_IMPLICIT_HOSTS: claude.ai,claude.com,chatgpt.com,antigravity.google,localhost,127.0.0.1
+  # Static public clients with byte-exact redirect matching (0.63.0). These
+  # bypass the implicit-host allowlist above but not shape, exact-match or PKCE,
+  # and carry no secret: the token endpoint advertises `none` only. One entry:
+  # the Cloudflare MCP Server Portal at mcp.mctl.ai. The redirect is the value
+  # the Cloudflare API resolves for portal `mcp` / server `tg`
+  # (effective-redirect-uri, source=per_portal), not a guess. Malformed JSON or
+  # an unknown key fails startup closed, so validate with the config parser
+  # before changing it. Same yq caveat as ALLOWED_ORIGINS above, and worse:
+  # this value is JSON full of colons and quotes, so after any automated
+  # rewrite of this file diff it against git before the pod restarts, or the
+  # server will refuse to start. Refs mctlhq/.github#35, #44.
+  OAUTH_PREREGISTERED_CLIENTS: '[{"client_id":"cloudflare-portal-mcp","client_name":"Cloudflare MCP Portal (mcp.mctl.ai)","redirect_uris":["https://mcp.mctl.ai/servers-callback"]}]'
   # Raised from the 10m default: the in-browser enable_access flow (phone -> SMS
   # -> 2FA) is bounded by this same TTL (lookupEnable), and 10m is too tight for
   # a human to receive and enter the SMS code -> "sign-in session has expired".
