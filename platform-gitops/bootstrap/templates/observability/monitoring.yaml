@@ -58,23 +58,103 @@ spec:
                     # rejected, VM still runs — it drops oldest data at the
                     # disk limit. vmbackup R2 size grows accordingly.
                     storage: 25Gi
-              # vmbackup sidecar — backs up to Cloudflare R2 daily
-              extraContainers:
+              # vmbackup sidecar — backs up VictoriaMetrics to R2 daily.
+              #
+              # This block existed since 2026-03 and had NEVER produced a single
+              # object in R2 (#1071). A full listing of s3://vault-backup on
+              # 2026-09-10 found no victoria-metrics/ prefix and not one key
+              # containing "victoria". Six independent defects, any one of which
+              # was fatal on its own — which is why nothing was ever red:
+              #
+              #   1. the values key was `extraContainers`. VMSingle's CRD field
+              #      is `containers`; the operator silently ignored the block
+              #      and the pod only ever had one container.
+              #   2. `ignoreDifferences` on VMSingle /spec/extraContainers, at
+              #      the bottom of this file, told ArgoCD not to reconcile the
+              #      very field being set. Removed in the same commit.
+              #   3. the binary is /vmbackup-prod, not /vmbackup. Verified by
+              #      running the image: `stat /vmbackup: no such file`.
+              #   4. the flags are -snapshot.createURL / -snapshot.deleteURL.
+              #      -snapshotCreateURL / -snapshotDeleteURL do not exist, and
+              #      Go's flag parser exits non-zero on an unknown flag.
+              #   5. -storageDataPath was /storage. The operator mounts the data
+              #      at /victoria-metrics-data, so vmbackup would have found no
+              #      snapshots directory.
+              #   6. no exit-code check, so any of the above printed "Done" and
+              #      slept 24h. A container that never crashes cannot be caught
+              #      by PodCrashLooping.
+              #
+              # On why there is still no `set -e` here, which looks like the
+              # obvious fix and is not: this is a SIDECAR. A container in
+              # CrashLoopBackOff is not ready, an unready container makes the
+              # POD unready, and an unready pod is removed from the vmsingle
+              # Service — so a failing backup would take metrics, alerting and
+              # every SLI offline. Crashing on failure trades a backup outage
+              # for a monitoring outage. The failure is made visible instead by
+              # publishing a success timestamp and alerting on its age, which is
+              # what #1071 asked for: "a backup that silently stops is the
+              # failure mode that matters, and container health does not
+              # express it".
+              #
+              # The timestamp is re-published every 5 minutes rather than only
+              # after a backup, because Pushgateway holds it in memory — it runs
+              # without persistence — so a Pushgateway restart would otherwise
+              # drop the series and fire VictoriaMetricsBackupMetricAbsent until
+              # the next daily run. Re-publishing heals that within one cycle.
+              containers:
                 - name: vmbackup
+                  # This tag is Alpine-based and DOES have a shell. Two
+                  # automated reviewers independently flagged the opposite —
+                  # that the default (non -alpine) vmbackup image is built FROM
+                  # scratch, so command: ["/bin/sh", ...] would fail to exec and
+                  # CrashLoopBackOff — which would be a serious finding if it
+                  # were true. It is not, for this image. Measured by running
+                  # the exact tag on this cluster
+                  # (sha256:ba728f716e27b7a4c9a0878f8eb7ed00b5fc0cd5bfd12d81df040580545fe709):
+                  #
+                  #   /bin/sh -> /bin/busybox
+                  #   PRETTY_NAME="Alpine Linux v3.20"
+                  #   /bin/date  /usr/bin/wget  /vmbackup-prod
+                  #
+                  # Do not "fix" this to :v1.106.1-alpine on the strength of the
+                  # general claim. Re-run the check above first.
                   image: victoriametrics/vmbackup:v1.106.1
                   command: ["/bin/sh", "-c"]
                   args:
                     - |
+                      PUSH="http://prometheus-pushgateway.monitoring.svc.cluster.local:9091/metrics/job/vmbackup/instance/vmsingle"
+                      LAST_SUCCESS=0
+                      NEXT_RUN=0
                       while true; do
-                        echo "[vmbackup] Starting backup to R2..."
-                        /vmbackup \
-                          -storageDataPath=/storage \
-                          -snapshotCreateURL=http://localhost:8428/snapshot/create \
-                          -snapshotDeleteURL=http://localhost:8428/snapshot/delete \
-                          -dst=s3://vault-backup/victoria-metrics \
-                          -customS3Endpoint=$S3_ENDPOINT
-                        echo "[vmbackup] Done. Next run in 24h."
-                        sleep 86400
+                        NOW=$(date +%s)
+                        if [ "$NOW" -ge "$NEXT_RUN" ]; then
+                          echo "[vmbackup] starting backup to s3://${BUCKET}/victoria-metrics"
+                          /vmbackup-prod \
+                            -storageDataPath=/victoria-metrics-data \
+                            -snapshot.createURL=http://localhost:8428/snapshot/create \
+                            -snapshot.deleteURL=http://localhost:8428/snapshot/delete \
+                            -dst="s3://${BUCKET}/victoria-metrics" \
+                            -customS3Endpoint="${S3_ENDPOINT}"
+                          RC=$?
+                          if [ "$RC" -eq 0 ]; then
+                            LAST_SUCCESS=$(date +%s)
+                            NEXT_RUN=$((NOW + 86400))
+                            echo "[vmbackup] backup ok at ${LAST_SUCCESS}"
+                          else
+                            # Retry in an hour, not tomorrow. A blip talking to
+                            # R2 should not cost a whole day of backup age —
+                            # the stale alert would still page at 25h, but by
+                            # then the gap is real rather than transient.
+                            NEXT_RUN=$((NOW + 3600))
+                            echo "[vmbackup] ERROR: backup failed, exit ${RC}. Retrying in 1h; no success timestamp published, so VictoriaMetricsBackupStale fires once the last success is 25h old." >&2
+                          fi
+                        fi
+                        if [ "$LAST_SUCCESS" -gt 0 ]; then
+                          printf 'vmbackup_last_success_timestamp_seconds %s\n' "$LAST_SUCCESS" > /tmp/vmbackup.prom
+                          wget -q -O /dev/null --post-file=/tmp/vmbackup.prom "$PUSH" \
+                            || echo "[vmbackup] WARNING: could not publish the success timestamp to Pushgateway" >&2
+                        fi
+                        sleep 300
                       done
                   env:
                     - name: AWS_ACCESS_KEY_ID
@@ -92,9 +172,16 @@ spec:
                         secretKeyRef:
                           name: victoria-backup-r2
                           key: S3_ENDPOINT
+                    # The bucket was hardcoded above while this key was synced
+                    # and never read. One source now: Vault platform/victoria-backup.
+                    - name: BUCKET
+                      valueFrom:
+                        secretKeyRef:
+                          name: victoria-backup-r2
+                          key: BUCKET
                   volumeMounts:
                     - name: data
-                      mountPath: /storage
+                      mountPath: /victoria-metrics-data
                   resources:
                     requests:
                       cpu: 10m
@@ -600,10 +687,12 @@ spec:
       path: platform-gitops/infra-components/observability/blackbox
 
   ignoreDifferences:
-    - group: operator.victoriametrics.com
-      kind: VMSingle
-      jsonPointers:
-        - /spec/extraContainers
+    # Removed 2026-09-10: an ignoreDifferences entry on VMSingle
+    # /spec/extraContainers. It told ArgoCD not to reconcile the field the
+    # vmbackup sidecar was being set through — so even once the values key was
+    # corrected, the sidecar would have rendered in git and never reached the
+    # cluster. The field does not exist in the CRD either (the container list
+    # is /spec/containers), so the entry protected nothing. See #1071.
     # The victoria-metrics-operator subchart ships a `pre-delete` Helm hook
     # ServiceAccount (cleanup-hook). ArgoCD applies it once but, being a
     # pre-delete hook, never re-applies it on a normal sync — so when the
@@ -646,13 +735,21 @@ spec:
       - ServerSideApply=true
       - RespectIgnoreDifferences=true
       # VictoriaMetrics operator CRDs (VMSingle, VMAlert, ...) declare an
-      # incomplete schema that omits some pass-through fields like
-      # `VMSingle.spec.extraContainers`. Once cluster-wide
-      # `controller.diff.server.side: "true"` is set, ArgoCD's SSA
-      # dry-run rejects the diff with `failed to create typed patch
-      # object: .spec.extraContainers: field not declared in schema` and
-      # the app stays Sync=Unknown. Opt this app out so it falls back to
-      # the legacy client-side diff.
+      # incomplete schema that omits some pass-through fields. Once cluster-wide
+      # `controller.diff.server.side: "true"` is set, ArgoCD's SSA dry-run
+      # rejects the diff with `field not declared in schema` and the app stays
+      # Sync=Unknown. Opt this app out so it falls back to the legacy
+      # client-side diff.
+      #
+      # The field originally named here was `VMSingle.spec.extraContainers`,
+      # and it is gone as of #1071 — it was never a real CRD field, which is
+      # exactly why the SSA dry-run rejected it. So the specific cause this
+      # opt-out was added for no longer exists. It is kept anyway rather than
+      # removed in the same change: whether any OTHER pass-through field in
+      # this app still trips the dry-run can only be established by turning it
+      # back on and watching, and doing that while also rewiring the backup
+      # sidecar would confuse two failures into one. Worth revisiting on its
+      # own.
       - ServerSideDiff=false
     retry:
       limit: 5

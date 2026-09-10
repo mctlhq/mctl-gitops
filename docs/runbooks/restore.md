@@ -11,8 +11,8 @@
 |---|---|---|---|---|---|
 | Postgres (9 tenant DB + backstage, argo, temporal, mctl-api audit) | CNPG `shared-pg` | barman + daily ScheduledBackup 02:00 | R2 `s3://vault-backup/postgres-backups/shared-pg` | 14d | да |
 | Vault (все секреты платформы) | vault ns, raft | CronJob 03:00 | R2 `s3://<bucket>/vault-backups/` | 30 копий | да |
-| Кластерное состояние k8s (etcd) | single CP node | k3s snapshot 6h local + S3 upload (включено 2026-08-15) | R2 `s3://mctl-etcd-snapshots/k3s-preview` | 56 копий (14d) | да |
-| Метрики | VMSingle (3d retention) | vmbackup daily | R2 `s3://vault-backup/victoria-metrics` | — | да |
+| Кластерное состояние k8s (etcd) | single CP node | k3s snapshot 12h local + S3 upload (включено 2026-08-15) | R2 `s3://mctl-etcd-snapshots/k3s-preview` | 28 копий (14d) | да |
+| Метрики | VMSingle (28d retention) | vmbackup daily (сайдкар) | R2 `s3://vault-backup/victoria-metrics` | инкрементальная копия последнего снапшота | да |
 | Логи | Loki | хранение сразу в R2 | R2 | 7d | да |
 | Terraform state | R2 `mctl-terraform-state` | версионирование R2 | — | — | да |
 | mctl-agent tickets/webhooks/metrics | Postgres `mctl-agent` DB в shared-pg (`DATABASE_URL`) | через CNPG | — | 14d | как Postgres |
@@ -172,10 +172,24 @@ sudo systemctl start k3s
 (см. `infrastructure/k3s-preview/README.md`, "Disaster recovery"), затем
 restore Vault (§2) и Postgres (§1) — в этом порядке, т.к. ESO зависит от Vault.
 
-## 4. VictoriaMetrics (опционально)
+## 4. VictoriaMetrics
 
-Метрики — потеря терпима (retention всё равно 3d). Restore: `vmrestore
--src=s3://vault-backup/victoria-metrics/<snapshot> -storageDataPath=...`.
+Раньше здесь стояло «опционально, потеря терпима — retention всё равно 3d». Оба
+утверждения устарели. Retention 28d, и с 2026-09-06 на эти 28 дней завязана
+скользящая SLI mctl-telegram и политика merge-freeze по бюджету ошибок
+(`vm-rules/mctl-telegram-slo.yaml`, `docs/slo.md` в том репозитории): потеря
+истории метрик — это потеря учёта бюджета, а не просто графиков.
+
+Restore: `vmrestore -src=s3://vault-backup/victoria-metrics
+-storageDataPath=/victoria-metrics-data` при ОСТАНОВЛЕННОМ vmsingle. `-src` —
+это сам путь назначения бэкапа, без имени снапшота: vmbackup держит там
+инкрементальную копию последнего снапшота, а не набор датированных.
+
+**Дрилл ни разу не проводился** — в журнале внизу этого файла есть CNPG, Vault и
+etcd, и нет VictoriaMetrics. До 2026-09-10 проводить было и нечего: сайдкар
+vmbackup не отработал ни разу с момента появления в 2026-03 и не записал в R2 ни
+одного объекта (#1071). Первый дрилл после того, как в
+`s3://vault-backup/victoria-metrics/` появятся объекты со свежей датой.
 
 ## Порядок полного DR (кластер потерян целиком)
 
