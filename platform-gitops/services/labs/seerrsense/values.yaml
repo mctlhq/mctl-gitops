@@ -58,6 +58,13 @@ env:
   # callback, this value changes and the server refuses the old one.
   # Format: client_id=redirect_uri[,redirect_uri];... (seerrsense#54).
   SEERRSENSE_OAUTH_CLIENTS: cloudflare-portal-mcp=https://mcp.mctl.ai/servers-callback
+  # Domain-verification token for the ChatGPT plugin directory submission
+  # (OpenAI Platform > Plugins > SeerrSense, draft asdk_app_6aa303bd…). The
+  # server serves it verbatim at /.well-known/openai-apps-challenge; unset, that
+  # path is 404. Not a secret: OpenAI fetches it over plain HTTPS from the
+  # public origin, and it proves only that whoever set it controls this host.
+  # A resubmission issues a new token, which is an edit here, not a release.
+  SEERRSENSE_OPENAI_APPS_CHALLENGE: Vk-eH4uc_v2S8Akww72HHNkfhy4aYfxvPoQkzavJMaI
   # Who may reach the shared SEERR_URL instance when they have attached nothing
   # of their own. Fail-closed like the allowlist: unset offers the household to
   # no signed-in subject, so this MUST be present before the image that reads it
