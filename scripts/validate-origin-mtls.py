@@ -45,7 +45,6 @@ from __future__ import annotations
 
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 import yaml
@@ -184,18 +183,16 @@ spec:
 """
 
 
-def _fixture(root: Path, tls_option: str, ca_source: str) -> tuple[Path, Path]:
-    """A one-template chart standing in for bootstrap, for the self-test."""
-    chart = root / "chart"
-    (chart / "templates").mkdir(parents=True)
-    (chart / "Chart.yaml").write_text("apiVersion: v2\nname: guard-fixture\nversion: 0.0.0\n")
-    (chart / "values.yaml").write_text("{}\n")
-    (chart / "templates" / "objects.yaml").write_text(f"{ca_source}---\n{tls_option}")
-    return chart, chart / "values.yaml"
-
-
 def selftest() -> int:
-    """Prove the detector fires on each way the enforcement can be lost."""
+    """Prove the detector fires on each way the enforcement can be lost.
+
+    Feeds parsed documents straight to problems() rather than rendering a
+    fixture chart through helm. What is under test is the predicate, not helm;
+    the render path is exercised by the real run, which follows this one in CI.
+    It is also what keeps this file free of a temp-file write whose contents
+    CodeQL reads as sensitive because Kubernetes spells its fields secretKey
+    and secretNames.
+    """
     cases = [
         ("intact", GOOD_OPTION, GOOD_CA_SOURCE, 0),
         ("TLSOption deleted", "", GOOD_CA_SOURCE, 1),
@@ -252,9 +249,8 @@ def selftest() -> int:
 
     failures = 0
     for name, option, ca_source, expected in cases:
-        with tempfile.TemporaryDirectory() as d:
-            chart, values = _fixture(Path(d), option, ca_source)
-            got = 1 if problems(render(chart, values)) else 0
+        docs = [d for d in yaml.safe_load_all(f"{ca_source}---\n{option}") if d]
+        got = 1 if problems(docs) else 0
         if got != expected:
             verb = "missed" if expected else "false-positived on"
             print(f"self-test FAILED: {verb} {name!r}", file=sys.stderr)
