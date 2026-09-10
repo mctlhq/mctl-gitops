@@ -32,6 +32,20 @@ spec:
 # content — 750 757 of the account's 864 480 requests in the week of
 # 2026-09-03 — and secrets.mctl.ai is Vault, whose unavailability breaks every
 # ExternalSecret refresh in the cluster.
+#
+# On Vault and http_2xx, because it is the obvious objection: Vault's
+# /v1/sys/health answers 429 on an unsealed STANDBY node, which under the
+# vault Helm chart's default ingress would flap this alert against a perfectly
+# healthy 3-node Raft cluster. It does not here. The ingress in the vault
+# namespace backs secrets.mctl.ai with the `vault-active` Service, whose
+# selector matches only the current leader, so a standby is never routed to
+# and 20 consecutive probes returned 200.
+#
+# ?standbyok=true is therefore deliberately NOT set. It would make the probe
+# succeed when there is no active node at all, which is exactly the condition
+# worth paging on. The one thing this does catch is a leader election, during
+# which vault-active has no endpoints and Traefik answers 503 — that is why
+# PublicEndpointDown waits for three consecutive failures rather than one.
 apiVersion: operator.victoriametrics.com/v1beta1
 kind: VMProbe
 metadata:
@@ -65,7 +79,12 @@ metadata:
   namespace: monitoring
 spec:
   jobName: redirect-zones
-  interval: 300s
+  # 120s, not 300s. A 300s scrape interval sits exactly on the default 5m
+  # instant-vector lookback, so one delayed scrape makes the series look stale,
+  # the expression evaluates to nothing, and the `for: 15m` timer resets — an
+  # alert that quietly never fires. Same failure shape as the one this whole
+  # component exists to fix.
+  interval: 120s
   module: http_redirect
   vmProberSpec:
     url: blackbox-exporter.monitoring.svc.cluster.local:9115

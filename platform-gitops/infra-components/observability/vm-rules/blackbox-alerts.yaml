@@ -68,29 +68,44 @@ spec:
 
         - alert: BlackboxProbeMetricAbsent
           # The failure mode probe_success == 0 cannot see. If the exporter is
-          # gone, the VMProbe was deleted, or vmagent stopped selecting it, the
-          # series disappears and every rule above silently stops evaluating —
+          # gone, a VMProbe was deleted, or vmagent stopped selecting one, the
+          # series disappears and the rules above silently stop evaluating —
           # the same shape as the alert this whole change exists to fix.
-          expr: absent(probe_success{job="platform-public"})
+          #
+          # Every probe job is listed, not just platform-public. Guarding one
+          # job would leave the other two able to fail exactly the way
+          # ServiceUnavailable already did: deleting the mctl-telegram-healthz
+          # probe alone would make that critical alert inert again with nothing
+          # to say so. Each absent() carries its own job label, so this fires
+          # once per missing job and names it.
+          expr: |
+            absent(probe_success{job="platform-public"})
+            or absent(probe_success{job="redirect-zones"})
+            or absent(probe_success{job="mctl-telegram-healthz"})
           for: 15m
           labels:
             severity: warning
             service: platform
           annotations:
-            summary: "External availability probes have stopped reporting"
+            summary: "Availability probes for {{ $labels.job }} have stopped reporting"
             description: >-
-              No probe_success series with job="platform-public" for 15
-              minutes. The availability alerts are inert while this is firing,
-              so treat it as an outage of the monitoring rather than a quiet
-              period. Check the blackbox-exporter deployment in the monitoring
-              namespace and that vmagent is still selecting the VMProbe
-              objects (it runs with selectAllByDefault: true).
+              No probe_success series with job="{{ $labels.job }}" for 15
+              minutes. The alerts that read that job are inert while this is
+              firing, so treat it as an outage of the monitoring rather than a
+              quiet period. Check the blackbox-exporter deployment in the
+              monitoring namespace and that vmagent is still selecting the
+              VMProbe objects (it runs with selectAllByDefault: true).
 
         - alert: PublicEndpointCertificateExpiringSoon
           # The edge certificate, not the origin's. Cloudflare renews its own
           # certificates automatically, so this firing means the automation
           # itself is stuck — which is exactly when nobody is watching.
-          expr: (probe_ssl_earliest_cert_expiry{job="platform-public"} - time()) / 86400 < 14
+          #
+          # No job matcher: every target here is probed over HTTPS, so the
+          # redirect zones' certificates are covered too. Scoping this to
+          # platform-public would have left mctl.me and mctl.ru unwatched for
+          # no reason other than the order the probes were written in.
+          expr: (probe_ssl_earliest_cert_expiry - time()) / 86400 < 14
           for: 1h
           labels:
             severity: warning

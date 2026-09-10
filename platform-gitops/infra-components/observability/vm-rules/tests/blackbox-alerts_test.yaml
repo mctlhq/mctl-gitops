@@ -138,9 +138,13 @@ tests:
   # BlackboxProbeMetricAbsent — the alert that guards the other alerts
   # ---------------------------------------------------------------------
   - interval: 1m
-    name: probes reporting keeps the absence alert quiet
+    name: all three probe jobs reporting keeps the absence alert quiet
     input_series:
       - series: 'probe_success{job="platform-public",instance="https://mctl.ai/"}'
+        values: '1x30'
+      - series: 'probe_success{job="redirect-zones",instance="https://mctl.me/"}'
+        values: '1x30'
+      - series: 'probe_success{job="mctl-telegram-healthz",instance="https://tg.mctl.ai/healthz"}'
         values: '1x30'
     alert_rule_test:
       - eval_time: 25m
@@ -154,13 +158,47 @@ tests:
     input_series:
       - series: 'probe_success{job="platform-public",instance="https://mctl.ai/"}'
         values: '0x30'
+      - series: 'probe_success{job="redirect-zones",instance="https://mctl.me/"}'
+        values: '0x30'
+      - series: 'probe_success{job="mctl-telegram-healthz",instance="https://tg.mctl.ai/healthz"}'
+        values: '0x30'
     alert_rule_test:
       - eval_time: 25m
         alertname: BlackboxProbeMetricAbsent
         exp_alerts: []
 
+  # The regression test for the guard's own coverage: deleting ONE probe must
+  # be caught. Guarding only platform-public would leave this silent, which is
+  # the bug ServiceUnavailable had for its whole life.
   - interval: 1m
-    name: no probe series at all fires the absence alert
+    name: one missing probe job among three fires, and names that job
+    input_series:
+      - series: 'probe_success{job="platform-public",instance="https://mctl.ai/"}'
+        values: '1x30'
+      - series: 'probe_success{job="redirect-zones",instance="https://mctl.me/"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: BlackboxProbeMetricAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: platform
+              # absent() synthesises the labels named in the matcher, so the
+              # alert carries job even though no series exists.
+              job: mctl-telegram-healthz
+            exp_annotations:
+              summary: Availability probes for mctl-telegram-healthz have stopped reporting
+              description: >-
+                No probe_success series with job="mctl-telegram-healthz" for 15 minutes.
+                The alerts that read that job are inert while this is firing,
+                so treat it as an outage of the monitoring rather than a quiet
+                period. Check the blackbox-exporter deployment in the
+                monitoring namespace and that vmagent is still selecting the
+                VMProbe objects (it runs with selectAllByDefault: true).
+
+  - interval: 1m
+    name: no probe series at all fires once per job
     input_series:
       - series: 'up{job="irrelevant"}'
         values: '1x30'
@@ -175,12 +213,42 @@ tests:
               # alert carries job even though no series exists.
               job: platform-public
             exp_annotations:
-              summary: External availability probes have stopped reporting
+              summary: Availability probes for platform-public have stopped reporting
               description: >-
-                No probe_success series with job="platform-public" for 15
-                minutes. The availability alerts are inert while this is
-                firing, so treat it as an outage of the monitoring rather than
-                a quiet period. Check the blackbox-exporter deployment in the
+                No probe_success series with job="platform-public" for 15 minutes.
+                The alerts that read that job are inert while this is firing,
+                so treat it as an outage of the monitoring rather than a quiet
+                period. Check the blackbox-exporter deployment in the
+                monitoring namespace and that vmagent is still selecting the
+                VMProbe objects (it runs with selectAllByDefault: true).
+          - exp_labels:
+              severity: warning
+              service: platform
+              # absent() synthesises the labels named in the matcher, so the
+              # alert carries job even though no series exists.
+              job: redirect-zones
+            exp_annotations:
+              summary: Availability probes for redirect-zones have stopped reporting
+              description: >-
+                No probe_success series with job="redirect-zones" for 15 minutes.
+                The alerts that read that job are inert while this is firing,
+                so treat it as an outage of the monitoring rather than a quiet
+                period. Check the blackbox-exporter deployment in the
+                monitoring namespace and that vmagent is still selecting the
+                VMProbe objects (it runs with selectAllByDefault: true).
+          - exp_labels:
+              severity: warning
+              service: platform
+              # absent() synthesises the labels named in the matcher, so the
+              # alert carries job even though no series exists.
+              job: mctl-telegram-healthz
+            exp_annotations:
+              summary: Availability probes for mctl-telegram-healthz have stopped reporting
+              description: >-
+                No probe_success series with job="mctl-telegram-healthz" for 15 minutes.
+                The alerts that read that job are inert while this is firing,
+                so treat it as an outage of the monitoring rather than a quiet
+                period. Check the blackbox-exporter deployment in the
                 monitoring namespace and that vmagent is still selecting the
                 VMProbe objects (it runs with selectAllByDefault: true).
 
