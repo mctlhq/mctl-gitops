@@ -74,3 +74,26 @@ Unchanged timestamps are what proves nothing was written.
 
 A plan containing create, update or destroy means stop and investigate. It does
 not mean apply and re-import.
+
+## Zone settings
+
+`min_tls_version` and `always_use_https` are declared in the shared baseline as
+of #1154. Zone settings always exist at Cloudflare — there is no unset, only a
+default — so they import rather than create.
+
+The values were applied through the Cloudflare API **before** this landed, the
+same way the Google Search Console TXT record was: these roots keep local state
+and cannot apply from CI (#1111), and their whole verification ritual runs on
+the read-only plan identity. Declaring a value the configuration cannot reach
+would have left `cloudflare-drift.yml` — which fails closed — red on every
+scheduled run until someone got round to it.
+
+So the plan stays zero-diff and the rule above never bends:
+
+```
+Plan: 6 to import, 0 to add, 0 to change, 0 to destroy.
+```
+
+(Six, not the "2 to import" quoted earlier in this file: that figure is from the
+original zero-diff pilot, when the root held only the apex and the wildcard. It
+has since grown the two rulesets from the shared baseline.)

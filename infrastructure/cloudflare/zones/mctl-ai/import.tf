@@ -114,3 +114,16 @@ import {
   to = cloudflare_dns_record.mcp_portal
   id = "${local.zone_id}/d2234121ecacf056358c9b937e47715a"
 }
+
+# Zone settings are objects that always exist — Cloudflare has no notion of an
+# unset setting, only its default. So these import rather than create. Both
+# values were applied through the API first, so the plan stays zero-diff.
+import {
+  to = cloudflare_zone_setting.min_tls_version
+  id = "${local.zone_id}/min_tls_version"
+}
+
+import {
+  to = cloudflare_zone_setting.always_use_https
+  id = "${local.zone_id}/always_use_https"
+}
