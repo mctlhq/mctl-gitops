@@ -47,10 +47,33 @@ spec:
       path: /metrics
       interval: 30s
       scrapeTimeout: 10s
-      # Promtail's exposition is mostly Go/process internals plus its own
-      # pipeline counters; the runtime series add nothing an alert or a
-      # dashboard here reads, so they stay out of the database.
+      # The metrics-stage counters carry the labels of the LOG STREAM they
+      # were counted from (namespace=labs, pod=labs-seerrsense-..., app,
+      # container, job). Without honorLabels the scrape's own target labels
+      # win, the stream's are renamed exported_namespace / exported_pod, and a
+      # rule selecting namespace="labs" matches nothing. Seen on the first
+      # scraped sample on 2026-09-10: namespace=monitoring,
+      # pod=loki-stack-promtail-748ct, exported_namespace=labs. Promtail's
+      # own promtail_* series carry no such labels, so they still get the
+      # target's namespace/pod as before.
+      honorLabels: true
       metricRelabelConfigs:
+        # Promtail's exposition is mostly Go/process internals plus its own
+        # pipeline counters; the runtime series add nothing an alert or a
+        # dashboard here reads, so they stay out of the database.
         - sourceLabels: [__name__]
           regex: "go_.*|process_.*"
           action: drop
+        # The metrics stage prefixes every counter it defines with
+        # promtail_custom_ (Promtail's fixed default; an empty `prefix` in
+        # the stage falls back to the same string). The VMRules and their
+        # unit tests, as well as loki.yaml, all name the counters without
+        # it — seerrsense_oauth_consent_total, not
+        # promtail_custom_seerrsense_oauth_consent_total — so strip it here,
+        # at the single point where the samples enter the database. Only
+        # these four counters exist with that prefix; nothing else is
+        # renamed.
+        - sourceLabels: [__name__]
+          regex: "promtail_custom_(.+)"
+          replacement: "$1"
+          targetLabel: __name__
