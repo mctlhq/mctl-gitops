@@ -171,7 +171,15 @@ jobs:
       # service, and no gate in this repo had anything to say about it for
       # months. The unit tests are the part that closes that.
       - name: Check and unit-test alerting rules
-        run: scripts/check-vm-rules.sh
+        # --selftest first, same reason as the other detectors in this job: the
+        # kind guard added with #1159 refuses a non-VMRule object under
+        # vm-rules/, and a guard never seen to fail is not known to work. It
+        # runs the script against a throwaway fixture directory, so it asserts
+        # on the real code path rather than a copy of it.
+        run: |
+          set -euo pipefail
+          scripts/check-vm-rules.sh --selftest
+          scripts/check-vm-rules.sh
 
       - name: Validate raw manifests (tenants, argo-workflows, mcp, infra-components)
         run: |

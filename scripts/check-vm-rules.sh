@@ -18,9 +18,58 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-RULES_DIR="$ROOT/platform-gitops/infra-components/observability/vm-rules"
-TESTS_DIR="$RULES_DIR/tests"
+# Overridable so --selftest below can point the real code path at a fixture
+# directory. Nothing else sets these.
+RULES_DIR="${RULES_DIR:-$ROOT/platform-gitops/infra-components/observability/vm-rules}"
+TESTS_DIR="${TESTS_DIR:-$RULES_DIR/tests}"
 GEN_DIR="$TESTS_DIR/generated"
+
+# --selftest: prove the kind guard below actually rejects something, then exit.
+#
+# It exists because a VMPodScrape sat unnoticed in vm-rules/ for three months,
+# scraping the pushgateway a second time and doubling every alert over a pushed
+# metric (#1159). A guard that has never been seen to fail is not known to
+# work — the same reason every other detector in validate-manifests.yml runs
+# --selftest before its real pass.
+#
+# This re-runs THIS script against a throwaway RULES_DIR rather than
+# reimplementing the check, so it tests the guard rather than a copy of it. The
+# accept case asserts only on the absence of the annotation, not on the exit
+# code: a minimal VMRule fixture has no real rule groups, so promtool further
+# down is entitled to reject it, and that is not what is under test.
+if [ "${1:-}" = "--selftest" ]; then
+  st_dir=$(mktemp -d)
+  trap 'rm -rf "$st_dir"' EXIT
+  mkdir -p "$st_dir/tests"
+  st_fail=0
+
+  printf 'apiVersion: operator.victoriametrics.com/v1beta1\nkind: VMPodScrape\nmetadata:\n  name: selftest\n' \
+    >"$st_dir/fixture.yaml"
+  st_out=$(RULES_DIR="$st_dir" TESTS_DIR="$st_dir/tests" "$0" 2>&1) && st_rc=0 || st_rc=$?
+  if [ "${st_rc:-0}" -eq 0 ]; then
+    echo "self-test FAILED: a VMPodScrape under vm-rules/ exited 0" >&2
+    st_fail=1
+  fi
+  case "$st_out" in
+    *"non-VMRule object (kind=VMPodScrape)"*) ;;
+    *) echo "self-test FAILED: no ::error annotation naming the kind. Got:" >&2
+       echo "$st_out" >&2
+       st_fail=1 ;;
+  esac
+
+  printf 'apiVersion: operator.victoriametrics.com/v1beta1\nkind: VMRule\nmetadata:\n  name: selftest\nspec:\n  groups: []\n' \
+    >"$st_dir/fixture.yaml"
+  st_out=$(RULES_DIR="$st_dir" TESTS_DIR="$st_dir/tests" "$0" 2>&1) || true
+  case "$st_out" in
+    *"non-VMRule object"*)
+       echo "self-test FAILED: a VMRule was rejected by the kind guard. Got:" >&2
+       echo "$st_out" >&2
+       st_fail=1 ;;
+  esac
+
+  [ "$st_fail" -eq 0 ] && echo "check-vm-rules.sh self-test: kind guard rejects non-VMRule, accepts VMRule"
+  exit "$st_fail"
+fi
 
 rm -rf "$GEN_DIR"
 mkdir -p "$GEN_DIR"
