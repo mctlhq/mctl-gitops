@@ -1,0 +1,120 @@
+# Alerts on the external availability probes (infra-components/observability/blackbox).
+#
+# These watch the platform from outside its own ingress: blackbox-exporter
+# probes the public hostname, so the path under test is client → Cloudflare
+# edge → origin → Traefik → pod. Everything else in vm-rules watches the
+# inside, where a pod can be perfectly healthy while nobody can reach it.
+#
+# ServiceUnavailable for mctl-telegram is deliberately NOT here — it already
+# exists in mctl-telegram-alerts.yaml on probe_success{job="mctl-telegram-healthz"}
+# and has simply never had a series to evaluate. The probe supplies it; that
+# rule stays where it is.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: mctl-blackbox-alerts
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: mctl-platform
+    app.kubernetes.io/component: availability
+spec:
+  groups:
+    - name: mctl.availability
+      interval: 60s
+      rules:
+        - alert: PublicEndpointDown
+          # 3m at a 60s probe interval means three consecutive failures, which
+          # is short enough to catch the 2026-09-08 origin outage (~3 hours)
+          # early and long enough to ride out a single edge hiccup.
+          expr: probe_success{job="platform-public"} == 0
+          for: 3m
+          labels:
+            severity: critical
+            service: platform
+          annotations:
+            summary: "{{ $labels.instance }} is unreachable from outside"
+            description: >-
+              blackbox-exporter has failed to get a 2xx from
+              {{ $labels.instance }} for more than 3 minutes. The probe leaves
+              the cluster and comes back through Cloudflare, so this covers the
+              whole path — a refused origin, a broken ingress route, an expired
+              certificate or an edge failure all look the same here. Check
+              probe_http_status_code and probe_ssl_earliest_cert_expiry for the
+              same instance to tell them apart, and the Cloudflare status map
+              for 5xx. This is the alert that was missing on 2026-09-08, when
+              the origin refused connections for about three hours and returned
+              1 793 responses with status 521 without anything firing.
+
+        - alert: RedirectZoneNotRedirecting
+          # The redirect zones answer 301 or they are broken. Probed every
+          # 120s; 15m is seven or eight consecutive failures, which is right
+          # for something that is a config regression rather than an outage.
+          expr: probe_success{job="redirect-zones"} == 0
+          for: 15m
+          labels:
+            severity: warning
+            service: platform
+          annotations:
+            summary: "{{ $labels.instance }} stopped answering 301"
+            description: >-
+              {{ $labels.instance }} did not return a 301 for 15 minutes. These
+              zones exist only to redirect to mctl.ai, and two independent
+              mechanisms produce that: the apex dynamic_redirect ruleset
+              (infrastructure/cloudflare/modules/zone-baseline) for the apex,
+              and the mctl-landing-form worker for subdomains. Check
+              probe_http_status_code — a 200 means the ruleset stopped firing,
+              a 5xx means the edge or origin is the problem, and a 410 means
+              the worker's bot filter answered instead, which would mean the
+              route now covers the apex too.
+
+        - alert: BlackboxProbeMetricAbsent
+          # The failure mode probe_success == 0 cannot see. If the exporter is
+          # gone, a VMProbe was deleted, or vmagent stopped selecting one, the
+          # series disappears and the rules above silently stop evaluating —
+          # the same shape as the alert this whole change exists to fix.
+          #
+          # Every probe job is listed, not just platform-public. Guarding one
+          # job would leave the other two able to fail exactly the way
+          # ServiceUnavailable already did: deleting the mctl-telegram-healthz
+          # probe alone would make that critical alert inert again with nothing
+          # to say so. Each absent() carries its own job label, so this fires
+          # once per missing job and names it.
+          expr: |
+            absent(probe_success{job="platform-public"})
+            or absent(probe_success{job="redirect-zones"})
+            or absent(probe_success{job="mctl-telegram-healthz"})
+          for: 15m
+          labels:
+            severity: warning
+            service: platform
+          annotations:
+            summary: "Availability probes for {{ $labels.job }} have stopped reporting"
+            description: >-
+              No probe_success series with job="{{ $labels.job }}" for 15
+              minutes. The alerts that read that job are inert while this is
+              firing, so treat it as an outage of the monitoring rather than a
+              quiet period. Check the blackbox-exporter deployment in the
+              monitoring namespace and that vmagent is still selecting the
+              VMProbe objects (it runs with selectAllByDefault: true).
+
+        - alert: PublicEndpointCertificateExpiringSoon
+          # The edge certificate, not the origin's. Cloudflare renews its own
+          # certificates automatically, so this firing means the automation
+          # itself is stuck — which is exactly when nobody is watching.
+          #
+          # No job matcher: every target here is probed over HTTPS, so the
+          # redirect zones' certificates are covered too. Scoping this to
+          # platform-public would have left mctl.me and mctl.ru unwatched for
+          # no reason other than the order the probes were written in.
+          expr: (probe_ssl_earliest_cert_expiry - time()) / 86400 < 14
+          for: 1h
+          labels:
+            severity: warning
+            service: platform
+          annotations:
+            summary: "TLS certificate for {{ $labels.instance }} expires in under 14 days"
+            description: >-
+              The certificate served for {{ $labels.instance }} expires in
+              under 14 days. These are Cloudflare universal certificates and
+              renew on their own, so this fires only when that renewal has
+              stopped working.

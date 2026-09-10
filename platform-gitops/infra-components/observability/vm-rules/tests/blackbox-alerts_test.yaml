@@ -1,0 +1,291 @@
+# Unit tests for blackbox-alerts.yaml (group mctl.availability).
+#
+# rule_files is resolved relative to this file. generated/ is produced by
+# scripts/check-vm-rules.sh, which extracts each VMRule's `.spec` so
+# promtool can evaluate the very rules the cluster runs.
+rule_files:
+  - generated/blackbox-alerts.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # ---------------------------------------------------------------------
+  # PublicEndpointDown
+  # ---------------------------------------------------------------------
+  - interval: 1m
+    name: a reachable endpoint stays quiet
+    input_series:
+      - series: 'probe_success{job="platform-public",instance="https://mctl.ai/"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: PublicEndpointDown
+        exp_alerts: []
+
+  - interval: 1m
+    name: two consecutive failures are still under the 3m threshold
+    input_series:
+      - series: 'probe_success{job="platform-public",instance="https://mctl.ai/"}'
+        values: '1 1 1 1 1 0 0 1 1 1'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: PublicEndpointDown
+        exp_alerts: []
+
+  - interval: 1m
+    name: an endpoint down for more than 3m fires critical
+    input_series:
+      - series: 'probe_success{job="platform-public",instance="https://mctl.ai/"}'
+        values: '1 1 0x18'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: PublicEndpointDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: platform
+              job: platform-public
+              instance: https://mctl.ai/
+            exp_annotations:
+              summary: https://mctl.ai/ is unreachable from outside
+              description: >-
+                blackbox-exporter has failed to get a 2xx from https://mctl.ai/
+                for more than 3 minutes. The probe leaves the cluster and comes
+                back through Cloudflare, so this covers the whole path — a
+                refused origin, a broken ingress route, an expired certificate
+                or an edge failure all look the same here. Check
+                probe_http_status_code and probe_ssl_earliest_cert_expiry for
+                the same instance to tell them apart, and the Cloudflare status
+                map for 5xx. This is the alert that was missing on 2026-09-08,
+                when the origin refused connections for about three hours and
+                returned 1 793 responses with status 521 without anything
+                firing.
+
+  # A failing Vault probe must alert on its own, not be masked by a healthy
+  # mctl.ai in the same job — the rule is per-series and this proves it.
+  - interval: 1m
+    name: one failing target in a multi-target job alerts alone
+    input_series:
+      - series: 'probe_success{job="platform-public",instance="https://mctl.ai/"}'
+        values: '1x20'
+      - series: 'probe_success{job="platform-public",instance="https://secrets.mctl.ai/v1/sys/health"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: PublicEndpointDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: platform
+              job: platform-public
+              instance: https://secrets.mctl.ai/v1/sys/health
+            exp_annotations:
+              summary: https://secrets.mctl.ai/v1/sys/health is unreachable from outside
+              description: >-
+                blackbox-exporter has failed to get a 2xx from
+                https://secrets.mctl.ai/v1/sys/health for more than 3 minutes.
+                The probe leaves the cluster and comes back through Cloudflare,
+                so this covers the whole path — a refused origin, a broken
+                ingress route, an expired certificate or an edge failure all
+                look the same here. Check probe_http_status_code and
+                probe_ssl_earliest_cert_expiry for the same instance to tell
+                them apart, and the Cloudflare status map for 5xx. This is the
+                alert that was missing on 2026-09-08, when the origin refused
+                connections for about three hours and returned 1 793 responses
+                with status 521 without anything firing.
+
+  # ---------------------------------------------------------------------
+  # RedirectZoneNotRedirecting
+  # ---------------------------------------------------------------------
+  - interval: 1m
+    name: a zone answering 301 stays quiet
+    input_series:
+      - series: 'probe_success{job="redirect-zones",instance="https://mctl.me/"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: RedirectZoneNotRedirecting
+        exp_alerts: []
+
+  - interval: 1m
+    name: a zone that stops redirecting for 15m fires warning
+    input_series:
+      - series: 'probe_success{job="redirect-zones",instance="https://mctl.me/"}'
+        values: '1 0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: RedirectZoneNotRedirecting
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: platform
+              job: redirect-zones
+              instance: https://mctl.me/
+            exp_annotations:
+              summary: https://mctl.me/ stopped answering 301
+              description: >-
+                https://mctl.me/ did not return a 301 for 15 minutes. These
+                zones exist only to redirect to mctl.ai, and two independent
+                mechanisms produce that: the apex dynamic_redirect ruleset
+                (infrastructure/cloudflare/modules/zone-baseline) for the apex,
+                and the mctl-landing-form worker for subdomains. Check
+                probe_http_status_code — a 200 means the ruleset stopped
+                firing, a 5xx means the edge or origin is the problem, and a
+                410 means the worker's bot filter answered instead, which would
+                mean the route now covers the apex too.
+
+  # ---------------------------------------------------------------------
+  # BlackboxProbeMetricAbsent — the alert that guards the other alerts
+  # ---------------------------------------------------------------------
+  - interval: 1m
+    name: all three probe jobs reporting keeps the absence alert quiet
+    input_series:
+      - series: 'probe_success{job="platform-public",instance="https://mctl.ai/"}'
+        values: '1x30'
+      - series: 'probe_success{job="redirect-zones",instance="https://mctl.me/"}'
+        values: '1x30'
+      - series: 'probe_success{job="mctl-telegram-healthz",instance="https://tg.mctl.ai/healthz"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: BlackboxProbeMetricAbsent
+        exp_alerts: []
+
+  # A failing probe is NOT an absent probe. Without this the two alerts could
+  # be written so that an outage silences the guard.
+  - interval: 1m
+    name: a failing probe is not an absent probe
+    input_series:
+      - series: 'probe_success{job="platform-public",instance="https://mctl.ai/"}'
+        values: '0x30'
+      - series: 'probe_success{job="redirect-zones",instance="https://mctl.me/"}'
+        values: '0x30'
+      - series: 'probe_success{job="mctl-telegram-healthz",instance="https://tg.mctl.ai/healthz"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: BlackboxProbeMetricAbsent
+        exp_alerts: []
+
+  # The regression test for the guard's own coverage: deleting ONE probe must
+  # be caught. Guarding only platform-public would leave this silent, which is
+  # the bug ServiceUnavailable had for its whole life.
+  - interval: 1m
+    name: one missing probe job among three fires, and names that job
+    input_series:
+      - series: 'probe_success{job="platform-public",instance="https://mctl.ai/"}'
+        values: '1x30'
+      - series: 'probe_success{job="redirect-zones",instance="https://mctl.me/"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: BlackboxProbeMetricAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: platform
+              # absent() synthesises the labels named in the matcher, so the
+              # alert carries job even though no series exists.
+              job: mctl-telegram-healthz
+            exp_annotations:
+              summary: Availability probes for mctl-telegram-healthz have stopped reporting
+              description: >-
+                No probe_success series with job="mctl-telegram-healthz" for 15 minutes.
+                The alerts that read that job are inert while this is firing,
+                so treat it as an outage of the monitoring rather than a quiet
+                period. Check the blackbox-exporter deployment in the
+                monitoring namespace and that vmagent is still selecting the
+                VMProbe objects (it runs with selectAllByDefault: true).
+
+  - interval: 1m
+    name: no probe series at all fires once per job
+    input_series:
+      - series: 'up{job="irrelevant"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: BlackboxProbeMetricAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: platform
+              # absent() synthesises the labels named in the matcher, so the
+              # alert carries job even though no series exists.
+              job: platform-public
+            exp_annotations:
+              summary: Availability probes for platform-public have stopped reporting
+              description: >-
+                No probe_success series with job="platform-public" for 15 minutes.
+                The alerts that read that job are inert while this is firing,
+                so treat it as an outage of the monitoring rather than a quiet
+                period. Check the blackbox-exporter deployment in the
+                monitoring namespace and that vmagent is still selecting the
+                VMProbe objects (it runs with selectAllByDefault: true).
+          - exp_labels:
+              severity: warning
+              service: platform
+              # absent() synthesises the labels named in the matcher, so the
+              # alert carries job even though no series exists.
+              job: redirect-zones
+            exp_annotations:
+              summary: Availability probes for redirect-zones have stopped reporting
+              description: >-
+                No probe_success series with job="redirect-zones" for 15 minutes.
+                The alerts that read that job are inert while this is firing,
+                so treat it as an outage of the monitoring rather than a quiet
+                period. Check the blackbox-exporter deployment in the
+                monitoring namespace and that vmagent is still selecting the
+                VMProbe objects (it runs with selectAllByDefault: true).
+          - exp_labels:
+              severity: warning
+              service: platform
+              # absent() synthesises the labels named in the matcher, so the
+              # alert carries job even though no series exists.
+              job: mctl-telegram-healthz
+            exp_annotations:
+              summary: Availability probes for mctl-telegram-healthz have stopped reporting
+              description: >-
+                No probe_success series with job="mctl-telegram-healthz" for 15 minutes.
+                The alerts that read that job are inert while this is firing,
+                so treat it as an outage of the monitoring rather than a quiet
+                period. Check the blackbox-exporter deployment in the
+                monitoring namespace and that vmagent is still selecting the
+                VMProbe objects (it runs with selectAllByDefault: true).
+
+  # ---------------------------------------------------------------------
+  # PublicEndpointCertificateExpiringSoon
+  # ---------------------------------------------------------------------
+  - interval: 1m
+    name: a certificate 60 days out stays quiet
+    input_series:
+      # eval starts at unix 0 in promtool, so express expiry as an absolute
+      # timestamp: 60 days = 5184000.
+      - series: 'probe_ssl_earliest_cert_expiry{job="platform-public",instance="https://mctl.ai/"}'
+        values: '5184000x70'
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: PublicEndpointCertificateExpiringSoon
+        exp_alerts: []
+
+  - interval: 1m
+    name: a certificate 10 days out fires after an hour
+    input_series:
+      # 10 days = 864000.
+      - series: 'probe_ssl_earliest_cert_expiry{job="platform-public",instance="https://mctl.ai/"}'
+        values: '864000x70'
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: PublicEndpointCertificateExpiringSoon
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: platform
+              job: platform-public
+              instance: https://mctl.ai/
+            exp_annotations:
+              summary: TLS certificate for https://mctl.ai/ expires in under 14 days
+              description: >-
+                The certificate served for https://mctl.ai/ expires in under 14
+                days. These are Cloudflare universal certificates and renew on
+                their own, so this fires only when that renewal has stopped
+                working.
