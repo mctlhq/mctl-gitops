@@ -85,6 +85,11 @@ resource "cloudflare_ruleset" "firewall_custom" {
 # settings were outside the scope of the #1089 import programme — they were
 # never considered and deferred, they simply were not on the list.
 #
+# Both values were applied through the API on 2026-09-10, before this file
+# declared them, so importing here is zero-diff. That order is deliberate:
+# these roots cannot apply from CI while they hold local state (#1111), and a
+# declared-but-unapplied value would leave the fail-closed drift check red.
+#
 # min_tls_version was "1.0". Over 2026-09-03..09 the four zones served
 # 837 277 TLS handshakes and not one of them was TLS 1.0 or 1.1 — 832 003 were
 # TLS 1.3 and the remaining 5 274 TLS 1.2 — so raising the floor to 1.2 refuses

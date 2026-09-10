@@ -3,7 +3,8 @@
 # mctl.me and mctl.ru get these from modules/zone-baseline; mctl.ai does not
 # use that module — it serves traffic rather than redirecting, so it is a flat
 # root — and therefore declares the same two settings itself. The values are
-# deliberately identical; see the module for the reasoning behind each.
+# deliberately identical; see the module for the reasoning behind each, and for
+# why they were applied through the API before being declared here.
 #
 # min_tls_version was "1.0" here too. mctl.ai carries the overwhelming majority
 # of the account's traffic — 750 757 requests over 2026-09-03..09 — and of the

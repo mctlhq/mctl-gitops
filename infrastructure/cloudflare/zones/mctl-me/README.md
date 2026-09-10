@@ -64,20 +64,23 @@ The token used was the read-only plan identity, negative-control verified: a
 `POST` creating a DNS record in this zone is refused (`10000`). Nothing in this
 procedure can mutate Cloudflare.
 
-## Zone settings — the one place this root is not zero-diff
+## Zone settings
 
 `min_tls_version` and `always_use_https` are declared in the shared baseline as
-of #1154. They are the first objects in this root whose live value the
-configuration deliberately disagrees with, so the rule above — a plan with a
-change means stop — does not apply to them, once, on that change.
+of #1154. Zone settings always exist at Cloudflare — there is no unset, only a
+default — so they import rather than create.
 
-Zone settings always exist at Cloudflare; there is no unset, only a default.
-They therefore import rather than create. `always_use_https` was already `on`
-here, so only the TLS floor moves:
+The values were applied through the Cloudflare API **before** this landed, the
+same way the Google Search Console TXT record was: these roots keep local state
+and cannot apply from CI (#1111), and their whole verification ritual runs on
+the read-only plan identity. Declaring a value the configuration cannot reach
+would have left `cloudflare-drift.yml` — which fails closed — red on every
+scheduled run until someone got round to it.
+
+So the plan stays zero-diff and the rule above never bends:
 
 ```
-Expect: 13 to import, 0 to add, 1 to change, 0 to destroy.
-        ~ cloudflare_zone_setting.min_tls_version  value: "1.0" -> "1.2"
+Plan: 13 to import, 0 to add, 0 to change, 0 to destroy.
 ```
 
-After that apply the plan is `No changes` again and the rule is back in force.
+(Thirteen: eleven from the original import plus these two.)

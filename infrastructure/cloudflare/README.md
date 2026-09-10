@@ -175,8 +175,16 @@ and in `zones/mctl-ai/tls.tf` for mctl.ai.
 
 Unlike DNS records and rulesets, a zone setting always exists. Cloudflare has
 no notion of an unset setting, only of its default, so these import rather than
-create, and the change shows as an update on the ones whose live value differs.
-Each root's README records what its plan should print.
+create.
+
+The values were applied through the API before the configuration landed — the
+same order used for the Google Search Console TXT record on mctl.ai, and for
+the same reason. All three zone roots keep local state and cannot apply from CI
+while they are listed in `.local-state-roots` (#1111), and their verification
+runs on the read-only plan identity. Declaring a value the configuration cannot
+reach would leave `cloudflare-drift.yml`, which fails closed, red on every
+scheduled run until someone applied by hand. Import first, mutate never: each
+root's README records the zero-diff plan it should print.
 
 Two settings are deliberately left out:
 
@@ -190,10 +198,10 @@ Two settings are deliberately left out:
   TLS floor it changes how visitors are challenged, and nothing measured here
   says which value is right. Left alone rather than normalised on a guess.
 
-`dmitriimashkov.com` has no root (decision 10) and so is not covered. Its
-settings were set through the API instead. That is a standing exception rather
-than drift: while the zone is intentionally unmanaged, anything applied to it
-is applied by hand.
+`dmitriimashkov.com` has no root (decision 10) and so is not covered, but it got
+the same two values so the account is uniform. That is a standing exception
+rather than drift: while the zone is intentionally unmanaged, anything applied
+to it is applied by hand and nothing here will notice if it changes.
 
 ## The origin address in Git (#1119)
 
