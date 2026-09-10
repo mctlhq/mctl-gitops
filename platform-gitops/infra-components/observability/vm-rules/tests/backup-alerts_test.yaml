@@ -1,0 +1,140 @@
+# Unit tests for backup-alerts.yaml (group mctl.backups).
+#
+# rule_files is resolved relative to this file. generated/ is produced by
+# scripts/check-vm-rules.sh, which extracts each VMRule's `.spec` so promtool
+# can evaluate the very rules the cluster runs.
+#
+# Scoped to the VictoriaMetrics pair added with #1071. promtool's clock starts
+# at unix 0, so a "last success" in the past is expressed as a negative
+# timestamp: at eval_time 20m, time() is 1200, and a series holding -90000
+# means the last success was 91200s ago.
+rule_files:
+  - generated/backup-alerts.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # ---------------------------------------------------------------------
+  # VictoriaMetricsBackupStale
+  # ---------------------------------------------------------------------
+  - interval: 1m
+    name: a backup that succeeded moments ago stays quiet
+    input_series:
+      - series: 'vmbackup_last_success_timestamp_seconds{job="vmbackup",instance="vmsingle"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: VictoriaMetricsBackupStale
+        exp_alerts: []
+
+  # 24h old is the normal steady state for a daily backup and must not fire —
+  # this is what pins the threshold above one full cycle.
+  - interval: 1m
+    name: a backup 24h old stays quiet
+    input_series:
+      - series: 'vmbackup_last_success_timestamp_seconds{job="vmbackup",instance="vmsingle"}'
+        values: '-86400x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: VictoriaMetricsBackupStale
+        exp_alerts: []
+
+  # Pins the `for` window. Without this, dropping `for: 10m` altogether would
+  # still pass every other test in this file.
+  - interval: 1m
+    name: a backup older than 25h is only pending in the first 10 minutes
+    input_series:
+      - series: 'vmbackup_last_success_timestamp_seconds{job="vmbackup",instance="vmsingle"}'
+        values: '-90000x40'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: VictoriaMetricsBackupStale
+        exp_alerts: []
+
+  - interval: 1m
+    name: a backup older than 25h fires critical
+    input_series:
+      - series: 'vmbackup_last_success_timestamp_seconds{job="vmbackup",instance="vmsingle"}'
+        values: '-90000x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: VictoriaMetricsBackupStale
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: monitoring
+              job: vmbackup
+              instance: vmsingle
+            exp_annotations:
+              summary: VictoriaMetrics backup has not succeeded in over 25 hours
+              description: >-
+                The vmbackup sidecar in the vmsingle pod has had no successful
+                run in 25 hours, so there is no fresh copy of the metrics
+                database in R2. This covers every SLI the error-budget
+                merge-freeze policy reads and the evaluation history behind
+                every alert. The sidecar does not crash on failure by design, so
+                its container will look healthy — read its logs instead:
+                `kubectl -n monitoring logs deploy/vmsingle-monitoring-victoria-metrics-k8s-stack -c vmbackup`.
+                Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/restore.md
+
+  # ---------------------------------------------------------------------
+  # VictoriaMetricsBackupMetricAbsent — the guard on the guard
+  # ---------------------------------------------------------------------
+  - interval: 1m
+    name: a reporting sidecar keeps the absence alert quiet
+    input_series:
+      - series: 'vmbackup_last_success_timestamp_seconds{job="vmbackup",instance="vmsingle"}'
+        values: '0x200'
+    alert_rule_test:
+      - eval_time: 150m
+        alertname: VictoriaMetricsBackupMetricAbsent
+        exp_alerts: []
+
+  # A stale backup still publishes a timestamp. If these two were written so
+  # that staleness also read as absence, the operator would get two alerts for
+  # one fault and the absence alert would stop meaning what it says.
+  - interval: 1m
+    name: a stale backup is not an absent backup
+    input_series:
+      - series: 'vmbackup_last_success_timestamp_seconds{job="vmbackup",instance="vmsingle"}'
+        values: '-90000x200'
+    alert_rule_test:
+      - eval_time: 150m
+        alertname: VictoriaMetricsBackupMetricAbsent
+        exp_alerts: []
+
+  - interval: 1m
+    name: no timestamp at all fires after 2h
+    input_series:
+      - series: 'up{job="irrelevant"}'
+        values: '1x200'
+    alert_rule_test:
+      - eval_time: 150m
+        alertname: VictoriaMetricsBackupMetricAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: monitoring
+              # absent() synthesises the labels named in the matcher.
+              job: vmbackup
+            exp_annotations:
+              summary: VictoriaMetrics backup has never reported success
+              description: >-
+                No vmbackup_last_success_timestamp_seconds series for 2 hours.
+                Either the vmbackup sidecar is not running, it has not completed
+                a successful backup since it started, or it cannot reach
+                Pushgateway. While this is absent VictoriaMetricsBackupStale
+                cannot fire, so the metrics backup is unmonitored — which is the
+                state that went unnoticed from 2026-03 to 2026-09 (#1071).
+                Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/restore.md
+
+  # Under 2h must not fire yet, or a normal cold start pages someone.
+  - interval: 1m
+    name: no timestamp for 90 minutes is still within the startup window
+    input_series:
+      - series: 'up{job="irrelevant"}'
+        values: '1x200'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: VictoriaMetricsBackupMetricAbsent
+        exp_alerts: []

@@ -88,3 +88,62 @@ spec:
               snapshots. A suspended CronJob keeps its last lastSuccessfulTime,
               so this is the only signal until VaultBackupStale trips 25h later.
               Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/restore.md
+        # VictoriaMetrics. Deliberately not modelled on the CronJob rules
+        # above: vmbackup cannot be a CronJob. It needs the VMSingle data
+        # directory, that PVC is ReadWriteOnce and already mounted by the
+        # vmsingle pod, so a second pod would stall on Multi-Attach. It runs as
+        # a sidecar in that pod instead, which means there is no
+        # kube_cronjob_status_last_successful_time to watch — the sidecar
+        # publishes its own success timestamp to Pushgateway.
+        #
+        # And it is not modelled on container health either. A sidecar that
+        # crashes makes the pod unready, an unready pod leaves the vmsingle
+        # Service, and metrics go dark — so the sidecar never exits on a failed
+        # backup. These two rules are the only thing standing between a broken
+        # backup and silence, which is exactly the state #1071 found: the
+        # sidecar had never run once since 2026-03 and nothing said so.
+        - alert: VictoriaMetricsBackupStale
+          # Daily loop, so 25h tolerates one slow run and never a missed day.
+          # Same threshold as VaultBackupStale, for the same reason.
+          expr: time() - vmbackup_last_success_timestamp_seconds{job="vmbackup"} > 90000
+          for: 10m
+          labels:
+            severity: critical
+            service: monitoring
+          annotations:
+            summary: "VictoriaMetrics backup has not succeeded in over 25 hours"
+            description: >-
+              The vmbackup sidecar in the vmsingle pod has had no successful run
+              in 25 hours, so there is no fresh copy of the metrics database in
+              R2. This covers every SLI the error-budget merge-freeze policy
+              reads and the evaluation history behind every alert. The sidecar
+              does not crash on failure by design, so its container will look
+              healthy — read its logs instead:
+              `kubectl -n monitoring logs deploy/vmsingle-monitoring-victoria-metrics-k8s-stack -c vmbackup`.
+              Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/restore.md
+        - alert: VictoriaMetricsBackupMetricAbsent
+          # The failure the staleness rule cannot see. If the sidecar stops
+          # publishing — deleted, never started, Pushgateway unreachable — the
+          # series vanishes and `time() - <absent>` never evaluates, so
+          # VictoriaMetricsBackupStale silently stops firing forever. That is
+          # the shape of the original bug and it gets its own alert.
+          #
+          # 2h, not the 30m used for the Vault CronJob: this series only appears
+          # after the sidecar's first successful backup, and a first backup of
+          # the whole database on a cold start takes appreciably longer than a
+          # 165 KiB Vault snapshot.
+          expr: absent(vmbackup_last_success_timestamp_seconds{job="vmbackup"})
+          for: 2h
+          labels:
+            severity: warning
+            service: monitoring
+          annotations:
+            summary: "VictoriaMetrics backup has never reported success"
+            description: >-
+              No vmbackup_last_success_timestamp_seconds series for 2 hours.
+              Either the vmbackup sidecar is not running, it has not completed a
+              successful backup since it started, or it cannot reach
+              Pushgateway. While this is absent VictoriaMetricsBackupStale
+              cannot fire, so the metrics backup is unmonitored — which is the
+              state that went unnoticed from 2026-03 to 2026-09 (#1071).
+              Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/restore.md
