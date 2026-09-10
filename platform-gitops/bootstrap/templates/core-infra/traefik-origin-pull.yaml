@@ -1,0 +1,94 @@
+# Authenticated Origin Pulls: make the origin refuse anything that is not this
+# account's Cloudflare.
+#
+# What this closes. infrastructure/cloudflare/README.md has recorded the gap
+# since #1119: the origin allowlist trusts *all* of Cloudflare, so someone can
+# point their own zone at this origin, arrive from a legitimate Cloudflare
+# address, and skip this zone's WAF rules entirely. An IP allowlist cannot tell
+# one Cloudflare customer from another. A client certificate can.
+#
+# Why the certificate is ours and not Cloudflare's. Enabling Authenticated
+# Origin Pulls with Cloudflare's global certificate would prove "this came from
+# Cloudflare" — which is exactly what the allowlist already proves, and exactly
+# what the gap above is about, since the attacker in that scenario also comes
+# from Cloudflare. Cloudflare supports uploading your own certificate instead,
+# on every plan including Free, and that is what is configured here: the edge
+# presents a certificate issued by an account-exclusive CA, and this is the
+# object that makes the origin check it.
+#
+#   CA        CN=mctl Cloudflare origin-pull CA, expires 2036-09-07
+#   client    CN=cloudflare-origin-pull,        expires 2031-09-09
+#   Vault     platform/traefik/origin-pull (ca.crt, ca.key, client.crt, client.key)
+#   uploaded  per zone via /zones/{id}/origin_tls_client_auth, all three active
+#
+# The CA private key is in Vault and nowhere else; only ca.crt reaches the
+# cluster, because verifying a certificate needs the CA's certificate, not its
+# key. Rotation: issue a new client certificate from the same CA, upload it,
+# delete the old one by id — Traefik needs no change because the CA does not
+# move.
+#
+# Ordering. The Cloudflare side was enabled first and is a no-op on its own: in
+# TLS a client sends a certificate only when the server asks, and Traefik did
+# not ask. This object is what makes it ask, so this is the change that starts
+# enforcing.
+#
+# Before enabling, it was verified that nothing inside the cluster talks to
+# Traefik directly on :8443, since such a client has no certificate and would
+# break. Three checks: no ConfigMap, Deployment, StatefulSet or CronJob in the
+# cluster references traefik.traefik.svc or its ClusterIP; 550 samples of
+# established connections to :8443 across all three Traefik pods over two
+# minutes found only node flannel gateway addresses (10.42.{4,5,6}.{0,1}, which
+# match the three workers' podCIDRs — externalTrafficPolicy is Cluster, so
+# external traffic is masqueraded to them) and not one real pod address; and a
+# pod resolving a public hostname goes out through Cloudflare and back, proven
+# by cf-ray in the response, so in-cluster clients that use public names carry
+# the certificate too. CoreDNS has no rewrite for mctl.* — only NodeHosts.
+#
+# The mechanism itself was proven before it was made global: a throwaway
+# hostname with this exact TLSOption answered 200 through Cloudflare and failed
+# the TLS handshake when addressed directly at the origin.
+#
+# Rollback is deleting this TLSOption; Traefik stops asking within a sync and
+# the origin is back to accepting any Cloudflare address.
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: traefik-origin-pull-ca
+  namespace: traefik
+spec:
+  refreshInterval: 24h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: vault-backend
+  target:
+    name: traefik-origin-pull-ca
+    creationPolicy: Owner
+  data:
+    # tls.ca is the key name Traefik reads for clientAuth.secretNames. Measured
+    # against a live probe before this landed; an Opaque secret under any other
+    # key is ignored silently, which would leave clientAuth configured and
+    # verifying nothing.
+    - secretKey: tls.ca
+      remoteRef:
+        key: platform/traefik/origin-pull
+        property: ca.crt
+---
+# A TLSOption named `default` in Traefik's own namespace applies to every router
+# that does not name another one, which is all of them.
+#
+# Only clientAuth is set. Every other TLS parameter is deliberately left absent
+# so it keeps Traefik's built-in default — there was no TLSOption here before,
+# so anything spelled out now would be a second, unrelated change riding along.
+apiVersion: traefik.io/v1alpha1
+kind: TLSOption
+metadata:
+  name: default
+  namespace: traefik
+spec:
+  clientAuth:
+    secretNames:
+      - traefik-origin-pull-ca
+    # RequireAndVerifyClientCert, not VerifyClientCertIfGiven: the latter lets a
+    # client that presents nothing through, which is precisely the traffic this
+    # is meant to refuse.
+    clientAuthType: RequireAndVerifyClientCert
