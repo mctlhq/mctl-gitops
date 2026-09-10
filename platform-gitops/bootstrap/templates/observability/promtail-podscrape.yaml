@@ -1,0 +1,56 @@
+# Scrape Promtail's own /metrics.
+#
+# Promtail has been running unscraped since the observability stack was set
+# up. Confirmed against VictoriaMetrics on 2026-09-10: no series named
+# promtail_*, no job for promtail in `up`, and — the part that matters —
+# every counter produced by the Promtail metrics stage in loki.yaml
+# (openclaw_token_refresh_failed_total, openclaw_provider_missing_api_key_total,
+# seerrsense_oauth_consent_total, seerrsense_tool_failures_total) absent from
+# the database. Promtail exposes those counters on its own :3101/metrics and
+# nowhere else, so the VMRules built on them (openclaw-auth-alerts.yaml,
+# seerrsense-alerts.yaml) evaluated against nothing and could never fire.
+# That is the real reason mctlhq/mctl-gitops#556 found the openclaw refresh
+# counter at zero data points across the whole retention window: not a quiet
+# metric, an unscraped one.
+#
+# VMPodScrape rather than VMServiceScrape because the loki-stack promtail
+# subchart (promtail-6.15.5) renders no Service, only a DaemonSet with the
+# container port `http-metrics` (3101). Pod-level is the only handle. This is
+# a different situation from #1159's pushgateway podScrape: there a
+# serviceScrape already covered the same target and the podScrape doubled it;
+# here nothing else scrapes Promtail, so this is the one and only scrape.
+# Lives here, next to the loki-stack Application that owns the pods, rather
+# than under vm-rules/, whose kind guard rejects scrape objects for exactly
+# the #1159 reason.
+#
+# VMAgent runs with selectAllByDefault, so no label is needed for it to pick
+# this up; `release: monitoring` is carried for consistency with the other
+# hand-written scrapes in bootstrap/templates/mctl-platform.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMPodScrape
+metadata:
+  name: loki-stack-promtail
+  namespace: monitoring
+  labels:
+    release: monitoring
+    app.kubernetes.io/part-of: mctl-platform
+spec:
+  namespaceSelector:
+    matchNames:
+      - monitoring
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: promtail
+      app.kubernetes.io/instance: loki-stack
+  podMetricsEndpoints:
+    - port: http-metrics
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+      # Promtail's exposition is mostly Go/process internals plus its own
+      # pipeline counters; the runtime series add nothing an alert or a
+      # dashboard here reads, so they stay out of the database.
+      metricRelabelConfigs:
+        - sourceLabels: [__name__]
+          regex: "go_.*|process_.*"
+          action: drop
