@@ -18,15 +18,16 @@ becomes a resource and the script goes away.
 - `secure_web_gateway` — whether the portal routes its traffic through
   Cloudflare Gateway. This is the Phase 2 subject (`mctlhq/.github#43`,
   `#1181`): committed `false` is the baseline the POC returns to.
-- `code_mode` / `allow_code_mode` — `code_mode` is one of `off`, `opt_in`,
-  `default_on`, `enforced` (the API's own set; it defaults to `opt_in` when
-  omitted on create, which is why leaving it unpinned is not the same as
-  leaving it off). The two fields must agree — the API answers 400 when they
-  disagree — so the script refuses a file where they do not. Pinned `off`/`false` because Phase 2 must
+- `code_mode` / `allow_code_mode` — pinned `off`/`false` because Phase 2 must
   leave Code Mode untouched, and "untouched" is only checkable if something
   records what it was. A drift here is as interesting as a drift in the
   Gateway switch: it means the portal grew an execution surface nobody
-  decided on.
+  decided on. `code_mode` is one of `off`, `opt_in`, `default_on`,
+  `enforced`, and defaults to `opt_in` when omitted on create — leaving it
+  unpinned is not the same as leaving it off. The two fields must agree; the
+  script refuses a file where they do not, and sends only `code_mode`,
+  because the API answers `7001: code_mode and allow_code_mode disagree.
+  Send only code_mode, or a consistent pair.` Measured, not inferred.
 - `portal` and `hostname` — the address. The script refuses a file naming a
   different portal: this file writes to a shared surface, and a retargeted
   file would rewrite a mapping this repository does not own.
@@ -34,6 +35,23 @@ becomes a resource and the script goes away.
 The tool allowlists are **not** here. They live with the servers that
 register the tools — `mctl-telegram`, `mctl-api`, `seerrsense` — because the
 decision "this tool is safe to expose" belongs in the same diff as the tool.
+
+## What the write does not touch
+
+The endpoint is a `PUT` that behaves as a merge: a field the body leaves out
+keeps its stored value. Measured against the live portal — a write omitting
+`description` left it intact, and a write omitting `servers` left all three
+upstream mappings at 74/5/30 tools with `default_disabled` untouched.
+
+So the script sends `secure_web_gateway` and `code_mode` and nothing else.
+That is not tidiness. `servers` carries the tool allowlists owned by
+`mctl-telegram`, `mctl-api` and `seerrsense`, and sending it back as read
+would make every apply a read-modify-write over their state: an allowlist
+applied between this script's read and its write would be silently reverted,
+and the API would answer `200`. A field that is never sent cannot lose that
+race. The apply still checks that no mapping disappeared across the write —
+by id, not by contents, because a concurrent allowlist edit is legitimate
+and must not read as a failure.
 
 ## Running it
 

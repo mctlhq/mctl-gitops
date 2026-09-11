@@ -50,27 +50,34 @@ LIVE = {
 }
 
 STUB_CURL = r"""#!/bin/sh
-# Records the PUT body, the curl config and the argv, then answers from
-# LIVE_JSON. Resolving -K is the point: the script's header claims the token
-# reaches curl through a config on a file descriptor and never through the
-# command line, and only a stub that opens that config can hold it to that.
+# Models the endpoint as measured, not as its verb suggests: the PUT is a
+# merge -- a field the body leaves out keeps its stored value. Verified
+# against the live portal for `description` and for `servers` before this
+# stub was written to behave that way.
+#
+# It also records the curl config and argv. Resolving -K is the point: the
+# script's header claims the token reaches curl through a config on a file
+# descriptor and never through the command line, and only a stub that opens
+# that config can hold it to that.
+[ -f "$STATE_FILE" ] || printf '%s' "$LIVE_JSON" > "$STATE_FILE"
 printf '%s' "$*" > "$ARGV_FILE"
 for a in "$@"; do
   if [ "${next:-}" = cfg ]; then cat "$a" > "$AUTH_FILE" 2>/dev/null; next=; continue; fi
   case "$a" in -K) next=cfg; continue ;; esac
 done
-next=
+is_put=no; next=
 for a in "$@"; do
-  if [ "$a" = "-X" ]; then is_put=maybe; continue; fi
-  if [ "${is_put:-}" = maybe ] && [ "$a" = "PUT" ]; then is_put=yes; continue; fi
-  case "$a" in --data) next=data; continue ;; esac
-  if [ "${next:-}" = data ]; then printf '%s' "$a" > "$PUT_BODY_FILE"; next=; fi
+  if [ "${next:-}" = data ]; then printf '%s' "$a" > "$PUT_BODY_FILE"; next=; continue; fi
+  case "$a" in
+    PUT) is_put=yes ;;
+    --data) next=data ;;
+  esac
 done
-if [ "${is_put:-}" = yes ]; then
-  printf '{"success":true,"result":%s}' "$(cat "$PUT_BODY_FILE")"
-else
-  printf '{"success":true,"result":%s}' "$LIVE_JSON"
+if [ "$is_put" = yes ]; then
+  jq -c --slurpfile patch "$PUT_BODY_FILE" '. * $patch[0]' "$STATE_FILE" > "$STATE_FILE.new"
+  mv "$STATE_FILE.new" "$STATE_FILE"
 fi
+printf '{"success":true,"result":%s}' "$(cat "$STATE_FILE")"
 """
 
 
@@ -103,12 +110,14 @@ def git(root, *args):
                    capture_output=True)
 
 
-def run(root, *args, live=None):
+def run(root, *args, live=None, keep_state=False):
     put_body = root / "put-body.json"
     # Cleared per run: otherwise a later invocation that exits before the PUT
     # returns the previous body, and `sent is not None` stops meaning "a PUT
     # happened" -- which would let a refusal case pass without asserting one.
     put_body.unlink(missing_ok=True)
+    if not keep_state:
+        (root / "portal-state.json").unlink(missing_ok=True)
     auth = root / "curl-auth.txt"
     argv = root / "curl-argv.txt"
     auth.unlink(missing_ok=True)
@@ -122,6 +131,7 @@ def run(root, *args, live=None):
         PUT_BODY_FILE=str(put_body),
         AUTH_FILE=str(auth),
         ARGV_FILE=str(argv),
+        STATE_FILE=str(root / "portal-state.json"),
     )
     p = subprocess.run(["bash", str(root / SCRIPT_REL), *args],
                        capture_output=True, text=True, env=env)
@@ -149,9 +159,12 @@ def main():
         # the round trip, and the allowlists must come back untouched.
         p, sent = run(root)
         check("a matching file applies", p.returncode == 0, p.stderr)
-        check("the servers array is carried back verbatim",
-              sent is not None and sent.get("servers") == LIVE["servers"],
-              json.dumps(sent.get("servers") if sent else None)[:200])
+        # The write carries only the fields this file owns. `servers` holds
+        # the tool allowlists of three other repositories; a body that sent
+        # them back would be a read-modify-write over somebody else's state.
+        check("the write carries only the two fields the file owns",
+              sent is not None and set(sent) == {"secure_web_gateway", "code_mode"},
+              json.dumps(sent)[:200])
         # The quiet direction of a two-valued signal. It is missing from a
         # suite that only ever asserts refusals, and its absence is what let
         # the drift expression report the baseline as drifted against itself.
@@ -173,10 +186,41 @@ def main():
               a.curl_argv != "" and "stub-token" not in a.curl_argv,
               repr(a.curl_argv)[:200])
 
-        check("read-only timestamps are dropped",
-              sent is not None and not ({"created_at", "created_by", "modified_at",
-                                         "modified_by"} & set(sent)),
-              str(sorted(sent)) if sent else "")
+        # The same statement from the other side: not sending the field and
+        # the field still being there are different claims, and the second
+        # one is what the upstream repositories actually need.
+        state = json.loads((root / "portal-state.json").read_text())
+        check("the mappings are untouched by the write",
+              state.get("servers") == LIVE["servers"],
+              json.dumps(state.get("servers"))[:200])
+
+    with tempfile.TemporaryDirectory() as tmp:
+        # An allowlist apply in mctl-telegram, mctl-api or seerrsense can land
+        # between this script's read and its write. A body that carried the
+        # mappings back would revert it and be answered 200. Here the stub
+        # rewrites tg's allowlist after the read, and the write must leave
+        # that new value standing.
+        root = fixture(tmp)
+        stub = root / "stub" / "curl"
+        concurrent = json.dumps([{"name": "get_my_send_status", "enabled": True},
+                                 {"name": "send_message", "enabled": False},
+                                 {"name": "list_dialogs", "enabled": True}])
+        # Injected only on the PUT invocation: the GET has already answered
+        # with the old state by then, which is exactly the window.
+        stub.write_text(stub.read_text().replace(
+            'if [ "$is_put" = yes ]; then\n  jq -c',
+            'if [ "$is_put" = yes ]; then\n'
+            "  jq -c --argjson t '" + concurrent + "' "
+            "'(.servers[] | select(.server_id==\"tg\") | .updated_tools) |= $t' "
+            '"$STATE_FILE" > "$STATE_FILE.c" && mv "$STATE_FILE.c" "$STATE_FILE"\n'
+            '  jq -c', 1))
+        stub.chmod(0o755)
+        p, _ = run(root)
+        state = json.loads((root / "portal-state.json").read_text())
+        tg = [x for x in state["servers"] if x["server_id"] == "tg"][0]
+        check("an allowlist applied during the write is not reverted",
+              p.returncode == 0 and len(tg["updated_tools"]) == 3,
+              f"rc={p.returncode} {json.dumps(tg)[:200]} {p.stderr[:150]}")
 
     with tempfile.TemporaryDirectory() as tmp:
         root = fixture(tmp)
@@ -191,6 +235,24 @@ def main():
         p, _ = run(root, "--check")
         check("--check reports drift against live", p.returncode != 0
               and "secure_web_gateway" in p.stderr, p.stderr[:200])
+
+    with tempfile.TemporaryDirectory() as tmp:
+        # The apply must not be able to print success over a portal that came
+        # back missing a mapping. Nothing observed does this -- it is the
+        # failure the response check exists for, so it is given a portal that
+        # does it.
+        root = fixture(tmp)
+        stub = root / "stub" / "curl"
+        stub.write_text(stub.read_text().replace(
+            'if [ "$is_put" = yes ]; then\n  jq -c',
+            'if [ "$is_put" = yes ]; then\n'
+            '  jq -c \'.servers |= map(select(.server_id != "seerrsense"))\' '
+            '"$STATE_FILE" > "$STATE_FILE.d" && mv "$STATE_FILE.d" "$STATE_FILE"\n'
+            '  jq -c', 1))
+        stub.chmod(0o755)
+        p, _ = run(root)
+        check("a portal that came back missing a mapping is not reported as applied",
+              p.returncode != 0 and "mapping was lost" in p.stderr, p.stderr[:200])
 
     with tempfile.TemporaryDirectory() as tmp:
         root = fixture(tmp)

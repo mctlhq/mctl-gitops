@@ -16,11 +16,21 @@
 # the read happens before any network call. It is written this way because
 # the guarantee should not rest on how close together two lines happen to be.
 #
-# The write sends the portal body exactly as read, minus the four top-level
-# timestamps, with only the pinned switches replaced. Nothing else is
-# projected away, so a field Cloudflare adds later survives untouched -- and
-# in particular the servers array, which carries the tool allowlists owned by
-# the upstream repositories and must come back out exactly as it came in.
+# The write sends only the fields this file owns. The endpoint is a PUT but
+# behaves as a merge: a field left out keeps its value. Measured against the
+# live portal before relying on it -- a PUT omitting `description` left it
+# intact, and a PUT omitting `servers` left all three upstream mappings at
+# 74/5/30 tools with `default_disabled` untouched.
+#
+# That is what makes this safe to run beside the allowlist applies in
+# mctl-telegram, mctl-api and seerrsense. Sending the body back as read would
+# be a read-modify-write over `servers`: an allowlist applied between this
+# script's GET and its PUT would be silently reverted, and the API would
+# answer 200. Not sending the field cannot lose that race.
+#
+# `allow_code_mode` is pinned in the file but never sent: the API refuses a
+# disagreeing pair (`7001: code_mode and allow_code_mode disagree. Send only
+# code_mode, or a consistent pair.`) and asks for exactly this shape.
 #
 # The token never appears on a command line: curl reads it from a config
 # handed over a file descriptor, so it is in neither the process table nor
@@ -122,26 +132,34 @@ if [ "$mode" = check ]; then
   exit 0
 fi
 
-body=$(jq --argjson want "$vetted" '
-  .result
-  | del(.created_at, .created_by, .modified_at, .modified_by)
-  | .secure_web_gateway = $want.secure_web_gateway
-  | .code_mode = $want.code_mode
-  | .allow_code_mode = $want.allow_code_mode' <<<"$current")
+body=$(jq -c '{secure_web_gateway, code_mode}' <<<"$vetted")
 
 if [ "$mode" = dry-run ]; then
   if [ -n "$drift" ]; then echo "would change:"; echo "$drift"; else echo "no change"; fi
-  jq . <<<"$body"
+  echo "would send:"; jq . <<<"$body"
   exit 0
 fi
 
+# The mappings as they were read, by id only. This script does not send the
+# field; the check is here because "did not send it" and "they are still
+# there" are different statements, and only the second is the guarantee the
+# upstream repositories need. Ids, not contents: an allowlist apply landing
+# in the same window is legitimate now that this write cannot revert it, and
+# holding the tool lists identical across the write would turn that into a
+# spurious failure.
+servers_before=$(jq -cS '[.result.servers // [] | .[] | .server_id] | sort' <<<"$current")
+
 res=$(cf -X PUT "$base/portals/$portal" --data "$body" | must_succeed "update portal")
-# The response must carry the switches that were sent. A portal that accepted
-# the call and stored something else would otherwise read as a clean apply,
-# which is the whole failure this script exists to make impossible.
-jq -er --argjson want "$vetted" '.result
+# The response must carry the switches that were sent, the pinned
+# allow_code_mode the API derives from code_mode, and the mappings unchanged.
+# A portal that accepted the call and stored something else would otherwise
+# read as a clean apply, which is the whole failure this script exists to
+# make impossible.
+jq -er --argjson want "$vetted" --argjson before "$servers_before" '.result
+  | ([.servers // [] | .[] | .server_id] | sort) as $after
   | select(.secure_web_gateway == $want.secure_web_gateway
            and .code_mode == $want.code_mode
-           and .allow_code_mode == $want.allow_code_mode)
-  | "applied: secure_web_gateway=\(.secure_web_gateway) code_mode=\(.code_mode) allow_code_mode=\(.allow_code_mode) servers=\(.servers | length)"' <<<"$res" \
-  || { echo "update returned success but the portal's switches are not the ones sent; verify by hand" >&2; exit 1; }
+           and .allow_code_mode == $want.allow_code_mode
+           and $after == $before)
+  | "applied: secure_web_gateway=\(.secure_web_gateway) code_mode=\(.code_mode) allow_code_mode=\(.allow_code_mode) mappings=\($after | join(","))"' <<<"$res" \
+  || { echo "update returned success but the portal does not match: either a switch is not the one sent, or a server mapping was lost across the write (those mappings carry the tool allowlists of mctl-telegram, mctl-api and seerrsense -- compare them before touching anything else)" >&2; exit 1; }
