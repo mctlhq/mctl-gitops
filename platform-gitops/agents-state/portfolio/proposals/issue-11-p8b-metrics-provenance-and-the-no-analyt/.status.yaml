@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-09-11T12:10:26Z'
+status: review-stuck
+updated_at: '2026-09-11T12:26:11Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -17,4 +17,7 @@ attempt:
   expires_at: '2026-09-11T13:28:20Z'
   finished_at: '2026-09-11T11:40:16Z'
 pr: https://github.com/mctlhq/portfolio/pull/36
-review_attempts: 2
+review_attempts: 3
+notes: Follow-up failed deterministically 3 time(s) (implementer follow-up exited
+  non-zero (42) for portfolio/issue-11-p8b-metrics-provenance-and-the-no-analyt);
+  human triage required.
