@@ -147,25 +147,62 @@ def problems(docs: list[dict]) -> list[str]:
             "expected exactly one (a later duplicate silently overrides the first)"
         )
     else:
-        entries = ca_sources[0].get("spec", {}).get("data") or []
-        published = [e.get("secretKey") for e in entries]
-        if CA_KEY not in published:
+        spec = ca_sources[0].get("spec") or {}
+
+        # metadata.name is not what Traefik looks up -- target.name is the
+        # Secret ESO actually creates. If they diverge, Traefik finds nothing,
+        # the TLSOption cannot be built, and the origin quietly stops
+        # enforcing. Absent means "same as the ExternalSecret", which is fine.
+        target = (spec.get("target") or {}).get("name", CA_SECRET_NAME)
+        if target != CA_SECRET_NAME:
+            found.append(
+                f"ExternalSecret/{CA_SECRET_NAME} creates a Secret named {target!r}; "
+                f"the TLSOption looks up {CA_SECRET_NAME!r} and would find nothing"
+            )
+
+        entries = spec.get("data") or []
+        matching = [e for e in entries if e.get("secretKey") == CA_KEY]
+        if not matching:
+            published = [e.get("secretKey") for e in entries]
             found.append(
                 f"ExternalSecret/{CA_SECRET_NAME} does not produce the {CA_KEY!r} key "
                 f"(produces {published!r}); Traefik ignores any other key silently and "
                 "would verify nothing"
             )
+        elif len(matching) > 1:
+            # Same last-wins hazard as duplicate objects, one level down: ESO
+            # walks the list in order, so a second entry for the same key
+            # decides what the CA actually is.
+            found.append(
+                f"ExternalSecret/{CA_SECRET_NAME} defines {CA_KEY!r} {len(matching)} times; "
+                "expected exactly one (a later entry overrides the earlier)"
+            )
         else:
             # Where the CA comes from matters as much as what it is called: the
             # same key name sourced from somewhere else is a different CA.
-            entry = next(e for e in entries if e.get("secretKey") == CA_KEY)
-            ref = entry.get("remoteRef") or {}
+            ref = matching[0].get("remoteRef") or {}
             if (ref.get("key"), ref.get("property")) != (VAULT_PATH, VAULT_PROPERTY):
                 found.append(
                     f"ExternalSecret/{CA_SECRET_NAME} sources {CA_KEY!r} from "
                     f"{ref.get('key')!r}/{ref.get('property')!r}, expected "
                     f"{VAULT_PATH!r}/{VAULT_PROPERTY!r}"
                 )
+
+    # A hand-written Secret of the same name in the same chart fights ESO for
+    # ownership: whichever wrote last decides which CA Traefik trusts, and it
+    # flaps. The CA has exactly one source, and it is Vault.
+    literal = [
+        d
+        for d in docs
+        if d.get("kind") == "Secret"
+        and d.get("metadata", {}).get("name") == CA_SECRET_NAME
+        and d.get("metadata", {}).get("namespace") == NAMESPACE
+    ]
+    if literal:
+        found.append(
+            f"the chart also renders a plain Secret/{CA_SECRET_NAME} in {NAMESPACE}; "
+            "it would race the ExternalSecret for ownership and could replace the CA"
+        )
 
     return found
 
@@ -193,6 +230,21 @@ spec:
       remoteRef:
         key: {VAULT_PATH}
         property: {VAULT_PROPERTY}
+"""
+
+
+DUPLICATE_CA_ENTRY = f"""    - secretKey: {CA_KEY}
+      remoteRef:
+        key: platform/somewhere-else
+        property: {VAULT_PROPERTY}
+"""
+
+LITERAL_SECRET = f"""---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {CA_SECRET_NAME}
+  namespace: {NAMESPACE}
 """
 
 
@@ -256,6 +308,24 @@ def selftest() -> int:
             "TLSOption moved out of the traefik namespace",
             GOOD_OPTION.replace(f"namespace: {NAMESPACE}", "namespace: default"),
             GOOD_CA_SOURCE,
+            1,
+        ),
+        (
+            "ExternalSecret creates a Secret under a different name",
+            GOOD_OPTION,
+            GOOD_CA_SOURCE.replace("  data:", "  target:\n    name: something-else\n  data:"),
+            1,
+        ),
+        (
+            "tls.ca defined twice, the second sourced from elsewhere",
+            GOOD_OPTION,
+            GOOD_CA_SOURCE + DUPLICATE_CA_ENTRY,
+            1,
+        ),
+        (
+            "a plain Secret claims the same name",
+            GOOD_OPTION,
+            GOOD_CA_SOURCE + LITERAL_SECRET,
             1,
         ),
     ]
