@@ -28,9 +28,16 @@
 # script's GET and its PUT would be silently reverted, and the API would
 # answer 200. Not sending the field cannot lose that race.
 #
-# `allow_code_mode` is pinned in the file but never sent: the API refuses a
-# disagreeing pair (`7001: code_mode and allow_code_mode disagree. Send only
-# code_mode, or a consistent pair.`) and asks for exactly this shape.
+# Both Code Mode fields are sent, as a pair the shape check has already
+# proved consistent. The API refuses only a *disagreeing* pair -- measured:
+# `{code_mode:"off", allow_code_mode:true}` answers `7001: code_mode and
+# allow_code_mode disagree. Send only code_mode, or a consistent pair.`,
+# while the agreeing pair is accepted. Sending both is what makes the write
+# converge: on a portal someone left at `opt_in`/`true`, a `code_mode`-only
+# write would leave the stored `allow_code_mode` true under the merge
+# semantics above, so `--check` would stay red on it and the apply could
+# never settle. Stating both values removes the question of whether the API
+# recomputes the second one, which is not something this script has measured.
 #
 # The token never appears on a command line: curl reads it from a config
 # handed over a file descriptor, so it is in neither the process table nor
@@ -132,7 +139,7 @@ if [ "$mode" = check ]; then
   exit 0
 fi
 
-body=$(jq -c '{secure_web_gateway, code_mode}' <<<"$vetted")
+body=$(jq -c '{secure_web_gateway, code_mode, allow_code_mode}' <<<"$vetted")
 
 if [ "$mode" = dry-run ]; then
   if [ -n "$drift" ]; then echo "would change:"; echo "$drift"; else echo "no change"; fi
@@ -150,8 +157,8 @@ fi
 servers_before=$(jq -cS '[.result.servers // [] | .[] | .server_id] | sort' <<<"$current")
 
 res=$(cf -X PUT "$base/portals/$portal" --data "$body" | must_succeed "update portal")
-# The response must carry the switches that were sent, the pinned
-# allow_code_mode the API derives from code_mode, and the mappings unchanged.
+# The response must carry the three switches that were sent, and no mapping
+# may have gone missing.
 # A portal that accepted the call and stored something else would otherwise
 # read as a clean apply, which is the whole failure this script exists to
 # make impossible.

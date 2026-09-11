@@ -24,10 +24,14 @@ becomes a resource and the script goes away.
   Gateway switch: it means the portal grew an execution surface nobody
   decided on. `code_mode` is one of `off`, `opt_in`, `default_on`,
   `enforced`, and defaults to `opt_in` when omitted on create — leaving it
-  unpinned is not the same as leaving it off. The two fields must agree; the
-  script refuses a file where they do not, and sends only `code_mode`,
-  because the API answers `7001: code_mode and allow_code_mode disagree.
-  Send only code_mode, or a consistent pair.` Measured, not inferred.
+  unpinned is not the same as leaving it off. The two fields must agree: the
+  API answers `7001: code_mode and allow_code_mode disagree. Send only
+  code_mode, or a consistent pair.` — measured, not inferred — so the script
+  refuses a file where they do not, and then sends the pair. Sending both is
+  what makes an apply converge on a portal someone left at `opt_in`: naming
+  only `code_mode` would leave the stored `allow_code_mode` true under the
+  merge semantics below, and `--check` would stay red on a field the apply
+  had no way to settle.
 - `portal` and `hostname` — the address. The script refuses a file naming a
   different portal: this file writes to a shared surface, and a retargeted
   file would rewrite a mapping this repository does not own.
@@ -43,7 +47,8 @@ keeps its stored value. Measured against the live portal — a write omitting
 `description` left it intact, and a write omitting `servers` left all three
 upstream mappings at 74/5/30 tools with `default_disabled` untouched.
 
-So the script sends `secure_web_gateway` and `code_mode` and nothing else.
+So the script sends `secure_web_gateway` and the two Code Mode fields, and
+nothing else.
 That is not tidiness. `servers` carries the tool allowlists owned by
 `mctl-telegram`, `mctl-api` and `seerrsense`, and sending it back as read
 would make every apply a read-modify-write over their state: an allowlist

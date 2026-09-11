@@ -162,8 +162,9 @@ def main():
         # The write carries only the fields this file owns. `servers` holds
         # the tool allowlists of three other repositories; a body that sent
         # them back would be a read-modify-write over somebody else's state.
-        check("the write carries only the two fields the file owns",
-              sent is not None and set(sent) == {"secure_web_gateway", "code_mode"},
+        check("the write carries only the fields the file owns",
+              sent is not None and set(sent) == {"secure_web_gateway", "code_mode",
+                                                 "allow_code_mode"},
               json.dumps(sent)[:200])
         # The quiet direction of a two-valued signal. It is missing from a
         # suite that only ever asserts refusals, and its absence is what let
@@ -221,6 +222,25 @@ def main():
         check("an allowlist applied during the write is not reverted",
               p.returncode == 0 and len(tg["updated_tools"]) == 3,
               f"rc={p.returncode} {json.dumps(tg)[:200]} {p.stderr[:150]}")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        # Someone turned Code Mode on in the dashboard. The apply has to
+        # bring both fields back, and then agree that it did: a write naming
+        # only code_mode would leave the stored allow_code_mode true under
+        # this endpoint's merge semantics, the response check would reject
+        # its own successful write, and --check would stay red forever.
+        root = fixture(tmp)
+        drifted = dict(LIVE, code_mode="opt_in", allow_code_mode=True)
+        p, sent = run(root, live=drifted)
+        state = json.loads((root / "portal-state.json").read_text())
+        check("an apply converges on a portal left at opt_in",
+              p.returncode == 0 and state["code_mode"] == "off"
+              and state["allow_code_mode"] is False,
+              f"rc={p.returncode} {json.dumps({k: state.get(k) for k in ('code_mode', 'allow_code_mode')})} {p.stderr[:150]}")
+        q, _ = run(root, "--check", live=drifted, keep_state=True)
+        check("--check is quiet once the apply has converged",
+              q.returncode == 0 and "in sync" in q.stdout,
+              f"rc={q.returncode} {(q.stdout + q.stderr)[:200]}")
 
     with tempfile.TemporaryDirectory() as tmp:
         root = fixture(tmp)
