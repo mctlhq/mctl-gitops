@@ -1,180 +1,171 @@
 # Tasks: issue-7-p5-work-page-with-project-entries
 
-- [ ] 1. Add the seven new entries to `src/i18n/ui.ts` (`workTitle`,
-  `workGroupPlatform`, `workGroupProducts`, `workRepoLabel`,
-  `workMetricsLabel`, `chipDesignTokens`, `chipUpstreamFork`) with the exact
-  strings from `requirements.md`, plus the `CHIP_TRANSLATIONS` map and the
-  `chipRu(chip)` export built from `ui.chipDesignTokens` and
-  `ui.chipUpstreamFork`. Edit no existing entry.
-  — DoD: `npm test` passes `test/ui.test.ts` unchanged; `chipRu('design tokens')`
-  returns `дизайн-токены`, `chipRu('Go')` returns `undefined`.
+- [ ] 1. Make `repo` optional in `src/content.config.ts`: change
+      `repo: githubUrl` to `repo: githubUrl.optional()` inside
+      `projectsSchema`. Leave `checkProjectParity` alone — its
+      `en[0].data.repo === ru[0].data.repo` comparison is already correct when
+      both sides are `undefined`. — DoD: `npm run check` passes with the
+      existing `mctl-api` pair, and a project file with no `repo:` line no
+      longer fails validation.
 
-- [ ] 2. Add `src/lib/projects.ts` with `ProjectFrontmatter`, `ProjectPair`,
-  `pairByLang`, `inGroup`, `repoLinkText` and `chipLabel` as specified in
-  `design.md` (depends on 1) — DoD: the module imports nothing but
-  `../i18n/ui`, so `node --test` loads it with no build step; `pairByLang`
-  throws naming the slug when a language is missing or duplicated; `inGroup`
-  returns a new array sorted by `order` ascending and does not mutate its
-  input; `chipLabel` returns `{ en: chip, ru: chip }` for an unregistered chip.
+- [ ] 2. Extend `src/i18n/ui.ts` (depends on nothing). Add to the `ui` object
+      the five `{ en, ru }` string pairs listed in `requirements.md` ->
+      "Interface strings added to `src/i18n/ui.ts`": `workGroupPlatform`,
+      `workGroupProducts`, `workDetailsSummary`, `workMetricsLabel`,
+      `workPageTitle`. Add `stackChipRu` as a **separate named export outside
+      the `ui` object** with exactly the two entries `'design tokens'` and
+      `'upstream fork'`. — DoD: `npm test` passes (`test/ui.test.ts` iterates
+      only `Object.entries(ui)`, so `stackChipRu` must not be a `ui` key), and
+      `npm run check` reports no type error.
 
-- [ ] 3. Add `perRepo(metrics, slug)` and the `MetricPerRepo` interface to
-  `src/lib/metrics.ts`, reading `sources.github.per_repo[slug]` defensively and
-  yielding `null` for any missing level or non-integer value. Change no existing
-  export and do not edit `src/data/metrics.json`.
-  — DoD: `perRepo(JSON.parse(readFileSync('src/data/metrics.json')), 'mctl-api')`
-  returns `{ commits: null, releases: null }`; `metricProblems` on the real
-  snapshot still returns `[]`.
+- [ ] 3. Write the fourteen `src/content/projects/<slug>.en.md` files (depends
+      on 1). Frontmatter fields, `stack`, `summary` and the bullet body are
+      copied character for character from the copy tables in
+      `requirements.md`. `order` is the global 1..14 number given there;
+      `group` is `platform` for 1-6 and `product` for 7-14;
+      `repo` is `https://github.com/mctlhq/<slug>` except
+      `pelican-libertex-social`
+      (`https://github.com/mashkoffdmitry/pelican-libertex-social`) and
+      `pfeifenpatenschaft-backend` (**no `repo` field at all**). Rewrite the
+      existing `mctl-api.en.md` to the issue's stack and summary, keeping its
+      `links` entry for `https://docs.mctl.ai`. Write each file directly, never
+      through a shell `echo`/`sed` pipeline, so em dashes and typographic
+      apostrophes survive. — DoD: fourteen `*.en.md` files exist; each body is a
+      markdown bullet list whose items match the EN detail bullets exactly.
 
-- [ ] 4. Write the fourteen project content pairs under
-  `src/content/projects/` — twenty-six new files plus a rewrite of
-  `mctl-api.en.md` and `mctl-api.ru.md` — with the frontmatter (`slug`, `lang`,
-  `name`, `group`, `order`, `repo`, `stack`, `summary`) and markdown bodies
-  reproduced character for character from the "Exact project copy" section of
-  `requirements.md`. Keep `mctl-api`'s existing `links` block. Use
-  `https://github.com/mashkoffdmitry/pelican-libertex-social` for project 12 and
-  `https://github.com/mctlhq/<slug>` for the other thirteen.
-  — DoD: `npm run check` (`astro sync && astro check`) passes, meaning all
-  twenty-eight files satisfy the `projectsSchema` `strictObject` and
-  `checkProjectParity`; `src/content/projects/` contains exactly 28 files;
-  every RU summary and body contains Cyrillic and no EN one does.
+- [ ] 4. Write the fourteen `src/content/projects/<slug>.ru.md` files (depends
+      on 3). Same `slug`, `name`, `group`, `order`, `repo` (or its absence) and
+      **byte-identical `stack` array** as the English file — `checkProjectParity`
+      compares `stack` with `JSON.stringify` and fails the build on any
+      difference. `summary` and the body are the RU strings from
+      `requirements.md`; `links[].label` is the Russian label where a link has
+      one (`Документация` for `mctl-api`). — DoD: `npm run check` passes, and
+      `astro dev` + `/dev/collections` reports `projects: 28`.
 
-- [ ] 5. Add `src/components/ProjectCard.astro` as specified in `design.md`
-  (depends on 2, 3, 4) — DoD: the root element is
-  `<details class="block card">` with no `open` attribute; the `<summary>`
-  contains an `<h3>` with `project.name`, a `<Lang>` pair for the summary and
-  one `<span class="chip">` per `stack` element produced by
-  `project.stack.map(...)`; the body contains `<div class="l en">` and
-  `<div class="l ru" lang="ru">` wrapping the two `render()`ed `<Content />`
-  components, the repository link, any `links` entries, and the two
-  `formatStat(perRepo(...))` metric values; the file contains no chip string
-  literal, no digit outside `<h3>`, and no `tabindex`, `role` or `on*`
-  attribute.
+- [ ] 5. Create `src/components/ProjectCard.astro` (depends on 2). Props
+      `{ en, ru }` as `CollectionEntry<'projects'>`; `const { Content: BodyEn }
+      = await render(en)` and the same for `ru`, with `render` imported from
+      `astro:content`. Markup per `design.md` section 2: `<article
+      class="project" id={slug}>`, `<h3 class="project-name">`, a
+      `<Lang>`-paired summary, `<ul class="chips">` built from
+      `en.data.stack.map(...)` with `stackChipRu[chip] ?? chip` on the Russian
+      side, and `<details class="block project-details">` holding the two
+      rendered bodies as an `.l.en` / `.l.ru` pair, the links list, and the
+      metrics line with a named `metrics` slot whose fallback is
+      `formatStat(null)`. Render the repository anchor only when
+      `en.data.repo` is defined, with the link text derived from the URL
+      (`host + path`). Do not add `tabindex`, `role` or any script. — DoD: no
+      chip, project name, summary or URL appears as a literal in the component;
+      `npm run check` passes.
 
-- [ ] 6. Add `src/pages/work.astro` as specified in `design.md` (depends on 1,
-  2, 5) — DoD: `npm run build` emits `dist/work/index.html`; the page renders
-  `<h1>` from `ui.navWork`, two `<section class="work-group">` elements with
-  `<h2>` headings from `ui.workGroupPlatform` then `ui.workGroupProducts`, and
-  fourteen `<details>` elements — six then eight — in the order listed in
-  `requirements.md`; the page adds no `<script>`.
+- [ ] 6. Create `src/pages/work.astro` (depends on 4, 5). `getCollection('projects')`,
+      split by `lang`, index the Russian entries by `slug`, filter by `group`
+      and sort by `data.order`; render `<Base title={ui.workPageTitle.en}>`, an
+      `<h1>` with the existing `ui.navWork` pair, then two `<section>` blocks
+      (Platform, then Products) each with an `<h2>` `<Lang>` pair and its
+      `ProjectCard` list. — DoD: `npm run build` emits `dist/work/index.html`
+      containing 14 `<article class="project"` occurrences, 6 in the first
+      section and 8 in the second, in the order listed in `requirements.md`.
 
-- [ ] 7. Append the card rules to `src/styles/site.css` (`.work-group`,
-  `.card-name`, `.card-summary`, `.chips`, `.chip`, `.card-links`,
-  `.card-metrics`, `.card-metric-value`) without editing any existing rule, then
-  run `npm run vendor` and commit the regenerated `public/styles/site.css`
-  (depends on 5, 6) — DoD: `git status` shows both files modified; no added
-  rule references `--font-editorial`; `.card-links a` has
-  `min-block-size: 44px`; the `@media print` block is unchanged.
+- [ ] 7. Add the `/* Work page. */` block to `src/styles/site.css` (depends on
+      5). `.project`, `.project-name`, `.project-summary`, `.chips`, `.chip`,
+      `.project-links`, `.project-metrics`, using the existing
+      `--mctl-space-*`, `--mctl-radius-*` and `--surface-*` tokens. Reuse the
+      existing `.block` class on the card's `<details>` so the 44px summary
+      target and the print rules apply. `--font-editorial` must not appear in
+      any new selector. Keep the two rendered-body wrappers as **direct**
+      children of the `<details>` so the existing print override
+      `:root[data-lang='en'] .block > .l.ru` still matches. — DoD:
+      `grep -c 'font-editorial' src/styles/site.css` is unchanged from `main`
+      (one occurrence, `.hero-name`), and `npm run vendor` regenerates
+      `public/styles/site.css` with the new rules committed.
 
-- [ ] 8. Repoint `src/components/Nav.astro`'s Work link from `/#work` to
-  `/work/` (depends on 6) — DoD: exactly one line changes in that file; the
-  Approach link still reads `/#approach`; `npm test` still passes
-  `test/home.test.ts`.
+- [ ] 8. Repoint `src/components/Nav.astro` from `href="/#work"` to
+      `href="/work/"` (depends on 6). Leave `/#approach` untouched. — DoD: the
+      nav item resolves to the new page from every page of the site.
 
-- [ ] 9. Register `test/projects.test.ts` and `test/work.test.ts` in the `test`
-  script of `package.json` (depends on 10, 11) — DoD: `npm test` output names
-  both files and reports zero failures; no other `package.json` field changes.
+- [ ] 9. Run the full local gate (depends on 6, 7, 8): `npm run check`,
+      `npm test`, `npm run build`, `node scripts/check-dist.mjs`. — DoD: all
+      four succeed; `check-dist` reports equal `class="l en"` and
+      `class="l ru"` counts for `dist/work/index.html` and no `.js` under
+      `dist/`.
 
-- [ ] 10. Run the link check and record it: build, extract every `href` from
-  `dist/work/index.html`, request each one, and print the URL and HTTP status.
-  Paste the script and its full output into the pull request description
-  (depends on 6) — DoD: every status is 200. If `https://docs.mctl.ai` is not
-  200, remove the `links` block from both `mctl-api` files, rebuild, re-run, and
-  state the removal in the description.
+- [ ] 10. Write the link-check script and paste it with its output into the
+      pull request description (depends on 9). It extracts every `href` from
+      `dist/work/index.html`, resolves site-relative paths against the deployed
+      origin, requests each URL and prints `url -> status`. Do **not** commit it
+      into `npm test`: CI must not depend on network reachability. — DoD: the
+      PR description carries the script and a run where every line ends in
+      `200`, including the absence of any `pfeifenpatenschaft-backend` URL.
 
-- [ ] 11. Verify the no-JavaScript and keyboard path by hand and record it in
-  the pull request description (depends on 6, 7) — DoD: the description states
-  that with JavaScript disabled a card was opened and closed with Tab plus
-  Enter and with Tab plus Space, that the focus ring was visible on the
-  `<summary>`, and that a HAR capture of `/work/` shows same-origin requests
-  only. It also records the byte size of `dist/work/index.html`.
+- [ ] 11. Add the journal entry
+      `src/content/journal/2026-09-11-work-page.md` (depends on 9), per
+      AGENTS.md: `service: portfolio`, `issue:` the issue URL,
+      `proposal_slug: issue-7-p5-work-page-with-project-entries`,
+      `visibility: public`, bilingual `title` and `decided`, `issue_opened_at`
+      and `proposal_approved_at`. Do not hand-write lead time or intervention
+      counts — they are computed at build time. — DoD: `npm run check` passes
+      with the new entry and its frontmatter validates against the `journal`
+      schema.
+
+- [ ] 12. Open the pull request from a branch (never commit to `main`), with a
+      conventional-commit title (`feat: add the work page with project
+      entries`) and a body listing each acceptance criterion with the evidence
+      for it. — DoD: the `build` workflow is green and the automated reviewer
+      has run.
 
 ## Tests
 
-- [ ] T1. `test/projects.test.ts` — unit tests for `src/lib/projects.ts`:
-  `pairByLang` pairs a two-entry fixture and hoists `group`, `order`, `repo`,
-  `stack`, `name`; throws naming the slug for an `en`-only fixture, for a
-  `ru`-only fixture, and for a duplicated language; `inGroup` returns only the
-  requested group, sorted by `order` ascending, and leaves the input array
-  order untouched; `repoLinkText('https://github.com/mctlhq/mctl-api')` returns
-  `github.com/mctlhq/mctl-api`; `chipLabel('design tokens')` returns
-  `{ en: 'design tokens', ru: 'дизайн-токены' }` and `chipLabel('Telegram Mini App')`
-  returns the same string on both sides.
+- [ ] T1. `test/projects.test.ts` — reads the files under
+      `src/content/projects/` as text (no YAML dependency; follow the
+      source-reading style of `test/home.test.ts`). Asserts: 28 files, 14
+      distinct slugs matching the list in `requirements.md`; every slug has
+      exactly one `.en.md` and one `.ru.md`; `lang:` in each file matches its
+      filename suffix; 6 files per language carry `group: platform` and 8 carry
+      `group: product`; the `order:` values are 1..14 once per language;
+      `pfeifenpatenschaft-backend.{en,ru}.md` contain no `repo:` line; every
+      other `repo:` value matches
+      `^https://github\.com/(mctlhq|mashkoffdmitry)/<slug>$`.
 
-- [ ] T2. `test/projects.test.ts` — content-file sweep over
-  `src/content/projects/`, done with `readdir`/`readFileSync` only (no
-  `astro:content`, which `node --test` cannot load): exactly 28 files matching
-  `*.{en,ru}.md`; the fourteen expected slugs each have both files; each file's
-  frontmatter `lang:` value matches its filename suffix; each `*.ru.md`
-  `summary:` line and body contain at least one Cyrillic character
-  (`/[Ѐ-ӿ]/`) and no `*.en.md` summary or body does; every `repo:`
-  line matches `^https://github\.com/`.
+- [ ] T2. `test/projects.test.ts` — for each slug, the `stack:` line is
+      byte-identical between the `.en.md` and `.ru.md` file (the same invariant
+      `checkProjectParity` enforces at build time, surfaced as a fast unit
+      failure with a readable message).
 
-- [ ] T3. `test/work.test.ts` — source assertions on
-  `src/pages/work.astro`: it imports `getCollection` from `astro:content` and
-  `ProjectCard`; it renders exactly two `<section class="work-group">`
-  occurrences (or one, produced by a two-element data array — assert the group
-  array has exactly two entries); its group headings come from
-  `ui.workGroupPlatform` and `ui.workGroupProducts`; it contains no `<script`.
+- [ ] T3. `test/work.test.ts` — reads `src/pages/work.astro` and
+      `src/components/ProjectCard.astro` as text. Asserts: `ProjectCard`
+      derives chips from `en.data.stack` and contains none of the chip literals
+      (`TypeScript`, `PostgreSQL`, `Go`, `design tokens`, `upstream fork`, ...);
+      neither file contains `--font-editorial`; neither file contains
+      `tabindex`; `work.astro` sorts on `data.order`; `work.astro` imports
+      `ProjectCard` and `getCollection`.
 
-- [ ] T4. `test/work.test.ts` — source assertions on
-  `src/components/ProjectCard.astro`: it contains `<details` and `<summary`; it
-  contains no `open=`, `tabindex`, `role=` or `on` + `click`; chips are rendered
-  by a `.map(` over `stack`; the file contains none of the twenty-two distinct
-  chip strings from the fourteen stack arrays as a literal (acceptance
-  criterion 4); it contains `class="l en"` and `class="l ru"` exactly as many
-  times as each other; it references `formatStat` and `perRepo` and contains no
-  numeric literal other than inside the `<h3>`/`</h3>` tag names.
+- [ ] T4. `test/ui.test.ts` (existing, unmodified) must still pass, proving
+      `stackChipRu` was exported outside the `ui` object.
 
-- [ ] T5. `test/work.test.ts` — typography guard: the rules added to
-  `src/styles/site.css` for `.card*`, `.chip*` and `.work-group` contain no
-  `--font-editorial` reference, so no Instrument Serif can carry Russian text
-  (constraint carried from #4).
+- [ ] T5. Wire T1-T3 into the `test` script in `package.json` by appending the
+      new files to the `node --test` argument list. A test nothing invokes is
+      not a test (AGENTS.md); `.github/workflows/build.yml` already runs
+      `npm test` and needs no change.
 
-- [ ] T6. `test/work.test.ts` — version-drift guard: the body of
-  `src/content/projects/mctl-design.en.md` contains the `MCTL_VERSION` value
-  parsed out of `scripts/vendor-assets.mjs`, and the body of
-  `mctl-design.ru.md` contains the same value. This is the one version number
-  the issue's copy types into content; the test keeps it from drifting from the
-  version actually vendored.
-
-- [ ] T7. `test/metrics.test.ts` — extend with `perRepo`: returns
-  `{ commits: null, releases: null }` for the real `src/data/metrics.json`, for
-  an unknown slug against a fixture that does have `per_repo`, and for a
-  fixture whose `per_repo` value is a string or a negative number; returns the
-  integers when the fixture supplies valid non-negative ones; returns `0` rather
-  than `null` for a zero value, so `formatStat` renders `0`.
-
-- [ ] T8. Build gates, run as one step: `npm run check`, `npm test`,
-  `npm run build`, then `node scripts/check-dist.mjs` and
-  `node scripts/csp-hash.mjs`. DoD: `check-dist` reports equal
-  `class="l en"` / `class="l ru"` counts for `dist/work/index.html` and no
-  `.js` anywhere under `dist/`; `csp-hash` still prints exactly one hash and
-  reports one distinct inline script body under the 400-byte budget; the CSP
-  placeholder in `nginx.conf` needs no update because the hash is unchanged.
+- [ ] T6. Manual check recorded in the PR description: with JavaScript disabled,
+      `/work/` renders the English content and every card expands; tabbing
+      reaches each `<summary>` with a visible focus ring and Enter and Space
+      both toggle it; a HAR capture of `/work/` shows same-origin requests only.
 
 ## Rollback
 
-The change is additive and confined to `src/`, `public/styles/site.css` and
-`package.json`'s `test` script. No database, no schema, no snapshot, no
-infrastructure.
+The change is additive and self-contained; nothing is deployed or migrated
+until the release workflow runs.
 
-1. **Before merge.** Close the pull request and delete the branch. `main` is
-   untouched: `/work/` returns the 404 page again, exactly as today.
-2. **After merge, before release.** Revert the merge commit on a branch and
-   merge the revert through the normal gate. Because
-   `src/pages/index.astro`, `Base.astro`, `Details.astro`, `Stat.astro`,
-   `Lang.astro`, `src/content.config.ts`, `src/data/metrics.json`,
-   `nginx.conf`, `Dockerfile` and the three scripts are never edited, the
-   revert cannot conflict with anything but its own files. `Nav.astro`'s Work
-   link returns to `/#work` with the revert.
-3. **After release and deploy.** `mctl_rollback_service team_name=<team>
-   component_name=portfolio target_tag=<previous tag>` — the previous image
-   still serves every route this change does not add, and `/work/` reverts to
-   the 404 page. Then revert on `main` as in step 2 so the next release does not
-   reintroduce the change.
-4. **Partial rollback.** If only the metrics row is at fault (for example P8b
-   lands a `per_repo` shape that renders something wrong), delete the
-   `.card-metrics` block from `src/components/ProjectCard.astro` and the
-   `perRepo` call above it; the cards keep working with no other change, because
-   `perRepo` has no other caller. If only one project's copy is wrong, edit that
-   slug's two files — no other project and no template is involved.
+- Before merge: close the pull request. `main` is untouched.
+- After merge, before release: revert the merge commit
+  (`git revert -m 1 <sha>`) on a branch and merge that. This removes
+  `src/pages/work.astro`, `src/components/ProjectCard.astro`, the 28 project
+  files, the `site.css` block, the `ui.ts` additions, the `Nav.astro` href and
+  the `repo` optionality in one step. The home page CTA then points at `/work/`
+  again with no page behind it — the state `main` is in today — so the revert
+  should be followed by re-running this proposal rather than left standing.
+- After release and deploy: `mctl_rollback_service` with the previous image tag
+  for the `portfolio` service, then revert as above. No data, secret or gitops
+  value is involved, so there is nothing else to undo.

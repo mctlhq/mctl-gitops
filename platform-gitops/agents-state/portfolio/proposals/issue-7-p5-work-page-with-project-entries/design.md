@@ -2,497 +2,288 @@
 
 ## Current state
 
-### Routing and layout
+**Routes.** `src/pages/` holds `index.astro`, `404.astro` and
+`dev/[check].astro`. The dev route's `getStaticPaths` returns `[]` outside
+`astro dev`, so a production build emits only `dist/index.html` and
+`dist/404.html`. There is no `/work/` route, yet `src/pages/index.astro:31`
+already renders `<a class="cta" href="/work/">` and `test/home.test.ts` asserts
+that href exists. `src/components/Nav.astro:13` still links `/#work`, a
+fragment no element carries since P4 removed the placeholder sections
+(`test/home.test.ts` asserts `id="work"` is gone).
 
-`astro.config.mjs` sets `output: 'static'`, `trailingSlash: 'always'` and
-`build.inlineStylesheets: 'never'`. Pages live in `src/pages/`: `index.astro`,
-`404.astro` and the development-only `dev/[check].astro` whose
-`getStaticPaths` returns `[]` outside `astro dev`, so it never reaches `dist/`.
-There is no `src/pages/work.astro`, yet `src/pages/index.astro` renders
-`<a class="cta" href="/work/">` and `test/home.test.ts` asserts that link
-exists. `/work/` is therefore a known 404 today.
+**Content collection.** `src/content.config.ts` already defines a `projects`
+collection with a `strictObject` schema: `slug`, `lang` (`en` | `ru`), `name`,
+`group` (`platform` | `product`), `order`, `repo` (a **required**
+`https://github.com/...` string), `stack` (non-empty string array), `summary`
+(one line), and optional `links[] = { label, url }`. `projectsLoader()` wraps
+the glob loader for `*.{en,ru}.md` under `src/content/projects` and runs
+`checkProjectParity`, which requires exactly one `en` and one `ru` file per
+slug and requires the two to agree on `group`, `order`, `repo`, `stack` (by
+`JSON.stringify`) and the ordered list of `links[].url`. `name`, `summary`,
+`links[].label` and the body are allowed to differ per language. Only
+`mctl-api.en.md` / `mctl-api.ru.md` exist today, and their `stack` and
+`summary` differ from the copy this issue specifies.
 
-`src/layouts/Base.astro` owns the document: it hardcodes
-`<html lang="en" data-lang="en" data-theme="dark">`, carries the single inline
-preference script (`is:inline`, under the 400-byte budget that
-`scripts/csp-hash.mjs` enforces), links the five stylesheets from `public/`, and
-renders `<Nav />`, a `<slot />` and `<Footer />`. Its only prop is `title`.
+**Bilingual mechanism.** `src/i18n/Lang.astro` emits
+`<span class="l en">…</span><span class="l ru" lang="ru">…</span>`;
+`src/styles/site.css` hides one side per `:root[data-lang]`. The 400-byte
+inline script in `src/layouts/Base.astro` only flips `data-lang` /
+`data-theme`, so English renders with JavaScript disabled.
+`scripts/check-dist.mjs` walks `dist/` post-build and fails if any file ends in
+`.js`, if any HTML file's `class="l en"` count differs from its `class="l ru"`
+count, or if `dist/index.html` reaches 40 KB. It is invoked from the
+`Dockerfile` build stage, not from `npm test`.
 
-### Bilingual mechanism
+**Strings.** `src/i18n/ui.ts` exports one flat `ui` object of `{ en, ru }`
+pairs (values are strings or equal-length string arrays).
+`test/ui.test.ts` iterates `Object.entries(ui)` and requires every value to
+have `en` and `ru` of the same kind — so a nested lookup map cannot live inside
+`ui`.
 
-`src/i18n/Lang.astro` emits exactly
-`<span class="l en">{en}</span><span class="l ru" lang="ru">{ru}</span>`.
-`src/styles/site.css` hides the inactive half with
-`:root[data-lang='en'] .l.ru { display: none }` and its mirror. Every
-user-facing string lives in `src/i18n/ui.ts` as an `{ en, ru }` pair (or a pair
-of equal-length arrays); `test/ui.test.ts` walks `Object.entries(ui)` and
-asserts each entry has a non-empty `en` and `ru` **of the same kind**, so any
-new entry must be a string pair or an array pair — a lookup object keyed by
-something other than `en`/`ru` would fail that test.
+**Existing card-shaped components.** `src/components/Details.astro` wraps a
+native `<details class="block">` with a `<summary>` carrying a `<Lang>` pair and
+a `<slot />`. `src/components/Stat.astro` renders `formatStat(value)` from
+`src/lib/metrics.ts`, where `formatStat(null)` returns the `EM_DASH` constant.
+`src/styles/site.css` already styles `.block > summary` with
+`min-block-size: 44px; display: list-item`, a global `:focus-visible` outline,
+and a print rule that force-opens collapsed `.block` bodies while keeping the
+language pair correct.
 
-`scripts/check-dist.mjs` walks every `dist/**/*.html` and fails the build if the
-counts of the literal substrings `class="l en"` and `class="l ru"` differ in any
-file. It also fails on any `.js` file under `dist/` and caps `dist/index.html`
-at 40 KB. It needs no change for this issue: the parity and no-`.js` checks
-already cover a new page automatically, and the size cap is `index.html`-only.
+**Nobody renders a markdown body yet.** No page calls `render()` on a
+collection entry; ADRs and journal entries are validated but not yet displayed.
+`public/assets/mctl/prose.css` is already linked from `Base.astro`, so rendered
+markdown inherits prose styling without new CSS.
 
-### Content collections
-
-`src/content.config.ts` already defines the `projects` collection. Frontmatter
-is a `z.strictObject` with `slug` (`/^[a-z0-9-]+$/`), `lang` (`'en' | 'ru'`),
-`name`, `group` (`z.enum(['platform', 'product'])`), `order` (non-negative
-integer), `repo` (a `https://github.com/...` regex), `stack` (non-empty array of
-non-empty strings), `summary` (non-empty, refined to reject `\n`) and an
-optional `links` array of `{ label, url }`. `projectsLoader()` wraps the glob
-loader for `*.{en,ru}.md` with `generateId: idFromFile`, so entry ids are
-`mctl-api.en` and `mctl-api.ru`, and runs `checkProjectParity` over the whole
-store after sync: every slug needs exactly one `en` and one `ru` entry, and the
-two must agree on `group`, `order`, `repo`, `stack` (compared by
-`JSON.stringify`) and each `links[].url`. `name`, `summary`, `links[].label` and
-the body may differ.
-
-Two content files exist: `src/content/projects/mctl-api.en.md` and
-`mctl-api.ru.md`, with `order: 1`, `group: platform`, a six-element `stack`, and
-a `links` entry for `https://docs.mctl.ai`. Nothing renders them. No page in
-the repository calls `render()` on a collection entry yet — `/work/` is the
-first.
-
-### Metrics
-
-`src/data/metrics.json` currently holds `generated_at: null` and two sources
-(`github` with `repos`/`commits`/`releases`, `mctl` with
-`services`/`devloop_proposals`), every value `null`, `method: "placeholder"`.
-`src/lib/metrics.ts` is deliberately import-free so `node --test` can load it
-without a build step; it exports `EM_DASH`, `formatStat` (branching on
-`value === null`, never on falsiness, so a real `0` renders as `0`),
-`snapshotDate` and `metricProblems`. `metricProblems` validates only the keys it
-knows about and ignores unknown keys, so adding `sources.github.per_repo` later
-does not break it. `src/components/Stat.astro` wraps `formatStat` with a
-`<Lang>` label and a `data-stat` hook; `src/pages/index.astro` passes only
-`metrics.sources.*` expressions, which `test/home.test.ts` asserts by regex.
-
-### Styling
-
-`src/styles/site.css` is the source of truth (`npm run vendor` copies it to
-`public/styles/site.css`). Relevant existing rules:
-
-- `.block` — `border-top`, `padding-block`; `.block > summary` gets
-  `cursor: pointer`, `min-block-size: 44px`, `display: list-item`; `.block ul`,
-  `.block li`, `.block p` get spacing. These are the home page's `<details>`
-  blocks.
-- `:focus-visible { outline: var(--focus-ring-width) solid var(--focus-ring) }`
-  — a global focus ring, so a native `<summary>` is already visibly focusable.
-- The `@media print` block forces `.block > *:not(summary)` visible with
-  `display: block !important`, then re-hides the inactive language with the
-  higher-specificity `:root[data-lang='en'] .block > .l.ru` override. That
-  override only matches **direct** children of `.block`.
-- `--font-editorial`, `--font-display` and `--font-mono` come from the vendored
-  `@mctlhq/css` 0.5.0 (`public/assets/mctl/mctl.css`). `.hero-name` uses
-  `--font-editorial` (Instrument Serif); `AGENTS.md` and issue #4 record that
-  Instrument Serif ships no Cyrillic subset, so it must not carry translated
-  text. `public/assets/mctl/prose.css` scopes its editorial typography under
-  `.mctl-prose`, so it does not leak into unopted markup.
-
-### Gates
-
-`package.json` runs `prebuild: npm run vendor && npm test` and
-`test: node --test test/journal.test.ts test/adr.test.ts test/metrics.test.ts test/home.test.ts test/ui.test.ts`
-— a new test file is invisible to CI unless it is added to that list.
-`.github/workflows/build.yml` runs `npm ci` then `npm test`, then a Docker
-build. `AGENTS.md` explicitly declares `build.yml` **not** reserved, so touching
-it is allowed; this change does not need to.
+**Typography.** `site.css` uses `var(--font-editorial)` only on `.hero-name`;
+everything translated uses `var(--font-display)` (Onest). AGENTS.md records why:
+Instrument Serif ships no Cyrillic subset.
 
 ## Proposed solution
 
-Five files change and four are added. Nothing outside `src/` and
-`package.json`'s `test` script is touched.
+### 1. Make `repo` optional in the schema
 
-### 1. `src/lib/projects.ts` (new) — pairing, ordering, chip lookup
+In `src/content.config.ts`, change `repo: githubUrl` to
+`repo: githubUrl.optional()`. `checkProjectParity` compares
+`en[0].data.repo === ru[0].data.repo`, which already behaves correctly when
+both sides are `undefined`, so no change is needed there. This is the one
+schema change; it exists solely so `pfeifenpatenschaft-backend` — private, 404
+to anonymous visitors — can be listed without a link. The `type ProjectData`
+alias is inferred from the schema, so it follows automatically.
 
-An import-free-except-`ui` helper module, in the style of `src/lib/metrics.ts`
-and `src/lib/adr.ts`, so `node --test` can exercise it without Astro.
-`src/i18n/ui.ts` is itself import-free, so importing it keeps the module
-loadable by plain Node (`test/ui.test.ts` already imports it that way).
+### 2. `src/components/ProjectCard.astro`
 
-```ts
-export interface ProjectFrontmatter {
-  slug: string; lang: 'en' | 'ru'; name: string;
-  group: 'platform' | 'product'; order: number; repo: string;
-  stack: readonly string[]; summary: string;
-  links?: readonly { label: string; url: string }[];
-}
-
-export interface ProjectPair<T> {
-  slug: string; name: string; group: 'platform' | 'product';
-  order: number; repo: string; stack: readonly string[];
-  en: T; ru: T;
-}
-
-export function pairByLang<T extends { id: string; data: ProjectFrontmatter }>(
-  entries: readonly T[],
-): ProjectPair<T>[];
-
-export function inGroup<T>(
-  pairs: readonly ProjectPair<T>[], group: 'platform' | 'product',
-): ProjectPair<T>[];
-
-export function repoLinkText(repo: string): string;   // strips 'https://'
-export function chipLabel(chip: string): { en: string; ru: string };
-```
-
-- `pairByLang` groups by `data.slug`, throws a message naming every offending
-  slug when a language is missing or duplicated, and hoists the
-  loader-guaranteed-identical fields (`group`, `order`, `repo`, `stack`, `name`)
-  off the English entry. The duplicate check is deliberate belt-and-braces: it
-  makes the pairing total in the type system, so `ProjectPair.en` and `.ru` are
-  never `undefined` at the call site.
-- `inGroup` filters and returns a **new** array sorted by `order` ascending with
-  `slug` as a deterministic tiebreak; it must not sort the input array in place,
-  because the caller reuses it for the second group.
-- `chipLabel` is the only place chip translation lives. It reads a `Map` built
-  from the plain-word chip entries in `ui` (`chipDesignTokens`,
-  `chipUpstreamFork`) and returns `{ en: chip, ru: <mapped> ?? chip }`. The
-  fallback is what keeps `Go`, `chi`, `Telegram Mini App` and the rest
-  untranslated with no per-chip bookkeeping.
-- `repoLinkText` exists so the repository link's visible text is derived from
-  the `repo` field rather than typed, and is unit-testable.
-
-### 2. `src/i18n/ui.ts` — seven new entries
-
-`workTitle`, `workGroupPlatform`, `workGroupProducts`, `workRepoLabel`,
-`workMetricsLabel`, `chipDesignTokens`, `chipUpstreamFork`, with the exact
-strings fixed in `requirements.md`. All are `{ en, ru }` string pairs, so
-`test/ui.test.ts` passes unchanged. Below the `ui` object, a second export:
-
-```ts
-const CHIP_TRANSLATIONS: ReadonlyMap<string, string> = new Map(
-  [ui.chipDesignTokens, ui.chipUpstreamFork].map((e) => [e.en, e.ru]),
-);
-export function chipRu(chip: string): string | undefined { ... }
-```
-
-Building the map *from* the `ui` entries rather than beside them means the chip
-translations are still covered by `test/ui.test.ts`'s non-empty/same-kind sweep,
-and there is exactly one place a Russian chip string is written.
-
-The page heading reuses `ui.navWork`; the metrics row reuses `ui.statCommits`
-and `ui.statReleases`. No existing entry is edited.
-
-### 3. `src/lib/metrics.ts` — a forward-compatible `per_repo` reader
-
-Two additions, no change to any existing export:
-
-```ts
-export interface MetricPerRepo {
-  commits: number | null;
-  releases: number | null;
-}
-
-export function perRepo(metrics: unknown, slug: string): MetricPerRepo;
-```
-
-`perRepo` walks `sources.github.per_repo[slug]` entirely defensively — any
-missing or non-object level, and any value that is not a non-negative integer,
-yields `null` for that field. Against today's `src/data/metrics.json`, which has
-no `per_repo` key, it returns `{ commits: null, releases: null }`, which
-`formatStat` renders as `—`. `src/data/metrics.json` is **not** edited: P8b owns
-the snapshot's shape and the generator that fills it. `metricProblems` is left
-alone; it ignores unknown keys, so it neither rejects nor validates `per_repo`
-today, and P8b extends it when the shape is decided.
-
-This is what makes the metrics slot honest: the page displays a number the
-moment the snapshot carries one, and an em dash until then, with no number
-typed into a template — the rule in `AGENTS.md`.
-
-### 4. `src/components/ProjectCard.astro` (new)
-
-One native `<details>` per card, no client-side code:
+A single component that takes the **pair** of entries for one project, because
+every card interleaves English and Russian:
 
 ```astro
 ---
+import type { CollectionEntry } from 'astro:content';
 import { render } from 'astro:content';
 import Lang from '../i18n/Lang.astro';
-import { ui } from '../i18n/ui';
-import { chipLabel, repoLinkText, type ProjectPair } from '../lib/projects';
-import { formatStat, perRepo } from '../lib/metrics';
-import raw from '../data/metrics.json';
+import { ui, stackChipRu } from '../i18n/ui';
+import { formatStat } from '../lib/metrics';
 
-interface Props { project: ProjectPair<CollectionEntry<'projects'>> }
-const { project } = Astro.props;
-const { Content: ContentEn } = await render(project.en);
-const { Content: ContentRu } = await render(project.ru);
-const counts = perRepo(raw, project.slug);
-const enLinks = project.en.data.links ?? [];
-const ruLinks = project.ru.data.links ?? [];
+interface Props {
+  en: CollectionEntry<'projects'>;
+  ru: CollectionEntry<'projects'>;
+}
+
+const { en, ru } = Astro.props;
+const { Content: BodyEn } = await render(en);
+const { Content: BodyRu } = await render(ru);
+const repoLabel = en.data.repo?.replace(/^https:\/\//, '').replace(/\/$/, '');
 ---
-<details class="block card">
-  <summary>
-    <h3 class="card-name">{project.name}</h3>
-    <span class="card-summary">
-      <Lang en={project.en.data.summary} ru={project.ru.data.summary} />
-    </span>
-    <span class="chips">
-      {project.stack.map((chip) => {
-        const c = chipLabel(chip);
-        return <span class="chip"><Lang en={c.en} ru={c.ru} /></span>;
-      })}
-    </span>
-  </summary>
-  <div class="card-body">
-    <div class="l en"><ContentEn /></div>
-    <div class="l ru" lang="ru"><ContentRu /></div>
-    <ul class="card-links">
-      <li><a href={project.repo}>{repoLinkText(project.repo)}</a></li>
-      {enLinks.map((link, i) => (
-        <li><a href={link.url}><Lang en={link.label} ru={ruLinks[i]?.label ?? link.label} /></a></li>
-      ))}
-    </ul>
-    <div class="card-metrics">
-      <span class="card-metric">
-        <span class="card-metric-value">{formatStat(counts.commits)}</span>
-        <span class="card-metric-label"><Lang en={ui.statCommits.en} ru={ui.statCommits.ru} /></span>
-      </span>
-      <span class="card-metric"> ... releases ... </span>
-    </div>
-  </div>
-</details>
 ```
 
-Why each part is the way it is:
+Markup, in order:
 
-- **`render()` inside the component, not the page.** Astro component
-  frontmatter supports top-level `await`, so each card resolves its own two
-  bodies and `work.astro` stays a list of `<ProjectCard>` elements. The
-  alternative — resolving all twenty-eight in `work.astro` and threading
-  component references through props — spreads the concern across two files for
-  no gain.
-- **`class="block card"`, not `class="card"`.** This reuses every existing
-  `.block` rule, including the whole `@media print` treatment, unchanged. The
-  print rule `.block > *:not(summary) { display: block !important }` forces the
-  single `.card-body` open, and because `.l.en` / `.l.ru` are its *children*
-  rather than direct children of `.block`, the ordinary language-toggle rules
-  (no `!important` on either side) still hide the inactive language. No print
-  CSS changes, and the comment in `src/styles/site.css` explaining that
-  override stays accurate.
-- **Chips are `<span>`s, not a `<ul>`.** The HTML content model for `<summary>`
-  is phrasing content optionally intermixed with heading content; a `<ul>` is
-  neither, so it would make the document invalid. Spans are phrasing content.
-  The `<h3>` is allowed as heading content and gives the page a real outline
-  (`h1` Work, `h2` group, `h3` project).
-- **No chip literal in the template.** The chips come from
-  `project.stack.map(...)`, and their Russian side comes from `chipLabel`, whose
-  data lives in `ui.ts`. Acceptance criterion 4 is then checkable by grepping
-  `ProjectCard.astro` for any chip string, which `test/work.test.ts` does.
-- **The project name renders once, unwrapped.** `name` is identical in both
-  languages (an identifier), so it is not an `.l` pair; that keeps the parity
-  counts balanced without a redundant duplicate span, and matches `AGENTS.md`'s
-  "identifiers stay untranslated".
-- **Links pair by index.** `checkProjectParity` guarantees `links[].url`
-  matches in order across the two files, so index pairing is sound; the `??`
-  fallback keeps the render total if a future edit slips past the loader.
-- **Nothing carries `open`.** All fourteen cards are closed on load, which keeps
-  first paint short and the page scannable.
-- **No `tabindex`, `role` or `onclick` anywhere.** A bare `<summary>` is
-  focusable and toggles on Enter and Space natively; every attribute one might
-  add here would only take that away. `test/work.test.ts` asserts their absence.
+1. `<article class="project">` with an `id={en.data.slug}` so a card can be
+   linked directly later.
+2. `<h3 class="project-name">{en.data.name}</h3>` — the project name is an
+   identifier, identical in both languages, so it is not a `<Lang>` pair and it
+   is **not** set in `--font-editorial`.
+3. `<p class="project-summary"><Lang en={en.data.summary} ru={ru.data.summary} /></p>`.
+4. `<ul class="chips">` built by `en.data.stack.map((chip) => …)`, each item
+   `<li class="chip"><Lang en={chip} ru={stackChipRu[chip] ?? chip} /></li>`.
+   The chip text comes from frontmatter; the template contains no chip literal,
+   which is acceptance criterion 4. `stack` is guaranteed identical in both
+   files by `checkProjectParity`, so iterating the English entry is safe, and
+   the Russian side is the dictionary lookup with identity fallback.
+5. `<details class="block project-details">` whose `<summary>` carries the
+   `<Lang>` pair `ui.workDetailsSummary` (`Details` / `Подробнее`) — interface
+   chrome, the one label a `<summary>` cannot do without — and whose body
+   holds:
+   - `<div class="l en"><BodyEn /></div>` and
+     `<div class="l ru" lang="ru"><BodyRu /></div>` — the rendered detail
+     bullets, one `.l.en` / `.l.ru` pair;
+   - a `<ul class="project-links">` containing, when `en.data.repo` is defined,
+     `<li><a href={en.data.repo}>{repoLabel}</a></li>`, then one `<li>` per
+     index of `en.data.links ?? []` rendering a single `<a href={link.url}>`
+     with `<Lang en={enLabel} ru={ruLabel} />`. URLs are identical across the
+     pair by the parity check, so one anchor with a bilingual label is correct
+     and keeps the `.l.en` / `.l.ru` counts balanced;
+   - `<p class="project-metrics"><Lang en={ui.workMetricsLabel.en} ru={ui.workMetricsLabel.ru} /> <span data-stat><slot name="metrics">{formatStat(null)}</slot></span></p>`.
+     P8b fills the named slot from `per_repo`; until then the fallback renders
+     the em dash from `src/lib/metrics.ts`, so the placeholder is produced by
+     the metrics module rather than typed.
 
-### 5. `src/pages/work.astro` (new)
+Because `<details>` / `<summary>` are native, acceptance criterion 5 (focus,
+Enter, Space) is satisfied by the platform: no `tabindex`, no `role`, no
+script. `.block > summary` in `site.css` already gives a 44px target and
+`display: list-item`, both of which keep the element focusable, and the global
+`:focus-visible` rule supplies the ring.
+
+### 3. `src/pages/work.astro`
 
 ```astro
----
-import { getCollection } from 'astro:content';
-import Base from '../layouts/Base.astro';
-import Lang from '../i18n/Lang.astro';
-import ProjectCard from '../components/ProjectCard.astro';
-import { ui } from '../i18n/ui';
-import { inGroup, pairByLang } from '../lib/projects';
-
-const pairs = pairByLang(await getCollection('projects'));
-const groups = [
-  { heading: ui.workGroupPlatform, items: inGroup(pairs, 'platform') },
-  { heading: ui.workGroupProducts, items: inGroup(pairs, 'product') },
-];
----
-<Base title={ui.workTitle.en}>
-  <main>
-    <h1><Lang en={ui.navWork.en} ru={ui.navWork.ru} /></h1>
-    {groups.map((g) => (
-      <section class="work-group">
-        <h2><Lang en={g.heading.en} ru={g.heading.ru} /></h2>
-        {g.items.map((project) => <ProjectCard project={project} />)}
-      </section>
-    ))}
-  </main>
-</Base>
+const all = await getCollection('projects');
+const en = all.filter((e) => e.data.lang === 'en');
+const ru = new Map(all.filter((e) => e.data.lang === 'ru').map((e) => [e.data.slug, e]));
+const inGroup = (group: 'platform' | 'product') =>
+  en.filter((e) => e.data.group === group).sort((a, b) => a.data.order - b.data.order);
 ```
 
-The group list is data, so the two sections cannot drift in markup, and the
-order of the array is the order on the page. `Base` already supplies the nav,
-footer, stylesheets and the single inline script; `work.astro` adds none of its
-own. No introductory lede paragraph is added — the issue supplies no copy for
-one and inventing copy is forbidden.
+The page renders two `<section>` elements — Platform then Products — each with
+an `<h2>` carrying `ui.workGroupPlatform` / `ui.workGroupProducts` as a `<Lang>`
+pair, and each mapping its group's ordered entries to
+`<ProjectCard en={entry} ru={ru.get(entry.data.slug)!} />`. Sorting on
+`data.order` rather than on the loader's return order makes criterion 1's
+ordering a property of the content, not of file-system iteration. Global
+ordering 1..14 is kept (so `mctl-api`'s existing `order: 1` is untouched) and
+the group filter makes the two sequences 1..6 and 7..14.
 
-### 6. `src/content/projects/*.{en,ru}.md` — twenty-eight files
+The page uses `<Base title={ui.workPageTitle.en}>` and an `<h1>` with the
+existing `ui.navWork` pair.
 
-Twenty-six new files plus a rewrite of the two existing `mctl-api` files, with
-the frontmatter and bodies fixed character for character in `requirements.md`.
-`mctl-api` keeps `order: 1`, `group: platform` and its `links` block; its
-`stack`, `summary` and body are replaced with the issue's copy. `order` uses the
-issue's global numbering 1-14 (Platform 1-6, Products 7-14), which leaves
-`mctl-api`'s existing value untouched and makes the intended sequence readable
-from any single file.
+### 4. `src/i18n/ui.ts`
 
-### 7. `src/styles/site.css` — card styling
+Add to the `ui` object: `workGroupPlatform`, `workGroupProducts`,
+`workDetailsSummary`, `workMetricsLabel`, `workPageTitle` — all `{ en, ru }`
+string pairs, so `test/ui.test.ts` continues to pass unchanged. Add
+`stackChipRu` as a **separate named export** outside `ui`, because
+`test/ui.test.ts` asserts every `ui` value is an `{ en, ru }` pair and a
+`Record<string, string>` would fail that assertion. `stackChipRu` carries the
+only two plain-word chips in the fourteen stacks: `design tokens` and
+`upstream fork`.
 
-New rules only, appended near the existing `.block` section; no existing rule is
-edited.
+### 5. Content files
 
-```css
-.work-group { margin-block: var(--mctl-space-6); }
-.card > summary { display: list-item; }             /* inherited from .block */
-.card-name { font-family: var(--font-mono); font-size: var(--mctl-typography-font-size-body); margin: 0; }
-.card-summary { display: block; font-family: var(--font-display); color: var(--surface-fg); }
-.chips { display: flex; flex-wrap: wrap; gap: var(--mctl-space-2); margin-block-start: var(--mctl-space-2); }
-.chip { font-family: var(--font-mono); font-size: var(--mctl-typography-font-size-xs);
-        padding: var(--mctl-space-1) var(--mctl-space-2);
-        border: 1px solid var(--surface-line); border-radius: var(--mctl-radius-md);
-        color: var(--surface-fg-muted); }
-.card-links { list-style: none; padding: 0; margin-block: var(--mctl-space-3); }
-.card-links a { overflow-wrap: anywhere; display: inline-flex; align-items: center; min-block-size: 44px; }
-.card-metrics { display: flex; flex-wrap: wrap; gap: var(--mctl-space-5); }
-.card-metric-value { font-variant-numeric: tabular-nums; }
-```
+Twenty-eight files `src/content/projects/<slug>.{en,ru}.md`, with the exact
+frontmatter and bodies transcribed in `requirements.md`. The two existing
+`mctl-api` files are rewritten to this issue's `stack`, `summary` and body; the
+`links` entry for `https://docs.mctl.ai` stays. `pfeifenpatenschaft-backend`
+omits `repo`; `pelican-libertex-social` uses the `mashkoffdmitry` URL. Each
+body is a markdown bullet list, one `- ` line per detail clause, which
+`render()` turns into a `<ul>` styled by the already-linked `prose.css`.
 
-`--font-editorial` appears nowhere in these rules. Every translated string on
-`/work/` is Onest (`--font-display`, inherited from the body) and every
-identifier is JetBrains Mono (`--font-mono`) — the typography constraint carried
-from #4. The chip border and muted foreground come from the vendored token set,
-so chips theme correctly in both light and dark without new colour values.
-`.card-links a` repeats the 44px tap-target pattern the file already applies to
-`.site-nav a`, `.toggle-group button` and `.site-footer a`.
+### 6. `src/styles/site.css`
 
-After editing `src/styles/site.css`, `npm run vendor` must run to refresh
-`public/styles/site.css` — that copy is what `Base.astro` links, and it is
-committed.
+Add a `/* Work page. */` block: `.project` spacing and separator borders,
+`.project-name` in `var(--font-display)` (or `var(--font-mono)`, since it is an
+identifier) — never `var(--font-editorial)`; `.project-summary` in
+`var(--font-display)`; `.chips` as a `display: flex; flex-wrap: wrap` list with
+`list-style: none`; `.chip` as a small bordered pill using existing
+`--mctl-space-*` / `--mctl-radius-*` / `--surface-*` tokens; `.project-links`
+and `.project-metrics` muted. `.project-details` reuses the existing `.block`
+class so the 44px summary target, the list marker and the print rules apply
+unchanged. Note that the print override
+`:root[data-lang='en'] .block > .l.ru` matches only **direct** children of
+`.block`; the card's two body wrappers are direct children of the `<details>`,
+so the existing rule keeps working — the implementer must not nest them inside
+an extra wrapper `div`.
 
-### 8. `src/components/Nav.astro` — one `href`
+Because `site.css` is copied to `public/styles/site.css` by
+`npm run vendor` (which `prebuild` runs), no extra wiring is needed; the
+implementer must run `npm run vendor` (or `npm run build`) so the public copy
+is regenerated and committed.
 
-`/#work` becomes `/work/`. This is the one file outside the issue's list that
-changes: the anchor it points at no longer exists (`test/home.test.ts` asserts
-`id="work"` is gone from `index.astro`), and the nav renders on `/work/` itself.
-The Approach link is left as it is; its page is a later issue.
+### 7. `src/components/Nav.astro`
 
-### 9. `package.json` — register the new tests
+Change `href="/#work"` to `href="/work/"`. `/#approach` stays until P6.
 
-`test/projects.test.ts` and `test/work.test.ts` are appended to the `test`
-script. Without this they run nowhere.
+### 8. Link checking (criterion 3)
+
+The check is a throwaway script pasted into the pull request description
+together with its output, not a committed test: `npm test` runs in CI with
+`permissions: contents: read` and must not depend on reachability of
+github.com. The script extracts every `href` from `dist/work/index.html`,
+resolves site-relative ones against the deployed origin, and requests each one,
+printing `url -> status`. A repository-resident, offline test
+(`test/projects.test.ts`) covers the parts that can be checked without the
+network: that 28 content files exist, that exactly 14 slugs appear, that
+`pfeifenpatenschaft-backend` has no `repo:` line, and that every other `repo:`
+value matches `https://github.com/(mctlhq|mashkoffdmitry)/<slug>`.
 
 ## Alternatives
 
-**Data in a TypeScript module instead of content collections.** A single
-`src/data/projects.ts` exporting fourteen objects with `en`/`ru` fields would be
-one file instead of twenty-eight and would need no `render()` call. Dropped:
-`src/content.config.ts` already ships a `projects` collection with a Zod schema
-and a bespoke `checkProjectParity` loader, written for exactly this purpose,
-and the issue names `src/content/projects/*.en.md` / `*.ru.md` as the files to
-add. Bypassing the collection would leave dead validation code in the repo and
-lose markdown bodies for the detail bullets.
+**A. One `ProjectCard` per language, rendered twice inside `.l.en` / `.l.ru`
+wrappers.** Simpler component props (one entry), but it duplicates the chips,
+the links and the metrics placeholder in the HTML, doubling the shared markup
+of fourteen cards for no benefit, and it makes the language classes wrap
+structure rather than text — which is exactly what the print override in
+`site.css` had to be patched for on the home page. Dropped.
 
-**One `.md` file per project with `summary_en` / `summary_ru` frontmatter and
-two body sections.** Halves the file count. Dropped: the existing schema pins
-`lang: z.enum(['en', 'ru'])` and the loader's parity check is built around
-one file per language, so this would mean rewriting `src/content.config.ts` — a
-change to reviewed, working validation for a cosmetic gain, in a repository
-whose `AGENTS.md` runs one DevLoop cycle at a time.
+**B. Put the detail bullets in `src/i18n/ui.ts` as arrays, like
+`detailsRunItems`, and keep the markdown bodies empty.** It would reuse the
+existing pattern and need no `render()` call. Dropped: the issue names
+`src/content/projects/*.md` as the place the project copy lives, the collection
+already exists for exactly this, and `ui.ts` is for interface chrome — putting
+fourteen projects' prose there would make the file the de-facto content store
+and leave the collection an empty formality.
 
-**Always-visible card header plus a nested `<details>` labelled "Details".**
-Reading (b) of the issue's card description. Dropped: it puts a second
-focusable control on every card, needs a new `Details` / `Подробнее` string the
-issue did not supply, and acceptance criterion 5 speaks of *the* `<summary>` of
-a card in the singular. Recorded in `requirements.md`'s Open questions.
+**C. Translate chips by giving `.ru.md` a different `stack` array.** The most
+obvious way to get Russian chips. Dropped: `checkProjectParity` in
+`src/content.config.ts` compares `stack` across the pair by `JSON.stringify`
+and would fail the build, and weakening that check to allow per-language stacks
+would remove the guarantee that both cards describe the same project. A
+dictionary in `src/i18n/ui.ts` keyed by the frontmatter chip keeps frontmatter
+as the single source of the chip set and keeps the template free of chip
+literals.
 
-**Reusing `src/components/Details.astro` for the card.** Its `<summary>` is a
-single `<Lang>` pair, so the card would need a new slot for summary content —
-a change to a component the home page depends on, to serve a different shape.
-Dropped: `ProjectCard.astro` authors its own `<details class="block card">`,
-inherits all the `.block` CSS, and leaves `Details.astro` untouched.
-
-**Reusing `src/components/Stat.astro` for the metrics row.** Dropped for the
-same reason inverted: `Stat.astro` renders a large `clamp(28px, 8vw, 40px)`
-hero figure with a `data-stat` hook sized for the home page's four headline
-numbers. Fourteen cards with two such figures each would dominate the page.
-The card uses `formatStat` directly with its own small `.card-metric` markup,
-so the em-dash-on-null rule is still shared and there is still exactly one
-place that decides what a missing number looks like.
-
-**Adding `per_repo` data to `src/data/metrics.json` now.** Dropped: the issue
-puts per-project numbers out of scope and assigns the snapshot to P8b. Writing
-placeholder objects full of `null`s into the snapshot would be speculative
-shape-setting for another cycle, and the defensive reader gives the same
-rendered result (`—`) with no commitment.
-
-**Extending `scripts/check-dist.mjs` with a size cap for `dist/work/index.html`
-and a card-count assertion.** Dropped: the issue asks for neither, a threshold
-invented here could block the page on a number nobody agreed to, and the
-existing parity and no-`.js` checks already cover the new page. The pull request
-reports the built byte size so a cap can be set with evidence later.
+**D. Give `pfeifenpatenschaft-backend` its GitHub URL anyway and let the link
+404.** Dropped outright: it breaks acceptance criterion 3 by construction, and
+a portfolio that links to a page the reader cannot open is worse than one that
+does not link at all.
 
 ## Platform impact
 
-**Migrations.** None. No database, no API, no schema change. `src/data/metrics.json`
-is unchanged, so no snapshot migration. `src/content.config.ts` is unchanged, so
-no content re-validation beyond the new files passing the existing schema.
-
-**Backward compatibility.** Purely additive at the routing level: `/work/`
-starts returning 200 where it returned the 404 page. `src/pages/index.astro`,
-`Base.astro`, `Details.astro`, `Stat.astro` and `Lang.astro` are untouched, so
-`test/home.test.ts` and `test/ui.test.ts` keep passing as written. The one
-behavioural change outside the new page is `Nav.astro`'s Work link, which moves
-from a dangling `/#work` fragment to a real route.
-
-**Resource impact.** `dist/work/index.html` adds one static file. It carries
-twenty-eight markdown bodies and fourteen chip sets in both languages, so it
-will be substantially larger than the 40 KB `index.html` — expect roughly
-60-110 KB uncompressed, well compressed by the `gzip_types text/plain` entry
-already in `nginx.conf`. No new font subset, no new stylesheet, no new request:
-the page uses only the five already-linked stylesheets from `public/`. Zero
-JavaScript bytes added; `dist/` still contains no `.js` and exactly one inline
-script body, so the CSP hash in `nginx.conf` does not change. No third-party
-origin is introduced, so the HAR stays same-origin.
-
-**Risks and mitigations.**
-
-- *A copy transcription error.* Twenty-eight files of fixed bilingual copy is
-  the largest failure surface here. Mitigation: every string is inlined in
-  `requirements.md`, and `test/work.test.ts` mechanically checks that each
-  `*.ru.md` body and summary contains Cyrillic while each `*.en.md` does not,
-  which catches the realistic mistakes (a language pasted into the wrong file,
-  a half-translated file) without asserting on prose.
-- *A missing or mismatched language file.* Mitigation: already fatal.
-  `checkProjectParity` in `src/content.config.ts` throws during `astro sync`,
-  `astro check`, `astro dev` and `astro build` alike, and `pairByLang` throws a
-  second time with the offending slug named.
-- *Bilingual parity drift breaking the build gate.* An `.l.en` without its
-  `.l.ru` fails `scripts/check-dist.mjs`. Mitigation: every pair on the page
-  comes from `Lang.astro` or from the two explicit body wrappers in
-  `ProjectCard.astro`, so parity is structural rather than maintained by hand.
-- *Instrument Serif leaking onto Russian text.* Mitigation: no new rule uses
-  `--font-editorial`, and `test/work.test.ts` asserts the string
-  `--font-editorial` does not appear in any rule added for this page.
-- *Forgetting `npm run vendor` after editing `src/styles/site.css`.* The served
-  copy is `public/styles/site.css`, so the page would ship unstyled cards.
-  Mitigation: `prebuild` runs `npm run vendor` before every build, and the task
-  list makes the committed diff of `public/styles/site.css` an explicit
-  deliverable.
-- *`https://docs.mctl.ai` returning a non-200 and failing acceptance criterion
-  3.* Mitigation: the link-check script runs before the pull request is opened;
-  if that host fails, the `links` block is removed from both `mctl-api` files
-  and the removal is stated in the description.
-- *`per_repo` landing in P8b with a different shape.* Mitigation: `perRepo` is
-  defensive at every level and returns nulls rather than throwing, so a shape
-  mismatch degrades to em dashes — the same thing the page renders today — and
-  P8b adapts one function in `src/lib/metrics.ts`.
-- *New test files not running in CI.* Mitigation: they are added to
-  `package.json`'s `test` script, which both `prebuild` and
-  `.github/workflows/build.yml` invoke; the task list gates on seeing them in
-  the `npm test` output.
+- **Migrations.** None. No database, no API, no gitops values. The only schema
+  change is `repo` becoming optional in the Astro content schema, which is a
+  widening: every existing entry still validates.
+- **Backward compatibility.** `dist/index.html` is unchanged except that
+  `Nav.astro`'s first link now points at `/work/`; the CTA on the home page
+  already pointed there. The 40 KB cap in `scripts/check-dist.mjs` applies only
+  to `dist/index.html`, so the new page is not size-gated; the `.l en` / `.l ru`
+  parity and the no-`.js` rule apply to it automatically because the script
+  walks all of `dist/`.
+- **Resource impact.** One extra static HTML page (estimated 25-40 KB before
+  gzip for fourteen cards) plus a few hundred bytes of CSS. No new
+  dependency, no new network request, no change to the CSP or to
+  `scripts/csp-hash.mjs` — the page ships no script of its own.
+- **Risk: `render()` API shape.** No page in this repo has rendered a
+  collection body before. On the content layer the call is
+  `const { Content } = await render(entry)` imported from `astro:content`.
+  Mitigation: `npm run check` (`astro sync && astro check`) fails loudly if the
+  import or the call shape is wrong; the implementer runs it before pushing.
+- **Risk: bilingual parity drift.** Fourteen cards multiply the chance of an
+  unmatched `.l.en` / `.l.ru`. Mitigation: `scripts/check-dist.mjs` already
+  fails the Docker build on an imbalance in any HTML file; the implementer runs
+  `npm run build && node scripts/check-dist.mjs` locally.
+- **Risk: copy corruption.** The Russian strings contain `ё`, em dashes and
+  typographic apostrophes (`runbook'и`, `backend'ом`). A shell-quoting or
+  editor-normalisation slip would silently alter published copy. Mitigation:
+  the implementer writes files directly (no `sed`/`echo` pipelines) and diffs
+  each summary against `requirements.md` before committing.
+- **Risk: numbers in prose.** AGENTS.md forbids typing metric values into
+  templates and content. The issue's copy contains `60 seconds`, `0.5.0`,
+  `15-minute`, `SOC 2`, `OAuth 2.0`, `Vue 3`. These are descriptive constants
+  and version identifiers, not site metrics, and `0.5.0` matches the
+  `MCTL_VERSION` constant pinned in `scripts/vendor-assets.mjs`. The "no digit"
+  assertion in `test/home.test.ts` is scoped to `src/pages/index.astro` and must
+  **not** be extended to `work.astro`.
+- **Risk: private repository exposure.** `pfeifenpatenschaft-backend` is
+  listed by name, summary and stack only. No URL, no hostname, nothing that
+  identifies a client. Consistent with the AGENTS.md rule about third parties in
+  public content.
+- **Rollback.** Deleting the new page, component, content files and CSS block
+  returns the site to its current state; see `tasks.md`.
