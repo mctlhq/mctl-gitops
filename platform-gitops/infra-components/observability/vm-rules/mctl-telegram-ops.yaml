@@ -27,8 +27,10 @@
 #   mctl_bridge_connections_total         counter{user_id}, :266    1 series, live
 #   mctl_agent_dead_letter_total          counter, metrics.go:288   1 series, live
 #   mctl_agent_actions_executing_stuck    gauge, metrics.go:293     1 series, live
+#   mctl_auth_failures_total              counter{reason,provider}  0 series for
+#                                         metrics.go:184            provider="bridge"
 #
-# Two of the seven are dormant, for two DIFFERENT reasons, and neither is a
+# Three of the eight are dormant, for three DIFFERENT reasons, and none is a
 # missing metric:
 #
 #  1. mctl_telegram_pool_capacity reads -1, which cmd/server/main.go:279 sets
@@ -50,6 +52,15 @@
 #     series means no FLOOD_WAIT has ever been observed on this deployment,
 #     which is the healthy state for an event counter. The series appears,
 #     and the rule starts evaluating, the first time Telegram rate-limits us.
+#
+#  3. mctl_auth_failures_total{provider="bridge"} is the same shape and the
+#     same healthy state: the counter is registered and incremented on every
+#     refusal at /bridge and at the token endpoint (mctl-telegram 0.64.0,
+#     internal/bridge/server.go and tokenhandler.go), and the labelled series
+#     appears on the first refusal. It is zero today because the one known
+#     offender was remediated before the metric shipped (mctl-telegram#612).
+#     Other provider values are live now, which is what confirms the metric
+#     family itself is scraped.
 #
 # Routing is configured in bootstrap/templates/observability/monitoring.yaml,
 # on alertname — see the comment on the MctlAgentDeadLetter route there for
@@ -209,12 +220,22 @@ spec:
         # audience, and the revocation check and the three device reasons come
         # after the token verified.
         #
-        # > 5 in 15m, for: 10m: a daemon on the 60s reconnect ladder produces
-        # ~15 per window, while a token that lapses mid-session is refused once
-        # or twice before the daemon's own refresh lands, and a rollout can
-        # produce a short burst of both. The 10m hold outlasts either.
+        # The lookback is deliberately SHORTER than the hold. With
+        # increase(...[15m]) and for: 10m a one-minute burst of six refusals
+        # keeps the expression above the threshold for the full 15 minutes it
+        # stays in the window, outlasting the hold and firing -- `for` cannot
+        # suppress a burst the window still remembers. At [5m] > 2 the same
+        # burst ages out after five minutes, well inside the ten-minute hold,
+        # while the failure this alert exists for -- a daemon refused on every
+        # 60s reconnect -- sustains ~5 per window indefinitely and fires.
+        #
+        # The aggregate is fleet-wide because the counter carries no daemon
+        # label (reason and provider only), so the summary must not name "a
+        # daemon". That is tolerable precisely because of the shape above: N
+        # unrelated daemons each refused once do not sustain anything, and
+        # only a genuine loop holds the condition for ten minutes.
         - alert: MctlBridgeAuthFailing
-          expr: sum by (reason) (increase(mctl_auth_failures_total{provider="bridge",reason=~"jwt_expired|jwt_invalid_issuer|jwt_missing_audience|jwt_wrong_audience|token_revoked|no_device_binding|device_inactive|device_revoked"}[15m])) > 5
+          expr: sum by (reason) (increase(mctl_auth_failures_total{provider="bridge",reason=~"jwt_expired|jwt_invalid_issuer|jwt_missing_audience|jwt_wrong_audience|token_revoked|no_device_binding|device_inactive|device_revoked"}[5m])) > 2
           for: 10m
           labels:
             severity: warning
@@ -223,9 +244,11 @@ spec:
             summary: "mctl-telegram Local Bridge is refusing daemon credentials ({{ $labels.reason }})"
             description: >-
               The bridge refused {{ $value | humanize }} daemon credentials in the
-              last 15 minutes with reason {{ $labels.reason }}. A daemon is looping on
-              a credential the server no longer accepts; the server log names it
-              ("bridge: authentication failed" / "bridge token: credential refused").
+              last 5 minutes with reason {{ $labels.reason }}, and has been doing so
+              for ten minutes. At least one daemon is looping on a credential the
+              server no longer accepts; the counter carries no daemon label, so the
+              server log is what names it ("bridge: authentication failed" /
+              "bridge token: credential refused").
             runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlbridgeauthfailing"
 
     - name: mctl-telegram-agent

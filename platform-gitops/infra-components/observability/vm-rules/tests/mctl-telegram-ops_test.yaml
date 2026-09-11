@@ -246,11 +246,31 @@ tests:
             exp_annotations:
               summary: "mctl-telegram Local Bridge is refusing daemon credentials (no_device_binding)"
               description: >-
-                The bridge refused 15 daemon credentials in the
-                last 15 minutes with reason no_device_binding. A daemon is looping on
-                a credential the server no longer accepts; the server log names it
-                ("bridge: authentication failed" / "bridge token: credential refused").
+                The bridge refused 5 daemon credentials in the
+                last 5 minutes with reason no_device_binding, and has been doing so
+                for ten minutes. At least one daemon is looping on a credential the
+                server no longer accepts; the counter carries no daemon label, so the
+                server log is what names it ("bridge: authentication failed" /
+                "bridge token: credential refused").
               runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlbridgeauthfailing"
+
+  # A burst is not a loop, and the hold alone cannot tell them apart: with a
+  # 15m lookback, six refusals in one minute stay in the window for fifteen
+  # minutes and outlast a ten-minute hold. The lookback is shorter than the
+  # hold so the burst ages out first. Ten refusals arrive in one minute here
+  # and nothing more.
+  - interval: 1m
+    name: a one-minute burst ages out before the hold expires
+    input_series:
+      - series: 'mctl_auth_failures_total{job="mctl-telegram",instance="prod",reason="jwt_expired",provider="bridge"}'
+        values: '0 0 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10'
+    # Evaluated at 15m, inside the fifteen minutes a [15m] lookback would still
+    # be reporting the burst: that is the moment the wider window fires and
+    # this one must not.
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: MctlBridgeAuthFailing
+        exp_alerts: []
 
   # Two silences that are not the same silence. A token expiring mid-session is
   # refused once or twice before the daemon's refresh lands -- ordinary, and
