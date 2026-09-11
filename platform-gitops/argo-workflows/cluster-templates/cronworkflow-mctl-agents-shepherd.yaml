@@ -98,10 +98,11 @@ spec:
   successfulJobsHistoryLimit: 96
   failedJobsHistoryLimit: 24
   # Active — un-suspended after the smoke test (one-shot real run on
-  # 2026-05-01 flipped 11 proposals correctly). Schedule fires every two
-  # hours between 07:00 and 21:00 UTC and the workflow contends on the
-  # shared `mctl-gitops-main-writes` mutex with the implementer /
-  # agents-run workflows, so back-pressure is bounded.
+  # 2026-05-01 flipped 11 proposals correctly). The workflow contends on
+  # the shared `mctl-gitops-main-writes` mutex with the implementer /
+  # agents-run workflows, so back-pressure is bounded; the :09 offset in
+  # the schedule comment above keeps it off reconcile's and
+  # rotate-github-app-tokens' minutes rather than relying on that.
   #
   # Re-un-suspended 2026-07-25 after the 2026-07-24T03:00:00Z org-wide
   # spend-cap reset (mctl-gitops#611 TEMP note): two manual
