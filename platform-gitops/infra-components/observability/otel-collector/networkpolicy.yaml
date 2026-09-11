@@ -55,3 +55,18 @@ spec:
           port: 4317
         - protocol: TCP
           port: 4318
+    # A SECOND rule, not another entry in the one above. `from` and `ports`
+    # inside a single ingress rule combine: every peer listed there may reach
+    # the ports listed there and nothing else. vmagent runs in `monitoring`
+    # and scrapes :8888 (infra-components/observability/otel-collector/
+    # servicescrape.yaml), so listing `monitoring` beside the OTLP producers
+    # granted it 4317/4318 and left the scrape denied -- which would have made
+    # `up{job="otel-collector"}` never populate and every alert in
+    # vm-rules/otel-collector-alerts.yaml dead on arrival.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 8888

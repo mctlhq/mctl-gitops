@@ -43,13 +43,46 @@ tests:
               job: otel-collector
               instance: 10.0.0.1:8888
             exp_annotations:
-              summary: "otel-collector target 10.0.0.1:8888 is down"
+              summary: "otel-collector is not reporting"
               description: >-
-                vmagent has not scraped otel-collector instance 10.0.0.1:8888
-                for 5 minutes. Traces sent to
+                vmagent has had no successful scrape of otel-collector for 5
+                minutes -- either a reachable instance is failing its scrape,
+                or the target has disappeared from discovery entirely. Traces
+                sent to
                 otel-collector.monitoring.svc.cluster.local are being refused
                 or dropped for as long as this fires. Check
                 `kubectl get pods -n monitoring -l app.kubernetes.io/name=opentelemetry-collector`.
+
+  # Regression: the target gone from discovery altogether. `up == 0` alone is
+  # silent here -- there is no series to compare against zero -- which is the
+  # shape both replicas failing readiness takes, and the shape a blocked
+  # metrics port takes. Only the absent() half fires.
+  - interval: 1m
+    name: no up series at all fires warning
+    input_series:
+      - series: 'otelcol_receiver_refused_spans{instance="10.0.0.1:8888"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: OtelCollectorDown
+        exp_alerts:
+          # absent() carries its own matcher's labels through, so `job` is
+          # present here while `instance` -- which only a real series has --
+          # is not.
+          - exp_labels:
+              severity: warning
+              mctl_agent_self: "true"
+              job: otel-collector
+            exp_annotations:
+              summary: "otel-collector is not reporting"
+              description: >-
+                vmagent has had no successful scrape of otel-collector for 5
+                minutes -- either a reachable instance is failing its scrape,
+                or the target has disappeared from discovery entirely. Traces
+                sent to otel-collector.monitoring.svc.cluster.local are being
+                refused or dropped for as long as this fires. Check `kubectl
+                get pods -n monitoring -l
+                app.kubernetes.io/name=opentelemetry-collector`.
 
   # ---------------------------------------------------------------------
   # OtelCollectorRefusedSpans

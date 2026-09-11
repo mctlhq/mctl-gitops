@@ -37,19 +37,28 @@ spec:
     - name: otel-collector.pipeline
       rules:
         - alert: OtelCollectorDown
-          # 2 replicas; both need to be gone for the scrape target to
-          # disappear from `up` entirely for a given pod, so 5m is enough to
-          # ride out a single rolling-update pod restart without paging.
-          expr: up{job="otel-collector"} == 0
+          # Both halves are needed and they catch different outages. `up == 0`
+          # is a target vmagent can still reach but cannot scrape. `absent(up)`
+          # is the target gone from discovery altogether -- both replicas
+          # failing readiness drops them from the Service's Endpoints, vmagent
+          # stops scraping, and the series goes stale rather than reporting 0,
+          # so `up == 0` alone stays silent through the worst case. It is also
+          # what fires if the metrics port is ever blocked again (see the
+          # second ingress rule in
+          # infra-components/observability/otel-collector/networkpolicy.yaml).
+          #
+          # 5m rides out a single rolling-update pod restart without paging.
+          expr: absent(up{job="otel-collector"}) or up{job="otel-collector"} == 0
           for: 5m
           labels:
             severity: warning
             mctl_agent_self: "true"
           annotations:
-            summary: "otel-collector target {{ $labels.instance }} is down"
+            summary: "otel-collector is not reporting"
             description: >-
-              vmagent has not scraped otel-collector instance
-              {{ $labels.instance }} for 5 minutes. Traces sent to
+              vmagent has had no successful scrape of otel-collector for 5
+              minutes -- either a reachable instance is failing its scrape, or
+              the target has disappeared from discovery entirely. Traces sent to
               otel-collector.monitoring.svc.cluster.local are being refused or
               dropped for as long as this fires. Check
               `kubectl get pods -n monitoring -l app.kubernetes.io/name=opentelemetry-collector`.

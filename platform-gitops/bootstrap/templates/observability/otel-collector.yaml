@@ -40,10 +40,16 @@ spec:
           ingress:
             enabled: false
 
+          # The memory request matches the memory_limiter's soft limit below
+          # (75% of 512Mi = 384Mi), not half of it. The collector is expected
+          # to reach that figure in normal operation -- that is the point at
+          # which backpressure starts, not an anomaly -- and a Burstable pod
+          # whose steady state sits at twice its request is a candidate for
+          # node-pressure eviction before its own limiter ever engages.
           resources:
             requests:
               cpu: 100m
-              memory: 192Mi
+              memory: 384Mi
             limits:
               cpu: 500m
               memory: 512Mi

@@ -128,8 +128,11 @@ check(len(names) == len(set(names)),
 
 # 6. The endpoint is the in-cluster collector, not a guess.
 _, env = workload(render({**BASE, "otel": {"enabled": True}}))
-check(env.get("OTEL_EXPORTER_OTLP_ENDPOINT", "").startswith(
-          "http://otel-collector.monitoring.svc.cluster.local"),
+# Compared whole rather than by prefix: a prefix test on a URL is the shape
+# CodeQL flags as incomplete-URL-substring-sanitization, and the value here is
+# a fixed in-cluster address, so there is nothing to match loosely.
+check(env.get("OTEL_EXPORTER_OTLP_ENDPOINT")
+      == "http://otel-collector.monitoring.svc.cluster.local:4318",
       f"unexpected endpoint {env.get('OTEL_EXPORTER_OTLP_ENDPOINT')!r}")
 check(env.get("OTEL_RESOURCE_ATTRIBUTES") == "service.namespace=labs",
       f"namespace not carried: {env.get('OTEL_RESOURCE_ATTRIBUTES')!r}")
