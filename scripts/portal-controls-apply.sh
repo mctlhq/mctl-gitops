@@ -150,10 +150,11 @@ fi
 # The mappings as they were read, by id only. This script does not send the
 # field; the check is here because "did not send it" and "they are still
 # there" are different statements, and only the second is the guarantee the
-# upstream repositories need. Ids, not contents: an allowlist apply landing
-# in the same window is legitimate now that this write cannot revert it, and
-# holding the tool lists identical across the write would turn that into a
-# spurious failure.
+# upstream repositories need. Ids, not contents, and one-sided: an allowlist
+# apply -- or a new upstream being mapped -- landing in the same window is
+# legitimate now that this write cannot revert it, and holding the tool lists
+# identical, or the id set equal, would turn either into a spurious failed
+# apply. What must not happen is a mapping that was there going missing.
 servers_before=$(jq -cS '[.result.servers // [] | .[] | .server_id] | sort' <<<"$current")
 
 res=$(cf -X PUT "$base/portals/$portal" --data "$body" | must_succeed "update portal")
@@ -164,9 +165,10 @@ res=$(cf -X PUT "$base/portals/$portal" --data "$body" | must_succeed "update po
 # make impossible.
 jq -er --argjson want "$vetted" --argjson before "$servers_before" '.result
   | ([.servers // [] | .[] | .server_id] | sort) as $after
+  | ($before - $after) as $lost
   | select(.secure_web_gateway == $want.secure_web_gateway
            and .code_mode == $want.code_mode
            and .allow_code_mode == $want.allow_code_mode
-           and $after == $before)
+           and ($lost | length) == 0)
   | "applied: secure_web_gateway=\(.secure_web_gateway) code_mode=\(.code_mode) allow_code_mode=\(.allow_code_mode) mappings=\($after | join(","))"' <<<"$res" \
   || { echo "update returned success but the portal does not match: either a switch is not the one sent, or a server mapping was lost across the write (those mappings carry the tool allowlists of mctl-telegram, mctl-api and seerrsense -- compare them before touching anything else)" >&2; exit 1; }
