@@ -1,5 +1,5 @@
-status: accepted
-updated_at: '2026-09-11T06:29:17Z'
+status: implemented
+updated_at: '2026-09-11T07:27:58Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -9,5 +9,11 @@ source:
 control:
   requires_human_approval: true
 approval:
-  approved_by: 'mashkovd'
+  approved_by: mashkovd
   approved_at: '2026-09-11T06:29:17Z'
+attempt:
+  id: 69171b35-3158-4668-a57a-8e087aedd752
+  started_at: '2026-09-11T06:55:41Z'
+  expires_at: '2026-09-11T09:05:41Z'
+  finished_at: '2026-09-11T07:27:58Z'
+pr: https://github.com/mctlhq/mctl-api/pull/291
