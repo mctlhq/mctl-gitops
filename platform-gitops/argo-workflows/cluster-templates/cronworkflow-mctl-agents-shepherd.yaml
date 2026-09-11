@@ -5,8 +5,9 @@ metadata:
   namespace: argo-workflows
   annotations:
     workflows.argoproj.io/description: |
-      Two-hourly (07:00-21:00 UTC, 8/day) trigger for the Tier 3 PR
-      shepherd.
+      Every 15 minutes at :09 (96/day) trigger for the Tier 3 PR
+      shepherd. Offset to sit two minutes behind the reconcile schedule
+      (:07), whose status projection it acts on.
 
       All workflow logic lives in ClusterWorkflowTemplate
       `mctl-agents-shepherd` (cwft-mctl-agents-shepherd.yaml). This
