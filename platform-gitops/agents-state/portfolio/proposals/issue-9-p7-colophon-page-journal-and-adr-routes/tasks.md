@@ -1,174 +1,175 @@
 # Tasks: issue-9-p7-colophon-page-journal-and-adr-routes
 
-- [ ] 1. Add `src/lib/colophon.ts`, a zero-import module (no `astro:content`,
-      no `zod`, no sibling import — mirror the header comment style of
-      `src/lib/metrics.ts`) exporting `EM_DASH`, `cycleDate`,
-      `compareCyclesNewestFirst`, `formatLeadTime`, `formatStamp`,
-      `githubRefLabel`, `visibilityOf`, `publicIds` and
-      `interventionsInSource`, with the exact semantics in `design.md` section
-      1. — DoD: `node --test src/…`-loadable with no build step; `formatLeadTime`
-      branches on `=== null` so `0` renders as `0.0`; `githubRefLabel` throws on
-      an unparseable URL; only type-strippable TypeScript syntax is used (no
-      `enum`, no `namespace`, no parameter properties).
+- [ ] 1. Add `src/lib/content.ts`: an import-free module exporting `isPublic`
+      and `publicEntries` over `{ data: { visibility } }`, with a header comment
+      in the style of `src/lib/journal.ts` explaining why it imports nothing.
+      — DoD: `node --test test/content.test.ts` passes; the module has no
+      `import` statement.
 
-- [ ] 2. Add every copy string from `requirements.md` ("Copy" section) to
-      `src/i18n/ui.ts` as `{ en, ru }` pairs — the intro, the three section
-      headings, `colophonChainItems` (two five-item arrays), the page title, the
-      two table captions, the eight cycle-table headers, the two ADR-only
-      headers, the two totals labels and the entry-page labels — plus a separate
-      `adrStatusLabel` export (a `Record<status, { en, ru }>`, not a `ui` key,
-      because `test/ui.test.ts` requires every `ui` value to be an `{ en, ru }`
-      pair of the same kind). — DoD: strings match `requirements.md` character
-      for character; `npm test` passes `test/ui.test.ts` unchanged; `npm run
-      check` is clean.
+- [ ] 2. Extend `src/lib/journal.ts` with `cycleTimestamp`, `byNewestFirst`,
+      `isoDate`, `isoStamp`, `formatLeadTime`, `totalInterventions` and
+      `githubRef` exactly as specified in `design.md` section 1, keeping the
+      module's import list empty (define a module-private `const EM_DASH = '—'`
+      with a comment pointing at the same rule `src/lib/metrics.ts` documents).
+      (depends on nothing) — DoD: existing `test/journal.test.ts` still passes
+      unchanged; new cases in it cover every added function.
 
-- [ ] 3. Add `src/components/CycleTable.astro` (depends on 1, 2): one
-      `<table class="cycle-table">` with a bilingual `<caption>`,
-      `<th scope="col">` headers and one row per entry in the order given by
-      `compareCyclesNewestFirst`, with the eight columns from `requirements.md`;
-      lead time from `leadTimeHours` via `formatLeadTime`, interventions from
-      `interventionCount`, issue and PR cells from `githubRefLabel`, em dash for
-      a missing `pr` or `release`, title linking to `/colophon/journal/<id>/`. —
-      DoD: no user-facing literal in the template (all copy via `ui` + `Lang`);
-      no `--font-editorial`; no `tabindex`; wrapped in a container that scrolls
-      horizontally on narrow viewports.
+- [ ] 3. Extend `src/lib/adr.ts` with a `byAdrId` comparator (ascending `id`)
+      and a `padAdrId(id: number): string` returning the four-digit form.
+      — DoD: `node --test test/adr.test.ts` passes with new cases for both.
 
-- [ ] 4. Add `src/pages/colophon/index.astro` (depends on 2, 3): `<h1>` from
-      `ui.navColophon`, the intro paragraph, the "Build and deploy chain"
-      bilingual `<ul>` pair from `ui.colophonChainItems`, the "Cycles" section
-      with `<CycleTable>` and the two totals carrying `data-cycle-count` and
-      `data-interventions-total`, and the "Decisions" section with the ADR index
-      table (id, title, status, date) sorted by `data.id` ascending, each row
-      linking to `/colophon/adr/<id>/` from its `ADR-NNNN` cell. Both collections
-      are read with a `visibility === 'public'` filter. — DoD: `/colophon/`
-      builds; the totals are computed from the collection, never typed; stripping
-      `<h1>`..`<h6>` tag names from the template leaves no digit in it (the same
-      mechanical proxy `test/home.test.ts` and `test/approach.test.ts` use).
+- [ ] 4. Add every string listed in `design.md` section 6 to `src/i18n/ui.ts`,
+      verbatim, character for character, keeping the existing file's grouping
+      and comment style. Do not modify `navColophon` or `footerColophonLabel`.
+      — DoD: `test/ui.test.ts` passes; `npm run check` reports no type error.
 
-- [ ] 5. Add `src/pages/colophon/journal/[...slug].astro` (depends on 1, 2):
-      `getStaticPaths` over the `journal` collection filtered to
-      `visibility === 'public'`, `params: { slug: entry.id }`; renders kicker,
-      bilingual title and `decided`, service, issue and PR links, release, the
-      five timestamps through `formatStamp`, the computed lead time, one item per
-      intervention (`what`, `why`, `at`) and a back link to `/colophon/`. — DoD:
-      one page per public entry at `/colophon/journal/<id>/`; an absent timestamp
-      renders an em dash rather than disappearing.
+- [ ] 5. Add `src/components/CycleTable.astro` per `design.md` section 2: eight
+      columns, one `<tr data-cycle-row>` per entry, title cell linking to
+      `/colophon/journal/${entry.id}/`, em dash for absent `pr`, `release` and
+      `null` lead time, `interventionCount` rendered even when `0`. Wrap the
+      table in the keyboard-reachable scroll region with the concatenated
+      bilingual `aria-label`. (depends on 2, 4) — DoD: the component contains no
+      hard-coded row, no numeric literal and no `var(--font-editorial)`.
 
-- [ ] 6. Add `src/pages/colophon/adr/[...slug].astro` (depends on 2): same
-      `getStaticPaths` shape over `adr`; renders `ADR-NNNN` (zero-padded from
-      `data.id`), the bilingual title, the status via `adrStatusLabel`, the date,
-      `supersedes` when present, the body through
-      `const { Content } = await render(entry)` as `ProjectCard.astro` does, and
-      a back link. — DoD: one page per public ADR at `/colophon/adr/<id>/`; the
-      rendered body keeps its own `.l en` / `.l ru` pairs.
+- [ ] 6. Add `src/pages/colophon/index.astro` per `design.md` section 3: intro,
+      `Build and deploy chain` bullets, `Cycles` section with `<CycleTable>` and
+      the two computed totals carrying `data-cycle-count` and
+      `data-intervention-count`, `Decisions` section with the ADR index table.
+      (depends on 1, 2, 3, 4, 5) — DoD: `npm run build` emits
+      `dist/colophon/index.html` containing eight `data-cycle-row` occurrences
+      and the two totals; neither total appears as a literal in `src/`.
 
-- [ ] 7. Add the colophon link to `src/components/Nav.astro` using
-      `ui.navColophon`, and correct the stale comment in
-      `src/components/Footer.astro` so it states that the release shown is the
-      built `package.json` version maintained by release-please with no `v`
-      prefix. Leave the `data-release` markup and the `import pkg` as they are. —
-      DoD: every page's nav carries `href="/colophon/"`; the footer still renders
-      `pkg.version` and nothing else changed in it.
+- [ ] 7. Add `src/pages/colophon/journal/[...slug].astro` per `design.md`
+      section 4, with `getStaticPaths` over `publicEntries(await
+      getCollection('journal'))`. (depends on 1, 2, 4) — DoD: `npm run build`
+      emits one `dist/colophon/journal/<id>/index.html` per public entry and
+      none for a private one; each page renders its interventions verbatim under
+      the bilingual note, inside a `lang="en"` container.
 
-- [ ] 8. Add `.cycle-table`, `.adr-table`, `.colophon-totals`, `.entry-meta` and
-      `.intervention` rules to `src/styles/site.css` using `--mctl-*` tokens and
-      `var(--font-display)` / `var(--font-mono)` (depends on 3-6). — DoD: no
-      `--font-editorial` in any new rule; the table wrapper scrolls on narrow
-      viewports; `npm run vendor` regenerates `public/styles/site.css` with the
-      new rules.
+- [ ] 8. Add `src/pages/colophon/adr/[...slug].astro` per `design.md` section 5,
+      rendering the body through `render(entry)` inside `<div class="mctl-prose">`.
+      (depends on 1, 3, 4) — DoD: `npm run build` emits
+      `dist/colophon/adr/0001-bootstrap-boundary/index.html`,
+      `.../0002-static-astro-no-client-bundles/index.html` and
+      `.../0005-self-contained-runtime-assets/index.html`; no `class="lede"` and
+      no `var(--font-editorial)` in the page.
 
-- [ ] 9. Backfill the journal (independent of 1-8): create
-      `src/content/journal/2026-09-11-content-collections-for-projects-journal-and-adrs.md`
-      with the frontmatter given verbatim in `requirements.md` ("Copy: P3 journal
-      entry"), and add the four keys listed in "Copy: backfilled timestamps" to
-      `2026-09-11-home-page.md`, `2026-09-11-work-page.md` and
-      `2026-09-11-approach-page.md`, keeping the key order used by the existing
-      entries. Add no `interventions` and no `deployed_at`. — DoD: `npm run
-      check` passes the `journal` schema; `grep -c "visibility: public"
-      src/content/journal/*.md` yields 8 files; no other field of the three
-      existing entries changed.
+- [ ] 9. Add the Colophon link to `src/components/Nav.astro` using the existing
+      `ui.navColophon`. (depends on 6) — DoD: every page's nav links
+      `/colophon/`; `.l.en` / `.l.ru` counts stay equal.
 
-- [ ] 10. Extend `scripts/check-dist.mjs` with `checkColophonPages()` (depends
-      on 1, 4, 5, 6, 9): assert `dist/colophon/index.html` exists; compare the
-      directory sets under `dist/colophon/journal/` and `dist/colophon/adr/`
-      against `publicIds()` over `src/content/journal/` and `src/content/adr/` in
-      both directions; assert no private id appears in any `dist/` path or in
-      `dist/colophon/index.html`; compare `data-cycle-count` with the number of
-      public journal files and `data-interventions-total` with the summed
-      `- what:` count; compare the `data-release` text in `dist/index.html` with
-      `package.json`'s `version` and fail if it differs or starts with `v`. — DoD:
-      every failure prints a named reason and sets a non-zero exit code, matching
-      the existing style; the OK line mentions the cycle count and the release.
+- [ ] 10. Add the Colophon link to `src/components/Footer.astro` using the
+      existing `ui.footerColophonLabel`, and replace the stale comment about the
+      release source with the statement that `package.json`'s `version` (bumped
+      by release-please) is the source. Leave
+      `<span data-release>{pkg.version}</span>` unchanged. (depends on 6)
+      — DoD: the footer renders the current `package.json` version and a
+      `/colophon/` link; no version literal appears in the component.
 
-- [ ] 11. Add `test/colophon.test.ts` and register it in the `test` script in
-      `package.json` (depends on 1, 3-6, 9). — DoD: `npm test` runs the new file;
-      the whole suite is green.
+- [ ] 11. Add table, scroll-region and colophon layout rules to
+      `src/styles/site.css` (`.cycles`, `.table-scroll`, `.adr-index`,
+      `.cycle-totals`, `.interventions`), narrow-first, using design tokens
+      only, `font-variant-numeric: tabular-nums` on numeric columns, and
+      `var(--font-display)` for every translated string. (depends on 5, 6)
+      — DoD: no literal colour and no `--font-editorial` in the added rules; the
+      page is readable at 360px with the table scrolling horizontally.
 
-- [ ] 12. Run the full local gate: `npm run check`, `npm test`, `npm run build`,
-      `node scripts/check-dist.mjs`, `node scripts/csp-hash.mjs` (depends on
-      1-11). — DoD: all five succeed; `find dist -name '*.js'` is empty;
-      `csp-hash` still reports exactly one inline script body.
+- [ ] 12. Create `src/content/journal/2026-09-11-content-collections.md` with
+      the frontmatter block given verbatim in `design.md` section 7.
+      — DoD: `npm run check` passes (the entry validates against the `journal`
+      schema); the file has an empty body, like every existing journal entry.
+
+- [ ] 13. Backfill `pr`, `release`, `merged_at` and `released_at` into
+      `src/content/journal/2026-09-11-home-page.md` and
+      `src/content/journal/2026-09-11-approach-page.md` with the exact values in
+      `design.md` section 7, in the documented key order, every timestamp
+      single-quoted. — DoD: `npm run check` passes; `git diff` shows only added
+      lines in those two files.
+
+- [ ] 14. Backfill `pr`, `release`, `merged_at`, `released_at` and the seven
+      `interventions` into `src/content/journal/2026-09-11-work-page.md`,
+      verbatim and in the order given in `design.md` section 7. (depends on 13
+      for consistency of key order) — DoD: the file's `- what:` items are
+      exactly those seven, in that order, with their `why` and `at` values
+      character for character as specified.
+
+- [ ] 15. Add `checkColophonPages()` to `scripts/check-dist.mjs` per `design.md`
+      section 8 (all six assertions), called from `main()` next to
+      `checkApproachPage()`, and extend the success log line with the derived
+      cycle and intervention counts. (depends on 6, 7, 8, 12, 13, 14)
+      — DoD: `npm run build && node scripts/check-dist.mjs` exits 0 and prints
+      the derived counts; deliberately editing one total in the page source
+      makes it exit non-zero.
+
+- [ ] 16. Register the new test files (`test/content.test.ts`,
+      `test/colophon.test.ts`) in the `test` script of `package.json`, which
+      enumerates its files explicitly. (depends on T1, T4) — DoD: `npm test`
+      runs every test file present in `test/`, and `npm run build` still runs
+      them through `prebuild`.
 
 ## Tests
 
-- [ ] T1. `formatLeadTime`: `null` gives the em dash; `0` gives `0.0`;
-      `0.7338888888888889` gives `0.7`; a large value keeps one decimal.
-- [ ] T2. `formatStamp`: a `Date` and the equivalent ISO string give the same
-      `YYYY-MM-DD HH:MMZ`; `undefined` and `null` give the em dash.
-- [ ] T3. `githubRefLabel` returns `portfolio#12` for
-      `https://github.com/mctlhq/portfolio/pull/12` and `mctl-api#282` for
-      `https://github.com/mctlhq/mctl-api/pull/282`, and throws on a
-      non-GitHub or malformed URL.
-- [ ] T4. `compareCyclesNewestFirst` sorts a fixture of entries by date prefix
-      descending, breaks a same-date tie by `issueOpenedAt` descending and an
-      identical-timestamp tie by id descending; sorting the same array twice is
-      idempotent.
-- [ ] T5. `cycleDate` returns the prefix for a valid id and throws for an id with
-      no `YYYY-MM-DD` prefix.
-- [ ] T6. `visibilityOf` / `publicIds` / `interventionsInSource` over inline
-      fixture sources: a `private` entry is excluded, a missing `visibility` line
-      yields `null`, and the intervention count matches the number of `- what:`
-      items.
-- [ ] T7. Every file in `src/content/journal/` contains no `lead_time`,
-      `lead_time_hours`, `leadTime`, `intervention_count` or `interventions_count`
-      key, and every top-level frontmatter key is one the `journal` schema
-      declares (the executable form of the issue's `grep -r lead_time
-      src/content` criterion).
-- [ ] T8. The journal directory holds 8 public entries and 10 `interventions`
-      items in total, so a later hand-edit of the record moves a number that a
-      test names.
-- [ ] T9. Source-level assertions on the new templates, in the style of
-      `test/work.test.ts`: `CycleTable.astro` derives cells from the entry
-      (`leadTimeHours(`, `interventionCount(`) rather than from literals; neither
-      new page nor `CycleTable.astro` mentions `--font-editorial` or `tabindex`;
-      each `[...slug].astro` filters `getStaticPaths` on
-      `visibility === 'public'`; `Nav.astro` carries `href="/colophon/"`;
-      `Footer.astro` still imports `../../package.json`.
-- [ ] T10. Post-build, `node scripts/check-dist.mjs` passes on a clean tree and
-      fails with the expected message when `data-cycle-count` is tampered with
-      (verify by hand once during implementation; the script itself is the
-      committed evidence).
+- [ ] T1. `test/content.test.ts`: `isPublic` and `publicEntries` keep only
+      `visibility: 'public'` entries, preserve input order, return a new array,
+      and return `[]` for an all-private input — the unit-level proof of the
+      "private entries produce no page" criterion.
+- [ ] T2. `test/journal.test.ts` (extended): `cycleTimestamp` prefers
+      `deployed_at`, then `released_at`, `merged_at`, `proposal_approved_at`,
+      `issue_opened_at`; `byNewestFirst` sorts a shuffled fixture newest first
+      and is stable on a tie via the id tiebreak; `isoDate` and `isoStamp`
+      render UTC with no fractional seconds; `formatLeadTime(null)` is the em
+      dash and `formatLeadTime(0.7338…)` is `'0.7'`; `formatLeadTime(0)` is
+      `'0.0'`, not the em dash; `totalInterventions` sums across entries and is
+      `0` for `[]`; `githubRef` returns `'#28'` for a pull request URL and the
+      input URL unchanged for a URL with no trailing number.
+- [ ] T3. `test/adr.test.ts` (extended): `byAdrId` sorts ascending; `padAdrId`
+      renders `1` as `'0001'` and `25` as `'0025'`.
+- [ ] T4. `test/colophon.test.ts` (source-level, reading files with
+      `readFileSync` in the style of `test/work.test.ts`):
+      - no file under `src/content/` contains `lead_time`, `leadTime`,
+        `intervention_count` or `interventionCount` (issue criterion 3);
+      - `src/pages/colophon/index.astro` contains `totalInterventions(` and
+        `.length` for the totals and no standalone integer literal in the totals
+        markup;
+      - `src/components/CycleTable.astro` maps over `entries` and contains none
+        of the journal titles, issue numbers or release tags as literals;
+      - every public journal file parses to the required frontmatter keys, every
+        timestamp is single-quoted and matches `ISO_WITH_OFFSET`, and every
+        `interventions` item has `what`, `why` and `at`;
+      - the count of public journal files equals the count of
+        `/^visibility:\s*public/m` matches, and the `- what:` total over those
+        files is reported in the assertion message so a reviewer sees the
+        derived figures without opening the page;
+      - `src/components/Footer.astro` imports `../../package.json` and renders
+        `pkg.version`, with no semver literal in the file;
+      - none of the new `.astro` files reference `var(--font-editorial)` or
+        `class="lede"` (typography constraint carried from issue #4).
+- [ ] T5. Post-build gate (`node scripts/check-dist.mjs`, run by the Dockerfile
+      builder stage and therefore by the `build` job of
+      `.github/workflows/build.yml`): the six assertions of `design.md`
+      section 8, plus the pre-existing no-`.js`, bilingual-parity and
+      `dist/index.html` size rules over the new pages.
 
-### Reviewer steps (not acceptance criteria)
+### Reviewer steps (human, not implementer criteria)
 
-- Load `/colophon/` in a browser with the network panel recording and confirm the
-  HAR shows same-origin requests only, and that the page is complete with
-  JavaScript disabled.
-- Toggle to Russian and confirm no Cyrillic string falls back to a non-Onest
-  face, particularly in the table headers and the ADR status labels.
-- Confirm the P6 entry's `release: 0.1.5` still names the release that first
-  contained the P6 merge commit.
+- [ ] R1. Load `/colophon/` in a browser with the network panel recording and
+      export a HAR; confirm every request is same-origin. T5's absolute-URL rule
+      is the mechanical half of this; the capture itself needs a human.
+- [ ] R2. Tab through `/colophon/` with the keyboard: the table's scroll region
+      takes focus with a visible ring and scrolls with the arrow keys, and both
+      language toggles still work.
+- [ ] R3. Spot-check three backfilled timestamps against
+      `gh api repos/mctlhq/portfolio/pulls` and `.../releases`.
 
 ## Rollback
 
-The change is additive and self-contained. Revert the merge commit on `main`
-(`git revert -m 1 <merge-sha>`): `/colophon/` returns to a dead link handled by
-`src/pages/404.astro`, the journal returns to seven entries, and
-`scripts/check-dist.mjs` returns to its pre-P7 checks. No schema, image,
-`nginx.conf` or CSP change is involved, so nothing outside the repository has to
-be undone. If only the backfill is wrong, revert the three edited entries and
-delete the new P3 file; the page then shows a smaller cycle count and the
-post-build check follows it automatically, because both numbers are computed. If
-the site has already been deployed from a release containing this change,
-`mctl_rollback_service` to the previous image tag restores the previous page set
-without touching the repository.
+Every change is additive and confined to one branch. To roll back before merge,
+close the pull request; nothing else is touched. To roll back after merge,
+revert the merge commit: the new routes disappear, the backfilled frontmatter
+keys revert with them, and the only user-visible regression is the home page's
+`ctaColophon` link 404ing again, exactly as it does today. Nothing is deployed
+by this cycle — the site is not onboarded yet, so `MCTL_ONBOARDED` is unset and
+the release workflow only tags. If a deploy has already happened by then,
+`mctl_rollback_service team_name=labs component_name=portfolio target_tag=0.1.5`
+returns the running image to the pre-P7 release; no data migration or state
+change needs undoing.
