@@ -1,5 +1,5 @@
-status: review-stuck
-updated_at: '2026-09-11T16:51:30Z'
+status: merged
+updated_at: '2026-09-11T17:06:32Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -17,9 +17,10 @@ attempt:
   expires_at: '2026-09-11T16:52:08Z'
   finished_at: '2026-09-11T14:45:23Z'
 pr: https://github.com/mctlhq/portfolio/pull/43
-review_attempts: 3
 notes: Codex P1/P2 findings persisted across 3 follow-up attempts; human triage required.
 github:
-  state: open
-  head_sha: 9ee175778463051460388c7d451892cae562e1ca
-  observed_at: '2026-09-11T16:51:30Z'
+  state: merged
+  head_sha: 802a62177df870823f190cedbfb23e2b19904cf1
+  observed_at: '2026-09-11T17:06:32Z'
+merged_at: '2026-09-11T17:06:32Z'
+merge_commit: 7751e2c0b4cb27b16ebc5a3f5edbc220323923a1
