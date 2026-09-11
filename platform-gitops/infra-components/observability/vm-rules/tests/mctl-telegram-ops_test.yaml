@@ -227,6 +227,87 @@ tests:
                 a token rotation problem, or network instability on the daemon host.
               runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlbridgedaemonsflapping"
 
+  # A refused daemon is invisible to the flapping alert above: it never reaches
+  # Register, so the connections counter does not move. This is the #612 shape,
+  # a legacy credential with no device binding, refused every 60 seconds.
+  - interval: 1m
+    name: a daemon refused on every reconnect fires
+    input_series:
+      - series: 'mctl_auth_failures_total{job="mctl-telegram",instance="prod",reason="no_device_binding",provider="bridge"}'
+        values: '0+1x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: MctlBridgeAuthFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: mctl-telegram
+              reason: no_device_binding
+            exp_annotations:
+              summary: "mctl-telegram Local Bridge is refusing daemon credentials (no_device_binding)"
+              description: >-
+                The bridge refused 5 daemon credentials in the
+                last 5 minutes with reason no_device_binding, and has been doing so
+                for ten minutes. At least one daemon is looping on a credential the
+                server no longer accepts; the counter carries no daemon label, so the
+                server log is what names it ("bridge: authentication failed" /
+                "bridge token: credential refused").
+              runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlbridgeauthfailing"
+
+  # A burst is not a loop, and the hold alone cannot tell them apart: with a
+  # 15m lookback, six refusals in one minute stay in the window for fifteen
+  # minutes and outlast a ten-minute hold. The lookback is shorter than the
+  # hold so the burst ages out first. Ten refusals arrive in one minute here
+  # and nothing more.
+  - interval: 1m
+    name: a one-minute burst ages out before the hold expires
+    input_series:
+      - series: 'mctl_auth_failures_total{job="mctl-telegram",instance="prod",reason="jwt_expired",provider="bridge"}'
+        values: '0 0 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10'
+    # Evaluated at 15m, inside the fifteen minutes a [15m] lookback would still
+    # be reporting the burst: that is the moment the wider window fires and
+    # this one must not.
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: MctlBridgeAuthFailing
+        exp_alerts: []
+
+  # Two silences that are not the same silence. A token expiring mid-session is
+  # refused once or twice before the daemon's refresh lands -- ordinary, and
+  # under the threshold. The anonymous reasons are unbounded by volume and
+  # excluded by the allowlist instead: /bridge is public, and without that
+  # filter any scanner could page the on-call from the open internet.
+  - interval: 1m
+    name: a brief mid-session expiry and anonymous traffic both stay silent
+    input_series:
+      - series: 'mctl_auth_failures_total{job="mctl-telegram",instance="prod",reason="jwt_expired",provider="bridge"}'
+        values: '0 0 0 1 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2'
+      - series: 'mctl_auth_failures_total{job="mctl-telegram",instance="prod",reason="no_token",provider="bridge"}'
+        values: '0+1x40'
+      - series: 'mctl_auth_failures_total{job="mctl-telegram",instance="prod",reason="bearer_scheme_error",provider="bridge"}'
+        values: '0+1x40'
+      - series: 'mctl_auth_failures_total{job="mctl-telegram",instance="prod",reason="jwt_invalid_signature",provider="bridge"}'
+        values: '0+1x40'
+      - series: 'mctl_auth_failures_total{job="mctl-telegram",instance="prod",reason="other",provider="bridge"}'
+        values: '0+1x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: MctlBridgeAuthFailing
+        exp_alerts: []
+
+  # The provider label is what separates a refused daemon from every other API
+  # auth failure: auth.Middleware labels its own 401s with the provider name
+  # (local-jwt, shared-hmac), and those have their own alerting.
+  - interval: 1m
+    name: middleware auth failures never count against the bridge alert
+    input_series:
+      - series: 'mctl_auth_failures_total{job="mctl-telegram",instance="prod",reason="jwt_expired",provider="local-jwt"}'
+        values: '0+1x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: MctlBridgeAuthFailing
+        exp_alerts: []
+
   # ------------------------------------------------------------------ agent
   #
   # `for: 5m` is what separates a genuinely stuck action from one the executor
