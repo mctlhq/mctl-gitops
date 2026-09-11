@@ -1,0 +1,7 @@
+{
+  "portal": "mcp",
+  "hostname": "mcp.mctl.ai",
+  "secure_web_gateway": false,
+  "code_mode": "off",
+  "allow_code_mode": false
+}

@@ -236,6 +236,18 @@ jobs:
         # extracted loop against a fixture with real yq.
         run: python3 tests/test_tpl_git_commit_yq.py
 
+      - name: Unit-test the MCP portal controls apply script
+        # The script writes to the portal that fronts tg, seerrsense and api,
+        # and the body it PUTs is the portal's own body with three switches
+        # replaced. Two failures there are invisible in review and answered
+        # 200 by the API: applying something other than the committed file,
+        # and carrying back less than it read -- that body holds the tool
+        # allowlists owned by three other repositories. Both are driven
+        # against a stub Cloudflare API here. CI holds no Cloudflare identity
+        # (#1111), so this tests the request the script would send, never a
+        # live portal.
+        run: python3 tests/test_portal_controls_apply.py
+
       - name: Unit-test wft-provision-database's values.yaml patch
         # The provisioner commits straight to main, so no PR check sees the
         # file it writes, and `helm template` above accepts duplicate keys
