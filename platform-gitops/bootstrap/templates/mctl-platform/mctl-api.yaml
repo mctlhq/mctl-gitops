@@ -61,7 +61,24 @@ spec:
             # can only be used with a hand-pasted static bearer token. Wildcard
             # rather than an exact path because the callback path is not documented
             # and has to survive client updates.
-            OAUTH_ALLOWED_REDIRECT_URIS: "https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback,http://localhost:6274/oauth/callback,http://localhost:6274/oauth/callback/debug,https://chatgpt.com/connector/oauth/*,https://antigravity.google/*"
+            #
+            # *-openclaw.mctl.ai: each OpenClaw tenant panel runs the OAuth
+            # dance from its own hostname. It re-registers via DCR on every
+            # connect attempt, so nothing here is about a stale registration:
+            # /oauth/register validates with IsRedirectURIAllowed("", uri) --
+            # an EMPTY client id, by design, so that registration cannot mint a
+            # client for an arbitrary attacker callback (internal/api/
+            # oauth_handlers.go, SOC hardening 8422446). On that path only this
+            # list and RFC 8252 loopback count; a client's own redirect_uris do
+            # not. A tenant panel is not loopback, so without an entry here it
+            # is refused before it ever receives a client id:
+            # redirect_uri "https://admins-openclaw.mctl.ai/overview?mctl_oauth=1"
+            # is not allowed -- which is what blocks mctlhq/mctl-gitops#571.
+            # Listed per tenant because IsRedirectURIAllowed matches a string
+            # prefix, not a host wildcard -- a general host-suffix rule is
+            # mctlhq/mctl-api#290. Wildcard path because the callback carries a
+            # ?mctl_oauth=1 query an exact compare would reject.
+            OAUTH_ALLOWED_REDIRECT_URIS: "https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback,http://localhost:6274/oauth/callback,http://localhost:6274/oauth/callback/debug,https://chatgpt.com/connector/oauth/*,https://antigravity.google/*,https://admins-openclaw.mctl.ai/*,https://labs-openclaw.mctl.ai/*,https://my-team-openclaw.mctl.ai/*,https://ovk-openclaw.mctl.ai/*"
             # The private aggregate portal mcp.mctl.ai (Cloudflare MCP Server
             # Portal, mctlhq/.github#35) stores one client id per upstream at
             # configuration time and cannot re-register after a pod restart, so
