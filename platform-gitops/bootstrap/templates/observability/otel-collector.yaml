@@ -31,6 +31,18 @@ spec:
 
           image:
             repository: otel/opentelemetry-collector-contrib
+            # Pinned explicitly rather than inherited from the chart's
+            # appVersion, because the config below depends on the collector
+            # version and not only on the chart. `redaction.blocked_key_patterns`
+            # does not exist before v0.14x -- the processor was an
+            # allowlist-of-keys model with a value blocklist until then -- and
+            # the collector unmarshals component config strictly, so a chart
+            # bump that moved appVersion backwards, or a reader working from
+            # the older schema, would turn this into a startup crashloop.
+            # Verified present at this tag:
+            # processor/redactionprocessor/config.go:44 in
+            # opentelemetry-collector-contrib v0.160.0.
+            tag: "0.160.0"
           command:
             name: otelcol-contrib
 
