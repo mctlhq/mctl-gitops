@@ -1,5 +1,5 @@
-status: accepted
-updated_at: '2026-09-11T23:51:47Z'
+status: implemented
+updated_at: '2026-09-11T23:53:45Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -9,5 +9,11 @@ source:
 control:
   requires_human_approval: true
 approval:
-  approved_by: 'mashkovd'
+  approved_by: mashkovd
   approved_at: '2026-09-11T23:51:47Z'
+attempt:
+  id: c7d2b7e6-0cb6-4775-9976-c42318aabb32
+  started_at: '2026-09-11T23:53:14Z'
+  expires_at: '2026-09-12T02:03:14Z'
+  finished_at: '2026-09-11T23:53:45Z'
+pr: https://github.com/mctlhq/mctl-design/pull/79
