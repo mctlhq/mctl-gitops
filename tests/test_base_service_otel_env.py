@@ -126,6 +126,25 @@ check(len(names) == len(set(names)),
       f"duplicate env names rendered: "
       f"{sorted(n for n in set(names) if names.count(n) > 1)}")
 
+# 5b. The same, through `envValueFrom`. A service can name an OTEL variable
+#     there too, and a duplicate would be harder to spot than in `env`: the
+#     two entries do not even look alike in the rendered list.
+docs = render({
+    **BASE,
+    "otel": {"enabled": True},
+    "envValueFrom": {
+        "OTEL_SERVICE_NAME": {"fieldRef": {"fieldPath": "metadata.name"}}},
+})
+kind, _ = workload(docs)
+entries = ([d for d in docs if d["kind"] == kind][0]
+           ["spec"]["template"]["spec"]["containers"][0]["env"])
+names = [e["name"] for e in entries]
+check(names.count("OTEL_SERVICE_NAME") == 1,
+      f"OTEL_SERVICE_NAME rendered {names.count('OTEL_SERVICE_NAME')} times "
+      f"when set via envValueFrom")
+check(all("valueFrom" in e for e in entries if e["name"] == "OTEL_SERVICE_NAME"),
+      "the service's valueFrom was overridden by the otel default")
+
 # 6. The endpoint is the in-cluster collector, not a guess.
 _, env = workload(render({**BASE, "otel": {"enabled": True}}))
 # Compared whole rather than by prefix: a prefix test on a URL is the shape

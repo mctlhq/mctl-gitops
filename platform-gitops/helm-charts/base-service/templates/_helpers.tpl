@@ -110,9 +110,12 @@ blueGreen service setting `otel.enabled: true` got no variables, no traces and
 no error. tests/test_base_service_otel_env.py renders both kinds and asserts
 they agree.
 
-`.Values.env` wins on conflict: an otel default is rendered only when the
-service has not already set that same key, so the list never carries a
-duplicate name (rather than relying on Kubernetes' last-one-wins behaviour).
+A service's own declarations win on conflict: an otel default is rendered only
+when neither `env` nor `envValueFrom` already sets that name, so the list never
+carries a duplicate (rather than relying on Kubernetes' last-one-wins
+behaviour). Both have to be consulted -- `envValueFrom` can name
+OTEL_EXPORTER_OTLP_ENDPOINT just as `env` can, and a duplicate there would be
+the harder one to spot, since the two entries do not even look alike.
 `default dict` guards a service that writes a bare `env:` key with nothing
 under it, which reaches here as nil.
 
@@ -129,6 +132,7 @@ which is a diff against every service that renders today for no reason.
 */}}
 {{- define "base-service.env" -}}
 {{- $env := default dict .Values.env -}}
+{{- $fromRefs := default dict .Values.envValueFrom -}}
 {{- if .Values.otel.enabled }}
 {{- $otelEnv := dict
     "OTEL_EXPORTER_OTLP_ENDPOINT" .Values.otel.endpoint
@@ -137,7 +141,7 @@ which is a diff against every service that renders today for no reason.
     "OTEL_RESOURCE_ATTRIBUTES" (printf "service.namespace=%s" .Release.Namespace)
 }}
 {{- range $key, $value := $otelEnv }}
-{{- if not (hasKey $env $key) }}
+{{- if not (or (hasKey $env $key) (hasKey $fromRefs $key)) }}
 - name: {{ $key }}
   value: {{ $value | quote }}
 {{- end }}
@@ -147,7 +151,7 @@ which is a diff against every service that renders today for no reason.
 - name: {{ $key }}
   value: {{ $value | quote }}
 {{- end }}
-{{- range $key, $source := default dict .Values.envValueFrom }}
+{{- range $key, $source := $fromRefs }}
 - name: {{ $key }}
   valueFrom:
 {{- toYaml $source | nindent 4 }}
