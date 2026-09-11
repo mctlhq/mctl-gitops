@@ -630,7 +630,17 @@ spec:
           # ephemeral-storage: the workdir is an emptyDir now and counts
           # against this pod, so the clone budget is declared here rather
           # than left for the node to absorb.
-          requests: { cpu: 200m, memory: 1Gi, ephemeral-storage: 10Gi }
+          # memory request bumped 1Gi -> 3Gi on 2026-09-12. The scheduler only
+          # ever sees the request, so a 1Gi/8Gi spread let an unbounded number
+          # of these land on one node against headroom that does not exist --
+          # this step carries no mutex (the two in this template cover the
+          # proposal claim and the gitops write). Measured over 7 days on
+          # worker-hnn: 6 of 18 runs exceeded 3Gi working set, one sat at
+          # 8134Mi against the 8Gi limit, and the node's anonymous memory
+          # reached 14100Mi of 15612Mi (90.3%) with nothing alerting. 3Gi is
+          # the realistic level, not the peak; the 8Gi limit stays, it is what
+          # keeps a `go build` run from being OOMKilled.
+          requests: { cpu: 200m, memory: 3Gi, ephemeral-storage: 10Gi }
           limits:   { cpu: 3000m, memory: 8Gi, ephemeral-storage: 11Gi }
         volumeMounts:
           - name: workdir
