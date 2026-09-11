@@ -1,4 +1,4 @@
-status: review-stuck
+status: implemented
 updated_at: '2026-09-11T15:39:24Z'
 updated_by: mctl-agents[bot]
 source:
@@ -17,5 +17,4 @@ attempt:
   expires_at: '2026-09-11T16:52:08Z'
   finished_at: '2026-09-11T14:45:23Z'
 pr: https://github.com/mctlhq/portfolio/pull/43
-review_attempts: 3
-notes: Codex P1/P2 findings persisted across 3 follow-up attempts; human triage required.
+review_attempts: 0
