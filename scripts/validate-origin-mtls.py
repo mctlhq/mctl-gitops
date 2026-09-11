@@ -32,11 +32,24 @@ Checks the RENDERED chart rather than the source file, because that is what
 reaches the cluster: a values change, a template guard or an accidental
 `{{- if }}` could drop the objects while leaving the YAML looking right.
 
-Note on naming: CA_SECRET_NAME and the `ca_sources` list below hold the *name*
-of a Kubernetes object and the manifests that create it. No key material is
-read, written or printed anywhere in this file. Earlier revisions called them
-`SECRET`/`secrets`, which tripped CodeQL's clear-text-logging heuristic on the
-identifier alone.
+On CodeQL, because this file has tripped it twice and will again. Kubernetes
+spells the fields `secretNames` and `secretKey`, so the queries
+py/clear-text-logging-sensitive-data and py/clear-text-storage-sensitive-data
+treat anything read through them as credentials. Nothing here is: the script
+parses `helm template` output and compares object NAMES
+(`traefik-origin-pull-ca`) and key NAMES (`tls.ca`). No key material is read,
+written or printed anywhere in it.
+
+Two of those alerts were raised and handled differently on purpose. The storage
+one was removed at the cause — the self-test no longer writes a fixture chart to
+disk, which it never needed. The logging one was dismissed in code scanning as a
+false positive (alert #4), because the values it objects to are exactly what an
+operator reading a red CI run needs to see: which CA the TLSOption actually
+ended up naming. Suppressing that would make the failure message useless.
+
+Earlier revisions also called CA_SECRET_NAME `SECRET` and `ca_sources`
+`secrets`, which tripped the same queries on the identifier alone. Do not rename
+them back.
 
 Run with --selftest to prove the detector still detects.
 """
