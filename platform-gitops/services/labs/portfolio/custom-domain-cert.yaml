@@ -10,3 +10,4 @@ spec:
     kind: ClusterIssuer
   dnsNames:
       - preview.dmitriimashkov.com
+      - dmitriimashkov.com
