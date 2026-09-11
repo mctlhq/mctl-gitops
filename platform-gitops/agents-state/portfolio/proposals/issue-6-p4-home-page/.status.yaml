@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-09-11T03:45:28Z'
+status: review-stuck
+updated_at: '2026-09-11T04:02:46Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -17,4 +17,6 @@ attempt:
   expires_at: '2026-09-11T05:25:06Z'
   finished_at: '2026-09-11T03:22:05Z'
 pr: https://github.com/mctlhq/portfolio/pull/24
-review_attempts: 2
+review_attempts: 3
+notes: Follow-up failed deterministically 3 time(s) (implementer follow-up exited
+  non-zero (42) for portfolio/issue-6-p4-home-page); human triage required.
