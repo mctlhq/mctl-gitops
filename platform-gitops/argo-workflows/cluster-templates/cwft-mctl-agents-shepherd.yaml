@@ -159,45 +159,35 @@ spec:
           - key: github-token
             path: github-token
 
-  # Workflow-level output declaration so the onExit handler's reference
-  # to `{{workflow.outputs.parameters.degraded_apps}}` passes Argo's
-  # static validator. Without this, the CronWorkflow stays in
-  # `SpecError` state and never schedules (observed 2026-05-06 21:00 →
-  # 2026-05-07).
-  outputs:
-    parameters:
-      - name: degraded_apps
-        valueFrom:
-          parameter: "{{steps.verify.outputs.parameters.degraded_apps}}"
-          default: ""
+  # No `outputs.parameters` here, and none on shepherd-proposals below. This
+  # template used to declare `degraded_apps` in both places purely so that
+  # notify-telegram's `{{workflow.outputs.parameters.degraded_apps}}` would
+  # pass Argo's static validator — without the declaration the CronWorkflow
+  # sat in `SpecError` and never scheduled (2026-05-06 21:00 → 2026-05-07).
+  #
+  # The whole mechanism is gone. Two separate failures killed it:
+  #
+  #   * 2026-07-06 — a SECOND entry sourced from a DIFFERENT step (`activity`
+  #     from `commit`) broke the static validator workflow-wide ("invalid
+  #     spec: templates.notify-telegram: failed to resolve
+  #     {{workflow.outputs.parameters.activity}}") even though each entry
+  #     resolved fine alone. Every tick failed and scheduling stopped. It was
+  #     reverted the same day, and the file has carried a one-slot budget ever
+  #     since.
+  #   * 2026-09-11 — the one remaining slot turned out not to work either.
+  #     Three runs recorded `degraded_apps: ""` in `status.outputs` and the
+  #     onExit pod, started 18s later, still got the raw `{{...}}` literal in
+  #     its env var, which notify-telegram's guard rendered as
+  #     "unknown (verification did not complete)" on three healthy runs
+  #     (gitops#1186).
+  #
+  # Every cross-step value onExit needs — shepherd_status, activity,
+  # verify_status + the degraded-app lists — now travels as an Argo ARTIFACT
+  # addressed by literal S3 key. That channel has neither limit, and it is
+  # what the three input artifacts on notify-telegram read.
 
   templates:
     - name: shepherd-proposals
-      outputs:
-        parameters:
-          # Surface the verify step's degraded-app list as a workflow-
-          # level output so the onExit notify-telegram template can
-          # include it in the alert. `default: ""` because the verify
-          # step might never run (e.g. clone-gitops crashed) — onExit
-          # still needs the parameter to resolve to *something*.
-          #
-          # NB: this is the ONLY workflow.outputs.parameters entry sourced
-          # from a step in this template. A second entry sourced from a
-          # DIFFERENT step (`activity` from `commit`, added 2026-07-06 and
-          # reverted the same day) broke Argo's static validator workflow-
-          # wide ("invalid spec: templates.notify-telegram: failed to
-          # resolve {{workflow.outputs.parameters.activity}}") even though
-          # each entry resolves fine alone — every CronWorkflow tick failed
-          # and scheduling stopped entirely. `activity` therefore never became
-          # a second entry here; it travelled as a file on the shared PVC, and
-          # now that the PVC is gone it travels as an Argo ARTIFACT addressed
-          # by literal S3 key — see the note on commit-and-push. That channel
-          # has no such limit, so this one slot stays the only workflow
-          # output parameter and the 2026-07-06 failure stays out of reach.
-          - name: degraded_apps
-            valueFrom:
-              parameter: "{{steps.verify.outputs.parameters.degraded_apps}}"
-              default: ""
       steps:
         # No `clone` step: with emptyDir there is no shared volume for one step
         # to clone into on another's behalf.
@@ -314,8 +304,9 @@ spec:
           #
           # An artifact rather than `workflow.outputs.parameters`: a second
           # workflow output sourced from a DIFFERENT step is the bug that broke
-          # all three agent CronWorkflows on 2026-07-06 (#530/#531), and this
-          # template already spends its one usable slot on `degraded_apps`.
+          # all three agent CronWorkflows on 2026-07-06 (#530/#531), and the
+          # one entry this file did keep did not resolve inside the exit
+          # handler anyway (gitops#1186). There are no output parameters left.
           # Verified on a canary that an onExit template resolves an input
           # artifact by literal S3 key — with the fallback skipped, with the
           # fallback running, and with no producer at all (falls through to
@@ -722,10 +713,10 @@ spec:
           # The onExit channel for `activity`. notify-telegram used to read this
           # off the shared PVC; an onExit pod gets its own emptyDir, so it
           # travels as an artifact addressed by literal key instead. NOT a
-          # second `workflow.outputs.parameters` entry — a second one sourced
-          # from a different step is the bug that broke all three agent
-          # CronWorkflows on 2026-07-06 (#530/#531), and `degraded_apps`
-          # already occupies the one usable slot.
+          # `workflow.outputs.parameters` entry — a second one sourced from a
+          # different step is the bug that broke all three agent CronWorkflows
+          # on 2026-07-06 (#530/#531), and the last remaining one was removed
+          # in gitops#1186 for not resolving inside the exit handler.
           - name: activity
             path: /tmp/onexit
             optional: true
@@ -786,8 +777,7 @@ spec:
           name: mctl-gitops-main-writes
       # Writes activity ("yes"/"none") for notify-telegram, handed over as an
       # Argo ARTIFACT addressed by literal S3 key — NOT via output parameters,
-      # see the note on the shepherd-proposals template's degraded_apps output
-      # for why.
+      # see the note above `templates:` for why this file has none.
       script:
         image: alpine/git:2.43.0
         command: [sh]
@@ -984,54 +974,58 @@ spec:
     # notices that the safeguard itself is broken — silently bypassing
     # would defeat the entire purpose of this step.
     #
-    # The degraded app list is also written to /tmp/degraded.txt and
-    # exposed as a workflow-level output parameter so the onExit
-    # notify-telegram template can include the names in its alert.
+    # Everything this step tells onExit travels on the artifact channel:
+    # verify_status (clean / degraded / kubectl-failed), the filtered
+    # degraded-app list, and the unfiltered snapshot. See the artifact
+    # block below for why none of it is a workflow output parameter.
     - name: post-deploy-verify
       inputs:
         parameters:
           - name: started_at
       outputs:
         artifacts:
-          # onExit channel for the unfiltered degraded-app list. Same reasoning
-          # as `activity` on commit-and-push: an onExit pod gets its own
-          # emptyDir, and this template's single `workflow.outputs.parameters`
-          # slot is already spent on `degraded_apps` below.
-          - name: degraded-unfiltered
+          # The onExit channel for every signal this step produces. Same
+          # reasoning as `activity` on commit-and-push: an onExit pod gets its
+          # own emptyDir, so a file has to travel as an artifact addressed by
+          # literal S3 key.
+          #
+          # `degraded_apps` used to travel as a `globalName` output parameter
+          # read back in notify-telegram as
+          # `{{workflow.outputs.parameters.degraded_apps}}`. That resolution
+          # is not reliable inside an exit handler: on 2026-09-11 three runs
+          # (d6c4ded3, 94ea75cf, 4f1402b6) recorded the global correctly in
+          # `status.outputs` — `{"name":"degraded_apps","value":""}` — and the
+          # onExit pod, started 18s later, still received the raw
+          # `{{...}}` literal in its env var. notify-telegram's guard against
+          # raw template syntax then rendered it as
+          # "unknown (verification did not complete)" and stapled a false
+          # post-deploy-verify warning onto three healthy runs (gitops#1186).
+          # The parameter channel is gone; this artifact is the whole
+          # interface now.
+          - name: verify-signals
             path: /tmp/onexit
             optional: true
             s3:
               key: "{{workflow.name}}/onexit-degraded.tgz"
-        parameters:
-          - name: degraded_apps
-            globalName: degraded_apps
-            valueFrom:
-              path: /tmp/degraded.txt
-              # The verify step always writes this file (empty on
-              # success, app list on failure, "kubectl-failed" on
-              # persistent kubectl errors). `default` keeps the output
-              # parameter resolvable even if the step exits before the
-              # write — onExit must always be able to read it.
-              default: ""
       script:
         image: alpine/k8s:1.33.12
         command: [bash]
         env:
           - name: STARTED_AT
             value: "{{inputs.parameters.started_at}}"
-        # Unfiltered-degraded signal below travels as an Argo ARTIFACT addressed
-        # by literal S3 key, NOT a second workflow.outputs.parameters entry — see
-        # the note on this template's own degraded_apps output for why a second
-        # global output parameter sourced from a different step broke Argo's static
-        # validator workflow-wide (2026-07-06 incident). This step and notify-telegram
-        # are different steps, so the same landmine applies here.
         source: |
           set -uo pipefail
 
-          # Always create the output files first so the workflow-level
-          # output parameter resolves even on early-exit paths.
-          : > /tmp/degraded.txt
+          # Write the onExit files FIRST, before anything that can fail, so a
+          # step that dies mid-flight still hands onExit a truthful state.
+          # `verify_status` is seeded as "clean" and overwritten only by a
+          # branch that found something; its ABSENCE (the step never got here,
+          # or the artifact never uploaded) is what onExit reads as
+          # "incomplete". Same missing-file-means-unknown contract as
+          # shepherd_status and activity.
           mkdir -p /tmp/onexit
+          printf 'clean' > /tmp/onexit/verify_status
+          : > /tmp/onexit/degraded.txt
           : > /tmp/onexit/degraded_unfiltered.txt
 
           # 5-min sleep ≈ ArgoCD's default app reconcile interval (180s)
@@ -1068,7 +1062,8 @@ spec:
           done
           if [ "$RC" -ne 0 ] || [ -z "$RAW" ]; then
             echo "❌ kubectl get applications failed 3× — persistent failure, not absorbing."
-            echo "kubectl-failed (rc=$RC)" > /tmp/degraded.txt
+            printf 'kubectl-failed' > /tmp/onexit/verify_status
+            echo "kubectl-failed (rc=$RC)" > /tmp/onexit/degraded.txt
             exit 1
           fi
 
@@ -1105,7 +1100,8 @@ spec:
             if [ -n "$BAD2" ]; then
               echo "❌ Still Degraded after 120s grace: $BAD2"
               echo "Threshold (workflow.creationTimestamp): $THRESHOLD"
-              printf '%s' "$BAD2" > /tmp/degraded.txt
+              printf 'degraded' > /tmp/onexit/verify_status
+              printf '%s' "$BAD2" > /tmp/onexit/degraded.txt
               exit 1
             fi
             echo "✓ Apps recovered within grace period (transient rolling-update): $BAD"
@@ -1118,8 +1114,8 @@ spec:
           # step can pass above purely because a Degraded app's transition
           # predates THIS run's threshold — that app would never show up
           # in $BAD/$BAD2 again even though it never recovered. onExit
-          # uses this unfiltered list, not degraded_apps, to decide whether
-          # it's safe to resolve the shepherd fingerprint.
+          # uses this unfiltered list, not the filtered degraded.txt, to
+          # decide whether it's safe to resolve the shepherd fingerprint.
           FRESH="${RAW2:-$RAW}"
           printf '%s' "$FRESH" | jq -r '
             .items[]
@@ -1159,18 +1155,21 @@ spec:
     - name: notify-telegram
       inputs:
         artifacts:
-          # The three values this onExit handler needs, each addressed by its
-          # own literal S3 key. onExit pods get their own emptyDir, so the
-          # shared-PVC files these used to read are gone; and a second
-          # `workflow.outputs.parameters` entry sourced from a different step
-          # is the 2026-07-06 bug (#530/#531), which is why this is an artifact
-          # channel rather than more output parameters.
+          # Everything this onExit handler needs, each addressed by its own
+          # literal S3 key. onExit pods get their own emptyDir, so the
+          # shared-PVC files these used to read are gone; and
+          # `workflow.outputs.parameters` is not an alternative here — a
+          # second entry sourced from a different step is the 2026-07-06 bug
+          # (#530/#531), and the single remaining entry turned out not to
+          # resolve inside an exit handler either (gitops#1186). See the note
+          # above `templates:` for both.
           #
           # `optional: true` on all three: an attempt that never ran, or
           # crashed before writing, simply leaves the object absent and the
-          # `|| echo "unknown"` fallbacks below take over — the same behaviour
-          # the missing-file fallbacks always had. Verified on a canary that an
-          # onExit template resolves these keys with the producing step
+          # missing-file fallbacks below take over — which is exactly how
+          # "verification did not complete" is now detected, instead of being
+          # inferred from unresolved template syntax. Verified on a canary that
+          # an onExit template resolves these keys with the producing step
           # skipped, with a fallback producing instead, and with no producer at
           # all.
           - name: shepherd-status
@@ -1183,7 +1182,7 @@ spec:
             optional: true
             s3:
               key: "{{workflow.name}}/onexit-activity.tgz"
-          - name: degraded-unfiltered
+          - name: verify-signals
             path: /onexit/verify
             optional: true
             s3:
@@ -1236,13 +1235,6 @@ spec:
             value: "{{workflow.name}}"
           - name: WORKFLOW_DURATION
             value: "{{workflow.duration}}"
-          # Degraded app list from the post-deploy-verify step (empty
-          # string when verify ran clean OR didn't run at all). When
-          # non-empty the alert calls out the offending apps so the
-          # operator can jump straight to argocd UI without re-deriving
-          # the list from workflow logs.
-          - name: WORKFLOW_DEGRADED_APPS
-            value: "{{workflow.outputs.parameters.degraded_apps}}"
         source: |
           set +e
           apk add --no-cache curl ca-certificates jq >/dev/null 2>&1
@@ -1250,19 +1242,30 @@ spec:
           # "none" when commit-and-push had nothing to commit (steady-state
           # hourly tick with no proposal transitions). Read from the artifact
           # mounted at /onexit/commit rather than a workflow output parameter
-          # — see the note on the shepherd-proposals template's degraded_apps
-          # output for why a second parameter is not available here.
+          # — see the note above `templates:` for why this file has none.
           WORKFLOW_ACTIVITY=$(cat /onexit/commit/activity 2>/dev/null || echo "unknown")
 
-          # If termination happens before verify exists, Argo can pass the
-          # unresolved expression through literally instead of the output's
-          # empty default. Never expose raw template syntax in the operator
-          # notification (incident-17841348).
-          case "$WORKFLOW_DEGRADED_APPS" in
-            *'{{workflow.outputs.parameters.degraded_apps}}'*)
-              WORKFLOW_DEGRADED_APPS="unknown (verification did not complete)"
-              ;;
-          esac
+          # post-deploy-verify's own verdict, and the app list behind it. Both
+          # come off the same artifact the step wrote before it could fail, so
+          # "verify ran and found nothing" and "verify never got there" are
+          # now two different readings instead of one ambiguous empty string:
+          #
+          #   clean          — ran, no newly-Degraded app survived the grace
+          #   degraded       — ran, apps still Degraded; list in degraded.txt
+          #   kubectl-failed — ran, could not read Applications 3× in a row
+          #   incomplete     — file absent: the step never reached its first
+          #                    write, or the artifact never uploaded
+          #
+          # This replaces reading the degraded_apps workflow output parameter
+          # from an env var. That resolution silently handed this script the raw
+          # template literal on runs where the global was recorded correctly, and
+          # the guard against raw syntax then reported three healthy runs as
+          # "unknown (verification did not complete)" (gitops#1186). NB: do not
+          # write that template expression out in full anywhere inside a script
+          # body — `argo lint` resolves tags in rendered script text too, and an
+          # explanatory mention is indistinguishable from a real reference.
+          VERIFY_STATUS=$(cat /onexit/verify/verify_status 2>/dev/null || echo "incomplete")
+          WORKFLOW_DEGRADED_APPS=$(cat /onexit/verify/degraded.txt 2>/dev/null || echo "")
 
           # Unfiltered (no time-threshold) snapshot of currently-Degraded
           # apps, written by post-deploy-verify. Empty means the cluster is
@@ -1313,11 +1316,32 @@ spec:
           # equivalent leg has always used printf for this reason.
           TEXT=$(printf '%s mctl-agents: %s — %s (%ss)\n%s' \
             "$ICON" "$SUBJECT" "$WORKFLOW_STATUS" "$WORKFLOW_DURATION" "$UI_URL")
-          if [ -n "$WORKFLOW_DEGRADED_APPS" ]; then
-            # The verify step writes either "kubectl-failed (rc=N)" or
-            # the space-separated list of namespace/name pairs. Both
-            # cases are operator-relevant — surface verbatim.
-            TEXT=$(printf '%s\n⚠️ post-deploy-verify flagged: %s' "$TEXT" "$WORKFLOW_DEGRADED_APPS")
+          # One note, built once, used by both the Telegram leg and the
+          # incident leg below so they can never disagree.
+          #
+          # `clean` says nothing: an all-clear that prints a ⚠️ line is how
+          # this channel started crying wolf in the first place. `incomplete`
+          # says nothing on a Succeeded workflow either — `verify` runs with
+          # no continueOn, so Succeeded means it finished, and a missing file
+          # there is an artifact-upload hiccup, not a verification outcome.
+          # It IS worth a line on a Failed/Error run, where "the safeguard
+          # never ran" is exactly what the operator needs to know.
+          VERIFY_NOTE=""
+          case "$VERIFY_STATUS" in
+            degraded|kubectl-failed)
+              # The verify step writes either "kubectl-failed (rc=N)" or the
+              # space-separated list of namespace/name pairs. Both cases are
+              # operator-relevant — surface verbatim.
+              VERIFY_NOTE="post-deploy-verify flagged: ${WORKFLOW_DEGRADED_APPS}"
+              ;;
+            incomplete)
+              if [ "$WORKFLOW_STATUS" != "Succeeded" ]; then
+                VERIFY_NOTE="post-deploy-verify did not run"
+              fi
+              ;;
+          esac
+          if [ -n "$VERIFY_NOTE" ]; then
+            TEXT=$(printf '%s\n⚠️ %s' "$TEXT" "$VERIFY_NOTE")
           fi
 
           # Telegram leg. Skip a Succeeded run that transitioned nothing —
@@ -1356,8 +1380,8 @@ spec:
             # dedup now happens via `fingerprint` below.
             INCIDENT_ID="argo-${WORKFLOW_NAME}-$(date +%s)"
             SUMMARY="shepherd ${SUBJECT} ${WORKFLOW_STATUS} after ${WORKFLOW_DURATION}s — ${UI_URL}"
-            if [ -n "$WORKFLOW_DEGRADED_APPS" ]; then
-              SUMMARY="${SUMMARY} | post-deploy-verify flagged: ${WORKFLOW_DEGRADED_APPS}"
+            if [ -n "$VERIFY_NOTE" ]; then
+              SUMMARY="${SUMMARY} | ${VERIFY_NOTE}"
             fi
             # JSON-encode via jq so quotes / newlines / backslashes in
             # WORKFLOW_SLUG / WORKFLOW_SERVICE cannot break the body.
