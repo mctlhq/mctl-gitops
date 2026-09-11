@@ -108,6 +108,20 @@ either.
 collector does not itself log which keys it redacted (that log line would
 become a new place secrets could leak).
 
+## Opting a service in
+
+Set `otel.enabled: true` in the service's `values.yaml`. The chart then renders
+`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_PROTOCOL`,
+`OTEL_SERVICE_NAME` and `OTEL_RESOURCE_ATTRIBUTES`; anything the service
+already sets under `env` wins and the default is not rendered at all, so the
+list never carries a duplicate name.
+
+This works the same on both workload kinds. `base-service` renders a Deployment
+or -- when `blueGreen.enabled` is true -- a Rollout, never both, and the two
+templates share one `base-service.env` partial precisely so the opt-in cannot
+work on one path and silently do nothing on the other.
+`tests/test_base_service_otel_env.py` renders both and compares them.
+
 ## Volume control
 
 `filter/health` drops server spans whose `url.path` or `http.target` is

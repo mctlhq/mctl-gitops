@@ -80,11 +80,31 @@ tests:
             exp_annotations:
               summary: "otel-collector is refusing spans"
               description: >-
-                otelcol_receiver_refused_spans increased on 10.0.0.1:8888 in
-                the last 15 minutes. This is the memory_limiter processor
-                rejecting incoming spans rather than letting the pod OOM --
+                otelcol_receiver_refused_spans has been increasing on
+                10.0.0.1:8888 continuously for 5 minutes. This is the
+                memory_limiter processor rejecting incoming spans rather than
+                letting the pod OOM --
                 see docs/runbooks/otel-collector.md for the current sizing and
                 whether it needs raising.
+
+  # Regression for the lookback/hold invariant (see the header of
+  # otel-collector-alerts.yaml). One scrape refuses spans and the counter is
+  # flat either side of it -- an operator should never be paged for that.
+  # This case is the reason the window is 2m: at the 15m the rules originally
+  # shipped with, the single step keeps increase() positive for fifteen
+  # minutes, the 5m hold passes on the way through, and this alert fires.
+  - interval: 1m
+    name: a single refused-spans spike does not fire
+    input_series:
+      - series: 'otelcol_receiver_refused_spans{instance="10.0.0.1:8888"}'
+        values: '0x5 7 7x14'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: OtelCollectorRefusedSpans
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: OtelCollectorRefusedSpans
+        exp_alerts: []
 
   # ---------------------------------------------------------------------
   # OtelCollectorExportFailures
@@ -116,11 +136,12 @@ tests:
             exp_annotations:
               summary: "otel-collector is failing to export spans"
               description: >-
-                otelcol_exporter_send_failed_spans increased on 10.0.0.1:8888
-                (otlp/backend) in the last 15 minutes. The debug exporter does
-                not fail this way, so a real backend is configured and
-                refusing or unreachable -- check otelCollector.backendEndpoint
-                and the queue via OtelCollectorQueueNearFull.
+                otelcol_exporter_send_failed_spans has been increasing on
+                10.0.0.1:8888 (otlp/backend) continuously for 5 minutes. The
+                debug exporter does not fail this way, so a real backend is
+                configured and refusing or unreachable -- check
+                otelCollector.backendEndpoint and the queue via
+                OtelCollectorQueueNearFull.
 
   # ---------------------------------------------------------------------
   # OtelCollectorQueueNearFull

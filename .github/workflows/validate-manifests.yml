@@ -243,3 +243,22 @@ jobs:
         # values file that already declares envFrom — the shape that lost
         # every application secret in gitops#1102.
         run: python3 tests/test_wft_provision_database_values.py
+
+      - name: Unit-test base-service's OTEL env on both workload kinds
+        # The chart renders a Deployment OR a Rollout, never both, so an env
+        # block added to one template is invisible in the other's output and
+        # fails silently — which is how the OTEL opt-in first shipped working
+        # only for non-blueGreen services. This renders both from the same
+        # values and compares them, and covers a service with no `env:` key.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_base_service_otel_env.py
+
+      - name: Check the otel-collector alert lookbacks against their holds
+        # `increase(...[W]) > 0` with W longer than `for: H` pages for a spike
+        # that is already over: the expression stays true for the whole window,
+        # so the hold is passed on the way through. promtool proves it for
+        # today's two rules; this states the invariant for any rule added next.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_otel_collector_alert_windows.py

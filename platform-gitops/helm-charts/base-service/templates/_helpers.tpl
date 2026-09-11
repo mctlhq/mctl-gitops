@@ -98,3 +98,58 @@ Accepts a dict of "store" and "kind".
 {{- define "base-service.secretStoreRef" -}}
 name: {{ .store | default "tenant-store" }}
 kind: {{ .kind | default "SecretStore" }}{{- end }}
+
+{{/*
+The container's `env:` list, shared by deployment.yaml and rollout.yaml.
+
+This exists as one partial rather than two copies because the two templates are
+mutually exclusive -- `blueGreen.enabled` picks Rollout *instead of* Deployment
+-- so a block added to only one of them is invisible in the other's rendering
+and fails silently. That is exactly how the OTEL variables first shipped: a
+blueGreen service setting `otel.enabled: true` got no variables, no traces and
+no error. tests/test_base_service_otel_env.py renders both kinds and asserts
+they agree.
+
+`.Values.env` wins on conflict: an otel default is rendered only when the
+service has not already set that same key, so the list never carries a
+duplicate name (rather than relying on Kubernetes' last-one-wins behaviour).
+`default dict` guards a service that writes a bare `env:` key with nothing
+under it, which reaches here as nil.
+
+Callers own the `env:` key and the indentation:
+
+  {{- if or .Values.env .Values.envValueFrom .Values.otel.enabled }}
+  env:
+    {{- include "base-service.env" . | trim | nindent 12 }}
+  {{- end }}
+
+`trim` is not decoration: the first `range` emits a leading newline, and
+`nindent` would turn that into a blank line of trailing spaces under `env:`,
+which is a diff against every service that renders today for no reason.
+*/}}
+{{- define "base-service.env" -}}
+{{- $env := default dict .Values.env -}}
+{{- if .Values.otel.enabled }}
+{{- $otelEnv := dict
+    "OTEL_EXPORTER_OTLP_ENDPOINT" .Values.otel.endpoint
+    "OTEL_EXPORTER_OTLP_PROTOCOL" "http/protobuf"
+    "OTEL_SERVICE_NAME" (include "base-service.fullname" .)
+    "OTEL_RESOURCE_ATTRIBUTES" (printf "service.namespace=%s" .Release.Namespace)
+}}
+{{- range $key, $value := $otelEnv }}
+{{- if not (hasKey $env $key) }}
+- name: {{ $key }}
+  value: {{ $value | quote }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- range $key, $value := $env }}
+- name: {{ $key }}
+  value: {{ $value | quote }}
+{{- end }}
+{{- range $key, $source := default dict .Values.envValueFrom }}
+- name: {{ $key }}
+  valueFrom:
+{{- toYaml $source | nindent 4 }}
+{{- end }}
+{{- end }}
