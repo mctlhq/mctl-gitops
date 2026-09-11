@@ -5,8 +5,9 @@ metadata:
   namespace: argo-workflows
   annotations:
     workflows.argoproj.io/description: |
-      Two-hourly (07:00-21:00 UTC, 8/day) trigger for the Tier 3 PR
-      shepherd.
+      Every 15 minutes at :09 (96/day) trigger for the Tier 3 PR
+      shepherd. Offset to sit two minutes behind the reconcile schedule
+      (:07), whose status projection it acts on.
 
       All workflow logic lives in ClusterWorkflowTemplate
       `mctl-agents-shepherd` (cwft-mctl-agents-shepherd.yaml). This
@@ -24,26 +25,59 @@ metadata:
       flipped 11 proposals (9 to `merged`, 2 to `rejected`) with no
       false positives.
 spec:
-  # `0 7-21/2 * * *` — 07, 09, 11, 13, 15, 17, 19, 21 UTC (8 ticks/day).
-  # Anchored on the operator's local morning: they are at UTC+2, so the
-  # first tick lands at 09:00 their time and the last at 23:00.
-  # A tick with no proposals in {implemented, review-fixing} is a cheap
-  # no-op (one glob + exit). Contends with rotate-github-app-tokens (also
-  # :00) on the `mctl-gitops-main-writes` mutex — Forbid drops overlaps
-  # cleanly, and since #852 the mutex is held only for the seconds
-  # commit-and-push runs rather than the whole tick.
+  # `9,24,39,54 * * * *` — every 15 minutes, offset to :09.
   #
-  # History: `30 */2 * * *` (12/day) → `0 * * * *` (24/day) on 2026-05-23
-  # to cut worst-case PR-sit-time from ~2h to ~1h → this on 2026-08-15.
-  # That trade is deliberate: PR-sit-time goes back up (2h during the
-  # working day, 10h across the overnight gap), and in exchange each tick
-  # stops costing a Hetzner volume provision + attach/detach cycle and an
-  # SDK run. 24 → 8 volumes a day on the one template that still carries a
-  # workdir PVC and is the live victim of the Multi-Attach stalls behind
+  # The shepherd is the third read-mostly reconciler in the dev loop, and
+  # until now it was the only one not on the family's cadence:
+  #
+  #   issue-poll   every 15 min, offset :03   (Temporal schedule)
+  #   reconcile    every 15 min, offset :07   (Temporal schedule)
+  #   shepherd     every 15 min, offset :09   (this file)
+  #   incidents    hourly,       offset :11   (Temporal) and :15 (Argo)
+  #
+  # The offset is not cosmetic. reconcile projects GitHub state onto
+  # proposal status; the shepherd then acts on whatever sits in
+  # {implemented, review-fixing}. Running two minutes behind reconcile
+  # means each tick reads status that was refreshed moments ago instead of
+  # up to fifteen minutes stale, and it keeps the two off the same minute
+  # on the `mctl-gitops-main-writes` mutex — which, since #852, either
+  # holds for the seconds commit-and-push runs or not at all. :00 is left
+  # to rotate-github-app-tokens.
+  #
+  # Why this is affordable now. The cadence was cut to 8 ticks/day on
+  # 2026-08-15 because every tick then provisioned a Hetzner volume, and 24
+  # attach/detach cycles a day were feeding the Multi-Attach stalls behind
   # the mutex cascades (see reference_argo_agents_pvc_multiattach_stall).
-  # Revisit once shepherd moves to emptyDir, which removes the volume cost
-  # entirely and makes a denser cadence cheap again.
-  schedule: "0 7-21/2 * * *"
+  # That revision named its own exit condition — "Revisit once shepherd
+  # moves to emptyDir" — and the move has happened:
+  # cwft-mctl-agents-shepherd mounts `workdir` as an emptyDir, so a tick
+  # costs a pod and nothing else. A tick with no proposal in
+  # {implemented, review-fixing} is a glob and an exit.
+  #
+  # What it buys. Worst-case PR sit time goes from 2 hours during the day
+  # and 10 hours across the overnight gap to 15 minutes, always. A dev-loop
+  # cycle is investigate -> approve -> implement -> review -> merge ->
+  # release; at the old cadence the wait for the shepherd was routinely the
+  # longest single step in it, and overnight it was longer than all the
+  # others combined.
+  #
+  # What it costs, so the next person changing this does not find out the
+  # hard way. The review-fixing attempt budget is spent faster: a PR whose
+  # findings the implementer declines to act on burns its 3 attempts in 45
+  # minutes instead of 6 hours and lands in review-stuck, which needs an
+  # operator to move the proposal back to accepted. The total quota spend is
+  # unchanged — the cap is 3 either way — but the failure arrives sooner.
+  # That is the better trade: review-stuck is a state someone has to notice,
+  # and noticing it 45 minutes in beats noticing it the next morning.
+  #
+  # History: `30 */2 * * *` (12/day) -> `0 * * * *` (24/day) on 2026-05-23
+  # -> `0 7-21/2 * * *` (8/day) on 2026-08-15 -> this (96/day) on
+  # 2026-09-11.
+  #
+  # `schedules` (a list), not the singular `schedule`: the singular is
+  # deprecated as of Argo 3.6 and removed in 4.0. Controller is v3.7.11.
+  schedules:
+    - "9,24,39,54 * * * *"
   timezone: "UTC"
   # Forbid: never overlap two shepherd ticks. They all contend on the
   # same `mctl-gitops-main-writes` mutex anyway, and a queued tick
@@ -52,23 +86,23 @@ spec:
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 600
   # Counts, NOT days — Argo retains the last N succeeded / N failed
-  # Workflow objects regardless of age. At 8 ticks/day these limits are no
-  # longer the binding constraint: the CWFT's 3d ttlStrategy deletes a run
-  # before 48 of them accumulate (that would take 6 days), so the effective
-  # window is ~3 days / ~24 runs. Left at 48/24 deliberately — they cost
-  # nothing unbinding, and they become right again if the cadence goes back
-  # up after the emptyDir move.
+  # Workflow objects regardless of age. At 96 ticks/day these bind well
+  # before the CWFT's 3d ttlStrategy does, which is what the previous
+  # revision predicted would happen once the cadence went back up after the
+  # emptyDir move. 96 succeeded keeps a full day of firing history, which is
+  # the window that matters when reading the pattern after an overnight run;
+  # the objects are a few KB each and nothing else depends on them.
+  # Failures stay at 24 — they are rare, so 24 of them reaches much further
+  # back than a day.
   #
-  # Default was 3 (~6 hours), which masked the firing pattern during
-  # the 2026-05-07 ESO triage. See plan
-  # ~/.claude/plans/mctl-agents-daily-cron-visibility.md.
-  successfulJobsHistoryLimit: 48
+  successfulJobsHistoryLimit: 96
   failedJobsHistoryLimit: 24
   # Active — un-suspended after the smoke test (one-shot real run on
-  # 2026-05-01 flipped 11 proposals correctly). Schedule fires every two
-  # hours between 07:00 and 21:00 UTC and the workflow contends on the
-  # shared `mctl-gitops-main-writes` mutex with the implementer /
-  # agents-run workflows, so back-pressure is bounded.
+  # 2026-05-01 flipped 11 proposals correctly). The workflow contends on
+  # the shared `mctl-gitops-main-writes` mutex with the implementer /
+  # agents-run workflows, so back-pressure is bounded; the :09 offset in
+  # the schedule comment above keeps it off reconcile's and
+  # rotate-github-app-tokens' minutes rather than relying on that.
   #
   # Re-un-suspended 2026-07-25 after the 2026-07-24T03:00:00Z org-wide
   # spend-cap reset (mctl-gitops#611 TEMP note): two manual
