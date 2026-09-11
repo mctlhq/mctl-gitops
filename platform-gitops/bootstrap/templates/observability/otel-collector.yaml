@@ -1,0 +1,263 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: otel-collector
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  sources:
+    # Chart version pinned to the latest release resolved from
+    # https://open-telemetry.github.io/opentelemetry-helm-charts on 2026-09-11
+    # (0.173.0 / appVersion 0.160.0), matching the exact-pin style of every
+    # other chart in this repo (argo-rollouts 2.39.0, external-secrets 0.10.7,
+    # vault 0.28.1, loki-stack 2.10.2, victoria-metrics-k8s-stack 0.72.5).
+    #
+    # image.repository is overridden below to the CONTRIB distribution
+    # (otel/opentelemetry-collector-contrib, command otelcol-contrib). This is
+    # mandatory, not cosmetic: the k8sattributes and redaction processors and
+    # the OTTL filter processor used in the traces pipeline below do not exist
+    # in the core distribution, which would fail to start with "unknown type"
+    # on each of them.
+    - repoURL: https://open-telemetry.github.io/opentelemetry-helm-charts
+      chart: opentelemetry-collector
+      targetRevision: "0.173.0"
+      helm:
+        values: |
+          mode: deployment
+          fullnameOverride: otel-collector
+          replicaCount: 2
+
+          image:
+            repository: otel/opentelemetry-collector-contrib
+          command:
+            name: otelcol-contrib
+
+          service:
+            type: ClusterIP
+
+          ingress:
+            enabled: false
+
+          resources:
+            requests:
+              cpu: 100m
+              memory: 192Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+
+          # kubernetesAttributes.enabled renders the ClusterRole/ClusterRoleBinding
+          # the k8sattributes processor below needs: get/list/watch on pods,
+          # namespaces and replicasets only -- no secrets, no write verbs.
+          presets:
+            kubernetesAttributes:
+              enabled: true
+
+          # Explicitly disabled, not just left at the chart default. vmagent runs
+          # selectAllByDefault: true (bootstrap/templates/observability/monitoring.yaml:287),
+          # so a chart-rendered ServiceMonitor/PodMonitor would be discovered too,
+          # alongside the hand-written VMServiceScrape at
+          # infra-components/observability/otel-collector/servicescrape.yaml --
+          # doubling every series and every alert over it. That is exactly the
+          # #1159 pushgateway double-scrape incident
+          # (infra-components/observability/pushgateway/servicescrape.yaml).
+          serviceMonitor:
+            enabled: false
+          podMonitor:
+            enabled: false
+
+          # Only the OTLP ports plus metrics are needed. jaeger-*/zipkin ports are
+          # disabled alongside their receivers below -- nothing in this pipeline
+          # uses them, and a config with a defined-but-unused receiver fails to
+          # start.
+          ports:
+            otlp:
+              enabled: true
+            otlp-http:
+              enabled: true
+            jaeger-compact:
+              enabled: false
+            jaeger-thrift:
+              enabled: false
+            jaeger-grpc:
+              enabled: false
+            zipkin:
+              enabled: false
+            metrics:
+              enabled: true
+
+          config:
+            receivers:
+              # Removed: only otlp is used by the traces pipeline below, and the
+              # collector refuses to start with a receiver defined but not
+              # referenced by any pipeline.
+              jaeger: null
+              prometheus: null
+              zipkin: null
+              otlp:
+                protocols:
+                  grpc:
+                    endpoint: 0.0.0.0:4317
+                  http:
+                    endpoint: 0.0.0.0:4318
+
+            processors:
+              # Backpressure mechanism. Must run first so a refusal happens before
+              # work is spent on a batch: past the soft limit the receiver returns
+              # a retryable error instead of the pod being OOM-killed.
+              memory_limiter:
+                check_interval: 1s
+                limit_percentage: 75
+                spike_limit_percentage: 20
+
+              # mctl.ai/team -> mctl.team and mctl.ai/component -> mctl.component
+              # are the same pair promtail already relabels for logs
+              # (bootstrap/templates/observability/loki.yaml:203-217), so a trace
+              # and a log line for the same pod carry matching tenant identity
+              # without a mapping table. pod_association and otel_annotations are
+              # left at the chart's generated default (connection-based fallback
+              # plus resource-attribute association).
+              k8sattributes:
+                extract:
+                  metadata:
+                    - k8s.namespace.name
+                    - k8s.pod.name
+                    - k8s.node.name
+                    - k8s.deployment.name
+                  labels:
+                    - tag_name: mctl.team
+                      key: mctl.ai/team
+                      from: pod
+                    - tag_name: mctl.component
+                      key: mctl.ai/component
+                      from: pod
+
+              # action: insert (never upsert): if a producer already set
+              # k8s.cluster.name or deployment.environment, the producer wins.
+              # This is what satisfies issue #902's "preserve execution-specific
+              # attributes rather than rewriting them destructively".
+              resource:
+                attributes:
+                  - key: k8s.cluster.name
+                    value: {{ .Values.otelCollector.clusterName | quote }}
+                    action: insert
+                  - key: deployment.environment
+                    value: {{ .Values.otelCollector.environment | quote }}
+                    action: insert
+
+              # allow_all_keys + key patterns rather than an exact key list:
+              # mctlhq/mctl-agent#38 and mctlhq/mctl-agents#195 (the producers of
+              # these spans) have not shipped yet, so the block list must catch
+              # attribute names nobody has invented yet. blocked_values covers
+              # credential *shapes* that can appear under an innocuous key --
+              # T7 in the proposal's tasks.md exercises this with a benign key
+              # whose value looks like a GitHub token. summary is left unset so
+              # the collector does not itself log which keys it redacted.
+              redaction:
+                allow_all_keys: true
+                blocked_key_patterns:
+                  - '(?i).*(authorization|cookie|api[-_]?key|token|secret|password|credential).*'
+                  - '(?i)^vault\..*'
+                  - '(?i)^gen_ai\.(prompt|completion).*'
+                  - '(?i).*\.messages$'
+                  - '(?i)^mcp\.tool\.(arguments|result)$'
+                  - '^db\.statement$'
+                  - '^http\.(request|response)\.header\..*'
+                blocked_values:
+                  - 'ghp_[A-Za-z0-9]{36}'
+                  - 'gh[pousr]_[A-Za-z0-9]{20,}'
+                  - 'sk-[A-Za-z0-9]{20,}'
+                  - 'hvs\.[A-Za-z0-9]{20,}'
+                  - 'eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.'
+
+              # Pure volume control: drops the two paths every base-service
+              # deployment probes (helm-charts/base-service/values.yaml:136-143).
+              # Costs nothing and removes the single largest source of
+              # uninteresting spans.
+              filter/health:
+                error_mode: ignore
+                traces:
+                  span:
+                    - 'attributes["url.path"] == "/healthz"'
+                    - 'attributes["url.path"] == "/readyz"'
+                    - 'attributes["http.target"] == "/healthz"'
+                    - 'attributes["http.target"] == "/readyz"'
+
+              batch:
+                send_batch_size: 512
+                send_batch_max_size: 1024
+                timeout: 5s
+
+            exporters:
+              # Always on in phase 1. Its stdout is already collected by the
+              # existing promtail -> Loki pipeline, so enrichment and redaction
+              # are both verifiable in Grafana without choosing a backend first.
+              debug:
+                verbosity: normal
+              {{- if .Values.otelCollector.backendEndpoint }}
+              # sending_queue + retry_on_failure absorb transient backend
+              # outages; queue-full drops the batch rather than stalling the
+              # receiver (see docs/runbooks/otel-collector.md).
+              otlp/backend:
+                endpoint: {{ .Values.otelCollector.backendEndpoint | quote }}
+                sending_queue:
+                  enabled: true
+                  num_consumers: 4
+                  queue_size: 5000
+                retry_on_failure:
+                  enabled: true
+                  initial_interval: 5s
+                  max_interval: 30s
+                  max_elapsed_time: 300s
+              {{- end }}
+
+            service:
+              pipelines:
+                # Traces only in phase 1. Removed rather than left at the chart
+                # default (which references receivers/exporters this collector
+                # does not define), since an unused-but-defined component fails
+                # the collector's own startup validation.
+                logs: null
+                metrics: null
+                traces:
+                  receivers: [otlp]
+                  processors:
+                    - memory_limiter
+                    - k8sattributes
+                    - resource
+                    - redaction
+                    - filter/health
+                    - batch
+                  exporters:
+                    - debug
+                    {{- if .Values.otelCollector.backendEndpoint }}
+                    - otlp/backend
+                    {{- end }}
+    - repoURL: {{ .Values.spec.source.repoURL }}
+      targetRevision: {{ .Values.spec.source.targetRevision }}
+      path: platform-gitops/infra-components/observability/otel-collector
+  destination:
+    server: {{ .Values.spec.destination.server }}
+    namespace: monitoring
+  # Minimal sync set, copied from loki.yaml -- NOT monitoring.yaml's
+  # ServerSideApply + RespectIgnoreDifferences + ServerSideDiff=false, and no
+  # ignoreDifferences block. That combination exists in monitoring.yaml for
+  # VictoriaMetrics operator CRDs with incomplete schemas; this chart renders
+  # only core resources (Deployment, Service, ConfigMap, ClusterRole,
+  # ClusterRoleBinding), so inheriting it would import a documented hazard
+  # (the array-indexing jq trap, #789 / argo-cd#17694) for nothing.
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

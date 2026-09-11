@@ -118,8 +118,29 @@ spec:
           {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-          {{- if or .Values.env .Values.envValueFrom }}
+          {{- if or .Values.env .Values.envValueFrom .Values.otel.enabled }}
           env:
+            {{- if .Values.otel.enabled }}
+            {{- /*
+            .Values.env wins on conflict: an otel default is only rendered
+            here when the service has not already set that same key under
+            `env`, so there is never a duplicate env var name in the list
+            below (as opposed to relying on Kubernetes' own last-one-wins
+            behaviour for duplicate names).
+            */}}
+            {{- $otelEnv := dict
+                "OTEL_EXPORTER_OTLP_ENDPOINT" .Values.otel.endpoint
+                "OTEL_EXPORTER_OTLP_PROTOCOL" "http/protobuf"
+                "OTEL_SERVICE_NAME" (include "base-service.fullname" .)
+                "OTEL_RESOURCE_ATTRIBUTES" (printf "service.namespace=%s" .Release.Namespace)
+            }}
+            {{- range $key, $value := $otelEnv }}
+            {{- if not (hasKey $.Values.env $key) }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
             {{- range $key, $value := .Values.env }}
             - name: {{ $key }}
               value: {{ $value | quote }}

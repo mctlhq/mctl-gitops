@@ -188,3 +188,14 @@ blueGreen:
   # once the preview pod passes readiness probes. Set to false for manual promotion
   # via `kubectl argo rollouts promote <name>` or the Argo Rollouts dashboard.
   autoPromotionEnabled: true
+
+# -- Optional: OpenTelemetry OTLP trace export (issue #902). Default-off: no
+# services/*/*/values.yaml opts in here, so this changes nothing until a
+# service sets otel.enabled: true. When enabled, renders
+# OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_EXPORTER_OTLP_PROTOCOL, OTEL_SERVICE_NAME
+# and OTEL_RESOURCE_ATTRIBUTES alongside `env` -- `env` wins on conflict, so a
+# service can override any of the four explicitly. See
+# docs/runbooks/otel-collector.md.
+otel:
+  enabled: false
+  endpoint: http://otel-collector.monitoring.svc.cluster.local:4318

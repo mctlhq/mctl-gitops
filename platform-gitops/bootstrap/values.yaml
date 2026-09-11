@@ -9,3 +9,17 @@ spec:
 # Set the chat ID for your Telegram group/channel
 alertmanager:
   telegramChatId: 210408407
+
+# OpenTelemetry Collector (traces gateway, phase 1 -- issue #902)
+otelCollector:
+  # Matches infrastructure/k3s-preview/kube.tf:120 (cluster_name =
+  # "mctl-preprod"). destination.server above is the in-cluster API, so this
+  # bootstrap values file only ever describes the one cluster ArgoCD here
+  # reconciles; a second cluster gets its own bootstrap values with its own
+  # clusterName/environment.
+  clusterName: mctl-preprod
+  environment: preprod
+  # Empty until a trace backend is chosen. With this empty, the collector's
+  # traces pipeline lists only the debug exporter -- see
+  # docs/runbooks/otel-collector.md for the one-key swap procedure.
+  backendEndpoint: ""
