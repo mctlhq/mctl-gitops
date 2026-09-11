@@ -70,6 +70,7 @@ NAMESPACE = "traefik"
 CA_SECRET_NAME = "traefik-origin-pull-ca"
 CA_KEY = "tls.ca"
 AUTH_TYPE = "RequireAndVerifyClientCert"
+STORE = "vault-backend"
 VAULT_PATH = "platform/traefik/origin-pull"
 VAULT_PROPERTY = "ca.crt"
 
@@ -149,6 +150,29 @@ def problems(docs: list[dict]) -> list[str]:
     else:
         spec = ca_sources[0].get("spec") or {}
 
+        # Which store the CA is fetched FROM is as load-bearing as the path
+        # within it. A different store is a different CA even with the same
+        # remoteRef.
+        store = (spec.get("secretStoreRef") or {}).get("name")
+        if store != STORE:
+            found.append(
+                f"ExternalSecret/{CA_SECRET_NAME} reads from secretStore {store!r}, "
+                f"expected {STORE!r}"
+            )
+
+        # target.template wins over spec.data in ESO, so a template that sets
+        # tls.ca replaces the fetched CA with a literal one and every check
+        # below would still pass. A template itself is legitimate -- the
+        # sibling traefik-origin-ca uses one to set type: kubernetes.io/tls --
+        # so only defining this key through it is refused.
+        template = (spec.get("target") or {}).get("template") or {}
+        templated = set(template.get("data") or {}) | set(template.get("stringData") or {})
+        if CA_KEY in templated:
+            found.append(
+                f"ExternalSecret/{CA_SECRET_NAME} sets {CA_KEY!r} through target.template, "
+                "which overrides the value fetched from Vault"
+            )
+
         # metadata.name is not what Traefik looks up -- target.name is the
         # Secret ESO actually creates. If they diverge, Traefik finds nothing,
         # the TLSOption cannot be built, and the origin quietly stops
@@ -225,6 +249,9 @@ metadata:
   name: {CA_SECRET_NAME}
   namespace: {NAMESPACE}
 spec:
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: {STORE}
   data:
     - secretKey: {CA_KEY}
       remoteRef:
@@ -327,6 +354,29 @@ def selftest() -> int:
             GOOD_OPTION,
             GOOD_CA_SOURCE + LITERAL_SECRET,
             1,
+        ),
+        (
+            "CA fetched from a different secret store",
+            GOOD_OPTION,
+            GOOD_CA_SOURCE.replace(f"name: {STORE}", "name: some-other-store"),
+            1,
+        ),
+        (
+            "tls.ca hardcoded through target.template",
+            GOOD_OPTION,
+            GOOD_CA_SOURCE.replace(
+                "  data:",
+                "  target:\n    template:\n      data:\n        " + CA_KEY + ": rogue\n  data:",
+            ),
+            1,
+        ),
+        (
+            "a template that does not touch tls.ca is fine",
+            GOOD_OPTION,
+            GOOD_CA_SOURCE.replace(
+                "  data:", "  target:\n    template:\n      type: kubernetes.io/tls\n  data:"
+            ),
+            0,
         ),
     ]
 
