@@ -1,5 +1,5 @@
-status: review-stuck
-updated_at: '2026-09-11T10:41:17Z'
+status: merged
+updated_at: '2026-09-11T16:51:31Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -17,7 +17,12 @@ attempt:
   expires_at: '2026-09-11T11:59:23Z'
   finished_at: '2026-09-11T10:00:25Z'
 pr: https://github.com/mctlhq/portfolio/pull/34
-review_attempts: 3
 notes: Follow-up failed deterministically 3 time(s) (implementer follow-up exited
   non-zero (42) for portfolio/issue-9-p7-colophon-page-journal-and-adr-routes); human
   triage required.
+github:
+  state: merged
+  head_sha: f55840d11ed08dd4f1d7d623399ffdb70d9a2044
+  observed_at: '2026-09-11T16:51:31Z'
+merged_at: '2026-09-11T16:51:31Z'
+merge_commit: 9c307a36ad0f8fb0928764494d90e15d098edc6b
