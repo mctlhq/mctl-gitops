@@ -18,7 +18,11 @@ becomes a resource and the script goes away.
 - `secure_web_gateway` — whether the portal routes its traffic through
   Cloudflare Gateway. This is the Phase 2 subject (`mctlhq/.github#43`,
   `#1181`): committed `false` is the baseline the POC returns to.
-- `code_mode` / `allow_code_mode` — pinned `off`/`false` because Phase 2 must
+- `code_mode` / `allow_code_mode` — `code_mode` is one of `off`, `opt_in`,
+  `default_on`, `enforced` (the API's own set; it defaults to `opt_in` when
+  omitted on create, which is why leaving it unpinned is not the same as
+  leaving it off). The two fields must agree — the API answers 400 when they
+  disagree — so the script refuses a file where they do not. Pinned `off`/`false` because Phase 2 must
   leave Code Mode untouched, and "untouched" is only checkable if something
   records what it was. A drift here is as interesting as a drift in the
   Gateway switch: it means the portal grew an execution surface nobody

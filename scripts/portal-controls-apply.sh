@@ -66,9 +66,10 @@ jq -e --argjson known "$known" '
   (keys_unsorted | sort) == ($known | sort)
   and (.secure_web_gateway | type == "boolean")
   and (.allow_code_mode | type == "boolean")
-  and (.code_mode | type == "string")
+  and (.code_mode | IN("off", "opt_in", "default_on", "enforced"))
+  and (.allow_code_mode == (.code_mode != "off"))
 ' >/dev/null <<<"$vetted" || {
-  echo "$rel does not have the expected shape: exactly $known, booleans for the two flags" >&2
+  echo "$rel does not have the expected shape: exactly $known; secure_web_gateway and allow_code_mode boolean; code_mode one of off|opt_in|default_on|enforced; allow_code_mode must agree with code_mode (the API answers 400 when they disagree)" >&2
   jq -c 'keys_unsorted' <<<"$vetted" >&2 || true
   exit 1
 }
@@ -99,10 +100,15 @@ live_host=$(jq -r '.result.hostname' <<<"$current")
 [ "$live_host" = "$hostname" ] \
   || { echo "portal '$portal' serves $live_host, but $rel is written for $hostname; refusing" >&2; exit 1; }
 
+# No `//` here: jq's alternative operator substitutes on false as well as
+# null, and both switches are committed false. `($live[.] // null) != $want[.]`
+# therefore read `null != false` and reported the baseline as drifted against
+# itself -- a detector that could only ever go red. A missing key already
+# indexes to null, so the plain comparison is both correct and shorter.
 drift=$(jq -r --argjson want "$vetted" '
   .result as $live
   | ["secure_web_gateway", "code_mode", "allow_code_mode"]
-  | map(select(($live[.] // null) != $want[.])
+  | map(select($live[.] != $want[.])
         | "\(.): live=\($live[.] | tojson) committed=\($want[.] | tojson)")
   | .[]' <<<"$current")
 

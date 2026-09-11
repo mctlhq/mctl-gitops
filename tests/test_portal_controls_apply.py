@@ -50,7 +50,16 @@ LIVE = {
 }
 
 STUB_CURL = r"""#!/bin/sh
-# Records the PUT body, answers both calls from LIVE_JSON.
+# Records the PUT body, the curl config and the argv, then answers from
+# LIVE_JSON. Resolving -K is the point: the script's header claims the token
+# reaches curl through a config on a file descriptor and never through the
+# command line, and only a stub that opens that config can hold it to that.
+printf '%s' "$*" > "$ARGV_FILE"
+for a in "$@"; do
+  if [ "${next:-}" = cfg ]; then cat "$a" > "$AUTH_FILE" 2>/dev/null; next=; continue; fi
+  case "$a" in -K) next=cfg; continue ;; esac
+done
+next=
 for a in "$@"; do
   if [ "$a" = "-X" ]; then is_put=maybe; continue; fi
   if [ "${is_put:-}" = maybe ] && [ "$a" = "PUT" ]; then is_put=yes; continue; fi
@@ -65,7 +74,7 @@ fi
 """
 
 
-def fixture(tmp, controls=None, live=None):
+def fixture(tmp, controls=None):
     """A throwaway checkout holding the real script and a committed file."""
     controls = controls if controls is not None else {
         "portal": "mcp", "hostname": "mcp.mctl.ai",
@@ -96,6 +105,14 @@ def git(root, *args):
 
 def run(root, *args, live=None):
     put_body = root / "put-body.json"
+    # Cleared per run: otherwise a later invocation that exits before the PUT
+    # returns the previous body, and `sent is not None` stops meaning "a PUT
+    # happened" -- which would let a refusal case pass without asserting one.
+    put_body.unlink(missing_ok=True)
+    auth = root / "curl-auth.txt"
+    argv = root / "curl-argv.txt"
+    auth.unlink(missing_ok=True)
+    argv.unlink(missing_ok=True)
     env = dict(
         os.environ,
         PATH=f"{root / 'stub'}{os.pathsep}{os.environ['PATH']}",
@@ -103,10 +120,14 @@ def run(root, *args, live=None):
         CLOUDFLARE_ACCOUNT_ID="stub-account",
         LIVE_JSON=json.dumps(live if live is not None else LIVE),
         PUT_BODY_FILE=str(put_body),
+        AUTH_FILE=str(auth),
+        ARGV_FILE=str(argv),
     )
     p = subprocess.run(["bash", str(root / SCRIPT_REL), *args],
                        capture_output=True, text=True, env=env)
     sent = json.loads(put_body.read_text()) if put_body.exists() else None
+    p.curl_config = auth.read_text() if auth.exists() else ""
+    p.curl_argv = argv.read_text() if argv.exists() else ""
     return p, sent
 
 
@@ -131,6 +152,27 @@ def main():
         check("the servers array is carried back verbatim",
               sent is not None and sent.get("servers") == LIVE["servers"],
               json.dumps(sent.get("servers") if sent else None)[:200])
+        # The quiet direction of a two-valued signal. It is missing from a
+        # suite that only ever asserts refusals, and its absence is what let
+        # the drift expression report the baseline as drifted against itself.
+        q, _ = run(root, "--check")
+        check("--check is quiet when live matches the committed file",
+              q.returncode == 0 and "in sync" in q.stdout,
+              f"rc={q.returncode} {(q.stdout + q.stderr)[:200]}")
+        d, _ = run(root, "--dry-run")
+        check("--dry-run says so when there is nothing to change",
+              d.returncode == 0 and "no change" in d.stdout,
+              f"rc={d.returncode} {(d.stdout + d.stderr)[:200]}")
+        # The header claims the token reaches curl through a config on a file
+        # descriptor and never through the command line. Asserted both ways.
+        a, _ = run(root)
+        check("the token reaches curl through the config",
+              "Authorization: Bearer stub-token" in a.curl_config,
+              repr(a.curl_config)[:200])
+        check("the token is nowhere in curl's arguments",
+              a.curl_argv != "" and "stub-token" not in a.curl_argv,
+              repr(a.curl_argv)[:200])
+
         check("read-only timestamps are dropped",
               sent is not None and not ({"created_at", "created_by", "modified_at",
                                          "modified_by"} & set(sent)),
@@ -159,6 +201,32 @@ def main():
         p, _ = run(root)
         # A key this script does not implement is a decision nobody applied.
         check("an unknown key is refused",
+              p.returncode != 0 and "expected shape" in p.stderr, p.stderr[:200])
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = fixture(tmp)
+        # `type == "string"` does not constrain this field the way
+        # `type == "boolean"` constrains a flag. A typo would be PUT to the
+        # portal and then reported as drift forever, noise shaped exactly
+        # like the signal this file exists to carry.
+        (root / FILE_REL).write_text(json.dumps(
+            {"portal": "mcp", "hostname": "mcp.mctl.ai", "secure_web_gateway": False,
+             "code_mode": "of", "allow_code_mode": False}, indent=2) + "\n")
+        git(root, "commit", "-qam", "typo in code_mode")
+        p, _ = run(root)
+        check("a code_mode outside the documented set is refused",
+              p.returncode != 0 and "expected shape" in p.stderr, p.stderr[:200])
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = fixture(tmp)
+        # The API answers 400 when code_mode and allow_code_mode disagree, so
+        # the file is refused here rather than sent to be rejected there.
+        (root / FILE_REL).write_text(json.dumps(
+            {"portal": "mcp", "hostname": "mcp.mctl.ai", "secure_web_gateway": False,
+             "code_mode": "off", "allow_code_mode": True}, indent=2) + "\n")
+        git(root, "commit", "-qam", "inconsistent code mode fields")
+        p, _ = run(root)
+        check("code_mode and allow_code_mode must agree",
               p.returncode != 0 and "expected shape" in p.stderr, p.stderr[:200])
 
     with tempfile.TemporaryDirectory() as tmp:
