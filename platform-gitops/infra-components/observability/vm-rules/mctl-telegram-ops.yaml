@@ -233,7 +233,14 @@ spec:
         # label (reason and provider only), so the summary must not name "a
         # daemon". That is tolerable precisely because of the shape above: N
         # unrelated daemons each refused once do not sustain anything, and
-        # only a genuine loop holds the condition for ten minutes.
+        # only a genuine loop holds the condition for ten minutes. What it
+        # does NOT separate is one loop from several short expiries that
+        # happen to overlap for ten minutes, which needs a per-daemon label
+        # the counter does not carry. With one pilot daemon the case is
+        # hypothetical; the fleet size at which it stops being so is the
+        # trigger to add the label (cardinality is bounded by local-mode
+        # accounts, as with mctl_bridge_connections_total) rather than to
+        # raise the threshold, which would also hide the loop.
         - alert: MctlBridgeAuthFailing
           expr: sum by (reason) (increase(mctl_auth_failures_total{provider="bridge",reason=~"jwt_expired|jwt_invalid_issuer|jwt_missing_audience|jwt_wrong_audience|token_revoked|no_device_binding|device_inactive|device_revoked"}[5m])) > 2
           for: 10m
