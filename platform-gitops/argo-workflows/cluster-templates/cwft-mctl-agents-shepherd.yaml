@@ -1018,13 +1018,19 @@ spec:
 
           # Write the onExit files FIRST, before anything that can fail, so a
           # step that dies mid-flight still hands onExit a truthful state.
-          # `verify_status` is seeded as "clean" and overwritten only by a
-          # branch that found something; its ABSENCE (the step never got here,
-          # or the artifact never uploaded) is what onExit reads as
-          # "incomplete". Same missing-file-means-unknown contract as
-          # shepherd_status and activity.
+          #
+          # `verify_status` is seeded PESSIMISTICALLY as "incomplete" and
+          # promoted to "clean" only by the last line of this script. Seeding
+          # it "clean" would be this same bug one layer down: the wait
+          # container uploads output artifacts for a FAILED pod too, so a step
+          # OOMKilled during the 300s sleep — or tripped by a jq error on
+          # malformed kubectl output — would ship a "clean" verdict it never
+          # reached, and onExit would stay silent about the safeguard on a
+          # workflow that failed (agy P2 on gitops#1187). An absent file reads
+          # as "incomplete" for the same reason, so the two unreachable paths
+          # agree.
           mkdir -p /tmp/onexit
-          printf 'clean' > /tmp/onexit/verify_status
+          printf 'incomplete' > /tmp/onexit/verify_status
           : > /tmp/onexit/degraded.txt
           : > /tmp/onexit/degraded_unfiltered.txt
 
@@ -1122,6 +1128,11 @@ spec:
             | select(.status.health.status == "Degraded")
             | "\(.metadata.namespace)/\(.metadata.name)"
           ' | tr '\n' ' ' > /tmp/onexit/degraded_unfiltered.txt
+
+          # Last line of the script, deliberately: everything above this
+          # point can fail, and until it is reached the verdict stays
+          # "incomplete".
+          printf 'clean' > /tmp/onexit/verify_status
 
     # ── 4b. Assert at least one attempt succeeded ───────────────────────────
     # Same shape as cwft-mctl-agents-investigate's assert-attempt: receives
@@ -1250,11 +1261,12 @@ spec:
           # "verify ran and found nothing" and "verify never got there" are
           # now two different readings instead of one ambiguous empty string:
           #
-          #   clean          — ran, no newly-Degraded app survived the grace
+          #   clean          — ran to the end, no newly-Degraded app survived
+          #                    the grace period
           #   degraded       — ran, apps still Degraded; list in degraded.txt
           #   kubectl-failed — ran, could not read Applications 3× in a row
-          #   incomplete     — file absent: the step never reached its first
-          #                    write, or the artifact never uploaded
+          #   incomplete     — the step was killed or errored out before its
+          #                    last line, or the file is absent entirely
           #
           # This replaces reading the degraded_apps workflow output parameter
           # from an env var. That resolution silently handed this script the raw
@@ -1322,10 +1334,12 @@ spec:
           # `clean` says nothing: an all-clear that prints a ⚠️ line is how
           # this channel started crying wolf in the first place. `incomplete`
           # says nothing on a Succeeded workflow either — `verify` runs with
-          # no continueOn, so Succeeded means it finished, and a missing file
-          # there is an artifact-upload hiccup, not a verification outcome.
-          # It IS worth a line on a Failed/Error run, where "the safeguard
-          # never ran" is exactly what the operator needs to know.
+          # no continueOn and writes `clean` on its last line, so a Succeeded
+          # workflow with anything else here is an artifact-upload hiccup, not
+          # a verification outcome. It IS worth a line on a Failed/Error run,
+          # where "the safeguard did not finish" is exactly what the operator
+          # needs to know, and is now a fact rather than the inference the old
+          # unresolved-parameter guard was making.
           VERIFY_NOTE=""
           case "$VERIFY_STATUS" in
             degraded|kubectl-failed)
@@ -1336,7 +1350,7 @@ spec:
               ;;
             incomplete)
               if [ "$WORKFLOW_STATUS" != "Succeeded" ]; then
-                VERIFY_NOTE="post-deploy-verify did not run"
+                VERIFY_NOTE="post-deploy-verify did not complete"
               fi
               ;;
           esac
