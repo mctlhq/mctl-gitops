@@ -77,8 +77,11 @@ spec:
             # Listed per tenant because IsRedirectURIAllowed matches a string
             # prefix, not a host wildcard -- a general host-suffix rule is
             # mctlhq/mctl-api#290. Wildcard path because the callback carries a
-            # ?mctl_oauth=1 query an exact compare would reject.
-            OAUTH_ALLOWED_REDIRECT_URIS: "https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback,http://localhost:6274/oauth/callback,http://localhost:6274/oauth/callback/debug,https://chatgpt.com/connector/oauth/*,https://antigravity.google/*,https://admins-openclaw.mctl.ai/*,https://labs-openclaw.mctl.ai/*,https://my-team-openclaw.mctl.ai/*,https://ovk-openclaw.mctl.ai/*"
+            # ?mctl_oauth=1 query an exact compare would reject. The list is the
+            # tenants under platform-gitops/services/; my-team-openclaw.mctl.ai
+            # still appears in docs examples but the tenant was deleted in
+            # af03d315, and a decommissioned host must not stay authorized here.
+            OAUTH_ALLOWED_REDIRECT_URIS: "https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback,http://localhost:6274/oauth/callback,http://localhost:6274/oauth/callback/debug,https://chatgpt.com/connector/oauth/*,https://antigravity.google/*,https://admins-openclaw.mctl.ai/*,https://labs-openclaw.mctl.ai/*,https://ovk-openclaw.mctl.ai/*"
             # The private aggregate portal mcp.mctl.ai (Cloudflare MCP Server
             # Portal, mctlhq/.github#35) stores one client id per upstream at
             # configuration time and cannot re-register after a pod restart, so
