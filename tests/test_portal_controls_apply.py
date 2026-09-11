@@ -1,15 +1,19 @@
 """Drive scripts/portal-controls-apply.sh against a stub Cloudflare API.
 
-The script writes to the MCP portal that fronts all three upstreams, and the
-body it PUTs is the portal's own body with three switches replaced. Two
+The script writes to the MCP portal that fronts all three upstreams. Two
 things can go wrong there and neither is visible in review:
 
   * it applies something other than the committed file -- an edit on disk, a
     file that is not tracked at all, or a file naming a different portal;
-  * it carries back less than it read. The `servers` array in that body holds
-    the tool allowlists owned by mctl-telegram, mctl-api and seerrsense. A
-    projection that dropped or flattened it would silently re-expose or hide
-    tools across three services, and the API would answer 200.
+  * it writes a field it does not own. The portal body carries a `servers`
+    array holding the tool allowlists of mctl-telegram, mctl-api and
+    seerrsense. Sending that back as read would make every apply a
+    read-modify-write over their state: an allowlist applied between this
+    script's read and its write would be reverted, and the API would answer
+    200. The script sends only the switches the committed file pins, which is
+    safe because the endpoint merges rather than replaces -- so the stub
+    below merges too, and the cases assert both that the field is not sent
+    and that it survived the write.
 
 Both are asserted here against the real script. The Cloudflare API is a stub
 `curl` on PATH, so nothing reaches the network and the assertions are about
@@ -237,7 +241,11 @@ def main():
               p.returncode == 0 and state["code_mode"] == "off"
               and state["allow_code_mode"] is False,
               f"rc={p.returncode} {json.dumps({k: state.get(k) for k in ('code_mode', 'allow_code_mode')})} {p.stderr[:150]}")
-        q, _ = run(root, "--check", live=drifted, keep_state=True)
+        # No live= here: keep_state leaves the converged portal in place,
+        # and the stub seeds from LIVE_JSON only when the state file is
+        # absent -- so passing the drifted portal again would read as if the
+        # check ran against it when it did not.
+        q, _ = run(root, "--check", keep_state=True)
         check("--check is quiet once the apply has converged",
               q.returncode == 0 and "in sync" in q.stdout,
               f"rc={q.returncode} {(q.stdout + q.stderr)[:200]}")
@@ -255,6 +263,25 @@ def main():
         p, _ = run(root, "--check")
         check("--check reports drift against live", p.returncode != 0
               and "secure_web_gateway" in p.stderr, p.stderr[:200])
+
+    with tempfile.TemporaryDirectory() as tmp:
+        # A fourth upstream mapped while the write was in flight is somebody
+        # else's legitimate change, not a fault. An equality check on the id
+        # set would refuse it and send the operator looking for a lost
+        # allowlist that never existed.
+        root = fixture(tmp)
+        stub = root / "stub" / "curl"
+        stub.write_text(stub.read_text().replace(
+            'if [ "$is_put" = yes ]; then\n  jq -c',
+            'if [ "$is_put" = yes ]; then\n'
+            '  jq -c \'.servers += [{"server_id":"newcomer",'
+            '"default_disabled":true,"updated_tools":[]}]\' '
+            '"$STATE_FILE" > "$STATE_FILE.a" && mv "$STATE_FILE.a" "$STATE_FILE"\n'
+            '  jq -c', 1))
+        stub.chmod(0o755)
+        p, _ = run(root)
+        check("an upstream mapped during the write does not fail the apply",
+              p.returncode == 0, p.stderr[:200])
 
     with tempfile.TemporaryDirectory() as tmp:
         # The apply must not be able to print success over a portal that came
