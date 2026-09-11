@@ -155,6 +155,20 @@ jobs:
           scripts/validate-yq-interpolation.py --selftest
           scripts/validate-yq-interpolation.py
 
+      - name: Origin mTLS is still enforced
+        run: |
+          set -euo pipefail
+          # Traefik refuses any TLS handshake without this account's Cloudflare
+          # client certificate, which is what closes the "another Cloudflare
+          # customer" gap in infrastructure/cloudflare/README.md (#1153). The
+          # whole enforcement is two objects; delete either and the origin goes
+          # back to accepting any Cloudflare address with nothing failing, no
+          # probe going red and no line in any log. Exactly the shape of the
+          # VMPodScrape that sat unnoticed in vm-rules/ for three months
+          # (#1159). --selftest first, same reason as the detectors above.
+          scripts/validate-origin-mtls.py --selftest
+          scripts/validate-origin-mtls.py
+
       - name: Install promtool
         env:
           PROMETHEUS_VERSION: "3.5.0"
