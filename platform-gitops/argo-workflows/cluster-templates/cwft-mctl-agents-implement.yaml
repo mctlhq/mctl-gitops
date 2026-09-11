@@ -10,18 +10,29 @@ metadata:
       (those with .status.yaml status=accepted) and opens PRs in the matching
       sibling repos under mctlhq/. Runs:
 
-        1. clone-gitops — SSH-clone mctl-gitops via the shared deploy key.
-        2. run-implementer — orchestrator/run_implementer.py inside
-           ghcr.io/mctlhq/mctl-agents:1.20.0. The Python script checks GitHub,
-           then, only when no prior result exists, gh-clones the
-           target sibling repo into /tmp, runs the Claude Agent SDK with the
-           per-service implementer.md sub-agent, pushes the branch, opens a PR.
-        3. commit-and-push — commits .status.yaml updates back to gitops main.
+        1. run-implementer — orchestrator/run_implementer.py inside
+           ghcr.io/mctlhq/mctl-agents:<tag>. An initContainer SSH-clones
+           mctl-gitops via the shared deploy key; the Python script checks
+           GitHub, then, only when no prior result exists, gh-clones the
+           target sibling repo into /workdir/clones, runs the Claude Agent
+           SDK with the per-service implementer.md sub-agent, pushes the
+           branch, opens a PR. Finally it copies the .status.yaml files it
+           changed into an Argo artifact — the handoff to step 2. Retried
+           once on a second OAuth account; both attempts write the same
+           artifact key.
+        2. commit-and-push — takes its OWN fresh clone of mctl-gitops, lays
+           the artifact over it, and commits the .status.yaml updates to
+           main. It never touches the worktree the agent held (gitops#983 P1).
+
+      There is no shared workdir volume: each pod clones for itself and
+      cross-step state travels as an artifact. See the "No PVC" note on
+      spec.volumes for what that replaced and why (mctl-gitops#1047).
 
       Triggered by:
-        - CronWorkflow mctl-agents-implement (every hour at :20 UTC)
+        - the DevLoop (Temporal) on every approved proposal
         - mctl-api MCP tool mctl_trigger_implementer (admin-only)
         - operator submitting a Workflow that references this CWFT
+        - CronWorkflow mctl-agents-implement (suspended — Temporal owns intake)
 spec:
   serviceAccountName: argo-workflow-sa
   imagePullSecrets:
@@ -40,13 +51,8 @@ spec:
       mctl.ai/team: admins
   ttlStrategy:
     secondsAfterCompletion: 86400
-  # Release the workdir PVC (and its 10 GB Hetzner volume) as soon as the
-  # workflow finishes — success OR failure. The Argo default
-  # (OnWorkflowSuccess) keeps a failed run's volume attached until the
-  # ttlStrategy above deletes the whole workflow (up to 14 days for the run
-  # template), which leaked ~€6 of idle detached volumes in June 2026.
-  volumeClaimGC:
-    strategy: OnWorkflowCompletion
+  # volumeClaimGC is gone with the PVC — there is no claim left to reclaim.
+  #
   # One proposal may still need clone + bounded SDK work + push + PR, so keep
   # a hard 2h safety ceiling. Do not raise this to accommodate an unlimited
   # batch: max_proposals=1 below is the quota and runtime boundary introduced
@@ -54,6 +60,8 @@ spec:
   activeDeadlineSeconds: 7200
   entrypoint: implement-proposals
   onExit: notify-telegram
+  # NB: mctl-gitops-main-writes lives on the commit-and-push template, not
+  # here at spec level — see the note there.
 
   arguments:
     parameters:
@@ -85,38 +93,49 @@ spec:
         # consumed by run-implementer. Left blank by any caller not yet
         # using the registry.
 
-  volumeClaimTemplates:
-    - metadata:
-        name: workdir
-      spec:
-        accessModes: ["ReadWriteOnce"]
-        resources:
-          requests:
-            # 10Gi because that is what Hetzner provisions regardless — its CSI
-            # rounds ANY request up to a 10Gi minimum. Confirmed live on
-            # 2026-09-04: five concurrent investigations each showed `10Gi` in
-            # `kubectl get pvc` against the 4Gi their template requested.
-            #
-            # This is the last agent template still on a PVC (mctl-gitops#1047);
-            # every other one is on emptyDir. Declaring 8Gi changed nothing
-            # about what was created and only made the manifest describe a
-            # volume that never existed, so the number is corrected to the real
-            # one rather than left as a smaller-looking fiction.
-            #
-            # Sizing rationale, and 10Gi is not generous: the implementer
-            # gh-clones each target sibling repo into `/workdir/clones` — ON
-            # THIS VOLUME — via TMPDIR, which run_implementer picks up through
-            # `tempfile.gettempdir()`. Worst case ~10 clones × ~500 MB.
-            #
-            # Said as the path and not as "/tmp", which is what an earlier
-            # wording called it: that reading suggests the clones land on the
-            # node's ephemeral storage and leave this volume idle, and a
-            # reviewer drew exactly that conclusion. Measured on a real run
-            # (mctl-agents-implement-a7817a7c): `/workdir/clones` appears 369
-            # times and holds the working copy, while `/tmp` holds only
-            # go.tar.gz and zig.tar — toolchain downloads, not clones.
-            storage: 10Gi
+  # ── No PVC ──────────────────────────────────────────────────────────────
+  # Was a 10Gi `volumeClaimTemplates` entry — the LAST one in the agent fleet
+  # (mctl-gitops#1047). Argo provisioned it as a Hetzner Cloud volume at
+  # workflow start, and because the six steps were six pods spread across
+  # nodes, the RWO volume moved between nodes on every step: six attach/detach
+  # pairs per run, `Multi-Attach error` in the events on every one of them.
+  # With the DevLoop driving up to ~20 implement runs a day (2026-09-11) that
+  # was ~120 volume operations a day on one template. A wedged detach leaves
+  # a pod Pending, and a Pending pod holding `mctl-gitops-main-writes` is the
+  # 2026-07-30 cascade.
+  #
+  # An `emptyDir` at spec level gives EACH pod its own scratch dir (they are
+  # not shared — that is the whole reason the PVC existed). Cross-step state
+  # now travels as an Argo artifact; see `run-implementer` below. Nothing on
+  # this volume was ever durable, so there is nothing to lose by it.
+  #
+  # The two Go-module-cache steps that used to bridge the volume to MinIO
+  # (restore-go-cache / save-go-cache on minio/mc) are gone with it. They
+  # never worked once: the agent overrides GOPATH to $HOME/go on every run
+  # (178 `export GOPATH=$HOME/go` in one run's audit log), and the
+  # save-side emptiness check (`find -maxdepth 3 -type f`) cannot see a Go
+  # module cache even when it is full. Both ended in an unconditional
+  # `exit 0`, so six months of "starting cold" went unnoticed, and MinIO
+  # never held a `mctl-agents/gocache/` object. Removing dead code is not a
+  # regression; a cache that actually works is a separate design (per-service
+  # partitioned artifact at the path the agent really uses, plus per-language
+  # images so the Go/Zig/musl-cross bootstrap stops being paid at all) —
+  # tracked separately from this port.
+  #
+  # sizeLimit 10Gi because the implementer gh-clones each target sibling
+  # repo into `/workdir/clones` — ON THIS VOLUME — via TMPDIR, which
+  # run_implementer picks up through `tempfile.gettempdir()`. Worst case
+  # ~10 clones × ~500 MB. Measured on a real run
+  # (mctl-agents-implement-a7817a7c): `/workdir/clones` holds the working
+  # copy, while `/tmp` holds only toolchain downloads. Unlike a PVC, emptyDir
+  # counts toward kubelet's ephemeral-storage accounting, so a runaway clone
+  # evicts THIS pod instead of driving the node into DiskPressure and taking
+  # out whatever else shares it (vault and shared-pg live on the same three
+  # CX43 workers).
   volumes:
+    - name: workdir
+      emptyDir:
+        sizeLimit: 10Gi
     - name: deploy-key
       secret:
         secretName: mctl-gitops-deploy-key
@@ -136,25 +155,21 @@ spec:
           - key: github-token
             path: github-token
 
+  # No `outputs.parameters` anywhere in this file. onExit used to read
+  # `/workdir/activity` off the shared PVC precisely to avoid
+  # `workflow.outputs.parameters`: a second entry sourced from a different
+  # step broke Argo's static validator workflow-wide on 2026-07-06
+  # (#530/#531), and the shepherd's single remaining entry then turned out
+  # not to resolve inside an exit handler either (gitops#1186). `activity`
+  # now travels as an Argo ARTIFACT addressed by literal S3 key — the
+  # channel proven on cwft-mctl-agents-shepherd, which has neither limit.
+
   templates:
     - name: implement-proposals
       steps:
-        - - name: clone
-            template: clone-gitops
-        # Restore any previously-saved Go module cache (see restore-go-cache
-        # below) so a Go-repo implementer run (currently only mctl-telegram)
-        # doesn't re-download the whole gotd/td dependency graph from a cold
-        # GOPATH every single time. No-op in ~1s for a non-Go run.
-        # continueOn: this is a purely optional performance cache — if
-        # minio-cache-creds hasn't synced yet or MinIO is briefly unhealthy,
-        # implementation must still proceed cold rather than the whole run
-        # failing before run-implementer even starts (codex P2 finding on
-        # PR #603).
-        - - name: restore-go-cache
-            template: restore-go-cache
-            continueOn:
-              failed: true
-              error: true
+        # No `clone` step: with emptyDir there is no shared volume for one
+        # step to clone into on another's behalf. Each pod that needs the
+        # gitops checkout takes its own, as an initContainer.
         - - name: implement
             template: run-implementer
             arguments:
@@ -164,13 +179,13 @@ spec:
                 - name: is-fallback
                   value: "false"
             # run_implementer.py writes .status.yaml updates (in-progress →
-            # implemented/error) to the worktree BEFORE any failure that may
-            # crash the step. Without continueOn, Argo would skip commit-and-push
-            # on non-zero exit, those updates would never persist back to
-            # mctl-gitops main, and the next run would reprocess the same
-            # proposal — duplicate PR attempts. Letting commit run unconditionally
-            # makes the status durable; commit-and-push already handles the
-            # "no diff" case via `git diff --cached --quiet`.
+            # implemented/error) BEFORE any failure that may crash the step.
+            # Without continueOn, Argo would skip commit-and-push on non-zero
+            # exit, those updates would never persist back to mctl-gitops
+            # main, and the next run would reprocess the same proposal —
+            # duplicate PR attempts. Letting commit run unconditionally makes
+            # the status durable; commit-and-push handles the "no handoff"
+            # case as a clean no-op.
             #
             # Both failed AND error: Argo distinguishes app-level non-zero
             # exits (Failed) from pod-level errors like OOMKilled / deadline /
@@ -180,16 +195,16 @@ spec:
               failed: true
               error: true
         # Fallback retry on a SECOND Claude account, mirroring
-        # cwft-mctl-agents-run / -investigate / -shepherd / -issue-poll: if
-        # the primary attempt did not succeed (most commonly the account-1
-        # OAuth token hitting its five_hour/seven_day usage limit → HTTP
-        # 429), retry once on the account-2 token `claude-code-oauth-token-2`.
-        # Previously this CWFT had no fallback at all — a quota-exhausted
-        # primary token aborted the whole implement step with no retry,
-        # discovered 2026-08-05 when the phase-4 DevLoopWorkflow E2E
-        # verification hit exactly this gap. If token-2 is not seeded the
-        # fallback fails (exit 1) so the run reports Failed instead of being
-        # masked as success.
+        # cwft-mctl-agents-run / -investigate / -shepherd: if the primary
+        # attempt did not succeed (most commonly the account-1 OAuth token
+        # hitting its five_hour/seven_day usage limit → HTTP 429), retry once
+        # on the account-2 token `claude-code-oauth-token-2`. Previously this
+        # CWFT had no fallback at all — a quota-exhausted primary token
+        # aborted the whole implement step with no retry, discovered
+        # 2026-08-05 when the phase-4 DevLoopWorkflow E2E verification hit
+        # exactly this gap. If token-2 is not seeded the fallback fails
+        # (exit 1) so the run reports Failed instead of being masked as
+        # success.
         - - name: implement-fallback
             template: run-implementer
             when: "{{steps.implement.status}} != Succeeded"
@@ -204,22 +219,6 @@ spec:
               error: true
         - - name: commit
             template: commit-and-push
-        # Save whatever Go module cache got populated back to MinIO,
-        # regardless of whether the implement step succeeded —
-        # even a run that hit its budget cap before finishing still
-        # downloaded real dependencies worth keeping for next time. Runs
-        # AFTER commit (not before): if a large mirror upload stalls or
-        # runs long, it must never risk the workflow hitting its
-        # activeDeadlineSeconds before the .status.yaml commit lands —
-        # that would silently leave a real implementation attempt stuck
-        # in-progress with no durable record (codex P2 finding on PR #603).
-        # activeDeadlineSeconds bounds worst-case stall time so this
-        # optional step can never eat meaningfully into the overall budget.
-        - - name: save-go-cache
-            template: save-go-cache
-            continueOn:
-              failed: true
-              error: true
         # Truthful status. implement runs with continueOn so a structured
         # needs-triage status is still committed. Fail the workflow when the
         # single bounded attempt failed. A genuine
@@ -234,62 +233,84 @@ spec:
                 - name: fallback
                   value: "{{steps.implement-fallback.status}}"
 
-    # ── 1. SSH-clone mctl-gitops into shared volume ───────────────────────
-    - name: clone-gitops
-      script:
-        image: alpine/git:2.43.0
-        command: [sh]
-        source: |
-          set -e
-          apk add --no-cache openssh-client ca-certificates
-          mkdir -p ~/.ssh
-          cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
-          # GitHub's published SSH host keys, PINNED rather than trusted on
-          # first use. Source: https://api.github.com/meta (.ssh_keys),
-          # fetched 2026-09-02. This replaces StrictHostKeyChecking=no,
-          # which accepted whatever key answered on a connection that
-          # carries a WRITE-capable deploy key: a MITM or a DNS-poison of
-          # ssh.github.com was handed that key with no complaint.
-          #
-          # Keyed on [ssh.github.com]:443, not github.com. The Host block
-          # above rewrites hostname and port, and ssh looks up what it
-          # actually connects to — a github.com entry would silently miss.
-          #
-          # If GitHub rotates a host key these lines must be updated; it
-          # last happened in March 2023, when the RSA key was replaced.
-          cat > ~/.ssh/known_hosts <<'GITHUB_HOST_KEYS'
-          [ssh.github.com]:443 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
-          [ssh.github.com]:443 ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=
-          [ssh.github.com]:443 ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=
-          GITHUB_HOST_KEYS
-          chmod 600 ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/config
-          git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops
-          mkdir -p /workdir/mctl-gitops/platform-gitops/agents-state
-          # Pre-create a PVC-backed scratch dir for run_implementer's
-          # `gh repo clone` targets. The orchestrator picks up
-          # `tempfile.gettempdir()` which honors TMPDIR — see run-implementer
-          # env below. Without this, clones would land on the pod's
-          # ephemeral storage and the 8Gi PVC sizing in this template would
-          # be ineffective for multi-repo runs (codex P2 finding).
-          mkdir -p /workdir/clones
-          # uid 1000 is the mctl-agents image USER (SOC F8). This clone step
-          # runs as root in alpine/git; without the handoff the next step
-          # cannot write STATE_DIR or TMPDIR.
-          chown -R 1000:1000 /workdir
-          echo "✓ gitops cloned"
-        volumeMounts:
-          - name: workdir
-            mountPath: /workdir
-          - name: deploy-key
-            mountPath: /secrets/deploy-key
-
-    # ── 2. Run implementer orchestrator ───────────────────────────────────
+    # ── 1. Run implementer orchestrator ───────────────────────────────────
     # 1.20.0 makes GitHub authoritative, preserves every status field, and
     # quarantines incomplete attempts instead of force-retrying them.
     - name: run-implementer
+      outputs:
+        artifacts:
+          # The `.status.yaml` updates THIS attempt made, at repo-relative
+          # paths. Replaces the shared workdir PVC as the channel to
+          # commit-and-push.
+          #
+          # Fixed, workflow-scoped S3 key rather than Argo's default per-pod
+          # key, and commit-and-push reads that literal key instead of
+          # `{{steps.<step>.outputs.artifacts.changes}}`: exactly one of the
+          # primary/fallback pair is skipped on every happy run, and a
+          # reference to a skipped step does not resolve. Both attempts write
+          # this one key, so there is no step reference to break; when both
+          # run the fallback goes second and wins.
+          #
+          # `optional: true` with the directory created only once there is
+          # something to put in it, so an attempt that produced nothing
+          # uploads nothing and leaves a previous attempt's object intact.
+          - name: changes
+            path: /tmp/state-out
+            optional: true
+            s3:
+              key: "{{workflow.name}}/agents-state.tgz"
+      initContainers:
+        - name: clone-gitops
+          image: alpine/git:2.43.0
+          command: [sh, -c]
+          args:
+            - |
+              set -e
+              apk add --no-cache openssh-client ca-certificates
+              mkdir -p ~/.ssh
+              cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
+              chmod 600 ~/.ssh/id_ed25519
+              printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
+              # GitHub's published SSH host keys, PINNED rather than trusted on
+              # first use. Source: https://api.github.com/meta (.ssh_keys),
+              # fetched 2026-09-02. This replaces StrictHostKeyChecking=no,
+              # which accepted whatever key answered on a connection that
+              # carries a WRITE-capable deploy key: a MITM or a DNS-poison of
+              # ssh.github.com was handed that key with no complaint.
+              #
+              # Keyed on [ssh.github.com]:443, not github.com. The Host block
+              # above rewrites hostname and port, and ssh looks up what it
+              # actually connects to — a github.com entry would silently miss.
+              #
+              # If GitHub rotates a host key these lines must be updated; it
+              # last happened in March 2023, when the RSA key was replaced.
+              cat > ~/.ssh/known_hosts <<'GITHUB_HOST_KEYS'
+              [ssh.github.com]:443 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
+              [ssh.github.com]:443 ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=
+              [ssh.github.com]:443 ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=
+              GITHUB_HOST_KEYS
+              chmod 600 ~/.ssh/known_hosts
+              chmod 600 ~/.ssh/config
+              git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops
+              mkdir -p /workdir/mctl-gitops/platform-gitops/agents-state
+              # Scratch dir for run_implementer's `gh repo clone` targets. The
+              # orchestrator picks up `tempfile.gettempdir()` which honors
+              # TMPDIR — see run-implementer env below. Without this Python's
+              # mkdtemp errors on the missing directory.
+              mkdir -p /workdir/clones
+              # uid 1000 is the mctl-agents image USER (SOC F8). This clone step
+              # runs as root in alpine/git; without the handoff the next step
+              # cannot write STATE_DIR or TMPDIR.
+              chown -R 1000:1000 /workdir
+              echo "✓ gitops cloned"
+          resources:
+            requests: { cpu: 50m, memory: 64Mi, ephemeral-storage: 10Gi }
+            limits:   { cpu: 500m, memory: 256Mi, ephemeral-storage: 11Gi }
+          volumeMounts:
+            - name: workdir
+              mountPath: /workdir
+            - name: deploy-key
+              mountPath: /secrets/deploy-key
       inputs:
         parameters:
           # Which Vault key under mctl-agents-secrets holds the OAuth token for
@@ -363,7 +384,148 @@ spec:
             printf '→'
             printf ' %s' "$@"
             printf '\n'
-            exec "$@"
+            # Deliberately NOT `exec`, and deliberately not fatal — the same
+            # shape as run-orchestrator, run-investigator and run-shepherd.
+            # run_implementer writes .status.yaml before any later failure
+            # path, and that work must still reach main. It used to fall out
+            # of `continueOn` plus a shared PVC; with an artifact handoff this
+            # script collects the files itself before exiting, so the exit
+            # code is captured and re-raised at the end. `set +e` around the
+            # attempt is load-bearing: under `set -e` a failing command aborts
+            # the script immediately and the collector below never runs.
+            set +e
+            "$@"
+            RC=$?
+            set -e
+            echo "implementer exited ${RC}"
+
+            # Collect exactly what commit-and-push may push: .status.yaml
+            # files under agents-state, nothing else. Anything else changed
+            # there (proposal bodies, digests, ad-hoc files left by a crashed
+            # implementer) is NOT what this workflow should be pushing back
+            # to gitops main — FATAL rather than skipped, so the scope never
+            # silently broadens.
+            #
+            # Parsed in Python, NOT in the shell. `git status -z` emits paths
+            # RAW, so a directory name carrying a literal newline splits a
+            # `tr` + `cut -c4-` pipeline into two entries and the second is
+            # attacker-chosen — the path-smuggling hole found on #1042. The
+            # SDK agent holds Bash in this worktree, so such a name is
+            # reachable. Splitting on NUL in Python has no such ambiguity, and
+            # a path outside the allowed set, containing `..`, or carrying a
+            # control character is FATAL rather than skipped.
+            python - "$RC" <<'COLLECT'
+            import os
+            import re
+            import shutil
+            import subprocess
+            import sys
+
+            ROOT = "/workdir/mctl-gitops"
+            OUT = "/tmp/state-out"
+            TREE = os.path.join(OUT, "tree")
+            DELETED = os.path.join(OUT, "deleted.lst")
+            ALLOWED = re.compile(r"^platform-gitops/agents-state/.+/\.status\.yaml$")
+            PATHSPEC = "platform-gitops/agents-state/"
+            rc = int(sys.argv[1])
+
+            # Cleared HERE, after the agent has exited, and owned by this script alone.
+            # The agent holds Bash in this container, so a reset before it ran would let
+            # it plant a directory that Argo then uploads as the handoff. The invariant is
+            # stated once: this directory exists at exit iff this script filled it.
+            shutil.rmtree(OUT, ignore_errors=True)
+
+            # The WHOLE agents-state subtree is scanned, not just `.status.yaml`
+            # matches: a non-status change there is what the PVC-era guard
+            # refused with "changes outside .status.yaml", and narrowing the
+            # pathspec would turn that refusal into silent omission.
+            raw = subprocess.run(
+                ["git", "-C", ROOT, "status", "--porcelain=v1", "-z", "-uall", "--", PATHSPEC],
+                capture_output=True, check=True).stdout
+
+
+            def _text(b):
+                return b.decode("utf-8", "surrogateescape")
+
+
+            # porcelain -z is NOT one record per NUL-separated field. A rename or copy is
+            # emitted as `XY new\0old\0` — the status prefix is on the FIRST field only, so
+            # slicing [3:] off every field chops three real characters off the old path
+            # (claude P2 on #1046). Walk the fields with an index and consume the extra one.
+            fields = [f for f in raw.split(b"\x00") if f != b""]
+            copies, deletions = [], []
+            i = 0
+            while i < len(fields):
+                entry = fields[i]
+                i += 1
+                status = _text(entry[:2])
+                path = _text(entry[3:])
+                # Both status columns, matching cwft-mctl-agents-run and
+                # -shepherd. A plain `mv` produces no rename entry at all
+                # (measured: `" D old"` + `"?? new"`), so the Y column is not
+                # reachable in practice here — but a missed pair would desync the
+                # NUL walk for every entry after it, and that fails silently.
+                if "R" in status or "C" in status:
+                    if i >= len(fields):
+                        sys.stderr.write("malformed rename entry: missing original path\n")
+                        sys.exit(1)
+                    original = _text(fields[i])
+                    i += 1
+                    # A rename removes the old path; a copy leaves it in place.
+                    if "R" in status:
+                        deletions.append(original)
+                src = os.path.join(ROOT, path)
+                if os.path.islink(src):
+                    print("skipping %s (symlink)" % path)
+                    continue
+                # A path git reports that no longer exists on disk is a DELETION, and it
+                # has to travel too: commit-and-push lays this handoff over a fresh clone,
+                # which is purely additive, so a removal the agent made would otherwise
+                # never reach main (claude P1 on #1046).
+                (copies if os.path.isfile(src) else deletions).append(path)
+
+            bad = [
+                p for p in copies + deletions
+                if not ALLOWED.match(p) or ".." in p.split("/") or any(c in p for c in "\n\r\t")
+            ]
+            if bad:
+                sys.stderr.write("refusing to hand off paths that are not .status.yaml under agents-state:\n")
+                for p in bad:
+                    sys.stderr.write("  %r\n" % p)
+                sys.exit(1)
+
+            if not copies and not deletions:
+                print("nothing to hand off")
+                sys.exit(rc)
+
+            os.makedirs(TREE, exist_ok=True)
+            for rel in copies:
+                dst = os.path.join(TREE, rel)
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                # follow_symlinks=False, and it is a secret-leak guard rather than
+                # tidiness. The islink() check happens in the classification loop
+                # above and the copy here — two passes — and the SDK agent can leave
+                # a background process alive past its own exit, so a path checked as
+                # a regular file can be a symlink by the time it is copied. copy2
+                # DEREFERENCES by default, so that would read the target — e.g. the
+                # GitHub token mounted at /var/run/gh — and land its contents in the
+                # handoff as an ORDINARY FILE, which commit-and-push's `! -type f`
+                # check then cannot tell from a legitimate one, and it reaches main.
+                # Copying the LINK keeps it a symlink, which that check does catch
+                # (agy P1 on gitops#1048).
+                shutil.copy2(os.path.join(ROOT, rel), dst, follow_symlinks=False)
+                print("handing off %s" % rel)
+
+            # Newline-separated is unambiguous here precisely because the check above
+            # already refused any path carrying a control character.
+            if deletions:
+                with open(DELETED, "w", encoding="utf-8") as fh:
+                    for rel in deletions:
+                        fh.write(rel + "\n")
+                        print("handing off DELETION of %s" % rel)
+
+            sys.exit(rc)
+            COLLECT
         env:
           - name: IS_FALLBACK
             value: "{{inputs.parameters.is-fallback}}"
@@ -399,10 +561,10 @@ spec:
           - name: STATE_DIR
             value: /workdir/mctl-gitops/platform-gitops/agents-state
           # Redirect Python's `tempfile.gettempdir()` (used by
-          # run_implementer._clone_target) onto the PVC so each
-          # `gh repo clone` lands in PVC-backed storage — not the pod's
-          # ephemeral filesystem. clone-gitops creates this dir; if it
-          # doesn't exist Python's mkstemp / mkdtemp will error.
+          # run_implementer._clone_target) onto the sized emptyDir so each
+          # `gh repo clone` lands under the volume's sizeLimit and not in
+          # the container's writable layer. The initContainer creates this
+          # dir; if it doesn't exist Python's mkstemp / mkdtemp will error.
           - name: TMPDIR
             value: /workdir/clones
           # Auth: OAuth (Claude Pro/Max). Key is parameterized: primary uses
@@ -457,16 +619,6 @@ spec:
           # top of the actual implementation cost every single run.
           - name: IMPLEMENTER_BUDGET_USD
             value: "20.00"
-          # Point any Go toolchain the implementer installs (currently only
-          # mctl-telegram) at the module cache restored by restore-go-cache /
-          # persisted by save-go-cache, instead of the default ~/go inside
-          # this ephemeral per-run PVC. Harmless no-op env var for non-Go
-          # implementer runs. GOCACHE (compiled build cache, as opposed to
-          # downloaded module source) is deliberately NOT pointed at the
-          # MinIO-backed path — see restore-go-cache/save-go-cache below for
-          # why compiled artifacts must not land in the shared cache bucket.
-          - name: GOPATH
-            value: /workdir/gocache/gopath
         resources:
           # memory bumped 4Gi -> 8Gi: the implementer sub-agent runs the
           # target repo's build as a sanity check; `go build ./...` on a
@@ -475,8 +627,11 @@ spec:
           # cpu bumped 2000m -> 3000m: observed pegged at the 2-core limit
           # during issue-283's run (Go toolchain bootstrap + SDK process
           # contending for CPU), same profile as an earlier real stall.
-          requests: { cpu: 200m, memory: 1Gi }
-          limits:   { cpu: 3000m, memory: 8Gi }
+          # ephemeral-storage: the workdir is an emptyDir now and counts
+          # against this pod, so the clone budget is declared here rather
+          # than left for the node to absorb.
+          requests: { cpu: 200m, memory: 1Gi, ephemeral-storage: 10Gi }
+          limits:   { cpu: 3000m, memory: 8Gi, ephemeral-storage: 11Gi }
         volumeMounts:
           - name: workdir
             mountPath: /workdir
@@ -484,134 +639,79 @@ spec:
             mountPath: /var/run/gh
             readOnly: true
 
-    # ── 2b. Restore Go MODULE cache from MinIO ────────────────────────────
-    # Reuses the existing in-cluster MinIO (`platform-cache` bucket, same
-    # instance + Vault path as the openclaw whisper-cli build cache — see
-    # platform-gitops/argo-workflows/service-templates/openclaw/values.yaml.tpl)
-    # instead of provisioning a new PVC. `workdir` is a fresh per-workflow-run
-    # volumeClaimTemplate (released on completion), so without this every Go
-    # repo run re-downloads its whole module graph (e.g. mctl-telegram +
-    # gotd/td) from a cold GOPATH — this bridges that gap across separate
-    # workflow runs via object storage instead of a persistent volume.
-    # `mc mirror` (not tar) so the step only depends on the `mc` binary
-    # itself — no assumption that the minio/mc image ships tar/gzip.
-    #
-    # Deliberately GOPATH (downloaded third-party module source) ONLY, never
-    # GOCACHE (compiled build cache derived from the target repo's own
-    # source). The `platform-cache` bucket + minio-cache-creds credential is
-    # also used by openclaw tenant configs (see
-    # platform-gitops/services/labs/openclaw/values.yaml), so anything
-    # written here is readable from tenant workloads sharing that
-    # credential — compiled artifacts of a private repo must not land there
-    # (codex P2 finding on PR #603). Module source is comparatively low-risk
-    # (public OSS dependency code either way).
-    #
-    # Non-fatal by design (set +e, no `mc alias set ... || exit`): this is a
-    # purely optional performance cache. If minio-cache-creds hasn't synced
-    # yet or MinIO is briefly unhealthy, the run must still proceed cold
-    # instead of failing before run-implementer even starts (codex P2
-    # finding on PR #603 — this step also has continueOn at the step-list
-    # level as defense in depth for pod-level scheduling errors).
-    - name: restore-go-cache
-      script:
-        image: minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
-        command: [sh]
-        env:
-          - name: MINIO_ENDPOINT
-            value: "http://minio.minio.svc.cluster.local:9000"
-          - name: MINIO_ACCESS_KEY
-            valueFrom:
-              secretKeyRef:
-                name: minio-cache-creds
-                key: access-key
-          - name: MINIO_SECRET_KEY
-            valueFrom:
-              secretKeyRef:
-                name: minio-cache-creds
-                key: secret-key
-          - name: MINIO_BUCKET
-            value: "platform-cache"
-        source: |
-          set +e
-          mkdir -p /workdir/gocache/gopath
-          mc alias set cache "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY" --quiet 2>&1
-          if mc mirror --quiet "cache/$MINIO_BUCKET/mctl-agents/gocache/gopath/" /workdir/gocache/gopath/ 2>&1; then
-            echo "✓ Go module cache restored"
-          else
-            echo "ℹ️  No existing Go module cache in MinIO (or restore failed) — starting cold."
-          fi
-          exit 0
-        resources:
-          requests: { cpu: 50m, memory: 128Mi }
-          limits:   { cpu: 500m, memory: 1Gi }
-        activeDeadlineSeconds: 300
-        volumeMounts:
-          - name: workdir
-            mountPath: /workdir
-
-    # ── 2c. Save Go MODULE cache back to MinIO ────────────────────────────
-    # Runs after commit (not before) — see the step-list comment above — and
-    # after implement regardless of outcome, since even a
-    # run that hit its budget cap before opening a PR still downloaded real
-    # dependencies worth keeping. Best-effort: a save failure must not fail
-    # the whole workflow (the actual implementation result already landed).
-    # GOPATH only, same private-artifact reasoning as restore-go-cache above.
-    - name: save-go-cache
-      script:
-        image: minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
-        command: [sh]
-        env:
-          - name: MINIO_ENDPOINT
-            value: "http://minio.minio.svc.cluster.local:9000"
-          - name: MINIO_ACCESS_KEY
-            valueFrom:
-              secretKeyRef:
-                name: minio-cache-creds
-                key: access-key
-          - name: MINIO_SECRET_KEY
-            valueFrom:
-              secretKeyRef:
-                name: minio-cache-creds
-                key: secret-key
-          - name: MINIO_BUCKET
-            value: "platform-cache"
-        source: |
-          set +e
-          if [ -d /workdir/gocache/gopath ] && [ -n "$(find /workdir/gocache/gopath -maxdepth 3 -type f -print -quit 2>/dev/null)" ]; then
-            mc alias set cache "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY" --quiet
-            mc mirror --quiet --overwrite /workdir/gocache/gopath/ "cache/$MINIO_BUCKET/mctl-agents/gocache/gopath/"
-            if [ $? -eq 0 ]; then
-              echo "✓ Go module cache saved"
-            else
-              echo "⚠️  Go module cache save failed (non-fatal, implementation result is unaffected)"
-            fi
-          else
-            echo "ℹ️  No Go module cache populated this run — nothing to save."
-          fi
-          exit 0
-        resources:
-          requests: { cpu: 50m, memory: 128Mi }
-          limits:   { cpu: 500m, memory: 1Gi }
-        activeDeadlineSeconds: 300
-        volumeMounts:
-          - name: workdir
-            mountPath: /workdir
-
-    # ── 3. Commit & push back to mctl-gitops ──────────────────────────────
+    # ── 2. Commit & push back to mctl-gitops ──────────────────────────────
     # Only .status.yaml files should change in agents-state/ (run_implementer
     # writes them after each proposal). Defensive: stage only that subtree.
     - name: commit-and-push
-      # Writes /workdir/activity ("yes"/"none") for notify-telegram to read
-      # directly off the shared workdir PVC — NOT via Argo output parameters.
-      # A `workflow.outputs.parameters.X` reference from onExit resolves fine
-      # with exactly one such parameter (see degraded_apps on
-      # cwft-mctl-agents-shepherd), but adding a SECOND one sourced from a
-      # different step broke Argo's static validator workflow-wide
-      # ("invalid spec: templates.notify-telegram: failed to resolve
-      # {{workflow.outputs.parameters.activity}}", reproduced 2026-07-06 —
-      # every CronWorkflow tick failed silently, `implement`/`issue-poll`
-      # stopped scheduling entirely). The PVC file sidesteps that mechanism.
-      #
+      inputs:
+        artifacts:
+          # The `.status.yaml` updates whichever attempt ran handed off,
+          # unpacked here and copied over this pod's OWN fresh clone. Literal
+          # S3 key, not a step reference: one of the primary/fallback pair is
+          # always skipped and a reference to a skipped step does not
+          # resolve. `optional: true` covers the case where neither attempt
+          # uploaded anything — the script treats an absent or empty handoff
+          # as a clean no-op.
+          - name: changes
+            path: /artifact
+            optional: true
+            s3:
+              key: "{{workflow.name}}/agents-state.tgz"
+      outputs:
+        artifacts:
+          # The onExit channel for `activity`. notify-telegram used to read
+          # this off the shared PVC; an onExit pod gets its own emptyDir, so
+          # it travels as an artifact addressed by literal key instead. NOT a
+          # `workflow.outputs.parameters` entry — see the note above
+          # `templates:`.
+          - name: activity
+            path: /tmp/onexit
+            optional: true
+            s3:
+              key: "{{workflow.name}}/onexit-activity.tgz"
+      initContainers:
+        - name: clone-gitops
+          image: alpine/git:2.43.0
+          command: [sh, -c]
+          args:
+            - |
+              set -e
+              apk add --no-cache openssh-client ca-certificates
+              mkdir -p ~/.ssh
+              cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
+              chmod 600 ~/.ssh/id_ed25519
+              printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
+              # GitHub's published SSH host keys, PINNED rather than trusted on
+              # first use. Source: https://api.github.com/meta (.ssh_keys),
+              # fetched 2026-09-02. This replaces StrictHostKeyChecking=no,
+              # which accepted whatever key answered on a connection that
+              # carries a WRITE-capable deploy key: a MITM or a DNS-poison of
+              # ssh.github.com was handed that key with no complaint.
+              #
+              # Keyed on [ssh.github.com]:443, not github.com. The Host block
+              # above rewrites hostname and port, and ssh looks up what it
+              # actually connects to — a github.com entry would silently miss.
+              #
+              # If GitHub rotates a host key these lines must be updated; it
+              # last happened in March 2023, when the RSA key was replaced.
+              cat > ~/.ssh/known_hosts <<'GITHUB_HOST_KEYS'
+              [ssh.github.com]:443 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
+              [ssh.github.com]:443 ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=
+              [ssh.github.com]:443 ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=
+              GITHUB_HOST_KEYS
+              chmod 600 ~/.ssh/known_hosts
+              chmod 600 ~/.ssh/config
+              git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops
+              mkdir -p /workdir/mctl-gitops/platform-gitops/agents-state
+              echo "✓ gitops cloned (fresh checkout, never touched by the agent)"
+          resources:
+            requests: { cpu: 50m, memory: 64Mi, ephemeral-storage: 1Gi }
+            limits:   { cpu: 500m, memory: 256Mi, ephemeral-storage: 2Gi }
+          volumeMounts:
+            - name: workdir
+              mountPath: /workdir
+            - name: deploy-key
+              mountPath: /secrets/deploy-key
       # Mutex scoped to just this template (not the whole workflow spec):
       # only this step actually writes to mctl-gitops main, so it's the
       # only part that needs to serialize against cwft-mctl-agents-run /
@@ -622,6 +722,16 @@ spec:
       synchronization:
         mutex:
           name: mctl-gitops-main-writes
+      # The workflow mutex does not cover direct GitHub Actions image bumps.
+      # Retry this bounded write step when one races the in-script rebase/push
+      # loop (incident-17841555). Same policy as cwft-mctl-agents-run.
+      retryStrategy:
+        limit: "3"
+        retryPolicy: OnFailure
+        backoff:
+          duration: "30s"
+          factor: "2"
+          maxDuration: "5m"
       script:
         image: alpine/git:2.43.0
         command: [sh]
@@ -664,66 +774,86 @@ spec:
           chmod 600 ~/.ssh/known_hosts
           chmod 600 ~/.ssh/config
 
-          # clone-gitops chowns /workdir to uid 1000 (the mctl-agents image
-          # USER, SOC F8). This container runs as root, so git's
-          # dubious-ownership check would otherwise refuse the repo — the
-          # first local `git config` then dies with "fatal: not in a git
-          # directory" (incident 2026-08-14 23:02, hourly shepherd failures).
-          git config --global --add safe.directory /workdir/mctl-gitops
+          # This worktree came from THIS pod's own initContainer clone, so nothing
+          # has touched it. That is the point (gitops#983 P1): git executes
+          # repository-supplied config and hooks, this container runs as root, and
+          # the write-capable deploy key is mounted here — running git inside the
+          # agent's worktree put a root-privileged push one planted hook away.
+          #
+          # It also lets `safe.directory` go: that line existed only because
+          # the old clone step chowned /workdir to uid 1000 for the agent (incident
+          # 2026-08-14 23:02). Nothing chowns this checkout, so git's ownership
+          # check stays armed. `git reset -q origin/main` goes too, along with the
+          # whole rationale above it — a pristine clone has no agent-staged index
+          # and no agent commit to unwind.
           cd /workdir/mctl-gitops
           git config user.name "mctl-agents[bot]"
           git config user.email "mctl-agents[bot]@users.noreply.github.com"
 
-          # Stage only .status.yaml updates under agents-state. Anything
-          # else changed there (proposal bodies, digests, ad-hoc files left
-          # by a crashed implementer) is NOT what this workflow should be
-          # pushing back to gitops main — fail loudly instead of silently
-          # broadening the commit scope.
-          #
-          # `git reset` first, and scan the WHOLE repository rather than just
-          # agents-state/ — see cwft-mctl-agents-investigate.yaml for why both
-          # are load-bearing (agy P1 on gitops#982). The agent shares this
-          # worktree and holds Bash: `git commit` commits the index, so
-          # anything it staged itself rides along regardless of what this step
-          # adds, and the old agents-state/-anchored pathspec could not see a
-          # change anywhere else in the repo.
-          # Reset to origin/main — the tip this pod CLONED — before the
-          # guard. Two things this is not, both learned by getting it wrong
-          # on gitops#982:
-          #
-          #  - Not a bare `git reset`. That rewinds the index to HEAD, and
-          #    the agent can `git commit` in this worktree itself, moving
-          #    HEAD; its commit would then look like clean history and ride
-          #    along on `git push HEAD:main` (agy P1, round 2).
-          #  - Not a freshly fetched remote tip. main is written constantly
-          #    (image bumps), and an agent run lasts up to two hours, so
-          #    resetting the index forward to a tip this worktree never
-          #    checked out makes every file changed upstream meanwhile show
-          #    as a local modification — tripping the guard and throwing away
-          #    the run's legitimate work (agy P2, round 3; reproduced).
-          #
-          # origin/main is set at clone time and no fetch here moves it, so it
-          # is exactly the pod's own starting point: agent commits unwind into
-          # the worktree where the guard sees them, and upstream movement is
-          # invisible. The push loop below still rebases onto whatever main
-          # has become.
-          git reset -q origin/main
-          NON_STATUS_CHANGES="$(git status --porcelain -- ':(exclude,glob)platform-gitops/agents-state/**/.status.yaml')"
+          # /tmp/onexit is the onExit channel, collected as an optional artifact.
+          mkdir -p /tmp/onexit
+
+          if [ ! -d /artifact ] \
+             || { [ -z "$(find /artifact/tree -type f -print -quit 2>/dev/null)" ] \
+                  && [ ! -s /artifact/deleted.lst ]; }; then
+            echo "ℹ️  No .status.yaml updates handed off — nothing to commit."
+            echo -n "none" > /tmp/onexit/activity
+            exit 0
+          fi
+
+          # Validate the handoff BEFORE any of it touches the checkout. This, not the
+          # git-status guard below, is the boundary that matters: `git status` cannot
+          # see inside `.git/`, so a file smuggled to `.git/hooks/pre-commit` would be
+          # invisible to it and would run as root with the deploy key mounted on the
+          # next git command (agy P1 on gitops#1042).
+          if [ -n "$(find /artifact -mindepth 1 ! -type d ! -type f -print -quit)" ]; then
+            echo "❌ Refusing a handoff containing a symlink or special file:" >&2
+            find /artifact -mindepth 1 ! -type d ! -type f >&2
+            exit 1
+          fi
+          BAD="$(cd /artifact/tree 2>/dev/null && find . -type f | sed 's|^\./||' | grep -vE '^platform-gitops/agents-state/.+/\.status\.yaml$' || true)"
+          if [ -n "$BAD" ]; then
+            echo "❌ Refusing a handoff with paths that are not .status.yaml under agents-state:" >&2
+            printf '%s\n' "$BAD" >&2
+            exit 1
+          fi
+          if [ -s /artifact/deleted.lst ]; then
+            BAD_DEL="$(grep -vE '^platform-gitops/agents-state/.+/\.status\.yaml$' /artifact/deleted.lst || true)"
+            if [ -n "$BAD_DEL" ]; then
+              echo "❌ Refusing a deletion list with paths that are not .status.yaml under agents-state:" >&2
+              printf '%s\n' "$BAD_DEL" >&2
+              exit 1
+            fi
+          fi
+
+          if [ -d /artifact/tree/platform-gitops/agents-state ]; then
+            mkdir -p /workdir/mctl-gitops/platform-gitops/agents-state
+            cp -a /artifact/tree/platform-gitops/agents-state/. /workdir/mctl-gitops/platform-gitops/agents-state/
+          fi
+          # Deletions travel explicitly: the copy above overlays onto a FRESH clone and
+          # is purely additive. `:(literal)` because $rel is a git PATHSPEC and a name
+          # carrying `*` would glob onto its neighbours (claude+agy P1 on gitops#1046).
+          if [ -s /artifact/deleted.lst ]; then
+            while IFS= read -r rel; do
+              [ -n "$rel" ] || continue
+              git rm -q --ignore-unmatch -- ":(literal)$rel"
+              echo "removed ${rel}"
+            done < /artifact/deleted.lst
+          fi
+
+          # Second layer, on the checkout: the same expression the PVC era used, now
+          # against a pristine clone holding only what the copy above laid down.
+          NON_STATUS_CHANGES="$(git status --porcelain -z -uall -- ':(exclude,glob)platform-gitops/agents-state/**/.status.yaml' | tr '\0' '\n' | cut -c4-)"
           if [ -n "$NON_STATUS_CHANGES" ]; then
             echo "❌ Refusing to commit changes outside .status.yaml files under platform-gitops/agents-state/:" >&2
             printf '%s\n' "$NON_STATUS_CHANGES" >&2
             exit 1
           fi
 
-          # Short-circuit BEFORE `git add`: with `set -e`, a glob pathspec
-          # that matches zero files (`fatal: pathspec ... did not match any
-          # files`) would otherwise crash the workflow instead of becoming
-          # a no-op. Happens on the very first run (no .status.yaml exist
-          # yet) and on runs where zero proposals were accepted.
-          STATUS_CHANGES="$(git status --porcelain -- ':(glob)platform-gitops/agents-state/**/.status.yaml')"
+          STATUS_CHANGES="$(git status --porcelain -z -uall -- ':(glob)platform-gitops/agents-state/**/.status.yaml' | tr '\0' '\n' | cut -c4-)"
           if [ -z "$STATUS_CHANGES" ]; then
             echo "ℹ️  No .status.yaml updates — nothing to commit."
-            echo -n "none" > /workdir/activity
+            echo -n "none" > /tmp/onexit/activity
             exit 0
           fi
           git add -- ':(glob)platform-gitops/agents-state/**/.status.yaml'
@@ -733,7 +863,7 @@ spec:
             # but keep this guard in case `git add` ever ends up staging
             # an empty diff (e.g. a permissions-only change git ignores).
             echo "ℹ️  No status updates after staging — nothing to commit."
-            echo -n "none" > /workdir/activity
+            echo -n "none" > /tmp/onexit/activity
             exit 0
           fi
 
@@ -750,7 +880,7 @@ spec:
           for i in 1 2 3 4 5; do
             if git push origin HEAD:main; then
               echo "✅ Pushed status updates"
-              echo -n "yes" > /workdir/activity
+              echo -n "yes" > /tmp/onexit/activity
               exit 0
             fi
             echo "⚠️  Push failed (attempt ${i}), rebasing..."
@@ -767,13 +897,21 @@ spec:
           done
           echo "❌ Push failed after 5 attempts"
           exit 1
+        # No resources were declared on this step at all — it was unbounded
+        # on cpu and memory as well as on disk. ephemeral-storage matters
+        # most: the workdir is an emptyDir now, so an unaccounted pod can
+        # pack onto a node beside vault and shared-pg and push it into
+        # DiskPressure.
+        resources:
+          requests: { cpu: 50m, memory: 64Mi, ephemeral-storage: 1Gi }
+          limits:   { cpu: 500m, memory: 256Mi, ephemeral-storage: 2Gi }
         volumeMounts:
           - name: workdir
             mountPath: /workdir
           - name: deploy-key
             mountPath: /secrets/deploy-key
 
-    # ── 3b. Assert the bounded attempt succeeded ───────────────────────────
+    # ── 2b. Assert the bounded attempt succeeded ───────────────────────────
     - name: assert-attempt
       inputs:
         parameters:
@@ -794,9 +932,26 @@ spec:
           echo "   Most often the Claude five_hour/seven_day usage limit / HTTP 429 on both accounts, or token-2 unset." >&2
           exit 1
 
-    # ── 4. Telegram notification (onExit) ──────────────────────────────────
-    # Same pattern as cwft-mctl-agents-run.
+    # ── 3. Telegram notification (onExit) ──────────────────────────────────
+    # Same pattern as cwft-mctl-agents-run / cwft-mctl-agents-shepherd.
     - name: notify-telegram
+      inputs:
+        artifacts:
+          # What this onExit handler needs, addressed by literal S3 key. onExit
+          # pods get their own emptyDir, so the shared-PVC file this used to
+          # read is gone; and `workflow.outputs.parameters` is not an
+          # alternative — see the note above `templates:`.
+          #
+          # `optional: true`: a commit step that never ran, or crashed before
+          # writing, simply leaves the object absent and the missing-file
+          # fallback below reads "unknown". Verified on the shepherd canary
+          # that an onExit template resolves such a key with the producer
+          # skipped, running, and absent.
+          - name: activity
+            path: /onexit/commit
+            optional: true
+            s3:
+              key: "{{workflow.name}}/onexit-activity.tgz"
       script:
         image: alpine:3.19
         command: [sh]
@@ -838,18 +993,15 @@ spec:
             value: "{{workflow.name}}"
           - name: WORKFLOW_DURATION
             value: "{{workflow.duration}}"
-        volumeMounts:
-          - name: workdir
-            mountPath: /workdir
         source: |
           set +e
           apk add --no-cache curl ca-certificates jq >/dev/null 2>&1
 
-          # "none" when commit-and-push had nothing to commit (steady-state
-          # tick at the */5 cadence with an empty proposal queue). Read off
-          # the shared workdir PVC rather than a workflow output parameter —
-          # see the note on commit-and-push for why.
-          WORKFLOW_ACTIVITY=$(cat /workdir/activity 2>/dev/null || echo "unknown")
+          # "none" when commit-and-push had nothing to commit (a run whose
+          # proposal queue was empty). Read from the artifact mounted at
+          # /onexit/commit rather than a workflow output parameter — see the
+          # note above `templates:` for why this file has none.
+          WORKFLOW_ACTIVITY=$(cat /onexit/commit/activity 2>/dev/null || echo "unknown")
 
           # Stable dedup key for this recurring job. Two failures of the same
           # {service, slug} scope collapse into one open incident instead of
@@ -873,9 +1025,9 @@ spec:
           TEXT="${ICON} mctl-agents: ${SUBJECT} — ${WORKFLOW_STATUS} (${WORKFLOW_DURATION}s)\n${UI_URL}"
 
           # Telegram leg. Skip a Succeeded run that found nothing to do —
-          # at the */5 cadence that's the steady-state outcome, and an
-          # unconditional ✅ every 5 minutes drowned out real activity.
-          # Failed/Error/Unknown always notify regardless of activity.
+          # an unconditional ✅ on every empty-queue run drowned out real
+          # activity. Failed/Error/Unknown always notify regardless of
+          # activity.
           if [ "$WORKFLOW_STATUS" = "Succeeded" ] && [ "$WORKFLOW_ACTIVITY" = "none" ]; then
             echo "ℹ️  Succeeded with no activity (empty proposal queue) — skipping Telegram leg."
           elif [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
