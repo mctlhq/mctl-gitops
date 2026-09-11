@@ -64,6 +64,25 @@ spec:
             summary: >-
               Node {{ $labels.instance }} CPU usage above 90% for 15 minutes
 
+        # Tier below NodeHighMemory. Measured 2026-09-12: worker-hnn peaked at
+        # 89.8% memory over 7d (anon, not reclaimable cache -- MemTotal minus
+        # MemFree/Cached/Buffers reached 14100Mi of 15612Mi) driven by
+        # concurrent mctl-agents-implement pods, one of which sat at its 8Gi
+        # container limit. Nothing fired: the peak stayed under NodeHighMemory's
+        # 0.9 and, as a short spike, would not have survived its for: 15m
+        # either. A ceiling that is only visible once it is hit is not a
+        # warning, so this rule makes the approach to it visible instead.
+        - alert: NodeMemoryHeadroomLow
+          expr: |
+            1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) > 0.85
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: >-
+              Node {{ $labels.instance }} memory headroom below 15%
+              ({{ $value | humanizePercentage }} used for 10 minutes)
+
         - alert: NodeHighMemory
           expr: |
             1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) > 0.9
