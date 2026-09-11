@@ -192,6 +192,42 @@ spec:
               a token rotation problem, or network instability on the daemon host.
             runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlbridgedaemonsflapping"
 
+        # The failure MctlBridgeDaemonsFlapping cannot see: a daemon refused at
+        # the door never reaches Register, so mctl_bridge_connections_total
+        # does not move and the flapping alert stays silent while the daemon
+        # dials once a minute forever. That is exactly how the pilot ran for
+        # two days on a credential the server had stopped accepting
+        # (mctl-telegram#612) with nothing but a log line per refusal.
+        #
+        # The reason set is an allowlist, not a threshold on everything:
+        # /bridge is public and behind no rate limiter, so reasons reachable
+        # without a signed token (no_token, bearer_scheme_error,
+        # jwt_invalid_signature, other) are counted for the operator but must
+        # never page -- a credential-spraying scanner would otherwise fire this
+        # alert from the open internet. Every reason below needs a token this
+        # server signed: Verify checks the HMAC before expiry, issuer and
+        # audience, and the revocation check and the three device reasons come
+        # after the token verified.
+        #
+        # > 5 in 15m, for: 10m: a daemon on the 60s reconnect ladder produces
+        # ~15 per window, while a token that lapses mid-session is refused once
+        # or twice before the daemon's own refresh lands, and a rollout can
+        # produce a short burst of both. The 10m hold outlasts either.
+        - alert: MctlBridgeAuthFailing
+          expr: sum by (reason) (increase(mctl_auth_failures_total{provider="bridge",reason=~"jwt_expired|jwt_invalid_issuer|jwt_missing_audience|jwt_wrong_audience|token_revoked|no_device_binding|device_inactive|device_revoked"}[15m])) > 5
+          for: 10m
+          labels:
+            severity: warning
+            service: mctl-telegram
+          annotations:
+            summary: "mctl-telegram Local Bridge is refusing daemon credentials ({{ $labels.reason }})"
+            description: >-
+              The bridge refused {{ $value | humanize }} daemon credentials in the
+              last 15 minutes with reason {{ $labels.reason }}. A daemon is looping on
+              a credential the server no longer accepts; the server log names it
+              ("bridge: authentication failed" / "bridge token: credential refused").
+            runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlbridgeauthfailing"
+
     - name: mctl-telegram-agent
       rules:
         - alert: MctlAgentDeadLetter
