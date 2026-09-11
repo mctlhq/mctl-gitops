@@ -1,0 +1,72 @@
+# Ingress allowlist for the otel-collector pods, in the allowlist style of
+# bootstrap/templates/core-infra/vault-netpol.yaml: selecting all pods with
+# policyTypes: [Ingress] makes this an allowlist, so no separate default-deny
+# is needed.
+#
+# The `monitoring` namespace has NO namespace-wide NetworkPolicy today
+# (infra-components/observability/blackbox/blackbox-exporter.yaml:19-26).
+# podSelector is therefore scoped to the collector's own pods only, NOT `{}` --
+# a `{}` selector here would silently convert the whole no-policy `monitoring`
+# namespace into an allowlist and cut off Grafana, VMSingle, vmagent and Loki,
+# none of which this change is meant to touch.
+#
+# Sources allowed: the platform namespaces that can plausibly emit spans today
+# or in the near term (mctlhq/mctl-agent#38, mctlhq/mctl-agents#195), plus
+# monitoring itself (vmagent scrapes the metrics port from within the
+# namespace) and any tenant namespace (mctl.me/tenant). Ports 4317/4318 only --
+# :8888 (metrics) and :13133 (health_check) are covered by the monitoring
+# entry and the kubelet probe path respectively, neither of which
+# NetworkPolicy gates for kubelet.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-otel-collector-ingress
+  namespace: monitoring
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: opentelemetry-collector
+      app.kubernetes.io/instance: otel-collector
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: admins
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: mctl-api
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: argo-workflows
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: temporal
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+        - namespaceSelector:
+            matchExpressions:
+              - key: mctl.me/tenant
+                operator: Exists
+      ports:
+        - protocol: TCP
+          port: 4317
+        - protocol: TCP
+          port: 4318
+    # A SECOND rule, not another entry in the one above. `from` and `ports`
+    # inside a single ingress rule combine: every peer listed there may reach
+    # the ports listed there and nothing else. vmagent runs in `monitoring`
+    # and scrapes :8888 (infra-components/observability/otel-collector/
+    # servicescrape.yaml), so listing `monitoring` beside the OTLP producers
+    # granted it 4317/4318 and left the scrape denied -- which would have made
+    # `up{job="otel-collector"}` never populate and every alert in
+    # vm-rules/otel-collector-alerts.yaml dead on arrival.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 8888
