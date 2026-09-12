@@ -19,9 +19,13 @@
   discipline, the exit-code table), argument parsing for
   `""` / `--dry-run` / `--check` / `-h` / `--help`, `usage()`, and the
   credential check on `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID`.
+  matching `-h`/`--help` before the arity guard so that `--help extra` exits 0,
+  as both reference scripts do.
   (depends on 1) — DoD: `--help` exits 0 and names all four modes and all four
-  exit codes; an unknown flag and a second argument both exit 2 with usage on
-  stderr; a missing credential refuses before any network call.
+  exit codes, including the missing-interpreter exception below; `--help extra`
+  also exits 0, pinning the help-first deviation; an unknown flag and a second
+  argument both exit 2 with usage on stderr; a missing credential refuses before
+  any network call.
 
 - [ ] 3. Implement the git pre-flight in the reference's order, via
   `execFileSync("git", ["-C", root, ...])`: `rev-parse --git-dir`, then
@@ -79,7 +83,10 @@
   accumulate them as `drift: <tool> synced by the server with no decision in
   docs/portal-allowlist.json` and keep evaluating the rest of the run.
   (depends on 7) — DoD: both behaviours are reachable from the same fixture by
-  changing only the mode.
+  changing only the mode; in `--check`, a tool that is both undecided and live
+  in `updated_tools` contributes two lines (its no-decision line and its
+  `file=absent` line) and therefore two to the `<n> difference(s)` total, which
+  is what the reference scripts do (mctlhq/mctl-telegram#635).
 
 - [ ] 9. Implement `--check`: expected side read out of the task-7 body, actual
   side read out of the task-6 portal response, a `sentinel(side, name)` helper
@@ -100,11 +107,13 @@
   hand"; a successful apply prints exactly one summary line.
 
 - [ ] 11. Add `scripts/portal-allowlist-apply.sh`: resolve its own directory,
-  refuse with exit 1 naming Node when `command -v node` fails, then
-  `exec node "$dir/portal-allowlist-apply.mjs" "$@"`. Mark it executable.
+  refuse with exit 2 naming Node when `command -v node` fails (the reference
+  scripts exit 2 for a missing `jq`; mirror that rather than the table's 1 —
+  mctlhq/mctl-telegram#635), then `exec node
+  "$dir/portal-allowlist-apply.mjs" "$@"`. Mark it executable.
   (depends on 10) — DoD: `scripts/portal-allowlist-apply.sh --check` and
   `--help` behave identically to the `.mjs` invocation, exit codes 0/1/2/3 pass
-  through unchanged, and a host without Node exits 1 rather than 127.
+  through unchanged, and a host without Node exits 2 rather than 127.
 
 - [ ] 12. Add `"portal:allowlist": "node scripts/portal-allowlist-apply.mjs"` to
   `package.json` scripts, next to `sync:tokens` / `check:tokens`. (depends on
@@ -114,8 +123,9 @@
 - [ ] 13. Update the `$comment` in `docs/portal-allowlist.json` to name this
   repository's own `scripts/portal-allowlist-apply.sh` (with `--check`) instead
   of pointing at mctl-telegram's, and add the operator subsection to `README.md`
-  (the two environment variables, the four modes, the exit-code table, the
-  `npm ci` prerequisite, and `--dry-run` as the documented first step).
+  (the two environment variables, the four modes, the exit-code table with the
+  missing-interpreter-exits-2 exception spelled out next to it, the `npm ci`
+  prerequisite, and `--dry-run` as the documented first step).
   (depends on 11) — DoD: no tool's `enabled` value and no `reason` changes;
   `npm test` still passes, including `tests/portal-allowlist.test.ts` and
   `tests/landing.test.ts`.
@@ -151,7 +161,10 @@ symlink to the real `node_modules`, `git init` plus a commit) and a loopback
   `updated_tools` -> `... portal=absent file=<v>`. Both exit 3.
 - [ ] T5. A synced tool with no decision in the file -> exit 3 with the
   `synced by the server with no decision` line, and the other tool still
-  evaluated in the same run.
+  evaluated in the same run. Assert the `<n> difference(s)` total counts that
+  tool twice when it is also live in `updated_tools` — the reference behaviour
+  the parity clause pins, so a later "tidy-up" to one has to fail this test
+  rather than pass silently.
 - [ ] T6. A file entry for a tool the server has not synced -> exit 0, the
   `in sync` line, and `held back (not synced by the server): <name>`.
 - [ ] T7. Inherited guards, each exit 1 with the reference's message fragment
@@ -170,7 +183,8 @@ symlink to the real `node_modules`, `git init` plus a commit) and a loopback
   a portal with no `seerrsense` mapping each exit 1 (not 3), with
   `read portal failed` and `expected exactly one` respectively.
 - [ ] T11. Usage: unknown flag -> exit 2; two arguments -> exit 2; `--help` ->
-  exit 0 and mentions `--check` and every exit code.
+  exit 0 and mentions `--check` and every exit code; `--help extra` -> exit 0,
+  pinning the help-first deviation against a future arity-first rewrite.
 - [ ] T12. A non-loopback `SEERRSENSE_PORTAL_API_BASE` -> exit 2, empty request
   log.
 - [ ] T13. Wrapper parity: run T1, T2 and T11 through

@@ -62,9 +62,15 @@ Invocation and modes
   against the live portal mapping and exit 0 when they agree, 3 when they
   disagree, and 1 when the comparison could not be made.
 - WHEN it is invoked with `-h` or `--help` THE SYSTEM SHALL print usage naming
-  all modes and the exit-code table, and exit 0.
+  all modes and the exit-code table, including the missing-interpreter
+  exception, and exit 0.
 - IF it is invoked with an unknown argument, or with more than one argument,
-  THEN THE SYSTEM SHALL print usage to stderr and exit 2.
+  THEN THE SYSTEM SHALL print usage to stderr and exit 2 — EXCEPT that `-h` and
+  `--help` are matched before the arity guard, so `--help extra` prints usage to
+  stdout and exits 0. That is the landed behaviour of both reference scripts
+  (mctl-telegram and mctl-api), one of the three deviations the parity clause
+  pins (mctlhq/mctl-telegram#635); mirror it here rather than "fixing" it, so
+  the three upstreams stay identical until #635 moves all of them at once.
 - WHILE running in `--check` or `--dry-run` mode THE SYSTEM SHALL issue no
   `PUT` on any path, including the path where the file and the portal disagree
   and the path where a guard refuses.
@@ -161,7 +167,15 @@ What `--check` reports
   `held back (not synced by the server): <comma-separated names>` line.
 - WHEN any disagreement is found THE SYSTEM SHALL print every drift line it
   found, then a `<n> difference(s) between the portal and
-  docs/portal-allowlist.json` line to stderr, and exit 3.
+  docs/portal-allowlist.json` line to stderr, and exit 3, where `<n>` is the
+  number of drift lines printed.
+- WHEN a synced-but-undecided tool is also present in the live `updated_tools`
+  THE SYSTEM SHALL emit both its `synced by the server with no decision` line
+  and its `portal=<value> file=absent` line, so that one tool contributes two to
+  `<n>`. That double count is not a defect to correct here: it is the landed
+  behaviour of both reference scripts and the second of the three deviations
+  pinned by mctlhq/mctl-telegram#635. Counting it once would make this
+  repository's output disagree with the other two for the same portal state.
 - WHILE comparing THE SYSTEM SHALL derive the expected side from the same body
   the apply would send, rather than recomputing it, so the comparison cannot
   fall out of step with the apply.
@@ -175,10 +189,17 @@ Interface parity for mctlhq/mctl-gitops#1211
 - WHEN mctlhq/mctl-gitops#1211 runs `scripts/portal-allowlist-apply.sh --check`
   in a checkout of this repository THE SYSTEM SHALL behave as specified above,
   with the same exit-code contract as the mctl-telegram and mctl-api scripts
-  (0 in sync, 1 could not check, 2 usage error, 3 drift).
-- IF the wrapper cannot find a runnable Node THEN THE SYSTEM SHALL exit 1 with
-  a message naming Node as the missing prerequisite, rather than failing with a
-  shell "command not found" status.
+  (0 in sync, 1 could not check, 2 usage error — and, by the exception below,
+  a missing interpreter — 3 drift).
+- IF the wrapper cannot find a runnable Node THEN THE SYSTEM SHALL exit **2**
+  with a message naming Node as the missing prerequisite, rather than failing
+  with a shell "command not found" status. Exit 1 would read as "could not
+  check" on the documented table, but a missing interpreter is the same
+  condition the reference scripts signal with exit 2 for a missing `jq` — the
+  third deviation pinned by mctlhq/mctl-telegram#635. Matching them keeps one
+  #1211 job from having to special-case this upstream; the exception SHALL be
+  stated wherever the exit-code table is written down (script header, `--help`,
+  README), not only here.
 
 Evidence
 
