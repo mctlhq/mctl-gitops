@@ -58,7 +58,14 @@
       `approval.approved_at` value read from `$PROPOSAL_DIR/.status.yaml` at
       implementation time, single-quoted and copied verbatim — NOT invented,
       NOT the current time, NOT left as the placeholder text; EN and RU
-      `title` and `decided` present character for character.
+      `title` and `decided` present character for character. **The filename's
+      date prefix must equal the UTC date of that resolved
+      `proposal_approved_at`**, the same invariant the five backfilled files
+      satisfy by inspection (see the filename table in `design.md`). The
+      normative copy names the file `2026-09-12-...`, which holds if approval
+      lands on 2026-09-12 UTC; if it lands on a later UTC date, rename the file
+      to that date's prefix rather than committing a prefix that contradicts
+      the timestamp inside it. `test/colophon.test.ts` compares the two.
 
 - [ ] 7. Confirm nothing outside `src/content/journal/` changed (depends on
       2-6b) — DoD: `git status --porcelain` lists exactly six added files, all

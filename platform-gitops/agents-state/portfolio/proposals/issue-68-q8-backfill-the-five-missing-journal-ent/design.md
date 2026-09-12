@@ -118,8 +118,24 @@ is the UTC date of that entry's `cycleTimestamp`, i.e. of
 | repository-links-out-of-the-disclosure | `2026-09-12T04:24:45Z` | 2026-09-12 | 2026-09-12 |
 | colophon-tables-and-computed-lead-time | `2026-09-12T06:32:13Z` | 2026-09-12 | 2026-09-12 |
 | navigation-state-and-accessibility-affordances | `2026-09-12T07:14:28Z` | 2026-09-12 | 2026-09-12 |
+| backfilling-five-omitted-journal-entries (task 6b) | resolved at implementation time * | = prefix, by construction | 2026-09-12 |
 
-Prefix and rendered date agree on all six, so the table never shows a row
+\* The five backfilled rows carry literal timestamps, already known. This
+cycle's own entry cannot: its `proposal_approved_at` is read from
+`$PROPOSAL_DIR/.status.yaml`'s `approval.approved_at` when the implementer
+runs, so no concrete value can be written here. The filename above assumes a
+`2026-09-12` UTC approval date, which is the expected case but is not
+guaranteed — approval could land after midnight UTC.
+
+**Therefore the prefix is an obligation on the implementer, not a prediction.**
+After reading `approval.approved_at`, take its UTC date and make the filename
+prefix equal it. If that date is not `2026-09-12`, rename the file to
+`<that date>-backfilling-five-omitted-journal-entries.md` rather than writing a
+prefix that contradicts the value inside the file. Task 6b's DoD carries the
+same instruction.
+
+Prefix and rendered date then agree on all six — five by inspection of the
+literals above, the sixth by construction — so the table never shows a row
 whose date contradicts its own URL.
 
 **Frontmatter shape.** Eight keys per file, in the order the existing entries
