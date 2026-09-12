@@ -67,10 +67,18 @@ CLOUDFLARE_API_TOKEN=… CLOUDFLARE_ACCOUNT_ID=… scripts/portal-controls-apply
 ```
 
 `--check` exits non-zero on drift and prints the fields that differ; it is
-the operator's stand-in for `cloudflare-drift.yml`, which cannot watch this
-until CI has a Cloudflare identity. Nothing in CI holds the token today, so
-nothing in CI applies or checks this file — that is the gap `#1111` closes,
-not something this script works around.
+the operator's stand-in for `cloudflare-drift.yml`, which does not watch this
+file. Nothing in CI applies or checks it today.
+
+That is no longer for want of a credential: `CF_PORTAL_READ_TOKEN` and
+`CF_APPLY_TOKEN_PORTAL` (see the root below) are `Account -> MCP Portals`
+Read and Edit, and the portal object these switches live on is inside that
+permission. What is missing is the wiring, and the durable answer is the same
+one the servers took — describe the portal as
+`cloudflare_zero_trust_access_ai_controls_mcp_portal` and let plan and apply
+own it. That import is a separate decision, because the portal object also
+carries the tool allowlists owned by `mctl-telegram`, `mctl-api` and
+`seerrsense`.
 
 # Cloudflare MCP Portal upstream OAuth registration — an OpenTofu root
 

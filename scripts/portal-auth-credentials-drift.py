@@ -68,7 +68,14 @@ def desired_from_state(state: dict) -> dict[str, dict]:
                     f"{sid}: state holds no auth_credentials; "
                     "apply the root before checking it"
                 )
-            out[sid] = json.loads(raw)
+            try:
+                out[sid] = json.loads(raw)
+            except json.JSONDecodeError as e:
+                # Exits 2, not 1. An unparseable state value is not a changed
+                # scope, and letting the ValueError escape would have reported
+                # it as one -- the same confusion the Undetermined class exists
+                # to prevent.
+                raise Undetermined(f"{sid}: auth_credentials in state is not JSON: {e}")
         stack.extend(mod.get("child_modules", []) or [])
     return out
 
@@ -90,6 +97,13 @@ def live_summary(account: str, server: str, token: str) -> dict:
     return (body.get("result") or {}).get("auth_config_summary") or {}
 
 
+# Keys the live projection may carry that the applied blob never names. They
+# are server-populated, so an "unknown live key" report on them would be a
+# false alarm rather than a tamper. Everything NOT listed here is still
+# reported: an unchecked field is how this class of drift stayed invisible.
+SERVER_POPULATED = {("config", "resource")}
+
+
 def compare(server: str, want: dict, live: dict) -> list[str]:
     """One line per difference. Scope as a set: the API stores it
     space-separated and the order it comes back in is not measured."""
@@ -105,6 +119,8 @@ def compare(server: str, want: dict, live: dict) -> list[str]:
         w = want.get(section) or {}
         l = live.get(section) or {}
         for key in sorted(set(w) | set(l)):
+            if (section, key) in SERVER_POPULATED and key not in w:
+                continue
             wv, lv = w.get(key), l.get(key)
             if key == "scope":
                 wv = sorted((wv or "").split())
@@ -154,6 +170,17 @@ def selftest() -> int:
         ("reordered redirect_uris is not drift",
          live_with(**{"registration_info.redirect_uris": ["https://a.test/cb"]}), 0),
     ]
+
+    # A manual registration silently becoming DCR is the loudest thing that
+    # could happen to this field, and the branch that catches it had no case.
+    dcr = json.loads(json.dumps(base))
+    dcr["auth_mode"] = "dcr"
+    cases.append(("a switch to dcr fires", dcr, 1))
+
+    # Cloudflare populating a server-side key it owns is not a tamper.
+    populated = live_with()
+    populated["config"]["resource"] = "https://example.test/mcp"
+    cases.append(("a server-populated key is not drift", populated, 0))
     failures = []
     for name, live, expected in cases:
         got = 1 if compare("s", base, live) else 0
