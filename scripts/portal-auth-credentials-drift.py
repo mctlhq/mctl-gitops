@@ -79,10 +79,10 @@ def desired_from_state(state: dict) -> dict[str, dict]:
                 )
             try:
                 out[sid] = {
-                "blob": json.loads(raw),
-                "summary": values.get("auth_config_summary") or {},
-                "account_id": values.get("account_id"),
-            }
+                    "blob": json.loads(raw),
+                    "summary": values.get("auth_config_summary") or {},
+                    "account_id": values.get("account_id"),
+                }
             except json.JSONDecodeError as e:
                 # Exits 2, not 1. An unparseable state value is not a changed
                 # scope, and letting the ValueError escape would have reported
