@@ -188,10 +188,20 @@ spec:
                 # the failure mode being guarded against is the quiet one.
                 if scope:
                     want_perms = scope.get("permissions")
-                    if want_perms and result.get("permissions") != want_perms:
-                        raise RuntimeError(
-                            f"token permissions {result.get('permissions')} != requested {want_perms}"
-                        )
+                    if want_perms:
+                        granted = dict(result.get("permissions") or {})
+                        # GitHub grants metadata:read on every installation
+                        # token whether or not it was asked for -- the same
+                        # forced permission fine-grained PATs carry. Dropped
+                        # by name rather than by tolerating extras in
+                        # general: an unexpected EXTRA permission is exactly
+                        # the silent widening this check exists to catch, so
+                        # only the one known-forced key is excused.
+                        granted.pop("metadata", None)
+                        if granted != want_perms:
+                            raise RuntimeError(
+                                f"token permissions {granted} != requested {want_perms}"
+                            )
                     want_repos = scope.get("repositories")
                     if want_repos:
                         got = sorted(r["name"] for r in result.get("repositories", []))
