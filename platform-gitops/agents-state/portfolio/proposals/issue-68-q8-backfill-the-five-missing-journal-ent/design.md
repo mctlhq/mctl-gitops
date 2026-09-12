@@ -1,5 +1,16 @@
 # Design: issue-68-q8-backfill-the-five-missing-journal-ent
 
+> **Operator amendment, applied before approval (2026-09-12).** The
+> deliverable is **six** content files, not five: the five backfilled entries
+> described throughout, plus **this cycle's own journal entry**, specified as
+> Copy (normative) -> 6 in `requirements.md` and as task 6b in `tasks.md`.
+> Every cycle writes its own entry; a backfill that repeats the omission it
+> corrects has corrected nothing. Consequently the derived cycle counter is
+> **20**, not 19, and `git status --porcelain` must list six added files.
+> Where any sentence below says "five files" or "nothing else", read it as
+> the five backfilled entries; the sixth is additive and changes nothing else
+> about the scope, which remains content files only.
+
 ## Current state
 
 **The collection.** `src/content.config.ts` defines `journal` with a `glob`
@@ -27,7 +38,7 @@ today, not the 13 the issue's arithmetic assumes. The fourteenth is
 `2026-09-12-q7-polish-wave-findings.md` (issue #52), approved at
 `2026-09-12T12:36:04Z`, later than every cycle backfilled here; it had
 evidently not landed when the issue was written. See "Platform impact" for
-why the derived counter is therefore 19 and why that, not 18, is the value
+why the derived counter is therefore 20 and why that, neither 18 nor 19, is the value
 the gates will demand.
 `2026-09-11-p8-production-hardening-accessibility-wc.md` is the
 shape this cycle copies: frontmatter only, no body, keys in the order
@@ -138,7 +149,7 @@ need no escaping.
 entry; the journal route renders `data.decided` and never `entry.body`.
 
 **Everything downstream is derived.** No template, script or test is touched.
-`cycleCount` becomes 19 because `journal.length` is 19; `CycleTable` gains
+`cycleCount` becomes 20 because `journal.length` is 20; `CycleTable` gains
 five `data-cycle-row` rows because it maps over the collection;
 `getStaticPaths()` emits five more pages because it maps over
 `publicEntries()`; the sitemap gains five URLs because
@@ -201,13 +212,13 @@ cycle of its own.
   URL.
 - **Backward compatibility.** Additive only. Every existing journal entry,
   page and permalink is untouched. `data-intervention-count` is unchanged;
-  `data-cycle-count` rises by exactly five — 14 to 19 against the tree as it
+  `data-cycle-count` rises by exactly six — 14 to 20 against the tree as it
   stands — which is the intended effect and is verified against an
   independent scan rather than against a literal.
 - **Risk: pinning the cycle counter to the issue's stale 18.** The issue was
   written when thirteen entries existed; a fourteenth
   (`2026-09-12-q7-polish-wave-findings.md`) has since merged, so
-  `journal.length` after this change is 19. `checkColophonPages()` in
+  `journal.length` after this change is 20. `checkColophonPages()` in
   `scripts/check-dist.mjs` recomputes the expected value from its own
   `readdir()` of `src/content/journal`, so any attempt to make the page read
   18 fails the build, and there is no literal to edit in any case.

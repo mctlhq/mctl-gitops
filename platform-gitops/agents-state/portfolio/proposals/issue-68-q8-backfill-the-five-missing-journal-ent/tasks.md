@@ -1,5 +1,16 @@
 # Tasks: issue-68-q8-backfill-the-five-missing-journal-ent
 
+> **Operator amendment, applied before approval (2026-09-12).** The
+> deliverable is **six** content files, not five: the five backfilled entries
+> described throughout, plus **this cycle's own journal entry**, specified as
+> Copy (normative) -> 6 in `requirements.md` and as task 6b in `tasks.md`.
+> Every cycle writes its own entry; a backfill that repeats the omission it
+> corrects has corrected nothing. Consequently the derived cycle counter is
+> **20**, not 19, and `git status --porcelain` must list six added files.
+> Where any sentence below says "five files" or "nothing else", read it as
+> the five backfilled entries; the sixth is additive and changes nothing else
+> about the scope, which remains content files only.
+
 - [ ] 1. Read `src/content/journal/2026-09-11-p8-production-hardening-accessibility-wc.md`
       and the `journal` collection in `src/content.config.ts` to confirm the
       target shape before writing anything — DoD: the eight-key order
@@ -37,8 +48,19 @@
       `issue` `.../issues/49` and `proposal_slug`
       `issue-49-q5-navigation-state-disclosure-defaults`.
 
+- [ ] 6b. Create `src/content/journal/2026-09-12-backfilling-five-omitted-journal-entries.md`
+      from Copy (normative) -> 6, this cycle's own entry (depends on 1) —
+      DoD: file exists; same eight-key order as tasks 2-6; `issue`
+      `.../issues/68` and `proposal_slug`
+      `issue-68-q8-backfill-the-five-missing-journal-ent`;
+      `issue_opened_at: '2026-09-12T12:27:57Z'`; `proposal_approved_at` is the
+      `approval.approved_at` value read from `$PROPOSAL_DIR/.status.yaml` at
+      implementation time, single-quoted and copied verbatim — NOT invented,
+      NOT the current time, NOT left as the placeholder text; EN and RU
+      `title` and `decided` present character for character.
+
 - [ ] 7. Confirm nothing outside `src/content/journal/` changed (depends on
-      2-6) — DoD: `git status --porcelain` lists exactly five added files, all
+      2-6b) — DoD: `git status --porcelain` lists exactly six added files, all
       under `src/content/journal/`; no template, style, script, test,
       `package.json` or `package-lock.json` change; `src/content.config.ts`
       untouched.
@@ -46,14 +68,14 @@
 ## Tests
 
 - [ ] T1. Run `npm run check` (`astro sync && astro check`) — DoD: exits
-      zero, proving all five files parse as YAML and validate against the
+      zero, proving all six files parse as YAML and validate against the
       `z.strictObject` journal schema, including the `stamp` refinement that
       would reject any timestamp YAML coerced into a `Date` and the strict
       rejection of any unknown key.
 
 - [ ] T2. Run `npm test` — DoD: exits zero. Specifically
       `test/colophon.test.ts` must pass its per-file frontmatter test on each
-      of the five new files: the seven required keys present, every timestamp
+      of the six new files: the seven required keys present, every timestamp
       value single-quoted and matching `ISO_WITH_OFFSET`, and zero
       intervention `what` / `why` / `at` items each. `node scripts/check-no-metrics.mjs`
       (first command in the `test` script) must stay green, which it will —

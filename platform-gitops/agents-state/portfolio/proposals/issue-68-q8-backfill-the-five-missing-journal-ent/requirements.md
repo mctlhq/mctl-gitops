@@ -1,5 +1,16 @@
 # Q8: backfill the five missing journal entries from the polish wave
 
+> **Operator amendment, applied before approval (2026-09-12).** The
+> deliverable is **six** content files, not five: the five backfilled entries
+> described throughout, plus **this cycle's own journal entry**, specified as
+> Copy (normative) -> 6 in `requirements.md` and as task 6b in `tasks.md`.
+> Every cycle writes its own entry; a backfill that repeats the omission it
+> corrects has corrected nothing. Consequently the derived cycle counter is
+> **20**, not 19, and `git status --porcelain` must list six added files.
+> Where any sentence below says "five files" or "nothing else", read it as
+> the five backfilled entries; the sixth is additive and changes nothing else
+> about the scope, which remains content files only.
+
 ## Context
 
 `AGENTS.md` requires one journal entry per DevLoop cycle under
@@ -29,7 +40,8 @@ stands today holds **fourteen** public entries under `src/content/journal/`
 `2026-09-12T12:36:04Z` — later than all five backfilled cycles. The issue's
 arithmetic was written before that entry landed. What is normative here is
 the invariant, not the number: the counter is `journal.length` and nothing
-else, so after this change it reads **19**, and `scripts/check-dist.mjs`
+else, so after this change it reads **20** — nineteen from the backfill plus this
+cycle's own entry (see "This cycle's own entry" below) — and `scripts/check-dist.mjs`
 will enforce that against its own scan of the content directory. An
 implementer who hard-codes 18 anywhere both violates criterion 5's own
 "no literal count" clause and fails the build.
@@ -90,9 +102,9 @@ implementer who hard-codes 18 anywhere both violates criterion 5's own
   the number of `visibility: public` files under `src/content/journal/`,
   derived from `journal.length` and the collection, with no literal count
   introduced in any file. WITH the fourteen entries present today plus the
-  five added here, that value is 19.
+  five backfilled here plus this cycle's own entry, that value is 20.
 - WHILE the change is authored THE SYSTEM SHALL introduce no numeric literal
-  for the cycle count anywhere — neither 18 nor 19 — in `src/`, `scripts/`
+  for the cycle count anywhere — neither 18 nor 19 nor 20 — in `src/`, `scripts/`
   or `test/`.
 - WHILE `data-intervention-count` is rendered THE SYSTEM SHALL report the
   same total as before this change, since none of the five entries records an
@@ -114,7 +126,7 @@ implementer who hard-codes 18 anywhere both violates criterion 5's own
 
 - Editing any existing journal entry, including adding `merged_at`,
   `released_at` or `deployed_at` to entries that omit them.
-- Any code, style, template, script or test change. This cycle adds five
+- Any code, style, template, script or test change. This cycle adds six
   content files and nothing else.
 - Any change to `src/content.config.ts`, including relaxing or extending the
   `journal` schema.
@@ -227,11 +239,42 @@ proposal_approved_at: '2026-09-12T07:14:28Z'
 ---
 ```
 
+### 6. `src/content/journal/2026-09-12-backfilling-five-omitted-journal-entries.md`
+
+**Amendment (operator, before approval).** This cycle writes its own entry, as
+every cycle does. Without it this cycle repeats the exact omission it exists to
+correct, and a later cycle would have to backfill it — which is how the five
+above came to be missing. It is additional to the five; the five are a backfill
+of other cycles, this one is the ordinary per-cycle record.
+
+`proposal_approved_at` is not guessed: read it from
+`$PROPOSAL_DIR/.status.yaml`'s `approval.approved_at` at implementation time,
+the same source `2026-09-12-q7-polish-wave-findings.md` used. `issue_opened_at`
+is issue #68's `created_at`, given below.
+
+```yaml
+---
+service: portfolio
+issue: https://github.com/mctlhq/portfolio/issues/68
+proposal_slug: issue-68-q8-backfill-the-five-missing-journal-ent
+visibility: public
+title:
+  en: "Backfilling five journal entries that five cycles were told to skip"
+  ru: "Восполнение пяти записей журнала, которые пяти циклам велели пропустить"
+decided:
+  en: "Five consecutive cycles of the polish wave shipped without a journal entry, on my instruction and on a belief that turned out to be false: that the entry schema needs merge, release and deploy timestamps an implementer cannot know at implementation time. It does not. An existing entry carries only issue_opened_at and proposal_approved_at, and the three later stamps are optional; the belief was never checked against the schema it claimed to describe. The cost was five missing records out of a loop whose whole claim is that it records itself, and a public cycle counter that under-reported by five — silently, because the counter is derived from the files present and a file that was never written cannot be missed. The five are restored here from issue and proposal data, with the later stamps honestly absent rather than reconstructed. This cycle also writes its own entry, which is the point: a backfill that repeats the omission it corrects has corrected nothing."
+  ru: "Пять подряд идущих циклов волны полировки вышли без записи в журнале — по моему указанию и на основании убеждения, оказавшегося ложным: будто схема записи требует отметок о мерже, релизе и деплое, которых имплементер в момент реализации знать не может. Не требует. Существующая запись несёт только issue_opened_at и proposal_approved_at, а три поздние отметки необязательны; убеждение ни разу не сверили со схемой, которую оно описывало. Ценой стали пять недостающих записей у цикла, вся суть которого — записывать самого себя, и публичный счётчик циклов, занижавший число на пять — молча, потому что счётчик выводится из имеющихся файлов, а ненаписанный файл пропажей не выглядит. Пять записей восстановлены из данных issue и пропозалов, поздние отметки честно отсутствуют, а не реконструированы. Этот цикл пишет и собственную запись — в чём и смысл: восполнение, повторяющее исправляемый им пропуск, ничего не исправило."
+issue_opened_at: '2026-09-12T12:27:57Z'
+proposal_approved_at: '<read from $PROPOSAL_DIR/.status.yaml approval.approved_at, single-quoted, verbatim>'
+---
+```
+
 ## Open questions
 
-- **The cycle counter is 19, not 18.** The issue's criterion 5 says the
+- **The cycle counter is 20, not 18.** (Amended: was 19 before this cycle's
+  own entry was added to the deliverable.) The issue's criterion 5 says the
   counter "reads 18, derived from `journal.length`". The clone holds fourteen
-  public entries, so the derived value after this change is 19. The two
+  public entries, so the derived value after this change is 20. The two
   halves of that criterion disagree, and only one of them can be satisfied:
   the derivation is enforced by `scripts/check-dist.mjs`, which recomputes
   the expected count from `src/content/journal/*.md`, so pinning 18 is not
