@@ -150,7 +150,28 @@ CLOUDFLARE_API_TOKEN=… CLOUDFLARE_ACCOUNT_ID=… scripts/portal-server-auth-ap
 CLOUDFLARE_API_TOKEN=… CLOUDFLARE_ACCOUNT_ID=… scripts/portal-server-auth-apply.sh
 ```
 
-Same gap as the controls script: nothing in CI holds a Cloudflare token, so
-`--check` is the operator's stand-in for `cloudflare-drift.yml` until `#1111`
-lands. After an apply, sign the upstream out and back in in the portal — a
-refresh cannot widen an existing grant.
+Unlike the controls script above, this one also runs in CI:
+
+- `.github/workflows/portal-server-auth-apply.yml` — `workflow_dispatch` only,
+  and shaped like `cloudflare-apply.yml`: a `plan` job publishes `--check` and
+  `--dry-run` with the read-only `CLOUDFLARE_API_TOKEN`, then an `apply` job
+  gated on the `cloudflare-apply` environment (required reviewer, `main`-only
+  branch policy) writes with the `CF_APPLY_TOKEN_PORTAL` **environment**
+  secret. The apply re-runs `--check` first and refuses if the live side moved
+  after the approval.
+- `.github/workflows/cloudflare-drift.yml` — the `portal-server-auth` job runs
+  `--check` on the nightly schedule and fails closed, with the same Telegram
+  alert as the OpenTofu roots. This is the only Cloudflare surface here that
+  OpenTofu does not describe, so the drift matrix cannot reach it.
+
+Both jobs read the account id as a committed literal, not a secret: it is an
+address, it grants nothing without the token, and it is already in
+`account/versions.tf` and every R2 endpoint in this repository.
+
+`--check` stays the operator's stand-in for a local run, and the write token
+is still the only Cloudflare write credential this surface has — `#1111` is
+about the OpenTofu import (`#1092`), after which this file becomes a resource
+and both the script and these jobs go away.
+
+After an apply, sign the upstream out and back in in the portal — a refresh
+cannot widen an existing grant.

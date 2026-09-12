@@ -278,3 +278,107 @@ jobs:
             Exit code <code>${{ steps.plan.outputs.code || format('none — plan {0}', steps.plan.conclusion) }}</code> (2 = drift, 1 = plan error)
             Cloudflare no longer matches Git, or the plan could not run.
             Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+  # The one Cloudflare surface in this repository that OpenTofu does not
+  # describe, so the matrix above cannot watch it: the MCP portal's upstream
+  # OAuth registration. The portal was created through the API and the
+  # dashboard, and declarative ownership is an import task (#1092); until it
+  # lands the registration is pinned in a committed JSON file and compared by
+  # its own script.
+  #
+  # It is here rather than in its own scheduled workflow because it is the same
+  # question on the same cadence — "does Cloudflare still match Git?" — and the
+  # answer goes to the same place. A second nightly workflow would be a second
+  # thing to notice going quiet.
+  #
+  # Independent of `discover`, with no `needs`: it watches a file, not a root,
+  # so an empty or unreadable infrastructure/cloudflare must not silence it.
+  portal-server-auth:
+    name: drift portal server auth
+    runs-on: ubuntu-latest
+
+    # Not the group cloudflare-apply.yml or portal-server-auth-apply.yml uses:
+    # an apply run holds its group while waiting on a human reviewer, up to 30
+    # days, and GitHub replaces whatever is pending behind it — so sharing one
+    # would mean each night's check cancels the previous pending one and this
+    # surface gets no detection at all for the length of the wait. There is no
+    # lock to serialise against anyway: the PUT merges, the check only reads,
+    # and a read landing mid-apply sees the old registration or the new one.
+    # The cost is a possible spurious alert during the seconds an apply runs,
+    # which fails closed.
+    concurrency:
+      group: portal-server-auth-check
+      cancel-in-progress: false
+
+    env:
+      # The read-only credential the rest of this workflow uses. It must carry
+      # Account -> AI Controls read for `GET .../access/ai-controls/mcp/
+      # servers/{id}` to answer; that has NOT been verified from here (CI holds
+      # the token, this file does not). A token without it makes this job red
+      # from the first night, with the API's own error text in the log — which
+      # is the right failure to have: a check that cannot read is not a check,
+      # and reporting it green would be worse than reporting it broken.
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: 6a09f637d20e1f66a8e9d45ebe778058
+
+    steps:
+      # A real checkout: the script refuses to compare anything but the blob at
+      # HEAD, which is what keeps "in sync" a statement about reviewed content
+      # rather than about whatever is on the runner.
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      # Fails closed, like every other job here, and for the same reason: a
+      # drift here means the portal is asking an upstream for a scope nobody
+      # committed — which is invisible at every other layer (the tools stay
+      # enabled, the identity keeps its tier, and a send just comes back as a
+      # dry-run preview). Nothing reconciles it automatically.
+      #
+      # Exit 1 is both "drifted" and "could not compare"; the script says which
+      # in its output, and both need a human. Exit 2 is usage or a missing
+      # dependency.
+      - name: Check the committed registration against the live portal
+        id: check
+        run: |
+          set -uo pipefail
+          set +e
+          scripts/portal-server-auth-apply.sh --check > check.txt 2>&1
+          code=$?
+          set -e
+          cat check.txt
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          {
+            if [ "$code" = "0" ]; then
+              echo "### portal server auth — in sync"
+            elif [ "$code" = "1" ]; then
+              echo "### portal server auth — DRIFT or UNREADABLE"
+              echo
+              echo "> [!WARNING]"
+              echo "> Either the live registration no longer matches the committed file, or the"
+              echo "> comparison could not be made. The output says which."
+            else
+              echo "### portal server auth — check failed (exit $code)"
+            fi
+            echo
+            echo '```'
+            cat check.txt 2>/dev/null || echo "(no output captured)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          rm -f check.txt
+          exit "$code"
+
+      - name: Notify Telegram
+        if: failure()
+        uses: appleboy/telegram-action@390cf7345777cd821dba28c72f436a78bce19cc5 # master 2026-05
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          # HTML for the same reason as the job above: an unpaired _ in a
+          # scope or a server id would make Telegram reject the whole message
+          # with a 400, losing the alert exactly when it matters.
+          format: html
+          message: |
+            <b>Cloudflare drift</b> — <code>portal server auth</code>
+            Exit code <code>${{ steps.check.outputs.code || format('none — check {0}', steps.check.conclusion) }}</code> (1 = drift or unreadable)
+            The MCP portal's upstream OAuth registration no longer matches
+            <code>infrastructure/cloudflare/portal/mcp-portal-server-auth.json</code>, or it could not be read.
+            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
