@@ -292,10 +292,20 @@ jobs:
         if: success() && matrix.root == 'infrastructure/cloudflare/portal'
         run: |
           set -uo pipefail
+          # `set +e` explicitly, and it has to be a separate statement.
+          # GitHub Actions runs a `run:` block as `bash -e {0}`, so errexit is
+          # already on before the first line executes, and `set -uo pipefail`
+          # does NOT turn it off -- it only adds -u and pipefail. Written the
+          # short way, a failing selftest would still abort the step before
+          # `code` was written, which is precisely the bug the rest of this
+          # block exists to fix. Measured: under `bash -e`, a script whose
+          # first line is `set -uo pipefail` stops at the next failing
+          # command; with `set +e` after it, it continues.
+          set +e
           # --selftest first, same reason as every other detector in this
           # repository: one never seen to fire is not known to work.
           #
-          # NOT under `set -e`, and its status is folded into the same `code`
+          # Its status is folded into the same `code`
           # the rest of this step reports. Under `set -e` a failing selftest
           # exited the step before `code` was ever written, so the Telegram
           # alert fell through to the plan's exit code -- 0, since a clean
@@ -310,7 +320,6 @@ jobs:
               echo; echo "> It was not run against Cloudflare. Fix the detector."; } >> "$GITHUB_STEP_SUMMARY"
             exit 2
           fi
-          set +e
           # 2>&1 on the detector, not on the pipeline: every drift line and
           # every `[2]` diagnosis goes to stderr, so a plain `| tee` captured
           # an empty file and both failure branches below rendered an empty
