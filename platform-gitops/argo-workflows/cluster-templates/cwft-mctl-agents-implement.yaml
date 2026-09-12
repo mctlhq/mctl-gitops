@@ -878,7 +878,11 @@ spec:
           # Carried over with a real parser rather than a line splice: the same
           # class of defect cost five review rounds on the approve template.
           if [ -d /artifact/tree/platform-gitops/agents-state ]; then
-            apk add --no-cache python3 py3-yaml >/dev/null 2>&1
+            if ! apk add --no-cache python3 py3-yaml 2>/tmp/apk.err; then
+              echo "Could not install python3/py3-yaml to preserve concurrent approvals:" >&2
+              cat /tmp/apk.err >&2
+              exit 1
+            fi
             python3 - <<'PYAPPROVAL'
           import os, sys, yaml
 

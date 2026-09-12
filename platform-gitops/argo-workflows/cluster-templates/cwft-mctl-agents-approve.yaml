@@ -228,7 +228,11 @@ spec:
           # mctl-agents decides this with yaml.safe_load; so does this now, and
           # the whole class goes with it (gitops#1209, Codex: "parse the YAML
           # scalar rather than normalizing the raw line").
-          apk add --no-cache python3 py3-yaml >/dev/null 2>&1
+          if ! apk add --no-cache python3 py3-yaml 2>/tmp/apk.err; then
+            echo "Could not install python3/py3-yaml to read the approval gate:" >&2
+            cat /tmp/apk.err >&2
+            exit 1
+          fi
           GATE=$(python3 - "$STATUS_FILE" <<'PYGATE'
           import sys, yaml
 
@@ -674,23 +678,32 @@ spec:
               # no-op the flip step grants, instead of failing the loop.
               git rebase --abort || true
               git fetch origin main
-              # "Someone else already did this run's job" depends on what the job WAS,
-              # and `status: accepted` alone cannot answer it. On the record path the
-              # proposal was already accepted before this workflow started, so that test
-              # was true from the outset and would swallow a conflict that discarded the
-              # approval -- green run, still-blocked proposal (Codex P2, gitops#1209).
+              # Two INDEPENDENT questions, both of which must hold before a conflict
+              # counts as "someone else already did this run's job":
               #
-              # Derived from the HANDOFF, not from a MODE variable: this is a different
-              # pod and has none. If what we pushed carries an approval, main must end up
-              # with a satisfying approver -- ours or the concurrent run's. If it does
-              # not (an ungated flip), the status test is still the right one.
+              #   1. did the status flip land?  ALWAYS required — both paths end accepted.
+              #   2. did an approval land?      required only if OUR handoff carried a
+              #      NAMED one, because that is the part a conflict could discard.
+              #
+              # Keyed on a NAMED approver in the handoff, not on the `approval:` key
+              # existing: the flip path appends that key unconditionally, with
+              # `approved_by: unknown` for an ungated proposal. Testing key presence made
+              # this branch fire on EVERY flip and turned a benign concurrent ungated
+              # approve into a hard failure (claude P2, gitops#1209).
+              #
+              # Derived from the handoff rather than a MODE variable: commit-and-push is
+              # a different pod and has none.
+              if ! apk add --no-cache python3 py3-yaml 2>/tmp/apk.err; then
+                echo "Could not install python3/py3-yaml to inspect the conflict:" >&2
+                cat /tmp/apk.err >&2
+                exit 1
+              fi
               git show "origin/main:${STATUS_PATH}" > /tmp/main-status.yaml 2>/dev/null || {
                 echo "Rebase conflict and ${STATUS_PATH} is absent on main - needs a human look" >&2
                 exit 1
               }
-              if grep -q '^approval:' "/artifact/${STATUS_PATH}"; then
-                apk add --no-cache python3 py3-yaml >/dev/null 2>&1
-                if python3 - /tmp/main-status.yaml <<'PYCHECK'
+              named_approver() {
+                python3 - "$1" <<'PYCHECK'
           import sys, yaml
           ANONYMOUS = {"", "unknown", "none", "null"}
           try:
@@ -705,19 +718,19 @@ spec:
           sys.exit(0 if isinstance(approved_by, str)
                    and approved_by.strip().lower() not in ANONYMOUS else 1)
           PYCHECK
-                then
-                  echo "${WORKFLOW_SLUG} already carries a named approver on main - no-op."
-                  exit 0
-                fi
+              }
+              # 1. the status flip, always
+              if ! grep -q '^status: accepted$' /tmp/main-status.yaml; then
+                echo "Rebase conflict and main does not read 'status: accepted' - needs a human look" >&2
+                exit 1
+              fi
+              # 2. the approval, only if ours carried a real one
+              if named_approver "/artifact/${STATUS_PATH}" && ! named_approver /tmp/main-status.yaml; then
                 echo "Rebase conflict and main still has no named approver - this run's approval was discarded" >&2
                 exit 1
               fi
-              if grep -q '^status: accepted$' /tmp/main-status.yaml; then
-                echo "${WORKFLOW_SLUG} already accepted on main (concurrent approve) - no-op."
-                exit 0
-              fi
-              echo "Rebase conflict and main does not read 'status: accepted' - needs a human look" >&2
-              exit 1
+              echo "${WORKFLOW_SLUG}: main already carries this run's outcome (concurrent approve) - no-op."
+              exit 0
             fi
           done
           echo "❌ Push failed after 5 attempts"
