@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-09-11T21:21:21Z'
+updated_at: '2026-09-12T04:12:43Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -21,3 +21,4 @@ github:
   state: open
   head_sha: 0a5058299911631cdeb4c2f6c56ab2227a35b229
   observed_at: '2026-09-11T21:21:21Z'
+review_attempts: 1
