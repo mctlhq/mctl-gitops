@@ -150,6 +150,20 @@ spec:
                 sig_b64 = base64.urlsafe_b64encode(signature).rstrip(b'=').decode()
                 app_jwt = f"{header}.{payload}.{sig_b64}"
 
+                # `scope: {}` is refused rather than honoured, because it
+                # reads like the opposite of what it does. An empty dict is
+                # serialised to the body `{}` -- byte-identical to sending no
+                # scope at all -- so it requests NO narrowing, while looking
+                # like "narrow to nothing". Anyone writing it means the
+                # narrowest possible token and would get the widest. The
+                # narrowest ask is spelled {"permissions": {}, "repositories":
+                # []}, which is validated like any other.
+                if scope is not None and not scope:
+                    raise RuntimeError(
+                        "empty scope dict requests NO narrowing (body {}); omit the key "
+                        'or name the limits, e.g. {"permissions": {}, "repositories": []}'
+                    )
+
                 # An empty body mints a token carrying the installation's
                 # FULL grant on every repository it covers. `scope` narrows it
                 # per target -- GitHub honours `repositories` and

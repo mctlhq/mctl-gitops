@@ -47,6 +47,24 @@ def scope_check_source() -> str:
 CHECK = scope_check_source()
 
 
+def empty_scope_guard_source() -> str:
+    """The `if scope is not None and not scope:` refusal, verbatim."""
+    tree = ast.parse(embedded_python())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "mint_installation_token":
+            for stmt in node.body:
+                if (isinstance(stmt, ast.If)
+                        and isinstance(stmt.test, ast.BoolOp)
+                        and "not scope" in ast.unparse(stmt.test)):
+                    return ast.unparse(stmt)
+    raise AssertionError(
+        "could not find the empty-scope refusal in mint_installation_token — "
+        "the template changed shape and this test is now checking nothing")
+
+
+EMPTY_GUARD = empty_scope_guard_source()
+
+
 def run(scope, result):
     """Execute the extracted check; return None on pass, the message on raise.
 
@@ -138,6 +156,28 @@ def main() -> int:
          {"repositories": ["mctl-gitops"]},
          {"permissions": {"contents": "read", "actions": "write", "metadata": "read"}},
          should_raise=True)
+
+    # `scope: {}` serialises to the body {} — byte-identical to no scope — so
+    # it requests NO narrowing while reading like the strictest possible ask.
+    # Refused rather than honoured, so nobody writes it expecting the opposite.
+    def guard(scope):
+        ns = {"scope": scope}
+        try:
+            exec(compile(EMPTY_GUARD, "<empty-guard>", "exec"), ns, ns)
+            return None
+        except RuntimeError as exc:
+            return str(exc)
+
+    for label, scope, should_raise in [
+        ("scope {} is refused outright", {}, True),
+        ("no scope is allowed", None, False),
+        ("a real narrowing is allowed", {"repositories": []}, False),
+    ]:
+        msg = guard(scope)
+        ok = (msg is not None) == should_raise
+        print(f"  {'ok  ' if ok else 'FAIL'} {label}")
+        if not ok:
+            failures.append(label)
 
     # Targets that pass no scope keep the previous behaviour: nothing checked,
     # because nothing was promised.
