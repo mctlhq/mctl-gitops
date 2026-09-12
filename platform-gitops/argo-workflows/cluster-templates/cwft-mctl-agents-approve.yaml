@@ -402,6 +402,25 @@ spec:
               printf '%s: %s\n' "$FIELD" "$VALUE" >> "$STATUS_FILE"
             fi
           done
+          # A block that exists but names nobody real (approved_by: unknown /
+          # none / null / absent) is a PLACEHOLDER, not an approval — the gate
+          # rejects it, which is why HAS_APPROVAL is no while HAS_BLOCK is yes.
+          # Leaving it in place would make this run report `recorded` while
+          # recording nothing, because the append below is guarded on the key
+          # existing (claude P2, gitops#1209). Strip it first; the append then
+          # writes the real approver.
+          #
+          # Bounded to the top-level key: enter at `^approval:`, leave at the
+          # next unindented line. The block is known to exist and to be
+          # top-level because the YAML parser said so.
+          if [ "$HAS_BLOCK" = "yes" ] && [ "$HAS_APPROVAL" = "no" ]; then
+            awk '
+              /^approval:/ { drop = 1; next }
+              drop && /^[^[:space:]#]/ { drop = 0 }
+              !drop { print }
+            ' "$STATUS_FILE" > "${STATUS_FILE}.tmp" && mv "${STATUS_FILE}.tmp" "$STATUS_FILE"
+            echo "ℹ️  replaced a placeholder approval block (no named approver)" >&2
+          fi
           if ! grep -q '^approval:' "$STATUS_FILE"; then
             # Single-quote approved_by: the sanitized charset still allows
             # YAML indicators in first position (`@alice`, a bare `-`),
