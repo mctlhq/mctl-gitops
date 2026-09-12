@@ -244,8 +244,13 @@ its entire lifetime.
 **Risks and mitigations.**
 
 - *A non-zero implement step may cause mctl-gitops to skip `commit-and-push`,
-  discarding the blocked marker in a blocked-only run.* Not verifiable from this
-  repo. Mitigated by ordering: the marker write happens before the exit-code
+  discarding the blocked marker in a blocked-only run.* **Resolved 2026-09-12:
+  it does not.** `cwft-mctl-agents-implement.yaml` sets
+  `continueOn: {failed: true, error: true}` on both `implement` and
+  `implement-fallback`, and `commit` is the next unconditional step — put there
+  for exactly this reason ("those updates would never persist back to
+  mctl-gitops main"). The marker survives a blocked-only run. The risk below is
+  retained as written because the reasoning still holds if that ever changes. Mitigated by ordering: the marker write happens before the exit-code
   decision, the red workflow is the primary signal and does not depend on the
   commit, the write is idempotent so any later run that does commit will carry
   it, and the `succeeded > 0` carve-out guarantees a run with real work still
