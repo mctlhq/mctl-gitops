@@ -131,12 +131,35 @@ def check_dir(agents_state: Path) -> list[tuple[Path, str]]:
     return findings
 
 
+def _wc_escape(value: object) -> str:
+    """Escape a value for use inside a GitHub Actions workflow command.
+
+    An `::error` annotation is terminated by a newline, so an unescaped one
+    truncates the message there -- which is exactly the case that needs the
+    detail, since a `yaml.YAMLError` renders as several lines carrying the
+    line and column. The same interpolation is a log-injection vector: a
+    proposal directory whose name contains a newline followed by
+    `::warning::...` would have that command executed by the runner (agy P2,
+    gitops#1210). Percent first, or it would double-escape the others.
+    """
+    return (
+        str(value)
+        .replace("%", "%25")
+        .replace("\r", "%0D")
+        .replace("\n", "%0A")
+    )
+
+
 def report(findings: list[tuple[Path, str]], agents_state: Path) -> int:
     if not findings:
         return 0
     for path, reason in findings:
         rel = path.relative_to(agents_state)
-        print(f"::error file={path.relative_to(ROOT)}::{rel}: {reason}", file=sys.stderr)
+        print(
+            f"::error file={_wc_escape(path.relative_to(ROOT))}"
+            f"::{_wc_escape(rel)}: {_wc_escape(reason)}",
+            file=sys.stderr,
+        )
     print(
         "\n"
         f"{len(findings)} proposal(s) cannot be implemented by any supported path.\n"
@@ -244,6 +267,11 @@ approval:
     # clean (Codex P2, gitops#1210).
     ("root_is_empty_list", "[]\n", True),
     ("root_is_false", "false\n", True),
+    # The `data is None` branch that keeps an empty document out of the
+    # falsey-root finding above. Untested until agy P3 on gitops#1210 pointed
+    # out that a refactor could drop it and start flagging empty files as
+    # unrunnable, with nothing to catch it.
+    ("empty_document", "", False),
 ]
 
 
