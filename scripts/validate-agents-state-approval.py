@@ -20,7 +20,9 @@ keeps its fail-closed direction: only a recognisably falsey value waives the
 gate, an absent `control` block means "never asked", and a `control` block
 that is present but not a mapping is corrupt rather than absent. Those
 semantics were hardened twice by review; if they change there, change them
-here -- `test_parity_with_mctl_agents` in the self-test names the contract.
+here. PARITY below pins the contract with the cases that actually differ, each
+measured against orchestrator/proposal_state.py rather than read off it, and
+--selftest asserts them.
 """
 
 from __future__ import annotations
@@ -79,11 +81,23 @@ def unrunnable(data: dict) -> str | None:
         return None
     if not requires_human_approval(data):
         return None
-    if has_named_approver(data):
-        return None
+    # Shape before approver, deliberately. `human_approval_satisfied()` returns
+    # False for a non-mapping `control` BEFORE it ever looks at `approval`, so a
+    # corrupt control block plus a perfectly good approver is still blocked
+    # over there. Checking the approver first accepted exactly that
+    # combination and left CI green on an unrunnable proposal (Codex P1 on
+    # gitops#1210). Verified against orchestrator/proposal_state.py at
+    # mctl-agents c13df87: {"status": "accepted", "control": "yes please",
+    # "approval": {"approved_by": "mashkovd"}} -> satisfied=False.
     control = data.get("control")
     if not isinstance(control, dict):
-        return "control block is present but is not a mapping, so the approval requirement cannot be evaluated"
+        return (
+            "control block is present but is not a mapping, so the approval "
+            "requirement cannot be evaluated and the implementer fails closed "
+            "on it regardless of any approval record"
+        )
+    if has_named_approver(data):
+        return None
     return (
         "status is 'accepted' and control.requires_human_approval is set, but no "
         "approval.approved_by names a real approver"
@@ -94,12 +108,22 @@ def check_dir(agents_state: Path) -> list[tuple[Path, str]]:
     findings: list[tuple[Path, str]] = []
     for path in sorted(agents_state.glob("*/proposals/*/.status.yaml")):
         try:
-            data = yaml.safe_load(path.read_text()) or {}
+            data = yaml.safe_load(path.read_text())
         except yaml.YAMLError as exc:
             findings.append((path, f"is not parseable YAML: {exc}"))
             continue
+        if data is None:
+            # A genuinely empty document. It carries no `status`, so it is not
+            # unrunnable in this validator's sense and something else owns it.
+            continue
         if not isinstance(data, dict):
-            findings.append((path, "does not parse to a mapping"))
+            # NOT `or {}`: that turned a falsey non-mapping root -- `[]`,
+            # `false`, `0`, `""` -- into an empty mapping, which then passed the
+            # type check below and left the corruption unreported (Codex P2 on
+            # gitops#1210). Only an empty document is defaulted, above.
+            findings.append(
+                (path, f"does not parse to a mapping (got {type(data).__name__})")
+            )
             continue
         reason = unrunnable(data)
         if reason:
@@ -192,6 +216,34 @@ status: implemented
 control:
   requires_human_approval: true
 """, False),
+    # --- parity cases -------------------------------------------------------
+    #
+    # The four shapes where a plausible reading diverges from what mctl-agents
+    # actually does. Each was measured by calling human_approval_satisfied()
+    # from orchestrator/proposal_state.py at mctl-agents c13df87, not inferred:
+    #
+    #   {"control": None}                      -> satisfied=True   (runs)
+    #   {} (no control key)                    -> satisfied=True   (runs)
+    #   {"control": "yes please"}              -> satisfied=False  (blocked)
+    #   {"control": "yes please", approver}    -> satisfied=False  (blocked)
+    #
+    # The last is why the shape check must come BEFORE the approver check: over
+    # there a corrupt control block fails closed without ever reading the
+    # approval, so a named approver does not rescue it (Codex P1, gitops#1210).
+    ("accepted_control_null", """
+status: accepted
+control:
+""", False),
+    ("accepted_control_not_mapping_with_approver", """
+status: accepted
+control: "yes please"
+approval:
+  approved_by: 'mashkovd'
+""", True),
+    # A falsey non-mapping root used to be swallowed by `or {}` and reported as
+    # clean (Codex P2, gitops#1210).
+    ("root_is_empty_list", "[]\n", True),
+    ("root_is_false", "false\n", True),
 ]
 
 
