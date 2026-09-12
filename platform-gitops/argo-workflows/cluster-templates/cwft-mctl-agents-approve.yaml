@@ -218,63 +218,78 @@ spec:
           # MODE decides what the tail below writes: a status flip, or only
           # the approval record on a proposal that is already accepted.
           MODE=flip
-          # Does this proposal demand a recorded human approver? Needed on
-          # BOTH paths: the `record` branch below decides whether there is
-          # anything to do, and the `flip` path needs it to refuse writing an
-          # anonymous approver onto a gated proposal.
-          #
-          # Falsey spellings mirror mctl-agents' _FALSEY. An ABSENT key lands
-          # here as empty and means "never asked", same as Python's
-          # `required is None` -> satisfied. Anything unrecognised requires
-          # approval, so an unexpected value is refused rather than waived.
-          NEEDS_APPROVAL=no
-          if grep -q '^control:' "$STATUS_FILE"; then
-            # The key is nested under `control:`; matched by its indented name
-            # because these files are machine-written and the name is unique in
-            # the schema. A `control:` block that is present but not a mapping
-            # cannot be told apart here — mctl-agents' human_approval_satisfied()
-            # fails closed on that, this cannot, and gitops#1207's validator
-            # rejects that shape at commit time instead.
-            # Scoped to the `control:` block, NOT a whole-file line scan. A
-            # top-level key earlier in the document can carry a multi-line
-            # block scalar — an LLM-authored `description:` or `plan:` quoting
-            # example YAML — whose indented text matches this key perfectly
-            # while being, to a real parser, string content belonging to
-            # another field. `head -1` would then classify the proposal from
-            # that, and reopen the permanently-stuck state this PR exists to
-            # close (agy P1 / claude P2, gitops#1209).
-            #
-            # awk walks the document instead: enter at `^control:`, leave at
-            # the next unindented line, and only match inside.
-            RAW=$(awk '
-              /^control:/ { inblock = 1; next }
-              inblock && /^[^[:space:]#]/ { inblock = 0 }
-              inblock && /^[[:space:]]+requires_human_approval:[[:space:]]*/ {
-                sub(/^[[:space:]]+requires_human_approval:[[:space:]]*/, "")
-                print
-                exit
-              }
-            ' "$STATUS_FILE" | sed 's/[[:space:]]*$//')
-            # Quoting is load-bearing and must survive the comparison. To a
-            # YAML parser `null` and `~` are None -> "never asked" -> not
-            # gated, but "null" and '~' are STRINGS, which are not in
-            # mctl-agents' _FALSEY and therefore DO require approval. Stripping
-            # quotes before the test collapsed the two and would have no-op'd a
-            # genuinely gated proposal forever (Codex P2, gitops#1209).
-            case "$RAW" in
-              '"'*|"'"*) QUOTED=yes ;;
-              *) QUOTED=no ;;
-            esac
-            RHA=$(printf '%s' "$RAW" | tr -d '"\047' | tr 'A-Z' 'a-z' | tr -d '[:space:]')
-            NEEDS_APPROVAL=yes
-            if [ "$QUOTED" = "yes" ]; then
-              # A quoted scalar is a string: only the _FALSEY spellings waive.
-              case "$RHA" in ''|false|no|0|off) NEEDS_APPROVAL=no ;; esac
-            else
-              # Unquoted: `null`, `~` and an absent value are all None.
-              case "$RHA" in ''|null|'~'|false|no|0|off) NEEDS_APPROVAL=no ;; esac
-            fi
-          fi
+          # The approval gate is decided by a REAL YAML parser, not by line
+          # scanning. Five review rounds on this PR found five defects of one
+          # class, each from text tools standing in for a parser: `head -1`
+          # taking a match from an earlier block scalar, quote stripping
+          # collapsing `null` with "null", an inline `# comment` surviving
+          # normalisation, block boundaries, and absent-vs-null. Each fix added
+          # another heuristic to something that is structurally not a parser.
+          # mctl-agents decides this with yaml.safe_load; so does this now, and
+          # the whole class goes with it (gitops#1209, Codex: "parse the YAML
+          # scalar rather than normalizing the raw line").
+          apk add --no-cache python3 py3-yaml >/dev/null 2>&1
+          GATE=$(python3 - "$STATUS_FILE" <<'PYGATE'
+          import sys, yaml
+
+          # Mirrors human_approval_satisfied() in mctl-agents
+          # orchestrator/proposal_state.py -- keep the two together. Only a
+          # recognisably falsey value waives the gate; an absent or null control
+          # block means "never asked" (the incident-responder writes accepted with
+          # no control block); a control block that is present but not a mapping is
+          # corrupt and fails closed.
+          FALSEY = {"false", "no", "0", "off", ""}
+          ANONYMOUS = {"", "unknown", "none", "null"}
+
+          try:
+              with open(sys.argv[1]) as fh:
+                  data = yaml.safe_load(fh)
+          except yaml.YAMLError as exc:
+              sys.stderr.write("unparseable YAML: %s\n" % str(exc).replace("\n", " ")[:200])
+              sys.exit(2)
+
+          if not isinstance(data, dict):
+              sys.stderr.write("status file does not parse to a mapping\n")
+              sys.exit(2)
+
+          control = data.get("control")
+          if control is None:
+              required = False
+          elif not isinstance(control, dict):
+              sys.stderr.write("control block is present but is not a mapping\n")
+              sys.exit(2)
+          else:
+              value = control.get("requires_human_approval")
+              if value is None or value is False:
+                  required = False
+              elif isinstance(value, str) and value.strip().lower() in FALSEY:
+                  required = False
+              elif isinstance(value, int) and not isinstance(value, bool) and value == 0:
+                  required = False
+              else:
+                  required = True
+
+          if not required:
+              sys.stdout.write("ungated")
+              sys.exit(0)
+
+          approval = data.get("approval")
+          approved_by = approval.get("approved_by") if isinstance(approval, dict) else None
+          if isinstance(approved_by, str) and approved_by.strip().lower() not in ANONYMOUS:
+              sys.stdout.write("gated-approved")
+          else:
+              sys.stdout.write("gated-unapproved")
+          PYGATE
+          ) || {
+            echo "❌ ${WORKFLOW_SLUG}: cannot read the approval gate from ${STATUS_FILE}" >&2
+            exit 1
+          }
+          case "$GATE" in
+            ungated)          NEEDS_APPROVAL=no;  HAS_APPROVAL=yes ;;
+            gated-approved)   NEEDS_APPROVAL=yes; HAS_APPROVAL=yes ;;
+            gated-unapproved) NEEDS_APPROVAL=yes; HAS_APPROVAL=no  ;;
+            *) echo "❌ unexpected gate verdict '${GATE}'" >&2; exit 1 ;;
+          esac
           if [ "$CURRENT" = "accepted" ]; then
             # Historically an unconditional no-op. That left one shape
             # permanently stuck: a proposal committed straight to `accepted`
@@ -289,7 +304,7 @@ spec:
             # never changes `status`, and treats "no control block" as "never
             # asked" — the incident-responder writes `accepted` with no control
             # block and must keep no-op'ing here.
-            if [ "$NEEDS_APPROVAL" = "no" ] || grep -q '^approval:' "$STATUS_FILE"; then
+            if [ "$NEEDS_APPROVAL" = "no" ] || [ "$HAS_APPROVAL" = "yes" ]; then
               # Idempotent path: a Temporal retry of submit_and_wait, or a
               # manual approve racing the automated one. Exit 0 so the loop
               # proceeds to implement instead of failing on a double-approve.

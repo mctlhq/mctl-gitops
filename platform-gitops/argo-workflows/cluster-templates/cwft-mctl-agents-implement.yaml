@@ -867,7 +867,55 @@ spec:
             fi
           fi
 
+          # An approval recorded while this run was in flight must survive it.
+          # cwft-mctl-agents-approve can now write approval.approved_by onto a
+          # proposal that is already accepted (gitops#1206). This run's handoff was
+          # produced from a clone taken BEFORE that, so the overlay below would drop
+          # the new block -- both writers hold mctl-gitops-main-writes, but
+          # serializing the commits does not make a stale whole-file artifact fresh
+          # (Codex P2, gitops#1209).
+          #
+          # Carried over with a real parser rather than a line splice: the same
+          # class of defect cost five review rounds on the approve template.
           if [ -d /artifact/tree/platform-gitops/agents-state ]; then
+            apk add --no-cache python3 py3-yaml >/dev/null 2>&1
+            python3 - <<'PYAPPROVAL'
+          import os, sys, yaml
+
+          HANDOFF = "/artifact/tree/platform-gitops/agents-state"
+          LIVE = "/workdir/mctl-gitops/platform-gitops/agents-state"
+
+          def load(path):
+              try:
+                  with open(path) as fh:
+                      data = yaml.safe_load(fh)
+              except (OSError, yaml.YAMLError):
+                  return None
+              return data if isinstance(data, dict) else None
+
+          carried = 0
+          for root, _dirs, files in os.walk(HANDOFF):
+              for name in files:
+                  if name != ".status.yaml":
+                      continue
+                  h_path = os.path.join(root, name)
+                  l_path = os.path.join(LIVE, os.path.relpath(h_path, HANDOFF))
+                  live = load(l_path)
+                  if not live or "approval" not in live:
+                      continue
+                  hand = load(h_path)
+                  if hand is None or "approval" in hand:
+                      continue
+                  hand["approval"] = live["approval"]
+                  with open(h_path, "w") as fh:
+                      yaml.safe_dump(hand, fh, sort_keys=False, default_flow_style=False)
+                  carried += 1
+                  sys.stderr.write("carried forward approval for %s\n"
+                                   % os.path.relpath(h_path, HANDOFF))
+
+          if carried:
+              sys.stderr.write("preserved %d approval block(s) written concurrently\n" % carried)
+          PYAPPROVAL
             mkdir -p /workdir/mctl-gitops/platform-gitops/agents-state
             cp -a /artifact/tree/platform-gitops/agents-state/. /workdir/mctl-gitops/platform-gitops/agents-state/
           fi
