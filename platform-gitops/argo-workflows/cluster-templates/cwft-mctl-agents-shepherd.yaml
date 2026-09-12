@@ -660,25 +660,45 @@ spec:
           # in practice most ticks find nothing to do and exit free.
           - name: SHEPHERD_BUDGET_USD
             value: "5.00"
-          # mctl-design's review/fix/merge is owned by pr-steward
-          # (mctl-claude-remote), not the shepherd. Skip it here so the two
-          # never contend on the same feat/agents-* PRs (double-push / merge
-          # race). run_shepherd reads this comma/space-separated list at
-          # import; unset = today's behavior for every other repo. The
-          # read-only --reconcile pass (cronworkflow-mctl-agents-reconcile)
-          # is the inverse — it handles ONLY these skip-listed repos.
+          # Ownership is split by STAGE, not by repo (mctl-agents#292).
           #
-          # CAUTION for future edits: "skip-listed" no longer implies
-          # "steward-owned". That held while every entry here was a repo
-          # handed to pr-steward (see claude-remote/values.yaml), but
-          # mctl-academy is a third case — skipped by the shepherd AND absent
-          # from the steward's repo list, so nothing auto-merges it at all.
-          # That is deliberate: Academy's clean-room content policy makes
-          # human CODEOWNER approval the last check before a question
-          # publishes, and an agent merging its own content PR would defeat
-          # the gate. Do not "fix" the asymmetry by adding it to the steward.
+          # fix-only: the shepherd discovers, reviews and pushes follow-up
+          # commits, but decide() returns defer-merge instead of merge, so the
+          # merge decision stays with the other PR lifecycle (pr-steward in
+          # mctl-claude-remote). This is what gives a steward-owned repo a path
+          # from a blocking review finding back to code — before it existed, a
+          # steward-owned repo could be told what was wrong and had nothing
+          # that could fix it.
+          #
+          # skip: discovered by nothing. Reserved for repos where even a
+          # follow-up commit from an agent is not wanted.
+          #
+          # The code for this shipped in mctl-agents#341 on 2026-09-11 and has
+          # been dark ever since, because this value was never set: every
+          # steward-owned repo stayed in SKIP, so the review-feedback path
+          # #292 added was unreachable in production. mctlhq/mctl-gitops#1073
+          # is the standing evidence — blocking findings since 2026-09-09 and
+          # no actor able to address them.
+          #
+          # Values are the ones the approved #292 proposal specifies
+          # (agents-state/mctl-agents/proposals/issue-292-.../tasks.md task 9).
+          #
+          # mctl-academy stays in SKIP and is the reason the two lists are not
+          # redundant: it is skipped by the shepherd AND absent from the
+          # steward's repo list, so nothing auto-merges it at all. Academy's
+          # clean-room content policy makes human CODEOWNER approval the last
+          # check before a question publishes. It is additionally hardened in
+          # code (NEVER_MERGE_SERVICES), which caps it at fix-only so no value
+          # here can ever resolve it to full. Do not "fix" the asymmetry by
+          # adding it to the steward.
+          #
+          # Both lists are comma/space-separated and read at import. A service
+          # named in both resolves to fix-only, so the two edits below are
+          # order-independent.
+          - name: SHEPHERD_FIX_ONLY_SERVICES
+            value: "mctl-design,mctl-telegram,mctl-gitops,mctl-pairdesk"
           - name: SHEPHERD_SKIP_SERVICES
-            value: "mctl-design,mctl-telegram,mctl-gitops,mctl-pairdesk,mctl-academy"
+            value: "mctl-academy"
         resources:
           # memory 8Gi: the shepherd forks run_implementer.py
           # --review-feedback in the same pod, which runs the target repo's
