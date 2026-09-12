@@ -674,11 +674,49 @@ spec:
               # no-op the flip step grants, instead of failing the loop.
               git rebase --abort || true
               git fetch origin main
-              if git show "origin/main:${STATUS_PATH}" 2>/dev/null | grep -q '^status: accepted$'; then
-                echo "ℹ️  ${WORKFLOW_SLUG} already accepted on main (concurrent approve) — no-op."
+              # "Someone else already did this run's job" depends on what the job WAS,
+              # and `status: accepted` alone cannot answer it. On the record path the
+              # proposal was already accepted before this workflow started, so that test
+              # was true from the outset and would swallow a conflict that discarded the
+              # approval -- green run, still-blocked proposal (Codex P2, gitops#1209).
+              #
+              # Derived from the HANDOFF, not from a MODE variable: this is a different
+              # pod and has none. If what we pushed carries an approval, main must end up
+              # with a satisfying approver -- ours or the concurrent run's. If it does
+              # not (an ungated flip), the status test is still the right one.
+              git show "origin/main:${STATUS_PATH}" > /tmp/main-status.yaml 2>/dev/null || {
+                echo "Rebase conflict and ${STATUS_PATH} is absent on main - needs a human look" >&2
+                exit 1
+              }
+              if grep -q '^approval:' "/artifact/${STATUS_PATH}"; then
+                apk add --no-cache python3 py3-yaml >/dev/null 2>&1
+                if python3 - /tmp/main-status.yaml <<'PYCHECK'
+          import sys, yaml
+          ANONYMOUS = {"", "unknown", "none", "null"}
+          try:
+              with open(sys.argv[1]) as fh:
+                  data = yaml.safe_load(fh)
+          except yaml.YAMLError:
+              sys.exit(1)
+          if not isinstance(data, dict):
+              sys.exit(1)
+          approval = data.get("approval")
+          approved_by = approval.get("approved_by") if isinstance(approval, dict) else None
+          sys.exit(0 if isinstance(approved_by, str)
+                   and approved_by.strip().lower() not in ANONYMOUS else 1)
+          PYCHECK
+                then
+                  echo "${WORKFLOW_SLUG} already carries a named approver on main - no-op."
+                  exit 0
+                fi
+                echo "Rebase conflict and main still has no named approver - this run's approval was discarded" >&2
+                exit 1
+              fi
+              if grep -q '^status: accepted$' /tmp/main-status.yaml; then
+                echo "${WORKFLOW_SLUG} already accepted on main (concurrent approve) - no-op."
                 exit 0
               fi
-              echo "❌ Rebase conflict and main does not read 'status: accepted' — needs a human look" >&2
+              echo "Rebase conflict and main does not read 'status: accepted' - needs a human look" >&2
               exit 1
             fi
           done
