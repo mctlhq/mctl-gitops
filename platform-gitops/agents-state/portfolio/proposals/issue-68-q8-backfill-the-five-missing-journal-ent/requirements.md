@@ -1,5 +1,17 @@
 # Q8: backfill the five missing journal entries from the polish wave
 
+> **Operator amendment, applied before approval (2026-09-12).** The
+> deliverable is **six** content files, not five: the five backfilled entries
+> described throughout, plus **this cycle's own journal entry**, specified as
+> Copy (normative) -> 6 in `requirements.md` and as task 6b in `tasks.md`.
+> Every cycle writes its own entry; a backfill that repeats the omission it
+> corrects has corrected nothing. Consequently the derived cycle counter is
+> **20**, not 19, and `git status --porcelain` must list six added files.
+> Propagated in full on 2026-09-12 after review: every derived-effect count in
+> this file now reads six, and the remaining "five" mentions are the ones that
+> genuinely mean the five backfilled entries (the backfill itself, the rejected
+> alternatives, and the copy blocks). The scope remains content files only.
+
 ## Context
 
 `AGENTS.md` requires one journal entry per DevLoop cycle under
@@ -18,7 +30,8 @@ is where that claim is made. `src/pages/colophon/index.astro` computes
 `scripts/check-dist.mjs` re-derives the same number by scanning
 `src/content/journal/*.md` independently, so five missing files mean the
 public cycle count under-reports the loop by five. Adding the files raises
-the counter by exactly five, adds five rows to `CycleTable.astro` and five
+the counter by exactly six — the five backfilled entries plus this cycle's own
+— adds six rows to `CycleTable.astro` and six
 pages at `/colophon/journal/<slug>/`, with no literal to edit anywhere. This
 cycle adds content files only: no code, no style, no template change.
 
@@ -29,7 +42,8 @@ stands today holds **fourteen** public entries under `src/content/journal/`
 `2026-09-12T12:36:04Z` — later than all five backfilled cycles. The issue's
 arithmetic was written before that entry landed. What is normative here is
 the invariant, not the number: the counter is `journal.length` and nothing
-else, so after this change it reads **19**, and `scripts/check-dist.mjs`
+else, so after this change it reads **20** — nineteen from the backfill plus this
+cycle's own entry (Copy block 6 below) — and `scripts/check-dist.mjs`
 will enforce that against its own scan of the content directory. An
 implementer who hard-codes 18 anywhere both violates criterion 5's own
 "no literal count" clause and fails the build.
@@ -46,13 +60,14 @@ implementer who hard-codes 18 anywhere both violates criterion 5's own
   against the same `z.strictObject` schema as every prior entry SO THAT the
   record stays machine-checkable and no per-entry exception is introduced.
 - AS a Russian-reading visitor I WANT `title` and `decided` in Russian on all
-  five entries SO THAT the `.l.en` / `.l.ru` toggle has a counterpart for
+  six entries SO THAT the `.l.en` / `.l.ru` toggle has a counterpart for
   every string on the new pages.
 
 ## Acceptance criteria (EARS)
 
 - WHEN the build loads the `journal` collection THE SYSTEM SHALL find exactly
-  five new files under `src/content/journal/`, named
+  six new files under `src/content/journal/` (the five below plus Copy 6),
+  named
   `2026-09-11-csp-hash-quoting-and-browser-verified-headers.md`,
   `2026-09-12-content-link-contrast-and-an-offline-link-check.md`,
   `2026-09-12-repository-links-out-of-the-disclosure.md`,
@@ -64,7 +79,7 @@ implementer who hard-codes 18 anywhere both violates criterion 5's own
   `issue_opened_at` are present, `proposal_approved_at` is present, no key
   outside the schema appears (`z.strictObject`), and `merged_at`,
   `released_at` and `deployed_at` are omitted entirely.
-- WHILE the five files exist THE SYSTEM SHALL leave `interventions` absent
+- WHILE the six files exist THE SYSTEM SHALL leave `interventions` absent
   from each of them, so the schema's `.default([])` supplies the value and
   `totalInterventions()` over the collection is unchanged.
 - WHEN `test/colophon.test.ts` scans `src/content/journal/*.md` THE SYSTEM
@@ -74,13 +89,30 @@ implementer who hard-codes 18 anywhere both violates criterion 5's own
 - WHEN each file's frontmatter is written THE SYSTEM SHALL reproduce every
   timestamp, URL and `proposal_slug` character for character as given in the
   Copy section below, with no value reconstructed or reformatted.
+- **EXCEPT** Copy 6's `proposal_approved_at`, which is the single value in the
+  whole deliverable that is NOT a literal: it is written there as the
+  placeholder `<read from $PROPOSAL_DIR/.status.yaml approval.approved_at,
+  single-quoted, verbatim>`. WHEN that file is written THE SYSTEM SHALL
+  resolve the placeholder — read `approval.approved_at` from
+  `$PROPOSAL_DIR/.status.yaml`, write its value single-quoted — and SHALL NOT
+  write the placeholder text itself. Copying it literally would fail
+  `ISO_WITH_OFFSET` and break the build, so the two rules would otherwise
+  contradict each other: this exception is what resolves that, and the
+  character-for-character rule continues to bind every other value in Copy 6,
+  including its `issue`, `proposal_slug`, `issue_opened_at` and both languages
+  of `title` and `decided`.
+- **AND** Copy 6's filename date prefix follows from that resolved value, not
+  from the heading: WHEN `approval.approved_at` resolves to a UTC date other
+  than `2026-09-12` THE SYSTEM SHALL name the file with that date's prefix
+  instead. The heading below shows the expected case, not a fixed name; see
+  the filename table in `design.md` for the invariant and task 6b for the DoD.
 - WHEN each file's body is written THE SYSTEM SHALL write no body at all:
   frontmatter delimited by `---` and nothing after the closing delimiter,
   matching every existing journal entry.
 - WHEN the loader's `generateId` derives an id from each filename THE SYSTEM
   SHALL produce a slug that `src/pages/colophon/journal/[...slug].astro`
   turns into a page, so `dist/colophon/journal/<slug>/index.html` exists for
-  all five after `npm run build`.
+  all six after `npm run build`.
 - WHEN a new journal page is rendered THE SYSTEM SHALL emit `title` and
   `decided` through `<Lang>` in both languages, so the built page has an
   equal count of `class="l en"` and `class="l ru"`, as
@@ -90,12 +122,12 @@ implementer who hard-codes 18 anywhere both violates criterion 5's own
   the number of `visibility: public` files under `src/content/journal/`,
   derived from `journal.length` and the collection, with no literal count
   introduced in any file. WITH the fourteen entries present today plus the
-  five added here, that value is 19.
+  five backfilled here plus this cycle's own entry, that value is 20.
 - WHILE the change is authored THE SYSTEM SHALL introduce no numeric literal
-  for the cycle count anywhere — neither 18 nor 19 — in `src/`, `scripts/`
+  for the cycle count anywhere — neither 18 nor 19 nor 20 — in `src/`, `scripts/`
   or `test/`.
 - WHILE `data-intervention-count` is rendered THE SYSTEM SHALL report the
-  same total as before this change, since none of the five entries records an
+  same total as before this change, since none of the six entries records an
   intervention.
 - IF a `decided` value contains a double quote character THEN THE SYSTEM
   SHALL keep the YAML scalar parseable while preserving the character exactly
@@ -108,13 +140,13 @@ implementer who hard-codes 18 anywhere both violates criterion 5's own
   SYSTEM SHALL exit zero, and `dist/` SHALL contain no file ending in `.js`.
 - WHEN `node scripts/check-links.mjs` runs over the rebuilt tree THE SYSTEM
   SHALL resolve the new pages' internal links against `dist/` and report the
-  five GitHub issue URLs as skipped off-origin, issuing no network request.
+  six GitHub issue URLs as skipped off-origin, issuing no network request.
 
 ## Out of scope
 
 - Editing any existing journal entry, including adding `merged_at`,
   `released_at` or `deployed_at` to entries that omit them.
-- Any code, style, template, script or test change. This cycle adds five
+- Any code, style, template, script or test change. This cycle adds six
   content files and nothing else.
 - Any change to `src/content.config.ts`, including relaxing or extending the
   `journal` schema.
@@ -127,7 +159,8 @@ implementer who hard-codes 18 anywhere both violates criterion 5's own
 
 ## Copy (normative)
 
-The five files below are the deliverable, byte for byte. Key order matches
+The five files below, together with Copy 6 further down, are the deliverable,
+byte for byte. Key order matches
 `2026-09-11-p8-production-hardening-accessibility-wc.md`. Timestamps are
 single-quoted; `title` and `decided` values are double-quoted scalars, with
 any internal double quote escaped as `\"`.
@@ -227,11 +260,46 @@ proposal_approved_at: '2026-09-12T07:14:28Z'
 ---
 ```
 
+### 6. `src/content/journal/<YYYY-MM-DD>-backfilling-five-omitted-journal-entries.md`
+
+Expected `2026-09-12-backfilling-five-omitted-journal-entries.md`; the prefix is
+the UTC date of the resolved `proposal_approved_at`, per the acceptance
+criteria above.
+
+**Amendment (operator, before approval).** This cycle writes its own entry, as
+every cycle does. Without it this cycle repeats the exact omission it exists to
+correct, and a later cycle would have to backfill it — which is how the five
+above came to be missing. It is additional to the five; the five are a backfill
+of other cycles, this one is the ordinary per-cycle record.
+
+`proposal_approved_at` is not guessed: read it from
+`$PROPOSAL_DIR/.status.yaml`'s `approval.approved_at` at implementation time,
+the same source `2026-09-12-q7-polish-wave-findings.md` used. `issue_opened_at`
+is issue #68's `created_at`, given below.
+
+```yaml
+---
+service: portfolio
+issue: https://github.com/mctlhq/portfolio/issues/68
+proposal_slug: issue-68-q8-backfill-the-five-missing-journal-ent
+visibility: public
+title:
+  en: "Backfilling five journal entries that five cycles were told to skip"
+  ru: "Восполнение пяти записей журнала, которые пяти циклам велели пропустить"
+decided:
+  en: "Five consecutive cycles of the polish wave shipped without a journal entry, on my instruction and on a belief that turned out to be false: that the entry schema needs merge, release and deploy timestamps an implementer cannot know at implementation time. It does not. An existing entry carries only issue_opened_at and proposal_approved_at, and the three later stamps are optional; the belief was never checked against the schema it claimed to describe. The cost was five missing records out of a loop whose whole claim is that it records itself, and a public cycle counter that under-reported by five — silently, because the counter is derived from the files present and a file that was never written cannot be missed. The five are restored here from issue and proposal data, with the later stamps honestly absent rather than reconstructed. This cycle also writes its own entry, which is the point: a backfill that repeats the omission it corrects has corrected nothing."
+  ru: "Пять подряд идущих циклов волны полировки вышли без записи в журнале — по моему указанию и на основании убеждения, оказавшегося ложным: будто схема записи требует отметок о мерже, релизе и деплое, которых имплементер в момент реализации знать не может. Не требует. Существующая запись несёт только issue_opened_at и proposal_approved_at, а три поздние отметки необязательны; убеждение ни разу не сверили со схемой, которую оно описывало. Ценой стали пять недостающих записей у цикла, вся суть которого — записывать самого себя, и публичный счётчик циклов, занижавший число на пять — молча, потому что счётчик выводится из имеющихся файлов, а ненаписанный файл пропажей не выглядит. Пять записей восстановлены из данных issue и пропозалов, поздние отметки честно отсутствуют, а не реконструированы. Этот цикл пишет и собственную запись — в чём и смысл: восполнение, повторяющее исправляемый им пропуск, ничего не исправило."
+issue_opened_at: '2026-09-12T12:27:57Z'
+proposal_approved_at: '<read from $PROPOSAL_DIR/.status.yaml approval.approved_at, single-quoted, verbatim>'
+---
+```
+
 ## Open questions
 
-- **The cycle counter is 19, not 18.** The issue's criterion 5 says the
+- **The cycle counter is 20, not 18.** (Amended: was 19 before this cycle's
+  own entry was added to the deliverable.) The issue's criterion 5 says the
   counter "reads 18, derived from `journal.length`". The clone holds fourteen
-  public entries, so the derived value after this change is 19. The two
+  public entries, so the derived value after this change is 20. The two
   halves of that criterion disagree, and only one of them can be satisfied:
   the derivation is enforced by `scripts/check-dist.mjs`, which recomputes
   the expected count from `src/content/journal/*.md`, so pinning 18 is not
@@ -247,7 +315,7 @@ proposal_approved_at: '2026-09-12T07:14:28Z'
   an abbreviated block that omits `service` and `visibility`. Acceptance
   criterion 1 nonetheless requires "seven required keys each", and `service`
   and `visibility` are two of the seven. Resolved by writing
-  `service: portfolio` and `visibility: public` on all five, which is the
+  `service: portfolio` and `visibility: public` on all six, which is the
   only reading under which the schema validates and the pages render at all
   (`publicEntries()` in `src/lib/content.ts` drops anything not `public`).
   Recorded here rather than blocking.
