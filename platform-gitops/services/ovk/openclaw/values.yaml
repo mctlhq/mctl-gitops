@@ -5,6 +5,25 @@
 
 # Chart: base-service
 
+# STOPPED 2026-09-12 on the tenant owner's request.
+#
+# replicaCount, not autoscaling.minReplicas: base-service renders the
+# Deployment as `replicas: {{ .Values.replicaCount }}`, and minReplicas feeds
+# only the HPA — which this service does not have, since it carries no
+# `autoscaling:` block. Scaling through mctl_scale_service would have appended
+# one with minReplicas: 0, a value the API server rejects without the
+# HPAScaleToZero alpha gate, and left replicaCount at its default 1 with the
+# pod still running.
+#
+# Reversible: set this back to 1. Nothing else is removed — the database,
+# the MinIO state, the Vault paths, the ingress and the TLS certificate all
+# stay. ovk-openclaw.mctl.ai will answer 503 while this is 0.
+#
+# The s3-sync sidecar's preStop hook runs a synchronous `mc mirror` with a
+# 60s terminationGracePeriodSeconds, so the shutdown is not instant and must
+# not be interrupted: that window is what gets the last state into MinIO.
+replicaCount: 0
+
 image:
   repository: ghcr.io/mctlhq/mctl-openclaw
   # release-drift: ignore -- upstream mirror, pinned by hand to a vetted
