@@ -53,7 +53,10 @@ Invocation and usage
   usage block that names `--check` and its exit codes, and exit 0, without
   requiring `CLOUDFLARE_API_TOKEN`, a git checkout or Go.
 - IF the script is invoked with an unknown argument, or with more than one
-  argument, THEN THE SYSTEM SHALL print usage to stderr and exit 2.
+  argument, THEN THE SYSTEM SHALL print usage to stderr and exit 2, EXCEPT
+  where `-h`/`--help` appears first: the parity clause below pins
+  `--help extra` to exit 0, matching the reference implementation, so that one
+  combination is deliberately outside this criterion.
 
 Pre-flight parity
 
@@ -70,7 +73,11 @@ Pre-flight parity
   `--- PASS: TestPortalAllowlist_CoversEveryRegisteredTool` rather than merely
   exiting 0.
 - WHEN any pre-flight check refuses in `--check` mode THE SYSTEM SHALL print
-  the reason, make no HTTP call at all, and exit 1.
+  the reason, make no HTTP call at all, and exit 1, EXCEPT a missing `jq`,
+  which the parity clause below pins to exit 2, matching the reference
+  implementation. That code is wrong on its merits and is tracked in
+  mctlhq/mctl-telegram#635; it is reproduced here so the two scripts do not
+  disagree while it is being fixed.
 - WHEN the file has passed the pre-flight THE SYSTEM SHALL read the decisions
   from the committed blob (`git show HEAD:docs/portal-allowlist.json`), not
   from the copy on disk, on every path (apply, `--dry-run`, `--check`).
@@ -156,7 +163,10 @@ Parity and documentation
   stub with exactly one field changed, with the no-`PUT` guarantee proven by
   a recorded call log rather than by reading the script.
 - WHILE asserting the no-`PUT` guarantee THE SYSTEM SHALL require the call log
-  to exist and to show the reads, for every case that reaches the network,
+  to exist and to show the reads, for every case that reaches the network --
+  the in-sync case, every drift case, and the API-error and missing-mapping
+  cases, which reach the network too and are exactly where a stray write would
+  be least expected to be looked for --
   before the absence of a `PUT` is allowed to mean anything. An assertion
   gated only on a successful read skips itself when the log is missing -- a
   dropped `STUB_CURL_LOG`, a broken append -- and every case then passes with

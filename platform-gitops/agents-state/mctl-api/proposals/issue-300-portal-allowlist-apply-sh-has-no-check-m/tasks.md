@@ -130,7 +130,10 @@ All in `scripts/portal_allowlist_apply_test.go` unless stated otherwise.
       exits 1.
 - [ ] T9. "Could not check" is not "no drift": an unsuccessful API envelope
       exits 1 naming `read portal failed`, and a portal with no `api` mapping
-      exits 1 naming `expected exactly one` — neither exits 3.
+      exits 1 naming `expected exactly one` — neither exits 3. Both reach the
+      network, so both carry the same call-log evidence T5 requires: the log
+      must be readable and show the GETs, and must contain no `PUT`. An error
+      path is where an unexpected write is least likely to be looked for.
 - [ ] T10. Usage: `--help` and `-h` exit 0 and name `--check` with no
       credential, checkout or Go present; `--bogus` exits 2; `--check extra`
       exits 2.
