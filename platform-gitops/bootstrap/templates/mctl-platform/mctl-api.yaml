@@ -152,25 +152,12 @@ spec:
             # ARGO_WEBHOOK_SECRET is not listed here; envFromSecret below
             # injects it from Vault platform/mctl-api/argo-webhook (SOC F13).
 
+          # One secret, not two. GITOPS_REPO_TOKEN used to arrive through
+          # `envFromExtraSecret: mctl-api-gitops-token`, a Secret applied by
+          # hand in 2026-03 and created by nothing in this repository or in
+          # Vault; it is described in mctl-api-secrets.yaml now.
+          # mctlhq/mctl-gitops#1229, step 2 of 2.
           envFromSecret: mctl-api-secrets
-          # STEP 1 OF 2 (mctlhq/mctl-gitops#1229). This mount is deliberately
-          # still here. `mctl-api-secrets` now also carries GITOPS_REPO_TOKEN,
-          # and envFrom applies in order, so this second Secret still wins and
-          # the pod keeps using the old value -- which is the point: there is
-          # no window in which the variable is absent.
-          #
-          # Removing it in this same commit would race. root-app applies the
-          # ExternalSecret and the child Application in one wave, so the
-          # Deployment can roll before ESO has added the key. That pod starts
-          # SUCCESSFULLY without GITOPS_REPO_TOKEN -- the clone silently falls
-          # back to an unset GITHUB_TOKEN -- and because envFrom is captured at
-          # container start, ESO's later update does not repair it. Nothing
-          # would trigger the restart that would.
-          #
-          # So step 2 is its own PR, merged once `mctl-api-secrets` is observed
-          # carrying the key in-cluster. Then this line goes and the restart it
-          # causes finds the key already present.
-          envFromExtraSecret: mctl-api-gitops-token
 
           resources:
             requests:
