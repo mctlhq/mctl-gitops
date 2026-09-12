@@ -17,7 +17,7 @@ metadata:
       the sense that a failure in one (mint, Vault write, or ExternalSecret
       re-sync) does not abort the loop and the other still rotates.
 
-      That is NOT a separate failure domain, though. Since 2026-08-13 both
+      That is NOT a separate failure domain, though. Since 2026-08-13 all
       targets mint from the same App — mctl-agents (id 4450852), the
       backend-only automation App — so a revoked key, a removed
       installation, or a GitHub outage takes out both at once. When
@@ -40,6 +40,10 @@ metadata:
                                             key github-token
                                          -> ExternalSecret
                                             argo-workflows/mctl-agents-secrets
+        - mctl-api    (App id 4450852)  -> secret/platform/mctl-api/github-app
+                                            key token
+                                         -> ExternalSecret
+                                            mctl-api/mctl-api-github-app
 
       Note the re-sync only refreshes the Kubernetes Secret. A consumer that
       reads the token from `envFrom`/`secretKeyRef` still never sees the new
@@ -128,7 +132,7 @@ spec:
                 )
                 return json.loads(urllib.request.urlopen(req).read())["data"]["version"]
 
-            def mint_installation_token(creds):
+            def mint_installation_token(creds, scope=None):
                 private_key = creds["private-key"]
                 app_id = creds["app-id"]
                 installation_id = creds["installation-id"]
@@ -146,18 +150,100 @@ spec:
                 sig_b64 = base64.urlsafe_b64encode(signature).rstrip(b'=').decode()
                 app_jwt = f"{header}.{payload}.{sig_b64}"
 
+                # `scope: {}` is refused rather than honoured, because it
+                # reads like the opposite of what it does. An empty dict is
+                # serialised to the body `{}` -- byte-identical to sending no
+                # scope at all -- so it requests NO narrowing, while looking
+                # like "narrow to nothing". Anyone writing it means the
+                # narrowest possible token and would get the widest. The
+                # narrowest ask is spelled {"permissions": {}, "repositories":
+                # []}, which is validated like any other.
+                if scope is not None and not scope:
+                    raise RuntimeError(
+                        "empty scope dict requests NO narrowing (body {}); omit the key "
+                        'or name the limits, e.g. {"permissions": {}, "repositories": []}'
+                    )
+
+                # An empty body mints a token carrying the installation's
+                # FULL grant on every repository it covers. `scope` narrows it
+                # per target -- GitHub honours `repositories` and
+                # `permissions` on this endpoint, and a permission not listed
+                # is not granted. A target that passes no scope keeps the
+                # previous behaviour exactly.
+                body = json.dumps(scope or {}, separators=(',', ':')).encode()
                 req = urllib.request.Request(
                     f"https://api.github.com/app/installations/{installation_id}/access_tokens",
-                    data=b"{}",
+                    data=body,
                     headers={
                         "Authorization": f"Bearer {app_jwt}",
                         "Accept": "application/vnd.github+json",
                         "X-GitHub-Api-Version": "2022-11-28",
-                        "Content-Length": "2",
+                        # Explicit, and load-bearing now that the body carries
+                        # meaning. urllib defaults an unset Content-Type to
+                        # application/x-www-form-urlencoded when data is
+                        # attached -- verified, not assumed -- so a JSON body
+                        # would arrive mislabelled and the narrowing could be
+                        # dropped on the floor, minting a FULL-scope token
+                        # that looks correct in every log. It did not matter
+                        # while the body was b"{}", which is why it was
+                        # missing; vault_write below always set it.
+                        "Content-Type": "application/json",
+                        "Content-Length": str(len(body)),
                     },
                     method="POST"
                 )
                 result = json.loads(urllib.request.urlopen(req).read())
+
+                # Trust the response, not the request. GitHub echoes the
+                # permissions and repositories the token actually carries, so
+                # a narrowing that silently failed to apply is caught here
+                # rather than discovered later by whatever the token could
+                # reach. Belt and braces with the header above, deliberately:
+                # the failure mode being guarded against is the quiet one.
+                if scope:
+                    want_perms = scope.get("permissions")
+                    # `is not None`, not truthiness: a target that deliberately
+                    # requests {} is asking for the narrowest possible token,
+                    # and that is exactly when a silently ignored limit matters
+                    # most. Skipping the check there would verify every scope
+                    # except the strictest one.
+                    if want_perms is not None:
+                        # GitHub grants metadata:read on every installation
+                        # token whether or not it was asked for -- the same
+                        # forced permission fine-grained PATs carry. Dropped
+                        # from BOTH sides so the comparison stays symmetric:
+                        # a target that names metadata explicitly must not
+                        # fail for having asked for what it gets anyway.
+                        #
+                        # Dropped by name rather than by tolerating extras in
+                        # general: an unexpected EXTRA permission is exactly
+                        # the silent widening this check exists to catch, so
+                        # only the one known-forced key is excused.
+                        granted = {k: v for k, v in (result.get("permissions") or {}).items()
+                                   if k != "metadata"}
+                        wanted = {k: v for k, v in want_perms.items() if k != "metadata"}
+                        if granted != wanted:
+                            raise RuntimeError(
+                                f"token permissions {granted} != requested {wanted}"
+                            )
+                    want_repos = scope.get("repositories")
+                    if want_repos is not None:
+                        # Absent key != empty list. A token that was NOT
+                        # narrowed comes back without a `repositories` key at
+                        # all, so .get(..., []) would read a full grant as a
+                        # successful narrowing to nothing -- the two shapes
+                        # that must never be confused, since one of them is
+                        # every repository the installation covers.
+                        if "repositories" not in result:
+                            raise RuntimeError(
+                                "token carries no repositories key: the narrowing did not "
+                                f"apply and this is a full grant, requested {sorted(want_repos)}"
+                            )
+                        got = sorted(r["name"] for r in result["repositories"])
+                        if got != sorted(want_repos):
+                            raise RuntimeError(
+                                f"token repositories {got} != requested {sorted(want_repos)}"
+                            )
                 return result["token"], result["expires_at"]
 
             def force_sync_external_secret(namespace, name, version):
@@ -208,6 +294,45 @@ spec:
                         ("argo-workflows", "mctl-agents-secrets"),
                     ],
                 },
+                {
+                    # mctl-api clones mctl-gitops and dispatches
+                    # cloudflare-apply.yml there. Both were static PATs until
+                    # mctlhq/mctl-api#307; this replaces them with a token that
+                    # refreshes itself.
+                    #
+                    # Its own Vault path and its own ExternalSecret, separate
+                    # from mctl-api-secrets on purpose: ESO fails the WHOLE
+                    # ExternalSecret when one remoteRef does not resolve, so
+                    # putting a 30-minute-lifetime key next to DB_PASSWORD
+                    # would let a rotation glitch take the database credential
+                    # down with it.
+                    #
+                    # mctl-api reads it from a mounted FILE, not envFrom —
+                    # see the note at the top of this file about why a re-sync
+                    # never reaches an environment variable.
+                    "label": "mctl-api",
+                    "creds_path": "platform/github-app-agents",
+                    "dest_path": "platform/mctl-api/github-app",
+                    "dest_key": "token",
+                    # Narrowed at mint time, which is the only place it CAN be
+                    # narrowed: the installation itself carries write on
+                    # contents, actions, issues, pull_requests and workflows
+                    # across every repository it covers, and is a main-
+                    # protection bypass actor. mctl-api needs to clone one
+                    # repository and start one workflow in it.
+                    #
+                    # Without this, wiring mctl-api to the shared App would
+                    # trade a PAT that can read one repository for a token
+                    # that can write to all of them -- the exact widening
+                    # #1229 was opened to undo.
+                    "scope": {
+                        "repositories": ["mctl-gitops"],
+                        "permissions": {"contents": "read", "actions": "write"},
+                    },
+                    "external_secrets": [
+                        ("mctl-api", "mctl-api-github-app"),
+                    ],
+                },
             ]
 
             failures = []
@@ -215,7 +340,7 @@ spec:
                 label = t["label"]
                 try:
                     creds = vault_get(t["creds_path"])
-                    token, expires_at = mint_installation_token(creds)
+                    token, expires_at = mint_installation_token(creds, t.get("scope"))
                     print(f"✅ [{label}] minted (installation={creds['installation-id']}, expires={expires_at})")
 
                     # Read-merge-write: never replace the whole secret, only
