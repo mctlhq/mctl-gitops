@@ -259,8 +259,9 @@ contains no `PUT`. The suite skips (rather than fails) when `git` is not on
   Note the ordering consequence: the edit must be committed before it can be
   applied, which is exactly the guard working as intended.
 - `README.md` gains a short operator subsection under the existing portal
-  material: the two environment variables, the four modes, the exit-code table,
-  and the `npm ci` prerequisite.
+  material: the two environment variables, the four modes, the exit-code table
+  with the missing-interpreter-exits-2 exception stated next to it, and the
+  `npm ci` prerequisite.
 
 ## Alternatives
 

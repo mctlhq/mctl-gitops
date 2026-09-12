@@ -62,7 +62,8 @@ Invocation and modes
   against the live portal mapping and exit 0 when they agree, 3 when they
   disagree, and 1 when the comparison could not be made.
 - WHEN it is invoked with `-h` or `--help` THE SYSTEM SHALL print usage naming
-  all modes and the exit-code table, and exit 0.
+  all modes and the exit-code table, including the missing-interpreter
+  exception, and exit 0.
 - IF it is invoked with an unknown argument, or with more than one argument,
   THEN THE SYSTEM SHALL print usage to stderr and exit 2 — EXCEPT that `-h` and
   `--help` are matched before the arity guard, so `--help extra` prints usage to
@@ -188,7 +189,8 @@ Interface parity for mctlhq/mctl-gitops#1211
 - WHEN mctlhq/mctl-gitops#1211 runs `scripts/portal-allowlist-apply.sh --check`
   in a checkout of this repository THE SYSTEM SHALL behave as specified above,
   with the same exit-code contract as the mctl-telegram and mctl-api scripts
-  (0 in sync, 1 could not check, 2 usage error, 3 drift).
+  (0 in sync, 1 could not check, 2 usage error — and, by the exception below,
+  a missing interpreter — 3 drift).
 - IF the wrapper cannot find a runnable Node THEN THE SYSTEM SHALL exit **2**
   with a message naming Node as the missing prerequisite, rather than failing
   with a shell "command not found" status. Exit 1 would read as "could not
