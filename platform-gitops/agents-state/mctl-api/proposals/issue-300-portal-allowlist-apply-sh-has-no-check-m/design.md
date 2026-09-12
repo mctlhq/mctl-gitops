@@ -85,7 +85,9 @@ change.
 **Mode dispatch and usage.** Replace the two-way `case` with
 `mode=apply|dry-run|check`, add `-h|--help` printing a `usage()` heredoc that
 names all three modes and the exit-code table, and route the unknown-argument
-and too-many-arguments paths through `usage >&2` + exit 2. Usage is answered
+and too-many-arguments paths through `usage >&2` + exit 2 -- with the one
+mirrored exception that `-h|--help` is matched before the arity guard, so
+`--help extra` prints usage and exits 0 rather than 2. Usage is answered
 before credentials, `jq`, git or Go are touched.
 
 **Pre-flight parity (applies to all three modes).** Bring over the hardening
@@ -136,10 +138,14 @@ apply's `applied:` line uses, guarded by `select(. != null)` so a missing
 mapping cannot print an empty success — and, when the file decides tools the
 server has not synced, a `held back (not synced by the server): …` line, then
 exit 0. Exit codes: `0` in sync/applied, `1` could not check or apply (guard
-refusal or API failure), `2` usage error, `3` drift. `1` and `3` are both
-failures; the split says which happened, and the header comment, `--help` and
-`README.md` all say so explicitly, because a caller that alerts on `3` alone
-would read an expired token as "no drift".
+refusal or API failure), `2` usage error, `3` drift -- with one documented
+exception carried over from the reference: a missing `jq` exits 2, not 1. `1`
+and `3` are both failures; the split says which happened, and the header
+comment, `--help` and `README.md` all say so explicitly -- and all three carry
+the missing-`jq` exception too, so that they are not misleading on the one host
+where it shows (tracked in mctlhq/mctl-telegram#635, to move in both
+repositories at once) -- because a caller that alerts on `3` alone would read
+an expired token as "no drift".
 
 **No write.** `--check` returns before the `sent=`/`PUT` block on every path,
 including the drift path. This is asserted by observation (below), not by
@@ -176,7 +182,8 @@ take `git` and `jq` with it and refuse for the wrong reason.
 Extend the "Portal tool allowlist" section (lines 386-397) with the `--check`
 invocation, what it compares, the pre-flight parity, the never-writes
 guarantee, the held-back rule, and the exit-code table including the explicit
-statement that `1` and `3` are both failures. Note that CI wiring is
+statement that `1` and `3` are both failures and the missing-`jq`-exits-2
+exception. Note that CI wiring is
 mctlhq/mctl-gitops#1211 and that `--check` is operator-run today.
 
 ## Alternatives

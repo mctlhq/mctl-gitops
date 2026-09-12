@@ -53,7 +53,10 @@ Invocation and usage
   usage block that names `--check` and its exit codes, and exit 0, without
   requiring `CLOUDFLARE_API_TOKEN`, a git checkout or Go.
 - IF the script is invoked with an unknown argument, or with more than one
-  argument, THEN THE SYSTEM SHALL print usage to stderr and exit 2.
+  argument, THEN THE SYSTEM SHALL print usage to stderr and exit 2, EXCEPT
+  where `-h`/`--help` appears first: the parity clause below pins
+  `--help extra` to exit 0, matching the reference implementation, so that one
+  combination is deliberately outside this criterion.
 
 Pre-flight parity
 
@@ -70,7 +73,11 @@ Pre-flight parity
   `--- PASS: TestPortalAllowlist_CoversEveryRegisteredTool` rather than merely
   exiting 0.
 - WHEN any pre-flight check refuses in `--check` mode THE SYSTEM SHALL print
-  the reason, make no HTTP call at all, and exit 1.
+  the reason, make no HTTP call at all, and exit 1, EXCEPT a missing `jq`,
+  which the parity clause below pins to exit 2, matching the reference
+  implementation. That code is wrong on its merits and is tracked in
+  mctlhq/mctl-telegram#635; it is reproduced here so the two scripts do not
+  disagree while it is being fixed.
 - WHEN the file has passed the pre-flight THE SYSTEM SHALL read the decisions
   from the committed blob (`git show HEAD:docs/portal-allowlist.json`), not
   from the copy on disk, on every path (apply, `--dry-run`, `--check`).
@@ -128,14 +135,59 @@ Parity and documentation
   `3` drift) and drift/summary line formats identical to
   `mctl-telegram/scripts/portal-allowlist-apply.sh`, the only difference being
   the server id `api`.
+- WHILE mirroring THE SYSTEM SHALL copy `mctl-telegram`'s *landed* behaviour
+  including its three known deviations from the published contract, rather than
+  silently correcting them here: a missing `jq` exits `2` where the contract
+  says `1`, `-h`/`--help` returns before the arity guard so `--help extra`
+  exits 0, and a synced-but-undecided tool is counted twice in the
+  `n difference(s)` total. They are tracked in mctlhq/mctl-telegram#635.
+  Correcting them in one repository and not the other is the one thing parity
+  cannot survive, because mctlhq/mctl-gitops#1211 drives both with one code
+  path and would then see two different answers to the same condition. When
+  #635 lands it must move both repositories in the same change; if it lands
+  first, mirror the corrected behaviour instead and say so in the PR.
 - WHEN this change lands THE SYSTEM SHALL describe `--check`, its exit codes
   and its no-write guarantee in the script's header comment, in `--help`, and
   in the "Portal tool allowlist" section of `README.md`.
+- WHEN the exit-code table is written into the header, `--help` and `README.md`
+  THE SYSTEM SHALL record the missing-`jq` exception alongside it: a missing
+  `jq` exits 2, not the 1 that the "could not check or apply" row would imply,
+  because that is the reference's landed behaviour. Without that line the three
+  documents are misleading on a host without `jq` -- the only place the
+  exception is observable -- and an implementer who trusts them instead breaks
+  the parity this proposal requires. The line SHALL name
+  mctlhq/mctl-telegram#635 and SHALL say the exception moves in both
+  repositories at once.
+- WHEN the exit codes are documented THE SYSTEM SHALL state that every non-zero
+  status is a failure a caller must surface, and that the split between "could
+  not check" and "drifted" exists to tell a human which happened, never to let
+  a caller treat one of them as tolerable. A job alerting on `3` alone answers
+  "no drift" when the token has expired, the scope was revoked or the API was
+  down -- the same answer a working check gives when everything agrees.
+  (mctl-telegram needed this added by hand after its implementation had already
+  landed; it belongs in the contract here rather than in a second review.)
 - WHEN the change is proposed for review THE SYSTEM SHALL carry an automated
   mutation proof in both directions: a `--check` run that exits 0 against a
   matching stubbed portal, and a `--check` run that exits 3 against the same
   stub with exactly one field changed, with the no-`PUT` guarantee proven by
   a recorded call log rather than by reading the script.
+- WHILE asserting the no-`PUT` guarantee THE SYSTEM SHALL require the call log
+  to exist and to show every read that path actually attempted, for every case
+  that reaches the network -- the in-sync case, every drift case, and the
+  API-error and missing-mapping cases, which reach the network too and are
+  exactly where a stray write would be least expected to be looked for --
+  before the absence of a `PUT` is allowed to mean anything. "Every read
+  attempted" is two `GET`s only on the paths that reach both: the
+  unsuccessful-envelope case exits after the first read, so requiring two there
+  would specify a test no correct implementation can pass. What the count must
+  never be is zero-tolerant. An assertion
+  gated only on a successful read skips itself when the log is missing -- a
+  dropped `STUB_CURL_LOG`, a broken append -- and every case then passes with
+  write-prevention silently switched off. This is not hypothetical: it is the
+  P2 found on mctlhq/mctl-telegram#634 and fixed there in `f98920f`, after a
+  mutation that made `--check` issue a `PUT` had already been taken as proof
+  that the guard worked. `tasks.md` carries this; it belongs in the acceptance
+  criteria too, because that is the half a reviewer checks against.
 
 ## Out of scope
 
