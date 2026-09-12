@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-09-12T00:19:02Z'
+status: review-stuck
+updated_at: '2026-09-12T03:11:26Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -17,8 +17,11 @@ attempt:
   expires_at: '2026-09-11T09:05:41Z'
   finished_at: '2026-09-11T07:27:58Z'
 pr: https://github.com/mctlhq/mctl-api/pull/291
-review_attempts: 4
+review_attempts: 5
 github:
   state: open
   head_sha: 6066e265d1089bb3dd712face652ef3882b8db9c
   observed_at: '2026-09-12T00:19:02Z'
+notes: Follow-up failed deterministically 5 time(s) (implementer follow-up exited
+  non-zero (42) for mctl-api/issue-283-feat-agent-platform-publish-and-resolve); human
+  triage required.
