@@ -1,0 +1,8 @@
+name: roadmap-compose
+title: Roadmap Compose
+description: Compose a canonical RoadmapDraft from a normalized intent and roadmap match evidence
+visibility: admin
+status: active
+owner: platform
+runtimes:
+- mcp
