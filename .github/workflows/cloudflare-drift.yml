@@ -290,13 +290,26 @@ jobs:
       - name: Check the write-only OAuth registration
         id: creds
         if: success() && matrix.root == 'infrastructure/cloudflare/portal'
-        env:
-          ACCOUNT_ID: 6a09f637d20e1f66a8e9d45ebe778058
         run: |
-          set -euo pipefail
+          set -uo pipefail
           # --selftest first, same reason as every other detector in this
           # repository: one never seen to fire is not known to work.
+          #
+          # NOT under `set -e`, and its status is folded into the same `code`
+          # the rest of this step reports. Under `set -e` a failing selftest
+          # exited the step before `code` was ever written, so the Telegram
+          # alert fell through to the plan's exit code -- 0, since a clean
+          # plan is the only way this step runs at all -- and announced a
+          # drift alert with "exit code 0". A broken detector is reported as
+          # 2, "could not run", which is what it is.
           "$GITHUB_WORKSPACE/scripts/portal-auth-credentials-drift.py" --selftest
+          selftest=$?
+          if [ "$selftest" -ne 0 ]; then
+            echo "code=2" >> "$GITHUB_OUTPUT"
+            { echo "### \`portal\` — the drift detector itself failed its selftest";
+              echo; echo "> It was not run against Cloudflare. Fix the detector."; } >> "$GITHUB_STEP_SUMMARY"
+            exit 2
+          fi
           set +e
           # 2>&1 on the detector, not on the pipeline: every drift line and
           # every `[2]` diagnosis goes to stderr, so a plain `| tee` captured
@@ -304,8 +317,8 @@ jobs:
           # code block -- "someone changed it outside Git" without ever saying
           # what changed.
           tofu show -json \
-            | { "$GITHUB_WORKSPACE/scripts/portal-auth-credentials-drift.py" \
-                  --account "$ACCOUNT_ID" 2>&1; } | tee cred.txt
+            | { "$GITHUB_WORKSPACE/scripts/portal-auth-credentials-drift.py" 2>&1; } \
+            | tee cred.txt
           code=${PIPESTATUS[1]}
           set -e
           echo "code=$code" >> "$GITHUB_OUTPUT"
