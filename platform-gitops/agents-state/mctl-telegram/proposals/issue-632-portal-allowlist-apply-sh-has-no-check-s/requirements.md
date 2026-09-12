@@ -98,6 +98,12 @@ Result
   `tg`, or the server reports no synced tools THEN THE SYSTEM SHALL exit with
   the "could not check" status, distinct from the drift status, because nothing
   was measured.
+- WHILE documenting the exit statuses THE SYSTEM SHALL state that every
+  non-zero status is a failure a caller must surface, and that the distinction
+  between "drifted" and "could not check" exists to tell a human what happened,
+  never to let a caller treat one of them as tolerable. A detector that a
+  guard refusal, an expired token or an API outage can quietly silence reports
+  "no drift" for the same reason a broken one does.
 
 Unchanged behaviour
 
@@ -141,7 +147,11 @@ Proof
   `docs/cloudflare-portal-compat.md` ("the endpoint is wrong" and "nothing was
   measured" call for different reactions). If mctlhq/mctl-gitops#1211 prefers a
   single non-zero code, collapsing 3 into 1 is a one-line change. Proceeding
-  with 3.
+  with 3. **Amended during review:** whichever way that lands,
+  mctlhq/mctl-gitops#1211 must go red on any non-zero status. The distinct
+  codes are for the human reading the run, not a licence to alert on 3 alone --
+  treating 1 as "infrastructure noise" would turn an expired token into a
+  green run.
 - **A file entry for a tool the portal has not synced.** Read as not drift,
   because the apply holds those entries back by design (a deployment on
   `MCP_TOOL_FILTER=read-only`, or a portal that has not re-synced since a
