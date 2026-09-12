@@ -944,11 +944,28 @@ spec:
       script:
         image: alpine:3.19
         command: [sh]
+        # Bound through env rather than interpolated into the script text.
+        # Argo substitutes a parameter BEFORE the interpreter parses the line,
+        # so a value carrying a quote and a semicolon would execute
+        # (gitops#992). These four are step statuses and exit codes rather than
+        # user input, but "looks internal" is exactly the assumption that lets
+        # one turn out not to be, and the repo's own detector refuses new
+        # interpolation sites regardless. primary/fallback move here too, which
+        # retires their two BASELINE entries instead of adding to them.
+        env:
+          - name: PARAM_PRIMARY
+            value: "{{inputs.parameters.primary}}"
+          - name: PARAM_FALLBACK
+            value: "{{inputs.parameters.fallback}}"
+          - name: PARAM_PRIMARY_EXIT
+            value: "{{inputs.parameters.primaryExit}}"
+          - name: PARAM_FALLBACK_EXIT
+            value: "{{inputs.parameters.fallbackExit}}"
         source: |
-          PRIMARY='{{inputs.parameters.primary}}'
-          FALLBACK='{{inputs.parameters.fallback}}'
-          PRIMARY_EXIT='{{inputs.parameters.primaryExit}}'
-          FALLBACK_EXIT='{{inputs.parameters.fallbackExit}}'
+          PRIMARY="$PARAM_PRIMARY"
+          FALLBACK="$PARAM_FALLBACK"
+          PRIMARY_EXIT="$PARAM_PRIMARY_EXIT"
+          FALLBACK_EXIT="$PARAM_FALLBACK_EXIT"
           echo "primary attempt: ${PRIMARY:-<none>} (exit ${PRIMARY_EXIT:-<none>})   fallback attempt: ${FALLBACK:-<none>} (exit ${FALLBACK_EXIT:-<none>})"
           if [ "$PRIMARY" = "Succeeded" ] || [ "$FALLBACK" = "Succeeded" ]; then
             echo "✓ An attempt succeeded — workflow status reflects real work."

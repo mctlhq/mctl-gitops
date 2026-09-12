@@ -58,8 +58,11 @@ BASELINE: set[tuple[str, str, str]] = {
     # caller-supplied value. They are listed rather than excluded because
     # "looks internal" is the assumption that lets one of these turn out to
     # be user input; each still needs its origin confirmed under gitops#992.
+    # cwft-mctl-agents-implement.yaml is absent deliberately: its
+    # assert-attempt binds all four of its parameters through env (gitops#1206),
+    # so listing it here would leave a stale entry. The ratchet only moves down.
     (f, "assert-attempt", p)
-    for f in ("cwft-mctl-agents-implement.yaml", "cwft-mctl-agents-investigate.yaml",
+    for f in ("cwft-mctl-agents-investigate.yaml",
               "cwft-mctl-agents-run.yaml", "cwft-mctl-agents-shepherd.yaml")
     for p in ("primary", "fallback")
 }
