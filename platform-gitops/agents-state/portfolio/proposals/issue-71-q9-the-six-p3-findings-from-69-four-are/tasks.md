@@ -118,14 +118,28 @@
       `MCTL_VERSION` in `scripts/vendor-assets.mjs:92` remains the only place
       the number lives.
 
-- [ ] 11d. **C3, half 2 -- let the gate see content** (depends on 11c). In
-      `scripts/check-no-metrics.mjs:29`, add `src/content/projects` to
-      `SCAN_DIRS`. Do NOT add `src/content/journal` or `src/content/adr`: those
-      record numbers as their subject. This is the half that matters — the
-      violation in 11c survived because the directory it lives in was outside
-      the gate's scan, not because the gate was wrong about it — DoD:
-      `node scripts/check-no-metrics.mjs` exits zero on the fixed tree, and
-      exits non-zero naming the file when `0.5.0` is put back (show both).
+- [ ] 11d. **C3, half 2 — a matcher that can see a version** (depends on 11c).
+      In `scripts/check-no-metrics.mjs`, add a second, independent check: for
+      every `.md` under `src/content/projects`, split off the YAML frontmatter
+      and apply `/\b\d+\.\d+(?:\.\d+)?\b/` to the body only, failing with a
+      `check-no-metrics:`-prefixed line naming the file and line number.
+      Frontmatter is excluded because `order: 10` through `order: 14` live there
+      in every file. Leave `MATCH_RE` and `SCAN_DIRS` untouched — the two checks
+      answer different questions. Do NOT include `src/content/journal` or
+      `src/content/adr`.
+
+      **My first version of this task said to add `src/content/projects` to
+      `SCAN_DIRS`, and that was wrong in both directions** — `MATCH_RE` is
+      `/\b[0-9]{2,}\b/g` and returns `null` on `0.5.0`, so the gate would not
+      have caught the violation it was added for; and twelve of the fourteen
+      files already carry `order:` values plus `60 seconds` and `15-minute`, so
+      it would have flooded on legitimate copy. Measured, not assumed: the
+      semver matcher above hits exactly two lines in the tree today,
+      `mctl-design.en.md:14` and `mctl-design.ru.md:14`, and nothing else.
+
+      DoD: `node scripts/check-no-metrics.mjs` exits zero on the fixed tree, and
+      exits non-zero naming the file and line when `0.5.0` is put back — show
+      both outputs, and show the message, not only the exit code.
 
 - [ ] 12. **D1 -- replace the raw NUL separators.** In `test/fonts.test.ts`, add
       a local `faceKey(family, weight)` helper returning `` `${family}|${weight}` ``
@@ -162,12 +176,15 @@
       numeral appears in the rendered copy.
 
 - [ ] 15. **Record the evidence in the commit body** (depends on 1-14). The
-      commit body states, for each of A1, A2, A3 and B1, the assertion message
-      the new test emits against the pre-fix code and the fact that it passes
-      after, plus the `npm test` total before (295) and after. This replaces the
-      issue's "state both outputs in the PR" criterion, which `AGENTS.md` makes
-      unsatisfiable — DoD: the four before/after message pairs and the new total
-      are in the commit body.
+      commit body states, for each of A1, A2, A3, B1 **and C3**, the assertion
+      message the new test emits against the pre-fix code and the fact that it
+      passes after, plus the `npm test` total before (295) and after. C3's pair
+      is `node scripts/check-no-metrics.mjs`'s output with `0.5.0` restored and
+      with it removed; it has the identical before/after shape as the other four
+      and is the fix this absorption is centred on, so it is not optional. This
+      replaces the issue's "state both outputs in the PR" criterion, which
+      `AGENTS.md` makes unsatisfiable — DoD: the **five** before/after message
+      pairs and the new total are in the commit body.
 
 ## Tests
 
@@ -205,28 +222,44 @@
 - [ ] T11. Every font test in `test/fonts.test.ts` passes with the `|`
       separator, including the negative `!facePairKeys.has(...)` assertion.
       (task 12)
-- [ ] T11b. New test: `scripts/check-no-metrics.mjs`'s `SCAN_DIRS` contains
-      `src/content/projects` and contains neither `src/content/journal` nor
-      `src/content/adr`, so a later widening cannot happen silently.
+- [ ] T11b. New test, over a temporary fixture tree rather than over the
+      constant: a semver-shaped literal placed in the body of a file under
+      `src/content/projects` is reported, and the same literal placed in a file
+      under `src/content/journal` or `src/content/adr` is NOT, and an `order:`
+      value in a project file's frontmatter is NOT. This pins the behaviour the
+      boundary exists for — which directories are read and which part of a file
+      is read — instead of pinning the names in a constant, so a refactor that
+      keeps the behaviour passes and a widening that changes it fails.
+      (task 11d)
 
-- [ ] T11c. C3 mutation: writing `version 0.5.0` back into a copy of
-      `src/content/projects/mctl-design.en.md` makes
-      `node scripts/check-no-metrics.mjs` exit non-zero and name that file;
-      removing it makes it exit zero. Assert on the message, not just the code.
+- [ ] T11c. C3 mutation over a temporary copy of the project tree: writing
+      `version 0.5.0` back into `mctl-design.en.md`'s body makes the check fail
+      naming that file and line; removing it makes it pass. Assert on the
+      message, not just the exit code. Include a control showing the existing
+      `60 seconds` and `15-minute` prose and every `order:` value stay
+      unreported, since the first version of this requirement would have failed
+      on all of them. (task 11d)
 
 - [ ] T12. `npm run vendor && npm test` is green end to end; the new total is
-      stated in the commit body. Expected: seven new tests over the 295 at
-      `efdb072`. (task 15)
+      stated in the commit body. Expected: **nine** new tests over the 295 at
+      `efdb072` — the original seven plus T11b and T11c from this absorption.
+      (task 15)
 
 ## Rollback
 
-Every change in this cycle is confined to two scripts, four existing test files,
-one new test file, `package.json`'s `test` script and one new journal entry. No
-rendered output, no content schema, no data file, no CI workflow and no
-deployment artifact changes, so a rollback is a `git revert` of the merge commit
-followed by `npm run vendor && npm test` to confirm 295 pass / 0 fail again.
+Every change in this cycle is confined to three scripts
+(`check-dist.mjs`, `vendor-assets.mjs`, `check-no-metrics.mjs`),
+`src/i18n/ui.ts`, two project content files, four existing test files, one new
+test file, `package.json`'s `test` script and one new journal entry. No content
+schema, no data file, no CI workflow and no deployment artifact changes, so a
+rollback is a `git revert` of the merge commit followed by
+`npm run vendor && npm test` to confirm 295 pass / 0 fail again.
 
-Per-finding, if only one of the six turns out to be wrong:
+**Rendered output does change**, in one place: `/work/`'s `mctl-design` card
+drops the words naming version `0.5.0` in both languages. That is the C3 content
+fix, it is deliberate, and it is the only visible difference on the site.
+
+Per-finding, if only one of the eight turns out to be wrong:
 
 - A2's wrapper: revert the `main`/`run` split and restore the single
   `async function main()` plus `await main();`. Tasks 3, 4, 5 and 6 depend on it,
@@ -238,3 +271,11 @@ Per-finding, if only one of the six turns out to be wrong:
 - C1, D1: pure text and separator changes with no behavioural coupling outside
   `test/fonts.test.ts` and `test/source-hygiene.test.ts`; reverting D1 requires
   reverting T10 with it, or the guard will fail on the restored NUL bytes.
+- C2: a one-line comment change in `src/i18n/ui.ts` with no code or test
+  coupling. Revert the line; nothing else moves.
+- C3: two independent halves, revertible separately. Half 1 is the two content
+  lines in `mctl-design.en.md` / `.ru.md` — restoring them changes `/work/` back
+  and, on its own, makes the half-2 check fail, so revert half 2 with it or
+  accept a red gate. Half 2 is the new semver check in
+  `scripts/check-no-metrics.mjs` plus T11b and T11c — reverting it leaves the
+  content fix in place and simply stops enforcing it.
