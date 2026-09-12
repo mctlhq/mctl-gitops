@@ -89,6 +89,23 @@ implementer who hard-codes 18 anywhere both violates criterion 5's own
 - WHEN each file's frontmatter is written THE SYSTEM SHALL reproduce every
   timestamp, URL and `proposal_slug` character for character as given in the
   Copy section below, with no value reconstructed or reformatted.
+- **EXCEPT** Copy 6's `proposal_approved_at`, which is the single value in the
+  whole deliverable that is NOT a literal: it is written there as the
+  placeholder `<read from $PROPOSAL_DIR/.status.yaml approval.approved_at,
+  single-quoted, verbatim>`. WHEN that file is written THE SYSTEM SHALL
+  resolve the placeholder — read `approval.approved_at` from
+  `$PROPOSAL_DIR/.status.yaml`, write its value single-quoted — and SHALL NOT
+  write the placeholder text itself. Copying it literally would fail
+  `ISO_WITH_OFFSET` and break the build, so the two rules would otherwise
+  contradict each other: this exception is what resolves that, and the
+  character-for-character rule continues to bind every other value in Copy 6,
+  including its `issue`, `proposal_slug`, `issue_opened_at` and both languages
+  of `title` and `decided`.
+- **AND** Copy 6's filename date prefix follows from that resolved value, not
+  from the heading: WHEN `approval.approved_at` resolves to a UTC date other
+  than `2026-09-12` THE SYSTEM SHALL name the file with that date's prefix
+  instead. The heading below shows the expected case, not a fixed name; see
+  the filename table in `design.md` for the invariant and task 6b for the DoD.
 - WHEN each file's body is written THE SYSTEM SHALL write no body at all:
   frontmatter delimited by `---` and nothing after the closing delimiter,
   matching every existing journal entry.
@@ -243,7 +260,11 @@ proposal_approved_at: '2026-09-12T07:14:28Z'
 ---
 ```
 
-### 6. `src/content/journal/2026-09-12-backfilling-five-omitted-journal-entries.md`
+### 6. `src/content/journal/<YYYY-MM-DD>-backfilling-five-omitted-journal-entries.md`
+
+Expected `2026-09-12-backfilling-five-omitted-journal-entries.md`; the prefix is
+the UTC date of the resolved `proposal_approved_at`, per the acceptance
+criteria above.
 
 **Amendment (operator, before approval).** This cycle writes its own entry, as
 every cycle does. Without it this cycle repeats the exact omission it exists to
