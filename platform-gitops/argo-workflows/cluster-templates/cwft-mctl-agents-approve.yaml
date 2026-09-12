@@ -269,26 +269,37 @@ spec:
               else:
                   required = True
 
-          if not required:
-              sys.stdout.write("ungated")
-              sys.exit(0)
-
+          # Two INDEPENDENT facts, because conflating them is a bug waiting to
+          # happen: whether the gate applies, and whether an approval record
+          # physically exists. A proposal can be ungated and still carry one.
           approval = data.get("approval")
           approved_by = approval.get("approved_by") if isinstance(approval, dict) else None
-          if isinstance(approved_by, str) and approved_by.strip().lower() not in ANONYMOUS:
-              sys.stdout.write("gated-approved")
-          else:
-              sys.stdout.write("gated-unapproved")
+          named = isinstance(approved_by, str) and approved_by.strip().lower() not in ANONYMOUS
+
+          sys.stdout.write("%s %s" % (
+              "gated" if required else "ungated",
+              "approved" if named else ("hasblock" if "approval" in data else "none"),
+          ))
           PYGATE
           ) || {
             echo "❌ ${WORKFLOW_SLUG}: cannot read the approval gate from ${STATUS_FILE}" >&2
             exit 1
           }
-          case "$GATE" in
-            ungated)          NEEDS_APPROVAL=no;  HAS_APPROVAL=yes ;;
-            gated-approved)   NEEDS_APPROVAL=yes; HAS_APPROVAL=yes ;;
-            gated-unapproved) NEEDS_APPROVAL=yes; HAS_APPROVAL=no  ;;
-            *) echo "❌ unexpected gate verdict '${GATE}'" >&2; exit 1 ;;
+          # "<gated|ungated> <approved|hasblock|none>"
+          #   NEEDS_APPROVAL — does the gate apply at all
+          #   HAS_APPROVAL   — is a NAMED approver already recorded
+          #   HAS_BLOCK      — does an approval key exist at all, named or not
+          set -- $GATE
+          case "$1" in
+            gated)   NEEDS_APPROVAL=yes ;;
+            ungated) NEEDS_APPROVAL=no ;;
+            *) echo "unexpected gate verdict: ${GATE}" >&2; exit 1 ;;
+          esac
+          case "$2" in
+            approved) HAS_APPROVAL=yes; HAS_BLOCK=yes ;;
+            hasblock) HAS_APPROVAL=no;  HAS_BLOCK=yes ;;
+            none)     HAS_APPROVAL=no;  HAS_BLOCK=no  ;;
+            *) echo "unexpected gate verdict: ${GATE}" >&2; exit 1 ;;
           esac
           if [ "$CURRENT" = "accepted" ]; then
             # Historically an unconditional no-op. That left one shape
@@ -355,6 +366,26 @@ spec:
           # exists, so this sed always matches. Skipped in `record` mode: the
           # file already reads accepted and this path must not touch `status`.
           if [ "$MODE" = "flip" ]; then
+            # A proposal still in `proposed` that already carries an approval
+            # block is malformed: this flip IS the approval event, so nothing
+            # can legitimately have approved it yet. The append below is
+            # guarded against creating a duplicate key, which means the stale
+            # block would simply SURVIVE -- and this run's approval would be
+            # attributed to whoever the pasted record names instead of the
+            # caller. A wrong-but-valid attribution is worse than a duplicate
+            # key, because nothing downstream can tell it is wrong.
+            #
+            # (agy P2 on gitops#1209 reported this as a duplicate-key risk.
+            # The append is already guarded, so that specific mechanism does
+            # not occur -- but the shape it points at is real and is refused
+            # here rather than silently carried forward.)
+            if [ "$HAS_BLOCK" = "yes" ]; then
+              echo "❌ ${WORKFLOW_SLUG} is still 'proposed' but already carries an approval block." >&2
+              echo "   Nothing can have approved it yet — this flip is the approval event." >&2
+              echo "   If this proposal was re-published from an accepted one, clear the stale" >&2
+              echo "   approval block in the same change that sets status back to proposed." >&2
+              exit 1
+            fi
             sed -i "s/^status:[[:space:]].*$/status: accepted/" "$STATUS_FILE"
           fi
           # updated_at/updated_by may be absent on a hand-written or partial
