@@ -214,7 +214,18 @@ spec:
                             )
                     want_repos = scope.get("repositories")
                     if want_repos is not None:
-                        got = sorted(r["name"] for r in result.get("repositories", []))
+                        # Absent key != empty list. A token that was NOT
+                        # narrowed comes back without a `repositories` key at
+                        # all, so .get(..., []) would read a full grant as a
+                        # successful narrowing to nothing -- the two shapes
+                        # that must never be confused, since one of them is
+                        # every repository the installation covers.
+                        if "repositories" not in result:
+                            raise RuntimeError(
+                                "token carries no repositories key: the narrowing did not "
+                                f"apply and this is a full grant, requested {sorted(want_repos)}"
+                            )
+                        got = sorted(r["name"] for r in result["repositories"])
                         if got != sorted(want_repos):
                             raise RuntimeError(
                                 f"token repositories {got} != requested {sorted(want_repos)}"

@@ -125,6 +125,20 @@ def main() -> int:
          {"permissions": {}, "repositories": [{"name": "mctl-gitops"}]},
          should_raise=True)
 
+    # The shape a token that was NOT narrowed actually has: GitHub omits the
+    # repositories key entirely on a full grant. Reading that as [] would make
+    # a full-access token indistinguishable from a successful narrowing to
+    # none — the single most expensive confusion available here, and the one
+    # the fixture above could not catch because it supplies the key.
+    case("full grant (repositories key absent) raises against []",
+         {"repositories": []},
+         {"permissions": {}},
+         should_raise=True)
+    case("full grant (repositories key absent) raises against a named repo",
+         {"repositories": ["mctl-gitops"]},
+         {"permissions": {"contents": "read", "actions": "write", "metadata": "read"}},
+         should_raise=True)
+
     # Targets that pass no scope keep the previous behaviour: nothing checked,
     # because nothing was promised.
     case("no scope checks nothing",
