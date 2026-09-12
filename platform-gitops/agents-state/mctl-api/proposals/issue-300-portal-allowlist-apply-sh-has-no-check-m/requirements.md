@@ -149,6 +149,15 @@ Parity and documentation
 - WHEN this change lands THE SYSTEM SHALL describe `--check`, its exit codes
   and its no-write guarantee in the script's header comment, in `--help`, and
   in the "Portal tool allowlist" section of `README.md`.
+- WHEN the exit-code table is written into the header, `--help` and `README.md`
+  THE SYSTEM SHALL record the missing-`jq` exception alongside it: a missing
+  `jq` exits 2, not the 1 that the "could not check or apply" row would imply,
+  because that is the reference's landed behaviour. Without that line the three
+  documents are misleading on a host without `jq` -- the only place the
+  exception is observable -- and an implementer who trusts them instead breaks
+  the parity this proposal requires. The line SHALL name
+  mctlhq/mctl-telegram#635 and SHALL say the exception moves in both
+  repositories at once.
 - WHEN the exit codes are documented THE SYSTEM SHALL state that every non-zero
   status is a failure a caller must surface, and that the split between "could
   not check" and "drifted" exists to tell a human which happened, never to let
@@ -163,11 +172,15 @@ Parity and documentation
   stub with exactly one field changed, with the no-`PUT` guarantee proven by
   a recorded call log rather than by reading the script.
 - WHILE asserting the no-`PUT` guarantee THE SYSTEM SHALL require the call log
-  to exist and to show the reads, for every case that reaches the network --
-  the in-sync case, every drift case, and the API-error and missing-mapping
-  cases, which reach the network too and are exactly where a stray write would
-  be least expected to be looked for --
-  before the absence of a `PUT` is allowed to mean anything. An assertion
+  to exist and to show every read that path actually attempted, for every case
+  that reaches the network -- the in-sync case, every drift case, and the
+  API-error and missing-mapping cases, which reach the network too and are
+  exactly where a stray write would be least expected to be looked for --
+  before the absence of a `PUT` is allowed to mean anything. "Every read
+  attempted" is two `GET`s only on the paths that reach both: the
+  unsuccessful-envelope case exits after the first read, so requiring two there
+  would specify a test no correct implementation can pass. What the count must
+  never be is zero-tolerant. An assertion
   gated only on a successful read skips itself when the log is missing -- a
   dropped `STUB_CURL_LOG`, a broken append -- and every case then passes with
   write-prevention silently switched off. This is not hypothetical: it is the

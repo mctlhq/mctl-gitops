@@ -10,10 +10,14 @@
 - [ ] 2. Add mode dispatch and usage to `scripts/portal-allowlist-apply.sh`:
       `mode=apply|dry-run|check`, `-h|--help` printing a `usage()` heredoc that
       names all three modes and the exit-code table, unknown argument and
-      >1 argument both `usage >&2` + exit 2. Usage answers before credentials,
-      `jq`, git or Go are consulted. (depends on 1) — DoD: `--help` exits 0 and
-      prints `--check` with no environment set; `--bogus` and `--check extra`
-      exit 2.
+      >1 argument both `usage >&2` + exit 2 — EXCEPT that `-h|--help` is
+      matched before the arity guard, so `--help extra` prints usage and exits
+      0. That is the reference's landed behaviour, one of the three deviations
+      the parity clause pins (mctlhq/mctl-telegram#635); do not "fix" it here.
+      Usage answers before credentials, `jq`, git or Go are consulted.
+      (depends on 1) — DoD: `--help` exits 0 and prints `--check` with no
+      environment set; `--bogus` and `--check extra` exit 2; `--help extra`
+      exits 0.
 - [ ] 3. Port the pre-flight hardening the reference carries and this copy
       lacks, in its order: `git rev-parse --git-dir`, `git ls-files
       --error-unmatch -- docs/portal-allowlist.json`, the existing
@@ -56,9 +60,16 @@
       `[--dry-run|--check|-h|--help]`, what `--check` compares, that it is held
       to the same pre-flight as an apply, that it never PUTs on any path, and
       the exit-code table (0/1/2/3) with the statement that every non-zero
-      status is a failure a caller must surface. (depends on 6) — DoD: the
-      header, `usage()` and `README.md` agree with each other and with the
-      implementation.
+      status is a failure a caller must surface. The table SHALL also record
+      the mirrored exception: a missing `jq` exits 2, not the 1 its "could not
+      check or apply" row would imply. Documenting the table without that line
+      would make the header, `--help` and `README.md` misleading on a host
+      without `jq` — the one place the exception is observable — and an
+      implementer who follows the documents instead would break parity.
+      Mark it as tracked in mctlhq/mctl-telegram#635 and due to move in both
+      repositories at once. (depends on 6) — DoD: the header, `usage()` and
+      `README.md` agree with each other and with the implementation, including
+      on a host with no `jq`.
 - [ ] 8. Add `scripts/portal_allowlist_apply_test.go` (`package scripts`,
       new file — this repository has no shell-script harness today), ported
       from the reference: `newFixture` building a throwaway checkout (real
@@ -76,9 +87,11 @@
       (lines 386-397): add the `--check` invocation alongside `--dry-run` and
       the apply, what it compares, the pre-flight parity, the never-writes
       guarantee, the held-back rule, the exit-code table with `1` vs `3`
-      spelled out, and the note that CI wiring is mctlhq/mctl-gitops#1211 so
+      spelled out and with the same missing-`jq`-exits-2 exception task 7
+      records, and the note that CI wiring is mctlhq/mctl-gitops#1211 so
       `--check` is operator-run today. (depends on 7) — DoD: an operator can
-      run `--check` correctly from the README alone.
+      run `--check` correctly from the README alone, and the README's exit-code
+      table does not contradict the script on a host without `jq`.
 - [ ] 10. Record the both-directions mutation proof in the PR body: paste the
       `go test -run 'TestApplyCheck/(in_sync|.*enabled_live)' -v` output showing
       T1 exiting 0 on the matching fixture and T2 exiting 3 on the same fixture
@@ -131,12 +144,21 @@ All in `scripts/portal_allowlist_apply_test.go` unless stated otherwise.
 - [ ] T9. "Could not check" is not "no drift": an unsuccessful API envelope
       exits 1 naming `read portal failed`, and a portal with no `api` mapping
       exits 1 naming `expected exactly one` — neither exits 3. Both reach the
-      network, so both carry the same call-log evidence T5 requires: the log
-      must be readable and show the GETs, and must contain no `PUT`. An error
+      network, so both carry call-log evidence of the same strength T5
+      requires, scaled to the reads the path actually attempts: the log must be
+      readable and must contain every `GET` that path issued — for the
+      unsuccessful-envelope case that is the one failing portal read, since the
+      script exits before the second read, so asserting two `GET` lines there
+      would specify a test no correct implementation can pass — and must
+      contain no `PUT`. The two-`GET` assertion belongs only to paths that
+      reach both reads. What must not be weakened is the gating: the assertion
+      runs only once the log has been read and the attempted `GET`s found, so a
+      stub that stopped recording fails rather than passing vacuously. An error
       path is where an unexpected write is least likely to be looked for.
 - [ ] T10. Usage: `--help` and `-h` exit 0 and name `--check` with no
       credential, checkout or Go present; `--bogus` exits 2; `--check extra`
-      exits 2.
+      exits 2; `--help extra` exits 0, pinning the help-first deviation the
+      parity clause requires this repository to mirror rather than correct.
 - [ ] T11. Regression on the existing paths: `--dry-run` still reaches and
       prints the PUT body for a clean committed fixture, and the body is built
       from the committed blob even when the guard test rewrites the on-disk
@@ -148,6 +170,13 @@ All in `scripts/portal_allowlist_apply_test.go` unless stated otherwise.
       credential: `--check` exits 0 on the current `api` mapping, or names what
       differs. Record the outcome in the PR; do not run an apply as part of
       this change.
+- [ ] T14. Missing `jq`, in `--check` mode: on a sandbox `PATH` with no `jq`
+      the script exits **2**, not 1, and makes no HTTP call (empty call log).
+      The test SHALL say in a comment that 2 is the mirrored reference
+      behaviour and that the documented table's exception exists for exactly
+      this case, so that when mctlhq/mctl-telegram#635 lands the assertion is
+      found and moved in the same change rather than silently re-anchoring the
+      contract.
 
 ## Rollback
 
