@@ -215,7 +215,16 @@ spec:
         # carries no exit code, still evaluates instead of failing to resolve.
         - - name: implement-fallback
             template: run-implementer
-            when: "{{steps.implement.status}} != Succeeded && '{{steps.implement.exitCode}}' != '45'"
+            # Expression tag with an explicit default rather than a plain
+            # `{{steps...exitCode}}`: a pod-level Error (deadline, OOM,
+            # controller error) can leave the node without a populated
+            # Outputs, and quoting a plain tag does not manufacture a value --
+            # it still has to resolve first, and a failure to resolve here
+            # would stop the fallback running on exactly the pod-error path
+            # `continueOn.error` exists to cover (Codex P2, gitops#1209).
+            # `??` yields '0' in that case, so the fallback still fires.
+            # Argo in this cluster is v3.7.11; expr tags are available.
+            when: "{{=steps['implement'].status != 'Succeeded' && (steps['implement'].exitCode ?? '0') != '45'}}"
             arguments:
               parameters:
                 - name: oauth-key
@@ -249,7 +258,7 @@ spec:
                 # primary's real failure is then the more important signal
                 # and the generic message is the right one anyway.
                 - name: primaryExit
-                  value: "{{steps.implement.exitCode}}"
+                  value: "{{=steps['implement'].exitCode ?? ''}}"
                 - name: primary
                   value: "{{steps.implement.status}}"
                 - name: fallback
@@ -986,8 +995,10 @@ spec:
           if [ "$PRIMARY_EXIT" = "45" ]; then
             echo "❌ Every proposal this run could act on is permanently blocked on a missing approval." >&2
             echo "   This is NOT a quota or credential problem and retrying will not help." >&2
-            echo "   Read the blocked block in the proposal's .status.yaml for the reason and remedy;" >&2
-            echo "   the usual fix is to re-publish the proposal in 'proposed' so the approve flip records an approver." >&2
+            echo "   Read the blocked block in the proposal's .status.yaml for the reason and remedy." >&2
+            echo "   The direct fix is to run mctl-agents-approve for that {service, slug} with a NAMED approver:" >&2
+            echo "   it now records approval.approved_by on a proposal that is already accepted, leaving the" >&2
+            echo "   status alone. Re-publishing as 'proposed' still works but rewrites the lifecycle needlessly." >&2
             exit 1
           fi
           echo "❌ Neither the primary attempt nor the account-2 fallback succeeded; inspect the durable needs-triage reason." >&2

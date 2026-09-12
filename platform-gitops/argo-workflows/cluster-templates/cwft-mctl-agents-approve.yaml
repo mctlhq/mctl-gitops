@@ -237,8 +237,15 @@ spec:
             # rejects that shape at commit time instead.
             RHA=$(sed -n 's/^[[:space:]][[:space:]]*requires_human_approval:[[:space:]]*//p' "$STATUS_FILE" \
                   | head -1 | tr -d '"\047' | tr 'A-Z' 'a-z' | tr -d '[:space:]')
+            # `null` and `~` are here because this is a TEXT parser reading a
+            # value a YAML parser would have turned into None. Python's
+            # `control.get(...)` returns None for `requires_human_approval:`,
+            # `: null` and `: ~` alike, and None means "never asked" ->
+            # satisfied. Without these two spellings this branch would call
+            # such a proposal gated and write an approval record onto one that
+            # never wanted an approver (Codex P2, gitops#1209).
             case "$RHA" in
-              ''|false|no|0|off) ;;
+              ''|null|'~'|false|no|0|off) ;;
               *) NEEDS_APPROVAL=yes ;;
             esac
           fi
@@ -513,6 +520,36 @@ spec:
           if [ -n "$(find /artifact -mindepth 1 ! -type d ! -type f -print -quit)" ]; then
             echo "❌ Refusing a handoff containing a symlink or special file." >&2
             exit 1
+          fi
+
+          # Time-of-check/time-of-use. flip-status evaluated "this proposal has
+          # no approval" OUTSIDE any mutex, then handed over a whole-file
+          # artifact that is copied over this pod's fresh checkout. Two approve
+          # workflows starting from the same accepted/no-approval revision both
+          # pass that check and both produce a full file; the second to take
+          # this mutex would silently replace the first's approver identity and
+          # timestamp, breaking the invariant that an existing approval is
+          # never edited (Codex P2, gitops#1209).
+          #
+          # The check has to be repeated HERE, under the mutex and against the
+          # freshly cloned tree, because only here is it serialized. Recording
+          # an approval where one already exists is a no-op, not an error: the
+          # concurrent run already did this run's job.
+          if [ -f "$STATUS_PATH" ] \
+             && grep -q '^status: accepted$' "$STATUS_PATH" \
+             && grep -q '^approval:' "$STATUS_PATH" \
+             && ! grep -q '^approval:' "/artifact/${STATUS_PATH}"; then
+            echo "❌ Handoff carries no approval but the checkout already has one — refusing to regress it." >&2
+            exit 1
+          fi
+          if grep -q '^approval:' "$STATUS_PATH" 2>/dev/null \
+             && grep -q '^status: accepted$' "$STATUS_PATH" 2>/dev/null; then
+            HANDOFF_APPROVER=$(sed -n 's/^[[:space:]][[:space:]]*approved_by:[[:space:]]*//p' "/artifact/${STATUS_PATH}" | head -1)
+            CURRENT_APPROVER=$(sed -n 's/^[[:space:]][[:space:]]*approved_by:[[:space:]]*//p' "$STATUS_PATH" | head -1)
+            if [ "$HANDOFF_APPROVER" != "$CURRENT_APPROVER" ]; then
+              echo "ℹ️  ${WORKFLOW_SLUG} was approved concurrently by ${CURRENT_APPROVER} — keeping that record, not overwriting it." >&2
+              exit 0
+            fi
           fi
 
           mkdir -p "$(dirname "$STATUS_PATH")"
