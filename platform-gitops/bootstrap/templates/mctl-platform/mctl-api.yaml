@@ -152,8 +152,11 @@ spec:
             # ARGO_WEBHOOK_SECRET is not listed here; envFromSecret below
             # injects it from Vault platform/mctl-api/argo-webhook (SOC F13).
 
+          # One secret, not two. GITOPS_REPO_TOKEN used to arrive through
+          # `envFromExtraSecret: mctl-api-gitops-token`, a Secret created by
+          # neither this repository nor Vault; it is described in
+          # mctl-api-secrets.yaml now. See mctlhq/mctl-gitops#1229.
           envFromSecret: mctl-api-secrets
-          envFromExtraSecret: mctl-api-gitops-token
 
           resources:
             requests:
