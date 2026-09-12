@@ -77,6 +77,20 @@ def has_named_approver(data: dict) -> bool:
 
 def unrunnable(data: dict) -> str | None:
     """A reason string when the proposal can never run as written, else None."""
+    # Shape first, at ANY status. A `proposed` record with a malformed control
+    # block is not harmless: the approve workflow only flips `status` and
+    # appends an approval, then commits straight to main -- so approving it
+    # MANUFACTURES the deadlocked accepted state, and a gate that only looks at
+    # `accepted` would go red one commit too late, after the bad record has
+    # already landed (Codex P2, gitops#1210). The implementer fails closed on
+    # this shape regardless of any approver, so it can never run.
+    control = data.get("control")
+    if control is not None and not isinstance(control, dict):
+        return (
+            "control block is present but is not a mapping, so the approval "
+            "requirement cannot be evaluated and the implementer fails closed "
+            "on it regardless of any approval record"
+        )
     if data.get("status") != "accepted":
         return None
     if not requires_human_approval(data):
@@ -89,13 +103,6 @@ def unrunnable(data: dict) -> str | None:
     # gitops#1210). Verified against orchestrator/proposal_state.py at
     # mctl-agents c13df87: {"status": "accepted", "control": "yes please",
     # "approval": {"approved_by": "mashkovd"}} -> satisfied=False.
-    control = data.get("control")
-    if not isinstance(control, dict):
-        return (
-            "control block is present but is not a mapping, so the approval "
-            "requirement cannot be evaluated and the implementer fails closed "
-            "on it regardless of any approval record"
-        )
     if has_named_approver(data):
         return None
     return (
@@ -150,13 +157,25 @@ def _wc_escape(value: object) -> str:
     )
 
 
+def _wc_escape_property(value: object) -> str:
+    """Escape a value used as an annotation PROPERTY, such as `file=`.
+
+    The runner splits properties on commas and parses each as `key:value`, so a
+    property needs `:` and `,` escaped on top of what data needs -- the same
+    split actions/toolkit makes between escapeProperty and escapeData. A
+    proposal directory carrying either character would otherwise render a
+    malformed or truncated `file=` (claude P3, gitops#1210).
+    """
+    return _wc_escape(value).replace(":", "%3A").replace(",", "%2C")
+
+
 def report(findings: list[tuple[Path, str]], agents_state: Path) -> int:
     if not findings:
         return 0
     for path, reason in findings:
         rel = path.relative_to(agents_state)
         print(
-            f"::error file={_wc_escape(path.relative_to(ROOT))}"
+            f"::error file={_wc_escape_property(path.relative_to(ROOT))}"
             f"::{_wc_escape(rel)}: {_wc_escape(reason)}",
             file=sys.stderr,
         )
@@ -272,6 +291,18 @@ approval:
     # out that a refactor could drop it and start flagging empty files as
     # unrunnable, with nothing to catch it.
     ("empty_document", "", False),
+    # A malformed control block is a defect before it is ever accepted: the
+    # approve workflow would turn this into the deadlocked accepted state and
+    # commit it to main, with the gate going red one commit too late
+    # (Codex P2, gitops#1210).
+    ("proposed_control_not_mapping", """
+status: proposed
+control: "yes please"
+""", True),
+    ("proposed_control_null", """
+status: proposed
+control:
+""", False),
 ]
 
 
