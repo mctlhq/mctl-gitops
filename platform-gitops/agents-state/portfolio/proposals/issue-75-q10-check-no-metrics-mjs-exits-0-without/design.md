@@ -241,7 +241,7 @@ source carries a top-level `if (...) { await main(); }` block must declare an
 compare makes the script exit 0 without running on a symlinked checkout; that
 the set is enumerated rather than typed, so a new script is covered without
 anyone remembering to add it; that the enumeration is floored at four files
-and pinned to four known names so a broken scan fails instead of passing
+and pinned to five known names so a broken scan fails instead of passing
 vacuously; and that the unconditional `await main();` scripts are excluded by
 the shape, not by a skip list. It should retain the note that
 `scripts/check-headers.mjs` is the one whose silent pass would make
@@ -353,7 +353,7 @@ reformat** (extra blank line, a comment between `if` and `await main();`, or a
 guard written as `if (isEntryPoint()) await main();` with no braces). A script
 silently dropping out of the derived set is exactly the vacuity this cycle is
 closing. Mitigated by the floor-of-four assertion plus the four named
-memberships: the four scripts that matter today cannot drop out unnoticed, and
+memberships: the five scripts that matter today cannot drop out unnoticed, and
 a general regression in the matcher takes the count below four and fails. The
 residual risk is a *sixth* script using an unmatched variant; the header
 comment should state the shape the matcher recognizes so an author knows what

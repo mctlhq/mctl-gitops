@@ -100,8 +100,18 @@ finds what the typed list could not.
   intent.
 - WHEN the derivation completes THE SYSTEM SHALL assert it returned at least
   four files, and SHALL assert that `scripts/check-contrast.mjs`,
-  `scripts/check-links.mjs`, `scripts/check-headers.mjs` and
-  `scripts/check-no-metrics.mjs` are each among them.
+  `scripts/check-links.mjs`, `scripts/check-headers.mjs`,
+  `scripts/check-no-metrics.mjs` **and `scripts/snapshot-metrics.mjs`** are each
+  among them.
+- **AND** the named-membership list SHALL include every script this cycle gives
+  the hybrid guard to. `snapshot-metrics.mjs` was missing from it, which left
+  exactly the hole this cycle exists to close: the floor is four, the true count
+  after task 3 is five, so a `snapshot-metrics.mjs` that silently lost its guard
+  would drop the set to four, satisfy `>= 4`, satisfy all four pinned names, and
+  pass green — leaving unguarded the script this cycle just fixed. That is the
+  same shape as portfolio#69's P2, where `FILES` omitted the one file that PR
+  added a guard to. The floor stays at four deliberately (see the open question
+  below); the names are what must be complete.
 - IF the enumeration matches fewer than four files THEN THE SYSTEM SHALL fail
   with a message naming the shortfall — the count found and the count
   required — rather than passing with nothing asserted.
@@ -187,4 +197,11 @@ finds what the typed list could not.
 - The issue says "at least four files". After this cycle the true count is
   five. The floor stays four as specified, so adding a sixth script does not
   require editing the assertion; the named-membership check is what pins the
-  known scripts.
+  known scripts. **That reasoning is right and is kept — but it only holds if
+  the named list is complete, and as first written it omitted
+  `scripts/snapshot-metrics.mjs`.** Corrected by the operator before approval:
+  a floor below the true count is fine precisely because every known script is
+  pinned by name, so the two must not disagree about what is known. The "at
+  least four" in the issue was written before `snapshot-metrics.mjs` was known
+  to have the defect at all; the investigator found it, and the list has to
+  catch up with the finding.

@@ -64,8 +64,12 @@
       asserted with a message naming the count found, the count required and
       the shortfall; a per-name membership assertion over
       `['scripts/check-contrast.mjs', 'scripts/check-links.mjs',
-      'scripts/check-headers.mjs', 'scripts/check-no-metrics.mjs']` that names
-      the missing script and prints the derived set on failure; and a test
+      'scripts/check-headers.mjs', 'scripts/check-no-metrics.mjs',
+      'scripts/snapshot-metrics.mjs']` that names the missing script and prints
+      the derived set on failure — **all five**, including the one task 3 gives
+      the guard to; with only four pinned, a `snapshot-metrics.mjs` that lost
+      its guard would drop the set to four and pass both the floor and the
+      membership check; and a test
       that calls `deriveEntryPointScripts` on a freshly created empty
       temporary directory and asserts it returns `[]`. — DoD: three new
       assertions present; the floor stays at four (not five), so a future
@@ -139,7 +143,10 @@
       that proves part B actually closes the hole part A patched. Failure
       message names the file and prints the derived set.
 - [ ] T3. The derived set contains `scripts/check-contrast.mjs`,
-      `scripts/check-links.mjs` and `scripts/check-headers.mjs`.
+      `scripts/check-links.mjs`, `scripts/check-headers.mjs` and
+      `scripts/snapshot-metrics.mjs` — the last being the script task 3 gives
+      the hybrid guard to, and the one whose omission from the pinned list
+      would have reopened this cycle's own hole.
 - [ ] T4. The derivation returns at least four files; the failure message
       names the count found, the count required and the shortfall.
 - [ ] T5. `deriveEntryPointScripts` over an empty temporary directory returns
