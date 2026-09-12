@@ -16,11 +16,15 @@
       `NewServer("http://localhost:"+port, "")`, sets `publicURL` trimmed of a
       trailing slash, and carries the comment explaining why the upstream stays
       loopback (mirrors the note at `cmd/api/main.go:304-306`).
-- [ ] 4. Rewire `cmd/api/main.go:307` to
-      `mcpSrv := mctlmcp.NewInProcessServer(cfg.Port, cfg.SelfURL)` (depends on
-      3) — DoD: no other change in `main.go`; `cfg.SelfURL` is the same value
-      already passed to `auth.NewOAuthServer` at `:117`; `go build ./...` and
-      `go vet ./...` clean.
+- [ ] 4. Add `publicBaseURL(cfg config, oauth *auth.OAuthServer) string` to
+      `cmd/api/main.go` and rewire `:307` to
+      `mcpSrv := mctlmcp.NewInProcessServer(cfg.Port, publicBaseURL(cfg, oauthServer))`
+      (depends on 3) — DoD: the helper returns `oauth.BaseURL` when the OAuth
+      server is enabled and that field is non-empty, and `cfg.SelfURL`
+      otherwise; no other change in `main.go`; `go build ./...` and
+      `go vet ./...` clean. (Amended during review: reading the issuer off the
+      OAuth server is what makes the "cannot drift" claim a guard rather than a
+      comment.)
 - [ ] 5. Rewrite the `toolWhoami` message in `internal/mcp/server.go:212-213`
       (depends on 2, 3) — DoD: builds the identity block byte-identically to
       today (`User:`/`Admin:`/`Teams:`/`Accessible namespaces:`, same order and
@@ -80,6 +84,18 @@ New file `internal/mcp/whoami_test.go` (package `mcp`):
       renders `Authenticated to https://api.mctl.ai` (trailing slash trimmed),
       pinning that `cmd/mcp/main.go`'s only correct configuration does not
       regress.
+- [ ] T7. **The displayed URL is the OAuth issuer, not a second copy of config.**
+      New `cmd/api/public_base_url_test.go` (`package main`). Build a `config`
+      whose `SelfURL` is `https://config.example` and an
+      `*auth.OAuthServer` whose `BaseURL` is `https://issuer.example`, and
+      assert `publicBaseURL(cfg, oauth) == "https://issuer.example"` — the two
+      deliberately differ, so a helper that returns `cfg.SelfURL` fails. Assert
+      `publicBaseURL(cfg, nil) == "https://config.example"` and that an OAuth
+      server with an empty `BaseURL` also falls back to `cfg.SelfURL`.
+      **Mutation check (verify by hand before merge):** changing the helper body
+      to `return cfg.SelfURL` must make T7 fail; if it still passes, the test is
+      asserting nothing.
+
 - [ ] T6. **Suite regression sweep.** `go test ./...` — in particular
       `internal/mcp/server_test.go` and `internal/mcp/stateless_test.go` pass
       untouched, confirming no tool-count or transport change.

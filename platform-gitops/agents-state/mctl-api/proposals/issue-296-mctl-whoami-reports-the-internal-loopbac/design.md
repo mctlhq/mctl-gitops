@@ -108,9 +108,33 @@ func NewInProcessServer(port, publicURL string) *Server {
 }
 ```
 
-`cmd/api/main.go:307` becomes `mcpSrv := mctlmcp.NewInProcessServer(cfg.Port, cfg.SelfURL)`
-— the same `cfg.SelfURL` already handed to `auth.NewOAuthServer` at `:117`, so
-the printed URL and the OAuth issuer cannot drift apart. This function is the
+`cmd/api/main.go:307` becomes
+`mcpSrv := mctlmcp.NewInProcessServer(cfg.Port, publicBaseURL(cfg, oauthServer))`.
+
+**Amended during review (2026-09-12).** The original text passed `cfg.SelfURL` a
+second time and argued the two values "cannot drift apart" because they happen
+to come from the same config field. That is an argument, not a guard: a later
+edit at either call site diverges silently and no test fails. Source the value
+from the object that already holds it instead, and extract the choice into a
+helper so `package main` can test it:
+
+```go
+// publicBaseURL is the caller-facing base URL shown by mctl_whoami. When the
+// OAuth server is enabled it IS the issuer the caller's token was verified
+// against -- read it from there rather than re-deriving it from config, so the
+// two cannot name different deployments. With OAuth disabled there is no
+// issuer, and cfg.SelfURL is the only public URL the process knows.
+func publicBaseURL(cfg config, oauth *auth.OAuthServer) string {
+    if oauth != nil && oauth.BaseURL != "" {
+        return oauth.BaseURL
+    }
+    return cfg.SelfURL
+}
+```
+
+`oauthServer` is already in scope at `:307` (declared `:114`, built `:116-126`),
+and `cmd/api` already has `package main` tests (`cmd/api/main_test.go`), so this
+helper is directly testable -- see T7. This function is the
 seam the acceptance test needs: the test calls the *same* constructor
 production calls, with arbitrary ports, instead of re-deriving the wiring.
 
