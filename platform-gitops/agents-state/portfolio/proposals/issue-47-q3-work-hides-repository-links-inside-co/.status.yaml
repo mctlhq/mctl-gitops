@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-09-12T06:13:19Z'
+status: merged
+updated_at: '2026-09-12T06:36:06Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -17,4 +17,9 @@ attempt:
   expires_at: '2026-09-12T06:36:06Z'
   finished_at: '2026-09-12T04:34:12Z'
 pr: https://github.com/mctlhq/portfolio/pull/58
-review_attempts: 5
+github:
+  state: merged
+  head_sha: ccda1706b616f761f7fa5baa7c2385509a454a4a
+  observed_at: '2026-09-12T06:36:06Z'
+merged_at: '2026-09-12T06:36:06Z'
+merge_commit: 62f6ee04dc7d4d59932fc39b4e461e3a107844c2
