@@ -87,14 +87,20 @@ jobs:
       digest: ${{ steps.check.outputs.digest }}
 
     env:
-      # The repository-wide read credential, the same one cloudflare-plan.yml
-      # and cloudflare-drift.yml use. It must carry Account -> AI Controls
-      # read for `GET .../access/ai-controls/mcp/servers/{id}` to answer; that
-      # has NOT been verified from here (CI holds the token, this file does
-      # not). A token without it fails this job loudly on the first read, with
-      # the API's own error text — which is the correct outcome either way,
-      # since a plan nobody can compute must not become an apply.
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      # Its own read credential, not the repository-wide CLOUDFLARE_API_TOKEN
+      # that cloudflare-plan.yml and cloudflare-drift.yml use for the tofu
+      # roots. That one is zone-scoped — "read-only across the four zones",
+      # All zones, no account permission — and this endpoint is account-level,
+      # so it would answer 10000 Authentication error on every run. Measured,
+      # not assumed: the live token list shows that credential holding zone
+      # permissions only.
+      #
+      # CF_PORTAL_READ_TOKEN is Account -> MCP Portals -> Read on this account
+      # alone. Verified when it was minted: it reads servers/{id}, a PUT comes
+      # back 10000, and it sees zero zones. That is why it is a repository
+      # secret rather than an environment one — a branch can use it, and the
+      # most a branch can do with it is read the portal's own registration.
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CF_PORTAL_READ_TOKEN }}
 
     steps:
       # A real checkout, with history irrelevant but the index and HEAD very
@@ -246,9 +252,12 @@ jobs:
       #
       # Its own token, not one of the four per-root apply tokens: those are
       # scoped per zone and per account root for tofu, and this writes to a
-      # different surface entirely (Account -> AI Controls / MCP portal). It
-      # needs write there and nothing else — in particular no DNS and no zone
-      # scope, so an apply of the wrong file cannot reach either.
+      # different surface entirely. The permission is the narrowest Cloudflare
+      # offers for it — Account -> MCP Portals -> Edit, this account only, no
+      # wider Zero Trust grant — verified at mint time: it reads and writes
+      # servers/{id}, an Access-apps read comes back 10000, and it sees zero
+      # zones. So an apply of the wrong file cannot reach DNS or a zone at
+      # all.
       CLOUDFLARE_API_TOKEN: ${{ secrets.CF_APPLY_TOKEN_PORTAL }}
 
     steps:
@@ -261,7 +270,7 @@ jobs:
           set -euo pipefail
           # Tested for emptiness, never printed or compared against a literal.
           if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
-            echo "::error::CF_APPLY_TOKEN_PORTAL is not set — add it to the cloudflare-apply ENVIRONMENT secrets (not repository secrets), scoped to Account -> AI Controls write"
+            echo "::error::CF_APPLY_TOKEN_PORTAL is not set — add it to the cloudflare-apply ENVIRONMENT secrets (not repository secrets), scoped to Account -> MCP Portals -> Edit"
             exit 1
           fi
 

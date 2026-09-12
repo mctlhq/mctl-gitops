@@ -311,14 +311,16 @@ jobs:
       cancel-in-progress: false
 
     env:
-      # The read-only credential the rest of this workflow uses. It must carry
-      # Account -> AI Controls read for `GET .../access/ai-controls/mcp/
-      # servers/{id}` to answer; that has NOT been verified from here (CI holds
-      # the token, this file does not). A token without it makes this job red
-      # from the first night, with the API's own error text in the log — which
-      # is the right failure to have: a check that cannot read is not a check,
-      # and reporting it green would be worse than reporting it broken.
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      # Not the repository-wide CLOUDFLARE_API_TOKEN the tofu roots above use.
+      # That credential is zone-scoped (All zones, zone permissions only —
+      # checked against the live token list), and this is an account-level
+      # endpoint, so it would make this job red from the first night with
+      # 10000 Authentication error and never once compare a scope.
+      #
+      # CF_PORTAL_READ_TOKEN is Account -> MCP Portals -> Read, this account
+      # only: verified at mint time to read servers/{id}, to be refused on a
+      # PUT, and to see zero zones.
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CF_PORTAL_READ_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: 6a09f637d20e1f66a8e9d45ebe778058
 
     steps:

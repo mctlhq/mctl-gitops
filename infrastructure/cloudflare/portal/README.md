@@ -154,7 +154,7 @@ Unlike the controls script above, this one also runs in CI:
 
 - `.github/workflows/portal-server-auth-apply.yml` — `workflow_dispatch` only,
   and shaped like `cloudflare-apply.yml`: a `plan` job publishes `--check` and
-  `--dry-run` with the read-only `CLOUDFLARE_API_TOKEN`, then an `apply` job
+  `--dry-run` with the read-only `CF_PORTAL_READ_TOKEN`, then an `apply` job
   gated on the `cloudflare-apply` environment (required reviewer, `main`-only
   branch policy) writes with the `CF_APPLY_TOKEN_PORTAL` **environment**
   secret. The apply re-runs `--check` first and refuses if the live side moved
@@ -167,6 +167,25 @@ Unlike the controls script above, this one also runs in CI:
 Both jobs read the account id as a committed literal, not a secret: it is an
 address, it grants nothing without the token, and it is already in
 `account/versions.tf` and every R2 endpoint in this repository.
+
+Neither job uses the repository-wide `CLOUDFLARE_API_TOKEN` that
+`cloudflare-plan.yml` and the OpenTofu half of `cloudflare-drift.yml` use.
+That credential is zone-scoped — "read-only across the four zones", All
+zones, no account permission — and these endpoints are account-level, so it
+answers `10000 Authentication error` on every call. This surface has two
+credentials of its own instead, both `Account -> MCP Portals` on this account
+alone, which is the narrowest permission group Cloudflare offers for it (no
+wider Zero Trust grant is needed):
+
+| Secret | Scope | Where it lives | Verified at mint time |
+| --- | --- | --- | --- |
+| `CF_PORTAL_READ_TOKEN` | MCP Portals: **Read** | repository secret | reads `servers/{id}`; a `PUT` answers `10000`; sees 0 zones |
+| `CF_APPLY_TOKEN_PORTAL` | MCP Portals: **Edit** | `cloudflare-apply` **environment** secret | reads and writes `servers/{id}`; an Access-apps read answers `10000`; sees 0 zones |
+
+The read one is a repository secret deliberately: a branch can use it, and the
+most a branch can do with it is read the portal's own registration. The write
+one is an environment secret for the reason the four apply tokens next door
+are — only a job that requests the environment is issued it.
 
 `--check` stays the operator's stand-in for a local run, and the write token
 is still the only Cloudflare write credential this surface has — `#1111` is
