@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-09-11T23:51:14Z'
+status: rejected
+updated_at: '2026-09-12T00:21:14Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -17,4 +17,8 @@ attempt:
   expires_at: '2026-09-12T00:29:20Z'
   finished_at: '2026-09-11T22:31:39Z'
 pr: https://github.com/mctlhq/portfolio/pull/54
-review_attempts: 4
+github:
+  state: closed
+  head_sha: ff19b36f7973acf97174f60ca4f99e4b1f46940d
+  observed_at: '2026-09-12T00:21:14Z'
+notes: PR was closed without merging.

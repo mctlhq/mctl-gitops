@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-09-11T23:53:45Z'
+status: merged
+updated_at: '2026-09-12T00:19:03Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -17,3 +17,9 @@ attempt:
   expires_at: '2026-09-12T02:03:14Z'
   finished_at: '2026-09-11T23:53:45Z'
 pr: https://github.com/mctlhq/mctl-design/pull/79
+github:
+  state: merged
+  head_sha: 520dc4648f87ec2883cca8013b05dfad3e977198
+  observed_at: '2026-09-12T00:19:03Z'
+merged_at: '2026-09-12T00:19:03Z'
+merge_commit: 6bc348745a6b17589d1b74f7e0d38b1b3f1bdc20
