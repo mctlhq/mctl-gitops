@@ -278,6 +278,7 @@ jobs:
          || inputs.root == 'infrastructure/cloudflare/zones/mctl-ru' && secrets.CF_APPLY_TOKEN_MCTL_RU
          || inputs.root == 'infrastructure/cloudflare/zones/mctl-me' && secrets.CF_APPLY_TOKEN_MCTL_ME
          || inputs.root == 'infrastructure/cloudflare/zones/mctl-ai' && secrets.CF_APPLY_TOKEN_MCTL_AI
+         || inputs.root == 'infrastructure/cloudflare/portal'        && secrets.CF_APPLY_TOKEN_PORTAL
          || '' }}
       # Apply's own R2 credential, Object Read & Write on mctl-cloudflare-state
       # alone — not the backup workflow's. Rotating or revoking one must not

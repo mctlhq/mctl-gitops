@@ -118,7 +118,22 @@ jobs:
       run:
         working-directory: ${{ matrix.root }}
     env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      # Per root, because one credential no longer covers them all. The
+      # repository-wide read token is zone-scoped ("read-only across the four
+      # zones", All zones, no account permission -- checked against the live
+      # token list), and infrastructure/cloudflare/portal describes an
+      # account-level surface, so it would answer 10000 Authentication error
+      # there on every run and never once compare anything.
+      #
+      # CF_PORTAL_READ_TOKEN is Account -> MCP Portals -> Read on this account
+      # alone: verified at mint time to read a server, to be refused on a PUT,
+      # and to see zero zones. An expression rather than a lookup because
+      # secrets cannot be indexed by a variable -- same explicit chain as
+      # cloudflare-apply.yml, and it is also the allowlist.
+      CLOUDFLARE_API_TOKEN: >-
+        ${{ matrix.root == 'infrastructure/cloudflare/portal'
+         && secrets.CF_PORTAL_READ_TOKEN
+         || secrets.CLOUDFLARE_API_TOKEN }}
       # Drift only reads. It uses the same Object-Read-only state credential as
       # the plan workflow, which is why it also passes -lock=false: taking the
       # lock would be a write this credential cannot perform.
@@ -263,6 +278,41 @@ jobs:
           rm -f plan.txt
           exit "$code"
 
+      # The one field OpenTofu cannot watch. `auth_credentials` is write-only:
+      # the API accepts it and never returns it, so the provider keeps what was
+      # last applied in state and a refresh cannot correct it. Measured against
+      # a throwaway server on 2026-09-12 -- an out-of-band PUT changed the live
+      # scope and `tofu plan` stayed `no-op`. A clean plan above therefore says
+      # nothing about this attribute, which is exactly when it needs checking.
+      #
+      # Runs only when the plan was clean: a drifted or failed plan has already
+      # made this job red, and a second red says nothing new.
+      - name: Check the write-only OAuth registration
+        if: success() && matrix.root == 'infrastructure/cloudflare/portal'
+        env:
+          ACCOUNT_ID: 6a09f637d20e1f66a8e9d45ebe778058
+        run: |
+          set -euo pipefail
+          # --selftest first, same reason as every other detector in this
+          # repository: one never seen to fire is not known to work.
+          "$GITHUB_WORKSPACE/scripts/portal-auth-credentials-drift.py" --selftest
+          set +e
+          tofu show -json \
+            | "$GITHUB_WORKSPACE/scripts/portal-auth-credentials-drift.py" \
+                --account "$ACCOUNT_ID" | tee cred.txt
+          code=${PIPESTATUS[1]}
+          set -e
+          case "$code" in
+            0) echo "### \`portal\` — OAuth registration in sync" >> "$GITHUB_STEP_SUMMARY" ;;
+            1) { echo "### \`portal\` — OAUTH REGISTRATION DRIFT";
+                 echo; echo '```'; cat cred.txt; echo '```';
+                 echo "> Someone changed it outside Git. \`tofu plan\` cannot see this field."; } >> "$GITHUB_STEP_SUMMARY" ;;
+            *) { echo "### \`portal\` — registration check could not run (exit $code)";
+                 echo; echo '```'; cat cred.txt 2>/dev/null || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY" ;;
+          esac
+          rm -f cred.txt
+          exit "$code"
+
       - name: Notify Telegram
         if: failure()
         uses: appleboy/telegram-action@390cf7345777cd821dba28c72f436a78bce19cc5 # master 2026-05
@@ -293,94 +343,3 @@ jobs:
   #
   # Independent of `discover`, with no `needs`: it watches a file, not a root,
   # so an empty or unreadable infrastructure/cloudflare must not silence it.
-  portal-server-auth:
-    name: drift portal server auth
-    runs-on: ubuntu-latest
-
-    # Not the group cloudflare-apply.yml or portal-server-auth-apply.yml uses:
-    # an apply run holds its group while waiting on a human reviewer, up to 30
-    # days, and GitHub replaces whatever is pending behind it — so sharing one
-    # would mean each night's check cancels the previous pending one and this
-    # surface gets no detection at all for the length of the wait. There is no
-    # lock to serialise against anyway: the PUT merges, the check only reads,
-    # and a read landing mid-apply sees the old registration or the new one.
-    # The cost is a possible spurious alert during the seconds an apply runs,
-    # which fails closed.
-    concurrency:
-      group: portal-server-auth-check
-      cancel-in-progress: false
-
-    env:
-      # Not the repository-wide CLOUDFLARE_API_TOKEN the tofu roots above use.
-      # That credential is zone-scoped (All zones, zone permissions only —
-      # checked against the live token list), and this is an account-level
-      # endpoint, so it would make this job red from the first night with
-      # 10000 Authentication error and never once compare a scope.
-      #
-      # CF_PORTAL_READ_TOKEN is Account -> MCP Portals -> Read, this account
-      # only: verified at mint time to read servers/{id}, to be refused on a
-      # PUT, and to see zero zones.
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CF_PORTAL_READ_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: 6a09f637d20e1f66a8e9d45ebe778058
-
-    steps:
-      # A real checkout: the script refuses to compare anything but the blob at
-      # HEAD, which is what keeps "in sync" a statement about reviewed content
-      # rather than about whatever is on the runner.
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-
-      # Fails closed, like every other job here, and for the same reason: a
-      # drift here means the portal is asking an upstream for a scope nobody
-      # committed — which is invisible at every other layer (the tools stay
-      # enabled, the identity keeps its tier, and a send just comes back as a
-      # dry-run preview). Nothing reconciles it automatically.
-      #
-      # Exit 1 is both "drifted" and "could not compare"; the script says which
-      # in its output, and both need a human. Exit 2 is usage or a missing
-      # dependency.
-      - name: Check the committed registration against the live portal
-        id: check
-        run: |
-          set -uo pipefail
-          set +e
-          scripts/portal-server-auth-apply.sh --check > check.txt 2>&1
-          code=$?
-          set -e
-          cat check.txt
-          echo "code=$code" >> "$GITHUB_OUTPUT"
-          {
-            if [ "$code" = "0" ]; then
-              echo "### portal server auth — in sync"
-            elif [ "$code" = "1" ]; then
-              echo "### portal server auth — DRIFT or UNREADABLE"
-              echo
-              echo "> [!WARNING]"
-              echo "> Either the live registration no longer matches the committed file, or the"
-              echo "> comparison could not be made. The output says which."
-            else
-              echo "### portal server auth — check failed (exit $code)"
-            fi
-            echo
-            echo '```'
-            cat check.txt 2>/dev/null || echo "(no output captured)"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-          rm -f check.txt
-          exit "$code"
-
-      - name: Notify Telegram
-        if: failure()
-        uses: appleboy/telegram-action@390cf7345777cd821dba28c72f436a78bce19cc5 # master 2026-05
-        with:
-          to: ${{ secrets.TELEGRAM_CHAT_ID }}
-          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          # HTML for the same reason as the job above: an unpaired _ in a
-          # scope or a server id would make Telegram reject the whole message
-          # with a 400, losing the alert exactly when it matters.
-          format: html
-          message: |
-            <b>Cloudflare drift</b> — <code>portal server auth</code>
-            Exit code <code>${{ steps.check.outputs.code || format('none — check {0}', steps.check.conclusion) }}</code> (1 = drift or unreadable)
-            The MCP portal's upstream OAuth registration no longer matches
-            <code>infrastructure/cloudflare/portal/mcp-portal-server-auth.json</code>, or it could not be read.
-            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

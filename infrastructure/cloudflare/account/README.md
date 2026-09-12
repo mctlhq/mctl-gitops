@@ -11,7 +11,12 @@ should report no changes.
 Imports arrive with:
 
 - `#1088` — Access applications, policies, organization settings, Email Routing
-- `#1092` — MCP Portal and MCP servers (blocked on `.github#35` / `#44`)
+- ~~`#1092` — MCP Portal and MCP servers~~ — the MCP servers landed in
+  `../portal/` instead, which is its own root with its own write token: the
+  one-token-per-root rule means putting them here would have widened this
+  root's credential to `MCP Portals`. The portal object itself is still
+  unimported; it carries the tool allowlists owned by three other
+  repositories, so adopting it is a separate decision.
 
 Not to be added here: the tunnel and cache ruleset owned by `mac-mini-infra`
 (see the boundary table one directory up) — those move under `#1090`, into

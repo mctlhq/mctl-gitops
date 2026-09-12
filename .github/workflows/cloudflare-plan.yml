@@ -359,7 +359,19 @@ jobs:
     # program, the http data source) fail at init before plan is reached.
 
     env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      # Per root: the repository-wide read credential is zone-scoped (All
+      # zones, zone permissions only -- checked against the live token list)
+      # and infrastructure/cloudflare/portal is account-level, so planning it
+      # with that token answers 10000 Authentication error rather than a plan.
+      # CF_PORTAL_READ_TOKEN is Account -> MCP Portals -> Read on this account
+      # alone, which keeps the reasoning above intact: what a branch can do
+      # with it is read the portal's own registration, and nothing else.
+      # An explicit chain because secrets cannot be indexed by a variable; a
+      # root with no entry falls back to the zone credential.
+      CLOUDFLARE_API_TOKEN: >-
+        ${{ matrix.root == 'infrastructure/cloudflare/portal'
+         && secrets.CF_PORTAL_READ_TOKEN
+         || secrets.CLOUDFLARE_API_TOKEN }}
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_PLAN_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_PLAN_SECRET_ACCESS_KEY }}
 
