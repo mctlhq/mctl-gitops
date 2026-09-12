@@ -47,7 +47,16 @@ class Undetermined(Exception):
 
 
 def desired_from_state(state: dict) -> dict[str, dict]:
-    """server id -> the auth_credentials blob state says was applied."""
+    """server id -> {"blob", "summary", "account_id"} as state records them.
+
+    "blob" is the auth_credentials that was applied -- the desired value.
+    "summary" is the auth_config_summary the API returned at that moment: it
+    is the only record of the two secret-bookkeeping fields, which the blob
+    deliberately never carries, so it is what those are compared against.
+    "account_id" is read here rather than passed in, because the docstring's
+    claim that there is no second source of truth has to hold for the address
+    as much as for the value.
+    """
     out: dict[str, dict] = {}
     stack = [state.get("values", {}).get("root_module", {})]
     while stack:
@@ -69,7 +78,11 @@ def desired_from_state(state: dict) -> dict[str, dict]:
                     "apply the root before checking it"
                 )
             try:
-                out[sid] = json.loads(raw)
+                out[sid] = {
+                    "blob": json.loads(raw),
+                    "summary": values.get("auth_config_summary") or {},
+                    "account_id": values.get("account_id"),
+                }
             except json.JSONDecodeError as e:
                 # Exits 2, not 1. An unparseable state value is not a changed
                 # scope, and letting the ValueError escape would have reported
@@ -104,7 +117,15 @@ def live_summary(account: str, server: str, token: str) -> dict:
 SERVER_POPULATED = {("config", "resource")}
 
 
-def compare(server: str, want: dict, live: dict) -> list[str]:
+# The projection's top-level bookkeeping. Not in the applied blob by design --
+# client_secret is a separate write-only field and must never be committed --
+# so these are compared against what the API returned at apply time, recorded
+# in state. A secret that vanished, or a version that moved without an apply,
+# is exactly the kind of change this check exists to surface.
+SECRET_BOOKKEEPING = ("has_client_secret", "client_secret_version")
+
+
+def compare(server: str, want: dict, live: dict, applied_summary: dict | None = None) -> list[str]:
     """One line per difference. Scope as a set: the API stores it
     space-separated and the order it comes back in is not measured."""
     diffs: list[str] = []
@@ -114,6 +135,15 @@ def compare(server: str, want: dict, live: dict) -> list[str]:
             f"{server}: auth_mode live={live.get('auth_mode')!r} "
             f"applied={want.get('auth_mode')!r}"
         )
+
+    for key in SECRET_BOOKKEEPING:
+        if applied_summary is None or key not in applied_summary:
+            continue
+        if applied_summary.get(key) != live.get(key):
+            diffs.append(
+                f"{server}: {key} live={json.dumps(live.get(key))} "
+                f"applied={json.dumps(applied_summary.get(key))}"
+            )
 
     for section in ("config", "registration_info"):
         w = want.get(section) or {}
@@ -188,6 +218,44 @@ def selftest() -> int:
         if got != expected:
             failures.append(name)
 
+    # The bookkeeping pair, which has no desired value in the blob and is
+    # compared against what state recorded at apply time.
+    summary = {"has_client_secret": True, "client_secret_version": 1}
+
+    def live_book(**over):
+        out = live_with()
+        out.update(summary)
+        out.update(over)
+        return out
+
+    got = compare("s", base, live_book(), summary)
+    ok = not got
+    print(f"{'ok  ' if ok else 'FAIL'} matching secret bookkeeping is quiet")
+    if not ok:
+        failures.append("bookkeeping quiet")
+
+    gone = live_book(has_client_secret=False)
+    got = compare("s", base, gone, summary)
+    ok = any("has_client_secret" in d for d in got)
+    print(f"{'ok  ' if ok else 'FAIL'} a vanished client_secret fires")
+    if not ok:
+        failures.append("vanished secret")
+
+    rotated = live_book(client_secret_version=2)
+    got = compare("s", base, rotated, summary)
+    ok = any("client_secret_version" in d for d in got)
+    print(f"{'ok  ' if ok else 'FAIL'} a rotated client_secret version fires")
+    if not ok:
+        failures.append("rotated secret")
+
+    # Without a recorded summary there is nothing to compare against, and
+    # inventing a expectation would be worse than saying nothing.
+    got = compare("s", base, gone, None)
+    ok = not any("has_client_secret" in d for d in got)
+    print(f"{'ok  ' if ok else 'FAIL'} no recorded summary means no claim")
+    if not ok:
+        failures.append("unrecorded summary")
+
     # A key the live side grew but the applied blob does not name must be
     # reported, not skipped: an unchecked field is how this class of drift
     # became invisible in the first place.
@@ -208,15 +276,12 @@ def selftest() -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--account", help="Cloudflare account id")
+    ap.add_argument("--account", help="Cloudflare account id (default: from state)")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
 
     if args.selftest:
         return selftest()
-    if not args.account:
-        ap.error("--account is required unless --selftest is given")
-
     token = os.environ.get("CLOUDFLARE_API_TOKEN")
     if not token:
         print("[2] CLOUDFLARE_API_TOKEN is not set", file=sys.stderr)
@@ -240,13 +305,17 @@ def main() -> int:
         return 2
 
     drifted = []
-    for server, blob in sorted(want.items()):
+    for server, rec in sorted(want.items()):
+        account = args.account or rec.get("account_id")
+        if not account:
+            print(f"[2] {server}: no account_id in state and none given", file=sys.stderr)
+            return 2
         try:
-            live = live_summary(args.account, server, token)
+            live = live_summary(account, server, token)
         except Undetermined as e:
             print(f"[2] {e}", file=sys.stderr)
             return 2
-        drifted += compare(server, blob, live)
+        drifted += compare(server, rec["blob"], live, rec.get("summary"))
 
     if drifted:
         print("auth_credentials has drifted from what was applied:", file=sys.stderr)
