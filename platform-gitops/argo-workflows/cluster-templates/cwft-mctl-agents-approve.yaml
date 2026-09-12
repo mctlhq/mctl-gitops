@@ -103,9 +103,13 @@ spec:
                 # this landed. Same shape as cwft-mctl-agents-reconcile.
                 - name: status-update
                   from: "{{steps.flip.outputs.artifacts.status-update}}"
-            # Skip the mutex-holding commit entirely when flip-status found
-            # the proposal already accepted (idempotent retry / rebase race).
-            when: "{{steps.flip.outputs.result}} == flipped"
+            # Skip the mutex-holding commit entirely when flip-status had
+            # nothing to write (idempotent retry / rebase race). Compared
+            # against `noop` rather than `== flipped` because there are now
+            # two writing outcomes: `flipped` (proposed → accepted) and
+            # `recorded` (an approver written onto an already-accepted
+            # proposal that demanded one — mctl-agents#349).
+            when: "{{steps.flip.outputs.result}} != noop"
 
     # ── 2. Flip proposed → accepted ───────────────────────────────────────
     # stdout is EXACTLY "flipped" or "noop" — Argo captures the script's
@@ -211,15 +215,54 @@ spec:
             exit 1
           fi
           CURRENT=$(sed -n 's/^status:[[:space:]]*//p' "$STATUS_FILE" | head -1)
+          # MODE decides what the tail below writes: a status flip, or only
+          # the approval record on a proposal that is already accepted.
+          MODE=flip
           if [ "$CURRENT" = "accepted" ]; then
-            # Idempotent path: a Temporal retry of submit_and_wait, or a
-            # manual approve racing the automated one. Exit 0 so the loop
-            # proceeds to implement instead of failing on a double-approve.
-            echo "ℹ️  ${WORKFLOW_SLUG} is already accepted — no-op." >&2
-            echo -n "noop"
-            exit 0
-          fi
-          if [ "$CURRENT" != "proposed" ]; then
+            # Historically an unconditional no-op. That left one shape
+            # permanently stuck: a proposal committed straight to `accepted`
+            # while carrying `control.requires_human_approval` and no
+            # `approval` block can never become runnable, because this step is
+            # the only writer of `approval.approved_by` and it declined to run,
+            # while the implementer refuses without that record. Both sides
+            # exited 0 and reported success (mctl-agents#349, gitops#1206).
+            #
+            # Deliberately NARROW: this only ever ADDS an approval block where
+            # one is demanded and absent. It never edits an existing approval,
+            # never changes `status`, and treats "no control block" as "never
+            # asked" — the incident-responder writes `accepted` with no control
+            # block and must keep no-op'ing here.
+            NEEDS_APPROVAL=no
+            if grep -q '^control:' "$STATUS_FILE"; then
+              # The key is nested under `control:`; matched by its indented
+              # name because these files are machine-written and the name is
+              # unique in the schema. A `control:` block that is present but
+              # not a mapping cannot be told apart here — mctl-agents'
+              # human_approval_satisfied() fails closed on that, this cannot,
+              # and the residual case is a corrupt file rather than a live
+              # shape. See gitops#1207 for the validator that rejects it.
+              RHA=$(sed -n 's/^[[:space:]][[:space:]]*requires_human_approval:[[:space:]]*//p' "$STATUS_FILE" \
+                    | head -1 | tr -d '"\047' | tr 'A-Z' 'a-z' | tr -d '[:space:]')
+              # Falsey spellings mirror mctl-agents' _FALSEY. An ABSENT key
+              # lands here as empty and means "never asked", same as Python's
+              # `required is None` -> satisfied. Anything unrecognised requires
+              # approval, so an unexpected value is refused rather than waived.
+              case "$RHA" in
+                ''|false|no|0|off) ;;
+                *) NEEDS_APPROVAL=yes ;;
+              esac
+            fi
+            if [ "$NEEDS_APPROVAL" = "no" ] || grep -q '^approval:' "$STATUS_FILE"; then
+              # Idempotent path: a Temporal retry of submit_and_wait, or a
+              # manual approve racing the automated one. Exit 0 so the loop
+              # proceeds to implement instead of failing on a double-approve.
+              echo "ℹ️  ${WORKFLOW_SLUG} is already accepted — no-op." >&2
+              echo -n "noop"
+              exit 0
+            fi
+            MODE=record
+            echo "ℹ️  ${WORKFLOW_SLUG} is accepted but demands an approver and has none — recording one." >&2
+          elif [ "$CURRENT" != "proposed" ]; then
             echo "❌ ${WORKFLOW_SLUG} has status '${CURRENT:-<missing>}' — only proposed → accepted is a valid approve" >&2
             exit 1
           fi
@@ -227,6 +270,19 @@ spec:
           # conservative charset rather than trying to quote arbitrary input.
           APPROVER_SAFE=$(printf '%s' "$WORKFLOW_APPROVER" | tr -cd 'A-Za-z0-9._@-' | cut -c1-64)
           [ -n "$APPROVER_SAFE" ] || APPROVER_SAFE="unknown"
+          if [ "$MODE" = "record" ]; then
+            # The whole point of this path is to satisfy the approval gate.
+            # mctl-agents' _ANONYMOUS_APPROVERS rejects these spellings, so
+            # writing one would produce a record that looks like an approval,
+            # commits to gitops, and leaves the proposal exactly as blocked as
+            # before. Refuse loudly instead of manufacturing that.
+            case "$(printf '%s' "$APPROVER_SAFE" | tr 'A-Z' 'a-z')" in
+              unknown|none|null)
+                echo "❌ ${WORKFLOW_SLUG} is already accepted and needs a named approver, but the caller supplied '${APPROVER_SAFE}'." >&2
+                echo "   An anonymous approver does not satisfy the gate — the proposal would stay blocked while looking approved." >&2
+                exit 1 ;;
+            esac
+          fi
           NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           # A hand-written file may lack a trailing newline; the appends
           # below would then glue their first key onto the last scalar
@@ -235,8 +291,11 @@ spec:
             echo >> "$STATUS_FILE"
           fi
           # The CURRENT read above already proved a top-level `status:` line
-          # exists (it parsed to "proposed"), so this sed always matches.
-          sed -i "s/^status:[[:space:]].*$/status: accepted/" "$STATUS_FILE"
+          # exists, so this sed always matches. Skipped in `record` mode: the
+          # file already reads accepted and this path must not touch `status`.
+          if [ "$MODE" = "flip" ]; then
+            sed -i "s/^status:[[:space:]].*$/status: accepted/" "$STATUS_FILE"
+          fi
           # updated_at/updated_by may be absent on a hand-written or partial
           # file — sed on a missing line is a silent no-op, so insert-or-
           # replace explicitly instead of assuming the investigator's shape.
@@ -280,8 +339,13 @@ spec:
           mkdir -p "/tmp/status-out/$(dirname "$REL")"
           cp -a "$STATUS_FILE" "/tmp/status-out/$REL"
 
-          echo "✅ ${WORKFLOW_SERVICE}/${WORKFLOW_SLUG}: proposed → accepted (by ${APPROVER_SAFE})" >&2
-          echo -n "flipped"
+          if [ "$MODE" = "flip" ]; then
+            echo "✅ ${WORKFLOW_SERVICE}/${WORKFLOW_SLUG}: proposed → accepted (by ${APPROVER_SAFE})" >&2
+            echo -n "flipped"
+          else
+            echo "✅ ${WORKFLOW_SERVICE}/${WORKFLOW_SLUG}: already accepted, approver recorded (${APPROVER_SAFE})" >&2
+            echo -n "recorded"
+          fi
         resources:
           requests: { cpu: 50m, memory: 64Mi, ephemeral-storage: 1Gi }
           limits:   { cpu: 200m, memory: 256Mi, ephemeral-storage: 2Gi }

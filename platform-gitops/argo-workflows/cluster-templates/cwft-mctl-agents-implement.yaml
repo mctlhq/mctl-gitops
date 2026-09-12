@@ -205,9 +205,17 @@ spec:
         # exactly this gap. If token-2 is not seeded the fallback fails
         # (exit 1) so the run reports Failed instead of being masked as
         # success.
+        # EXIT_BLOCKED_ONLY (45, mctl-agents run_implementer.py) means the run
+        # found nothing but proposals that are permanently blocked on a missing
+        # approval. It is not transient and not a quota problem: the gate is
+        # evaluated before any model call, so retrying on the account-2 token
+        # spends a second pod to reach the identical refusal, and a "fallback
+        # fired" signal then means something it does not mean (gitops#1206).
+        # The exit code is compared as a string so a pod-level Error, which
+        # carries no exit code, still evaluates instead of failing to resolve.
         - - name: implement-fallback
             template: run-implementer
-            when: "{{steps.implement.status}} != Succeeded"
+            when: "{{steps.implement.status}} != Succeeded && '{{steps.implement.exitCode}}' != '45'"
             arguments:
               parameters:
                 - name: oauth-key
@@ -228,6 +236,10 @@ spec:
             template: assert-attempt
             arguments:
               parameters:
+                - name: primaryExit
+                  value: "{{steps.implement.exitCode}}"
+                - name: fallbackExit
+                  value: "{{steps.implement-fallback.exitCode}}"
                 - name: primary
                   value: "{{steps.implement.status}}"
                 - name: fallback
@@ -927,16 +939,33 @@ spec:
         parameters:
           - name: primary
           - name: fallback
+          - name: primaryExit
+          - name: fallbackExit
       script:
         image: alpine:3.19
         command: [sh]
         source: |
           PRIMARY='{{inputs.parameters.primary}}'
           FALLBACK='{{inputs.parameters.fallback}}'
-          echo "primary attempt: ${PRIMARY:-<none>}   fallback attempt: ${FALLBACK:-<none>}"
+          PRIMARY_EXIT='{{inputs.parameters.primaryExit}}'
+          FALLBACK_EXIT='{{inputs.parameters.fallbackExit}}'
+          echo "primary attempt: ${PRIMARY:-<none>} (exit ${PRIMARY_EXIT:-<none>})   fallback attempt: ${FALLBACK:-<none>} (exit ${FALLBACK_EXIT:-<none>})"
           if [ "$PRIMARY" = "Succeeded" ] || [ "$FALLBACK" = "Succeeded" ]; then
             echo "✓ An attempt succeeded — workflow status reflects real work."
             exit 0
+          fi
+          # EXIT_BLOCKED_ONLY. The run reached every proposal it was given and
+          # refused them all before any model call, because each is accepted
+          # while demanding an approver it does not have. Red is correct — that
+          # is the whole point of the code — but it must not be reported as the
+          # quota exhaustion below, which is what this step used to say for any
+          # non-success (gitops#1206, mctl-agents#349).
+          if [ "$PRIMARY_EXIT" = "45" ] || [ "$FALLBACK_EXIT" = "45" ]; then
+            echo "❌ Every proposal this run could act on is permanently blocked on a missing approval." >&2
+            echo "   This is NOT a quota or credential problem and retrying will not help." >&2
+            echo "   Read the blocked block in the proposal's .status.yaml for the reason and remedy;" >&2
+            echo "   the usual fix is to re-publish the proposal in 'proposed' so the approve flip records an approver." >&2
+            exit 1
           fi
           echo "❌ Neither the primary attempt nor the account-2 fallback succeeded; inspect the durable needs-triage reason." >&2
           echo "   Most often the Claude five_hour/seven_day usage limit / HTTP 429 on both accounts, or token-2 unset." >&2
