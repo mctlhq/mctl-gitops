@@ -183,8 +183,11 @@ revert with no cleanup.
   literal against a script this investigation did not read. Revert
   `test/entry-point.test.ts` to the hand-typed
   `FILES = ['scripts/check-contrast.mjs', 'scripts/check-links.mjs',
-  'scripts/check-headers.mjs', 'scripts/check-no-metrics.mjs']` (the #69-style
-  fix, now including all five scripts) and keep tasks 2 and 3. The symlink
+  'scripts/check-headers.mjs', 'scripts/check-no-metrics.mjs',
+  'scripts/snapshot-metrics.mjs']` (the #69-style fix, all five names — the
+  fifth is not optional here: tasks 2 and 3 are kept in this rollback, so both
+  scripts still carry the hybrid guard and a four-name list would let
+  `snapshot-metrics.mjs` lose it again without failing) and keep tasks 2 and 3. The symlink
   defect stays fixed and coverage stays no worse than before this cycle, at
   the cost of part B.
 - Scoped revert of task 3 alone: if running `scripts/snapshot-metrics.mjs` on
