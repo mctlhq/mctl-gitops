@@ -136,6 +136,19 @@ jobs:
       - name: Validate Argo local workdir invariants
         run: scripts/validate-local-workdir.py
 
+      # A proposal committed as `accepted` while demanding an approval it does
+      # not carry is unrunnable by every supported path, and nothing fails on
+      # it: the approve operation and the implementer both exit 0. One sat in
+      # agents-state for five weeks (mctl-agents#349). mctl-agents#358 guards
+      # its own writers; only a gate here can refuse YAML committed straight
+      # into this repo. --selftest first, same reason as the other detectors:
+      # a guard never seen to fail is not known to work.
+      - name: Validate agents-state approval records
+        run: |
+          set -euo pipefail
+          scripts/validate-agents-state-approval.py --selftest
+          scripts/validate-agents-state-approval.py
+
       - name: Check for shell interpolation of workflow parameters
         run: |
           set -euo pipefail
