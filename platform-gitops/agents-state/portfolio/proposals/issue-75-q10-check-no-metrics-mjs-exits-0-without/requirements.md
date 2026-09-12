@@ -117,11 +117,12 @@ finds what the typed list could not.
   required — rather than passing with nothing asserted.
 - IF a required known script is absent from the derived set THEN THE SYSTEM
   SHALL fail naming that script.
-- WHEN a script under `scripts/` that is not one of the four named scripts
+- WHEN a script under `scripts/` that is not one of the five named scripts
   carries the `if (...) { await main(); }` shape THE SYSTEM SHALL assert the
-  hybrid form on it too; concretely, `scripts/snapshot-metrics.mjs` is in the
-  derived set today and SHALL therefore be given the same hybrid
-  `isEntryPoint()` in this cycle so the derived test is green.
+  hybrid form on it too. That is the whole value of deriving the set: a sixth
+  script is covered the day it is written, without anyone editing a list.
+  `scripts/snapshot-metrics.mjs` is no longer an example of such a script — it
+  is one of the five named, and task 3 gives it the hybrid form in this cycle.
 - WHILE `scripts/check-dist.mjs`, `scripts/csp-hash.mjs`,
   `scripts/render-og.mjs` and `scripts/vendor-assets.mjs` call top-level
   `await main();` with no `if (...)` wrapper THE SYSTEM SHALL leave them
@@ -164,9 +165,12 @@ finds what the typed list could not.
   `scripts/render-og.mjs` or `scripts/vendor-assets.mjs` to an
   `isEntryPoint()` form. Their unconditional `await main();` is a different
   shape and the derivation excludes it deliberately.
-- Adding `scripts/snapshot-metrics.mjs` to the four names the count/membership
-  assertion requires. It is covered by the derivation, which is the point; the
-  required-name floor stays at the four the issue lists.
+- Raising `MIN_DERIVED` above four. The floor stays at the four the issue lists
+  even though the true count is five, so a sixth script needs no edit; what pins
+  the known scripts is the named-membership list, and that list names all five
+  including `scripts/snapshot-metrics.mjs`. (This bullet previously declared the
+  fifth name out of scope, which contradicted the list itself — corrected by the
+  operator before approval.)
 - Changing `.github/workflows/build.yml`, the `npm test` script list, or
   anything about how CI invokes the suite.
 
