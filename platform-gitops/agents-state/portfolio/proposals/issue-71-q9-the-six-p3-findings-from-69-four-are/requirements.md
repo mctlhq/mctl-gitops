@@ -154,6 +154,46 @@ checked.
   `.github/workflows/build.yml`'s final step,
   `node scripts/check-headers.mjs http://127.0.0.1:8080`, is that job's sole check.
 
+### C2 -- the chip guard's comment describes behaviour it no longer has
+
+Absorbed from portfolio#31 item 8, which the operator verified still open
+against `main` at `4098039` while closing that issue. Same class as C1:
+documentation that contradicts the code it documents.
+
+- WHEN `src/i18n/ui.ts` line 300 is read THE SYSTEM SHALL describe the chip
+  guard as throwing, not warning. Commit `be62cce` changed it from a warning to
+  a `throw`, and that comment is the one place a reader looks to find out what
+  the guard does on a missing translation.
+- WHILE correcting it THE SYSTEM SHALL change nothing about the guard itself.
+
+### C3 -- a version number typed into content, and the guard that cannot see it
+
+Absorbed from portfolio#31 item 7. AGENTS.md forbids numbers typed into
+content; `src/content/projects/mctl-design.en.md:14` and `mctl-design.ru.md:14`
+both name version `0.5.0`.
+
+**The interesting half is why it survived.** `scripts/check-no-metrics.mjs:29`
+declares `SCAN_DIRS = ['src/pages', 'src/components', 'src/layouts']`. The
+directory the violation lives in is not in that list, so the gate did not miss
+it -- the gate could not see it. That is this cycle's own subject, in the gate
+that exists to enforce the rule.
+
+- WHEN `src/content/projects/mctl-design.en.md` and `mctl-design.ru.md` are read
+  THE SYSTEM SHALL state that the site vendors the design system without naming
+  a version, in both languages. The source of truth is `MCTL_VERSION` at
+  `scripts/vendor-assets.mjs:92`; `@mctlhq/css` is not an npm dependency, so no
+  bot will ever bump the content copy and the two drift on the next re-pin.
+- WHEN `scripts/check-no-metrics.mjs` runs THE SYSTEM SHALL also scan
+  `src/content/projects`, so a version typed into a project description fails
+  the gate rather than passing unseen.
+- **AND** THE SYSTEM SHALL NOT extend the scan to `src/content/journal` or
+  `src/content/adr`. Those record timestamps, counts and release numbers as
+  their subject matter; scanning them would turn the gate into an allowlist
+  exercise and is a separate decision, not this cycle's.
+- WHEN the widened scan runs against the tree as it stands after the content fix
+  THE SYSTEM SHALL exit zero, proving the widening introduced no false positive
+  across the other thirteen project descriptions.
+
 ### D1 -- no raw NUL bytes in source
 
 - WHEN `test/fonts.test.ts` builds or queries a composite family/weight key THE

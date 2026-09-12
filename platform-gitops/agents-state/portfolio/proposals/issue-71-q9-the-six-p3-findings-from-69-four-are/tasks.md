@@ -105,6 +105,28 @@
       `.github/workflows/build.yml`) vacuous. Leave `FILES` and every test
       unchanged — DoD: header and `FILES` agree; no behavioural change.
 
+- [ ] 11b. **C2 -- correct the chip guard's comment.** In `src/i18n/ui.ts`
+      line 300, change "warns at build time" to say the guard throws, matching
+      what `be62cce` made it do. Absorbed from portfolio#31 item 8 — DoD: the
+      comment describes a throw; the guard itself is untouched; no test changes.
+
+- [ ] 11c. **C3, half 1 -- drop the typed version from content.** In
+      `src/content/projects/mctl-design.en.md:14` and `mctl-design.ru.md:14`,
+      remove `0.5.0` and say the site vendors the design system, in both
+      languages. Absorbed from portfolio#31 item 7 — DoD: neither file names a
+      version; the EN and RU lines still say the same thing as each other;
+      `MCTL_VERSION` in `scripts/vendor-assets.mjs:92` remains the only place
+      the number lives.
+
+- [ ] 11d. **C3, half 2 -- let the gate see content** (depends on 11c). In
+      `scripts/check-no-metrics.mjs:29`, add `src/content/projects` to
+      `SCAN_DIRS`. Do NOT add `src/content/journal` or `src/content/adr`: those
+      record numbers as their subject. This is the half that matters — the
+      violation in 11c survived because the directory it lives in was outside
+      the gate's scan, not because the gate was wrong about it — DoD:
+      `node scripts/check-no-metrics.mjs` exits zero on the fixed tree, and
+      exits non-zero naming the file when `0.5.0` is put back (show both).
+
 - [ ] 12. **D1 -- replace the raw NUL separators.** In `test/fonts.test.ts`, add
       a local `faceKey(family, weight)` helper returning `` `${family}|${weight}` ``
       with a docblock naming why (`|` cannot occur in a CSS font-family name;
@@ -183,6 +205,15 @@
 - [ ] T11. Every font test in `test/fonts.test.ts` passes with the `|`
       separator, including the negative `!facePairKeys.has(...)` assertion.
       (task 12)
+- [ ] T11b. New test: `scripts/check-no-metrics.mjs`'s `SCAN_DIRS` contains
+      `src/content/projects` and contains neither `src/content/journal` nor
+      `src/content/adr`, so a later widening cannot happen silently.
+
+- [ ] T11c. C3 mutation: writing `version 0.5.0` back into a copy of
+      `src/content/projects/mctl-design.en.md` makes
+      `node scripts/check-no-metrics.mjs` exit non-zero and name that file;
+      removing it makes it exit zero. Assert on the message, not just the code.
+
 - [ ] T12. `npm run vendor && npm test` is green end to end; the new total is
       stated in the commit body. Expected: seven new tests over the 295 at
       `efdb072`. (task 15)
