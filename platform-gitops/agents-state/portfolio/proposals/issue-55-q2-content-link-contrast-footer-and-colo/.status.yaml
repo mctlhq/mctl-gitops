@@ -17,7 +17,7 @@ attempt:
   expires_at: '2026-09-12T02:31:03Z'
   finished_at: '2026-09-12T00:41:01Z'
 pr: https://github.com/mctlhq/portfolio/pull/56
-review_attempts: 5
+review_attempts: 0
 github:
   state: open
   head_sha: 8b28f7d86eef5fbd5b80f79add449bea50e0215a
