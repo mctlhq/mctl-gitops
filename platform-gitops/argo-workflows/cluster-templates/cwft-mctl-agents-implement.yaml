@@ -236,10 +236,20 @@ spec:
             template: assert-attempt
             arguments:
               parameters:
+                # Only `implement`'s exit code. Measured in-cluster on
+                # 2026-09-12: a node that RAN carries outputs.exitCode
+                # (Succeeded -> 0, Failed -> 1), but a Skipped node has
+                # `outputs: null` entirely -- and implement-fallback is
+                # Skipped on every green run, which is the common case. So
+                # referencing its exitCode would risk the happy path to
+                # describe a rare one. `implement` always runs.
+                #
+                # The case this gives up: implement fails for some other
+                # reason and the fallback is the one that hits 45. The
+                # primary's real failure is then the more important signal
+                # and the generic message is the right one anyway.
                 - name: primaryExit
                   value: "{{steps.implement.exitCode}}"
-                - name: fallbackExit
-                  value: "{{steps.implement-fallback.exitCode}}"
                 - name: primary
                   value: "{{steps.implement.status}}"
                 - name: fallback
@@ -940,7 +950,6 @@ spec:
           - name: primary
           - name: fallback
           - name: primaryExit
-          - name: fallbackExit
       script:
         image: alpine:3.19
         command: [sh]
@@ -959,14 +968,11 @@ spec:
             value: "{{inputs.parameters.fallback}}"
           - name: PARAM_PRIMARY_EXIT
             value: "{{inputs.parameters.primaryExit}}"
-          - name: PARAM_FALLBACK_EXIT
-            value: "{{inputs.parameters.fallbackExit}}"
         source: |
           PRIMARY="$PARAM_PRIMARY"
           FALLBACK="$PARAM_FALLBACK"
           PRIMARY_EXIT="$PARAM_PRIMARY_EXIT"
-          FALLBACK_EXIT="$PARAM_FALLBACK_EXIT"
-          echo "primary attempt: ${PRIMARY:-<none>} (exit ${PRIMARY_EXIT:-<none>})   fallback attempt: ${FALLBACK:-<none>} (exit ${FALLBACK_EXIT:-<none>})"
+          echo "primary attempt: ${PRIMARY:-<none>} (exit ${PRIMARY_EXIT:-<none>})   fallback attempt: ${FALLBACK:-<none>}"
           if [ "$PRIMARY" = "Succeeded" ] || [ "$FALLBACK" = "Succeeded" ]; then
             echo "✓ An attempt succeeded — workflow status reflects real work."
             exit 0
@@ -977,7 +983,7 @@ spec:
           # is the whole point of the code — but it must not be reported as the
           # quota exhaustion below, which is what this step used to say for any
           # non-success (gitops#1206, mctl-agents#349).
-          if [ "$PRIMARY_EXIT" = "45" ] || [ "$FALLBACK_EXIT" = "45" ]; then
+          if [ "$PRIMARY_EXIT" = "45" ]; then
             echo "❌ Every proposal this run could act on is permanently blocked on a missing approval." >&2
             echo "   This is NOT a quota or credential problem and retrying will not help." >&2
             echo "   Read the blocked block in the proposal's .status.yaml for the reason and remedy;" >&2
