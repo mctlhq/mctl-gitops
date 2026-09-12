@@ -1,5 +1,5 @@
-status: accepted
-updated_at: '2026-09-12T15:41:55Z'
+status: implemented
+updated_at: '2026-09-12T15:47:32Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -9,5 +9,11 @@ source:
 control:
   requires_human_approval: true
 approval:
-  approved_by: 'mashkovd'
+  approved_by: mashkovd
   approved_at: '2026-09-12T15:41:55Z'
+attempt:
+  id: cbf06ec0-87eb-4216-bd45-e719b10e07f6
+  started_at: '2026-09-12T15:43:26Z'
+  expires_at: '2026-09-12T17:53:26Z'
+  finished_at: '2026-09-12T15:47:32Z'
+pr: https://github.com/mctlhq/portfolio/pull/72
