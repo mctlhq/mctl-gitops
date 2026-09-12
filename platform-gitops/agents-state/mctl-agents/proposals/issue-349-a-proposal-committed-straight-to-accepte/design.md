@@ -110,8 +110,11 @@ otherwise                                 -> return (0)
 `EXIT_BRANCH_MISSING_ON_ORIGIN = 43`, `EXIT_OPERATION_TIMEOUT = 44`,
 `run_implementer.py:128-161`). The `succeeded > 0` carve-out is deliberate: a
 run that already opened a PR has durable `.status.yaml` writes pending, and a
-non-zero exit could cost the mctl-gitops `commit-and-push` step that carries
-them. In that case the blocked proposal is still reported in its own section and
+non-zero exit should not risk the mctl-gitops `commit-and-push` step that
+carries them. (As of 2026-09-12 that step runs regardless — see the risk note
+below — so this is defence in depth rather than the load-bearing reason. The
+carve-out stands on its own: a run that did real work should not report red.)
+In that case the blocked proposal is still reported in its own section and
 still gets the durable marker below. `--dry-run` never changes the exit code.
 
 ### 2. A durable marker, written once
@@ -244,13 +247,20 @@ its entire lifetime.
 **Risks and mitigations.**
 
 - *A non-zero implement step may cause mctl-gitops to skip `commit-and-push`,
-  discarding the blocked marker in a blocked-only run.* Not verifiable from this
-  repo. Mitigated by ordering: the marker write happens before the exit-code
+  discarding the blocked marker in a blocked-only run.* **Not a risk — resolved
+  2026-09-12 by reading the CWFT.** `cwft-mctl-agents-implement.yaml` sets
+  `continueOn: {failed: true, error: true}` on both `implement` and
+  `implement-fallback`, and `commit` is the next unconditional step — put there
+  for exactly this reason ("those updates would never persist back to
+  mctl-gitops main"). The marker survives a blocked-only run, so no follow-up is
+  needed and none should be filed.
+
+  The original mitigation is recorded here because it is what makes the design
+  robust if that ever changes: the marker write happens before the exit-code
   decision, the red workflow is the primary signal and does not depend on the
   commit, the write is idempotent so any later run that does commit will carry
   it, and the `succeeded > 0` carve-out guarantees a run with real work still
-  exits `0`. A follow-up in mctl-gitops should make `commit-and-push`
-  unconditional.
+  exits `0`.
 - *A red workflow where operators previously saw green could be read as a
   regression.* That is the intent, and it is bounded: the code only fires when a
   proposal is provably unrunnable. The dedicated exit code `45` and the

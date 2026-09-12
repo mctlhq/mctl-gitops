@@ -80,10 +80,33 @@
 
 - [ ] 11. Open a follow-up issue on `mctlhq/mctl-gitops` covering (a) making
   `mctl-agents-approve` record `approval.approved_by` on an already-accepted
-  proposal and (b) running the implement CWFT's `commit-and-push` step even when
-  the implement step exits non-zero, and reference it from a comment beside
-  `EXIT_BLOCKED_ONLY` (depends on 9) — DoD: the issue link is in the code
-  comment so the cross-repo dependency is discoverable from here.
+  proposal and (b) teaching `cwft-mctl-agents-implement.yaml` that
+  `EXIT_BLOCKED_ONLY` is neither a retryable failure nor a quota problem, and
+  reference it from a comment beside `EXIT_BLOCKED_ONLY` (depends on 9) — DoD:
+  the issue link is in the code comment so the cross-repo dependency is
+  discoverable from here.
+
+  Scope of (b), verified against the CWFT on 2026-09-12 (mctl-agents#349
+  comment): both gates there compare Argo step **status strings** and neither
+  looks at an exit code, so exit 45 makes `implement` `Failed` and then
+
+    - `implement-fallback` (`when: "{{steps.implement.status}} != Succeeded"`)
+      retries the blocked proposal on the account-2 OAuth token — cheap, since
+      the gate is evaluated before any model call, but a second pod per tick and
+      a fallback invocation that means something it does not mean;
+    - `assert-attempt` fails the workflow (correct, that is the signal this
+      proposal wants) but its stderr reads "Most often the Claude
+      five_hour/seven_day usage limit / HTTP 429 on both accounts, or token-2
+      unset" — diagnosing an unapproved proposal as quota exhaustion.
+
+  That is this issue's own defect in another costume: loud signal, wrong cause.
+  Nothing in mctl-agents can fix it; the CWFT is in mctl-gitops.
+
+  **The original (b) — "run `commit-and-push` even when implement exits
+  non-zero" — is dropped: it is already true.** The CWFT carries
+  `continueOn: {failed: true, error: true}` on both `implement` and
+  `implement-fallback`, with `commit` as the next unconditional step. Do not
+  file a follow-up for it.
 
 ## Tests
 

@@ -108,8 +108,11 @@ mctl-gitops and is explicitly out of scope here.
   `approval.approved_by` on an already-accepted proposal. That is the issue's
   suggested direction (1); it lives in a different repository and must be a
   separate, reviewed change there. Nothing in this proposal forges an approval.
-- Changing the mctl-gitops implement CWFT so `commit-and-push` still runs when
-  the implement step exits non-zero. See the risk note in `design.md`.
+- Changing `cwft-mctl-agents-implement.yaml` so it handles `EXIT_BLOCKED_ONLY`
+  correctly: not retrying it on the account-2 token, and not reporting it as a
+  quota problem. Verified 2026-09-12 — see the risk note in `design.md` and
+  task 11(b). (The earlier wording of this bullet asked for `commit-and-push` to
+  run on a non-zero exit; that already happens, so it is not scope for anyone.)
 - Unblocking the specific proposal
   `mctl-design/issue-21-docs-license-file-reference-in-readme`. That is a data
   change in mctl-gitops, not a code change here.
@@ -122,13 +125,15 @@ mctl-gitops and is explicitly out of scope here.
 
 ## Open questions
 
-- Whether the mctl-gitops implement CWFT runs its `commit-and-push` step after a
-  non-zero implement step. If it does not, the `blocked` marker written during a
-  blocked-only run is discarded and only the red workflow survives as a signal —
-  still strictly better than today, and self-healing once the CWFT is fixed or
-  once a later run does other work. Not verifiable from this repository;
-  proceeding with the red-workflow signal as the primary fix and the marker as
-  the durable secondary one.
+- ~~Whether the mctl-gitops implement CWFT runs its `commit-and-push` step after
+  a non-zero implement step.~~ **Answered 2026-09-12: it does.**
+  `continueOn: {failed: true, error: true}` on both `implement` and
+  `implement-fallback`, with `commit` as the next unconditional step. The
+  `blocked` marker survives a blocked-only run; both the red workflow and the
+  durable marker land. What reading that CWFT did surface is a different
+  problem — neither `implement-fallback`'s `when` nor `assert-attempt` looks at
+  an exit code, so exit 45 triggers a pointless account-2 retry and a red
+  workflow whose stderr blames the Claude usage limit. That is task 11(b).
 - Whether `EXIT_BLOCKED_ONLY` should also fire when a blocked proposal coexists
   with a successful one. Decided no, because a non-zero exit there risks
   discarding a real `.status.yaml` -> PR handoff; the dedicated summary section
