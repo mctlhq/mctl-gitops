@@ -58,3 +58,60 @@ tests:
       - eval_time: 25m
         alertname: ArgoCDGitPollingStalled
         exp_alerts: []
+
+  # ---------------------------------------------------------------------
+  # NodeMemoryHeadroomLow (group mctl.node-health)
+  #
+  # The tier below NodeHighMemory. Both directions are asserted: a node at
+  # 87% fires, a node at 80% does not, and 87% that recedes before the 10m
+  # hold elapses does not either. A test that can only pass is not a test.
+  # ---------------------------------------------------------------------
+  - interval: 1m
+    name: a node holding 87% memory for 10m fires
+    input_series:
+      - series: 'node_memory_MemTotal_bytes{instance="10.0.0.102:9100"}'
+        values: '100x20'
+      - series: 'node_memory_MemAvailable_bytes{instance="10.0.0.102:9100"}'
+        values: '13x20'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: NodeMemoryHeadroomLow
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: 10.0.0.102:9100
+            exp_annotations:
+              summary: >-
+                Node 10.0.0.102:9100 memory headroom below 15%
+                (87% used for 10 minutes)
+
+  - interval: 1m
+    name: a node at 80% memory stays quiet
+    input_series:
+      - series: 'node_memory_MemTotal_bytes{instance="10.0.0.102:9100"}'
+        values: '100x20'
+      - series: 'node_memory_MemAvailable_bytes{instance="10.0.0.102:9100"}'
+        values: '20x20'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: NodeMemoryHeadroomLow
+        exp_alerts: []
+
+  - interval: 1m
+    name: an 87% spike shorter than the 10m hold does not fire
+    input_series:
+      - series: 'node_memory_MemTotal_bytes{instance="10.0.0.102:9100"}'
+        values: '100x20'
+      - series: 'node_memory_MemAvailable_bytes{instance="10.0.0.102:9100"}'
+        values: '13x8 40x12'
+    alert_rule_test:
+      # Inside the spike but before the hold elapses: the 10m `for` is what
+      # keeps this quiet. Shorten the hold and this assertion fails, which is
+      # the point -- the 12m check alone passes at any hold length because the
+      # series has already recovered by then.
+      - eval_time: 5m
+        alertname: NodeMemoryHeadroomLow
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: NodeMemoryHeadroomLow
+        exp_alerts: []
