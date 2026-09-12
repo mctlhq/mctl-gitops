@@ -7,9 +7,10 @@
 > Every cycle writes its own entry; a backfill that repeats the omission it
 > corrects has corrected nothing. Consequently the derived cycle counter is
 > **20**, not 19, and `git status --porcelain` must list six added files.
-> Where any sentence below says "five files" or "nothing else", read it as
-> the five backfilled entries; the sixth is additive and changes nothing else
-> about the scope, which remains content files only.
+> Propagated in full on 2026-09-12 after review: every derived-effect count in
+> this file now reads six, and the remaining "five" mentions are the ones that
+> genuinely mean the five backfilled entries (the backfill itself, the rejected
+> alternatives, and the copy blocks). The scope remains content files only.
 
 ## Context
 
@@ -29,7 +30,8 @@ is where that claim is made. `src/pages/colophon/index.astro` computes
 `scripts/check-dist.mjs` re-derives the same number by scanning
 `src/content/journal/*.md` independently, so five missing files mean the
 public cycle count under-reports the loop by five. Adding the files raises
-the counter by exactly five, adds five rows to `CycleTable.astro` and five
+the counter by exactly six — the five backfilled entries plus this cycle's own
+— adds six rows to `CycleTable.astro` and six
 pages at `/colophon/journal/<slug>/`, with no literal to edit anywhere. This
 cycle adds content files only: no code, no style, no template change.
 
@@ -58,13 +60,14 @@ implementer who hard-codes 18 anywhere both violates criterion 5's own
   against the same `z.strictObject` schema as every prior entry SO THAT the
   record stays machine-checkable and no per-entry exception is introduced.
 - AS a Russian-reading visitor I WANT `title` and `decided` in Russian on all
-  five entries SO THAT the `.l.en` / `.l.ru` toggle has a counterpart for
+  six entries SO THAT the `.l.en` / `.l.ru` toggle has a counterpart for
   every string on the new pages.
 
 ## Acceptance criteria (EARS)
 
 - WHEN the build loads the `journal` collection THE SYSTEM SHALL find exactly
-  five new files under `src/content/journal/`, named
+  six new files under `src/content/journal/` (the five below plus Copy 6),
+  named
   `2026-09-11-csp-hash-quoting-and-browser-verified-headers.md`,
   `2026-09-12-content-link-contrast-and-an-offline-link-check.md`,
   `2026-09-12-repository-links-out-of-the-disclosure.md`,
@@ -76,7 +79,7 @@ implementer who hard-codes 18 anywhere both violates criterion 5's own
   `issue_opened_at` are present, `proposal_approved_at` is present, no key
   outside the schema appears (`z.strictObject`), and `merged_at`,
   `released_at` and `deployed_at` are omitted entirely.
-- WHILE the five files exist THE SYSTEM SHALL leave `interventions` absent
+- WHILE the six files exist THE SYSTEM SHALL leave `interventions` absent
   from each of them, so the schema's `.default([])` supplies the value and
   `totalInterventions()` over the collection is unchanged.
 - WHEN `test/colophon.test.ts` scans `src/content/journal/*.md` THE SYSTEM
@@ -92,7 +95,7 @@ implementer who hard-codes 18 anywhere both violates criterion 5's own
 - WHEN the loader's `generateId` derives an id from each filename THE SYSTEM
   SHALL produce a slug that `src/pages/colophon/journal/[...slug].astro`
   turns into a page, so `dist/colophon/journal/<slug>/index.html` exists for
-  all five after `npm run build`.
+  all six after `npm run build`.
 - WHEN a new journal page is rendered THE SYSTEM SHALL emit `title` and
   `decided` through `<Lang>` in both languages, so the built page has an
   equal count of `class="l en"` and `class="l ru"`, as
@@ -107,7 +110,7 @@ implementer who hard-codes 18 anywhere both violates criterion 5's own
   for the cycle count anywhere — neither 18 nor 19 nor 20 — in `src/`, `scripts/`
   or `test/`.
 - WHILE `data-intervention-count` is rendered THE SYSTEM SHALL report the
-  same total as before this change, since none of the five entries records an
+  same total as before this change, since none of the six entries records an
   intervention.
 - IF a `decided` value contains a double quote character THEN THE SYSTEM
   SHALL keep the YAML scalar parseable while preserving the character exactly
@@ -120,7 +123,7 @@ implementer who hard-codes 18 anywhere both violates criterion 5's own
   SYSTEM SHALL exit zero, and `dist/` SHALL contain no file ending in `.js`.
 - WHEN `node scripts/check-links.mjs` runs over the rebuilt tree THE SYSTEM
   SHALL resolve the new pages' internal links against `dist/` and report the
-  five GitHub issue URLs as skipped off-origin, issuing no network request.
+  six GitHub issue URLs as skipped off-origin, issuing no network request.
 
 ## Out of scope
 
@@ -139,7 +142,8 @@ implementer who hard-codes 18 anywhere both violates criterion 5's own
 
 ## Copy (normative)
 
-The five files below are the deliverable, byte for byte. Key order matches
+The five files below, together with Copy 6 further down, are the deliverable,
+byte for byte. Key order matches
 `2026-09-11-p8-production-hardening-accessibility-wc.md`. Timestamps are
 single-quoted; `title` and `decided` values are double-quoted scalars, with
 any internal double quote escaped as `\"`.
@@ -290,7 +294,7 @@ proposal_approved_at: '<read from $PROPOSAL_DIR/.status.yaml approval.approved_a
   an abbreviated block that omits `service` and `visibility`. Acceptance
   criterion 1 nonetheless requires "seven required keys each", and `service`
   and `visibility` are two of the seven. Resolved by writing
-  `service: portfolio` and `visibility: public` on all five, which is the
+  `service: portfolio` and `visibility: public` on all six, which is the
   only reading under which the schema validates and the pages render at all
   (`publicEntries()` in `src/lib/content.ts` drops anything not `public`).
   Recorded here rather than blocking.

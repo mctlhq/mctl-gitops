@@ -7,9 +7,10 @@
 > Every cycle writes its own entry; a backfill that repeats the omission it
 > corrects has corrected nothing. Consequently the derived cycle counter is
 > **20**, not 19, and `git status --porcelain` must list six added files.
-> Where any sentence below says "five files" or "nothing else", read it as
-> the five backfilled entries; the sixth is additive and changes nothing else
-> about the scope, which remains content files only.
+> Propagated in full on 2026-09-12 after review: every derived-effect count in
+> this file now reads six, and the remaining "five" mentions are the ones that
+> genuinely mean the five backfilled entries (the backfill itself, the rejected
+> alternatives, and the copy blocks). The scope remains content files only.
 
 - [ ] 1. Read `src/content/journal/2026-09-11-p8-production-hardening-accessibility-wc.md`
       and the `journal` collection in `src/content.config.ts` to confirm the

@@ -7,9 +7,10 @@
 > Every cycle writes its own entry; a backfill that repeats the omission it
 > corrects has corrected nothing. Consequently the derived cycle counter is
 > **20**, not 19, and `git status --porcelain` must list six added files.
-> Where any sentence below says "five files" or "nothing else", read it as
-> the five backfilled entries; the sixth is additive and changes nothing else
-> about the scope, which remains content files only.
+> Propagated in full on 2026-09-12 after review: every derived-effect count in
+> this file now reads six, and the remaining "five" mentions are the ones that
+> genuinely mean the five backfilled entries (the backfill itself, the rejected
+> alternatives, and the copy blocks). The scope remains content files only.
 
 ## Current state
 
@@ -89,7 +90,7 @@ literally those three — so prose figures in a content file are outside its
 reach, as acceptance criterion 6 says and as `2026-09-12-q7-polish-wave-findings.md`
 already demonstrates. `scripts/check-links.mjs` opens no socket: it extracts
 hrefs from `dist/`, resolves internal ones against the built tree and reports
-off-origin ones as skipped by count, so five more GitHub issue links add five
+off-origin ones as skipped by count, so six more GitHub issue links add six
 skipped entries and no network dependency. `scripts/check-dist.mjs` check (b)
 requires an equal count of `class="l en"` and `class="l ru"` in every built
 HTML file; `checkNavigationState()` rejects any `aria-label` mixing Latin and
@@ -99,7 +100,8 @@ Cyrillic, with a named exemption for the `.table-scroll` region on
 
 ## Proposed solution
 
-Add five files under `src/content/journal/` and change nothing else. The
+Add six files under `src/content/journal/` and change nothing else — the five
+backfilled entries and this cycle's own. The
 exact bytes are in `requirements.md` under "Copy (normative)"; this section
 explains why each property of those files is what it is.
 
@@ -117,11 +119,11 @@ is the UTC date of that entry's `cycleTimestamp`, i.e. of
 | colophon-tables-and-computed-lead-time | `2026-09-12T06:32:13Z` | 2026-09-12 | 2026-09-12 |
 | navigation-state-and-accessibility-affordances | `2026-09-12T07:14:28Z` | 2026-09-12 | 2026-09-12 |
 
-Prefix and rendered date agree on all five, so the table never shows a row
+Prefix and rendered date agree on all six, so the table never shows a row
 whose date contradicts its own URL.
 
 **Frontmatter shape.** Eight keys per file, in the order the existing entries
-use. `service: portfolio` and `visibility: public` are written on all five;
+use. `service: portfolio` and `visibility: public` are written on all six;
 the issue shows them only on file 1 because files 2-5 are abbreviated to the
 lines that differ, and without `visibility: public` the entry would be
 dropped by `publicEntries()` and would produce no page and no row. The three
@@ -150,9 +152,9 @@ entry; the journal route renders `data.decided` and never `entry.body`.
 
 **Everything downstream is derived.** No template, script or test is touched.
 `cycleCount` becomes 20 because `journal.length` is 20; `CycleTable` gains
-five `data-cycle-row` rows because it maps over the collection;
-`getStaticPaths()` emits five more pages because it maps over
-`publicEntries()`; the sitemap gains five URLs because
+six `data-cycle-row` rows because it maps over the collection;
+`getStaticPaths()` emits six more pages because it maps over
+`publicEntries()`; the sitemap gains six URLs because
 `@astrojs/sitemap` walks the built routes and `check-dist.mjs` derives the
 expected list from the same content directory. The two independent
 derivations — the page's `getCollection()` and the script's `readdir()` — can
@@ -208,7 +210,7 @@ cycle of its own.
 ## Platform impact
 
 - **Migrations.** None. No schema change, no data transformation, no
-  redirect. Five new static routes appear; nothing existing moves or changes
+  redirect. Six new static routes appear; nothing existing moves or changes
   URL.
 - **Backward compatibility.** Additive only. Every existing journal entry,
   page and permalink is untouched. `data-intervention-count` is unchanged;
@@ -222,13 +224,13 @@ cycle of its own.
   `scripts/check-dist.mjs` recomputes the expected value from its own
   `readdir()` of `src/content/journal`, so any attempt to make the page read
   18 fails the build, and there is no literal to edit in any case.
-  Mitigation: change nothing outside the five new content files, and read
+  Mitigation: change nothing outside the six new content files, and read
   criterion 5's binding clause as the derivation rather than the digits.
   Flagged as the first open question in `requirements.md` for the approving
   human.
-- **Resource impact.** Five more pre-rendered pages and five more table rows.
+- **Resource impact.** Six more pre-rendered pages and six more table rows.
   `dist/index.html` is unaffected, so the 40 KB ceiling in `check-dist.mjs`
-  is not in play. Build time grows by the cost of parsing five small
+  is not in play. Build time grows by the cost of parsing six small
   markdown files.
 - **Risk: a YAML quoting mistake in the two entries with inner double
   quotes.** A naive double-quoted scalar containing an unescaped `"` ends the
@@ -249,10 +251,10 @@ cycle of its own.
   disk but absent from `dist/` is reported as a missing page, not silently
   tolerated.
 - **Risk: the copy drifting from the issue.** `AGENTS.md` makes the copy the
-  contract. Mitigation: the full EN and RU text for all five entries is
+  contract. Mitigation: the full EN and RU text for all six entries is
   carried verbatim in `requirements.md`, so the implementer never has to read
   past the approval boundary or invent prose.
-- **Security and privacy.** All five entries are `visibility: public` and
+- **Security and privacy.** All six entries are `visibility: public` and
   name only public GitHub issues, public proposal slugs and public technical
   detail. No credential, no internal hostname, no third party, consistent
   with the `public` rule in `AGENTS.md`.
