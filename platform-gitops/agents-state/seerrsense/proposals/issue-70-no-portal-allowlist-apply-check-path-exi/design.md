@@ -79,9 +79,14 @@ comparison is ordinary code the repository's own test runner can drive.
 Structure, in the order the script runs:
 
 1. **Argument parsing.** `""` -> apply, `--dry-run`, `--check`, `-h`/`--help`.
-   Anything else, or more than one argument, prints usage to stderr and exits 2.
-   The usage text and the header comment name all four modes and the exit-code
-   table, as the reference's does.
+   Anything else, or more than one argument, prints usage to stderr and exits 2
+   — with `-h`/`--help` matched *before* the arity check, so `--help extra`
+   prints usage to stdout and exits 0. That ordering is not an oversight to
+   correct: it is what both reference scripts landed with, pinned as one of the
+   three deviations in mctlhq/mctl-telegram#635, and the three upstreams move
+   together or not at all. The usage text and the header comment name all four
+   modes and the exit-code table, as the reference's does, including the
+   missing-interpreter exception below.
 2. **Credentials.** `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` must be
    set; missing either is a refusal naming the variable, before any network
    call.
@@ -180,11 +185,17 @@ need from being a way to point an operator's token at another host.
 
 ### 2. `scripts/portal-allowlist-apply.sh` — the uniform entry point
 
-Ten lines of bash: resolve its own directory, refuse with exit 1 and a message
-naming Node if `command -v node` fails (so #1211 gets the documented "could not
-check" status rather than shell 127), then `exec node
+Ten lines of bash: resolve its own directory, refuse with exit 2 and a message
+naming Node if `command -v node` fails, then `exec node
 "$dir/portal-allowlist-apply.mjs" "$@"`. `exec` preserves argv and the child's
-exit code, so every code in the contract passes through untouched. This is what
+exit code, so every code in the contract passes through untouched. Exit 2 for
+the missing interpreter rather than the table's 1 is deliberate: a missing `jq`
+exits 2 in both reference scripts, and a missing interpreter is the same
+condition. #1211 reads a non-zero, non-3 status as "could not check" either way,
+so the choice costs that job nothing and saves it from special-casing one
+upstream. It is the third deviation pinned by mctlhq/mctl-telegram#635, and it
+is written next to the exit-code table in the header, `--help` and README so a
+reader meets the exception where they meet the rule. This is what
 lets mctlhq/mctl-gitops#1211 run the identical
 `scripts/portal-allowlist-apply.sh --check` in all three upstreams while the
 implementation here stays repository-native. `npm run portal:allowlist --
@@ -231,7 +242,8 @@ Cases (the numbering is the reference's, adapted):
   the credential is stripped;
 - API failures: `success:false` and a portal with no `seerrsense` mapping ->
   exit 1, not 3;
-- usage: no-argument-plus-extra and an unknown flag -> exit 2; `--help` -> exit
+- usage: no-argument-plus-extra and an unknown flag -> exit 2; `--help extra` ->
+  exit 0, pinning the help-first ordering; `--help` -> exit
   0 and mentions `--check`;
 - a non-loopback `SEERRSENSE_PORTAL_API_BASE` -> exit 2, empty request log.
 
