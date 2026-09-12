@@ -164,11 +164,41 @@ spec:
                         "Authorization": f"Bearer {app_jwt}",
                         "Accept": "application/vnd.github+json",
                         "X-GitHub-Api-Version": "2022-11-28",
+                        # Explicit, and load-bearing now that the body carries
+                        # meaning. urllib defaults an unset Content-Type to
+                        # application/x-www-form-urlencoded when data is
+                        # attached -- verified, not assumed -- so a JSON body
+                        # would arrive mislabelled and the narrowing could be
+                        # dropped on the floor, minting a FULL-scope token
+                        # that looks correct in every log. It did not matter
+                        # while the body was b"{}", which is why it was
+                        # missing; vault_write below always set it.
+                        "Content-Type": "application/json",
                         "Content-Length": str(len(body)),
                     },
                     method="POST"
                 )
                 result = json.loads(urllib.request.urlopen(req).read())
+
+                # Trust the response, not the request. GitHub echoes the
+                # permissions and repositories the token actually carries, so
+                # a narrowing that silently failed to apply is caught here
+                # rather than discovered later by whatever the token could
+                # reach. Belt and braces with the header above, deliberately:
+                # the failure mode being guarded against is the quiet one.
+                if scope:
+                    want_perms = scope.get("permissions")
+                    if want_perms and result.get("permissions") != want_perms:
+                        raise RuntimeError(
+                            f"token permissions {result.get('permissions')} != requested {want_perms}"
+                        )
+                    want_repos = scope.get("repositories")
+                    if want_repos:
+                        got = sorted(r["name"] for r in result.get("repositories", []))
+                        if got != sorted(want_repos):
+                            raise RuntimeError(
+                                f"token repositories {got} != requested {sorted(want_repos)}"
+                            )
                 return result["token"], result["expires_at"]
 
             def force_sync_external_secret(namespace, name, version):
