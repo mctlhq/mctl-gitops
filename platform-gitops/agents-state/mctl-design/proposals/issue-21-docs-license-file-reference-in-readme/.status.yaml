@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-09-12T10:24:21Z'
+status: merged
+updated_at: '2026-09-12T10:34:02Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -17,4 +17,9 @@ attempt:
   expires_at: '2026-09-12T12:00:43Z'
   finished_at: '2026-09-12T09:52:06Z'
 pr: https://github.com/mctlhq/mctl-design/pull/80
-merge_owner: pr-steward
+github:
+  state: merged
+  head_sha: ef327803cdc018b724f07a8daa1006e5cede61ee
+  observed_at: '2026-09-12T10:34:02Z'
+merged_at: '2026-09-12T10:34:02Z'
+merge_commit: 98c8352c1636332234ab6ad815de661d55a4ac92
