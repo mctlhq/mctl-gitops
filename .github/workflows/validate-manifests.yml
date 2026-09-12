@@ -241,6 +241,16 @@ jobs:
         # of them forever.
         run: python3 tests/test_release_deploy_bump.py
 
+      - name: Unit-test the App-token scope validation
+        # rotate-github-app-tokens narrows mctl-api's installation token to one
+        # repository and two permissions, then checks GitHub's response against
+        # what it asked for. That check is the only thing standing between a
+        # narrowing that silently did not apply and a token carrying the
+        # installation's full write grant across every repository — which
+        # works, and logs identically. It runs every 30 minutes in a workflow
+        # nobody watches, so it is tested here instead.
+        run: python3 tests/test_rotate_github_token_scope.py
+
       - name: Unit-test tpl-git-commit's yq handling
         # The static check above proves no yq expression interpolates a shell
         # variable. This proves the shape that replaced it actually resists

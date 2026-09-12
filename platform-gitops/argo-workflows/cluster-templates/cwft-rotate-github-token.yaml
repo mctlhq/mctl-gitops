@@ -188,22 +188,32 @@ spec:
                 # the failure mode being guarded against is the quiet one.
                 if scope:
                     want_perms = scope.get("permissions")
-                    if want_perms:
-                        granted = dict(result.get("permissions") or {})
+                    # `is not None`, not truthiness: a target that deliberately
+                    # requests {} is asking for the narrowest possible token,
+                    # and that is exactly when a silently ignored limit matters
+                    # most. Skipping the check there would verify every scope
+                    # except the strictest one.
+                    if want_perms is not None:
                         # GitHub grants metadata:read on every installation
                         # token whether or not it was asked for -- the same
                         # forced permission fine-grained PATs carry. Dropped
-                        # by name rather than by tolerating extras in
+                        # from BOTH sides so the comparison stays symmetric:
+                        # a target that names metadata explicitly must not
+                        # fail for having asked for what it gets anyway.
+                        #
+                        # Dropped by name rather than by tolerating extras in
                         # general: an unexpected EXTRA permission is exactly
                         # the silent widening this check exists to catch, so
                         # only the one known-forced key is excused.
-                        granted.pop("metadata", None)
-                        if granted != want_perms:
+                        granted = {k: v for k, v in (result.get("permissions") or {}).items()
+                                   if k != "metadata"}
+                        wanted = {k: v for k, v in want_perms.items() if k != "metadata"}
+                        if granted != wanted:
                             raise RuntimeError(
-                                f"token permissions {granted} != requested {want_perms}"
+                                f"token permissions {granted} != requested {wanted}"
                             )
                     want_repos = scope.get("repositories")
-                    if want_repos:
+                    if want_repos is not None:
                         got = sorted(r["name"] for r in result.get("repositories", []))
                         if got != sorted(want_repos):
                             raise RuntimeError(
