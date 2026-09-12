@@ -154,6 +154,83 @@ checked.
   `.github/workflows/build.yml`'s final step,
   `node scripts/check-headers.mjs http://127.0.0.1:8080`, is that job's sole check.
 
+### C2 -- the chip guard's comment describes behaviour it no longer has
+
+Absorbed from portfolio#31 item 8, which the operator verified still open
+against `main` at `4098039` while closing that issue. Same class as C1:
+documentation that contradicts the code it documents.
+
+- WHEN `src/i18n/ui.ts` line 300 is read THE SYSTEM SHALL describe the chip
+  guard as throwing, not warning. Commit `be62cce` changed it from a warning to
+  a `throw`, and that comment is the one place a reader looks to find out what
+  the guard does on a missing translation.
+- WHILE correcting it THE SYSTEM SHALL change nothing about the guard itself.
+
+### C3 -- a version number typed into content, and the guard that cannot see it
+
+Absorbed from portfolio#31 item 7. AGENTS.md forbids numbers typed into
+content; `src/content/projects/mctl-design.en.md:14` and `mctl-design.ru.md:14`
+both name version `0.5.0`.
+
+**The interesting half is why it survived.** `scripts/check-no-metrics.mjs:29`
+declares `SCAN_DIRS = ['src/pages', 'src/components', 'src/layouts']`. The
+directory the violation lives in is not in that list, so the gate did not miss
+it -- the gate could not see it. That is this cycle's own subject, in the gate
+that exists to enforce the rule.
+
+- WHEN `src/content/projects/mctl-design.en.md` and `mctl-design.ru.md` are read
+  THE SYSTEM SHALL state that the site vendors the design system without naming
+  a version, in both languages. The source of truth is `MCTL_VERSION` at
+  `scripts/vendor-assets.mjs:92`; `@mctlhq/css` is not an npm dependency, so no
+  bot will ever bump the content copy and the two drift on the next re-pin.
+
+**Corrected after review (operator, 2026-09-12).** My first version of this
+requirement said to add `src/content/projects` to `SCAN_DIRS`. That was wrong in
+both directions, and I had asserted a mutation proof for it without running one.
+Measured against the tree:
+
+- `MATCH_RE` is `/\b[0-9]{2,}\b/g` — two or more digits. Every component of
+  `0.5.0` is a single digit, so the matcher returns `null` on
+  `- this site vendors version 0.5.0`. The widened gate would not have caught the
+  one violation it was added for, and the mutation test would have exited zero
+  and been recorded as proof.
+- Twelve of the fourteen project files already carry two-or-more-digit literals:
+  `order: 10` through `order: 14` in every file's frontmatter, plus
+  `60 seconds` and `15-minute` in prose. The widened gate would have flooded on
+  legitimate copy, so the clean-tree exit was unreachable too.
+
+A directory is the wrong axis. The rule being enforced is "no version number
+typed into content", and that needs a matcher for what a version looks like:
+
+- WHEN `scripts/check-no-metrics.mjs` runs THE SYSTEM SHALL apply a
+  semver-shaped matcher — `/(?<![\d.])\d+\.\d+\.\d+(?![\d.])/` — to the
+  **body** of every file under `src/content/projects`, and fail naming the file
+  and line when one matches.
+- **AND** the matcher SHALL require all three components and SHALL be bounded on
+  both sides. An earlier draft of this requirement made the third component
+  optional and used `\b`; measured, that form matches `latency is 1.5 seconds`,
+  `ratio 3.14` and the `127.0.0` prefix of an IPv4 literal, so it would have
+  failed the build on ordinary prose while this very section calls duration prose
+  legitimate. The bounded three-component form returns null on all three and
+  still matches `0.5.0` and `1.10.2`. An IPv4 literal is deliberately not this
+  check's subject; if one is ever wanted, it needs its own rule, not a looser
+  version pattern.
+- **AND** THE SYSTEM SHALL exclude each file's YAML frontmatter from that scan.
+  `order:` is structural, not prose, and is the reason a whole-file scan cannot
+  work.
+- **AND** THE SYSTEM SHALL leave `MATCH_RE` and the existing `SCAN_DIRS`
+  untouched. The two checks answer different questions and must not be merged:
+  the existing one catches metrics typed into templates, this one catches
+  versions typed into project copy.
+- **AND** THE SYSTEM SHALL NOT scan `src/content/journal` or `src/content/adr`
+  under either matcher. Those record timestamps, counts and release numbers as
+  their subject matter; extending to them is a separate decision, not this
+  cycle's.
+- WHEN the new matcher runs against the tree after the content fix THE SYSTEM
+  SHALL exit zero. Verified before writing this: the matcher hits exactly two
+  lines today, `mctl-design.en.md:14` and `mctl-design.ru.md:14`, and nothing
+  else across the other twelve projects.
+
 ### D1 -- no raw NUL bytes in source
 
 - WHEN `test/fonts.test.ts` builds or queries a composite family/weight key THE
@@ -187,19 +264,19 @@ checked.
 
   `title.en`:
   ```
-  Q9: six review findings, four of them guards that could pass unchecked
+  Q9: eight review findings, five of them guards that could pass unchecked
   ```
   `title.ru`:
   ```
-  Q9: шесть замечаний ревью, четыре из них — проверки, способные пройти вхолостую
+  Q9: восемь замечаний ревью, пять из них — проверки, способные пройти вхолостую
   ```
   `decided.en`:
   ```
-  Six findings the previous review raised but could not route to the implementer are closed in their own cycle. Four are the defect class this wave has been closing: a check that reports success because its subject was absent. The check-dist control test now asserts a positive marker that the spawned script actually reached the stage under test, and a committed mutation test that injects an upstream throw proves the control goes red instead of passing vacuously; scripts/check-dist.mjs gains the top-level try/catch wrapper its own comment already claimed, so an accumulated report prints instead of being lost to a stack trace, and every problem line now carries the check-dist prefix, including the ones that come from a failed read rather than from the script's own throw; scripts/vendor-assets.mjs now rejects a manifest entry whose filename carries no content hash at all, instead of accepting it because there was nothing to compare against; and the chip-literal guard in test/work.test.ts matches on a word boundary, so a future comment containing a longer word can no longer fail while naming a literal that is not hard-coded. The remaining two are corrections by inspection: the entry-point test's header now names all three scripts its own list enforces, and the composite keys in the font test use a printable separator instead of a raw NUL byte that made the whole file invisible to grep.
+  Eight findings are closed in their own cycle: six the previous review raised but could not route to the implementer, plus two absorbed from an older follow-up issue whose other seven items earlier cycles had already closed. Five are the defect class this wave has been closing: a check that reports success because its subject was absent. The check-dist control test now asserts a positive marker that the spawned script actually reached the stage under test, and a committed mutation test that injects an upstream throw proves the control goes red instead of passing vacuously; scripts/check-dist.mjs gains the top-level try/catch wrapper its own comment already claimed, so an accumulated report prints instead of being lost to a stack trace, and every problem line now carries the check-dist prefix, including the ones that come from a failed read rather than from the script's own throw; scripts/vendor-assets.mjs now rejects a manifest entry whose filename carries no content hash at all, instead of accepting it because there was nothing to compare against; and the chip-literal guard in test/work.test.ts matches on a word boundary, so a future comment containing a longer word can no longer fail while naming a literal that is not hard-coded. The fifth is the one absorbed from the older issue: a version number typed into two project descriptions, which the project's own rules forbid. It had survived because the gate meant to prevent it scans templates only and its pattern requires two consecutive digits, so a three-part version of single digits was both outside the directories it reads and invisible to the expression it reads with. A version-shaped matcher over project copy now covers it, deliberately not extended to the journal or the decision records, where numbers are the subject matter rather than a leak. The remaining three are corrections by inspection: the entry-point test's header now names all three scripts its own list enforces, the composite keys in the font test use a printable separator instead of a raw NUL byte that made the whole file invisible to grep, and a comment describing the chip guard no longer says it warns on a missing translation, which it stopped doing when the guard was changed to throw — that comment being the one place a reader looks to find out.
   ```
   `decided.ru`:
   ```
-  Шесть замечаний, поднятых предыдущим ревью, но не доходивших до исполнителя, закрыты отдельным циклом. Четыре из них относятся к тому же классу дефектов, который эта волна закрывает: проверка сообщает об успехе, потому что её предмет отсутствовал. Контрольный тест check-dist теперь проверяет положительный маркер того, что запущенный скрипт действительно дошёл до проверяемого этапа, а зафиксированный мутационный тест, подставляющий исключение выше по потоку, доказывает, что контроль краснеет, а не проходит вхолостую; scripts/check-dist.mjs получает обёртку try/catch верхнего уровня, о которой его собственный комментарий уже говорил, так что накопленный отчёт печатается, а не теряется в трассировке стека, и каждая строка проблемы теперь несёт префикс check-dist, включая те, что приходят из неудавшегося чтения, а не из собственного исключения скрипта; scripts/vendor-assets.mjs теперь отвергает запись манифеста, в имени файла которой вовсе нет хеша содержимого, вместо того чтобы принимать её из-за отсутствия предмета сравнения; а проверка литералов чипов в test/work.test.ts сопоставляет по границе слова, так что будущий комментарий с более длинным словом больше не сможет упасть, назвав литерал, который нигде не захардкожен. Остальные два — исправления по результату чтения: заголовок теста точки входа теперь называет все три скрипта, которые его собственный список проверяет, а составные ключи в тесте шрифтов используют печатаемый разделитель вместо сырого нулевого байта, из-за которого весь файл был невидим для grep.
+  Восемь замечаний закрыты отдельным циклом: шесть подняло предыдущее ревью, но они не доходили до исполнителя, и ещё два перенесены из более старого follow-up issue, остальные семь пунктов которого закрыли предыдущие циклы. Пять из них относятся к тому же классу дефектов, который эта волна закрывает: проверка сообщает об успехе, потому что её предмет отсутствовал. Контрольный тест check-dist теперь проверяет положительный маркер того, что запущенный скрипт действительно дошёл до проверяемого этапа, а зафиксированный мутационный тест, подставляющий исключение выше по потоку, доказывает, что контроль краснеет, а не проходит вхолостую; scripts/check-dist.mjs получает обёртку try/catch верхнего уровня, о которой его собственный комментарий уже говорил, так что накопленный отчёт печатается, а не теряется в трассировке стека, и каждая строка проблемы теперь несёт префикс check-dist, включая те, что приходят из неудавшегося чтения, а не из собственного исключения скрипта; scripts/vendor-assets.mjs теперь отвергает запись манифеста, в имени файла которой вовсе нет хеша содержимого, вместо того чтобы принимать её из-за отсутствия предмета сравнения; а проверка литералов чипов в test/work.test.ts сопоставляет по границе слова, так что будущий комментарий с более длинным словом больше не сможет упасть, назвав литерал, который нигде не захардкожен. Пятое — перенесённое из более старого issue: в двух описаниях проектов был вписан номер версии, что правила проекта запрещают. Оно уцелело потому, что гейт, обязанный это предотвращать, просматривает только шаблоны, а его выражение требует двух цифр подряд, — трёхчастная версия из однозначных чисел оказалась и вне читаемых им каталогов, и невидимой для самого выражения. Теперь её ловит выражение, распознающее форму версии в текстах проектов, — сознательно не распространённое на журнал и записи о решениях, где числа составляют содержание, а не утечку. Остальные три — исправления по результату чтения: заголовок теста точки входа теперь называет все три скрипта, которые его собственный список проверяет; составные ключи в тесте шрифтов используют печатаемый разделитель вместо сырого нулевого байта, из-за которого весь файл был невидим для grep; и комментарий к проверке чипов больше не утверждает, что она предупреждает о пропущенном переводе, хотя проверку давно изменили на выброс исключения, — а именно в этот комментарий читатель и смотрит, чтобы узнать поведение.
   ```
 
 ## Out of scope
@@ -220,7 +297,7 @@ checked.
   `parseTopLevelRules()` skips `@media` and finds no `@layer`/`@supports` in them.
   No change.
 - Any change to `src/pages/`, `src/components/`, `src/layouts/`, `astro.config.mjs`,
-  `nginx.conf`, `Dockerfile` or the CSP. This cycle touches only two scripts, four
+  `nginx.conf`, `Dockerfile` or the CSP. This cycle touches three scripts, `src/i18n/ui.ts`, two project content files, four
   test files, `package.json`'s `test` script, and one new journal entry.
 - The P2 finding from round 1 of the #69 review, which was already fixed in
   `1cf7bbc`.
@@ -235,8 +312,9 @@ checked.
 - The issue also asks for the new suite total to be stated. The same constraint
   applies. The total is required in the commit body, not the pull request body,
   and not in the journal copy -- `AGENTS.md` keeps typed numbers out of rendered
-  content. Arithmetic from the tasks below predicts seven new tests over the
-  295 at `efdb072`, so 302 is expected; the criterion is `npm test` green with the
+  content. Arithmetic from the tasks below predicts **nine** new tests over the
+  295 at `efdb072` — the original seven plus T11b and T11c from the C2/C3
+  absorption — so **304** is expected; the criterion is `npm test` green with the
   actual total stated, not the specific figure.
 - The NUL-byte guard needs a home. This proposal creates
   `test/source-hygiene.test.ts` and wires it into `package.json`'s `test` script,

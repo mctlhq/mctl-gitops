@@ -355,7 +355,11 @@ its compatibility benefit, since no key is persisted anywhere.
 
 ## Platform impact
 
-**Migrations.** None. No content schema, no data file, no rendered output
+**Rendered output.** One change, from C3: `/work/`'s `mctl-design` card no
+longer names version `0.5.0` in either language. Everything else below still
+holds.
+
+**Migrations.** None. No content schema, no data file, no other rendered output
 changes. `src/data/assets.json` is read but never rewritten by this cycle.
 
 **Backward compatibility.** `scripts/check-dist.mjs` gains one new stderr line
