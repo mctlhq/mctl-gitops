@@ -235,19 +235,45 @@ spec:
             # cannot be told apart here — mctl-agents' human_approval_satisfied()
             # fails closed on that, this cannot, and gitops#1207's validator
             # rejects that shape at commit time instead.
-            RHA=$(sed -n 's/^[[:space:]][[:space:]]*requires_human_approval:[[:space:]]*//p' "$STATUS_FILE" \
-                  | head -1 | tr -d '"\047' | tr 'A-Z' 'a-z' | tr -d '[:space:]')
-            # `null` and `~` are here because this is a TEXT parser reading a
-            # value a YAML parser would have turned into None. Python's
-            # `control.get(...)` returns None for `requires_human_approval:`,
-            # `: null` and `: ~` alike, and None means "never asked" ->
-            # satisfied. Without these two spellings this branch would call
-            # such a proposal gated and write an approval record onto one that
-            # never wanted an approver (Codex P2, gitops#1209).
-            case "$RHA" in
-              ''|null|'~'|false|no|0|off) ;;
-              *) NEEDS_APPROVAL=yes ;;
+            # Scoped to the `control:` block, NOT a whole-file line scan. A
+            # top-level key earlier in the document can carry a multi-line
+            # block scalar — an LLM-authored `description:` or `plan:` quoting
+            # example YAML — whose indented text matches this key perfectly
+            # while being, to a real parser, string content belonging to
+            # another field. `head -1` would then classify the proposal from
+            # that, and reopen the permanently-stuck state this PR exists to
+            # close (agy P1 / claude P2, gitops#1209).
+            #
+            # awk walks the document instead: enter at `^control:`, leave at
+            # the next unindented line, and only match inside.
+            RAW=$(awk '
+              /^control:/ { inblock = 1; next }
+              inblock && /^[^[:space:]#]/ { inblock = 0 }
+              inblock && /^[[:space:]]+requires_human_approval:[[:space:]]*/ {
+                sub(/^[[:space:]]+requires_human_approval:[[:space:]]*/, "")
+                print
+                exit
+              }
+            ' "$STATUS_FILE" | sed 's/[[:space:]]*$//')
+            # Quoting is load-bearing and must survive the comparison. To a
+            # YAML parser `null` and `~` are None -> "never asked" -> not
+            # gated, but "null" and '~' are STRINGS, which are not in
+            # mctl-agents' _FALSEY and therefore DO require approval. Stripping
+            # quotes before the test collapsed the two and would have no-op'd a
+            # genuinely gated proposal forever (Codex P2, gitops#1209).
+            case "$RAW" in
+              '"'*|"'"*) QUOTED=yes ;;
+              *) QUOTED=no ;;
             esac
+            RHA=$(printf '%s' "$RAW" | tr -d '"\047' | tr 'A-Z' 'a-z' | tr -d '[:space:]')
+            NEEDS_APPROVAL=yes
+            if [ "$QUOTED" = "yes" ]; then
+              # A quoted scalar is a string: only the _FALSEY spellings waive.
+              case "$RHA" in ''|false|no|0|off) NEEDS_APPROVAL=no ;; esac
+            else
+              # Unquoted: `null`, `~` and an absent value are all None.
+              case "$RHA" in ''|null|'~'|false|no|0|off) NEEDS_APPROVAL=no ;; esac
+            fi
           fi
           if [ "$CURRENT" = "accepted" ]; then
             # Historically an unconditional no-op. That left one shape
@@ -542,14 +568,18 @@ spec:
             echo "❌ Handoff carries no approval but the checkout already has one — refusing to regress it." >&2
             exit 1
           fi
+          # An approval already on main is never edited, and that does NOT
+          # depend on who it names. Comparing approvers let two runs with the
+          # SAME approver fall through and copy the second run's whole-file
+          # artifact over the first, rewriting approved_at and updated_at --
+          # an edit to an existing approval, which is precisely the invariant
+          # (Codex P2, gitops#1209). The record exists; there is nothing to
+          # add, whoever wrote it.
           if grep -q '^approval:' "$STATUS_PATH" 2>/dev/null \
              && grep -q '^status: accepted$' "$STATUS_PATH" 2>/dev/null; then
-            HANDOFF_APPROVER=$(sed -n 's/^[[:space:]][[:space:]]*approved_by:[[:space:]]*//p' "/artifact/${STATUS_PATH}" | head -1)
             CURRENT_APPROVER=$(sed -n 's/^[[:space:]][[:space:]]*approved_by:[[:space:]]*//p' "$STATUS_PATH" | head -1)
-            if [ "$HANDOFF_APPROVER" != "$CURRENT_APPROVER" ]; then
-              echo "ℹ️  ${WORKFLOW_SLUG} was approved concurrently by ${CURRENT_APPROVER} — keeping that record, not overwriting it." >&2
-              exit 0
-            fi
+            echo "ℹ️  ${WORKFLOW_SLUG} is already approved on main by ${CURRENT_APPROVER} — leaving that record untouched." >&2
+            exit 0
           fi
 
           mkdir -p "$(dirname "$STATUS_PATH")"
