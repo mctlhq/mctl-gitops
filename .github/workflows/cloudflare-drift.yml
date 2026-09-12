@@ -118,7 +118,22 @@ jobs:
       run:
         working-directory: ${{ matrix.root }}
     env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      # Per root, because one credential no longer covers them all. The
+      # repository-wide read token is zone-scoped ("read-only across the four
+      # zones", All zones, no account permission -- checked against the live
+      # token list), and infrastructure/cloudflare/portal describes an
+      # account-level surface, so it would answer 10000 Authentication error
+      # there on every run and never once compare anything.
+      #
+      # CF_PORTAL_READ_TOKEN is Account -> MCP Portals -> Read on this account
+      # alone: verified at mint time to read a server, to be refused on a PUT,
+      # and to see zero zones. An expression rather than a lookup because
+      # secrets cannot be indexed by a variable -- same explicit chain as
+      # cloudflare-apply.yml, and it is also the allowlist.
+      CLOUDFLARE_API_TOKEN: >-
+        ${{ matrix.root == 'infrastructure/cloudflare/portal'
+         && secrets.CF_PORTAL_READ_TOKEN
+         || secrets.CLOUDFLARE_API_TOKEN }}
       # Drift only reads. It uses the same Object-Read-only state credential as
       # the plan workflow, which is why it also passes -lock=false: taking the
       # lock would be a write this credential cannot perform.
@@ -263,6 +278,48 @@ jobs:
           rm -f plan.txt
           exit "$code"
 
+      # The one field OpenTofu cannot watch. `auth_credentials` is write-only:
+      # the API accepts it and never returns it, so the provider keeps what was
+      # last applied in state and a refresh cannot correct it. Measured against
+      # a throwaway server on 2026-09-12 -- an out-of-band PUT changed the live
+      # scope and `tofu plan` stayed `no-op`. A clean plan above therefore says
+      # nothing about this attribute, which is exactly when it needs checking.
+      #
+      # Runs only when the plan was clean: a drifted or failed plan has already
+      # made this job red, and a second red says nothing new.
+      - name: Check the write-only OAuth registration
+        id: creds
+        if: success() && matrix.root == 'infrastructure/cloudflare/portal'
+        env:
+          ACCOUNT_ID: 6a09f637d20e1f66a8e9d45ebe778058
+        run: |
+          set -euo pipefail
+          # --selftest first, same reason as every other detector in this
+          # repository: one never seen to fire is not known to work.
+          "$GITHUB_WORKSPACE/scripts/portal-auth-credentials-drift.py" --selftest
+          set +e
+          # 2>&1 on the detector, not on the pipeline: every drift line and
+          # every `[2]` diagnosis goes to stderr, so a plain `| tee` captured
+          # an empty file and both failure branches below rendered an empty
+          # code block -- "someone changed it outside Git" without ever saying
+          # what changed.
+          tofu show -json \
+            | { "$GITHUB_WORKSPACE/scripts/portal-auth-credentials-drift.py" \
+                  --account "$ACCOUNT_ID" 2>&1; } | tee cred.txt
+          code=${PIPESTATUS[1]}
+          set -e
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          case "$code" in
+            0) echo "### \`portal\` — OAuth registration in sync" >> "$GITHUB_STEP_SUMMARY" ;;
+            1) { echo "### \`portal\` — OAUTH REGISTRATION DRIFT";
+                 echo; echo '```'; cat cred.txt; echo '```';
+                 echo "> Someone changed it outside Git. \`tofu plan\` cannot see this field."; } >> "$GITHUB_STEP_SUMMARY" ;;
+            *) { echo "### \`portal\` — registration check could not run (exit $code)";
+                 echo; echo '```'; cat cred.txt 2>/dev/null || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY" ;;
+          esac
+          rm -f cred.txt
+          exit "$code"
+
       - name: Notify Telegram
         if: failure()
         uses: appleboy/telegram-action@390cf7345777cd821dba28c72f436a78bce19cc5 # master 2026-05
@@ -275,6 +332,8 @@ jobs:
           format: html
           message: |
             <b>Cloudflare drift</b> — <code>${{ matrix.root }}</code>
-            Exit code <code>${{ steps.plan.outputs.code || format('none — plan {0}', steps.plan.conclusion) }}</code> (2 = drift, 1 = plan error)
-            Cloudflare no longer matches Git, or the plan could not run.
+            ${{ steps.creds.outputs.code && steps.creds.outputs.code != '0'
+             && format('OAuth registration check exit <code>{0}</code> (1 = drifted, 2 = could not run). The plan was clean; this field is invisible to it.', steps.creds.outputs.code)
+             || format('Plan exit code <code>{0}</code> (2 = drift, 1 = plan error)', steps.plan.outputs.code || format('none — plan {0}', steps.plan.conclusion)) }}
+            Cloudflare no longer matches Git, or a check could not run.
             Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

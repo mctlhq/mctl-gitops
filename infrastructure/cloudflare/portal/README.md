@@ -67,7 +67,91 @@ CLOUDFLARE_API_TOKEN=… CLOUDFLARE_ACCOUNT_ID=… scripts/portal-controls-apply
 ```
 
 `--check` exits non-zero on drift and prints the fields that differ; it is
-the operator's stand-in for `cloudflare-drift.yml`, which cannot watch this
-until CI has a Cloudflare identity. Nothing in CI holds the token today, so
-nothing in CI applies or checks this file — that is the gap `#1111` closes,
-not something this script works around.
+the operator's stand-in for `cloudflare-drift.yml`, which does not watch this
+file. Nothing in CI applies or checks it today.
+
+That is no longer for want of a credential: `CF_PORTAL_READ_TOKEN` and
+`CF_APPLY_TOKEN_PORTAL` (see the root below) are `Account -> MCP Portals`
+Read and Edit, and the portal object these switches live on is inside that
+permission. What is missing is the wiring, and the durable answer is the same
+one the servers took — describe the portal as
+`cloudflare_zero_trust_access_ai_controls_mcp_portal` and let plan and apply
+own it. That import is a separate decision, because the portal object also
+carries the tool allowlists owned by `mctl-telegram`, `mctl-api` and
+`seerrsense`.
+
+# Cloudflare MCP Portal upstream OAuth registration — an OpenTofu root
+
+This directory is also an OpenTofu root (`mcp-servers.tf`), holding the
+portal's upstream servers. Its state key is `cloudflare/portal/terraform.tfstate`
+in `mctl-cloudflare-state`, and `cloudflare-plan.yml`, `cloudflare-apply.yml`
+and `cloudflare-drift.yml` pick it up the way they pick up any root.
+
+It does **not** live in `account/`, which its README lists as the eventual
+home for the portal (`#1092`). The reason is the rule stated in
+`cloudflare-apply.yml`: one write token per root, so an apply of one root
+cannot touch another surface. The account root's credential will carry Access,
+R2 and organization settings; this one carries `MCP Portals` and nothing else.
+Folding the two together would mean widening whichever token applies them.
+
+## Why the scope needs describing at all
+
+It is the one portal setting that fails silently. On 2026-09-12 the portal's
+grant for `tg` was:
+
+```
+oauth: token authorization_code grant
+client_id:       cloudflare-portal-mcp
+requested_scope: telegram:dialogs:read telegram:messages:read
+granted_scope:   telegram:dialogs:read telegram:messages:read admin:users
+```
+
+Every other layer looked healthy: all 30 `tg` tools enabled in the portal, the
+identity on the admin tier, `send_enabled` on, `ALLOW_SEND` on. A send still
+came back as a dry-run preview, because `mctl-telegram`'s `narrowGrant`
+(`internal/oauth/scopes.go`) drops any negotiable scope the client did not ask
+for. `admin:users` survived only because it is *not* negotiable and is granted
+by membership — its presence beside a missing send scope is the signature of
+this failure, and the reason "raise the access tier" is the wrong fix.
+
+The two-scope string had been set by hand when the server was created on
+2026-09-10, and was recorded nowhere.
+
+## The field OpenTofu cannot see
+
+`auth_credentials` is write-only: the API accepts it and returns only the
+read-only `auth_config_summary` projection. Measured on 2026-09-12 against a
+throwaway server created and destroyed for the purpose:
+
+- **No perpetual diff.** After an apply, the next plan is `no-op` — the
+  provider keeps the applied value in state rather than nulling it on refresh.
+- **No drift detection either, for that attribute.** An out-of-band `PUT`
+  changed the live scope to `probe:TAMPERED` and `tofu plan` still reported
+  `no-op`. State said what had been applied; the API could not contradict it.
+
+So the plan owns everything else on the server, and
+`scripts/portal-auth-credentials-drift.py` owns that one attribute: it reads
+the live projection and compares it against what state says was applied. There
+is no second source of truth — the desired value comes from the state, not from
+a file beside it — and `cloudflare-drift.yml` runs it nightly for this root,
+only when the plan came back clean.
+
+## Other things measured here
+
+- Importing the live server plans exactly one update, to `auth_credentials`.
+  `client_secret` does not appear in the diff and is not touched.
+- **Creating** a manual-mode `oauth` server requires a non-empty
+  `client_secret` (`7001: client_secret must be a non-empty string`); updating
+  one does not. Adopting `tg` therefore needs no secret in state; a future
+  server added from scratch will.
+- `updated_tools` / `updated_prompts` are in `ignore_changes`. They are the
+  allowlists owned by `mctl-telegram`, `mctl-api` and `seerrsense`, applied
+  from those repositories. Nothing here sets them, so nothing here can revert
+  them.
+
+## After an apply
+
+Sign the upstream out and back in in the portal. `boundRefreshGrant`
+(`mctl-telegram/internal/oauth/server.go`) intersects a refresh with the
+family's original grant, so a wider scope never reaches a token that already
+exists.

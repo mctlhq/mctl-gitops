@@ -261,6 +261,15 @@ jobs:
         # live portal.
         run: python3 tests/test_portal_controls_apply.py
 
+      - name: Unit-test the portal OAuth registration drift detector
+        # The MCP server's `auth_credentials` is write-only: the API accepts it
+        # and never returns it, so OpenTofu keeps what was last applied in
+        # state and a refresh cannot correct it -- measured against a throwaway
+        # server, an out-of-band change left `tofu plan` at `no-op`. That one
+        # attribute is therefore checked by a script instead, and this is its
+        # selftest: a detector never seen to fire is not known to work.
+        run: scripts/portal-auth-credentials-drift.py --selftest
+
       - name: Unit-test wft-provision-database's values.yaml patch
         # The provisioner commits straight to main, so no PR check sees the
         # file it writes, and `helm template` above accepts duplicate keys
