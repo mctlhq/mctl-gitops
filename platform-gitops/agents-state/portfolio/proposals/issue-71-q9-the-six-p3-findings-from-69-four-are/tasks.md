@@ -121,7 +121,10 @@
 - [ ] 11d. **C3, half 2 — a matcher that can see a version** (depends on 11c).
       In `scripts/check-no-metrics.mjs`, add a second, independent check: for
       every `.md` under `src/content/projects`, split off the YAML frontmatter
-      and apply `/\b\d+\.\d+(?:\.\d+)?\b/` to the body only, failing with a
+      and apply `/(?<![\d.])\d+\.\d+\.\d+(?![\d.])/` to the body only — all
+      three components required, bounded on both sides so `1.5 seconds`,
+      `3.14` and the `127.0.0` prefix of an IPv4 literal do not match — failing
+      with a
       `check-no-metrics:`-prefixed line naming the file and line number.
       Frontmatter is excluded because `order: 10` through `order: 14` live there
       in every file. Leave `MATCH_RE` and `SCAN_DIRS` untouched — the two checks
@@ -134,7 +137,8 @@
       have caught the violation it was added for; and twelve of the fourteen
       files already carry `order:` values plus `60 seconds` and `15-minute`, so
       it would have flooded on legitimate copy. Measured, not assumed: the
-      semver matcher above hits exactly two lines in the tree today,
+      bounded three-component matcher above hits exactly two lines in the tree
+      today,
       `mctl-design.en.md:14` and `mctl-design.ru.md:14`, and nothing else.
 
       DoD: `node scripts/check-no-metrics.mjs` exits zero on the fixed tree, and
