@@ -32,7 +32,6 @@ metadata:
         - the DevLoop (Temporal) on every approved proposal
         - mctl-api MCP tool mctl_trigger_implementer (admin-only)
         - operator submitting a Workflow that references this CWFT
-        - CronWorkflow mctl-agents-implement (suspended — Temporal owns intake)
 spec:
   serviceAccountName: argo-workflow-sa
   imagePullSecrets:
