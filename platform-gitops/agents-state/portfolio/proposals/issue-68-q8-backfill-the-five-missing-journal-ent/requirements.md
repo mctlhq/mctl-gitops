@@ -43,7 +43,7 @@ stands today holds **fourteen** public entries under `src/content/journal/`
 arithmetic was written before that entry landed. What is normative here is
 the invariant, not the number: the counter is `journal.length` and nothing
 else, so after this change it reads **20** — nineteen from the backfill plus this
-cycle's own entry (see "This cycle's own entry" below) — and `scripts/check-dist.mjs`
+cycle's own entry (Copy block 6 below) — and `scripts/check-dist.mjs`
 will enforce that against its own scan of the content directory. An
 implementer who hard-codes 18 anywhere both violates criterion 5's own
 "no literal count" clause and fails the build.
