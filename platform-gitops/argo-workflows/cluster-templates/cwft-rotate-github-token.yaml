@@ -17,7 +17,7 @@ metadata:
       the sense that a failure in one (mint, Vault write, or ExternalSecret
       re-sync) does not abort the loop and the other still rotates.
 
-      That is NOT a separate failure domain, though. Since 2026-08-13 both
+      That is NOT a separate failure domain, though. Since 2026-08-13 all
       targets mint from the same App — mctl-agents (id 4450852), the
       backend-only automation App — so a revoked key, a removed
       installation, or a GitHub outage takes out both at once. When
@@ -40,6 +40,10 @@ metadata:
                                             key github-token
                                          -> ExternalSecret
                                             argo-workflows/mctl-agents-secrets
+        - mctl-api    (App id 4450852)  -> secret/platform/mctl-api/github-app
+                                            key token
+                                         -> ExternalSecret
+                                            mctl-api/mctl-api-github-app
 
       Note the re-sync only refreshes the Kubernetes Secret. A consumer that
       reads the token from `envFrom`/`secretKeyRef` still never sees the new
@@ -206,6 +210,30 @@ spec:
                     "dest_key": "github-token",
                     "external_secrets": [
                         ("argo-workflows", "mctl-agents-secrets"),
+                    ],
+                },
+                {
+                    # mctl-api clones mctl-gitops and dispatches
+                    # cloudflare-apply.yml there. Both were static PATs until
+                    # mctlhq/mctl-api#307; this replaces them with a token that
+                    # refreshes itself.
+                    #
+                    # Its own Vault path and its own ExternalSecret, separate
+                    # from mctl-api-secrets on purpose: ESO fails the WHOLE
+                    # ExternalSecret when one remoteRef does not resolve, so
+                    # putting a 30-minute-lifetime key next to DB_PASSWORD
+                    # would let a rotation glitch take the database credential
+                    # down with it.
+                    #
+                    # mctl-api reads it from a mounted FILE, not envFrom —
+                    # see the note at the top of this file about why a re-sync
+                    # never reaches an environment variable.
+                    "label": "mctl-api",
+                    "creds_path": "platform/github-app-agents",
+                    "dest_path": "platform/mctl-api/github-app",
+                    "dest_key": "token",
+                    "external_secrets": [
+                        ("mctl-api", "mctl-api-github-app"),
                     ],
                 },
             ]
