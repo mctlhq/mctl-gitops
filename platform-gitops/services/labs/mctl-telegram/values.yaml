@@ -132,6 +132,25 @@ env:
   # Telegram OIDC/session login rather than this password bypass, and must
   # carry per-account send_enabled=false so probes stay read-only even though
   # ALLOW_SEND is true globally.
+  # TEMPORARY, mctl-telegram#617 Slice 1 (Phase 3 correlation, .github#35).
+  # Turns on internal/web.HeaderProbe: one sanitized log line per request to
+  # MCP_PATH with the complete set of arriving header names, so the measurement
+  # can say which request identifiers actually reach this ingress from the
+  # Cloudflare Portal and whether they are stable across calls. It logs header
+  # NAMES and sanitized values only -- secrets collapse to
+  # [redacted len=N fp=hmac], client addresses are masked per hop, and the
+  # request body is never read. Needs 0.65.0 or later; earlier images ignore
+  # the key.
+  #
+  # Fingerprints are keyed per PROCESS, so they compare only within one pod.
+  # replicaCount is 1 and the strategy is Recreate, so the measurement window
+  # already lands on a single process -- do not scale up while this is true.
+  #
+  # REMOVE THIS KEY once the header table is posted on #617. The middleware,
+  # the flag and docs/ingress-header-measurement.md are all deleted in the same
+  # pass; leaving it on costs log volume on an unauthenticated path for no
+  # measurement.
+  MCP_HEADER_PROBE: "true"
   DEMO_REVIEWER_ENABLED: "false"
   DEMO_REVIEWER_TG_ID: "8745115872"
 # Downward-API identity for the mctl_telegram_replica_id info gauge. The
