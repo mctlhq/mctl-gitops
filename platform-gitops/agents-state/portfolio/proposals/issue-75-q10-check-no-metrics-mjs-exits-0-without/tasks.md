@@ -64,14 +64,19 @@
       asserted with a message naming the count found, the count required and
       the shortfall; a per-name membership assertion over
       `['scripts/check-contrast.mjs', 'scripts/check-links.mjs',
-      'scripts/check-headers.mjs', 'scripts/check-no-metrics.mjs']` that names
-      the missing script and prints the derived set on failure; and a test
+      'scripts/check-headers.mjs', 'scripts/check-no-metrics.mjs',
+      'scripts/snapshot-metrics.mjs']` that names the missing script and prints
+      the derived set on failure — **all five**, including the one task 3 gives
+      the guard to; with only four pinned, a `snapshot-metrics.mjs` that lost
+      its guard would drop the set to four and pass both the floor and the
+      membership check; and a test
       that calls `deriveEntryPointScripts` on a freshly created empty
       temporary directory and asserts it returns `[]`. — DoD: three new
       assertions present; the floor stays at four (not five), so a future
-      sixth script needs no edit; `scripts/snapshot-metrics.mjs` is covered by
-      the derivation and is deliberately **not** added to the required-name
-      list.
+      sixth script needs no edit; `scripts/snapshot-metrics.mjs` **is** in the
+      required-name list, alongside the other four — it is the script task 3
+      gives the guard to, and leaving it out is precisely the gap this cycle
+      exists to close.
 
 - [ ] 7. Rewrite the header comment of `test/entry-point.test.ts` (lines
       1-15) to describe the derived rule (depends on 4, 5, 6): what is
@@ -139,8 +144,12 @@
       that proves part B actually closes the hole part A patched. Failure
       message names the file and prints the derived set.
 - [ ] T3. The derived set contains `scripts/check-contrast.mjs`,
-      `scripts/check-links.mjs` and `scripts/check-headers.mjs`.
-- [ ] T4. The derivation returns at least four files; the failure message
+      `scripts/check-links.mjs`, `scripts/check-headers.mjs` and
+      `scripts/snapshot-metrics.mjs` — the last being the script task 3 gives
+      the hybrid guard to, and the one whose omission from the pinned list
+      would have reopened this cycle's own hole.
+- [ ] T4. The derivation returns at least four files (the floor; the true count
+      today is five); the failure message
       names the count found, the count required and the shortfall.
 - [ ] T5. `deriveEntryPointScripts` over an empty temporary directory returns
       `[]` — so the reader can see T4 has a real condition to fire on.
@@ -174,8 +183,11 @@ revert with no cleanup.
   literal against a script this investigation did not read. Revert
   `test/entry-point.test.ts` to the hand-typed
   `FILES = ['scripts/check-contrast.mjs', 'scripts/check-links.mjs',
-  'scripts/check-headers.mjs', 'scripts/check-no-metrics.mjs']` (the #69-style
-  fix, now including the fourth script) and keep tasks 2 and 3. The symlink
+  'scripts/check-headers.mjs', 'scripts/check-no-metrics.mjs',
+  'scripts/snapshot-metrics.mjs']` (the #69-style fix, all five names — the
+  fifth is not optional here: tasks 2 and 3 are kept in this rollback, so both
+  scripts still carry the hybrid guard and a four-name list would let
+  `snapshot-metrics.mjs` lose it again without failing) and keep tasks 2 and 3. The symlink
   defect stays fixed and coverage stays no worse than before this cycle, at
   the cost of part B.
 - Scoped revert of task 3 alone: if running `scripts/snapshot-metrics.mjs` on
