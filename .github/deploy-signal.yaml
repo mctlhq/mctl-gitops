@@ -33,6 +33,8 @@ services:
     release_repo: mctlhq/mctl-agents
   - path: platform-gitops/services/admins/mctl-agents-worker-exec/values.yaml
     release_repo: mctlhq/mctl-agents
+  - path: platform-gitops/services/labs/portfolio/values.yaml
+    release_repo: mctlhq/portfolio
 
   # --- deployed from main, not from releases ---
   - path: platform-gitops/services/labs/mctl-telegram-preview/values.yaml
