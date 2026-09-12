@@ -115,3 +115,94 @@ tests:
       - eval_time: 12m
         alertname: NodeMemoryHeadroomLow
         exp_alerts: []
+
+  # ---------------------------------------------------------------------
+  # ContainerOOMKilled
+  #
+  # Both arms, both directions. The measurements these encode are in the
+  # comment above the rule: an Argo step pod's terminated_reason series
+  # lives ~2 minutes before podGC removes the pod, and a once-only pod
+  # never populates last_terminated_reason at all.
+  # ---------------------------------------------------------------------
+  - interval: 1m
+    name: an Argo step pod OOMKilled and then garbage-collected still alerts
+    input_series:
+      # Two samples, then the pod is deleted and the series ends — exactly
+      # the shape measured for mctl-agents-implement-92b263a8 on 2026-09-12.
+      - series: 'kube_pod_container_status_terminated_reason{namespace="argo-workflows",pod="mctl-agents-implement-x-run-implementer-1",container="main",reason="OOMKilled"}'
+        values: '1 1 _ _ _ _ _ _ _ _ _ _'
+    alert_rule_test:
+      # 8 minutes after the series ended: the pod is long gone and a `for:`
+      # hold would never have elapsed, but the lookback still sees it.
+      - eval_time: 10m
+        alertname: ContainerOOMKilled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: argo-workflows
+              pod: mctl-agents-implement-x-run-implementer-1
+              container: main
+            exp_annotations:
+              summary: >-
+                Container main in argo-workflows/mctl-agents-implement-x-run-implementer-1
+                was OOMKilled
+              description: >-
+                The container hit its memory limit and the kernel killed it.
+                A node-level memory alert will not catch this: the container
+                dies at its own limit long before the node is under pressure,
+                and the spike collapses within minutes. Compare
+                container_memory_rss against container_spec_memory_limit_bytes
+                for this pod, then either raise the limit or find what grew.
+
+  - interval: 1m
+    name: a step pod that merely finished does not alert
+    input_series:
+      - series: 'kube_pod_container_status_terminated_reason{namespace="argo-workflows",pod="mctl-agents-shepherd-x-run-shepherd-1",container="main",reason="Completed"}'
+        values: '1 1 _ _ _ _ _ _ _ _ _ _'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ContainerOOMKilled
+        exp_alerts: []
+
+  - interval: 1m
+    name: a restarting Deployment container that was OOMKilled alerts
+    input_series:
+      - series: 'kube_pod_container_status_last_terminated_reason{namespace="admins",pod="admins-mctl-agents-worker-base-service-1",container="base-service",reason="OOMKilled"}'
+        values: '1x20'
+      - series: 'kube_pod_container_status_restarts_total{namespace="admins",pod="admins-mctl-agents-worker-base-service-1",container="base-service"}'
+        values: '0 0 0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ContainerOOMKilled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: admins
+              pod: admins-mctl-agents-worker-base-service-1
+              container: base-service
+            exp_annotations:
+              summary: >-
+                Container base-service in admins/admins-mctl-agents-worker-base-service-1
+                was OOMKilled
+              description: >-
+                The container hit its memory limit and the kernel killed it.
+                A node-level memory alert will not catch this: the container
+                dies at its own limit long before the node is under pressure,
+                and the spike collapses within minutes. Compare
+                container_memory_rss against container_spec_memory_limit_bytes
+                for this pod, then either raise the limit or find what grew.
+
+  - interval: 1m
+    name: an old OOMKill with no fresh restart does not keep the alert stuck on
+    input_series:
+      # lastState still records the OOMKill for the whole life of the pod.
+      # Without the restart join this series alone would hold the alert at 1
+      # indefinitely, which is the failure mode the join exists to prevent.
+      - series: 'kube_pod_container_status_last_terminated_reason{namespace="admins",pod="admins-mctl-agents-worker-base-service-1",container="base-service",reason="OOMKilled"}'
+        values: '1x40'
+      - series: 'kube_pod_container_status_restarts_total{namespace="admins",pod="admins-mctl-agents-worker-base-service-1",container="base-service"}'
+        values: '1x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: ContainerOOMKilled
+        exp_alerts: []

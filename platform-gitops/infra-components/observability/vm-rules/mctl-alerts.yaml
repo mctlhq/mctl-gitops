@@ -395,6 +395,59 @@ spec:
               MinIO write errors imminent. Free space immediately or expand
               PVC.
 
+    # OOMKill detection, measured 2026-09-12 rather than assumed.
+    #
+    # The usual kube-prometheus expression keys on
+    # kube_pod_container_status_last_terminated_reason. That metric reads the
+    # container's *lastState*, which Kubernetes only populates after a
+    # restart. Argo step pods run with restartPolicy: Never, so lastState
+    # stays empty and the metric never exists for them: a rule built on it
+    # alone is inert for the whole agents fleet. Verified against 30 days of
+    # data -- three OOMKills, none of them visible in that series.
+    #
+    # So the first arm keys on the *current* terminated state, which does
+    # appear for a once-only pod. It is short-lived: podGC
+    # (OnWorkflowCompletion) deletes the pod, and kube-state-metrics stops
+    # exporting it. The implement OOMKill on 2026-09-12 was present for
+    # 2 minutes at the 1m scrape interval, a shepherd one for 8. Hence
+    # max_over_time over 15m and NO `for:` hold -- the evidence is gone long
+    # before any hold would elapse. This is the mirror image of
+    # NodeMemoryHeadroomLow, where the lookback must be shorter than the
+    # hold; here there is no hold to outlive.
+    #
+    # The second arm covers the other pod shape -- a long-running Deployment
+    # that restarts after its OOMKill. There lastState IS the record, and it
+    # is joined to a fresh restart so the alert does not stay stuck at 1 for
+    # the remaining life of the pod.
+    - name: mctl.workload-health
+      rules:
+        - alert: ContainerOOMKilled
+          expr: |
+            max by (namespace, pod, container) (
+              max_over_time(
+                kube_pod_container_status_terminated_reason{reason="OOMKilled"}[15m]
+              )
+            ) > 0
+            or
+            max by (namespace, pod, container) (
+              kube_pod_container_status_last_terminated_reason{reason="OOMKilled"}
+              and on (namespace, pod, container)
+              increase(kube_pod_container_status_restarts_total[15m]) > 0
+            ) > 0
+          labels:
+            severity: warning
+          annotations:
+            summary: >-
+              Container {{ $labels.container }} in {{ $labels.namespace }}/{{ $labels.pod }}
+              was OOMKilled
+            description: >-
+              The container hit its memory limit and the kernel killed it.
+              A node-level memory alert will not catch this: the container
+              dies at its own limit long before the node is under pressure,
+              and the spike collapses within minutes. Compare
+              container_memory_rss against container_spec_memory_limit_bytes
+              for this pod, then either raise the limit or find what grew.
+
     # The generic total_count metric only has namespace and phase labels, so
     # it cannot distinguish agents pipelines. workflowtemplate_triggered_total
     # identifies the referenced ClusterWorkflowTemplate and records each phase.
