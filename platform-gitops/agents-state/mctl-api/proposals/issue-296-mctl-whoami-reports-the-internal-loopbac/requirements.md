@@ -66,6 +66,14 @@ which puts the loopback address back in the user-visible response.
 - WHEN the test suite runs THE SYSTEM SHALL fail if the whoami message is
   reverted to formatting `s.apiURL` (mutation check), rather than merely
   asserting that some string was produced.
+- WHILE the OAuth server is enabled THE SYSTEM SHALL source the URL shown by
+  `mctl_whoami` from the same object that carries the OAuth issuer
+  (`auth.OAuthServer.BaseURL`), so the displayed URL and the issuer a caller's
+  token was verified against cannot name different deployments.
+- WHEN the test suite runs THE SYSTEM SHALL fail if `cmd/api` is rewired to pass
+  any value other than the enabled OAuth server's `BaseURL` into the MCP
+  server's public URL — passing `cfg.SelfURL` a second time, independently, is
+  not sufficient, because nothing then fails when the two diverge.
 
 ## Out of scope
 
