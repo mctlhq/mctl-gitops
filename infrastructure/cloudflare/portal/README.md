@@ -71,3 +71,86 @@ the operator's stand-in for `cloudflare-drift.yml`, which cannot watch this
 until CI has a Cloudflare identity. Nothing in CI holds the token today, so
 nothing in CI applies or checks this file — that is the gap `#1111` closes,
 not something this script works around.
+
+
+# Cloudflare MCP Portal upstream OAuth registration
+
+`mcp-portal-server-auth.json` is the committed state of the OAuth
+registration each upstream is connected with — the endpoints, the client, and
+above all the **scope the portal asks that upstream for**. It is applied by
+`scripts/portal-server-auth-apply.sh`, with the same `--check` and
+`--dry-run` modes as the controls script above.
+
+## Why a scope needs pinning at all
+
+It is the one portal setting that fails silently in both directions. On
+2026-09-12 the portal's grant for `tg` was:
+
+```
+oauth: token authorization_code grant
+client_id:       cloudflare-portal-mcp
+requested_scope: telegram:dialogs:read telegram:messages:read
+granted_scope:   telegram:dialogs:read telegram:messages:read admin:users
+```
+
+Every other layer looked healthy: all 30 `tg` tools enabled in the portal,
+the identity on the admin tier, `send_enabled` on, `ALLOW_SEND` on. A send
+still came back as a dry-run preview, because `mctl-telegram`'s `narrowGrant`
+(`internal/oauth/scopes.go`) drops any negotiable scope the client did not
+ask for — `admin:users` survived only because it is *not* negotiable and is
+granted by membership. The two-scope string had been set by hand when the
+server was created on 2026-09-10 and was recorded nowhere.
+
+The scope is also not a field of the MCP Server API. It lives inside
+`auth_credentials`, a write-only blob, surfaced back only as the read-only
+`auth_config_summary` projection — so it is invisible to anything that lists
+the server's own fields.
+
+A new scope does not reach a live session: `boundRefreshGrant`
+(`mctl-telegram/internal/oauth/server.go`) intersects a refresh with the
+family's original grant, so **the upstream must be signed out and back in in
+the portal after an apply**. The script says so on every apply.
+
+## Measured, not inferred
+
+Against the live `tg` server on 2026-09-12:
+
+- `PUT /servers/{id}` **merges**: a write naming only `description` left
+  `auth_credentials`, `tools` (30) and `has_client_secret` (v1) intact. The
+  first attempt re-sent the description it already had and proved nothing —
+  the API answers 200 to a no-op — so it was repeated with a value that
+  actually changed, then restored.
+- `modified_at` did **not** move across that real write. It stays at creation
+  time, so it is not a change signal; drift is decided by comparing fields.
+- `client_secret` is a separate top-level write-only field, not part of the
+  blob, so the scope can be rewritten without knowing the secret. The apply
+  asserts `has_client_secret` survived anyway.
+- Server-level `tools` is the synced capability catalogue — name, description,
+  schemas, no enabled flags. The flags live on the portal object's `servers[]`
+  entries, which this script never touches.
+
+The blob's own shape is **not** published in the OpenAPI schema; it is
+mirrored from the projection. That is why the apply reads the projection back
+after every write and fails — printing the pre-write snapshot as the restore
+point — rather than trusting a 200.
+
+## What the write does not touch
+
+Only `auth_credentials` is sent. Not `client_secret`, not
+`updated_tools`/`updated_prompts` (the capability overrides owned by
+`mctl-telegram`, `mctl-api` and `seerrsense` — naming them would make every
+apply a read-modify-write over their state), not `hostname`/`name`/
+`description`.
+
+## Running it
+
+```
+CLOUDFLARE_API_TOKEN=… CLOUDFLARE_ACCOUNT_ID=… scripts/portal-server-auth-apply.sh --check
+CLOUDFLARE_API_TOKEN=… CLOUDFLARE_ACCOUNT_ID=… scripts/portal-server-auth-apply.sh --dry-run
+CLOUDFLARE_API_TOKEN=… CLOUDFLARE_ACCOUNT_ID=… scripts/portal-server-auth-apply.sh
+```
+
+Same gap as the controls script: nothing in CI holds a Cloudflare token, so
+`--check` is the operator's stand-in for `cloudflare-drift.yml` until `#1111`
+lands. After an apply, sign the upstream out and back in in the portal — a
+refresh cannot widen an existing grant.
