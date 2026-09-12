@@ -72,6 +72,13 @@ spec:
         # 0.9 and, as a short spike, would not have survived its for: 15m
         # either. A ceiling that is only visible once it is hit is not a
         # warning, so this rule makes the approach to it visible instead.
+        #
+        # The name is carried in mctl-agent's classifyAlert by
+        # mctlhq/mctl-agent#131, per this file's header. That is not only a
+        # label: an unlisted node alert classifies as TypeGeneric, which
+        # picks up the service=alertName fallback and so misses
+        # isInfraAlert's "TypeResourceLimit + empty Service" manual-only
+        # gate that its siblings rely on.
         - alert: NodeMemoryHeadroomLow
           expr: |
             1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) > 0.85
