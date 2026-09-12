@@ -6,8 +6,8 @@ metadata:
   annotations:
     workflows.argoproj.io/description: |
       Every 15 minutes at :09 (96/day) trigger for the Tier 3 PR
-      shepherd. Offset to sit two minutes behind the reconcile schedule
-      (:07), whose status projection it acts on.
+      shepherd. Offset to sit behind the reconcile schedule (:03), whose
+      status projection it acts on.
 
       All workflow logic lives in ClusterWorkflowTemplate
       `mctl-agents-shepherd` (cwft-mctl-agents-shepherd.yaml). This
@@ -30,14 +30,14 @@ spec:
   # The shepherd is the third read-mostly reconciler in the dev loop, and
   # until now it was the only one not on the family's cadence:
   #
-  #   issue-poll   every 15 min, offset :03   (Temporal schedule)
-  #   reconcile    every 15 min, offset :07   (Temporal schedule)
+  #   reconcile    every 15 min, offset :03   (Temporal schedule)
+  #   issue-poll   every 15 min, offset :07   (Temporal schedule)
   #   shepherd     every 15 min, offset :09   (this file)
   #   incidents    hourly,       offset :11   (Temporal) and :15 (Argo)
   #
   # The offset is not cosmetic. reconcile projects GitHub state onto
   # proposal status; the shepherd then acts on whatever sits in
-  # {implemented, review-fixing}. Running two minutes behind reconcile
+  # {implemented, review-fixing}. Running six minutes behind reconcile
   # means each tick reads status that was refreshed moments ago instead of
   # up to fifteen minutes stale, and it keeps the two off the same minute
   # on the `mctl-gitops-main-writes` mutex — which, since #852, either
