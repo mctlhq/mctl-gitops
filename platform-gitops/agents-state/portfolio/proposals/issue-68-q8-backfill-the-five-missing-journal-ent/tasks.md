@@ -82,7 +82,7 @@
       its `SCAN_DIRS` are `src/pages`, `src/components`, `src/layouts` only.
 
 - [ ] T3. Diff the parsed strings against the normative copy (depends on
-      T1) — DoD: for each of the five files, the `title.en`, `title.ru`,
+      T1) — DoD: for each of the six files, the `title.en`, `title.ru`,
       `decided.en` and `decided.ru` values as parsed (e.g. via a throwaway
       `node --input-type=module` snippet or `astro sync` output) are byte-identical
       to `requirements.md` -> Copy (normative), confirming the `\"` escapes
@@ -90,48 +90,59 @@
       is not committed.
 
 - [ ] T4. Run `npm run build` (depends on T2) — DoD: exits zero, and
-      `dist/colophon/journal/<slug>/index.html` exists for all five new
-      slugs.
+      `dist/colophon/journal/<slug>/index.html` exists for all six new
+      slugs, task 6b's included.
 
 - [ ] T5. Run `node scripts/check-dist.mjs` (depends on T4) — DoD: exits
       zero. This is the criterion-5 gate: `checkColophonPages()` compares
       `data-cycle-count` and the `data-cycle-row` count in
       `dist/colophon/index.html` against its own independent `readdir()` of
       `src/content/journal`, so both must equal the number of public entries
-      on disk — 19 with the fourteen already present plus the five added
-      here, not the 18 the issue's stale arithmetic names (see the first
-      open question in `requirements.md`). It also confirms no
+      on disk — **20** with the fourteen already present plus the five
+      backfilled here and this cycle's own entry from task 6b; neither the 18
+      the issue's stale arithmetic names nor the 19 this proposal carried
+      before the operator amendment (see the amendment header above and the
+      first open question in `requirements.md`). It also confirms no
       `dist/**/*.js`, equal `class="l en"` / `class="l ru"` counts on each of
-      the five new pages, the three-item breadcrumb on each, and the sitemap
-      URL list including the five new routes.
+      the six new pages, the three-item breadcrumb on each, and the sitemap
+      URL list including the six new routes.
 
 - [ ] T6. Confirm the counter is derived, not typed (depends on T4) — DoD:
       the `data-cycle-count` value in `dist/colophon/index.html` equals
       `ls src/content/journal/*.md | wc -l` restricted to files carrying
-      `visibility: public` (19 as the tree stands), and
-      `grep -rn '\b1[89]\b' src/pages src/components src/layouts src/i18n`
-      shows no newly introduced literal count — neither 18 nor 19 — proving
-      the number comes from `journal.length` alone.
+      `visibility: public` (**20** as the tree stands after this change), and
+      `grep -rnE '\b(1[89]|20)\b' src/pages src/components src/layouts src/i18n`
+      shows no newly introduced literal count — neither 18 nor 19 nor 20 —
+      proving the number comes from `journal.length` alone.
+      **The pattern must include the current target value.** Before the
+      operator amendment this check read `'\b1[89]\b'`, which would have
+      passed a hard-coded `20` in silence: a guard that cannot see the value
+      it exists to forbid. If a later change moves the counter again, move
+      this pattern with it.
 
 - [ ] T7. Run `node scripts/check-links.mjs` against the rebuilt tree
-      (depends on T4) — DoD: exits zero; the five new GitHub issue URLs are
-      reported as skipped off-origin, and every internal link on the five new
+      (depends on T4) — DoD: exits zero; the six new GitHub issue URLs are
+      reported as skipped off-origin (task 6b's entry links
+      `.../issues/68`), and every internal link on the six new
       pages (`/`, `/colophon/`, the breadcrumb and the back link) resolves
       against a file under `dist/`. No network request is issued.
 
 - [ ] T8. Confirm the intervention total is unchanged (depends on T4) — DoD:
       `data-intervention-count` in `dist/colophon/index.html` holds the same
       value it held before this change, since `interventions` is omitted from
-      all five new files and defaults to `[]`.
+      all six new files and defaults to `[]`.
 
 ## Rollback
 
-Delete the five added files under `src/content/journal/` and rebuild; the
-cycle counter returns to 13, the five pages and table rows disappear, and no
-other file was touched, so nothing else has to be reverted. Before merge:
-close the pull request or drop the commit. After merge: `git revert` the
-merge commit — the diff is five file additions and the revert is a pure
-deletion with no schema, template or script change to undo. Because every
+Delete the six added files under `src/content/journal/` and rebuild; the
+cycle counter returns to **14** — the count the tree already held before this
+backfill, as `design.md` establishes; not 13, which was the issue's stale
+figure written before `2026-09-12-q7-polish-wave-findings.md` landed — the six
+pages and table rows disappear, and no other file was touched, so nothing else
+has to be reverted. Before merge: close the pull request or drop the commit.
+After merge: `git revert` the merge commit — the diff is six file additions and
+the revert is a pure deletion with no schema, template or script change to
+undo. Because every
 downstream number is derived from the content directory rather than from a
 literal, the removal is self-consistent the moment the files are gone; no
 follow-up edit to `src/pages/colophon/index.astro`, `CycleTable.astro` or any
