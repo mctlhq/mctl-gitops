@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-09-12T12:33:40Z'
+updated_at: '2026-09-12T12:34:02Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -11,9 +11,8 @@ control:
 approval:
   approved_by: mashkovd
   approved_at: '2026-09-12T12:14:09Z'
-attempt:
-  id: 80ee6cd7-8bde-4760-ae90-85edc08c0a97
-  started_at: '2026-09-12T12:15:07Z'
-  expires_at: '2026-09-12T14:25:07Z'
-  finished_at: '2026-09-12T12:33:40Z'
 pr: https://github.com/mctlhq/mctl-api/pull/303
+github:
+  state: open
+  head_sha: c13642a1b8bf7749ebbc045a5cd8307c133b0430
+  observed_at: '2026-09-12T12:34:02Z'
