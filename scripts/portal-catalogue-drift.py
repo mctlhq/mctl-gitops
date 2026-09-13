@@ -350,6 +350,20 @@ def apply_waivers(findings: list[dict], today: str, compared: set[str]
                 f'NOT {", ".join(new_names)})')
             continue
         waived.append(f'{f["message"]}\n    (known until {w["until"]}: {w["why"]})')
+        # The waiver covering MORE than the finding is also a state worth a
+        # word. Some of the tools it was reviewed against have stopped
+        # firing -- a partial upstream fix -- and the excuse silently keeps
+        # covering them, so one of them closing again before the expiry date
+        # would be waived by a reason that no longer applies to it. Not
+        # failing: nothing is stale. Maintenance, like a waiver that excuses
+        # nothing at all, which is this same check at its limit.
+        gone = sorted(set(w.get("tools") or []) - set(f.get("names") or []))
+        if gone:
+            maintenance.append(
+                f"{f['server']}: the waiver for {f['kind']} still names "
+                f"{', '.join(gone)}, which no longer fire. Narrow it in "
+                f"KNOWN_STALE to what is left, or delete it when nothing is. "
+                f"({w['why']})")
 
     for key, w in sorted(KNOWN_STALE.items()):
         # Only a server that was actually compared can prove its waiver dead.
@@ -362,6 +376,24 @@ def apply_waivers(findings: list[dict], today: str, compared: set[str]
                 f"it names is gone. Delete it from KNOWN_STALE in this script. "
                 f"({w['why']})")
     return failing, waived, maintenance
+
+
+def waiver_is_wellformed(key, w) -> bool:
+    """Both halves of a KNOWN_STALE key have to name something this file emits.
+
+    A predicate rather than four conjuncts inline in selftest(), so the cases
+    that matter -- a kind compare() cannot produce, a server not in OWNERS --
+    are reachable. The committed table is valid by construction, so without
+    them the clause that catches a rename or a singular typo is never seen to
+    fire, and the cost of losing it is a nightly that reports a waived finding
+    as a stale catalogue and sends someone to re-snapshot for it.
+    """
+    try:
+        _dt.date.fromisoformat(w["until"])
+        return (bool(w.get("tools")) and bool(w.get("why"))
+                and key[0] in OWNERS and key[1] in KINDS)
+    except (KeyError, ValueError, TypeError):
+        return False
 
 
 def expected_missing(servers) -> list[str]:
@@ -483,6 +515,8 @@ def selftest() -> int:
         other = [{"server": "s", "kind": "missing-tool", "names": ["z"],
                   "message": "s: missing"}]
 
+        shrunk = [{"server": "s", "kind": "closed-output-schemas", "names": ["a"],
+                   "message": "s: a is closed"}]
         wcases = [
             ("a live waiver excuses the tools it names", finding, "2026-09-13", 0, 0),
             ("it still holds on the expiry date itself", finding, "2026-10-15", 0, 0),
@@ -492,6 +526,12 @@ def selftest() -> int:
             ("an unwaived finding fails and does not excuse the waiver",
              other, "2026-09-13", 1, 1),
             ("a waiver that excuses nothing needs maintenance", [], "2026-09-13", 0, 1),
+            # The middle of that range: half the tools fixed. Nothing is
+            # stale, so it must not fail -- but the waiver is now wider than
+            # what fires, and left silent it would keep covering a tool that
+            # closed again before the expiry date.
+            ("a waiver wider than its finding needs narrowing",
+             shrunk, "2026-09-13", 0, 1),
         ]
         # A server that could not be compared must not make its own waiver
         # look dead: it produces no findings by construction.
@@ -523,13 +563,25 @@ def selftest() -> int:
     # singular typo in the next entry was silent until the nightly reported
     # the waived finding as exit 1, with a re-snapshot instruction that
     # re-captures exactly what the waiver was written for.
+    for name, key, w, want in [
+        ("a well-formed waiver passes", ("tg", "closed-output-schemas"),
+         {"until": "2026-10-15", "tools": ["a"], "why": "fixture"}, True),
+        ("a kind compare() cannot emit fails", ("tg", "closed-output-schema"),
+         {"until": "2026-10-15", "tools": ["a"], "why": "fixture"}, False),
+        ("a server not in OWNERS fails", ("nope", "closed-output-schemas"),
+         {"until": "2026-10-15", "tools": ["a"], "why": "fixture"}, False),
+        ("an undated waiver fails", ("tg", "closed-output-schemas"),
+         {"until": "soon", "tools": ["a"], "why": "fixture"}, False),
+        ("a waiver naming no tools fails", ("tg", "closed-output-schemas"),
+         {"until": "2026-10-15", "tools": [], "why": "fixture"}, False),
+    ]:
+        got = waiver_is_wellformed(key, w)
+        print(f"{'ok  ' if got == want else 'FAIL'} {name}")
+        if got != want:
+            failures.append(name)
+
     for key, w in sorted(KNOWN_STALE.items()):
-        try:
-            _dt.date.fromisoformat(w["until"])
-            valid = (bool(w.get("tools")) and bool(w.get("why"))
-                     and key[0] in OWNERS and key[1] in KINDS)
-        except (KeyError, ValueError, TypeError):
-            valid = False
+        valid = waiver_is_wellformed(key, w)
         print(f"{'ok  ' if valid else 'FAIL'} committed waiver {key} names a known "
               "server and kind, is dated and names its tools")
         if not valid:
@@ -645,9 +697,11 @@ def main() -> int:
         # purpose. Say here that the quieter one also fired, so the heading and
         # the alert -- which are what get read first -- do not imply the
         # catalogues are otherwise in sync.
-        if failing:
-            print(f"  (and {len(failing)} catalogue finding(s) below, which this "
-                  "exit status does not name)", file=sys.stderr)
+        others = len(failing) + len(undetermined) + len(maintenance)
+        if others:
+            print(f"  (and {others} other finding(s) below -- stale catalogues, "
+                  "servers that could not be compared, waivers to fix -- which "
+                  "this exit status does not name)", file=sys.stderr)
     if undetermined:
         print("these servers were not compared:", file=sys.stderr)
         for line in undetermined:
