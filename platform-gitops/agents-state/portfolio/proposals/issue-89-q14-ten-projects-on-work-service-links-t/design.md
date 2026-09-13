@@ -2,11 +2,12 @@
 
 ## Current state
 
-### The content collection
+Read in the clone at `mctlhq/portfolio` main.
 
-`src/content/projects/` holds twenty-eight Markdown files, one `.en.md` and
-one `.ru.md` per slug, fourteen slugs in total. Today's `order` and `group`
-values, read from the `.en.md` files:
+### Content
+
+`src/content/projects/` holds 28 files, `<slug>.en.md` and `<slug>.ru.md` for
+fourteen slugs. Frontmatter today (`order` from the `.en.md` files):
 
 | order | slug | group |
 |---|---|---|
@@ -25,132 +26,161 @@ values, read from the `.en.md` files:
 | 13 | `pfeifenpatenschaft-backend` | product |
 | 14 | `mctl-openclaw` | product |
 
-`src/content.config.ts` defines `projectsSchema` (lines 35-46) as a
-`z.strictObject` with `slug`, `lang`, `name`, `group` (`platform | product`),
-`order` (non-negative integer), optional `repo` (a `https://github.com/...`
-regex), optional `private` (boolean), `stack` (non-empty array), `summary`
-(one line — `.refine((s) => !s.includes('\n'))`) and optional
-`links: z.array(z.strictObject({ label, url: httpsUrl })).optional()`.
+`src/content.config.ts:35-46` defines `projectsSchema`: `slug`, `lang`, `name`,
+`group` (`platform | product`), `order` (non-negative int), optional `repo`
+(`githubUrl`), optional `private` (boolean), `stack`, one-line `summary`, and
+an optional `links` array of `{ label, url }` where `url` is `httpsUrl`
+(`^https:\/\/[^\s]+$`). `projectsLoader()` (`src/content.config.ts:102-118`)
+wraps the glob loader and runs `checkProjectParity` over the whole store after
+sync: exactly one `en` and one `ru` per slug, agreeing on `group`, `order`,
+`repo`, `private`, `stack` and `links[].url` (`src/content.config.ts:74-86`).
+That check runs on `astro sync`, `astro check`, `astro dev` and `astro build`
+alike.
 
-`checkProjectParity` (lines 57-92) runs from `projectsLoader()` after the
-glob loader has synced every file. It requires exactly one `en` and one `ru`
-entry per slug, and equality of `group`, `order`, `repo`, `private`, `stack`
-and the ordered list of `links[].url`. `name`, `summary` and `links[].label`
-are explicitly allowed to differ, which is what makes a translated label legal
-and a differing `url` illegal. The loader runs on `astro sync`, `astro check`,
-`astro dev` and `astro build` alike, so nothing bypasses it.
+`src/content/projects/mctl-api.en.md` is the one file with a `links` array:
 
-### The card
+```yaml
+links:
+  - label: "Docs"
+    url: https://docs.mctl.ai
+```
 
-`src/components/ProjectCard.astro` takes the `en` and `ru` entry of one slug.
-Line 18 derives `repoLabel` from `en.data.repo`; lines 19-20 read
-`en.data.links ?? []` and `ru.data.links ?? []`; line 24 computes
-`hasLinks = Boolean(en.data.repo) || links.length > 0`. The template renders
-`<ul class="project-links">` when `hasLinks` (lines 46-59): first the
-repository `<li>` when `en.data.repo` is set, then one `<li>` per entry of
-`links`, pairing `link.label` with `ruLinks[index]?.label ?? link.label`
-through `<Lang>`. So a service link is an addition to the same list the
-repository link already occupies — index-aligned across languages, which is
-exactly what `checkProjectParity`'s ordered `links[].url` comparison protects.
+and `mctl-api.ru.md` carries the same `url` with `label: "Документация"`.
 
-Lines 60-67 render the metrics line only `{en.data.repo && ...}`, through
-`repoMetrics(metrics, en.data.repo)` and `formatStat(...)`. Lines 68-72 render
-the private chip from `{en.data.private && (...)}` with
-`ui.workPrivateRepo.en` / `.ru` — an explicit field, deliberately not `!repo`.
+`src/content/projects/pfeifenpatenschaft-backend.{en,ru}.md` are the only files
+with `private: true` and no `repo:`.
 
-`src/lib/metrics.ts`'s `repoMetrics` returns `EMPTY_REPO_METRIC` when the repo
-key is absent from `metrics.json`, and `formatStat(null)` renders an em dash,
-so a fixture project with an unknown repository renders without throwing.
+`src/content/projects/seerrsense.en.md` currently reads
+`summary: "Natural-language media requests for Seerr, Radarr and Sonarr over MCP: the model interprets intent, provider IDs stay the source of truth."`
+with body bullets `- OAuth for both Claude and ChatGPT`,
+`- per-user connections`, `- directory submissions`; the `.ru.md` file mirrors
+it.
 
-`src/pages/work.astro` loads the collection, filters `lang === 'en'`, builds a
-`Map` of the Russian entries by slug, and renders two `<section>`s — `platform`
-then `product` — each sorted by `a.data.order - b.data.order`. There is no
-per-project page and no per-project route, so deleting content files removes
-no route and changes no sitemap entry.
+### Rendering
 
-### The tests that encode the current set
+`src/pages/work.astro` reads `getCollection('projects')`, filters to `lang ===
+'en'`, builds a `slug -> ru entry` map, and renders two `<section>`s —
+`platform` then `product` — each sorted by `a.data.order - b.data.order`, one
+`<ProjectCard en ru />` per entry. Group headings are unconditional, so an
+empty group would render a bare `<h2>`.
 
-`test/projects.test.ts` holds `EXPECTED_SLUGS` (lines 11-26, all fourteen),
-`NO_REPO_SLUGS = new Set(['pfeifenpatenschaft-backend'])` (line 28), and
-hand-typed counts: 28 files and 14 slugs (lines 38-42), 6 platform and 8
-product (lines 60-75), `order` 1..14 (lines 77-86). Three assertions name
-`pfeifenpatenschaft-backend` directly: the "no repo: line" test (lines 88-93),
-the repository-pattern test that skips it via `NO_REPO_SLUGS` (lines 95-107),
-and the T6 metrics-key test that skips it the same way (lines 124-140).
+`src/components/ProjectCard.astro`:
 
-`test/work.test.ts` asserts the card's structure from source text: T3 (lines
-448-468) checks the `hasLinks` gate, the `en.data.repo` metrics gate, the
-`{en.data.private && (` private branch — and then reads
-`pfeifenpatenschaft-backend.en.md` / `.ru.md` off disk to assert `private:
-true`, no `repo:`, no `links:`. T4 (lines 472-481) asserts fourteen distinct
-project names per language.
+- line 18: `repoLabel` strips the scheme from `en.data.repo`.
+- lines 19-20: `links` / `ruLinks` default to `[]`.
+- line 24: `hasLinks = Boolean(en.data.repo) || links.length > 0`.
+- lines 46-59: `{hasLinks && (<ul class="project-links">…)}` — the repository
+  `<li>` first when `en.data.repo` is set, then one `<li>` per `links` entry,
+  pairing `link.label` with `ruLinks[index]?.label ?? link.label` through
+  `<Lang>`. This is exactly the shape the six new service links need: the
+  service link is appended beside the repository link, not in place of it.
+- lines 60-67: the metrics line, gated on `en.data.repo`.
+- lines 68-72: the private chip, gated on `en.data.private`, rendering
+  `ui.workPrivateRepo` (`src/i18n/ui.ts:126`:
+  `{ en: 'private repo', ru: 'приватный репозиторий' }`).
+- lines 26-34: every stack chip must be known to `chipIsKnown` or the build
+  throws.
 
-`test/ui.test.ts` asserts that every `ui` entry has `en` and `ru` of the same
-kind and, for arrays, of equal length — which is what makes deleting one item
-from each `colophonChainItems` array mandatory rather than optional.
-`test/chain.test.ts` reads `ui.colophonChainItems` and `CHAIN_LINKS` from
-`src/lib/chain.ts`; `CHAIN_LINKS` linkifies only
-`github.com/mctlhq/portfolio` and `ghcr.io/mctlhq/portfolio`, neither of which
-appears in the rehearsal-host item, so `src/lib/chain.ts` needs no change.
+`src/i18n/ui.ts:203-222` holds `colophonChainItems.en` (7 items) and `.ru`
+(7 items); the last item of each is the rehearsal-host note. `src/pages/
+colophon/index.astro:36-44` maps both arrays through `chainSegments`
+(`src/lib/chain.ts`), which linkifies only the two `CHAIN_LINKS` identifiers
+`github.com/mctlhq/portfolio` and `ghcr.io/mctlhq/portfolio` — neither occurs
+in the item being removed. `test/ui.test.ts:18-22` asserts every array-valued
+dictionary entry is non-empty, all-string, and equal in length across
+languages. `test/chain.test.ts` looks items up by `find(...)` on the two
+linkified identifiers, so it does not index by position and is unaffected.
 
-`ui.colophonChainItems` lives at `src/i18n/ui.ts:203-222`; the rehearsal-host
-items are lines 211 (en) and 220 (ru), the last element of each array. The
-only other occurrences of `preview.dmitriimashkov.com` in the repository are
-in `src/content/journal/2026-09-11-production-cutover.md` (lines 39 and 47),
-a dated record that stays.
+### Tests that encode the current set
 
-### The fixture pattern already in the repository
+`test/projects.test.ts`:
 
-`test/journal-build.test.ts` builds isolated Astro trees:
-`makeFixtureTree()` copies the committed `src/` into an `mkdtemp` directory,
-deletes and recreates one content subdirectory with fixture files, copies
-`astro.config.mjs`, `package.json` and `tsconfig.json`, symlinks
-`node_modules` and `public`, and optionally overwrites
-`src/content.config.ts`. `runAstro()` spawns
-`node_modules/astro/bin/astro.mjs` directly (never `npm run build`, which
-would recurse through `prebuild`). Schema and loader cases use `astro sync`;
-the markup case uses `astro build` and reads `dist/.../index.html`. This is
-the pattern the private-repo proof will reuse, pointed at
-`src/content/projects` instead of `src/content/journal`.
+- `EXPECTED_SLUGS` (lines 11-26): the fourteen slugs, hand-typed.
+- `NO_REPO_SLUGS = new Set(['pfeifenpatenschaft-backend'])` (line 28).
+- line 39: `assert.equal(files.length, 28…)`; line 42: `slugs.size, 14`.
+- lines 72-73: 6 platform, 8 product per language.
+- line 84: `order` values are `1..14` once per language.
+- lines 88-93: `pfeifenpatenschaft-backend has no repo: line…`.
+- lines 95-107 and 124-140: repository-pattern and `metrics.json` per-repo-key
+  assertions, both skipping `NO_REPO_SLUGS`.
 
-`package.json`'s `test` script enumerates every test file passed to `node
---test`, so a new test file is invisible to `npm test` until it is added
-there.
+`test/work.test.ts`:
+
+- lines 461-468 (T3): reads `pfeifenpatenschaft-backend.{en,ru}.md` and asserts
+  no `repo:`, no `links:`, `private: true`.
+- lines 472-481 (T4): `assert.equal(names.length, 14)` and
+  `new Set(names).size === 14` per language.
+- lines 448-459 (T3): source-level assertions that `ProjectCard.astro` gates
+  `project-links` on `hasLinks`, `project-metrics` on `en.data.repo`, and the
+  private chip on `en.data.private` rather than `!repo`. These are source
+  greps, not proof of rendering — which is exactly the gap the fixture closes.
+
+### Fixture precedent
+
+`test/journal-build.test.ts:29-61` is the repository's existing pattern for
+"prove the real schema, loader and rendering, not just a pure helper":
+`makeFixtureTree()` copies the committed `src/` into `mkdtemp`, replaces one
+content directory with fixture files, copies `astro.config.mjs`,
+`package.json` and `tsconfig.json`, symlinks `node_modules` and `public`, and
+runs `node node_modules/astro/bin/astro.mjs sync|build` in that tree with
+`spawnSync`. `npm run build` is never invoked from a test (its `prebuild` would
+recurse). The comment there states the rule the private-chip fixture reuses:
+`astro sync` for schema/loader cases, `astro build` when the case needs actual
+markup.
+
+### Adjacent gates that must keep passing
+
+- `scripts/check-links.mjs` issues no network request at all: it walks `dist/`,
+  resolves same-origin hrefs against emitted files, and reports off-origin
+  hrefs as *skipped*, listed by count. Six new external service links are
+  therefore skipped, never fetched — no new CI flake surface.
+- `scripts/check-dist.mjs` checks `class="l en"` / `class="l ru"` parity in
+  every emitted page, so a link label rendered through `<Lang>` stays balanced;
+  its `work/index.html` branch only asserts zero `<summary><h2` openings.
+- `scripts/check-no-metrics.mjs` scans `src/pages`, `src/components`,
+  `src/layouts` only — content files are untouched by it.
+- `test/a11y.test.ts` `TARGET_SELECTORS` includes `.project-links a`, which
+  already carries the 24px hit-area rule; more `<li>` entries inherit it.
+- `docs/journal.md` and the journal schema: at most one entry may be
+  `status: in_progress`. The previous cycle's entry
+  (`src/content/journal/2026-09-13-q13-link-hit-areas-titles-indexing-and-share-image-alt.md`)
+  is already `status: complete` with `merged_at` and `released_at`, so nothing
+  needs closing by hand and this cycle's new entry is free to be `in_progress`.
 
 ## Proposed solution
 
-Five mechanical edits plus one new test file. Nothing in `work.astro`,
-`ProjectCard.astro` or `content.config.ts` changes.
+Six mechanical edits and one new test file. No change to
+`src/pages/work.astro`, `src/components/ProjectCard.astro` or
+`src/content.config.ts` is needed: `ProjectCard` already renders `links` beside
+the repository link and already gates the private chip on `en.data.private`,
+and the schema already carries `private` and `links`.
 
 ### 1. Delete eight files, renumber twenty
 
 Delete `mctl-agent.{en,ru}.md`, `mctl-pairdesk.{en,ru}.md`,
-`pfeifenpatenschaft-backend.{en,ru}.md` and `mctl-openclaw.{en,ru}.md` from
-`src/content/projects/`. Then rewrite the `order:` line of the remaining
-twenty files so both language files of a slug carry the same value:
+`pfeifenpatenschaft-backend.{en,ru}.md`, `mctl-openclaw.{en,ru}.md`.
 
-| order | slug | group | today |
+Rewrite `order` in the remaining twenty files so both language files of a slug
+carry the same value (the parity check enforces it):
+
+| slug | old order | new order | group |
 |---|---|---|---|
-| 1 | `mctl-api` | platform | 1 |
-| 2 | `mctl-gitops` | platform | 2 |
-| 3 | `mctl-agents` | platform | 3 |
-| 4 | `mctl-portal` | platform | 5 |
-| 5 | `mctl-design` | platform | 6 |
-| 6 | `mctl-telegram` | product | 7 |
-| 7 | `seerrsense` | product | 8 |
-| 8 | `mctl-academy` | product | 9 |
-| 9 | `mctl-loyalty` | product | 10 |
-| 10 | `pelican-libertex-social` | product | 12 |
+| `mctl-api` | 1 | 1 | platform |
+| `mctl-gitops` | 2 | 2 | platform |
+| `mctl-agents` | 3 | 3 | platform |
+| `mctl-portal` | 5 | 4 | platform |
+| `mctl-design` | 6 | 5 | platform |
+| `mctl-telegram` | 7 | 6 | product |
+| `seerrsense` | 8 | 7 | product |
+| `mctl-academy` | 9 | 8 | product |
+| `mctl-loyalty` | 10 | 9 | product |
+| `pelican-libertex-social` | 12 | 10 | product |
 
-Relative order inside each group is preserved and platform stays before
-product, so the visible ordering of the survivors does not change — only the
-gaps close. Because `work.astro` sorts within a group and never reads the
-global range, the renumbering is cosmetic at render time and load-bearing only
-for `test/projects.test.ts`'s 1..10 assertion; doing it keeps `order` a dense
-sequence rather than a set with holes, which is what the acceptance criterion
-asks for.
+Relative order within each group is preserved and platform still precedes
+product, so `work.astro`'s two sections render five and five with no gap and no
+empty heading.
 
-### 2. Correct `seerrsense`
+### 2. `seerrsense` correction
 
 Replace the `summary` line of `src/content/projects/seerrsense.en.md` with
 exactly:
@@ -165,32 +195,19 @@ and the `summary` line of `src/content/projects/seerrsense.ru.md` with exactly:
 summary: "Запросы медиа на естественном языке для Seerr через MCP: модель интерпретирует намерение, идентификаторы провайдеров остаются источником истины."
 ```
 
-Append one body bullet to each file, as the last bullet, exactly — English:
+Append one body bullet to each file, as the last bullet, exactly:
 
-```
-- one upstream: Seerr, which is what drives Radarr and Sonarr
-```
+- `seerrsense.en.md`: `- one upstream: Seerr, which is what drives Radarr and Sonarr`
+- `seerrsense.ru.md`: `- один апстрим — Seerr, и уже он управляет Radarr и Sonarr`
 
-Russian:
+`summary` stays a single line (`src/content.config.ts:44` refuses a `\n`).
+Nothing else in either file changes beyond the new `order: 7` and the `links`
+entry from step 3.
 
-```
-- один апстрим — Seerr, и уже он управляет Radarr и Sonarr
-```
+### 3. Six `links` arrays
 
-Today's bullets are `- OAuth for both Claude and ChatGPT`, `- per-user
-connections`, `- directory submissions` (en) and `- OAuth для Claude и
-ChatGPT`, `- подключения на пользователя`, `- заявки в каталоги` (ru); the new
-bullet goes after those three and nothing else in either file changes. The
-bullet keeps the context the removed words carried — Seerr drives Radarr and
-Sonarr, SeerrSense drives Seerr — in the body, where it is a statement about
-the upstream rather than a claim about this project's integrations, while the
-`summary` (the line the card shows without expanding) names only Seerr.
-`summary` stays a single line, as the schema's `.refine` requires.
-
-### 3. Add six `links` arrays
-
-Insert a `links:` block after the `summary:` line of both language files of
-six slugs, in the shape `mctl-api` already uses:
+Add to both language files of six slugs, in the `mctl-api` shape (two-space
+indented list, quoted label, bare URL, no trailing slash):
 
 | slug | `url` | EN label | RU label |
 |---|---|---|---|
@@ -201,223 +218,196 @@ six slugs, in the shape `mctl-api` already uses:
 | `mctl-academy` | `https://academy.mctl.ai` | `Service` | `Сервис` |
 | `mctl-loyalty` | `https://labs-mctl-loyalty.mctl.ai` | `Service` | `Сервис` |
 
-For example, `mctl-portal.en.md` gains
+`Storybook` is a product name and stays untranslated in both files.
+`mctl-api` keeps its `Docs` / `Документация` entry and gains nothing;
+`mctl-gitops` and `pelican-libertex-social` gain no `links` array. Each card
+keeps its repository link; the service link is a second `<li>` in the same
+`project-links` list, which `ProjectCard.astro:51-57` already emits.
 
-```
-links:
-  - label: "Portal"
-    url: https://app.mctl.ai
-```
+### 4. One chain item per language
 
-and `mctl-portal.ru.md` gains the same block with `label: "Портал"`. No
-trailing slash on any `url`, matching the existing `https://docs.mctl.ai`
-entry. `Storybook` stays untranslated in both files: it is a product name, and
-`AGENTS.md` keeps proper nouns, hostnames and identifiers out of translation.
-`mctl-api` keeps its existing `Docs` / `Документация` entry unchanged and
-gains nothing; `mctl-gitops` and `pelican-libertex-social` gain no `links`
-array. The repository link each card already renders is untouched — the
-service link is an addition beside it, not a replacement.
+Delete exactly
+`'Rehearsal host preview.dmitriimashkov.com shares the same certificate and stays until the apex has been observed',`
+from `ui.colophonChainItems.en` and exactly
+`'Репетиционный хост preview.dmitriimashkov.com делит тот же сертификат и остаётся, пока апекс не будет отнаблюдён',`
+from `ui.colophonChainItems.ru` in `src/i18n/ui.ts`. Both arrays go from seven
+items to six and stay equal in length, satisfying `test/ui.test.ts:20`. The
+`www` 301 item above it stays in both languages. `src/lib/chain.ts` and
+`CHAIN_LINKS` are untouched — the removed item carries neither linkified
+identifier. Journal entries that mention the rehearsal host are dated records
+and are not rewritten.
 
-Two existing mechanisms make this safe without touching the card:
-`checkProjectParity` compares the ordered `links[].url` lists of the two
-files, so a typo in one language fails the build rather than rendering a
-mismatched pair; and `ProjectCard.astro` pairs labels by index
-(`ruLinks[index]?.label ?? link.label`), so one entry per file in the same
-position is all the component needs. `scripts/check-links.mjs` classifies
-off-origin hrefs as `skipped` and never fetches, so six new external links add
-six skipped entries and no network dependency.
+### 5. One expected-project table, two test files
 
-### 4. Drop the rehearsal-host chain item
+Introduce `test/support/expected-projects.ts` — a plain module, not a test
+file, so it is not added to the `npm test` file list and running it executes
+nothing:
 
-Delete exactly one string from `ui.colophonChainItems.en` in `src/i18n/ui.ts`:
-
-```
-Rehearsal host preview.dmitriimashkov.com shares the same certificate and stays until the apex has been observed
-```
-
-and exactly one from `ui.colophonChainItems.ru`:
-
-```
-Репетиционный хост preview.dmitriimashkov.com делит тот же сертификат и остаётся, пока апекс не будет отнаблюдён
+```ts
+export const EXPECTED_PROJECTS = [
+  { slug: 'mctl-api', group: 'platform', order: 1 },
+  … one row per slug, in the order table above …
+] as const;
+export const EXPECTED_SLUGS = EXPECTED_PROJECTS.map((p) => p.slug);
 ```
 
-Both are the last element of their array. Every other item stays exactly as
-it is, including `Live at dmitriimashkov.com; www redirects to it with a 301`
-and `Работает на dmitriimashkov.com; www перенаправляется на него с кодом
-301` — a 301 at the edge is a standing decision, not a transient one. The
-arrays go from seven items to six each and stay equal in length, which is what
-`test/ui.test.ts` enforces. `src/lib/chain.ts` and `CHAIN_LINKS` are
-untouched. The journal entry
-`src/content/journal/2026-09-11-production-cutover.md` keeps its own mentions
-of the rehearsal host: it is a dated record of what happened.
+`test/projects.test.ts` imports it and derives every count that is currently
+hand-typed: `files.length === EXPECTED_SLUGS.length * 2` (28 -> 20),
+`slugs.size === EXPECTED_SLUGS.length` (14 -> 10), the group counts from
+`EXPECTED_PROJECTS.filter((p) => p.group === 'platform').length` (6 -> 5) and
+`'product'` (8 -> 5), and the order range from
+`EXPECTED_PROJECTS.map((p) => p.order).sort()` (1..14 -> 1..10). It also gains
+a direct assertion that each file's `order` and `group` match its row, which is
+what makes the table, and not a count, the single source of truth. `test/
+work.test.ts`'s T4 imports the same module for its per-language name count
+(14 -> 10). This is the answer to C.9: a list and a count that must agree are
+no longer both hand-typed.
 
-### 5. Move the private-repo proof to a fixture
+`NO_REPO_SLUGS` is deleted along with the two `continue` guards it feeds; the
+repository-pattern and `metrics.json`-key assertions are restated as "every
+project that declares a `repo:` …", reading the field and skipping a project
+that declares none. Since all ten remaining projects declare a `repo:`, the
+assertions keep the same coverage with no exception list. The two tests naming
+`pfeifenpatenschaft-backend` (`test/projects.test.ts:88-93`,
+`test/work.test.ts:461-468`) are deleted; their subject moves to the fixture.
 
-The capability stays whole: the `private` field in `projectsSchema`, the
-`{en.data.private && (...)}` branch at `ProjectCard.astro:68-72`, and
-`ui.workPrivateRepo`. What moves is its subject.
+A new assertion in `test/projects.test.ts` makes criterion 5 checkable by a
+commit rather than by a human running grep: walk `src/` and `test/` and fail on
+a word-bounded match of `mctl-agent`, `mctl-pairdesk`,
+`pfeifenpatenschaft-backend` or `mctl-openclaw`, excluding
+`src/data/metrics.json` — which the issue's own out-of-scope list says keeps
+its keys — and naming that one exclusion in the test. The word boundary is what
+keeps `mctl-agent` from matching inside the ten remaining `mctl-agents` files.
 
-A new `test/project-card-private.test.ts` reuses
-`test/journal-build.test.ts`'s tree-copying approach, replacing
-`src/content/projects` instead of `src/content/journal`, then running
-`node_modules/astro/bin/astro.mjs build` in the temporary tree and reading
-`dist/work/index.html`. The fixture set is four slugs (each as an `en` and a
-`ru` file, so `checkProjectParity` passes), using stack chips that already
-exist in `stackChipRu`/`stackChipUntranslated` so `ProjectCard`'s chip guard
-does not throw:
+Also added there: an assertion that the six slugs in the link table carry
+exactly the listed `url` and the listed EN/RU label, and that `mctl-gitops` and
+`pelican-libertex-social` carry no `links:` line — so a later edit cannot
+quietly retarget or drop a service link. And an assertion that neither
+`seerrsense` file's `summary` matches `/radarr|sonarr/i`.
 
-| fixture slug | `repo:` | `private:` | expected markup |
-|---|---|---|---|
-| `fixture-private` | absent | `true` | private chip, no repository link |
-| `fixture-public` | present | absent | repository link, no private chip |
-| `fixture-neither` | absent | absent | neither chip nor repository link |
-| `fixture-both` | present | `true` | repository link **and** private chip |
+### 6. `test/project-card-private.test.ts` — the fixture and its mutant
 
-The first two rows are the two directions the issue names. The last two are
-the discriminators that give the mutation something real to fail on:
+A new test file, modelled on `test/journal-build.test.ts` and added to the
+`npm test` file list in `package.json` (`AGENTS.md` reserves only
+`claude-review.yml`, `release-please.yml` and `dependabot.yml`; `package.json`
+is implementer-writable).
 
-- Mutation `{!en.data.repo && (` in place of `{en.data.private && (`:
-  `fixture-neither` would gain a private chip it must not have, and
-  `fixture-both` would lose the chip it must have. Either assertion kills the
-  mutant. Without those two rows the mutant survives, because
-  `fixture-private` and `fixture-public` alone cannot distinguish `private`
-  from `!repo`.
+`makeProjectFixtureTree(cardSource?)` copies the committed `src/`, replaces
+`src/content/projects/` with four fixture slugs (`en` and `ru` each, all with
+a chip `chipIsKnown` already accepts, two in each group so neither heading
+renders empty), optionally overwrites `src/components/ProjectCard.astro` with a
+mutant, copies `astro.config.mjs`, `package.json`, `tsconfig.json`, symlinks
+`node_modules` and `public`, and runs `astro build`. The card renders
+`<article class="project" id={en.data.slug}>`, so each fixture's markup is
+sliced out of `dist/work/index.html` by its `id` and asserted in isolation.
 
-The mutation evidence is executed, not narrated: the test builds a second
-fixture tree in which the copied (never the committed) `ProjectCard.astro` has
-that one branch textually replaced, runs the same build, and asserts the
-mutant's `dist/work/index.html` violates at least one of the assertions the
-unmutated build satisfies. The mutation string, the reasoning above and the
-expected kill are written as comments in the test file — per `AGENTS.md`, this
-evidence goes into a committed file that `npm test` runs, never into a pull
-request description the implementer cannot edit.
+| fixture slug | `repo:` | `private:` | `links:` | expected markup |
+|---|---|---|---|---|
+| `fixture-private-no-repo` | absent | `true` | absent | private chip present; no repository `<li>`; no metrics line |
+| `fixture-public-repo` | present | absent | one entry | repository `<li>` and service `<li>`, in that order; no private chip |
+| `fixture-no-repo-no-private` | absent | absent | absent | no private chip, no `project-links` list at all |
+| `fixture-private-with-repo` | present | `true` | absent | private chip *and* repository `<li>` |
 
-The new file is added to `package.json`'s `test` script so `npm test` invokes
-it. The fixture tree never touches the real `src/`; it is created under
-`mkdtemp` and removed in a `finally`.
+The first two rows are criterion B.5 verbatim. The last two exist to give
+criterion B.6 something real to fail on: under a card mutated to read
+`!en.data.repo` instead of `en.data.private`, `fixture-no-repo-no-private`
+gains a chip it must not have and `fixture-private-with-repo` loses one it
+must have. `fixture-public-repo` additionally proves criterion 7's rendering
+half — a repository link and a service link on the same card — generically,
+without pinning a production slug.
 
-### 6. Update the counts, drop the named assertions
+The mutation evidence is produced by the test, not described in prose: a
+`mutantCard()` helper reads the real `ProjectCard.astro`, asserts the exact
+token `{en.data.private && (` occurs exactly once (failing loudly if the source
+has drifted), replaces it with `{!en.data.repo && (`, builds a second fixture
+tree with that card, and asserts the mutant output violates the two
+discriminating expectations. The evidence is therefore committed, re-derived on
+every run, and lives in the test file — never in the pull request description,
+as `AGENTS.md` requires.
 
-In `test/projects.test.ts`:
+### 7. Journal entry
 
-- `EXPECTED_SLUGS` becomes the ten survivors, in the order of the table above.
-- `NO_REPO_SLUGS` becomes empty — or, preferably, is deleted and the two
-  assertions it gated are restated as "every project that declares a `repo:`
-  matches the repository pattern and resolves to a `metrics.json` key", so
-  there is no exception list to leave stale. A file-level `repo` presence
-  check replaces the `continue`: a project without `repo:` is simply not
-  subject to the pattern or metrics-key rules.
-- The file-count assertion derives from `EXPECTED_SLUGS`:
-  `EXPECTED_SLUGS.length * 2` for files and `EXPECTED_SLUGS.length` for
-  distinct slugs, rather than the literals 28 and 14. The same for the order
-  range: `Array.from({ length: EXPECTED_SLUGS.length }, (_, i) => i + 1)`.
-- The group counts become 5 and 5; where possible they too are derived, by
-  counting the `group` frontmatter values rather than typing both numbers.
-  The two group counts must still sum to `EXPECTED_SLUGS.length`, which is
-  the assertion worth keeping explicit.
-- The `pfeifenpatenschaft-backend has no repo:` test is deleted; the private
-  capability it half-covered is now covered by the fixture test.
-
-In `test/work.test.ts`:
-
-- T3's `pfeifenpatenschaft-backend` case (lines 461-468) is deleted. The three
-  source-text assertions in T3 that check `hasLinks`, the metrics gate and the
-  `{en.data.private && (` branch stay: they are assertions about the
-  component, not about a project.
-- T4's fourteen becomes ten, read from the directory listing rather than typed
-  twice where practical.
-
-This is the same defect class the repository has already paid for twice — a
-list and a count both hand-typed, required to agree — so the direction of
-travel is: one source of truth (`EXPECTED_SLUGS`, or the directory listing),
-everything else derived.
-
-### 7. The journal entry
-
-This cycle writes `src/content/journal/2026-09-13-<slug>.md` with `status:
-in_progress`, `service: portfolio`, the issue URL, `proposal_slug:
-issue-89-q14-ten-projects-on-work-service-links-t`, `visibility: public`,
-bilingual `title` and `decided`, and `issue_opened_at`. Per `docs/journal.md`,
-an in-progress entry carries no release, release time or deployment time, and
-at most one entry may be `in_progress` across the collection — the loader
-enforces it. The previous cycle's entry,
-`src/content/journal/2026-09-13-q13-link-hit-areas-titles-indexing-and-share-image-alt.md`,
-is already `status: complete` with `pr`, `release: 0.1.24`, `merged_at` and
-`released_at` recorded, so the closure workflow has already done its work and
-nothing is owed there; the implementer verifies this rather than assuming it.
-If the entry's English `title` exceeds 65 characters, it needs an explicit
-`seoTitle`, as `test/title.test.ts` enforces through
-`journalPageTitle`/`titleProblems`.
+Add `src/content/journal/2026-09-13-q14-ten-projects-and-service-links.md`
+with `service: portfolio`, `issue: https://github.com/mctlhq/portfolio/issues/89`,
+`proposal_slug: issue-89-q14-ten-projects-on-work-service-links-t`,
+`status: in_progress`, `visibility: public`, `indexing: noindex`, bilingual
+`title` and `decided`, a quoted `issue_opened_at`, and `interventions: []`.
+A `seoTitle` is supplied so the rendered title stays inside the length budget
+`src/lib/seo.ts` enforces via `test/title.test.ts`. The previous entry is
+already `status: complete`, so the one-in_progress-at-a-time rule in
+`checkJournalCollection` holds with no other edit.
 
 ## Alternatives
 
-**Keep `pfeifenpatenschaft-backend` purely to keep the private-repo test
-green.** Rejected: it inverts the relationship between the site and its tests
-— production content would exist to satisfy an assertion. It is also the exact
-failure the repository already named in issue #83, where a test keyed to one
-named entry broke the moment that entry legitimately changed. The fixture
-costs one test file and removes the coupling permanently.
+1. **Keep `pfeifenpatenschaft-backend` as a hidden or draft entry so the
+   private-repo tests keep their subject.** Rejected: the owner's decision is
+   that the entry does not belong on the site, and a hidden content file that
+   exists only to satisfy a test is the same defect issue #83 named — a test
+   keyed to one named entry. The fixture gives the capability a subject that no
+   editorial decision can remove.
 
-**Assert the private branch only from `ProjectCard.astro`'s source text, as
-T3 already does, and add no fixture build.** Rejected: source-text matching
-cannot distinguish "the branch exists" from "the branch renders the right
-thing for the right input", and it cannot be killed by the `!repo` mutation —
-a mutated file would simply fail a different regex, which proves the regex,
-not the behaviour. Acceptance criterion 4 asks for rendered proof.
+2. **Prove the private chip with source-level greps only (extend the existing
+   T3 assertions in `test/work.test.ts:455-459`).** Rejected: those greps
+   already exist and would pass unchanged against a card that never renders.
+   They cannot distinguish `en.data.private` from `!en.data.repo` in emitted
+   markup, which is precisely criterion B.6. `test/journal-build.test.ts`
+   already established the isolated-build pattern for exactly this reason.
 
-**Build the fixture entirely in memory by importing `ProjectCard.astro` and
-rendering it with an Astro container API.** Rejected: nothing else in this
-repository does it, the component's `await render(entry)` needs a real content
-store, and `test/journal-build.test.ts` already established the tree-copy
-pattern as the way this repository proves rendered markup. Reusing a pattern
-the suite already carries beats introducing a second one.
+3. **Render `ProjectCard` through Astro's container API in-process instead of
+   spawning a build.** Rejected: it would be a second, unprecedented rendering
+   path in a repository that has one (`makeFixtureTree` + spawned `astro`), and
+   the component's `render(entry)` call and `astro:content` imports need a real
+   content store anyway. Consistency with the existing precedent is worth more
+   than the seconds saved.
 
-**Replace the repository link with the service link on the six cards.**
-Rejected by the issue and by the site's purpose: the repository is the
-evidence, the service is the artifact, and a reader wants both. The card's
-existing `project-links` list already renders them side by side with no layout
-change needed.
+4. **Renumber by leaving gaps (1, 2, 3, 5, 6, …) to minimise the diff.**
+   Rejected: criterion 2 requires `order` to run 1..10 once per language, and
+   the order table in the issue is explicit. Contiguity is also what makes the
+   "no gap in the list" criterion checkable.
 
-**Remove the `private` field, branch and string along with the project.**
-Rejected: explicitly out of scope, and it would have to be reinstated by the
-next project without a public repository — exactly the churn the issue is
-avoiding. It would also re-open the `!repo` conflation that T3 was written to
-close.
+5. **Give `mctl-loyalty` no service link because it has no branded host.**
+   Rejected by the issue: `labs-mctl-loyalty.mctl.ai` is public and serves the
+   product, so it is linked as it is rather than not at all.
 
 ## Platform impact
 
-- **Migrations**: none. No database, no persisted state. The content
-  collection is rebuilt from files on every build.
-- **Routes and sitemap**: unchanged. `/work/` is a single page; there are no
-  per-project routes, so `scripts/check-dist.mjs`'s expected route set is
-  unaffected by the deletions. The new journal entry adds one route, which
-  that script derives from the journal directory.
-- **Backward compatibility**: four project cards disappear from `/work/`.
-  Their anchors (`<article class="project" id={slug}>`) disappear with them,
-  so any external deep link of the form `/work/#mctl-openclaw` degrades to the
-  top of `/work/` — acceptable for a curated portfolio and explicitly the
-  owner's decision.
-- **`src/data/metrics.json`**: untouched, as required. It remains a snapshot
-  of twenty-four repositories; keys for removed projects stay. Dropping the
-  `NO_REPO_SLUGS` exception rather than restating it per-slug means the
-  metrics-key assertion now reads "every declared repo resolves", which the
-  remaining ten all do.
-- **Risk: a `links[].url` mismatch between the two files of a slug.**
-  Mitigated by `checkProjectParity`, which fails `astro sync` and therefore
-  `npm run build` before anything renders.
-- **Risk: the fixture build test is slow or flaky in CI.** It spawns an Astro
-  build per tree, like `test/journal-build.test.ts` already does. Mitigated by
-  keeping the fixture set to four slugs, symlinking `node_modules` and
-  `public` rather than copying, and cleaning up in a `finally`. If the second
-  (mutant) build proves too costly, the mutation can be applied to the same
-  tree and rebuilt in place rather than in a fresh `mkdtemp`.
-- **Risk: the chain arrays drift out of equal length.** Mitigated by
-  `test/ui.test.ts`, which asserts equal length for every array-valued `ui`
-  entry, and by `test/chain.test.ts`, which reads the arrays directly.
-- **Risk: a stale reference to a removed slug survives somewhere under
-  `src/`.** Mitigated by the acceptance criterion's `grep -rn` over `src/` and
-  `test/` for all four slugs, which the implementer runs before opening the
-  pull request.
-- **Resource impact**: `/work/` gets smaller — four fewer cards, four fewer
-  rendered bodies. Six additional external anchors add no requests at build
-  time (`check-links.mjs` never fetches) and none at runtime.
+- **Migrations / data.** None. Content collections are files; no database, no
+  schema change. `src/data/metrics.json` keeps its keys for the removed
+  repositories by explicit decision, and `repoMetrics`
+  (`src/lib/metrics.ts:97-107`) returns `EMPTY_REPO_METRIC` for a key it cannot
+  resolve, so an unused key harms nothing.
+- **Backward compatibility / URLs.** `/work/` is a single page with no
+  per-project routes (`src/pages/work.astro` is the only consumer), so removing
+  four projects breaks no URL. The in-page anchors `#mctl-agent`,
+  `#mctl-pairdesk`, `#pfeifenpatenschaft-backend` and `#mctl-openclaw`
+  disappear; no page in the repository links to them (`scripts/check-links.mjs`
+  resolves internal links against emitted files and would report a broken one).
+- **Page weight.** `/work/` loses four cards and gains six `<li>` links: a net
+  reduction. `dist/index.html` is unaffected by this change and stays under the
+  40 KB cap `scripts/check-dist.mjs` enforces.
+- **External links.** The six service addresses are off-origin, so
+  `scripts/check-links.mjs` counts them as skipped and never opens a socket —
+  no CI flake, and no new third-party browser request at page load (the links
+  are `<a href>`, not subresources, so ADR-0005 and the CSP are unaffected).
+  Risk: an address could go dark later and the site would link to a dead page.
+  Mitigation: the link table is asserted in `test/projects.test.ts`, so any
+  change to it is a deliberate, reviewed edit; liveness itself is a release
+  owner concern, as with `https://docs.mctl.ai` today.
+- **Test runtime.** The new fixture file spawns two `astro build` runs (one
+  honest, one mutant), the same cost profile `test/journal-build.test.ts`
+  already pays. Mitigation if this proves slow: the honest case can drop to one
+  build by asserting all four fixtures from a single `dist/work/index.html`,
+  which is how it is specified above — two builds total, not one per fixture.
+- **Risk: a fixture tree that fails to build for an unrelated reason** (a chip
+  with no Russian translation, a `metrics.json` key miss) would read as a
+  private-capability regression. Mitigation: fixtures use only chips
+  `chipIsKnown` already accepts, and the test asserts the build exited zero
+  with its stderr in the failure message, as `journal-build.test.ts` does.
+- **Risk: the mutant helper silently stops mutating** if `ProjectCard.astro`'s
+  text drifts. Mitigation: the helper asserts the token occurs exactly once
+  before replacing, so drift fails the suite instead of quietly passing it.
+- **Deployment.** Ordinary release-please cycle; the deploy is dispatched to
+  `release-deploy` in mctl-gitops as usual. No DNS, certificate or
+  custom-domain action is part of this change; decommissioning
+  `preview.dmitriimashkov.com` remains the release owner's separate action
+  through the mctl and Cloudflare MCP tools.
