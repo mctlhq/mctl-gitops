@@ -209,7 +209,8 @@ the server still works, so nothing that can fail is left to run when the only
 copy of the registration is already gone.
 
 And the token reaches curl in a config on a file descriptor, while the
-generated secret reaches `jq` through the environment. A command line is
+generated secret reaches `jq` through the environment and the body it ends up
+in is written under `umask 077` and deleted once spent. A command line is
 world-readable in `/proc`; both of these would otherwise sit in the process
 table.
 
@@ -219,10 +220,18 @@ token, and step 3 is a person in a browser, so everything after it would run
 against a server that has not been re-authorized yet. Run each block on its
 own, and the third only once step 3 is actually done.
 
+Work inside a **nested shell**. `set -e` and the `exit 1` in step 4 are
+honoured at an interactive prompt just as they are in a script, so without one
+a failed `ok()` closes the terminal these blocks share — in step 1 or 2 that
+means losing them in the middle of the destructive window. Exporting the token
+first is what lets the nested shell die without taking it with it.
+
 Type this one, do not paste it with anything else:
 
 ```
 read -rs CLOUDFLARE_API_TOKEN           # Account -> MCP Portals -> Edit
+export CLOUDFLARE_API_TOKEN
+bash                                    # everything below runs in here
 ```
 
 Then the target and the two helpers:
@@ -262,10 +271,15 @@ printf '%s' "$summary" | jq -S '[.result.tools[]] | sort_by(.name)' \
 #     auth_credentials is auth_mode + config + registration_info as one
 #     JSON-encoded string; client_secret is required by a switch back to
 #     manual and any non-empty value does with token_endpoint_auth_method none.
+#     Written to a FILE, not just a variable: from step 1 on, the live server
+#     no longer holds the registration, so a shell that dies in the window
+#     takes the only in-memory copy of it with it.
 CREDS=$(jq -ce '{auth_mode, config, registration_info}' "$SERVER.summary.json")
 SECRET=$(openssl rand -hex 24); test -n "$SECRET"
-restore=$(CREDS="$CREDS" SECRET="$SECRET" \
-  jq -n '{auth_type:"oauth", auth_credentials:env.CREDS, client_secret:env.SECRET}')
+(umask 077; CREDS="$CREDS" SECRET="$SECRET" \
+  jq -n '{auth_type:"oauth", auth_credentials:env.CREDS, client_secret:env.SECRET}' \
+  > "$SERVER.restore.json")
+test -s "$SERVER.restore.json"
 
 # 1. flip to bearer, then READ BACK that the registration is really gone.
 #    status goes waiting -> error ("unable to connect"), last_synced moves.
@@ -274,9 +288,19 @@ cf | jq -e '.result.auth_config_summary == null' >/dev/null
 
 # 2. restore, and read back that manual OAuth is in place and the server is
 #    waiting for its first authorization.
-printf '%s' "$restore" | cf -X PUT --json @- | ok
+cf -X PUT --json "@$SERVER.restore.json" | ok
 cf | jq -e '.result.status == "waiting"
             and .result.auth_config_summary.auth_mode == "manual"' >/dev/null
+
+# 2a. and that it is the SAME registration, field for field. status+auth_mode
+#     only say a manual-OAuth registration exists; this API is on record
+#     answering 200 while keeping a field it was told to change, and for api
+#     and seerrsense nothing declarative would catch a narrowed scope or a
+#     moved endpoint later. Compare against the copy taken in step 0.
+diff -u <(jq -S '{auth_mode, config, registration_info}' "$SERVER.summary.json") \
+        <(cf | jq -S '.result.auth_config_summary
+                      | {auth_mode, config, registration_info}')
+rm -f "$SERVER.restore.json"             # the secret in it is spent
 ```
 
 **Step 3 is a person, not a command.** One user signs the server out and back
@@ -310,6 +334,16 @@ esac
 #    apply it: scripts/portal-allowlist-apply.sh in mctl-telegram and mctl-api
 #    (then --check). seerrsense has no apply script yet (mctlhq/seerrsense#70).
 ```
+
+If the nested shell dies between step 1 and step 2, the server is in bearer
+mode with `auth_config_summary` null and nothing on Cloudflare's side to
+rebuild the registration from — but `$SERVER.summary.json` and
+`$SERVER.restore.json` are on disk, which is why step 0b writes the payload
+rather than holding it in a variable. Start a new shell, redo the two helper
+definitions, and rerun step 2 as written; it does not depend on anything else
+step 0 put in the environment. Only if `$SERVER.restore.json` is missing does
+the payload have to be rebuilt, and then step 0b's three lines do it from the
+summary file with a fresh secret.
 
 Steps 0 to 2 are a window in which this server's registration must have no
 other writer. The backup is a point-in-time copy and step 2 puts it back, so a
