@@ -450,9 +450,17 @@ def waiver_is_wellformed(key, w) -> bool:
     # drift -- the exact failure this predicate exists to catch at PR time.
     if not isinstance(key, tuple) or len(key) != 2:
         return False
+    # `tools` a LIST of names, not merely truthy. Written as a bare string it
+    # passes truthiness here and then reaches apply_waivers(), where
+    # set("search_media") is a set of eleven characters: the waiver matches no
+    # finding it was written for, and the nightly reports it as fresh drift.
+    tools = w.get("tools")
+    if not isinstance(tools, list) or not all(isinstance(t, str) and t
+                                              for t in tools):
+        return False
     try:
         _dt.date.fromisoformat(w["until"])
-        return (bool(w.get("tools")) and bool(w.get("why"))
+        return (bool(tools) and bool(w.get("why"))
                 and key[0] in OWNERS and key[1] in KINDS)
     except (KeyError, ValueError, TypeError):
         return False
@@ -737,6 +745,9 @@ def selftest() -> int:
          {"until": "2026-10-15", "tools": [], "why": "fixture"}, False),
         ("a key that is not a (server, kind) tuple fails", "seerrsense",
          {"until": "2026-10-15", "tools": ["a"], "why": "fixture"}, False),
+        ("a waiver whose tools is a bare string fails",
+         ("tg", "closed-output-schemas"),
+         {"until": "2026-10-15", "tools": "search_media", "why": "fixture"}, False),
         ("a three-element key fails",
          ("tg", "closed-output-schemas", "typo"),
          {"until": "2026-10-15", "tools": ["a"], "why": "fixture"}, False),
