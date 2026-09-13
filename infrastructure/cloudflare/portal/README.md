@@ -155,3 +155,78 @@ Sign the upstream out and back in in the portal. `boundRefreshGrant`
 (`mctl-telegram/internal/oauth/server.go`) intersects a refresh with the
 family's original grant, so a wider scope never reaches a token that already
 exists.
+
+## Re-snapshot: refreshing a manual-OAuth server's tool catalogue
+
+The portal keeps a snapshot of each upstream's tools (`servers/{id}.tools`,
+including every `outputSchema`) and serves clients from it. For a server in
+manual OAuth mode — all three of ours — that snapshot is taken **once**, when
+the first user completes upstream OAuth, and is never refreshed. That is
+documented, not a bug: the MCP Portals limitations list says *"Manual OAuth
+capabilities are captured during the first user authorization … Background
+and manual capability synchronization do not refresh them."* Synchronisation
+runs with an admin credential that only automatic (DCR) registration has, so
+`POST servers/{id}/sync` answers `success` and does nothing; the only honest
+signal is `last_synced`.
+
+The cost is not just "a new tool never reaches clients" (mctlhq/.github#64).
+Clients validate live responses against the snapshot's `outputSchema`, so an
+output-schema change to a tool that is already enabled breaks that tool
+through the portal (mctlhq/mctl-telegram#637).
+
+### What moves the snapshot, measured 2026-09-13 on `seerrsense`
+
+| Lever | Result |
+| --- | --- |
+| `PUT` `auth_credentials` with a different `scope` | `status: ready`, `last_synced` unchanged |
+| `PUT` `hostname` alone (`…/mcp?v=2`) | `7000 D1_ERROR: near "WHERE": syntax error` — nothing written |
+| `PUT` `hostname` with `name` and `auth_type` | `200`, hostname silently kept as before |
+| `PUT` `auth_type: bearer` (dummy token), then back to `oauth`/`manual` | **works** — see below |
+
+Only the auth-type flip puts the server back through `waiting`. It clears the
+stored manual registration (`auth_config_summary: null`) while in bearer mode,
+so the second `PUT` must resend the full `auth_credentials` blob **and** a
+`client_secret` (a switch *to* manual requires one; any non-empty value works
+with `token_endpoint_auth_method: none`, and it bumps `client_secret_version`).
+
+### Recipe
+
+```
+U=https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/access/ai-controls/mcp/servers/$SERVER
+
+# 1. flip to bearer: status goes waiting -> error ("unable to connect"), last_synced moves
+curl -X PUT "$U" --json '{"auth_type":"bearer","auth_credentials":"resnapshot-not-a-token"}'
+
+# 2. flip back to manual OAuth with the registration from mcp-servers.tf (tg)
+#    or from the previous auth_config_summary (api, seerrsense), plus a client_secret
+curl -X PUT "$U" --json '{"auth_type":"oauth","auth_credentials":"<json string>","client_secret":"<random>"}'
+#    -> status: waiting, authentication_status: manual
+
+# 3. one user signs the server out and back in on the portal's server selection
+#    page (portal_toggle_servers gives the URL). That authorization takes the
+#    new snapshot: status ready, last_synced now, tools = live count.
+
+# 4. re-apply the allowlist from the owning repository so the new tools get a
+#    decision (scripts/portal-allowlist-apply.sh, then --check).
+```
+
+Measured on the day: `seerrsense` `last_synced` 2026-09-10 19:32 → 2026-09-13
+05:42, `api` 74 → 75 tools with the allowlist re-applied 75/75. The portal
+mapping (`updated_tools`, `default_disabled`, `on_behalf`) survived both flips
+untouched; `description` survived; the Access application was not involved.
+
+What it costs: for the minutes between step 1 and step 3 the server is
+unusable through the portal, and every portal user has to re-authorise it
+afterwards. Live MCP sessions keep the old `tools/list` until they reconnect.
+
+Two rules follow. Re-snapshot **after** the release that changed the schema is
+deployed, never before — the snapshot copies whatever the upstream advertises
+at that moment (`tg` waits for the release carrying mctl-telegram#638, or the
+closed schemas get captured again). And any PR that adds a tool or changes an
+output schema owes this step; until a drift check exists, the only thing that
+notices otherwise is a failing client.
+
+For `tg`, which OpenTofu describes in `mcp-servers.tf`: the flip is done with
+the same API token outside tofu, the registration is resent from the file's
+values, and the next `tofu plan` must come back `no-op` —
+`scripts/portal-auth-credentials-drift.py` is the check that it did.
