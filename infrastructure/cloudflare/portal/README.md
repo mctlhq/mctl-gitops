@@ -399,13 +399,16 @@ PORTAL=mcp
 pf() { curl -sS --fail-with-body \
   -K <(printf 'header = "Authorization: Bearer %s"\n' "$CLOUDFLARE_API_TOKEN") \
   "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/access/ai-controls/mcp/portals/$PORTAL" "$@"; }
-others() { jq -S '[.result.servers[] | select(.server_id != "seerrsense")
-                   | {server_id, default_disabled,
-                      n: (.updated_tools | length)}]'; }
+#     whole decisions, not counts: a revert that swaps one tool for another
+#     keeps the count identical.
+mapping() { jq -S '[.result.servers[]
+  | {server_id, default_disabled, on_behalf,
+     updated_tools: (.updated_tools | sort_by(.name)), updated_prompts}]'; }
+others() { mapping | jq -S '[.[] | select(.server_id != "seerrsense")]'; }
 
 before=$(pf); printf '%s' "$before" | ok
-printf '%s' "$before" | others > portal.others.before.json
-test -s portal.others.before.json
+printf '%s' "$before" | mapping > portal.mapping.before.json
+test -s portal.mapping.before.json
 
 TOOL="seerrsense_new_tool"              # the name from the step-4 diff
 body=$(TOOL="$TOOL" jq -c '{servers: [.result.servers[]
@@ -418,6 +421,16 @@ printf '%s' "$body" | jq .          # READ THIS before the next line
 Then, and only if that body is what you meant:
 
 ```
+# re-read FIRST. This is a read-modify-write with no conditional write: an
+# allowlist apply that lands between the read above and this PUT is reverted
+# by it, and the check below would then compare the result against a copy
+# that already has the revert baked in -- a lost update that verifies clean.
+# Re-reading here narrows that window to these few lines. It does not close
+# it; only an apply script for seerrsense (mctlhq/seerrsense#70) does.
+fresh=$(pf); printf '%s' "$fresh" | ok
+diff -u portal.mapping.before.json <(printf '%s' "$fresh" | mapping) \
+  || { echo "the portal moved while you were reading: start again from the top of this step"; exit 1; }
+
 printf '%s' "$body" | pf -X PUT --json @- | ok
 result=$(pf); printf '%s' "$result" | ok
 
@@ -429,9 +442,9 @@ printf '%s' "$result" | TOOL="$TOOL" jq -e '[.result.servers[]
   | select(.name == env.TOOL and .enabled == true)] | length == 1' >/dev/null \
   || { echo "the new tool is not enabled on the mapping; do not close the window"; exit 1; }
 
-# and the other two mappings must be untouched -- this is the race, not a
-# formality, and a 200 says nothing about it either.
-diff -u portal.others.before.json <(printf '%s' "$result" | others)
+# and the other two mappings must be untouched, tool decisions included --
+# this is the race, not a formality, and a 200 says nothing about it either.
+diff -u <(printf '%s' "$before" | others) <(printf '%s' "$result" | others)
 ```
 
 `updated_tools[0]` is the shape donor, so this needs `seerrsense` to have at
