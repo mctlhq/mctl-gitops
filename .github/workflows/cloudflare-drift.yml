@@ -342,6 +342,68 @@ jobs:
           rm -f cred.txt
           exit "$code"
 
+      # The portal's tool catalogue is a snapshot the portal never refreshes
+      # for a manual-OAuth upstream (mctlhq/.github#64): a tool added upstream
+      # stays invisible, and a changed output schema is validated by clients
+      # against the stale copy. `tools` is a computed attribute, so the plan
+      # above says nothing about it. This compares the snapshot with the
+      # allowlist each owning repository commits on main -- test-enforced there
+      # to equal what the server registers -- and flags closed stored schemas.
+      # Exit 1 means someone has to re-snapshot (recipe in the portal README).
+      #
+      # Runs after the registration check regardless of its result: the two
+      # fields drift independently, and a red registration must not hide a
+      # stale catalogue. `always()` would also run on a cancelled job, so the
+      # condition is spelled out; `steps.plan.conclusion` is what gates it, the
+      # same clean-plan requirement the registration step expresses via
+      # success().
+      - name: Check the tool catalogue against the upstreams
+        id: catalogue
+        if: matrix.root == 'infrastructure/cloudflare/portal' && steps.plan.conclusion == 'success' && !cancelled()
+        run: |
+          set -uo pipefail
+          set +e
+          "$GITHUB_WORKSPACE/scripts/portal-catalogue-drift.py" --selftest
+          selftest=$?
+          if [ "$selftest" -ne 0 ]; then
+            echo "code=2" >> "$GITHUB_OUTPUT"
+            { echo "### \`portal\` — the catalogue drift detector itself failed its selftest";
+              echo; echo "> It was not run against Cloudflare. Fix the detector."; } >> "$GITHUB_STEP_SUMMARY"
+            exit 2
+          fi
+          tofu show -json \
+            | { "$GITHUB_WORKSPACE/scripts/portal-catalogue-drift.py" 2>&1; } \
+            | tee catalogue.txt
+          code=${PIPESTATUS[1]}
+          set -e
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          case "$code" in
+            0) { echo "### \`portal\` — tool catalogue in sync with the upstreams";
+                 # The script prints every waived finding on stdout even when
+                 # it passes, and that is the difference between "nothing is
+                 # stale" and "nothing is stale that we have written down".
+                 # Dropping it would leave the summary — the page someone
+                 # opens after a nightly run, and all a passing run leaves
+                 # behind — asserting the stronger claim.
+                 if grep -q 'known stale:' catalogue.txt; then
+                   echo; echo "Known and waived, not re-checked:";
+                   echo '```'; grep -A1 'known stale:' catalogue.txt; echo '```';
+                 fi; } >> "$GITHUB_STEP_SUMMARY" ;;
+            1) { echo "### \`portal\` — TOOL CATALOGUE STALE";
+                 echo; echo '```'; cat catalogue.txt; echo '```';
+                 # Deliberately not a bare "re-snapshot": exit 1 also covers a
+                 # waiver in the script that no longer matches anything, and
+                 # that one is fixed by deleting lines from the script. The
+                 # output above says which of the two happened under its own
+                 # heading; sending someone through the recipe for a dead
+                 # waiver would take a server down for nothing.
+                 echo "> Read the heading above. A stale catalogue is fixed by the re-snapshot recipe in infrastructure/cloudflare/portal/README.md; a waiver that matches nothing is fixed in scripts/portal-catalogue-drift.py."; } >> "$GITHUB_STEP_SUMMARY" ;;
+            *) { echo "### \`portal\` — catalogue check could not run (exit $code)";
+                 echo; echo '```'; cat catalogue.txt 2>/dev/null || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY" ;;
+          esac
+          rm -f catalogue.txt
+          exit "$code"
+
       - name: Notify Telegram
         if: failure()
         uses: appleboy/telegram-action@390cf7345777cd821dba28c72f436a78bce19cc5 # master 2026-05
@@ -351,11 +413,23 @@ jobs:
           # HTML, not the default Markdown: root names are directory names, and
           # an unpaired _ in one of them makes Telegram reject the whole message
           # with a 400 — losing the drift alert exactly when it matters.
+          #
+          # One line per check, not a `||` chain picking the first. GitHub
+          # expressions short-circuit on the first truthy operand and a
+          # non-empty string is truthy, so a chain reported the registration
+          # failure and silently dropped the catalogue one whenever both were
+          # red — which is the single case the catalogue step's `!cancelled()`
+          # gating exists to surface. Each line renders its own check or
+          # nothing, and the plan line only when neither check spoke.
           format: html
           message: |
             <b>Cloudflare drift</b> — <code>${{ matrix.root }}</code>
             ${{ steps.creds.outputs.code && steps.creds.outputs.code != '0'
-             && format('OAuth registration check exit <code>{0}</code> (1 = drifted, 2 = could not run). The plan was clean; this field is invisible to it.', steps.creds.outputs.code)
-             || format('Plan exit code <code>{0}</code> (2 = drift, 1 = plan error)', steps.plan.outputs.code || format('none — plan {0}', steps.plan.conclusion)) }}
+             && format('OAuth registration check exit <code>{0}</code> (1 = drifted, 2 = could not run). The plan was clean; this field is invisible to it.', steps.creds.outputs.code) || '' }}
+            ${{ steps.catalogue.outputs.code && steps.catalogue.outputs.code != '0'
+             && format('Tool catalogue check exit <code>{0}</code> (1 = stale, re-snapshot needed; 2 = could not run). The plan was clean; the catalogue is invisible to it.', steps.catalogue.outputs.code) || '' }}
+            ${{ (steps.creds.outputs.code == '' || steps.creds.outputs.code == '0')
+             && (steps.catalogue.outputs.code == '' || steps.catalogue.outputs.code == '0')
+             && format('Plan exit code <code>{0}</code> (2 = drift, 1 = plan error)', steps.plan.outputs.code || format('none — plan {0}', steps.plan.conclusion)) || '' }}
             Cloudflare no longer matches Git, or a check could not run.
             Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
