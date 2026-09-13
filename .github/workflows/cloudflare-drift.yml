@@ -402,11 +402,13 @@ jobs:
                  echo "> Re-snapshot per the recipe in infrastructure/cloudflare/portal/README.md — unless the block above says otherwise."; } >> "$GITHUB_STEP_SUMMARY" ;;
             3) { echo "### \`portal\` — a catalogue waiver needs attention";
                  echo; echo '```'; cat catalogue.txt; echo '```';
-                 # Its own status, not folded into 1. The finding a waiver was
-                 # written for is gone, which is good news with a chore
-                 # attached; renders as exit 1 it would have sent the on-call
+                 # Its own status, not folded into 1. Two chores share it: a
+                 # waiver whose finding is gone, which is good news and a
+                 # deletion, and one that is merely wider than what fires,
+                 # where the finding is NOT gone and the edit is to its tool
+                 # list. Rendered as exit 1 either would have sent the on-call
                  # through the re-snapshot recipe -- a server down and every
-                 # portal user re-authorizing -- to delete three lines.
+                 # portal user re-authorizing -- for a text edit.
                  echo "> Nothing is stale. The block above says whether to delete the waiver in \`scripts/portal-catalogue-drift.py\` or narrow it — deleting one that still covers a live finding sends the next run to the recipe. Do NOT re-snapshot."; } >> "$GITHUB_STEP_SUMMARY" ;;
             4) { echo "### \`portal\` — AN UPSTREAM IS MISSING FROM THE PORTAL";
                  echo; echo '```'; cat catalogue.txt; echo '```';

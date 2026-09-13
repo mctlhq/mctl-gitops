@@ -573,6 +573,21 @@ def selftest() -> int:
         if not ok:
             failures.append("per-tool waiver")
 
+        # And the loud half on the same kind: one of the two tools stopped
+        # firing, so the waiver is genuinely wider than the night. `shrunk`
+        # above cannot pin this -- it uses a kind that arrives as one
+        # aggregated finding, where per-finding and unioned judging are
+        # indistinguishable.
+        KNOWN_STALE[("s", "missing-tool")] = {
+            "until": "2026-10-15", "tools": ["y", "z"], "why": "fixture"}
+        f_, _, m_ = apply_waivers(per_tool[:1], "2026-09-13", {"s"})
+        del KNOWN_STALE[("s", "missing-tool")]
+        narrow = [line for line in m_ if "missing-tool" in line and "z" in line]
+        ok = not f_ and len(narrow) == 1
+        print(f"{'ok  ' if ok else 'FAIL'} a per-tool waiver half matched needs narrowing")
+        if not ok:
+            failures.append("per-tool narrowing")
+
         for name, f, today, want_fail, want_maint in wcases:
             failing, _, maint = apply_waivers(f, today, {"s"})
             got_f, got_m = (1 if failing else 0), (1 if maint else 0)

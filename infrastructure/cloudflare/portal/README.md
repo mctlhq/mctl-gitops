@@ -551,9 +551,13 @@ of them, so without that list a sixth tool going closed would ride in on the
 excuse for the five known ones. The side is part of the kind for the same
 reason — an excuse written for five closed output schemas does not cover those
 same five tools going closed on the input side. It stops excusing on the day after its
-date, and a waiver whose finding has gone fails on its own — under a separate
-heading, because deleting three lines from a script is not the same job as
-taking a server down to re-snapshot it. One waiver is committed today:
+date, and it answers for its own upkeep under a separate heading — because
+editing a list in a script is not the same job as taking a server down to
+re-snapshot it. Two things land there: a waiver whose finding has gone
+entirely, which is a deletion, and one that is merely wider than what fires,
+which is a narrowing. Deleting in the second case is the wrong half: for the
+committed `seerrsense` waiver it would fail the still-closed schemas unwaived
+on the next run and point at the recipe, which captures them closed again. One waiver is committed today:
 `seerrsense` publishes closed output schemas in code, and the fix waits on
 that repository's review freeze.
 
