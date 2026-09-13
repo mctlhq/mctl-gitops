@@ -204,25 +204,33 @@ CLOUDFLARE_ACCOUNT_ID=<account id>      # the same name the rest of this README 
 SERVER=<tg|api|seerrsense>
 
 cf() { curl -sS --fail-with-body \
-  -K <(printf 'header = "Authorization: Bearer %s"\nheader = "Content-Type: application/json"\n' "$CLOUDFLARE_API_TOKEN") \
+  -K <(printf 'header = "Authorization: Bearer %s"\n' "$CLOUDFLARE_API_TOKEN") \
   "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/access/ai-controls/mcp/servers/$SERVER" "$@"; }
 
 # 0. save the registration FIRST and refuse to continue without it. Step 1
 #    clears it, and for api and seerrsense nothing else records it (only tg is
 #    described in mcp-servers.tf). The read-only projection carries every field
-#    step 2 needs except the secret.
-cf | jq -e '.success and (.result.auth_config_summary != null)' >/dev/null \
-  && cf | jq -e '.result.auth_config_summary' > "$SERVER.summary.json" \
-  || { echo "no usable registration to back up -- do not flip"; return 2>/dev/null || exit 1; }
+#    step 2 needs except the secret. One fetch, validated and saved, so the
+#    bytes checked are the bytes kept.
+summary=$(cf) || { echo "the GET failed -- do not flip"; exit 1; }
+printf '%s' "$summary" | jq -e '.success and (.result.auth_config_summary != null)' >/dev/null \
+  || { echo "no usable registration to back up -- do not flip"; exit 1; }
+printf '%s' "$summary" | jq '.result.auth_config_summary' > "$SERVER.summary.json"
 
 # 1. flip to bearer: status goes waiting -> error ("unable to connect"), last_synced moves
 cf -X PUT --json '{"auth_type":"bearer","auth_credentials":"resnapshot-not-a-token"}'
 
 # 2. flip back to manual OAuth. auth_credentials is the saved summary's
-#    auth_mode + config + registration_info, JSON-encoded as one string, plus a
+#    auth_mode + config + registration_info as ONE JSON-encoded string, and a
 #    client_secret (a switch to manual requires one; any non-empty value with
-#    token_endpoint_auth_method none). For tg take the values from mcp-servers.tf.
-cf -X PUT --json '{"auth_type":"oauth","auth_credentials":"<json string>","client_secret":"<random>"}'
+#    token_endpoint_auth_method none). Build it with jq from the saved file
+#    rather than hand-encoding it into a quoted shell string: jq does the
+#    escaping, and an apostrophe anywhere in a redirect URI or scope would
+#    otherwise close the quote and send a mangled registration.
+jq -n --arg creds "$(jq -c '{auth_mode, config, registration_info}' "$SERVER.summary.json")" \
+      --arg secret "$(openssl rand -hex 24)" \
+      '{auth_type:"oauth", auth_credentials:$creds, client_secret:$secret}' \
+  | cf -X PUT --json @-
 #    -> status: waiting, authentication_status: manual
 
 # 3. ONE user signs the server out and back in on the portal's server selection
@@ -235,10 +243,16 @@ cf -X PUT --json '{"auth_type":"oauth","auth_credentials":"<json string>","clien
 
 # 4. give the new tools a decision in the owning repository's allowlist and
 #    apply it: scripts/portal-allowlist-apply.sh in mctl-telegram and mctl-api
-#    (then --check). seerrsense has no apply script yet (mctlhq/seerrsense#70):
-#    there the mapping is written by hand with a read-modify-write PUT on
-#    portals/mcp, as in Phase 0.
+#    (then --check). seerrsense has no apply script yet (mctlhq/seerrsense#70).
 ```
+
+For `seerrsense`, step 4 is the read-modify-write PUT on `portals/mcp` that
+Phase 0 used, and it carries the race this file describes under "What the
+write does not touch": it sends every server's mapping back, so a `tg` or
+`api` allowlist applied between the read and the write is silently reverted,
+with a `200`. Until a targeted script exists, run it when no other apply is in
+flight, and read the other two mappings back afterwards — their tool counts
+and `default_disabled` must be what they were before.
 
 Measured on the day: `seerrsense` `last_synced` 2026-09-10 19:32 → 2026-09-13
 05:42, `api` 74 → 75 tools with the allowlist re-applied 75/75. The portal
@@ -258,8 +272,9 @@ And any PR that changes what `tools/list` advertises owes this step: a tool
 added or removed, an `outputSchema` changed, and equally an `inputSchema` —
 the snapshot carries the whole tool definition, so a renamed or newly required
 parameter leaves clients calling the tool the old way against a server that no
-longer accepts it. The nightly check described below is what notices when
-someone forgets; before it existed, the only thing that did was a failing
+longer accepts it. Nothing automatic notices a missed re-snapshot on this
+branch — the nightly catalogue check is mctlhq/mctl-gitops#1242, stacked on
+this one — so until that lands the only thing that notices is a failing
 client.
 
 For `tg`, which OpenTofu describes in `mcp-servers.tf`: the flip is done with
