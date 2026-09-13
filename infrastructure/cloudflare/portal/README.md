@@ -155,3 +155,367 @@ Sign the upstream out and back in in the portal. `boundRefreshGrant`
 (`mctl-telegram/internal/oauth/server.go`) intersects a refresh with the
 family's original grant, so a wider scope never reaches a token that already
 exists.
+
+## Re-snapshot: refreshing a manual-OAuth server's tool catalogue
+
+The portal keeps a snapshot of each upstream's tools (`servers/{id}.tools`,
+including every `outputSchema`) and serves clients from it. For a server in
+manual OAuth mode — all three of ours — that snapshot is taken **once**, when
+the first user completes upstream OAuth, and is never refreshed. That is
+documented, not a bug: the MCP Portals limitations list says *"Manual OAuth
+capabilities are captured during the first user authorization … Background
+and manual capability synchronization do not refresh them."* Synchronisation
+runs with an admin credential that only automatic (DCR) registration has, so
+`POST servers/{id}/sync` answers `success` and does nothing; the only honest
+signal is `last_synced`.
+
+The cost is not just "a new tool never reaches clients" (mctlhq/.github#64).
+Clients validate live responses against the snapshot's `outputSchema`, so an
+output-schema change to a tool that is already enabled breaks that tool
+through the portal (mctlhq/mctl-telegram#637).
+
+### What moves the snapshot, measured 2026-09-13 on `seerrsense`
+
+| Lever | Result |
+| --- | --- |
+| `PUT` `auth_credentials` with a different `scope` | `status: ready`, `last_synced` unchanged |
+| `PUT` `hostname` alone (`…/mcp?v=2`) | `7000 D1_ERROR: near "WHERE": syntax error` — nothing written |
+| `PUT` `hostname` with `name` and `auth_type` | `200`, hostname silently kept as before |
+| `PUT` `auth_type: bearer` (dummy token), then back to `oauth`/`manual` | **works** — see below |
+
+Only the auth-type flip puts the server back through `waiting`. It clears the
+stored manual registration (`auth_config_summary: null`) while in bearer mode,
+so the second `PUT` must resend the full `auth_credentials` blob **and** a
+`client_secret` (a switch *to* manual requires one; any non-empty value works
+with `token_endpoint_auth_method: none`, and it bumps `client_secret_version`).
+
+### Recipe
+
+Four things in here are load-bearing, each for a measured reason.
+
+`set -euo pipefail`, because the middle of this procedure is a server that
+does not work: any command substitution that fails silently — a missing backup
+file, an `openssl` that is not there — would otherwise reach the API as an
+empty string and be discovered only after the flip.
+
+`ok()`, because `--fail-with-body` catches HTTP errors and this API answers
+`200` with `success: false`, and has been measured answering `200` while
+silently keeping a field it was told to change. The envelope is the truth, and
+after each write the server is read back to confirm the transition rather than
+trusted to have made it.
+
+The whole restoration payload is built **before** the destructive flip, while
+the server still works, so nothing that can fail is left to run when the only
+copy of the registration is already gone.
+
+And the token reaches curl in a config on a file descriptor, while the
+generated secret reaches `jq` through the environment and the body it ends up
+in is written under `umask 077` and deleted once spent. A command line is
+world-readable in `/proc`; both of these would otherwise sit in the process
+table.
+
+It is **four blocks, not one**, and they are not interchangeable. A single
+block cannot be pasted: `read` would consume the next pasted line as the
+token, and step 3 is a person in a browser, so everything after it would run
+against a server that has not been re-authorized yet. Run each block on its
+own, and the fourth only once step 3 is actually done.
+
+Work inside a **nested shell**. `set -e` and the `exit 1` in step 4 are
+honoured at an interactive prompt just as they are in a script, so without one
+a failed `ok()` closes the terminal these blocks share — in step 1 or 2 that
+means losing them in the middle of the destructive window. Exporting the token
+first is what lets the nested shell die without taking it with it.
+
+Type this one, do not paste it with anything else:
+
+```
+read -rs CLOUDFLARE_API_TOKEN           # Account -> MCP Portals -> Edit
+export CLOUDFLARE_API_TOKEN
+bash                                    # everything below runs in here
+```
+
+Then the target and the two helpers:
+
+```
+set -euo pipefail
+export CLOUDFLARE_ACCOUNT_ID=6a09f637d20e1f66a8e9d45ebe778058
+SERVER=tg                               # or api, or seerrsense
+
+cf() { curl -sS --fail-with-body \
+  -K <(printf 'header = "Authorization: Bearer %s"\n' "$CLOUDFLARE_API_TOKEN") \
+  "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/access/ai-controls/mcp/servers/$SERVER" "$@"; }
+ok() { jq -e '.success' >/dev/null; }   # a 2xx envelope can still say success:false
+```
+
+Steps 0 to 2, the destructive half:
+
+```
+# 0. back up the registration, and refuse to go on without a file that has
+#    something in it. Step 1 clears it, and for api and seerrsense nothing
+#    else records it (only tg is described in mcp-servers.tf).
+summary=$(cf)
+printf '%s' "$summary" | ok
+printf '%s' "$summary" | jq -e '.result.auth_config_summary != null' >/dev/null
+#    umask, because this file carries the whole registration -- endpoints,
+#    client id, scope -- for the rest of the procedure.
+rm -f "$SERVER.summary.json"
+(umask 077; printf '%s' "$summary" | jq '.result.auth_config_summary' \
+  > "$SERVER.summary.json")
+test -s "$SERVER.summary.json"
+
+# 0a. and the catalogue as it stands, to diff against afterwards. WHOLE tool
+#     objects: descriptions and annotations travel in the snapshot too, and
+#     readOnlyHint in particular is a structural claim this platform acts on,
+#     so a projection down to names and schemas would call a changed
+#     annotation "no change".
+printf '%s' "$summary" | jq -e '(.result.tools | type) == "array"
+                                and (.result.tools | length) > 0' >/dev/null \
+  || { echo "this server has no catalogue to diff against; stop"; exit 1; }
+printf '%s' "$summary" | jq -S '[.result.tools[]] | sort_by(.name)' \
+  > "$SERVER.catalogue.before.json"
+
+# 0b. build the ENTIRE restoration body now, while the server still works.
+#     auth_credentials is auth_mode + config + registration_info as one
+#     JSON-encoded string; client_secret is required by a switch back to
+#     manual and any non-empty value does with token_endpoint_auth_method none.
+#     Written to a FILE, not just a variable: from step 1 on, the live server
+#     no longer holds the registration, so a shell that dies in the window
+#     takes the only in-memory copy of it with it.
+CREDS=$(jq -ce '{auth_mode, config, registration_info}' "$SERVER.summary.json")
+SECRET=$(openssl rand -hex 24); test -n "$SECRET"
+rm -f "$SERVER.restore.json"             # umask does not re-mode an existing file
+(umask 077; CREDS="$CREDS" SECRET="$SECRET" \
+  jq -n '{auth_type:"oauth", auth_credentials:env.CREDS, client_secret:env.SECRET}' \
+  > "$SERVER.restore.json")
+test -s "$SERVER.restore.json"
+
+# 1. flip to bearer, then READ BACK that the registration is really gone.
+#    status goes waiting -> error ("unable to connect"), last_synced moves.
+cf -X PUT --json '{"auth_type":"bearer","auth_credentials":"resnapshot-not-a-token"}' | ok
+#    envelope FIRST: on success:false `.result` is null, and
+#    `.result.auth_config_summary == null` is then true -- a failed read
+#    reporting the flip as done.
+gone=$(cf); printf '%s' "$gone" | ok
+printf '%s' "$gone" | jq -e '.result.auth_config_summary == null' >/dev/null
+
+# 2. restore, and read back that manual OAuth is in place and the server is
+#    waiting for its first authorization. The trap is armed on the line
+#    before the PUT, not after it: from that moment the secret in the file
+#    is live, and every way out of this shell -- a failed read-back under
+#    set -e, a dropped response, the operator closing it -- has to take the
+#    file with it. Before the PUT the secret has never been sent, so the
+#    file is worth more as the resume artifact than it costs.
+trap 'rm -f "$SERVER.restore.json"' EXIT
+#    and on a signal: a shell killed by SIGINT or SIGHUP dies of that signal
+#    and never runs its EXIT trap -- ^C on a hanging PUT, or a dropped
+#    terminal, both plausible here.
+trap 'rm -f "$SERVER.restore.json"; exit 130' INT TERM HUP
+cf -X PUT --json "@$SERVER.restore.json" | ok
+cf | jq -e '.result.status == "waiting"
+            and .result.auth_config_summary.auth_mode == "manual"' >/dev/null
+
+# 2a. and that it is the SAME registration, field for field. status+auth_mode
+#     only say a manual-OAuth registration exists; this API is on record
+#     answering 200 while keeping a field it was told to change, and for api
+#     and seerrsense nothing declarative would catch a narrowed scope or a
+#     moved endpoint later. Compare against the copy taken in step 0.
+#     rc, not a bare diff: under set -e a mismatch would abort the shell with
+#     the live client_secret still in the file below.
+rc=0
+diff -u <(jq -S '{auth_mode, config, registration_info}' "$SERVER.summary.json") \
+        <(cf | jq -S '.result.auth_config_summary
+                      | {auth_mode, config, registration_info}') || rc=$?
+#     every trap, not just EXIT: an INT trap left armed in a shell the
+#     operator keeps using would turn a ^C in step 4 or 5 into an exit 130
+#     that takes the shell and its variables with it.
+rm -f "$SERVER.restore.json"; trap - EXIT INT TERM HUP   # the secret is spent
+test "$rc" -eq 0 || { echo "registration changed: redo 0b and 2"; exit 1; }
+```
+
+**Step 3 is a person, not a command.** One user signs the server out and back
+in on the portal's server selection page (`portal_toggle_servers` gives the
+URL), and it must be an identity on the upstream's highest tier. The snapshot
+holds whatever `tools/list` THAT identity is shown, and it is taken once: if a
+lower-tier user authorizes first, the catalogue keeps their reduced set and
+the later high-tier login does not refresh it. Announce the window, and do not
+run the next block until this is done.
+
+Steps 4 and 5, the verification:
+
+```
+# 4. diff the whole tool definition set against the copy from 0a. The
+#    difference must be exactly what the release changed. An identical
+#    catalogue is a FAILURE, not a pass: it means the snapshot never moved,
+#    whatever last_synced says.
+after=$(cf); printf '%s' "$after" | ok
+#    and that there IS a catalogue. `tools` is null for a server nobody has
+#    authorized -- which is the state this step is verifying its way out of,
+#    and the state the server is in if step 3 was announced but never done.
+#    Unguarded, jq dies with "Cannot iterate over null" and set -e takes the
+#    shell at the one point where access is still closed; worse, an empty
+#    ARRAY would diff as every tool removed and read as a release delta.
+printf '%s' "$after" | jq -e '(.result.tools | type) == "array"
+                              and (.result.tools | length) > 0' >/dev/null \
+  || { echo "the portal holds no tools: step 3 did not complete, do NOT reopen access"; exit 1; }
+printf '%s' "$after" | jq -S '[.result.tools[]] | sort_by(.name)' \
+  > "$SERVER.catalogue.after.json"
+printf '%s' "$after" | jq -r '.result.last_synced'
+
+rc=0; diff -u "$SERVER.catalogue.before.json" "$SERVER.catalogue.after.json" || rc=$?
+case $rc in
+  0) echo "catalogue identical: the snapshot did not move, do NOT reopen access"; exit 1 ;;
+  1) echo "read the diff above: it must be exactly what the release changed" ;;
+  *) echo "diff could not run ($rc)"; exit 1 ;;
+esac
+
+# 5. give any new tool a decision in the owning repository's allowlist and
+#    apply it: scripts/portal-allowlist-apply.sh in mctl-telegram and mctl-api
+#    (then --check). seerrsense has no apply script yet (mctlhq/seerrsense#70).
+```
+
+If the nested shell dies between step 1 and step 2, the server is in bearer
+mode with `auth_config_summary` null and nothing on Cloudflare's side to
+rebuild the registration from — but `$SERVER.summary.json` and
+`$SERVER.restore.json` are on disk, which is why step 0b writes the payload
+rather than holding it in a variable. Start a new shell, redo the two helper
+definitions, and rerun step 2 as written; it does not depend on anything else
+step 0 put in the environment. If `$SERVER.restore.json` is gone — it survives a
+shell that dies before step 2's `PUT`, and is deleted by the trap or by step
+2a itself on every path after it, because from that point it holds a live
+`client_secret` — step 0b's three lines rebuild it from the summary file with
+a fresh secret.
+
+Steps 0 to 2 are a window in which this server's registration must have no
+other writer. The backup is a point-in-time copy and step 2 puts it back, so a
+scope or endpoint change made by anyone else in between is silently reverted —
+including one made by `cloudflare-apply.yml`, which owns `tg`'s registration
+and serializes against other applies but knows nothing about this procedure.
+Do not run it while an apply of this root is in flight, and say in the channel
+that the window is open.
+
+Step 5 for `seerrsense` is **not** in the blocks above, and is a different
+endpoint: `cf()` addresses `servers/{id}`, while a tool allowlist lives on the
+portal object. `mctl-telegram` and `mctl-api` have `scripts/portal-allowlist-apply.sh`
+for this; `seerrsense` does not yet (mctlhq/seerrsense#70), so until it does,
+its mapping is written by hand the way Phase 0 wrote it — a read-modify-write
+`PUT` on `portals/mcp`. That carries the race described under "What the write
+does not touch": the body sends every server's mapping back, so a `tg` or
+`api` allowlist applied between the read and the write is silently reverted,
+with a `200`. Run it when no other apply is in flight.
+
+The new entry is **copied from an existing one** rather than written from
+scratch, so it carries whatever fields this API actually stores, and the body
+is printed for a human before anything is sent:
+
+```
+test "$SERVER" = seerrsense              # this block reads its step-4 file
+PORTAL=mcp
+pf() { curl -sS --fail-with-body \
+  -K <(printf 'header = "Authorization: Bearer %s"\n' "$CLOUDFLARE_API_TOKEN") \
+  "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/access/ai-controls/mcp/portals/$PORTAL" "$@"; }
+#     whole decisions, not counts: a revert that swaps one tool for another
+#     keeps the count identical.
+mapping() { jq -S '[.result.servers[]
+  | {server_id, default_disabled, on_behalf,
+     updated_tools: (.updated_tools | sort_by(.name)), updated_prompts}]'; }
+others() { mapping | jq -S '[.[] | select(.server_id != "seerrsense")]'; }
+
+before=$(pf); printf '%s' "$before" | ok
+printf '%s' "$before" | mapping > portal.mapping.before.json
+test -s portal.mapping.before.json
+
+TOOL="seerrsense_new_tool"              # a newly captured tool, or "" if the
+                                        # release only removed or renamed
+ENABLED=false                           # what the review of THAT tool decided.
+                                        # The allowlist is opt-in; a tool is
+                                        # enabled because someone said so, not
+                                        # because it appeared.
+
+# the decisions are REBUILT against the refreshed catalogue, not appended to.
+# A release that removes or renames a tool is one of the triggers for this
+# whole procedure, and the flip does not touch the mapping -- so the stale
+# decision survives, and a PUT that sends a name the portal has not seen is
+# rejected (error 7001), leaving step 5 unfinishable.
+names=$(jq -S '[.[].name]' "$SERVER.catalogue.after.json")
+body=$(jq -c --arg tool "$TOOL" --argjson enabled "$ENABLED" --argjson names "$names" \
+  '{servers: [.result.servers[]
+  | if .server_id == "seerrsense"
+    then .updated_tools = ([.updated_tools[]
+                            | select(.name != $tool and (.name | IN($names[])))]
+                           + (if $tool == "" then []
+                              else [(.updated_tools[0]
+                                     | .name = $tool | .enabled = $enabled)] end))
+    else . end]}' <<<"$before")
+printf '%s' "$body" | jq .          # READ THIS before the next line
+```
+
+Then, and only if that body is what you meant:
+
+```
+# re-read FIRST. This is a read-modify-write with no conditional write: an
+# allowlist apply that lands between the read above and this PUT is reverted
+# by it, and the check below would then compare the result against a copy
+# that already has the revert baked in -- a lost update that verifies clean.
+# Re-reading here narrows that window to these few lines. It does not close
+# it; only an apply script for seerrsense (mctlhq/seerrsense#70) does.
+fresh=$(pf); printf '%s' "$fresh" | ok
+diff -u portal.mapping.before.json <(printf '%s' "$fresh" | mapping) \
+  || { echo "the portal moved while you were reading: start again from the top of this step"; exit 1; }
+
+printf '%s' "$body" | pf -X PUT --json @- | ok
+result=$(pf); printf '%s' "$result" | ok
+
+# seerrsense's own mapping, decision for decision, against what was SENT --
+# not just "the new tool is there". ok() reads the envelope, and this API is
+# on record answering 200 while keeping a field it was told to change, so a
+# dropped removal or a flipped `enabled` on any of the others would otherwise
+# go unseen. This also covers the removals when TOOL is empty.
+seerr() { jq -S '[.[] | select(.server_id == "seerrsense")
+                 | .updated_tools | sort_by(.name)]'; }
+diff -u <(printf '%s' "$body" | jq '.servers' | seerr) \
+        <(printf '%s' "$result" | jq '.result.servers' | seerr)
+
+# and the other two mappings must be untouched, tool decisions included --
+# this is the race, not a formality, and a 200 says nothing about it either.
+diff -u <(printf '%s' "$before" | others) <(printf '%s' "$result" | others)
+```
+
+`updated_tools[0]` is the shape donor, so this needs `seerrsense` to have at
+least one entry already; it has five. If that ever stops being true, read a
+`tg` entry instead and change `server_id` nowhere — the entry shape is the
+same across servers.
+
+Measured on the day: `seerrsense` `last_synced` 2026-09-10 19:32 → 2026-09-13
+05:42, `api` 74 → 75 tools with the allowlist re-applied 75/75. The portal
+mapping (`updated_tools`, `default_disabled`, `on_behalf`) survived both flips
+untouched; `description` survived; the Access application was not involved.
+
+What it costs: for the minutes between step 1 and step 3 the server is
+unusable through the portal, and every portal user has to re-authorise it
+afterwards. Live MCP sessions keep the old `tools/list` until they reconnect.
+
+Two rules follow. Re-snapshot **after** the release that changed the tool
+definitions is deployed, never before — the snapshot copies whatever the
+upstream advertises at that moment (`tg` waited for the release carrying
+mctl-telegram#638, or the closed schemas would have been captured again).
+
+And any PR that changes what `tools/list` advertises owes this step: a tool
+added or removed, an `outputSchema` changed, and equally an `inputSchema` —
+the snapshot carries the whole tool definition, so a renamed or newly required
+parameter leaves clients calling the tool the old way against a server that no
+longer accepts it. Nothing automatic notices a missed re-snapshot on this
+branch — the nightly catalogue check is mctlhq/mctl-gitops#1242, stacked on
+this one — so until that lands the only thing that notices is a failing
+client.
+
+For `tg`, which OpenTofu describes in `mcp-servers.tf`: the flip is done with
+the same API token outside tofu and the registration is resent from the file's
+values, so the next `tofu plan` comes back `no-op`. The secret does not: step 2
+bumps `client_secret_version`, and `scripts/portal-auth-credentials-drift.py`
+compares the live version with the one state recorded at the last apply, so
+the nightly check reports drift until state learns the new version. Its
+backend credential is read-only, so a plan cannot record it -- run the
+`cloudflare-apply.yml` workflow for this root once (it applies nothing and
+refreshes state; the environment approval is the gate) before expecting the
+detector to pass. Measured after the `tg` re-snapshot on 2026-09-13: live
+version 2, state version 1.
