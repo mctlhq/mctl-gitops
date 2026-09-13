@@ -395,10 +395,11 @@ jobs:
                  echo; echo '```'; cat catalogue.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY" ;;
             1) { echo "### \`portal\` — TOOL CATALOGUE STALE";
                  echo; echo '```'; cat catalogue.txt; echo '```';
-                 # A bare instruction, and correct now: main() returns 3 for a
-                 # dead waiver, so this branch is reached only when something
-                 # is genuinely stale and the re-snapshot is owed.
-                 echo "> Re-snapshot per the recipe in infrastructure/cloudflare/portal/README.md."; } >> "$GITHUB_STEP_SUMMARY" ;;
+                 # main() returns 3 for a dead waiver, so this branch always
+                 # means a real finding -- but not always a re-snapshot: a
+                 # closed inputSchema may be deliberate upstream, and then the
+                 # block above says a waiver is the only way out.
+                 echo "> Re-snapshot per the recipe in infrastructure/cloudflare/portal/README.md — unless the block above says otherwise."; } >> "$GITHUB_STEP_SUMMARY" ;;
             3) { echo "### \`portal\` — a catalogue waiver matches nothing";
                  echo; echo '```'; cat catalogue.txt; echo '```';
                  # Its own status, not folded into 1. The finding a waiver was

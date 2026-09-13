@@ -2,7 +2,7 @@
 """Detect a stale tool catalogue on the Cloudflare MCP portal.
 
 The portal serves clients from a snapshot of each upstream's tools --
-names and `outputSchema` included. For a server in manual OAuth mode that
+names, `inputSchema` and `outputSchema` included. For a server in manual OAuth mode that
 snapshot is taken once, at the first user authorization, and never
 refreshed: `POST servers/{id}/sync` answers `success` and does nothing
 (documented under the MCP Portals limitations; measured 2026-09-13,
@@ -49,7 +49,9 @@ things:
     0  in sync (any waived finding is printed, and the run says so)
     1  the catalogue is stale -- re-snapshot per the portal README, which
        takes a server down and makes every portal user re-authorize
-    2  could not be determined -- nothing was compared, fix the check
+    2  a side could not be read, or a server holds no tools at all -- the
+       servers that WERE compared are still reported; an unauthorized server
+       needs a user to sign in, anything else is a check to fix
     3  a waiver in this file matches nothing any more -- delete it here;
        do NOT re-snapshot for this
     4  an upstream this script expects is not mapped on the portal at all --
@@ -180,6 +182,14 @@ def closed_objects(schema, path: str = "") -> list[str]:
     return out
 
 
+# Every `kind` compare() can emit. KNOWN_STALE keys are checked against this
+# in selftest(), so a waiver naming a kind this file cannot produce fails on a
+# pull request instead of at night, where it would arrive as a stale catalogue
+# and a destructive instruction that fixes nothing.
+KINDS = ("missing-tool", "extra-tool",
+         "closed-output-schemas", "closed-input-schemas")
+
+
 def compare(server: str, snapshot: dict, allowlist: dict) -> list[dict]:
     """Structured findings: {"server", "kind", "names", "message"}.
 
@@ -230,13 +240,13 @@ def compare(server: str, snapshot: dict, allowlist: dict) -> list[dict]:
                     "message": f"{server}: {message}"})
 
     for name in sorted(want - set(live)):
-        add("missing-tool", [name],
+        add(KINDS[0], [name],
             f"{name} is upstream but not in the portal catalogue "
             f"(last_synced {snapshot.get('last_synced')}) -- re-snapshot, or the "
             "release that adds it is merged but not deployed yet, in which case "
             "wait for the rollout first")
     for name in sorted(set(live) - want):
-        add("extra-tool", [name],
+        add(KINDS[1], [name],
             f"{name} is in the portal catalogue but no longer upstream -- "
             "re-snapshot, or the release that removes it is merged but not "
             "deployed yet, in which case wait for the rollout first: "
@@ -259,8 +269,8 @@ def compare(server: str, snapshot: dict, allowlist: dict) -> list[dict]:
     # the zod output schemas, the next snapshot brings zod's closed inputs, and
     # the finding that should have died (exit 3, "delete the waiver") stays
     # alive instead.
-    for kind, names, side in (("closed-output-schemas", closed_out, "output"),
-                              ("closed-input-schemas", closed_in, "input")):
+    for kind, names, side in ((KINDS[2], closed_out, "output"),
+                              (KINDS[3], closed_in, "input")):
         if not names:
             continue
         add(kind, names,
@@ -507,13 +517,21 @@ def selftest() -> int:
     # selftest runs on every pull request in the repository, so asserting
     # freshness here would turn an expiry into a repo-wide red on unrelated
     # PRs. Expiry belongs to apply_waivers, which the nightly run calls.
+    # The key too, not just the body. Both halves have to line up with values
+    # produced elsewhere in this file -- `kind` with what compare() emits,
+    # `server` with OWNERS -- and neither was checked, so a rename here or a
+    # singular typo in the next entry was silent until the nightly reported
+    # the waived finding as exit 1, with a re-snapshot instruction that
+    # re-captures exactly what the waiver was written for.
     for key, w in sorted(KNOWN_STALE.items()):
         try:
             _dt.date.fromisoformat(w["until"])
-            valid = bool(w.get("tools")) and bool(w.get("why"))
+            valid = (bool(w.get("tools")) and bool(w.get("why"))
+                     and key[0] in OWNERS and key[1] in KINDS)
         except (KeyError, ValueError, TypeError):
             valid = False
-        print(f"{'ok  ' if valid else 'FAIL'} committed waiver {key} is dated and names its tools")
+        print(f"{'ok  ' if valid else 'FAIL'} committed waiver {key} names a known "
+              "server and kind, is dated and names its tools")
         if not valid:
             failures.append(f"waiver {key}")
         if valid and w["until"] < _dt.date.today().isoformat():
