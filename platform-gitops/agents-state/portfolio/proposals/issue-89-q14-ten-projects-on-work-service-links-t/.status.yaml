@@ -1,0 +1,10 @@
+status: proposed
+updated_at: '2026-09-13T11:54:30Z'
+updated_by: mctl-agents[bot]
+source:
+  type: github_issue
+  repo: mctlhq/portfolio
+  issue: 89
+  url: https://github.com/mctlhq/portfolio/issues/89
+control:
+  requires_human_approval: true
