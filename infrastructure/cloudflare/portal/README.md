@@ -557,9 +557,10 @@ re-snapshot it. Two things land there: a waiver whose finding has gone
 entirely, which is a deletion, and one that is merely wider than what fires,
 which is a narrowing. Deleting in the second case is the wrong half: for the
 committed `seerrsense` waiver it would fail the still-closed schemas unwaived
-on the next run and point at the recipe, which captures them closed again. One waiver is committed today:
-`seerrsense` publishes closed output schemas in code, and the fix waits on
-that repository's review freeze.
+on the next run and point at the recipe, which captures them closed again.
+
+One waiver is committed today: `seerrsense` publishes closed output schemas
+in code, and the fix waits on that repository's review freeze.
 
 The waived findings are printed even on a passing run, and the nightly summary
 repeats them, so a green check never reads as more than it is.

@@ -169,27 +169,46 @@ def owner_allowlist(server: str) -> dict:
     return body
 
 
-# JSON Schema keywords whose values are DATA, not subschemas. Walking into
-# them reads a sample document as a schema: `examples: [{"additionalProperties":
-# false}]` is a perfectly open schema carrying an example that happens to spell
-# the closed form, and reported as closed it is exit 1 and a re-snapshot that
-# cannot clear it, because nothing about the real schema is stale.
-NOT_SUBSCHEMAS = ("examples", "example", "default", "enum", "const")
+# Where a JSON Schema keeps SUBSCHEMAS. The walk visits these and nothing
+# else, because a schema also carries data: `examples: [{"additionalProperties":
+# false}]` is a perfectly open schema whose sample happens to spell the closed
+# form, and reported as closed it is exit 1 and a re-snapshot that cannot
+# clear it. Skipping the data keywords by name instead would be wrong the
+# other way -- inside `properties` the keys are names the upstream chose, so a
+# parameter called `default` or `enum` would take its whole subtree out of the
+# walk and hide a genuinely closed schema.
+SUBSCHEMA_MAPS = ("properties", "patternProperties", "$defs", "definitions",
+                  "dependentSchemas")
+SUBSCHEMA_LISTS = ("allOf", "anyOf", "oneOf", "prefixItems")
+SUBSCHEMA_VALUES = ("items", "additionalItems", "contains", "not", "if", "then",
+                    "else", "propertyNames", "additionalProperties",
+                    "unevaluatedItems", "unevaluatedProperties")
 
 
 def closed_objects(schema, path: str = "") -> list[str]:
     """JSON-pointer-ish paths of every object with additionalProperties:false."""
     out: list[str] = []
-    if isinstance(schema, dict):
-        if schema.get("additionalProperties") is False:
-            out.append(path or "/")
-        for k, v in schema.items():
-            if k in NOT_SUBSCHEMAS:
-                continue
+    if not isinstance(schema, dict):
+        return out
+    if schema.get("additionalProperties") is False:
+        out.append(path or "/")
+    for k in SUBSCHEMA_MAPS:
+        v = schema.get(k)
+        if isinstance(v, dict):
+            for name, sub in v.items():
+                out += closed_objects(sub, f"{path}/{k}/{name}")
+    for k in SUBSCHEMA_LISTS:
+        v = schema.get(k)
+        if isinstance(v, list):
+            for i, sub in enumerate(v):
+                out += closed_objects(sub, f"{path}/{k}/{i}")
+    for k in SUBSCHEMA_VALUES:
+        v = schema.get(k)
+        if isinstance(v, list):          # draft-4 tuple form of `items`
+            for i, sub in enumerate(v):
+                out += closed_objects(sub, f"{path}/{k}/{i}")
+        else:
             out += closed_objects(v, f"{path}/{k}")
-    elif isinstance(schema, list):
-        for i, v in enumerate(schema):
-            out += closed_objects(v, f"{path}/{i}")
     return out
 
 
@@ -467,6 +486,13 @@ def selftest() -> int:
         ("a closed nested schema fires", snap([], extra=nested_closed), allow(["n"]), 1),
         # An open schema carrying an example that spells the closed form is
         # open. Walking into `examples` reads a sample document as a schema.
+        # ... and a PARAMETER named like one of those keywords is still
+        # walked: inside `properties` the keys are the upstream's names.
+        ("a closed schema under a property named default still fires",
+         {"tools": [{"name": "a", "outputSchema": {
+             "type": "object", "properties": {"default": {
+                 "type": "object", "additionalProperties": False}}}}],
+          "last_synced": ""}, allow(["a"]), 1),
         ("a closed form inside examples is not a closed schema",
          {"tools": [{"name": "a", "outputSchema": {
              "type": "object", "properties": {"a": {"type": "string"}},
