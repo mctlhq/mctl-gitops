@@ -251,25 +251,28 @@ def compare(server: str, snapshot: dict, allowlist: dict) -> list[dict]:
                         if closed_objects(t.get("outputSchema")))
     closed_in = sorted(n for n, t in live.items()
                        if closed_objects(t.get("inputSchema")))
-    closed = sorted(set(closed_out) | set(closed_in))
-    if closed:
-        # Which side, because the remedies differ: a closed outputSchema is
-        # the upstream bug mctlhq/mctl-telegram#637 and a release plus a
-        # re-snapshot clears it, while a closed inputSchema may be deliberate
-        # upstream behaviour no release will open, and then the only way out
-        # of exit 1 is a KNOWN_STALE entry. `names` stays tool names, so a
-        # waiver enumerates what it always enumerated.
-        sides = []
-        if closed_out:
-            sides.append("output: " + ", ".join(closed_out))
-        if closed_in:
-            sides.append("input: " + ", ".join(closed_in))
-        add("closed-schemas", closed,
-            f"{len(closed)} stored schema(s) are closed "
-            "(additionalProperties:false) -- a field or parameter added upstream "
-            "fails the call, and re-snapshotting before the release that opens "
-            "them is deployed just captures them closed again. "
-            + "; ".join(sides))
+    # One kind per side, not one aggregated finding: the kind is what a waiver
+    # names, so aggregating them would let the waiver written for five closed
+    # OUTPUT schemas silently also excuse those same five tools going closed on
+    # the INPUT side -- same tool names, same `names` list, no new signal. That
+    # is the exact path this file's own waiver predicts: seerrsense#70 opens
+    # the zod output schemas, the next snapshot brings zod's closed inputs, and
+    # the finding that should have died (exit 3, "delete the waiver") stays
+    # alive instead.
+    for kind, names, side in (("closed-output-schemas", closed_out, "output"),
+                              ("closed-input-schemas", closed_in, "input")):
+        if not names:
+            continue
+        add(kind, names,
+            f"{len(names)} stored {side}Schema(s) are closed "
+            "(additionalProperties:false) -- a field or parameter added "
+            "upstream fails the call" + (
+                ", and re-snapshotting before the release that opens them is "
+                "deployed just captures them closed again"
+                if side == "output" else
+                ", and a closed input schema may be deliberate upstream, in "
+                "which case a KNOWN_STALE entry is the only way out") +
+            ": " + ", ".join(names))
     return out
 
 
@@ -284,13 +287,15 @@ def compare(server: str, snapshot: dict, allowlist: dict) -> list[dict]:
 # stopped firing is itself an error, so the file cannot quietly accumulate
 # excuses for things that were fixed months ago.
 KNOWN_STALE = {
-    ("seerrsense", "closed-schemas"): {
+    ("seerrsense", "closed-output-schemas"): {
         "until": "2026-10-15",
         # The tools the waiver was written against. A finding is excused only
         # if every tool it names is in here, so a SIXTH seerrsense tool
         # acquiring a closed schema still fails -- without this the waiver
         # would cover the regression as well as the five known schemas, since
-        # they arrive as one aggregated finding.
+        # a side's finding arrives as one aggregated line. The kind pins the
+        # side: the same five tools going closed on the INPUT side is a
+        # different kind and is not excused here.
         "tools": ["get_media", "request_media", "resolve_media",
                   "search_media", "whoami"],
         "why": "seerrsense publishes closed output schemas in code (zod); the fix "
@@ -427,10 +432,21 @@ def selftest() -> int:
     # silently matching nothing.
     got = compare("s", snap(["a"], closed=True), allow(["a", "b"]))
     kinds = {f["kind"] for f in got}
-    ok = kinds == {"missing-tool", "closed-schemas"} and all(f["names"] for f in got)
+    ok = (kinds == {"missing-tool", "closed-output-schemas"}
+          and all(f["names"] for f in got))
     print(f"{'ok  ' if ok else 'FAIL'} findings are labelled by kind and tools ({sorted(kinds)})")
     if not ok:
         failures.append("kinds")
+
+    # The split by side, pinned: one tool closed on both sides is TWO findings,
+    # because the kind is what a waiver names and an output-side waiver must
+    # not excuse the same tool going closed on the input side.
+    got = compare("s", snap(["a"], closed=True, closed_input=True), allow(["a"]))
+    kinds = sorted(f["kind"] for f in got)
+    ok = kinds == ["closed-input-schemas", "closed-output-schemas"]
+    print(f"{'ok  ' if ok else 'FAIL'} a tool closed on both sides is two findings ({kinds})")
+    if not ok:
+        failures.append("both sides")
 
     # A nameless entry is a shape this script does not understand, and must
     # exit 2 rather than reach sorted() and die as exit 1, "stale".
@@ -448,11 +464,11 @@ def selftest() -> int:
     fixture = dict(KNOWN_STALE)
     try:
         KNOWN_STALE.clear()
-        KNOWN_STALE[("s", "closed-schemas")] = {
+        KNOWN_STALE[("s", "closed-output-schemas")] = {
             "until": "2026-10-15", "tools": ["a", "b"], "why": "fixture"}
-        finding = [{"server": "s", "kind": "closed-schemas", "names": ["a", "b"],
+        finding = [{"server": "s", "kind": "closed-output-schemas", "names": ["a", "b"],
                     "message": "s: closed"}]
-        grown = [{"server": "s", "kind": "closed-schemas", "names": ["a", "b", "c"],
+        grown = [{"server": "s", "kind": "closed-output-schemas", "names": ["a", "b", "c"],
                   "message": "s: closed"}]
         other = [{"server": "s", "kind": "missing-tool", "names": ["z"],
                   "message": "s: missing"}]

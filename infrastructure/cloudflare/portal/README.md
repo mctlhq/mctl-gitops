@@ -527,12 +527,12 @@ It reads every server mapped on the portal, compares the stored tool names
 with the `docs/portal-allowlist.json` each owning repository commits on `main`
 — test-enforced there to equal what the server registers, so it is the honest
 statement of which tools the upstream advertises — and reports any stored
-`inputSchema` or `outputSchema` that is still closed, naming which, because a
-closed output schema is fixed by a release and a re-snapshot while a closed
-input schema may be deliberate upstream and leave a waiver as the only way
-out. Exit 1 means "re-snapshot per the recipe above". Its `--selftest` runs on every pull request from
-`validate-manifests.yml`, because a detector never seen to fire is not known
-to work.
+`inputSchema` or `outputSchema` that is still closed. The two sides are
+separate findings, because their remedies differ: a closed output schema is
+fixed by a release and a re-snapshot, while a closed input schema may be
+deliberate upstream and leave a waiver as the only way out. Its `--selftest`
+runs on every pull request from `validate-manifests.yml`, because a detector
+never seen to fire is not known to work.
 
 Read its green carefully: it says *names match and the stored input and
 output schemas are open*, not *the catalogue is fresh*. A schema whose content
@@ -546,9 +546,11 @@ against, which no repository has today.
 elsewhere. It exists because a job that is red every night is one people stop
 reading — this file's own argument about green checks, pointed the other way.
 A waiver covers one kind of finding on one server, **and enumerates the tools
-it was written against**: the closed-schema finding arrives as one line for
-all of them, so without that list a sixth tool going closed would ride in on
-the excuse for the five known ones. It stops excusing on the day after its
+it was written against**: a closed-schema finding arrives as one line for all
+of them, so without that list a sixth tool going closed would ride in on the
+excuse for the five known ones. The side is part of the kind for the same
+reason — an excuse written for five closed output schemas does not cover those
+same five tools going closed on the input side. It stops excusing on the day after its
 date, and a waiver whose finding has gone fails on its own — under a separate
 heading, because deleting three lines from a script is not the same job as
 taking a server down to re-snapshot it. One waiver is committed today:
@@ -559,9 +561,17 @@ The waived findings are printed even on a passing run, and the nightly summary
 repeats them, so a green check never reads as more than it is.
 
 Its exit statuses are five, not two, because the remedies cost different
-things: `1` is a stale catalogue and means the recipe above, `2` is a check
-that could not run, `3` is a waiver that no longer matches anything — good
-news with a chore attached, and emphatically not a reason to take a server
-down — and `4` is a whole upstream missing from the portal, which is the
-loudest of them and would otherwise have been announced as the detector being
-broken. The alert and the run summary say which.
+things — and `3` in particular is good news with a chore attached, not a
+reason to take a server down:
+
+| exit | meaning | remedy |
+| --- | --- | --- |
+| 0 | names match, stored schemas open | nothing (read the waived lines) |
+| 1 | the catalogue is stale | the recipe above |
+| 2 | a side could not be read, or a server holds no tools at all | fix the check; an unauthorized server needs a user to sign in |
+| 3 | a waiver matches nothing | delete it from the script — **not** the recipe |
+| 4 | an upstream is missing from the portal | restore the mapping, or retire it from `OWNERS` |
+
+`4` outranks `1`, so a night with both names only the missing upstream; the
+run says in that case that catalogue findings also fired. The alert and the
+run summary carry the same table's wording.

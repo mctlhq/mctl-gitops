@@ -420,7 +420,7 @@ jobs:
                  grep -q 'which this exit status does not name' catalogue.txt \
                    && echo "> Catalogue findings also fired tonight and this status does not name them — read the block above."
                  true; } >> "$GITHUB_STEP_SUMMARY" ;;
-            *) { echo "### \`portal\` — catalogue check could not run (exit $code)";
+            *) { echo "### \`portal\` — catalogue check could not run, or a server is serving no tools (exit $code)";
                  echo; echo '```'; cat catalogue.txt 2>/dev/null || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY" ;;
           esac
           rm -f catalogue.txt
@@ -449,7 +449,7 @@ jobs:
             ${{ steps.creds.outputs.code && steps.creds.outputs.code != '0'
              && format('OAuth registration check exit <code>{0}</code> (1 = drifted, 2 = could not run). The plan was clean; this field is invisible to it.', steps.creds.outputs.code) || '' }}
             ${{ steps.catalogue.outputs.code && steps.catalogue.outputs.code != '0'
-             && format('Tool catalogue check exit <code>{0}</code> (1 = stale, re-snapshot; 2 = could not run; 3 = a waiver matches nothing, delete it; 4 = an upstream is missing from the portal). The plan was clean; the catalogue is invisible to it.', steps.catalogue.outputs.code) || '' }}
+             && format('Tool catalogue check exit <code>{0}</code> (1 = stale, re-snapshot; 2 = could not run, or a server holds no tools at all and serves nothing; 3 = a waiver matches nothing, delete it; 4 = an upstream is missing from the portal). The plan was clean; the catalogue is invisible to it.', steps.catalogue.outputs.code) || '' }}
             ${{ (steps.creds.outputs.code == '' || steps.creds.outputs.code == '0')
              && (steps.catalogue.outputs.code == '' || steps.catalogue.outputs.code == '0')
              && format('Plan exit code <code>{0}</code> (2 = drift, 1 = plan error)', steps.plan.outputs.code || format('none — plan {0}', steps.plan.conclusion)) || '' }}
