@@ -325,7 +325,10 @@ rc=0
 diff -u <(jq -S '{auth_mode, config, registration_info}' "$SERVER.summary.json") \
         <(cf | jq -S '.result.auth_config_summary
                       | {auth_mode, config, registration_info}') || rc=$?
-rm -f "$SERVER.restore.json"; trap - EXIT    # the secret in it is spent
+#     every trap, not just EXIT: an INT trap left armed in a shell the
+#     operator keeps using would turn a ^C in step 4 or 5 into an exit 130
+#     that takes the shell and its variables with it.
+rm -f "$SERVER.restore.json"; trap - EXIT INT TERM HUP   # the secret is spent
 test "$rc" -eq 0 || { echo "registration changed: redo 0b and 2"; exit 1; }
 ```
 
