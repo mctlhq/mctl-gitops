@@ -395,8 +395,9 @@ that the window is open.
 
 Step 5 for `seerrsense` is **not** in the blocks above, and is a different
 endpoint: `cf()` addresses `servers/{id}`, while a tool allowlist lives on the
-portal object. `mctl-telegram` and `mctl-api` have `scripts/portal-allowlist-apply.sh`
-for this; `seerrsense` does not yet (mctlhq/seerrsense#70), so until it does,
+portal object. `mctl-telegram` and `mctl-api` have
+`scripts/portal-allowlist-apply.sh` for this; `seerrsense` does not yet
+(mctlhq/seerrsense#70), so until it does,
 its mapping is written by hand the way Phase 0 wrote it — a read-modify-write
 `PUT` on `portals/mcp`. That carries the race described under "What the write
 does not touch": the body sends every server's mapping back, so a `tg` or
@@ -503,10 +504,9 @@ And any PR that changes what `tools/list` advertises owes this step: a tool
 added or removed, an `outputSchema` changed, and equally an `inputSchema` —
 the snapshot carries the whole tool definition, so a renamed or newly required
 parameter leaves clients calling the tool the old way against a server that no
-longer accepts it. Nothing automatic notices a missed re-snapshot on this
-branch — the nightly catalogue check is mctlhq/mctl-gitops#1242, stacked on
-this one — so until that lands the only thing that notices is a failing
-client.
+longer accepts it. What notices a missed re-snapshot is the nightly
+check described below; before it existed, the only thing that did was a
+failing client.
 
 For `tg`, which OpenTofu describes in `mcp-servers.tf`: the flip is done with
 the same API token outside tofu and the registration is resent from the file's
@@ -519,3 +519,65 @@ backend credential is read-only, so a plan cannot record it -- run the
 refreshes state; the environment approval is the gate) before expecting the
 detector to pass. Measured after the `tg` re-snapshot on 2026-09-13: live
 version 2, state version 1.
+
+### The check that notices
+
+`scripts/portal-catalogue-drift.py` runs nightly from `cloudflare-drift.yml`
+for this root, after the registration check and independently of its result.
+It reads every server mapped on the portal, compares the stored tool names
+with the `docs/portal-allowlist.json` each owning repository commits on `main`
+— test-enforced there to equal what the server registers, so it is the honest
+statement of which tools the upstream advertises — and reports any stored
+`inputSchema` or `outputSchema` that is still closed. The two sides are
+separate findings, because their remedies differ: a closed output schema is
+fixed by a release and a re-snapshot, while a closed input schema may be
+deliberate upstream and leave a waiver as the only way out. Its `--selftest`
+runs on every pull request from `validate-manifests.yml`, because a detector
+never seen to fire is not known to work.
+
+Read its green carefully: it says *names match and the stored input and
+output schemas are open*, not *the catalogue is fresh*. A schema whose content
+changed under an unchanged name and an open snapshot passes — a retyped or
+newly required parameter as much as an added field — and would still break
+clients.
+Seeing that needs a committed copy of each upstream's schemas to compare
+against, which no repository has today.
+
+`KNOWN_STALE` in the script is the list of findings already written down
+elsewhere. It exists because a job that is red every night is one people stop
+reading — this file's own argument about green checks, pointed the other way.
+A waiver covers one kind of finding on one server, **and enumerates the tools
+it was written against**: a closed-schema finding arrives as one line for all
+of them, so without that list a sixth tool going closed would ride in on the
+excuse for the five known ones. The side is part of the kind for the same
+reason — an excuse written for five closed output schemas does not cover those
+same five tools going closed on the input side. It stops excusing on the day
+after its date, and it answers for its own upkeep under a separate heading —
+because editing a list in a script is not the same job as taking a server down to
+re-snapshot it. Two things land there: a waiver whose finding has gone
+entirely, which is a deletion, and one that is merely wider than what fires,
+which is a narrowing. Deleting in the second case is the wrong half: for the
+committed `seerrsense` waiver it would fail the still-closed schemas unwaived
+on the next run and point at the recipe, which captures them closed again.
+
+One waiver is committed today: `seerrsense` publishes closed output schemas
+in code, and the fix waits on that repository's review freeze.
+
+The waived findings are printed even on a passing run, and the nightly summary
+repeats them, so a green check never reads as more than it is.
+
+Its exit statuses are five, not two, because the remedies cost different
+things — and `3` in particular is good news with a chore attached, not a
+reason to take a server down:
+
+| exit | meaning | remedy |
+| --- | --- | --- |
+| 0 | names match, stored schemas open | nothing (read the waived lines) |
+| 1 | the catalogue is stale | the recipe above |
+| 2 | a side could not be read, or a server holds no tools at all | fix the check; an unauthorized server needs a user to sign in |
+| 3 | a waiver matches nothing, or is wider than what fires | delete or narrow it in the script — **not** the recipe |
+| 4 | an upstream is missing from the portal | restore the mapping, or retire it from `OWNERS` |
+
+`4` outranks `1`, so a night with both names only the missing upstream; the
+run says in that case that catalogue findings also fired. The alert and the
+run summary carry the same table's wording.
