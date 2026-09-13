@@ -288,6 +288,24 @@ CWFT_DIR = ROOT / "platform-gitops" / "argo-workflows" / "cluster-templates"
 BUDGET_ENV_SUFFIX = "_BUDGET_USD"
 TIMEOUT_ENV_SUFFIX = "_TIMEOUT_SECONDS"
 
+# Not every *_TIMEOUT_SECONDS is the run's wall-clock budget. A
+# *_DRAIN_TIMEOUT_SECONDS is a sub-deadline INSIDE one run -- how long a
+# driver waits for an asynchronously launched sub-agent to reach a terminal
+# status before giving up (mctl-agents#366) -- and a profile's
+# timeoutSeconds never pins it. Matching it here would break the check in
+# both directions, and both are live cases:
+#
+#   - cwft-mctl-agents-implement.yaml already pins IMPLEMENTER_TIMEOUT_SECONDS,
+#     so a drain variable beside it makes the suffix ambiguous and aborts the
+#     whole file with "cannot tell which one a profile pins".
+#   - cwft-mctl-agents-shepherd.yaml pins no wall-clock override at all, so a
+#     drain variable would become the only match and silently redefine the
+#     effective timeout from spec.activeDeadlineSeconds (7200) to 300.
+#
+# Ignored suffixes are matched before the plain suffix, so ordering inside the
+# CWFT does not matter.
+TIMEOUT_ENV_IGNORED_SUFFIXES = ("_DRAIN_TIMEOUT_SECONDS",)
+
 
 def _iter_env_vars(node):
     """Yield every (name, value) under any `env:` list anywhere in the doc.
@@ -328,9 +346,16 @@ def _unique_env_by_suffix(doc, suffix: str, path: pathlib.Path):
 
     Repeats with the SAME value are fine and normal — that is what the
     duplicates above actually are.
+
+    Names ending in a TIMEOUT_ENV_IGNORED_SUFFIXES entry are skipped for the
+    timeout suffix: they are sub-deadlines inside a run, not the run's budget,
+    and no profile field pins them. See that constant for why.
     """
+    ignored = TIMEOUT_ENV_IGNORED_SUFFIXES if suffix == TIMEOUT_ENV_SUFFIX else ()
     found: dict[str, set] = {}
     for name, value in _iter_env_vars(doc):
+        if name.endswith(ignored):
+            continue
         if name.endswith(suffix):
             found.setdefault(name, set()).add(str(value))
     if len(found) > 1:
