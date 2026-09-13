@@ -192,22 +192,35 @@ with `token_endpoint_auth_method: none`, and it bumps `client_secret_version`).
 ### Recipe
 
 ```
+H='Authorization: Bearer <Account -> MCP Portals -> Edit token>'
 U=https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/access/ai-controls/mcp/servers/$SERVER
 
-# 1. flip to bearer: status goes waiting -> error ("unable to connect"), last_synced moves
-curl -X PUT "$U" --json '{"auth_type":"bearer","auth_credentials":"resnapshot-not-a-token"}'
+# 0. save the registration FIRST. Step 1 clears it, and for api and seerrsense
+#    nothing else records it (only tg is described in mcp-servers.tf). The
+#    read-only projection has every field step 2 needs except the secret.
+curl -H "$H" "$U" | jq '.result.auth_config_summary' > "$SERVER.summary.json"
 
-# 2. flip back to manual OAuth with the registration from mcp-servers.tf (tg)
-#    or from the previous auth_config_summary (api, seerrsense), plus a client_secret
-curl -X PUT "$U" --json '{"auth_type":"oauth","auth_credentials":"<json string>","client_secret":"<random>"}'
+# 1. flip to bearer: status goes waiting -> error ("unable to connect"), last_synced moves
+curl -H "$H" -X PUT "$U" --json '{"auth_type":"bearer","auth_credentials":"resnapshot-not-a-token"}'
+
+# 2. flip back to manual OAuth. auth_credentials is the saved summary's
+#    auth_mode + config + registration_info, JSON-encoded as one string, plus a
+#    client_secret (a switch to manual requires one; any non-empty value with
+#    token_endpoint_auth_method none). For tg take the values from mcp-servers.tf.
+curl -H "$H" -X PUT "$U" --json '{"auth_type":"oauth","auth_credentials":"<json string>","client_secret":"<random>"}'
 #    -> status: waiting, authentication_status: manual
 
 # 3. one user signs the server out and back in on the portal's server selection
 #    page (portal_toggle_servers gives the URL). That authorization takes the
-#    new snapshot: status ready, last_synced now, tools = live count.
+#    new snapshot: status ready, last_synced now, tools = live count. Use an
+#    identity on the upstream's highest tier -- the snapshot holds whatever
+#    tools/list that identity is shown.
 
-# 4. re-apply the allowlist from the owning repository so the new tools get a
-#    decision (scripts/portal-allowlist-apply.sh, then --check).
+# 4. give the new tools a decision in the owning repository's allowlist and
+#    apply it: scripts/portal-allowlist-apply.sh in mctl-telegram and mctl-api
+#    (then --check). seerrsense has no apply script yet (mctlhq/seerrsense#70):
+#    there the mapping is written by hand with a read-modify-write PUT on
+#    portals/mcp, as in Phase 0.
 ```
 
 Measured on the day: `seerrsense` `last_synced` 2026-09-10 19:32 → 2026-09-13
@@ -227,6 +240,13 @@ output schema owes this step; until a drift check exists, the only thing that
 notices otherwise is a failing client.
 
 For `tg`, which OpenTofu describes in `mcp-servers.tf`: the flip is done with
-the same API token outside tofu, the registration is resent from the file's
-values, and the next `tofu plan` must come back `no-op` —
-`scripts/portal-auth-credentials-drift.py` is the check that it did.
+the same API token outside tofu and the registration is resent from the file's
+values, so the next `tofu plan` comes back `no-op`. The secret does not: step 2
+bumps `client_secret_version`, and `scripts/portal-auth-credentials-drift.py`
+compares the live version with the one state recorded at the last apply, so
+the nightly check reports drift until state learns the new version. Its
+backend credential is read-only, so a plan cannot record it -- run the
+`cloudflare-apply.yml` workflow for this root once (it applies nothing and
+refreshes state; the environment approval is the gate) before expecting the
+detector to pass. Measured after the `tg` re-snapshot on 2026-09-13: live
+version 2, state version 1.
