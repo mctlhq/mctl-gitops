@@ -238,7 +238,7 @@ Then the target and the two helpers:
 
 ```
 set -euo pipefail
-CLOUDFLARE_ACCOUNT_ID=6a09f637d20e1f66a8e9d45ebe778058
+export CLOUDFLARE_ACCOUNT_ID=6a09f637d20e1f66a8e9d45ebe778058
 SERVER=tg                               # or api, or seerrsense
 
 cf() { curl -sS --fail-with-body \
@@ -292,7 +292,11 @@ test -s "$SERVER.restore.json"
 # 1. flip to bearer, then READ BACK that the registration is really gone.
 #    status goes waiting -> error ("unable to connect"), last_synced moves.
 cf -X PUT --json '{"auth_type":"bearer","auth_credentials":"resnapshot-not-a-token"}' | ok
-cf | jq -e '.result.auth_config_summary == null' >/dev/null
+#    envelope FIRST: on success:false `.result` is null, and
+#    `.result.auth_config_summary == null` is then true -- a failed read
+#    reporting the flip as done.
+gone=$(cf); printf '%s' "$gone" | ok
+printf '%s' "$gone" | jq -e '.result.auth_config_summary == null' >/dev/null
 
 # 2. restore, and read back that manual OAuth is in place and the server is
 #    waiting for its first authorization. The trap is armed on the line
@@ -413,7 +417,12 @@ before=$(pf); printf '%s' "$before" | ok
 printf '%s' "$before" | mapping > portal.mapping.before.json
 test -s portal.mapping.before.json
 
-TOOL="seerrsense_new_tool"              # the name from the step-4 diff
+TOOL="seerrsense_new_tool"              # a newly captured tool, or "" if the
+                                        # release only removed or renamed
+ENABLED=false                           # what the review of THAT tool decided.
+                                        # The allowlist is opt-in; a tool is
+                                        # enabled because someone said so, not
+                                        # because it appeared.
 
 # the decisions are REBUILT against the refreshed catalogue, not appended to.
 # A release that removes or renames a tool is one of the triggers for this
@@ -421,11 +430,14 @@ TOOL="seerrsense_new_tool"              # the name from the step-4 diff
 # decision survives, and a PUT that sends a name the portal has not seen is
 # rejected (error 7001), leaving step 5 unfinishable.
 names=$(jq -S '[.[].name]' "$SERVER.catalogue.after.json")
-body=$(jq -c --arg tool "$TOOL" --argjson names "$names" '{servers: [.result.servers[]
+body=$(jq -c --arg tool "$TOOL" --argjson enabled "$ENABLED" --argjson names "$names" \
+  '{servers: [.result.servers[]
   | if .server_id == "seerrsense"
     then .updated_tools = ([.updated_tools[]
                             | select(.name != $tool and (.name | IN($names[])))]
-                           + [(.updated_tools[0] | .name = $tool | .enabled = true)])
+                           + (if $tool == "" then []
+                              else [(.updated_tools[0]
+                                     | .name = $tool | .enabled = $enabled)] end))
     else . end]}' <<<"$before")
 printf '%s' "$body" | jq .          # READ THIS before the next line
 ```
@@ -446,13 +458,15 @@ diff -u portal.mapping.before.json <(printf '%s' "$fresh" | mapping) \
 printf '%s' "$body" | pf -X PUT --json @- | ok
 result=$(pf); printf '%s' "$result" | ok
 
-# seerrsense's own mapping: the tool has to be there AND enabled. ok() reads
-# the envelope, and this API is on record answering 200 while keeping a field
-# it was told to change, so nothing so far has looked at what was stored.
-printf '%s' "$result" | TOOL="$TOOL" jq -e '[.result.servers[]
-  | select(.server_id == "seerrsense") | .updated_tools[]
-  | select(.name == env.TOOL and .enabled == true)] | length == 1' >/dev/null \
-  || { echo "the new tool is not enabled on the mapping; do not close the window"; exit 1; }
+# seerrsense's own mapping, decision for decision, against what was SENT --
+# not just "the new tool is there". ok() reads the envelope, and this API is
+# on record answering 200 while keeping a field it was told to change, so a
+# dropped removal or a flipped `enabled` on any of the others would otherwise
+# go unseen. This also covers the removals when TOOL is empty.
+seerr() { jq -S '[.[] | select(.server_id == "seerrsense")
+                 | .updated_tools | sort_by(.name)]'; }
+diff -u <(printf '%s' "$body" | jq '.servers' | seerr) \
+        <(printf '%s' "$result" | jq '.result.servers' | seerr)
 
 # and the other two mappings must be untouched, tool decisions included --
 # this is the race, not a formality, and a 200 says nothing about it either.
