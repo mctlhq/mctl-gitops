@@ -213,18 +213,34 @@ generated secret reaches `jq` through the environment. A command line is
 world-readable in `/proc`; both of these would otherwise sit in the process
 table.
 
+It is **four blocks, not one**, and they are not interchangeable. A single
+block cannot be pasted: `read` would consume the next pasted line as the
+token, and step 3 is a person in a browser, so everything after it would run
+against a server that has not been re-authorized yet. Run each block on its
+own, and the third only once step 3 is actually done.
+
+Type this one, do not paste it with anything else:
+
+```
+read -rs CLOUDFLARE_API_TOKEN           # Account -> MCP Portals -> Edit
+```
+
+Then the target and the two helpers:
+
 ```
 set -euo pipefail
-
-read -rs CLOUDFLARE_API_TOKEN           # Account -> MCP Portals -> Edit
-CLOUDFLARE_ACCOUNT_ID=<account id>      # the same name the rest of this README uses
-SERVER=<tg|api|seerrsense>
+CLOUDFLARE_ACCOUNT_ID=6a09f637d20e1f66a8e9d45ebe778058
+SERVER=tg                               # or api, or seerrsense
 
 cf() { curl -sS --fail-with-body \
   -K <(printf 'header = "Authorization: Bearer %s"\n' "$CLOUDFLARE_API_TOKEN") \
   "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/access/ai-controls/mcp/servers/$SERVER" "$@"; }
 ok() { jq -e '.success' >/dev/null; }   # a 2xx envelope can still say success:false
+```
 
+Steps 0 to 2, the destructive half:
+
+```
 # 0. back up the registration, and refuse to go on without a file that has
 #    something in it. Step 1 clears it, and for api and seerrsense nothing
 #    else records it (only tg is described in mcp-servers.tf).
@@ -234,11 +250,13 @@ printf '%s' "$summary" | jq -e '.result.auth_config_summary != null' >/dev/null
 printf '%s' "$summary" | jq '.result.auth_config_summary' > "$SERVER.summary.json"
 test -s "$SERVER.summary.json"
 
-# 0a. and the catalogue as it stands, to diff against afterwards. Names alone
-#     would not do: a release that retypes one schema, or adds and removes one
-#     tool, leaves the name list identical while the snapshot goes stale.
-printf '%s' "$summary" | jq -S '[.result.tools[] | {name, inputSchema, outputSchema}]
-                                | sort_by(.name)' > "$SERVER.catalogue.before.json"
+# 0a. and the catalogue as it stands, to diff against afterwards. WHOLE tool
+#     objects: descriptions and annotations travel in the snapshot too, and
+#     readOnlyHint in particular is a structural claim this platform acts on,
+#     so a projection down to names and schemas would call a changed
+#     annotation "no change".
+printf '%s' "$summary" | jq -S '[.result.tools[]] | sort_by(.name)' \
+  > "$SERVER.catalogue.before.json"
 
 # 0b. build the ENTIRE restoration body now, while the server still works.
 #     auth_credentials is auth_mode + config + registration_info as one
@@ -259,24 +277,34 @@ cf | jq -e '.result.auth_config_summary == null' >/dev/null
 printf '%s' "$restore" | cf -X PUT --json @- | ok
 cf | jq -e '.result.status == "waiting"
             and .result.auth_config_summary.auth_mode == "manual"' >/dev/null
+```
 
-# 3. ONE user signs the server out and back in on the portal's server selection
-#    page (portal_toggle_servers gives the URL), and it must be an identity on
-#    the upstream's highest tier. The snapshot holds whatever tools/list THAT
-#    identity is shown, and it is taken once: if a lower-tier user authorizes
-#    first, the catalogue keeps their reduced set and the later high-tier login
-#    does not refresh it. Announce the window.
+**Step 3 is a person, not a command.** One user signs the server out and back
+in on the portal's server selection page (`portal_toggle_servers` gives the
+URL), and it must be an identity on the upstream's highest tier. The snapshot
+holds whatever `tools/list` THAT identity is shown, and it is taken once: if a
+lower-tier user authorizes first, the catalogue keeps their reduced set and
+the later high-tier login does not refresh it. Announce the window, and do not
+run the next block until this is done.
 
-# 4. verify the snapshot before telling anyone to reconnect, by diffing the
-#    whole tool definition against the copy taken in 0a -- names AND both
-#    schemas. The difference must be exactly what the release changed; an
-#    empty diff means the snapshot never moved and the procedure achieved
-#    nothing, whatever last_synced says.
+Steps 4 and 5, the verification:
+
+```
+# 4. diff the whole tool definition set against the copy from 0a. The
+#    difference must be exactly what the release changed. An identical
+#    catalogue is a FAILURE, not a pass: it means the snapshot never moved,
+#    whatever last_synced says.
 after=$(cf); printf '%s' "$after" | ok
-printf '%s' "$after" | jq -S '[.result.tools[] | {name, inputSchema, outputSchema}]
-                              | sort_by(.name)' > "$SERVER.catalogue.after.json"
+printf '%s' "$after" | jq -S '[.result.tools[]] | sort_by(.name)' \
+  > "$SERVER.catalogue.after.json"
 printf '%s' "$after" | jq -r '.result.last_synced'
-diff -u "$SERVER.catalogue.before.json" "$SERVER.catalogue.after.json" || true
+
+rc=0; diff -u "$SERVER.catalogue.before.json" "$SERVER.catalogue.after.json" || rc=$?
+case $rc in
+  0) echo "catalogue identical: the snapshot did not move, do NOT reopen access"; exit 1 ;;
+  1) echo "read the diff above: it must be exactly what the release changed" ;;
+  *) echo "diff could not run ($rc)"; exit 1 ;;
+esac
 
 # 5. give any new tool a decision in the owning repository's allowlist and
 #    apply it: scripts/portal-allowlist-apply.sh in mctl-telegram and mctl-api
@@ -291,13 +319,16 @@ and serializes against other applies but knows nothing about this procedure.
 Do not run it while an apply of this root is in flight, and say in the channel
 that the window is open.
 
-For `seerrsense`, step 4 is the read-modify-write PUT on `portals/mcp` that
-Phase 0 used, and it carries the race this file describes under "What the
-write does not touch": it sends every server's mapping back, so a `tg` or
-`api` allowlist applied between the read and the write is silently reverted,
-with a `200`. Until a targeted script exists, run it when no other apply is in
-flight, and read the other two mappings back afterwards — their tool counts
-and `default_disabled` must be what they were before.
+Step 5 for `seerrsense` is **not** in the blocks above, and is a different
+endpoint: `cf()` addresses `servers/{id}`, while a tool allowlist lives on the
+portal object. Until that repository has an apply script
+(mctlhq/seerrsense#70), its mapping is written the way Phase 0 wrote it — a
+read-modify-write `PUT` on `portals/mcp` — which carries the race described
+under "What the write does not touch": the body sends every server's mapping
+back, so a `tg` or `api` allowlist applied between the read and the write is
+silently reverted, with a `200`. Run it when no other apply is in flight, and
+read the other two mappings back afterwards; their tool counts and
+`default_disabled` must be what they were before.
 
 Measured on the day: `seerrsense` `last_synced` 2026-09-10 19:32 → 2026-09-13
 05:42, `api` 74 → 75 tools with the allowlist re-applied 75/75. The portal
