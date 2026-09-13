@@ -194,38 +194,28 @@ spec:
                 )
                 result = json.loads(urllib.request.urlopen(req).read())
 
-                # Trust the response, not the request. GitHub echoes the
-                # permissions and repositories the token actually carries, so
-                # a narrowing that silently failed to apply is caught here
-                # rather than discovered later by whatever the token could
-                # reach. Belt and braces with the header above, deliberately:
-                # the failure mode being guarded against is the quiet one.
+                # DO NOT re-add an equality check on result["permissions"].
+                #
+                # It was here, it passed, and it was wrong. Measured on the
+                # live token 2026-09-13: a mint scoped to
+                # {contents: read, actions: write} came back reporting exactly
+                # that, and the issued token could still create an issue
+                # (mctlhq/mctl-gitops#1236, created by the probe and closed).
+                # So GitHub echoes the requested permissions whether or not it
+                # applied all of them, and a guard reading that echo returns a
+                # pass for a token that is wider than it claims -- false
+                # assurance, which is worse than no guard, because it is the
+                # exact failure it was written to catch.
+                #
+                # What GitHub DOES apply, same measurement: `repositories`
+                # (1 repo, a private repo outside it 404s) and a downgrade of a
+                # named permission (contents:write -> read, writes 403). What
+                # it does not is REMOVE an unnamed permission. So the narrowing
+                # is real but partial, and only behaviour proves which half.
+                #
+                # verify_token below probes the issued token instead of
+                # believing the reply. See mctlhq/mctl-api#307.
                 if scope:
-                    want_perms = scope.get("permissions")
-                    # `is not None`, not truthiness: a target that deliberately
-                    # requests {} is asking for the narrowest possible token,
-                    # and that is exactly when a silently ignored limit matters
-                    # most. Skipping the check there would verify every scope
-                    # except the strictest one.
-                    if want_perms is not None:
-                        # GitHub grants metadata:read on every installation
-                        # token whether or not it was asked for -- the same
-                        # forced permission fine-grained PATs carry. Dropped
-                        # from BOTH sides so the comparison stays symmetric:
-                        # a target that names metadata explicitly must not
-                        # fail for having asked for what it gets anyway.
-                        #
-                        # Dropped by name rather than by tolerating extras in
-                        # general: an unexpected EXTRA permission is exactly
-                        # the silent widening this check exists to catch, so
-                        # only the one known-forced key is excused.
-                        granted = {k: v for k, v in (result.get("permissions") or {}).items()
-                                   if k != "metadata"}
-                        wanted = {k: v for k, v in want_perms.items() if k != "metadata"}
-                        if granted != wanted:
-                            raise RuntimeError(
-                                f"token permissions {granted} != requested {wanted}"
-                            )
                     want_repos = scope.get("repositories")
                     if want_repos is not None:
                         # Absent key != empty list. A token that was NOT
@@ -245,6 +235,56 @@ spec:
                                 f"token repositories {got} != requested {sorted(want_repos)}"
                             )
                 return result["token"], result["expires_at"]
+
+            def verify_token(token, checks, label):
+                """Prove what a freshly minted token can and cannot do.
+
+                The mint reply cannot be trusted for permissions (see the note
+                in mint_installation_token), so each scoped target declares
+                what its token MUST be refused and what it MUST still be able
+                to do, and this exercises the real token against the real API.
+
+                NOTHING IS CREATED. Every write probe sends a deliberately
+                invalid body, because GitHub checks permission BEFORE it
+                validates: a permitted write comes back 422 (or 404 when the
+                object named does not exist) and a refused one comes back 403,
+                and neither outcome changes anything. That property is the
+                whole design -- if you ever "fix" one of these bodies to be
+                valid, this job starts creating objects in mctl-gitops every
+                30 minutes.
+
+                Each check names the exact status codes it accepts rather than
+                a "permitted"/"refused" word, because those do not map onto a
+                single code. A repository outside the token's scope answers
+                404, not 403 -- GitHub hides its existence rather than refusing
+                access -- so a rule like "403 means refused, anything else
+                means permitted" reads a correctly invisible repository as
+                reachable. Found by running this against the live tokens
+                before shipping it.
+                """
+                for expected, method, path, body in checks:
+                    data = json.dumps(body).encode() if body is not None else None
+                    headers = {
+                        "Authorization": f"Bearer {token}",
+                        "Accept": "application/vnd.github+json",
+                        "X-GitHub-Api-Version": "2022-11-28",
+                    }
+                    if data is not None:
+                        headers["Content-Type"] = "application/json"
+                    req = urllib.request.Request(
+                        f"https://api.github.com{path}", data=data,
+                        headers=headers, method=method)
+                    try:
+                        code = urllib.request.urlopen(req).status
+                    except urllib.error.HTTPError as e:
+                        code = e.code
+                    if code not in expected:
+                        raise RuntimeError(
+                            f"{method} {path} returned {code}, expected one of "
+                            f"{sorted(expected)}: the token does not have the access this "
+                            "target requires, or has access it must not"
+                        )
+                    print(f"    [{label}] {code} {method} {path}")
 
             def force_sync_external_secret(namespace, name, version):
                 patch_body = json.dumps({
@@ -329,6 +369,41 @@ spec:
                         "repositories": ["mctl-gitops"],
                         "permissions": {"contents": "read", "actions": "write"},
                     },
+                    # What the token must and must not be able to do, checked
+                    # against the API on every mint. Entries are
+                    # (expectation, method, path, body); a body is invalid on
+                    # purpose so nothing is created -- see verify_token.
+                    #
+                    # These assert the narrowing that GitHub actually applies.
+                    # Note what is deliberately NOT asserted: that the token
+                    # cannot open an issue. Measured 2026-09-13, it still can,
+                    # because GitHub downgrades a named permission but does not
+                    # remove an unnamed one. Asserting it would fail the
+                    # rotation forever over a limit GitHub does not honour;
+                    # pretending otherwise is what the old response check did.
+                    "verify": [
+                        # The clone must keep working.
+                        ({200}, "GET", "/repos/mctlhq/mctl-gitops/contents/README.md", None),
+                        # And the dispatch: 404 is the PASS here -- permission
+                        # was accepted and only the workflow file is missing.
+                        # A 403 would mean actions:write did not survive.
+                        ({404}, "POST",
+                         "/repos/mctlhq/mctl-gitops/actions/workflows/zz-nonexistent.yml/dispatches",
+                         {"ref": "main"}),
+                        # contents must be read-only: 403 on a write. This is
+                        # the half of the permission narrowing GitHub honours,
+                        # and the one worth asserting. The unscoped token
+                        # answers 422 here, which is what makes this check
+                        # discriminate rather than decorate.
+                        ({403}, "POST", "/repos/mctlhq/mctl-gitops/git/refs",
+                         {"ref": "refs/heads/zz-permission-probe",
+                          "sha": "0000000000000000000000000000000000000000"}),
+                        # The repository narrowing: a private repository
+                        # outside the scope answers 404, not 403 -- GitHub
+                        # hides it rather than refusing it.
+                        ({404}, "GET",
+                         "/repos/mctlhq/pfeifenpatenschaft-backend/contents/README.md", None),
+                    ],
                     "external_secrets": [
                         ("mctl-api", "mctl-api-github-app"),
                     ],
@@ -342,6 +417,16 @@ spec:
                     creds = vault_get(t["creds_path"])
                     token, expires_at = mint_installation_token(creds, t.get("scope"))
                     print(f"✅ [{label}] minted (installation={creds['installation-id']}, expires={expires_at})")
+
+                    # Before the token is stored anywhere. A token that is
+                    # wider than its target expects must not reach Vault, so
+                    # this raises and the target fails rather than degrading
+                    # quietly -- the previous value stays in place and keeps
+                    # working until it expires, which is a far better hour to
+                    # be in than an unnoticed over-grant.
+                    if t.get("verify"):
+                        verify_token(token, t["verify"], label)
+                        print(f"✅ [{label}] token verified against the API, not the mint reply")
 
                     # Read-merge-write: never replace the whole secret, only
                     # the one key. Other keys at this path (OAuth tokens,
