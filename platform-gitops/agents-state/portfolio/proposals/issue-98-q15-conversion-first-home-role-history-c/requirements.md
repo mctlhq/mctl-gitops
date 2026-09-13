@@ -219,6 +219,13 @@ re-punctuated.
   to it.
 - Any availability or "open to work" statement, in any wording, in either
   language.
+- Elapsed-time counts in any copy string ("nine years", "four years", "a team
+  of four"). `AGENTS.md` states that every number on the site comes from
+  `src/data/metrics.json` and that numbers are never typed into content;
+  career history has no such source and cannot have one, and an elapsed-time
+  count is true only relative to an unstated present. The copy states fixed
+  dates instead, which do not go stale. Fixed calendar years (`2017`, `2021`,
+  `2024`) are dates, not counts, and are permitted.
 - Any city or country of residence. `contactIntro` states the working mode, the
   working hours and the relocation preference, and nothing beyond that.
 - Version numbers on any language, framework or runtime named in the copy.
@@ -293,14 +300,14 @@ re-punctuated.
 
 en:
 
-1. `Nine years of production engineering. Since 2021, backend and platform work for a global retail-trading fintech: high-availability services on AWS EKS and ECS, Kafka event streaming for market data and order flow, and transaction processing that cannot double-count a balance update. Since 2024 I also review architecture and code for several core financial microservices as the team's Java and Spring component mentor.`
-2. `Before that, four years of Python at a large retail chain — forecasting services and spatial data pipelines over PostGIS — the last of them leading a team of four engineers end to end, from prioritisation with the business to production rollout.`
+1. `Production engineering since 2017. Since 2021, backend and platform work for a global retail-trading fintech: high-availability services on AWS EKS and ECS, Kafka event streaming for market data and order flow, and transaction processing that cannot double-count a balance update. Since 2024 I also review architecture and code for several core financial microservices as the team's Java and Spring component mentor.`
+2. `Before that, Python at a large retail chain from 2017 to 2021 — forecasting services and spatial data pipelines over PostGIS — latterly leading its engineering team end to end, from prioritisation with the business to production rollout.`
 3. `Since early 2026 I build and operate mctl.ai in the open: a multi-tenant Kubernetes platform where AI agents carry the delivery work and humans hold the gates. This site is one of the services running on it, and every cycle that changed it is recorded on the colophon.`
 
 ru:
 
-1. `Девять лет продакшн-инженерии. С 2021 года — бэкенд и платформа для глобального финтеха розничного трейдинга: высокодоступные сервисы на AWS EKS и ECS, потоковая обработка рыночных данных и потока ордеров через Kafka, обработка транзакций, в которой изменение баланса невозможно применить дважды. С 2024 года дополнительно ревьюю архитектуру и код нескольких ключевых финансовых микросервисов как component mentor команды по Java и Spring.`
-2. `До этого — четыре года Python в крупной розничной сети: сервисы прогнозирования и конвейеры пространственных данных на PostGIS. Последний из них — с командой из четырёх инженеров, от приоритизации с бизнесом до выката в продакшн.`
+1. `Продакшн-инженерия с 2017 года. С 2021 года — бэкенд и платформа для глобального финтеха розничного трейдинга: высокодоступные сервисы на AWS EKS и ECS, потоковая обработка рыночных данных и потока ордеров через Kafka, обработка транзакций, в которой изменение баланса невозможно применить дважды. С 2024 года дополнительно ревьюю архитектуру и код нескольких ключевых финансовых микросервисов как component mentor команды по Java и Spring.`
+2. `До этого — Python в крупной розничной сети с 2017 по 2021 год: сервисы прогнозирования и конвейеры пространственных данных на PostGIS. В конце этого периода вёл инженерную команду целиком, от приоритизации с бизнесом до выката в продакшн.`
 3. `С начала 2026 года строю и эксплуатирую mctl.ai в открытую: мультитенантную платформу на Kubernetes, где доставку ведут AI-агенты, а люди стоят на контрольных точках. Этот сайт — один из сервисов на ней, и каждый изменивший его цикл записан в колофоне.`
 
 ### A.5 `capabilitiesHeading`
