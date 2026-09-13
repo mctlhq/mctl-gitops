@@ -191,30 +191,47 @@ with `token_endpoint_auth_method: none`, and it bumps `client_secret_version`).
 
 ### Recipe
 
-```
-H='Authorization: Bearer <Account -> MCP Portals -> Edit token>'
-U=https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/access/ai-controls/mcp/servers/$SERVER
+The token never reaches a command line: `cf()` hands it to curl in a config on
+a file descriptor, the same shape `scripts/portal-controls-apply.sh` uses, so
+it is in neither the shell history nor the process table. `--fail-with-body`
+and `jq -e` are load-bearing on step 0 — curl succeeds on an HTTP error by
+default and plain `jq` writes `null` with status 0, which would leave the
+operator holding an empty backup of the only copy of the registration.
 
-# 0. save the registration FIRST. Step 1 clears it, and for api and seerrsense
-#    nothing else records it (only tg is described in mcp-servers.tf). The
-#    read-only projection has every field step 2 needs except the secret.
-curl -H "$H" "$U" | jq '.result.auth_config_summary' > "$SERVER.summary.json"
+```
+read -rs CLOUDFLARE_API_TOKEN           # Account -> MCP Portals -> Edit
+CLOUDFLARE_ACCOUNT_ID=<account id>      # the same name the rest of this README uses
+SERVER=<tg|api|seerrsense>
+
+cf() { curl -sS --fail-with-body \
+  -K <(printf 'header = "Authorization: Bearer %s"\nheader = "Content-Type: application/json"\n' "$CLOUDFLARE_API_TOKEN") \
+  "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/access/ai-controls/mcp/servers/$SERVER" "$@"; }
+
+# 0. save the registration FIRST and refuse to continue without it. Step 1
+#    clears it, and for api and seerrsense nothing else records it (only tg is
+#    described in mcp-servers.tf). The read-only projection carries every field
+#    step 2 needs except the secret.
+cf | jq -e '.success and (.result.auth_config_summary != null)' >/dev/null \
+  && cf | jq -e '.result.auth_config_summary' > "$SERVER.summary.json" \
+  || { echo "no usable registration to back up -- do not flip"; return 2>/dev/null || exit 1; }
 
 # 1. flip to bearer: status goes waiting -> error ("unable to connect"), last_synced moves
-curl -H "$H" -X PUT "$U" --json '{"auth_type":"bearer","auth_credentials":"resnapshot-not-a-token"}'
+cf -X PUT --json '{"auth_type":"bearer","auth_credentials":"resnapshot-not-a-token"}'
 
 # 2. flip back to manual OAuth. auth_credentials is the saved summary's
 #    auth_mode + config + registration_info, JSON-encoded as one string, plus a
 #    client_secret (a switch to manual requires one; any non-empty value with
 #    token_endpoint_auth_method none). For tg take the values from mcp-servers.tf.
-curl -H "$H" -X PUT "$U" --json '{"auth_type":"oauth","auth_credentials":"<json string>","client_secret":"<random>"}'
+cf -X PUT --json '{"auth_type":"oauth","auth_credentials":"<json string>","client_secret":"<random>"}'
 #    -> status: waiting, authentication_status: manual
 
-# 3. one user signs the server out and back in on the portal's server selection
-#    page (portal_toggle_servers gives the URL). That authorization takes the
-#    new snapshot: status ready, last_synced now, tools = live count. Use an
-#    identity on the upstream's highest tier -- the snapshot holds whatever
-#    tools/list that identity is shown.
+# 3. ONE user signs the server out and back in on the portal's server selection
+#    page (portal_toggle_servers gives the URL), and it must be an identity on
+#    the upstream's highest tier. The snapshot holds whatever tools/list THAT
+#    identity is shown, and it is taken once: if a lower-tier user authorizes
+#    first, the catalogue keeps their reduced set and the later high-tier login
+#    does not refresh it. Announce the window, and read the tool count back
+#    before telling anyone else to reconnect.
 
 # 4. give the new tools a decision in the owning repository's allowlist and
 #    apply it: scripts/portal-allowlist-apply.sh in mctl-telegram and mctl-api
@@ -232,12 +249,18 @@ What it costs: for the minutes between step 1 and step 3 the server is
 unusable through the portal, and every portal user has to re-authorise it
 afterwards. Live MCP sessions keep the old `tools/list` until they reconnect.
 
-Two rules follow. Re-snapshot **after** the release that changed the schema is
-deployed, never before — the snapshot copies whatever the upstream advertises
-at that moment (`tg` waits for the release carrying mctl-telegram#638, or the
-closed schemas get captured again). And any PR that adds a tool or changes an
-output schema owes this step; until a drift check exists, the only thing that
-notices otherwise is a failing client.
+Two rules follow. Re-snapshot **after** the release that changed the tool
+definitions is deployed, never before — the snapshot copies whatever the
+upstream advertises at that moment (`tg` waited for the release carrying
+mctl-telegram#638, or the closed schemas would have been captured again).
+
+And any PR that changes what `tools/list` advertises owes this step: a tool
+added or removed, an `outputSchema` changed, and equally an `inputSchema` —
+the snapshot carries the whole tool definition, so a renamed or newly required
+parameter leaves clients calling the tool the old way against a server that no
+longer accepts it. The nightly check described below is what notices when
+someone forgets; before it existed, the only thing that did was a failing
+client.
 
 For `tg`, which OpenTofu describes in `mcp-servers.tf`: the flip is done with
 the same API token outside tofu and the registration is resent from the file's
