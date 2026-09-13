@@ -407,7 +407,7 @@ before=$(pf); printf '%s' "$before" | ok
 printf '%s' "$before" | others > portal.others.before.json
 test -s portal.others.before.json
 
-TOOL=<the tool name from the step-4 diff>
+TOOL="seerrsense_new_tool"              # the name from the step-4 diff
 body=$(TOOL="$TOOL" jq -c '{servers: [.result.servers[]
   | if .server_id == "seerrsense"
     then .updated_tools += [(.updated_tools[0] | .name = env.TOOL | .enabled = true)]
@@ -419,10 +419,19 @@ Then, and only if that body is what you meant:
 
 ```
 printf '%s' "$body" | pf -X PUT --json @- | ok
+result=$(pf); printf '%s' "$result" | ok
 
-# the other two mappings must be untouched -- this is the race, not a
-# formality, and a 200 says nothing about it.
-diff -u portal.others.before.json <(pf | others)
+# seerrsense's own mapping: the tool has to be there AND enabled. ok() reads
+# the envelope, and this API is on record answering 200 while keeping a field
+# it was told to change, so nothing so far has looked at what was stored.
+printf '%s' "$result" | TOOL="$TOOL" jq -e '[.result.servers[]
+  | select(.server_id == "seerrsense") | .updated_tools[]
+  | select(.name == env.TOOL and .enabled == true)] | length == 1' >/dev/null \
+  || { echo "the new tool is not enabled on the mapping; do not close the window"; exit 1; }
+
+# and the other two mappings must be untouched -- this is the race, not a
+# formality, and a 200 says nothing about it either.
+diff -u portal.others.before.json <(printf '%s' "$result" | others)
 ```
 
 `updated_tools[0]` is the shape donor, so this needs `seerrsense` to have at
