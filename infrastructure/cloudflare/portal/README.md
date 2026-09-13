@@ -217,8 +217,12 @@ printf '%s' "$summary" | jq -e '.success and (.result.auth_config_summary != nul
   || { echo "no usable registration to back up -- do not flip"; exit 1; }
 printf '%s' "$summary" | jq '.result.auth_config_summary' > "$SERVER.summary.json"
 
-# 1. flip to bearer: status goes waiting -> error ("unable to connect"), last_synced moves
-cf -X PUT --json '{"auth_type":"bearer","auth_credentials":"resnapshot-not-a-token"}'
+# 1. flip to bearer: status goes waiting -> error ("unable to connect"), last_synced moves.
+#    Stop on failure. A PUT that did not land leaves the snapshot uncleared,
+#    and step 2 would then re-upload the same registration and look like a
+#    successful run, while clients keep getting the old schemas.
+cf -X PUT --json '{"auth_type":"bearer","auth_credentials":"resnapshot-not-a-token"}' \
+  || { echo "step 1 did not flip -- the snapshot is NOT cleared, stop here"; exit 1; }
 
 # 2. flip back to manual OAuth. auth_credentials is the saved summary's
 #    auth_mode + config + registration_info as ONE JSON-encoded string, and a
@@ -227,10 +231,17 @@ cf -X PUT --json '{"auth_type":"bearer","auth_credentials":"resnapshot-not-a-tok
 #    rather than hand-encoding it into a quoted shell string: jq does the
 #    escaping, and an apostrophe anywhere in a redirect URI or scope would
 #    otherwise close the quote and send a mangled registration.
-jq -n --arg creds "$(jq -c '{auth_mode, config, registration_info}' "$SERVER.summary.json")" \
-      --arg secret "$(openssl rand -hex 24)" \
-      '{auth_type:"oauth", auth_credentials:$creds, client_secret:$secret}' \
-  | cf -X PUT --json @-
+#
+#    The values go to jq through the ENVIRONMENT, not --arg. A command line is
+#    world-readable in /proc, so --arg would put the new client_secret in the
+#    process table -- the leak the -K config above exists to avoid, reopened
+#    one step later for a different secret.
+body=$(CREDS="$(jq -c '{auth_mode, config, registration_info}' "$SERVER.summary.json")" \
+       SECRET="$(openssl rand -hex 24)" \
+       jq -n '{auth_type:"oauth", auth_credentials:env.CREDS, client_secret:env.SECRET}') \
+  || { echo "could not build the registration body"; exit 1; }
+printf '%s' "$body" | cf -X PUT --json @- \
+  || { echo "step 2 failed -- the server is still in bearer mode, retry before anyone reconnects"; exit 1; }
 #    -> status: waiting, authentication_status: manual
 
 # 3. ONE user signs the server out and back in on the portal's server selection
