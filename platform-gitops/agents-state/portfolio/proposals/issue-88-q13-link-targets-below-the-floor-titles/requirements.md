@@ -3,144 +3,143 @@
 ## Context
 
 An external UX audit of https://dmitriimashkov.com/ dated 2026-09-13 measured
-four mechanical defects on production 0.1.23 and against `main` at `41dc023`+.
-None of them needs a copy decision from the owner, and none of them changes
-wording or layout beyond two new links on the 404 page.
+four mechanical defects on production 0.1.23 and on `main` at `41dc023`+. None
+of them needs a copy decision from the owner.
 
-1. **Standalone links are below the target-size floor and the guard cannot see
-   them.** `test/a11y.test.ts:22` checks `min-block-size` on six selectors only
-   (`'.site-nav a'`, `'.toggle-group button'`, `'.site-footer a'`, `'.cta'`,
-   `'.block > summary'`, `'.skip-link:focus'`). `src/styles/site.css` sets
-   `min-block-size: 44px` on those six and nothing on the standalone links
-   outside that list: the repository and Docs links on `/work/`
-   (`.project-links a`, `src/components/ProjectCard.astro`), the issue and
-   pull-request links in the journal meta list (`.journal-meta a`,
-   `src/pages/colophon/journal/[...slug].astro`), the breadcrumb links
-   (`.breadcrumb a`, `src/components/Breadcrumb.astro`), and the links inside
-   the cycles and ADR tables (`.table-scroll a`,
-   `src/components/CycleTable.astro`, `src/pages/colophon/index.astro`). The
-   audit measured 17-20px on those. The suite is green while the links are
-   half the floor.
-2. **Rendered titles run past what a search result shows.** The journal route
-   renders `` `${data.title.en} — Dmitrii Mashkov` `` and the ADR route
+1. `src/styles/site.css` gives a 44px `min-block-size` to six interactive
+   selectors (`.site-nav a`, `.toggle-group button`, `.site-footer a`, `.cta`,
+   `.block > summary`, `.skip-link:focus`) and the guard in
+   `test/a11y.test.ts:22` checks exactly those six. Four classes of standalone
+   link carry no hit-area rule at all and measured 17-20px: `.project-links a`
+   (the repository and Docs links on `/work/`), `.journal-meta a` (the issue
+   and pull-request links on a journal entry page), `.breadcrumb a`, and the
+   links inside `.table-scroll` (the cycles table and the ADR index). The suite
+   is green while those links are half the 24px floor.
+2. `src/pages/colophon/journal/[...slug].astro` renders
+   `` `${data.title.en} — Dmitrii Mashkov` `` and
+   `src/pages/colophon/adr/[...slug].astro` renders
    `` `ADR-${padAdrId(entry.data.id)}: ${entry.data.title.en} — Dmitrii Mashkov` ``,
-   with no length budget anywhere. The longest is 129 characters
-   (`2026-09-12-symlink-safe-check-no-metrics-entry-guard.md` measures 127 in
-   the committed tree; the audit measured 129 on production 0.1.23).
-   `test/seo.test.ts` exercises `clampDescription` and asserts nothing about
-   titles. An editorial H1 and a search-result title are different jobs; the
-   page needs both.
-3. **Every raw operational entry is indexable.** All 24 journal entries appear
-   in `dist/sitemap-0.xml`. Most are internal build notes of 96-200 words --
-   correct as a public record, wrong as an answer to a search. Nothing in
-   `src/content.config.ts` can say so.
-4. **The share image has no alternative text and no page carries structured
-   data.** `src/layouts/Base.astro` emits `og:image` and `twitter:image` with
-   no `og:image:alt` or `twitter:image:alt`, and emits no JSON-LD of any kind.
+   with no length budget anywhere. Measured against the clone, 23 rendered
+   titles are longer than 65 characters and one more is exactly 65; the longest
+   is 127 characters
+   (`2026-09-12-symlink-safe-check-no-metrics-entry-guard.md`).
+   `test/seo.test.ts` exercises `clampDescription` only and asserts nothing
+   about titles. An editorial H1 and a search-result title are different jobs.
+3. All 24 public journal entries reach `dist/sitemap-0.xml`, because
+   `astro.config.mjs` only filters `/404` and `/dev/` and `scripts/check-dist.mjs`
+   `checkSitemap()` expects exactly one sitemap URL per public journal entry.
+   Most entries are internal build notes of 96-200 words: correct as a public
+   record, wrong as an answer to a search. The journal schema in
+   `src/content.config.ts` has no way to say so.
+4. `src/layouts/Base.astro` emits `og:image` and `twitter:image` with no
+   `og:image:alt` or `twitter:image:alt`, and no page carries structured data
+   of any kind.
 
-This proposal gives every standalone link a hit area the test can actually see,
-gives long pages a short search title without touching their headings, lets an
-entry say whether it is written for a reader or for the record, and describes
-the share image.
+This proposal gives every standalone link a hit area the test can actually
+see, gives long pages a short search title without touching their headings,
+lets a journal entry say whether it is written for a reader or for the record,
+and describes the share image. Nothing user-facing changes in wording or
+layout beyond the 404 page's two new links.
 
 ## User stories
 
-- AS a reader on a 360px-wide phone I WANT every standalone link -- repository
-  links, breadcrumb links, journal issue and pull-request links, links inside
-  the colophon tables -- to have a hit area of at least 24px SO THAT I can tap
-  the one I meant instead of the one next to it.
-- AS a maintainer I WANT the accessibility test to enumerate every class of
-  standalone link SO THAT a link half the floor cannot ship behind a green
-  suite.
-- AS a person searching for this site I WANT a page's title in the result to
-  read as a complete label rather than a truncated sentence SO THAT I can tell
-  what the page is before I open it.
-- AS the site owner I WANT an entry's `<h1>` and its `<title>` to be allowed to
-  differ SO THAT an editorial heading is not forced to be a filing label.
-- AS a person searching for how this platform works I WANT the six journal
-  entries that answer a question to be indexed and the eighteen raw build notes
-  not to be SO THAT the index carries answers rather than logs.
-- AS a maintainer I WANT a `noindex` entry to stay published, linked from the
-  colophon and reachable SO THAT the public record is unbroken while the index
-  is not polluted.
-- AS someone who sees this site shared on a social platform with images off, or
-  who reads it through a screen reader, I WANT the share image described SO
-  THAT the card still carries meaning.
-- AS a search engine I WANT a `BreadcrumbList` on every journal and ADR page SO
-  THAT the result shows where the page sits in the site.
-- AS a reader who lands on a missing URL I WANT a link to the work and a way to
-  get in touch SO THAT the 404 is a fork in the road rather than a dead end.
+- AS a reader on a 360px phone I WANT every standalone link on the work,
+  journal, breadcrumb and colophon-table surfaces to have a hit area of at
+  least 24px SO THAT I can tap the link I meant without hitting its neighbour.
+- AS the maintainer I WANT the hit-area guard in `test/a11y.test.ts` to cover
+  all ten selectors and to fail when a declaration drops below the floor SO
+  THAT a future stylesheet edit cannot silently take a link back under 24px.
+- AS someone who finds a page of this site in a search result I WANT its title
+  to fit inside the result SO THAT I can read what the page is before I click.
+- AS the maintainer I WANT a build-time title-length budget SO THAT a new
+  entry with a long editorial title cannot ship a truncated search title.
+- AS someone searching for how this site handles CSP headers or cache
+  lifetimes I WANT the six journal entries that answer a real question to be
+  indexed and the eighteen raw build notes to stay out of the index SO THAT
+  search results are answers and not operational noise.
+- AS a reader of the colophon I WANT every journal entry, indexed or not, to
+  stay published, linked and reachable SO THAT the public record is complete.
+- AS someone shown the share card by a screen reader or on a slow connection I
+  WANT the image to have alternative text SO THAT I know what was shared.
+- AS a search engine crawling a journal or ADR page I WANT a `BreadcrumbList`
+  that matches the visible breadcrumb SO THAT the page's place in the site is
+  unambiguous.
+- AS a reader who lands on a wrong URL I WANT the 404 page to offer the work
+  page and a contact address SO THAT I am not left with only a link home.
+- AS the maintainer I WANT the JSON-LD to cost no CSP change SO THAT
+  `scripts/csp-hash.mjs` keeps reporting exactly one script hash and the
+  `script-src` directive stays as it is.
 
 ## Acceptance criteria (EARS)
 
 ### A. Hit areas
 
-- WHEN `src/styles/site.css` is read THE SYSTEM SHALL declare a
-  `min-block-size` of at least `24px`, together with `display: inline-flex` and
-  `align-items: center`, for each of `.project-links a`, `.breadcrumb a`,
-  `.journal-meta a` and `.table-scroll a`, in the same grouped-rule shape the
-  existing six selectors already use.
-- WHILE those four rules are in force THE SYSTEM SHALL leave `main a` -- a link
-  inside a sentence of prose -- untouched: this change covers standalone links
-  only, and no rule may turn an inline sentence link into a block.
+- WHEN `src/styles/site.css` is read THE SYSTEM SHALL declare, for each of
+  `.project-links a`, `.breadcrumb a`, `.journal-meta a` and `.table-scroll a`,
+  a `min-block-size` of at least 24px together with `display: inline-flex` and
+  `align-items: center`, in the same shape the existing six selectors use.
+- WHILE those four rules are in force THE SYSTEM SHALL leave `main a` in prose
+  untouched: no hit-area rule may apply to a link inside a paragraph of running
+  text by virtue of being inside `<main>`.
 - WHEN `test/a11y.test.ts` runs THE SYSTEM SHALL check all ten selectors --
-  `.site-nav a`, `.toggle-group button`, `.site-footer a`, `.cta`,
-  `.block > summary`, `.skip-link:focus`, `.project-links a`, `.breadcrumb a`,
-  `.journal-meta a` and `.table-scroll a` -- keeping the existing assertion
-  shape: at least one rule block whose comma-separated selector list contains
-  the exact selector sets `min-block-size`, and every such declaration is at or
-  above the 24px floor.
-- IF any of the ten selectors declares a `min-block-size` below `24px` THEN THE
-  SYSTEM SHALL fail `test/a11y.test.ts`, and the test file SHALL itself contain
-  a recorded mutation -- the same matcher run over a synthetic stylesheet whose
-  declaration is below the floor, asserted to report a problem -- so the guard
-  is proven to discriminate rather than merely to pass.
-- WHILE the four new rules are in force THE SYSTEM SHALL introduce no
-  `min-width`, no fixed `height`/`block-size`, and no change to
-  `.table-scroll`'s focusable region (`role="region"`, `tabindex="0"`,
-  `:focus-visible` outline) or to its `@media (max-width: 599px)`
-  `.table-scroll::after` scroll hint.
-- WHILE the four new rules are in force THE SYSTEM SHALL declare no
-  `animation` or `transition` anywhere in `src/styles/site.css`, so the
-  existing assertion in `test/a11y.test.ts` continues to hold.
+  the existing `.site-nav a`, `.toggle-group button`, `.site-footer a`, `.cta`,
+  `.block > summary`, `.skip-link:focus` plus the four new ones -- keeping the
+  existing assertion shape: at least one rule block whose selector list
+  contains the exact selector sets `min-block-size`, and every such declaration
+  is at or above 24px.
+- IF any of the ten `min-block-size` declarations drops below 24px THEN THE
+  SYSTEM SHALL fail `test/a11y.test.ts` naming the selector and the measured
+  value.
+- WHEN `test/a11y.test.ts` runs THE SYSTEM SHALL prove the guard discriminates
+  by running the same matcher over a synthetic stylesheet recorded in the test
+  file that declares `min-block-size: 20px` for a selector, and asserting the
+  matcher reports a problem for it; and over a synthetic stylesheet that
+  declares no `min-block-size` at all for that selector, and asserting the
+  matcher reports a problem for that too.
+- WHILE the new rules are in force THE SYSTEM SHALL introduce no `min-width`,
+  no fixed `height`/`block-size`, no `animation` and no `transition`, and
+  SHALL leave `.table-scroll`'s `overflow-x: auto`, `tabindex="0"` focusable
+  region, `:focus-visible` outline and the `@media (max-width: 599px)`
+  `.table-scroll::after` scroll hint exactly as they are.
 
 ### B. Short search titles
 
 - WHEN `src/content.config.ts` is loaded THE SYSTEM SHALL accept an optional
-  `seoTitle: z.string().min(1)` on the `journal` schema and on the `adr`
-  schema. It is a complete `<title>` string, Latin, one per entry, not
-  bilingual -- a browser tab is a filing label, exactly as `AGENTS.md` already
-  says of `homeTitle`.
-- WHEN a journal or ADR entry carries `seoTitle` THE SYSTEM SHALL render that
-  string as the page `<title>` (and therefore as `og:title` and
-  `twitter:title`, which `Base.astro` derives from the same `title` prop).
-- IF an entry carries no `seoTitle` THEN THE SYSTEM SHALL render the current
-  template unchanged: `` `${data.title.en} — Dmitrii Mashkov` `` for a journal
-  entry, `` `ADR-${padAdrId(entry.data.id)}: ${entry.data.title.en} — Dmitrii Mashkov` ``
-  for an ADR.
-- WHILE `seoTitle` is present THE SYSTEM SHALL leave the page's `<h1>` and its
-  breadcrumb current-item unchanged: the journal `<h1>` keeps its
-  `title.en`/`title.ru` `<Lang>` pair, the ADR `<h1>` keeps
-  `ADR-{padAdrId(id)}: ` plus its `title.en`/`title.ru` pair, and the
-  breadcrumb keeps `currentEn`/`currentRu` exactly as today.
+  `seoTitle: z.string().min(1)` on the `journal` collection schema and on the
+  `adr` collection schema.
+- WHILE `seoTitle` is a single Latin string THE SYSTEM SHALL NOT make it
+  bilingual: it is a complete `<title>` string, one per entry, exactly as
+  `AGENTS.md` already prescribes for `ui.homeTitle`.
+- WHEN a journal page is rendered THE SYSTEM SHALL use `data.seoTitle` as the
+  `<title>` if present, and otherwise `` `${data.title.en} — Dmitrii Mashkov` ``.
+- WHEN an ADR page is rendered THE SYSTEM SHALL use `entry.data.seoTitle` as
+  the `<title>` if present, and otherwise
+  `` `ADR-${padAdrId(entry.data.id)}: ${entry.data.title.en} — Dmitrii Mashkov` ``.
+- WHILE `seoTitle` is present on an entry THE SYSTEM SHALL leave that page's
+  `<h1>` and its breadcrumb current-item text rendering `title.en` / `title.ru`
+  unchanged.
 - WHEN `src/lib/seo.ts` is imported THE SYSTEM SHALL export
-  `titleProblems(title, { warn = 65, fail = 75 })` returning a list of problem
+  `titleProblems(title: string, options?: { warn?: number; fail?: number }): string[]`
+  with defaults `warn = 65` and `fail = 75`, returning a list of problem
   strings.
-- WHEN `titleProblems` is given a title of exactly 65 characters THE SYSTEM
-  SHALL return an empty list.
-- WHEN `titleProblems` is given a title of 66 characters THE SYSTEM SHALL
-  return exactly one problem, a warning whose message names the actual length.
-- WHEN `titleProblems` is given a title of 76 characters THE SYSTEM SHALL
-  return a failure-level problem.
-- WHEN the title test runs THE SYSTEM SHALL compute, for every journal entry
-  and every ADR entry, the title the route actually renders -- through the same
-  shared helper the route calls, not a hand-typed list -- and SHALL assert that
-  none of them exceeds 75 characters.
-- WHILE a page's rendered title exceeds 65 characters THE SYSTEM SHALL require
-  that page to carry a `seoTitle`; a page may exceed 65 only by carrying one.
-- WHEN the content files are read THE SYSTEM SHALL find exactly these 24
-  `seoTitle` values, character for character, one on each named entry, and on
-  no other entry:
+- WHEN `titleProblems` is called with a title of exactly 65 characters THE
+  SYSTEM SHALL return an empty list.
+- WHEN `titleProblems` is called with a title of 66 characters THE SYSTEM
+  SHALL return exactly one problem, classified as a warning, whose message
+  contains the number 66 and the number 65.
+- WHEN `titleProblems` is called with a title of 76 characters THE SYSTEM
+  SHALL return a problem classified as a failure, whose message contains the
+  number 76 and the number 75.
+- WHEN the title-length test runs THE SYSTEM SHALL compute, for every journal
+  and every ADR entry, the title the route actually renders -- by calling the
+  same exported helper the route calls, not by reading a hand-typed list of
+  titles -- and SHALL assert that no computed title exceeds 75 characters.
+- WHEN the title-length test runs THE SYSTEM SHALL assert that every entry
+  whose computed title exceeds 65 characters carries a `seoTitle`; that is, an
+  entry may exceed the 65-character warning budget only by carrying one.
+- WHEN the content files are read THE SYSTEM SHALL carry exactly these 24
+  `seoTitle` values, character for character, each on the named file and on no
+  other:
 
 | file | `seoTitle` |
 |---|---|
@@ -169,149 +168,130 @@ the share image.
 | `src/content/adr/0004-no-analytics.md` | `ADR-0004: No analytics, no cookies — Dmitrii Mashkov` |
 | `src/content/adr/0002-static-astro-no-client-bundles.md` | `ADR-0002: Static Astro, no client bundles — Dmitrii Mashkov` |
 
-- WHILE those 24 are the only entries carrying `seoTitle` THE SYSTEM SHALL
-  leave every other entry on its generated title. The five unlisted journal
-  entries (`2026-09-11-hero-name-in-the-reader-s-script.md` 61 chars,
-  `2026-09-10-add-portfolio-to-the-devloop-service-enums.md` 60,
-  `2026-09-11-work-page.md` 48, `2026-09-11-approach-page.md` 31,
-  `2026-09-11-home-page.md` 27) and the unlisted ADR
-  (`0006-browser-verified-security-headers.md` 61) each already render at or
-  below 65.
-- WHEN this cycle's own new journal entry is written THE SYSTEM SHALL give it a
-  `title.en` of at most 47 characters, so its generated title (`title.en` plus
-  the 18-character suffix `" — Dmitrii Mashkov"`) is at or below 65 and it
-  needs no `seoTitle` of its own -- no entry outside the 24 above may gain one.
+  The em dash in every value above is U+2014 surrounded by one space on each
+  side, exactly as the existing route templates already emit.
+
+- WHILE these 24 values are in place THE SYSTEM SHALL leave the remaining five
+  journal entries
+  (`2026-09-10-add-portfolio-to-the-devloop-service-enums.md`,
+  `2026-09-11-approach-page.md`,
+  `2026-09-11-hero-name-in-the-reader-s-script.md`,
+  `2026-09-11-home-page.md`,
+  `2026-09-11-work-page.md`)
+  and the remaining ADR
+  (`0006-browser-verified-security-headers.md`)
+  without a `seoTitle`; each already renders at or below 65 characters.
 
 ### C. Indexing
 
 - WHEN `src/content.config.ts` is loaded THE SYSTEM SHALL accept
   `indexing: z.enum(['index', 'noindex']).default('index')` on the `journal`
-  schema only.
-- WHILE the `adr` schema is unchanged in this respect THE SYSTEM SHALL give
-  ADRs no `indexing` field: the six decision records are each substantive and
-  all stay indexed.
+  collection schema, and SHALL NOT add such a field to the `adr` schema: the
+  six decision records are each substantive and all stay indexed.
 - WHEN the journal content files are read THE SYSTEM SHALL find an explicit
-  `indexing:` key in the frontmatter of every journal entry, with exactly these
-  values:
-
-| file | `indexing` |
-|---|---|
-| `2026-09-10-add-portfolio-to-the-devloop-service-enums.md` | `noindex` |
-| `2026-09-10-astro-static-skeleton-and-nginx-image.md` | `noindex` |
-| `2026-09-10-base-layout-vendored-tokens-and-fonts.md` | `index` |
-| `2026-09-10-register-portfolio-as-a-devloop-service.md` | `noindex` |
-| `2026-09-11-approach-page.md` | `noindex` |
-| `2026-09-11-content-collections.md` | `noindex` |
-| `2026-09-11-csp-hash-quoting-and-browser-verified-headers.md` | `index` |
-| `2026-09-11-hero-name-in-the-reader-s-script.md` | `noindex` |
-| `2026-09-11-home-page.md` | `noindex` |
-| `2026-09-11-metrics-provenance-and-no-analytics.md` | `index` |
-| `2026-09-11-p8-production-hardening-accessibility-wc.md` | `noindex` |
-| `2026-09-11-production-cutover.md` | `index` |
-| `2026-09-11-work-page.md` | `noindex` |
-| `2026-09-12-backfilling-five-omitted-journal-entries.md` | `noindex` |
-| `2026-09-12-colophon-tables-and-computed-lead-time.md` | `noindex` |
-| `2026-09-12-content-link-contrast-and-an-offline-link-check.md` | `index` |
-| `2026-09-12-navigation-state-and-accessibility-affordances.md` | `noindex` |
-| `2026-09-12-q7-polish-wave-findings.md` | `noindex` |
-| `2026-09-12-q9-six-review-findings.md` | `noindex` |
-| `2026-09-12-repository-links-out-of-the-disclosure.md` | `noindex` |
-| `2026-09-12-share-image-font-preload-cache-lifetime.md` | `noindex` |
-| `2026-09-12-symlink-safe-check-no-metrics-entry-guard.md` | `noindex` |
-| `2026-09-13-journal-lifecycle-and-release-closure.md` | `index` |
-| `2026-09-13-journal-tests-assert-invariants-only.md` | `noindex` |
-
-  That is six `index` and eighteen `noindex` across the 24 entries committed
-  today. This cycle's own new entry is a build note and carries
-  `indexing: noindex`, making nineteen `noindex` in the tree the implementer
-  commits.
-- WHEN the indexing split is tested THE SYSTEM SHALL read the collection and
-  assert that the set of `index` ids is exactly the six named above and that
-  every other journal entry is `noindex` -- never a hard-coded total that a
-  future cycle must edit.
-- WHEN a `noindex` journal page is built THE SYSTEM SHALL emit
-  `<meta name="robots" content="noindex,follow">` -- follow, not none: the
-  links out of it stay useful -- and SHALL still emit its
-  `<link rel="canonical">`, since the page is still the canonical copy of
+  `indexing:` line in every one of the 24 entries.
+- WHEN the journal content files are read THE SYSTEM SHALL find exactly these
+  six entries carrying `indexing: index`:
+  - `src/content/journal/2026-09-11-production-cutover.md`
+  - `src/content/journal/2026-09-11-csp-hash-quoting-and-browser-verified-headers.md`
+  - `src/content/journal/2026-09-11-metrics-provenance-and-no-analytics.md`
+  - `src/content/journal/2026-09-10-base-layout-vendored-tokens-and-fonts.md`
+  - `src/content/journal/2026-09-12-content-link-contrast-and-an-offline-link-check.md`
+  - `src/content/journal/2026-09-13-journal-lifecycle-and-release-closure.md`
+- WHEN the journal content files are read THE SYSTEM SHALL find every other
+  journal entry carrying `indexing: noindex`.
+- WHEN the indexing test runs THE SYSTEM SHALL assert the split by reading the
+  collection -- every entry declares an explicit value, every value is one of
+  the two, the `index` set and the `noindex` set partition the collection with
+  no overlap and no remainder, and the `index` set is non-empty -- and SHALL
+  NOT assert a literal count that a future cycle would have to edit.
+- WHEN a journal page whose entry is `noindex` is built THE SYSTEM SHALL emit
+  `<meta name="robots" content="noindex,follow">` -- `follow`, not `none`, so
+  the links out of the page stay useful -- and SHALL still emit its
+  `<link rel="canonical">`, because the page remains the canonical copy of
   itself.
-- WHEN an `index` journal page is built THE SYSTEM SHALL emit no robots meta at
-  all and SHALL be byte-identical to today's output in every other respect.
-- WHILE an entry is `noindex` THE SYSTEM SHALL keep it published: its page is
-  still generated, still linked from `/colophon/`, still reachable, and still
-  counted in the colophon's cycle table and totals. It leaves the index only.
-- WHEN `astro.config.mjs` builds the sitemap THE SYSTEM SHALL exclude the
-  `noindex` journal pages alongside `/404` and `/dev/`, deriving the excluded
-  set from the journal collection at build time rather than from a hand-typed
-  path list -- the defect class `test/entry-point.test.ts` already exists to
-  prevent.
-- WHEN `dist/sitemap-0.xml` is checked THE SYSTEM SHALL contain the six indexed
-  journal pages and no `noindex` one, with the expectation derived from the
-  collection.
+- WHEN a journal page whose entry is `index` is built THE SYSTEM SHALL emit no
+  `robots` meta at all and SHALL be byte-identical in its head to what it is
+  today apart from the additions in section D.
+- WHILE an entry is `noindex` THE SYSTEM SHALL keep it published, linked from
+  `/colophon/` and reachable at its own URL; only its sitemap entry and its
+  index eligibility change.
+- WHEN `npm run build` completes THE SYSTEM SHALL produce a
+  `dist/sitemap-0.xml` containing one URL for each of the six `index` journal
+  entries and for no `noindex` entry, alongside the existing `/`, `/work/`,
+  `/approach/`, `/colophon/` and the six ADR pages.
+- WHILE the sitemap filter is in force THE SYSTEM SHALL derive the excluded
+  set from the journal collection's own files at build time and SHALL NOT
+  contain a hand-typed list of paths -- the defect class `test/entry-point.test.ts`
+  exists to prevent.
+- WHEN `node scripts/check-dist.mjs` runs THE SYSTEM SHALL compare the built
+  sitemap against an expected set derived independently from
+  `src/content/journal` and `src/content/adr`, honouring `indexing`, so a
+  missing indexed page and a leaked `noindex` page both fail there.
 
 ### D. Share image and structured data
 
-- WHEN any page is built THE SYSTEM SHALL emit `og:image:alt` and
-  `twitter:image:alt` in English, on every page, with exactly this text,
-  because the image itself is English and Latin:
+- WHEN any page is built THE SYSTEM SHALL emit `<meta property="og:image:alt">`
+  and `<meta name="twitter:image:alt">` whose content is exactly, in English on
+  every page because the image itself is English and Latin:
 
   `Dmitrii Mashkov — platform engineering with AI on proven open source, dmitriimashkov.com`
 
-- WHEN `src/layouts/Base.astro` is given an optional `jsonLd` prop THE SYSTEM
+  The em dash is U+2014 with one space on each side.
+- WHEN `src/layouts/Base.astro` receives an optional `jsonLd` prop THE SYSTEM
   SHALL render exactly one `<script type="application/ld+json">` element
-  carrying it, and WHEN the prop is absent THE SYSTEM SHALL render nothing.
-- WHEN a journal or ADR page is built THE SYSTEM SHALL carry exactly one
-  `BreadcrumbList` JSON-LD block with three items -- Home (`/`), Colophon
-  (`/colophon/`) and the current page -- whose names are built from the same
-  values `src/components/Breadcrumb.astro` renders, so the visible breadcrumb
-  and the structured data cannot drift.
-- WHILE this cycle is in scope THE SYSTEM SHALL emit no `Person`, `WebSite` or
-  `Article` entity: those carry owner facts this cycle does not have.
-- WHEN `scripts/csp-hash.mjs` runs over the built output THE SYSTEM SHALL still
-  print exactly one `'sha256-...'` token: `application/ld+json` is a data
-  block, not script, and CSP `script-src` does not apply to it.
-- WHEN the CSP test runs THE SYSTEM SHALL assert that the built journal and ADR
-  pages contain the JSON-LD block and that the count of hash tokens
-  `scriptSrcTokens` yields for the built output is unchanged at one.
-- IF a `<script>` element carries a non-JavaScript `type` (a data block such as
-  `application/ld+json`) THEN THE SYSTEM SHALL exclude it from
-  `extractInlineScripts` in `src/lib/csp.ts`, so neither `scripts/csp-hash.mjs`
-  nor `scripts/check-headers.mjs` treats it as an inline script needing a hash.
-- WHILE the security headers are unchanged THE SYSTEM SHALL require no edit to
-  `security-headers.conf` or `nginx.conf` for the JSON-LD.
+  carrying its JSON serialisation, and WHEN it receives no such prop THE SYSTEM
+  SHALL render no such element.
+- WHEN a journal page or an ADR page is built THE SYSTEM SHALL carry exactly
+  one `BreadcrumbList` JSON-LD block with three `ListItem` entries -- Home at
+  `/`, Colophon at `/colophon/`, and the current page at its own URL -- whose
+  three names are built from the same values `src/components/Breadcrumb.astro`
+  renders for its English half, so the two cannot drift.
+- WHILE the JSON-LD is in place THE SYSTEM SHALL emit no `Person`, `WebSite`
+  or `Article` entity: those carry owner facts this cycle does not have.
+- WHEN `node scripts/check-dist.mjs` runs THE SYSTEM SHALL assert, for every
+  built journal and ADR page, that there is exactly one
+  `application/ld+json` block, that it parses, that its `@type` is
+  `BreadcrumbList`, and that its three item names equal the three names read
+  out of that same page's rendered `<nav class="breadcrumb">` English spans.
+- WHEN `scripts/csp-hash.mjs` runs over the built tree THE SYSTEM SHALL print
+  exactly one `'sha256-…'` token, unchanged from today, because
+  `application/ld+json` is data and not script.
+- WHEN the CSP test runs THE SYSTEM SHALL assert that the inline-script
+  extraction used by `scripts/csp-hash.mjs` and `scripts/check-headers.mjs`
+  ignores a `<script type="application/ld+json">` body while still capturing
+  the executable inline script, and that `scriptSrcTokens` for the built
+  output is unchanged in count.
+- WHILE the JSON-LD is in place THE SYSTEM SHALL require no change to
+  `security-headers.conf`, `nginx.conf` or the `script-src` directive.
 
 ### E. The 404 page
 
 - WHEN `/404.html` is built THE SYSTEM SHALL carry, below the existing home
-  link, two further links using new `ui` keys with exactly this copy:
+  link, two new links using two new `ui` keys with exactly this copy:
+  - `notFoundWork` -- EN `See the work`, RU `Посмотреть работы` -- linking to
+    `/work/`
+  - `notFoundContact` -- EN `Get in touch`, RU `Написать` -- linking to
+    `mailto:hello@dmitriimashkov.com`, the address
+    `src/pages/index.astro` already uses in its contact block
+- WHILE the two links are present THE SYSTEM SHALL keep `/404.html`
+  `noindex` and bilingual exactly as it is today, with the `class="l en"` /
+  `class="l ru"` pairs that `scripts/check-dist.mjs` counts for parity.
 
-| key | EN | RU | href |
-|---|---|---|---|
-| `notFoundWork` | `See the work` | `Посмотреть работы` | `/work/` |
-| `notFoundContact` | `Get in touch` | `Написать` | `mailto:hello@dmitriimashkov.com` |
+### F. Suite and gates
 
-  `mailto:hello@dmitriimashkov.com` is the address the home page's contact
-  block already uses (`src/pages/index.astro:58`).
-- WHILE the two links are added THE SYSTEM SHALL keep `/404.html` `noindex`
-  (the existing `noindex` prop on `Base.astro`) and bilingual, with each new
-  link rendered through `<Lang>` so the `class="l en"` / `class="l ru"` parity
-  `scripts/check-dist.mjs` enforces still holds.
-- WHILE `notFoundWork` exists THE SYSTEM SHALL NOT reuse the existing
-  `ctaWork` key: `ctaWork` is `{ en: 'See the work', ru: 'Смотреть работы' }`
-  and the Russian side differs from `notFoundWork`'s
-  `Посмотреть работы`.
-
-### F. Cycle hygiene
-
-- WHEN the build runs THE SYSTEM SHALL pass `npm run vendor && npm test`,
-  `npm run build`, `node scripts/check-dist.mjs` and
-  `node scripts/check-links.mjs`.
-- WHILE any new test file exists THE SYSTEM SHALL list it in the enumerated
-  `test` script in `package.json`.
-- WHEN this cycle is implemented THE SYSTEM SHALL write its own journal entry
-  under `src/content/journal/` with `status: in_progress`; the closure workflow
-  closes the previous one as usual. No journal entry currently carries
-  `status: in_progress`, so the one-cycle-at-a-time guard in
-  `checkJournalCollection` is satisfied by adding exactly one.
+- WHEN `npm run vendor && npm test` runs THE SYSTEM SHALL pass, and any new
+  test file SHALL be listed in the enumerated `test` script in `package.json`.
+- WHEN `npm run build` runs THE SYSTEM SHALL succeed.
+- WHEN `node scripts/check-dist.mjs` runs against the built tree THE SYSTEM
+  SHALL exit zero.
+- WHEN `node scripts/check-links.mjs` runs against the built tree THE SYSTEM
+  SHALL exit zero, reporting the new `mailto:` href as skipped rather than as
+  a failure.
+- WHEN this cycle's work is committed THE SYSTEM SHALL include a new journal
+  entry for it with `status: in_progress`, carrying `indexing` like every other
+  entry, leaving closure of the previous entry to the existing closure
+  workflow.
 
 ## Out of scope
 
@@ -328,56 +308,51 @@ the share image.
 - Any change to `scripts/close-journal.mjs`, `.github/workflows/`, the journal
   lifecycle, or `AGENTS.md`.
 - The five P3 findings still open on pull request #80.
-- Changing `main a` (prose links inside a paragraph), or adding a hit-area
-  floor to any selector beyond the four named in section A.
-- Changing `public/og.svg` or `scripts/render-og.mjs`: the alt text describes
-  the existing image, it does not redraw it.
-- Changing `security-headers.conf`, `nginx.conf` or the CSP header value.
-- Removing any journal entry from the site, from `/colophon/`, from the cycle
-  table or from the totals. `noindex` affects the index, nothing else.
+- Any change to the visible wording or layout of any page other than the two
+  new links on `/404.html`.
+- Any change to the `script-src` CSP directive, `security-headers.conf` or
+  `nginx.conf`.
+- Measuring the rendered rectangles in a browser. That is a reviewer step (see
+  below), not an acceptance criterion: the agent that must satisfy the criteria
+  cannot run a browser.
 
 ## Reviewer steps (not acceptance criteria)
 
-- Measure the actual rendered rectangles of the four link classes in a browser
-  at 360px and 390px, in EN and in RU.
-- Confirm the cycles table still scrolls sideways and keeps its focus ring.
+- Measure the actual rectangles of `.project-links a`, `.breadcrumb a`,
+  `.journal-meta a` and `.table-scroll a` in a browser at 360px and 390px, in
+  EN and in RU.
+- Confirm the cycles table still scrolls horizontally and still shows its
+  focus ring when the `.table-scroll` region is focused by keyboard.
 
 ## Open questions
 
-- The issue's heading for section 2 says "Twenty-four rendered titles exceed 65
-  characters". Measured in the committed tree at `main`, 23 pages render a
-  title strictly above 65: 18 journal entries and 5 ADRs. The 24th row in the
-  `seoTitle` table, `2026-09-12-repository-links-out-of-the-disclosure.md`,
-  renders at exactly 65 -- at the budget, not over it. The table is
-  authoritative and the count is not: apply all 24 values as written. The entry
-  at exactly 65 gains a `seoTitle` too, which is harmless and satisfies "all 24
-  present, no unlisted entry gains one".
-- Acceptance criterion 4 in the issue reads "exactly the six in C.11 are
-  `index` and the other eighteen `noindex`". This cycle's own new journal entry
-  makes it nineteen others. Proceeding with the derived form the same criterion
-  demands ("a test asserts the split by reading the collection, not a literal
-  count that a future cycle must edit"): the test asserts the `index` set
-  equals the six named ids and that every other entry is `noindex`.
-- The issue does not name this cycle's journal entry title. Since no unlisted
-  entry may gain a `seoTitle`, the new entry's `title.en` must fit the 47-char
-  budget. Proceeding with
-  `title.en: "Q13: hit areas, titles, indexing, image alt"` (43 chars, renders
-  at 61) and `title.ru: "Q13: зоны нажатия, заголовки, индексация, alt изображения"`.
-  The implementer may choose different wording provided `title.en` stays at or
-  below 47 characters.
-- The issue asserts that JSON-LD needs no CSP change. That is true of the
-  header, and false of this repository's tooling as written:
-  `INLINE_SCRIPT_RE` in `src/lib/csp.ts` matches any `<script>` without a
-  `src=` attribute, which includes `type="application/ld+json"`. Left alone,
-  `scripts/csp-hash.mjs` would see two distinct inline bodies and fail the
-  build, and `scripts/check-headers.mjs` would report a stale hash against
-  production. Proceeding by narrowing `extractInlineScripts` to JavaScript
-  script elements, which is what "the header needs no change" actually
-  requires. See `design.md`.
-- The issue's file list does not mention `scripts/check-dist.mjs`, but
-  `checkSitemap()` there asserts the sitemap equals the closure of every
-  *public* journal and ADR page and reports "sitemap contains unexpected URL" /
-  "sitemap is missing expected URL" on any difference. Excluding the eighteen
-  `noindex` pages therefore fails that gate unless the same script learns the
-  `indexing` field. Proceeding by extending it; this is also where acceptance
-  criteria 5, 6, 7 and 8 are proven against real built output.
+- The issue states "Twenty-four rendered titles exceed 65 characters". Measured
+  against the clone, 23 exceed 65 and
+  `src/content/journal/2026-09-12-repository-links-out-of-the-disclosure.md`
+  renders at exactly 65. That entry is nonetheless listed in the `seoTitle`
+  table, so it receives its value; 24 entries gain a `seoTitle` either way and
+  the acceptance criterion "no entry not listed gains one" is unaffected.
+  Proceeding with the table as written.
+- The issue's "files expected to change" list does not name
+  `scripts/check-dist.mjs` or `src/lib/csp.ts`, but both must change for the
+  acceptance criteria to hold: `checkSitemap()` in `check-dist.mjs` derives its
+  expected sitemap URL set from one page per public journal entry and would
+  report eighteen "sitemap is missing expected URL" problems the moment the
+  filter excludes them, and `INLINE_SCRIPT_RE` in `src/lib/csp.ts` matches any
+  `<script>` without a `src=` attribute, which includes
+  `<script type="application/ld+json">`, so `scripts/csp-hash.mjs` would report
+  two distinct inline bodies and fail. The list is "expected", not exhaustive;
+  proceeding with both changes, scoped narrowly as described in `design.md`.
+- The issue asks for both "a test asserts the split by reading the collection"
+  and an exact six-entry list. A test that hard-codes the six ids would be the
+  literal the criterion forbids. Proceeding with: the test asserts the
+  structural invariants (explicit value on every entry, valid enum, clean
+  partition, non-empty `index` set) while the six named entries are content in
+  the files themselves, and `scripts/check-dist.mjs` proves the sitemap matches
+  whatever the files say.
+- `Base.astro`'s existing `noindex` boolean prop both emits
+  `<meta name="robots" content="noindex">` and suppresses the canonical link.
+  A `noindex` journal page needs `noindex,follow` *and* a canonical, so the
+  two cases cannot share one boolean. Proceeding with a second, optional
+  `robots?: string` prop that leaves the canonical in place, keeping the
+  existing `noindex` boolean for `/404.html` untouched.

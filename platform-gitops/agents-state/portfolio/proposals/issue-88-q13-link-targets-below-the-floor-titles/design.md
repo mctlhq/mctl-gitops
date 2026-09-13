@@ -4,381 +4,355 @@
 
 ### Hit areas
 
-`src/styles/site.css` carries one grouped tap-target rule (around line 497):
+`src/styles/site.css` (727 lines) declares `min-block-size: 44px` in exactly
+four places:
 
-```css
-/* Tap targets: every interactive element on the page is at least 44px tall
- * at any viewport width, per the 360px acceptance criterion. */
-.site-nav a,
-.toggle-group button,
-.site-footer a {
-  display: inline-flex;
-  align-items: center;
-  min-block-size: 44px;
-}
-```
+- `.skip-link:focus` (line 137 block, with `display: inline-flex; align-items: center`)
+- `.cta` (line 278, same shape)
+- `.block > summary` (line 298, `display: list-item`, no flex)
+- a grouped block at line 494 comment "Tap targets: every interactive element
+  on the page is at least 44px tall at any viewport width, per the 360px
+  acceptance criterion", covering `.site-nav a`, `.toggle-group button`,
+  `.site-footer a` with `display: inline-flex; align-items: center;
+  min-block-size: 44px`.
 
-plus three individual rules that each set `min-block-size: 44px` with
-`display: inline-flex; align-items: center`: `.skip-link:focus` (line ~137),
-`.cta` (line ~279) and `.block > summary` (line ~300, `display: list-item`).
+`test/a11y.test.ts:22` hard-codes those six selectors in `TARGET_SELECTORS` and
+runs one `node:test` case per selector. The matcher walks `([^{}]+)\{([^}]*)\}`
+over the comment-stripped stylesheet, splits each selector list on commas,
+requires the exact selector string to be present, and asserts that at least one
+matching block sets `min-block-size` and that every such declaration is
+`>= MIN_TARGET_PX` (24). The matcher is written inline in the test body; there
+is no named function and no synthetic-input proof that it discriminates.
 
-`test/a11y.test.ts:22` hard-codes the matching list:
+The four unguarded link classes exist and carry no size rule:
 
-```ts
-const TARGET_SELECTORS = ['.site-nav a', '.toggle-group button', '.site-footer a', '.cta', '.block > summary', '.skip-link:focus'];
-```
+- `.project-links a` — `site.css:376` sets only `color`, plus pins at 404-405.
+  Rendered by `src/components/ProjectCard.astro:47-56` as the repository link
+  and each `links[]` entry (the "Docs" links) on `/work/`.
+- `.breadcrumb a` — no rule at all. `site.css:160` styles `.breadcrumb ol`
+  (`display: flex; flex-wrap: wrap; gap: var(--mctl-space-2)`) and
+  `.breadcrumb li + li::before` renders the `/` separator.
+  `src/components/Breadcrumb.astro` renders two links and one
+  `<span aria-current="page">`.
+- `.journal-meta a` — no rule at all. `site.css:625` makes `.journal-meta` a
+  two-column grid; `src/pages/colophon/journal/[...slug].astro` puts the issue
+  and pull-request links inside its `<dd>` elements.
+- `.table-scroll a` — no rule at all. `src/components/CycleTable.astro:23` and
+  `src/pages/colophon/index.astro:71` wrap their tables in
+  `<div class="table-scroll" role="region" tabindex="0">`; the links inside are
+  the journal entry link (CycleTable line 47), the issue and PR links (lines
+  54-55) and the ADR link (colophon index line 87). `site.css:516` sets
+  `position: relative; overflow-x: auto`, `:focus-visible` gets the outline at
+  521, and an `@media (max-width: 599px)` block adds the `::after` edge
+  affordance.
 
-and for each runs a rule-block scan: split `site.css` (comments stripped) into
-`selectorList { declarations }` pairs, keep blocks whose comma-split,
-whitespace-normalised selector list `includes(selector)` exactly, and assert at
-least one such block declares `min-block-size: <n>px` with every such `n >= 24`.
-
-The four unguarded classes exist and carry no size rule:
-
-- `.project-links a` -- `src/components/ProjectCard.astro:47-58`, the repository
-  and Docs links on `/work/`. `site.css` sets only `color` on it (line ~376) and
-  a `:hover` / `:visited:not(:hover)` colour pin (line ~404).
-- `.breadcrumb a` -- `src/components/Breadcrumb.astro`, inside a
-  `display: flex; flex-wrap: wrap` `<ol>` (line ~160). No `a` rule at all.
-- `.journal-meta a` -- `src/pages/colophon/journal/[...slug].astro:65-96`, the
-  issue and pull-request links in the `<dl class="journal-meta">` grid
-  (line ~625). No `a` rule at all.
-- `.table-scroll a` -- `src/components/CycleTable.astro:23` and
-  `src/pages/colophon/index.astro:71`, the cycle-title, issue and PR links in
-  the cycles table and the ADR index. `.table-scroll` itself is
-  `position: relative; overflow-x: auto` with a `:focus-visible` outline and a
-  `@media (max-width: 599px)` `::after` gradient hint. No `a` rule.
-
-All four sit inside `<main>`, so they inherit `main a { color: var(--accent) }`
-(line ~390).
+`main a` at `site.css:382` colours every content link inside `<main>`; the
+pins at 401-405 keep `.cta` and `.project-links a` above it. Any hit-area rule
+must be selector-scoped, never attached to `main a`.
 
 ### Titles
 
-`src/pages/colophon/journal/[...slug].astro` renders
+`src/layouts/Base.astro` takes `{ title, description, noindex = false }` and
+renders `<title>{title}</title>`, the description meta, then either
+`<meta name="robots" content="noindex">` (when `noindex`) or
+`<link rel="canonical" href={canonicalUrl.href}>` — never both. It then emits
+`og:type`, `og:site_name`, `og:title`, `og:description`, `og:url`, `og:image`
+(`new URL('/og.png', Astro.site)`), `og:locale`, `twitter:card`,
+`twitter:title`, `twitter:description`, `twitter:image`. There is no
+`og:image:alt`, no `twitter:image:alt` and no JSON-LD slot.
 
-```astro
-<Base title={`${data.title.en} — Dmitrii Mashkov`} description={description}>
-```
+`src/pages/colophon/journal/[...slug].astro` passes
+`` title={`${data.title.en} — Dmitrii Mashkov`} `` and
+`description={clampDescription(data.decided.en)}`.
+`src/pages/colophon/adr/[...slug].astro` passes
+`` title={`ADR-${padAdrId(entry.data.id)}: ${entry.data.title.en} — Dmitrii Mashkov`} ``.
+Measured over the clone, the rendered journal titles run 27-127 characters and
+the ADR titles 61-113.
 
-and `src/pages/colophon/adr/[...slug].astro`
+`src/lib/seo.ts` is a deliberately zero-import module (its own header comment
+says so: "no `astro:content`, no `astro/loaders`, no `zod` … so
+`test/seo.test.ts` can exercise the real logic"). It exports only
+`clampDescription`. `test/seo.test.ts` has six cases, all on
+`clampDescription`.
 
-```astro
-<Base
-  title={`ADR-${padAdrId(entry.data.id)}: ${entry.data.title.en} — Dmitrii Mashkov`}
-  description={description}
->
-```
+### Indexing and the sitemap
 
-`src/layouts/Base.astro` takes `{ title, description, noindex? }` and uses
-`title` for `<title>`, `og:title` and `twitter:title`. `src/lib/seo.ts` is a
-deliberately zero-import module (its own header comment says so, so that plain
-`node --test` can import it) exporting only `clampDescription`.
-`test/seo.test.ts` covers `clampDescription` and nothing else.
+`src/content.config.ts` defines `journal` with a `strictObject` schema plus a
+`superRefine` that maps `journalEntryProblems` from `src/lib/journal.ts`, and
+wraps the glob loader in `journalLoader()` so `checkJournalCollection` runs over
+the whole store after every sync. `adr` uses `adrLoader()` the same way. There
+is no indexing field on either.
 
-Measured over the committed tree, 18 of 24 journal pages and 5 of 6 ADR pages
-render a title above 65 characters; the longest is 127
-(`2026-09-12-symlink-safe-check-no-metrics-entry-guard.md`).
+`astro.config.mjs` configures `@astrojs/sitemap` with a `filter` that excludes
+only `/404` and `/dev/`. All 24 journal entries are `visibility: public`, so
+all 24 reach the sitemap.
 
-### Indexing
+`scripts/check-dist.mjs` is the post-build gate (`npm test` runs in `prebuild`,
+before `astro build`, so it cannot see `dist/`). Its `checkSitemap()` reads
+`sitemap-index.xml`, follows every child sitemap, and compares the union of
+`<loc>` values against an expected set built from `idsByVisibility()` over
+`src/content/journal` and `src/content/adr`: `/`, `/work/`, `/approach/`,
+`/colophon/`, one `/colophon/journal/<id>/` per public journal entry and one
+`/colophon/adr/<id>/` per public ADR entry. Both directions are checked
+("sitemap is missing expected URL", "sitemap contains unexpected URL").
+**Excluding eighteen journal pages from the sitemap without touching this
+function makes `node scripts/check-dist.mjs` fail with eighteen "missing"
+problems.**
 
-`src/content.config.ts` defines `journal` with a `journalSchema` strict object
-plus a `superRefine` mapping `journalEntryProblems`, loaded through
-`journalLoader()`, which wraps the base glob loader and runs
-`checkJournalCollection` (at most one `in_progress`). `adr` is a plain
-`z.strictObject`. Neither has any indexing or SEO field. Both collections are
-filtered to public entries by `publicEntries` from `src/lib/content.ts`.
+`checkColophonPages()` in the same script already walks every `dist/**/*.html`,
+runs `checkBreadcrumb()` on each journal/ADR page (asserting a
+`<nav class="breadcrumb">` with exactly three `<li>`, a link to `/`, a link to
+`/colophon/`, and a non-link third item with `aria-current="page"`), checks the
+footer release, the main landmark, the absolute-URL subresource rule
+(`SUBRESOURCE_RE` matches only `href=`/`src=` inside a `<link|script|img|source>`
+**opening tag**, so a JSON-LD body full of absolute URLs is not matched), and
+rejects any `<style>` element or `style="…"` attribute.
 
-`astro.config.mjs` configures `@astrojs/sitemap` with a path-prefix filter:
+### CSP and inline scripts
 
-```js
-filter: (page) => {
-  const path = new URL(page).pathname;
-  return !path.startsWith('/404') && !path.startsWith('/dev/');
-},
-```
+`src/lib/csp.ts` exports
+`INLINE_SCRIPT_RE = /<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g` and
+`extractInlineScripts()`. `scripts/csp-hash.mjs` walks every `dist/**/*.html`,
+collects the distinct inline bodies, and **fails when there is more than one**
+("expected exactly one distinct inline script body, found N") or when the body
+exceeds 400 bytes. `scripts/check-headers.mjs:251` calls `staleHashProblems()`
+over the live home page, which hashes every extracted body and requires each
+hash to appear in `script-src`.
 
-`scripts/check-dist.mjs` `checkSitemap()` (line ~758) derives the *expected*
-sitemap as the exact closure `['/', '/work/', '/approach/', '/colophon/']` plus
-one `/colophon/journal/<id>/` per public journal id and one
-`/colophon/adr/<id>/` per public ADR id, using `idsByVisibility()` (line ~526,
-a regex scan of the content directories), and reports both directions --
-"sitemap is missing expected URL" and "sitemap contains unexpected URL". This
-gate will fail the moment the sitemap loses eighteen journal pages, so it is
-part of this change whether or not the issue's file list names it.
+The negative lookahead only excludes `src=`. A
+`<script type="application/ld+json">` has no `src=`, so **today's regex would
+capture the JSON-LD body**, `csp-hash.mjs` would see two distinct bodies and
+exit 1, and the build/gate chain would break. This is precisely what
+acceptance criterion D asks to be proven, and it cannot be proven without
+changing the regex.
 
-`Base.astro` treats indexing as one boolean with an either/or emission:
+### 404 and i18n
 
-```astro
-{noindex ? (
-  <meta name="robots" content="noindex" />
-) : (
-  <link rel="canonical" href={canonicalUrl.href} />
-)}
-```
-
-so today "noindex" and "has a canonical" are mutually exclusive. Only
-`src/pages/404.astro` passes `noindex`.
-
-### Share image and inline scripts
-
-`Base.astro` emits `og:image` and `twitter:image` from
-`new URL('/og.png', Astro.site)`, with no `:alt` companion, and emits exactly
-one inline `<script is:inline>` (the ~330-byte language/theme bootstrap).
-`scripts/check-dist.mjs` `checkOgImageMeta()` (line ~418) asserts `og:image`
-and `twitter:image` are present, equal, absolute and resolve to a file under
-`dist/`.
-
-`src/lib/csp.ts` is the single source of truth for what an "inline script" is:
-
-```ts
-export const INLINE_SCRIPT_RE = /<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g;
-```
-
-`scripts/csp-hash.mjs` collects `extractInlineScripts` over every
-`dist/**/*.html`, and **exits non-zero if the number of distinct bodies is not
-exactly one**. `scripts/check-headers.mjs:251` calls `staleHashProblems`, which
-requires a `script-src` hash for *every* body the same regex finds in the live
-response. The negative lookahead only excludes `src=`; a
-`<script type="application/ld+json">` element has no `src`, so it matches. This
-is the single largest hidden dependency in the issue: the header genuinely
-needs no change, but the tooling does.
-
-### 404 and copy
-
-`src/pages/404.astro` renders one `<h1>`, one body paragraph and one
-`<p><a href="/">` home link, all through `<Lang>`, with `noindex` on `Base`.
-`src/i18n/ui.ts` holds every user-facing string as an `{ en, ru }` pair;
-`test/ui.test.ts` asserts that shape for every key. `ctaWork` already exists as
-`{ en: 'See the work', ru: 'Смотреть работы' }` -- same English, different
-Russian from what this issue specifies, so it must not be reused.
-`scripts/check-dist.mjs` counts `class="l en"` against `class="l ru"` per file
-and fails on any imbalance. `scripts/check-links.mjs` classifies `mailto:` as
-skipped, never broken. Cloudflare Email Obfuscation was disabled for the zone
-on 2026-09-11 (recorded as an intervention in
-`src/content/journal/2026-09-11-production-cutover.md`), so a `mailto:` href
-survives the edge intact.
-
-### Test conventions
-
-Source-level tests read files with `node:fs` and assert on text
-(`test/a11y.test.ts`, `test/colophon.test.ts`, `test/journal-status.test.ts`).
-Anything needing real built markup goes either into `scripts/check-dist.mjs`
-(post-build, invoked separately because `prebuild` runs `npm test` *before*
-`astro build`) or into a fixture Astro build spawned from a test
-(`test/journal-build.test.ts` copies `src/`, symlinks `node_modules` and
-`public/`, and runs `astro sync` or `astro build` in a temp dir).
-`test/entry-point.test.ts` is the house pattern for "derive the list, never
-hand-type it", and `test/check-dist.test.ts` for "prove a guard discriminates
-by running it over a synthetic fixture".
+`src/pages/404.astro` renders `<h1>`, a body paragraph and one
+`<p><a href="/">…</a></p>`, all through `<Lang en ru />`, inside
+`<Base … noindex>`. `src/i18n/ui.ts` holds `notFoundTitle`, `notFoundBody`,
+`notFoundHome`. `test/ui.test.ts` asserts every `ui` entry has a non-empty
+`en` and `ru` of the same kind. `src/pages/index.astro:58` already uses
+`mailto:hello@dmitriimashkov.com`.
 
 ## Proposed solution
 
-Five independent slices. Nothing user-facing changes in wording or layout
-beyond the 404 page's two new links.
+Five independent slices. Nothing is refactored beyond what a criterion needs.
 
-### 1. Hit areas (`site.css`, `test/a11y.test.ts`)
+### 1. `site.css` — four hit-area rules; `test/a11y.test.ts` — ten selectors
 
-Add one grouped rule to `src/styles/site.css`, next to the existing tap-target
-block and commented in the same voice:
+Add one new grouped rule block next to the existing "Tap targets" block at
+`site.css:494`, in the same shape and with a comment naming this issue:
 
 ```css
-/* Standalone links -- a link that is its own control rather than a word in a
- * sentence: the repository/Docs links on /work/, the breadcrumb, the journal
- * meta list, and the links inside the colophon tables. 24px is the WCAG 2.2
- * target-size minimum; the six 44px controls above are unchanged. `main a`
- * in prose is deliberately untouched. */
+/* Standalone links (issue #88, Q13): a link that stands on its own -- a
+ * repository or docs link on /work/, a breadcrumb step, the issue and PR
+ * links in a journal entry's meta list, a link inside one of the colophon
+ * tables -- is a tap target in its own right and measured 17-20px. Prose
+ * links inside a paragraph (main a) are deliberately not here: turning an
+ * inline sentence link into a 24px flex box would break the line box it
+ * sits in. No min-width, no fixed height, no animation, no transition. */
 .project-links a,
 .breadcrumb a,
 .journal-meta a,
 .table-scroll a {
   display: inline-flex;
   align-items: center;
-  flex-wrap: wrap;
   min-block-size: 24px;
 }
 ```
 
-`flex-wrap: wrap` is the one addition beyond the six existing rules' shape and
-is there for `.table-scroll a`: a cycle-title link wraps two `<span class="l">`
-children, and a nowrap flex container would resist breaking between them if
-both were ever visible. It costs nothing and removes the only plausible way
-this rule widens the cycles table. No `min-width`, no fixed height, no change
-to `.table-scroll`, its `role="region" tabindex="0"` markup, its
-`:focus-visible` outline or its `@media (max-width: 599px) .table-scroll::after`
-hint.
+24px rather than 44px: these links sit inside a flex `<ol>`, a grid `<dd>` and
+table cells whose row height is set by their text, and 44px is the AAA figure
+the six chrome-level controls already exceed. WCAG 2.2 AA 2.5.8 is 24px, which
+is the floor `test/a11y.test.ts` already enforces (`MIN_TARGET_PX = 24`). The
+grouped form means the existing matcher, which splits the selector list on
+commas, finds all four without any change to its shape.
 
-In `test/a11y.test.ts`, extend `TARGET_SELECTORS` to all ten, and refactor the
-per-selector body into a local pure function so the same matcher can be run
-over a synthetic stylesheet:
+`inline-flex` on a table-cell or grid-cell link does not change the cell's
+width, so the cycles table's column layout and `.table-scroll`'s
+`overflow-x: auto` behaviour are untouched; `.breadcrumb ol`'s own
+`display: flex` is untouched because the new rule targets the `<a>`, not the
+list.
 
-```ts
-/** Every min-block-size (in px) declared by a rule block whose comma-split
- * selector list contains `selector` exactly. */
-function declaredMinBlockSizes(css: string, selector: string): number[] { ... }
+In `test/a11y.test.ts`:
 
-/** Problems for one selector: no rule at all, or any declaration below the
- * floor. Same two assertions as before, expressed as data so the matcher can
- * be proven to discriminate. */
-function minBlockSizeProblems(css: string, selector: string, floor: number): string[] { ... }
-```
+1. Extend `TARGET_SELECTORS` to the ten selectors.
+2. Lift the inline matcher out of the loop body into a named
+   `minBlockSizeProblems(css: string, selector: string, floor: number): string[]`
+   that returns problem strings instead of asserting, mirroring
+   `entryPointProblems()` in `test/entry-point.test.ts`. Each per-selector test
+   becomes `assert.deepEqual(minBlockSizeProblems(siteCss, selector, MIN_TARGET_PX), [])`.
+3. Add two mutation cases recorded in the test file, over synthetic stylesheets
+   defined as string literals in the test: one where the selector's block
+   declares `min-block-size: 20px` (must report a problem naming `20` and the
+   selector), one where the selector's block declares no `min-block-size` at
+   all (must report the "no min-block-size rule found" problem). This is the
+   evidence acceptance criterion A.1 asks for, in the file, runnable by
+   `npm test`.
 
-The recorded mutation required by acceptance criterion 1 is a test that runs
-`minBlockSizeProblems` over a synthetic string containing
-`.breadcrumb a { min-block-size: 16px; }` and asserts it reports a problem
-naming 16, plus one over a stylesheet with no rule for the selector at all --
-mirroring how `test/entry-point.test.ts` proves `entryPointProblems`
-discriminates and `test/check-dist.test.ts` proves its script fails on a bad
-fixture. No file outside the test is mutated.
+### 2. Titles
 
-### 2. Title budget (`src/lib/seo.ts`, both routes, `src/content.config.ts`)
-
-`src/lib/seo.ts` gains three exports and keeps its zero-import property:
+`src/lib/seo.ts` gains three exports, staying zero-import:
 
 ```ts
-export interface TitleProblem { level: 'warn' | 'fail'; message: string }
-
-/** Problems with a rendered <title>: a warning above `warn`, a failure above
- * `fail`. Both messages name the actual length, so a failing test says how
- * far over budget the page is. Empty list at or below `warn`. */
-export function titleProblems(title: string, { warn = 65, fail = 75 } = {}): TitleProblem[]
-
-/** The <title> a journal page renders: `seoTitle` when present, otherwise
- * `${titleEn} — Dmitrii Mashkov`. */
-export function journalPageTitle(entry: { seoTitle?: string; title: { en: string } }): string
-
-/** The <title> an ADR page renders: `seoTitle` when present, otherwise
- * `ADR-${paddedId}: ${titleEn} — Dmitrii Mashkov`. */
-export function adrPageTitle(entry: { seoTitle?: string; id: number; title: { en: string } }, paddedId: string): string
+export function titleProblems(
+  title: string,
+  { warn = 65, fail = 75 }: { warn?: number; fail?: number } = {},
+): string[]
 ```
 
-`titleProblems` returns `[]` at 65, one `warn` at 66, and a `fail` (plus the
-warn, or a single `fail`-level entry -- the criterion only requires "a failure"
-at 76) above 75. The `SITE_TITLE_SUFFIX = ' — Dmitrii Mashkov'` constant lives
-here too so the em-dash byte sequence exists once.
-
-Both routes stop composing the string inline and call the helper:
-
-```astro
-<Base title={journalPageTitle(data)} description={description}>
-```
-
-```astro
-<Base title={adrPageTitle(entry.data, padAdrId(entry.data.id))} description={description}>
-```
-
-`padAdrId` stays in `src/lib/adr.ts` and is passed in, so `seo.ts` keeps no
-dependency on the ADR module. `<h1>` and `<Breadcrumb currentEn/currentRu>` are
-untouched on both routes.
-
-This hoist is what makes acceptance criterion 2 honest: the test imports the
-same two functions the routes call, reads the frontmatter of every
-`src/content/journal/*.md` and `src/content/adr/*.md`, and asserts
-`titleProblems(...)` reports no `fail` for any of them, and that any page above
-65 carries a `seoTitle`. Nothing is hand-typed, and the route cannot drift from
-the check without the check breaking.
-
-Schema: `seoTitle: z.string().min(1).optional()` on both `journalSchema` and the
-`adr` schema in `src/content.config.ts`. Both are `strictObject`, so an
-unlisted key would otherwise be rejected -- this is why the schema change is
-mandatory rather than cosmetic.
-
-### 3. Indexing (`content.config.ts`, journal route, `Base.astro`, `astro.config.mjs`, `check-dist.mjs`)
-
-**Schema.** `indexing: z.enum(['index', 'noindex']).default('index')` on
-`journalSchema` only. The default keeps a hypothetical future entry valid; the
-committed tree carries the key explicitly on every entry so the file-level test
-can read it without running Astro.
-
-**Robots emission.** `Base.astro`'s `Props` gains `robots?: string`, and the
-either/or block becomes:
-
-```astro
-const robotsContent = noindex ? 'noindex' : robots;
-...
-{robotsContent && <meta name="robots" content={robotsContent} />}
-{!noindex && <link rel="canonical" href={canonicalUrl.href} />}
-```
-
-This preserves both existing outputs byte for byte -- `/404.html` emits the
-robots meta and no canonical; an ordinary page emits the canonical and no
-robots meta -- and adds exactly one new combination, which the journal route
-uses: `robots="noindex,follow"` *with* the canonical. `noindex` stays the 404's
-switch and is not overloaded.
-
-The journal route passes
-`robots={data.indexing === 'noindex' ? 'noindex,follow' : undefined}`. The ADR
-route passes nothing.
-
-**Sitemap.** `astro.config.mjs` cannot import `astro:content`. A new zero-import
-helper `src/lib/indexing.ts` does the derivation once, for three consumers:
+Returns `[]` when `[...title].length <= warn`; one `warning: …` string naming
+the measured length and `warn` when it is above `warn` but at or below `fail`;
+one `failure: …` string naming the measured length and `fail` when it is above
+`fail`. Length is counted in code points (`[...title].length`), not UTF-16
+units, so an em dash counts once.
 
 ```ts
-/** Reads `indexing:` out of one journal file's frontmatter; 'index' when the
- * key is absent, matching the schema default. */
-export function parseIndexing(source: string): 'index' | 'noindex'
-
-/** Every journal id whose file declares `indexing: noindex`, sorted.
- * Directory-scanning, so a new entry is covered the day it is written. */
-export function noindexJournalIds(journalDir: string): string[]
-
-/** The route paths those ids map to: `/colophon/journal/<id>/`. */
-export function noindexJournalPaths(journalDir: string): string[]
+export function journalPageTitle(data: { title: { en: string }; seoTitle?: string }): string
+export function adrPageTitle(data: { id: number; title: { en: string }; seoTitle?: string }): string
 ```
 
-`astro.config.mjs` imports it and closes over the set once at config load:
+These hold the two templates — `` `${title.en} — Dmitrii Mashkov` `` and
+`` `ADR-${padAdrId(id)}: ${title.en} — Dmitrii Mashkov` `` — and the
+`seoTitle ?? template` precedence. `padAdrId` currently lives in
+`src/lib/adr.ts`; `adrPageTitle` takes the already-padded id string is one
+option, but simpler and drift-free is to re-derive the pad inline in
+`src/lib/seo.ts` with `String(id).padStart(4, '0')` and have `test/adr.test.ts`'s
+existing `padAdrId` coverage stand — the implementer should instead import
+`padAdrId` from `src/lib/adr.ts` **only if** that module is itself zero-import;
+it is (`src/lib/adr.ts` is imported by `src/content.config.ts` and by plain
+`node --test`), so `adrPageTitle` imports `padAdrId` and no format is retyped.
+
+Both routes then call the helper instead of building the string inline:
+`<Base title={journalPageTitle(data)} …>` and
+`<Base title={adrPageTitle(entry.data)} …>`. The `<h1>` and the
+`<Breadcrumb currentEn … currentRu …>` props are untouched.
+
+`src/content.config.ts` adds `seoTitle: z.string().min(1).optional()` to
+`journalSchema` and to the `adr` schema. Both are `strictObject`, so the field
+must be declared before any entry may carry it.
+
+The 24 values from `requirements.md` go into the named files as a single
+`seoTitle:` frontmatter line each.
+
+A new `test/title.test.ts`:
+
+- unit-tests `titleProblems` at lengths 65 (no problem), 66 (one warning whose
+  message names 66 and 65), 75 (no failure), 76 (a failure whose message names
+  76 and 75);
+- reads `src/content/journal/*.md` and `src/content/adr/*.md`, extracts
+  `title.en`, `seoTitle` and (for ADRs) `id` with focused anchored regexes in
+  the style `scripts/check-dist.mjs` already uses for `VISIBILITY_RE`, feeds
+  them through `journalPageTitle` / `adrPageTitle` — the same functions the
+  routes call, so the computed title is the rendered title by construction —
+  and asserts `titleProblems(t).every(p => !p.startsWith('failure'))` for every
+  entry, i.e. nothing over 75;
+- asserts that any entry whose computed title exceeds 65 carries a `seoTitle`.
+
+`test/title.test.ts` is appended to the enumerated `test` script in
+`package.json`.
+
+In addition, `scripts/check-dist.mjs` gets a two-line extension inside the
+existing per-file loop of `checkColophonPages()`: for a journal or ADR page,
+read `<title>([^<]*)</title>` out of the built HTML and report a problem if its
+code-point length exceeds 75. This closes the gap between "the template renders
+this" and "the browser receives this" without a second source of truth.
+
+### 3. Indexing
+
+New zero-import module `src/lib/indexing.ts` — the single source of truth for
+"which journal entries leave the index":
+
+```ts
+export const INDEXING_RE = /^indexing:\s*(index|noindex)\s*$/m;
+export function indexingFromFrontmatter(text: string): 'index' | 'noindex' | null;
+export function noindexJournalIds(dir: string): string[];   // sync fs read, sorted
+export function noindexJournalPaths(dir: string): string[]; // `/colophon/journal/<id>/`
+```
+
+It is importable three ways, all of which already exist in this repo:
+`astro.config.mjs` loads through Vite (TypeScript fine), `scripts/*.mjs` import
+`../src/lib/csp.ts` under plain Node 24 today, and `node --test` runs `.ts`
+directly.
+
+`src/content.config.ts` adds
+`indexing: z.enum(['index', 'noindex']).default('index')` to `journalSchema`
+only. The `adr` schema is untouched.
+
+`astro.config.mjs`:
 
 ```js
 import { noindexJournalPaths } from './src/lib/indexing.ts';
-const noindexPaths = new Set(noindexJournalPaths('./src/content/journal'));
-...
+const NOINDEX_PATHS = new Set(noindexJournalPaths('./src/content/journal'));
+// …
 filter: (page) => {
   const path = new URL(page).pathname;
   if (path.startsWith('/404') || path.startsWith('/dev/')) return false;
-  return !noindexPaths.has(path);
+  return !NOINDEX_PATHS.has(path);
 },
 ```
 
-Astro loads its config through Vite, which strips TypeScript, and
-`scripts/check-dist.mjs` already imports `../src/lib/content-hash.ts` from a
-`.mjs` file under Node's type stripping, so a `.ts` helper is consistent with
-the repository. If the config loader turns out to reject the `.ts` import in
-this Astro version, the fallback is to inline the same `readdirSync` +
-`parseIndexing` scan directly in `astro.config.mjs` and have the test import
-`parseIndexing` from `src/lib/indexing.ts` -- still derived, still no
-hand-typed path list. Either way a test asserts `astro.config.mjs` contains no
-literal `/colophon/journal/` path.
+The set is computed from the collection's own files at config-load time, so a
+new `noindex` entry is excluded the day it is written — no path list to edit.
 
-**check-dist.** `idsByVisibility()` gains a third bucket, populated only for the
-journal directory: `indexedIds` (public and `indexing: index`) and
-`noindexIds` (public and `indexing: noindex`), read with the same
-`parseIndexing` helper so the script and the config cannot disagree.
-`checkSitemap()` swaps `journal.publicIds` for `journal.indexedIds` in
-`expectedPaths` -- the existing "unexpected URL" branch then already proves no
-`noindex` page is present, and the "missing expected URL" branch proves all six
-indexed ones are. A new `checkJournalRobots()` walks
-`dist/colophon/journal/<id>/index.html` and asserts, per entry: a `noindex` page
-has exactly one `<meta name="robots" content="noindex,follow">` **and** a
-`<link rel="canonical">`; an `index` page has no robots meta at all.
+`src/layouts/Base.astro` gains an optional `robots?: string` prop. The existing
+`noindex` boolean keeps its exact current meaning and is left alone for
+`/404.astro`:
 
-`/colophon/` itself, the cycle table, the totals, `data-cycle-row` count and the
-per-entry page generation are all untouched: `checkColophonPages()` keeps using
-`publicIds`.
+```astro
+{noindex ? (
+  <meta name="robots" content="noindex" />
+) : (
+  <>
+    <link rel="canonical" href={canonicalUrl.href} />
+    {robots && <meta name="robots" content={robots} />}
+  </>
+)}
+```
 
-### 4. Share image alt and BreadcrumbList (`Base.astro`, both routes, `csp.ts`)
+An `index` journal page passes nothing and renders exactly what it renders
+today. A `noindex` journal page passes `robots="noindex,follow"` and gets both
+the robots meta and its canonical.
 
-**Alt text.** A module-level constant in `Base.astro`:
+The journal route computes `const robots = data.indexing === 'noindex' ? 'noindex,follow' : undefined;`
+and forwards it. The ADR route forwards nothing.
 
-```ts
+`scripts/check-dist.mjs`:
+
+- `checkSitemap()` builds its expected journal URLs from
+  `idsByVisibility(JOURNAL_DIR).publicIds` **minus** the ids
+  `src/lib/indexing.ts` reports as `noindex`, so both directions of the
+  existing comparison still hold and a leaked `noindex` page still fails as
+  "sitemap contains unexpected URL".
+- `checkColophonPages()` gains, for each built journal page, a check that the
+  page's robots meta matches its entry's `indexing`: `noindex` ⇒ exactly
+  `<meta name="robots" content="noindex,follow">` **and** a
+  `<link rel="canonical">`; `index` ⇒ no robots meta at all.
+
+New `test/indexing.test.ts` asserts the structural invariants over the
+collection (see `requirements.md` section C): every entry declares an explicit
+value, every value is in the enum, the two sets partition the 24 files with no
+overlap and no remainder, the `index` set is non-empty, and
+`noindexJournalPaths()` returns exactly one `/colophon/journal/<id>/` path per
+`noindex` entry. Added to `package.json`.
+
+### 4. Share image alt and JSON-LD
+
+`src/layouts/Base.astro`:
+
+```astro
 const OG_IMAGE_ALT = 'Dmitrii Mashkov — platform engineering with AI on proven open source, dmitriimashkov.com';
 ```
 
-emitted as `<meta property="og:image:alt" content={OG_IMAGE_ALT} />` directly
-after `og:image`, and `<meta name="twitter:image:alt" content={OG_IMAGE_ALT} />`
-directly after `twitter:image`. English on every page, deliberately: the image
-is English and Latin. `checkOgImageMeta()` in `scripts/check-dist.mjs` gains an
-assertion that both alt values are present and equal that exact string.
+declared as a module-scope const in the frontmatter (one literal, two metas),
+emitted as `<meta property="og:image:alt" content={OG_IMAGE_ALT} />` right
+after `og:image` and `<meta name="twitter:image:alt" content={OG_IMAGE_ALT} />`
+right after `twitter:image`. English on every page, because `public/og.svg`
+renders `Dmitrii Mashkov`, `Platform engineering with AI on proven open source`
+and `dmitriimashkov.com` in Latin regardless of the reader's toggle.
 
-**JSON-LD.** `Base.astro`'s `Props` gains `jsonLd?: unknown`:
+`jsonLd?: unknown` prop, rendered at the end of `<head>`:
 
 ```astro
 {jsonLd && (
@@ -389,215 +363,195 @@ assertion that both alt values are present and equal that exact string.
 )}
 ```
 
-The `<` escape is the standard defence against a `</script>` sequence inside a
-JSON string value; no current value contains one, and the escape keeps that
-true for whatever a later cycle passes.
+`set:html` because Astro would otherwise HTML-escape the quotes; the `<`
+escape is the standard guard against a `</script>` sequence appearing inside a
+string value. `check-dist.mjs`'s `<style>`/`style="…"` rejections and its
+`SUBRESOURCE_RE` are unaffected (no `href`/`src` in the opening tag).
 
-A new zero-import `src/lib/jsonld.ts` builds the entity:
+`src/lib/seo.ts` gains:
 
 ```ts
-export interface BreadcrumbItem { name: string; path: string }
-
-/** A schema.org BreadcrumbList over `items`, positions 1..n, each `item`
- * resolved against `site`. Pure, so test/seo (or a dedicated test) can assert
- * its exact shape without a build. */
-export function breadcrumbList(items: readonly BreadcrumbItem[], site: string | URL): object
+export function breadcrumbJsonLd(
+  site: string,
+  items: { name: string; path: string }[],
+): object
 ```
 
-Both routes build the three items once and pass the *same* values to both the
-visible breadcrumb and the JSON-LD, which is what makes "the two cannot drift"
-structural rather than aspirational:
+returning `{'@context':'https://schema.org','@type':'BreadcrumbList','itemListElement':[…]}`
+with `position` 1..n, `name`, and `item` as the absolute URL. Both routes build
+the same three-element array from the same two `ui` strings and the same
+current-page string they already pass to `<Breadcrumb>`:
 
 ```astro
 const crumbs = [
   { name: ui.navHome.en, path: '/' },
   { name: ui.navColophon.en, path: '/colophon/' },
-  { name: data.title.en, path: Astro.url.pathname },   // ADR: `ADR-${padAdrId(id)}`
+  { name: currentEn, path: Astro.url.pathname },
 ];
----
-<Base ... jsonLd={breadcrumbList(crumbs, Astro.site)}>
-  <Breadcrumb currentEn={crumbs[2].name} currentRu={data.title.ru} />
 ```
 
-The names are the English side of each pair: `<title>` is already Latin-only by
-`AGENTS.md`, JSON-LD holds one string per item, and the site is one URL per
-page with no `hreflang` (explicitly out of scope). `crumbs[2].name` on the ADR
-route is `ADR-${padAdrId(entry.data.id)}`, exactly what the visible breadcrumb
-renders today for both languages. No `Person`, `WebSite` or `Article`.
+where `currentEn` is the very variable handed to `<Breadcrumb currentEn={currentEn} …>`
+— one expression, two consumers, so the JSON-LD and the visible breadcrumb
+cannot drift. Names are the English half, consistent with `<title>` being Latin
+(`AGENTS.md`, "a browser tab is a filing label").
 
-**CSP.** `src/lib/csp.ts` narrows what counts as an inline script. The regex
-keeps its name and its `src=` exclusion and gains a data-block exclusion, with
-the classification expressed as a small pure predicate so it is testable:
+`src/lib/csp.ts` — the minimum change that makes acceptance criterion D.15
+provable. `INLINE_SCRIPT_RE`'s negative lookahead grows one alternative so a
+non-executable script type is skipped:
 
 ```ts
-/** True for a `type` attribute value that makes the element a data block
- * rather than script: anything that is not absent, empty, `module`, or a
- * JavaScript MIME type. Per HTML, CSP script-src does not govern a data
- * block, so `application/ld+json` carries no hash. */
-export function isDataBlockType(type: string | null): boolean
+export const INLINE_SCRIPT_RE =
+  /<script(?![^>]*\bsrc=)(?![^>]*\btype="application\/ld\+json")[^>]*>([\s\S]*?)<\/script>/g;
 ```
 
-`extractInlineScripts` parses each match's attributes, skips data blocks, and
-returns only real script bodies. `scripts/csp-hash.mjs` and
-`scripts/check-headers.mjs` both consume it unchanged and therefore both keep
-seeing exactly one body. `test/csp.test.ts` gains cases: a `ld+json` element is
-ignored; `type="module"`, `type="text/javascript"`, `type=""` and no `type` are
-all still captured; a document containing both the bootstrap script and a
-`ld+json` block yields exactly one body. `scripts/check-dist.mjs` asserts that
-every built journal and ADR page carries exactly one
-`<script type="application/ld+json">`, that it parses as JSON with
-`"@type": "BreadcrumbList"` and three items, and that its three `name` values
-equal the three English names parsed out of that page's own
-`<nav class="breadcrumb">` -- the drift check, run against real markup.
-Acceptance criterion 8's "one hash for the build" is proven by
-`node scripts/csp-hash.mjs` continuing to exit 0 with one token, which the
-existing `.github/workflows/build.yml` path and the manual gate already run;
-`test/csp.test.ts` additionally asserts `scriptSrcTokens` over the committed
-`security-headers.conf` still yields exactly one hash-shaped token.
+This is the one change that keeps `scripts/csp-hash.mjs` emitting exactly one
+hash and keeps `scripts/check-headers.mjs`'s `staleHashProblems()` from
+demanding a CSP hash for a data block. `test/csp.test.ts` gains three cases:
+`extractInlineScripts` ignores a `<script type="application/ld+json">` body,
+still captures the executable inline script when both are present, and
+`staleHashProblems` returns `[]` for a fixture carrying both. `test/csp.test.ts`
+is already enumerated in `package.json`.
 
-### 5. 404 (`src/i18n/ui.ts`, `src/pages/404.astro`)
+`scripts/check-dist.mjs` gains `checkJsonLd(html, rel, breadcrumbNames)`, called
+from the existing journal/ADR branch of `checkColophonPages()` next to
+`checkBreadcrumb()`: exactly one `application/ld+json` block per page, it
+`JSON.parse`s, `@type === 'BreadcrumbList'`, three `itemListElement` entries
+with `position` 1,2,3, and the three `name` values equal to the three names read
+out of that page's rendered `<nav class="breadcrumb">` English spans. That last
+equality is the anti-drift proof acceptance criterion D asks for, measured on
+built bytes.
 
-Two new keys, placed beside `notFoundHome`:
+Nothing here needs a CSP, nginx or header change, which is the point: the
+`script-src` directive is untouched and `scripts/csp-hash.mjs`'s output is
+compared, unchanged, by the existing `check-headers.mjs` run in
+`.github/workflows/build.yml`.
+
+### 5. The 404 page
+
+`src/i18n/ui.ts` gains two keys next to `notFoundHome`:
 
 ```ts
 notFoundWork: { en: 'See the work', ru: 'Посмотреть работы' },
 notFoundContact: { en: 'Get in touch', ru: 'Написать' },
 ```
 
-and two paragraphs after the existing home link:
+`src/pages/404.astro` gains two paragraphs below the existing home link:
 
 ```astro
-<p><a href="/"><Lang en={ui.notFoundHome.en} ru={ui.notFoundHome.ru} /></a></p>
 <p><a href="/work/"><Lang en={ui.notFoundWork.en} ru={ui.notFoundWork.ru} /></a></p>
 <p><a href="mailto:hello@dmitriimashkov.com"><Lang en={ui.notFoundContact.en} ru={ui.notFoundContact.ru} /></a></p>
 ```
 
-`noindex` stays. Each link adds one `class="l en"` and one `class="l ru"`, so
-`check-dist`'s parity count stays balanced. `ctaWork` is untouched and not
-reused. `scripts/check-links.mjs` resolves `/work/` under `dist/` and reports
-the `mailto:` as skipped-and-listed.
+Two more `<Lang>` pairs keep `class="l en"`/`class="l ru"` parity, which
+`check-dist.mjs` counts. `noindex` and the bilingual shape are untouched.
+`scripts/check-links.mjs` reports the `mailto:` href as skipped by count and by
+name, as it already does for `src/pages/index.astro`'s contact link.
 
-### Content edits
-
-Every `seoTitle` from the table in `requirements.md` is added as a top-level
-scalar key in its entry's frontmatter, and every journal entry gains a
-top-level `indexing:` key. Both are flat scalars, which matters for
-`scripts/close-journal.mjs`: its `parseFrontmatter` reads top-level
-`key: value` pairs into `data`, and `applyClosure` only ever *writes* the five
-lifecycle fields (`pr`, `release`, `merged_at`, `released_at`, `deployed_at`),
-preserving everything else verbatim. Adding two more flat keys is inside that
-contract, and `scripts/close-journal.mjs` is not edited (out of scope).
-
-This cycle's own entry, `src/content/journal/2026-09-13-<slug>.md`, carries
-`status: in_progress`, `indexing: noindex`, no `seoTitle`, and a `title.en` at
-or below 47 characters. No entry currently holds `in_progress`, so
-`checkJournalCollection`'s one-cycle rule is satisfied.
-
-### Where each acceptance criterion is proven
-
-| criterion | proven by |
-|---|---|
-| 1 hit areas + mutation | `test/a11y.test.ts` (ten selectors, `minBlockSizeProblems` over real and synthetic CSS) |
-| 2 `titleProblems` + no page over 75 | `test/seo.test.ts` (unit) and a new `test/title-budget.test.ts` (frontmatter scan through `journalPageTitle`/`adrPageTitle`) |
-| 3 all 24 `seoTitle` verbatim | `test/title-budget.test.ts` (exact-string table; also asserts no unlisted entry carries one) |
-| 4 indexing split from the collection | `test/indexing.test.ts` (`index` set equals the six named ids, all others `noindex`, every entry declares the key) |
-| 5 robots meta + canonical on built pages | `scripts/check-dist.mjs` `checkJournalRobots()` |
-| 6 sitemap contents derived | `scripts/check-dist.mjs` `checkSitemap()` |
-| 7 `og:image:alt` / `twitter:image:alt` | `scripts/check-dist.mjs` `checkOgImageMeta()` |
-| 8 one BreadcrumbList, names match, one script hash | `scripts/check-dist.mjs` + `scripts/csp-hash.mjs` + `test/csp.test.ts` |
-| 9 404 copy and noindex | `scripts/check-dist.mjs` (or `test/ui.test.ts` for the exact strings plus a source assertion on `404.astro`) |
-| 10 suite green | `npm run vendor && npm test`, `npm run build`, `check-dist`, `check-links` |
-| 11 journal entry | the committed entry with `status: in_progress` |
-
-Three test files may be new: `test/title-budget.test.ts`, `test/indexing.test.ts`
-and `test/jsonld.test.ts` (if `breadcrumbList` is not folded into
-`test/seo.test.ts`). Every one added must be appended to the enumerated
-`node --test` list in `package.json`'s `test` script.
+`test/ui.test.ts` gains an exact-value assertion for the two new keys, in the
+shape of its existing "carry their exact EN/RU values character for character"
+test. `scripts/check-dist.mjs` gains a `/404.html` check for both hrefs and both
+EN strings, and for the surviving `<meta name="robots" content="noindex">`.
 
 ## Alternatives
 
-**A single `noindex: boolean` on the journal schema instead of an
-`indexing` enum.** Shorter to write and it would have reused `Base.astro`'s
-existing prop name. Dropped: the issue specifies the enum, and a boolean makes
-the third state ("indexed, and we said so on purpose") unrepresentable, so a
-future `noarchive` or `max-snippet` value would be a schema migration rather
-than an enum member. It would also have collided with `Base.astro`'s existing
-`noindex`, which means "robots noindex *and no canonical*" -- exactly the
-behaviour criterion 9 forbids for a journal page.
+**A. Put the hit-area rule on `main a` instead of four selectors.** One rule,
+zero selector list to maintain. Dropped: `site.css:382`'s comment describes
+`main a` as "any `<a>` inside `<main>` that carries no component class of its
+own", which is exactly the prose link the issue says must stay untouched.
+Giving every sentence link `display: inline-flex; min-block-size: 24px` turns
+it into a flex box inside a line of text, changing the line box and the
+underline. That is a layout change on every content page, which section
+"Not in scope" forbids.
 
-**Hand-typing the eighteen excluded paths in `astro.config.mjs`'s filter.**
-The smallest possible diff and no new module. Dropped by the issue's own
-reasoning: `test/entry-point.test.ts` exists because a hand-typed list of
-scripts was wrong twice, and a hand-typed list of eighteen slugs is the same
-defect class -- an entry added or reclassified in a later cycle would silently
-stay in or out of the index.
+**B. Make `seoTitle` bilingual (`{ en, ru }`) like `title`.** Rejected by
+`AGENTS.md`, which fixes `<title>` as a single Latin string and gives
+`ui.homeTitle` the same `{ en: 'Dmitrii Mashkov', ru: 'Dmitrii Mashkov' }`
+shape for that reason: a tab is a filing label, and the site's one-URL model
+means one page cannot serve two titles anyway. A bilingual `seoTitle` would
+also need a language decision at render time that the CSS-driven toggle cannot
+make in `<head>`.
 
-**Reading the indexing split from the sitemap output rather than from the
-collection.** Would have avoided touching `astro.config.mjs` at all: build
-everything, then post-process `dist/sitemap-0.xml`. Dropped: the sitemap is
-generated by `@astrojs/sitemap` before any post-build step runs, and rewriting
-XML after the fact means `dist/` is briefly wrong and the integration's own
-`sitemap-index.xml` checksum-free contract has to be re-derived. Filtering at
-the source is one function and one truth.
+**C. Auto-truncate long titles with `clampDescription` instead of adding
+`seoTitle`.** One line of code and no content edits. Dropped: a machine cut of
+"Q10: a symlink-safe entry guard for check-no-metrics.mjs, and an entry-point
+test that cannot forget a script" produces a search result that reads as
+broken, and the issue is explicit that "an editorial H1 and a search-result
+title are different jobs". The 24 values are an owner decision already made in
+the issue; the implementer transcribes them.
 
-**Leaving `src/lib/csp.ts` alone and instead giving the JSON-LD block its own
-hash in `security-headers.conf`.** It would "work" in the sense that
-`csp-hash.mjs` emits two tokens and the header lists both. Dropped for three
-reasons: it is factually wrong (a data block is not script and needs no hash);
-it breaks `csp-hash.mjs`'s "exactly one distinct inline body" rule, which
-`AGENTS.md` fixes as the site's inline-script budget, so every future JSON-LD
-consumer would erode that budget; and it makes the header depend on page
-content, meaning any breadcrumb rename would require a header change and a
-redeploy of `nginx.conf`. Editing the header is also explicitly out of scope.
+**D. Hand-write the eighteen excluded paths in `astro.config.mjs`'s filter.**
+Simplest possible diff. Dropped by the issue and by precedent:
+`test/entry-point.test.ts`'s header records two separate cycles (#69, #75)
+where a hand-typed list silently lost coverage. Deriving from the collection's
+files is one small module and removes the class.
 
-**Putting the title-length assertion in `scripts/check-dist.mjs` by parsing
-`<title>` out of built HTML instead of computing it from the collection.** It
-would be the most literal reading of "the title the route actually renders".
-Dropped: criterion 2 asks for a *test*, `npm test` runs before `astro build`,
-and the hoisted `journalPageTitle`/`adrPageTitle` helpers give the same
-guarantee -- the route and the test call one function -- while running in
-milliseconds. `check-dist` still sees the built `<title>` indirectly, via
-`og:title`, which it already reads.
+**E. Reuse `Base.astro`'s existing `noindex` boolean for the `noindex` journal
+pages.** Dropped: today that branch emits `content="noindex"` (not
+`noindex,follow`) and drops the canonical link, and acceptance criterion C
+requires `noindex,follow` **with** the canonical. Overloading the boolean would
+silently change `/404.html` too. A separate optional `robots` prop leaves the
+404 path byte-identical.
+
+**F. Add a CSP hash for the JSON-LD block, or add `'unsafe-inline'` to
+`script-src`.** Dropped: both are wrong on the facts. `application/ld+json` is
+a data block a browser never executes, so no CSP `script-src` source applies to
+it; adding a hash would make `scripts/csp-hash.mjs` emit two tokens (violating
+the "exactly one inline script" budget `AGENTS.md` fixes) and would make
+`check-headers.mjs` demand a header change for every content edit. Narrowing
+`INLINE_SCRIPT_RE` is the correct fix and makes the claim testable.
+
+**G. Assert the built-output criteria (robots meta, sitemap contents, JSON-LD,
+404 copy) in `npm test` rather than in `scripts/check-dist.mjs`.** Dropped:
+`package.json`'s `prebuild` is `npm run vendor && npm test`, so `npm test` runs
+**before** `astro build` and `dist/` does not exist at that point. This is
+already documented at the top of `scripts/check-dist.mjs`. Source-level tests
+cover the schema, the helpers and the content; built-output claims belong in
+the post-build gate.
 
 ## Platform impact
 
-**Migrations.** None. Two new optional/defaulted frontmatter fields on content
-files in the same repository; no database, no API, no deployed configuration.
+**Migrations.** None. `seoTitle` is optional; `indexing` has a schema default
+of `index`, so an entry without the field still validates while the content
+files all declare it explicitly and `test/indexing.test.ts` enforces that. No
+database, no deployment shape change, no gitops values change.
 
-**Backward compatibility.**
+**Backward compatibility.** Every URL that exists today still exists and is
+still reachable and still linked from `/colophon/`. The eighteen `noindex`
+entries lose their sitemap row and gain a robots meta; they lose nothing else.
+`/404.html` gains two links; no other page changes in wording or layout. The
+Docker image, `nginx.conf`, `security-headers.conf` and the CSP header are
+untouched.
 
-- `Base.astro`'s existing `title`, `description` and `noindex` props keep their
-  exact behaviour; `robots` and `jsonLd` are additive and optional. Every page
-  that passes neither renders byte-identically to today apart from the two new
-  `:alt` meta tags.
-- `src/lib/csp.ts`'s narrowing changes behaviour only for `<script>` elements
-  with a non-JavaScript `type`, of which there are currently zero in `dist/`.
-  `scripts/csp-hash.mjs` output is therefore unchanged today and stays
-  unchanged after the JSON-LD lands -- which is the point.
-- `scripts/close-journal.mjs` is untouched and its five-field contract is
-  respected; `test/journal-closure.test.ts` must still pass over entries that
-  now carry two extra flat keys.
-- The sitemap loses eighteen URLs. That is the intended change, and
-  `public/robots.txt` (`Disallow:` for all agents, `Sitemap:` pointing at
-  `sitemap-index.xml`) needs no edit: `noindex,follow` on the page is what
-  removes it from the index, and the pages stay crawlable so their outbound
-  links keep counting.
-
-**Resource impact.** Negligible. Four CSS declarations, one extra `<script>`
-element of roughly 250-350 bytes on 30 pages, and two extra `<meta>` tags on
-every page. `dist/index.html` gains only the two meta tags and stays far under
-`check-dist`'s 40 KB cap. No new dependency; every new module is zero-import
-and plain TypeScript.
+**Resource impact.** `dist/sitemap-0.xml` shrinks by eighteen URLs. Each
+journal and ADR page grows by one JSON-LD block of roughly 300-400 bytes and
+every page by two meta tags of about 110 bytes each. `dist/index.html` is
+capped at 40960 bytes by `scripts/check-dist.mjs`; it gains only the two meta
+tags, so the cap is not at risk.
 
 **Risks and mitigations.**
 
-| risk | mitigation |
-|---|---|
-| `display: inline-flex` on `.table-scroll a` makes a long cycle title unwrappable and widens the cycles table | `flex-wrap: wrap` in the same rule; no `min-width`; reviewer measures the table at 360px and 390px, EN and RU |
-| `astro.config.mjs` cannot import a `.ts` helper in this Astro version | Fallback documented above: inline the same `readdirSync`/`parseIndexing` scan in the config, keep the helper as the shared parser, keep the "no literal `/colophon/journal/` path in the config" test |
-| `csp-hash.mjs` fails the build on the JSON-LD block | Exactly what slice 4's `isDataBlockType` narrowing prevents; `test/csp.test.ts` proves the predicate discriminates in both directions before any build runs |
-| `check-dist.mjs` `checkSitemap()` fails with eighteen "missing expected URL" problems | `idsByVisibility()` gains `indexedIds`/`noindexIds` from the same `parseIndexing`; the pre-existing bidirectional check then proves criterion 6 with no new logic |
-| A `noindex` entry is read as "deleted" or "hidden" | The entry keeps its page, its colophon row, its totals contribution and `follow`; `checkColophonPages()` still counts every public entry, so a regression here fails the build |
-| The 404 `mailto:` is rewritten by the edge into `/cdn-cgi/l/email-protection` | Cloudflare Email Obfuscation was disabled zone-wide on 2026-09-11 (recorded intervention in `2026-09-11-production-cutover.md`); the home page's identical `mailto:` has served correctly since |
-| Sixty-odd content files edited by hand, one typo away from a wrong `seoTitle` | The exact-string table in `test/title-budget.test.ts` is the gate: a mistyped value fails by name, and `astro sync` rejects an unknown key because both schemas are `strictObject` |
-| The new journal entry accidentally needs a `seoTitle` | Its `title.en` is capped at 47 characters; `test/title-budget.test.ts`'s "no unlisted entry carries `seoTitle`" and "no page over 75" assertions catch either mistake |
+- *`scripts/csp-hash.mjs` fails with "found 2" once JSON-LD ships.* This is the
+  highest-likelihood failure in the change and the reason `src/lib/csp.ts` is in
+  scope. Mitigated by narrowing `INLINE_SCRIPT_RE` and by the three new
+  `test/csp.test.ts` cases, which fail loudly at `npm test` time — before
+  `astro build` — if the narrowing is wrong or is later reverted.
+- *`scripts/check-dist.mjs` `checkSitemap()` fails with eighteen "missing URL"
+  problems.* Mitigated by updating the expected-set derivation in the same
+  commit, from the same `src/lib/indexing.ts` the sitemap filter uses, so the
+  two cannot disagree.
+- *`astro.config.mjs` importing a `.ts` module.* Precedent exists in the other
+  direction (`scripts/csp-hash.mjs` imports `../src/lib/csp.ts` under plain
+  Node) and Astro loads its config through Vite. If the import nonetheless
+  fails, the fallback is to give `src/lib/indexing.ts` a `.mjs` sibling-free
+  form — a plain `.mjs` module under `scripts/` imported by config, tests and
+  `check-dist.mjs` alike. Either way there is exactly one implementation.
+- *A `min-block-size` on a table-cell link changing the cycles table's layout.*
+  Mitigated by using `inline-flex` with no `min-width` and no fixed height, and
+  by the named reviewer step that measures the table at 360px and 390px.
+- *The em dash in `seoTitle` being typed as a hyphen or an en dash.* Mitigated
+  by `test/title.test.ts`'s exact-length assertions and by the fact that the
+  24 values are inlined here character for character; a reviewer diffing the
+  content against this file catches any drift.
+- *The `l en` / `l ru` parity count on `/404.html`.* Two new `<Lang>` pairs add
+  one `en` and one `ru` each, so `scripts/check-dist.mjs`'s parity check stays
+  balanced. A link added without `<Lang>` would break it and fail the gate.
