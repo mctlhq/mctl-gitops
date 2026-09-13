@@ -395,8 +395,9 @@ that the window is open.
 
 Step 5 for `seerrsense` is **not** in the blocks above, and is a different
 endpoint: `cf()` addresses `servers/{id}`, while a tool allowlist lives on the
-portal object. `mctl-telegram` and `mctl-api` have `scripts/portal-allowlist-apply.sh`
-for this; `seerrsense` does not yet (mctlhq/seerrsense#70), so until it does,
+portal object. `mctl-telegram` and `mctl-api` have
+`scripts/portal-allowlist-apply.sh` for this; `seerrsense` does not yet
+(mctlhq/seerrsense#70), so until it does,
 its mapping is written by hand the way Phase 0 wrote it — a read-modify-write
 `PUT` on `portals/mcp`. That carries the race described under "What the write
 does not touch": the body sends every server's mapping back, so a `tg` or

@@ -262,11 +262,20 @@ def compare(server: str, snapshot: dict, allowlist: dict) -> list[dict]:
     # clear. An empty allowlist is the mirror: the file parsed, so its shape
     # changed upstream, and every stored tool would be called `extra-tool`.
     if not live:
+        # The remedy follows the evidence. `tools` is None for two payloads:
+        # the waiting server, where a user signing in is the fix, and a result
+        # that simply has no `tools` -- a thin or renamed body from an API
+        # answering success. Asserting the first while printing `status None`
+        # right beside it puts the contradiction in one sentence and leaves the
+        # on-call to spot it.
+        status = snapshot.get("status")
+        remedy = ("a server waiting for its first authorization needs a user "
+                  "to sign in, not a re-snapshot" if status == "waiting" else
+                  "the portal answered without a tool list; this is the check "
+                  "or the API to look at, not the catalogue")
         raise Undetermined(
             f"{server}: the portal holds no tools at all (status "
-            f"{snapshot.get('status')!r}, last_synced {snapshot.get('last_synced')}) "
-            "-- a server waiting for its first authorization needs a user to "
-            "sign in, not a re-snapshot")
+            f"{status!r}, last_synced {snapshot.get('last_synced')}) -- {remedy}")
     if not want:
         raise Undetermined(
             f"{server}: the allowlist lists no tools -- its shape changed "
@@ -543,6 +552,8 @@ def selftest() -> int:
         # `tools: null` is the waiting-server shape, not a broken payload:
         # undetermined either way, but it has to reach the guard whose message
         # says a user must sign in.
+        ("a result with no tool list at all is undetermined",
+         {"status": "ready", "last_synced": ""}, allow(["a"]), "U"),
         ("a null catalogue is the waiting-server message",
          {"tools": None, "status": "waiting", "last_synced": ""}, allow(["a"]), "U"),
         ("a non-list allowlist is undetermined",
@@ -591,6 +602,18 @@ def selftest() -> int:
     print(f"{'ok  ' if ok else 'FAIL'} a null catalogue says a user must sign in")
     if not ok:
         failures.append("null catalogue message")
+
+    # ... and the same shape with no `status: waiting` behind it must NOT say
+    # that: the exit code is identical, so only the message separates "sign
+    # in" from "the API answered oddly".
+    try:
+        compare("s", {"status": "ready", "last_synced": ""}, allow(["a"]))
+        ok = False
+    except Undetermined as e:
+        ok = "sign in" not in str(e) and "without a tool list" in str(e)
+    print(f"{'ok  ' if ok else 'FAIL'} a missing tool list does not claim the server is waiting")
+    if not ok:
+        failures.append("missing tool list message")
 
     # A nameless entry is a shape this script does not understand, and must
     # exit 2 rather than reach sorted() and die as exit 1, "stale".
