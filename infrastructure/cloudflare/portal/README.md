@@ -218,7 +218,7 @@ It is **four blocks, not one**, and they are not interchangeable. A single
 block cannot be pasted: `read` would consume the next pasted line as the
 token, and step 3 is a person in a browser, so everything after it would run
 against a server that has not been re-authorized yet. Run each block on its
-own, and the third only once step 3 is actually done.
+own, and the fourth only once step 3 is actually done.
 
 Work inside a **nested shell**. `set -e` and the `exit 1` in step 4 are
 honoured at an interactive prompt just as they are in a script, so without one
@@ -287,7 +287,13 @@ cf -X PUT --json '{"auth_type":"bearer","auth_credentials":"resnapshot-not-a-tok
 cf | jq -e '.result.auth_config_summary == null' >/dev/null
 
 # 2. restore, and read back that manual OAuth is in place and the server is
-#    waiting for its first authorization.
+#    waiting for its first authorization. The trap is armed on the line
+#    before the PUT, not after it: from that moment the secret in the file
+#    is live, and every way out of this shell -- a failed read-back under
+#    set -e, a dropped response, the operator closing it -- has to take the
+#    file with it. Before the PUT the secret has never been sent, so the
+#    file is worth more as the resume artifact than it costs.
+trap 'rm -f "$SERVER.restore.json"' EXIT
 cf -X PUT --json "@$SERVER.restore.json" | ok
 cf | jq -e '.result.status == "waiting"
             and .result.auth_config_summary.auth_mode == "manual"' >/dev/null
@@ -303,7 +309,7 @@ rc=0
 diff -u <(jq -S '{auth_mode, config, registration_info}' "$SERVER.summary.json") \
         <(cf | jq -S '.result.auth_config_summary
                       | {auth_mode, config, registration_info}') || rc=$?
-rm -f "$SERVER.restore.json"             # the secret in it is spent either way
+rm -f "$SERVER.restore.json"; trap - EXIT    # the secret in it is spent
 test "$rc" -eq 0 || { echo "registration changed: redo 0b and 2"; exit 1; }
 ```
 
@@ -345,10 +351,11 @@ rebuild the registration from — but `$SERVER.summary.json` and
 `$SERVER.restore.json` are on disk, which is why step 0b writes the payload
 rather than holding it in a variable. Start a new shell, redo the two helper
 definitions, and rerun step 2 as written; it does not depend on anything else
-step 0 put in the environment. If `$SERVER.restore.json` is gone — it is
-deleted the moment step 2a has read the registration back, mismatch or not,
-because it holds a live `client_secret` — step 0b's three lines rebuild it
-from the summary file with a fresh secret.
+step 0 put in the environment. If `$SERVER.restore.json` is gone — it survives a
+shell that dies before step 2's `PUT`, and is deleted by the trap or by step
+2a itself on every path after it, because from that point it holds a live
+`client_secret` — step 0b's three lines rebuild it from the summary file with
+a fresh secret.
 
 Steps 0 to 2 are a window in which this server's registration must have no
 other writer. The backup is a point-in-time copy and step 2 puts it back, so a
