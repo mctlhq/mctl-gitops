@@ -1,0 +1,23 @@
+# A drain sub-deadline sitting BESIDE the agent's wall-clock timeout must not
+# make the *_TIMEOUT_SECONDS suffix ambiguous: the profile pins the agent
+# timeout (1234), never the drain deadline. Without the
+# TIMEOUT_ENV_IGNORED_SUFFIXES carve-out this file aborts with "declares 2
+# _TIMEOUT_SECONDS variables". Shape of cwft-mctl-agents-implement.yaml,
+# mctl-agents#366.
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterWorkflowTemplate
+metadata:
+  name: mctl-agents-investigate
+spec:
+  activeDeadlineSeconds: 7200
+  templates:
+    - name: run
+      container:
+        image: example
+        env:
+          - name: ISSUE_INVESTIGATOR_BUDGET_USD
+            value: "3.00"
+          - name: ISSUE_INVESTIGATOR_TIMEOUT_SECONDS
+            value: "1234"
+          - name: ISSUE_INVESTIGATOR_DRAIN_TIMEOUT_SECONDS
+            value: "300"

@@ -699,6 +699,21 @@ spec:
             value: "mctl-design,mctl-telegram,mctl-gitops,mctl-pairdesk"
           - name: SHEPHERD_SKIP_SERVICES
             value: "mctl-academy"
+          # How long run_implementer --review-feedback waits for an
+          # asynchronously launched `implementer` sub-agent to reach a
+          # terminal status before giving up with exit 46
+          # (EXIT_ORPHANED_SUBAGENT). This is a sub-deadline INSIDE one
+          # follow-up, not the run's wall-clock budget -- that is the 7200s
+          # activeDeadlineSeconds at the top of this file. Before
+          # mctl-agents#366 the driver stopped reading at the first
+          # ResultMessage, which ends a TURN and not the RUN, so an
+          # async-launched sub-agent was abandoned mid-work and the shepherd
+          # charged the proposal a review attempt for the harness's own loss.
+          # Pinned at orchestrator/options.py's default so the knob exists in
+          # the cluster; raise it only if orphan exits start appearing on
+          # sub-agents that were in fact still making progress.
+          - name: IMPLEMENTER_DRAIN_TIMEOUT_SECONDS
+            value: "300"
         resources:
           # memory 8Gi: the shepherd forks run_implementer.py
           # --review-feedback in the same pod, which runs the target repo's
