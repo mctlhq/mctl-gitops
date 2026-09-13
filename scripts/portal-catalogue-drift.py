@@ -169,6 +169,14 @@ def owner_allowlist(server: str) -> dict:
     return body
 
 
+# JSON Schema keywords whose values are DATA, not subschemas. Walking into
+# them reads a sample document as a schema: `examples: [{"additionalProperties":
+# false}]` is a perfectly open schema carrying an example that happens to spell
+# the closed form, and reported as closed it is exit 1 and a re-snapshot that
+# cannot clear it, because nothing about the real schema is stale.
+NOT_SUBSCHEMAS = ("examples", "example", "default", "enum", "const")
+
+
 def closed_objects(schema, path: str = "") -> list[str]:
     """JSON-pointer-ish paths of every object with additionalProperties:false."""
     out: list[str] = []
@@ -176,6 +184,8 @@ def closed_objects(schema, path: str = "") -> list[str]:
         if schema.get("additionalProperties") is False:
             out.append(path or "/")
         for k, v in schema.items():
+            if k in NOT_SUBSCHEMAS:
+                continue
             out += closed_objects(v, f"{path}/{k}")
     elif isinstance(schema, list):
         for i, v in enumerate(schema):
@@ -399,6 +409,12 @@ def waiver_is_wellformed(key, w) -> bool:
     fire, and the cost of losing it is a nightly that reports a waived finding
     as a stale catalogue and sends someone to re-snapshot for it.
     """
+    # Shape first. A three-element key passes an element-wise check and then
+    # never matches the (server, kind) tuple apply_waivers() builds, so the
+    # waiver is silently absent and its finding arrives at night as fresh
+    # drift -- the exact failure this predicate exists to catch at PR time.
+    if not isinstance(key, tuple) or len(key) != 2:
+        return False
     try:
         _dt.date.fromisoformat(w["until"])
         return (bool(w.get("tools")) and bool(w.get("why"))
@@ -449,6 +465,13 @@ def selftest() -> int:
         ("a tool gone from upstream fires", snap(["a", "b"]), allow(["a"]), 1),
         ("a closed top-level schema fires", snap(["a"], closed=True), allow(["a"]), 1),
         ("a closed nested schema fires", snap([], extra=nested_closed), allow(["n"]), 1),
+        # An open schema carrying an example that spells the closed form is
+        # open. Walking into `examples` reads a sample document as a schema.
+        ("a closed form inside examples is not a closed schema",
+         {"tools": [{"name": "a", "outputSchema": {
+             "type": "object", "properties": {"a": {"type": "string"}},
+             "examples": [{"additionalProperties": False}]}}],
+          "last_synced": ""}, allow(["a"]), 0),
         ("no outputSchema at all is quiet",
          {"tools": [{"name": "a"}], "last_synced": ""}, allow(["a"]), 0),
         ("order does not matter", snap(["b", "a"]), allow(["a", "b"]), 0),
@@ -622,6 +645,9 @@ def selftest() -> int:
         ("a waiver naming no tools fails", ("tg", "closed-output-schemas"),
          {"until": "2026-10-15", "tools": [], "why": "fixture"}, False),
         ("a key that is not a (server, kind) tuple fails", "seerrsense",
+         {"until": "2026-10-15", "tools": ["a"], "why": "fixture"}, False),
+        ("a three-element key fails",
+         ("tg", "closed-output-schemas", "typo"),
          {"until": "2026-10-15", "tools": ["a"], "why": "fixture"}, False),
     ]:
         got = waiver_is_wellformed(key, w)
