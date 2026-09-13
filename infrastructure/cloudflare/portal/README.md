@@ -234,6 +234,12 @@ printf '%s' "$summary" | jq -e '.result.auth_config_summary != null' >/dev/null
 printf '%s' "$summary" | jq '.result.auth_config_summary' > "$SERVER.summary.json"
 test -s "$SERVER.summary.json"
 
+# 0a. and the catalogue as it stands, to diff against afterwards. Names alone
+#     would not do: a release that retypes one schema, or adds and removes one
+#     tool, leaves the name list identical while the snapshot goes stale.
+printf '%s' "$summary" | jq -S '[.result.tools[] | {name, inputSchema, outputSchema}]
+                                | sort_by(.name)' > "$SERVER.catalogue.before.json"
+
 # 0b. build the ENTIRE restoration body now, while the server still works.
 #     auth_credentials is auth_mode + config + registration_info as one
 #     JSON-encoded string; client_secret is required by a switch back to
@@ -261,11 +267,16 @@ cf | jq -e '.result.status == "waiting"
 #    first, the catalogue keeps their reduced set and the later high-tier login
 #    does not refresh it. Announce the window.
 
-# 4. verify the snapshot before telling anyone to reconnect -- the NAMES and
-#    the schemas that changed, not the count. A release that adds and removes
-#    one tool, or that only retypes a schema, leaves the count identical and
-#    the catalogue stale.
-cf | jq -r '.result.last_synced, ([.result.tools[].name] | sort | join(" "))'
+# 4. verify the snapshot before telling anyone to reconnect, by diffing the
+#    whole tool definition against the copy taken in 0a -- names AND both
+#    schemas. The difference must be exactly what the release changed; an
+#    empty diff means the snapshot never moved and the procedure achieved
+#    nothing, whatever last_synced says.
+after=$(cf); printf '%s' "$after" | ok
+printf '%s' "$after" | jq -S '[.result.tools[] | {name, inputSchema, outputSchema}]
+                              | sort_by(.name)' > "$SERVER.catalogue.after.json"
+printf '%s' "$after" | jq -r '.result.last_synced'
+diff -u "$SERVER.catalogue.before.json" "$SERVER.catalogue.after.json" || true
 
 # 5. give any new tool a decision in the owning repository's allowlist and
 #    apply it: scripts/portal-allowlist-apply.sh in mctl-telegram and mctl-api
