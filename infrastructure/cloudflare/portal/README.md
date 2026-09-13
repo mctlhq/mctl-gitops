@@ -503,10 +503,9 @@ And any PR that changes what `tools/list` advertises owes this step: a tool
 added or removed, an `outputSchema` changed, and equally an `inputSchema` —
 the snapshot carries the whole tool definition, so a renamed or newly required
 parameter leaves clients calling the tool the old way against a server that no
-longer accepts it. Nothing automatic notices a missed re-snapshot on this
-branch — the nightly catalogue check is mctlhq/mctl-gitops#1242, stacked on
-this one — so until that lands the only thing that notices is a failing
-client.
+longer accepts it. What notices a missed re-snapshot is the nightly
+check described below; before it existed, the only thing that did was a
+failing client.
 
 For `tg`, which OpenTofu describes in `mcp-servers.tf`: the flip is done with
 the same API token outside tofu and the registration is resent from the file's
@@ -519,3 +518,46 @@ backend credential is read-only, so a plan cannot record it -- run the
 refreshes state; the environment approval is the gate) before expecting the
 detector to pass. Measured after the `tg` re-snapshot on 2026-09-13: live
 version 2, state version 1.
+
+### The check that notices
+
+`scripts/portal-catalogue-drift.py` runs nightly from `cloudflare-drift.yml`
+for this root, after the registration check and independently of its result.
+It reads every server mapped on the portal, compares the stored tool names
+with the `docs/portal-allowlist.json` each owning repository commits on `main`
+— test-enforced there to equal what the server registers, so it is the honest
+statement of which tools the upstream advertises — and reports any stored
+`outputSchema` that is still closed. Exit 1 means "re-snapshot per the recipe
+above". Its `--selftest` runs on every pull request from
+`validate-manifests.yml`, because a detector never seen to fire is not known
+to work.
+
+Read its green carefully: it says *names match and the stored schemas are
+open*, not *the catalogue is fresh*. A schema whose content changed under an
+unchanged name and an open snapshot passes, and would still break clients.
+Seeing that needs a committed copy of each upstream's schemas to compare
+against, which no repository has today.
+
+`KNOWN_STALE` in the script is the list of findings already written down
+elsewhere. It exists because a job that is red every night is one people stop
+reading — this file's own argument about green checks, pointed the other way.
+A waiver covers one kind of finding on one server, **and enumerates the tools
+it was written against**: the closed-schema finding arrives as one line for
+all of them, so without that list a sixth tool going closed would ride in on
+the excuse for the five known ones. It stops excusing on the day after its
+date, and a waiver whose finding has gone fails on its own — under a separate
+heading, because deleting three lines from a script is not the same job as
+taking a server down to re-snapshot it. One waiver is committed today:
+`seerrsense` publishes closed output schemas in code, and the fix waits on
+that repository's review freeze.
+
+The waived findings are printed even on a passing run, and the nightly summary
+repeats them, so a green check never reads as more than it is.
+
+Its exit statuses are five, not two, because the remedies cost different
+things: `1` is a stale catalogue and means the recipe above, `2` is a check
+that could not run, `3` is a waiver that no longer matches anything — good
+news with a chore attached, and emphatically not a reason to take a server
+down — and `4` is a whole upstream missing from the portal, which is the
+loudest of them and would otherwise have been announced as the detector being
+broken. The alert and the run summary say which.

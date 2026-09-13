@@ -280,6 +280,16 @@ jobs:
         # selftest: a detector never seen to fire is not known to work.
         run: scripts/portal-auth-credentials-drift.py --selftest
 
+      - name: Unit-test the portal tool catalogue drift detector
+        # Its sibling above. The portal never refreshes a manual-OAuth server's
+        # tool snapshot, so a tool added upstream stays invisible and a changed
+        # output schema is validated by clients against the stale copy. Same
+        # reason for running it here rather than only nightly: a refactor that
+        # breaks compare() or the waiver table would merge green, and the first
+        # anyone heard of it would be a nightly run reporting that the detector
+        # could not run — with the catalogue unchecked meanwhile.
+        run: scripts/portal-catalogue-drift.py --selftest
+
       - name: Unit-test wft-provision-database's values.yaml patch
         # The provisioner commits straight to main, so no PR check sees the
         # file it writes, and `helm template` above accepts duplicate keys
