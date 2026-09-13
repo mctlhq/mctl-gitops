@@ -297,10 +297,14 @@ cf | jq -e '.result.status == "waiting"
 #     answering 200 while keeping a field it was told to change, and for api
 #     and seerrsense nothing declarative would catch a narrowed scope or a
 #     moved endpoint later. Compare against the copy taken in step 0.
+#     rc, not a bare diff: under set -e a mismatch would abort the shell with
+#     the live client_secret still in the file below.
+rc=0
 diff -u <(jq -S '{auth_mode, config, registration_info}' "$SERVER.summary.json") \
         <(cf | jq -S '.result.auth_config_summary
-                      | {auth_mode, config, registration_info}')
-rm -f "$SERVER.restore.json"             # the secret in it is spent
+                      | {auth_mode, config, registration_info}') || rc=$?
+rm -f "$SERVER.restore.json"             # the secret in it is spent either way
+test "$rc" -eq 0 || { echo "registration changed: redo 0b and 2"; exit 1; }
 ```
 
 **Step 3 is a person, not a command.** One user signs the server out and back
@@ -341,9 +345,10 @@ rebuild the registration from — but `$SERVER.summary.json` and
 `$SERVER.restore.json` are on disk, which is why step 0b writes the payload
 rather than holding it in a variable. Start a new shell, redo the two helper
 definitions, and rerun step 2 as written; it does not depend on anything else
-step 0 put in the environment. Only if `$SERVER.restore.json` is missing does
-the payload have to be rebuilt, and then step 0b's three lines do it from the
-summary file with a fresh secret.
+step 0 put in the environment. If `$SERVER.restore.json` is gone — it is
+deleted the moment step 2a has read the registration back, mismatch or not,
+because it holds a live `client_secret` — step 0b's three lines rebuild it
+from the summary file with a fresh secret.
 
 Steps 0 to 2 are a window in which this server's registration must have no
 other writer. The backup is a point-in-time copy and step 2 puts it back, so a
