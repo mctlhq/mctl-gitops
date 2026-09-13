@@ -306,6 +306,10 @@ printf '%s' "$gone" | jq -e '.result.auth_config_summary == null' >/dev/null
 #    file with it. Before the PUT the secret has never been sent, so the
 #    file is worth more as the resume artifact than it costs.
 trap 'rm -f "$SERVER.restore.json"' EXIT
+#    and on a signal: a shell killed by SIGINT or SIGHUP dies of that signal
+#    and never runs its EXIT trap -- ^C on a hanging PUT, or a dropped
+#    terminal, both plausible here.
+trap 'rm -f "$SERVER.restore.json"; exit 130' INT TERM HUP
 cf -X PUT --json "@$SERVER.restore.json" | ok
 cf | jq -e '.result.status == "waiting"
             and .result.auth_config_summary.auth_mode == "manual"' >/dev/null
