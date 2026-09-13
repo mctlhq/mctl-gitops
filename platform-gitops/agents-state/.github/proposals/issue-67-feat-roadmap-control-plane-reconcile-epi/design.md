@@ -2,272 +2,239 @@
 
 ## Current state
 
-`mctlhq/.github` has no application code beyond the roadmap control plane and
-the shared review workflows. The full file list relevant to this issue:
+`mctlhq/.github` already contains the declarative roadmap contract and offline validation path:
 
 ```text
 roadmap/README.md
-roadmap/requirements.txt                      # jsonschema==4.25.1, PyYAML==6.0.2
-roadmap/schemas/epic-definition.schema.json   # v1alpha1 authored contract
-roadmap/epics/human-input.yaml                # first pilot manifest
-roadmap/scripts/validate.py                   # offline schema + semantic validator
-roadmap/tests/test_validate.py                # unittest suite
-.github/workflows/roadmap-validate.yml        # CI, permissions: {}
+roadmap/requirements.txt
+roadmap/schemas/epic-definition.schema.json
+roadmap/epics/human-input.yaml
+roadmap/scripts/validate.py
+roadmap/tests/test_validate.py
+.github/workflows/roadmap-validate.yml
 ```
 
-What exists today:
+`validate.py` owns structural validation, per-manifest graph invariants, and corpus invariants. The important split is that `validate_document()` checks one manifest, while `corpus_errors()` checks uniqueness across manifests (`metadata.name` and GitHub issue bindings). The current CI is deliberately offline and runs with `permissions: {}`.
 
-- `roadmap/schemas/epic-definition.schema.json` defines the authored contract
-  with `additionalProperties: false` everywhere, an `issueRef` `$def`
-  (`repository` matching `^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+$`, integer
-  `number >= 1`), and a `workItem` that may carry `issue`, `parent`,
-  `dependsOn` (local ids), and `externalDependsOn` (issue refs). Reverse
-  relations (`blocks`, `children`, `status`) are rejected structurally — see
-  `test_reverse_relation_is_not_authored` in `roadmap/tests/test_validate.py`.
-- `roadmap/scripts/validate.py` layers schema validation (`schema_errors`),
-  per-manifest semantics (`semantic_errors`: unique ids, valid references,
-  acyclic `parent` and `dependsOn` graphs via the iterative `_cycle` helper,
-  unique local bindings, `externalDependsOn` may not point at a locally bound
-  issue, unbound items require `title` and `owner`), and corpus invariants
-  (`corpus_errors`: unique `metadata.name`, globally unique issue bindings).
-  Useful reusable primitives already present: `_issue_key`, `_document_bindings`,
-  `_manifest_paths`, `validate_document`, and the exit-code convention in
-  `main` (0 pass, 1 validation failure, 2 usage/IO error).
-- `roadmap/epics/human-input.yaml` binds epic root `mctlhq/.github#42` and five
-  bound work items across four repositories (`mctl-agents#333`, `mctl-api#261`,
-  `mctl-telegram#571`, `mctl-portal#124`, `mctl-docs#106`), one external
-  dependency (`mctl-telegram#443`), and one deliberately unbound item
-  (`devloop-e2e`). No work item uses `parent`, so every bound item is a direct
-  child of the epic root today.
-- `.github/workflows/roadmap-validate.yml` runs on `roadmap/**` changes with
-  top-level `permissions: {}`, installs `roadmap/requirements.txt`, runs the
-  validator over `roadmap/epics`, and runs `unittest discover -s roadmap/tests`.
-  The checkout action is SHA-pinned, matching the hardening conventions
-  documented in `.github/workflows/claude-review.yml`.
-- `roadmap/README.md` already specifies the target boundary (manifest →
-  validation → `RoadmapReconcileWorkflow` → live GitHub graph read →
-  deterministic `RoadmapDiff` → `mctl-api` observed/read model), the
-  source-of-truth rules (authored `parent`/`dependsOn`, derived
-  `children`/`blocks`), the separation of hierarchy from dependency, the "no LLM
-  in the apply path" rule, the requirement that the manifest hash is carried
-  into audit/evidence, and the both-directions mutation-test bar.
-
-What is missing is exactly the middle of that pipeline: there is no code that
-reads GitHub, no observed-state model, no `RoadmapDiff` contract, and no
-fixtures.
+What is missing is observed-state reconciliation: read the native GitHub graph, normalize it, compare it to the desired graph, and emit a deterministic machine-readable diff.
 
 ## Proposed solution
 
-Add a read-only reconciler alongside the existing validator, in the same
-directory, with the same stdlib-first, offline-by-default posture.
+Add a read-only reconciler alongside the validator. Keep it stdlib-first, offline-testable, and incapable of GitHub writes.
 
 New files:
 
 ```text
-roadmap/schemas/github-graph-snapshot.schema.json  # observed-graph capture contract
-roadmap/schemas/roadmap-diff.schema.json           # RoadmapDiff output contract
-roadmap/scripts/github_graph.py                    # graph sources (fixture + live, GET-only)
-roadmap/scripts/reconcile.py                       # desired/observed normalization + diff + CLI
-roadmap/fixtures/human-input/converged.json        # captured converged snapshot of the pilot
-roadmap/tests/test_reconcile.py                    # mutation tests, both directions
-roadmap/tests/mutations.py                         # deterministic snapshot mutators
+roadmap/schemas/github-graph-snapshot.schema.json
+roadmap/schemas/roadmap-diff.schema.json
+roadmap/scripts/github_graph.py
+roadmap/scripts/reconcile.py
+roadmap/fixtures/human-input/live-capture.json          # optional immutable evidence capture
+roadmap/fixtures/human-input/converged-fixture.json     # synthetic green test fixture
+roadmap/tests/test_reconcile.py
+roadmap/tests/mutations.py
 ```
 
-Modified: `.github/workflows/roadmap-validate.yml` (one extra step running the
-reconciler over the committed snapshot in fixture mode; `permissions: {}` and
-the absence of any token stay unchanged). `roadmap/README.md` gains a
-"Reconciliation" section. `roadmap/requirements.txt` is unchanged — the
-reconciler uses only `json`, `hashlib`, `urllib.request`, plus the already
-pinned `jsonschema` and `PyYAML`.
+Modified files:
+
+```text
+.github/workflows/roadmap-validate.yml
+roadmap/README.md
+```
+
+No new pip dependency is required.
+
+### Layer 0 — validation preflight
+
+`reconcile.py` loads all selected manifests before any network access. For each manifest it runs the same schema + semantic validation as today. Then it runs the existing corpus invariants across the whole selected set.
+
+The key rule is:
+
+```text
+load selected manifests
+  → validate_document(each)
+  → corpus_errors(all valid selected manifests)
+  → only then derive desired graph / read GitHub
+```
+
+This prevents a reconciler run from bypassing the global invariant that one GitHub issue may bind to at most one authored work item across the manifest corpus. Any schema, semantic, or corpus failure exits 2 and performs no GitHub read.
 
 ### Layer 1 — desired graph (`reconcile.py`)
 
-`desired_graph(document) -> DesiredGraph` runs only on a document that already
-returned `[]` from `validate.validate_document`, so it may assume ids are
-unique, references resolve, and the graphs are acyclic. It produces:
+`desired_graph(document)` runs only after validation succeeds. It produces:
 
-- `bindings: dict[str, IssueKey]` — work-item id to canonical issue key, reusing
-  `validate._issue_key` for extraction and normalizing `repository` with
-  `str.lower()` for comparison while retaining the authored spelling for output.
-- `hierarchy: set[tuple[IssueKey, IssueKey]]` as `(parent, child)` — a bound item
-  with no `parent` yields `(spec.github.issue, item.issue)`; a bound item with
-  `parent` yields `(bindings[item.parent], item.issue)`.
-- `dependencies: set[tuple[IssueKey, IssueKey]]` as `(blocked, blocker)` — from
-  `dependsOn` resolved through `bindings` and from `externalDependsOn` verbatim.
-- `suppressed: list[Suppression]` — every edge that could not be derived because
-  one endpoint is an unbound work item. `spec.phases` is read only to carry the
-  phase label into entry payloads; it never produces an edge, which the
-  `test_phase_order_is_not_a_dependency` test locks in.
+- `bindings`: work-item id → canonical issue key;
+- `hierarchy`: `(parent, child)` edges; root is `spec.github.issue` when `parent` is absent;
+- `dependencies`: `(blocked, blocker)` edges from `dependsOn` plus `externalDependsOn`;
+- suppressions for relations touching intentionally unbound items.
 
-### Layer 2 — observed graph (`github_graph.py`)
+Repository comparison is case-insensitive, but authored spelling may be retained for display. `spec.phases` never creates an edge.
 
-One provider-neutral `GraphSnapshot` shape, validated against
-`github-graph-snapshot.schema.json`:
+### Layer 2 — provider-neutral observed snapshot (`github_graph.py`)
+
+The snapshot schema is independent of GitHub transport details. It carries explicit provenance so synthetic fixtures cannot masquerade as live evidence.
+
+Example live capture:
 
 ```json
 {
   "apiVersion": "roadmap.mctl.ai/v1alpha1",
   "kind": "GitHubGraphSnapshot",
-  "capturedAt": "2026-09-01T00:00:00Z",
-  "issues": [
-    {"repository": "mctlhq/.github", "number": 42, "found": true,
-     "state": "open", "title": "...",
-     "parent": null,
-     "subIssues": [{"repository": "mctlhq/mctl-agents", "number": 333}],
-     "blockedBy": [], "blocking": []}
-  ]
+  "source": {
+    "mode": "live-capture",
+    "capturedAt": "2026-09-13T19:00:00Z",
+    "apiBase": "https://api.github.com"
+  },
+  "issues": []
 }
 ```
 
-Two sources implement the same `fetch(refs) -> GraphSnapshot` protocol:
+Example synthetic fixture:
 
-- `FixtureGraphSource(path)` loads a committed snapshot. Used by every test and
-  by CI. No network, no token.
-- `LiveGraphSource(token, api_base)` resolves each referenced issue with a
-  batched GraphQL query for existence/state/`parent`/`subIssues`, then a REST
-  `GET /repos/{owner}/{repo}/issues/{number}/dependencies/blocked_by` per issue
-  for dependency edges. Every request goes through one `_get(url, ...)` helper
-  that hardcodes `method="GET"` and raises `WriteAttempted` if any caller passes
-  another method or a body — a structural, testable guarantee rather than a
-  convention. It also supports `--capture <path>`, writing a snapshot for
-  offline replay, which is how the converged fixture is produced and refreshed.
-
-Normalization happens once, in `observed_graph(snapshot)`: lowercase repository
-keys, sort every relation list, drop self-edges, and collapse duplicate
-relations. Anything the snapshot reports as `found: false` becomes a binding
-entry and marks that issue key as unresolvable.
-
-### Layer 3 — diff (`reconcile.py`)
-
-`diff(desired, observed) -> RoadmapDiff` returns three separate collections, per
-the issue's requirement that hierarchy and dependency drift stay distinct:
-
-| collection | type | emitted when |
-| --- | --- | --- |
-| `binding` | `BindingIssueNotFound` | bound issue absent from the observed graph |
-| `binding` | `BindingRedirected` | issue resolves to a different repo/number |
-| `binding` | `BindingAmbiguous` | issue observed with more than one parent, or a binding with multiple candidates |
-| `binding` | `BindingUnbound` (info) | work item has no `issue`; carries `title`/`owner` |
-| `hierarchy` | `HierarchyMissingParent` | desired `(parent, child)` not observed |
-| `hierarchy` | `HierarchyWrongParent` | child observed under a different parent |
-| `hierarchy` | `HierarchyUnexpectedChild` (info) | observed child of a bound parent that no work item binds |
-| `dependency` | `DependencyMissing` | desired `(blocked, blocker)` not observed |
-| `dependency` | `DependencyUnexpected` | observed `blockedBy` on a bound issue with no desired counterpart |
-
-Binding entries are computed first and any desired edge touching an unresolvable
-or suppressed endpoint is dropped from the hierarchy/dependency comparison, so a
-single missing issue produces one binding entry instead of a cascade of fake
-hierarchy and dependency drift.
-
-Determinism is a hard requirement, so: sets are converted to sorted lists by
-`(type, subject, object)`; no `datetime.now()` anywhere (`capturedAt` is copied
-from the snapshot, never generated); `json.dumps(..., sort_keys=True,
-indent=2)`; and the document carries `manifest.sha256` computed over the exact
-manifest bytes, satisfying the README rule that the manifest revision/hash is
-carried into evidence. `test_output_is_byte_stable` asserts two runs produce
-identical bytes.
-
-### Layer 4 — CLI and CI
-
-`python roadmap/scripts/reconcile.py roadmap/epics --snapshot
-roadmap/fixtures/human-input/converged.json [--output diff.json]` mirrors
-`validate.py`'s argument handling (reusing `validate._manifest_paths`) and its
-exit codes: 0 converged, 1 drift, 2 usage/IO/validation error. `--live` selects
-`LiveGraphSource` and is never used by this repository's CI. The workflow gains:
-
-```yaml
-      - name: Reconcile pilot epic against captured graph
-        run: >-
-          python3 roadmap/scripts/reconcile.py roadmap/epics/human-input.yaml
-          --snapshot roadmap/fixtures/human-input/converged.json
+```json
+{
+  "apiVersion": "roadmap.mctl.ai/v1alpha1",
+  "kind": "GitHubGraphSnapshot",
+  "source": {
+    "mode": "synthetic-fixture",
+    "derivedFrom": "live-capture.json"
+  },
+  "issues": []
+}
 ```
 
-which keeps `permissions: {}` and requires no secret. The `unittest discover`
-step picks up `roadmap/tests/test_reconcile.py` automatically.
+A synthetic fixture does not carry a live `capturedAt` claim. If no immutable live capture is committed, `derivedFrom` is omitted.
 
-### Mutation testing
+Two sources implement one protocol:
 
-`roadmap/tests/mutations.py` provides pure functions over a loaded snapshot:
-`drop_parent_edge(snapshot, child)`, `drop_dependency_edge(snapshot, blocked,
-blocker)`, `rebind_issue(snapshot, old, new)`. Tests derive every red case from
-the single committed converged snapshot, assert the expected family turns red
-while the other families stay empty, then assert the restored copy compares
-equal to the original object and reconciles green again. Committing one snapshot
-rather than N mutated files makes it impossible for the green and red fixtures to
-drift apart.
+- `FixtureGraphSource(path)` loads a schema-valid snapshot without network access.
+- `LiveGraphSource(token, api_base)` uses GitHub REST GETs only.
 
-## Alternatives
+### Layer 3 — live GitHub adapter: REST GET-only
 
-1. **Extend `validate.py` with an optional GitHub mode.** Rejected: the
-   validator's contract is that it is offline and read-only for both network and
-   filesystem (`roadmap/README.md`: "The validator is intentionally offline and
-   read-only"), and `.github/workflows/roadmap-validate.yml` runs it on every
-   roadmap PR with `permissions: {}`. Mixing a network path into it would put a
-   token requirement onto a workflow that deliberately has none. A separate
-   `reconcile.py` that imports `validate` keeps one validation implementation
-   without weakening that boundary.
+The live adapter intentionally does **not** use GraphQL in this slice. The safety contract is expressed at the HTTP method level and stays literal: every request is GET, every request body is absent, and any attempt to construct a non-GET request raises before transmission.
 
-2. **Read the observed graph live in CI instead of from a captured snapshot.**
-   Rejected for this slice: the pilot spans five repositories, so CI would need
-   a cross-repo read token, and the tests would become non-deterministic (the
-   real `human-input` graph is not converged today and changes whenever a human
-   edits an issue). The snapshot source makes "converged fixture returns no
-   drift" a real, stable assertion; `--live` remains available for operators and
-   for the later `RoadmapReconcileWorkflow` in `mctl-agents`.
+For each referenced issue the adapter uses the native REST surfaces:
 
-3. **Implement the reconciler in `mctl-agents` (TypeScript/Python workflow code)
-   straight away.** Rejected as premature: the desired-state derivation depends
-   on manifest semantics that live here and are already covered by
-   `roadmap/tests/test_validate.py`, and the issue explicitly scopes this to a
-   read-only detector with machine-readable output. Keeping the detector next to
-   the contract lets `mctl-agents` later import or shell out to a proven,
-   version-pinned artifact instead of re-deriving the graph rules.
+```text
+GET /repos/{owner}/{repo}/issues/{number}
+GET /repos/{owner}/{repo}/issues/{number}/parent
+GET /repos/{owner}/{repo}/issues/{number}/sub_issues
+GET /repos/{owner}/{repo}/issues/{number}/dependencies/blocked_by
+```
 
-4. **Reconstruct dependencies from `Depends on` prose in issue bodies.**
-   Rejected: an explicit non-goal of the issue ("LLM-based interpretation of
-   issue prose"), and non-deterministic by construction. Only native sub-issue
-   and issue-dependency relations are read.
+The issue GET supplies existence/state and the canonical/final identity needed for redirect/transfer detection. Redirect handling must retain both the originally requested key and the final resolved key so the diff can emit `BindingRedirected` rather than collapsing a transfer into `BindingIssueNotFound`.
+
+All requests funnel through one helper. Tests inject a stub opener and assert:
+
+- only GET is ever sent;
+- no request body is sent;
+- forcing any other method/body raises `WriteAttempted` before I/O.
+
+The adapter requires only read access (`issues: read`; `contents: read` is sufficient for manifest/content reads when used by a later runtime). CI in this repository never supplies a token and never runs live mode.
+
+`--capture <path>` is a live-operator action that writes a `source.mode: live-capture` snapshot. A committed live capture is evidence and is not hand-converged in place.
+
+### Layer 4 — normalization
+
+`observed_graph(snapshot)` lowercases repository identity for comparison, sorts and deduplicates relation lists, drops self-edges, and builds a canonical graph representation.
+
+A `found: false` issue becomes a binding failure and marks dependent desired edges as suppressed. The normalizer also detects impossible/ambiguous parent data rather than arbitrarily picking one parent.
+
+### Layer 5 — deterministic diff
+
+`diff(desired, observed)` returns three separate collections:
+
+| collection | type | meaning |
+| --- | --- | --- |
+| binding | `BindingIssueNotFound` | bound issue absent |
+| binding | `BindingRedirected` | requested issue resolves to another canonical repo/number |
+| binding | `BindingAmbiguous` | binding/parent observation is ambiguous |
+| binding | `BindingUnbound` | informational desired work without issue binding |
+| hierarchy | `HierarchyMissingParent` | expected parent edge missing |
+| hierarchy | `HierarchyWrongParent` | child has a different observed parent |
+| hierarchy | `HierarchyUnexpectedChild` | informational observed child not owned by manifest |
+| dependency | `DependencyMissing` | expected blocked-by edge missing |
+| dependency | `DependencyUnexpected` | observed blocked-by edge not authored |
+
+Binding entries are computed first. Any desired relation that depends on an unresolved/ambiguous endpoint is suppressed from hierarchy/dependency comparison so one bad binding cannot create a cascade of fake drift.
+
+Determinism is part of the contract:
+
+- exact manifest bytes → SHA-256 in `RoadmapDiff`;
+- stable sort keys for every collection;
+- no generated timestamp in the diff;
+- source metadata copied from the snapshot;
+- `json.dumps(..., sort_keys=True, indent=2)`;
+- identical manifest + snapshot bytes produce byte-identical output.
+
+### Layer 6 — fixture model and mutation tests
+
+The green fixture is explicitly synthetic:
+
+```text
+roadmap/fixtures/human-input/converged-fixture.json
+```
+
+It represents the desired fully converged graph even if the real GitHub graph is not currently converged. It may be derived from a real capture, but it must be marked `source.mode: synthetic-fixture` and never pretend to be the captured state.
+
+If a real capture is useful for audit/debugging, keep it separately as:
+
+```text
+roadmap/fixtures/human-input/live-capture.json
+```
+
+and never hand-edit it to make tests pass.
+
+`roadmap/tests/mutations.py` derives all red cases from the single synthetic green fixture. Tests mutate one parent edge, one dependency edge, or one binding, assert only the expected family turns red, then restore and assert green again.
+
+### Layer 7 — CLI and CI
+
+CLI shape:
+
+```text
+python roadmap/scripts/reconcile.py roadmap/epics/human-input.yaml \
+  --snapshot roadmap/fixtures/human-input/converged-fixture.json
+```
+
+Modes:
+
+- `--snapshot`: offline fixture/capture replay;
+- `--live`: GET-only GitHub read using token from environment;
+- `--capture`: live mode plus snapshot write;
+- `--output`: optional diff destination.
+
+Exit codes:
+
+- `0`: no drift-severity entries;
+- `1`: drift detected;
+- `2`: usage/IO/credentials/schema/semantic/corpus validation error.
+
+`.github/workflows/roadmap-validate.yml` adds only an offline fixture reconciliation step. `permissions: {}` remains unchanged and no secret/token is introduced.
+
+## Alternatives rejected
+
+1. **GraphQL for sub-issues.** Rejected for this slice because it conflicts with the explicit HTTP GET-only safety contract. REST exposes the required native issue, parent, sub-issue, and blocked-by reads and makes redirect/transfer handling explicit.
+2. **Only call `validate_document()` per manifest.** Rejected because it bypasses existing corpus invariants and allows duplicate desired ownership across selected manifests.
+3. **Hand-edit a captured snapshot into a converged test fixture.** Rejected because the resulting artifact would no longer be live evidence while still carrying live provenance. Synthetic and captured artifacts are separate.
+4. **Read live GitHub state in CI.** Rejected because the pilot spans repositories, would require a token, and would make green/red tests non-deterministic.
+5. **Implement write reconciliation now.** Rejected; this issue proves detector correctness first.
+6. **Parse `Depends on` prose.** Rejected; only native relations are authoritative for this detector.
 
 ## Platform impact
 
-- **Migrations:** none. No schema in `roadmap/schemas/epic-definition.schema.json`
-  changes, `roadmap/epics/human-input.yaml` is untouched, and no data store is
-  involved. Two new schemas are added for new artifacts only.
-- **Backward compatibility:** `validate.py` keeps its current public functions
-  and exit codes; `reconcile.py` imports them rather than forking them. Existing
-  CI steps are unchanged; one step is added. `RoadmapDiff` and
-  `GitHubGraphSnapshot` are introduced at `v1alpha1`, so later shape changes are
-  permitted under the same alpha contract that `EpicDefinition` already uses.
-- **Dependencies / resource impact:** no new pip dependency. Fixture-mode
-  reconciliation is pure CPU over a handful of issues — CI cost is under a
-  second. Live mode is O(issues) requests: one batched GraphQL query plus one
-  REST call per issue (7 issues for the pilot), well inside rate limits.
-- **Security:** the reconciler needs `contents: read` and `issues: read` only,
-  and never receives a write-capable token in this repository. The GET-only
-  guard in `github_graph._get` is enforced in code and asserted by a test, so
-  "no GitHub write permission is required" is verifiable rather than asserted.
-  Manifest content is untrusted only insofar as it is reviewed via PR; issue
-  titles fetched from GitHub are treated as opaque data, are never interpolated
-  into shell commands (all HTTP goes through `urllib.request`, no `gh` subprocess
-  and no `run:` interpolation), and the existing `issueRef.repository` pattern
-  already rejects shell-like values — see
-  `test_repository_ref_rejects_shell_like_or_spacey_values`.
-- **Risks and mitigations:**
-  - *GitHub's sub-issue / issue-dependency API shape changes or differs from
-    what is assumed.* Mitigated by isolating every API detail in
-    `github_graph.LiveGraphSource` behind the provider-neutral snapshot schema;
-    the detector, the diff contract, and all tests are unaffected by an adapter
-    rewrite.
-  - *False drift from repository name casing or from issues transferred between
-    repositories.* Mitigated by canonical lowercase keys and by explicit
-    `BindingRedirected` handling instead of silent mismatch.
-  - *A cascade of misleading entries when one issue is unreachable.* Mitigated
-    by computing binding entries first and suppressing dependent edges.
-  - *The captured fixture rots against reality.* Accepted for this read-only
-    slice and mitigated by `--capture`, which regenerates the snapshot in one
-    command; the fixture's job is to prove detector behaviour, not to mirror
-    live state.
-  - *Someone later adds an apply path on top of this output.* Mitigated by
-    keeping write capability entirely absent from the module and by the
-    both-directions mutation tests that `roadmap/README.md` makes a
-    precondition for enabling writes.
+- No migration and no authored `EpicDefinition` schema change.
+- `validate.py` keeps its current contract; reconciliation reuses its validation/corpus invariants rather than forking them.
+- No new runtime dependency.
+- Fixture mode is pure offline CPU work.
+- Live mode is O(issues) REST GET traffic and remains comfortably inside normal rate limits for the pilot.
+- No write capability exists in the module.
+- A later `mctl-agents` workflow can invoke this proven detector, but write/apply remains a separate governed phase.
+
+## Risks and mitigations
+
+- **GitHub REST relation shape changes:** isolate all provider details in `LiveGraphSource`; detector/tests consume the provider-neutral snapshot contract.
+- **Transferred issues:** issue GET preserves requested vs canonical resolved identity and emits `BindingRedirected`.
+- **False cascades:** binding failures suppress dependent edge comparisons.
+- **Fixture rot:** synthetic green fixture proves detector behaviour, not live truth; optional live capture can be regenerated independently.
+- **Future apply misuse:** no mutation primitive exists here, and mutation tests remain a prerequisite for enabling writes elsewhere.
