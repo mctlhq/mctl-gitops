@@ -1,5 +1,5 @@
-status: accepted
-updated_at: '2026-09-13T08:30:14Z'
+status: implemented
+updated_at: '2026-09-13T08:50:11Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -9,5 +9,11 @@ source:
 control:
   requires_human_approval: true
 approval:
-  approved_by: 'mashkovd'
+  approved_by: mashkovd
   approved_at: '2026-09-13T08:30:14Z'
+attempt:
+  id: 8af434d8-c4b3-4738-af2b-9bb7f8a8ef73
+  started_at: '2026-09-13T08:31:36Z'
+  expires_at: '2026-09-13T10:41:36Z'
+  finished_at: '2026-09-13T08:50:11Z'
+pr: https://github.com/mctlhq/portfolio/pull/84
