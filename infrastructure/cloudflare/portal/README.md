@@ -550,9 +550,9 @@ it was written against**: a closed-schema finding arrives as one line for all
 of them, so without that list a sixth tool going closed would ride in on the
 excuse for the five known ones. The side is part of the kind for the same
 reason — an excuse written for five closed output schemas does not cover those
-same five tools going closed on the input side. It stops excusing on the day after its
-date, and it answers for its own upkeep under a separate heading — because
-editing a list in a script is not the same job as taking a server down to
+same five tools going closed on the input side. It stops excusing on the day
+after its date, and it answers for its own upkeep under a separate heading —
+because editing a list in a script is not the same job as taking a server down to
 re-snapshot it. Two things land there: a waiver whose finding has gone
 entirely, which is a deletion, and one that is merely wider than what fires,
 which is a narrowing. Deleting in the second case is the wrong half: for the

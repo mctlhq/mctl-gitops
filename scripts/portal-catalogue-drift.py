@@ -229,6 +229,13 @@ def compare(server: str, snapshot: dict, allowlist: dict) -> list[dict]:
     """
     out: list[dict] = []
     raw_live, raw_want = snapshot.get("tools"), allowlist.get("tools")
+    # `tools: null` is the portal's answer for a server waiting on its first
+    # authorization -- the case the `if not live` guard below was written for,
+    # with the message that says a user has to sign in. Left as None it trips
+    # the type check first and that message becomes unreachable, replaced by
+    # one about a broken payload shape. Same exit 2, wrong instruction.
+    if raw_live is None:
+        raw_live = []
 
     # Everything below this point is the same argument in four shapes: a side
     # this script cannot read is not drift, and exit 1 is the status that
@@ -493,6 +500,23 @@ def selftest() -> int:
              "type": "object", "properties": {"default": {
                  "type": "object", "additionalProperties": False}}}}],
           "last_synced": ""}, allow(["a"]), 1),
+        # One case per family of subschema location, since the walk names
+        # twenty keywords and `properties`/`items` alone would leave the map,
+        # list and value branches unexercised.
+        ("a closed schema under $defs fires",
+         {"tools": [{"name": "a", "outputSchema": {
+             "$defs": {"row": {"type": "object", "additionalProperties": False}}}}],
+          "last_synced": ""}, allow(["a"]), 1),
+        ("a closed schema inside anyOf fires",
+         {"tools": [{"name": "a", "outputSchema": {
+             "anyOf": [{"type": "null"},
+                       {"type": "object", "additionalProperties": False}]}}],
+          "last_synced": ""}, allow(["a"]), 1),
+        ("a closed schema in the tuple form of items fires",
+         {"tools": [{"name": "a", "outputSchema": {
+             "type": "array",
+             "items": [{"type": "object", "additionalProperties": False}]}}],
+          "last_synced": ""}, allow(["a"]), 1),
         ("a closed form inside examples is not a closed schema",
          {"tools": [{"name": "a", "outputSchema": {
              "type": "object", "properties": {"a": {"type": "string"}},
@@ -515,7 +539,12 @@ def selftest() -> int:
         ("an allowlist with no tools is undetermined, not total drift",
          snap(["a"]), {"server": "s", "tools": []}, "U"),
         ("a non-list catalogue is undetermined",
-         {"tools": None, "last_synced": ""}, allow(["a"]), "U"),
+         {"tools": "nope", "last_synced": ""}, allow(["a"]), "U"),
+        # `tools: null` is the waiting-server shape, not a broken payload:
+        # undetermined either way, but it has to reach the guard whose message
+        # says a user must sign in.
+        ("a null catalogue is the waiting-server message",
+         {"tools": None, "status": "waiting", "last_synced": ""}, allow(["a"]), "U"),
         ("a non-list allowlist is undetermined",
          snap(["a"]), {"server": "s", "tools": {"a": True}}, "U"),
     ]
@@ -549,6 +578,19 @@ def selftest() -> int:
     print(f"{'ok  ' if ok else 'FAIL'} a tool closed on both sides is two findings ({kinds})")
     if not ok:
         failures.append("both sides")
+
+    # `tools: null` must reach the guard whose message names the remedy. Both
+    # paths are exit 2, so the exit-code cases above cannot tell them apart --
+    # the message IS the finding here.
+    try:
+        compare("s", {"tools": None, "status": "waiting", "last_synced": ""},
+                allow(["a"]))
+        ok = False
+    except Undetermined as e:
+        ok = "sign in" in str(e)
+    print(f"{'ok  ' if ok else 'FAIL'} a null catalogue says a user must sign in")
+    if not ok:
+        failures.append("null catalogue message")
 
     # A nameless entry is a shape this script does not understand, and must
     # exit 2 rather than reach sorted() and die as exit 1, "stale".
