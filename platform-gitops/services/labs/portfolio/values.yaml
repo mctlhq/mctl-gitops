@@ -25,7 +25,6 @@ ingress:
   enabled: true
   hosts:
     - labs-portfolio.mctl.ai
-    - preview.dmitriimashkov.com
     - dmitriimashkov.com
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
@@ -35,6 +34,5 @@ ingress:
         - labs-portfolio.mctl.ai
     - secretName: portfolio-custom-tls
       hosts:
-        - preview.dmitriimashkov.com
         - dmitriimashkov.com
 extraContainers: []
