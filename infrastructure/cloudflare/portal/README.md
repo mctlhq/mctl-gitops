@@ -527,14 +527,18 @@ It reads every server mapped on the portal, compares the stored tool names
 with the `docs/portal-allowlist.json` each owning repository commits on `main`
 — test-enforced there to equal what the server registers, so it is the honest
 statement of which tools the upstream advertises — and reports any stored
-`outputSchema` that is still closed. Exit 1 means "re-snapshot per the recipe
-above". Its `--selftest` runs on every pull request from
+`inputSchema` or `outputSchema` that is still closed, naming which, because a
+closed output schema is fixed by a release and a re-snapshot while a closed
+input schema may be deliberate upstream and leave a waiver as the only way
+out. Exit 1 means "re-snapshot per the recipe above". Its `--selftest` runs on every pull request from
 `validate-manifests.yml`, because a detector never seen to fire is not known
 to work.
 
-Read its green carefully: it says *names match and the stored schemas are
-open*, not *the catalogue is fresh*. A schema whose content changed under an
-unchanged name and an open snapshot passes, and would still break clients.
+Read its green carefully: it says *names match and the stored input and
+output schemas are open*, not *the catalogue is fresh*. A schema whose content
+changed under an unchanged name and an open snapshot passes — a retyped or
+newly required parameter as much as an added field — and would still break
+clients.
 Seeing that needs a committed copy of each upstream's schemas to compare
 against, which no repository has today.
 

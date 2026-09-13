@@ -412,7 +412,14 @@ jobs:
                  # Not folded into 2. A whole server gone from production is
                  # the loudest thing this check can find, and "the check could
                  # not run" is the triage bucket people reach for last.
-                 echo "> A server this check expects is not mapped on the portal at all. Restore the mapping, or retire it from \`OWNERS\`."; } >> "$GITHUB_STEP_SUMMARY" ;;
+                 echo "> A server this check expects is not mapped on the portal at all. Restore the mapping, or retire it from \`OWNERS\`."
+                 # Exit 4 outranks exit 1, so a night with both names only
+                 # this one. The script says in the block above when the
+                 # quieter finding also fired; repeat it under the heading,
+                 # which is what gets read first.
+                 grep -q 'which this exit status does not name' catalogue.txt \
+                   && echo "> Catalogue findings also fired tonight and this status does not name them — read the block above."
+                 true; } >> "$GITHUB_STEP_SUMMARY" ;;
             *) { echo "### \`portal\` — catalogue check could not run (exit $code)";
                  echo; echo '```'; cat catalogue.txt 2>/dev/null || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY" ;;
           esac

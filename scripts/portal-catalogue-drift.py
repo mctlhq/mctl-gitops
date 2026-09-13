@@ -20,12 +20,13 @@ synced rather than failing on them. This compares the live snapshot with
 the allowlist each owning repository commits on `main` -- that file is
 test-enforced there to equal the set of tools the server registers, so it
 is the honest statement of which tools the upstream advertises -- and
-inspects the stored schemas for the closed form.
+inspects the stored inputSchema and outputSchema for the closed form.
 
 What it does NOT detect, stated so nobody reads more into a green run: a
 schema whose CONTENT changed while its tool kept its name and its snapshot
-stayed open. A retyped property or a newly required one breaks clients
-against the stale snapshot exactly like an added field does, and nothing
+stayed open, on either side. A retyped property or a newly required
+parameter breaks clients against the stale snapshot exactly like a field
+added to an output does, and nothing
 here can see it, because no authoritative copy of the upstream's schemas is
 committed anywhere to compare against -- the allowlist carries names and
 decisions, not schemas. Closing that gap means a golden catalogue file in
@@ -187,15 +188,42 @@ def compare(server: str, snapshot: dict, allowlist: dict) -> list[dict]:
     else.
     """
     out: list[dict] = []
-    live = {t.get("name"): t for t in snapshot.get("tools") or []}
-    want = {t.get("name") for t in allowlist.get("tools") or []}
+    raw_live, raw_want = snapshot.get("tools"), allowlist.get("tools")
 
-    # A nameless entry on either side is not drift, it is a shape this script
-    # does not understand -- and left alone it reaches sorted() as a None key,
-    # raises TypeError, and exits 1: the status that means "stale, go
-    # re-snapshot", for a server that may be perfectly fresh.
+    # Everything below this point is the same argument in four shapes: a side
+    # this script cannot read is not drift, and exit 1 is the status that
+    # means "stale, go re-snapshot", for a server that may be perfectly fresh.
+    if not isinstance(raw_live, list) or not isinstance(raw_want, list):
+        raise Undetermined(
+            f"{server}: tools is not a list "
+            f"(portal {type(raw_live).__name__}, allowlist {type(raw_want).__name__}); "
+            "refusing to compare")
+
+    live = {t.get("name"): t for t in raw_live}
+    want = {t.get("name") for t in raw_want}
+
+    # A nameless entry would otherwise reach sorted() as a None key and raise
+    # TypeError.
     if None in live or None in want:
         raise Undetermined(f"{server}: a tool entry has no name; refusing to compare")
+
+    # An empty side is not an empty catalogue. The portal holds no tools for a
+    # server nobody has authorized yet -- `status: waiting`, which is also
+    # where the README's own recipe parks a server between step 2 and step 3 --
+    # and reported as drift that is every upstream tool `missing-tool`, exit 1,
+    # and a re-snapshot instruction for a condition only a user signing in can
+    # clear. An empty allowlist is the mirror: the file parsed, so its shape
+    # changed upstream, and every stored tool would be called `extra-tool`.
+    if not live:
+        raise Undetermined(
+            f"{server}: the portal holds no tools at all (status "
+            f"{snapshot.get('status')!r}, last_synced {snapshot.get('last_synced')}) "
+            "-- a server waiting for its first authorization needs a user to "
+            "sign in, not a re-snapshot")
+    if not want:
+        raise Undetermined(
+            f"{server}: the allowlist lists no tools -- its shape changed "
+            "upstream; refusing to call every stored tool extra")
 
     def add(kind: str, names: list[str], message: str) -> None:
         out.append({"server": server, "kind": kind, "names": names,
@@ -219,16 +247,29 @@ def compare(server: str, snapshot: dict, allowlist: dict) -> list[dict]:
     # exactly as a closed outputSchema rejects a field it started returning.
     # Measured 2026-09-13: every stored inputSchema is open today, so this
     # widens what is watched without widening what is red.
-    closed = sorted(n for n, t in live.items()
-                    if closed_objects(t.get("outputSchema"))
-                    or closed_objects(t.get("inputSchema")))
+    closed_out = sorted(n for n, t in live.items()
+                        if closed_objects(t.get("outputSchema")))
+    closed_in = sorted(n for n, t in live.items()
+                       if closed_objects(t.get("inputSchema")))
+    closed = sorted(set(closed_out) | set(closed_in))
     if closed:
+        # Which side, because the remedies differ: a closed outputSchema is
+        # the upstream bug mctlhq/mctl-telegram#637 and a release plus a
+        # re-snapshot clears it, while a closed inputSchema may be deliberate
+        # upstream behaviour no release will open, and then the only way out
+        # of exit 1 is a KNOWN_STALE entry. `names` stays tool names, so a
+        # waiver enumerates what it always enumerated.
+        sides = []
+        if closed_out:
+            sides.append("output: " + ", ".join(closed_out))
+        if closed_in:
+            sides.append("input: " + ", ".join(closed_in))
         add("closed-schemas", closed,
             f"{len(closed)} stored schema(s) are closed "
             "(additionalProperties:false) -- a field or parameter added upstream "
             "fails the call, and re-snapshotting before the release that opens "
-            "them is deployed just captures them closed again: "
-            + ", ".join(closed))
+            "them is deployed just captures them closed again. "
+            + "; ".join(sides))
     return out
 
 
@@ -308,15 +349,32 @@ def apply_waivers(findings: list[dict], today: str, compared: set[str]
     return failing, waived, maintenance
 
 
+def expected_missing(servers) -> list[str]:
+    """Upstreams OWNERS expects that the portal does not map at all.
+
+    A function rather than a set expression inline in main() so the loudest
+    branch in this file is reachable from selftest() like every other one.
+    """
+    return [
+        f"{missing}: expected on portal {PORTAL} and not mapped there at all "
+        "-- restore the mapping, or drop it from OWNERS in this script if it "
+        "was retired on purpose"
+        for missing in sorted(set(OWNERS) - set(servers))
+    ]
+
+
 def selftest() -> int:
     """A detector never seen to fire is not known to work."""
-    def snap(names, closed=False, extra=None):
+    def snap(names, closed=False, extra=None, closed_input=False):
         tools = []
         for n in names:
             schema = {"type": "object", "properties": {"a": {"type": "string"}}}
             if closed:
                 schema["additionalProperties"] = False
-            tools.append({"name": n, "outputSchema": schema})
+            t = {"name": n, "outputSchema": schema}
+            if closed_input:
+                t["inputSchema"] = {"type": "object", "additionalProperties": False}
+            tools.append(t)
         if extra:
             tools.append(extra)
         return {"tools": tools, "last_synced": "2026-09-10 12:00:00"}
@@ -336,10 +394,30 @@ def selftest() -> int:
         ("no outputSchema at all is quiet",
          {"tools": [{"name": "a"}], "last_synced": ""}, allow(["a"]), 0),
         ("order does not matter", snap(["b", "a"]), allow(["a", "b"]), 0),
+        # The inputSchema half of the closedness check: snap() writes an
+        # outputSchema for every tool, so without this case the clause that
+        # scans inputSchema could be deleted -- or misspelled input_schema,
+        # which t.get() answers None to -- and every other case still passes.
+        ("a closed inputSchema fires too",
+         snap(["a"], closed_input=True), allow(["a"]), 1),
+        # A side this script cannot read is exit 2, never exit 1: the four
+        # shapes of that, since exit 1 sends someone through a destructive
+        # recipe that fixes none of them.
+        ("an unsnapshotted server is undetermined, not total drift",
+         {"tools": [], "status": "waiting", "last_synced": ""}, allow(["a"]), "U"),
+        ("an allowlist with no tools is undetermined, not total drift",
+         snap(["a"]), {"server": "s", "tools": []}, "U"),
+        ("a non-list catalogue is undetermined",
+         {"tools": None, "last_synced": ""}, allow(["a"]), "U"),
+        ("a non-list allowlist is undetermined",
+         snap(["a"]), {"server": "s", "tools": {"a": True}}, "U"),
     ]
     failures = []
     for name, sn, a, expected in cases:
-        got = 1 if compare("s", sn, a) else 0
+        try:
+            got = 1 if compare("s", sn, a) else 0
+        except Undetermined:
+            got = "U"
         print(f"{'ok  ' if got == expected else 'FAIL'} {name}")
         if got != expected:
             failures.append(name)
@@ -425,6 +503,20 @@ def selftest() -> int:
         if valid and w["until"] < _dt.date.today().isoformat():
             print(f"     note: waiver {key} expired on {w['until']}; the nightly run reports it")
 
+    # The loudest branch in the file, and until it moved out of main() the only
+    # decision here with no case: an upstream OWNERS expects and the portal
+    # does not map at all.
+    for name, servers, want in [
+        ("every expected upstream mapped is quiet", set(OWNERS), 0),
+        ("an upstream missing from the portal fires", set(OWNERS) - {"tg"}, 1),
+        ("a server the portal maps and OWNERS does not is not missing",
+         set(OWNERS) | {"unknown"}, 0),
+    ]:
+        got = 1 if expected_missing(servers) else 0
+        print(f"{'ok  ' if got == want else 'FAIL'} {name}")
+        if got != want:
+            failures.append(name)
+
     if failures:
         print(f"\n{len(failures)} failing: {', '.join(map(str, failures))}")
         return 1
@@ -483,12 +575,7 @@ def main() -> int:
     # announced as "the catalogue check could not run", which is the triage
     # bucket people reach for last -- for the one finding here that means a
     # whole upstream has disappeared from production.
-    vanished = [
-        f"{missing}: expected on portal {PORTAL} and not mapped there at all "
-        "-- restore the mapping, or drop it from OWNERS in this script if it "
-        "was retired on purpose"
-        for missing in sorted(set(OWNERS) - set(servers))
-    ]
+    vanished = expected_missing(servers)
 
     # Per server, so one unreachable upstream does not discard the drift
     # already found on the others. A read timeout on the last repository used
@@ -520,6 +607,13 @@ def main() -> int:
         print(f"an upstream is missing from portal {PORTAL} entirely:", file=sys.stderr)
         for line in vanished:
             print(f"  {line}", file=sys.stderr)
+        # One exit code cannot carry two states, and exit 4 outranks exit 1 on
+        # purpose. Say here that the quieter one also fired, so the heading and
+        # the alert -- which are what get read first -- do not imply the
+        # catalogues are otherwise in sync.
+        if failing:
+            print(f"  (and {len(failing)} catalogue finding(s) below, which this "
+                  "exit status does not name)", file=sys.stderr)
     if undetermined:
         print("these servers were not compared:", file=sys.stderr)
         for line in undetermined:
