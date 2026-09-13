@@ -258,6 +258,7 @@ printf '%s' "$summary" | ok
 printf '%s' "$summary" | jq -e '.result.auth_config_summary != null' >/dev/null
 #    umask, because this file carries the whole registration -- endpoints,
 #    client id, scope -- for the rest of the procedure.
+rm -f "$SERVER.summary.json"
 (umask 077; printf '%s' "$summary" | jq '.result.auth_config_summary' \
   > "$SERVER.summary.json")
 test -s "$SERVER.summary.json"
@@ -282,6 +283,7 @@ printf '%s' "$summary" | jq -S '[.result.tools[]] | sort_by(.name)' \
 #     takes the only in-memory copy of it with it.
 CREDS=$(jq -ce '{auth_mode, config, registration_info}' "$SERVER.summary.json")
 SECRET=$(openssl rand -hex 24); test -n "$SECRET"
+rm -f "$SERVER.restore.json"             # umask does not re-mode an existing file
 (umask 077; CREDS="$CREDS" SECRET="$SECRET" \
   jq -n '{auth_type:"oauth", auth_credentials:env.CREDS, client_secret:env.SECRET}' \
   > "$SERVER.restore.json")
@@ -395,6 +397,7 @@ scratch, so it carries whatever fields this API actually stores, and the body
 is printed for a human before anything is sent:
 
 ```
+test "$SERVER" = seerrsense              # this block reads its step-4 file
 PORTAL=mcp
 pf() { curl -sS --fail-with-body \
   -K <(printf 'header = "Authorization: Bearer %s"\n' "$CLOUDFLARE_API_TOKEN") \
@@ -411,9 +414,18 @@ printf '%s' "$before" | mapping > portal.mapping.before.json
 test -s portal.mapping.before.json
 
 TOOL="seerrsense_new_tool"              # the name from the step-4 diff
-body=$(TOOL="$TOOL" jq -c '{servers: [.result.servers[]
+
+# the decisions are REBUILT against the refreshed catalogue, not appended to.
+# A release that removes or renames a tool is one of the triggers for this
+# whole procedure, and the flip does not touch the mapping -- so the stale
+# decision survives, and a PUT that sends a name the portal has not seen is
+# rejected (error 7001), leaving step 5 unfinishable.
+names=$(jq -S '[.[].name]' "$SERVER.catalogue.after.json")
+body=$(jq -c --arg tool "$TOOL" --argjson names "$names" '{servers: [.result.servers[]
   | if .server_id == "seerrsense"
-    then .updated_tools += [(.updated_tools[0] | .name = env.TOOL | .enabled = true)]
+    then .updated_tools = ([.updated_tools[]
+                            | select(.name != $tool and (.name | IN($names[])))]
+                           + [(.updated_tools[0] | .name = $tool | .enabled = true)])
     else . end]}' <<<"$before")
 printf '%s' "$body" | jq .          # READ THIS before the next line
 ```
