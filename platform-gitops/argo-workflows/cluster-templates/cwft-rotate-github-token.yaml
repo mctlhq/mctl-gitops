@@ -78,6 +78,11 @@ spec:
     # unreachable (Codex P1 on PR #147). The 3600 value was harmless
     # for the rotation primary purpose (only the latest token matters)
     # but defeated the new triage-history requirement.
+    # A hard ceiling on a single run. HTTP_TIMEOUT bounds each call; this
+    # bounds the run, so no combination of slow calls can outlive the cadence
+    # and block the next rotation under concurrencyPolicy: Forbid. 10 min is
+    # ~20x a normal run and a third of the interval.
+    activeDeadlineSeconds: 600
     ttlStrategy:
       secondsAfterCompletion: 259200
     entrypoint: rotate
@@ -95,6 +100,14 @@ spec:
 
             VAULT_ADDR = os.environ["VAULT_ADDR"]
 
+            # Every urlopen below passes this. Without it Python waits forever on a socket
+            # that was accepted and then went quiet, and this CronWorkflow is
+            # concurrencyPolicy: Forbid -- so one stuck call does not fail a rotation, it
+            # stops EVERY later rotation while the installation tokens expire an hour
+            # later. 30s is far above any normal response here and far below the 30-minute
+            # cadence. Belt and braces with activeDeadlineSeconds on the workflow.
+            HTTP_TIMEOUT = 30
+
             from cryptography.hazmat.primitives import serialization, hashes
             from cryptography.hazmat.primitives.asymmetric import padding
             from cryptography.hazmat.backends import default_backend
@@ -107,7 +120,7 @@ spec:
                 data=json.dumps({"role": "argo-workflow", "jwt": sa_token}).encode(),
                 headers={"Content-Type": "application/json"},
                 method="POST"
-            ))
+            ), timeout=HTTP_TIMEOUT)
             vault_token = json.loads(resp.read())["auth"]["client_token"]
             print("✅ Vault authenticated")
 
@@ -121,7 +134,7 @@ spec:
                     f"{VAULT_ADDR}/v1/secret/data/{path}",
                     headers={"X-Vault-Token": vault_token}
                 )
-                return json.loads(urllib.request.urlopen(req).read())["data"]["data"]
+                return json.loads(urllib.request.urlopen(req, timeout=HTTP_TIMEOUT).read())["data"]["data"]
 
             def vault_write(path, data):
                 req = urllib.request.Request(
@@ -130,7 +143,7 @@ spec:
                     headers={"X-Vault-Token": vault_token, "Content-Type": "application/json"},
                     method="POST"
                 )
-                return json.loads(urllib.request.urlopen(req).read())["data"]["version"]
+                return json.loads(urllib.request.urlopen(req, timeout=HTTP_TIMEOUT).read())["data"]["version"]
 
             def mint_installation_token(creds, scope=None):
                 private_key = creds["private-key"]
@@ -192,7 +205,7 @@ spec:
                     },
                     method="POST"
                 )
-                result = json.loads(urllib.request.urlopen(req).read())
+                result = json.loads(urllib.request.urlopen(req, timeout=HTTP_TIMEOUT).read())
 
                 # DO NOT re-add an equality check on result["permissions"].
                 #
@@ -275,7 +288,7 @@ spec:
                         f"https://api.github.com{path}", data=data,
                         headers=headers, method=method)
                     try:
-                        code = urllib.request.urlopen(req).status
+                        code = urllib.request.urlopen(req, timeout=HTTP_TIMEOUT).status
                     except urllib.error.HTTPError as e:
                         code = e.code
                     if code not in expected:
@@ -300,7 +313,7 @@ spec:
                     },
                     method="PATCH"
                 )
-                urllib.request.urlopen(req, context=k8s_ctx)
+                urllib.request.urlopen(req, context=k8s_ctx, timeout=HTTP_TIMEOUT)
 
             # ── One entry per App. Adding a new consumer of the same App
             # pattern later only needs a new entry here, no template changes.
@@ -387,9 +400,21 @@ spec:
                         # And the dispatch: 404 is the PASS here -- permission
                         # was accepted and only the workflow file is missing.
                         # A 403 would mean actions:write did not survive.
+                        #
+                        # BOTH the workflow file and the ref are ones that do
+                        # not exist, on purpose. A body of {"ref": "main"} is a
+                        # VALID dispatch, so this probe's safety would rest
+                        # entirely on nobody ever adding a file by that name --
+                        # a property repository contents control, not this
+                        # file. With a nonexistent ref as well, two unrelated
+                        # things must both be created before this could fire
+                        # anything, and if the workflow alone appears the
+                        # response becomes 422 and this check goes red rather
+                        # than quietly dispatching every 30 minutes.
                         ({404}, "POST",
-                         "/repos/mctlhq/mctl-gitops/actions/workflows/zz-nonexistent.yml/dispatches",
-                         {"ref": "main"}),
+                         "/repos/mctlhq/mctl-gitops/actions/workflows/"
+                         "zz-nonexistent-permission-probe.yml/dispatches",
+                         {"ref": "zz-nonexistent-permission-probe"}),
                         # contents must be read-only: 403 on a write. This is
                         # the half of the permission narrowing GitHub honours,
                         # and the one worth asserting. The unscoped token
@@ -398,9 +423,15 @@ spec:
                         ({403}, "POST", "/repos/mctlhq/mctl-gitops/git/refs",
                          {"ref": "refs/heads/zz-permission-probe",
                           "sha": "0000000000000000000000000000000000000000"}),
-                        # The repository narrowing: a private repository
-                        # outside the scope answers 404, not 403 -- GitHub
-                        # hides it rather than refusing it.
+                        # The repository narrowing. Note WHICH boundary this
+                        # asserts: the mint-time repositories: ["mctl-gitops"]
+                        # limit, not the installation's reach. This repository
+                        # is itself a consumer of the same App (see
+                        # docs/runbooks/github-app-scope-audit.md), so it is
+                        # plausibly inside the installation and outside this
+                        # token -- which is exactly the boundary under test.
+                        # A private repository outside the scope answers 404,
+                        # not 403: GitHub hides it rather than refusing it.
                         ({404}, "GET",
                          "/repos/mctlhq/pfeifenpatenschaft-backend/contents/README.md", None),
                     ],

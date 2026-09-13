@@ -50,6 +50,20 @@ def scope_check_source() -> str:
 CHECK = scope_check_source()
 
 
+def template_constant(name: str):
+    """Read a module-level constant out of the template.
+
+    Taken from the source rather than restated, for the same reason the
+    functions are: a literal here would keep the test green after the template
+    changed. verify_token references HTTP_TIMEOUT, so the stub namespace needs
+    the real value.
+    """
+    for node in ast.parse(embedded_python()).body:
+        if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", None) == name:
+            return ast.literal_eval(node.value)
+    raise AssertionError(f"{name} is no longer defined in the template")
+
+
 def verify_token_source() -> str:
     """The verify_token function, taken from the template."""
     tree = ast.parse(embedded_python())
@@ -197,13 +211,18 @@ def main() -> int:
             def __init__(self, status):
                 self.status = status
 
-        def fake_urlopen(req):
+        def fake_urlopen(req, timeout=None, **kwargs):
+            # Accepts timeout because the template passes it — and asserts it,
+            # since an unbounded call is what stalls the rotation under
+            # concurrencyPolicy: Forbid.
+            assert timeout, "verify_token must pass a finite timeout"
             code = seq.pop(0)
             if code >= 400:
                 raise urllib.error.HTTPError(req.full_url, code, "", None, None)
             return Resp(code)
 
-        ns = {"json": json, "urllib": urllib, "print": lambda *a, **k: None}
+        ns = {"json": json, "urllib": urllib, "print": lambda *a, **k: None,
+              "HTTP_TIMEOUT": template_constant("HTTP_TIMEOUT")}
         exec(compile(fn_src, "<verify_token>", "exec"), ns, ns)
         real = urllib.request.urlopen
         urllib.request.urlopen = fake_urlopen
