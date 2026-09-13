@@ -256,7 +256,10 @@ Steps 0 to 2, the destructive half:
 summary=$(cf)
 printf '%s' "$summary" | ok
 printf '%s' "$summary" | jq -e '.result.auth_config_summary != null' >/dev/null
-printf '%s' "$summary" | jq '.result.auth_config_summary' > "$SERVER.summary.json"
+#    umask, because this file carries the whole registration -- endpoints,
+#    client id, scope -- for the rest of the procedure.
+(umask 077; printf '%s' "$summary" | jq '.result.auth_config_summary' \
+  > "$SERVER.summary.json")
 test -s "$SERVER.summary.json"
 
 # 0a. and the catalogue as it stands, to diff against afterwards. WHOLE tool
@@ -264,6 +267,9 @@ test -s "$SERVER.summary.json"
 #     readOnlyHint in particular is a structural claim this platform acts on,
 #     so a projection down to names and schemas would call a changed
 #     annotation "no change".
+printf '%s' "$summary" | jq -e '(.result.tools | type) == "array"
+                                and (.result.tools | length) > 0' >/dev/null \
+  || { echo "this server has no catalogue to diff against; stop"; exit 1; }
 printf '%s' "$summary" | jq -S '[.result.tools[]] | sort_by(.name)' \
   > "$SERVER.catalogue.before.json"
 
@@ -329,6 +335,15 @@ Steps 4 and 5, the verification:
 #    catalogue is a FAILURE, not a pass: it means the snapshot never moved,
 #    whatever last_synced says.
 after=$(cf); printf '%s' "$after" | ok
+#    and that there IS a catalogue. `tools` is null for a server nobody has
+#    authorized -- which is the state this step is verifying its way out of,
+#    and the state the server is in if step 3 was announced but never done.
+#    Unguarded, jq dies with "Cannot iterate over null" and set -e takes the
+#    shell at the one point where access is still closed; worse, an empty
+#    ARRAY would diff as every tool removed and read as a release delta.
+printf '%s' "$after" | jq -e '(.result.tools | type) == "array"
+                              and (.result.tools | length) > 0' >/dev/null \
+  || { echo "the portal holds no tools: step 3 did not complete, do NOT reopen access"; exit 1; }
 printf '%s' "$after" | jq -S '[.result.tools[]] | sort_by(.name)' \
   > "$SERVER.catalogue.after.json"
 printf '%s' "$after" | jq -r '.result.last_synced'
@@ -367,14 +382,53 @@ that the window is open.
 
 Step 5 for `seerrsense` is **not** in the blocks above, and is a different
 endpoint: `cf()` addresses `servers/{id}`, while a tool allowlist lives on the
-portal object. Until that repository has an apply script
-(mctlhq/seerrsense#70), its mapping is written the way Phase 0 wrote it — a
-read-modify-write `PUT` on `portals/mcp` — which carries the race described
-under "What the write does not touch": the body sends every server's mapping
-back, so a `tg` or `api` allowlist applied between the read and the write is
-silently reverted, with a `200`. Run it when no other apply is in flight, and
-read the other two mappings back afterwards; their tool counts and
-`default_disabled` must be what they were before.
+portal object. `mctl-telegram` and `mctl-api` have `scripts/portal-allowlist-apply.sh`
+for this; `seerrsense` does not yet (mctlhq/seerrsense#70), so until it does,
+its mapping is written by hand the way Phase 0 wrote it — a read-modify-write
+`PUT` on `portals/mcp`. That carries the race described under "What the write
+does not touch": the body sends every server's mapping back, so a `tg` or
+`api` allowlist applied between the read and the write is silently reverted,
+with a `200`. Run it when no other apply is in flight.
+
+The new entry is **copied from an existing one** rather than written from
+scratch, so it carries whatever fields this API actually stores, and the body
+is printed for a human before anything is sent:
+
+```
+PORTAL=mcp
+pf() { curl -sS --fail-with-body \
+  -K <(printf 'header = "Authorization: Bearer %s"\n' "$CLOUDFLARE_API_TOKEN") \
+  "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/access/ai-controls/mcp/portals/$PORTAL" "$@"; }
+others() { jq -S '[.result.servers[] | select(.server_id != "seerrsense")
+                   | {server_id, default_disabled,
+                      n: (.updated_tools | length)}]'; }
+
+before=$(pf); printf '%s' "$before" | ok
+printf '%s' "$before" | others > portal.others.before.json
+test -s portal.others.before.json
+
+TOOL=<the tool name from the step-4 diff>
+body=$(TOOL="$TOOL" jq -c '{servers: [.result.servers[]
+  | if .server_id == "seerrsense"
+    then .updated_tools += [(.updated_tools[0] | .name = env.TOOL | .enabled = true)]
+    else . end]}' <<<"$before")
+printf '%s' "$body" | jq .          # READ THIS before the next line
+```
+
+Then, and only if that body is what you meant:
+
+```
+printf '%s' "$body" | pf -X PUT --json @- | ok
+
+# the other two mappings must be untouched -- this is the race, not a
+# formality, and a 200 says nothing about it.
+diff -u portal.others.before.json <(pf | others)
+```
+
+`updated_tools[0]` is the shape donor, so this needs `seerrsense` to have at
+least one entry already; it has five. If that ever stops being true, read a
+`tg` entry instead and change `server_id` nowhere — the entry shape is the
+same across servers.
 
 Measured on the day: `seerrsense` `last_synced` 2026-09-10 19:32 → 2026-09-13
 05:42, `api` 74 → 75 tools with the allowlist re-applied 75/75. The portal
