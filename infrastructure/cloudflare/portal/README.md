@@ -288,3 +288,38 @@ backend credential is read-only, so a plan cannot record it -- run the
 refreshes state; the environment approval is the gate) before expecting the
 detector to pass. Measured after the `tg` re-snapshot on 2026-09-13: live
 version 2, state version 1.
+
+### The check that notices
+
+`scripts/portal-catalogue-drift.py` runs nightly from `cloudflare-drift.yml`
+for this root, after the registration check and independently of its result.
+It reads every server mapped on the portal, compares the stored tool names
+with the `docs/portal-allowlist.json` each owning repository commits on `main`
+— test-enforced there to equal what the server registers, so it is the honest
+statement of which tools the upstream advertises — and reports any stored
+`outputSchema` that is still closed. Exit 1 means "re-snapshot per the recipe
+above". Its `--selftest` runs on every pull request from
+`validate-manifests.yml`, because a detector never seen to fire is not known
+to work.
+
+Read its green carefully: it says *names match and the stored schemas are
+open*, not *the catalogue is fresh*. A schema whose content changed under an
+unchanged name and an open snapshot passes, and would still break clients.
+Seeing that needs a committed copy of each upstream's schemas to compare
+against, which no repository has today.
+
+`KNOWN_STALE` in the script is the list of findings already written down
+elsewhere. It exists because a job that is red every night is one people stop
+reading — this file's own argument about green checks, pointed the other way.
+A waiver covers one kind of finding on one server, **and enumerates the tools
+it was written against**: the closed-schema finding arrives as one line for
+all of them, so without that list a sixth tool going closed would ride in on
+the excuse for the five known ones. It stops excusing on the day after its
+date, and a waiver whose finding has gone fails on its own — under a separate
+heading, because deleting three lines from a script is not the same job as
+taking a server down to re-snapshot it. One waiver is committed today:
+`seerrsense` publishes closed output schemas in code, and the fix waits on
+that repository's review freeze.
+
+The waived findings are printed even on a passing run, and the nightly summary
+repeats them, so a green check never reads as more than it is.
