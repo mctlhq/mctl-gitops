@@ -52,8 +52,9 @@ things:
     2  a side could not be read, or a server holds no tools at all -- the
        servers that WERE compared are still reported; an unauthorized server
        needs a user to sign in, anything else is a check to fix
-    3  a waiver in this file matches nothing any more -- delete it here;
-       do NOT re-snapshot for this
+    3  a waiver in this file needs attention -- it matches nothing any more,
+       or it still names tools that have stopped firing. Delete or narrow it
+       here; do NOT re-snapshot for either
     4  an upstream this script expects is not mapped on the portal at all --
        restore the mapping, or retire it from OWNERS
 
@@ -329,6 +330,12 @@ def apply_waivers(findings: list[dict], today: str, compared: set[str]
     waived: list[str] = []
     maintenance: list[str] = []
     used: set[tuple[str, str]] = set()
+    # Every tool name waived under a key, ACROSS findings. `missing-tool` and
+    # `extra-tool` arrive one finding per tool while the closed-schema kinds
+    # arrive aggregated, so judging a waiver's width one finding at a time
+    # would call a two-tool waiver too wide twice over, on a night when it is
+    # working exactly as written.
+    seen: dict[tuple[str, str], set[str]] = {}
 
     for f in findings:
         key = (f["server"], f["kind"])
@@ -350,22 +357,26 @@ def apply_waivers(findings: list[dict], today: str, compared: set[str]
                 f'NOT {", ".join(new_names)})')
             continue
         waived.append(f'{f["message"]}\n    (known until {w["until"]}: {w["why"]})')
-        # The waiver covering MORE than the finding is also a state worth a
-        # word. Some of the tools it was reviewed against have stopped
-        # firing -- a partial upstream fix -- and the excuse silently keeps
-        # covering them, so one of them closing again before the expiry date
-        # would be waived by a reason that no longer applies to it. Not
-        # failing: nothing is stale. Maintenance, like a waiver that excuses
-        # nothing at all, which is this same check at its limit.
-        gone = sorted(set(w.get("tools") or []) - set(f.get("names") or []))
+        seen.setdefault(key, set()).update(f.get("names") or [])
+
+    # The waiver covering MORE than what fired is a state worth a word: some of
+    # the tools it was reviewed against have stopped firing -- a partial
+    # upstream fix -- and the excuse silently keeps covering them, so one of
+    # them regressing before the expiry date would be waived by a reason that
+    # no longer applies to it. Not failing: nothing is stale. Maintenance, like
+    # a waiver that excuses nothing at all, which is this same check at its
+    # limit.
+    for key, names in sorted(seen.items(), key=repr):
+        w = KNOWN_STALE[key]
+        gone = sorted(set(w.get("tools") or []) - names)
         if gone:
             maintenance.append(
-                f"{f['server']}: the waiver for {f['kind']} still names "
+                f"{key[0]}: the waiver for {key[1]} still names "
                 f"{', '.join(gone)}, which no longer fire. Narrow it in "
                 f"KNOWN_STALE to what is left, or delete it when nothing is. "
                 f"({w['why']})")
 
-    for key, w in sorted(KNOWN_STALE.items()):
+    for key, w in sorted(KNOWN_STALE.items(), key=repr):
         # Only a server that was actually compared can prove its waiver dead.
         # One that could not be read produces no findings by construction, and
         # judging it here would tell someone to delete a waiver because
@@ -514,6 +525,10 @@ def selftest() -> int:
                   "message": "s: closed"}]
         other = [{"server": "s", "kind": "missing-tool", "names": ["z"],
                   "message": "s: missing"}]
+        per_tool = [{"server": "s", "kind": "missing-tool", "names": ["y"],
+                     "message": "s: y missing"},
+                    {"server": "s", "kind": "missing-tool", "names": ["z"],
+                     "message": "s: z missing"}]
 
         shrunk = [{"server": "s", "kind": "closed-output-schemas", "names": ["a"],
                    "message": "s: a is closed"}]
@@ -540,6 +555,23 @@ def selftest() -> int:
         print(f"{'ok  ' if ok else 'FAIL'} an uncompared server does not condemn its waiver")
         if not ok:
             failures.append("uncompared server")
+
+        # A per-tool kind: compare() emits one finding PER NAME for
+        # missing-tool and extra-tool, so both waived tools arrive as separate
+        # findings. Judged one finding at a time, each would look like the
+        # other had stopped firing, and a waiver working exactly as written
+        # would report itself broken twice a night. Its own table entry,
+        # because a second waiver in the fixture would change every case above.
+        KNOWN_STALE[("s", "missing-tool")] = {
+            "until": "2026-10-15", "tools": ["y", "z"], "why": "fixture"}
+        f_, _, m_ = apply_waivers(per_tool, "2026-09-13", {"s"})
+        del KNOWN_STALE[("s", "missing-tool")]
+        # The other fixture waiver fires nothing here and is swept as dead, so
+        # only its own kind's lines are the subject.
+        ok = not f_ and not [line for line in m_ if "missing-tool" in line]
+        print(f"{'ok  ' if ok else 'FAIL'} a per-tool waiver matched in full is quiet")
+        if not ok:
+            failures.append("per-tool waiver")
 
         for name, f, today, want_fail, want_maint in wcases:
             failing, _, maint = apply_waivers(f, today, {"s"})
@@ -574,13 +606,19 @@ def selftest() -> int:
          {"until": "soon", "tools": ["a"], "why": "fixture"}, False),
         ("a waiver naming no tools fails", ("tg", "closed-output-schemas"),
          {"until": "2026-10-15", "tools": [], "why": "fixture"}, False),
+        ("a key that is not a (server, kind) tuple fails", "seerrsense",
+         {"until": "2026-10-15", "tools": ["a"], "why": "fixture"}, False),
     ]:
         got = waiver_is_wellformed(key, w)
         print(f"{'ok  ' if got == want else 'FAIL'} {name}")
         if got != want:
             failures.append(name)
 
-    for key, w in sorted(KNOWN_STALE.items()):
+    # key=repr: a key written as a bare string instead of a 2-tuple is the
+    # other easy typo here, and a plain sorted() compares str with tuple and
+    # dies with a TypeError -- a traceback in place of the FAIL line that
+    # names the offending key, which is the whole point of checking at PR time.
+    for key, w in sorted(KNOWN_STALE.items(), key=repr):
         valid = waiver_is_wellformed(key, w)
         print(f"{'ok  ' if valid else 'FAIL'} committed waiver {key} names a known "
               "server and kind, is dated and names its tools")
@@ -714,8 +752,9 @@ def main() -> int:
     if maintenance:
         # Its own heading and its own exit status: this one is fixed in this
         # file, not on the portal.
-        print("a waiver in this script no longer matches anything "
-              "(do NOT re-snapshot for this):", file=sys.stderr)
+        print("a waiver in this script needs attention -- it matches nothing, "
+              "or it is wider than what fires (do NOT re-snapshot for either):",
+              file=sys.stderr)
         for line in maintenance:
             print(f"  {line}", file=sys.stderr)
 

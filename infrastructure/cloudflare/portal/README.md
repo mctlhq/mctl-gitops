@@ -569,7 +569,7 @@ reason to take a server down:
 | 0 | names match, stored schemas open | nothing (read the waived lines) |
 | 1 | the catalogue is stale | the recipe above |
 | 2 | a side could not be read, or a server holds no tools at all | fix the check; an unauthorized server needs a user to sign in |
-| 3 | a waiver matches nothing | delete it from the script — **not** the recipe |
+| 3 | a waiver matches nothing, or is wider than what fires | delete or narrow it in the script — **not** the recipe |
 | 4 | an upstream is missing from the portal | restore the mapping, or retire it from `OWNERS` |
 
 `4` outranks `1`, so a night with both names only the missing upstream; the
