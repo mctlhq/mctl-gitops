@@ -454,6 +454,11 @@ def waiver_is_wellformed(key, w) -> bool:
     # passes truthiness here and then reaches apply_waivers(), where
     # set("search_media") is a set of eleven characters: the waiver matches no
     # finding it was written for, and the nightly reports it as fresh drift.
+    # `w` itself first: a body written as a string or a list answers no
+    # `.get`, and an AttributeError here is a traceback where the point of
+    # this predicate is a FAIL line naming the bad waiver.
+    if not isinstance(w, dict):
+        return False
     tools = w.get("tools")
     if not isinstance(tools, list) or not all(isinstance(t, str) and t
                                               for t in tools):
@@ -745,6 +750,8 @@ def selftest() -> int:
          {"until": "2026-10-15", "tools": [], "why": "fixture"}, False),
         ("a key that is not a (server, kind) tuple fails", "seerrsense",
          {"until": "2026-10-15", "tools": ["a"], "why": "fixture"}, False),
+        ("a waiver whose body is not a dict fails",
+         ("tg", "closed-output-schemas"), "2026-10-15", False),
         ("a waiver whose tools is a bare string fails",
          ("tg", "closed-output-schemas"),
          {"until": "2026-10-15", "tools": "search_media", "why": "fixture"}, False),
