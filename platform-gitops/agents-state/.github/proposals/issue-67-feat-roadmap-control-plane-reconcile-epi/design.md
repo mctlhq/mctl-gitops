@@ -127,7 +127,7 @@ GET /repos/{owner}/{repo}/issues/{number}/dependencies/blocked_by
 
 The `/parent` route is verified against GitHub's official REST documentation: **Get parent issue** is exposed at exactly `GET /repos/{owner}/{repo}/issues/{issue_number}/parent`, requires only `Issues: read` for private resources, and documents 200/301/404/410 responses. This closes the prior P3 uncertainty; the implementation should use the normal GitHub REST API-version header already used by the repository/client.
 
-The issue GET supplies existence/state and requested-vs-resolved identity for redirects/transfers. All requests funnel through one helper; tests inject a stub opener and prove GET-only/no-body behavior.
+The issue GET supplies existence/state and requested-vs-resolved identity for redirects/transfers. The requested key is recorded from the request URL before transmission, never from the response, because a 301 on a transferred issue may be followed by the HTTP client before any response reaches the adapter; the resolved key is then derived from the response body's `repository_url` and `number`, not from the final request URL. A redirect is therefore detected by comparing those two recorded keys, which works identically whether the client follows the 301 or surfaces it. All requests funnel through one helper; tests inject a stub opener and prove GET-only/no-body behavior.
 
 CI never runs live mode.
 

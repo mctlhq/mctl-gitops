@@ -21,7 +21,8 @@ Issue #67 adds the observed-state half of the roadmap control plane: determinist
 - WHEN an authored issue resolves to a different canonical repository/number THE SYSTEM SHALL emit exactly one `BindingRedirected`, preserve requested and resolved identities, and use the **resolved canonical key** for hierarchy/dependency comparison. Redirect alone SHALL NOT suppress relations or create cascaded relation drift.
 - IF a bound issue cannot be resolved THE SYSTEM SHALL emit `BindingIssueNotFound` and suppress dependent hierarchy/dependency comparisons.
 - IF a binding or parent observation is ambiguous THE SYSTEM SHALL emit `BindingAmbiguous` and suppress dependent relation comparisons for that endpoint.
-- WHEN hierarchy differs THE SYSTEM SHALL emit `HierarchyMissingParent` or `HierarchyWrongParent`; unexpected observed children MAY be reported as informational `HierarchyUnexpectedChild`.
+- WHEN hierarchy differs THE SYSTEM SHALL emit `HierarchyMissingParent` or `HierarchyWrongParent`.
+- WHEN an observed child is not owned by the manifest THE SYSTEM SHALL emit informational `HierarchyUnexpectedChild` and SHALL NOT change exit 0 by itself. It is informational in severity, not optional in emission: the reconciler always reports it, and the exit code ignores it.
 - WHEN dependency state differs THE SYSTEM SHALL emit `DependencyMissing` or `DependencyUnexpected`.
 - WHEN a work item is intentionally unbound THE SYSTEM SHALL emit informational `BindingUnbound`, derive no edge through it, and SHALL NOT change exit 0 by itself.
 - WHEN reconciliation completes THE SYSTEM SHALL emit `apiVersion: roadmap.mctl.ai/v1alpha1`, `kind: RoadmapDiff`, exact manifest-byte SHA-256, source metadata, per-family counts, and separate `binding`, `hierarchy`, and `dependency` collections.
