@@ -159,6 +159,26 @@ spec:
           # mctlhq/mctl-gitops#1229, step 2 of 2.
           envFromSecret: mctl-api-secrets
 
+          # The GitHub App installation token, mounted as a FILE. mctl-api
+          # reads GITHUB_APP_TOKEN_FILE per use (internal/ghtoken), which is
+          # what lets a token re-minted every 30 minutes be picked up without
+          # a restart -- envFrom would capture it at container start and serve
+          # an expired value within the hour.
+          #
+          # From here GITOPS_REPO_TOKEN and GITOPS_ACTIONS_TOKEN in
+          # mctl-api-secrets become the fallback only: the file wins. They stay
+          # for now so this change is reversible by deleting one line, and are
+          # removed in a follow-up once the pod is observed running on the
+          # file.
+          #
+          # What this token is, measured rather than assumed
+          # (mctlhq/mctl-api#307): one repository (mctl-gitops), contents
+          # read-only, actions write, rotating hourly. GitHub downgrades a
+          # permission you name but does not remove one you do not, so it also
+          # carries issues/pull_requests/workflows write on that one
+          # repository -- a recorded trade, not an oversight.
+          githubAppTokenSecret: mctl-api-github-app
+
           resources:
             requests:
               cpu: 100m
