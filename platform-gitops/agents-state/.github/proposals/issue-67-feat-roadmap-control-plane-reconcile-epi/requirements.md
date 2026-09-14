@@ -4,6 +4,8 @@
 
 Issue #67 adds the observed-state half of the roadmap control plane: deterministic comparison of validated `EpicDefinition` manifests against native GitHub issue hierarchy and dependency relations. This slice is read-only, emits a stable `RoadmapDiff`, does not interpret issue prose, and must prove both green and red detector directions before any apply path exists.
 
+`EpicDefinition` remains the canonical **desired graph** only. Portfolio priority/status such as P0/P1/P2/PARK and Todo/In Progress are not duplicated into the manifest in this slice; Org Project #1 remains their portfolio source of truth. Likewise, liveness/health (`ALIGNED`, `DRIFT`, `UNEXPECTED_SILENCE`, `OBSERVATION_FAILED`) is a later **derived** layer over `EpicDefinition` + observed state, not a second `roadmap-state.yaml` desired-state model.
+
 ## User stories
 
 - AS a roadmap owner I WANT a command that compares `roadmap/epics/*.yaml` with the live GitHub graph SO THAT parent/dependency drift is explicit.
@@ -33,6 +35,7 @@ Issue #67 adds the observed-state half of the roadmap control plane: determinist
 - WHEN the Human Input synthetic converged fixture is reconciled THE SYSTEM SHALL report zero drift-severity entries and exit 0.
 - WHEN one parent edge, dependency edge, binding, or redirect mapping is deliberately mutated THE SYSTEM SHALL report only the expected drift; restoring the mutation SHALL return to green.
 - WHEN roadmap files change in CI THE SYSTEM SHALL run only offline fixture-based reconciliation under existing `permissions: {}`.
+- WHEN priority/status or liveness/health is needed THE SYSTEM SHALL treat it as observed/derived portfolio state outside the authored `EpicDefinition` graph for this slice; reconciliation SHALL NOT invent or persist a second editable source of truth for those fields.
 
 ## Out of scope
 
@@ -40,6 +43,8 @@ Issue #67 adds the observed-state half of the roadmap control plane: determinist
 - Persisting `RoadmapDiff` in `mctl-api`.
 - A runtime `RoadmapReconcileWorkflow` in `mctl-agents`.
 - Critical-path/progress scoring or LLM interpretation of issue prose.
+- Project-v2 priority/status reconciliation.
+- `RoadmapHealth`/liveness evaluation and notification policy.
 - Migrating additional epics.
 
 ## Resolved design decisions
@@ -47,6 +52,8 @@ Issue #67 adds the observed-state half of the roadmap control plane: determinist
 - **Parent endpoint verified:** GitHub documents `GET /repos/{owner}/{repo}/issues/{issue_number}/parent` as the REST **Get parent issue** endpoint with `Issues: read` permission.
 - **Corpus scope:** reconciliation targets may be a subset, but corpus invariants always run against the full canonical `roadmap/epics/` corpus (or explicit test corpus root) before live access.
 - **Canonical issue identity:** repository identity is case-insensitive everywhere an authored GitHub issue key participates in Phase-0 validation or Phase-1 reconciliation. The validator and reconciler MUST use the same canonical key so global ownership cannot pass validation and later collapse onto one observed GitHub entity.
+- **Portfolio metadata boundary:** Org Project #1 remains authoritative for P0/P1/P2/PARK and workflow status until a deliberate later integration exists. These fields are not copied into `EpicDefinition` merely for convenience.
+- **Roadmap health boundary:** the health states explored in `mctlhq/.github#56` are retained as a future derived layer consuming the canonical desired graph and observed `RoadmapDiff`; the standalone `roadmap-state.yaml` model is not a second desired-state authority.
 - **Redirect semantics:** `BindingRedirected` is binding drift; relations are then compared using the resolved canonical key. Redirect alone never suppresses relations.
 - **Suppression:** only unresolved/ambiguous bindings and intentionally unbound desired work suppress dependent comparisons.
 - **Fixture provenance:** live capture and synthetic converged fixture are separate artifact classes.
