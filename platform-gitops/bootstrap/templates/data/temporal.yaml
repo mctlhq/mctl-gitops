@@ -81,14 +81,23 @@ spec:
                 limits:
                   cpu: 250m
                   memory: 512Mi
+            # history's memory limit doubled 2026-09-14 after a confirmed
+            # OOMKilled (incident 379e3a69, temporal-history-8f4849ffb-bmdm8):
+            # history holds workflow execution state in memory and is the
+            # only one of these four components that has ever hit a resource
+            # limit (frontend/matching/worker share the same envelope above
+            # with zero incidents). No usage-graph data was available to size
+            # this precisely, so this is a conservative first bump, not a
+            # measured target -- re-tune from actual working-set if it OOMs
+            # again.
             history:
               resources:
                 requests:
                   cpu: 100m
-                  memory: 256Mi
+                  memory: 384Mi
                 limits:
                   cpu: 250m
-                  memory: 512Mi
+                  memory: 1Gi
             matching:
               resources:
                 requests:
