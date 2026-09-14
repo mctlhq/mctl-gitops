@@ -200,6 +200,104 @@ spec:
                             config:
                               match_all: false
                               action: inc
+                      # DevLoopWorkflow's finally clearing an ownership claim
+                      # whose write did not land (mctl-agents#365 item 3). The
+                      # workflow runs in the mctl-agents worker, which is in
+                      # `admins` and therefore already inside this selector --
+                      # the shadow compare below needs its own block because
+                      # the shepherd is an Argo step pod instead.
+                      - regex:
+                          expression: '(?P<lifecycle_claim_abandoned>LIFECYCLE-CLAIM-ABANDONED entity=)'
+                      - metrics:
+                          lifecycle_claim_abandoned_total:
+                            type: Counter
+                            description: "DevLoopWorkflow claims abandoned without a landed write"
+                            source: lifecycle_claim_abandoned
+                            config:
+                              match_all: false
+                              action: inc
+                # The lifecycle observe soak (ADR-010 §12, mctlhq/.github#57).
+                #
+                # A SECOND match block, not extra stages in the one above,
+                # because the shepherd runs as an Argo step pod in
+                # `argo-workflows` and that selector covers labs|admins|ovk.
+                # Leaving the existing block untouched keeps its four counters
+                # from silently changing scope.
+                #
+                # ONE COUNTER PER CLASS, because the metrics stage attaches no
+                # dynamic labels: a single counter with a `class` label is not
+                # expressible here (see the note on `provider` above), so the
+                # class lives in the counter NAME.
+                #
+                # Each expression anchors on the space AFTER the class rather
+                # than on a word boundary. `-` is a non-word character, so
+                # \bstore-permits-old-forbids\b would also match a seventh
+                # class that merely began with the same text. The per-tick
+                # totals line carries no `class=` token at all, so none of
+                # these can match it and count a tick twice.
+                - match:
+                    selector: '{namespace="argo-workflows"}'
+                    stages:
+                      - regex:
+                          expression: '(?P<lifecycle_shadow_agree>lifecycle-shadow: divergence class=agree )'
+                      - metrics:
+                          lifecycle_shadow_agree_total:
+                            type: Counter
+                            description: "shadow compare: both mechanisms agree"
+                            source: lifecycle_shadow_agree
+                            config:
+                              match_all: false
+                              action: inc
+                      - regex:
+                          expression: '(?P<lifecycle_shadow_store_permits_old_forbids>lifecycle-shadow: divergence class=store-permits-old-forbids )'
+                      - metrics:
+                          lifecycle_shadow_store_permits_old_forbids_total:
+                            type: Counter
+                            description: "shadow compare: the store would license an action the old mechanism forbids (THE dangerous class)"
+                            source: lifecycle_shadow_store_permits_old_forbids
+                            config:
+                              match_all: false
+                              action: inc
+                      - regex:
+                          expression: '(?P<lifecycle_shadow_store_forbids_old_permits>lifecycle-shadow: divergence class=store-forbids-old-permits )'
+                      - metrics:
+                          lifecycle_shadow_store_forbids_old_permits_total:
+                            type: Counter
+                            description: "shadow compare: the store withholds an action the old mechanism permits"
+                            source: lifecycle_shadow_store_forbids_old_permits
+                            config:
+                              match_all: false
+                              action: inc
+                      - regex:
+                          expression: '(?P<lifecycle_shadow_owner_mismatch>lifecycle-shadow: divergence class=owner-mismatch )'
+                      - metrics:
+                          lifecycle_shadow_owner_mismatch_total:
+                            type: Counter
+                            description: "shadow compare: both say held, and they name different holders"
+                            source: lifecycle_shadow_owner_mismatch
+                            config:
+                              match_all: false
+                              action: inc
+                      - regex:
+                          expression: '(?P<lifecycle_shadow_store_unknown>lifecycle-shadow: divergence class=store-unknown )'
+                      - metrics:
+                          lifecycle_shadow_store_unknown_total:
+                            type: Counter
+                            description: "shadow compare: no answer from the store (not a divergence)"
+                            source: lifecycle_shadow_store_unknown
+                            config:
+                              match_all: false
+                              action: inc
+                      - regex:
+                          expression: '(?P<lifecycle_shadow_legacy_unknown>lifecycle-shadow: divergence class=legacy-unknown )'
+                      - metrics:
+                          lifecycle_shadow_legacy_unknown_total:
+                            type: Counter
+                            description: "shadow compare: no answer from the old mechanism (not a divergence)"
+                            source: lifecycle_shadow_legacy_unknown
+                            config:
+                              match_all: false
+                              action: inc
               extraRelabelConfigs:
                 # Pods that opt out of scraping opt out of log collection too,
                 # as before.

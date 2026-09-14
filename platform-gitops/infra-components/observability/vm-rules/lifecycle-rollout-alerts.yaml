@@ -1,0 +1,190 @@
+# Alerts for the lifecycle ownership observe soak (ADR-010 §12,
+# mctlhq/.github#57).
+#
+# What is being measured: two mechanisms decide who owns a pull request — the
+# old DevLoopWorkflow liveness probe in run_shepherd, and the ownership store
+# in mctl-api. During observe the OLD one still decides and the shepherd logs
+# how the two compare. These alerts watch that comparison.
+#
+# The counters come from Promtail's metrics stage over the shepherd's Argo step
+# pods (bootstrap/templates/observability/loki.yaml, the argo-workflows match
+# block). One counter per divergence class, because the metrics stage attaches
+# no dynamic labels and a single counter with a `class` label is not
+# expressible there; the promtail_custom_ prefix is stripped at ingest by
+# promtail-podscrape.yaml.
+#
+# The class names mirror mctl-api's internal/lifecycle/diverge.go. Exactly one
+# of them is dangerous, and the alert on it is the soak's STOP condition rather
+# than a trend to watch.
+#
+# NOT here, deliberately: LifecycleShadowSilent, which catches a compare that
+# emits nothing — the failure that reads as a clean soak. It cannot ship before
+# the mode is flipped to observe, because until then emitting nothing is the
+# correct behaviour and the alert would fire continuously on every deployment.
+# It lands in the same change that sets LIFECYCLE_ROLLOUT_MODE=observe.
+#
+# Routing: an `alertname =~ "Lifecycle.*"` route to telegram is added to
+# bootstrap/templates/observability/monitoring.yaml alongside this file, and it
+# is load-bearing rather than cosmetic. Without it these fall through to the
+# ROOT receiver, which is mctl-agent — so the stop signal for a rollout would
+# be delivered only to the system being rolled out, which can open a ticket
+# against itself and notify no human at all.
+#
+# mctl_agent_self="true" is carried for consistency with the other mctl-owned
+# rules. Note it does NOT by itself drop anything: no Alertmanager route
+# matches that label today (mctl-agent-cleanup-alerts.yaml leaves the same
+# thing as a TODO). The telegram route above is what actually delivers these.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: lifecycle-rollout-alerts
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: mctl-platform
+spec:
+  groups:
+    - name: lifecycle.shadow
+      rules:
+        # THE stop condition. The store would license an action the old
+        # mechanism forbids: no healthy owner in the store while a live
+        # DevLoopWorkflow is driving the pull request. Under enforce the
+        # shepherd would take a PR another machine is actively pushing to,
+        # which is the double-driving mctl-agents#213 exists to prevent.
+        #
+        # Threshold is > 0, not a rate: one of these is an incident. `for` is
+        # short for the same reason — this is not a condition to confirm over
+        # time, it is one to stop the rollout over.
+        #
+        # max_over_time, NOT increase(), and this is the difference between an
+        # alert that exists and one that does not.
+        #
+        # Promtail keys a metrics-stage counter by the log stream, pod label
+        # included, and creates the series only when its regex FIRST matches.
+        # A shepherd Argo step pod that reports one dangerous divergence
+        # therefore produces a series whose samples are 1, 1, 1 — never a 0
+        # before them. increase() over that is 0, so the expression would have
+        # been false for exactly the isolated one-off event this stop condition
+        # exists to catch, while passing a unit test that seeds its own zero.
+        #
+        # The value is safe to read directly precisely because the series is
+        # per-pod and these pods are ephemeral: the counter cannot accumulate
+        # across ticks, and it leaves the 15m window with the pod that wrote
+        # it, so the alert self-clears. That is not true of the worker counter
+        # in the group below, which is why that one is written differently.
+        #
+        # Lookback (15m) is LONGER than the hold (5m), the opposite of the
+        # usual pairing and the point: a window shorter than the hold lets a
+        # one-off decay out before the hold elapses, which is right for a rate
+        # and wrong here. The hold only stops a single scrape from flapping,
+        # and the pod's samples stay in the 15m window long enough to satisfy
+        # it even after the pod is gone.
+        - alert: LifecycleShadowDangerousDivergence
+          expr: max_over_time(lifecycle_shadow_store_permits_old_forbids_total[15m]) > 0
+          for: 5m
+          labels:
+            severity: warning
+            mctl_agent_self: "true"
+          annotations:
+            summary: "Lifecycle shadow: the store would license an action the old mechanism forbids"
+            description: >-
+              {{ $value | printf "%.0f" }} dangerous divergence(s) in the last 15m.
+              The ownership store holds no live owner for a pull request a
+              DevLoopWorkflow is driving. This is the one class that would let
+              two machines drive the same PR under enforce. STOP the rollout:
+              set LIFECYCLE_ROLLOUT_MODE back to off, then find the entity with
+              mctl_get_lifecycle_ownership and write down the root cause before
+              restarting the soak clock.
+
+        # An unknown is not a divergence — an absent answer is not a
+        # disagreement — but at enforce UNKNOWN blocks mutations, so a
+        # harmless-looking 5% becomes a 5% stall the day the mode changes.
+        # The soak's exit criterion is < 1% over the trailing 7d; this fires
+        # well before that is at risk.
+        - alert: LifecycleShadowStoreUnknownHigh
+          # Every term carries `or vector(0)`, and that is load-bearing rather
+          # than defensive.
+          #
+          # sum() of an absent series is an EMPTY VECTOR, not zero, and empty
+          # + anything is empty. Without the fallbacks this whole expression
+          # evaluates to nothing whenever any single class has never occurred
+          # — which is the normal state early in the soak, and precisely when
+          # an unknown-rate alert matters most. The rule would not have fired;
+          # it would have silently not existed. A unit test caught it.
+          #
+          # The obvious tidier form — one {__name__=~"lifecycle_shadow_.+"}
+          # selector instead of six named terms — does not work: increase()
+          # drops __name__, so six series that differ only by metric name
+          # collapse into six identical labelsets and the evaluation errors
+          # with "vector cannot contain metrics with the same labelset".
+          #
+          # Consequence worth knowing: a seventh divergence class added to
+          # diverge.go must be added to this denominator by hand, or it will
+          # not count as a comparison.
+          expr: >-
+            (sum(increase(lifecycle_shadow_store_unknown_total[30m])) or vector(0))
+            /
+            clamp_min(
+              (sum(increase(lifecycle_shadow_agree_total[30m])) or vector(0))
+              + (sum(increase(lifecycle_shadow_store_permits_old_forbids_total[30m])) or vector(0))
+              + (sum(increase(lifecycle_shadow_store_forbids_old_permits_total[30m])) or vector(0))
+              + (sum(increase(lifecycle_shadow_owner_mismatch_total[30m])) or vector(0))
+              + (sum(increase(lifecycle_shadow_store_unknown_total[30m])) or vector(0))
+              + (sum(increase(lifecycle_shadow_legacy_unknown_total[30m])) or vector(0)), 1)
+            > 0.05
+          for: 30m
+          labels:
+            severity: warning
+            mctl_agent_self: "true"
+          annotations:
+            summary: "Lifecycle shadow: the ownership store is not answering"
+            description: >-
+              {{ $value | humanizePercentage }} of comparisons in the last 30m
+              read store-unknown. Common causes, in the order worth checking:
+              the shepherd's MCTL_TOKEN is not a lifecycle admin (the batch
+              route is admin-gated and answers 403 for every id), mctl-api is
+              down, or its version predates the derived.held field the compare
+              reads. At enforce an unknown blocks the mutation, so this is a
+              stall waiting to happen.
+
+    - name: lifecycle.claims
+      rules:
+        # DevLoopWorkflow clearing an ownership claim whose write did not land
+        # (mctl-agents#365 item 3). The workflow believes it released the
+        # entity; the store still holds the row, and it will sit there until
+        # its liveness bound expires. Not dangerous on its own — a stale row
+        # withholds, it never licenses — but a persistent source of
+        # store-forbids-old-permits that would otherwise be read as "expected
+        # bootstrap residue".
+        #
+        # Two disjuncts, because this counter lives in a LONG-LIVED pod — the
+        # Temporal worker — unlike the shepherd's ephemeral step pods:
+        #
+        #  - increase() catches every occurrence after the first, and is the
+        #    right shape for a series that persists and keeps incrementing;
+        #  - it cannot catch the first, for the same reason as the rule above:
+        #    Promtail creates the series at 1, so there is no 0 to increase
+        #    from. The second disjunct catches exactly that — the counter
+        #    exists now and did not an hour ago — and the `unless` makes it
+        #    stop firing an hour later instead of latching forever on a value
+        #    that never goes back down.
+        - alert: LifecycleClaimAbandoned
+          expr: >-
+            increase(lifecycle_claim_abandoned_total[1h]) > 0
+            or
+            (
+              max_over_time(lifecycle_claim_abandoned_total[1h]) > 0
+              unless
+              max_over_time(lifecycle_claim_abandoned_total[1h] offset 1h) > 0
+            )
+          for: 15m
+          labels:
+            severity: warning
+            mctl_agent_self: "true"
+          annotations:
+            summary: "DevLoopWorkflow abandoned an ownership claim without a landed write"
+            description: >-
+              {{ $value | printf "%.0f" }} claim(s) abandoned in the last hour.
+              The workflow cleared its local claim on a write that did not
+              reach mctl-api, so the store holds a row nobody is refreshing.
+              Find it with mctl_get_lifecycle_ownership and check whether it is
+              still withholding the entity.
