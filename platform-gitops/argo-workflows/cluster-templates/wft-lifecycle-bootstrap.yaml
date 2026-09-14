@@ -1,0 +1,180 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterWorkflowTemplate
+metadata:
+  name: lifecycle-bootstrap
+  annotations:
+    workflows.argoproj.io/description: |
+      One-shot import of the pull requests already in flight into the
+      lifecycle ownership store (ADR-010, mctlhq/.github#57).
+
+      The observe soak compares two mechanisms. Before it starts, the store
+      has to hold a row for every entity the OLD mechanism already knows
+      about — otherwise every comparison reads store-permits-old-forbids, the
+      one dangerous class, and the measurement is swamped by its own
+      migration.
+
+      Operator-submitted, never scheduled. There is no CronWorkflow for this
+      and there should not be: it is a migration step, and a migration that
+      runs on a timer is a reconciler nobody designed.
+
+      Two runs, in this order:
+        1. dry_run=true (the default) — prints a JSON report and writes
+           NOTHING. Review every row against the store and live Temporal.
+        2. dry_run=false — writes the rows the report planned.
+
+      Safety properties, all in orchestrator/lifecycle/bootstrap.py:
+        - READ FIRST. Any entity that reads UNKNOWN aborts the whole run
+          with nothing written: an id whose owner cannot be seen is not one
+          to write an owner over.
+        - Idempotent on two legs — the read-first pass skips entities that
+          already have a row, and owner ids are deterministic
+          (`shepherd:{service}`, never a pod name), so a re-run writes the
+          same thing rather than colliding with itself.
+        - Entities no rule covers are left UNOWNED and listed under
+          `ambiguous`. An unowned entity is one the old mechanism still
+          drives, i.e. the status quo, not a new risk.
+
+      Why it lives in mctl-agents and not behind an mctl-api endpoint: the
+      import rules need .status.yaml from the gitops checkout, _service_mode
+      / SHEPHERD_SKIP_SERVICES, and the pr_url fallback. None of those exist
+      in mctl-api, and moving them there would put a second copy of the
+      shepherd's policy in a repository that cannot see the state it applies
+      to.
+
+      Submit with:
+        argo submit --from clusterworkflowtemplate/lifecycle-bootstrap \
+          -n argo-workflows -p dry_run=true
+
+spec:
+  ttlStrategy:
+    secondsAfterSuccess: 1800
+    secondsAfterFailure: 86400
+    secondsAfterCompletion: 3600
+  entrypoint: bootstrap
+  serviceAccountName: argo-workflow-sa
+  # Minutes, not the shepherd's two hours: this reads the state dir, issues
+  # one batched read and at most one acquire per entity. Nothing here invokes
+  # a model or waits on a reconcile.
+  activeDeadlineSeconds: 900
+
+  arguments:
+    parameters:
+      - name: dry_run
+        value: "true"
+        # The DEFAULT, and deliberately the safe one. bootstrap.py requires
+        # --apply to write anything, so an operator who submits this template
+        # with no parameters at all gets a report and no writes.
+      - name: agent_image
+        value: ghcr.io/mctlhq/mctl-agents:1.45.0
+
+  volumes:
+    - name: workdir
+      emptyDir:
+        sizeLimit: 1Gi
+    - name: deploy-key
+      secret:
+        secretName: mctl-gitops-deploy-key
+        defaultMode: 0600
+
+  templates:
+    - name: bootstrap
+      # The clone scaffolding is the shepherd CWFT's, minus everything
+      # SDK- and budget-related: no OAuth token, no per-tick cost cap, no
+      # implementer subprocess, and therefore no TMPDIR clone directory.
+      initContainers:
+        - name: clone-gitops
+          image: alpine/git:2.43.0
+          command: [sh, -c]
+          args:
+            - |
+              set -e
+              apk add --no-cache openssh-client ca-certificates
+              mkdir -p ~/.ssh
+              cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
+              chmod 600 ~/.ssh/id_ed25519
+              printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
+              # GitHub's published SSH host keys, PINNED rather than trusted on
+              # first use — same list and same reasoning as the shepherd CWFT.
+              # StrictHostKeyChecking=no would accept whatever key answered on
+              # a connection carrying a write-capable deploy key.
+              cat > ~/.ssh/known_hosts <<'GITHUB_HOST_KEYS'
+              [ssh.github.com]:443 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
+              [ssh.github.com]:443 ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=
+              [ssh.github.com]:443 ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=
+              GITHUB_HOST_KEYS
+              chmod 600 ~/.ssh/known_hosts
+              chmod 600 ~/.ssh/config
+              # Read-only: this workflow never commits. The gitops checkout is
+              # an INPUT — .status.yaml is where the proposals and their PR
+              # urls live — so there is no push step and no write mutex.
+              git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops
+              # uid 1000 is the mctl-agents image USER (SOC F8); this step runs
+              # as root in alpine/git.
+              chown -R 1000:1000 /workdir
+              echo "✓ gitops cloned"
+          resources:
+            requests: { cpu: 50m, memory: 64Mi, ephemeral-storage: 1Gi }
+            limits:   { cpu: 500m, memory: 256Mi, ephemeral-storage: 2Gi }
+          volumeMounts:
+            - name: workdir
+              mountPath: /workdir
+            - name: deploy-key
+              mountPath: /secrets/deploy-key
+      container:
+        image: "{{workflow.parameters.agent_image}}"
+        imagePullPolicy: IfNotPresent
+        command: ["/entrypoint.sh"]
+        args:
+          - "sh"
+          - "-c"
+          - |
+            set -eu
+            # The parameter reaches the shell as an ENV VAR, never interpolated
+            # into the script body: {{workflow.parameters.*}} inside a script is
+            # a shell-injection vector, and this one decides whether the run
+            # writes.
+            #
+            # The comparison is explicit and the DEFAULT is dry: anything other
+            # than the literal "false" leaves --apply off. A typo must not write
+            # to the ownership store, and matching "true" instead would make a
+            # misspelled "flase" write.
+            APPLY=""
+            if [ "${WORKFLOW_DRY_RUN}" = "false" ]; then
+              APPLY="--apply"
+              echo "▶ APPLY mode: planned rows WILL be written"
+            else
+              echo "▶ dry run: nothing will be written"
+            fi
+            # No shell parsing of the report. It is JSON on stdout for an
+            # operator and for the workflow log; a `grep` here would become a
+            # second, drifting copy of the module's own decision vocabulary.
+            exec python -m orchestrator.lifecycle.bootstrap \
+              --state-dir "${STATE_DIR}" ${APPLY}
+        env:
+          - name: WORKFLOW_DRY_RUN
+            value: "{{workflow.parameters.dry_run}}"
+          - name: STATE_DIR
+            value: /workdir/mctl-gitops/platform-gitops/agents-state
+          # The ownership store is admin-gated: GET /lifecycle/ownership/batch
+          # and the acquire route both require a lifecycle admin. NOT optional
+          # here, unlike on the shepherd — a bootstrap that cannot authenticate
+          # would read UNKNOWN for every entity and abort, which is safe but is
+          # a wasted run with a confusing report.
+          - name: MCTL_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: mctl-token
+          # MCTL_API_BASE_URL is deliberately NOT set, matching the shepherd
+          # CWFT: the default lives in orchestrator/temporal/mctl_client.py and
+          # both the ownership client and the DevLoop liveness probe read it
+          # from there. Pinning it in one template of several is how the two
+          # drift — and the failure that would cause is quiet, since a
+          # bootstrap pointed at another environment's API imports owners
+          # derived from that cluster's liveness.
+        resources:
+          requests: { cpu: 100m, memory: 256Mi, ephemeral-storage: 1Gi }
+          limits:   { cpu: 1000m, memory: 1Gi, ephemeral-storage: 2Gi }
+        volumeMounts:
+          - name: workdir
+            mountPath: /workdir
