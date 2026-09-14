@@ -137,6 +137,28 @@ spec:
             # pinning the operator CA; verify-full needs a copied CA secret
             # in this namespace (helm postgresCA) and can wait for CA sync.
             AUDIT_DB_URL: "postgresql://$(DB_USER):$(DB_PASSWORD)@shared-pg-rw.platform-db.svc:5432/mctl-api?sslmode=require"
+            # The lifecycle ownership store (ADR-010) gets its OWN database,
+            # not mctl-api's: it is the source of truth for who may act on an
+            # entity, and its neighbours in mctl-api -- the audit log, the
+            # alert store, the agent registry -- are retained, vacuumed and
+            # restored on their own schedules.
+            #
+            # Set in a SEPARATE merge from the Database CR (mctlhq/mctl-gitops#1245)
+            # and deliberately so: shared-pg and admins-mctl-api are two ArgoCD
+            # Applications reconciling independently, so landing both at once
+            # can restart mctl-api before CNPG has created the database. The
+            # store initialises once at startup with a bounded retry budget;
+            # exhaust it and it stays nil, answering 503 long after the
+            # Database goes Ready, until somebody restarts the pod again.
+            #
+            # cmd/api/main.go falls back to AUDIT_DB_URL when this is unset,
+            # which is how the ownership tables ended up in mctl-api in the
+            # first place. That fallback makes a typo HERE silent: the store
+            # would come up healthy against the audit database -- a 200 that
+            # means the wrong thing. Confirm on deploy that the lifecycle list
+            # read answers count: 0; a non-zero count means it is still
+            # talking to mctl-api.
+            LIFECYCLE_DB_URL: "postgresql://$(DB_USER):$(DB_PASSWORD)@shared-pg-rw.platform-db.svc:5432/mctl-lifecycle?sslmode=require"
             # Traefik pod IPs (namespace traefik). X-Forwarded-For is trusted
             # for audit client IP only from these peers (SOC F20). Update if
             # Traefik replicas roll to new IPs.
