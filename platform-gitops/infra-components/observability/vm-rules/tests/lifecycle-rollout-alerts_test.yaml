@@ -1,0 +1,166 @@
+# Unit tests for lifecycle-rollout-alerts.yaml.
+#
+# rule_files is resolved relative to this file. generated/ is produced by
+# scripts/check-vm-rules.sh, which extracts each VMRule's `.spec` so promtool
+# evaluates the very rules the cluster runs.
+#
+# The case worth testing hardest here is not "does it fire" but the two ways
+# this measurement can be wrong while looking right:
+#
+#   1. the dangerous alert staying quiet for a SINGLE occurrence -- the window
+#      and hold are paired the unusual way round precisely so one event fires,
+#      and a well-meant "fix" of that pairing would silence the soak's stop
+#      condition without breaking any syntax check;
+#   2. the unknown-rate ratio dividing by a series that does not exist, which
+#      is how HighToolErrorRate shipped a mathematically impossible expression
+#      and lived for months.
+rule_files:
+  - generated/lifecycle-rollout-alerts.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # ---------------------------------------------------------------------
+  # LifecycleShadowDangerousDivergence
+  # ---------------------------------------------------------------------
+  - interval: 1m
+    name: agreement alone never fires the stop condition
+    input_series:
+      - series: 'lifecycle_shadow_agree_total{namespace="argo-workflows"}'
+        values: '0+12x60'
+      - series: 'lifecycle_shadow_store_permits_old_forbids_total{namespace="argo-workflows"}'
+        values: '0+0x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: LifecycleShadowDangerousDivergence
+        exp_alerts: []
+
+  - interval: 1m
+    name: ONE dangerous divergence fires
+    input_series:
+      # Flat, then a single increment at minute 10 and never again. This is the
+      # shape the alert exists for: not a rate, one event.
+      - series: 'lifecycle_shadow_store_permits_old_forbids_total{namespace="argo-workflows"}'
+        values: '0x10 1x50'
+    alert_rule_test:
+      # 15m after the increment: still inside the lookback, hold elapsed.
+      - eval_time: 20m
+        alertname: LifecycleShadowDangerousDivergence
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              mctl_agent_self: "true"
+              namespace: argo-workflows
+            exp_annotations:
+              summary: "Lifecycle shadow: the store would license an action the old mechanism forbids"
+              description: >-
+                1 dangerous divergence(s) in the last 15m. The ownership store
+                holds no live owner for a pull request a DevLoopWorkflow is
+                driving. This is the one class that would let two machines
+                drive the same PR under enforce. STOP the rollout: set
+                LIFECYCLE_ROLLOUT_MODE back to off, then find the entity with
+                mctl_get_lifecycle_ownership and write down the root cause
+                before restarting the soak clock.
+
+  - interval: 1m
+    name: the spike leaves the window and the alert clears
+    input_series:
+      - series: 'lifecycle_shadow_store_permits_old_forbids_total{namespace="argo-workflows"}'
+        values: '0x10 1x50'
+    alert_rule_test:
+      # Well past the 15m lookback: increase() is 0 again.
+      - eval_time: 50m
+        alertname: LifecycleShadowDangerousDivergence
+        exp_alerts: []
+
+  # ---------------------------------------------------------------------
+  # LifecycleShadowStoreUnknownHigh
+  # ---------------------------------------------------------------------
+  - interval: 1m
+    name: a healthy compare with a few unknowns stays quiet
+    input_series:
+      # 60 agreements and 1 unknown over the window: ~1.6%.
+      - series: 'lifecycle_shadow_agree_total{namespace="argo-workflows"}'
+        values: '0+1x60'
+      - series: 'lifecycle_shadow_store_unknown_total{namespace="argo-workflows"}'
+        values: '0x30 1x30'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: LifecycleShadowStoreUnknownHigh
+        exp_alerts: []
+
+  - interval: 1m
+    name: a store that answers nothing fires
+    input_series:
+      # Every comparison unknown -- the 403 shape: a shepherd token that is not
+      # a lifecycle admin gets one for every id, and the soak would otherwise
+      # run for a fortnight measuring nothing.
+      - series: 'lifecycle_shadow_store_unknown_total{namespace="argo-workflows"}'
+        values: '0+4x90'
+    alert_rule_test:
+      - eval_time: 80m
+        alertname: LifecycleShadowStoreUnknownHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              mctl_agent_self: "true"
+            exp_annotations:
+              summary: "Lifecycle shadow: the ownership store is not answering"
+              description: >-
+                100% of comparisons in the last 30m read store-unknown. Common
+                causes, in the order worth checking: the shepherd's MCTL_TOKEN
+                is not a lifecycle admin (the batch route is admin-gated and
+                answers 403 for every id), mctl-api is down, or its version
+                predates the derived.held field the compare reads. At enforce
+                an unknown blocks the mutation, so this is a stall waiting to
+                happen.
+
+  - interval: 1m
+    name: no traffic at all does not divide by zero
+    input_series:
+      # Every counter flat. clamp_min keeps the denominator at 1, so the ratio
+      # is 0 rather than NaN -- without it this rule would either vanish from
+      # the evaluation or fire on an empty cluster.
+      - series: 'lifecycle_shadow_agree_total{namespace="argo-workflows"}'
+        values: '0+0x60'
+      - series: 'lifecycle_shadow_store_unknown_total{namespace="argo-workflows"}'
+        values: '0+0x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: LifecycleShadowStoreUnknownHigh
+        exp_alerts: []
+
+  # ---------------------------------------------------------------------
+  # LifecycleClaimAbandoned
+  # ---------------------------------------------------------------------
+  - interval: 1m
+    name: no abandoned claims, no alert
+    input_series:
+      - series: 'lifecycle_claim_abandoned_total{namespace="admins"}'
+        values: '0+0x90'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: LifecycleClaimAbandoned
+        exp_alerts: []
+
+  - interval: 1m
+    name: one abandoned claim fires
+    input_series:
+      - series: 'lifecycle_claim_abandoned_total{namespace="admins"}'
+        values: '0x10 1x80'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: LifecycleClaimAbandoned
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              mctl_agent_self: "true"
+              namespace: admins
+            exp_annotations:
+              summary: "DevLoopWorkflow abandoned an ownership claim without a landed write"
+              description: >-
+                1 claim(s) abandoned in the last hour. The workflow cleared its
+                local claim on a write that did not reach mctl-api, so the
+                store holds a row nobody is refreshing. Find it with
+                mctl_get_lifecycle_ownership and check whether it is still
+                withholding the entity.

@@ -70,9 +70,15 @@ spec:
         # unit tests, as well as loki.yaml, all name the counters without
         # it — seerrsense_oauth_consent_total, not
         # promtail_custom_seerrsense_oauth_consent_total — so strip it here,
-        # at the single point where the samples enter the database. Only
-        # these four counters exist with that prefix; nothing else is
-        # renamed.
+        # at the single point where the samples enter the database.
+        #
+        # The rule is the PREFIX, not a list: every counter any metrics stage
+        # in loki.yaml defines is renamed, and nothing else is. It used to say
+        # "only these four counters exist", which stopped being true the day
+        # the lifecycle observe soak added seven more
+        # (lifecycle_shadow_*_total and lifecycle_claim_abandoned_total) —
+        # a comment that has to be edited every time a counter is added is a
+        # comment that will eventually be wrong without anyone noticing.
         - sourceLabels: [__name__]
           regex: "promtail_custom_(.+)"
           replacement: "$1"
