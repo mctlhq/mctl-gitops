@@ -15,6 +15,8 @@ Issue #67 adds the observed-state half of the roadmap control plane: determinist
 ## Acceptance criteria (EARS)
 
 - WHEN one or more manifests are selected for reconciliation THE SYSTEM SHALL first load and validate the **entire canonical corpus** under `roadmap/epics/` (or an explicitly supplied test corpus root), running schema + per-manifest validation and existing corpus invariants before any GitHub read. Selecting one manifest SHALL NOT narrow corpus-wide uniqueness checks. Duplicate `metadata.name` or duplicate GitHub issue bindings anywhere in the corpus SHALL exit 2 with zero network calls.
+- WHEN GitHub issue identity is compared during Phase-0 validation THE SYSTEM SHALL canonicalize the repository component case-insensitively for root bindings, work-item bindings, `externalDependsOn`, and corpus-wide ownership. Case variants such as `mctlhq/mctl-api#261` and `MCTLHQ/MCTL-API#261` SHALL identify the same GitHub issue. Authored spelling MAY be retained for diagnostics, but MUST NOT affect ownership/equality decisions.
+- WHEN two authored bindings differ only by repository casing THE SYSTEM SHALL reject them as a duplicate binding before any GitHub read; WHEN `externalDependsOn` differs only by casing from a locally bound issue THE SYSTEM SHALL reject it and require local `dependsOn`.
 - WHEN a validated manifest is reconciled THE SYSTEM SHALL derive desired hierarchy as `(parent, child)` and dependencies as `(blocked, blocker)` from `dependsOn` and `externalDependsOn`; phase order SHALL NOT create edges.
 - WHEN live state is read THE SYSTEM SHALL use GitHub REST GET endpoints only: issue GET, `/parent`, `/sub_issues`, and `/dependencies/blocked_by`; GraphQL is out of scope for this slice.
 - ANY attempted non-GET method or request body SHALL fail before transmission.
@@ -44,6 +46,7 @@ Issue #67 adds the observed-state half of the roadmap control plane: determinist
 
 - **Parent endpoint verified:** GitHub documents `GET /repos/{owner}/{repo}/issues/{issue_number}/parent` as the REST **Get parent issue** endpoint with `Issues: read` permission.
 - **Corpus scope:** reconciliation targets may be a subset, but corpus invariants always run against the full canonical `roadmap/epics/` corpus (or explicit test corpus root) before live access.
+- **Canonical issue identity:** repository identity is case-insensitive everywhere an authored GitHub issue key participates in Phase-0 validation or Phase-1 reconciliation. The validator and reconciler MUST use the same canonical key so global ownership cannot pass validation and later collapse onto one observed GitHub entity.
 - **Redirect semantics:** `BindingRedirected` is binding drift; relations are then compared using the resolved canonical key. Redirect alone never suppresses relations.
 - **Suppression:** only unresolved/ambiguous bindings and intentionally unbound desired work suppress dependent comparisons.
 - **Fixture provenance:** live capture and synthetic converged fixture are separate artifact classes.

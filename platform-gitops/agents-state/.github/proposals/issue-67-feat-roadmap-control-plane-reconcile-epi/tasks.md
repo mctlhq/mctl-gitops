@@ -1,5 +1,6 @@
 # Tasks: issue-67-feat-roadmap-control-plane-reconcile-epi
 
+- [ ] 0. Close the Phase-0 identity gap in `roadmap/scripts/validate.py` before adding live reconciliation: canonicalize the repository component of every GitHub issue key case-insensitively at the shared `_issue_key()` boundary. The canonical key must be used for root/work-item duplicate binding checks, corpus-wide binding ownership, and local-vs-`externalDependsOn` checks; authored spelling may remain only in diagnostics/source data. — DoD: case variants of the same issue cannot acquire two owners; validator and reconciler use the same identity semantics; existing lowercase fixtures remain green.
 - [ ] 1. Add `roadmap/schemas/github-graph-snapshot.schema.json` defining the provider-neutral observed graph. Include explicit provenance under `source`:
       - `mode: live-capture` with `capturedAt` and `apiBase`, or
       - `mode: synthetic-fixture` with optional `derivedFrom` and no live timestamp claim.
@@ -27,6 +28,9 @@
 
 ## Tests
 
+- [ ] T0a. Phase-0 local ownership: one manifest binds the epic root to `mctlhq/example#10` and a work item to `MCTLHQ/EXAMPLE#10` → duplicate binding failure. This explicitly covers root↔work-item identity, not only work-item↔work-item.
+- [ ] T0b. Phase-0 corpus ownership: manifest A binds its epic root to `mctlhq/example#10` while manifest B binds a work item to `MCTLHQ/EXAMPLE#10` → corpus validation failure before any network request. This mixed root/work-item case proves the corpus collector canonicalizes every binding class.
+- [ ] T0c. Phase-0 external/local identity: `externalDependsOn` using a case variant of a locally bound issue → validation failure instructing the author to use `dependsOn`.
 - [ ] T1. Converged: `human-input.yaml` + `converged-fixture.json` produce zero drift-severity entries and exit 0.
 - [ ] T2. Hierarchy missing: drop one expected parent edge → exactly one `HierarchyMissingParent`, dependency collection unchanged, exit 1.
 - [ ] T3. Wrong parent: re-point one child → exactly one `HierarchyWrongParent` with expected + observed parent.
