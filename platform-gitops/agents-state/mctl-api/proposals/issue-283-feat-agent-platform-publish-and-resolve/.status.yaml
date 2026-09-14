@@ -1,5 +1,5 @@
-status: review-stuck
-updated_at: '2026-09-12T03:11:26Z'
+status: needs-triage
+updated_at: '2026-09-14T10:19:03Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -21,7 +21,10 @@ review_attempts: 5
 github:
   state: open
   head_sha: 6066e265d1089bb3dd712face652ef3882b8db9c
-  observed_at: '2026-09-12T00:19:02Z'
-notes: Follow-up failed deterministically 5 time(s) (implementer follow-up exited
-  non-zero (42) for mctl-api/issue-283-feat-agent-platform-publish-and-resolve); human
-  triage required.
+  blocking_reason: conflict
+  observed_at: '2026-09-14T10:19:03Z'
+notes: 'reconcile: open PR has a merge conflict'
+failure:
+  code: merge-conflict
+  stage: reconcile
+  message: GitHub reports a merge conflict with the base branch.
