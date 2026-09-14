@@ -143,9 +143,16 @@ spec:
           - |
             set -eu
             # The parameter reaches the shell as an ENV VAR, never interpolated
-            # into the script body: {{workflow.parameters.*}} inside a script is
-            # a shell-injection vector, and this one decides whether the run
+            # into the script body: an Argo parameter tag inside a script is a
+            # shell-injection vector, and this one decides whether the run
             # writes.
+            #
+            # That sentence carries NO literal tag braces, deliberately. The
+            # controller's substitution pass runs over this whole block,
+            # comments included, and a tag it cannot resolve fails the
+            # submission -- so a comment written to warn about tags would be
+            # the thing that broke the template. The shepherd CWFT makes the
+            # same point the same way.
             #
             # The comparison is explicit and the DEFAULT is dry: anything other
             # than the literal "false" leaves --apply off. A typo must not write
@@ -154,9 +161,15 @@ spec:
             APPLY=""
             if [ "${WORKFLOW_DRY_RUN}" = "false" ]; then
               APPLY="--apply"
-              echo "▶ APPLY mode: planned rows WILL be written"
+              # stderr, not stdout. stdout carries the JSON report, and the
+              # fewer things share it the better -- _discover_refs already
+              # prints a skip notice there for every service the shepherd does
+              # not own, so the report is the LAST object on stdout rather than
+              # the only one. Adding a banner of our own on top would be one
+              # more line between a reader and the thing they came for.
+              echo "▶ APPLY mode: planned rows WILL be written" >&2
             else
-              echo "▶ dry run: nothing will be written"
+              echo "▶ dry run: nothing will be written" >&2
             fi
             # No shell parsing of the report. It is JSON on stdout for an
             # operator and for the workflow log; a `grep` here would become a
