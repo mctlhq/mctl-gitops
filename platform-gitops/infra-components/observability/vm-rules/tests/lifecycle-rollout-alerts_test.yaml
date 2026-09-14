@@ -38,13 +38,16 @@ tests:
   - interval: 1m
     name: ONE dangerous divergence fires, with no zero before it
     input_series:
-      # The shape a real shepherd pod produces, and the reason this rule does
-      # not use increase(). Promtail creates a metrics-stage counter only when
-      # its regex first matches, keyed by the pod, so the series APPEARS at 1:
-      # there is no 0 sample ahead of it to increase from. `_` is an absent
-      # sample -- seeding a 0 here instead would test a series shape that never
-      # occurs, and would pass against an expression that misses every
-      # first-occurrence event.
+      # The shape a real shepherd pod produces. Promtail creates a
+      # metrics-stage counter only when its regex first matches, keyed by the
+      # pod, so the series APPEARS at 1: there is no 0 sample ahead of it. `_`
+      # is an absent sample -- seeding a 0 here instead would test a series
+      # shape that never occurs.
+      #
+      # promtool is Prometheus, and Prometheus does not count that first point;
+      # VictoriaMetrics, which actually evaluates these rules, does. That
+      # divergence is why the rule uses max_over_time: this fixture is honest
+      # about the shape AND passes under the engine the test suite has.
       - series: 'lifecycle_shadow_store_permits_old_forbids_total{namespace="argo-workflows"}'
         values: '_x9 1x5'
     alert_rule_test:

@@ -49,16 +49,26 @@ spec:
         # short for the same reason — this is not a condition to confirm over
         # time, it is one to stop the rollout over.
         #
-        # max_over_time, NOT increase(), and this is the difference between an
-        # alert that exists and one that does not.
+        # max_over_time, NOT increase(), and the reason is about which ENGINE
+        # is asked.
         #
         # Promtail keys a metrics-stage counter by the log stream, pod label
         # included, and creates the series only when its regex FIRST matches.
         # A shepherd Argo step pod that reports one dangerous divergence
         # therefore produces a series whose samples are 1, 1, 1 — never a 0
-        # before them. increase() over that is 0, so the expression would have
-        # been false for exactly the isolated one-off event this stop condition
-        # exists to catch, while passing a unit test that seeds its own zero.
+        # before them.
+        #
+        # VictoriaMetrics counts the first point of a new series, so increase()
+        # WOULD have fired here; vmalert is what evaluates these rules, and
+        # that behaviour is confirmed end-to-end (gitops#1171, 2026-09-10).
+        # Prometheus does not, and `promtool test rules` — the thing that gates
+        # this file — is Prometheus. So increase() here is an expression whose
+        # correctness depends on who evaluates it, and the only way to make the
+        # unit test pass is to seed a zero the real pipeline never writes,
+        # which is a test agreeing with itself rather than with production.
+        #
+        # max_over_time is correct under both, and testable under the one we
+        # have.
         #
         # The value is safe to read directly precisely because the series is
         # per-pod and these pods are ephemeral: the counter cannot accumulate
@@ -192,12 +202,15 @@ spec:
         #
         #  - increase() catches every occurrence after the first, and is the
         #    right shape for a series that persists and keeps incrementing;
-        #  - it cannot catch the first, for the same reason as the rule above:
-        #    Promtail creates the series at 1, so there is no 0 to increase
-        #    from. The second disjunct catches exactly that — the counter
-        #    exists now and did not an hour ago — and the `unless` makes it
-        #    stop firing an hour later instead of latching forever on a value
-        #    that never goes back down.
+        #  - under PROMETHEUS semantics it cannot catch the first, for the
+        #    reason the rule above explains: Promtail creates the series at 1,
+        #    so there is no 0 to increase from. VictoriaMetrics does catch it,
+        #    and vmalert is what runs here — but promtool is what tests it, and
+        #    a rule that is only correct on one of the two is a rule the test
+        #    suite cannot check. The second disjunct catches that case — the
+        #    counter exists now and did not an hour ago — and the `unless`
+        #    makes it stop firing an hour later instead of latching forever on
+        #    a value that never goes back down.
         - alert: LifecycleClaimAbandoned
           expr: >-
             increase(lifecycle_claim_abandoned_total[1h]) > 0
