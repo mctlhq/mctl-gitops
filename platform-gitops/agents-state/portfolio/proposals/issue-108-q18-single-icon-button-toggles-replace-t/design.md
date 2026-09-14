@@ -1,526 +1,306 @@
 # Design: issue-108-q18-single-icon-button-toggles-replace-t
 
+All verbatim markup, CSS, strings, test bodies and script edits live in
+`requirements.md`'s Appendices A-J. This document explains the current state,
+the shape of the change and the trade-offs; it does not restate the copy.
+
 ## Current state
 
-Read in the clone at `mctlhq/portfolio@c1dd71f`.
+Read in the clone at `mctlhq/portfolio` @ `main` (version 0.1.30).
 
-**Markup.** `src/components/Nav.astro` renders a `.site-header` flex row: a
-`#nav-label` `.visually-hidden` span, `<nav class="site-nav">` with four
-literal anchors, and `<div class="toggle-bar"><LangToggle /><ThemeToggle />
-</div>`. `src/components/LangToggle.astro` renders two
-`<div class="toggle-group l en|ru" role="group"
-aria-labelledby="lang-toggle-label">` wrappers, each with two `<button
-type="button" data-set-lang="en|ru" aria-pressed="true|false">` children
-holding `<Lang en={ui.langEn.en} ...>`, followed by the shared
-`#lang-toggle-label` hidden span and a `<noscript><p>`.
-`src/components/ThemeToggle.astro` is the same shape for `data-set-theme` and
-`#theme-toggle-label`. Twelve elements in total for two binary controls.
+### The two components
 
-**Stance mechanism.** `src/styles/site.css` lines 43-57 hide the inactive
-half: `:root[data-lang='en'] .l.ru { display: none }`,
-`:root[data-lang='ru'] .l.en { display: none }`,
-`:root[data-theme='dark'] .t.light { display: none }`,
-`:root[data-theme='light'] .t.dark { display: none }`. There is no
-client-side re-render: `src/layouts/Base.astro` ships a single `is:inline`
-head script (CSP-hash pinned) that only writes `data-lang` / `data-theme` on
-`<html>` and persists them, with one delegated listener
-`e.target.closest?.("[data-set-lang],[data-set-theme]")`. Because `closest()`
-walks up from the event target, a click landing on an inner `<svg>` or
-`<path>` still resolves the owning button — the new glyph markup needs no
-script change.
+`src/components/Nav.astro` renders
 
-**Accessible naming.** Every control names itself with `aria-labelledby`
-pointing at a `.visually-hidden` span nesting `<Lang>`
+```
+<div class="toggle-bar">
+  <LangToggle />
+  <ThemeToggle />
+</div>
+```
+
+inside `<header class="site-header">`, after `<nav class="site-nav">`.
+
+`src/components/LangToggle.astro` and `src/components/ThemeToggle.astro` are
+structurally identical to each other: each emits **two**
+`<div class="toggle-group … ">` wrappers — one per CSS stance (`l en` / `l ru`
+for language, `t dark` / `t light` for theme) — each carrying
+`role="group"` and `aria-labelledby` pointing at a single shared
+`.visually-hidden` span (`#lang-toggle-label` / `#theme-toggle-label`), and
+each holding **two** `<button type="button">` segments with
+`data-set-lang` / `data-set-theme` and `aria-pressed="true"` on whichever
+segment matches that wrapper's stance. A `<noscript><p>` follows.
+
+So today the header contains eight `<button>` elements in the HTML, four of
+which are hidden by CSS at any moment. This cycle takes that to four buttons,
+two hidden.
+
+### The stance mechanism
+
+`src/styles/site.css` opens with the only mechanism this site has for
+bilingual and theme content:
+
+```css
+:root[data-lang='en'] .l.ru { display: none; }
+:root[data-lang='ru'] .l.en { display: none; }
+:root[data-theme='dark'] .t.light { display: none; }
+:root[data-theme='light'] .t.dark { display: none; }
+```
+
+`src/layouts/Base.astro` authors `<html lang="en" data-lang="en"
+data-theme="dark">` and its single `is:inline` `<head>` script (SHA-pinned in
+the CSP) applies `localStorage` values before paint and registers one
+delegated `click` listener on `[data-set-lang],[data-set-theme]`. Nothing
+re-renders. That is exactly why an accessible name must go through
+`aria-labelledby` -> `.visually-hidden` span -> `<Lang>` pair
 (`src/i18n/Lang.astro` emits `<span class="l en">…</span><span class="l ru"
-lang="ru">…</span>`), never a literal `aria-label`. `checkNavigationState()`
-in `scripts/check-dist.mjs` fails the build on any `aria-label` value mixing
-Latin and Cyrillic, and `test/nav.test.ts` forbids the slash-joined bilingual
-template literal.
+lang="ru">…</span>`): the same static HTML serves both a Russian and an
+English screen-reader session, and only the CSS stance rules can pick between
+them.
 
-**Styles.** `site.css` lines 183-231 hold the `/* Toggle groups. */` block:
-`.toggle-group` (inline-flex, `gap: 0`, `1px solid var(--surface-line)`,
-`var(--mctl-radius-md)`), `.toggle-bar`, `.toggle-bar noscript`,
-`.toggle-group button`, `:first-child` / `:last-child` corner radii,
-`button + button` divider and `button[aria-pressed='true']` accent fill.
-Lines 613-621 add the tap-target exception `.toggle-group button {
-display: inline-flex; align-items: center; min-block-size: 32px }`. A single
-global `:focus-visible { outline: var(--focus-ring-width) solid
-var(--focus-ring); outline-offset: var(--focus-ring-offset) }` sits at line
-93. The `@media print` block lists `.site-header, .toggle-group, .ctas {
-display: none }`.
+### The CSS being replaced
 
-**Tokens.** `public/assets/mctl/mctl.baf7fec1.css` ships the semantic layer:
-`:root` (dark) and `[data-theme='light']` each declare `--surface-card`
-alongside `--surface-bg`, `--surface-elevated`, `--surface-fg`,
-`--surface-fg-muted` and `--surface-line`. Raw values: `mctl-surface-dark-card
-#15181d`, `mctl-surface-light-card #fffdf8`, `mctl-radius-lg 8px`,
-`mctl-typography-font-weight-semibold 600`. `site.css` never declares
-`--surface-card` itself, exactly as it never declares `--surface-elevated`.
+`src/styles/site.css` carries a `/* Toggle groups. */` region with six rules
+(`.toggle-group`, `.toggle-group button`, `:first-child`, `:last-child`,
+`+ button`, `[aria-pressed='true']`) plus the interleaved `.toggle-bar` and
+`.toggle-bar noscript` rules, and — separately, roughly 400 lines further
+down under the "Tap targets" comment — a second `.toggle-group button` rule
+declaring `display: inline-flex; align-items: center; min-block-size: 32px`.
+There is also a `@media print` rule listing
+`.site-header, .toggle-group, .ctas { display: none; }`.
 
-**Gates.** `npm test` = `check-no-metrics.mjs` + `check-contrast.mjs` + 37
-`node --test` files. `scripts/check-dist.mjs` runs in the `Dockerfile`
-(`npm run build && node scripts/check-dist.mjs && node scripts/csp-hash.mjs`),
-so the CI `build` job fails on it. `scripts/check-contrast.mjs` has no
-`surface-card` entry in `SEMANTIC_TOKENS`. `test/header.test.ts` T4/T5/T6 and
-`test/a11y.test.ts`'s `TARGET_SELECTORS` pin `.toggle-group`;
-`test/nav.test.ts` pins `role="group"`; `docs/accessibility-checklist.md`
-names `.toggle-group button` and the `[aria-pressed='true']` swap.
+### The gates that observe all of this
 
-**Two verified facts that shape this design.**
-
-1. `checkApproachPage()` in `scripts/check-dist.mjs` (lines 90-181) iterates
-   **every** `<svg>` slice in `dist/approach/index.html` and requires
-   `role="img"`, a resolving `aria-labelledby`, exactly one `<title>` and one
-   `<desc>`, a `viewBox` and no `width`/`height`. The header renders on that
-   page, so the two new decorative theme glyphs would add six failures and
-   break acceptance criterion 7. Section G fixes this.
-2. `scripts/check-dist.mjs`'s bilingual parity counts the literal substring
-   `class="l en"` / `class="l ru"`. The new language buttons emit
-   `class="l en icon-toggle lang-toggle"` / `class="l ru icon-toggle
-   lang-toggle"`, which match neither needle, and the `<Lang>` components
-   inside the buttons and hidden spans stay balanced — parity is unaffected.
+- `test/a11y.test.ts` — `TARGET_SELECTORS` includes `'.toggle-group button'`
+  and requires a `min-block-size` >= 24px for each entry; also asserts the
+  global `:focus-visible` rule, the absence of any `animation`/`transition`,
+  and the `.toggle-bar` rule.
+- `test/header.test.ts` — T1..T6; T4 and T5 describe the segmented container
+  and its divider, T6 pins `.toggle-group button` to exactly one 32px
+  `min-block-size`. Both this file and `a11y.test.ts` strip `/* … */`
+  comments before parsing and use the shared flat-regex parser in
+  `test/support/css-rules.ts`, whose `ruleBlockBodies()` matches an exact
+  comma-split selector and returns every matching block (including one inside
+  `@media print`).
+- `test/nav.test.ts` — asserts two `.toggle-group` divs per component, each
+  with `role="group"` and `aria-labelledby`, and no `aria-label`.
+- `test/ui.test.ts` — every `ui` entry is a non-empty `{ en, ru }` of the
+  same kind. It pins specific keys by value but pins neither
+  `langToggleLabel` nor `themeToggleLabel`, so removing them is safe.
+- `scripts/check-no-metrics.mjs` — first command in `npm test`; fails on any
+  `\b[0-9]{2,}\b` under `src/pages`, `src/components`, `src/layouts` that no
+  `RULES` classifier and no `ALLOW` entry accounts for, **and** fails on a
+  stale `ALLOW` value that matches nothing.
+- `scripts/check-contrast.mjs` — second command in `npm test`; resolves
+  `SEMANTIC_TOKENS` against the vendored, content-hashed
+  `public/assets/mctl/mctl.baf7fec1.css` and checks `PAIRS` in both themes,
+  plus thirteen content-link lines. It has no `surface-card` entry today.
+- `scripts/check-dist.mjs` — run from `Dockerfile` line 6
+  (`RUN npm run build && node scripts/check-dist.mjs && node
+  scripts/csp-hash.mjs > …`) and therefore in CI's `build` job.
+  `checkApproachPage()` iterates **every** `<svg>` on
+  `dist/approach/index.html`.
 
 ## Proposed solution
 
-Six source files change plus two documentation files. Every block below is
-the literal text to write.
+### 1. Markup: two plain buttons per component, one per stance
 
-### A. `src/components/ThemeToggle.astro` — full replacement
+Each component drops both wrapper `<div>`s and one inner button per stance,
+keeping exactly the button that corresponds to that stance and giving it the
+*other* stance's `data-set-*` value. The stance classes (`t dark`, `t light`,
+`l en`, `l ru`) move from the deleted wrapper onto the button itself, so the
+existing four `display: none` rules keep doing all the work with no CSS
+change. `aria-pressed` disappears: a single button is not a two-state segment
+set, and with the glyph naming the active state there is nothing for it to
+express.
 
-Replace the entire file with, character for character:
+The accessible name pattern is unchanged in kind and only multiplied: instead
+of one shared `.visually-hidden` label span per component, there are now two
+— one per button — because the two buttons no longer share a purpose
+("Language") but have distinct ones ("Switch to Russian" / "Switch to
+English"). Each span sits as a sibling immediately after its button, and the
+`aria-labelledby` id references it. Appendix A / B.
 
-```astro
----
-import Lang from '../i18n/Lang.astro';
-import { ui } from '../i18n/ui';
----
+Why buttons and not a link or a single button that cycles: the delegated
+listener in `Base.astro` reads `dataset.setLang` / `dataset.setTheme` off the
+clicked element, so the target value must be static markup. A single
+"cycling" button would need JavaScript to compute the next value, which the
+static-output constraint (ADR-0002) rules out.
 
-<button type="button" class="t dark icon-toggle" data-set-theme="light" aria-labelledby="theme-toggle-to-light">
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-    <path d="M20.5 14.5c-1.1.45-2.3.7-3.55.7-5.25 0-9.5-4.25-9.5-9.5 0-1.25.25-2.45.7-3.55C4.6 3.4 2.5 6.95 2.5 11c0 5.8 4.7 10.5 10.5 10.5 4.05 0 7.6-2.1 8.85-4.9 0-.03.02-.07.03-.1z" />
-  </svg>
-</button>
-<span id="theme-toggle-to-light" class="visually-hidden"><Lang en={ui.themeSwitchToLight.en} ru={ui.themeSwitchToLight.ru} /></span>
-<button type="button" class="t light icon-toggle" data-set-theme="dark" aria-labelledby="theme-toggle-to-dark">
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true" focusable="false">
-    <circle cx="12" cy="12" r="4.5" />
-    <line x1="12" y1="1.75" x2="12" y2="4.25" />
-    <line x1="12" y1="19.75" x2="12" y2="22.25" />
-    <line x1="4.22" y1="4.22" x2="5.99" y2="5.99" />
-    <line x1="18.01" y1="18.01" x2="19.78" y2="19.78" />
-    <line x1="1.75" y1="12" x2="4.25" y2="12" />
-    <line x1="19.75" y1="12" x2="22.25" y2="12" />
-    <line x1="4.22" y1="19.78" x2="5.99" y2="18.01" />
-    <line x1="18.01" y1="5.99" x2="19.78" y2="4.22" />
-  </svg>
-</button>
-<span id="theme-toggle-to-dark" class="visually-hidden"><Lang en={ui.themeSwitchToDark.en} ru={ui.themeSwitchToDark.ru} /></span>
-<noscript>
-  <p><Lang en={ui.themeNoScript.en} ru={ui.themeNoScript.ru} /></p>
-</noscript>
-```
+### 2. Strings: four new `ui` keys, two removed
 
-The first button (`.t.dark`, visible while the page is in dark stance) shows
-the MOON and switches to light; the second (`.t.light`) shows the SUN and
-switches to dark. This is the "currently active" reading confirmed with the
-site owner — moon means dark is on right now, not "click to go dark".
+`themeSwitchToDark` / `themeSwitchToLight` / `langSwitchToEn` /
+`langSwitchToRu` replace the two group labels. They are the accessible names,
+so they are full sentences ("Switch to dark theme"), not the two-letter
+visible labels — `langEn` / `langRu` / `themeDark` / `themeLight` stay for the
+visible text and, in the theme toggle's case, are simply no longer referenced
+by that component while remaining valid dictionary entries the way
+`ctaColophon` and `detailsContactSummary` already are.
 
-### B. `src/components/LangToggle.astro` — full replacement
+Careful reading of the issue: `themeDark`/`themeLight` are named as "still
+used (visible label text)". After Appendix A the theme button's visible
+content is an SVG, not a `<Lang>` pair, so `themeDark`/`themeLight` become
+unreferenced. They are still **not removed** — that is what the issue says,
+and the repository already tolerates unreferenced keys by precedent
+(`ctaColophon`, `detailsContactSummary`, with `test/ui.test.ts` asserting
+they stay). Recorded here so a reviewer does not read it as an oversight.
 
-Replace the entire file with, character for character:
+### 3. CSS: one flat class, no container
 
-```astro
----
-import Lang from '../i18n/Lang.astro';
-import { ui } from '../i18n/ui';
----
+`.icon-toggle` is a fixed 32x32 inline-flex box with the border, radius and
+background that the deleted `.toggle-group` container used to carry, moved
+onto the button itself. `.lang-toggle` adds only typography for the
+two-letter label. `.icon-toggle svg` sizes the glyph to 20px inside the 32px
+box. There is deliberately no `overflow` anywhere: the Q16 lesson was that an
+`overflow: hidden` container clips the `outline-offset` focus ring, and with
+no container the problem cannot arise — Appendix D's comment says so, and
+Appendix E2's new header test asserts it mechanically so a future edit cannot
+reintroduce it.
 
-<button type="button" class="l en icon-toggle lang-toggle" data-set-lang="ru" aria-labelledby="lang-toggle-to-ru">
-  <Lang en={ui.langEn.en} ru={ui.langEn.ru} />
-</button>
-<span id="lang-toggle-to-ru" class="visually-hidden"><Lang en={ui.langSwitchToRu.en} ru={ui.langSwitchToRu.ru} /></span>
-<button type="button" class="l ru icon-toggle lang-toggle" data-set-lang="en" aria-labelledby="lang-toggle-to-en">
-  <Lang en={ui.langRu.en} ru={ui.langRu.ru} />
-</button>
-<span id="lang-toggle-to-en" class="visually-hidden"><Lang en={ui.langSwitchToEn.en} ru={ui.langSwitchToEn.ru} /></span>
-<noscript>
-  <p><Lang en={ui.langNoScript.en} ru={ui.langNoScript.ru} /></p>
-</noscript>
-```
+`--surface-card` is the right token because these are small raised chips
+against the page background, the same role `mctl.css` ships that token for;
+`--surface-elevated` is reserved for the `:hover` state so hover reads as a
+lift rather than a colour change, and no `transition` is added (criterion 20).
 
-### C. `src/i18n/ui.ts`
+### 4. Gate work
 
-Add four new keys, character for character (place near the existing
-`langEn` / `langRu` / `themeDark` / `themeLight` keys):
+Three scripts observe the markup and must move with it. Two are authorised by
+the issue; one was found by reading the clone.
 
-```ts
-themeSwitchToDark: { en: 'Switch to dark theme', ru: 'Переключить на тёмную тему' },
-themeSwitchToLight: { en: 'Switch to light theme', ru: 'Переключить на светлую тему' },
-langSwitchToEn: { en: 'Switch to English', ru: 'Переключить на английский' },
-langSwitchToRu: { en: 'Switch to Russian', ru: 'Переключить на русский' },
-```
+**`check-no-metrics.mjs` (Appendix G).** The SVG coordinates produce 70
+matches, all unclassified — the `CSS length` rule needs a `px`/`rem`/… suffix,
+the `year in copy` rule needs a four-digit `19xx`/`20xx`, and neither applies
+to `d="M20.5 14.5c-1.1.45…"`. Rather than trust the issue's list, the
+investigation imported `scanForTypedNumbers()` and `RULES` from the real
+script and ran them, with an empty `ALLOW`, over a temp tree holding exactly
+Appendix A's file. Result: 70 matches, 70 unclassified, distinct values
+`[1,2,3,5,7,10,12,14,18,19,22,24,25,45,55,75,78,85,95,99]` — byte-identical
+to the issue's list. That is the list in Appendix G, and the appendix records
+how to recompute it if a coordinate ever changes, because the same script
+also fails on a value that no longer matches anything.
 
-Remove `langToggleLabel` and `themeToggleLabel` — they named the now-deleted
-`role="group"` sets and have no remaining reference after sections A/B.
-`langEn`, `langRu`, `themeDark`, `themeLight`, `langNoScript`,
-`themeNoScript` are NOT removed. (Note: after section A, `themeDark` and
-`themeLight` are no longer rendered anywhere; they are kept deliberately, see
-requirements.md "Open questions".) If a test pins
-`langToggleLabel`/`themeToggleLabel`, update that test in the same commit
-rather than leaving the keys in place to satisfy it — a repo-wide grep at
-`c1dd71f` finds no such test, so this is a guard, not a known edit.
+**`check-contrast.mjs` (Appendix F).** `SEMANTIC_TOKENS` gains
+`surface-card` in both themes; `PAIRS` gains one `kind: 'text'` entry. The
+ratios were computed during investigation from the vendored tokens actually
+in the tree: `#a4a8ae` over `#15181d` = 7.45:1 (dark), `#3a3f47` over
+`#fffdf8` = 10.42:1 (light). Both clear 4.5:1, so no `EXEMPTIONS` entry is
+needed. The reported pair count moves 27 -> 29, which is why the
+accessibility checklist's contrast row is corrected too.
 
-### D. `src/styles/site.css`
+**`check-dist.mjs` (Appendix H) — the change the issue does not mention.**
+`checkApproachPage()`'s per-slice loop runs over `extractSvgSlices(html)`,
+i.e. every `<svg>` on `dist/approach/index.html`, and requires each to have
+`role="img"`, a resolving `aria-labelledby` and exactly one `<title>` and one
+`<desc>`. The header is on every page, so Appendix A's two decorative
+`aria-hidden="true"` glyphs land there and produce six failures; the same
+slices would also be added to the 12 KB `MAX_SVG_BYTES` budget the docstring
+scopes to the diagram. The script runs inside `Dockerfile`, so this fails the
+image build, and the issue's own acceptance criterion 7 names it. The fix is
+one line: filter the slice list to the diagram's own `cycle-svg` class, which
+`src/components/CycleDiagram.astro` puts on both variants
+(`class={`cycle-svg cycle-${v.key}`}`). Everything downstream —
+`slices.length < 2`, `svgBytes`, the per-slice loop, `sawNarrowSlice` — keeps
+its exact prior meaning, and the check becomes what its docstring always
+claimed it was.
 
-Delete the entire `/* Toggle groups. */` block (the `.toggle-group`,
-`.toggle-group button`, `.toggle-group button:first-child`,
-`.toggle-group button:last-child`, `.toggle-group button + button` and
-`.toggle-group button[aria-pressed='true']` rules) — but KEEP the
-`.toggle-bar` and `.toggle-bar noscript` rules that currently sit inside that
-same region, unchanged and in place. Also delete the `.toggle-group button`
-selector's `min-block-size: 32px` rule near the tap-target block (the
-`display: inline-flex; align-items: center; min-block-size: 32px` rule and
-its preceding comment). Replace with, character for character:
+### 5. Documentation and journal
 
-```css
-/* Icon toggles (issue #108, Q18): one button per CSS stance -- .t.dark/
- * .t.light, .l.en/.l.ru -- the same mutually-exclusive display:none
- * mechanism as every other bilingual/theme element on the site, just one
- * glyph or label each instead of a two-button segmented pair. No inner
- * divider and no overflow: the lesson from the Q16 segmented control (an
- * overflow:hidden container clips the :focus-visible ring) doesn't even
- * arise here, but is worth restating: this class must never gain one. */
-.icon-toggle {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  inline-size: 32px;
-  block-size: 32px;
-  min-inline-size: 32px;
-  min-block-size: 32px;
-  padding: 0;
-  border: 1px solid var(--surface-line);
-  border-radius: var(--mctl-radius-lg);
-  background: var(--surface-card);
-  color: var(--surface-fg-muted);
-  cursor: pointer;
-}
-.icon-toggle:hover {
-  background: var(--surface-elevated);
-}
-.icon-toggle svg {
-  inline-size: 20px;
-  block-size: 20px;
-}
-.lang-toggle {
-  font-family: var(--font-display);
-  font-size: 12px;
-  font-weight: var(--mctl-typography-font-weight-semibold);
-  letter-spacing: 0.02em;
-}
-```
-
-Place this replacement where the deleted `/* Toggle groups. */` rules were
-(after the `.breadcrumb` rules, around the retained `.toggle-bar` block), and
-add NO second `.icon-toggle` rule block anywhere else in the file — in
-particular do not re-add a `min-block-size` for it in the tap-target section.
-`test/header.test.ts` T6 asserts `minBlockSizes(siteCss, '.icon-toggle')`
-equals exactly `[32]`, so a second declaration fails the build.
-
-The site's single global `:focus-visible` rule already covers `.icon-toggle`
-(no per-class focus override is needed or wanted). `--surface-card` is the
-same token `mctl.css` already ships — declared in its semantic layer under
-`:root` (dark, `#15181d`) and `[data-theme='light']` (`#fffdf8`), resolved the
-same way `site.css` already resolves `--surface-elevated`;
-`scripts/check-contrast.mjs` does not yet resolve it (see section F).
-
-Do NOT add a `.toggle-bar` or `.toggle-bar noscript` change — both keep their
-Q16 declarations (`gap`, `margin-inline-start: auto`,
-`justify-content: flex-end`, `text-align: end` on the noscript paragraphs)
-untouched; two 32px buttons fit that layout exactly as the two former pills
-did.
-
-One further edit in the same file: the `@media print` block currently reads
-
-```css
-  .site-header,
-  .toggle-group,
-  .ctas {
-    display: none;
-  }
-```
-
-Replace `.toggle-group` there with `.icon-toggle`, leaving the other two
-selectors and the declaration as they are. This keeps the print rule pointing
-at a class that still exists; it changes no rendering, because `.site-header`
-already hides the whole header row in print. Verified against the tests: the
-flat parser in `test/support/css-rules.ts` will then resolve `.icon-toggle` to
-two bodies (the real one and this `display: none` one), which T4's replacement
-handles with `.some()`/`.every()`, and which leaves `minBlockSizes` at `[32]`
-because the print body declares none.
-
-### E. Tests
-
-**`test/nav.test.ts`** — replace the test named `'LangToggle.astro and
-ThemeToggle.astro give every .toggle-group role="group" and an
-aria-labelledby, never an aria-label'` with, character for character:
-
-```ts
-test('LangToggle.astro and ThemeToggle.astro render exactly two .icon-toggle buttons, each with its own aria-labelledby, no role="group" and no aria-label', () => {
-  for (const [name, source] of [
-    ['LangToggle.astro', langToggle],
-    ['ThemeToggle.astro', themeToggle],
-  ] as const) {
-    const buttonTags = source.match(/<button\s+type="button"\s+class="[^"]*icon-toggle[^"]*"[^>]*>/g) ?? [];
-    assert.equal(buttonTags.length, 2, `${name}: expected exactly two .icon-toggle buttons`);
-    for (const tag of buttonTags) {
-      assert.match(tag, /aria-labelledby="/, `${name}: ${tag} is missing aria-labelledby`);
-    }
-    assert.doesNotMatch(source, /role="group"/, `${name}: no role="group" should remain -- a single button is not a set`);
-    assert.doesNotMatch(source, /aria-label=/, `${name}: no aria-label should remain`);
-    assert.doesNotMatch(source, /groupLabel/, `${name}: no groupLabel const should remain`);
-  }
-});
-```
-
-Every other assertion in `test/nav.test.ts` (bilingual-template-literal check,
-`Base.astro`'s skip link, `Nav.astro`'s four literal hrefs) is unaffected and
-must keep passing unchanged. The file's top comment still describes the old
-`role="group"` pairs; refresh that prose to describe the per-button
-`aria-labelledby` pattern (comment only, no assertion change).
-
-**`test/a11y.test.ts`** — in `TARGET_SELECTORS`, replace the literal
-`'.toggle-group button'` with `'.icon-toggle'`. No other entry in that array
-changes. All other tests in this file (`:focus-visible` rule, no
-animation/transition, the `.toggle-bar` rule, `.site-nav a[aria-current]`
-colour+text-decoration, `Lang.astro` emitting `lang="ru"`) must keep passing
-unchanged.
-
-**`test/header.test.ts`** — remove test T4 (`'some .toggle-group block
-declares a border and a border-radius, and no .toggle-group block declares
-overflow'`) and test T5 (`'a rule block whose selector list includes
-.toggle-group button + button declares border-inline-start'`) outright: there
-is no more segmented container and no more adjacent-sibling divider for either
-to describe. Add one replacement test in their place, character for character:
-
-```ts
-test('some .icon-toggle block declares border, border-radius and background, and no .icon-toggle block declares overflow', () => {
-  const bodies = ruleBlockBodies(siteCss, '.icon-toggle');
-  assert.ok(bodies.length > 0, 'expected at least one .icon-toggle rule block');
-  assert.ok(
-    bodies.some((b) => /\bborder:\s*[^;]+;/.test(b) && /border-radius:/.test(b) && /background:/.test(b)),
-    'expected a .icon-toggle block declaring border, border-radius and background',
-  );
-  assert.ok(
-    bodies.every((b) => !/\boverflow\s*:/.test(b)),
-    'expected no .icon-toggle block to declare overflow',
-  );
-});
-```
-
-Update T6 (`'.toggle-group button resolves to exactly one min-block-size of
-32px...'`) to read `.icon-toggle` in place of `.toggle-group button` — its
-name string and its `minBlockSizes(siteCss, '.toggle-group button')` call
-both — while its `.site-nav a` / `.site-footer a` assertions are unchanged.
-T1, T2 and T3 (the `.site-header` row, `.site-nav`'s missing `border-bottom`,
-`.toggle-bar`'s `margin-inline-start: auto`) are unrelated to this cycle and
-must keep passing unchanged. The file's top comment names `.toggle-group` as
-the two-body example; update that prose to name `.icon-toggle` (comment only).
-
-### F. `scripts/check-contrast.mjs`
-
-`SEMANTIC_TOKENS` has no entry for the `--surface-*-card` token this cycle
-introduces as `.icon-toggle`'s background, so the new glyph/label colour
-cannot be checked without extending it. Add, character for character, to BOTH
-the `dark` and `light` objects in `SEMANTIC_TOKENS`:
-
-```js
-'surface-card': 'mctl-surface-dark-card',
-```
-```js
-'surface-card': 'mctl-surface-light-card',
-```
-
-(dark value in the `dark` object, light value in the `light` object — same
-placement pattern as the six existing keys in each).
-
-Add one entry to `PAIRS`, character for character:
-
-```js
-{ fg: 'surface-fg-muted', bg: 'surface-card', kind: 'text' },
-```
-
-`kind: 'text'` (the 4.5:1 threshold), not `'focus-ring'` (3:1): the language
-button's `EN`/`RU` label is real text at 12px/600, below the WCAG large-text
-threshold (18.66px bold), so it needs the stricter ratio — and because both
-buttons inherit their colour from the same `color: var(--surface-fg-muted)`
-declaration via `currentColor` on the SVG, one pair covers the theme button's
-icon too (a non-text glyph, which only strictly needs 3:1, clears the stricter
-number for free). Do not add a second, separate `kind: 'focus-ring'` pair for
-the icon — that would just duplicate the same two hex values under a lower
-bar.
-
-Measured from the vendored token file during this investigation: `#a4a8ae`
-over `#15181d` = **7.45:1** (dark), `#3a3f47` over `#fffdf8` = **10.42:1**
-(light). Both clear 4.5:1, and `CONTENT_LINK_SEMANTIC_TOKENS` inherits the new
-key automatically through its `{ ...SEMANTIC_TOKENS.dark }` spread with no
-further edit.
-
-### G. `scripts/check-dist.mjs` — required for acceptance criterion 7
-
-`checkApproachPage()` audits every `<svg>` in `dist/approach/index.html` for
-`role="img"`, a resolving `aria-labelledby`, exactly one `<title>` and one
-`<desc>`, a `viewBox` and no `width`/`height`. That audit was written for the
-two `CycleDiagram.astro` variants. After section A the site header — which
-renders on every page, including `/approach/` — contributes two decorative
-`aria-hidden="true"` glyph SVGs, which would produce six spurious failures and
-break the Dockerfile step `npm run build && node scripts/check-dist.mjs`.
-
-In `checkApproachPage()`, replace
-
-```js
-  const slices = extractSvgSlices(html);
-```
-
-with, character for character:
-
-```js
-  // Issue #108 (Q18): the header's theme toggle renders two decorative
-  // aria-hidden="true" glyph <svg> elements on every page, this one
-  // included. A decorative icon inside a button that already carries an
-  // aria-labelledby name must NOT also claim role="img" and a <title>/<desc>
-  // pair -- it would announce the control twice. Filtered on the one
-  // attribute that states exactly that, never on a class allow-list, so a
-  // future named diagram is still audited by default.
-  const slices = extractSvgSlices(html).filter((slice) => !/aria-hidden="true"/.test(svgOpenTag(slice)));
-```
-
-Everything downstream (`slices.length < 2`, the `MAX_SVG_BYTES` sum, the
-per-slice loop, the `cycle-narrow` viewBox cap) then applies to the two
-diagram variants exactly as before, and the 12 KB diagram budget keeps
-measuring the diagram rather than absorbing ~1 KB of header glyphs.
-
-### H. `docs/accessibility-checklist.md`
-
-Replace the "Target size at least 24px" row with, character for character:
-
-```
-| Target size at least 24px | pass | `src/styles/site.css` sets `min-block-size: 44px` — above the 24px CSS Working Group "AA equivalent" floor named in the issue — on `.site-nav a`, `.site-footer a`, `.cta` and `.block > summary`, and a fixed 32px box (`inline-size`, `block-size`, `min-inline-size` and `min-block-size` together) on `.icon-toggle`, the two single-button auxiliary language and theme controls in the header; both are above the 24px floor and both are asserted by `test/a11y.test.ts`. |
-```
-
-Replace the "Group naming in the active language" row with, character for
-character:
-
-```
-| Group naming in the active language | pass | Since issue #108 (Q18) the language and theme controls are single buttons, not `role="group"` sets: `src/components/LangToggle.astro` and `src/components/ThemeToggle.astro` each render two `.icon-toggle` buttons, one per CSS stance, and every one of them takes its accessible name from `aria-labelledby` pointing at its own `.visually-hidden` bilingual `<Lang>` span — never a literal `aria-label`, which would read one fixed language aloud on both stances of a page that is rendered once and toggled with CSS. The `site-nav` `<nav>` and the home page's `.ctas` `<nav>` keep the same `aria-labelledby` mechanism for their landmarks. `checkNavigationState()` fails the build on any remaining `aria-label` value that mixes a Latin and a Cyrillic letter, exempting only the out-of-scope `.table-scroll` region on `dist/colophon/index.html`; `test/nav.test.ts` asserts the two `.icon-toggle` buttons, their `aria-labelledby`, the absence of `role="group"` and of any `aria-label` at the source level, and the absence of any remaining `${…en} / ${…ru}` template literal in `src/components/`, `src/layouts/` and `src/pages/index.astro`. |
-```
-
-Replace the "No motion" row with, character for character:
-
-```
-| No motion | pass | `src/styles/site.css` declares no `animation` or `transition` property anywhere in the file (grep-verified and asserted by `test/a11y.test.ts`); the only visual change on interaction is the `.icon-toggle:hover` background swap and the `:focus-visible` outline, both instantaneous. |
-```
-
-Append to the "Re-walk log", after the issue #103 entry, character for
-character:
-
-```
-- Issue #108 (Q18, single icon-button toggles): the Q16 segmented pill is
-  gone. Each auxiliary control is now one 32x32px bordered `.icon-toggle`
-  button per CSS stance -- a moon or sun glyph for the theme, an `EN`/`RU`
-  label for the language -- always showing the currently active state, so the
-  "Target size at least 24px" row names `.icon-toggle` instead of
-  `.toggle-group button`. With no `role="group"` set left to name, every
-  button carries its own `aria-labelledby` pointing at a `.visually-hidden`
-  bilingual `<Lang>` span, and the "Group naming in the active language" row
-  is rewritten around that per-button pattern. The theme glyphs are
-  decorative `aria-hidden="true"` SVGs inside an already-named button, so
-  `checkApproachPage()` in `scripts/check-dist.mjs` now skips `aria-hidden`
-  SVGs before demanding `role="img"` and a `<title>`/`<desc>` pair -- that
-  requirement describes the cycle diagram, not an icon whose button already
-  carries the name. No per-class focus rule was added: the site's single
-  global `:focus-visible` outline covers `.icon-toggle`, and the class must
-  never gain `overflow`, which would clip it.
-```
-
-### I. Journal entry
-
-Add `src/content/journal/2026-09-13-q18-single-icon-button-toggles.md`,
-frontmatter only and no body, in exactly the shape of
-`2026-09-13-q16-compact-segmented-language-and-theme.md`: `service:
-portfolio`, `issue:
-https://github.com/mctlhq/portfolio/issues/108`, `proposal_slug:
-issue-108-q18-single-icon-button-toggles-replace-t`, `status: in_progress`,
-`visibility: public`, `indexing: noindex`, the `title`, `seoTitle` and
-`decided` values from requirements.md Appendix B, `interventions: []`, and
-`issue_opened_at` as a quoted ISO 8601 UTC timestamp (from `gh issue view 108
---repo mctlhq/portfolio --json createdAt`, falling back to
-`'2026-09-13T18:00:00Z'`). No `pr`, `release`, `merged_at`, `released_at` or
-`deployed_at` — the journal-closure workflow writes those.
+`docs/accessibility-checklist.md` gets four note rewrites and one re-walk log
+entry (Appendix I). Two of the four are direct consequences the issue did not
+name — the "No motion" row cites the deleted `[aria-pressed='true']` rule,
+and the "Contrast in both themes" row states a pair count that section F
+changes — and are included rather than left contradicting the code. One new
+journal entry (Appendix J) with `status: in_progress`, per `AGENTS.md`.
 
 ## Alternatives
 
-1. **Keep `role="group"` with one button inside.** Rejected: a group of one is
-   not a set, screen readers announce a pointless group boundary, and it would
-   keep `langToggleLabel`/`themeToggleLabel` alive for no reader benefit. The
-   per-button `aria-labelledby` span carries strictly more information ("switch
-   to X") in the reader's own language.
-2. **Show the destination instead of the active state** (sun while dark is on,
-   meaning "click for light"). Rejected: the site owner compared both readings
-   live and chose active-state; the destination is still announced, through the
-   accessible name, so the two conventions coexist without ambiguity for a
-   screen-reader user.
-3. **An icon for the language toggle too** (a globe or a "文A"-style glyph).
-   Rejected in the issue: no single glyph legibly distinguishes two specific
-   languages, and `EN`/`RU` at 12px/600 in `--font-display` is unambiguous at
-   the same 32px target.
-4. **Give each glyph `role="img"` + `<title>`/`<desc>` instead of patching
-   `scripts/check-dist.mjs`.** Rejected: it contradicts section A's
-   character-for-character markup, double-announces a button that already has
-   an accessible name, and would need a bilingual `<title>` the SVG cannot
-   express through the `.l.en`/`.l.ru` mechanism.
-5. **Scope `checkApproachPage()`'s SVG scan to the `<main>` slice instead of
-   filtering `aria-hidden`.** Considered and dropped: it would silently exempt
-   any future decorative-or-not SVG placed in the header or footer, whereas
-   the `aria-hidden="true"` filter names the exact property that makes an
-   audit exemption correct.
-6. **Keep `.toggle-group` in the `@media print` selector list.** Dropped: the
-   class would exist nowhere else in the repository, making the print rule
-   dead code; `.icon-toggle` in its place keeps every print selector live at
-   zero rendering cost.
+1. **Keep `role="group"` with a single button inside.** Rejected: a group of
+   one is not a group, it adds an announced container with no members for a
+   screen reader to move between, and it would keep the wrapper `<div>` this
+   cycle exists to delete. `test/nav.test.ts`'s replacement assertion
+   (Appendix E1) actively forbids it.
+
+2. **Use `aria-label` now that each button has its own distinct purpose.**
+   Rejected, and this is the single most load-bearing decision in the cycle.
+   The site renders one HTML document per page for both languages; a literal
+   `aria-label="Switch to Russian"` would be announced verbatim to a Russian
+   screen-reader user reading the Russian stance of the same document.
+   `aria-labelledby` -> `.visually-hidden` span -> `<Lang>` pair routes the
+   accessible name through the same `display: none` stance mechanism as the
+   visible text, which is the only mechanism this static site has.
+   `checkNavigationState()` in `scripts/check-dist.mjs` independently fails
+   the build on an `aria-label` mixing Latin and Cyrillic, so the older
+   slash-joined workaround is not available either.
+
+3. **Show the destination rather than the active state** (moon = "click for
+   dark"). Rejected: confirmed with the site owner against an interactive
+   preview. Showing the active state also lets the two hidden-by-CSS stances
+   map one-to-one onto the two buttons with no extra markup — the moon button
+   *is* the dark-stance button — so the design and the mechanism agree.
+
+4. **An icon for the language toggle too** (a globe, or a flag). Rejected in
+   the issue's out-of-scope list: there is no legible single glyph for a
+   two-language toggle, and a flag names a country rather than a language.
+   `EN`/`RU` at 12px/600 stays as text, which is why Appendix F picks the
+   4.5:1 text threshold rather than the 3:1 non-text one.
+
+5. **Ship the glyphs as `public/` SVG files referenced by `<img>` instead of
+   inline markup**, to sidestep `check-no-metrics.mjs` entirely. Rejected:
+   an `<img>` cannot inherit `currentColor`, so the glyph would need a
+   separate asset per theme and would stop tracking `--surface-fg-muted`; it
+   would also add two HTTP requests to a site whose whole point is zero
+   third-party and minimal first-party requests, and
+   `scripts/vendor-assets.mjs` SHA-pins `public/assets/mctl/*` anyway. The
+   `ALLOW` entry is the cheaper and more honest answer.
+
+6. **Also delete `.toggle-group` from the `@media print` selector list.**
+   Rejected for this cycle (requirements.md, Open question 1): unauthorised
+   by the issue, already redundant because the same rule hides
+   `.site-header`, and cited as the worked example in two test-file header
+   comments. Left as a one-line follow-up.
 
 ## Platform impact
 
-- **Migrations / data.** None. No content collection schema, no metrics, no
-  build config, no `public/assets/mctl/*` change.
-- **Backward compatibility.** `localStorage.lang` / `localStorage.theme` keep
-  their names and values; a returning visitor's preference still applies on
-  the first frame through the unchanged inline script. The CSP script hash is
-  unchanged because `Base.astro` is untouched.
-- **Resource impact.** Net HTML per page: the two inline glyph SVGs add about
-  1.0 KB (moon ~350 bytes, sun ~660 bytes), minus roughly 0.4 KB of removed
-  wrapper/button markup. `MAX_INDEX_BYTES` in `scripts/check-dist.mjs` is
-  40 KB and `MAX_SVG_BYTES` (approach page, diagram only after section G) is
-  12 KB; both are reported on every passing run, so the implementer sees the
-  actual numbers. Risk if `dist/index.html` is already near 40 KB: check the
-  printed figure; no mitigation is expected to be needed and none is
-  pre-authorised (raising a cap is out of scope).
-- **Risk: the approach-page SVG audit (section G).** Highest-impact risk in
-  this cycle, because it fails only at `node scripts/check-dist.mjs` after a
-  full build, not in `npm test`. Mitigation: task 7 makes running the built
-  check part of the definition of done.
-- **Risk: a second `.icon-toggle` rule block.** `test/header.test.ts` T6
-  requires exactly one `min-block-size` for the selector. Mitigation: section
-  D states the constraint explicitly and task 3's DoD names it.
-- **Risk: partial deletion of the `/* Toggle groups. */` region.**
-  `.toggle-bar` and `.toggle-bar noscript` live inside that region and must
-  survive; `test/a11y.test.ts` and `test/header.test.ts` T3 fail loudly if
-  they do not.
-- **Risk: keyboard focus.** `.icon-toggle` declares no `overflow` and no
-  per-class focus rule, so the global `:focus-visible` outline draws outside
-  the 32px box with the existing `outline-offset`. Visual confirmation in a
-  browser is a reviewer step, per AGENTS.md, not an acceptance criterion.
-- **Accessibility posture.** Unchanged or better: the accessible name gains a
-  verb ("Switch to …") in the reader's language, the target size stays 32px,
-  and the decorative glyph is correctly hidden from the accessibility tree.
-- **Rollback.** Single-commit revert; see tasks.md.
+**Migrations / data.** None. No content collection, no schema, no metrics,
+no build-time data file changes. `src/data/assets.json` and
+`public/assets/mctl/*` are untouched, so `npm run vendor` produces no diff
+and CI's "Vendored tree matches the commit" step stays green. The one
+regenerated artefact is `public/styles/site.css`, which `.gitignore` already
+excludes and whose hash is pinned through `src/data/assets.json`'s fifth
+`styles[]` entry by the vendor step.
+
+**Backward compatibility.** The click contract is unchanged:
+`[data-set-lang]` / `[data-set-theme]` with the same four values, read by the
+same untouched delegated listener, persisted to the same `localStorage` keys.
+A returning visitor's stored preference keeps working across the deploy.
+`Base.astro` is not edited, so the CSP script hash does not move and
+`test/csp.test.ts` / `scripts/csp-hash.mjs` are unaffected.
+
+**Bilingual parity.** `scripts/check-dist.mjs` counts occurrences of the
+literal substrings `class="l en"` and `class="l ru"` per built page and
+requires them equal. The new language buttons render
+`class="l en icon-toggle lang-toggle"`, which does not contain the literal
+`class="l en"` (a space follows `en`, not a quote), exactly as today's
+`class="toggle-group l en"` does not. Every `<Lang>` component still emits
+one span of each. Parity is preserved by construction.
+
+**Resource impact.** Net HTML delta per page is roughly +900 bytes (two
+inline SVGs plus four bilingual hidden spans) minus roughly 400 bytes (two
+wrapper `<div>`s, four `aria-pressed` attributes and four deleted buttons
+across the two components) — well inside `MAX_INDEX_BYTES` (40 KB), and the
+script prints the measured size on every run. Stylesheet size is roughly
+flat: six rules out, four in. No new requests, no new fonts, no JavaScript.
+
+**Risks and mitigations.**
+
+| Risk | Mitigation |
+| --- | --- |
+| The `check-dist.mjs` gap (Appendix H) is missed and the Docker build fails after merge | Appendix H specifies the one-line fix verbatim and requirements.md criterion 16 makes a passing `node scripts/check-dist.mjs` a condition of done; the approver is asked to read it (Open question 3) |
+| The `ALLOW` list drifts from the SVG coordinates and `check-no-metrics.mjs` reports a stale value | Appendix G records that the list was produced by running the gate's own matcher, and tells the implementer to recompute rather than hand-adjust after any coordinate change |
+| `minBlockSizes(siteCss, '.icon-toggle')` returns more than one value and T6's `deepEqual([32])` fails | `ruleBlockBodies()` matches exact comma-split selectors, so `.icon-toggle:hover` and `.icon-toggle svg` are different selectors; Appendix D declares `min-block-size` in exactly one `.icon-toggle` block, and Appendix D also deletes the old tap-target rule that would otherwise leave a second one |
+| Appendix D's comment mentions `overflow`, tripping the new header test's `.every()` assertion | Both `test/header.test.ts` and `test/a11y.test.ts` strip `/* … */` comments at read time before parsing; noted inline in Appendix E2 |
+| The focus ring is clipped or invisible on the new buttons | No `overflow` on `.icon-toggle` (asserted), no per-class focus rule, and the global `:focus-visible` rule uses `outline-offset` so the ring draws outside a 32px box that has no clipping ancestor. Visual confirmation remains a reviewer step, per `AGENTS.md` |
+| A screen reader announces the wrong language | Structural: the name comes from a `<Lang>` pair inside a `.visually-hidden` span, governed by the same stance rules as visible text. An actual NVDA/VoiceOver sweep stays a reviewer step, never an acceptance criterion |
+| Contrast regression in one theme | `scripts/check-contrast.mjs` now checks the exact pair the new background introduces, in both themes, at the text threshold, and fails the build below 4.5:1 |
+
+**Rollback.** Single commit, no data or schema change — see `tasks.md`.
