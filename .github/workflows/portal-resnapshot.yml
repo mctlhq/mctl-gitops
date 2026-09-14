@@ -92,6 +92,10 @@ jobs:
       # value is already stale and verify would read it as "moved" the instant
       # it starts — a check that passes without a sign-in having happened.
       last_synced: ${{ steps.flip.outputs.last_synced_after_restore }}
+      # WHETHER THE SERVER WAS TOUCHED, published so the job graph can branch
+      # on it. The markers say what was written; only the graph decides whether
+      # the bound runs, and those two had drifted apart.
+      flipped: ${{ steps.marks.outputs.flipped }}
     # THE approval, and it is before anything is written. `cloudflare-apply` is
     # where CF_APPLY_TOKEN_PORTAL lives (Account -> MCP Portals -> Edit), so the
     # environment issues the credential and takes the approval in one.
@@ -101,7 +105,11 @@ jobs:
     # Whoever approves should be the person who will do that sign-in, now.
     environment: cloudflare-apply
     env:
-      CF_TOKEN: ${{ secrets.CF_APPLY_TOKEN_PORTAL }}
+      # NOT the write token here. Job-level `env:` is handed to EVERY step,
+      # including the third-party Telegram container action below, and
+      # `VAULT_TOKEN` reaches `$GITHUB_ENV` the same way. Both are scoped to
+      # the steps that need them.
+      #
       # secrets.mctl.ai, NOT vault.mctl.ai. The latter does not exist: the
       # platform's Vault is what `build-image.yaml` logs into, what
       # `infrastructure/cloudflare/zones/mctl-ai/firewall.tf` allowlists, and
@@ -135,6 +143,7 @@ jobs:
         id: vault
         env:
           SERVER: ${{ inputs.server }}
+          CF_TOKEN: ${{ secrets.CF_APPLY_TOKEN_PORTAL }}
         run: .github/scripts/portal-resnapshot-vault-canary.sh
 
       - name: Back up, flip, and restore
@@ -142,6 +151,7 @@ jobs:
         env:
           SERVER: ${{ inputs.server }}
           RUN_ID: ${{ github.run_id }}
+          CF_TOKEN: ${{ secrets.CF_APPLY_TOKEN_PORTAL }}
         run: .github/scripts/portal-resnapshot-flip.sh
 
       # The catalogue as it was, for `verify` to prove the snapshot moved. An
@@ -221,6 +231,17 @@ jobs:
   verify:
     name: verify ${{ inputs.server }}
     needs: flip
+    # RUNS WHENEVER THE SERVER WAS FLIPPED, not only when the flip job was
+    # green. Four things can fail that job after the restore -- step 2a's
+    # registration-changed exit most importantly -- and `needs:` alone skipped
+    # this job for all of them: no wait, no diff, and no `failure()` alert
+    # either, because a skipped job runs no steps. The announce meanwhile told
+    # the operator the countdown was running.
+    #
+    # The markers are the right source for WHAT WAS WRITTEN; the job graph is
+    # the only source for WHETHER THE BOUND IS RUNNING, and this is where the
+    # two are reconciled.
+    if: always() && needs.flip.outputs.flipped == 'yes'
     runs-on: ubuntu-latest
     env:
       CF_TOKEN: ${{ secrets.CF_PORTAL_READ_TOKEN }}

@@ -36,7 +36,15 @@ while :; do
   # dying under `set -e` inside the command substitution. An unreadable answer
   # is just another tick that is not `ready`.
   now=$(cf 2>/dev/null) || now=""
-  status=$(printf '%s' "$now" | jq -r '.result.status // "unreadable"' 2>/dev/null) || status="unreadable"
+  # The `// "unreadable"` default only fires on a body that PARSES. `jq` given
+  # zero input exits 0 having printed nothing, so an empty body left `status`
+  # as the empty string and read as neither ready nor unreadable.
+  if [ -z "$now" ]; then
+    status="unreadable"
+  else
+    status=$(printf '%s' "$now" | jq -r '.result.status // "unreadable"' 2>/dev/null) || status="unreadable"
+    [ -n "$status" ] || status="unreadable"
+  fi
   last=$(printf '%s' "$now" | jq -r '.result.last_synced // ""' 2>/dev/null) || last=""
 
   # BOTH, not just status. A server can read `ready` off the pre-flip snapshot
@@ -49,7 +57,16 @@ while :; do
 
   elapsed=$(( $(date -u +%s) - started ))
   if [ "$elapsed" -ge "$DEADLINE_S" ]; then
-    echo "::error::${SERVER} is still status=${status} after ${elapsed}s; it is UNUSABLE until someone signs it out and back in on the portal server-selection page"
+    # "unreadable" is not "not ready", and the two send an operator to
+    # different places. `jq` on an empty body exits 0 with `// "unreadable"`
+    # never firing, so a thirty-minute run of failed READS used to be announced
+    # as a server nobody had signed into -- sending someone to a browser for
+    # what is an API or credential problem.
+    if [ "$status" = "unreadable" ] || [ -z "$now" ]; then
+      echo "::error::could not read ${SERVER} for ${elapsed}s (last status: ${status:-no response}). This is a read failure, not a missing sign-in: check the token and the API before touching the portal. The server may still be in Waiting."
+    else
+      echo "::error::${SERVER} is still status=${status} after ${elapsed}s; it is UNUSABLE until someone signs it out and back in on the portal server-selection page"
+    fi
     exit 1
   fi
   echo "waiting: status=${status} last_synced=${last:-none} (${elapsed}s of ${DEADLINE_S}s)"
