@@ -22,6 +22,23 @@ metadata:
            NOTHING. Review every row against the store and live Temporal.
         2. dry_run=false — writes the rows the report planned.
 
+      A dry run works in any rollout mode. An APPLY refuses unless the worker
+      is already at LIFECYCLE_ROLLOUT_MODE=observe, and exits 2 saying so:
+      below observe the DevLoopWorkflow's ownership activity short-circuits, so
+      a row written here for a devloop-workflow owner would never be
+      heartbeated, progressed or released by the workflow it names. It would
+      sit `active` until its liveness bound expired, held by an owner that does
+      not know it holds anything.
+
+      So the rollout is three steps and this is the middle one:
+        1. the WORKER flips to observe — the writer goes live
+        2. this workflow, dry then apply
+        3. the SHEPHERD flips — the comparison starts against a populated store
+
+      --service and --slug scope a run. Worth using for the first apply:
+      apply_report skips an entity the store already holds, so a row written
+      wrongly cannot be corrected by re-running.
+
       Safety properties, all in orchestrator/lifecycle/bootstrap.py:
         - READ FIRST. Any entity that reads UNKNOWN aborts the whole run
           with nothing written: an id whose owner cannot be seen is not one
