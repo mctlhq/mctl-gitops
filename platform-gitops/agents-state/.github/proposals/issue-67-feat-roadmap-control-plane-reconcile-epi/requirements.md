@@ -2,168 +2,48 @@
 
 ## Context
 
-`roadmap/` in `mctlhq/.github` already holds the authored desired state for the
-roadmap control plane: the `roadmap.mctl.ai/v1alpha1` `EpicDefinition` contract
-(`roadmap/schemas/epic-definition.schema.json`), the first pilot manifest
-(`roadmap/epics/human-input.yaml`), and an intentionally offline validator
-(`roadmap/scripts/validate.py`) that checks structure and graph invariants but,
-as its module docstring states, "performs no GitHub reads or writes". The
-remaining half of the loop described in `roadmap/README.md` under "Planned
-reconciliation boundary" is missing: nothing yet compares the authored graph
-with what GitHub actually shows.
-
-Issue #67 asks for the first read-only slice of that comparison: load validated
-manifests, resolve the bound parent issue and every bound work-item issue, read
-native GitHub sub-issue relationships and issue dependency relationships,
-normalize them, and emit deterministic `RoadmapDiff` entries. No GitHub writes,
-no issue creation, no Project field updates, no LLM interpretation. The value is
-that drift between the manifest and the collaboration surface becomes a
-machine-readable, reviewable artifact that `mctl-api` can later persist as
-observed state — and that the detector proves it can report green before anyone
-is allowed to wire up an apply path. `roadmap/README.md` already states the bar:
-"A detector that can only report drift is as broken as a guard that can only
-pass."
+Issue #67 adds the observed-state half of the roadmap control plane: deterministic comparison of validated `EpicDefinition` manifests against native GitHub issue hierarchy and dependency relations. This slice is read-only, emits a stable `RoadmapDiff`, does not interpret issue prose, and must prove both green and red detector directions before any apply path exists.
 
 ## User stories
 
-- AS a roadmap owner I WANT a command that compares `roadmap/epics/*.yaml` with
-  the live GitHub issue graph SO THAT I can see exactly which parent and
-  dependency edges are missing or wrong without reading issue prose.
-- AS a platform engineer I WANT the drift result emitted as stable, schema-valid
-  JSON SO THAT `mctl-api` can later ingest it as observed/read-model state
-  without re-deriving anything.
-- AS a reviewer I WANT hierarchy drift and dependency drift kept in separate
-  result types SO THAT a missing sub-issue link is never silently conflated with
-  a missing `Depends on` edge.
-- AS a security reviewer I WANT the reconciler to hold no GitHub write
-  permission and to be provably GET-only SO THAT a bug in the detector cannot
-  mutate the collaboration surface.
-- AS a maintainer I WANT the detector mutation-tested in both directions against
-  a captured graph snapshot SO THAT a converged epic stays green and every
-  deliberately broken edge turns red.
-- AS a CI operator I WANT the offline test path to need no network and no token
-  SO THAT `.github/workflows/roadmap-validate.yml` keeps running with
-  `permissions: {}`.
+- AS a roadmap owner I WANT a command that compares `roadmap/epics/*.yaml` with the live GitHub graph SO THAT parent/dependency drift is explicit.
+- AS a platform engineer I WANT stable schema-valid JSON SO THAT `mctl-api` can later persist observed state without re-deriving the graph.
+- AS a reviewer I WANT hierarchy, dependency, and binding drift kept separate SO THAT unrelated failure families are never conflated.
+- AS a security reviewer I WANT the live adapter to be structurally GET-only SO THAT the detector cannot mutate GitHub.
+- AS a maintainer I WANT a synthetic converged fixture plus mutation tests SO THAT green → red → restored-green behaviour is deterministic and offline.
 
 ## Acceptance criteria (EARS)
 
-- WHEN the reconciler is invoked with one or more `EpicDefinition` paths THE
-  SYSTEM SHALL first run `validate.validate_document` (schema plus semantic
-  layer) and SHALL refuse to reconcile any manifest that fails validation,
-  reporting the validation failures unchanged.
-- WHEN a validated manifest is reconciled THE SYSTEM SHALL derive the desired
-  hierarchy edge set as: every bound work item without `parent` is a child of
-  `spec.github.issue`, and every bound work item with `parent` is a child of the
-  issue bound to that parent work item.
-- WHEN a validated manifest is reconciled THE SYSTEM SHALL derive the desired
-  dependency edge set from `workItems[].dependsOn` (resolved to the bound issue
-  of the target work item) and `workItems[].externalDependsOn` (used verbatim),
-  in the direction "this issue is blocked by that issue".
-- WHILE deriving desired edges THE SYSTEM SHALL ignore `spec.phases` ordering
-  entirely and SHALL NOT create any dependency edge from phase membership.
-- WHEN the observed graph is read THE SYSTEM SHALL collect, for each referenced
-  issue, its existence, its state, its native sub-issue parent, its native
-  sub-issue children, and its `blocked_by` issue dependency relationships, and
-  SHALL normalize every issue reference to a canonical `owner/repo#number` key
-  with case-insensitive repository matching.
-- WHEN a desired hierarchy edge has no matching observed sub-issue relationship
-  THE SYSTEM SHALL emit a `HierarchyMissingParent` entry naming the work item,
-  the child issue, and the expected parent issue.
-- IF an observed child issue has a sub-issue parent other than the desired
-  parent THEN THE SYSTEM SHALL emit a `HierarchyWrongParent` entry carrying both
-  the expected and the observed parent.
-- IF an issue observed as a sub-issue of a manifest-bound parent is not bound by
-  any work item of that epic THEN THE SYSTEM SHALL emit a
-  `HierarchyUnexpectedChild` entry.
-- WHEN a desired dependency edge has no matching observed `blocked_by`
-  relationship THE SYSTEM SHALL emit a `DependencyMissing` entry.
-- IF an observed `blocked_by` relationship on a bound issue is not in the
-  desired dependency edge set THEN THE SYSTEM SHALL emit a
-  `DependencyUnexpected` entry.
-- IF a bound issue cannot be resolved on GitHub (404, or resolvable only as a
-  redirect/transfer to a different repository or number) THEN THE SYSTEM SHALL
-  emit a `BindingIssueNotFound` or `BindingRedirected` entry and SHALL suppress
-  every desired edge that depends on that binding rather than reporting those
-  edges as missing.
-- IF the same issue is observed as a sub-issue of more than one parent, or one
-  manifest binding resolves to more than one candidate issue THEN THE SYSTEM
-  SHALL emit a `BindingAmbiguous` entry.
-- WHEN a work item carries no `issue` binding THE SYSTEM SHALL emit an
-  informational `BindingUnbound` entry carrying its `title` and `owner`, and
-  SHALL NOT derive any edge from or to that work item.
-- WHILE producing results THE SYSTEM SHALL keep hierarchy, dependency, and
-  binding entries in separate, separately-typed collections of the emitted
-  `RoadmapDiff` document.
-- WHEN the reconciler finishes THE SYSTEM SHALL emit a `RoadmapDiff` JSON
-  document (`apiVersion: roadmap.mctl.ai/v1alpha1`, `kind: RoadmapDiff`) that
-  validates against a committed JSON Schema and carries the epic name, the
-  manifest path, the SHA-256 of the exact manifest bytes, the graph source mode,
-  per-family entry counts, and the entry collections.
-- WHILE serializing the `RoadmapDiff` THE SYSTEM SHALL sort every entry
-  collection by a deterministic key and SHALL NOT embed wall-clock timestamps,
-  random values, or map iteration order, so that two runs over identical inputs
-  produce byte-identical output.
-- WHEN the same manifest and the same graph snapshot are reconciled twice THE
-  SYSTEM SHALL produce byte-identical `RoadmapDiff` output.
-- WHILE reading the live graph THE SYSTEM SHALL issue only HTTP GET requests and
-  SHALL raise rather than perform any other HTTP method, and SHALL require only
-  read scopes (`contents: read`, `issues: read`).
-- WHEN the reconciler is run against a converged captured snapshot of the
-  `human-input` pilot THE SYSTEM SHALL report zero drift entries and exit 0.
-- WHEN exactly one parent edge, one dependency edge, or one issue binding is
-  mutated in that snapshot THE SYSTEM SHALL report drift in the corresponding
-  family, leave the other families unchanged, and exit 1.
-- WHEN a mutated snapshot is restored to its original content THE SYSTEM SHALL
-  again report zero drift entries.
-- IF invocation is malformed (unreadable manifest, unreadable snapshot, missing
-  credentials in live mode) THEN THE SYSTEM SHALL exit 2, distinct from the
-  drift exit code 1 and the converged exit code 0, matching the existing
-  `roadmap/scripts/validate.py` exit-code convention.
-- WHEN roadmap files change in a pull request THE SYSTEM SHALL have its offline
-  fixture-based tests executed by `.github/workflows/roadmap-validate.yml`
-  without network access, without any GitHub token, and with `permissions: {}`
-  preserved.
+- WHEN one or more manifests are selected for reconciliation THE SYSTEM SHALL first load and validate the **entire canonical corpus** under `roadmap/epics/` (or an explicitly supplied test corpus root), running schema + per-manifest validation and existing corpus invariants before any GitHub read. Selecting one manifest SHALL NOT narrow corpus-wide uniqueness checks. Duplicate `metadata.name` or duplicate GitHub issue bindings anywhere in the corpus SHALL exit 2 with zero network calls.
+- WHEN a validated manifest is reconciled THE SYSTEM SHALL derive desired hierarchy as `(parent, child)` and dependencies as `(blocked, blocker)` from `dependsOn` and `externalDependsOn`; phase order SHALL NOT create edges.
+- WHEN live state is read THE SYSTEM SHALL use GitHub REST GET endpoints only: issue GET, `/parent`, `/sub_issues`, and `/dependencies/blocked_by`; GraphQL is out of scope for this slice.
+- ANY attempted non-GET method or request body SHALL fail before transmission.
+- WHEN an authored issue resolves to a different canonical repository/number THE SYSTEM SHALL emit exactly one `BindingRedirected`, preserve requested and resolved identities, and use the **resolved canonical key** for hierarchy/dependency comparison. Redirect alone SHALL NOT suppress relations or create cascaded relation drift.
+- IF a bound issue cannot be resolved THE SYSTEM SHALL emit `BindingIssueNotFound` and suppress dependent hierarchy/dependency comparisons.
+- IF a binding or parent observation is ambiguous THE SYSTEM SHALL emit `BindingAmbiguous` and suppress dependent relation comparisons for that endpoint.
+- WHEN hierarchy differs THE SYSTEM SHALL emit `HierarchyMissingParent` or `HierarchyWrongParent`.
+- WHEN an observed child is not owned by the manifest THE SYSTEM SHALL emit informational `HierarchyUnexpectedChild` and SHALL NOT change exit 0 by itself. It is informational in severity, not optional in emission: the reconciler always reports it, and the exit code ignores it.
+- WHEN dependency state differs THE SYSTEM SHALL emit `DependencyMissing` or `DependencyUnexpected`.
+- WHEN a work item is intentionally unbound THE SYSTEM SHALL emit informational `BindingUnbound`, derive no edge through it, and SHALL NOT change exit 0 by itself.
+- WHEN reconciliation completes THE SYSTEM SHALL emit `apiVersion: roadmap.mctl.ai/v1alpha1`, `kind: RoadmapDiff`, exact manifest-byte SHA-256, source metadata, per-family counts, and separate `binding`, `hierarchy`, and `dependency` collections.
+- SERIALIZATION SHALL be deterministic: stable collection ordering, no generated timestamp/random value in the diff, byte-identical JSON for identical manifest + snapshot bytes.
+- FIXTURE mode SHALL distinguish immutable live captures from synthetic green test fixtures. Synthetic fixtures SHALL NOT claim a live capture timestamp.
+- WHEN the Human Input synthetic converged fixture is reconciled THE SYSTEM SHALL report zero drift-severity entries and exit 0.
+- WHEN one parent edge, dependency edge, binding, or redirect mapping is deliberately mutated THE SYSTEM SHALL report only the expected drift; restoring the mutation SHALL return to green.
+- WHEN roadmap files change in CI THE SYSTEM SHALL run only offline fixture-based reconciliation under existing `permissions: {}`.
 
 ## Out of scope
 
-- Any GitHub mutation: creating, editing, linking, or closing issues;
-  adding/removing sub-issues or dependencies; updating Project fields.
-- Creating issues for unbound work items (only reported, never created).
-- Persisting the `RoadmapDiff` in `mctl-api` or exposing an API endpoint; this
-  slice only guarantees the payload contract is stable enough to persist later.
-- A `RoadmapReconcileWorkflow` in `mctl-agents`; only the reusable detector and
-  its CLI land here.
-- Critical-path, ready/blocked counts, and completion percentage derivation
-  (`completion.mode: allRequired` evaluation) — observed issue state is
-  collected and reported but not scored.
-- LLM-based interpretation of issue titles, bodies, or `Depends on` prose
-  sections; only native sub-issue and issue-dependency relations are read.
-- Treating `spec.phases` order as dependency edges.
-- Migrating additional epics (for example Enterprise MCP) onto `EpicDefinition`.
+- Any GitHub mutation or auto-remediation.
+- Persisting `RoadmapDiff` in `mctl-api`.
+- A runtime `RoadmapReconcileWorkflow` in `mctl-agents`.
+- Critical-path/progress scoring or LLM interpretation of issue prose.
+- Migrating additional epics.
 
-## Open questions
+## Resolved design decisions
 
-- Native issue dependencies are a comparatively new GitHub surface and are
-  primarily exposed through REST (`/repos/{owner}/{repo}/issues/{number}/
-  dependencies/blocked_by`) rather than a stable GraphQL field. The proposal
-  isolates both reads behind one adapter and pins the snapshot schema to a
-  provider-neutral shape; if the GraphQL surface is available for both
-  relations at implementation time, the adapter should prefer a single batched
-  GraphQL query for cost. Decided default: GraphQL for sub-issues, REST for
-  dependencies, both GET-only.
-- The issue does not say whether an observed sub-issue of the epic root that is
-  not in the manifest is drift or acceptable human activity. Decided default:
-  report it as `HierarchyUnexpectedChild` (informational severity) so the signal
-  exists without implying a future deletion.
-- The issue does not specify how cross-repository reads authenticate. Decided
-  default: live mode reads a token from the environment and is never run from
-  this repository's `permissions: {}` CI; only the offline snapshot path runs in
-  CI here.
-- Whether the captured snapshot of the pilot should be committed as a golden
-  fixture or re-captured on demand. Decided default: commit one converged
-  snapshot under `roadmap/fixtures/` as the single source of truth and derive
-  every mutated variant from it in tests, so the mutation pairs cannot drift
-  apart.
-- Whether `RoadmapDiff` needs severity levels beyond the entry type. Decided
-  default: each entry carries a fixed `severity` field (`drift` or `info`) so
-  the later `mctl-api` read model does not have to hardcode a type list.
+- **Parent endpoint verified:** GitHub documents `GET /repos/{owner}/{repo}/issues/{issue_number}/parent` as the REST **Get parent issue** endpoint with `Issues: read` permission.
+- **Corpus scope:** reconciliation targets may be a subset, but corpus invariants always run against the full canonical `roadmap/epics/` corpus (or explicit test corpus root) before live access.
+- **Redirect semantics:** `BindingRedirected` is binding drift; relations are then compared using the resolved canonical key. Redirect alone never suppresses relations.
+- **Suppression:** only unresolved/ambiguous bindings and intentionally unbound desired work suppress dependent comparisons.
+- **Fixture provenance:** live capture and synthetic converged fixture are separate artifact classes.
