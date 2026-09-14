@@ -337,9 +337,20 @@ jobs:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           format: html
-          # THREE states, because "may still be in Waiting" is wrong on two of
-          # them and sends an operator to the portal UI for a problem the
-          # portal UI cannot fix.
+          # THREE states, EXHAUSTIVE. `restored` is yes or it is not; if it is,
+          # the wait either succeeded or it did not.
+          #
+          # `!= 'success'` and not `== 'failure'`, because `steps.wait.outcome`
+          # is only one of those when the step RAN. A failed checkout above
+          # skips it and leaves `skipped` -- and with `== 'failure'` none of the
+          # three matched, so the operator got a header, three blank lines and
+          # a link, for a server sitting in Waiting after the flip announce had
+          # already said the countdown was running. The branch carrying a
+          # POSITIVE claim -- "no portal action needed" -- is the one that must
+          # require evidence, so it keeps `== 'success'` and the others do not.
+          #
+          # And "may still be in Waiting" is wrong on two of these and sends an
+          # operator to the portal UI for a problem the portal UI cannot fix.
           #
           # The cleared-registration path's timing was fixed last commit and its
           # MESSAGE was not: the recovery there is Vault, not a sign-in. And
@@ -348,6 +359,6 @@ jobs:
           message: |
             <b>Portal re-snapshot FAILED to verify</b> — <code>${{ inputs.server }}</code>
             ${{ needs.flip.outputs.restored != 'yes' && format('The registration is <b>cleared</b>, not merely unauthorized — a sign-in cannot fix it. Restore from Vault at <code>secret/platform/portal-resnapshot/{0}</code>.', inputs.server) || '' }}
-            ${{ (needs.flip.outputs.restored == 'yes' && steps.wait.outcome == 'failure') && 'The server is still in <b>Waiting</b> and unusable: nobody completed the upstream sign-in, or it could not be read. The run says which.' || '' }}
+            ${{ (needs.flip.outputs.restored == 'yes' && steps.wait.outcome != 'success') && 'The server is still in <b>Waiting</b> and unusable: nobody completed the upstream sign-in, it could not be read, or this job died before it got that far. The run says which.' || '' }}
             ${{ (needs.flip.outputs.restored == 'yes' && steps.wait.outcome == 'success') && 'The sign-in <b>completed</b> and the server is usable; the catalogue or drift check is what failed. No portal action needed — read the run.' || '' }}
             <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">run</a>

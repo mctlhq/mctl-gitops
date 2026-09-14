@@ -16,7 +16,15 @@ set -euo pipefail
 . "$(dirname "$0")/portal-resnapshot-lib.sh"
 assert_server_id
 
-out=$(python3 scripts/portal-catalogue-drift.py 2>&1) && code=0 || code=$?
+# PYTHONUNBUFFERED, because the evidence check reads stdout out of a stream
+# merged with stderr. Python block-buffers stdout when it is not a tty and
+# line-buffers stderr, so without this the `compared: ...` line can be
+# interleaved with a stderr write and lose its line start -- and the anchored
+# `^compared: ` then fails to match. That used to cost a spurious green; since
+# the gate requires positive evidence it costs the opposite, failing a run
+# where the sign-in completed and the catalogue moved. Either way the buffering
+# decides the verdict, which is not something a verdict may depend on.
+out=$(PYTHONUNBUFFERED=1 python3 scripts/portal-catalogue-drift.py 2>&1) && code=0 || code=$?
 printf '%s\n' "$out"
 
 # POSITIVE EVIDENCE FIRST, and it is what makes every branch below safe.
@@ -32,7 +40,8 @@ printf '%s\n' "$out"
 # module, an OOM kill. The final gate of a procedure that just took a
 # production server down must not report the end state good having compared
 # nothing, and only positive evidence rules that out.
-# NON-ZERO, and `${code:-1}` was not that. `:-` substitutes only on
+# THESE BRANCHES MUST EXIT NON-ZERO, and `${code:-1}` was not that. `:-`
+# substitutes only on
 # unset-or-empty, and on a clean detector run `code` is the STRING "0" -- so
 # both branches below printed their `::error::` and exited 0, passing the step
 # and reporting the end state good having compared nothing. Verbatim the
