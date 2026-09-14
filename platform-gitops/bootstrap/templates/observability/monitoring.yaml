@@ -501,6 +501,26 @@ spec:
                   - receiver: telegram
                     matchers:
                       - alertname =~ "SeerrSense.*"
+                  # The lifecycle ownership rollout (ADR-010 §12,
+                  # mctlhq/.github#57). Telegram only, no ticket, and the
+                  # routing is load-bearing rather than a preference:
+                  # LifecycleShadowDangerousDivergence is the soak's STOP
+                  # condition, and the remedy is a human setting
+                  # LIFECYCLE_ROLLOUT_MODE back to off. Left unrouted these
+                  # fall through to the root mctl-agent receiver — i.e. the
+                  # stop signal for a rollout would be delivered only to the
+                  # system being rolled out, which could open a ticket against
+                  # itself and notify nobody.
+                  #
+                  # Prefix match for the same reason as the two routes above:
+                  # the defect is "a rollout alert defaults to agent-only", not
+                  # "these three alertnames are unrouted", and an enumeration
+                  # would let the next alert added to the VMRule reintroduce it
+                  # silently. Remove this route when the rollout finishes and
+                  # vm-rules/lifecycle-rollout-alerts.yaml goes with it.
+                  - receiver: telegram
+                    matchers:
+                      - alertname =~ "Lifecycle.*"
                   # Platform/infra Applications (projects default + platform)
                   # also page a human, in ADDITION to mctl-agent — hence
                   # continue: true, which lets the catch-all route below still

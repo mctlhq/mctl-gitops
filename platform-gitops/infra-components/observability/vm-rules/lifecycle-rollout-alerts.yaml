@@ -23,10 +23,17 @@
 # correct behaviour and the alert would fire continuously on every deployment.
 # It lands in the same change that sets LIFECYCLE_ROLLOUT_MODE=observe.
 #
-# severity=warning + mctl_agent_self="true" on every rule: these describe
-# mctl's own components, and the AlertManager route in
-# bootstrap/templates/observability/monitoring.yaml drops that label so
-# mctl-agent does not open tickets against itself.
+# Routing: an `alertname =~ "Lifecycle.*"` route to telegram is added to
+# bootstrap/templates/observability/monitoring.yaml alongside this file, and it
+# is load-bearing rather than cosmetic. Without it these fall through to the
+# ROOT receiver, which is mctl-agent — so the stop signal for a rollout would
+# be delivered only to the system being rolled out, which can open a ticket
+# against itself and notify no human at all.
+#
+# mctl_agent_self="true" is carried for consistency with the other mctl-owned
+# rules. Note it does NOT by itself drop anything: no Alertmanager route
+# matches that label today (mctl-agent-cleanup-alerts.yaml leaves the same
+# thing as a TODO). The telegram route above is what actually delivers these.
 apiVersion: operator.victoriametrics.com/v1beta1
 kind: VMRule
 metadata:
@@ -48,15 +55,31 @@ spec:
         # short for the same reason — this is not a condition to confirm over
         # time, it is one to stop the rollout over.
         #
-        # Lookback (15m) is LONGER than the hold (5m), which is the opposite of
-        # the usual pairing and is the point. A window shorter than the hold
-        # lets a one-off spike decay out before the hold elapses, so the alert
-        # only ever fires on a SUSTAINED condition — correct when you are
-        # watching a rate, wrong here, where a single occurrence is the event.
-        # The hold is there only so a scrape gap cannot produce a one-sample
-        # flap.
+        # max_over_time, NOT increase(), and this is the difference between an
+        # alert that exists and one that does not.
+        #
+        # Promtail keys a metrics-stage counter by the log stream, pod label
+        # included, and creates the series only when its regex FIRST matches.
+        # A shepherd Argo step pod that reports one dangerous divergence
+        # therefore produces a series whose samples are 1, 1, 1 — never a 0
+        # before them. increase() over that is 0, so the expression would have
+        # been false for exactly the isolated one-off event this stop condition
+        # exists to catch, while passing a unit test that seeds its own zero.
+        #
+        # The value is safe to read directly precisely because the series is
+        # per-pod and these pods are ephemeral: the counter cannot accumulate
+        # across ticks, and it leaves the 15m window with the pod that wrote
+        # it, so the alert self-clears. That is not true of the worker counter
+        # in the group below, which is why that one is written differently.
+        #
+        # Lookback (15m) is LONGER than the hold (5m), the opposite of the
+        # usual pairing and the point: a window shorter than the hold lets a
+        # one-off decay out before the hold elapses, which is right for a rate
+        # and wrong here. The hold only stops a single scrape from flapping,
+        # and the pod's samples stay in the 15m window long enough to satisfy
+        # it even after the pod is gone.
         - alert: LifecycleShadowDangerousDivergence
-          expr: increase(lifecycle_shadow_store_permits_old_forbids_total[15m]) > 0
+          expr: max_over_time(lifecycle_shadow_store_permits_old_forbids_total[15m]) > 0
           for: 5m
           labels:
             severity: warning
@@ -133,11 +156,26 @@ spec:
         # store-forbids-old-permits that would otherwise be read as "expected
         # bootstrap residue".
         #
-        # Window longer than the hold again, and for the same reason as the
-        # dangerous-divergence rule above: one abandoned claim is the event,
-        # not a rate to confirm over time.
+        # Two disjuncts, because this counter lives in a LONG-LIVED pod — the
+        # Temporal worker — unlike the shepherd's ephemeral step pods:
+        #
+        #  - increase() catches every occurrence after the first, and is the
+        #    right shape for a series that persists and keeps incrementing;
+        #  - it cannot catch the first, for the same reason as the rule above:
+        #    Promtail creates the series at 1, so there is no 0 to increase
+        #    from. The second disjunct catches exactly that — the counter
+        #    exists now and did not an hour ago — and the `unless` makes it
+        #    stop firing an hour later instead of latching forever on a value
+        #    that never goes back down.
         - alert: LifecycleClaimAbandoned
-          expr: increase(lifecycle_claim_abandoned_total[1h]) > 0
+          expr: >-
+            increase(lifecycle_claim_abandoned_total[1h]) > 0
+            or
+            (
+              max_over_time(lifecycle_claim_abandoned_total[1h]) > 0
+              unless
+              max_over_time(lifecycle_claim_abandoned_total[1h] offset 1h) > 0
+            )
           for: 15m
           labels:
             severity: warning

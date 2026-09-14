@@ -36,14 +36,20 @@ tests:
         exp_alerts: []
 
   - interval: 1m
-    name: ONE dangerous divergence fires
+    name: ONE dangerous divergence fires, with no zero before it
     input_series:
-      # Flat, then a single increment at minute 10 and never again. This is the
-      # shape the alert exists for: not a rate, one event.
+      # The shape a real shepherd pod produces, and the reason this rule does
+      # not use increase(). Promtail creates a metrics-stage counter only when
+      # its regex first matches, keyed by the pod, so the series APPEARS at 1:
+      # there is no 0 sample ahead of it to increase from. `_` is an absent
+      # sample -- seeding a 0 here instead would test a series shape that never
+      # occurs, and would pass against an expression that misses every
+      # first-occurrence event.
       - series: 'lifecycle_shadow_store_permits_old_forbids_total{namespace="argo-workflows"}'
-        values: '0x10 1x50'
+        values: '_x9 1x5'
     alert_rule_test:
-      # 15m after the increment: still inside the lookback, hold elapsed.
+      # The pod reported at minute 10 and was gone by 15. Its samples are still
+      # inside the 15m lookback here, and the 5m hold has elapsed.
       - eval_time: 20m
         alertname: LifecycleShadowDangerousDivergence
         exp_alerts:
@@ -63,13 +69,16 @@ tests:
                 before restarting the soak clock.
 
   - interval: 1m
-    name: the spike leaves the window and the alert clears
+    name: the event leaves the window and the alert clears
     input_series:
       - series: 'lifecycle_shadow_store_permits_old_forbids_total{namespace="argo-workflows"}'
-        values: '0x10 1x50'
+        values: '_x9 1x5'
     alert_rule_test:
-      # Well past the 15m lookback: increase() is 0 again.
-      - eval_time: 50m
+      # Well past the 15m lookback. The series is per-pod and the pod is gone,
+      # so the counter cannot accumulate across ticks and the alert
+      # self-clears -- which is what makes reading the value directly safe
+      # here, and is not true of the worker counter below.
+      - eval_time: 40m
         alertname: LifecycleShadowDangerousDivergence
         exp_alerts: []
 
@@ -144,7 +153,7 @@ tests:
         exp_alerts: []
 
   - interval: 1m
-    name: one abandoned claim fires
+    name: a second abandoned claim fires through increase()
     input_series:
       - series: 'lifecycle_claim_abandoned_total{namespace="admins"}'
         values: '0x10 1x80'
@@ -164,3 +173,41 @@ tests:
                 store holds a row nobody is refreshing. Find it with
                 mctl_get_lifecycle_ownership and check whether it is still
                 withholding the entity.
+
+  - interval: 1m
+    name: the FIRST abandoned claim fires, with no zero before it
+    input_series:
+      # Same first-sample problem as the shadow counter, in a long-lived pod:
+      # Promtail creates the series at 1, so increase() sees nothing. The
+      # second disjunct is what catches this.
+      - series: 'lifecycle_claim_abandoned_total{namespace="admins"}'
+        values: '_x9 1x180'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: LifecycleClaimAbandoned
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              mctl_agent_self: "true"
+              namespace: admins
+            exp_annotations:
+              summary: "DevLoopWorkflow abandoned an ownership claim without a landed write"
+              description: >-
+                1 claim(s) abandoned in the last hour. The workflow cleared its
+                local claim on a write that did not reach mctl-api, so the
+                store holds a row nobody is refreshing. Find it with
+                mctl_get_lifecycle_ownership and check whether it is still
+                withholding the entity.
+
+  - interval: 1m
+    name: a first-claim alert stops instead of latching on a counter that never falls
+    input_series:
+      - series: 'lifecycle_claim_abandoned_total{namespace="admins"}'
+        values: '_x9 1x180'
+    alert_rule_test:
+      # Two hours on, the same value is still 1 and always will be -- the
+      # worker does not restart to clear it. The `unless` is what makes this
+      # alert end rather than fire forever over one event.
+      - eval_time: 2h
+        alertname: LifecycleClaimAbandoned
+        exp_alerts: []
