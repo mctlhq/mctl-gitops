@@ -39,10 +39,13 @@ SECRET=$(openssl rand -hex 24); test -n "$SECRET"
 test -s "$work/restore.json"
 echo "::add-mask::${SECRET}"
 
-curl -sS --fail-with-body -H "X-Vault-Token: ${VAULT_TOKEN}" \
-  -X POST "${VAULT_ADDR}/v1/secret/data/${VAULT_BACKUP_PATH}" \
-  --json "$(jq -n --slurpfile r "$work/restore.json" --arg run "${RUN_ID}" \
-             '{data: {restore: ($r[0] | tojson), run_id: $run}}')" >/dev/null
+# Through STDIN: the restoration body carries the whole registration and a
+# live client_secret, and a command line is world-readable in /proc.
+jq -n --slurpfile r "$work/restore.json" --arg run "${RUN_ID}" \
+  '{data: {restore: ($r[0] | tojson), run_id: $run}}' \
+  | curl -sS --fail-with-body -H "X-Vault-Token: ${VAULT_TOKEN}" \
+      -H 'content-type: application/json' \
+      -X POST "${VAULT_ADDR}/v1/secret/data/${VAULT_BACKUP_PATH}" --data-binary @- >/dev/null
 # Read back, because a write this one depends on must not be believed on a 2xx.
 curl -sS --fail-with-body -H "X-Vault-Token: ${VAULT_TOKEN}" \
   "${VAULT_ADDR}/v1/secret/data/${VAULT_BACKUP_PATH}" \
@@ -68,9 +71,41 @@ cf | jq -e '.result.status == "waiting" and .result.auth_config_summary.auth_mod
 #     answering 200 while keeping a field it was told to change, and for `api`
 #     and `seerrsense` nothing declarative would catch a narrowed scope or a
 #     moved endpoint later.
-rc=0
-diff -u <(jq -S '{auth_mode, config, registration_info}' "$work/summary.json") \
-        <(cf | jq -S '.result.auth_config_summary | {auth_mode, config, registration_info}') || rc=$?
-test "$rc" -eq 0 || { echo "::error::registration changed across the flip; restore from ${VAULT_BACKUP_PATH} by hand"; exit 1; }
+#     Compared by FIELD NAME, never by printing the values. A `diff -u` of the
+#     two blobs puts endpoints, client id and scope into the run log — readable
+#     by everyone with repository access, and outliving the run. The whole
+#     reason the backup goes to Vault rather than an artifact is that this blob
+#     must not land somewhere durable and broadly readable, and a log is both.
+#
+#     A null `auth_config_summary` reports all three as changed rather than
+#     comparing as equal-to-nothing, which is the shape a failed read takes.
+(umask 077; cf | jq -S '.result.auth_config_summary' > "$work/restored.json")
+changed=$(jq -r -n --slurpfile a "$work/summary.json" --slurpfile b "$work/restored.json" '
+  ($a[0] | {auth_mode, config, registration_info}) as $before
+  | ($b[0] // {}) as $after
+  | ["auth_mode", "config", "registration_info"]
+  | map(select(($before[.] // null) != ($after[.] // null)))
+  | join(", ")')
+if [ -n "$changed" ]; then
+  echo "::error::registration changed across the flip in: ${changed}. Restore from Vault at ${VAULT_BACKUP_PATH} by hand — the values are deliberately not printed here."
+  exit 1
+fi
 
-echo "restored: waiting for a user sign-in"
+# The catalogue as it was, for `verify` to prove the snapshot actually moved.
+# An artifact, unlike the registration: this is tool names, schemas and
+# annotations, which already live in each owning repository's
+# docs/portal-allowlist.json. The registration does not.
+mkdir -p "${RUNNER_TEMP:-/tmp}/portal-resnapshot"
+cp "$work/before.json" "${RUNNER_TEMP:-/tmp}/portal-resnapshot/before.json"
+
+# The baseline `verify` waits to move, and it has to be taken HERE.
+#
+# The bearer flip moves `last_synced` itself — the README records that as the
+# sign it worked — so a baseline read before the flip is already stale by the
+# time the restore lands, and `verify` comparing against it would find the
+# value "moved" the instant the job starts. The only value that moving proves a
+# SIGN-IN is the one the server holds after the restoration.
+restored_synced=$(cf | jq -r '.result.last_synced // ""')
+echo "last_synced_after_restore=${restored_synced}" >> "$GITHUB_OUTPUT"
+
+echo "restored: waiting for a user sign-in (baseline last_synced=${restored_synced:-none})"

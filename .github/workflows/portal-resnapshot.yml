@@ -65,9 +65,6 @@ jobs:
     name: preflight ${{ inputs.server }}
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
-    outputs:
-      tools_before: ${{ steps.state.outputs.tools }}
-      last_synced: ${{ steps.state.outputs.last_synced }}
     env:
       # READ credential. This job exists to be looked at before anyone approves
       # anything, the same split cloudflare-apply.yml makes between plan and
@@ -89,6 +86,12 @@ jobs:
     name: flip ${{ inputs.server }}
     needs: preflight
     runs-on: ubuntu-latest
+    outputs:
+      # The baseline `verify` waits to move. Taken AFTER the restore, not from
+      # preflight: the bearer flip moves `last_synced` itself, so a pre-flip
+      # value is already stale and verify would read it as "moved" the instant
+      # it starts — a check that passes without a sign-in having happened.
+      last_synced: ${{ steps.flip.outputs.last_synced_after_restore }}
     # THE approval, and it is before anything is written. `cloudflare-apply` is
     # where CF_APPLY_TOKEN_PORTAL lives (Account -> MCP Portals -> Edit), so the
     # environment issues the credential and takes the approval in one.
@@ -135,26 +138,55 @@ jobs:
           RUN_ID: ${{ github.run_id }}
         run: .github/scripts/portal-resnapshot-flip.sh
 
+      # The catalogue as it was, for `verify` to prove the snapshot moved. An
+      # artifact, unlike the registration: this is tool names, schemas and
+      # annotations, which already live in each owning repository's
+      # docs/portal-allowlist.json. The registration does not, which is why it
+      # goes to Vault instead.
+      - name: Publish the pre-flip catalogue
+        if: steps.flip.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: portal-catalogue-before-${{ inputs.server }}
+          path: ${{ runner.temp }}/portal-resnapshot/before.json
+          retention-days: 7
+          if-no-files-found: error
+
       # The window is open from here. Announced on the channel an operator
       # actually watches, because the next job measures rather than waits for a
       # click: nobody is going to be prompted.
+      # THREE outcomes, not two, and they are different instructions.
+      #
+      # A failure BEFORE the flip step ran — the Vault canary refused, the
+      # checkout failed — touched nothing: the server is exactly as it was and
+      # the right action is to fix the cause and dispatch again. A failure
+      # INSIDE the flip step is the dangerous one: the registration may be
+      # cleared, and the recovery is the Vault copy. Collapsing them into "the
+      # job failed" sends an operator to look for damage that does not exist,
+      # or worse, not to look for damage that does.
+      #
+      # `steps.flip.outcome` is what separates them: `skipped` when an earlier
+      # step failed, `failure` when this one did.
       - name: Announce the sign-in window
         if: always()
         uses: appleboy/telegram-action@390cf7345777cd821dba28c72f436a78bce19cc5 # master 2026-05
         with:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          # HTML rather than the default Markdown: an unpaired underscore in a
+          # server or tool name makes Telegram reject the whole message with a
+          # 400, losing the alert exactly when it matters.
           format: html
           message: |
             <b>Portal re-snapshot</b> — <code>${{ inputs.server }}</code>
-            ${{ job.status == 'success'
-             && 'Server is in <b>Waiting</b> and unusable until someone signs it out and back in on the portal server-selection page. Do it now — the verify job is already counting down.'
-             || 'Flip job ended <b>' }}${{ job.status == 'success' && '' || format('{0}</b>. Check whether the registration was restored before touching anything else.', job.status) }}
+            ${{ steps.flip.outcome == 'success' && 'Server is in <b>Waiting</b> and unusable until someone signs it out and back in on the portal server-selection page. Do it now — verify is already counting down.' || '' }}
+            ${{ steps.flip.outcome == 'failure' && format('<b>Failed during the flip.</b> The registration may be cleared and the server unusable. The backup is in Vault at <code>secret/platform/portal-resnapshot/{0}</code> — restore it by hand before anything else.', inputs.server) || '' }}
+            ${{ (steps.flip.outcome != 'success' && steps.flip.outcome != 'failure') && 'Stopped <b>before</b> the flip; nothing was written and the server is untouched.' || '' }}
             <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">run</a>
 
   verify:
     name: verify ${{ inputs.server }}
-    needs: [preflight, flip]
+    needs: flip
     runs-on: ubuntu-latest
     env:
       CF_TOKEN: ${{ secrets.CF_PORTAL_READ_TOKEN }}
@@ -171,7 +203,7 @@ jobs:
         id: wait
         env:
           SERVER: ${{ inputs.server }}
-          LAST_SYNCED_BEFORE: ${{ needs.preflight.outputs.last_synced }}
+          LAST_SYNCED_BEFORE: ${{ needs.flip.outputs.last_synced }}
         run: .github/scripts/portal-resnapshot-wait.sh
 
       # An IDENTICAL catalogue is a failure, not a pass: it means the snapshot
@@ -179,10 +211,16 @@ jobs:
       # annotations travel in the snapshot too and `readOnlyHint` is a
       # structural claim this platform acts on — a projection down to names
       # would call a changed annotation "no change".
+      - name: Fetch the pre-flip catalogue
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: portal-catalogue-before-${{ inputs.server }}
+          path: ${{ runner.temp }}/before
+
       - name: Diff the catalogue
         env:
           SERVER: ${{ inputs.server }}
-          TOOLS_BEFORE: ${{ needs.preflight.outputs.tools_before }}
+          BEFORE_JSON: ${{ runner.temp }}/before/before.json
         run: .github/scripts/portal-resnapshot-diff.sh
 
       # The end state, checked by the same detector that found the problem.

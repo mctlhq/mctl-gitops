@@ -31,10 +31,10 @@ if [ "$tools" -eq 0 ]; then
   exit 1
 fi
 
-{
-  echo "tools=${tools}"
-  echo "last_synced=${last}"
-} >> "$GITHUB_OUTPUT"
+# No job outputs. This job exists to be READ before the approval, not to feed
+# the later ones: the flip moves `last_synced` and rewrites the catalogue, so
+# every value here is stale by the time anything compares against it. `verify`
+# takes its baseline from the flip job, after the restore.
 
 {
   echo "### Portal re-snapshot preflight — \`${SERVER}\`"

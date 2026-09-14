@@ -16,8 +16,13 @@ jwt=$(curl -sS -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
   "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=vault" | jq -r '.value')
 [ -n "$jwt" ] && [ "$jwt" != "null" ] || { echo "::error::no OIDC token"; exit 1; }
 
-token=$(curl -sS --fail-with-body -X POST "${VAULT_ADDR}/v1/auth/jwt/login" \
-  --json "$(jq -n --arg jwt "$jwt" '{role: "mctl-gitops", jwt: $jwt}')" \
+# Through STDIN, not argv: a command line is world-readable in /proc, and this
+# one would carry the OIDC assertion. The same habit the `cf` helper follows
+# for the API token, and the reason it is worth following in a script an
+# operator also copies.
+token=$(jq -n --arg jwt "$jwt" '{role: "mctl-gitops", jwt: $jwt}' \
+  | curl -sS --fail-with-body -X POST "${VAULT_ADDR}/v1/auth/jwt/login" \
+      -H 'content-type: application/json' --data-binary @- \
   | jq -r '.auth.client_token')
 [ -n "$token" ] && [ "$token" != "null" ] || { echo "::error::Vault JWT login failed"; exit 1; }
 echo "::add-mask::${token}"
@@ -25,9 +30,10 @@ echo "VAULT_TOKEN=${token}" >> "$GITHUB_ENV"
 
 path="platform/portal-resnapshot/${SERVER}"
 canary="canary-$(date -u +%s)"
-curl -sS --fail-with-body -H "X-Vault-Token: ${token}" \
-  -X POST "${VAULT_ADDR}/v1/secret/data/${path}" \
-  --json "$(jq -n --arg c "$canary" '{data: {canary: $c}}')" >/dev/null
+jq -n --arg c "$canary" '{data: {canary: $c}}' \
+  | curl -sS --fail-with-body -H "X-Vault-Token: ${token}" \
+      -H 'content-type: application/json' \
+      -X POST "${VAULT_ADDR}/v1/secret/data/${path}" --data-binary @- >/dev/null
 
 read_back=$(curl -sS --fail-with-body -H "X-Vault-Token: ${token}" \
   "${VAULT_ADDR}/v1/secret/data/${path}" | jq -r '.data.data.canary')

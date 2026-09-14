@@ -1,14 +1,30 @@
 #!/usr/bin/env bash
-# Step 4: the catalogue actually moved.
+# Step 4: prove the snapshot actually moved.
 #
-# An IDENTICAL catalogue is a FAILURE, not a pass: it means the snapshot never
-# moved, whatever `last_synced` says. That is the whole reason this workflow
-# exists, so it is the one outcome that must not read as success.
+# An IDENTICAL catalogue is a FAILURE, not a pass. That is the outcome this
+# whole procedure exists to prevent — `last_synced` moving while the stored
+# tools do not is exactly what a flip that did nothing looks like — so it is
+# the one result that must not read as success.
+#
+# The first version of this script compared the tool COUNT and printed a
+# warning, on the reasoning that "the real check is the drift detector". That
+# was wrong: the detector compares the snapshot's tool NAMES against each
+# owning repository's allowlist, so it is blind to a tool whose schema or
+# annotations changed under an unchanged name — and blind to nothing having
+# changed at all whenever the allowlist already agrees with the old snapshot.
+# A warning is also not a verdict, and the pull request describing this
+# workflow claimed a failure. Two answers to one question, which is the defect
+# this repository keeps finding.
+#
+# WHOLE tool objects, because annotations travel in the snapshot and
+# `readOnlyHint` is a structural claim this platform acts on: a projection down
+# to names and schemas would call a changed annotation "no change".
 set -euo pipefail
 # shellcheck source=.github/scripts/portal-resnapshot-lib.sh
 . "$(dirname "$0")/portal-resnapshot-lib.sh"
 assert_server_id
-: "${TOOLS_BEFORE:?}"
+: "${BEFORE_JSON:?the pre-flip catalogue from the flip job}"
+test -s "$BEFORE_JSON"
 
 after=$(cf); printf '%s' "$after" | ok
 
@@ -19,19 +35,36 @@ after=$(cf); printf '%s' "$after" | ok
 printf '%s' "$after" | jq -e '(.result.tools | type) == "array" and (.result.tools | length) > 0' >/dev/null \
   || { echo "::error::the portal holds no tools: the sign-in did not complete"; exit 1; }
 
-count=$(printf '%s' "$after" | jq '.result.tools | length')
+work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
+printf '%s' "$after" | jq -S '[.result.tools[]] | sort_by(.name)' > "$work/after.json"
+
+before_n=$(jq 'length' "$BEFORE_JSON")
+after_n=$(jq 'length' "$work/after.json")
+last=$(printf '%s' "$after" | jq -r '.result.last_synced')
+
+if cmp -s "$BEFORE_JSON" "$work/after.json"; then
+  echo "::error::the catalogue is byte-identical to the pre-flip snapshot (${after_n} tools, last_synced=${last}). The snapshot did not move: whoever signed in was shown the same tools/list, or the sign-in landed on a different server."
+  exit 1
+fi
+
+# Names only in the summary. The full objects carry schemas, which are long and
+# are already in the owning repository's allowlist; what an operator wants here
+# is which tools arrived and which left.
+added=$(jq -r -n --slurpfile a "$BEFORE_JSON" --slurpfile b "$work/after.json" \
+  '($b[0] | map(.name)) - ($a[0] | map(.name)) | join(", ")')
+removed=$(jq -r -n --slurpfile a "$BEFORE_JSON" --slurpfile b "$work/after.json" \
+  '($a[0] | map(.name)) - ($b[0] | map(.name)) | join(", ")')
+
 {
   echo "### Portal catalogue — \`${SERVER}\`"
   echo
-  echo "\`${TOOLS_BEFORE}\` tools before, \`${count}\` after."
+  echo "\`${before_n}\` tools before, \`${after_n}\` after. \`last_synced=${last}\`"
+  echo
+  echo "| | |"
+  echo "| --- | --- |"
+  echo "| added | ${added:-_none_} |"
+  echo "| removed | ${removed:-_none_} |"
+  [ -z "$added" ] && [ -z "$removed" ] && echo && echo "No name changed; something in a tool's schema or annotations did."
 } >> "$GITHUB_STEP_SUMMARY"
 
-if [ "$count" -eq "$TOOLS_BEFORE" ]; then
-  # Same COUNT is not the same catalogue -- a tool can be replaced, or only its
-  # schema or annotations changed -- so this is a warning here and the real
-  # check is the byte comparison the drift detector makes against the
-  # allowlist. What is NOT tolerable is nothing having changed at all, and
-  # that is what the detector answers.
-  echo "::warning::the tool count did not change (${count}); if this release was supposed to add one, the snapshot did not move"
-fi
-echo "last_synced=$(printf '%s' "$after" | jq -r '.result.last_synced')"
+echo "catalogue moved: ${before_n} -> ${after_n} tools, last_synced=${last}"
