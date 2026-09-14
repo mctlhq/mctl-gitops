@@ -22,6 +22,20 @@ work=$(mktemp -d)
 # copy is the only way back. So the marker is written BEFORE the destructive
 # PUT and survives into the trap, which reports it on every exit path
 # including the signals a cancellation actually arrives as.
+# ON DISK, not only in a shell variable. A cancelled job kills the step, and
+# the workflow's own announce step -- which is what actually reaches a human --
+# can only see `steps.flip.outcome`, which for a cancellation is `cancelled`
+# whichever side of the destructive PUT it landed on. Reading the outcome
+# alone, the announce told an operator "nothing was written" for a run that had
+# already cleared the registration.
+#
+# A file survives the step and is readable by every later `if: always()` step,
+# so the marker the shell keeps and the marker the workflow reports are the
+# same fact.
+MARKERS="${RUNNER_TEMP:-/tmp}/portal-resnapshot"
+mkdir -p "$MARKERS"
+rm -f "$MARKERS/flipped" "$MARKERS/restored"
+
 flipped=no
 on_exit() {
   rc=$?
@@ -81,6 +95,7 @@ echo "registration backed up to ${VAULT_BACKUP_PATH}"
 #    reporting the flip as done.
 echo "::warning::${SERVER} is now going offline until someone signs it back in"
 flipped=yes
+: > "$MARKERS/flipped"
 cf -X PUT --json '{"auth_type":"bearer","auth_credentials":"resnapshot-not-a-token"}' | ok
 gone=$(cf); printf '%s' "$gone" | ok
 printf '%s' "$gone" | jq -e '.result.auth_config_summary == null' >/dev/null
@@ -90,6 +105,7 @@ printf '%s' "$gone" | jq -e '.result.auth_config_summary == null' >/dev/null
 cf -X PUT --json "@$work/restore.json" | ok
 cf | jq -e '.result.status == "waiting" and .result.auth_config_summary.auth_mode == "manual"' >/dev/null
 restored=yes
+: > "$MARKERS/restored"
 
 # 2a. and that it is the SAME registration, field for field. status+auth_mode
 #     only say a manual-OAuth registration exists; this API is on record

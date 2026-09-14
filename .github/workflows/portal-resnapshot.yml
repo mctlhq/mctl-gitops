@@ -151,6 +151,12 @@ jobs:
       # goes to Vault instead.
       - name: Publish the pre-flip catalogue
         if: steps.flip.outcome == 'success'
+        # A failed upload must not fail this job. It runs AFTER the destructive
+        # flip, and failing here skips `verify` — which `needs: flip` — and
+        # `verify` is the only thing bounding how long the server stays down.
+        # Losing the byte comparison costs a red `verify` with the server
+        # restored; losing `verify` costs an unbounded outage.
+        continue-on-error: true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: portal-catalogue-before-${{ inputs.server }}
@@ -161,6 +167,22 @@ jobs:
       # The window is open from here. Announced on the channel an operator
       # actually watches, because the next job measures rather than waits for a
       # click: nobody is going to be prompted.
+      # Read the MARKERS, not `steps.flip.outcome`. For a cancelled job the
+      # outcome is `cancelled` whichever side of the destructive PUT it landed
+      # on, so an outcome-only reading told an operator "nothing was written"
+      # for a run that had already cleared the registration. The flip script
+      # touches these files either side of the PUT, and a file survives the
+      # killed step.
+      - name: Read what actually happened
+        if: always()
+        id: marks
+        run: |
+          set -euo pipefail
+          m="${RUNNER_TEMP}/portal-resnapshot"
+          { echo "flipped=$([ -e "$m/flipped" ] && echo yes || echo no)"
+            echo "restored=$([ -e "$m/restored" ] && echo yes || echo no)"
+          } >> "$GITHUB_OUTPUT"
+
       # THREE outcomes, not two, and they are different instructions.
       #
       # A failure BEFORE the flip step ran — the Vault canary refused, the
@@ -191,9 +213,9 @@ jobs:
           format: html
           message: |
             <b>Portal re-snapshot</b> — <code>${{ inputs.server }}</code>
-            ${{ steps.flip.outcome == 'success' && 'Server is in <b>Waiting</b> and unusable until someone signs it out and back in on the portal server-selection page. Do it now — verify is already counting down.' || '' }}
-            ${{ steps.flip.outcome == 'failure' && format('<b>Failed during the flip.</b> The registration may be cleared and the server unusable. The backup is in Vault at <code>secret/platform/portal-resnapshot/{0}</code> — restore it by hand before anything else.', inputs.server) || '' }}
-            ${{ (steps.flip.outcome != 'success' && steps.flip.outcome != 'failure') && 'Stopped <b>before</b> the flip; nothing was written and the server is untouched.' || '' }}
+            ${{ steps.marks.outputs.restored == 'yes' && 'Server is in <b>Waiting</b> and unusable until someone signs it out and back in on the portal server-selection page. Do it now — verify is already counting down. While it is Waiting it reports NO tools, so do not reconnect any MCP client until this is done: a client that refreshes now caches an empty catalogue and keeps it until it is removed and re-added.' || '' }}
+            ${{ (steps.marks.outputs.flipped == 'yes' && steps.marks.outputs.restored != 'yes') && format('<b>The registration is CLEARED and was not restored.</b> {0} is unusable. The backup is in Vault at <code>secret/platform/portal-resnapshot/{0}</code> — restore it by hand before anything else.', inputs.server) || '' }}
+            ${{ steps.marks.outputs.flipped != 'yes' && 'Stopped <b>before</b> the flip; nothing was written and the server is untouched.' || '' }}
             <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">run</a>
 
   verify:
@@ -224,6 +246,11 @@ jobs:
       # structural claim this platform acts on — a projection down to names
       # would call a changed annotation "no change".
       - name: Fetch the pre-flip catalogue
+        # Its absence is survivable and its failure must not skip the WAIT:
+        # the upload that produces it is itself `continue-on-error`, for the
+        # same reason. `diff.sh` says it could not compare rather than passing
+        # quietly — a red run with the server restored, not an unbounded one.
+        continue-on-error: true
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: portal-catalogue-before-${{ inputs.server }}
@@ -241,23 +268,14 @@ jobs:
       # belongs in the same diff as the tool. A new tool arriving here still
       # needs its owning repository's scripts/portal-allowlist-apply.sh, and
       # the detector is what says so rather than this file guessing.
-      - name: Catalogue drift must be green
+      - name: Catalogue drift must be green for this server
         env:
+          SERVER: ${{ inputs.server }}
           # THE NAME THE SCRIPT READS. `portal-catalogue-drift.py` takes
-          # `CLOUDFLARE_API_TOKEN` and exits 2 before its first API call
-          # without it — so the final gate would have failed on every run, for
-          # a reason having nothing to do with the catalogue, after the outage
-          # had already happened. The job's own `CF_TOKEN` is what the `cf`
-          # helper in the shell scripts reads; they are two consumers with two
-          # names and both have to be fed.
+          # `CLOUDFLARE_API_TOKEN`; the job's own `CF_TOKEN` is what the `cf`
+          # helper reads. Two consumers, two names, and both have to be fed.
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_PORTAL_READ_TOKEN }}
-        run: |
-          set -euo pipefail
-          python3 scripts/portal-catalogue-drift.py || {
-            code=$?
-            echo "::error::catalogue drift exit ${code}; if new tools arrived, run scripts/portal-allowlist-apply.sh in the owning repository and re-run this check"
-            exit "${code}"
-          }
+        run: .github/scripts/portal-resnapshot-drift-gate.sh
 
       - name: Notify Telegram
         if: failure()

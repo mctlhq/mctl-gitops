@@ -24,7 +24,14 @@ set -euo pipefail
 . "$(dirname "$0")/portal-resnapshot-lib.sh"
 assert_server_id
 : "${BEFORE_JSON:?the pre-flip catalogue from the flip job}"
-test -s "$BEFORE_JSON"
+if [ ! -s "$BEFORE_JSON" ]; then
+  # The artifact is missing, which its own upload step tolerates on purpose:
+  # failing that step would skip this job, and this job is the only bound on
+  # the outage. So the comparison is lost and the run is red for it -- but the
+  # WAIT above has already happened, which is the part that mattered.
+  echo "::error::the pre-flip catalogue is missing, so it cannot be proved the snapshot moved. The sign-in completed (the wait above passed); compare ${SERVER}'s tools against the previous run by hand."
+  exit 1
+fi
 
 after=$(cf); printf '%s' "$after" | ok
 
