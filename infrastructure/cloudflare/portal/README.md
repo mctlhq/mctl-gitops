@@ -189,6 +189,30 @@ so the second `PUT` must resend the full `auth_credentials` blob **and** a
 `client_secret` (a switch *to* manual requires one; any non-empty value works
 with `token_endpoint_auth_method: none`, and it bumps `client_secret_version`).
 
+### Running it
+
+`.github/workflows/portal-resnapshot.yml` is what runs this, and it is the
+thing to dispatch. The blocks below stay as the REASONING — every step in the
+workflow points at the paragraph here that explains why it is shaped that way —
+and as the manual fallback for a day when Actions is not available.
+
+Two differences between the workflow and the hand procedure, both deliberate:
+
+- The workflow takes **one** approval, before the destructive half, on the
+  `cloudflare-apply` environment. `mctlhq/mctl-gitops#1258` proposed a second
+  approval afterwards meaning "I have signed in"; the workflow measures that
+  instead — `status: ready` with a moved `last_synced` is the same claim, and
+  it fails on a bounded timeout, which an approval nobody clicks does not.
+- The restoration body goes to **Vault** (`secret/platform/portal-resnapshot/<server>`)
+  before the flip, not just to a file, and the run proves that path is writable
+  first. A runner that dies in the window would otherwise take the only copy of
+  the registration with it — and for `api` and `seerrsense` nothing else
+  records it.
+
+Approving the flip is approving an **outage**: the server is unusable from that
+moment until a person signs it back in. Whoever approves should be the person
+who is about to do that.
+
 ### Recipe
 
 Four things in here are load-bearing, each for a measured reason.
