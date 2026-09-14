@@ -228,12 +228,13 @@ reading the script in the clone — see design.md, "Platform impact").
    list. This is the same shape of gap the issue's own section G records for
    `check-no-metrics.mjs`. **The approver should read Appendix H before
    approving.**
-4. **`issue_opened_at` for the journal entry.** The implementer cannot read
-   the issue, so Appendix J fixes the value at `'2026-09-14T00:00:00Z'`. If
-   issue #108 was opened at a different instant, the approver should correct
-   the literal in Appendix J before approving; nothing else depends on it
-   (the only ordering constraint is that it is not later than
-   `proposal_approved_at`, which `scripts/close-journal.mjs` writes later).
+4. **`issue_opened_at` for the journal entry — corrected by the approver.**
+   Issue #108's actual `createdAt` is `2026-09-13T22:48:25Z` (`gh issue view
+   108 --json createdAt`); Appendix J is corrected to that value below,
+   replacing the implementer-unreachable placeholder this proposal
+   originally computed. This is the same reading Q17 (portfolio#105)
+   establishes as the convention: the issue's own creation instant, not a
+   round or guessed value.
 5. **`dist/index.html`'s 40 KB cap.** `MAX_INDEX_BYTES` in
    `scripts/check-dist.mjs` is 40 KB. The net markup delta here is small
    (roughly +900 bytes of SVG and hidden spans, minus roughly 400 bytes of
@@ -691,7 +692,7 @@ decided:
   en: "The header's language and theme controls were still the Q16 segmented pill: two <div class=\"toggle-group\"> wrappers per control, one per CSS stance, each holding two buttons joined by an internal divider, with role=group, a shared aria-labelledby and aria-pressed on the segments. On a phone that reads as a control panel wedged into the navigation line. This cycle replaces each control with a single 32x32px bordered button: one carrying a hand-authored sun or moon glyph, one carrying an EN or RU label, both naming the state that is currently active rather than the destination a click leads to. Because the site renders every page once per stance and hides the inactive half with CSS, a hardcoded aria-label would be read aloud in the wrong language, so each button keeps the site's existing pattern -- aria-labelledby pointing at its own visually-hidden bilingual span -- even though a single button is no longer part of a set. Nav.astro, Base.astro's delegated click listener and .toggle-bar's own CSS are untouched; the whole toggle-groups CSS region and the separate 32px tap-target rule are replaced by one .icon-toggle block that declares no overflow, so the global focus ring stays unclipped, and no per-class focus override was added. Three build gates moved with the markup: check-no-metrics.mjs gained an ALLOW entry for the SVG's fractional coordinates, computed by running the gate's own matcher rather than estimated; check-contrast.mjs learned to resolve the surface-card token the new button background uses and now checks surface-fg-muted over it at the 4.5:1 text minimum in both themes, taking its checked total from twenty-seven pairs to twenty-nine; and check-dist.mjs's approach-page SVG audit, which asserted role=img and a title/desc pair on every inline SVG on that page, was narrowed to the DevLoop cycle diagram's own cycle-svg class, so a decorative aria-hidden glyph in the shared header can neither fail an audit written for the diagram nor eat its 12 KB byte budget."
   ru: "Переключатели языка и темы в шапке всё ещё были сегментированной плашкой из Q16: по два <div class=\"toggle-group\"> на контрол, по одному на каждое CSS-состояние, в каждом две кнопки, разделённые внутренней линией, с role=group, общим aria-labelledby и aria-pressed на сегментах. На телефоне это читалось как пульт управления, втиснутый в строку навигации. Этот цикл заменяет каждый контрол одной кнопкой 32x32px с рамкой: одна несёт нарисованную вручную иконку солнца или луны, другая — надпись EN или RU, и обе показывают состояние, активное прямо сейчас, а не то, куда ведёт клик. Поскольку сайт рендерит каждую страницу один раз на состояние и прячет неактивную половину через CSS, жёстко заданный aria-label читался бы вслух не на том языке, поэтому каждая кнопка сохраняет уже принятый на сайте приём — aria-labelledby, указывающий на собственный visually-hidden двуязычный span, — даже несмотря на то, что одиночная кнопка больше не входит в группу. Nav.astro, делегированный обработчик кликов в Base.astro и собственный CSS .toggle-bar не тронуты; весь блок toggle groups и отдельное правило тап-таргета в 32px заменены одним блоком .icon-toggle, который не объявляет overflow, поэтому глобальное кольцо фокуса не обрезается, и отдельного правила фокуса для класса не добавлено. Вместе с разметкой сдвинулись три контрольных скрипта: check-no-metrics.mjs получил запись ALLOW для дробных координат SVG, вычисленную запуском собственного матчера гейта, а не на глаз; check-contrast.mjs научился резолвить токен surface-card, который использует новый фон кнопки, и теперь проверяет surface-fg-muted поверх него по порогу 4.5:1 для текста в обеих темах, доводя число проверяемых пар с двадцати семи до двадцати девяти; а проверка SVG на странице approach в check-dist.mjs, требовавшая role=img и пары title/desc от каждого встроенного SVG на этой странице, сужена до собственного класса cycle-svg диаграммы DevLoop, чтобы декоративная иконка с aria-hidden в общей шапке не могла ни провалить аудит, написанный для диаграммы, ни съесть её бюджет в 12 КБ."
 interventions: []
-issue_opened_at: '2026-09-14T00:00:00Z'
+issue_opened_at: '2026-09-13T22:48:25Z'
 ---
 ```
 
