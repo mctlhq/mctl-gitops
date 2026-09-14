@@ -32,15 +32,25 @@ printf '%s\n' "$out"
 # module, an OOM kill. The final gate of a procedure that just took a
 # production server down must not report the end state good having compared
 # nothing, and only positive evidence rules that out.
+# NON-ZERO, and `${code:-1}` was not that. `:-` substitutes only on
+# unset-or-empty, and on a clean detector run `code` is the STRING "0" -- so
+# both branches below printed their `::error::` and exited 0, passing the step
+# and reporting the end state good having compared nothing. Verbatim the
+# outcome the paragraph above says positive evidence was chosen to rule out,
+# and unreachable today only because of how the detector happens to order its
+# own exit codes: the same coupling, moved from a grep into an exit status.
+fail() {
+  echo "::error::$1"
+  [ "${code:-0}" -ne 0 ] && exit "$code"
+  exit 1
+}
+
 compared=$(printf '%s\n' "$out" | grep -E '^compared: ' || true)
 if [ -z "$compared" ]; then
-  echo "::error::the catalogue detector produced no \"compared:\" line (exit ${code}): it never compared ${SERVER}, whatever else it printed. Nothing here has been verified."
-  exit "${code:-1}"
+  fail "the catalogue detector produced no \"compared:\" line (exit ${code}): it never compared ${SERVER}, whatever else it printed. Nothing here has been verified."
 fi
-printf '%s\n' "$compared" | grep -qE "(^|[ ,])${SERVER}=" || {
-  echo "::error::the detector compared servers but not ${SERVER}: ${compared}"
-  exit "${code:-1}"
-}
+printf '%s\n' "$compared" | grep -qE "(^|[ ,])${SERVER}=" \
+  || fail "the detector compared servers but not ${SERVER}: ${compared}"
 
 if [ "$code" -eq 0 ]; then
   echo "catalogue drift is clean account-wide"

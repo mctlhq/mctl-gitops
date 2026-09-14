@@ -273,8 +273,17 @@ jobs:
       # only delays the right message by the full deadline.
       - name: Refuse to wait on a server with no registration
         if: needs.flip.outputs.restored != 'yes'
+        # Through `env:`, like every other shell consumer in this file, and for
+        # the reason portal-resnapshot-lib.sh states: `type: choice` constrains
+        # the UI, not the API, so a dispatch through `gh api` can send anything
+        # and `${{ }}` is substituted before bash parses the line. This was the
+        # only `run:` here that interpolated the input into the script text,
+        # which left the file holding two answers to whether that premise is
+        # true.
+        env:
+          SERVER: ${{ inputs.server }}
         run: |
-          echo "::error::${{ inputs.server }} was flipped and NOT restored: the registration is cleared and no sign-in is possible. Restore from Vault at secret/platform/portal-resnapshot/${{ inputs.server }} by hand."
+          echo "::error::${SERVER} was flipped and NOT restored: the registration is cleared and no sign-in is possible. Restore from Vault at secret/platform/portal-resnapshot/${SERVER} by hand."
           exit 1
 
       - name: Wait for the sign-in
@@ -328,7 +337,17 @@ jobs:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           format: html
+          # THREE states, because "may still be in Waiting" is wrong on two of
+          # them and sends an operator to the portal UI for a problem the
+          # portal UI cannot fix.
+          #
+          # The cleared-registration path's timing was fixed last commit and its
+          # MESSAGE was not: the recovery there is Vault, not a sign-in. And
+          # the steps after the wait can only fail once the sign-in has already
+          # happened, so asserting Waiting for them is false too.
           message: |
             <b>Portal re-snapshot FAILED to verify</b> — <code>${{ inputs.server }}</code>
-            The server may still be in <b>Waiting</b>, i.e. unusable.
+            ${{ needs.flip.outputs.restored != 'yes' && format('The registration is <b>cleared</b>, not merely unauthorized — a sign-in cannot fix it. Restore from Vault at <code>secret/platform/portal-resnapshot/{0}</code>.', inputs.server) || '' }}
+            ${{ (needs.flip.outputs.restored == 'yes' && steps.wait.outcome == 'failure') && 'The server is still in <b>Waiting</b> and unusable: nobody completed the upstream sign-in, or it could not be read. The run says which.' || '' }}
+            ${{ (needs.flip.outputs.restored == 'yes' && steps.wait.outcome == 'success') && 'The sign-in <b>completed</b> and the server is usable; the catalogue or drift check is what failed. No portal action needed — read the run.' || '' }}
             <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">run</a>
