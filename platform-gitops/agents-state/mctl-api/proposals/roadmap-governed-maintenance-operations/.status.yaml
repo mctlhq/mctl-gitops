@@ -1,0 +1,9 @@
+status: proposed
+updated_at: '2026-09-14T10:15:00Z'
+updated_by: mashkovd
+control:
+  requires_human_approval: true
+notes: >-
+  Manual platform proposal created from the Roadmap Control Plane portfolio-hygiene review.
+  Related to mctlhq/.github#66 and implementation slice #68. Do not approve or
+  implement until read-only reconciliation #67 has proven the detector.
