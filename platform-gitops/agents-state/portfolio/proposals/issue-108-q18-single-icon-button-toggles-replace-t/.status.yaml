@@ -1,6 +1,6 @@
-status: needs-triage
-updated_at: '2026-09-14T06:13:00Z'
-updated_by: mctl-agents[bot]
+status: proposed
+updated_at: '2026-09-14T06:30:00Z'
+updated_by: mashkovd
 source:
   type: github_issue
   repo: mctlhq/portfolio
@@ -8,16 +8,3 @@ source:
   url: https://github.com/mctlhq/portfolio/issues/108
 control:
   requires_human_approval: true
-approval:
-  approved_by: mashkovd
-  approved_at: '2026-09-14T06:01:24Z'
-attempt:
-  id: 017b72d1-8067-4bce-bb93-e95adf879a36
-  started_at: '2026-09-14T06:12:55Z'
-  expires_at: '2026-09-14T08:22:55Z'
-  finished_at: '2026-09-14T06:13:00Z'
-failure:
-  code: no-commits
-  stage: agent
-  message: implementer produced no commits
-notes: 'agent: implementer produced no commits'
