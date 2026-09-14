@@ -22,8 +22,9 @@ metadata:
            NOTHING. Review every row against the store and live Temporal.
         2. dry_run=false — writes the rows the report planned.
 
-      A dry run works in any rollout mode. An APPLY refuses unless the worker
-      is already at LIFECYCLE_ROLLOUT_MODE=observe, and exits 2 saying so:
+      A dry run works in any rollout mode. An APPLY additionally needs
+      `-p rollout_mode=observe` — the operator attesting that the mctl-agents
+      worker is already flipped. Without it bootstrap.py exits 2, because
       below observe the DevLoopWorkflow's ownership activity short-circuits, so
       a row written here for a devloop-workflow owner would never be
       heartbeated, progressed or released by the workflow it names. It would
@@ -64,6 +65,9 @@ metadata:
           -p agent_image=ghcr.io/mctlhq/mctl-agents:<version with bootstrap.py> \
           -p dry_run=true
 
+      and, for the apply, additionally -p rollout_mode=observe. That is an
+      attestation and not a check: this pod cannot see the worker's mode.
+
       agent_image has no default on purpose: the module does not exist in any
       released image yet, so there is no value that could work. Argo refuses
       the submission by name rather than failing inside the container on a
@@ -101,6 +105,22 @@ spec:
         # The DEFAULT, and deliberately the safe one. bootstrap.py requires
         # --apply to write anything, so an operator who submits this template
         # with no parameters at all gets a report and no writes.
+      - name: rollout_mode
+        value: "off"
+        # The operator's ATTESTATION that the mctl-agents worker is already at
+        # LIFECYCLE_ROLLOUT_MODE=observe — not a verification of it. This
+        # parameter sets the variable in THIS pod, and the hazard it guards is
+        # the WORKER's mode, which this pod cannot see.
+        #
+        # Without it --apply is unreachable in production: bootstrap.py refuses
+        # to write below observe and exits 2, and nothing else in this template
+        # sets the variable. With it, an apply is a deliberate two-part
+        # statement — dry_run=false AND rollout_mode=observe — rather than
+        # something a default carried in unnoticed.
+        #
+        # Defaults to "off" so a submission that forgets it refuses rather than
+        # writes. The value is echoed into the report, so what was claimed is
+        # on the record beside what it licensed.
       - name: agent_image
         # NO DEFAULT, deliberately, and unlike every sibling template.
         #
@@ -214,6 +234,8 @@ spec:
         env:
           - name: WORKFLOW_DRY_RUN
             value: "{{workflow.parameters.dry_run}}"
+          - name: LIFECYCLE_ROLLOUT_MODE
+            value: "{{workflow.parameters.rollout_mode}}"
           - name: STATE_DIR
             value: /workdir/mctl-gitops/platform-gitops/agents-state
           # The ownership store is admin-gated: GET /lifecycle/ownership/batch
