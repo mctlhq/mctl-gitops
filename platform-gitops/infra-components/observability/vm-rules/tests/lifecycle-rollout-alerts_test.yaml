@@ -140,6 +140,53 @@ tests:
         exp_alerts: []
 
   # ---------------------------------------------------------------------
+  # LifecycleShadowSilent
+  # ---------------------------------------------------------------------
+  - interval: 1m
+    name: a compare that emits nothing fires after an hour
+    input_series: []
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: LifecycleShadowSilent
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              mctl_agent_self: "true"
+            exp_annotations:
+              summary: "Lifecycle shadow compare has emitted nothing for an hour"
+              description: >-
+                No shadow comparison counters exist. Either
+                LIFECYCLE_ROLLOUT_MODE is not observe on the shepherd CWFT, or
+                the Promtail match block for namespace=argo-workflows is not
+                selecting the shepherd's pods. A silent compare reads as a
+                clean soak, which is the one way this measurement can be wrong
+                without looking wrong.
+
+  - interval: 1m
+    name: a live compare keeps it quiet
+    input_series:
+      - series: 'lifecycle_shadow_agree_total{namespace="argo-workflows"}'
+        values: '0+3x120'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: LifecycleShadowSilent
+        exp_alerts: []
+
+  - interval: 1m
+    name: a compare emitting only unknowns is NOT silent
+    input_series:
+      # What a BROKEN compare emits: a 403 on the admin-gated batch route
+      # answers store-unknown for every id. It is loud, and
+      # LifecycleShadowStoreUnknownHigh is the alert for it; this one must not
+      # also fire, or one fault raises two alerts naming different causes.
+      - series: 'lifecycle_shadow_store_unknown_total{namespace="argo-workflows"}'
+        values: '0+3x120'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: LifecycleShadowSilent
+        exp_alerts: []
+
+  # ---------------------------------------------------------------------
   # LifecycleClaimAbandoned
   # ---------------------------------------------------------------------
   - interval: 1m
