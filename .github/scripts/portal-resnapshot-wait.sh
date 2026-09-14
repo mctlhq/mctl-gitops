@@ -12,7 +12,18 @@ set -euo pipefail
 . "$(dirname "$0")/portal-resnapshot-lib.sh"
 assert_server_id
 
-: "${LAST_SYNCED_BEFORE:?}"
+# NOT `${LAST_SYNCED_BEFORE:?}`. An empty baseline is a real answer — the API
+# can return no `last_synced` — and `:?` would kill this script on its first
+# line, AFTER the flip, removing the only bound on the outage for the sake of a
+# value the loop can do without: an empty baseline simply means any non-empty
+# `last_synced` counts as movement, which is the correct reading.
+#
+# The variable being UNSET is different and is a wiring error, so that is what
+# is refused. `set -u` would otherwise report it on line 28, mid-wait.
+if [ -z "${LAST_SYNCED_BEFORE+set}" ]; then
+  echo "::error::LAST_SYNCED_BEFORE is not set; the flip job did not publish its baseline"
+  exit 1
+fi
 DEADLINE_S=${DEADLINE_S:-1800}
 INTERVAL_S=${INTERVAL_S:-20}
 

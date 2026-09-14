@@ -169,6 +169,12 @@ jobs:
       # step failed, `failure` when this one did.
       - name: Announce the sign-in window
         if: always()
+        # A notifier that cannot reach Telegram must not fail this job. It
+        # would skip `verify` — which `needs: flip` — and `verify` is the only
+        # thing bounding how long the server stays down. Losing the
+        # announcement is bad; losing the bound because the announcement failed
+        # is the outcome this whole design exists to prevent.
+        continue-on-error: true
         uses: appleboy/telegram-action@390cf7345777cd821dba28c72f436a78bce19cc5 # master 2026-05
         with:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -230,6 +236,15 @@ jobs:
       # needs its owning repository's scripts/portal-allowlist-apply.sh, and
       # the detector is what says so rather than this file guessing.
       - name: Catalogue drift must be green
+        env:
+          # THE NAME THE SCRIPT READS. `portal-catalogue-drift.py` takes
+          # `CLOUDFLARE_API_TOKEN` and exits 2 before its first API call
+          # without it — so the final gate would have failed on every run, for
+          # a reason having nothing to do with the catalogue, after the outage
+          # had already happened. The job's own `CF_TOKEN` is what the `cf`
+          # helper in the shell scripts reads; they are two consumers with two
+          # names and both have to be fed.
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_PORTAL_READ_TOKEN }}
         run: |
           set -euo pipefail
           python3 scripts/portal-catalogue-drift.py || {
