@@ -137,6 +137,15 @@ spec:
             # pinning the operator CA; verify-full needs a copied CA secret
             # in this namespace (helm postgresCA) and can wait for CA sync.
             AUDIT_DB_URL: "postgresql://$(DB_USER):$(DB_PASSWORD)@shared-pg-rw.platform-db.svc:5432/mctl-api?sslmode=require"
+            # Lifecycle ownership store (ADR-010). Its OWN database, not
+            # mctl-api's: this is the source of truth for who may act on an
+            # entity, and cmd/api/main.go falls back to AUDIT_DB_URL when this
+            # is unset - which is how the tables ended up in mctl-api until
+            # now. The fallback makes a typo here silent: the store would come
+            # up *healthy* against the audit database, a 200 that means the
+            # wrong thing. Confirm on deploy that the lifecycle list read
+            # answers count: 0 against an empty mctl-lifecycle.
+            LIFECYCLE_DB_URL: "postgresql://$(DB_USER):$(DB_PASSWORD)@shared-pg-rw.platform-db.svc:5432/mctl-lifecycle?sslmode=require"
             # Traefik pod IPs (namespace traefik). X-Forwarded-For is trusted
             # for audit client IP only from these peers (SOC F20). Update if
             # Traefik replicas roll to new IPs.

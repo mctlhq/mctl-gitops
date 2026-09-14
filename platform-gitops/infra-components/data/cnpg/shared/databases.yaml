@@ -48,12 +48,38 @@ spec:
 # Backs three optional mctl-api stores (alerts, audit log, agent registry),
 # all initialised from AUDIT_DB_URL. Owner must be mctl-api: each store runs
 # CREATE TABLE IF NOT EXISTS on startup.
+#
+# The lifecycle ownership store is NOT one of them any more - it has its own
+# database below. Until LIFECYCLE_DB_URL was set, cmd/api/main.go fell back to
+# AUDIT_DB_URL and the ownership tables were created in here; those rows are
+# abandoned deliberately rather than migrated (pre-soak traffic from a client
+# with no production caller), and dropping the two tables is a follow-up.
 apiVersion: postgresql.cnpg.io/v1
 kind: Database
 metadata:
   name: mctl-api-db
 spec:
   name: "mctl-api"
+  owner: "mctl-api"
+  cluster:
+    name: shared-pg
+  databaseReclaimPolicy: retain
+---
+# Backs the lifecycle ownership store (mctl-api internal/lifecycle), read from
+# LIFECYCLE_DB_URL. Separate from mctl-api's database on purpose: this one is
+# the source of truth for who may act on an entity, so an audit-log restore,
+# vacuum or retention job must not be able to reach it.
+#
+# Owner must be mctl-api - the same role whose DB_USER/DB_PASSWORD already
+# reach the pod, so this needs no new ExternalSecret and no new Vault path -
+# and the store runs CREATE TABLE IF NOT EXISTS on startup, so an empty
+# database is the expected initial state.
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: mctl-lifecycle-db
+spec:
+  name: "mctl-lifecycle"
   owner: "mctl-api"
   cluster:
     name: shared-pg
