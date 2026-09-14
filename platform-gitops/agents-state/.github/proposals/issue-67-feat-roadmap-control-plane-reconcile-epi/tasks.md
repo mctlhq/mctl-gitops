@@ -28,8 +28,8 @@
 
 ## Tests
 
-- [ ] T0a. Phase-0 local ownership: one manifest binds `mctlhq/example#10` and `MCTLHQ/EXAMPLE#10` to two work items → duplicate binding failure.
-- [ ] T0b. Phase-0 corpus ownership: two manifests bind case variants of the same GitHub issue → corpus validation failure before any network request.
+- [ ] T0a. Phase-0 local ownership: one manifest binds the epic root to `mctlhq/example#10` and a work item to `MCTLHQ/EXAMPLE#10` → duplicate binding failure. This explicitly covers root↔work-item identity, not only work-item↔work-item.
+- [ ] T0b. Phase-0 corpus ownership: manifest A binds its epic root to `mctlhq/example#10` while manifest B binds a work item to `MCTLHQ/EXAMPLE#10` → corpus validation failure before any network request. This mixed root/work-item case proves the corpus collector canonicalizes every binding class.
 - [ ] T0c. Phase-0 external/local identity: `externalDependsOn` using a case variant of a locally bound issue → validation failure instructing the author to use `dependsOn`.
 - [ ] T1. Converged: `human-input.yaml` + `converged-fixture.json` produce zero drift-severity entries and exit 0.
 - [ ] T2. Hierarchy missing: drop one expected parent edge → exactly one `HierarchyMissingParent`, dependency collection unchanged, exit 1.
