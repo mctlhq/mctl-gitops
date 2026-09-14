@@ -52,6 +52,19 @@ spec:
     secondsAfterCompletion: 3600
   entrypoint: bootstrap
   serviceAccountName: argo-workflow-sa
+  # ghcr.io/mctlhq/mctl-agents is private. Without this the main container
+  # ImagePullBackOffs and the workflow never runs at all — the same block every
+  # other template pulling that image carries.
+  imagePullSecrets:
+    - name: ghcr-credentials
+  # Promtail maps these pod labels onto the Loki `app` and `team` labels. Argo
+  # pods without them cannot be found through mctl_get_service_logs, and the
+  # bootstrap's whole output is a report printed to stdout — a run nobody can
+  # read the logs of produced nothing.
+  podMetadata:
+    labels:
+      app.kubernetes.io/name: mctl-agents
+      mctl.ai/team: admins
   # Minutes, not the shepherd's two hours: this reads the state dir, issues
   # one batched read and at most one acquire per entity. Nothing here invokes
   # a model or waits on a reconcile.
