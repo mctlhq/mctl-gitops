@@ -17,12 +17,6 @@
 # of them is dangerous, and the alert on it is the soak's STOP condition rather
 # than a trend to watch.
 #
-# NOT here, deliberately: LifecycleShadowSilent, which catches a compare that
-# emits nothing — the failure that reads as a clean soak. It cannot ship before
-# the mode is flipped to observe, because until then emitting nothing is the
-# correct behaviour and the alert would fire continuously on every deployment.
-# It lands in the same change that sets LIFECYCLE_ROLLOUT_MODE=observe.
-#
 # Routing: an `alertname =~ "Lifecycle.*"` route to telegram is added to
 # bootstrap/templates/observability/monitoring.yaml alongside this file, and it
 # is load-bearing rather than cosmetic. Without it these fall through to the
@@ -55,16 +49,26 @@ spec:
         # short for the same reason — this is not a condition to confirm over
         # time, it is one to stop the rollout over.
         #
-        # max_over_time, NOT increase(), and this is the difference between an
-        # alert that exists and one that does not.
+        # max_over_time, NOT increase(), and the reason is about which ENGINE
+        # is asked.
         #
         # Promtail keys a metrics-stage counter by the log stream, pod label
         # included, and creates the series only when its regex FIRST matches.
         # A shepherd Argo step pod that reports one dangerous divergence
         # therefore produces a series whose samples are 1, 1, 1 — never a 0
-        # before them. increase() over that is 0, so the expression would have
-        # been false for exactly the isolated one-off event this stop condition
-        # exists to catch, while passing a unit test that seeds its own zero.
+        # before them.
+        #
+        # VictoriaMetrics counts the first point of a new series, so increase()
+        # WOULD have fired here; vmalert is what evaluates these rules, and
+        # that behaviour is confirmed end-to-end (gitops#1171, 2026-09-10).
+        # Prometheus does not, and `promtool test rules` — the thing that gates
+        # this file — is Prometheus. So increase() here is an expression whose
+        # correctness depends on who evaluates it, and the only way to make the
+        # unit test pass is to seed a zero the real pipeline never writes,
+        # which is a test agreeing with itself rather than with production.
+        #
+        # max_over_time is correct under both, and testable under the one we
+        # have.
         #
         # The value is safe to read directly precisely because the series is
         # per-pod and these pods are ephemeral: the counter cannot accumulate
@@ -146,6 +150,43 @@ spec:
               reads. At enforce an unknown blocks the mutation, so this is a
               stall waiting to happen.
 
+        # A compare that emits nothing is indistinguishable from one that was
+        # never wired up — and the difference matters enormously, because the
+        # second looks like a clean soak. The shepherd sweeps every 5 minutes
+        # and every non-reconcile ref is compared, so an hour of silence with
+        # the mode at observe means the instrument is broken.
+        #
+        # Ships with the shepherd's flip and not before: until this commit,
+        # emitting nothing is the correct behaviour and this would fire
+        # continuously. Remove it together with the mode.
+        #
+        # absent() rather than a threshold on a sum: before the first
+        # comparison the series do not exist at all, and `sum(...) == 0` over a
+        # missing series is an EMPTY VECTOR, not zero — the alert would never
+        # fire on the one condition it exists for. All three must be absent,
+        # because store-unknown and legacy-unknown are what a BROKEN compare
+        # emits, and alerting on the absence of `agree` alone would stay quiet
+        # through exactly that while LifecycleShadowStoreUnknownHigh also
+        # fired, raising two alerts naming different causes for one fault.
+        - alert: LifecycleShadowSilent
+          expr: >-
+            absent(lifecycle_shadow_agree_total)
+            and absent(lifecycle_shadow_store_unknown_total)
+            and absent(lifecycle_shadow_legacy_unknown_total)
+          for: 1h
+          labels:
+            severity: warning
+            mctl_agent_self: "true"
+          annotations:
+            summary: "Lifecycle shadow compare has emitted nothing for an hour"
+            description: >-
+              No shadow comparison counters exist. Either
+              LIFECYCLE_ROLLOUT_MODE is not observe on the shepherd CWFT, or
+              the Promtail match block for namespace=argo-workflows is not
+              selecting the shepherd's pods. A silent compare reads as a clean
+              soak, which is the one way this measurement can be wrong without
+              looking wrong.
+
     - name: lifecycle.claims
       rules:
         # DevLoopWorkflow clearing an ownership claim whose write did not land
@@ -161,12 +202,15 @@ spec:
         #
         #  - increase() catches every occurrence after the first, and is the
         #    right shape for a series that persists and keeps incrementing;
-        #  - it cannot catch the first, for the same reason as the rule above:
-        #    Promtail creates the series at 1, so there is no 0 to increase
-        #    from. The second disjunct catches exactly that — the counter
-        #    exists now and did not an hour ago — and the `unless` makes it
-        #    stop firing an hour later instead of latching forever on a value
-        #    that never goes back down.
+        #  - under PROMETHEUS semantics it cannot catch the first, for the
+        #    reason the rule above explains: Promtail creates the series at 1,
+        #    so there is no 0 to increase from. VictoriaMetrics does catch it,
+        #    and vmalert is what runs here — but promtool is what tests it, and
+        #    a rule that is only correct on one of the two is a rule the test
+        #    suite cannot check. The second disjunct catches that case — the
+        #    counter exists now and did not an hour ago — and the `unless`
+        #    makes it stop firing an hour later instead of latching forever on
+        #    a value that never goes back down.
         - alert: LifecycleClaimAbandoned
           expr: >-
             increase(lifecycle_claim_abandoned_total[1h]) > 0
