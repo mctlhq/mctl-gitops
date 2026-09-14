@@ -43,7 +43,14 @@ metadata:
 
       Submit with:
         argo submit --from clusterworkflowtemplate/lifecycle-bootstrap \
-          -n argo-workflows -p dry_run=true
+          -n argo-workflows \
+          -p agent_image=ghcr.io/mctlhq/mctl-agents:<version with bootstrap.py> \
+          -p dry_run=true
+
+      agent_image has no default on purpose: the module does not exist in any
+      released image yet, so there is no value that could work. Argo refuses
+      the submission by name rather than failing inside the container on a
+      missing module.
 
 spec:
   ttlStrategy:
@@ -78,7 +85,18 @@ spec:
         # --apply to write anything, so an operator who submits this template
         # with no parameters at all gets a report and no writes.
       - name: agent_image
-        value: ghcr.io/mctlhq/mctl-agents:1.45.0
+        # NO DEFAULT, deliberately, and unlike every sibling template.
+        #
+        # orchestrator/lifecycle/bootstrap.py does not exist in any released
+        # mctl-agents image yet, so there is no value that could go here and
+        # work. A default of today's pin would make the documented submission
+        # -- the one with no parameters -- fail inside the container on a
+        # missing module, which is a confusing way to learn that the image is
+        # wrong. Omitting `value` makes Argo refuse the submission by name:
+        # "parameter agent_image was not supplied".
+        #
+        # Give this a default once a release carries the module, and drop this
+        # comment with it.
 
   volumes:
     - name: workdir
