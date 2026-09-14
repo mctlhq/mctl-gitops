@@ -96,6 +96,15 @@ jobs:
       # on it. The markers say what was written; only the graph decides whether
       # the bound runs, and those two had drifted apart.
       flipped: ${{ steps.marks.outputs.flipped }}
+      # AND `restored`. `flipped` answers "did the outage start"; it does not
+      # answer "is there a sign-in to wait for". Four points in flip.sh sit
+      # between the bearer PUT and the restore read-back, and on all of them
+      # the registration is CLEARED -- a server nobody can sign into. Waiting
+      # on it burns the full deadline and then fires "may still be in Waiting,
+      # i.e. unusable", which contradicts the announce's correct "the
+      # registration is cleared, restore it by hand" and arrives thirty minutes
+      # later, putting the wrong message at the bottom of the channel.
+      restored: ${{ steps.marks.outputs.restored }}
     # THE approval, and it is before anything is written. `cloudflare-apply` is
     # where CF_APPLY_TOKEN_PORTAL lives (Account -> MCP Portals -> Edit), so the
     # environment issues the credential and takes the approval in one.
@@ -106,9 +115,14 @@ jobs:
     environment: cloudflare-apply
     env:
       # NOT the write token here. Job-level `env:` is handed to EVERY step,
-      # including the third-party Telegram container action below, and
-      # `VAULT_TOKEN` reaches `$GITHUB_ENV` the same way. Both are scoped to
-      # the steps that need them.
+      # including the third-party Telegram container action below, so CF_TOKEN
+      # is scoped to the two steps that need it.
+      #
+      # `VAULT_TOKEN` is NOT scoped and cannot be: the canary exports it
+      # through `$GITHUB_ENV`, which by design reaches every later step in the
+      # job. It is a short-lived JWT-login token for one Vault path, and the
+      # honest note is that it remains in scope for the announce step rather
+      # than a claim that both were moved.
       #
       # secrets.mctl.ai, NOT vault.mctl.ai. The latter does not exist: the
       # platform's Vault is what `build-image.yaml` logs into, what
@@ -254,6 +268,15 @@ jobs:
       # approval. `ready` with a moved `last_synced` is what an approval saying
       # "I signed in" would be claiming, measured rather than asserted — and it
       # fails on a timeout, which an unclicked approval does not.
+      # THE CLEARED CASE, refused before the wait rather than after it. There is
+      # no sign-in to wait for on a server with no registration, so polling it
+      # only delays the right message by the full deadline.
+      - name: Refuse to wait on a server with no registration
+        if: needs.flip.outputs.restored != 'yes'
+        run: |
+          echo "::error::${{ inputs.server }} was flipped and NOT restored: the registration is cleared and no sign-in is possible. Restore from Vault at secret/platform/portal-resnapshot/${{ inputs.server }} by hand."
+          exit 1
+
       - name: Wait for the sign-in
         id: wait
         env:
