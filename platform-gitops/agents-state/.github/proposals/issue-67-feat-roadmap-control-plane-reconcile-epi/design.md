@@ -18,6 +18,11 @@ roadmap/tests/test_validate.py
 
 What is missing is observed-state reconciliation: read the native GitHub graph, normalize it, compare it to desired state, and emit a deterministic machine-readable diff.
 
+Two adjacent concepts are deliberately **not** alternate desired-state inputs:
+
+- Org Project #1 remains the portfolio source of truth for priority/status (`P0/P1/P2/PARK`, Todo/In Progress, etc.). `EpicDefinition` does not duplicate those fields in this slice.
+- The `ALIGNED` / `DRIFT` / `UNEXPECTED_SILENCE` / `OBSERVATION_FAILED` model explored by `mctlhq/.github#56` is useful, but belongs later as derived `RoadmapHealth` over the canonical desired graph plus observed state. Its standalone `roadmap-state.yaml` must not become a second desired-state contract beside `EpicDefinition`.
+
 ## Proposed solution
 
 Add a read-only reconciler alongside the validator. Keep it stdlib-first, offline-testable, and incapable of GitHub writes.
@@ -211,6 +216,31 @@ Exit codes: 0 converged, 1 drift, 2 usage/IO/auth/validation error.
 
 `.github/workflows/roadmap-validate.yml` adds only offline fixture reconciliation. `permissions: {}` remains unchanged and no secret is introduced.
 
+## Follow-up: derived `RoadmapHealth`
+
+After `RoadmapDiff` is proven, a later slice may consume the canonical graph and observations to derive operational health such as:
+
+```text
+ALIGNED
+DRIFT
+UNEXPECTED_SILENCE
+OBSERVATION_FAILED
+```
+
+This layer may add liveness windows, observation-failure precedence and change-only notifications. It must not author a second graph or duplicate parent/dependency/priority/status desired state. In other words:
+
+```text
+EpicDefinition (desired graph)
+        +
+GitHubGraphSnapshot (observed graph)
+        ↓
+RoadmapDiff
+        ↓
+RoadmapHealth (derived, optional later)
+```
+
+The useful detector lessons from `mctlhq/.github#56` remain design evidence for this later health layer; that PR is not the canonical reconciliation model.
+
 ## Alternatives rejected
 
 1. **GraphQL for sub-issues.** Rejected because the slice's safety contract is HTTP GET-only.
@@ -220,6 +250,8 @@ Exit codes: 0 converged, 1 drift, 2 usage/IO/auth/validation error.
 5. **Read live GitHub state in CI.** Rejected because it requires external state and makes tests non-deterministic.
 6. **Implement write reconciliation now.** Rejected; detector correctness comes first.
 7. **Parse dependency prose.** Rejected; only native relations are authoritative.
+8. **Keep `roadmap-state.yaml` as a second desired-state file.** Rejected because it would duplicate the graph contract and make drift between control planes inevitable; health is derived instead.
+9. **Author project priority/status into `EpicDefinition` now.** Rejected because Org Project #1 already owns those portfolio fields and this slice has no deterministic Project-v2 reconciliation contract.
 
 ## Platform impact
 
@@ -236,4 +268,5 @@ Exit codes: 0 converged, 1 drift, 2 usage/IO/auth/validation error.
 - **Transferred issues:** preserve requested/resolved identities, emit `BindingRedirected`, canonicalize relation comparison to the resolved key.
 - **False cascades:** only unresolved/ambiguous bindings suppress dependent comparisons.
 - **Fixture rot:** synthetic green fixture proves detector behaviour, not live truth; optional live capture is separate evidence.
+- **Competing roadmap authorities:** keep `EpicDefinition` as the desired graph, Project #1 as external portfolio metadata, and health as derived state until explicit later reconciliation is designed.
 - **Future apply misuse:** no mutation primitive exists in this slice.
