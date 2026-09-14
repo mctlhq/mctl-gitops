@@ -117,6 +117,13 @@ spec:
     pg_hba:
       - host all mctl-agent all scram-sha-256
       - host mctl-api mctl-api all scram-sha-256
+      # The lifecycle ownership store, same role, its own database. This rule
+      # is REQUIRED, not decorative: the mctl-api entry above is scoped to the
+      # mctl-api database (unlike mctl-agent's wildcard on the line before), so
+      # without it a connection to mctl-lifecycle falls through to the
+      # reject-all at the bottom of this list and Postgres refuses it at auth
+      # time -- the store never initialises, and its routes answer 503 forever.
+      - host mctl-lifecycle mctl-api all scram-sha-256
       # Backstage — access to own db + postgres db (assertDatabaseExists check)
       - host backstage backstage all scram-sha-256
       - host postgres backstage all scram-sha-256

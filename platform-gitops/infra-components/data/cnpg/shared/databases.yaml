@@ -65,8 +65,14 @@ spec:
     name: shared-pg
   databaseReclaimPolicy: retain
 ---
-# Backs the lifecycle ownership store (mctl-api internal/lifecycle), read from
-# LIFECYCLE_DB_URL. Separate from mctl-api's database on purpose: this one is
+# Backs the lifecycle ownership store (mctl-api internal/lifecycle), which will
+# read it from LIFECYCLE_DB_URL. Setting that variable is a SEPARATE merge, and
+# deliberately so: shared-pg and admins-mctl-api are two ArgoCD Applications
+# reconciling independently, so landing both at once can restart mctl-api
+# before CNPG has created this database. The store initialises once at startup
+# with a bounded retry budget; exhaust it and the store stays nil and its
+# routes answer 503 until somebody restarts the pod again. Database first,
+# Ready, then the variable. Separate from mctl-api's database on purpose: this one is
 # the source of truth for who may act on an entity, so an audit-log restore,
 # vacuum or retention job must not be able to reach it.
 #
