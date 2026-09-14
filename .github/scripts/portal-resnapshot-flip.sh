@@ -11,7 +11,30 @@ set -euo pipefail
 assert_server_id
 : "${VAULT_ADDR:?}" ; : "${VAULT_TOKEN:?}" ; : "${VAULT_BACKUP_PATH:?}"
 
-work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
+work=$(mktemp -d)
+
+# WHETHER A MUTATION HAPPENED, recorded on the way rather than inferred after.
+#
+# A cancelled run — the operator hitting the button, a runner evicted — takes
+# the script mid-procedure, and "the job was cancelled" says nothing about
+# which side of the flip it was on. The two need opposite responses: before it,
+# nothing was touched; after it, the server has no registration and the Vault
+# copy is the only way back. So the marker is written BEFORE the destructive
+# PUT and survives into the trap, which reports it on every exit path
+# including the signals a cancellation actually arrives as.
+flipped=no
+on_exit() {
+  rc=$?
+  if [ "$flipped" = yes ] && [ "$restored" != yes ]; then
+    echo "::error::the run ended (rc=${rc}) between the flip and the restore. ${SERVER} has NO registration; restore from Vault at ${VAULT_BACKUP_PATH}."
+  elif [ "$flipped" = no ]; then
+    echo "nothing was written: the run ended before the flip"
+  fi
+  rm -rf "$work"
+}
+restored=no
+trap on_exit EXIT
+trap 'exit 130' INT TERM HUP
 
 # 0. back up the registration, and refuse to go on without one.
 summary=$(cf)
@@ -57,6 +80,7 @@ echo "registration backed up to ${VAULT_BACKUP_PATH}"
 #    `.result.auth_config_summary == null` is then true — a failed read
 #    reporting the flip as done.
 echo "::warning::${SERVER} is now going offline until someone signs it back in"
+flipped=yes
 cf -X PUT --json '{"auth_type":"bearer","auth_credentials":"resnapshot-not-a-token"}' | ok
 gone=$(cf); printf '%s' "$gone" | ok
 printf '%s' "$gone" | jq -e '.result.auth_config_summary == null' >/dev/null
@@ -65,6 +89,7 @@ printf '%s' "$gone" | jq -e '.result.auth_config_summary == null' >/dev/null
 #    waiting for its first authorization.
 cf -X PUT --json "@$work/restore.json" | ok
 cf | jq -e '.result.status == "waiting" and .result.auth_config_summary.auth_mode == "manual"' >/dev/null
+restored=yes
 
 # 2a. and that it is the SAME registration, field for field. status+auth_mode
 #     only say a manual-OAuth registration exists; this API is on record

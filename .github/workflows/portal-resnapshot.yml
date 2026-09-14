@@ -102,7 +102,13 @@ jobs:
     environment: cloudflare-apply
     env:
       CF_TOKEN: ${{ secrets.CF_APPLY_TOKEN_PORTAL }}
-      VAULT_ADDR: https://vault.mctl.ai
+      # secrets.mctl.ai, NOT vault.mctl.ai. The latter does not exist: the
+      # platform's Vault is what `build-image.yaml` logs into, what
+      # `infrastructure/cloudflare/zones/mctl-ai/firewall.tf` allowlists, and
+      # what the k3s bootstrap README names. A wrong address fails closed here
+      # — the canary runs before anything destructive — but it would have made
+      # the workflow unrunnable rather than merely wrong.
+      VAULT_ADDR: https://secrets.mctl.ai
     permissions:
       contents: read
       id-token: write

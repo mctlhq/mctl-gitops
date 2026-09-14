@@ -29,9 +29,15 @@ INTERVAL_S=${INTERVAL_S:-20}
 
 started=$(date -u +%s)
 while :; do
-  now=$(cf) || true
-  status=$(printf '%s' "$now" | jq -r '.result.status // "unreadable"')
-  last=$(printf '%s' "$now" | jq -r '.result.last_synced // ""')
+  # EVERY step of this tolerant, because the loop is the only bound on the
+  # outage and anything that kills it removes the bound. `cf` can fail, and it
+  # can also succeed with a body that is not JSON at all — an edge error page,
+  # a 5xx rendered as HTML — so `jq` gets a `|| true` of its own rather than
+  # dying under `set -e` inside the command substitution. An unreadable answer
+  # is just another tick that is not `ready`.
+  now=$(cf 2>/dev/null) || now=""
+  status=$(printf '%s' "$now" | jq -r '.result.status // "unreadable"' 2>/dev/null) || status="unreadable"
+  last=$(printf '%s' "$now" | jq -r '.result.last_synced // ""' 2>/dev/null) || last=""
 
   # BOTH, not just status. A server can read `ready` off the pre-flip snapshot
   # in a race, and `last_synced` is the only field this API moves on a real

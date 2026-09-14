@@ -13,8 +13,12 @@
 #   copies when running the procedure by hand, and the habit is the point.
 
 # shellcheck disable=SC2120  # called with no args on read paths, with -X PUT on writes
+# `--max-time`, because every caller is inside a window where the server is
+# down. curl's default is no total timeout at all: a connection that hangs
+# holds the step until the job's own limit, and the job that would be holding
+# is the one bounding the outage.
 cf() {
-  curl -sS --fail-with-body \
+  curl -sS --fail-with-body --max-time 45 --connect-timeout 10 \
     -K <(printf 'header = "Authorization: Bearer %s"\n' "$CF_TOKEN") \
     "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/access/ai-controls/mcp/servers/${SERVER}" "$@"
 }
