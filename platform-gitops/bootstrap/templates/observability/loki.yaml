@@ -216,7 +216,7 @@ spec:
                             config:
                               match_all: false
                               action: inc
-                # The lifecycle observe soak (ADR-010 SS12, mctlhq/.github#57).
+                # The lifecycle observe soak (ADR-010 §12, mctlhq/.github#57).
                 #
                 # A SECOND match block, not extra stages in the one above,
                 # because the shepherd runs as an Argo step pod in
