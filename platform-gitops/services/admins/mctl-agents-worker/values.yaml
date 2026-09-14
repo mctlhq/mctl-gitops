@@ -89,6 +89,23 @@ env:
   TEMPORAL_ADDRESS: temporal-frontend.temporal.svc.cluster.local:7233
   TEMPORAL_NAMESPACE: mctl-agents
   LOG_LEVEL: info
+  # The lifecycle rollout stage (ADR-010 §12, mctlhq/.github#57).
+  #
+  # This worker runs DevLoopWorkflow, the only WRITER. It flips FIRST, ahead of
+  # the shepherd CWFT and ahead of the ownership bootstrap, and the order is
+  # not cosmetic: below `observe` the ownership activity short-circuits before
+  # any HTTP call, so a row the bootstrap wrote for a devloop-workflow owner
+  # would never be heartbeated, progressed or released by the workflow it
+  # names. It would sit `active` until its liveness bound expired, held by an
+  # owner that does not know it holds anything.
+  #
+  # Writer live -> bootstrap -> shepherd flips and the comparison starts
+  # against a populated store.
+  #
+  # The gate is in ACTIVITY code, not workflow code, so this does not change
+  # which commands the workflow issues: a history recorded under one mode
+  # replays under another.
+  LIFECYCLE_ROLLOUT_MODE: observe
   # GitHub App installation tokens expire after 60 min. rotate-github-app-tokens
   # mints a fresh one every 30 min into Vault, but env vars are frozen at
   # container start, so a long-lived pod like this one is authenticated for at
