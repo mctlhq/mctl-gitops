@@ -1,9 +1,15 @@
 status: proposed
-updated_at: '2026-09-14T10:15:00Z'
+updated_at: '2026-09-17T22:41:00Z'
 updated_by: mashkovd
+source:
+  type: github_issue
+  repo: mctlhq/.github
+  issue: 68
+  url: https://github.com/mctlhq/.github/issues/68
 control:
   requires_human_approval: true
 notes: >-
   Manual platform proposal created from the Roadmap Control Plane portfolio-hygiene review.
-  Related to mctlhq/.github#66 and implementation slice #68. Do not approve or
-  implement until read-only reconciliation #67 has proven the detector.
+  Read-only reconciliation #67 completed on 2026-09-16, so that prerequisite is satisfied.
+  Project-owned priority work may proceed independently; graph create/update/close/supersede/reparent
+  must remain fail-closed until deterministic governed apply #68 is implemented and proven.
