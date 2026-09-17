@@ -19,7 +19,7 @@ spec:
         # Valkey reads valkey.conf and the ACL file at start only. Bump this after
         # changing valkey.conf; after rotating a password in Vault, wait for ESO
         # to refresh valkey-acl and restart the pod the same way.
-        mctl.ai/config-revision: "1"
+        mctl.ai/config-revision: "2"
     spec:
       securityContext:
         runAsNonRoot: true
