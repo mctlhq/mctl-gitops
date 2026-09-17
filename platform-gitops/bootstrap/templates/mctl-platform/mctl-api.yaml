@@ -171,6 +171,13 @@ spec:
             # above for the other optional stores).
             TEMPORAL_ADDRESS: temporal-frontend.temporal.svc.cluster.local:7233
             TEMPORAL_NAMESPACE: mctl-agents
+            # GitHub pull request events (mctlhq/mctl-api#323, 4.49.0+). The
+            # webhook enqueues into the audit database's outbox and a relay
+            # XADDs to mctl:events:github; GITHUB_WEBHOOK_SECRET and
+            # EVENTS_VALKEY_PASSWORD come from the mctl-api-events Secret
+            # (envFromExtraSecret below). Without both the endpoint answers
+            # 401/503 and nothing is published.
+            EVENTS_VALKEY_URL: "redis://github-producer@valkey.platform-events.svc.cluster.local:6379/0"
             # ARGO_WEBHOOK_SECRET is not listed here; envFromSecret below
             # injects it from Vault platform/mctl-api/argo-webhook (SOC F13).
 
@@ -180,6 +187,10 @@ spec:
           # Vault; it is described in mctl-api-secrets.yaml now.
           # mctlhq/mctl-gitops#1229, step 2 of 2.
           envFromSecret: mctl-api-secrets
+          # Event producer credentials, in their own ExternalSecret so a
+          # missing key cannot take DB_PASSWORD down with it
+          # (mctl-api-secrets.yaml).
+          envFromExtraSecret: mctl-api-events
 
           # The GitHub App installation token, mounted as a FILE. mctl-api
           # reads GITHUB_APP_TOKEN_FILE per use (internal/ghtoken), which is

@@ -112,6 +112,21 @@ env:
   CLAUDE_CODE_RESUME_THRESHOLD_MINUTES: "2000000000"
   CLAUDE_CODE_RESUME_TOKEN_THRESHOLD: "2000000000"
   CLAUDE_CODE_AUTO_COMPACT_WINDOW: "140000"
+  # Inbound events Channel (mctlhq/.github#87, image 0.11.0+). Wakes the live
+  # remote-control session on platform Valkey events; inert on older images,
+  # which do not read these variables. Streams, sources, types and subjects the
+  # session may be woken for are in the mctl-events-policy ConfigMap below --
+  # deny by default. Both credentials arrive as FILES from the
+  # claude-remote-events ExternalSecret, never as env.
+  MCTL_EVENTS_ENABLED: "true"
+  MCTL_EVENTS_VALKEY_URL: "redis://claude-remote@valkey.platform-events.svc.cluster.local:6379/0"
+  MCTL_EVENTS_VALKEY_PASSWORD_FILE: "/etc/mctl-events/secrets/valkey-password"
+  MCTL_EVENTS_POLICY: "/etc/mctl-events/policy.json"
+  # Hydration of telegram.message.* refs through the preview mctl-telegram MCP
+  # (the account's live traffic is on preview). The worker token is read-only;
+  # its expiry is tracked in Vault platform/mctl-claude-remote/telegram-mcp.
+  MCTL_EVENTS_TELEGRAM_MCP_URL: "https://tg-preview.mctl.ai/mcp"
+  MCTL_EVENTS_TELEGRAM_MCP_TOKEN_FILE: "/etc/mctl-events/secrets/telegram-mcp-token"
 # Intentionally NO envFrom / no CLAUDE_CODE_OAUTH_TOKEN in env:
 #
 # `claude --remote-control` needs a full-scope claude.ai login (from
@@ -152,6 +167,19 @@ extraExternalSecrets:
       - secretKey: private-key.pem
         remoteKey: platform/mctl-claude-remote/github-app
         property: private-key
+  # Inbound events: the claude-remote Valkey ACL user's password and the
+  # read-only mctl-telegram worker token. Mounted as files (0440), not env.
+  mctl-claude-remote-events:
+    store: vault-backend
+    storeKind: ClusterSecretStore
+    targetSecret: claude-remote-events
+    data:
+      - secretKey: valkey-password
+        remoteKey: platform/valkey
+        property: claude-remote-password
+      - secretKey: telegram-mcp-token
+        remoteKey: platform/mctl-claude-remote/telegram-mcp
+        property: worker-token
 # Workspace lives in emptyDir, persisted to MinIO by s3-sync sidecar
 extraVolumes:
   - name: workspace
@@ -183,6 +211,14 @@ extraVolumes:
   - name: steward-logs
     emptyDir:
       sizeLimit: 100Mi
+  # Inbound events: routing policy and credentials (see env MCTL_EVENTS_*).
+  - name: events-policy
+    configMap:
+      name: mctl-events-policy
+  - name: events-secrets
+    secret:
+      secretName: claude-remote-events
+      defaultMode: 0440
 extraVolumeMounts:
   - name: workspace
     mountPath: /workspace
@@ -200,6 +236,13 @@ extraVolumeMounts:
     readOnly: true
   - name: steward-logs
     mountPath: /var/log/steward
+  - name: events-policy
+    mountPath: /etc/mctl-events/policy.json
+    subPath: policy.json
+    readOnly: true
+  - name: events-secrets
+    mountPath: /etc/mctl-events/secrets
+    readOnly: true
 # Restore workspace from MinIO before claude starts
 initContainers:
   - name: restore-state
@@ -679,6 +722,32 @@ backstage:
   kubernetesId: claude-remote
 # pr-steward overlay ConfigMaps
 configMaps:
+  # Deny-by-default routing for the inbound events Channel. The session is
+  # woken only for new or edited private messages to the operator's own
+  # Telegram account (924671154) and for pull request events in mctlhq
+  # repositories. The consumer name is fixed, so a restarted pod re-reads its
+  # own pending entries instead of leaving them to a dead consumer.
+  mctl-events-policy:
+    policy.json: |
+      {
+        "group": "claude-remote",
+        "consumer": "claude-remote-0",
+        "max_inflight": 5,
+        "routes": [
+          {
+            "stream": "mctl:events:telegram",
+            "sources": ["mctl-telegram"],
+            "types": ["telegram.message.created", "telegram.message.edited"],
+            "subject": {"account_id": ["924671154"]}
+          },
+          {
+            "stream": "mctl:events:github",
+            "sources": ["mctl-api"],
+            "types": ["github.pull_request.*", "github.pull_request_review.submitted"],
+            "subject": {"repository": ["mctlhq/*"]}
+          }
+        ]
+      }
   pr-steward-config:
     pr-steward.config.json: |
       {
