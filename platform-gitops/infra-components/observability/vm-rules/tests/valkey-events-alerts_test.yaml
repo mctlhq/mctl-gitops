@@ -1,4 +1,8 @@
 # Unit tests for valkey-events-alerts.yaml (group valkey.events).
+#
+# rule_files is resolved relative to this file. generated/ is produced by
+# scripts/check-vm-rules.sh, which extracts each VMRule's `.spec` so
+# promtool can evaluate the very rules the cluster runs.
 rule_files:
   - generated/valkey-events-alerts.yaml
 

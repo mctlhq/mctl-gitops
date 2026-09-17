@@ -2,7 +2,8 @@
 # (infra-components/data/valkey, mctlhq/.github#87).
 #
 # redis_* series come from the redis_exporter sidecar in the valkey pod, scraped
-# through the ServiceMonitor in platform-events.
+# through the VMServiceScrape in platform-events
+# (infra-components/data/valkey/vmservicescrape.yaml).
 #
 # Down and absent are separate rules: `redis_up == 0` is an exporter that runs
 # but cannot reach Valkey; absent() is the whole pod gone from discovery, where
