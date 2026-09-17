@@ -102,11 +102,17 @@ spec:
             secretName: valkey-acl
             defaultMode: 0440
   volumeClaimTemplates:
-    - metadata:
+    # apiVersion, kind and volumeMode are the values Kubernetes fills in; stating
+    # them keeps git equal to live. Ignoring them with jqPathExpressions instead
+    # would index into this array, which wedges SSA sync (#789).
+    - apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
         name: data
       spec:
         accessModes: [ReadWriteOnce]
         storageClassName: hcloud-volumes
+        volumeMode: Filesystem
         resources:
           requests:
             storage: 10Gi
