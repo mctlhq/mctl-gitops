@@ -30,6 +30,18 @@ spec:
         - .metadata.annotations
         - .spec.target.deletionPolicy
         - .status
+    # Kube fills the claim template in with apiVersion, kind, volumeMode and a
+    # status that the manifest never sets, so the app stayed OutOfSync after a
+    # successful sync. Same paths as vault.yaml.
+    - group: apps
+      kind: StatefulSet
+      name: valkey
+      jqPathExpressions:
+        - .spec.volumeClaimTemplates[].apiVersion
+        - .spec.volumeClaimTemplates[].kind
+        - .spec.volumeClaimTemplates[].metadata.creationTimestamp
+        - .spec.volumeClaimTemplates[].spec.volumeMode
+        - .spec.volumeClaimTemplates[].status
   destination:
     server: {{ .Values.spec.destination.server }}
     namespace: platform-events
