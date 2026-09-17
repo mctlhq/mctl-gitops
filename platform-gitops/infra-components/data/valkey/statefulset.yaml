@@ -85,7 +85,10 @@ spec:
               cpu: 10m
               memory: 24Mi
             limits:
-              cpu: 100m
+              # Averages ~1m, but each scrape bursts past 100m within one CFS
+              # period: at 100m it was throttled in 39% of periods and fired
+              # CPUThrottlingHigh.
+              cpu: 300m
               memory: 64Mi
           securityContext:
             allowPrivilegeEscalation: false
