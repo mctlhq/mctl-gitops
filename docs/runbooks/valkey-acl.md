@@ -1,9 +1,17 @@
 # valkey — the ACL file, and how to change it without an outage
 
-**Valkey's `aclfile` accepts no comment lines. A single `#` line does not get
-ignored: it aborts server startup.** That one fact is the reason this runbook
-exists — it turned a documentation change into a four-minute outage of
-`platform-events` on 2026-09-17.
+**Use this when** you are about to change the Valkey ACL template, or when
+`valkey-0` is crash-looping after one was changed.
+
+**On this deployment, a `#` line inside the rendered `aclfile` is not ignored —
+it aborts server startup.** Scope of that claim: it is what was observed on the
+cluster's own image (`valkey/valkey:8.1.10-alpine`, file mounted from the
+`valkey-acl` secret) on 2026-09-17, where it turned a documentation change into
+a four-minute outage of `platform-events`, and reproduced on a local 7.2.4 with
+the same file. It has not been measured across other versions or against
+`user` directives in `valkey.conf`, so treat it as a property of *this*
+Valkey and config-generation path, not as a general statement about Valkey.
+That is enough: this path is the only one that renders the file here.
 
 Source of the file:
 `platform-gitops/infra-components/data/valkey/externalsecret.yaml` — an
@@ -88,9 +96,16 @@ values never reach the terminal.
 
 Fix forward by correcting the ExternalSecret and merging — ESO re-renders
 within its refresh interval (or immediately on a forced refresh), and the pod
-recovers on its next restart attempt. Rolling back the `config-revision`
-without fixing the file does not help: the file is already wrong, and the pod
-will read it again anyway.
+recovers on its next restart attempt.
+
+**Rolling back the `config-revision` does not repair the file.** The two live
+in different places: `config-revision` is an annotation on the StatefulSet pod
+template whose only job is to make a pod restart, while the ACL text is
+rendered by ESO from the ExternalSecret into the `valkey-acl` Secret and mounted
+from there. Reverting the annotation reverts the *trigger*, not the *content* —
+the Secret still holds the broken file, and the restarted pod mounts and parses
+exactly the same bytes. Only a corrected ExternalSecret, re-synced by ESO,
+changes what the pod reads.
 
 ## The ACL users, and what each is for
 
