@@ -209,6 +209,10 @@ env:
   # account, it needs a fresh login regardless, and the id can be added back
   # at that moment.
   SESSION_TTL_EXEMPT_TG_IDS: "210408407"
+  # Inbound events producer (mctlhq/mctl-telegram#646): after the ingest
+  # transaction commits, the outbox relay XADDs a reference-only envelope to
+  # mctl:events:telegram. The password comes from the -events secret below.
+  EVENTS_VALKEY_URL: "redis://telegram-producer@valkey.platform-events.svc.cluster.local:6379/0"
 ingress:
   enabled: true
   hosts:
@@ -343,7 +347,20 @@ envFrom:
       name: "labs-mctl-telegram-preview-oauth"
   - secretRef:
       name: "labs-mctl-telegram-preview-login"
+  - secretRef:
+      name: "labs-mctl-telegram-preview-events"
 extraExternalSecrets:
+  # EVENTS_VALKEY_PASSWORD for the telegram-producer Valkey ACL user
+  # (XADD to mctl:events:telegram and mctl:events:audit only).
+  labs-mctl-telegram-preview-events:
+    store: vault-backend
+    storeKind: ClusterSecretStore
+    refreshInterval: 1h
+    targetSecret: labs-mctl-telegram-preview-events
+    data:
+      - secretKey: EVENTS_VALKEY_PASSWORD
+        remoteKey: secret/data/platform/valkey
+        property: telegram-producer-password
   # TG_API_ID / TG_API_HASH are MTProto app-level credentials — shared with stable.
   labs-mctl-telegram-preview-tg-api:
     # Platform-scoped path — cluster store required; tenant-store only resolves this tenant's prefix.
