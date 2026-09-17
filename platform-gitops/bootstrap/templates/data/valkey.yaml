@@ -1,0 +1,44 @@
+# Platform Valkey — the delivery layer for MCTL inbound events (mctlhq/.github#87).
+#
+# Valkey (BSD-3, Redis-protocol compatible) Streams + consumer groups carry
+# reference-only `mctl.events/v1` envelopes from producers (mctl-telegram,
+# mctl-api) to the claude-remote Channel adapter. It is NOT a system of record:
+# producers keep a durable outbox and every event only points at data that stays
+# in its own service, so a lost stream entry is republished, never lost data.
+#
+# Plain manifests (StatefulSet + ESO-rendered ACL file) rather than a chart: the
+# whole deployment is ~150 lines and every permission is visible in git.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: valkey
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/mctlhq/mctl-gitops.git
+    targetRevision: main
+    path: platform-gitops/infra-components/data/valkey
+  ignoreDifferences:
+    # Same ESO handling as minio.yaml: ignore admission-injected annotations and
+    # status only; never jq paths that index into spec arrays (#789).
+    - group: external-secrets.io
+      kind: ExternalSecret
+      jqPathExpressions:
+        - .metadata.annotations
+        - .spec.target.deletionPolicy
+        - .status
+  destination:
+    server: {{ .Values.spec.destination.server }}
+    namespace: platform-events
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true
+      - ServerSideApply=true
+      - RespectIgnoreDifferences=true

@@ -13,6 +13,8 @@ metadata:
         secret/platform/argo-workflows/database → username, password
         secret/platform/backstage/database      → postgres-user, postgres-password
         secret/platform/mctl-agent/database     → username, password
+        secret/platform/valkey                  → telegram-producer-password, github-producer-password, synthetic-producer-password,
+                                                  claude-remote-password, exporter-password
 
       Run once after initial cluster setup:
         argo submit --from clusterworkflowtemplate/bootstrap-platform -n argo-workflows
@@ -94,6 +96,11 @@ spec:
 
           write_if_missing "platform/mctl-agent/database" \
             "{\"username\":\"${AGENT_DB_USER}\",\"password\":\"${AGENT_DB_PASS}\"}"
+
+          # Platform Valkey ACL users (infra-components/data/valkey). Hex only:
+          # the ACL `>password` syntax ends a password at whitespace.
+          write_if_missing "platform/valkey" \
+            "{\"telegram-producer-password\":\"$(gen)\",\"github-producer-password\":\"$(gen)\",\"synthetic-producer-password\":\"$(gen)\",\"claude-remote-password\":\"$(gen)\",\"exporter-password\":\"$(gen)\"}"
 
           echo ""
           echo "Bootstrap complete. ExternalSecrets will refresh within 1h."

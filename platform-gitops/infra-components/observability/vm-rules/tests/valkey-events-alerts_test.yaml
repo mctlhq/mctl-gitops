@@ -1,0 +1,98 @@
+# Unit tests for valkey-events-alerts.yaml (group valkey.events).
+#
+# rule_files is resolved relative to this file. generated/ is produced by
+# scripts/check-vm-rules.sh, which extracts each VMRule's `.spec` so
+# promtool can evaluate the very rules the cluster runs.
+rule_files:
+  - generated/valkey-events-alerts.yaml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    name: healthy valkey stays quiet
+    input_series:
+      - series: 'redis_up{namespace="platform-events",pod="valkey-0"}'
+        values: '1x20'
+      - series: 'redis_memory_used_bytes{namespace="platform-events",pod="valkey-0"}'
+        values: '50000000x20'
+      - series: 'redis_memory_max_bytes{namespace="platform-events",pod="valkey-0"}'
+        values: '209715200x20'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ValkeyEventsDown
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: ValkeyEventsAbsent
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: ValkeyEventsMemoryHigh
+        exp_alerts: []
+
+  - interval: 1m
+    name: exporter up but valkey unreachable fires after 5m
+    input_series:
+      - series: 'redis_up{namespace="platform-events",pod="valkey-0"}'
+        values: '1 1 0x18'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: ValkeyEventsDown
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: ValkeyEventsDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: valkey
+              namespace: platform-events
+            exp_annotations:
+              summary: "Platform Valkey (event streams) is down"
+              description: >-
+                redis_exporter in platform-events cannot reach Valkey. Inbound
+                events for Claude Remote are not delivered; producers keep them in
+                their outbox and republish once Valkey is back.
+
+  - interval: 1m
+    name: no series at all fires absent, not down
+    input_series:
+      - series: 'redis_up{namespace="other",pod="x"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: ValkeyEventsDown
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: ValkeyEventsAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: valkey
+              namespace: platform-events
+            exp_annotations:
+              summary: "Platform Valkey (event streams) is not being scraped"
+              description: >-
+                No redis_up series from platform-events for 10 minutes: the valkey
+                pod is gone from discovery or its metrics port is blocked. Check
+                `kubectl -n platform-events get pods`.
+
+  - interval: 1m
+    name: memory above 80% for 10m fires warning
+    input_series:
+      - series: 'redis_memory_used_bytes{namespace="platform-events",pod="valkey-0"}'
+        values: '190000000x20'
+      - series: 'redis_memory_max_bytes{namespace="platform-events",pod="valkey-0"}'
+        values: '209715200x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: ValkeyEventsMemoryHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: valkey
+              namespace: platform-events
+            exp_annotations:
+              summary: "Platform Valkey above 80% of maxmemory"
+              description: >-
+                maxmemory-policy is noeviction, so writes fail at the limit and
+                producers fall back to their outbox. Check stream MAXLEN trimming
+                and consumer-group pending entries.

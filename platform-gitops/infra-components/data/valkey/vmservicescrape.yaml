@@ -1,0 +1,19 @@
+# VMServiceScrape for the redis_exporter sidecar. Native VMOperator kind rather
+# than monitoring.coreos.com/ServiceMonitor, which the operator auto-converts and
+# ArgoCD then reports as drift (same as argo-workflows/config/servicemonitor.yaml).
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMServiceScrape
+metadata:
+  name: valkey
+  namespace: platform-events
+  labels:
+    app.kubernetes.io/name: valkey
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: valkey
+  endpoints:
+    - port: metrics
+      interval: 30s
+      path: /metrics
+      scheme: http

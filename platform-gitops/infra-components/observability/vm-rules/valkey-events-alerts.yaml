@@ -1,0 +1,64 @@
+# Alerts for platform Valkey, the delivery layer for inbound events
+# (infra-components/data/valkey, mctlhq/.github#87).
+#
+# redis_* series come from the redis_exporter sidecar in the valkey pod, scraped
+# through the VMServiceScrape in platform-events
+# (infra-components/data/valkey/vmservicescrape.yaml).
+#
+# Down and absent are separate rules: `redis_up == 0` is an exporter that runs
+# but cannot reach Valkey; absent() is the whole pod gone from discovery, where
+# there is no series to compare against zero.
+#
+# No mctl_agent_self label: a down Valkey is a real platform incident that the
+# default route should open, not an alert about the agent's own tooling.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: valkey-events-alerts
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: mctl-platform
+    app.kubernetes.io/component: valkey
+spec:
+  groups:
+    - name: valkey.events
+      rules:
+        - alert: ValkeyEventsDown
+          expr: max by (namespace) (redis_up{namespace="platform-events"}) == 0
+          for: 5m
+          labels:
+            severity: critical
+            service: valkey
+          annotations:
+            summary: "Platform Valkey (event streams) is down"
+            description: >-
+              redis_exporter in platform-events cannot reach Valkey. Inbound
+              events for Claude Remote are not delivered; producers keep them in
+              their outbox and republish once Valkey is back.
+        - alert: ValkeyEventsAbsent
+          expr: absent(redis_up{namespace="platform-events"})
+          for: 10m
+          labels:
+            severity: critical
+            service: valkey
+          annotations:
+            summary: "Platform Valkey (event streams) is not being scraped"
+            description: >-
+              No redis_up series from platform-events for 10 minutes: the valkey
+              pod is gone from discovery or its metrics port is blocked. Check
+              `kubectl -n platform-events get pods`.
+        - alert: ValkeyEventsMemoryHigh
+          expr: |
+            max by (namespace) (redis_memory_used_bytes{namespace="platform-events"})
+              / max by (namespace) (redis_memory_max_bytes{namespace="platform-events"} > 0)
+              > 0.8
+          for: 10m
+          labels:
+            severity: warning
+            service: valkey
+          annotations:
+            summary: "Platform Valkey above 80% of maxmemory"
+            description: >-
+              maxmemory-policy is noeviction, so writes fail at the limit and
+              producers fall back to their outbox. Check stream MAXLEN trimming
+              and consumer-group pending entries.
