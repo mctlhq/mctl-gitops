@@ -724,8 +724,8 @@ backstage:
 configMaps:
   # Deny-by-default routing for the inbound events Channel. The session is
   # woken only for new or edited private messages to the operator's own
-  # Telegram account (924671154) and for pull request events in mctlhq
-  # repositories. The consumer name is fixed, so a restarted pod re-reads its
+  # Telegram account (210408407, the account the worker token reads) and for
+  # pull request events in mctlhq repositories. The consumer name is fixed, so a restarted pod re-reads its
   # own pending entries instead of leaving them to a dead consumer.
   mctl-events-policy:
     policy.json: |
@@ -738,7 +738,7 @@ configMaps:
             "stream": "mctl:events:telegram",
             "sources": ["mctl-telegram"],
             "types": ["telegram.message.created", "telegram.message.edited"],
-            "subject": {"account_id": ["924671154"]}
+            "subject": {"account_id": ["210408407"]}
           },
           {
             "stream": "mctl:events:github",
