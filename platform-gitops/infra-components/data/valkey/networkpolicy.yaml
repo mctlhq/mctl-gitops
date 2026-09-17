@@ -24,6 +24,8 @@ spec:
     - Ingress
   ingress:
     # mctl-telegram (producer) and claude-remote (consumer) both run in labs.
+    # The communication-agent listener that ingests real messages runs on the
+    # preview deployment, so both telegram instances may publish.
     - from:
         - namespaceSelector:
             matchLabels:
@@ -34,6 +36,7 @@ spec:
                 operator: In
                 values:
                   - labs-mctl-telegram
+                  - labs-mctl-telegram-preview
                   - labs-claude-remote
         # GitHub webhook producer.
         - namespaceSelector:
