@@ -204,6 +204,30 @@ OAuth provider. The portal is the owner's own aggregate view, which is also
 why the two admin tools being in its catalogue is not a customer-facing
 decision.
 
+### What the two nightly checks had to be told
+
+Both drift detectors were written when every registered server was manual and
+public, and a DCR server in a private repository is neither. Neither change is
+cosmetic — without them this registration breaks the checks rather than being
+covered by them.
+
+- `portal-auth-credentials-drift.py` compares the applied `auth_credentials`
+  blob against the live projection. This server has no blob **by design**, and
+  the script raised `Undetermined` for a missing one from inside its resource
+  loop, with no per-resource catch — so one DCR server in state aborted the
+  whole scan and the nightly write-only registration check would have reported
+  "could not run" for `tg` too, forever. `DCR_SERVERS` now names the servers
+  whose absence is the expected state; every other empty one still raises, and
+  a DCR server that *grows* a blob raises as well.
+- `portal-catalogue-drift.py` fetches each upstream's allowlist from
+  `raw.githubusercontent.com` with no token, which only works for a public
+  repository. `mctlhq/projects-mcp` is private on purpose, so `projects` is in
+  `PRIVATE_OWNERS` and its allowlist goes through the contents API with a
+  mctl-agents App token (`ALLOWLIST_TOKEN`, minted in `cloudflare-drift.yml`).
+  Its "an upstream vanished from production" branch now also consults OpenTofu
+  state: an `OWNERS` entry that has not been applied yet is a plan, not an
+  outage, which is the gap between merging this and clicking apply.
+
 ## Re-snapshot: refreshing a manual-OAuth server's tool catalogue
 
 The portal keeps a snapshot of each upstream's tools (`servers/{id}.tools`,

@@ -367,9 +367,29 @@ jobs:
       # condition is spelled out; `steps.plan.conclusion` is what gates it, the
       # same clean-plan requirement the registration step expresses via
       # success().
+      # One upstream, mctlhq/projects-mcp, is private on purpose, so its
+      # allowlist cannot be read from raw.githubusercontent.com the way the
+      # three public ones are. The mctl-agents App is installed on every
+      # repository in the org, and contents:read is all the fetch needs;
+      # GITHUB_TOKEN would not do, being scoped to this repository.
+      - name: Generate a read token for the private upstreams
+        id: allowlist_token
+        if: matrix.root == 'infrastructure/cloudflare/portal' && steps.plan.conclusion == 'success' && !cancelled()
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.AGENTS_APP_ID }}
+          private-key: ${{ secrets.AGENTS_APP_PRIVATE_KEY }}
+          owner: mctlhq
+          permission-contents: read
+          permission-metadata: read
+
       - name: Check the tool catalogue against the upstreams
         id: catalogue
         if: matrix.root == 'infrastructure/cloudflare/portal' && steps.plan.conclusion == 'success' && !cancelled()
+        env:
+          # Read by scripts/portal-catalogue-drift.py for the private
+          # upstreams only; the public three are still fetched anonymously.
+          ALLOWLIST_TOKEN: ${{ steps.allowlist_token.outputs.token }}
         run: |
           set -uo pipefail
           set +e
