@@ -18,9 +18,16 @@ policy and mounted into the pod so the server decides what each caller sees from
 the same lines — one list, not two. The chart renders ConfigMap content inline
 from values, which is why the list lives in a values file and is decoded twice.
 
-Sign-in is Google or a one-time PIN mailed to the address. The PIN is there
-because a customer's work address is not necessarily a Google account. Both
-providers are named by UUID: a data source was tried and removed, because the
+Sign-in is Google, and only Google since 2026-09-18. A one-time PIN mailed to
+the address was allowed at first, on the argument that a customer's work address
+is not necessarily a Google account; it was dropped because a code sent to
+whoever controls an inbox is a weaker thing to hold this behind than an account.
+The consequence is worth knowing before adding an address: a person in the
+grants list without a Google account is admitted by the policy and still cannot
+log in, and what they see is a product that does not work rather than a provider
+that is missing.
+
+The provider is named by UUID: a data source was tried and removed, because the
 read-only plan identity cannot see the account's identity configuration and
 returned an empty list instead of an error — a plan that proposed an application
 with no providers at all.
