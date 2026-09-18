@@ -13,7 +13,25 @@ metadata:
     # Deploys are deliberate here: the image carries a fixed copy of other
     # people's documentation, so a build is a decision about what is published.
     mctl.me/auto-deploy: "false"
+  links:
+    - url: https://ops.mctl.ai/applications/argocd/labs-projects-mcp
+      title: ArgoCD
+      icon: dashboard
+    # Private, unlike every other source link in this catalogue: the repository
+    # holds the grants table and third-party contact details.
+    - url: https://github.com/mctlhq/projects-mcp
+      title: Source Repository
+      icon: github
+    # Behind Cloudflare Access, so the link only opens for somebody the grants
+    # table already names.
+    - url: https://projects.mctl.ai
+      title: Service URL
+      icon: web
+  labels:
+    team: labs
+    env: apps
 spec:
   type: service
   lifecycle: production
-  owner: labs
+  owner: group:default/labs
+  system: system:default/team-labs

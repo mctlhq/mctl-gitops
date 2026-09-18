@@ -49,6 +49,30 @@ env:
   # a build; nothing is fetched at run time.
   PROJECTS_ROOT: /app/projects
 
+# /healthz is the one route that answers without an Access assertion, which is
+# what lets the kubelet reach it at all; Access still covers it from outside.
+# It answers only once the corpus has been read, which is the slow part of
+# startup, so readiness here means the pod can actually answer a question.
+# One replica means a restart is a short outage — that is the argument for the
+# startup and readiness probes, not against the liveness one.
+probes:
+  startup:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    failureThreshold: 24
+  readiness:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
+  liveness:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 30
+    periodSeconds: 15
+
 ingress:
   enabled: true
   # projects.mctl.ai is what the Access application secures and what a customer
