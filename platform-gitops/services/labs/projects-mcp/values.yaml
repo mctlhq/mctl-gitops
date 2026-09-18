@@ -1,0 +1,108 @@
+# Service: projects-mcp
+# Team: labs
+
+# Chart: base-service
+
+# The MCP connector customers use to ask about their own product. Source
+# mctlhq/projects-mcp (private). Cloudflare Access is the OAuth authorization
+# server in front of it (infrastructure/cloudflare/account/projects-mcp.tf);
+# this pod only verifies the assertion Access forwards, so it holds no client
+# secret, no signing key and no credential for anybody's documentation.
+
+image:
+  repository: ghcr.io/mctlhq/projects-mcp
+  tag: "0.1.0"
+imagePullSecrets:
+  - name: ghcr-credentials
+service:
+  port: 8787
+backstage:
+  kubernetesId: projects-mcp
+
+# One replica on purpose. Grants are re-read from a mounted file on a timer and
+# the documentation is baked into the image, so two pods would answer alike —
+# but there is nothing here to make two of them worth the memory yet.
+replicaCount: 1
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 192Mi
+  limits:
+    cpu: 500m
+    memory: 384Mi
+
+env:
+  PORT: "8787"
+  # Baked into every metadata document this server publishes, so it cannot move
+  # without invalidating what clients have already fetched.
+  PUBLIC_URL: https://projects.mctl.ai
+  # mbank.cloudflareaccess.com — the team this account's Access belongs to. The
+  # server builds the JWKS URL and the expected issuer from it.
+  ACCESS_TEAM_DOMAIN: mbank
+  # The AUD tag of the Access application, and the reason this value has no
+  # default in the server: an assertion minted for a different application would
+  # otherwise verify here.
+  ACCESS_AUD: dd49dee99fcb6d80c0ed1748524b9ad6a720d9faa0171581742dae08c3143ffa
+  GRANTS_FILE: /etc/projects-mcp/grants.yaml
+  # The copy committed in the image. Changing the corpus is a sync, a commit and
+  # a build; nothing is fetched at run time.
+  PROJECTS_ROOT: /app/projects
+
+ingress:
+  enabled: true
+  # projects.mctl.ai is what the Access application secures and what a customer
+  # types into their client. The generated labs- name is deliberately NOT here:
+  # it resolves to the same origin and is not covered by the Access application,
+  # which would make it a way around the whole authorization path.
+  hosts:
+    - projects.mctl.ai
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls:
+    - secretName: projects-mcp-tls
+      hosts:
+        - projects.mctl.ai
+
+# Who may reach this server, and what each person sees in each project.
+#
+# The same file decides both, and Terraform reads it from here to build the
+# Access policy (infrastructure/cloudflare/account/projects-mcp.tf), so an
+# address admitted by Cloudflare is an address the server knows. Editing it
+# changes what people see within GRANTS_TTL_MS of the ConfigMap remount, with
+# no release and no restart; Cloudflare's side of it needs an apply.
+configMaps:
+  projects-mcp-grants:
+    grants.yaml: |
+      # Levels are public ⊂ partner ⊂ internal. A project a person is not listed
+      # for does not exist as far as they are concerned: the server answers the
+      # same way it answers for a project that was never configured.
+      #
+      # The address must be the one the person signs in with, lowercase. Access
+      # offers Google and a one-time PIN mailed to that address, so a work
+      # address that is not a Google account still works.
+      grants:
+        - email: mashkoffdmitry@gmail.com
+          note: Owner. Sees everything, in every project.
+          projects:
+            lingscape: internal
+            livri: internal
+
+        # Customers are added one entry at a time, after their sign-in address
+        # is known. A customer gets `public` for their own project and nothing
+        # at all for anybody else's:
+        #
+        # - email: someone@example.com
+        #   note: Lingscape, client side.
+        #   projects:
+        #     lingscape: public
+
+extraVolumes:
+  - name: grants
+    configMap:
+      name: projects-mcp-grants
+
+extraVolumeMounts:
+  - name: grants
+    mountPath: /etc/projects-mcp
+    readOnly: true

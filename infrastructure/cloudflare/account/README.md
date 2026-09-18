@@ -12,10 +12,11 @@ with it. Everything else is still to be imported.
 `projects-mcp.tf` is the Cloudflare half of the connector customers use to ask
 about their own product. Access is the OAuth authorization server for that
 application; the origin only verifies the assertion Access forwards. Who may
-reach it is `projects-mcp-grants.yaml`, read by Terraform to build the policy
-and by the server to decide what each caller sees — one list, not two. The file
-moves next to the service when it is deployed, and the `projects_mcp_grants_file`
-variable moves with it.
+reach it is the grants list inside
+`platform-gitops/services/labs/projects-mcp/values.yaml`, read here to build the
+policy and mounted into the pod so the server decides what each caller sees from
+the same lines — one list, not two. The chart renders ConfigMap content inline
+from values, which is why the list lives in a values file and is decoded twice.
 
 Sign-in is Google or a one-time PIN mailed to the address. The PIN is there
 because a customer's work address is not necessarily a Google account. Both

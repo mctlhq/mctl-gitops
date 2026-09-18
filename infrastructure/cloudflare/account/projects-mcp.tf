@@ -15,16 +15,19 @@
 # The MCP portal is not on a customer's path at all. An application reached by its
 # own URL is reached by its own policy, so there is nothing to bypass.
 
-variable "projects_mcp_grants_file" {
+variable "projects_mcp_service_values" {
   description = <<-EOT
-    grants.yaml — the single list of who may reach projects.mctl.ai and at what
-    level. Resolved relative to this root, not to the repository: when the file
-    moves next to the service and the chart mounts it, this becomes
-    "../../../platform-gitops/services/labs/projects-mcp/grants.yaml" so both
-    sides keep reading one file.
+    The service's Helm values, which carry the grants list. Resolved relative to
+    this root, not to the repository.
+
+    The list lives there rather than here because the chart mounts it into the
+    pod from a ConfigMap, and base-service renders ConfigMap content inline from
+    values. Reading it back out is a little awkward and buys the thing that
+    matters: one list. An address Cloudflare admits is an address the server
+    knows, because both sides read the same lines.
   EOT
   type        = string
-  default     = "projects-mcp-grants.yaml"
+  default     = "../../../platform-gitops/services/labs/projects-mcp/values.yaml"
 }
 
 # The two identity providers Access offers on the login page, named outright.
@@ -59,7 +62,12 @@ variable "projects_mcp_otp_idp_id" {
 }
 
 locals {
-  projects_mcp_grants = yamldecode(file("${path.module}/${var.projects_mcp_grants_file}"))
+  projects_mcp_values = yamldecode(file("${path.module}/${var.projects_mcp_service_values}"))
+
+  # The ConfigMap entry is a string of YAML inside YAML, so it is decoded twice.
+  projects_mcp_grants = yamldecode(
+    local.projects_mcp_values.configMaps["projects-mcp-grants"]["grants.yaml"]
+  )
 
   # Addresses are lowercased here because they are compared as strings on both
   # sides: Access matches the claim, and the server looks the caller up in this

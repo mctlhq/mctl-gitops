@@ -1,0 +1,19 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: projects-mcp
+  namespace: labs
+  description: "MCP connector: customers ask about their own product's documentation and status"
+  annotations:
+    backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=labs-projects-mcp
+    backstage.io/kubernetes-id: projects-mcp
+    backstage.io/kubernetes-namespace: labs
+    argocd/app-name: labs-projects-mcp
+    github.com/source-repo: mctlhq/projects-mcp
+    # Deploys are deliberate here: the image carries a fixed copy of other
+    # people's documentation, so a build is a decision about what is published.
+    mctl.me/auto-deploy: "false"
+spec:
+  type: service
+  lifecycle: production
+  owner: labs
