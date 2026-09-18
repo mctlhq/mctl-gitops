@@ -14,8 +14,9 @@
 # a Google account still works.
 #
 # Moves to platform-gitops/services/labs/projects-mcp/grants.yaml when the
-# service is deployed, and the `grants_file` variable moves with it: the chart
-# mounts the file from there, and this root reads the same one.
+# service is deployed: the chart mounts the file from there, and this root reads
+# the same one through `projects_mcp_grants_file`, which is a path relative to
+# the root rather than to the repository.
 
 grants:
   - email: mashkoffdmitry@gmail.com

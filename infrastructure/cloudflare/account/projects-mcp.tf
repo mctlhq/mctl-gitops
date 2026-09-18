@@ -18,9 +18,10 @@
 variable "projects_mcp_grants_file" {
   description = <<-EOT
     grants.yaml — the single list of who may reach projects.mctl.ai and at what
-    level. Moves to platform-gitops/services/labs/projects-mcp/grants.yaml when
-    the service is deployed and the chart mounts it; this variable moves with it
-    so both sides keep reading one file.
+    level. Resolved relative to this root, not to the repository: when the file
+    moves next to the service and the chart mounts it, this becomes
+    "../../../platform-gitops/services/labs/projects-mcp/grants.yaml" so both
+    sides keep reading one file.
   EOT
   type        = string
   default     = "projects-mcp-grants.yaml"
@@ -73,6 +74,12 @@ resource "cloudflare_zero_trust_access_application" "projects_mcp" {
   account_id = var.account_id
   name       = "mctl Projects (projects.mctl.ai)"
   type       = "self_hosted"
+
+  # Both, deliberately. `destinations` is the current field and is what Access
+  # matches on; `domain` is the primary hostname the API and the dashboard show
+  # for the application, and leaving it to be inferred is not something to find
+  # out during an apply.
+  domain = "projects.mctl.ai"
 
   destinations = [
     {
