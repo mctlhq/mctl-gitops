@@ -102,9 +102,12 @@ configMaps:
       # for does not exist as far as they are concerned: the server answers the
       # same way it answers for a project that was never configured.
       #
-      # The address must be the one the person signs in with, lowercase. Access
-      # offers Google and a one-time PIN mailed to that address, so a work
-      # address that is not a Google account still works.
+      # The address must be the one the person signs in with, lowercase, and it
+      # must be a Google account: Google is the only provider Access offers for
+      # this application. An address added here that is not one is admitted by
+      # the policy and still cannot log in, and what that person sees is a
+      # product that does not work rather than a sign-in method that is missing.
+      # Check before adding, not after.
       grants:
         - email: mashkoffdmitry@gmail.com
           note: Owner. Sees everything, in every project.
