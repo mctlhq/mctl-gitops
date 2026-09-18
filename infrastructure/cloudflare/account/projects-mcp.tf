@@ -30,8 +30,8 @@ variable "projects_mcp_idp_ids" {
   description = <<-EOT
     The identity providers Access offers on the login page. Left null, the Google
     provider and the one-time PIN provider configured in this account are
-    discovered below. Set it explicitly if either lookup ever finds none or more
-    than one.
+    discovered below, and a precondition requires exactly one of each. Set this
+    to name them outright if that ever stops being true.
   EOT
   type        = list(string)
   default     = null
@@ -66,13 +66,15 @@ locals {
     idp.id if idp.type == "onetimepin"
   ]
 
-  # `one()` fails the plan when either provider is missing or duplicated. That
-  # is the intent: both cases need a person to decide, and silently picking the
-  # first would put the login page in front of the wrong directory.
-  projects_mcp_idp_ids = coalesce(var.projects_mcp_idp_ids, [
-    one(local.projects_mcp_google_idps),
-    one(local.projects_mcp_otp_idps),
-  ])
+  # The override wins when it is set; otherwise both providers come from the
+  # lookups above. The "exactly one of each" rule is a precondition on the
+  # resource rather than `one()` here: `one()` raises while the expression is
+  # evaluated, which no override can prevent, so the escape hatch would not
+  # work in the very case it exists for.
+  projects_mcp_idp_ids = var.projects_mcp_idp_ids != null ? var.projects_mcp_idp_ids : concat(
+    local.projects_mcp_google_idps,
+    local.projects_mcp_otp_idps,
+  )
 }
 
 resource "cloudflare_zero_trust_access_application" "projects_mcp" {
@@ -125,6 +127,23 @@ resource "cloudflare_zero_trust_access_application" "projects_mcp" {
     grant = {
       access_token_lifetime = "1h"
       session_duration      = "24h"
+    }
+  }
+
+  # A missing or duplicated provider needs a person to decide: silently taking
+  # the first would put the login page in front of the wrong directory. Setting
+  # projects_mcp_idp_ids names the providers outright and skips the check.
+  lifecycle {
+    precondition {
+      condition = var.projects_mcp_idp_ids != null || (
+        length(local.projects_mcp_google_idps) == 1 &&
+        length(local.projects_mcp_otp_idps) == 1
+      )
+      error_message = join(" ", [
+        "Expected exactly one Google and one one-time-PIN identity provider in this account;",
+        "found ${length(local.projects_mcp_google_idps)} and ${length(local.projects_mcp_otp_idps)}.",
+        "Set projects_mcp_idp_ids to name them explicitly.",
+      ])
     }
   }
 
