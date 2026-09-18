@@ -94,3 +94,59 @@ resource "cloudflare_zero_trust_access_ai_controls_mcp_server" "tg" {
     ignore_changes = [updated_tools, updated_prompts]
   }
 }
+
+# The fourth upstream, and the first registered by dynamic client registration
+# rather than by hand.
+#
+# The three above are `auth_mode: manual`, which costs them the thing this one
+# is being registered to test: a manual server's capability catalogue is
+# captured once, at the first user authorization, and never refreshed. That is
+# Cloudflare's documented limitation, and it is why `POST servers/{id}/sync`
+# answers `success` on those three while `last_synced` does not move —
+# synchronisation runs with an admin credential that only DCR registration
+# has.
+#
+# `projects.mctl.ai` can have that credential. It sits behind a Cloudflare
+# Access application with Managed OAuth and DCR enabled, so the portal can
+# register itself as a client without anybody pasting a client_id: hence no
+# `auth_credentials` and no `client_secret` here at all. Supplying either is
+# what opts a server INTO manual mode, which is the mode we are trying not to
+# be in.
+#
+# What Terraform cannot do is the next step. After the apply, an admin opens
+# the server in the dashboard and completes the upstream OAuth login once;
+# that account becomes the admin credential used for every later sync. Until
+# then the server sits in `waiting`. Two consequences worth knowing before
+# that login:
+#
+#   - Whoever logs in decides what the snapshot contains. This server hands an
+#     admin caller two more tools than a customer, so the snapshot taken by an
+#     owner address carries all eight. That is deliberate and is the decision
+#     recorded in mctlhq/projects-mcp docs/portal-allowlist.json.
+#   - The admin credential expires on the upstream's schedule and nobody is
+#     notified. `authentication_status` goes `stale` and the server stops
+#     appearing for end users. It is a read-only attribute, so it is worth
+#     watching rather than discovering.
+#
+# Customers do not reach this server through the portal and never will: they
+# add https://projects.mctl.ai/mcp as a connector directly, where Access is
+# the OAuth provider. The portal is the owner's own aggregate view.
+resource "cloudflare_zero_trust_access_ai_controls_mcp_server" "projects" {
+  account_id = var.account_id
+  id         = "projects"
+  name       = "mctl Projects (projects.mctl.ai)"
+  hostname   = "https://projects.mctl.ai/mcp"
+  auth_type  = "oauth"
+
+  description = "Customer-facing documentation and live status, per project, filtered by a per-address grant. Registered by DCR to test whether capability sync works where manual registration cannot. Refs mctlhq/.github#35, #64."
+
+  secure_web_gateway               = false
+  is_shared_oauth_callback_enabled = false
+
+  lifecycle {
+    # Same reasoning as the servers above: the allowlist is owned by the
+    # source repository (mctlhq/projects-mcp docs/portal-allowlist.json) and
+    # applied from there, so nothing here can revert it.
+    ignore_changes = [updated_tools, updated_prompts]
+  }
+}

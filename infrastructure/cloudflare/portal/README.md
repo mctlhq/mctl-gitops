@@ -156,6 +156,54 @@ Sign the upstream out and back in in the portal. `boundRefreshGrant`
 family's original grant, so a wider scope never reaches a token that already
 exists.
 
+## The fourth upstream, and the question it is there to answer
+
+`projects.mctl.ai` is registered by **dynamic client registration**, not by
+hand: `auth_type = "oauth"` with no `auth_credentials` and no `client_secret`.
+Supplying either is what opts a server into manual mode, and manual mode is
+the thing being avoided. It can be registered this way because it sits behind
+a Cloudflare Access application with Managed OAuth and DCR enabled, so the
+portal can register itself as a client with nobody pasting a client id.
+
+The section below is about what manual mode costs: a catalogue captured once
+and never refreshed. Cloudflare's own explanation of that limitation names the
+reason -- synchronisation runs with an admin credential that only DCR
+registration has. So this server is the test of whether the limitation ends
+where the documentation says it does. **It is not yet proven.** The check,
+after the first login:
+
+1. `last_synced` and `last_successful_sync` are set.
+2. Change the upstream's tool set (`mctlhq/projects-mcp` ships a new tool, or
+   an existing description changes), deploy it, then `POST servers/projects/sync`.
+3. `last_synced` moves and the new tool appears in `tools`. On the three
+   manual servers step 3 answers `success` and changes nothing, which is the
+   behaviour being compared against.
+
+If it holds, a tool can be added to a DCR upstream without the auth-type flip
+recipe below, and the catalogue stops being a thing to design around.
+
+### What Terraform cannot do here
+
+The apply creates the server and leaves it in `waiting`. An admin then opens
+it in the dashboard and completes the upstream OAuth login once; **that
+account becomes the admin credential** for every later sync. Two things follow
+from that, both worth knowing before clicking:
+
+- **Whoever logs in decides what the snapshot contains.** `projects` registers
+  two extra tools for a caller in its `ADMIN_EMAILS`, so an owner's login
+  snapshots eight tools and a customer's would snapshot six. The eight are the
+  recorded decision (`mctlhq/projects-mcp`, `docs/portal-allowlist.json`).
+- **The admin credential expires on the upstream's schedule and nobody is
+  told.** `authentication_status` goes `stale`, the server stops appearing for
+  end users, and the only way to notice is to look. It is read-only here, so
+  it belongs in whatever watches the portal rather than in this root.
+
+Customers never reach this server through the portal: they add
+`https://projects.mctl.ai/mcp` as a connector directly, where Access is the
+OAuth provider. The portal is the owner's own aggregate view, which is also
+why the two admin tools being in its catalogue is not a customer-facing
+decision.
+
 ## Re-snapshot: refreshing a manual-OAuth server's tool catalogue
 
 The portal keeps a snapshot of each upstream's tools (`servers/{id}.tools`,
