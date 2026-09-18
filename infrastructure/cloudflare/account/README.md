@@ -11,12 +11,29 @@ with it. Everything else is still to be imported.
 
 `projects-mcp.tf` is the Cloudflare half of the connector customers use to ask
 about their own product. Access is the OAuth authorization server for that
-application; the origin only verifies the assertion Access forwards. Who may
-reach it is the grants list inside
-`platform-gitops/services/labs/projects-mcp/values.yaml`, read here to build the
-policy and mounted into the pod so the server decides what each caller sees from
-the same lines — one list, not two. The chart renders ConfigMap content inline
-from values, which is why the list lives in a values file and is decoded twice.
+application; the origin only verifies the assertion Access forwards.
+
+**Access authenticates here; it does not authorize.** The policy admits any
+account from the Google provider below, and what each of those people may see
+is decided by the server alone, from a grants list in Vault
+(`secret/teams/labs/projects-mcp`, field `grants_yaml`) that this root does not
+read. A caller with no grant reaches the server and is told nothing: an empty
+project list, and every slug answering exactly as a slug that does not exist.
+
+Until 2026-09-19 the policy named one address per person, built from that list
+where it then lived — in `platform-gitops/services/labs/projects-mcp/values.yaml`,
+committed in this PUBLIC repository. Moving the list to Vault is what ended
+that, and it could not stay an input to this root afterwards: `plan` runs on
+every pull request, a pull request that adds a root is code this repository
+runs with that job's credentials, so a Vault token here is a Vault token any
+branch can take — and the one thing it reads is the list being protected. The
+policy gave up naming people rather than hand that out.
+
+What that costs is worth stating: the origin is now reachable by anyone who can
+sign in with Google, not by a named few. The server holds no credential for
+anybody's documentation and serves it from a copy baked into its image, and
+`tests/leak.test.ts` in `mctlhq/projects-mcp` sweeps every tool for a caller
+with no grant at all.
 
 Sign-in is Google, and only Google since 2026-09-18. A one-time PIN mailed to
 the address was allowed at first, on the argument that a customer's work address
@@ -36,10 +53,11 @@ The apply identity for this root needs `Access: Apps and Policies Write`; the
 plan identity is `CF_ACCOUNT_READ_TOKEN`, because the repository-wide read token
 is zone-scoped and answers 1010 on an account-level application.
 
-That values file is the one input to this root that lives outside
-`infrastructure/cloudflare/`, so `cloudflare-plan.yml` names it explicitly in
-its change filter. Without that a pull request could admit an address to the
-Access policy and never plan it.
+Every input to this root is now inside `infrastructure/cloudflare/`, so
+`cloudflare-plan.yml`'s change filter no longer needs to name anything else.
+It named that values file while the grants list was an input, because a pull
+request could otherwise admit an address to the Access policy and never plan
+it; with the policy naming nobody, there is no such pull request to catch.
 
 Imports arrive with:
 
