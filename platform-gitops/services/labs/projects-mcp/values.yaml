@@ -126,6 +126,32 @@ externalSecret:
       remoteKey: teams/labs/projects-mcp
       property: grants_yaml
 
+# Who may read the whole grants table.
+#
+# A separate ExternalSecret rather than another key on the one above, because
+# this one is consumed as environment and that one as a file: envFrom injects
+# every key in a Secret, and `grants.yaml` is not a name an environment
+# variable can have. The Vault path is the same, so there is still one place to
+# edit.
+#
+# Deliberately not a tier. `internal` says how much of a project's
+# documentation somebody may read; it must not also decide who gets to see
+# every customer's address and what each of them was granted. Empty or absent
+# means nobody, and nobody is the right default for a surface that would
+# otherwise appear because a value was forgotten.
+extraExternalSecrets:
+  projects-mcp-admins:
+    targetSecret: projects-mcp-admins
+    refreshInterval: 5m
+    data:
+      - secretKey: ADMIN_EMAILS
+        remoteKey: teams/labs/projects-mcp
+        property: ADMIN_EMAILS
+
+envFrom:
+  - secretRef:
+      name: projects-mcp-admins
+
 extraVolumes:
   - name: grants
     secret:
