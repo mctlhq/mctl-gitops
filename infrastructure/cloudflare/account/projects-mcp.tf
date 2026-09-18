@@ -26,13 +26,14 @@ variable "projects_mcp_grants_file" {
   default     = "projects-mcp-grants.yaml"
 }
 
-variable "projects_mcp_idp_id" {
+variable "projects_mcp_idp_ids" {
   description = <<-EOT
-    The identity provider Access offers on the login page. Left null, the Google
-    provider configured in this account is discovered below. Set it explicitly if
-    that lookup ever finds none or more than one.
+    The identity providers Access offers on the login page. Left null, the Google
+    provider and the one-time PIN provider configured in this account are
+    discovered below. Set it explicitly if either lookup ever finds none or more
+    than one.
   EOT
-  type        = string
+  type        = list(string)
   default     = null
 }
 
@@ -56,10 +57,22 @@ locals {
     idp.id if idp.type == "google" || idp.type == "google-apps"
   ]
 
-  # `one()` fails the plan when the account has no Google provider or has two.
-  # That is the intent: both cases need a person to decide, and silently picking
-  # the first would put the login page in front of the wrong directory.
-  projects_mcp_idp_id = coalesce(var.projects_mcp_idp_id, one(local.projects_mcp_google_idps))
+  # The one-time PIN provider mails a code to the address being signed in with.
+  # It is here because a customer's work address is not necessarily a Google
+  # account: the university side signs in with uni.lu addresses, and without
+  # this they would be admitted by the policy and unable to log in at all.
+  projects_mcp_otp_idps = [
+    for idp in data.cloudflare_zero_trust_access_identity_providers.all.result :
+    idp.id if idp.type == "onetimepin"
+  ]
+
+  # `one()` fails the plan when either provider is missing or duplicated. That
+  # is the intent: both cases need a person to decide, and silently picking the
+  # first would put the login page in front of the wrong directory.
+  projects_mcp_idp_ids = coalesce(var.projects_mcp_idp_ids, [
+    one(local.projects_mcp_google_idps),
+    one(local.projects_mcp_otp_idps),
+  ])
 }
 
 resource "cloudflare_zero_trust_access_application" "projects_mcp" {
@@ -78,8 +91,11 @@ resource "cloudflare_zero_trust_access_application" "projects_mcp" {
   # host to the cluster origin (zones/mctl-ai/dns.tf). Access sits in front of it
   # because the record is proxied, which is what makes this application effective.
 
-  allowed_idps              = [local.projects_mcp_idp_id]
-  auto_redirect_to_identity = true
+  allowed_idps = local.projects_mcp_idp_ids
+
+  # Two providers means the person picks one, so the skip-the-picker setting is
+  # off: Cloudflare only honours it when exactly one provider is allowed.
+  auto_redirect_to_identity = false
 
   # An MCP client is not a browser and has nobody to show a launcher to.
   app_launcher_visible = false

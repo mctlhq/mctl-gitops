@@ -9,8 +9,9 @@
 # does not exist as far as they are concerned: the server answers the same way
 # it answers for a project that was never configured.
 #
-# The address must be the one the person signs in with. Access is configured for
-# Google here, so it is their Google account address, lowercase.
+# The address must be the one the person signs in with, lowercase. Access offers
+# Google and a one-time PIN mailed to that address, so a work address that is not
+# a Google account still works.
 #
 # Moves to platform-gitops/services/labs/projects-mcp/grants.yaml when the
 # service is deployed, and the `grants_file` variable moves with it: the chart
