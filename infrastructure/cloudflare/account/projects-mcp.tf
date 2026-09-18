@@ -15,21 +15,6 @@
 # The MCP portal is not on a customer's path at all. An application reached by its
 # own URL is reached by its own policy, so there is nothing to bypass.
 
-variable "projects_mcp_service_values" {
-  description = <<-EOT
-    The service's Helm values, which carry the grants list. Resolved relative to
-    this root, not to the repository.
-
-    The list lives there rather than here because the chart mounts it into the
-    pod from a ConfigMap, and base-service renders ConfigMap content inline from
-    values. Reading it back out is a little awkward and buys the thing that
-    matters: one list. An address Cloudflare admits is an address the server
-    knows, because both sides read the same lines.
-  EOT
-  type        = string
-  default     = "../../../platform-gitops/services/labs/projects-mcp/values.yaml"
-}
-
 # The identity provider Access offers on the login page, named outright.
 #
 # A data source would have been nicer to read, and was tried: the plan identity
@@ -47,23 +32,6 @@ variable "projects_mcp_google_idp_id" {
   description = "The Google identity provider in this account."
   type        = string
   default     = "bb581a63-79d5-477b-af43-dd5cd07ff12b"
-}
-
-locals {
-  projects_mcp_values = yamldecode(file("${path.module}/${var.projects_mcp_service_values}"))
-
-  # The ConfigMap entry is a string of YAML inside YAML, so it is decoded twice.
-  projects_mcp_grants = yamldecode(
-    local.projects_mcp_values.configMaps["projects-mcp-grants"]["grants.yaml"]
-  )
-
-  # Addresses are lowercased here because they are compared as strings on both
-  # sides: Access matches the claim, and the server looks the caller up in this
-  # same file. One capital letter in an address would otherwise let a person
-  # through Cloudflare and leave them with no grant on the other side.
-  projects_mcp_emails = sort(distinct([
-    for grant in local.projects_mcp_grants.grants : lower(grant.email)
-  ]))
 }
 
 resource "cloudflare_zero_trust_access_application" "projects_mcp" {
@@ -140,17 +108,40 @@ resource "cloudflare_zero_trust_access_application" "projects_mcp" {
     }
   }
 
+  # Access authenticates; this server authorizes.
+  #
+  # The policy admitted one address per person until 2026-09-19, built from the
+  # grants list. Two things were wrong with that. The list carries customers'
+  # sign-in addresses, and building the policy from it meant the list had to be
+  # readable by a job that plans on every pull request in a PUBLIC repository —
+  # and a pull request that adds a root is code this repository runs with that
+  # job's credentials, so the credential that reads the list is reachable by
+  # any branch. And it was a second place where access lived: handing somebody
+  # a project meant an edit AND an apply here, which is how a person ends up
+  # granted in one place and refused in the other.
+  #
+  # So the list is in Vault, read only by the pod, and this policy admits any
+  # account from the one identity provider above. What that buys a stranger is
+  # an authenticated conversation with a server that tells them nothing: a
+  # caller with no grant sees an empty project list, and every project answers
+  # exactly as it answers for a project that does not exist. That is not a
+  # weaker check than the one removed — it is the same check, in the one place
+  # that was always doing it, and tests/leak.test.ts in mctlhq/projects-mcp
+  # sweeps every tool for a caller with no grant at all.
+  #
+  # What is genuinely given up: reaching the origin no longer requires being
+  # known in advance, so the pod is exposed to anyone who can sign in with
+  # Google rather than to a named few. The server holds no credential for
+  # anybody's documentation and serves it from a copy baked into its image, so
+  # what is behind the door is the filtering code and the corpus it filters.
   policies = [
     {
-      name       = "projects-mcp-named-people"
+      name       = "projects-mcp-any-google-account"
       decision   = "allow"
       precedence = 1
 
-      # Every address in grants.yaml, and nobody else. A person removed from
-      # that file stops getting past Cloudflare on the next apply, whatever the
-      # server would have said about them.
       include = [
-        for email in local.projects_mcp_emails : { email = { email = email } }
+        { login_method = { id = var.projects_mcp_google_idp_id } },
       ]
     },
   ]
@@ -161,9 +152,4 @@ resource "cloudflare_zero_trust_access_application" "projects_mcp" {
 output "projects_mcp_aud" {
   description = "ACCESS_AUD for projects-mcp."
   value       = cloudflare_zero_trust_access_application.projects_mcp.aud
-}
-
-output "projects_mcp_emails" {
-  description = "Addresses the Access policy admits, as read from grants.yaml."
-  value       = local.projects_mcp_emails
 }

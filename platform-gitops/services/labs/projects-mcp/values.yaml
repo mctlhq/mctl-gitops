@@ -90,54 +90,93 @@ ingress:
 
 # Who may reach this server, and what each person sees in each project.
 #
-# The same file decides both, and Terraform reads it from here to build the
-# Access policy (infrastructure/cloudflare/account/projects-mcp.tf), so an
-# address admitted by Cloudflare is an address the server knows. Editing it
-# changes what people see within GRANTS_TTL_MS of the ConfigMap remount, with
-# no release and no restart; Cloudflare's side of it needs an apply.
-configMaps:
-  projects-mcp-grants:
-    grants.yaml: |
-      # Levels are public ⊂ partner ⊂ internal. A project a person is not listed
-      # for does not exist as far as they are concerned: the server answers the
-      # same way it answers for a project that was never configured.
-      #
-      # The address must be the one the person signs in with, lowercase, and it
-      # must be a Google account: Google is the only provider Access offers for
-      # this application. An address added here that is not one is admitted by
-      # the policy and still cannot log in, and what that person sees is a
-      # product that does not work rather than a sign-in method that is missing.
-      # Check before adding, not after.
-      grants:
-        - email: mashkoffdmitry@gmail.com
-          note: Owner. Sees everything, in every project.
-          projects:
-            lingscape: internal
-            livri: internal
+# This is the only place access is decided. Cloudflare Access authenticates —
+# it admits any Google account and forwards a verified address — and the server
+# decides from this list what that address may see, which for an address that
+# is not here is nothing at all, indistinguishably from projects that do not
+# exist.
+#
+# The list itself is NOT in this repository. It carries every customer's
+# sign-in address and a note about each of them, and mctl-gitops is public: a
+# values file committed here is readable by anyone, with no account and no
+# clone. It lives in Vault at secret/teams/labs/projects-mcp, field
+# `grants_yaml`, and reaches the pod as a Secret through the tenant ESO store.
+#
+# Handing somebody a project is therefore one edit and no deploy:
+#
+#   vault kv patch secret/teams/labs/projects-mcp grants_yaml=@-
+#
+# refreshInterval below plus GRANTS_TTL_MS is the whole delay before the server
+# sees it. There is no apply and no second list to keep in step; that used to
+# be the Access policy, and removing it is what made this the only place.
+externalSecret:
+  targetSecret: projects-mcp-grants
+  # Five minutes, not the chart's hour. Handing somebody access should not be a
+  # thing you start and come back to; an hour of waiting is how a person ends up
+  # editing the list a second time because they think the first edit did not
+  # take.
+  refreshInterval: 5m
+  data:
+    # The Vault field is `grants_yaml` and the file is `grants.yaml`: ESO reads
+    # `property` as a gjson path, where a dot descends into an object, so a
+    # field actually named `grants.yaml` would be looked up as `yaml` inside
+    # `grants` and come back empty. The secretKey is what names the file on
+    # disk, and that keeps its dot.
+    - secretKey: grants.yaml
+      remoteKey: teams/labs/projects-mcp
+      property: grants_yaml
 
-        # A second account of the maintainer's, held at the level a customer
-        # gets, so the customer's view can be looked at without waiting for a
-        # customer. It is not a service account and holds no other privilege
-        # here: livri is absent on purpose, and absent means indistinguishable
-        # from a project that was never configured.
-        - email: moonqua@gmail.com
-          note: Test account. Stands in for a lingscape client.
-          projects:
-            lingscape: public
+# Who may read the whole grants table.
+#
+# A separate ExternalSecret rather than another key on the one above, because
+# this one is consumed as environment and that one as a file: envFrom injects
+# every key in a Secret, and `grants.yaml` is not a name an environment
+# variable can have. The Vault path is the same, so there is still one place to
+# edit.
+#
+# Deliberately not a tier. `internal` says how much of a project's
+# documentation somebody may read; it must not also decide who gets to see
+# every customer's address and what each of them was granted. Empty means
+# nobody, and nobody is the right default for a surface that would otherwise
+# appear because a value was forgotten.
+#
+# Empty, though — not deleted. Take somebody's admin rights away by setting
+#
+#   vault kv patch secret/teams/labs/projects-mcp ADMIN_EMAILS=
+#
+# and never by removing the field. ESO does not read a missing property as an
+# empty one: the read errors, the ExternalSecret stops syncing, and it leaves
+# the Secret it already wrote exactly as it was. The person you meant to remove
+# stays an admin, for as long as nobody looks. It is not silent — the
+# ExternalSecret goes Ready: False and the Application turns Degraded — but a
+# revocation that announces itself as an infrastructure fault and then does not
+# revoke anything is worse than one that fails outright. The same is true of
+# `grants_yaml` above: both fields are emptied, never deleted.
+extraExternalSecrets:
+  projects-mcp-admins:
+    targetSecret: projects-mcp-admins
+    refreshInterval: 5m
+    data:
+      - secretKey: ADMIN_EMAILS
+        remoteKey: teams/labs/projects-mcp
+        property: ADMIN_EMAILS
 
-        # Customers are added one entry at a time, after their sign-in address
-        # is known. A customer gets `public` for their own project and nothing
-        # at all for anybody else's:
-        #
-        # - email: someone@example.com
-        #   note: Lingscape, client side.
-        #   projects:
-        #     lingscape: public
+envFrom:
+  - secretRef:
+      name: projects-mcp-admins
+      # For the case the note above does not cover: the field having never
+      # been there at all. Then ESO's first read errors too, but there is no
+      # Secret yet to leave behind, and an envFrom that requires one stops the
+      # container with CreateContainerConfigError. A service that will not
+      # start because nobody has been made an admin yet is the wrong failure.
+      # Optional, the variable is unset, the server defaults ADMIN_EMAILS to ""
+      # and registers the admin tools for no one.
+      optional: true
 
 extraVolumes:
   - name: grants
-    configMap:
-      name: projects-mcp-grants
+    secret:
+      secretName: projects-mcp-grants
 
 extraVolumeMounts:
   - name: grants
