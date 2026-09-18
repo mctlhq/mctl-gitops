@@ -136,9 +136,22 @@ externalSecret:
 #
 # Deliberately not a tier. `internal` says how much of a project's
 # documentation somebody may read; it must not also decide who gets to see
-# every customer's address and what each of them was granted. Empty or absent
-# means nobody, and nobody is the right default for a surface that would
-# otherwise appear because a value was forgotten.
+# every customer's address and what each of them was granted. Empty means
+# nobody, and nobody is the right default for a surface that would otherwise
+# appear because a value was forgotten.
+#
+# Empty, though — not deleted. Take somebody's admin rights away by setting
+#
+#   vault kv patch secret/teams/labs/projects-mcp ADMIN_EMAILS=
+#
+# and never by removing the field. ESO does not read a missing property as an
+# empty one: the read errors, the ExternalSecret stops syncing, and it leaves
+# the Secret it already wrote exactly as it was. The person you meant to remove
+# stays an admin, for as long as nobody looks. It is not silent — the
+# ExternalSecret goes Ready: False and the Application turns Degraded — but a
+# revocation that announces itself as an infrastructure fault and then does not
+# revoke anything is worse than one that fails outright. The same is true of
+# `grants_yaml` above: both fields are emptied, never deleted.
 extraExternalSecrets:
   projects-mcp-admins:
     targetSecret: projects-mcp-admins
@@ -151,15 +164,13 @@ extraExternalSecrets:
 envFrom:
   - secretRef:
       name: projects-mcp-admins
-      # Without this the sentence above is false. ESO does not read a missing
-      # property as an empty one: if ADMIN_EMAILS is not in Vault the
-      # ExternalSecret fails to sync, the Secret is never created, and an
-      # envFrom that requires it stops the container with
-      # CreateContainerConfigError. So "absent means nobody" would have meant
-      # "absent takes the service down" — the opposite of a safe default, and
-      # reached by deleting one field. Optional, the variable is simply unset,
-      # the server defaults ADMIN_EMAILS to "" and registers the admin tools
-      # for no one.
+      # For the case the note above does not cover: the field having never
+      # been there at all. Then ESO's first read errors too, but there is no
+      # Secret yet to leave behind, and an envFrom that requires one stops the
+      # container with CreateContainerConfigError. A service that will not
+      # start because nobody has been made an admin yet is the wrong failure.
+      # Optional, the variable is unset, the server defaults ADMIN_EMAILS to ""
+      # and registers the admin tools for no one.
       optional: true
 
 extraVolumes:
