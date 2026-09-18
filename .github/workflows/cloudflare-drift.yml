@@ -380,6 +380,13 @@ jobs:
           app-id: ${{ secrets.AGENTS_APP_ID }}
           private-key: ${{ secrets.AGENTS_APP_PRIVATE_KEY }}
           owner: mctlhq
+          # The one private upstream in PRIVATE_OWNERS, named rather than
+          # left open. Without `repositories:` the token carries contents
+          # read across every repository the App is installed on, which is
+          # all of them; this step reads one file in one repo. Widen only
+          # when a second private upstream is added there, and add the row
+          # to docs/runbooks/agents-app-secret-exposure.md when you do.
+          repositories: projects-mcp
           permission-contents: read
           permission-metadata: read
 
