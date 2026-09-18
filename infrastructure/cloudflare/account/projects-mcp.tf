@@ -26,19 +26,35 @@ variable "projects_mcp_grants_file" {
   default     = "projects-mcp-grants.yaml"
 }
 
-variable "projects_mcp_idp_ids" {
-  description = <<-EOT
-    The identity providers Access offers on the login page. Left null, the Google
-    provider and the one-time PIN provider configured in this account are
-    discovered below, and a precondition requires exactly one of each. Set this
-    to name them outright if that ever stops being true.
-  EOT
-  type        = list(string)
-  default     = null
+# The two identity providers Access offers on the login page, named outright.
+#
+# A data source would have been nicer to read, and was tried: the plan identity
+# for this root is read-only and deliberately does not carry
+# `Access: Organizations, Identity Providers, and Groups Read`, so the lookup
+# came back with an empty list rather than an error and the plan proposed an
+# application with no providers at all. A wrong answer that looks like an answer
+# is worse than a pasted UUID, and widening a read-only plan token to see the
+# account's identity configuration is the wrong way to avoid one.
+#
+# Neither value is a secret; both identify objects in this account. Confirm with
+# `GET /accounts/{account_id}/access/identity_providers`.
+
+variable "projects_mcp_google_idp_id" {
+  description = "The Google identity provider in this account."
+  type        = string
+  default     = "bb581a63-79d5-477b-af43-dd5cd07ff12b"
 }
 
-data "cloudflare_zero_trust_access_identity_providers" "all" {
-  account_id = var.account_id
+variable "projects_mcp_otp_idp_id" {
+  description = <<-EOT
+    The one-time PIN provider. It mails a code to the address being signed in
+    with, and it is offered because a customer's work address is not necessarily
+    a Google account: the university side signs in with uni.lu addresses, and
+    with Google alone they would be admitted by the policy and still unable to
+    log in.
+  EOT
+  type        = string
+  default     = "e3a75cb3-c81f-43db-acf2-579db7949595"
 }
 
 locals {
@@ -51,30 +67,6 @@ locals {
   projects_mcp_emails = sort(distinct([
     for grant in local.projects_mcp_grants.grants : lower(grant.email)
   ]))
-
-  projects_mcp_google_idps = [
-    for idp in data.cloudflare_zero_trust_access_identity_providers.all.result :
-    idp.id if idp.type == "google" || idp.type == "google-apps"
-  ]
-
-  # The one-time PIN provider mails a code to the address being signed in with.
-  # It is here because a customer's work address is not necessarily a Google
-  # account: the university side signs in with uni.lu addresses, and without
-  # this they would be admitted by the policy and unable to log in at all.
-  projects_mcp_otp_idps = [
-    for idp in data.cloudflare_zero_trust_access_identity_providers.all.result :
-    idp.id if idp.type == "onetimepin"
-  ]
-
-  # The override wins when it is set; otherwise both providers come from the
-  # lookups above. The "exactly one of each" rule is a precondition on the
-  # resource rather than `one()` here: `one()` raises while the expression is
-  # evaluated, which no override can prevent, so the escape hatch would not
-  # work in the very case it exists for.
-  projects_mcp_idp_ids = var.projects_mcp_idp_ids != null ? var.projects_mcp_idp_ids : concat(
-    local.projects_mcp_google_idps,
-    local.projects_mcp_otp_idps,
-  )
 }
 
 resource "cloudflare_zero_trust_access_application" "projects_mcp" {
@@ -93,7 +85,10 @@ resource "cloudflare_zero_trust_access_application" "projects_mcp" {
   # host to the cluster origin (zones/mctl-ai/dns.tf). Access sits in front of it
   # because the record is proxied, which is what makes this application effective.
 
-  allowed_idps = local.projects_mcp_idp_ids
+  allowed_idps = [
+    var.projects_mcp_google_idp_id,
+    var.projects_mcp_otp_idp_id,
+  ]
 
   # Two providers means the person picks one, so the skip-the-picker setting is
   # off: Cloudflare only honours it when exactly one provider is allowed.
@@ -127,23 +122,6 @@ resource "cloudflare_zero_trust_access_application" "projects_mcp" {
     grant = {
       access_token_lifetime = "1h"
       session_duration      = "24h"
-    }
-  }
-
-  # A missing or duplicated provider needs a person to decide: silently taking
-  # the first would put the login page in front of the wrong directory. Setting
-  # projects_mcp_idp_ids names the providers outright and skips the check.
-  lifecycle {
-    precondition {
-      condition = var.projects_mcp_idp_ids != null || (
-        length(local.projects_mcp_google_idps) == 1 &&
-        length(local.projects_mcp_otp_idps) == 1
-      )
-      error_message = join(" ", [
-        "Expected exactly one Google and one one-time-PIN identity provider in this account;",
-        "found ${length(local.projects_mcp_google_idps)} and ${length(local.projects_mcp_otp_idps)}.",
-        "Set projects_mcp_idp_ids to name them explicitly.",
-      ])
     }
   }
 

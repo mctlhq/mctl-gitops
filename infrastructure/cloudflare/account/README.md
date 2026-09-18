@@ -17,14 +17,14 @@ and by the server to decide what each caller sees — one list, not two. The fil
 moves next to the service when it is deployed, and the `projects_mcp_grants_file`
 variable moves with it.
 
-Sign-in is Google or a one-time PIN mailed to the address. Both providers are
-already configured in this account and are found by type through a data source
-rather than pasted as UUIDs; the PIN is there because a customer's work address
-is not necessarily a Google account.
+Sign-in is Google or a one-time PIN mailed to the address. The PIN is there
+because a customer's work address is not necessarily a Google account. Both
+providers are named by UUID: a data source was tried and removed, because the
+read-only plan identity cannot see the account's identity configuration and
+returned an empty list instead of an error — a plan that proposed an application
+with no providers at all.
 
-The apply identity for this root needs `Access: Apps and Policies Write` and
-`Access: Organizations, Identity Providers, and Groups Read` — the second for
-that lookup.
+The apply identity for this root needs `Access: Apps and Policies Write`.
 
 Imports arrive with:
 
