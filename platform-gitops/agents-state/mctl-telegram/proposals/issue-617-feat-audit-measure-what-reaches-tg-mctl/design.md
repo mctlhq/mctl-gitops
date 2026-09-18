@@ -57,8 +57,8 @@ capture and no new correlation identifier.
 | --- | --- |
 | `mctl.edge.request_id` | `edgectx.Context.RequestID` |
 | `mctl.edge.route` | `edgectx.Context.Route` |
-| `mcp.method` | `edgectx.Context.Method` |
-| `mcp.name` | `edgectx.Context.Name` |
+| `mcp.method` | `edgectx.Context.MCPMethod` |
+| `mcp.name` | `edgectx.Context.MCPName` |
 | `mcp.protocol_version` | `edgectx.Context.ProtocolVersion` |
 | `mctl.tool.name` | existing audited tool name |
 | `mctl.tool.status` | existing audited status |
