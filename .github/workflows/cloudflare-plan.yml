@@ -73,7 +73,16 @@ jobs:
           # pull request editing only that file could otherwise excuse a root
           # without a single check running. cloudflare-drift.yml is here for the
           # same reason: it shares the discovery and the exception list.
-          if grep -qE '^(infrastructure/cloudflare/|\.github/scripts/cloudflare-local-state-roots\.sh$|\.github/workflows/cloudflare-(plan|drift)\.yml$)' <<< "$files"; then
+          #
+          # The projects-mcp grants list is the one Cloudflare input that lives
+          # outside this tree. The account root reads it with file() to build
+          # the Access policy (var.projects_mcp_service_values), so adding or
+          # removing an address there changes who may reach projects.mctl.ai
+          # while touching nothing under infrastructure/cloudflare/. Caught on
+          # #1272, which admitted an address and went green with the plan job
+          # skipped. A root's inputs are part of what the gate is made of, the
+          # same argument as the two files above.
+          if grep -qE '^(infrastructure/cloudflare/|platform-gitops/services/labs/projects-mcp/values\.yaml$|\.github/scripts/cloudflare-local-state-roots\.sh$|\.github/workflows/cloudflare-(plan|drift)\.yml$)' <<< "$files"; then
             changed=true
           else
             changed=false
