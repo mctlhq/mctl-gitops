@@ -1,0 +1,35 @@
+# Who may reach projects.mctl.ai, and what each person sees there.
+#
+# This file is the only place access is granted. Terraform reads it to build the
+# Access policy (who gets past Cloudflare at all), and the server reads the same
+# file to decide which level each caller holds in each project. Revoking is
+# deleting one entry; there is no second list to keep in step.
+#
+# Levels are public ⊂ partner ⊂ internal. A project a person is not listed for
+# does not exist as far as they are concerned: the server answers the same way
+# it answers for a project that was never configured.
+#
+# The address must be the one the person signs in with, lowercase. Access offers
+# Google and a one-time PIN mailed to that address, so a work address that is not
+# a Google account still works.
+#
+# Moves to platform-gitops/services/labs/projects-mcp/grants.yaml when the
+# service is deployed: the chart mounts the file from there, and this root reads
+# the same one through `projects_mcp_grants_file`, which is a path relative to
+# the root rather than to the repository.
+
+grants:
+  - email: mashkoffdmitry@gmail.com
+    note: Owner. Sees everything, in every project.
+    projects:
+      lingscape: internal
+      livri: internal
+
+  # Customers are added one entry at a time, after their sign-in address is
+  # known. A customer gets `public` for their own project and nothing at all
+  # for anybody else's:
+  #
+  # - email: someone@example.com
+  #   note: Lingscape, client side.
+  #   projects:
+  #     lingscape: public
