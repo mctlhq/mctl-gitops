@@ -30,7 +30,7 @@ variable "projects_mcp_service_values" {
   default     = "../../../platform-gitops/services/labs/projects-mcp/values.yaml"
 }
 
-# The two identity providers Access offers on the login page, named outright.
+# The identity provider Access offers on the login page, named outright.
 #
 # A data source would have been nicer to read, and was tried: the plan identity
 # for this root is read-only and deliberately does not carry
@@ -40,25 +40,13 @@ variable "projects_mcp_service_values" {
 # is worse than a pasted UUID, and widening a read-only plan token to see the
 # account's identity configuration is the wrong way to avoid one.
 #
-# Neither value is a secret; both identify objects in this account. Confirm with
-# `GET /accounts/{account_id}/access/identity_providers`.
+# The value is not a secret; it identifies an object in this account. Confirm
+# with `GET /accounts/{account_id}/access/identity_providers`.
 
 variable "projects_mcp_google_idp_id" {
   description = "The Google identity provider in this account."
   type        = string
   default     = "bb581a63-79d5-477b-af43-dd5cd07ff12b"
-}
-
-variable "projects_mcp_otp_idp_id" {
-  description = <<-EOT
-    The one-time PIN provider. It mails a code to the address being signed in
-    with, and it is offered because a customer's work address is not necessarily
-    a Google account: the university side signs in with uni.lu addresses, and
-    with Google alone they would be admitted by the policy and still unable to
-    log in.
-  EOT
-  type        = string
-  default     = "e3a75cb3-c81f-43db-acf2-579db7949595"
 }
 
 locals {
@@ -100,13 +88,25 @@ resource "cloudflare_zero_trust_access_application" "projects_mcp" {
   # host to the cluster origin (zones/mctl-ai/dns.tf). Access sits in front of it
   # because the record is proxied, which is what makes this application effective.
 
+  # Google alone. The one-time PIN provider (e3a75cb3-c81f-43db-acf2-579db7949595)
+  # was allowed here at first, on the argument that a customer's work address is
+  # not necessarily a Google account, and removed on 2026-09-18: a code mailed to
+  # whoever controls an inbox is a weaker thing to hold this behind than an
+  # account, and the addresses actually being admitted are Google-backed.
+  #
+  # The cost is real and belongs next to the decision: an address in the grants
+  # list that is not a Google account is now admitted by the policy and still
+  # unable to log in, which looks to that person like a broken product rather
+  # than a missing provider. Restoring it is putting the UUID above back in this
+  # list; nothing else here depends on the count.
   allowed_idps = [
     var.projects_mcp_google_idp_id,
-    var.projects_mcp_otp_idp_id,
   ]
 
-  # Two providers means the person picks one, so the skip-the-picker setting is
-  # off: Cloudflare only honours it when exactly one provider is allowed.
+  # One provider, so there is nothing to pick — but the picker page is also
+  # where Access says "That account does not have access", and skipping it
+  # sends a refused person straight back to Google instead of telling them
+  # why. Left off deliberately.
   auto_redirect_to_identity = false
 
   # An MCP client is not a browser and has nobody to show a launcher to.
