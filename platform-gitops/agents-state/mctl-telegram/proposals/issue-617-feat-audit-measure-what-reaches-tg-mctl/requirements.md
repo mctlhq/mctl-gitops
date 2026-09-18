@@ -53,8 +53,8 @@ contract.
   SHALL set these attributes from the same values already used for audit/slog:
   - `mctl.edge.request_id` <- `edgectx.Context.RequestID`
   - `mctl.edge.route` <- `edgectx.Context.Route`
-  - `mcp.method` <- `edgectx.Context.Method`
-  - `mcp.name` <- `edgectx.Context.Name`
+  - `mcp.method` <- `edgectx.Context.MCPMethod`
+  - `mcp.name` <- `edgectx.Context.MCPName`
   - `mcp.protocol_version` <- `edgectx.Context.ProtocolVersion`
   - `mctl.tool.name` <- audited tool name
   - `mctl.tool.status` <- audited status
