@@ -314,13 +314,20 @@ Nothing is committed. CI reads:
   Its `Access: Apps and Policies` is **zone**-scoped, which is not the same
   permission as the account-level one: reading an Access application in the
   account answers `1010 auth.forbidden` with this token.
-- `CF_ACCOUNT_READ_TOKEN` — plan and drift identity for
+- `CF_ACCOUNT_READ_TOKEN` — read identity for
   `infrastructure/cloudflare/account` alone, `Account -> Access: Apps and
   Policies -> Read` on this account and nothing else. Without it that root
   cannot refresh the Access application it now holds, and every plan of it
   fails on the refresh rather than reporting a diff. Absent, the chain in
   `cloudflare-plan.yml` and `cloudflare-drift.yml` falls back to the zone
   credential, so the gap shows up as a failing root rather than a silent skip.
+
+  **Three workflows, not two.** `cloudflare-apply.yml` has a read-only `plan`
+  job of its own, and it needs this token for the same reason. That was missed
+  when the token was introduced and the account root became unappliable on its
+  second change: the first apply had nothing to refresh, so the gap only
+  appeared once the application existed. A new per-root read credential belongs
+  in all three chains at once.
 
 Everything above is a **repository** secret. `R2_CF_STATE_*` should not be:
 it has exactly one consumer, `opentofu-state-backup.yml`, whose `state-backup`
