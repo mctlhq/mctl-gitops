@@ -311,6 +311,16 @@ Nothing is committed. CI reads:
   `Page Rules`, `Access: Apps and Policies`, `Email Routing Rules`,
   `Workers Routes`, all `Read`). Verified read-only: a `POST` to create a DNS
   record is rejected. It is never given to `cloudflare-apply.yml`.
+  Its `Access: Apps and Policies` is **zone**-scoped, which is not the same
+  permission as the account-level one: reading an Access application in the
+  account answers `1010 auth.forbidden` with this token.
+- `CF_ACCOUNT_READ_TOKEN` — plan and drift identity for
+  `infrastructure/cloudflare/account` alone, `Account -> Access: Apps and
+  Policies -> Read` on this account and nothing else. Without it that root
+  cannot refresh the Access application it now holds, and every plan of it
+  fails on the refresh rather than reporting a diff. Absent, the chain in
+  `cloudflare-plan.yml` and `cloudflare-drift.yml` falls back to the zone
+  credential, so the gap shows up as a failing root rather than a silent skip.
 
 Everything above is a **repository** secret. `R2_CF_STATE_*` should not be:
 it has exactly one consumer, `opentofu-state-backup.yml`, whose `state-backup`

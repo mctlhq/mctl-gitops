@@ -130,9 +130,19 @@ jobs:
       # and to see zero zones. An expression rather than a lookup because
       # secrets cannot be indexed by a variable -- same explicit chain as
       # cloudflare-apply.yml, and it is also the allowlist.
+      #
+      # infrastructure/cloudflare/account is account-level for the same reason
+      # and now holds an Access application, which the zone credential cannot
+      # even read: it answers 1010 auth.forbidden on the refresh, so the root
+      # fails before it can compare anything. CF_ACCOUNT_READ_TOKEN is
+      # Account -> Access: Apps and Policies -> Read on this account alone.
+      # Absent, the chain falls back to the zone credential and that root keeps
+      # failing visibly rather than being skipped.
       CLOUDFLARE_API_TOKEN: >-
         ${{ matrix.root == 'infrastructure/cloudflare/portal'
          && secrets.CF_PORTAL_READ_TOKEN
+         || matrix.root == 'infrastructure/cloudflare/account'
+         && secrets.CF_ACCOUNT_READ_TOKEN
          || secrets.CLOUDFLARE_API_TOKEN }}
       # Drift only reads. It uses the same Object-Read-only state credential as
       # the plan workflow, which is why it also passes -lock=false: taking the
