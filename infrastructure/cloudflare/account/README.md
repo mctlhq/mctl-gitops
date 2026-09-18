@@ -25,7 +25,14 @@ read-only plan identity cannot see the account's identity configuration and
 returned an empty list instead of an error — a plan that proposed an application
 with no providers at all.
 
-The apply identity for this root needs `Access: Apps and Policies Write`.
+The apply identity for this root needs `Access: Apps and Policies Write`; the
+plan identity is `CF_ACCOUNT_READ_TOKEN`, because the repository-wide read token
+is zone-scoped and answers 1010 on an account-level application.
+
+That values file is the one input to this root that lives outside
+`infrastructure/cloudflare/`, so `cloudflare-plan.yml` names it explicitly in
+its change filter. Without that a pull request could admit an address to the
+Access policy and never plan it.
 
 Imports arrive with:
 
