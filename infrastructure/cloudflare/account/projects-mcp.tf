@@ -153,8 +153,3 @@ output "projects_mcp_aud" {
   description = "ACCESS_AUD for projects-mcp."
   value       = cloudflare_zero_trust_access_application.projects_mcp.aud
 }
-
-# How many addresses the policy admits, and not which. The count is what an
-# apply is checked against — "I added one person, one more is admitted" — and it
-# is the whole of that check that can be printed in a public log. To see the
-# list, read the Vault path.

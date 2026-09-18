@@ -151,6 +151,16 @@ extraExternalSecrets:
 envFrom:
   - secretRef:
       name: projects-mcp-admins
+      # Without this the sentence above is false. ESO does not read a missing
+      # property as an empty one: if ADMIN_EMAILS is not in Vault the
+      # ExternalSecret fails to sync, the Secret is never created, and an
+      # envFrom that requires it stops the container with
+      # CreateContainerConfigError. So "absent means nobody" would have meant
+      # "absent takes the service down" — the opposite of a safe default, and
+      # reached by deleting one field. Optional, the variable is simply unset,
+      # the server defaults ADMIN_EMAILS to "" and registers the admin tools
+      # for no one.
+      optional: true
 
 extraVolumes:
   - name: grants
