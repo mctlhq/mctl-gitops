@@ -1,0 +1,27 @@
+# Design: ghsa-batch-2026-09-11-upgrade-assessment
+
+## Current state
+Per `context/architecture.md`, all three tenants (`admins`, `labs`, `ovk`) run openclaw via Docker → mctl-gitops → ArgoCD, sharing the 3-layer skills architecture and the S3-backed state guards from ADR-0002 (s3-sync canary + restore-state probe). `mctl_get_service_status`/`mctl_get_service_config` confirm all three tenants are currently on image tag `2026.7.11-beta.2`, unchanged since at least 2026-08-22, while upstream's latest is `2026.9.4` — two monthly release trains ahead. `context/current-version.md` is stale (says `2026.3.14`, last updated 2026-04-26) and does not reflect either the actual deployed version or this gap. Ten official GHSA advisories were published upstream on 2026-09-11; we have not yet determined whether `2026.7.11-beta.2` is inside the affected range for any of them, nor which target version demonstrably fixes the fork-relevant ones (WhatsApp, Discord, Slack, exec-approval).
+
+## Proposed solution
+1. **Exposure assessment.** For each of the 10 GHSA advisories, read the advisory's "affected versions" / "patched versions" fields directly from `github.com/openclaw/openclaw/security/advisories` (primary source only — not third-party aggregators, consistent with how the inbox treated CVE-2026-41301/CVE-2026-32922 as unconfirmed) and check `2026.7.11-beta.2` against that range.
+2. **Target selection.** Prefer the newest `2026.9.x` release whose changelog or advisory cross-references confirm all fork-relevant fixes are included, over the `2026.6.35` extended-stable line, because issue #151054 shows the LTS line's backport coverage is currently undocumented and unverifiable. If LTS is chosen instead (e.g., for stability reasons), the residual risk of unconfirmed backport coverage must be explicitly written down and accepted, not assumed away.
+3. **Staged rollout.** Bump the image tag in mctl-gitops for `labs` first, observe for the standard ADR-0001 window, then `admins`, then `ovk` — no shortcuts. Per ADR-0002, pause the s3-sync canary for the duration of each tenant's rollout and let it restart with its normal delay; do not touch the restore-state probe timeout.
+4. **Version-record hygiene.** After all three tenants are confirmed on the new version, update `context/current-version.md` (version, per-tenant confirmation, update date) and, if any tenant diverges from the others post-rollout, add a new ADR documenting why.
+
+This sequencing (assess → select → stage → record) is the smallest change that closes the actual gap (unknown exposure + unknown patch target + stale version record) without touching anything unrelated (canary/probe internals, skills layout, other channels' code).
+
+## Alternatives
+- **Upgrade all three tenants simultaneously.** Rejected: directly violates ADR-0001's mandated `labs` → `admins` → `ovk` order and removes the canary benefit `labs` is supposed to provide.
+- **Patch by cherry-picking individual advisory fixes onto `2026.7.11-beta.2` instead of bumping the full version.** Rejected for now: higher engineering effort and risk of missing transitive fixes/dependency bumps bundled in the same releases; only worth revisiting if a full version bump proves blocked by an unrelated breaking change (e.g., the reported Node runtime/SDK execution policy changes in `2026.9.3`).
+- **Adopt `2026.6.35` (LTS) as the default "safe, no breaking changes" choice.** Rejected as the default: issue #151054 means we cannot currently verify it contains the September 11 fixes; only acceptable as a documented, explicitly-accepted-risk fallback.
+
+## Platform impact
+- **Migrations:** Standard image-tag bump per tenant via mctl-gitops/ArgoCD; no data migration expected unless the selected target version's changelog says otherwise (to be checked during target selection).
+- **Backward compatibility:** The `2026.9.3` third-party summary flags possible breaking changes to Node runtime requirements, SDK execution policies, and search-result callbacks, not yet confirmed against the primary changelog — this must be verified against the primary release notes before selecting `2026.9.x` as the target, and the `labs` observation window is specifically there to catch any such regression before `admins`/`ovk`.
+- **Resource impact (labs):** No expected footprint change from a version bump alone; however, `labs` is the first tenant in the rollout order and is currently trending toward its memory/CPU quota (see `labs-memory-quota-trend-review`). The rollout for this proposal SHOULD be sequenced after (or coordinated with) confirmation that `labs` has safe headroom, since the canary/probe restart cycle during rollout will transiently need pod headroom.
+- **Risks and mitigations:**
+  - Risk: `labs` lacks headroom for a canary rollout → Mitigation: check current `labs-memory-quota-trend-review` findings before starting the `labs` rollout step.
+  - Risk: rollout proceeds without confirming LTS backport coverage → Mitigation: explicit go/no-go checkpoint requiring either a `2026.9.x` target or a documented accepted-risk note for LTS.
+  - Risk: canary/probe misconfigured during rollout causing false alerts or a stuck ArgoCD sync → Mitigation: follow ADR-0002's documented pause/restart-with-delay procedure exactly; do not shorten the probe timeout.
+  - Risk: `ovk` restart during its rollout step causes customer-visible downtime → Mitigation: rollout only after successful `labs` and `admins` observation windows, per ADR-0001; no `ovk` action without the standard justification.
