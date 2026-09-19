@@ -1,0 +1,30 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: mctl-alice
+  namespace: labs
+  description: "MCP connector: AI assistant control for Yandex Alice smart speakers"
+  annotations:
+    backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=labs-mctl-alice
+    backstage.io/kubernetes-id: mctl-alice
+    backstage.io/kubernetes-namespace: labs
+    argocd/app-name: labs-mctl-alice
+    github.com/source-repo: mctlhq/mctl-alice
+  links:
+    - url: https://ops.mctl.ai/applications/argocd/labs-mctl-alice
+      title: ArgoCD
+      icon: dashboard
+    - url: https://github.com/mctlhq/mctl-alice
+      title: Source Repository
+      icon: github
+    - url: https://alice.mctl.ai
+      title: Service URL
+      icon: web
+  labels:
+    team: labs
+    env: apps
+spec:
+  type: service
+  lifecycle: production
+  owner: group:default/labs
+  system: system:default/team-labs
