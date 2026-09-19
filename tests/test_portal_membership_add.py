@@ -56,6 +56,7 @@ PORTAL_LIVE = {
 SERVER_LIVE = {
     "id": "projects",
     "tools": [{"name": "projects_list"}, {"name": "projects_status"}],
+    "prompts": [{"name": "projects_prompt_a"}],
 }
 
 STUB_CURL = r"""#!/bin/sh
@@ -93,6 +94,15 @@ case "$url" in
       # {"servers": [...]} becomes the new .result, id/hostname preserved.
       jq -c '. + {id:"mcp", hostname:"mcp.mctl.ai"}' "$STATE_FILE" > "$STATE_FILE.w"
       mv "$STATE_FILE.w" "$STATE_FILE"
+      # Models the measured API bug the README's re-snapshot recipe diffs
+      # against: "this API is on record answering 200 while keeping a field
+      # it was told to change." Only active when SPOIL_TG_ENABLED is set, so
+      # every other case still gets a faithful store.
+      if [ -n "${SPOIL_TG_ENABLED:-}" ]; then
+        jq -c '(.servers[] | select(.server_id=="tg") | .updated_tools[0].enabled) |= not' \
+          "$STATE_FILE" > "$STATE_FILE.s"
+        mv "$STATE_FILE.s" "$STATE_FILE"
+      fi
     fi
     printf '{"success":true,"result":%s}' "$(cat "$STATE_FILE")"
     ;;
@@ -124,7 +134,7 @@ def git(root, *args):
                    capture_output=True)
 
 
-def run(root, *args, portal=None, server=None, keep_state=False):
+def run(root, *args, portal=None, server=None, keep_state=False, spoil_tg=False):
     put_body = root / "put-body.json"
     put_body.unlink(missing_ok=True)
     if not keep_state:
@@ -146,6 +156,7 @@ def run(root, *args, portal=None, server=None, keep_state=False):
         ARGV_FILE=str(argv),
         STATE_FILE=str(root / "portal-state.json"),
         SERVER_STATE_FILE=str(server_state),
+        SPOIL_TG_ENABLED="1" if spoil_tg else "",
     )
     p = subprocess.run(["bash", str(root / SCRIPT_REL), *args],
                        capture_output=True, text=True, env=env)
@@ -177,6 +188,12 @@ def main():
               and {t["name"]: t["enabled"] for t in
                    [s for s in sent["servers"] if s["server_id"] == "projects"][0]["updated_tools"]}
               == {"projects_list": False, "projects_status": False},
+              json.dumps(sent)[:300])
+        check("the new entry carries every prompt disabled",
+              sent is not None
+              and {t["name"]: t["enabled"] for t in
+                   [s for s in sent["servers"] if s["server_id"] == "projects"][0]["updated_prompts"]}
+              == {"projects_prompt_a": False},
               json.dumps(sent)[:300])
         check("the new entry copies on_behalf/default_disabled from the agreeing existing members",
               sent is not None
@@ -234,6 +251,16 @@ def main():
               p.stderr[:200])
 
     with tempfile.TemporaryDirectory() as tmp:
+        # seerrsense is a live portal member (PORTAL_LIVE) with no Terraform
+        # resource at all, by design -- a DCR server registered out-of-band.
+        # The Terraform gate must not run for --check, only for a write.
+        root = fixture(tmp)
+        p, sent = run(root, "seerrsense", "--check")
+        check("--check on a live, non-Terraform-declared member succeeds",
+              p.returncode == 0 and sent is None and "already a member" in p.stdout,
+              f"rc={p.returncode} {(p.stdout + p.stderr)[:200]}")
+
+    with tempfile.TemporaryDirectory() as tmp:
         # A server_id containing ERE metacharacters must not match loosely
         # against an unrelated resource name.
         root = fixture(tmp, tf=TF_FIXTURE + '\nresource "cloudflare_zero_trust_access_ai_controls_mcp_server" "fooXbar" {\n}\n')
@@ -258,6 +285,34 @@ def main():
         check("disagreeing existing donors refuse rather than guess",
               p.returncode != 0 and sent is None and "do not agree" in p.stderr,
               p.stderr[:200])
+
+    with tempfile.TemporaryDirectory() as tmp:
+        # Existing members "agree" only because both are missing the keys
+        # entirely (the API having stopped projecting them) -- {} projects to
+        # {on_behalf: null, default_disabled: null}, which `unique` collapses
+        # to a single element, so the agreement check alone would pass this.
+        # The type check below it must catch it.
+        null_donors = json.loads(json.dumps(PORTAL_LIVE))
+        for s in null_donors["servers"]:
+            del s["on_behalf"]
+            del s["default_disabled"]
+        root = fixture(tmp)
+        p, sent = run(root, "projects", portal=null_donors)
+        check("agreeing but non-boolean (null) donors refuse rather than copy null",
+              p.returncode != 0 and sent is None and "not on a boolean value" in p.stderr,
+              p.stderr[:200])
+
+    with tempfile.TemporaryDirectory() as tmp:
+        # The API answers 200 while keeping a field it was told to change --
+        # measured behaviour per README.md's re-snapshot section. Here it
+        # silently flips tg's first tool back after the write, so what comes
+        # back does not match what was sent for a server this script never
+        # touched. The id-only check alone would call this a clean apply.
+        root = fixture(tmp)
+        p, sent = run(root, "projects", spoil_tg=True)
+        check("a write that returns something other than what was sent for an untouched member is refused",
+              p.returncode != 0 and "does not match what was sent" in p.stderr,
+              f"rc={p.returncode} {p.stderr[:300]}")
 
     with tempfile.TemporaryDirectory() as tmp:
         root = fixture(tmp)

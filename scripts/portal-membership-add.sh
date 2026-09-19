@@ -58,15 +58,17 @@ command -v jq >/dev/null || { echo "jq is required" >&2; exit 2; }
 git -C "$here" rev-parse --git-dir >/dev/null 2>&1 \
   || { echo "$here is not a git checkout; run this from a clone" >&2; exit 1; }
 
-# The server this script is about to add to the portal must already be a
+# The server this script is about to WRITE to the portal must already be a
 # reviewed, committed Terraform resource -- otherwise it is being invented
 # here rather than declared in the one place this repository says a server
-# is declared. A literal match, not a regex: $server can contain characters
-# ('.', '*', '[') that an ERE would treat as metacharacters and match loosely
-# against a resource this is not meant to find.
-git -C "$here" show "HEAD:$tf_rel" 2>/dev/null \
-  | grep -qF "resource \"cloudflare_zero_trust_access_ai_controls_mcp_server\" \"$server\"" \
-  || { echo "no cloudflare_zero_trust_access_ai_controls_mcp_server resource named '$server' in $tf_rel@HEAD; add and merge that first" >&2; exit 1; }
+# is declared. That is a property of the write, not of asking a question:
+# `api` and `seerrsense` are both members of portal `mcp` today with no
+# Terraform resource at all, by design (they are DCR servers registered
+# out-of-band; see portal-auth-credentials-drift.py's DCR_SERVERS and the
+# README), so gating --check on this too would make `--check api` fail with
+# a misleading "add and merge that first" for a server that is already a
+# correctly-configured member. The gate therefore runs only for apply/dry-run,
+# below the --check branch (see tf_declared() below, defined once used).
 
 base="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/access/ai-controls/mcp"
 cf() { curl -sS -K <(printf 'header = "Authorization: Bearer %s"\nheader = "Content-Type: application/json"\n' "$CLOUDFLARE_API_TOKEN") "$@"; }
@@ -96,14 +98,24 @@ if [ "$already" = true ]; then
   exit 0
 fi
 
+# A literal match, not a regex: $server can contain characters ('.', '*',
+# '[') that an ERE would treat as metacharacters and match loosely against a
+# resource this is not meant to find.
+tf_declared() { git -C "$here" show "HEAD:$tf_rel" 2>/dev/null \
+  | grep -qF "resource \"cloudflare_zero_trust_access_ai_controls_mcp_server\" \"$server\""; }
+tf_declared \
+  || { echo "no cloudflare_zero_trust_access_ai_controls_mcp_server resource named '$server' in $tf_rel@HEAD; add and merge that first" >&2; exit 1; }
+
 # The new server's own capability catalogue -- this is what a manual-OAuth
 # server's dashboard login (or a DCR server's automatic sync) has already
 # populated on the server resource itself, independent of any portal. Adding
-# it to the portal with no tools listed is not the same as "all disabled":
-# an empty updated_tools is undefined behaviour this script has not measured,
-# so every advertised tool gets an explicit, disabled entry instead.
+# it to the portal with no tools (or no prompts) listed is not the same as
+# "all disabled": an empty updated_tools/updated_prompts is undefined
+# behaviour this script has not measured, so every advertised tool and prompt
+# gets an explicit, disabled entry instead.
 server_obj=$(cf "$base/servers/$server" | must_succeed "read server $server")
 tools=$(jq -c '[.result.tools // [] | .[].name]' <<<"$server_obj")
+prompts=$(jq -c '[.result.prompts // [] | .[].name]' <<<"$server_obj")
 [ "$(jq 'length' <<<"$tools")" -gt 0 ] \
   || { echo "server '$server' has no tools in its catalogue yet (authentication_status is probably 'waiting'); nothing to enable, refusing to add an empty member" >&2; exit 1; }
 
@@ -114,14 +126,19 @@ tools=$(jq -c '[.result.tools // [] | .[].name]' <<<"$server_obj")
 # resources, api/seerrsense are DCR added out-of-band), and nothing here has
 # measured whether on_behalf/default_disabled vary by registration type --
 # so copying whichever entry happens to sort first is only safe once every
-# existing member is checked to agree on both fields. A donor that turned out
-# not to be representative would otherwise write a wrong value silently
-# rather than fail loudly.
+# existing member is checked to agree on both fields, AND both fields are
+# actually present as booleans (not this API having quietly stopped
+# projecting them, which `unique` would otherwise let through as "one
+# element" of null/null and this script would then send as explicit nulls --
+# exactly the wrong-value-silently case this check exists to prevent).
 [ "$(jq '.result.servers // [] | length' <<<"$before")" -gt 0 ] \
   || { echo "portal '$portal' has no existing members to copy a shape from; this script assumes at least one" >&2; exit 1; }
 donor_values=$(jq -c '[.result.servers // [] | .[] | {on_behalf, default_disabled}] | unique' <<<"$before")
 [ "$(jq 'length' <<<"$donor_values")" -eq 1 ] \
   || { echo "existing portal members do not agree on on_behalf/default_disabled, so there is no single safe default to copy for a new one: $(jq -c . <<<"$donor_values")" >&2; exit 1; }
+jq -e '.[0] | (.on_behalf | type) == "boolean" and (.default_disabled | type) == "boolean"' \
+  >/dev/null <<<"$donor_values" \
+  || { echo "existing portal members agree, but not on a boolean value, for on_behalf/default_disabled: $(jq -c . <<<"$donor_values"); refusing to copy a non-boolean shape" >&2; exit 1; }
 donor=$(jq '.result.servers[0]' <<<"$before")
 on_behalf=$(jq '.on_behalf' <<<"$donor")
 default_disabled=$(jq '.default_disabled' <<<"$donor")
@@ -131,8 +148,10 @@ new_entry=$(jq -c -n \
   --argjson on_behalf "$on_behalf" \
   --argjson default_disabled "$default_disabled" \
   --argjson tools "$tools" \
+  --argjson prompts "$prompts" \
   '{server_id: $server_id, on_behalf: $on_behalf, default_disabled: $default_disabled,
-    updated_tools: [$tools[] | {name: ., enabled: false}], updated_prompts: []}')
+    updated_tools: [$tools[] | {name: ., enabled: false}],
+    updated_prompts: [$prompts[] | {name: ., enabled: false}]}')
 
 if [ "$mode" = dry-run ]; then
   echo "would add to portal '$portal':"; jq . <<<"$new_entry"
@@ -154,6 +173,29 @@ body=$(jq -c --argjson new "$new_entry" '{servers: (.result.servers + [$new])}' 
 echo "adding:"; jq . <<<"$new_entry"
 
 res=$(cf -X PUT "$base/portals/$portal" --data "$body" | must_succeed "update portal")
+
+# id-only would pass a write that reverted somebody else's tool decisions: this
+# script, unlike portal-controls-apply.sh, sends the whole `servers` array
+# back, so a `tg`/`api`/`seerrsense` allowlist apply landing between this
+# script's read and its write is a legitimate concurrent change this script
+# must not silently undo -- but if it DID undo one, the id set alone would
+# still look clean (the mapping is still there, just reverted). The hand-run
+# recipe this replaces diffs decision-for-decision against what was SENT for
+# exactly this reason (README: "this API is on record answering 200 while
+# keeping a field it was told to change"), and this script already has both
+# sides of that comparison in hand.
+#
+# Scoped to entries OTHER than $server: the new entry legitimately gains
+# fields the API computes (id, authentication_status, tools, timestamps) that
+# were never in $body, so comparing it here would fail on every successful
+# apply, not just a broken one. Its own shape is asserted separately below.
+if ! diff -q <(jq -S --arg s "$server" '.servers | map(select(.server_id != $s)) | sort_by(.server_id)' <<<"$body") \
+             <(jq -S --arg s "$server" '.result.servers | map(select(.server_id != $s)) | sort_by(.server_id)' <<<"$res") >/dev/null; then
+  echo "the portal does not match what was sent: an existing mapping was altered or lost across the write -- those entries carry the tool allowlists of mctl-telegram, mctl-api and seerrsense; compare them before touching anything else" >&2
+  diff -u <(jq -S --arg s "$server" '.servers | map(select(.server_id != $s)) | sort_by(.server_id)' <<<"$body") \
+          <(jq -S --arg s "$server" '.result.servers | map(select(.server_id != $s)) | sort_by(.server_id)' <<<"$res") >&2 || true
+  exit 1
+fi
 
 jq -er --arg s "$server" --argjson before "$servers_before" '.result
   | ([.servers // [] | .[] | .server_id] | sort) as $after
