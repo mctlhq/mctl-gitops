@@ -1,6 +1,6 @@
-status: accepted
-updated_at: '2026-09-09T17:30:00Z'
-updated_by: mashkovd
+status: needs-triage
+updated_at: '2026-09-19T09:57:27Z'
+updated_by: mctl-agents[bot]
 source:
   type: github_issue
   repo: mctlhq/mctl-telegram
@@ -11,8 +11,13 @@ control:
 approval:
   approved_by: mashkovd
   approved_at: '2026-09-09T17:30:00Z'
-notes: >-
-  Accepted after implementation. Scope grew during review of
-  mctlhq/mctl-telegram#593 to four metric families / 118 series; see
-  requirements.md "Scope expanded during implementation". Already implemented —
-  do not schedule an implementer attempt against this proposal.
+notes: 'agent: implementer produced no commits'
+attempt:
+  id: 0df481d6fdb37bbfc6789285c4d663abbaf64217830bced8bb662914146dea43
+  started_at: '2026-09-19T09:57:02Z'
+  expires_at: '2026-09-19T12:07:02Z'
+  finished_at: '2026-09-19T09:57:27Z'
+failure:
+  code: no-commits
+  stage: agent
+  message: implementer produced no commits
