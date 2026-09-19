@@ -54,7 +54,7 @@ strategy:
 
 image:
   repository: ghcr.io/mctlhq/mctl-agents
-  tag: "1.47.0"
+  tag: "1.48.0"
 imagePullSecrets:
   - name: ghcr-credentials
 command: ["python", "-m", "orchestrator.temporal.worker", "--role", "implementation"]
