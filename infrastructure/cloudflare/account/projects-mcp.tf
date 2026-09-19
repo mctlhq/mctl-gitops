@@ -206,3 +206,44 @@ output "projects_mcp_aud" {
   description = "ACCESS_AUD for projects-mcp."
   value       = cloudflare_zero_trust_access_application.projects_mcp.aud
 }
+
+# A second application, scoped to the bare root path only, that bypasses
+# Access entirely. This exists solely so someone with no grant yet can find
+# out how to get one: the server now answers `/` with a plain HTML page
+# explaining how to add https://projects.mctl.ai/mcp as a custom connector,
+# and that page is unreachable to read if Access is already demanding an
+# identity before anyone has been told how to sign in.
+#
+# Scoped narrowly and deliberately: this does not widen what `/mcp` or
+# `/whoami` require. Those stay matched by the whole-domain application
+# above, which Cloudflare Access resolves with lower priority than this
+# exact-path one for `/` itself. If that precedence assumption is wrong,
+# `cloudflare-plan.yml`'s output on this PR is where it would show up — read
+# it before merging, not after.
+resource "cloudflare_zero_trust_access_application" "projects_mcp_landing" {
+  account_id = var.account_id
+  name       = "mctl Projects — public landing (projects.mctl.ai/)"
+  type       = "self_hosted"
+  domain     = "projects.mctl.ai/"
+
+  destinations = [
+    {
+      type = "public"
+      uri  = "projects.mctl.ai/"
+    },
+  ]
+
+  app_launcher_visible = false
+
+  policies = [
+    {
+      name       = "projects-mcp-landing-public"
+      decision   = "bypass"
+      precedence = 1
+
+      include = [
+        { everyone = {} },
+      ]
+    },
+  ]
+}
