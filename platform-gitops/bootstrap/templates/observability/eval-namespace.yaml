@@ -92,9 +92,26 @@ spec:
           protocol: UDP
         - port: 53
           protocol: TCP
+    # Pod and Service CIDRs, minus the node subnets, so a candidate cannot
+    # reach kubelet on 10250 directly. Mirrors
+    # helm-charts/tenant/templates/networkpolicy.yaml's allow-cluster-egress.
     - to:
         - ipBlock:
             cidr: 10.0.0.0/8
+            except:
+              # workers
+              - 10.0.0.0/24
+              # control plane
+              - 10.255.0.0/24
+    # kubernetes.default needs its own rule: Service DNAT resolves it to the
+    # control-plane endpoint before the exception above applies, so without
+    # this carve-out in-namespace API clients would be stranded.
+    - to:
+        - ipBlock:
+            cidr: 10.255.0.0/24
+      ports:
+        - protocol: TCP
+          port: 6443
     - to:
         - ipBlock:
             cidr: 172.16.0.0/12
