@@ -94,10 +94,10 @@ spec:
         # queue AGE, MctlAgentsImplementQueueAgeHigh below.
         #
         # `temporal_worker_task_slots_available`
-        # is a generic SDK metric name, and every rule in this group carries a
-        # static mctl_agent_self="true" that the AlertManager route DROPS. So
-        # an unscoped selector does not merely mislabel another team's
-        # saturation as ours — it silences their page. Nothing else in the
+        # is a generic SDK metric name, so an unscoped selector would read
+        # another team's saturation as ours and page on it under this
+        # alertname — which, per the header above, lands on mctl-agent
+        # rather than on whoever runs that workload. Nothing else in the
         # cluster is scraped into these series today; the guard costs one
         # selector and removes the need to remember this when something is.
         #
@@ -214,16 +214,45 @@ spec:
         # a shift of the whole distribution, not a tail. `rate` on both
         # counters over the same window, so a single long wait recorded at
         # once does not read as sustained.
+        #
+        # `max_over_time(...[2h:1m])` around that mean, because this metric
+        # is only observed when an activity IS admitted. At N=3 with 30-70
+        # minute runs, admissions arrive every 10-25 minutes and routinely
+        # gap past 30, and an empty rate window collapses the ratio to
+        # 0/0.001 = 0 — which would reset `for:` and keep a genuinely
+        # backed-up queue quiet forever. Taking the maximum over two hours
+        # means a single window that saw a long wait holds the alert up
+        # through the gaps around it, and `for: 10m` then only asks that
+        # the condition survive one more evaluation rather than that
+        # admissions keep arriving.
+        #
+        # The clamp floor is 1e-6, not the 0.001 the control-queue rule
+        # uses, and the difference is load-bearing here rather than
+        # cosmetic. It exists only so an all-zero window cannot divide by
+        # zero, but any floor ABOVE the real admission rate replaces the
+        # denominator and silently deflates the mean: at N=3 one admission
+        # per 30 minutes is a count rate of 5.5e-4/s, so a 0.001 floor
+        # reported a three-hour wait as 5586s and kept a 7200s threshold
+        # quiet. 1e-6 is one admission per eleven days — below anything
+        # this queue can produce while still being non-zero.
+        #
+        # This rule still cannot see a FULL stall: with every slot held and
+        # nothing admitted there are no observations at all, anywhere in the
+        # window. That case is MctlAgentsImplementAdmissionStalled below,
+        # which reads the pool itself.
         - alert: MctlAgentsImplementQueueAgeHigh
           expr: |
-            (
-              sum(rate(temporal_activity_schedule_to_start_latency_sum{task_queue="mctl-dev-loop-implement"}[30m]))
-              /
-              clamp_min(sum(rate(temporal_activity_schedule_to_start_latency_count{task_queue="mctl-dev-loop-implement"}[30m])), 0.001)
+            max_over_time(
+              (
+                sum(rate(temporal_activity_schedule_to_start_latency_sum{task_queue="mctl-dev-loop-implement"}[30m]))
+                /
+                clamp_min(sum(rate(temporal_activity_schedule_to_start_latency_count{task_queue="mctl-dev-loop-implement"}[30m])), 1e-6)
+              )[2h:1m]
             ) > 7200
-          for: 30m
+          for: 10m
           labels:
             severity: warning
+            namespace: admins
           annotations:
             summary: approved DevLoops are waiting over 2h for implementation capacity
             description: |
@@ -252,6 +281,7 @@ spec:
           for: 30m
           labels:
             severity: warning
+            namespace: admins
           annotations:
             summary: no Temporal SDK metrics from the mctl-agents implementation worker
             description: |
@@ -265,3 +295,48 @@ spec:
               DevLoop is waiting on a queue nobody polls. Check the pod
               admins/mctl-agents-worker-implement and the VMServiceScrape at
               bootstrap/templates/mctl-platform/mctl-agents-worker-monitor.yaml.
+
+        # The stall the queue-age rule structurally cannot see.
+        #
+        # Schedule-to-start latency is observed when a worker RECEIVES an
+        # activity task, so while every slot is held and nothing is being
+        # admitted, no observation is made at all — the histogram is not
+        # slow, it is empty, and a rule built on it stays quiet exactly
+        # while the queue is most stuck. This one reads the pool itself,
+        # which is exported every scrape whether or not anything moves.
+        #
+        # A full pool is normal: at N=3 three concurrent implementers is
+        # the design, and runs take 30-70 minutes, so hours of zero free
+        # slots is the abnormal part rather than the zero. `for: 4h` is
+        # therefore well past a legitimate back-to-back burst, and is the
+        # reason this does not contradict the deliberate exclusion of
+        # mctl-dev-loop-implement from MctlAgentsWorkerActivitySlotsExhausted
+        # above — that rule fires on the instant, this one on the duration.
+        #
+        # `sum` across pods for the same reason as there: the queue is
+        # stalled only when no worker anywhere can take work. Under the
+        # replicaCount: 1 invariant the two agree today.
+        - alert: MctlAgentsImplementAdmissionStalled
+          expr: |
+            sum(temporal_worker_task_slots_available{worker_type="ActivityWorker", task_queue="mctl-dev-loop-implement"}) == 0
+          for: 4h
+          labels:
+            severity: warning
+            namespace: admins
+          annotations:
+            summary: no free implementation slots for 4h; approved DevLoops cannot be admitted
+            description: |
+              Every activity slot on mctl-dev-loop-implement has been held for
+              four hours, so nothing new has been admitted in that time and no
+              schedule-to-start latency has been observed — which is why
+              MctlAgentsImplementQueueAgeHigh is silent rather than firing.
+
+              Either the N admitted implementers are genuinely running long,
+              or they are wedged: an activity whose Argo workflow never
+              terminates holds its slot until the worker restarts. Check the
+              running mctl-agents-implement-* workflows in Argo and
+              temporal_worker_task_slots_used{task_queue="mctl-dev-loop-implement"},
+              then decide between raising
+              IMPLEMENTATION_MAX_CONCURRENT_ACTIVITIES in
+              platform-gitops/services/admins/mctl-agents-worker-implement/values.yaml
+              and terminating the stuck run. Context: mctl-agents#395.

@@ -331,6 +331,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: warning
+              namespace: admins
             exp_annotations:
               summary: approved DevLoops are waiting over 2h for implementation capacity
               description: |
@@ -377,6 +378,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: warning
+              namespace: admins
               task_queue: mctl-dev-loop-implement
             exp_annotations:
               summary: no Temporal SDK metrics from the mctl-agents implementation worker
@@ -401,3 +403,91 @@ tests:
       - eval_time: 40m
         alertname: MctlAgentsImplementWorkerMetricsMissing
         exp_alerts: []
+
+  # --- the stall the queue-age rule cannot see -------------------------------
+
+  - interval: 5m
+    name: a full slot pool for four hours fires the stall alert
+    input_series:
+      # Every slot held, nothing admitted — and therefore NO schedule-to-start
+      # observations at all, which is the point: the queue-age rule has no
+      # series to evaluate while this is happening.
+      - series: 'temporal_worker_task_slots_available{worker_type="ActivityWorker",task_queue="mctl-dev-loop-implement",service_name="temporal-core-sdk",namespace="mctl-agents"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 3h55m
+        alertname: MctlAgentsImplementAdmissionStalled
+        exp_alerts: []
+      - eval_time: 4h5m
+        alertname: MctlAgentsImplementAdmissionStalled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: admins
+            exp_annotations:
+              summary: no free implementation slots for 4h; approved DevLoops cannot be admitted
+              description: |
+                Every activity slot on mctl-dev-loop-implement has been held for
+                four hours, so nothing new has been admitted in that time and no
+                schedule-to-start latency has been observed — which is why
+                MctlAgentsImplementQueueAgeHigh is silent rather than firing.
+
+                Either the N admitted implementers are genuinely running long,
+                or they are wedged: an activity whose Argo workflow never
+                terminates holds its slot until the worker restarts. Check the
+                running mctl-agents-implement-* workflows in Argo and
+                temporal_worker_task_slots_used{task_queue="mctl-dev-loop-implement"},
+                then decide between raising
+                IMPLEMENTATION_MAX_CONCURRENT_ACTIVITIES in
+                platform-gitops/services/admins/mctl-agents-worker-implement/values.yaml
+                and terminating the stuck run. Context: mctl-agents#395.
+      # And the queue-age rule is indeed silent through the same stall.
+      - eval_time: 4h5m
+        alertname: MctlAgentsImplementQueueAgeHigh
+        exp_alerts: []
+
+  - interval: 5m
+    name: a busy pool that frees a slot does not fire the stall alert
+    input_series:
+      # Three hours full, then one slot returns. Back-to-back implementer
+      # runs at N=3 look exactly like this and must stay quiet.
+      - series: 'temporal_worker_task_slots_available{worker_type="ActivityWorker",task_queue="mctl-dev-loop-implement",service_name="temporal-core-sdk",namespace="mctl-agents"}'
+        values: '0x36 1x24'
+    alert_rule_test:
+      - eval_time: 4h5m
+        alertname: MctlAgentsImplementAdmissionStalled
+        exp_alerts: []
+
+  - interval: 1m
+    name: sparse admissions still hold the queue-age alert through the gaps
+    input_series:
+      # One three-hour wait admitted in the first ten minutes, then nothing
+      # for an hour — the real N=3 cadence. The 30m rate windows go empty,
+      # which would have collapsed the plain ratio to zero and reset for:.
+      - series: 'temporal_activity_schedule_to_start_latency_sum{task_queue="mctl-dev-loop-implement",service_name="temporal-core-sdk",namespace="mctl-agents"}'
+        values: '0+1080x10 10800x80'
+      - series: 'temporal_activity_schedule_to_start_latency_count{task_queue="mctl-dev-loop-implement",service_name="temporal-core-sdk",namespace="mctl-agents"}'
+        values: '0+0.1x10 1x80'
+    alert_rule_test:
+      - eval_time: 80m
+        alertname: MctlAgentsImplementQueueAgeHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: admins
+            exp_annotations:
+              summary: approved DevLoops are waiting over 2h for implementation capacity
+              description: |
+                Activities on mctl-dev-loop-implement are averaging more than two
+                hours between being scheduled and a worker slot admitting them,
+                for 30m. That wait is admission working as designed — no Argo
+                workflow exists for a queued DevLoop — but this long means the
+                approval rate exceeds capacity N, or the admitted runs are not
+                finishing and freeing their slots.
+
+                Capacity is IMPLEMENTATION_MAX_CONCURRENT_ACTIVITIES in
+                platform-gitops/services/admins/mctl-agents-worker-implement/values.yaml
+                (one replica, by invariant). Check
+                temporal_worker_task_slots_used{task_queue="mctl-dev-loop-implement"}
+                against N and the running mctl-agents-implement-* workflows in
+                Argo before raising N. Context: mctl-agents#395.

@@ -58,19 +58,37 @@ def violations(values_path: Path) -> list[str]:
     if isinstance(autoscaling, dict) and autoscaling.get("enabled"):
         found.append("autoscaling.enabled is true; an HPA multiplies admission capacity")
 
-    rollout = doc.get("rollout")
-    if isinstance(rollout, dict) and rollout.get("enabled"):
-        found.append(
-            "rollout.enabled is true; a blue/green Rollout runs two ReplicaSets and "
-            "therefore two admission processes during every deploy"
-        )
+    # `blueGreen` is the key base-service actually renders on
+    # (helm-charts/base-service/values.yaml and templates/rollout.yaml, which
+    # switches deployment.yaml off); `rollout` is accepted alongside it only
+    # so a future chart rename cannot silently reopen the hole.
+    for key in ("blueGreen", "rollout"):
+        section = doc.get(key)
+        if isinstance(section, dict) and section.get("enabled"):
+            found.append(
+                f"{key}.enabled is true; a blue/green Rollout runs two ReplicaSets and "
+                "therefore two admission processes during every deploy"
+            )
 
+    # Absent or scalar `command` is a violation, not a skip: without it the
+    # deployment runs the image entrypoint and polls whatever queue the
+    # default role picks, which is not this worker at all. And the flag is
+    # matched as an adjacent pair, so `["--role", "execution", "--tag",
+    # "implementation"]` does not pass on a stray token.
     command = doc.get("command")
-    if isinstance(command, list) and "implementation" not in [str(c) for c in command]:
+    if not isinstance(command, list):
         found.append(
-            f"command does not select --role implementation ({command!r}); the "
-            "deployment this check guards is no longer the admission worker"
+            f"command is {command!r}, not a list; without an explicit --role the "
+            "deployment runs the image entrypoint and polls the default queue"
         )
+    else:
+        argv = [str(c) for c in command]
+        pairs = zip(argv, argv[1:], strict=False)
+        if ("--role", "implementation") not in list(pairs):
+            found.append(
+                f"command does not select --role implementation ({command!r}); the "
+                "deployment this check guards is no longer the admission worker"
+            )
     return found
 
 
@@ -94,7 +112,27 @@ def selftest() -> int:
         ("scaled to zero", good.replace("replicaCount: 1", "replicaCount: 0"), True),
         ("replicaCount missing", good.replace("replicaCount: 1\n", ""), True),
         ("hpa on", good + "autoscaling:\n  enabled: true\n  minReplicas: 1\n", True),
-        ("blue-green on", good + "rollout:\n  enabled: true\n  strategy: blueGreen\n", True),
+        ("blue-green on", good + "blueGreen:\n  enabled: true\n  autoPromotionEnabled: true\n", True),
+        ("blue-green off", good + "blueGreen:\n  enabled: false\n", False),
+        ("rollout key, kept for a chart rename", good + "rollout:\n  enabled: true\n", True),
+        ("command removed", good.replace(good.splitlines()[1] + "\n", ""), True),
+        (
+            "command as a scalar string",
+            good.replace(
+                good.splitlines()[1],
+                'command: "python -m orchestrator.temporal.worker --role implementation"',
+            ),
+            True,
+        ),
+        (
+            "implementation only as a stray token",
+            good.replace(
+                good.splitlines()[1],
+                'command: ["python", "-m", "orchestrator.temporal.worker", "--role", '
+                '"execution", "--tag", "implementation"]',
+            ),
+            True,
+        ),
         ("hpa present but off", good + "autoscaling:\n  enabled: false\n", False),
         ("role changed", good.replace('"implementation"', '"execution"'), True),
         ("not a mapping", "- just\n- a list\n", True),
@@ -119,7 +157,8 @@ def selftest() -> int:
             return 1
     print(
         "selftest OK: detector fires on replicas != 1, a missing pin, an HPA, a "
-        "blue/green rollout and a changed role; stays quiet on the invariant"
+        "blue/green rollout, a missing or scalar command and a changed role; "
+        "stays quiet on the invariant"
     )
     return 0
 
