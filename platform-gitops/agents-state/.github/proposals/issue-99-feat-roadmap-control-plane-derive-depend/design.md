@@ -2,275 +2,308 @@
 
 ## Current state
 
-Everything relevant lives under `roadmap/` in `mctlhq/.github`. The pipeline is documented
-in `roadmap/README.md` and implemented as small pure modules under `roadmap/scripts/`:
+The roadmap control plane in this repository is a chain of pure derivations over two
+inputs -- validated manifest bytes and one observed `GitHubGraphSnapshot`. There is no
+`ready.py` and no readiness contract today.
 
-- `validate.py` — schema (`roadmap/schemas/epic-definition.schema.json`), per-manifest
-  semantic checks (`semantic_errors()`: unique ids, valid local references, acyclic
-  `parent` and `dependsOn` graphs, `externalDependsOn` truly external) and corpus checks
-  (`corpus_errors()`: unique epic names, globally unique bindings). `issue_key()` is the
-  shared `(repository, number)` normaliser; `RESERVED_WORK_ITEM_IDS = {"epic"}`.
-- `github_graph.py` — read-only observation. `ObservedGraph` (line 165) is the normalized
-  view: `resolution` (requested → resolved identity), `missing`, `observed`, `parents`,
-  `children`, `blocked_by` and `states` (resolved key → `(state, stateReason)`; an issue
-  with no entry had no state captured). `observed_graph()` builds it from a schema-valid
-  `GitHubGraphSnapshot`; `FixtureGraphSource` replays one with
-  `require_complete=False` for the health path; `LiveGraphSource` is GET-only and raises
-  `WriteAttempted` before transmission on anything else.
-- `reconcile.py` — `DesiredGraph` (line 60) with `bindings`, `unbound`, `hierarchy`,
-  `dependencies`, `external_refs`, plus `owned_keys()` / `authored_keys()`.
-  `desired_graph()` (line 94) already walks `dependsOn` and `externalDependsOn` and drops
-  edges whose endpoints are unbound, because a relation needs two GitHub objects.
-  `validate_corpus()`, `LoadedManifest` (document + digest of the exact validated bytes),
-  `_manifest_label()` and `_build_source()` are the reusable CLI plumbing.
-- `completion.py` — the completion contract. `item_status(key, observed, unobserved,
-  ambiguous)` returns `(status, reason)` over the closed vocabulary documented in
-  `roadmap/README.md` ("Completion"): `complete/closed`, `incomplete/open`,
-  `incomplete/closed_not_planned`, `incomplete/closed_duplicate`, `incomplete/unbound`,
-  `incomplete/issue_not_found`, `unknown/unobserved`, `unknown/state_not_observed`,
-  `unknown/binding_ambiguous`, `unknown/closed_reason_unrecognized`.
-  `_colliding_bindings()` computes the `BindingAmbiguous` key set; `consistency_errors()`
-  is the semantic check a consumer runs on a block it did not compute.
-- `health.py` — `assess()` observes one validated manifest, computes `unobserved` as
-  `authored_keys() - snapshot.requested`, emits `ObservationMissing` diagnostics for those
-  endpoints and hands the same `unobserved` set to `completion.compute()`. `evaluate()` is
-  pure; `render()` collapses one document or emits a `RoadmapHealthList` ordered by
-  manifest path; exit codes are `0/1/2/3/4`.
+Authored desired state
 
-What does not exist today: any consumer of `DesiredGraph.dependencies` for readiness.
-`completion.compute()` sorts work items by `id` and classifies each in isolation; its
-`blocking` list is "required items not complete", with no edge traversal at all
-(`roadmap/scripts/completion.py:197`). `roadmap/epics/roadmap-control-plane.yaml` already
-authors this work as the `ready-work-items` item in the `waves` phase, bound to
-`mctlhq/.github#99` and depending on `reconciler` (#67) and `roadmap-health` (#83), with
-`epic-status-api` (mctl-api#333) and `governed-wave-start` (mctl-api#334) depending on it.
-`roadmap/fixtures/roadmap-control-plane/live-capture.json` observes #67, #68 and #83
-closed as `completed` and #85, #99, #333, #334 open — so #99 is genuinely the next ready
-item of its own epic, which makes this feature its own best dogfood.
+- `roadmap/schemas/epic-definition.schema.json` defines `EpicDefinition` v1alpha1.
+  `$defs.workItem` requires `id`, `phase`, `required`, and optionally carries `issue`
+  (`$defs.issueRef`), `parent`, `dependsOn` (array of local ids, `uniqueItems`) and
+  `externalDependsOn` (array of `issueRef`). `additionalProperties: false` rejects
+  authored `blocks`, `children` and `status`.
+- `roadmap/scripts/validate.py` adds the semantic layer: unique ids, valid local
+  references, acyclic parent and dependency graphs (`_cycle`), unique/globally unique
+  bindings (`_document_bindings`, `corpus_errors`), `externalDependsOn` that truly
+  points outside the epic, and `title`+`owner` on unbound items. `issue_key()` and
+  `canonical_repository()` are the canonical `(repository, number)` normalizers.
+- The corpus is `roadmap/epics/*.yaml`. Three manifests matter for the acceptance
+  criteria: `lifecycle-ownership.yaml` (six required items; `guarded-recovery` depends
+  on `ownership-inspection` `mctlhq/mctl-api#293`, `executor-fencing`
+  `mctlhq/mctl-agents#352`, `ownership-reconciler` `mctlhq/mctl-agents#353`),
+  `human-input.yaml` (required + optional items, an `externalDependsOn` on
+  `mctlhq/mctl-telegram#443`, and an unbound `devloop-e2e`), and
+  `unified-identity.yaml` (every item unbound, `principal-model` with no `dependsOn`).
+- `roadmap/epics/roadmap-control-plane.yaml` already authors this issue as work item
+  `ready-work-items` (`mctlhq/.github#99`, phase `waves`, required, `dependsOn:
+  [reconciler, roadmap-health]`) with `epic-status-api` (`mctlhq/mctl-api#333`) and
+  `governed-wave-start` (`mctlhq/mctl-api#334`) depending on it. Its success criteria
+  already say "Dependency-aware readiness is derived from EpicDefinition and observed
+  issue state, never from operator memory."
 
-Fixtures available today: `human-input/converged-fixture.json` (synthetic, all eight
-issues open), `roadmap-control-plane/live-capture.json` and
-`claude-remote-inbound-channels/live-capture.json`. There is none for
-`lifecycle-ownership` or `unified-identity`. CI (`.github/workflows/roadmap-validate.yml`)
-runs validate, reconcile, health, plan, apply and the unittest suite entirely offline with
-`permissions: {}`.
+Observed state
+
+- `roadmap/scripts/github_graph.py` holds the read half and no mutation primitive at
+  all. `ObservedGraph` (frozen dataclass, line 165) carries `resolution`, `missing`,
+  `observed`, `parents`, `children`, `blocked_by` and `states` --
+  `states[resolved] = (state, stateReason)` only for issues whose state was actually
+  captured, so "no entry" means unknown rather than open. `observed_graph()` normalizes
+  a schema-valid snapshot; `snapshot_errors()`, `load_snapshot()`,
+  `require_observations()`, `FixtureGraphSource` and `LiveGraphSource` are the source
+  boundary.
+- `roadmap/scripts/reconcile.py` builds `DesiredGraph` (`desired_graph()`, line 94):
+  `bindings` (item id -> `IssueKey`), `unbound`, `hierarchy`, `dependencies`
+  (`(item_id, child, blocker)` triples, already flattening `dependsOn` *and*
+  `externalDependsOn`), `external_refs`, plus `authored_keys()` / `owned_keys()`.
+  `validate_corpus()` / `load_corpus()` are the preflight, `_manifest_label()` the
+  portable path renderer, `_build_source()` the `--snapshot` vs `--live` switch.
+
+Derived projections
+
+- `roadmap/scripts/completion.py` is the closest prior art and the layer #99 must reuse
+  rather than re-derive. `item_status(key, observed, unobserved, ambiguous)` returns the
+  `(status, reason)` pairs in the README's completion table; `_DELIVERED = {None,
+  "completed"}` and `_NOT_DELIVERED = {"not_planned", "duplicate"}` are the accepted
+  completion reasons; `_colliding_bindings()` reproduces the reconciler's
+  `BindingAmbiguous` rule; `compute()` sorts `workItems` by id and emits `blocking` as
+  "required items not complete"; `consistency_errors()` is the semantic check a consumer
+  runs on a block it did not compute.
+- `roadmap/scripts/health.py` wires it together: `assess()` obtains the snapshot,
+  computes `unobserved = keys - observed`, emits `ObservationMissing` diagnostics,
+  diffs, then calls `completion.compute(loaded.document, graph, unobserved)`.
+  `render()` collapses one document or emits a `RoadmapHealthList`. Exit codes
+  `0/1/2/3/4` map to `healthy/drift/usage/invalid/observation_failed`.
+- `roadmap/schemas/roadmap-health.schema.json` `$defs.completion` is the shape to
+  mirror: `mode`, `status`, `required` counts, `blocking`, `items` with a **closed**
+  `reason` enum (`closed`, `open`, `closed_not_planned`, `closed_duplicate`, `unbound`,
+  `issue_not_found`, `unobserved`, `state_not_observed`,
+  `closed_reason_unrecognized`, `binding_ambiguous`).
+- Tests: `roadmap/tests/test_completion.py` derives its graphs from the manifest it is
+  handed (`_required_bound`, `_close_required_except`, a local `_set_state`) precisely so
+  new work items do not break old assertions. `roadmap/tests/mutations.py` holds pure
+  deep-copy mutators (`ref`, `drop_dependency`, `mark_missing`, `redirect`,
+  `add_second_parent`, ...). `.github/workflows/roadmap-validate.yml` runs validate,
+  reconcile, health, plan/apply offline against fixtures with `permissions: {}` and never
+  runs `--live`.
+
+Gap: nothing joins `DesiredGraph.dependencies` with `completion.item_status` per item.
+`completion.blocking` is "required and not complete" and is deliberately
+dependency-blind.
 
 ## Proposed solution
 
-Add a fourth derived projection beside diff, health and completion, in the same shape as
-the existing ones: a pure module, a published schema, a thin CLI, a semantic
-consistency checker, and offline fixtures.
+Add one new pure module, one new schema and one new test module. Nothing existing
+changes semantically.
 
-### New files
+### 1. `roadmap/schemas/roadmap-ready-set.schema.json`
 
-```text
-roadmap/schemas/roadmap-ready-set.schema.json   RoadmapReadySet | RoadmapReadySetList
-roadmap/scripts/ready.py                        pure compute() + CLI
-roadmap/tests/test_ready.py                     semantics, determinism, mutation cases
-roadmap/fixtures/lifecycle-ownership/converged-fixture.json   synthetic, all open
-roadmap/fixtures/unified-identity/root-only-fixture.json      synthetic, root only
+A `oneOf` over `$defs.roadmapReadySet` and `$defs.roadmapReadySetList`, mirroring
+`roadmap-health.schema.json`'s structure and reusing its `issueRef` shape.
+`additionalProperties: false` everywhere.
+
+```jsonc
+{
+  "apiVersion": "roadmap.mctl.ai/v1alpha1",
+  "kind": "RoadmapReadySet",
+  "epic": {"name": "lifecycle-ownership",
+           "manifest": {"path": "roadmap/epics/lifecycle-ownership.yaml", "sha256": "<64 hex>"},
+           "issue": {"repository": "mctlhq/.github", "number": 57}},
+  "source": {"mode": "live-capture", "capturedAt": "...", "apiBase": "..."},
+  "ready": ["guarded-recovery"],                       // sorted ids, the queue itself
+  "summary": {
+    "items":    {"ready": 1, "blocked": 0, "complete": 5, "unknown": 0},
+    "required": {"ready": 1, "blocked": 0, "complete": 5, "unknown": 0}
+  },
+  "items": [
+    {"id": "guarded-recovery", "phase": "operations", "required": true,
+     "state": "ready",
+     "completion": {"status": "incomplete", "reason": "open"},
+     "issue": {"repository": "mctlhq/mctl-api", "number": 294},
+     "dependsOn": ["ownership-inspection", "executor-fencing", "ownership-reconciler"],
+     "blockers": []}
+  ]
+}
 ```
 
-### The projection
+- `state` enum: `ready | blocked | complete | unknown`. The item's own completion axis is
+  kept in a nested `completion: {status, reason}` whose `status` and `reason` enums are
+  **copied verbatim** from `roadmap-health.schema.json` `$defs.completion`, so the two
+  documents cannot drift apart in vocabulary and the readiness state is always traceable
+  to the completion evidence that produced it.
+- `dependsOn` and `externalDependsOn` echo the manifest in **authored order** (the only
+  place authored order is preserved). `externalDependsOn` items are `issueRef`s.
+- `blockers` entries are discriminated: `{"kind": "workItem", "id": ..., "status": ...,
+  "reason": ...}` or `{"kind": "external", "issue": {...}, "status": ..., "reason": ...}`.
+  No synthetic id is invented for an external issue. Sorted by `(kind, id or
+  repository, number)`.
+- `source` is **required**: a ready set without provenance is not evidence.
+- `epic.issue` is present when the manifest binds a root, exactly as `health._epic()`
+  does.
 
-`ready.compute(document, observed, unobserved=frozenset()) -> dict` mirrors
-`completion.compute()`'s signature exactly, so `health.assess()`'s existing call site is
-the template: it already has a validated `document`, an `ObservedGraph` and the
-`unobserved` key set.
+### 2. `roadmap/scripts/ready.py`
 
-Step 1 — reuse completion, do not fork it. Ambiguous bindings come from the existing
-`completion._colliding_bindings()`, promoted to a public `completion.colliding_bindings()`
-(the private name kept as an alias so nothing else moves). Each work item's own status is
-`completion.item_status(key, observed, unobserved, ambiguous)`. The readiness module
-therefore contains no GitHub state vocabulary of its own: `_DELIVERED`/`_NOT_DELIVERED`
-stay in one file, and a future change to the completion contract cannot leave the two
-projections disagreeing about whether an issue is done.
+Pure core plus a CLI, structured like `health.py`.
 
-Step 2 — map completion status onto a readiness verdict. The readiness axis splits
-`completion.item_status()`'s results into three classes:
+```python
+READY, BLOCKED, COMPLETE, UNKNOWN = "ready", "blocked", "complete", "unknown"
 
-| completion status/reason | readiness treatment |
-| --- | --- |
-| `complete/closed` | `state: complete`, `reason: closed`, no blockers |
-| `incomplete/open`, `incomplete/closed_not_planned`, `incomplete/closed_duplicate` | own state proven incomplete → evaluate predecessors |
-| `incomplete/unbound` | `state: unknown`, `reason: unbound` |
-| `incomplete/issue_not_found` | `state: unknown`, `reason: issue_not_found` |
-| any `unknown/*` | `state: unknown`, same reason verbatim |
+# Reasons that are observed evidence of undelivered work. Only these make a
+# dependent BLOCKED; every other non-complete reason is indeterminate.
+BLOCKING_REASONS = frozenset({"open", "closed_not_planned", "closed_duplicate"})
 
-The two deliberate divergences from the completion axis are `unbound` and
-`issue_not_found`: completion calls them `incomplete` because absence of a delivered issue
-is evidence the work is not done, while readiness calls them `unknown` because the issue
-invariant is explicit — "Unbound work items are never reported `ready`; they are
-`unknown/unbound`". Each item echoes its `completion: {status, reason}` block verbatim, so
-the divergence is visible in the artifact rather than hidden in code, and a consumer can
-cross-check a ready set against a `RoadmapHealth` completion block field by field.
-
-Step 3 — evaluate predecessors for items whose own state is proven incomplete. The
-predecessor set of item `i` is the authored `dependsOn` ids plus the authored
-`externalDependsOn` refs — nothing else. Hierarchy (`parent`, observed `subIssues`) and
-phase order create no edges, per `roadmap/README.md` ("Hierarchy and dependency are
-deliberately separate"), and observed `blocked_by` edges are not consulted either: those
-are the *observed* graph the reconciler compares against, not a dependency source. Each
-predecessor is scored with the same `completion.item_status()` — an internal one on its
-own binding (so an unbound predecessor is `unknown`, not silently skipped as
-`desired_graph()` does for drift purposes), an external one on its `issueRef` directly.
-Then:
-
-```text
-any predecessor status == incomplete  -> blocked  (reason dependency_incomplete)
-else any predecessor status == unknown -> unknown  (reason dependency_unknown)
-else                                   -> ready    (reason dependencies_complete)
+def compute(document, observed, unobserved=frozenset()) -> dict   # pure
+def consistency_errors(block) -> list[str]                        # pure
+def assess(path, loaded, source_adapter, *, corpus=None) -> dict   # reads via adapter
+def main(argv=None) -> int                                         # CLI
 ```
 
-`blocked` outranks `unknown` because an observed-incomplete predecessor *proves*
-non-executability, exactly as `completion.compute()` lets a certain `incomplete` outrank
-an `unknown`. An item with no predecessors is vacuously `ready`. Transitivity needs no
-closure walk: if A is open then B is `blocked`, and B being open makes C `blocked` in the
-same pass — direct-edge evaluation is already transitively correct.
+`compute()` algorithm, in order:
 
-`blockers` lists every predecessor whose status is not `complete`, each as
-`{kind: internal, id, status, reason}` or `{kind: external, issue, status, reason}`.
-Complete predecessors are omitted; a `ready` or `complete` item therefore always carries
-`blockers: []`.
+1. `ambiguous = completion.colliding_bindings(spec["workItems"], observed, unobserved)`
+   -- the existing `_colliding_bindings` promoted to a public name with
+   `_colliding_bindings = colliding_bindings` kept as an alias so no existing caller or
+   test changes.
+2. For every work item, `status, reason = completion.item_status(key, observed,
+   unobserved, ambiguous)`. This is the single source of the completion axis; #99 adds no
+   second interpretation of GitHub state.
+3. Classify each item id into one of three predecessor contributions:
+   `SATISFIED` (status `complete`), `BLOCKING` (status `incomplete` and reason in
+   `BLOCKING_REASONS`), `INDETERMINATE` (everything else: `unbound`, `issue_not_found`,
+   `unobserved`, `state_not_observed`, `binding_ambiguous`,
+   `closed_reason_unrecognized`).
+4. For external references, evaluate `completion.item_status(external_key, observed,
+   unobserved, ambiguous)` on the `IssueKey` directly -- legal because
+   `DesiredGraph.authored_keys()` already includes `external_refs`, so `reconcile.py`,
+   `health.py` and this module all observe the same key set and an unobserved external
+   issue lands in `unobserved` and classifies `INDETERMINATE`.
+5. Assign the item's `state`:
+   - own contribution `SATISFIED` -> `complete`, `blockers: []`;
+   - own contribution `INDETERMINATE` -> `unknown`, `blockers: []` (the reason is on
+     `completion.reason`; this is the unbound / unobserved / ambiguous / not-found item
+     itself, so no predecessor is blamed);
+   - own contribution `BLOCKING` -> look at predecessors: any `BLOCKING` predecessor ->
+     `blocked`; else any `INDETERMINATE` predecessor -> `unknown`; else -> `ready`.
+     `blockers` lists exactly the non-`SATISFIED` predecessors.
+   Only one hop is needed: `validate.semantic_errors` already rejects dependency cycles,
+   and a `complete` predecessor's own history is not evidence about this item.
+6. Emit `items` sorted by id (same key `completion.compute` uses), `ready` as the sorted
+   ids of `state == "ready"`, and `summary` counts over all items and over
+   `required: true` items.
 
-### Document shape
+Purity is the same as `completion.py`: no I/O, no clock, no randomness, no absolute
+path. Nothing about DevLoop, Temporal, Argo or ownership is an argument, so #95 runtime
+state cannot leak in by construction.
 
-```yaml
-apiVersion: roadmap.mctl.ai/v1alpha1
-kind: RoadmapReadySet
-epic:
-  name: lifecycle-ownership
-  manifest: {path: roadmap/epics/lifecycle-ownership.yaml, sha256: <64 hex>}
-  issue: {repository: mctlhq/.github, number: 57}
-source: {mode: live-capture, capturedAt: ..., apiBase: ...}   # copied verbatim
-summary: {ready: 1, blocked: 2, complete: 3, unknown: 0}       # all items
-required: {total: 6, ready: 1, blocked: 2, complete: 3, unknown: 0}
-ready: [guarded-recovery]                                      # sorted ids, any optionality
-items:
-  - id: guarded-recovery
-    required: true
-    state: ready
-    reason: dependencies_complete
-    issue: {repository: mctlhq/mctl-api, number: 294}
-    completion: {status: incomplete, reason: open}
-    dependsOn: [ownership-inspection, executor-fencing, ownership-reconciler]
-    externalDependsOn: []
-    blockers: []
-```
+`assess()` reuses `health.assess()`'s observation contract verbatim -- `FixtureGraphSource`
+with `require_complete=False`, `github_graph.snapshot_errors()`, `unobserved = keys -
+observed(requested)`, `observed_graph()` -- then calls `compute()` and validates the
+document against `roadmap-ready-set.schema.json` plus `consistency_errors()` before
+returning it. A source-level failure (`ObservationError`, `SnapshotIncomplete`,
+`SnapshotInvalid`, `OSError`) prints to stderr and exits 4 without emitting a document,
+because the schema requires `source`.
 
-Ordering: `items` sorted by `id` (as `completion.compute()` does), `blockers` sorted by
-`(kind, id or repository, number)`, `ready` sorted. `dependsOn` and `externalDependsOn`
-keep authored order — the single contract-explicit exception the issue allows, because
-they are an echo of authored input rather than a derived set. Nothing carries a timestamp
-of its own; the only time in the document is the snapshot's `capturedAt`, copied as
-provenance, exactly as `RoadmapDiff` does.
+`main()` mirrors `reconcile.py`/`plan.py` flags: positional manifests, `--corpus`
+(default `roadmap/epics`, always validated in full before any network call),
+`--schema`, `--ready-schema`, `--snapshot`, `--live`, `--capture` (implies `--live`),
+`--api-base`, `--output`. Exit codes: `0` a ready set was produced, `2` usage/IO,
+`3` desired state invalid (nothing observed), `4` some state could not be observed.
+Readiness states never change the exit code, exactly as completion does not change
+`health.py`'s.
 
-`ready.consistency_errors(document)` is the semantic layer JSON Schema cannot express,
-modelled on `completion.consistency_errors()`: summary and `required` counts must equal
-the items; `ready` must be exactly the `ready`-state ids; a `ready`/`complete` item must
-have no blockers; a `blocked` item must have at least one `incomplete` blocker; an
-`unknown` item must have either an own-unknown `reason` or at least one `unknown` blocker;
-an item with `state: ready` must carry an `issue`; every blocker must name an id present
-in that item's `dependsOn` or a ref present in its `externalDependsOn`. Schema plus this
-function is the "reject internally contradictory ready sets" acceptance criterion.
+`render()` collapses a single document or emits `RoadmapReadySetList` ordered by manifest
+path, copied from `health.render()`.
 
-### CLI
+### 3. Reuse edits (small, behaviour-preserving)
 
-`ready.py` copies `health.py`'s `main()` structure: positional manifests, `--corpus`
-(always fully validated first, never narrowed by selection), `--schema`, `--ready-schema`,
-`--snapshot` / `--live` (mutually exclusive), `--capture`, `--api-base`, `--output`.
-Observation reuses `reconcile._build_source()` and the `FixtureGraphSource(...,
-require_complete=False)` path so an unobserved endpoint degrades into per-item `unknown`
-instead of aborting. Exit codes reuse health's space: `0` every item classified with no
-`unknown`, `1` at least one `unknown`, `2` usage/IO, `3` manifest or corpus invalid, `4`
-observation failure or unusable snapshot. The emitted document is validated against its
-own schema and against `consistency_errors()` before it is returned, as `apply.py` does
-with `RoadmapApplyResult`.
+- `completion.py`: rename `_colliding_bindings` -> `colliding_bindings`, keep the old
+  name as an alias. No logic change; `test_completion.py` keeps passing untouched.
+- `roadmap/tests/mutations.py`: add two pure helpers --
+  `set_state(snapshot, issue, state, reason)` (the deep-copy version of
+  `test_completion._set_state`, so `test_ready.py` does not copy it) and
+  `synthetic_snapshot(document, states)`, which builds a converged
+  `GitHubGraphSnapshot` for any manifest from `reconcile.desired_graph()` and always
+  stamps `source.mode: synthetic-fixture`. That is how the `lifecycle-ownership` and
+  `unified-identity` acceptance criteria get graphs without hand-editing a capture, and
+  the mode stamp makes it impossible for a test graph to claim to be live evidence.
+- `.github/workflows/roadmap-validate.yml`: add offline `ready.py` steps beside the
+  existing health steps (human-input converged fixture, and the two immutable live
+  captures) plus an inline assertion that the emitted `kind` is `RoadmapReadySet` and
+  that `ready` equals the ids of the `ready` items. `--live` still never runs in CI and
+  `permissions: {}` is unchanged.
+- `roadmap/README.md`: a `## Readiness` section between `## Completion` and
+  `## Dogfood: epic #66` documenting the state table, the precedence rule, the
+  `blocked` vs `unknown` split and the CLI, and a `ready.py` line in the `## Layout`
+  tree.
 
-### Why runtime state cannot enter
+### 4. Why this shape
 
-The only two inputs are validated `EpicDefinition` bytes and a `GitHubGraphSnapshot`.
-`roadmap/schemas/github-graph-snapshot.schema.json` is `additionalProperties: false` and
-has no field in which a DevLoop or Temporal state could be expressed, so "changing only
-runtime state does not change the ready set" is a property of the input vocabulary, not a
-promise. The test suite asserts it that way rather than by mutating a field that cannot
-exist.
-
-### Documentation and CI
-
-`roadmap/README.md` gains a "Readiness" section after "Completion": the state table, the
-precedence rule, the two deliberate divergences from the completion axis, and the CLI.
-`.github/workflows/roadmap-validate.yml` gains offline steps that run `ready.py` against
-the human-input synthetic fixture and against the epic #66 live capture, asserting
-`human-input-core` and `ready-work-items` respectively — the same dogfood pattern the
-health steps already use, with no token and no `--live`.
+- **Separate document, separate script.** Readiness has a different consumer
+  (`mctl-api#333`/`#334`) and a different failure model from health. A new file cannot
+  change `RoadmapHealth` states, precedence, diagnostics or exit codes, which is an
+  explicit acceptance criterion.
+- **One interpretation of GitHub state.** Readiness delegates every "is this delivered"
+  decision to `completion.item_status`. Adding a second closed-reason table would be the
+  exact drift the manifest model exists to prevent.
+- **Authored edges only.** `dependsOn` / `externalDependsOn` come from the manifest;
+  `ObservedGraph.blocked_by` is deliberately unused here. Observed edge drift is
+  `reconcile.py`'s `DependencyMissing` / `DependencyUnexpected` job, and a ready set that
+  fell back to observed edges would silently use a graph nobody reviewed.
+- **Unbound is never ready.** The single strongest safety property for #334: a wave
+  launcher can trust `state: ready` to imply a bound, observed, incomplete issue.
 
 ## Alternatives
 
-1. **Extend the `completion` block with `ready`/`blocked` fields inside `RoadmapHealth`.**
-   Cheapest to write and needs no new CLI. Dropped: `roadmap-health.schema.json` is
-   `additionalProperties: false`, so every field added is a breaking contract change for
-   existing consumers, and the issue requires "RoadmapHealth/completion behavior is
-   unchanged". It would also fuse two axes the README keeps separate — an epic can be
-   healthy and blocked, or drifted with ready work — and force every health consumer to
-   pay for DAG evaluation it did not ask for.
-
-2. **Derive readiness from the observed `blocked_by` graph instead of authored
-   `dependsOn`.** Tempting because `ObservedGraph.blocked_by` is already normalized and
-   would cover dependencies nobody wrote into a manifest. Dropped: it inverts the
-   source-of-truth rule the whole directory rests on ("`dependsOn` is authored; `blocks`
-   is derived"), and it makes readiness change when somebody clicks a button in the GitHub
-   UI. Worse, it is unsound in exactly the case that matters — an unauthored observed edge
-   is `DependencyUnexpected` drift, and treating drift as a dependency would let a bad
-   edge block a wave with no reviewable record. The observed graph stays what the
-   reconciler compares against.
-
-3. **Emit a full transitive closure with wave numbers (`wave: 0,1,2`).** Would directly
-   answer "what can I start next, and then what". Dropped: it is ordering/selection, which
-   the issue lists as a non-goal ("Selecting priority between independent ready items"),
-   and a wave index is unstable under `unknown` — an unbound predecessor makes every
-   downstream depth meaningless, so the number would have to be `null` exactly where the
-   graph is most interesting. Direct blockers plus the full item list let a client compute
-   any closure it wants, deterministically.
-
-4. **Put readiness in mctl-api instead of this repo.** Dropped: the manifest, the schemas
-   and the deterministic evaluators live here and are validated by this repo's CI;
-   mctl-api#333 is a consumer of a published contract, not the place to re-derive it. A
-   second implementation of the DAG rules is the drift this epic exists to remove.
+1. **Extend `RoadmapHealth` with a `readiness` block** (like `completion`). Rejected:
+   it edits `roadmap-health.schema.json` and every consumer of that contract, couples the
+   readiness state to health precedence and exit codes, and contradicts "RoadmapHealth
+   semantics and precedence remain unchanged". It also forces readiness to be recomputed
+   on every health call even when a caller only wants drift.
+2. **Compute readiness in `mctl-api` (#333) from the health document.** Rejected: the
+   health document does not carry `dependsOn`, so mctl-api would have to parse
+   `roadmap/epics/*.yaml` itself -- a second implementation of the DAG in another
+   language, with no shared fixtures and no way to keep the closed reason vocabulary in
+   step. The derivation belongs next to `completion.py`; #333 consumes the published
+   document.
+3. **Derive readiness from the observed `blocked_by` graph instead of the manifest.**
+   Rejected: it inverts the source-of-truth rule in `roadmap/README.md`
+   ("`dependsOn` is authored; `blocks` is derived"), and the first live run against #66
+   proved exactly why -- three authored dependencies existed only as issue prose and were
+   absent from the live graph. A readiness queue built on the observed graph would have
+   called blocked work ready.
+4. **Full transitive closure, marking an item ready only when its entire ancestor set is
+   complete.** Rejected as redundant: a `complete` predecessor's own predecessors say
+   nothing about this item, the authored graph is already acyclic, and closure would make
+   one `unknown` leaf paint every descendant `unknown` -- destroying the queue's
+   usefulness without adding a fact.
 
 ## Platform impact
 
-- **Migrations.** None. No manifest field is added, so `epic-definition.schema.json` is
-  untouched and every existing `roadmap/epics/*.yaml` keeps validating unchanged. No
-  stored state, no database, no Vault entry, no service deployment.
-- **Backward compatibility.** `RoadmapHealth`, `RoadmapDiff`, `RoadmapApplyPlan` and
-  `RoadmapApplyResult` documents and exit codes are unchanged. The only edit to an
-  existing module is promoting `completion._colliding_bindings()` to a public name with
-  the private alias retained; `completion.compute()` and `consistency_errors()` keep
-  identical behaviour, and the existing `test_completion.py` suite is the regression proof.
-- **New public contract.** `roadmap-ready-set.schema.json` becomes a published
-  `v1alpha1` contract that mctl-api#333 and #334 will read. It is `additionalProperties:
-  false` throughout with closed `state` and `reason` vocabularies, so no issue title, body
-  or comment text can be written into it — the same containment rule
-  `roadmap-apply-result.schema.json` holds.
-- **Resource impact.** Offline runs are pure CPU over a parsed snapshot. `--live` issues
-  exactly the reads `reconcile.py` already issues, through the same GET-only client; no
-  new endpoint and no write primitive is introduced. CI grows by two short offline steps.
+- **Migrations.** None. No schema is modified, no persisted artifact is rewritten, no
+  GitOps values change. The additions are two new files under `roadmap/`, one new test
+  module, two new test helpers, a public alias in `completion.py`, README text and CI
+  steps.
+- **Backward compatibility.** `RoadmapDiff`, `RoadmapHealth`, `RoadmapApplyPlan` and
+  `RoadmapApplyResult` documents and exit codes are untouched; `test_reconcile.py`,
+  `test_health.py`, `test_completion.py`, `test_plan.py` and `test_apply.py` must pass
+  unmodified, which is the regression proof. `RoadmapReadySet` is v1alpha1 and additive:
+  a consumer that does not know it is unaffected.
+- **Write safety.** `ready.py` imports `completion`, `github_graph`, `reconcile` and
+  `validate` and never `github_apply`. It is a read-only projection; the four-endpoint
+  write allow-list and its `MutationRefused` guard are not touched.
+- **Resource impact.** Offline evaluation is a few milliseconds over an already-loaded
+  snapshot. A `--live` run reads exactly `DesiredGraph.authored_keys()` -- the same GET
+  set `health.py` already issues, no new endpoint and no GraphQL. CI adds ~4 offline
+  invocations.
 - **Risks and mitigations.**
-  - *Readiness and completion drift apart over time.* Mitigated by construction: both call
-    `completion.item_status()`, each item echoes its completion block, and a test asserts
-    every item's echoed block equals `completion.compute()`'s entry for the same id.
-  - *An operator reads `unknown` as "probably fine" and starts work anyway.* Mitigated by
-    the exit code (`1` on any `unknown`) and by every `unknown` naming its evidence; the
-    README states plainly that `unknown` is never a weaker `ready`.
-  - *A hand-authored fixture is mistaken for evidence.* Both new fixtures use
-    `source.mode: synthetic-fixture`; the snapshot schema's `oneOf` forbids a synthetic
-    fixture from claiming a `capturedAt`, so promotion to evidence is structurally
-    impossible.
-  - *Ambiguous or redirected bindings silently credited.* `completion.item_status()`
-    already returns `unknown/binding_ambiguous` for collisions, and this module passes the
-    same `ambiguous` set through; a test covers the redirected and ambiguous cases using
-    the existing `mutations.redirect()` and `mutations.add_second_parent()` mutators.
-  - *The lifecycle-ownership fixture rots as that epic grows.* The test derives its
-    expectations from the manifest it loads (the pattern `test_completion.py` adopted in
-    `_close_required_except`), not from a hard-coded item list.
+  - *Readiness and completion drift apart.* Mitigated by delegating to
+    `completion.item_status` and copying the `status`/`reason` enums into the new schema,
+    plus a test asserting the ready set's per-item `completion` block equals the
+    corresponding `completion.compute()` entry for the same inputs.
+  - *An operator reads `ready` as "safe to launch" for an unbound item.* Mitigated by the
+    invariant that `unbound` is `unknown`, a dedicated `unified-identity` /
+    `principal-model` test, and a `consistency_errors()` rule that rejects any `ready`
+    item whose own reason is not in `BLOCKING_REASONS`.
+  - *Optional items quietly excluded from a wave that actually depends on them.*
+    Mitigated by scoring optional items exactly like required ones and by the
+    `human-input` `portal-card` / `docs` tests; the `required` flag is exposed per item so
+    filtering is the caller's explicit choice.
+  - *Partially observed snapshot read as a shorter queue.* Mitigated by emitting the
+    affected items as `unknown` and exiting 4, never omitting them, and by a test that a
+    snapshot missing one predecessor turns its dependent `unknown` rather than `ready`.
+  - *Non-determinism creeping in.* Mitigated by a byte-identity test over shuffled
+    `spec.workItems` order and shuffled snapshot `issues` order, and by adding no clock
+    or random value (only the snapshot's own `capturedAt` is copied as provenance).
+  - *A synthetic test graph mistaken for evidence.* Mitigated by
+    `mutations.synthetic_snapshot()` hard-coding `source.mode: synthetic-fixture`, which
+    `github-graph-snapshot.schema.json` already keeps distinct from `live-capture`.
