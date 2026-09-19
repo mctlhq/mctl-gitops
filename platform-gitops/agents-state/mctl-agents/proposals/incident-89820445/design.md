@@ -1,53 +1,38 @@
 # Design: incident-89820445
 
 ## Diagnosis
-Same root cause as the sibling incident diagnosed as incident-89820765 in
-this same target service (argo-mctl-agents-implement-1318e8f2-1789820765,
-proposal mctl-telegram/issue-510-add-self-identification-tool-get-my-iden):
-the Argo ClusterWorkflowTemplate `mctl-agents-implement`
-(argo-workflows/cluster-templates/cwft-mctl-agents-implement.yaml) ran
-`orchestrator.run_implementer` against the accepted proposal
-.github/issue-67-feat-roadmap-control-plane-reconcile-epi. The primary
-attempt completed a full, successful Claude Agent SDK session, ran the
-target repo's own offline test suite (220 tests, all passing) to confirm,
-and correctly determined that every deliverable in tasks.md is already
-implemented and merged on `main`. It wrote a structured
-`.implementer-refusal.json` (`refused: true`) and intentionally made no
-commit, exiting 1 to signal "no commit produced."
-
-Because `run_implementer.py` and the CWFT treat any non-zero exit as a
-failed attempt, the account-2 fallback re-ran the identical, already-decided
-question at additional Claude budget cost, `assert-attempt` then failed the
-whole workflow because neither step reported `Succeeded`, and
-`notify-telegram` filed a generic `workflow_failed` incident whose canned
-text blames Claude usage limits / an unseeded fallback token — neither of
-which happened; both attempts ran to completion and agreed on the same,
-correct, non-error conclusion.
-
-## Confidence: LOW
-Built from Argo step logs and the SDK transcript only; the actual source of
-`orchestrator/run_implementer.py` was not available to verify the current
-exit-code/status-write logic, so the code change below needs verification
-against that file before it is applied.
+The Tier-2 implementer workflow (mctl-agents-implement-c36902fb) ran against proposal
+.github/issue-67-feat-roadmap-control-plane-reconcile-epi. The fallback Claude Code
+session completed successfully (ResultMessage subtype=success, is_error=False,
+stop_reason=end_turn) and found that the proposed roadmap-control-plane reconcile
+functionality already exists in mctlhq/.github: `roadmap/scripts/reconcile.py` already
+implements the desired/observed graph diff, the required diagnostic classes,
+deterministic output, exit codes, and CLI flags the proposal asked for. As with
+incident argo-mctl-agents-implement-1318e8f2-1789820765 (proposal mctl-telegram/issue-510,
+same time window), the implementer correctly produced no diff because the work is
+already done, but the `assert-attempt` step treats "no diff" as an unconditional
+failure regardless of why, so the workflow failed and generated this incident. A
+Claude seven-day rate-limit utilization of 0.76 ("allowed_warning") appears in the log
+but is a warning, not a block — it did not cause the run to fail (the ResultMessage
+confirms the turn completed normally); it should not be read as the root cause here
+even though the generic assert-attempt failure message suggests rate limiting as the
+likely cause.
 
 ## Proposed Fix
-Identical fix to incident-89820765's design.md, in the same file
-(`orchestrator/run_implementer.py` in the mctl-agents repo): give a
-deliberate "nothing left to implement" refusal (the `.implementer-refusal.json`
-/ `refused: true` signal observed here) its own non-retryable `.status.yaml`
-outcome and a 0 exit code, instead of being indistinguishable from a real
-implementer error. This removes the duplicate account-2 fallback run for a
-refusal a second run cannot answer differently, and stops
-`assert-attempt`/`notify-telegram` from reporting a correct, completed
-refusal as a `workflow_failed` incident with a misleading quota/token
-diagnosis.
-
-If incident-89820765's proposal is implemented first, this proposal's
-implementer should simply confirm the fix already covers this case (same
-file, same code path) rather than making a second, conflicting change.
+Same underlying issue as incident-89820765 (the mctl-agents implementer wrapper /
+`assert-attempt` step in mctlhq/mctl-agents does not distinguish "correct no-op
+because the proposal is already satisfied upstream" from "implementer genuinely
+failed to make progress"). See the design.md of
+platform-gitops/agents-state/mctl-agents/proposals/incident-89820765 for the
+recommended classification fix; apply the same change here. No .github-specific code
+change is required — the reconcile functionality already exists and is out of scope.
 
 ## Scope
-Minimal: touch only the outcome classification and status/exit-code path in
-`orchestrator/run_implementer.py` for the "no gap left to implement" case.
-Do not change the CWFT YAML, the proposal-claim mutex, or any other exit
-path (genuine implementer errors must keep failing loudly).
+Minimal: same classification fix as incident-89820765, applied once in the shared
+implementer/assert-attempt path — not a per-proposal fix.
+
+## Confidence: LOW
+Root cause is well evidenced (implementer explicitly reports the feature already
+exists, and the ResultMessage shows a successful, non-erroring turn). The exact
+file/line to patch in mctl-agents is not confirmed — this responder has no source
+access to that repository.

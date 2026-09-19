@@ -4,7 +4,7 @@
 - ID: argo-mctl-agents-implement-c36902fb-1789820445
 - Tenant: admins
 - Service: mctl-agents
-- Alert: workflow_failed (mctl-agents-implement-c36902fb)
+- Alert: workflow_failed
 - Created: 2026-09-19T12:20:45.311605Z
 
 ### Summary
@@ -20,31 +20,21 @@ type: workflow_failed
 severity: warning
 fingerprint: workflow_failed:implement:.github:issue-67-feat-roadmap-control-plane-reconcile-epi
 occurrence_count: 1
+pr_url: (none)
 ```
 
 ### Log Snippet
 ```
+[assert-attempt-3787595614]
 primary attempt: Failed   fallback attempt: Failed
 Neither the primary attempt nor the account-2 fallback succeeded; inspect the durable needs-triage reason.
-Most often the Claude five_hour/seven_day usage limit / HTTP 429 on both accounts, or token-2 unset.
+   Most often the Claude five_hour/seven_day usage limit / HTTP 429 on both accounts, or token-2 unset.
 
---- run-implementer transcript (primary attempt) ---
-.implementer-refusal.json: refused=true, reason: "All of tasks.md is already
-implemented on main: roadmap/scripts/reconcile.py (798 lines),
-roadmap/scripts/github_graph.py (699 lines), the required JSON schemas,
-fixture corpora, roadmap/tests/test_reconcile.py (1283 lines covering the
-exact scenarios from tasks.md), CI wiring in
-.github/workflows/roadmap-validate.yml, and README documentation already
-citing this reconciler as landed prior work."
-Ran the full offline suite: 220 tests, all passing.
-Recommended next step: this proposal should be marked resolved/superseded
-rather than retried, since re-running the implementer will keep finding
-nothing to do.
-
-=== Summary ===
-  fail .github/issue-67-feat-roadmap-control-plane-reconcile-epi: implementer produced no commits
-Totals: 0 succeeded, 1 failed, 0 skipped, 0 blocked
-implementer exited 1
+[run-implementer-4232364369 fallback attempt, tail of session]
+ResultMessage(subtype='success', is_error=False, num_turns=4, stop_reason='end_turn', ...)
+RateLimitEvent(status='allowed_warning', rate_limit_type='seven_day', utilization=0.76, ...)
+... already exists in `mctlhq/.github`:
+- `roadmap/scripts/reconcile.py` — desired/observed graph diff, all required diagnostic classes, deterministic output, exit codes 0/1/2, CLI flags (--corpus, --snapshot, --live, --capture, --output).
 ```
 
 ## Acceptance Criteria
