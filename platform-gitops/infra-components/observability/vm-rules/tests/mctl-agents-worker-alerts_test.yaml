@@ -335,12 +335,19 @@ tests:
             exp_annotations:
               summary: approved DevLoops are waiting over 2h for implementation capacity
               description: |
-                Activities on mctl-dev-loop-implement are averaging more than two
-                hours between being scheduled and a worker slot admitting them,
-                for 30m. That wait is admission working as designed — no Argo
-                workflow exists for a queued DevLoop — but this long means the
-                approval rate exceeds capacity N, or the admitted runs are not
-                finishing and freeing their slots.
+                At some point in the last two hours, activities on
+                mctl-dev-loop-implement averaged more than two hours between
+                being scheduled and a worker slot admitting them. That wait is
+                admission working as designed — no Argo workflow exists for a
+                queued DevLoop — but this long means the approval rate exceeds
+                capacity N, or the admitted runs are not finishing and freeing
+                their slots.
+
+                This rule looks back two hours on purpose, because admissions
+                at N=3 are too sparse to evaluate on a 30m window alone, so it
+                can still be firing after the queue has drained. For the live
+                state check the slot pool and MctlAgentsImplementAdmissionStalled
+                rather than assuming the backlog is still there.
 
                 Capacity is IMPLEMENTATION_MAX_CONCURRENT_ACTIVITIES in
                 platform-gitops/services/admins/mctl-agents-worker-implement/values.yaml
@@ -478,12 +485,19 @@ tests:
             exp_annotations:
               summary: approved DevLoops are waiting over 2h for implementation capacity
               description: |
-                Activities on mctl-dev-loop-implement are averaging more than two
-                hours between being scheduled and a worker slot admitting them,
-                for 30m. That wait is admission working as designed — no Argo
-                workflow exists for a queued DevLoop — but this long means the
-                approval rate exceeds capacity N, or the admitted runs are not
-                finishing and freeing their slots.
+                At some point in the last two hours, activities on
+                mctl-dev-loop-implement averaged more than two hours between
+                being scheduled and a worker slot admitting them. That wait is
+                admission working as designed — no Argo workflow exists for a
+                queued DevLoop — but this long means the approval rate exceeds
+                capacity N, or the admitted runs are not finishing and freeing
+                their slots.
+
+                This rule looks back two hours on purpose, because admissions
+                at N=3 are too sparse to evaluate on a 30m window alone, so it
+                can still be firing after the queue has drained. For the live
+                state check the slot pool and MctlAgentsImplementAdmissionStalled
+                rather than assuming the backlog is still there.
 
                 Capacity is IMPLEMENTATION_MAX_CONCURRENT_ACTIVITIES in
                 platform-gitops/services/admins/mctl-agents-worker-implement/values.yaml

@@ -522,10 +522,11 @@ spec:
                     matchers:
                       - alertname =~ "Lifecycle.*"
                   # Implementation admission (mctl-agents#395, #1285). Telegram
-                  # only, no ticket: the two alerts in
+                  # only, no ticket: the alerts in
                   # vm-rules/mctl-agents-worker-alerts.yaml's admission group
-                  # each end in a values edit — raising N, or restoring the
-                  # single-replica worker — which mctl-agent cannot make.
+                  # each end in a values edit — raising N, restoring the
+                  # single-replica worker, or freeing a wedged slot — which
+                  # mctl-agent cannot make.
                   # Left unrouted they would fall through to the root
                   # mctl-agent receiver like the ADR-008 worker alerts do
                   # today. Prefix match, for the same reason as the routes
