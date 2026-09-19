@@ -94,6 +94,24 @@ resource "cloudflare_zero_trust_access_application" "projects_mcp" {
       allowed_uris = [
         "https://claude.ai/api/mcp/auth_callback",
         "https://claude.com/api/mcp/auth_callback",
+
+        # The Cloudflare dashboard's own callback, registered out of band on
+        # 2026-09-19 when an admin completed the upstream OAuth login that turns
+        # this server from `waiting` into the portal's fourth upstream. That
+        # login is what produces the admin credential every later capability
+        # sync runs with (infrastructure/cloudflare/portal/mcp-servers.tf says
+        # so, and says the credential expires with nobody being told).
+        #
+        # It is listed here because the plan that added
+        # portal-mcp-apps.tf showed this URI being REMOVED: it exists only
+        # because the dashboard wrote it, so the first apply of this root after
+        # that login would have taken it back out. Nothing breaks the moment it
+        # goes — the credential already obtained keeps working — which is
+        # exactly why it is worth writing down: the failure would surface much
+        # later, as a re-authorization that cannot complete, on the day
+        # `authentication_status` has already gone stale and the server has
+        # stopped appearing for end users.
+        "https://dash.cloudflare.com/${var.account_id}/one/access-controls/ai-controls/mcp-server/oauth-callback/projects",
       ]
 
       # Claude Desktop and Claude Code complete the flow on a loopback port that
