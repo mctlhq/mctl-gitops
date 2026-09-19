@@ -190,6 +190,24 @@ just_before=$(cf "$base/portals/$portal" | must_succeed "read portal")
   = "$(jq -cS '[.result.servers // [] | .[] | .server_id] | sort' <<<"$fresh")" ] \
   || { echo "the portal's membership moved while this script was reading; start again" >&2; exit 1; }
 
+# The id-set check above only proves the SET of members did not change -- it
+# says nothing about a field on an existing one, such as the donor's own
+# on_behalf/default_disabled, flipping between `fresh` and this read. Donor
+# derivation is therefore redone here, against `just_before`, and folded into
+# `new_entry` before it is used to build the write body: that keeps every
+# value this script sends sourced from the SAME read it validated as fresh,
+# instead of a mix of an older donor and a newer servers[] array.
+donor_values=$(jq -c '[.result.servers // [] | .[] | {on_behalf, default_disabled}] | unique' <<<"$just_before")
+[ "$(jq 'length' <<<"$donor_values")" -eq 1 ] \
+  || { echo "existing portal members do not agree on on_behalf/default_disabled, so there is no single safe default to copy for a new one: $(jq -c . <<<"$donor_values")" >&2; exit 1; }
+jq -e '.[0] | (.on_behalf | type) == "boolean" and (.default_disabled | type) == "boolean"' \
+  >/dev/null <<<"$donor_values" \
+  || { echo "existing portal members agree, but not on a boolean value, for on_behalf/default_disabled: $(jq -c . <<<"$donor_values"); refusing to copy a non-boolean shape" >&2; exit 1; }
+donor=$(jq '.result.servers[0]' <<<"$just_before")
+new_entry=$(jq -c --argjson on_behalf "$(jq '.on_behalf' <<<"$donor")" \
+  --argjson default_disabled "$(jq '.default_disabled' <<<"$donor")" \
+  '.on_behalf = $on_behalf | .default_disabled = $default_disabled' <<<"$new_entry")
+
 body=$(jq -c --argjson new "$new_entry" '{servers: (.result.servers + [$new])}' <<<"$just_before")
 echo "adding:"; jq . <<<"$new_entry"
 
@@ -203,9 +221,18 @@ res=$(cf -X PUT "$base/portals/$portal" --data "$body" | must_succeed "update po
 # API (e.g. returned in .tools[] order rather than the order this script sent
 # them in) exactly as readily as on a real dropped or altered entry, and the
 # whole point of these checks is to mean something when they fire.
+# `// []` before sort_by is load-bearing, not defensive filler: sort_by
+# cannot iterate null, jq exits nonzero on that, and both diffs below read
+# from a process substitution -- a jq failure there is invisible to
+# set -e/pipefail and leaves that side of the diff empty. A member missing
+# updated_prompts (the DCR members api/seerrsense start that way, before any
+# allowlist-apply has ever run) would then make BOTH sides of a comparison
+# empty, "diff -q" would report no difference, and this filter's entire job
+# -- proving no existing mapping was lost -- would silently no-op instead of
+# failing loud.
 mapping_filter='{server_id, on_behalf, default_disabled,
-  updated_tools: (.updated_tools | sort_by(.name)),
-  updated_prompts: (.updated_prompts | sort_by(.name))}'
+  updated_tools: (.updated_tools // [] | sort_by(.name)),
+  updated_prompts: (.updated_prompts // [] | sort_by(.name))}'
 
 # id-only would pass a write that reverted somebody else's tool decisions: this
 # script, unlike portal-controls-apply.sh, sends the whole `servers` array

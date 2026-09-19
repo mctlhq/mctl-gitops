@@ -418,6 +418,10 @@ def main():
               p.returncode == 0 and sent is not None
               and [s for s in sent["servers"] if s["server_id"] == "tg"][0]["on_behalf"] is False,
               f"rc={p.returncode} {json.dumps(sent)[:300] if sent else p.stderr[:300]}")
+        check("the NEW entry's own donor value also comes from the just-before-write read",
+              p.returncode == 0 and sent is not None
+              and [s for s in sent["servers"] if s["server_id"] == "projects"][0]["on_behalf"] is False,
+              f"rc={p.returncode} {json.dumps(sent)[:300] if sent else p.stderr[:300]}")
 
     with tempfile.TemporaryDirectory() as tmp:
         # The API is free to return array elements in a different order than

@@ -243,8 +243,11 @@ nothing committed at all, closed retroactively by writing this script.
 CLOUDFLARE_API_TOKEN=… CLOUDFLARE_ACCOUNT_ID=… scripts/portal-membership-add.sh <server_id> [--check|--dry-run]
 ```
 
-It refuses to run against a `server_id` that is not already a committed
-Terraform resource in `mcp-servers.tf`, and it writes every tool the server
+In write mode (the default, and `--dry-run`), it refuses to run against a
+`server_id` that is not already a committed Terraform resource in
+`mcp-servers.tf` -- `--check` skips that gate, since it only asks a question
+and must also work for `api`/`seerrsense`, both DCR-registered members with no
+Terraform resource at all. It writes every tool the server
 advertises with `enabled: false` — the same state a server has right after
 being added through the dashboard. It deliberately does not decide which
 tools go live: that is still `scripts/portal-allowlist-apply.sh`, run
