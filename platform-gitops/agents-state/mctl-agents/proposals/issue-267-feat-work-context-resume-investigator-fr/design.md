@@ -2,331 +2,334 @@
 
 ## Current state
 
-**One issue, one workflow, one shot.** `orchestrator/temporal/issue_ref.py:30`
-derives the workflow id `dev-loop-{owner}-{repo}-{issue}` from the issue URL
-alone. `orchestrator/temporal/start.py:65-72` starts `DevLoopWorkflow.run` with
-`IssueRef(issue_url=...)`, `id_reuse_policy=ALLOW_DUPLICATE_FAILED_ONLY` and
-`id_conflict_policy=USE_EXISTING`. The consequences are documented in
-`start.py:31-61`: a RUNNING duplicate start is a no-op, a previously SUCCEEDED
-run raises `WorkflowAlreadyStartedError` (the poller treats it as "already
-handled", `run_issue_poller.py:225-242`), and a FAILED run restarts from the
-top. `dev_loop.py:925-935` states the gap this issue targets outright: "It is a
-restart, not a resume — the new run re-investigates and waits for a fresh
-approve signal."
+**Task identity is the issue URL, and nothing else.**
+`orchestrator/temporal/workflows/dev_loop.py:370-372` defines the workflow
+input as a frozen dataclass with one field:
 
-**The workflow input carries no context.** `IssueRef`
-(`dev_loop.py:370-372`) is a single `issue_url: str`. `DevLoopWorkflow`
-(`dev_loop.py:712-1005`) runs resolve → `_run_cwft("mctl-agents-investigate",
-{"issue_url", "agent_image", "agent_version"})` (`:812-817`) → `_record(...)`
-(`:818`) → `await workflow.wait_condition(lambda: self._approved)` (`:827`) →
-slug lookup → `mctl-agents-approve` → `mctl-agents-implement` → merge/deploy/
-incident watches. Its complete handler set is two queries (`shepherd_in_loop`
-`:753`, `lifecycle_claim` `:766`) and one signal (`approve` `:787-800`); there
-are no update handlers anywhere in `orchestrator/temporal/workflows/`. Every
-behavioural fork is gated by a `workflow.patched` marker — `exec-queue` `:499`,
-`atomic-approve` `:864`, `slug-scoped-implement` `:869`, `merge-detection`
-`:966`, `shepherd-in-loop` `:2247`, and seven more — and `dev_loop.py:2287-2295`
-records the standard for when a new marker is justified. There is no
-`continue_as_new`; history growth is managed by cadence arithmetic
-(`dev_loop.py:129-144`, `:193-208`).
+```python
+@dataclass(frozen=True)
+class IssueRef:
+    issue_url: str
+```
 
-**Execution identity exists, but is issue-keyed.** `_record`
-(`dev_loop.py:524-563`) posts an `ExecutionRecord`
-(`orchestrator/temporal/activities/state.py:28-46`) whose primary correlation
-key is `temporal_workflow_id = workflow.info().workflow_id`, plus
-`argo_workflow_name`, `agent`, `version`, `image_ref`, `target_repo`, `phase`.
-`state.py:34-42` notes the target SHA is deliberately not captured. Agent
-versions are pinned per step via the registry (`_resolve` `:474`,
-`_require_release` `:660`, `activities/registry.py`).
+`orchestrator/temporal/issue_ref.py:30-37` derives the workflow id
+(`dev-loop-mctlhq-<repo>-<N>`) from that URL, and
+`orchestrator/temporal/start.py:65-72` starts the loop with
+`id_reuse_policy=ALLOW_DUPLICATE_FAILED_ONLY` /
+`id_conflict_policy=USE_EXISTING`. So Temporal already dedupes *per issue*, but
+there is no identifier for a *task* that could outlive the issue or span
+surfaces.
 
-**The context contract exists but has no producer.** ADR 009
-(`docs/adr/009-context-snapshot-contract.md`) and
-`orchestrator/context_snapshot.py` define a frozen, stdlib-only,
-content-addressed `ContextSnapshot`: `seal()` (`context_snapshot.py:885`)
-computes `content_hash` over canonical JSON of everything except
-`content_hash`/`snapshot_id`/`created_at`, and `snapshot_id = "cs-" +
-content_hash[7:23]`. `ExecutionCorrelation` (`:406-476`) is explicitly designed
-to join on fields both sides already have — `temporal_workflow_id`,
-`argo_workflow_name`, the four version/hash pins, `target_repository_sha`. ADR
-009's follow-up table names exactly what is still missing: "(a) a producer wired
-into `run_issue_investigator.py` that calls `seal()`" and "(b) persisting sealed
-snapshots next to `ExecutionRecord` in mctl-api" — both "needs an issue". This
-issue is that issue, plus resume.
+**There is no execution identity.** A repo-wide grep for `execution_id`
+returns zero hits. `orchestrator/resolver.py`'s `ExecutionPlan`
+(`resolver.py:226-258`) has no id field — its identity is the tuple of pins
+(`definition_version`, `profile_content_hash`, `release_revision`,
+`target_repository_sha`, ...), and ADR 007's validation expectations
+(`007:301-302`) explicitly want two runs with identical inputs to produce
+*identical* plan identifiers. Runtime identity comes from outside: the
+`ExecutionRecord` at `orchestrator/temporal/activities/state.py:29-44` carries
+`temporal_workflow_id` and `argo_workflow_name`.
 
-**The investigator already reconstructs state from durable artifacts.**
-`run_issue_investigator.investigate()` (`:1457`) resolves the proposal directory
-by issue number via `resolve_slug` (`:842`, rename-safe since #246), reads the
-existing `.status.yaml` with `_load_status` (`:889`), refuses to clobber a
-proposal outside `_OVERWRITABLE_STATUSES`, carries prior files forward with
-`_carry_forward` (`:712`), fetches five issue fields with `gh_issue_view`
-(`:868`), clones the target repo with `_clone_repo` (`:900`), and pins the SHA
-with `_target_repository_sha` (`:117`). Untrusted text is neutralized by
-`_neutralize_prompt_tags` (`:1098`) and wrapped as DATA by `_build_prompt`
-(`:1127`). Its CLI (`main()` `:2075`) accepts only `--issue-url`, `--state-dir`,
-`--dry-run`. So the machinery for transcript-free canonical reconstruction is
-already there; what is missing is a work-item identity to hang it on.
+**Snapshot correlation is intra-execution only.**
+`orchestrator/context_snapshot.py` implements ADR 009: `seal()` at `:885`
+produces a content-addressed document (`content_hash = "sha256:" +
+sha256(canonical JSON)`, `snapshot_id = "cs-" + content_hash[7:23]`, `:915-916`),
+`ExecutionCorrelation` at `:407-476` quotes the plan's pins, and `StepRef` at
+`:480-500` chains a step snapshot to a per-execution root — with the rule at
+`:796-805` that a child's `execution` block must equal its parent's. ADR 009
+`:203-205` scopes that chain to *one* execution; there is no contract for two
+executions of one task. The module is inert: its own docstring (`:19-21`) says
+it "is not yet imported by production code, only by tests and fixture
+generation", and ADR 009 follow-up (a) — "a producer wired into
+`run_issue_investigator.py`" — still reads "needs an issue".
 
-**There is a precedent for exactly this shape of cross-repo contract.**
-`orchestrator/lifecycle/` (ADR 010) is a durable, mctl-api-owned ownership
-record consumed by mctl-agents through two transports: a synchronous urllib
-`OwnershipClient` for Argo pods and CLI processes (`lifecycle/client.py`, whose
-docstring states "The Temporal side does NOT use this module"), and async httpx
-activities for the worker (`activities/lifecycle.py`). It carries a monotonic
-`epoch` (`lifecycle/contract.py:85`), returns denials as data rather than
-exceptions, treats an unreachable store as `UNKNOWN` rather than permission, and
-is rolled out through `LIFECYCLE_ROLLOUT_MODE` (`lifecycle/rollout.py:59`). This
-design reuses that pattern rather than inventing a second one.
+**The investigator has three flags.**
+`orchestrator/run_issue_investigator.py:2075-2094` builds the parser inline in
+`main()`: `--issue-url` (required), `--state-dir`, `--dry-run`. `investigate()`
+(`:1457-1461`) takes `(issue_url, state_dir, dry_run)`. State is entirely
+derived from the issue: `gh_issue_view` (`:868`), then
+`resolve_slug(proposals_dir, number, title)` (`:842`) picks the
+`issue-<N>-<slug>` directory, and `_load_status` (`:889`) reads the
+`.status.yaml` the previous run wrote (`write_status_yaml`, `:979-1044`). The
+de-facto cross-run memory is therefore already transcript-free — it is the
+gitops proposal directory — but it is keyed on the issue, not on a work item.
+
+**Resume is explicitly denied today.** `dev_loop.py:923-936`:
+"It is a restart, not a resume — the new run re-investigates and waits for a
+fresh approve signal." The only signal is `approve` (`:787-800`), which parses
+its payload defensively and never raises; the durable wait is
+`await workflow.wait_condition(lambda: self._approved)` (`:827`) with no
+timeout. The two queries are `shepherd_in_loop` (`:753`) and `lifecycle_claim`
+(`:766`).
+
+**There is a proven pattern for exactly this kind of change.**
+ADR-010 shipped `orchestrator/lifecycle/` as: `contract.py` (frozen
+dataclasses mirroring an mctl-api surface, tolerant `from_payload`
+staticmethods that ignore unknown keys and return `None` on a malformed
+payload — `contract.py:129-137`), `client.py` (synchronous stdlib-urllib
+client, `Bearer $MCTL_TOKEN`, https-only, no-redirect opener, uncertainty
+returned as an `UNKNOWN` *value* rather than an exception), `policy.py` (pure
+decisions) and `rollout.py` (a four-stage `off | observe | enforce | only`
+switch read from one env var, defaulting to `off`, warning rather than raising
+on a typo — `rollout.py:62-79`). This proposal reuses that shape wholesale.
+
+**Nothing exists yet.** A repo-wide grep for
+`work_item|WorkItem|work-item|WorkContextRef|ContextSnapshotRef` returns *no
+matches*. This is greenfield within a well-established set of conventions.
 
 ## Proposed solution
 
-Five additive pieces. Nothing existing changes shape; every new behaviour is
-opt-in on the presence of a work-item reference.
+Five additions, all inside `mctlhq/mctl-agents`.
 
-### 1. `orchestrator/work_item.py` — the client-side contract (new, stdlib-only)
+### 1. `orchestrator/work_context/` — the client-side WorkItem contract
 
-Frozen dataclasses mirroring `context_snapshot.py` and `lifecycle/contract.py`:
-no pydantic, no `schemas/` package, every field defaulted so a payload recorded
-before a field existed still deserializes out of Temporal history.
+A new package mirroring `orchestrator/lifecycle/`, because the situation is
+identical: mctl-api (#227) owns the store, this repo owns a tolerant client
+mirror.
 
-- `WorkItemRef(work_item_id, canonical_task_ref, epoch)` — `canonical_task_ref`
-  is the issue URL today; the id is opaque and server-minted.
-- `SurfaceRef(kind, id)` with closed vocabulary `SURFACE_KINDS = {"github-issue",
-  "telegram", "web", "cli", "cron", "api"}`; `ActorRef(kind, id)` with
-  `ACTOR_KINDS = {"human", "service", "agent"}`. Identifiers only — never a
-  credential, never a token, never free text.
-- `ResumeIntent(work_item_id, expected_epoch, surface, actor, reason_code,
-  idempotency_key)`.
-- `ExecutionIdentity(execution_id, work_item_id, epoch, parent_execution_id,
-  prior_execution_ids, prior_snapshot_ids)` — all minted or returned by the
-  store; this module never invents an id.
-- `resume_key(work_item_id, expected_epoch, surface, actor) -> str`, a
-  sha256-derived idempotency key. Deterministic on purpose: it is computed
-  inside `@workflow.defn` code, where `uuid4()`/`time.time()` are forbidden.
-- Bounded-length and closed-vocabulary validation with loud failure, copying
-  `context_snapshot._reject_unknown_keys`/`_require_str` verbatim in style, and
-  a `MAX_ID_LENGTH` ceiling so no id field becomes a free-text carrier.
+- `contract.py` — stdlib only, frozen dataclasses, `from_payload`
+  staticmethods that ignore unknown keys and return `None` on a malformed
+  payload (the `orchestrator/lifecycle/contract.py:129-137` discipline; an
+  mctl-api deploy that adds a field must not become an agents outage).
+  Symbols: `SurfaceRef(kind, surface_id, thread_ref)`,
+  `ActorRef(kind, actor_id)`, `WorkItemRef(work_item_id, revision)`,
+  `ExecutionRef(execution_id, sequence, temporal_workflow_id, started_at,
+  surface, actor)`, `WorkItem(work_item_id, revision, state, origin,
+  executions, issue_url, service, slug)`, `WorkItemAnswer(verdict, item,
+  reason, accepted)`. Closed vocabularies as module frozensets:
+  `SURFACE_KINDS`, `ACTOR_KINDS`, `WORK_ITEM_STATES`, and the verdicts
+  `WORK_ITEM_FOUND | WORK_ITEM_ABSENT | WORK_ITEM_CONFLICT |
+  WORK_ITEM_UNKNOWN`. Plus two pure functions:
+  - `execution_id_for(work_item_id, sequence, attempt) -> str` — a sha256 of
+    `"{work_item_id}|{sequence}|{attempt}"`, deliberately the same shape as
+    `lifecycle/contract.py:1013-1024`'s `idempotency_key_for`, so a duplicate
+    resume derives the *same* id and dedupes by construction rather than by
+    luck. A UUID fallback is forbidden, as in ADR-010 §8.
+  - `reconstruct_canonical_state(item, proposal_dir, prior_digests) ->
+    CanonicalState` — see §4.
+- `client.py` — `WorkItemClient`, synchronous urllib, copied structurally from
+  `lifecycle/client.py:86-301`: `MCTL_API_BASE_URL` (default
+  `https://api.mctl.ai`), `Bearer $MCTL_TOKEN`, refusal of a non-https base,
+  `_no_redirect_opener`, and a `WorkItemUnavailable(RuntimeError)` raised only
+  by the transport and converted by every public method into a
+  `WORK_ITEM_UNKNOWN` answer. Routes live in one module-level table:
+  `GET /api/v1/work-items/{id}`, `POST /api/v1/work-items/{id}/executions`,
+  `GET /api/v1/work-items/{id}/executions`.
+- `rollout.py` — `WORK_CONTEXT_ROLLOUT_MODE` with the same `OFF/OBSERVE/
+  ENFORCE/ONLY` ladder, `mode()`, `at_least()`, `records_writes()`,
+  `computes_new_answer()`, `new_answer_may_veto()`, `new_answer_decides()`,
+  and `blocks_on_unknown()` reading the `WORK_CONTEXT_REQUIRED` break-glass and
+  nothing else. Default `off`: the entire change is inert until an operator
+  moves it, which is what makes this safe to merge ahead of
+  mctlhq/mctl-gitops#1279 and mctlhq/mctl-api#335.
+- `__init__.py` — a re-export block with `# noqa: F401`, matching
+  `orchestrator/lifecycle/__init__.py`.
 
-No field name may contain `allow`/`deny`/`permit`/`grant`/`authorized` — the
-recursive field-name assertion in `tests/test_context_snapshot.py` is extended
-to cover this module, so ADR 009 sec. 5 ("context relevance is never an
-authorization mechanism") survives the addition.
+The package imports no third-party module, so `tests/test_worker_isolation.py`
+stays green whether the worker or the Argo sandbox imports it.
 
-### 2. Two transports to the mctl-api work-context surface
+### 2. `WorkContextRef` on the ContextSnapshot
 
-Exactly the lifecycle split, for exactly the lifecycle reasons:
-
-- `orchestrator/work_context_client.py` — synchronous urllib, no-redirect
-  opener, used by `run_issue_investigator` inside the Argo pod. Methods:
-  `resolve(work_item_id)`, `open_execution(ResumeIntent)`,
-  `publish_snapshot(execution_id, snapshot_dict)`, `report_refusal(...)`.
-- `orchestrator/temporal/activities/work_items.py` — async httpx activities
-  `resolve_work_item`, `open_work_item_execution`, `record_surface_transition`,
-  used by `DevLoopWorkflow`. Workflow code never calls HTTP directly (ADR 010
-  §9).
-
-Failure semantics follow `lifecycle/client.py`: a conflict is **data** (a 409
-becomes an explicit `conflict` answer, not an exception), while unreachable is
-`UNKNOWN` and, for a resume, fails closed — an execution identity is never
-invented locally. A `WORK_ITEM_ROLLOUT_MODE` env switch (`off | shadow |
-enforce`), modelled on `lifecycle/rollout.py`, lets the surface be exercised in
-shadow before it decides anything.
-
-### 3. `ContextSnapshot` gains an optional `work_item` block (ADR 011)
-
-New frozen dataclass in `orchestrator/context_snapshot.py`:
-
-```
-WorkContextRef(
-  work_item_id, epoch, execution_id,
-  parent_execution_id | None,
-  prior_execution_ids: tuple[str, ...],
-  prior_snapshot_ids: tuple[str, ...],
-  surface_kind, surface_id, actor_kind, actor_id,
-  resume_reason_code,
-)
-```
-
-carried as `ContextSnapshot.work_item: WorkContextRef | None = None`.
-
-**Hash rule — omit when absent.** `_content_payload` (`context_snapshot.py:860`)
-includes the `"work_item"` key **only when the block is present**. That is a
-deliberate, narrow amendment to ADR 009 sec. 2, and it is what keeps the
-checked-in golden fixture `tests/fixtures/context/investigator-snapshot.json`
-hashing byte-for-byte to `sha256:de22a552...` under the existing T3 test. The
-`step` key keeps its always-rendered `null`, untouched. ADR 009 declares sec. 1
-and sec. 2 normative and not reopenable by a follow-up, so this lands as **ADR
-011, an amendment ADR** that states the rule, the compatibility argument, and
-the new field-owner row — not as a silent schema edit.
-
-The chaining rule extends consistently: `validate(parent=...)`
-(`context_snapshot.py:796-805`) already requires a child's `execution` block to
-equal its parent's; it will require the same of `work_item`. Resume never
-mutates a chain — it starts a **new root** whose `prior_execution_ids` and
-`prior_snapshot_ids` point backwards. `to_log_dict()` (`:807`) gains
-`work_item_id`, `execution_id`, `epoch`: identifiers only, no locator, no
-selector, no payload-derived string.
-
-### 4. `run_issue_investigator.py` — resume input plus the first real producer
-
-`main()` (`:2075`) gains optional flags, all absent-by-default so today's CWFT
-invocation is untouched:
+A new frozen dataclass in `orchestrator/context_snapshot.py`, following that
+module's *strict* discipline (a sealed document rejects unknown keys, unlike
+the tolerant API mirror above — the two are different jobs and the difference
+is deliberate):
 
 ```
---work-item <id>            canonical WorkItem reference
---expected-epoch <n>        compare-and-set guard for the resume
---surface <kind>:<id>       provenance of THIS invocation
---actor <kind>:<id>         provenance of THIS invocation
---resume-of <execution_id>  prior execution being continued
+WorkContextRef(work_item_id, work_item_revision, execution_id,
+               execution_sequence, prior_execution_ids, resumed_from_snapshot_id,
+               origin_surface, current_surface, actor_kind, actor_id,
+               surface_transition)
 ```
 
-`investigate()` (`:1457`) gains a matching optional `work_item: WorkItemRef |
-None` parameter and, when present:
+Wired as `ContextSnapshot.work_context: WorkContextRef | None = None`, added to
+`_SNAPSHOT_KEYS` (`:631`), `to_dict`, `from_dict`, `_content_payload`
+(`:860-882`, so it participates in `content_hash` exactly as `step` does),
+`validate()` (closed-vocabulary checks for `origin_surface`/`current_surface`/
+`actor_kind`, and — extending the existing parent rule at `:804-805` — a child
+step snapshot's `work_context` must equal its parent's), and `to_log_dict()`
+(`:807-827`, emitting `work_item_id`/`execution_id`/`execution_sequence` for
+#195 trace correlation but **not** `actor_id`).
 
-1. Calls `open_execution(...)` before any agent work; the store returns the
-   `ExecutionIdentity` (execution id, epoch, prior execution/snapshot ids) or an
-   explicit conflict, which aborts without running the agent.
-2. Reconstructs canonical state from durable artifacts only — the WorkItem
-   record, the existing proposal triplet found by `resolve_slug`/`_load_status`,
-   and `gh_issue_view`. There is no transcript parameter, and the prompt builder
-   has no place to put one.
-3. Feeds `_build_prompt` (`:1127`) a new, clearly-delimited "prior work on this
-   WorkItem" section built from those artifacts, keeping the existing untrusted
-   wrapping (`_neutralize_prompt_tags` `:1098`) for anything third-party
-   authored. Prior proposal documents are `proposal-dir` sources at trust tier
-   `reported`; the issue body stays `untrusted`; the clone stays `authoritative`
-   at its pinned SHA.
-4. On completion, seals one **root** `ContextSnapshot` with `seal()`
-   (`:885`) — sources: `github-issue`, `target-repo` at
-   `_target_repository_sha` (`:117`), and on resume the `proposal-dir` — plus the
-   `work_item` block, and publishes it with `publish_snapshot`. This is ADR 009
-   follow-ups (a) and (b), scoped to the investigator.
-5. Leaves the existing idempotency guard in force: a proposal outside
-   `_OVERWRITABLE_STATUSES` is still refused, and the refusal is now also
-   reported against the WorkItem rather than only printed.
+This is the piece that satisfies "resume creates a new execution identity and
+ContextSnapshot while retaining correlation to prior executions" *without*
+mutating history. Execution B seals its own snapshot; because `work_context`
+feeds the hash and `execution_id` differs, its `snapshot_id` differs from
+execution A's. Correlation is carried forward by `work_item_id` and
+`prior_execution_ids`, and by the optional one-way pointer
+`resumed_from_snapshot_id`. Nothing re-opens A's document. This deliberately
+does **not** reuse `StepRef`: ADR 009 `:203-205` scopes step chaining to one
+execution and requires a child's `execution` block to equal its parent's, which
+is exactly what a resume violates. `WorkContextRef` is the sibling-correlation
+axis; `StepRef` remains the intra-execution axis.
 
-Every step is skipped entirely when `--work-item` is absent, so the
-`agents:intake` poller path and the current CWFT parameters keep working
-unchanged during rollout.
+Because it adds a field to the sealed shape, this needs a short **ADR 011**
+(the repo's `docs/adr/` template: Context → Decision → Alternatives → Non-goals
+→ Platform impact → Implementation map), stating that it extends ADR 009 sec. 1's
+field/owner table and reaffirms the sec. 5 boundary — `work_context` records
+provenance and is never read by an authorization decision.
 
-### 5. `DevLoopWorkflow` — resume without a second engine
+### 3. Investigator flags
 
-- `IssueRef` (`dev_loop.py:370`) grows **defaulted** fields: `work_item_id: str
-  = ""`, `surface_kind/surface_id/actor_kind/actor_id: str = ""`,
-  `resume_of_execution_id: str = ""`, `epoch: int = 0`. Defaults are what make
-  old histories deserialize — the pattern `DevLoopResult` already relies on
-  (`dev_loop.py:449-471`).
-- New marker `workflow.patched("work-item-resume")` guards every new branch:
-  passing `work_item_id`/`execution_id` into `investigate_params`
-  (`:812-815`), and the new signal/query below. Histories without the marker
-  replay exactly as recorded, per the memoization semantics pinned by
-  `tests/test_patch_memoization.py`.
-- New signal `resume(self, *args: object)`, written in the defensive style of
-  `approve` (`:787-800`) — signals must never raise. It records the
-  actor/surface transition via `record_surface_transition` and updates the
-  in-workflow provenance fields. It does **not** approve anything.
-- `approve` is extended to accept the optional keys `actor_kind`, `actor_id`,
-  `surface_kind`, `surface_id`, `epoch` in its dict form, still ignoring
-  anything unrecognized. An approval recorded for epoch N does not satisfy a
-  gate in epoch N+1: on the resume path the workflow requires
-  `self._approved_epoch == self._epoch`. Approval *enforcement* stays where it
-  is — mctl-api's authenticated approve endpoint (`cli.py:113-118`) — this is
-  bookkeeping that prevents inheritance, not a new authority.
-- New query `work_item() -> WorkItemView(work_item_id, epoch, execution_ids)`,
-  alongside `shepherd_in_loop` and `lifecycle_claim`, so trace/evidence views
-  and the mctl-api liveness route can correlate executions to one WorkItem.
-- Start path: `start.py` gains `start_dev_loop_resume(work_item, intent)`.
-  `workflow_id_for` stays byte-identical for epoch 0 — `mctl_get_dev_loop`, the
-  poller and the shepherd cron all derive ids from it — and a new
-  `resume_workflow_id_for(issue_url, epoch)` appends `-r{epoch}` for epoch > 0.
-  Reuse/conflict policies are unchanged.
+`main()` (`run_issue_investigator.py:2075`) gains `--work-item-id`,
+`--execution-id`, `--resume-from-execution-id`, `--surface`, `--actor-kind`,
+`--actor-id`; `--issue-url` drops `required=True` and becomes conditionally
+required by an explicit post-parse check (missing → `SystemExit` unless
+`--work-item-id` is given and the mode is `only`). `investigate()` gains the
+same names as **keyword-only parameters defaulting to `None`**, so every
+existing call site — `investigate(url, tmp_path)` in ~170 tests, and any direct
+trigger — is untouched. A small `_work_context_from_args(args) ->
+WorkContextInput | None` helper does the validation (closed vocabularies, the
+`--resume-from-execution-id` ⇒ `--work-item-id` requirement) in one testable
+place, and `orchestrator/work_context` is imported **lazily**, inside the
+functions that use it, preserving the module-scope import discipline that
+`run_issue_investigator.py:68-73` documents and `test_worker_isolation.py`
+enforces.
 
-**Why this satisfies concurrency.** The epoch is minted by the WorkItem store
-under a compare-and-set on `expected_epoch`. Two concurrent resumes carrying the
-same `resume_key` receive the same epoch and therefore the same workflow id,
-where `WorkflowIDConflictPolicy.USE_EXISTING` (`start.py:71`) collapses them to
-one run; a resume presenting a stale `expected_epoch` gets a 409 that surfaces as
-a non-retryable `ApplicationError` and starts nothing. A resume arriving while
-the first execution is still parked at `wait_condition` (`:827`) is routed as the
-`resume` signal instead of a start — one Temporal execution, provenance
-recorded, no fork.
+When the mode is at least `observe`, `investigate()` resolves the `WorkItem`,
+computes the canonical state, and records the resulting `WorkContextRef` on the
+`ExecutionPlan` log line; the `seal()` producer itself remains ADR 009
+follow-up (a) and is out of scope here.
+
+### 4. Canonical-state reconstruction
+
+`reconstruct_canonical_state(item: WorkItem, proposal_dir: Path | None,
+prior_digests: Sequence[Mapping[str, Any]]) -> CanonicalState` is a pure
+function whose *signature has no parameter capable of carrying a transcript*.
+Its inputs are:
+
+- the `WorkItem`'s own structured fields (`state`, `issue_url`, `service`,
+  `slug`, `executions`);
+- the gitops artifacts `run_issue_investigator` already reads —
+  `.status.yaml` via `_load_status` (`:889`) and the
+  `requirements.md`/`design.md`/`tasks.md` triplet (`TRIPLET`, `:258`);
+- prior execution digests in `ContextSnapshot.to_log_dict()` shape (ids,
+  counts, hashes — never payloads).
+
+It returns `CanonicalState(work_item_id, state, service, slug, issue_url,
+prior_execution_ids, prior_status, artifacts_present, reconstructed_from)`.
+The "no raw transcript" requirement becomes testable as a *type* property
+rather than a promise: a test asserts the function's signature and the
+`CanonicalState` field set contain no free-text message field, mirroring how
+`ContextSource` is defended by having no payload field to put one in
+(`context_snapshot.py:277-281`).
+
+### 5. The `resume` signal on `DevLoopWorkflow`
+
+```
+@workflow.signal def resume(self, *args: object) -> None
+@workflow.query  def work_context(self) -> WorkContextState
+```
+
+`resume` parses defensively and never raises, exactly like `approve`
+(`dev_loop.py:787-800`). Accepted payload:
+`{"work_item_id", "execution_id", "surface", "actor_kind", "actor_id"}`.
+New workflow state: `_work_item_id`, `_executions: list[ExecutionRef]`,
+`_seen_execution_ids: set[str]`, `_resume_pending: bool`,
+`_resume_rejections: list[ResumeRejection]`, `_current_surface`,
+`_current_actor`.
+
+Semantics, and why each is the conservative choice:
+
+| Case | Behaviour |
+|---|---|
+| `execution_id` already in `_seen_execution_ids` | no-op (idempotent). Because `execution_id_for` is a deterministic hash, a duplicated signal derives the same id and lands here automatically. |
+| a different `execution_id` while `_resume_pending` | rejected; a `ResumeRejection(execution_id, reason="resume-already-pending")` is appended and surfaced by the query. Never a fork. |
+| `work_item_id` disagrees with the one already bound | rejected, `reason="work-item-mismatch"`. |
+| accepted, same surface and actor | new `ExecutionRef` appended; approval untouched. |
+| accepted, surface or actor changed | new `ExecutionRef` appended, `surface_transition=True` recorded, **`self._approved = False` and `self._approver = None`** |
+
+That last row is the whole answer to "authorization/approval is re-evaluated"
+and to the "no cross-surface privilege inheritance" non-goal: the existing
+`await workflow.wait_condition(lambda: self._approved)` (`:827`) simply
+re-arms, so the loop parks again until the *current* actor approves through the
+normal `approve` signal, whose authorization is governed by #198 and unchanged
+here.
+
+**Determinism.** A signal handler adds no workflow commands, so the handler and
+the query can be added unguarded. Anything that changes the *command stream* —
+merging work-context keys into `investigate_params` (`:812-815`), or re-entering
+the wait after clearing `_approved` — sits behind a new
+`workflow.patched("work-context-resume")` marker, following
+`"atomic-approve"`/`"slug-scoped-implement"` (`:864-869`) and heeding the
+explicit cost note at `:2286-2295`. `IssueRef` gains an optional
+`work_item_id: str | None = None` field; a defaulted field keeps old histories
+deserializable.
+
+**The submission path stays closed.** `investigate_params` is `dict[str, str]`
+POSTed verbatim as the operation body (`activities/argo.py:118-125`), and the
+mctl-api registry rejects unknown parameters until mctlhq/mctl-api#335 and the
+CWFT change mctlhq/mctl-gitops#1279 land. So the merge is guarded by *both* the
+patch marker and `work_context.rollout.at_least(ENFORCE)`, and with the default
+`off` mode nothing new is ever sent. A pure `work_context_params(...) ->
+dict[str, str]` helper carries the logic and is unit-tested directly.
 
 ## Alternatives
 
-**A. Put the work-item fields inside `ExecutionCorrelation`.** It is the natural
-home (it already carries `temporal_workflow_id`, `argo_workflow_name`, the
-version pins). Dropped because `ExecutionCorrelation.to_dict()` is unconditional
-inside `_content_payload`, so adding fields changes the `content_hash` of *every*
-snapshot including the golden fixture, invalidating the one test ADR 009 relies
-on to prove hash stability — and because the "child execution block must equal
-parent's" rule would then silently bind step-chaining to resume state.
+1. **Reuse `StepRef` for cross-execution chaining.** Rejected: ADR 009
+   `:796-805` requires a child's `execution` block to equal its parent's, and
+   a resume by definition has a different execution. Relaxing that rule would
+   reopen one of ADR 009's explicitly frozen decisions (`009:454-462`) and would
+   make "same execution" unfalsifiable. A separate correlation axis keeps both
+   rules intact and each one checkable.
 
-**B. Bump `api_version` to `context.mctl.ai/v1alpha2`.** Honest about the schema
-change and avoids the omit-when-absent subtlety. Dropped because it forces two
-supported versions in `SUPPORTED_API_VERSIONS` (`context_snapshot.py:44`), a
-migration path in `from_dict`, and a second golden fixture, for a strictly
-additive optional block — ADR 009's own platform-impact section already names
-"additive, defaulted fields" as the intended growth path and reserves
-`apiVersion` bumps for breaking changes.
+2. **Put resume state in the proposal's `.status.yaml`.** Rejected for the four
+   reasons ADR-010 §1 already gives for not putting ownership there — chiefly
+   the ~35-minute gitops mutex, which makes it useless as a concurrency control
+   for "two surfaces resumed at once". Also, a resume must work before any
+   proposal exists.
 
-**C. Resume by re-using the same Temporal workflow id and history
-(continue-as-new or a long-lived per-WorkItem workflow).** Dropped for two
-reasons: it violates "historical execution/snapshot state is not mutated on
-resume" in spirit — one execution identity would span surfaces — and it breaks
-the repo's history-size discipline, since the 14-day watch is already budgeted
-against the 50k-event ceiling (`dev_loop.py:129-144`) with no continue-as-new
-anywhere in the codebase.
+3. **A second Temporal workflow per execution, parented to a work-item
+   workflow.** Rejected: it doubles the workflow-id space and the replay
+   surface for no gain the `resume` signal does not already provide, and the
+   issue explicitly forbids introducing a parallel orchestration engine.
+   `DevLoopWorkflow` already owns durable per-issue state and already parks
+   indefinitely on `wait_condition`.
 
-**D. Carry a summarized transcript between executions as prompt text.** Simplest
-to build, and explicitly what the issue forbids. Dropped: it makes surface
-content a load-bearing input, has no content-hash story, and would smuggle
-payload into a schema whose entire design is payload-free (ADR 009 sec. 7).
+4. **Omit `work_context` from `_content_payload` when `None`, to preserve
+   existing `content_hash` values.** Rejected: it would make the canonical JSON
+   shape conditional, diverging from `step`, which is always emitted as
+   `null` (`:876`). Since the module has no production producer yet
+   (`:19-21`), the entire cost of an unconditional key is re-cutting one golden
+   fixture. Recorded here because a reviewer who disagrees only has to flip one
+   line — the tests pin the decision either way.
 
 ## Platform impact
 
-- **Migrations.** None in this repo. The WorkItem store lives in mctl-api
-  (the depended-on contract); mctl-agents is a client. No GitOps schema, no
-  manifest field, no `.status.yaml` shape change.
-- **Cross-repo sequencing.** `mctl-agents-investigate` must accept new CWFT
-  parameters (`work_item_id`, `execution_id`) before `DevLoopWorkflow` sends
-  them: the template lives in mctl-gitops (`cwft-mctl-agents-investigate.yaml`)
-  and mctl-api's operation registry validates params. mctl-agents CI cannot
-  check that sibling repo — the same blind spot `dev_loop.py:936-950` documents
-  for the implement CWFT's `service` param — so the gitops change lands first,
-  and the workflow only passes the params behind `workflow.patched`.
-- **Backward compatibility.** Additive by construction. Absent `--work-item`
-  reproduces today's behaviour exactly; `IssueRef`'s new fields are defaulted;
-  the `work_item` snapshot block is omitted from the content payload when
-  absent, so existing snapshot ids and the golden fixture hash are unchanged;
-  `workflow_id_for` is untouched for epoch 0.
-- **Determinism and replay.** The chief risk. Mitigations: every new branch
-  behind one marker (`work-item-resume`); the idempotency key derived by
-  sha256, never `uuid4`/wall-clock, inside workflow code; all HTTP through
-  activities; replay tests extended with a pre-patch history fixture in
-  `tests/fixtures/histories/`.
-- **Resource impact.** One extra activity per execution start and one extra
-  HTTP POST per completed investigation — not per poll, so the 14-day
-  history budget (`dev_loop.py:193-208`) is untouched. A sealed snapshot is a
-  few kilobytes of primitives. New modules stay stdlib-only (client) or
-  httpx-only (activities), preserving `tests/test_worker_isolation.py`'s line
-  against `claude_agent_sdk` in the worker.
-- **Risks and mitigations.**
-  - *Resume becomes a privilege-escalation path across surfaces.* Mitigated by
-    epoch-scoped approval, actor/surface recorded as identifiers only, no
-    authorization field names in any new schema (asserted by test), and
-    enforcement left with mctl-api.
-  - *The store is down and a resume proceeds anyway.* Mitigated by fail-closed
-    UNKNOWN handling copied from `lifecycle/client.py`, plus the
-    `WORK_ITEM_ROLLOUT_MODE` shadow stage before anything decides.
-  - *A resume clobbers an in-flight implementer's proposal.* Mitigated by the
-    existing `_OVERWRITABLE_STATUSES` guard, which resume must not weaken, now
-    also reported back to the WorkItem.
-  - *Snapshot ids drift and old ones stop verifying.* Mitigated by the
-    omit-when-absent hash rule plus a test asserting the existing fixture's
-    hash byte-for-byte and a second fixture for the resume shape.
-  - *A permanent patch marker for a feature that gets reverted.* Accepted and
-    bounded: markers are removed by attrition via `workflow.deprecate_patch`
-    after `MERGE_WATCH_DEADLINE` (14 days), never by deleting deployed code.
-- **Security.** The snapshot stays payload-free and non-authoritative. Surface
-  and actor are identifiers with bounded length and closed vocabularies.
-  Provider-side authorization (GitHub, mctl MCP, Kubernetes) remains the only
-  enforcement, unchanged.
+**Migrations.** None in this repository. The only durable state it touches is
+Temporal workflow history (handled by `workflow.patched`) and the gitops
+proposal directory (unchanged on disk). The mctl-api `WorkItem` table is
+mctl-api#227's migration, not this one.
+
+**Backward compatibility.**
+- CLI: every new flag is optional and defaults to `None`; omitting all of them
+  reproduces today's behaviour exactly. `investigate()`'s new parameters are
+  keyword-only, so the ~170 existing positional call sites compile unchanged.
+- Workflow: `IssueRef` gains one defaulted field; new commands are patch-gated;
+  a recorded pre-change history must replay, which is enforced by adding a
+  scenario to `tests/replay_scenarios.py` / `tests/test_workflow_replay.py`.
+- Snapshot: `ContextSnapshot.work_context` defaults to `None` and `from_dict`
+  accepts a document without the key. The `content_hash` of a `work_context=None`
+  document changes once; the only artifact affected is
+  `tests/fixtures/context/investigator-snapshot.json`, which is re-cut in the
+  same PR.
+- Rollout default `off` means the merged PR changes no runtime behaviour at
+  all, which is what allows it to land before its two cross-repo prerequisites.
+
+**Resource impact.** Negligible. At `observe` and above, one extra
+`GET /api/v1/work-items/{id}` per investigator execution (10 s timeout,
+uncertainty returned as a value), plus a handful of strings in workflow memory
+and a slightly larger snapshot document. The Temporal worker's 256 Mi limit
+(ADR-008, agents#179) is unaffected: the new package is stdlib-only and adds no
+dependency to `pyproject.toml`.
+
+**Risks and mitigations.**
+
+| Risk | Mitigation |
+|---|---|
+| Workflow nondeterminism wedges in-flight approved loops at deploy time — the failure mode `dev_loop.py:845-852` was written about | Every new command behind `workflow.patched("work-context-resume")`; a pre-patch history added to the replay suite as a merge gate. |
+| A resume from a hostile or merely different surface inherits an earlier approval | Surface/actor transition clears `_approved` and `_approver`; covered by a dedicated workflow test. |
+| Concurrent resumes fork one work item | Deterministic `execution_id_for` makes duplicates idempotent; a differing id while pending is rejected with a recorded reason; Temporal's single-writer execution serialises the handler. Server-side sequence allocation remains the long-term answer and is recorded as a known simplification. |
+| mctl-api route shape guessed wrong | Routes isolated in one table; the client fails to a `WORK_ITEM_UNKNOWN` value, and at the default `off` mode is never called. |
+| Worker bloat / import-line regression | `orchestrator/work_context` is stdlib-only and imported lazily inside functions in `run_issue_investigator.py`; `tests/test_worker_isolation.py` already fails the build if that line moves. |
+| Scope creep into the submission path | The `investigate_params` merge is double-gated (patch + `enforce`) and defaults to sending nothing; the cross-repo work stays in mctlhq/mctl-gitops#1279 and mctlhq/mctl-api#335. |

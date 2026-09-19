@@ -2,146 +2,227 @@
 
 ## Context
 
-Today a dev-loop run is keyed to one GitHub issue and nothing else.
-`orchestrator/temporal/issue_ref.py:30` derives the Temporal workflow id as
-`dev-loop-{owner}-{repo}-{issue}`, `orchestrator/temporal/start.py:65` starts
-`DevLoopWorkflow` with a single-field input `IssueRef(issue_url)`
-(`orchestrator/temporal/workflows/dev_loop.py:370`), and the investigate submit
-carries exactly three params — `issue_url`, `agent_image`, `agent_version`
-(`dev_loop.py:812-817`). A successful run burns that workflow id forever
-(`WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY`, `start.py:70`), and the
-only way to touch the issue again is a restart that re-investigates from
-scratch — the code says so in its own words: "It is a restart, not a resume —
-the new run re-investigates and waits for a fresh approve signal"
-(`dev_loop.py:925-935`). There is no actor, no surface, no work-item identity
-anywhere on the input or in workflow state; the single human-provenance field
-is `self._approver`, set by an unauthenticated `approve` signal
-(`dev_loop.py:787-800`, `orchestrator/temporal/cli.py:113-118`).
+Today an investigator run is identified by exactly one thing: the GitHub
+issue URL. `orchestrator/temporal/workflows/dev_loop.py:370-372` defines
+`IssueRef` with a single field (`issue_url`); `workflow_id_for` in
+`orchestrator/temporal/issue_ref.py:30-37` derives
+`dev-loop-mctlhq-<repo>-<N>` from it; and `orchestrator/run_issue_investigator.py`
+takes three flags (`--issue-url`, `--state-dir`, `--dry-run`, lines 2075-2094)
+with no notion of an execution identity at all — a grep for
+`run_id|execution_id|correlation` over that 2129-line module returns nothing.
+The de-facto correlation key is the proposal slug on disk. That means a task
+cannot outlive one execution: `dev_loop.py:923-936` says so in as many words
+("It is a restart, not a resume — the new run re-investigates and waits for a
+fresh approve signal"). There is no way for work begun on one surface to be
+picked up on another without replaying the original conversation, and nothing
+ties two executions of the same task together for trace or evidence purposes.
 
-This proposal adds resume semantics so one durable unit of work — a **WorkItem**,
-owned by the mctl-api contract this depends on — can span multiple executions
-started from different surfaces, without replaying any original chat transcript.
-Each execution stays immutable and gets its own identity and its own
-`ContextSnapshot` (`orchestrator/context_snapshot.py`, ADR 009), correlated back
-to the same WorkItem, so trace and evidence views can join executions A and B.
-Canonical task state is reconstructed from durable artifacts the platform
-already owns — the WorkItem record, the proposal triplet under
-`platform-gitops/agents-state/<service>/proposals/<slug>/`, and the GitHub issue
-— never from a surface conversation log. The pilot is the investigator flow
-only; Temporal remains the single durable orchestration engine.
+This proposal adds the missing durable spine in `mctl-agents`: a client-side
+mirror of the canonical `WorkItem` contract that mctl-api#227 owns, a
+`WorkContextRef` block on the `ContextSnapshot` document
+(`orchestrator/context_snapshot.py`) that correlates sibling executions of one
+work item, a staged rollout switch modelled on
+`orchestrator/lifecycle/rollout.py`, new investigator flags, a pure
+canonical-state reconstruction function that never takes a transcript, and a
+`resume` signal on `DevLoopWorkflow` whose idempotency, rejection and
+approval-re-evaluation semantics are explicit and tested. Temporal remains the
+only durable orchestration engine; nothing here introduces a second one.
 
 ## User stories
 
-- AS a platform operator I WANT to start an investigator execution from a
-  canonical WorkItem reference SO THAT the run is identified by the unit of
-  work rather than by whichever surface happened to trigger it.
-- AS an operator who began work in one surface I WANT to resume the same
-  WorkItem from a second surface SO THAT the loop continues without the first
-  surface's transcript and without re-opening a duplicate issue.
-- AS an auditor I WANT every execution and every `ContextSnapshot` to remain
-  immutable and correlated to one WorkItem SO THAT "what ran, on what input,
-  for which unit of work" is answerable after the fact.
-- AS a security reviewer I WANT actor/surface transitions recorded as
-  identifiers and approval re-evaluated per execution SO THAT no privilege
-  granted in surface A is inherited by surface B.
-- AS an on-call engineer I WANT concurrent resume attempts to be idempotent or
-  explicitly rejected SO THAT two surfaces cannot fork one unit of work into
-  two racing agent runs.
+- AS a platform operator I WANT to launch an investigator execution from a
+  canonical `WorkItem` reference SO THAT the task's identity is durable and
+  independent of the surface that happened to start it.
+- AS a user who started work in one surface I WANT to resume the same work
+  item from a different surface SO THAT I do not have to restate the task or
+  replay the original conversation.
+- AS an auditor I WANT every execution to carry its own immutable execution
+  identity and sealed `ContextSnapshot`, correlated to one `WorkItem` SO THAT
+  a trace or evidence view can show both executions as one task without either
+  record having been rewritten.
+- AS a security reviewer I WANT a surface or actor transition to force
+  re-evaluation of approval SO THAT approval granted by one actor on one
+  surface is never silently inherited by another.
+- AS a maintainer of the dev-loop worker I WANT resume to be idempotent or
+  explicitly rejected SO THAT a duplicated signal or a racing second surface
+  cannot fork one work item into two divergent executions.
 
 ## Acceptance criteria (EARS)
 
-- WHEN `run_issue_investigator` is invoked with a canonical work-item reference
-  THE SYSTEM SHALL resolve that WorkItem from the mctl-api work-context surface
-  and open a new execution against it before any agent invocation.
-- WHEN an execution is opened against a WorkItem THE SYSTEM SHALL record an
-  execution identity minted by the WorkItem store (execution id plus the
-  WorkItem epoch the execution belongs to) and SHALL NOT invent one locally.
-- WHEN an investigator execution completes THE SYSTEM SHALL seal exactly one
-  root `ContextSnapshot` via `orchestrator.context_snapshot.seal` carrying a
-  `work_item` correlation block, and SHALL persist it against that execution.
-- WHEN a second execution resumes the same WorkItem from a different surface
-  reference THE SYSTEM SHALL create a new execution identity and a new
-  `ContextSnapshot`, and SHALL carry the prior execution ids and prior snapshot
-  ids as correlation fields on the new snapshot.
-- WHILE a resume is in progress THE SYSTEM SHALL treat every previously
-  recorded execution record and `ContextSnapshot` as immutable and SHALL NOT
-  issue any update or delete against them.
-- WHEN a resume is requested THE SYSTEM SHALL reconstruct canonical task state
-  from the WorkItem record, the existing proposal directory under
-  `agents-state/<service>/proposals/<slug>/`, and the GitHub issue only, and
-  SHALL NOT require, request, or accept a raw surface transcript as input.
-- WHEN a resume changes the surface or actor relative to the prior execution
-  THE SYSTEM SHALL record the transition as `{surface_kind, surface_id,
-  actor_kind, actor_id, reason_code}` identifiers at metadata level, and SHALL
-  record no conversation content.
-- IF a resumed execution reaches the approval gate THEN THE SYSTEM SHALL
-  require an approval granted for the current WorkItem epoch, and SHALL NOT
-  treat an approval recorded for an earlier epoch as satisfying it.
-- WHILE the workflow is parked on `workflow.wait_condition(lambda:
-  self._approved)` (`dev_loop.py:827`) THE SYSTEM SHALL accept a resume signal
-  that records the actor/surface transition without starting a second Temporal
-  execution for the same epoch.
-- IF two resume attempts for the same WorkItem carry the same idempotency key
-  THEN THE SYSTEM SHALL return the same execution identity to both and SHALL
-  start at most one Temporal execution.
-- IF a resume attempt presents a stale expected epoch THEN THE SYSTEM SHALL
-  reject it with a non-retryable, explicitly-conflicting outcome and SHALL NOT
-  start an execution.
-- IF the WorkItem store is unreachable or returns an indeterminate answer THEN
-  THE SYSTEM SHALL fail the resume closed and SHALL NOT proceed with an
-  invented or reused execution identity.
-- IF no work-item reference is supplied THEN THE SYSTEM SHALL behave exactly as
-  today (issue-keyed workflow id, no work-item block on any snapshot), so the
-  existing `agents:intake` poller path is unchanged.
-- WHEN a resumed execution targets a proposal whose `.status.yaml` status is
-  outside `_OVERWRITABLE_STATUSES` (`run_issue_investigator.py`) THE SYSTEM
-  SHALL refuse to overwrite it, report the refusal against the WorkItem, and
-  exit without running the agent.
-- WHEN a snapshot is exported for traces THE SYSTEM SHALL emit only
-  `work_item_id`, `execution_id` and `epoch` alongside the existing
-  `to_log_dict()` fields, and SHALL emit no locator, selector, or
-  payload-derived string.
-- WHILE any resume field exists in the schema THE SYSTEM SHALL contain no
-  field whose name encodes an authorization decision (`allow`, `deny`,
-  `permit`, `grant`, `authorized`), preserving ADR 009 sec. 5.
-- WHEN new branching is added to `DevLoopWorkflow` THE SYSTEM SHALL gate it
-  behind a `workflow.patched` marker so histories recorded before this change
-  replay unchanged.
+Contract and identity
+
+- WHEN a caller constructs a `WorkItemRef` from an mctl-api payload THE SYSTEM
+  SHALL accept a payload carrying keys it does not recognise and SHALL return
+  `None` for a payload missing a required key, mirroring
+  `orchestrator/lifecycle/contract.py`'s `from_payload` discipline
+  (contract.py:129-137, 166-176).
+- WHEN a `WorkItemRef`, `SurfaceRef`, `ActorRef` or `ExecutionRef` is parsed
+  and a closed-vocabulary field (`surface.kind`, `actor.kind`,
+  `work_item.state`) carries an unrecognised value THE SYSTEM SHALL classify
+  the answer as `WORK_ITEM_UNKNOWN` and SHALL NOT fall back to a permissive
+  default.
+- WHEN an investigator execution starts THE SYSTEM SHALL have exactly one
+  `execution_id` for that execution, SHALL derive it deterministically from
+  `(work_item_id, execution_sequence, attempt)` when the caller supplies none,
+  and SHALL treat it as immutable for the life of the execution.
+- WHILE more than one execution exists for one work item THE SYSTEM SHALL keep
+  every prior `ExecutionRef` and every prior `ContextSnapshot` byte-identical;
+  no resume path SHALL write to, re-seal, or re-hash a historical record.
+
+ContextSnapshot correlation
+
+- WHEN `orchestrator.context_snapshot.seal()` is called with a
+  `WorkContextRef` THE SYSTEM SHALL include that block in the canonical JSON
+  that produces `content_hash`, so two executions of the same work item that
+  differ only in execution identity SHALL seal to different `snapshot_id`s.
+- WHEN a `WorkContextRef` is present THE SYSTEM SHALL record
+  `work_item_id`, `work_item_revision`, `execution_id`, `execution_sequence`,
+  `prior_execution_ids`, `resumed_from_snapshot_id`, `origin_surface`,
+  `current_surface`, `actor_kind`, `actor_id` and `surface_transition`.
+- IF a `ContextSnapshot` carries a `step` block referencing a parent snapshot
+  THEN THE SYSTEM SHALL require its `work_context` block to equal its
+  parent's, alongside the existing rule that its `execution` block must equal
+  its parent's (`context_snapshot.py:796-805`).
+- WHILE a `WorkContextRef` is attached THE SYSTEM SHALL NOT consume any of its
+  fields in an authorization decision, preserving ADR 009 sec. 5's boundary
+  (`context_snapshot.py:23-27`); the block is provenance metadata only.
+- WHEN `to_log_dict()` is called on a snapshot carrying a `WorkContextRef` THE
+  SYSTEM SHALL emit `work_item_id`, `execution_id` and `execution_sequence` for
+  correlation and SHALL NOT emit `actor_id`.
+
+Rollout staging
+
+- WHEN `WORK_CONTEXT_ROLLOUT_MODE` is unset, empty, or unrecognised THE SYSTEM
+  SHALL answer `off`, SHALL print a `warn:`-style line for an unrecognised
+  value, and SHALL NOT raise — mirroring
+  `orchestrator/lifecycle/rollout.py:62-79`.
+- WHILE the mode is `off` THE SYSTEM SHALL accept and validate the new flags
+  and signal payloads but SHALL NOT call the work-item store and SHALL produce
+  exactly today's investigator behaviour.
+- WHILE the mode is `observe` THE SYSTEM SHALL resolve the `WorkItem`, seal the
+  `WorkContextRef` and log the reconstructed canonical state, WHILE the issue
+  URL SHALL remain the deciding source of task state.
+- WHILE the mode is `enforce` THE SYSTEM SHALL allow the reconstructed
+  canonical state to veto a run (for example a work item in a terminal state)
+  but SHALL NOT allow it to license a run the issue path would refuse.
+- WHILE the mode is `only` THE SYSTEM SHALL treat the `WorkItem` as the sole
+  source of canonical task state and `--issue-url` SHALL become optional.
+- IF the work-item store is unreachable THEN THE SYSTEM SHALL answer
+  `WORK_ITEM_UNKNOWN` as a value rather than raising, and SHALL block a
+  mutating step only when `blocks_on_unknown()` is true (mode at least
+  `enforce` AND the `WORK_CONTEXT_REQUIRED` break-glass unset/true).
+
+Investigator flags
+
+- WHEN `run_issue_investigator.main()` is invoked with `--work-item-id`,
+  `--execution-id`, `--resume-from-execution-id`, `--surface`, `--actor-kind`
+  and `--actor-id` THE SYSTEM SHALL parse them, validate them and thread them
+  into `investigate()` as keyword-only parameters.
+- IF `--resume-from-execution-id` is given without `--work-item-id` THEN THE
+  SYSTEM SHALL exit non-zero with a message naming the missing flag.
+- IF `--surface` or `--actor-kind` carries a value outside the closed
+  vocabulary THEN THE SYSTEM SHALL exit non-zero rather than coercing it.
+- IF `--issue-url` is omitted THEN THE SYSTEM SHALL require `--work-item-id`
+  and the mode `only`, and SHALL resolve the issue URL from the work item;
+  otherwise it SHALL exit non-zero.
+- WHEN no new flag is supplied THE SYSTEM SHALL behave byte-for-byte as it does
+  today, including `investigate(url, tmp_path)` positional calls made by every
+  existing test and by `orchestrator/run_issue_poller.py`.
+
+Canonical-state reconstruction
+
+- WHEN canonical task state is reconstructed THE SYSTEM SHALL derive it only
+  from the `WorkItem`'s own structured fields, the gitops proposal artifacts
+  (`requirements.md`, `design.md`, `tasks.md`, `.status.yaml`) and prior
+  execution digests, and the reconstruction function SHALL expose no parameter
+  capable of carrying a conversation transcript.
+- WHEN reconstruction runs against a work item whose prior execution produced a
+  proposal THE SYSTEM SHALL return a state carrying the service, slug, prior
+  execution ids and prior status without reading any surface message log.
+
+Resume signal
+
+- WHEN `DevLoopWorkflow` receives a `resume` signal THE SYSTEM SHALL parse the
+  payload defensively and SHALL NOT raise from the handler, mirroring the
+  `approve` signal (`dev_loop.py:787-800`).
+- WHEN a `resume` signal carries an `execution_id` already recorded on the
+  workflow THE SYSTEM SHALL treat it as a no-op and SHALL NOT allocate a new
+  execution identity.
+- IF a second `resume` carrying a different `execution_id` arrives while one
+  resume is already pending THEN THE SYSTEM SHALL reject it, record the
+  rejection with a reason, and SHALL NOT fork the work item.
+- WHEN an accepted `resume` changes the surface or the actor THE SYSTEM SHALL
+  set `_approved` back to `False`, clear `_approver`, and record the
+  transition, so the existing `await workflow.wait_condition(lambda:
+  self._approved)` (`dev_loop.py:827`) re-arms and approval is re-evaluated by
+  the current actor.
+- WHILE a resume adds any new workflow command THE SYSTEM SHALL gate it behind
+  a new `workflow.patched("work-context-resume")` marker so histories recorded
+  before this change still replay, per the convention at
+  `dev_loop.py:864-869, 2286-2295`.
+- WHEN a `work_context` query is issued against a running or completed
+  `DevLoopWorkflow` THE SYSTEM SHALL return the work item id, the current
+  execution id and sequence, every recorded `ExecutionRef`, the last surface
+  and actor, and every resume rejection — so a trace view can correlate both
+  executions to one work item.
 
 ## Out of scope
 
-- Telegram, web, or any other surface adapter implementation. This proposal
-  consumes surface references; it does not create surfaces.
-- UI or trace-view design. Only the correlation fields those views need.
-- The mctl-api WorkItem storage model itself (owned by the depended-on
-  mctl-api contract). This repository is a client of it.
-- Shared mutable model conversation memory, transcript storage, or any form of
-  context carried as free text between executions.
-- Cross-surface privilege inheritance, and any change to who may approve.
-  Authorization enforcement stays with mctl-api and the approval contract.
-- Resume for the implementer and shepherd tiers (`run_implementer.py`,
-  `run_shepherd.py`). The pilot is the investigator only.
-- A second workflow engine, a continue-as-new refactor, or any change to the
-  14-day merge-watch cadence budget (`dev_loop.py:129-144`).
-- Reconciling the two disagreeing prompt-hash algorithms noted in ADR 009.
+- Telegram, web, or any other surface adapter. This proposal defines what a
+  surface must pass; it implements no surface.
+- Any UI or trace-view rendering. The `work_context` query and
+  `to_log_dict()` fields are the seam; the viewer is #195/#199 work.
+- Shared mutable model conversation memory of any kind. Nothing here persists
+  or replays messages.
+- Cross-surface privilege inheritance. A surface transition explicitly clears
+  approval rather than carrying it forward.
+- Changes to the investigate `ClusterWorkflowTemplate` (mctlhq/mctl-gitops#1279)
+  or to the mctl-api operation registry's allowed parameters
+  (mctlhq/mctl-api#335). Both are genuine prerequisites of the *submission*
+  path and are tracked in those repositories; no file outside
+  `mctlhq/mctl-agents` is touched by this proposal.
+- Server-side `WorkItem` storage, revisioning or concurrency control. mctl-api#227
+  owns that; this repository only mirrors the contract as a client.
+- Persisting sealed snapshots durably (ADR 009 follow-up (b)) and the redaction
+  helper (follow-up (c)).
 
 ## Open questions
 
-- Does an approval granted in epoch N survive into epoch N+1 when the resume is
-  a pure surface change by the same actor? This proposal takes the safe
-  reading — approvals are epoch-scoped and a resumed execution needs a fresh
-  approve — and leaves widening to the approval contract owner.
-- Exact mctl-api route shapes and field names for the work-context surface
-  (`/api/v1/work-items/...`) are assumed from the dependency and are isolated
-  behind one client module so a rename is a one-file change.
-- Whether a resume against a still-RUNNING workflow should ever be allowed to
-  start a second execution (e.g. the first is wedged). This proposal routes it
-  as a signal only; taking over a live run is ADR-010 ownership territory.
-- Whether the WorkItem id should be derivable from the issue URL for
-  already-running loops, or minted server-side only. This proposal assumes
-  server-minted, with the issue URL carried as the WorkItem's canonical task
-  reference.
-- Whether `mctl-agents-investigate` CWFT parameters may be extended in the
-  same release as this change (a sibling-repo gitops edit) or must land one
-  release earlier. Sequencing is handled in tasks.md as a separate,
-  earlier-landing task.
+- **Submission-path wiring.** The `investigate_params` dict at
+  `dev_loop.py:812-815` is where `work_item_id`/`execution_id` would eventually
+  be sent, but the CWFT and the operation registry reject unknown parameters
+  until mctlhq/mctl-gitops#1279 and mctlhq/mctl-api#335 land. This proposal
+  builds and unit-tests a pure `work_context_params()` helper and merges its
+  output into `investigate_params` only when the rollout mode is at least
+  `enforce` (default `off`, so nothing is sent in production today). A reviewer
+  who reads the boundary note more strictly may prefer the helper to exist with
+  no call site at all; that is a one-line change to the merge guard. Proceeding
+  with the gated merge because it makes the seam exercisable end-to-end without
+  changing any current behaviour.
+- **`content_hash` stability.** Adding `work_context` to
+  `_content_payload` (`context_snapshot.py:860-882`) changes the canonical JSON
+  of every snapshot, including ones with `work_context=None`, exactly as the
+  always-present `step: null` key does today. `context_snapshot.py:19-21` states
+  the module "is not yet imported by production code, only by tests and fixture
+  generation", so the only casualty is the golden fixture
+  `tests/fixtures/context/investigator-snapshot.json`. Proceeding with an
+  unconditional key plus a re-cut fixture, and recording the alternative
+  (omit-when-None to preserve legacy hashes) in design.md.
+- **Exact mctl-api route shape.** mctl-api#227 is not readable from this clone.
+  The client is written against `/api/v1/work-items/...` by analogy with
+  `/api/v1/lifecycle/ownership/...` (`orchestrator/lifecycle/client.py:152-282`),
+  with route strings isolated in one module-level table so a rename is a
+  one-line change and the tests monkeypatch the transport rather than the URL.
+- **Where `execution_sequence` is allocated.** Server-side allocation by
+  mctl-api is the correct long-term answer (it is the only party that can see
+  a concurrent resume from another surface). Until #227 exposes it, the client
+  derives the sequence from `len(work_item.executions)` and the workflow relies
+  on its own in-memory dedupe plus Temporal's single-writer guarantee for the
+  loop it owns. Recorded as a known simplification, in the spirit of ADR-010's
+  own "Known simplification" note about CLI-originated claims acquiring with
+  `owner_epoch=0`.
+- **Work-item state vocabulary.** The issue's diagram names `waiting` and
+  `completed-with-followup`; mctl-api#227 may use different spellings. The
+  vocabulary is declared in one frozenset in `contract.py` and an unrecognised
+  value classifies as `WORK_ITEM_UNKNOWN`, so a mismatch fails closed and is a
+  one-line correction.
