@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-09-19T11:13:06Z'
+status: needs-triage
+updated_at: '2026-09-19T11:19:17Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -18,3 +18,13 @@ attempt:
   finished_at: '2026-09-19T10:42:51Z'
 pr: https://github.com/mctlhq/mctl-agents/pull/407
 review_attempts: 1
+github:
+  state: open
+  head_sha: 28d97f882d24cabad6d062e5313d4c9894e9266d
+  blocking_reason: conflict
+  observed_at: '2026-09-19T11:19:17Z'
+failure:
+  code: merge-conflict
+  stage: reconcile
+  message: GitHub reports a merge conflict with the base branch.
+notes: 'reconcile: open PR has a merge conflict'
