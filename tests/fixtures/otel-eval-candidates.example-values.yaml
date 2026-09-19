@@ -1,0 +1,36 @@
+# Example overlay for the issue-903 trace-backend comparison spike.
+#
+# This is a TEST FIXTURE, not a values file anyone applies to the cluster:
+# it drives tests/test_otel_collector_backends_render.py (T2, T5) and the
+# eval-manifest kubeconform step in .github/workflows/validate-manifests.yml,
+# proving the fan-out and evaluation-namespace templates render valid,
+# schema-correct manifests before mctlhq/mctl-gitops#1280 fills in real
+# candidate pins. No credential is present here: the `headers` entry is an
+# ${env:...} expansion expression, never a literal.
+otelCollector:
+  backends:
+    - name: candidate-a
+      endpoint: "candidate-a.observability-eval.svc.cluster.local:4317"
+      insecure: true
+    - name: candidate-b
+      endpoint: "https://ingest.candidate-b.example.com:443"
+      headers:
+        authorization: "${env:CANDIDATE_B_AUTH_HEADER}"
+      numConsumers: 8
+      queueSize: 10000
+  eval:
+    enabled: true
+    teardownAfter: "2026-10-31"
+    candidates:
+      # No manifestsPath: renders a single-source Application only.
+      - name: candidate-a
+        repoURL: https://charts.example.com/candidate-a
+        chart: candidate-a
+        targetRevision: "1.2.3"
+      # With manifestsPath: renders a second source pointing at a directory
+      # in this repo (created later, under #1280, alongside the real pin).
+      - name: candidate-b
+        repoURL: https://charts.example.com/candidate-b
+        chart: candidate-b
+        targetRevision: "4.5.6"
+        manifestsPath: platform-gitops/infra-components/observability/eval/candidate-b

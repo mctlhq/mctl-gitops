@@ -1,0 +1,130 @@
+# issue-903: the trace-backend comparison spike's evaluation namespace.
+#
+# Gated off by default (otelCollector.eval.enabled: false) so this file
+# renders nothing until mctlhq/mctl-gitops#1280 flips the key. The live
+# evaluation -- deploying candidates, running the soak, filling the rubric,
+# tearing down -- is entirely #1280's scope; this template only commits the
+# namespace shape and its NetworkPolicies so that work is a values edit and a
+# review of already-merged manifests.
+{{- if .Values.otelCollector.eval.enabled }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: observability-eval
+  labels:
+    mctl.ai/purpose: "issue-903-spike"
+  annotations:
+    # Greppable abandonment guard: an evaluation namespace with no teardown
+    # date and no active issue is exactly the kind of thing that becomes
+    # silently permanent. #1280 sets this when it flips eval.enabled.
+    mctl.ai/teardown-after: {{ .Values.otelCollector.eval.teardownAfter | quote }}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. Default deny: block all ingress and all egress by default.
+#
+# `podSelector: {}` is correct HERE, and only here -- this chart creates
+# `observability-eval` in the same breath as this policy, so there is no
+# window where the namespace exists policy-free. Contrast
+# infra-components/observability/otel-collector/networkpolicy.yaml, which
+# scopes its podSelector to the collector's own pods because `monitoring`
+# predates any NetworkPolicy and has no namespace-wide default; a `{}`
+# selector there would silently turn the whole namespace into an allowlist
+# and cut off Grafana, VMSingle, vmagent and Loki.
+# ─────────────────────────────────────────────────────────────────────────────
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: observability-eval
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. Allow intra-namespace traffic (a candidate's own components -- e.g. an
+#    ingest service talking to its own storage backend -- must be able to
+#    reach each other).
+# ─────────────────────────────────────────────────────────────────────────────
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-intra-namespace
+  namespace: observability-eval
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector: {}
+  egress:
+    - to:
+        - podSelector: {}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3. DNS and cluster-internal egress only. A candidate is disposable and
+#    self-hostable by Stage A's own gate (requirements.md "Frozen rubric and
+#    Stage A screen"); it has no business reaching the public internet from
+#    inside this namespace.
+# ─────────────────────────────────────────────────────────────────────────────
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-cluster-egress
+  namespace: observability-eval
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - to:
+        - ipBlock:
+            cidr: 10.0.0.0/8
+    - to:
+        - ipBlock:
+            cidr: 172.16.0.0/12
+    - to:
+        - ipBlock:
+            cidr: 192.168.0.0/16
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. Ingress from `monitoring` only, on the OTLP ports. This is the one path
+#    into the namespace: the otel-collector fan-out sends spans here, and
+#    nothing else is permitted to reach a candidate.
+# ─────────────────────────────────────────────────────────────────────────────
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-from-monitoring
+  namespace: observability-eval
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 4317
+        - protocol: TCP
+          port: 4318
+{{- end }}

@@ -23,3 +23,18 @@ otelCollector:
   # traces pipeline lists only the debug exporter -- see
   # docs/runbooks/otel-collector.md for the one-key swap procedure.
   backendEndpoint: ""
+  # issue-903: generalized fan-out for the trace-backend comparison spike.
+  # Empty by default, so the rendered collector ConfigMap stays
+  # byte-identical to the backendEndpoint-only render. Each entry is
+  # {name, endpoint, insecure, headers, numConsumers, queueSize}; headers
+  # must hold ${env:...} expansion expressions, never a literal credential.
+  # The live spike (populating this list, deploying candidates) is
+  # mctlhq/mctl-gitops#1280 -- see docs/adr/0001-agent-execution-trace-backend.md.
+  backends: []
+  # Evaluation namespace and candidate Applications for the issue-903 spike,
+  # gated off by default so merging this key's templates changes no cluster
+  # state. Filled in and flipped on by mctlhq/mctl-gitops#1280, not here.
+  eval:
+    enabled: false
+    teardownAfter: ""
+    candidates: []
