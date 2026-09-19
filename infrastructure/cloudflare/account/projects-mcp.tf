@@ -34,6 +34,12 @@ variable "projects_mcp_google_idp_id" {
   default     = "bb581a63-79d5-477b-af43-dd5cd07ff12b"
 }
 
+variable "projects_mcp_otp_idp_id" {
+  description = "The one-time PIN (email code) identity provider in this account."
+  type        = string
+  default     = "e3a75cb3-c81f-43db-acf2-579db7949595"
+}
+
 resource "cloudflare_zero_trust_access_application" "projects_mcp" {
   account_id = var.account_id
   name       = "mctl Projects (projects.mctl.ai)"
@@ -56,19 +62,21 @@ resource "cloudflare_zero_trust_access_application" "projects_mcp" {
   # host to the cluster origin (zones/mctl-ai/dns.tf). Access sits in front of it
   # because the record is proxied, which is what makes this application effective.
 
-  # Google alone. The one-time PIN provider (e3a75cb3-c81f-43db-acf2-579db7949595)
-  # was allowed here at first, on the argument that a customer's work address is
-  # not necessarily a Google account, and removed on 2026-09-18: a code mailed to
-  # whoever controls an inbox is a weaker thing to hold this behind than an
-  # account, and the addresses actually being admitted are Google-backed.
+  # Google alone at first; the one-time PIN provider was removed on 2026-09-18
+  # on the argument that a code mailed to whoever controls an inbox is a
+  # weaker thing to hold this behind than an account, and the addresses being
+  # admitted at the time were Google-backed.
   #
-  # The cost is real and belongs next to the decision: an address in the grants
-  # list that is not a Google account is now admitted by the policy and still
-  # unable to log in, which looks to that person like a broken product rather
-  # than a missing provider. Restoring it is putting the UUID above back in this
-  # list; nothing else here depends on the count.
+  # Restored on 2026-09-19: grants were added (in Vault, not this repo) for
+  # non-Google customer domains this org does not control and cannot confirm
+  # are Google-backed — without this, the policy admits them and they still
+  # cannot sign in, which reads as a broken product rather than a missing
+  # provider. The cost above is accepted knowingly: for any address, whoever
+  # can read that inbox authenticates as it. Nothing else here depends on the
+  # count if this needs removing again.
   allowed_idps = [
     var.projects_mcp_google_idp_id,
+    var.projects_mcp_otp_idp_id,
   ]
 
   # One provider, so there is nothing to pick — but the picker page is also
@@ -164,7 +172,7 @@ resource "cloudflare_zero_trust_access_application" "projects_mcp" {
   # granted in one place and refused in the other.
   #
   # So the list is in Vault, read only by the pod, and this policy admits any
-  # account from the one identity provider above. What that buys a stranger is
+  # account from either identity provider above. What that buys a stranger is
   # an authenticated conversation with a server that tells them nothing: a
   # caller with no grant sees an empty project list, and every project answers
   # exactly as it answers for a project that does not exist. That is not a
@@ -174,17 +182,19 @@ resource "cloudflare_zero_trust_access_application" "projects_mcp" {
   #
   # What is genuinely given up: reaching the origin no longer requires being
   # known in advance, so the pod is exposed to anyone who can sign in with
-  # Google rather than to a named few. The server holds no credential for
-  # anybody's documentation and serves it from a copy baked into its image, so
-  # what is behind the door is the filtering code and the corpus it filters.
+  # Google or receive a one-time PIN, rather than to a named few. The server
+  # holds no credential for anybody's documentation and serves it from a copy
+  # baked into its image, so what is behind the door is the filtering code and
+  # the corpus it filters.
   policies = [
     {
-      name       = "projects-mcp-any-google-account"
+      name       = "projects-mcp-any-google-or-otp-account"
       decision   = "allow"
       precedence = 1
 
       include = [
         { login_method = { id = var.projects_mcp_google_idp_id } },
+        { login_method = { id = var.projects_mcp_otp_idp_id } },
       ]
     },
   ]
