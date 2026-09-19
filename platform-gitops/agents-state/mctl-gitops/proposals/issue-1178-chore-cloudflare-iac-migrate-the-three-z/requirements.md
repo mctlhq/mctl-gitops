@@ -1,133 +1,164 @@
-# Migrate the three Cloudflare zone roots from local state to R2 and put them under drift
+# Migrate the three Cloudflare zone roots onto the shared R2 backend
 
 ## Context
 
-`infrastructure/cloudflare/` holds five OpenTofu roots. Two of them — `account/`
-and `portal/` — carry a `backend.tf` with the shared R2 (`s3`) backend, so their
-state lives in the `mctl-cloudflare-state` bucket, `cloudflare-drift.yml` plans
-them nightly and `cloudflare-apply.yml` will act on them. The three zone roots
-(`zones/mctl-ru`, `zones/mctl-me`, `zones/mctl-ai`) have no `backend.tf` at all:
-each `versions.tf` still carries the "No backend block yet" comment, and all
-three are listed in `infrastructure/cloudflare/.local-state-roots`. Every import
-proven so far (#1096, #1103, #1115) ran against throwaway local state, so the
-zero-diff proofs recorded in the root READMEs are real but nothing owns the
-result. Drift skips these roots by design and apply refuses them
-(`.github/scripts/cloudflare-assert-applyable-root.sh`), which is why the three
-zone-setting changes (#1142, #1154, #1168) had to be applied by hand through the
-API and then import-pinned so the configuration stayed reachable.
+`infrastructure/cloudflare/zones/mctl-ru`, `zones/mctl-me` and `zones/mctl-ai`
+are the only Cloudflare OpenTofu roots still without a `backend.tf`. They have
+no `backend "local"` block either — their `versions.tf` files carry a comment
+saying "No backend block yet", which resolves to the implicit local backend, so
+on a fresh CI runner each of them plans against empty state. All three are
+listed in `infrastructure/cloudflare/.local-state-roots`, which is read by
+`cloudflare-drift.yml` (skips them), by `cloudflare-plan.yml` (excuses them from
+the backend requirement and from the resolved-backend assertion) and by
+`.github/scripts/cloudflare-assert-applyable-root.sh` (makes
+`cloudflare-apply.yml` refuse them). The consequence is recorded in
+`infrastructure/cloudflare/README.md`: the three zone-setting changes shipped so
+far had to be applied through the Cloudflare API by hand and then pinned with
+`import` blocks, because a value the configuration cannot reach would leave the
+fail-closed drift workflow red every night.
 
-The apply identities those roots need now exist: `cloudflare-apply.yml` already
-maps `CF_APPLY_TOKEN_MCTL_RU`, `CF_APPLY_TOKEN_MCTL_ME` and
-`CF_APPLY_TOKEN_MCTL_AI` per root, and `R2_APPLY_*` is Object Read & Write on the
-state bucket. What is missing is the ownership transfer itself: declare the
-shared backend on each zone root, re-run the imports against remote state so an
-R2 state object exists, take the root off `.local-state-roots`, and let drift
-watch it. Until that happens the three zones that actually serve traffic are the
-only part of the Cloudflare control plane with no detector behind it.
+This proposal is the configuration half of the ownership transfer: each zone
+root gains the same `backend "s3"` block the account and portal roots already
+use (R2 bucket `mctl-cloudflare-state`, `use_lockfile = true`, one state key
+derived from the root path), its entry leaves `.local-state-roots`, the guard
+self-test that depends on that list is rebuilt against a fixture tree, and the
+documentation stops claiming that zone settings must be hand-applied. Per the
+DevLoop boundary added to the issue on 2026-09-19 this is **one pull request
+covering all three roots**; the environment-approved import-only apply per root,
+the post-apply `No changes` evidence, the first green scheduled drift run and
+the backup evidence are operator work tracked in `mctlhq/mctl-gitops#1281`.
 
 ## User stories
 
-- AS a platform operator I WANT the three zone roots to keep their state in
-  `mctl-cloudflare-state` SO THAT a plan of a zone reflects what is live in
-  Cloudflare rather than an empty local file.
-- AS a platform operator I WANT `cloudflare-drift.yml` to plan the three zone
-  roots nightly SO THAT an out-of-band DNS, ruleset or zone-setting change on
-  `mctl.ai`, `mctl.me` or `mctl.ru` is reported instead of going unnoticed.
-- AS a reviewer I WANT zone changes to be applied by `cloudflare-apply.yml`
-  under the existing approval and plan-digest gate SO THAT "applied by hand and
-  then import-pinned" stops being the way zone settings change.
-- AS the person restoring state after an incident I WANT the three new state
-  objects to appear in the nightly `opentofu-state-backup.yml` snapshot SO THAT
-  the zone roots have the same recoverability as the account root.
+- AS a platform operator I WANT the three zone roots to keep their state in the
+  shared R2 bucket SO THAT a plan of those roots is a statement about live
+  Cloudflare rather than about empty state.
+- AS a platform operator I WANT `cloudflare-drift.yml` to cover the zone roots
+  SO THAT an out-of-band change to DNS, rulesets, email routing or zone settings
+  is reported instead of being invisible.
+- AS a platform operator I WANT `cloudflare-apply.yml` to stop refusing the zone
+  roots SO THAT a zone-setting change can be reviewed as a plan and applied from
+  CI instead of being applied by hand and import-pinned afterwards.
+- AS a reviewer of this repository I WANT the CI guards to keep failing closed
+  after `.local-state-roots` empties SO THAT the checks that protect the apply
+  path are not silently reduced to accepting everything.
+- AS a future maintainer I WANT the READMEs to describe the remote-state
+  procedure and drop the "hand-applied zone settings" exception SO THAT the
+  documented ritual matches what the roots can actually do.
 
 ## Acceptance criteria (EARS)
 
-- WHEN a zone root is migrated THE SYSTEM SHALL declare the shared backend in
-  its own `backend.tf` file (not in `versions.tf`), with
-  `bucket = "mctl-cloudflare-state"`, `key = "cloudflare/zones/<root>/terraform.tfstate"`,
-  the R2 endpoint `https://6a09f637d20e1f66a8e9d45ebe778058.r2.cloudflarestorage.com`
-  and `use_lockfile = true`, so that `.github/scripts/cloudflare-assert-backend.sh`
-  accepts it.
-- WHEN a zone root gains its `backend.tf` THE SYSTEM SHALL remove that root's
-  entry from `infrastructure/cloudflare/.local-state-roots` in the same pull
-  request.
-- IF a root is listed in `.local-state-roots` and `tofu init` resolved a
-  non-local backend for it THEN THE SYSTEM SHALL fail the `cloudflare-plan`
-  check (the existing "Assert remote backend" branch), which is why the two
-  changes cannot be split across pull requests.
-- WHEN `cloudflare-plan.yml` runs on the migration pull request THE SYSTEM SHALL
-  report "`<root>` is on the s3 backend", pass the root-coverage guard without
-  the `cloudflare-root-removal` label, and publish a plan whose create, update
-  and destroy columns are all zero.
-- WHEN the migration lands on `main` THE SYSTEM SHALL allow
-  `cloudflare-apply.yml` to be dispatched for that root: the "Validate the root"
-  step prints `root '<root>' accepted` and the mapped write token resolves.
-- WHEN the import-only apply completes for a root THE SYSTEM SHALL leave
-  Cloudflare unmutated — the applied plan shall show only imports, with zero
-  add, change and destroy — and shall write that root's state object to
-  `mctl-cloudflare-state`.
-- WHEN the root is planned again after that apply THE SYSTEM SHALL print
-  `No changes.`
-- WHILE all three roots are migrated THE SYSTEM SHALL leave
-  `.local-state-roots` with no root entries, and
-  `.github/scripts/cloudflare-local-state-roots.sh` shall still exit 0 printing
-  nothing.
-- WHEN `.local-state-roots` no longer lists `zones/mctl-ru` THE SYSTEM SHALL
-  still pass `CLOUDFLARE_GUARD_SELF_TEST=1 .github/scripts/cloudflare-assert-applyable-root.sh`
-  — the suite's two list-dependent cases must be rebuilt against a fixture tree,
-  as the "DO NOT DELETE THE `reject` CASE" comment in that file instructs.
-- WHEN the next scheduled `cloudflare-drift.yml` run fires after a migration
-  THE SYSTEM SHALL include the migrated root in its matrix and report it in
-  sync, with no "this root's state holds no resources" warning.
-- WHEN the next scheduled `opentofu-state-backup.yml` run fires after all three
-  migrations THE SYSTEM SHALL count five state objects in
-  `mctl-cloudflare-state` and copy all five into the dated `_backups/` prefix.
-- WHEN all three roots can apply from CI THE SYSTEM SHALL no longer claim in
-  `infrastructure/cloudflare/README.md` that the zone roots keep local state,
-  cannot apply from CI, and therefore need their zone settings applied by hand.
-- IF any migration plan shows an add, change or destroy action THEN THE SYSTEM
-  SHALL stop and the change shall be investigated as out-of-band drift rather
-  than applied.
+- WHEN the pull request is opened THE SYSTEM SHALL contain exactly one
+  `backend.tf` in each of `infrastructure/cloudflare/zones/mctl-ru`,
+  `zones/mctl-me` and `zones/mctl-ai`, each declaring `backend "s3"` with
+  `bucket = "mctl-cloudflare-state"`, endpoint
+  `https://6a09f637d20e1f66a8e9d45ebe778058.r2.cloudflarestorage.com`,
+  `region = "auto"`, `use_lockfile = true`, the four `skip_*` flags and
+  `use_path_style = true`, byte-for-byte consistent with
+  `infrastructure/cloudflare/account/backend.tf` except for `key`.
+- WHILE each root's `backend.tf` is in the tree THE SYSTEM SHALL use the state
+  key `cloudflare/zones/<root>/terraform.tfstate`, which is the value
+  `.github/scripts/cloudflare-assert-backend.sh` derives from the root path
+  (`cloudflare/${ROOT#infrastructure/cloudflare/}/terraform.tfstate`).
+- WHEN the pull request is opened THE SYSTEM SHALL no longer list any of the
+  three roots in `infrastructure/cloudflare/.local-state-roots`, while keeping
+  that file's header prose explaining the mechanism.
+- WHILE the same commit adds a backend and removes the list entry THE SYSTEM
+  SHALL keep the two halves together, because `cloudflare-plan.yml`'s
+  "Assert remote backend" step fails a root that resolved a non-local backend
+  while still being listed, and its "Guard root coverage" step fails a root that
+  is unlisted with no `backend.tf`.
+- WHEN `cloudflare-plan.yml` runs on the pull request THE SYSTEM SHALL pass the
+  `Guard root coverage` step without the `cloudflare-root-removal` label, and
+  each migrated root's plan job SHALL print `<root> is on the s3 backend`.
+- WHEN each migrated root is planned on the pull request THE SYSTEM SHALL report
+  its `import` blocks as the only planned actions — 7 for `mctl-ru`, 14 for
+  `mctl-me`, 26 for `mctl-ai` — with `0` in the create, update and destroy
+  columns of the `Summarize` step's table.
+- IF any migrated root's pull-request plan shows a create, update or destroy
+  THEN THE SYSTEM SHALL be treated as out-of-band drift: the pull request is not
+  merged and the difference is investigated first.
+- WHEN `.local-state-roots` no longer names a real root THE SYSTEM SHALL still
+  pass `CLOUDFLARE_GUARD_SELF_TEST=1
+  .github/scripts/cloudflare-assert-applyable-root.sh`, with the list-dependent
+  `reject` cases rebuilt against a fixture tree as that file's own
+  "DO NOT DELETE THE `reject` CASE WHEN .local-state-roots EMPTIES" comment
+  instructs, and with a paired `accept` control so the case cannot pass for the
+  wrong reason.
+- WHEN `.github/scripts/cloudflare-local-state-roots.sh` is run against the
+  edited file THE SYSTEM SHALL print nothing and exit 0.
+- WHEN `tofu fmt -check -diff` and `tofu validate` run in each migrated root
+  THE SYSTEM SHALL report no diff and no error.
+- WHEN the documentation is read after the change THE SYSTEM SHALL no longer
+  state that a zone root keeps local state, that a zone root cannot apply from
+  CI, or that zone settings must be applied by hand and import-pinned; this
+  covers the "Zone settings" paragraph and the `cloudflare-plan.yml` /
+  `cloudflare-drift.yml` rows of the workflow table in
+  `infrastructure/cloudflare/README.md`, plus the corresponding sections of
+  `zones/mctl-ru/README.md`, `zones/mctl-me/README.md` and
+  `zones/mctl-ai/README.md`.
+- WHILE the documentation is updated THE SYSTEM SHALL leave the unrelated
+  `dmitriimashkov.com` "standing exception" paragraph
+  (`infrastructure/cloudflare/README.md`, the zone with no root, decision 10)
+  intact, since that exception is about an intentionally unmanaged zone and not
+  about hand-applied zone settings.
+- WHEN each root's README is read after the change THE SYSTEM SHALL record the
+  root's state key, the expected imports-only plan, that the import is executed
+  by dispatching `cloudflare-apply.yml` on `main` rather than from a laptop, and
+  that the post-import verification plan prints `No changes.`
+- IF the READMEs still describe a local `tofu state rm` reversibility ritual
+  THEN THE SYSTEM SHALL mark it as an operation on shared remote state, because
+  the state it edits is no longer throwaway.
 
 ## Out of scope
 
-- Any mutating apply against Cloudflare. The only apply this proposal asks for
-  is import-only: it writes state, not Cloudflare objects.
-- Importing objects that are deliberately unmanaged: worker routes for
-  `mctl.ru` / `mctl.me`, `TXT _acme-challenge.*`, page rules (deleted in #1089),
-  `security_level`, and everything owned by `mashkovd/mac-mini-infra` (#1090).
-- `dmitriimashkov.com`, which has no root at all (decision 10) and keeps its own
-  separate standing exception.
-- Changing the `.local-state-roots` mechanism, the guard scripts' logic, or the
-  coverage guard. Only the self-test fixtures that depend on the list's current
-  contents change.
-- Off-bucket state backup (still blocked by R2 bucket-scoped tokens) and R2
-  object versioning (does not exist).
-- `infrastructure/k3s-preview`, which runs on HashiCorp Terraform and a
-  different bucket.
+- The import-only apply itself. Writing each state object needs the
+  `cloudflare-apply` environment's required reviewer and the per-root
+  `CF_APPLY_TOKEN_MCTL_*` write credential; it is dispatched on `main` after
+  this pull request merges and is tracked in `mctlhq/mctl-gitops#1281`.
+- Proving `No changes` against remote state, the first green scheduled
+  `cloudflare-drift.yml` run, the dispatched `cloudflare-apply.yml` `plan`
+  acceptance and the scheduled state-backup evidence. All four require a merged
+  main, live credentials or a scheduled run, so none can be produced inside the
+  pull request; they are `#1281`'s acceptance evidence.
+- Any change to what the three roots manage. No resource, `import` block, zone
+  setting, DNS record, ruleset or email-routing rule is added, removed or
+  altered; the only `.tf` files touched are the new `backend.tf` files and the
+  stale backend comments in each `versions.tf`.
+- `opentofu-state-backup.yml`. It snapshots `s3://mctl-cloudflare-state`
+  recursively with `--include '*.tfstate'`, so the three new keys are picked up
+  with no code change once they exist.
+- The per-root write-token chain in `cloudflare-apply.yml`. It already maps
+  `CF_APPLY_TOKEN_MCTL_RU`, `CF_APPLY_TOKEN_MCTL_ME` and
+  `CF_APPLY_TOKEN_MCTL_AI`; verifying those secrets exist is operator work.
+- Worker routes for `mctl.me` / `mctl.ru`, `dmitriimashkov.com`, and the
+  `security_level` setting — all deliberately unmanaged today and unaffected.
+- Any change to `infrastructure/k3s-preview` or to the `mctl-terraform-state`
+  bucket.
 
 ## Open questions
 
-- The issue says "no apply is required to close this issue", but an empty R2
-  object means the root's plan is "N to import", which is drift's failure
-  signal, and means the backup has nothing to copy. Two acceptance criteria in
-  the same issue (green drift, state objects in the backup) therefore require an
-  import-only apply. Interpretation taken: what is not required is a *mutating*
-  apply; the import-only apply through `cloudflare-apply.yml` is in scope.
-- Which "standing exception" wording the issue means. There are two in
-  `infrastructure/cloudflare/README.md`: the paragraph saying the zone roots
-  keep local state and so zone settings are applied by hand, and a separate one
-  about `dmitriimashkov.com` being intentionally unmanaged. Interpretation:
-  remove the first, keep the second — the second is about a zone with no root
-  and is unaffected by this migration.
-- One PR or three. Interpretation: three sequential pull requests in the issue's
-  order (`mctl-ru` → `mctl-me` → `mctl-ai`), with the guard self-test fixture
-  work done in the first; a single PR showing three separate zero-diff plans
-  remains acceptable if the reviewer prefers it.
-- Whether `CF_APPLY_TOKEN_MCTL_RU` / `_ME` / `_AI` and `R2_APPLY_*` actually
-  exist as **environment** secrets on `cloudflare-apply` (#1111 was a checklist;
-  the workflow only fails at dispatch time if they do not). Verified before the
-  first dispatch, not assumed.
-- `zones/mctl-ru/README.md` still documents the two-record pilot plan ("2 to
-  import") while `import.tf` now carries seven import blocks. The migration
-  re-measures and records the real figure.
+- The issue says "replace `backend "local"` with the shared `backend "s3"`".
+  No zone root contains a `backend "local"` block; they contain a comment saying
+  no backend block exists yet, which resolves to the implicit local backend.
+  Interpretation taken: add `backend.tf` and delete the stale comment.
+- The issue's scope item 2 ("re-run the imports against the remote state and
+  prove `No changes`") cannot happen inside the pull request, because the first
+  write to a state key is an apply. Interpretation taken: the pull request ships
+  the configuration and shows each root's imports-only plan from
+  `cloudflare-plan.yml`; the `No changes` proof is `#1281`.
+- Between merge and the three import-only applies, each migrated root plans its
+  imports against an empty remote state, so a scheduled `cloudflare-drift.yml`
+  run (06:00 UTC) in that window exits 2 and reports `DRIFT` with pending
+  imports. Interpretation taken: the window is named in the READMEs and in the
+  pull-request body so the operator dispatches the applies before the next
+  scheduled run; nothing in the pull request can shorten it, and keeping the
+  roots listed to suppress it is rejected by the plan job's listed-root /
+  resolved-backend mismatch check.
+- The ordering `mctl-ru` -> `mctl-me` -> `mctl-ai` is a property of the applies,
+  not of a single pull request. Interpretation taken: record the order as the
+  documented apply order rather than splitting the pull request.
+- `.local-state-roots` becomes entry-free. Interpretation taken: keep the file
+  with its header prose (the helper's own comment calls an empty list "the
+  normal end state", and three workflow steps plus two guards read it) rather
+  than deleting it.
