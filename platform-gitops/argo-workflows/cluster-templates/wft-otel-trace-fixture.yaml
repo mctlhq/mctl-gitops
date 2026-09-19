@@ -144,6 +144,14 @@ spec:
                               value = span.get(field)
                               if value is not None:
                                   span[field] = str(int(value) + offset_ns)
+                          # Span events (the exception detail on failing spans)
+                          # carry their own absolute timestamp; shift them by the
+                          # same offset so each event stays inside its span's
+                          # [start, end] window after the rebase.
+                          for event in span.get("events", []):
+                              value = event.get("timeUnixNano")
+                              if value is not None:
+                                  event["timeUnixNano"] = str(int(value) + offset_ns)
 
               body = json.dumps(payload).encode("utf-8")
               req = urllib.request.Request(
