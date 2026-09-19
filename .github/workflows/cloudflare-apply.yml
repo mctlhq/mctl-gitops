@@ -214,7 +214,7 @@ jobs:
               echo
               echo "> [!WARNING]"
               echo "> This plan destroys $destroy resource(s)."
-              jq -r '.resource_changes[]? | select(.change.actions | index("delete")) | "- \`" + .address + "\`"' plan.json
+              jq -r '.resource_changes[]? | select(.change.actions | index("delete")) | "- `" + .address + "`"' plan.json
             fi
             echo
             echo "<details><summary>Full plan</summary>"
