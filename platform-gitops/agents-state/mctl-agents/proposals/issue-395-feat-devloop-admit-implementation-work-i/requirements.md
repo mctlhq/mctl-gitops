@@ -1,192 +1,183 @@
-# Close out Temporal admission of implementation work: durable queue age, capacity visibility, and drift guards
+# Finish the implementation-admission slice: name the queued state, measure queue age at the source, and watch the admission queue
 
 ## Context
 
-Issue #395 asks that implementation work be admitted in Temporal before it
-reaches Argo: a dedicated task queue whose slot limit *is* the implementation
-capacity `N`, so that a burst of approvals queues as Scheduled activities in
-Temporal rather than as nine Argo workflows racing a capacity-1 mutex and dying
-of a workflow-level `activeDeadlineSeconds`.
+Issue #395 asks that implementation work be admitted in Temporal before it is
+submitted to Argo, so that a burst of approvals queues as *Scheduled
+activities* instead of as Argo workflows dying on a capacity-1 mutex. The
+mechanism it specifies — a third task queue `mctl-dev-loop-implement`, served
+by a one-replica `--role implementation` worker whose
+`max_concurrent_activities` is the implementation capacity `N` — is largely on
+`main` already, shipped through #396/#397 in 1.47.0 and 1.48.0:
+`IMPLEMENTATION_TASK_QUEUE` and `implementation_max_concurrent_activities()`
+(`orchestrator/temporal/constants.py:64,108`), the `implementation` role
+(`orchestrator/temporal/worker.py:499-536`), the routing flip behind
+`workflow.patched("implement-queue")` (`orchestrator/temporal/workflows/dev_loop.py:544`),
+pre-start classification and bounded requeue
+(`orchestrator/temporal/implement_outcome.py`, `dev_loop.py:1087-1166`), the
+D7 amendment (`docs/adr/008-worker-queue-split-and-capacity.md:191-302`), and
+the nine-approval regression test
+(`tests/test_dev_loop_workflow.py::TestImplementationAdmission::test_a_burst_of_approvals_is_admitted_n_at_a_time`).
 
-Most of that mechanism is already on `main` in this clone. `IMPLEMENTATION_TASK_QUEUE`
-(`orchestrator/temporal/constants.py:64`), the `--role implementation` worker plan
-(`orchestrator/temporal/worker.py:497-505`), the routing branch behind
-`workflow.patched("implement-queue")` (`orchestrator/temporal/workflows/dev_loop.py:544-552`),
-the `admitted`/`submitted`/`running` runtime projection in
-`orchestrator/temporal/activities/argo.py:102-104`, the `pre_start` classifier
-(`orchestrator/temporal/implement_outcome.py`), the requeue loop
-(`dev_loop.py:1087-1165`) and the nine-approval regression test
-(`tests/test_dev_loop_workflow.py:4013-4051`) all exist. ADR-008 carries D7 and
-ADR-010 carries the matching amendment in its Non-goals section.
+What is *not* on `main` is the observability half of the same issue, and it is
+the half that decides whether an operator can tell a healthy capacity wait
+from a silent hang. Three states of the four the issue defines are published
+(`admitted`, `submitted`, `running` — `orchestrator/temporal/activities/argo.py:102-104`);
+the first one, `queued`/`waiting` with `waiting_on: implementation_capacity`,
+is named nowhere in code. `queue_age` is recorded nowhere: ADR-008 D7 says
+the queue's schedule-to-start latency *is* the queue age, which is true as a
+per-queue histogram in VictoriaMetrics but gives no per-attempt number for the
+runtime projection #389 / mctl-api#331 renders. And because the implement
+submit deliberately carries no `schedule_to_start_timeout`
+(`dev_loop.py:103-107`), an implementation queue that no worker polls — a
+failed rollout of mctl-gitops#1285, a crash-looping pod — is indistinguishable
+from a full one: both are "activities sitting Scheduled forever", and nothing
+in this repo looks.
 
-What is *not* done is the part of #395's scope that survives the run. Scope item 5
-says "`queue_age` recorded separately from execution duration": today the admission
-wait is observable only twice, and both are perishable. Live, it is a join of
-`DevLoopWorkflow.implement_execution`'s `queued_at` (`dev_loop.py:781`) with the
-pending activity's heartbeat; in aggregate, it is the SDK's
-`temporal_activity_schedule_to_start_latency` histogram keyed on `task_queue`.
-Neither gives a per-attempt number once the step ends: `WorkflowResult`
-(`argo.py:73-90`) carries no `admitted_at`, `ExecutionRecord`
-(`orchestrator/temporal/activities/state.py:29-43`) carries no timing at all, and
-the activity's heartbeat details are gone the moment it completes. So the very
-question the 2026-09-19 incident review will be asked — "how long did these
-proposals wait for capacity, and was any of that charged to the execution budget"
-— cannot be answered after the fact from anything this repo writes down.
-
-Three smaller residues sit beside it. `N` is the one number that defines admission
-and it is absent from the worker's startup log (`worker.py:593-597` logs role and
-queue names only). `tools/diagram_facts.py`'s `facts_from_code` reads `worker.py`
-for schedules and workflow classes but records neither the task-queue names nor
-the capacity default, so `docs/diagrams/archify/facts.yaml` cannot report drift if
-someone changes `DEFAULT_IMPLEMENTATION_MAX_CONCURRENT_ACTIVITIES`. And the
-diagrams still describe a single queue: `docs/diagrams/temporal-flow-overview.mmd:7`
-reads `queue=mctl-dev-loop` while `docs/temporal-flow.md:21` was already updated to
-`queues=mctl-dev-loop / -exec / -implement`, and `docs/diagrams/archify/dev-loop.workflow.json`
-contains no admission node at all.
+This proposal closes those three gaps inside the boundary #395 drew: git stays
+durable lifecycle state, Temporal and Argo stay durable runtime state, and no
+new scheduler, service or control plane is introduced.
 
 ## User stories
 
-- AS a platform operator reviewing an implementation incident I WANT the admission
-  wait of each implement attempt recorded durably SO THAT I can prove, after the
-  run has ended, that waiting for capacity did not consume the execution budget.
-- AS an on-call engineer reading a worker's logs I WANT the implementation capacity
-  `N` stated at startup SO THAT I can tell what capacity that process actually
-  imposed without reading the environment of a pod that may already be gone.
-- AS the runtime-projection consumer (mctl-agents#389 to mctl-api#331) I WANT the
-  orchestrator to declare which queue the implement step waits on and why SO THAT
-  I can render `phase: waiting, waiting_on: implementation_capacity` without
-  hard-coding a reason string or inventing a second runtime-state surface.
-- AS a reviewer of a future change to capacity or queue naming I WANT the diagram
-  drift report to fail SO THAT `N` and the queue split cannot move silently.
-- AS a reader of the architecture diagrams I WANT the three task queues and the
-  admission gate drawn SO THAT the pictures agree with `docs/temporal-flow.md` and
-  ADR-008 D7.
+- AS a platform operator I WANT a loop waiting for implementation capacity to
+  report `waiting` with `waiting_on: implementation_capacity` and the instant
+  it started waiting SO THAT a queued proposal is visibly queued rather than
+  indistinguishable from a stalled one.
+- AS a platform operator I WANT the admission wait of each implement submit
+  recorded as its own number, separate from execution duration SO THAT I can
+  tell "capacity is tight" from "the implementer is slow" without reading two
+  dashboards and doing the subtraction by hand.
+- AS a platform operator I WANT to be told when the admission queue has no
+  poller, or more than one SO THAT a failed worker rollout or an unnoticed
+  `replicaCount` change surfaces as a warning instead of as proposals that
+  never start.
+- AS the runtime-projection consumer (mctl-agents#389 → mctl-api#331 →
+  mctlhq/.github#95) I WANT one normative, versioned description of the
+  runtime phase vocabulary and where each field comes from SO THAT the
+  projection is read off a written contract rather than reverse-engineered
+  from a dict literal in an activity.
+- AS a reader arriving from the ADR-010 claim/fencing thread I WANT ADR-010 to
+  say that worker-slot admission is the current, softer backpressure and where
+  the hard count belongs SO THAT the two threads are not read as competing.
 
 ## Acceptance criteria (EARS)
 
-### Durable queue age
+Runtime states and the projection contract
 
-- WHEN `submit_and_wait` returns a terminal `WorkflowResult` THE SYSTEM SHALL
-  include `admitted_at`, the ISO-8601 UTC instant at which a worker slot took the
-  activity, spelled through the existing `_iso` helper (`argo.py:157-169`).
-- WHEN a `WorkflowResult` is deserialised from a history recorded before
-  `admitted_at` existed THE SYSTEM SHALL default it to `None` and SHALL NOT fail
-  replay, in the same manner as `implementer_ran` (`argo.py:83`).
-- WHEN the implement step's submit returns THE SYSTEM SHALL compute
-  `queue_age_seconds` as `admitted_at - queued_at` and record it on
-  `ImplementExecutionState` alongside the existing `queued_at` and
-  `prestart_requeues`.
-- WHEN a pre-start requeue resets `queued_at` (`dev_loop.py:1113-1118`) THE SYSTEM
-  SHALL keep a running `total_queue_age_seconds` across every attempt of the step,
-  so the reset does not erase the waiting already observed.
-- WHILE an implement attempt is executing THE SYSTEM SHALL keep `queue_age_seconds`
-  disjoint from execution duration: the recorded value SHALL cover only the span
-  from scheduling to admission and SHALL NOT include any time after the activity
-  started.
-- IF `admitted_at` is absent or unparseable THEN THE SYSTEM SHALL leave
-  `queue_age_seconds` as `None` and SHALL NOT substitute zero, because an unknown
-  wait and a zero wait are different answers.
-- WHEN the implement step completes or fails THE SYSTEM SHALL emit one log line
-  naming the Argo workflow, the outcome, `queue_age_seconds` and
-  `prestart_requeues`, and the terminal `ApplicationError` message for a non-success
-  outcome SHALL carry the queue age.
+- THE SYSTEM SHALL define the implementation runtime phase vocabulary —
+  `waiting`, `admitted`, `submitted`, `running` — in exactly one module,
+  imported by `orchestrator/temporal/activities/argo.py` and by the workflow,
+  with no second spelling of any phase string anywhere in the repo.
+- WHEN `submit_and_wait` publishes its runtime heartbeat detail THE SYSTEM
+  SHALL include a schema version field, and SHALL keep the detail's existing
+  keys (`phase`, `admitted_at`, `submitted_at`, `implementer_started_at`) and
+  their meanings unchanged.
+- WHEN a heartbeat detail written by a newer schema version is read back by an
+  older attempt THE SYSTEM SHALL ignore keys it does not define rather than
+  fail, preserving the current filtering behaviour at `argo.py:201-210`.
+- WHILE an implement `submit_and_wait` activity is scheduled on
+  `mctl-dev-loop-implement` and has not started THE SYSTEM SHALL make that
+  state derivable as `phase=waiting, waiting_on=implementation_capacity` from
+  the DevLoopWorkflow `implement_execution` query plus
+  `describe_workflow_execution`'s pending-activity block, and the derivation
+  rule SHALL be written down in this repository's docs.
+- THE SYSTEM SHALL expose `waiting_on` on `ImplementExecutionState` as a
+  constant describing what the current implement submit waits for, and SHALL
+  NOT have the workflow assert whether the activity has started — that remains
+  Temporal's knowledge.
 
-### Capacity visibility
+Queue age
 
-- WHEN a worker starts with a plan that serves `IMPLEMENTATION_TASK_QUEUE` THE
-  SYSTEM SHALL log the queue name and its `max_concurrent_activities`, together
-  with a statement that capacity is `replicas x N` and that the deployment is
-  pinned to one replica.
-- WHILE a worker serves no implementation plan THE SYSTEM SHALL NOT read
-  `IMPLEMENTATION_MAX_CONCURRENT_ACTIVITIES`, preserving the existing rule that a
-  malformed value only refuses the role that needs it
-  (`worker.py:496-505`, `constants.py:96-101`).
-- WHEN the orchestrator declares the implement step's waiting surface THE SYSTEM
-  SHALL expose, on `ImplementExecutionState`, the task queue the submit is routed
-  to and a static `waiting_on` reason of `implementation_capacity`.
-- WHILE the implement submit has not yet been admitted THE SYSTEM SHALL NOT assert
-  liveness from the workflow query: whether the activity is still Scheduled remains
-  Temporal's answer via `describe_workflow_execution`, and the query SHALL only say
-  what the step waits on, never whether it is still waiting.
+- WHEN an implement `submit_and_wait` attempt starts THE SYSTEM SHALL compute
+  its admission wait from `activity.info().scheduled_time` and
+  `activity.info().started_time` (both present in temporalio 1.31.0,
+  `temporalio/activity.py:110-118`) and publish it as `queue_age_seconds`
+  alongside `queued_at` in the runtime heartbeat detail.
+- WHILE an activity is retried THE SYSTEM SHALL keep the first attempt's
+  `admitted_at`, `queued_at` and `queue_age_seconds` in the restored
+  projection, so that queue age never absorbs a previous attempt's execution
+  time.
+- WHEN an implement submit is admitted THE SYSTEM SHALL log the admission with
+  the operation, the Argo-bound workflow reference once known, and the queue
+  age, at INFO, in the plain-word style CONTRIBUTING.md requires.
+- THE SYSTEM SHALL NOT add `schedule_to_start_timeout` or
+  `schedule_to_close_timeout` to the implement submit; the admission wait
+  stays unbounded by design (ADR-008 D7, `dev_loop.py:103-107`).
 
-### Drift guards and diagrams
+Admission-queue health
 
-- WHEN `tools/diagram_facts.py` builds facts from code THE SYSTEM SHALL record the
-  three task-queue names, the execution slot limit, and the implementation capacity
-  default from `orchestrator/temporal/constants.py`.
-- IF a change alters a task-queue name or `DEFAULT_IMPLEMENTATION_MAX_CONCURRENT_ACTIVITIES`
-  without regenerating `docs/diagrams/archify/facts.yaml` THEN the diagram drift
-  check SHALL report it.
-- WHEN the overview diagram is read THE SYSTEM SHALL name all three queues, matching
-  `docs/temporal-flow.md:21`.
-- WHEN `docs/diagrams/archify/dev-loop.workflow.json` is read THE SYSTEM SHALL show
-  admission between approval and Argo submission, and SHALL continue to pass the
-  archify composition checks run by `.github/workflows/diagrams.yml`.
+- WHEN `ReconcileWorkflow` runs a tick THE SYSTEM SHALL read the admission
+  queue's poller count and backlog through
+  `WorkflowService.DescribeTaskQueue` (`report_pollers`, `report_stats`) in an
+  activity, never in workflow code.
+- IF the admission queue reports zero pollers THEN THE SYSTEM SHALL log an
+  error naming the queue and the backlog, and carry the observation in the
+  reconcile result.
+- IF the admission queue reports more than one poller THEN THE SYSTEM SHALL
+  log a warning stating that capacity is `replicas x N` and that
+  `replicaCount: 1` is an architectural invariant of this phase.
+- IF the DescribeTaskQueue read fails THEN THE SYSTEM SHALL log the failure
+  and continue the reconcile tick unchanged — admission health is an
+  observation, never a gate.
+- THE SYSTEM SHALL NOT fail, retry, cancel or resubmit any implementation work
+  on the basis of this observation.
 
-### Regression coverage
+Documentation and regression
 
-- WHEN nine DevLoops are approved simultaneously with `N = 3` THE SYSTEM SHALL start
-  exactly three implement activities, SHALL leave six durably Scheduled with no
-  submit call made for them, and SHALL drain the remaining six with no intervention
-  as slots free — the existing
-  `test_a_burst_of_approvals_is_admitted_n_at_a_time` contract, which SHALL continue
-  to pass.
-- WHEN that burst test runs THE SYSTEM SHALL pin `N = 3` explicitly for the test
-  rather than asserting that the ambient environment happens to leave the default in
-  place (`tests/test_dev_loop_workflow.py:4023-4024`).
-- WHEN a pre-start requeue occurs THE SYSTEM SHALL show, in a test, that the second
-  attempt's `queue_age_seconds` measures only the second wait while
-  `total_queue_age_seconds` covers both.
-- WHEN an existing recorded history is replayed against the changed workflow code
-  THE SYSTEM SHALL replay without a non-determinism error
-  (`tests/test_workflow_replay.py`, `tests/replay_scenarios.py`).
+- THE SYSTEM SHALL add an amendment section to
+  `docs/adr/010-lifecycle-ownership-contract.md` recording that worker-slot
+  admission (ADR-008 D7) is this phase's backpressure, that it is not a
+  distributed lease, and that the hard count across crashes and replicas
+  belongs to ADR-010's server-side claims (mctl-api#337).
+- WHEN nine loops are approved simultaneously with `N = 3` THE SYSTEM SHALL
+  start exactly three implement submits, leave six durably scheduled with no
+  submit call made for them, and drain the remaining six as slots free, with
+  no manual retry — the existing regression test SHALL keep passing unchanged.
+- WHEN the projection is asserted in tests THE SYSTEM SHALL show a queued loop
+  reported as `waiting` and an admitted one reported with a `queue_age_seconds`
+  that excludes execution time.
 
 ## Out of scope
 
-- Per-service capacity `M`. It needs a distributed counter, which is the thing this
-  phase exists to avoid (ADR-008 Non-goals; #395 states it explicitly).
-- Lowering `EXECUTION_MAX_CONCURRENT_ACTIVITIES` from 40. Investigate, reconcile and
-  incidents stay independent of implementation capacity.
-- Removing the Argo mutex `mctl-agents-proposal-claims`. The admin-only direct
-  `mctl_trigger_implementer` path and the `cronworkflow-mctl-agents-implement`
-  five-minute cron (`docs/diagrams/archify/facts.yaml:25`) both bypass Temporal
-  admission, so the mutex still guards a real path.
-- Adding `schedule_to_start_timeout` or `schedule_to_close_timeout` to the implement
-  submit. Bounding the admission wait would turn waiting for capacity into a failure
-  — the shape of the bug being fixed (`dev_loop.py:104-107`).
-- The mctl-gitops deployment, `replicaCount: 1` CI guard, queue-age alert and
-  dashboards. Those are mctlhq/mctl-gitops#1285 and #1287; this repo can make `N`
-  auditable and loggable but cannot fail another repo's CI.
-- The mctl-api side of the runtime projection (mctl-api#331) and the schema in
-  mctlhq/.github#95. This proposal only makes the producer side complete.
-- ADR-010's server-side claim and fencing (mctl-api#337). `ClaimClient`
-  (`orchestrator/lifecycle/claim.py`) stays at rollout `off`.
-- A second reconciler, and any change to `commit-and-push` or to what reaches git
-  mid-attempt. Git remains durable lifecycle state; Temporal and Argo remain durable
-  runtime state.
-- Writing a new ADR. ADR-008 D7 and the ADR-010 Non-goals amendment already record
-  this decision; this proposal amends wording only where a new field needs naming.
+- Per-service capacity `M` — it needs a distributed counter, which this phase
+  exists to avoid.
+- Lowering `EXECUTION_MAX_CONCURRENT_ACTIVITIES` from 40.
+- Removing or narrowing the Argo mutex `mctl-agents-proposal-claims`
+  (mctl-gitops#1283).
+- The implementation worker Deployment, its `replicaCount: 1` CI guard, the
+  VMRules and dashboards — mctl-gitops#1285. This proposal adds the in-cluster
+  *observation* of the same invariant, not its enforcement.
+- The mctl-api projection endpoint and its UI (mctl-api#331, mctlhq/.github#95).
+  This proposal produces and documents the data they read.
+- ADR-010 server-side claims and fencing (mctl-api#337); `ClaimClient` stays at
+  rollout `off`.
+- A second reconciler or any recovery behaviour (#353, mctl-api#294).
+- Any change to the issue poller's cadence.
 
 ## Open questions
 
-- **Where the durable queue age should ultimately live.** This proposal keeps it in
-  Temporal (workflow query state plus the activity's return value), which is
-  self-contained and needs no cross-repo change. Extending `ExecutionRecord`
-  (`activities/state.py:29-43`) with `queue_age_seconds` would put it in mctl-api's
-  execution audit trail where `mctl_list_recent_agent_runs` could read it, but that
-  needs an mctl-api schema change. Proceeding with the in-repo form and recording
-  the mctl-api extension as a follow-up.
-- **Whether `waiting_on` belongs on the query at all.** `ImplementExecutionState`'s
-  docstring (`dev_loop.py:768-774`) deliberately refuses to model liveness. This
-  proposal reads that as a prohibition on *guessing whether* the step is waiting,
-  not on *declaring what* it waits on, and adds only the static reason and the queue
-  name. If a reviewer disagrees, drop that one field; nothing else depends on it.
-- **The archify diagram's shape.** `dev-loop.workflow.json` has no queue concept
-  today, so where the admission gate sits in its lane layout is an authoring choice
-  that must still satisfy the composition checks (no crossing edges, no label
-  collisions). Proceeding with a gate node between approval and the implement
-  submit; the renderer decides whether that survives.
-- **Whether N is still 3 in production.** `DEFAULT_IMPLEMENTATION_MAX_CONCURRENT_ACTIVITIES = 3`
-  is the code default, but the live value comes from the mctl-gitops values file,
-  which is not in this clone. The drift fact records the default, not the deployed
-  value.
+- The issue uses two words for the first state: `queued` in the scope list and
+  `phase: waiting, waiting_on: implementation_capacity` in the projection
+  sample. Proceeding with `waiting` as the wire value (it matches the concrete
+  sample the consumer was specified against) and `queued_at` as the timestamp
+  field name already in `ImplementExecutionState`, with both spellings recorded
+  in the docs contract. If mctl-api#331 has already shipped `queued`, the alias
+  is a one-line change in the vocabulary module.
+- Whether mctl-api#331 reads the workflow query, the activity heartbeat, or
+  both. Proceeding by publishing both and documenting precedence: the heartbeat
+  detail wins wherever the two overlap, because it is written by the process
+  that observes Argo.
+- Whether `queue_age_seconds` should also be a Prometheus metric emitted by the
+  implementation worker. Proceeding without one: the SDK already exports
+  `temporal_activity_schedule_to_start_latency` labelled
+  `task_queue="mctl-dev-loop-implement"`, which is the same quantity in
+  aggregate, and a second exporter would be a second surface.
+- Whether admission health belongs on the reconcile tick (every 15 min,
+  `offset=3`) or on its own schedule. Proceeding with reconcile: it already
+  holds a Temporal-client-bound activity class
+  (`orchestrator/temporal/activities/visibility.py`) and adding a schedule
+  would be a new moving part for one read.
+- Whether zero pollers should also raise an incident rather than only log.
+  Proceeding with log plus reconcile-result field; alerting on the metric is
+  mctl-gitops#1285's half.
