@@ -39,9 +39,20 @@ records where the list came from and which caller each entry serves.
 
 ## State
 
-Local, and listed in `../../.local-state-roots`, like the other two zone roots.
-Proving zero diff needs no write access; keeping state on R2 does, and the
-apply identity does not exist yet (#1111).
+Remote, on the shared R2 backend as of #1178: `cloudflare/zones/mctl-ai/terraform.tfstate`
+in `mctl-cloudflare-state`, declared in `backend.tf`, like the other two
+migrated zone roots. Before #1178 this root ran on local, throwaway state —
+proving zero diff needed no write access, and the evidence below was gathered
+against that throwaway state with a read-only token. Moving the state itself
+onto R2 is an import-only apply, executed by dispatching `cloudflare-apply.yml`
+on `main` and approving the `cloudflare-apply` environment's required reviewer
+rather than from a laptop, tracked in `mctlhq/mctl-gitops#1281`. Expect `26 to
+import, 0 to add, 0 to change, 0 to destroy` on that plan, and `No changes.` on
+the verification plan that follows the apply. Intended order across the three
+migrated roots: `mctl-ru` -> `mctl-me` -> `mctl-ai` (see `../../README.md`,
+this root last); between merge and this root's apply, a scheduled
+`cloudflare-drift.yml` run reports its pending imports as `DRIFT` — expected,
+self-clearing once the apply runs, and never a write, since drift only plans.
 
 ## Evidence
 
@@ -74,11 +85,11 @@ Zone settings always exist at Cloudflare — there is no unset, only a default �
 so they import rather than create.
 
 The values were applied through the Cloudflare API **before** this landed, the
-same way the Google Search Console TXT record was: these roots keep local state
-and cannot apply from CI (#1111), and their whole verification ritual runs on
-the read-only plan identity. Declaring a value the configuration cannot reach
-would have left `cloudflare-drift.yml` — which fails closed — red on every
-scheduled run until someone got round to it.
+same way the Google Search Console TXT record was: this root could not yet
+apply from CI (#1178 removed that constraint), and their whole verification
+ritual ran on the read-only plan identity. Declaring a value the configuration
+could not reach would have left `cloudflare-drift.yml` — which fails closed —
+red on every scheduled run until someone got round to it.
 
 So the plan stays zero-diff and the rule above never bends:
 
