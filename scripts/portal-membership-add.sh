@@ -252,11 +252,18 @@ mapping_filter='{server_id, on_behalf, default_disabled,
 # decision. Comparing those would fail on a cosmetic API-side change exactly
 # as readily as on a real dropped mapping.
 others_filter="[.[] | select(.server_id != \$s) | $mapping_filter] | sort_by(.server_id)"
-if ! diff -q <(jq -cS --arg s "$server" ".servers | $others_filter" <<<"$body") \
-             <(jq -cS --arg s "$server" ".result.servers | $others_filter" <<<"$res") >/dev/null; then
+# Evaluated into variables, not compared straight out of a process
+# substitution: a jq failure inside `<(...)` is invisible to set -e/pipefail
+# and would otherwise leave that side of the diff empty -- exactly the
+# silent-no-op failure mode `// []` above exists to close for the one known
+# trigger. Assigning first means set -e still catches any OTHER jq failure
+# here (a non-array updated_tools, say), the same way `fresh`/`body`/`res`
+# already rely on it elsewhere in this script.
+others_sent=$(jq -cS --arg s "$server" ".servers | $others_filter" <<<"$body")
+others_got=$(jq -cS --arg s "$server" ".result.servers | $others_filter" <<<"$res")
+if [ "$others_sent" != "$others_got" ]; then
   echo "the portal does not match what was sent: an existing mapping was altered or lost across the write -- those entries carry the tool allowlists of mctl-telegram, mctl-api and seerrsense; compare them before touching anything else" >&2
-  diff -u <(jq -cS --arg s "$server" ".servers | $others_filter" <<<"$body") \
-          <(jq -cS --arg s "$server" ".result.servers | $others_filter" <<<"$res") >&2 || true
+  diff -u <(printf '%s\n' "$others_sent") <(printf '%s\n' "$others_got") >&2 || true
   exit 1
 fi
 
@@ -268,11 +275,11 @@ fi
 # the API computes on insert (id, authentication_status, tools, timestamps)
 # are not part of what was asked for and are not asserted here.
 new_filter="select(.server_id == \$s) | $mapping_filter"
-if ! diff -q <(jq -cS "$mapping_filter" <<<"$new_entry") \
-             <(jq -cS --arg s "$server" ".result.servers[] | $new_filter" <<<"$res") >/dev/null; then
+new_sent=$(jq -cS "$mapping_filter" <<<"$new_entry")
+new_got=$(jq -cS --arg s "$server" ".result.servers[] | $new_filter" <<<"$res")
+if [ "$new_sent" != "$new_got" ]; then
   echo "'$server' was not written as sent -- comparing the requested entry against what the portal now reports for it:" >&2
-  diff -u <(jq -cS "$mapping_filter" <<<"$new_entry") \
-          <(jq -cS --arg s "$server" ".result.servers[] | $new_filter" <<<"$res") >&2 || true
+  diff -u <(printf '%s\n' "$new_sent") <(printf '%s\n' "$new_got") >&2 || true
   exit 1
 fi
 

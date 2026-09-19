@@ -365,6 +365,22 @@ def main():
               f"rc={p.returncode} {p.stderr[:300]}")
 
     with tempfile.TemporaryDirectory() as tmp:
+        # A member the API returns without `updated_prompts` at all -- the
+        # state the DCR members api/seerrsense are in before any
+        # allowlist-apply has ever run. Without `// []` in mapping_filter,
+        # sort_by(null) aborts jq inside BOTH process substitutions, so
+        # `others_sent`/`others_got` would both come back empty, the compare
+        # would find no difference, and tg's spoiled tool would sail through
+        # undetected -- this must still catch it.
+        no_prompts = json.loads(json.dumps(PORTAL_LIVE))
+        del no_prompts["servers"][1]["updated_prompts"]
+        root = fixture(tmp)
+        p, sent = run(root, "projects", portal=no_prompts, spoil_tg=True)
+        check("a member returned without updated_prompts does not disable the untouched-members check",
+              p.returncode != 0 and "does not match what was sent" in p.stderr,
+              f"rc={p.returncode} {p.stderr[:300]}")
+
+    with tempfile.TemporaryDirectory() as tmp:
         root = fixture(tmp)
         p, sent = run(root, "--check")
         check("an omitted server_id (flag lands in $1) is a usage error, not a bogus add",
