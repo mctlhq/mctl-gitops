@@ -207,43 +207,19 @@ output "projects_mcp_aud" {
   value       = cloudflare_zero_trust_access_application.projects_mcp.aud
 }
 
-# A second application, scoped to the bare root path only, that bypasses
-# Access entirely. This exists solely so someone with no grant yet can find
-# out how to get one: the server now answers `/` with a plain HTML page
-# explaining how to add https://projects.mctl.ai/mcp as a custom connector,
-# and that page is unreachable to read if Access is already demanding an
-# identity before anyone has been told how to sign in.
+# A second application, scoped to the bare root path with a bypass policy,
+# existed here 2026-09-19 – 2026-09-20 so `/` (a plain HTML page explaining
+# how to add https://projects.mctl.ai/mcp as a custom connector) was readable
+# by anyone, signed in or not.
 #
-# Scoped narrowly and deliberately: this does not widen what `/mcp` or
-# `/whoami` require. Those stay matched by the whole-domain application
-# above, which Cloudflare Access resolves with lower priority than this
-# exact-path one for `/` itself. If that precedence assumption is wrong,
-# `cloudflare-plan.yml`'s output on this PR is where it would show up — read
-# it before merging, not after.
-resource "cloudflare_zero_trust_access_application" "projects_mcp_landing" {
-  account_id = var.account_id
-  name       = "mctl Projects — public landing (projects.mctl.ai/)"
-  type       = "self_hosted"
-  domain     = "projects.mctl.ai/"
+# Removed: unnecessary and wrong. A browser hitting the bare domain already
+# gets Access's own interactive Google/Email-code login page, not a bare 401
+# — the JSON 401 only shows up for non-browser requests (curl, an API
+# client), which is not who this page is for. Bypassing Access here meant
+# the page was readable by literally anyone on the internet with no identity
+# at all, which was never the intent — the intent was "no PROJECT GRANT
+# required to read it", a check this server never made for `/` anyway. `/`
+# is back under the whole-domain application above: reachable by anyone who
+# can authenticate at all (still no grant required, since nothing here reads
+# grants for this path), unreachable by nobody.
 
-  destinations = [
-    {
-      type = "public"
-      uri  = "projects.mctl.ai/"
-    },
-  ]
-
-  app_launcher_visible = false
-
-  policies = [
-    {
-      name       = "projects-mcp-landing-public"
-      decision   = "bypass"
-      precedence = 1
-
-      include = [
-        { everyone = {} },
-      ]
-    },
-  ]
-}
