@@ -112,6 +112,31 @@ resource "cloudflare_zero_trust_access_application" "projects_mcp" {
         # `authentication_status` has already gone stale and the server has
         # stopped appearing for end users.
         "https://dash.cloudflare.com/${var.account_id}/one/access-controls/ai-controls/mcp-server/oauth-callback/projects",
+
+        # The MCP portal's own callback. The dashboard URI above is the ADMIN's
+        # one-time login, which is what produces the credential the capability
+        # sync runs with; this one is every END USER's authorization, and it is
+        # a separate flow that was never going to work without being listed.
+        #
+        # Measured on 2026-09-19, after the portal member application landed and
+        # `mctl Projects (projects.mctl.ai)` finally appeared in a client's
+        # server list: it came up "Authorization failed: invalid request", and
+        # no login event for this application reached the Access log at all,
+        # because the request never got as far as a policy. Asking Access
+        # directly, with a registered client whose redirect is this URI:
+        #
+        #   GET /cdn-cgi/access/oauth/authorization?...
+        #       &redirect_uri=https://mcp.mctl.ai/servers-callback
+        #       &resource=https://projects.mctl.ai/mcp
+        #   302 -> ...?error=invalid_request
+        #          &error_description=Redirect+URI+not+allowed+by+application+configuration
+        #
+        # The other three upstreams never hit this: they run their own OAuth
+        # servers, which accept whatever redirect the portal was configured
+        # with by hand (infrastructure/cloudflare/portal/mcp-servers.tf). Here
+        # Access IS the authorization server, so the portal is just another
+        # client and this list is what it is checked against.
+        "https://mcp.mctl.ai/servers-callback",
       ]
 
       # Claude Desktop and Claude Code complete the flow on a loopback port that
