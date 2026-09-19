@@ -4,10 +4,17 @@ Holds resources that are not attached to a single zone: R2 buckets, Access
 applications/policies/IdPs and organization settings, Zero Trust gateway and
 device settings, and eventually the MCP Portal and its servers.
 
-**Holds one application.** The root was empty until `projects.mctl.ai` landed
-in `projects-mcp.tf`: an Access application created here rather than imported,
-which is the one thing this root could take before `#1088` without colliding
-with it. Everything else is still to be imported.
+**Holds two applications, both for `projects.mctl.ai`.** The root was empty
+until `projects.mctl.ai` landed in `projects-mcp.tf`: Access applications
+created here rather than imported, which is the one thing this root could
+take before `#1088` without colliding with it. Everything else is still to be
+imported.
+
+The second application, added 2026-09-19, scopes only the bare `/` path and
+bypasses Access entirely — the server there answers with a public HTML page
+explaining how to connect, unreachable to read if Access already demanded an
+identity before telling anyone how to get one. `/mcp` and `/whoami` are still
+matched by the first application below and still require a real sign-in.
 
 `projects-mcp.tf` is the Cloudflare half of the connector customers use to ask
 about their own product. Access is the OAuth authorization server for that
