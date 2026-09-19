@@ -36,6 +36,7 @@ spec:
         values:
           - admins-mctl-agents-worker
           - admins-mctl-agents-worker-exec
+          - admins-mctl-agents-worker-implement
   namespaceSelector:
     matchNames:
       - admins

@@ -1,0 +1,33 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: mctl-agents-worker-implement
+  namespace: admins
+  description: "Temporal admission worker — serves submit_and_wait for mctl-agents-implement only, on the mctl-dev-loop-implement queue with capacity N (mctl-agents#395)"
+  annotations:
+    backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=admins-mctl-agents-worker-implement
+    backstage.io/kubernetes-id: mctl-agents-worker-implement
+    backstage.io/kubernetes-namespace: admins
+    argocd/app-name: admins-mctl-agents-worker-implement
+    github.com/source-repo: mctlhq/mctl-agents
+    # Same image and tag as mctl-agents-worker; bumped by release-deploy,
+    # so not deployed from here by webhook.
+    mctl.me/auto-deploy: "false"
+  links:
+    - url: https://ops.mctl.ai/applications/argocd/admins-mctl-agents-worker-implement
+      title: ArgoCD
+      icon: dashboard
+    - url: https://github.com/mctlhq/mctl-agents
+      title: Source Repository
+      icon: github
+    - url: https://workflows.mctl.ai
+      title: Argo Workflows
+      icon: github
+  labels:
+    team: admins
+    env: apps
+spec:
+  type: worker
+  lifecycle: production
+  owner: group:default/admins
+  system: system:default/team-admins

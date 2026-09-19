@@ -1,0 +1,98 @@
+# Worker: mctl-agents-worker-implement
+# Team: admins
+# Chart: base-service (ingress disabled)
+#
+# The admission worker (mctlhq/mctl-agents#395, this repo #1285). Same
+# image as mctl-agents-worker and mctl-agents-worker-exec, different
+# --role: this process polls `mctl-dev-loop-implement` and serves exactly
+# one activity, submit_and_wait, for exactly one operation,
+# mctl-agents-implement.
+#
+# Why a third worker rather than a smaller exec pool: the slot limit on
+# THIS process is the number of implementer runs allowed to exist at once.
+# With no free slot the Temporal activity stays Scheduled — no Argo
+# workflow is created, no Argo deadline starts. On 2026-09-19 nine
+# approvals reached Argo at once, queued inside Argo on a capacity-1
+# mutex, and six died of their own deadline before reaching the head of
+# that queue. Admission belongs in the orchestrator, before Argo sees
+# anything; exec stays at 40 for investigate/reconcile/incidents.
+#
+# NOTHING SCHEDULES HERE YET. The routing flip is a later, separately
+# releasable step in mctl-agents behind workflow.patched("implement-queue")
+# — a worker must be polling a queue before any workflow targets it.
+#
+# REQUIRES an image with `--role implementation`: mctl-agents 1.47.0 or
+# later (mctl-agents#397). Older tags argparse-error on the unknown
+# argument and CrashLoopBackOff. Bumped by release-deploy along with the
+# other two workers once mctl-agents' release-please dispatch names this
+# path (that edit lands with the routing flip, because release-deploy
+# fails loudly on a named path that does not exist yet).
+#
+# replicaCount: 1 is an ARCHITECTURAL INVARIANT of this phase, not a
+# sizing choice. IMPLEMENTATION_MAX_CONCURRENT_ACTIVITIES is a per-process
+# limit, not a distributed semaphore: capacity is replicas × N, so two
+# replicas at N=3 admit six. scripts/validate-implement-worker-singleton.py
+# fails CI if this leaves 1 — raise N instead, and if a hard N across
+# crashes and replicas is ever needed that is ADR-010's server-side claim
+# (mctlhq/mctl-api#337), not a second replica.
+replicaCount: 1
+image:
+  repository: ghcr.io/mctlhq/mctl-agents
+  tag: "1.47.0"
+imagePullSecrets:
+  - name: ghcr-credentials
+command: ["python", "-m", "orchestrator.temporal.worker", "--role", "implementation"]
+ingress:
+  enabled: false
+# See mctl-agents-worker/values.yaml for why each probe is nulled
+# individually: this is an asyncio process with no HTTP server, the chart
+# defaults httpGet /healthz, and `probes: {}` / `probes: null` both fail
+# for different reasons.
+probes:
+  liveness: null
+  readiness: null
+resources:
+  # Same shape as the exec worker: one queue, one I/O-bound activity, a
+  # slot pool of N. Nothing here grows with loop count.
+  requests:
+    cpu: 25m
+    memory: 64Mi
+  limits:
+    cpu: 250m
+    memory: 128Mi
+automountServiceAccountToken: false
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+env:
+  TEMPORAL_ADDRESS: temporal-frontend.temporal.svc.cluster.local:7233
+  TEMPORAL_NAMESPACE: mctl-agents
+  LOG_LEVEL: info
+  # N. The one number an operator moves (ADR-008 D5): read against
+  # MctlAgentsImplementQueueAgeHigh, which is the signal that it is too
+  # small. Starting value from mctl-agents#395; a malformed or non-positive
+  # value refuses to start rather than admitting nothing forever.
+  IMPLEMENTATION_MAX_CONCURRENT_ACTIVITIES: "3"
+envFrom:
+  - secretRef:
+      name: mctl-agents-worker-implement-secrets
+# MCTL_TOKEN only — same reasoning as mctl-agents-worker-exec: the whole
+# activity is POST /api/v1/operations/{op}/execute plus polling
+# GET /api/v1/workflows/{name} against mctl-api. No GitHub, no agent SDK.
+externalSecret:
+  store: vault-backend
+  storeKind: ClusterSecretStore
+  targetSecret: mctl-agents-worker-implement-secrets
+  data:
+    - secretKey: MCTL_TOKEN
+      remoteKey: platform/mctl-agents
+      property: mctl-token
