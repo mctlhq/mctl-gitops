@@ -1,43 +1,42 @@
 # Design: incident-89825049
 
 ## Diagnosis
-Same shared root cause and mechanism as incident-89825245 (see that proposal's design.md for
-the full read of `post-deploy-verify` in
-`platform-gitops/argo-workflows/cluster-templates/cwft-mctl-agents-shepherd.yaml`): the
-shepherd's post-merge safeguard lists every ArgoCD Application in the `argocd` namespace that
-became Degraded after this workflow's own creation timestamp (2026-09-19T13:29:22Z), found
-`argocd/labs-agent-worker-preview` still Degraded after its 120s grace period, and failed the
-whole workflow — even though `labs-agent-worker-preview` (a `labs`-tenant preview worker) has
-no relationship to the mctl-agents issue-305 proposal this run was shepherding, and
-commit-and-push's own log shows this tick made no proposal-state change at all.
+This workflow_failed incident is not about a defect in the shepherd run
+itself or in proposal issue-305. The run's own post-deploy-verify step
+failed its environment health gate because it found argocd/labs-agent-worker-preview
+"Still Degraded after 120s grace" — an app this shepherd run never touched.
 
-Root cause and full evidence for why `labs-agent-worker-preview` is Degraded: incident
-b1eb40f5-a589-4745-a720-5b64cc221e40, proposal `mctl-gitops/proposals/incident-cc221e40/`
-(this same batch).
+The Degraded state has an independently-diagnosed root cause: the labs
+tenant namespace's limits.cpu ResourceQuota is exhausted (11300m of 12000m
+used, ~700m headroom) while agent-worker-preview (replicaCount=1, cpu limit
+1000m) tries to do a routine rolling update. The RollingUpdate surge pod
+cannot get the 1000m of cpu limit headroom it needs, so it's rejected by the
+quota, the rollout stalls, and ArgoCD reports the app Degraded. Full
+diagnosis and evidence is in sibling proposal
+mctl-gitops/proposals/incident-cc221e40 (incident
+b1eb40f5-a589-4745-a720-5b64cc221e40).
 
-As with incident-89825245, I am not proposing any change to the post-deploy-verify safety net
-itself — it is a deliberate, documented tradeoff (see its own comments referencing the
-2026-05-01 external-secrets incident) and narrowing it without human review risks
-reintroducing the gap it was built to close.
-
-## Confidence: LOW
-(Causal chain confirmed from source and logs; root cause of the underlying Degraded app is
-still lower-confidence — see the sibling proposal.)
+A second, independent shepherd run (issue-364,
+argo-mctl-agents-shepherd-ac5088f0-1789825245) hit the identical
+post-deploy-verify failure a few minutes later, which corroborates that this
+is a standing environment condition, not something particular to this one
+workflow or proposal.
 
 ## Proposed Fix
-Same fix as `mctl-gitops/proposals/incident-cc221e40/` and `incident-89825245/`: add a
-`podAnnotations` restart marker to
-`platform-gitops/services/labs/agent-worker-preview/values.yaml` to force a fresh rollout of
-the stuck Deployment. If already applied by either sibling proposal, this is a no-op — check
-the file first.
+Same fix as sibling proposal incident-cc221e40: raise
+tenant.quotas.limits.cpu from "12" to "14" in
+platform-gitops/tenants/labs/values.yaml, so the labs tenant namespace has
+enough limits.cpu headroom for a routine single-replica rolling update's
+surge pod. See incident-cc221e40/design.md for the full diagnosis and the
+exact comment text to add.
 
-```yaml
-podAnnotations:
-  rollout-restart-at: "2026-09-19T14:11:18Z"
-```
-
-No change to `cwft-mctl-agents-shepherd.yaml` or the issue-305 proposal is needed or proposed.
+Once labs-agent-worker-preview's rollout can complete and its ArgoCD health
+returns to Healthy, this shepherd's post-deploy-verify gate will stop
+flagging it, and future shepherd runs (including any retry of issue-305)
+will no longer be blocked by this unrelated app.
 
 ## Scope
-Minimal, and shared with both sibling proposals — do not duplicate the edit if it is already
-present.
+Minimal, and identical to incident-cc221e40: only the tenant.quotas.limits.cpu
+field in platform-gitops/tenants/labs/values.yaml. Do not modify the
+shepherd/post-deploy-verify workflow logic and do not touch
+services/labs/agent-worker-preview/values.yaml.

@@ -1,12 +1,13 @@
 # Tasks: incident-cc221e40
 
-1. [ ] Edit `platform-gitops/services/labs/agent-worker-preview/values.yaml`: add a
-       `podAnnotations` block with a `rollout-restart-at` timestamp (see design.md for the
-       exact snippet and placement) to force a fresh rollout of the Deployment.
-2. [ ] Verify the diff only touches `platform-gitops/services/labs/agent-worker-preview/values.yaml`
-       and adds nothing else (no image tag change, no probe/resource change).
-3. [ ] After merge, confirm (via `mctl_get_service_status` for team=labs,
-       service=agent-worker-preview, or `argocd app get labs-agent-worker-preview`) that the
-       Application returns to `Healthy`. If it does not clear within a few minutes of sync,
-       flag for human investigation of the resource tree — this fix only addresses a stuck
-       rollout, not a genuine code regression in the running image.
+1. [ ] In platform-gitops/tenants/labs/values.yaml, under tenant.quotas, change
+       limits.cpu from "12" to "14". Add a dated comment above the line
+       explaining why (quota exhaustion stalled agent-worker-preview's
+       rolling update; see design.md for the exact comment text).
+2. [ ] Verify the edited YAML is still valid (correct indentation under
+       tenant.quotas, value quoted as a string "14" to match the existing
+       style of the other quota fields in this file).
+3. [ ] No other files need to change. Do not touch
+       services/labs/agent-worker-preview/values.yaml — its resource
+       requests/limits are already correctly sized and have their own
+       documented history of not being trimmed further.
