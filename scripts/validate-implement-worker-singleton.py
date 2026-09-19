@@ -120,6 +120,18 @@ def selftest() -> int:
         'command: ["python", "-m", "orchestrator.temporal.worker", "--role", "implementation"]\n'
         "env:\n  IMPLEMENTATION_MAX_CONCURRENT_ACTIVITIES: \"3\"\n"
     )
+    def _line(body: str, prefix: str) -> str:
+        """The one line starting with `prefix`, found by content.
+
+        Positional indexing broke silently once a key was added above: the
+        three command cases below edited `strategy` instead and passed on
+        the wrong check, so the command arm was never exercised at all.
+        """
+        matches = [line for line in body.splitlines() if line.startswith(prefix)]
+        if len(matches) != 1:
+            raise AssertionError(f"selftest fixture has {len(matches)} lines starting {prefix!r}")
+        return matches[0]
+
     cases: list[tuple[str, str, bool]] = [
         ("invariant held", good, False),
         ("scaled to two", good.replace("replicaCount: 1", "replicaCount: 2"), True),
@@ -135,11 +147,11 @@ def selftest() -> int:
         ("blue-green on", good + "blueGreen:\n  enabled: true\n  autoPromotionEnabled: true\n", True),
         ("blue-green off", good + "blueGreen:\n  enabled: false\n", False),
         ("rollout key, kept for a chart rename", good + "rollout:\n  enabled: true\n", True),
-        ("command removed", good.replace(good.splitlines()[1] + "\n", ""), True),
+        ("command removed", good.replace(_line(good, "command:") + "\n", ""), True),
         (
             "command as a scalar string",
             good.replace(
-                good.splitlines()[1],
+                _line(good, "command:"),
                 'command: "python -m orchestrator.temporal.worker --role implementation"',
             ),
             True,
@@ -147,7 +159,7 @@ def selftest() -> int:
         (
             "implementation only as a stray token",
             good.replace(
-                good.splitlines()[1],
+                _line(good, "command:"),
                 'command: ["python", "-m", "orchestrator.temporal.worker", "--role", '
                 '"execution", "--tag", "implementation"]',
             ),
