@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-09-19T07:07:37Z'
+updated_at: '2026-09-19T07:28:12Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -17,3 +17,4 @@ attempt:
   expires_at: '2026-09-19T09:03:04Z'
   finished_at: '2026-09-19T07:07:37Z'
 pr: https://github.com/mctlhq/mctl-gitops/pull/1286
+review_attempts: 1
