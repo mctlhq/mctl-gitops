@@ -1,243 +1,243 @@
-# Durable agent clarification loop — `HumanInputRequest`/`HumanInputResponse` and `WAITING_FOR_INPUT`
+# Durable agent clarification loop: `HumanInputRequest`/`HumanInputResponse` and `WAITING_FOR_INPUT`
 
 ## Context
 
-`mctl-agents` agents run as one-shot Argo/Claude-Agent-SDK steps driven by
-`DevLoopWorkflow` (`orchestrator/temporal/workflows/dev_loop.py`). When an
-agent hits genuine ambiguity it has no way to ask a human: the
-`issue-investigator` prompt tells it outright to "capture the ambiguity in
-`## Open questions`, never stop to ask"
-(`orchestrator/run_issue_investigator.py:_build_prompt`). The one durable
-human checkpoint that does exist is `approve()` — a Temporal signal that
-authorizes the `proposed -> accepted` flip for a proposal
-(`dev_loop.py:787-800`, `orchestrator/temporal/cli.py:approve`). That is
-*authorization* for one consequential action, not *clarification*, and
-`orchestrator/lifecycle/policy.py:merge_authority_for` records in its own
-docstring the cost of conflating the two (mctlhq/mctl-agents#344).
+`mctl-agents` already has one durable human-in-the-loop primitive: **authorization**.
+`DevLoopWorkflow` (`orchestrator/temporal/workflows/dev_loop.py:712`) parks on
+`await workflow.wait_condition(lambda: self._approved)` (line 827) until the
+`approve` signal (line 787) arrives, then runs the `mctl-agents-approve` CWFT.
+That answers "is this exact action authorized?". It does not answer the other
+question an agent hits constantly: "I do not have enough information to continue
+reliably — what is the answer?".
 
-This proposal adds the missing primitive: an agent that cannot continue with
-acceptable confidence seals a versioned `HumanInputRequest`, releases its
-compute pod, and the workflow parks in a first-class `WAITING_FOR_INPUT`
-state until an authorized human answers through a surface. The answer becomes
-attributed evidence in a child `ContextSnapshot` (ADR 009,
-`orchestrator/context_snapshot.py`) and a fresh Argo step continues the same
-WorkItem. The first deliverable is the ADR that `mctlhq/mctl-api#261` and
-`mctlhq/mctl-telegram#571` consume as the schema of record; this repository
-owns the schema module, the workflow states, the capability and the
-investigator continuation, not the surface or the HTTP endpoints.
+Today an investigator that meets a genuinely ambiguous requirement has to guess,
+because there is no way to ask. Issue #333 asks for the missing primitive: a
+versioned `HumanInputRequest`/`HumanInputResponse` contract, a first-class
+`WAITING_FOR_INPUT` workflow state distinguishable from `WAITING_FOR_APPROVAL`,
+a durable wait that releases the Argo/model pod, eligibility gated by the
+resolved `ExecutionPlan`, dedupe and loop controls, and tests. The issue's
+"DevLoop implementation boundary (2026-09-19)" scopes this proposal to
+`mctlhq/mctl-agents` only: the response/read-model API (`mctl-api#261`), the
+Telegram surface (`mctl-telegram#571`) and the catalog profile grant
+(`mctl-gitops#1277`) are separate work items, and this core must be provable by
+tests alone with no operator step and no sibling-repo edit.
 
 ## User stories
 
-- AS an `issue-investigator` agent I WANT to ask one bounded question when
-  retrieval and code reading leave a consequential requirement ambiguous SO
-  THAT I produce a grounded proposal instead of guessing or deferring the
-  decision to `## Open questions`.
-- AS a platform operator I WANT the workflow to distinguish
-  `WAITING_FOR_INPUT` from `WAITING_FOR_APPROVAL` SO THAT I can tell "an
-  agent needs information from me" from "an action needs my authorization".
-- AS a platform operator I WANT to answer from Telegram and have the exact
-  paused run resume automatically SO THAT I do not have to re-trigger the
-  issue by hand.
-- AS a platform owner I WANT no Argo pod or model process held open while a
-  human is offline SO THAT a 24-hour wait costs Temporal history, not
-  compute.
-- AS a security reviewer I WANT a human answer to be data, never
-  authorization or system instruction, SO THAT "use option B and merge it"
-  supplies B and still goes through `approve()` for the merge.
-- AS an `mctl-api` / `mctl-telegram` implementer I WANT one versioned,
-  hashed, stdlib-only contract SO THAT my surface consumes platform state
-  rather than owning it.
+- AS an issue-investigator agent I WANT to emit a durable, typed question and
+  terminate my step SO THAT an ambiguous requirement is resolved by a human
+  instead of guessed, without holding a model process open.
+- AS the `DevLoopWorkflow` I WANT a `WAITING_FOR_INPUT` state distinct from
+  `WAITING_FOR_APPROVAL` SO THAT automation, queries and traces can tell
+  "blocked on missing information" apart from "blocked on authorization".
+- AS a platform operator I WANT a clarification answer to become attributed
+  evidence and never an authorization token SO THAT `"use B and merge it"`
+  supplies `B` as data and still leaves the merge behind the approval gate.
+- AS a surface adapter author (`mctl-api#261`, `mctl-telegram#571`) I WANT a
+  versioned, hash-pinned request/response contract owned by `mctl-agents`
+  SO THAT I consume workflow state rather than owning it.
+- AS a platform operator I WANT clarification-round, dedupe and timeout limits
+  SO THAT a retrying agent cannot spam humans with the same unanswered question.
+- AS a release manager I WANT an agent with no `human.request_input` grant in
+  its resolved `ExecutionPlan` to behave exactly as it does today SO THAT this
+  core can merge before the catalog rollout in `mctl-gitops#1277`.
 
 ## Acceptance criteria (EARS)
 
 ### Contract and identity
 
-- WHEN a `HumanInputRequest` is sealed THE SYSTEM SHALL compute
+- WHEN a `HumanInputRequest` is sealed THE SYSTEM SHALL assign
+  `request_id = "hir-" + request_hash[7:23]` and
   `request_hash = "sha256:" + sha256(canonical JSON of every field except
-  `request_hash`, `request_id` and `created_at`)` and derive
-  `request_id = "hir-" + request_hash[7:23]`, using the same
-  `json.dumps(payload, sort_keys=True, separators=(",", ":"))` convention as
-  `orchestrator/context_snapshot.py`.
-- WHEN a `HumanInputRequest` or `HumanInputResponse` is parsed from a dict
-  THE SYSTEM SHALL reject any key it does not know, and SHALL reject any
-  hash-typed field that does not carry the `sha256:` prefix.
-- WHILE a `HumanInputRequest` exists THE SYSTEM SHALL carry an
-  `ExecutionCorrelation` block byte-identical in shape to ADR 009's
-  (`agent`, `environment`, `temporal_workflow_id`, `temporal_run_id`,
-  `argo_workflow_name`, `target_repository_sha`, `definition_version`,
-  `definition_content_hash`, `profile_version`, `profile_content_hash`,
-  `release_revision`) plus `work_item_id`, `trace_id` and
-  `context_snapshot_ref`.
-- WHERE a response is typed THE SYSTEM SHALL validate `value` against
-  `response.type` in the closed vocabulary `free_text | single_choice |
-  multi_choice | structured`, and SHALL reject a `single_choice` /
-  `multi_choice` value not drawn from `response.options`.
-- THE SYSTEM SHALL bound every free-text field of both documents
-  (`question`, `reason`, each option, `value`) to a declared maximum length,
-  and SHALL reject a longer value rather than truncating it.
-- THE SYSTEM SHALL declare no field named or containing `allow`, `deny`,
-  `permit`, `grant`, `approve` or `authorized` anywhere in either schema,
-  mirroring ADR 009 sec. 5.
-- THE SYSTEM SHALL carry `context_refs` as `{kind, locator}` pointers only,
-  and SHALL declare no field capable of holding a raw prompt, tool payload,
-  log or secret.
+  `request_id`, `request_hash` and `created_at`)`, mirroring the existing
+  `seal()`/`_hash_bytes` convention in `orchestrator/context_snapshot.py:885`.
+- WHEN a `HumanInputRequest` or `HumanInputResponse` document is parsed THE
+  SYSTEM SHALL reject any unknown key and any unsupported `api_version`,
+  matching `_reject_unknown_keys` / `SUPPORTED_API_VERSIONS`
+  (`orchestrator/context_snapshot.py:42,92`).
+- WHILE a request exists THE SYSTEM SHALL carry `work_item_id`, the Temporal
+  `workflow_id`/`run_id`, `argo_workflow_name`, `agent`,
+  `definition_version`, `profile_version`, `release_revision` and
+  `target_repository_sha`, reusing the field set of
+  `ExecutionCorrelation` (`orchestrator/context_snapshot.py:406`).
+- WHEN a request declares `response.type` THE SYSTEM SHALL accept only
+  `free_text | single_choice | multi_choice | structured`, and SHALL require a
+  non-empty `options` list for `single_choice`/`multi_choice`.
+- IF a request carries a `context_refs` entry that is not a reference
+  (`github:`, `gitops-file:`, `context_snapshot:`, `evidence:`) THEN THE SYSTEM
+  SHALL reject the request, so no raw payload is smuggled into it.
+- WHEN a request is sealed THE SYSTEM SHALL require a non-empty `question`, a
+  non-empty `reason`, and an `expires_at` strictly after `created_at` and no
+  further out than `MAX_REQUEST_TTL`.
 
-### Yielding and the durable wait
+### Eligibility
 
-- WHEN an eligible agent calls the `human.request_input` capability THE
-  SYSTEM SHALL seal a request, persist it through the platform API, and
-  return only the `request_id` and `request_hash` to the model.
-- WHEN the capability has been called THE SYSTEM SHALL terminate the current
-  agent step with the typed outcome `needs_input` and a dedicated exit code,
-  and SHALL NOT publish a partial proposal triplet from that step.
-- WHILE a run is waiting for a human answer THE SYSTEM SHALL hold no Argo
-  pod, no model stream and no Temporal activity open for the wait; the wait
-  SHALL be a `workflow.wait_condition` in `DevLoopWorkflow` only.
-- WHILE `DevLoopWorkflow` is parked on a clarification THE SYSTEM SHALL
-  answer its `waiting_for` query with `input`, and SHALL answer `approval`
-  while parked on `approve()` — the two states SHALL never be represented by
-  the same value.
-- IF the model calls `human.request_input` when the resolved
-  `ExecutionPlan.tools` does not grant it THEN THE SYSTEM SHALL refuse the
-  call, record the refusal, and leave the step's normal outcome unchanged.
-- IF the model calls `human.request_input` a second time within one step
-  THEN THE SYSTEM SHALL refuse the second call and keep the first request as
-  the outstanding one.
+- IF the resolved `ExecutionPlan.tools` (`orchestrator/resolver.py:247`) does
+  not grant the `human.request_input` capability THEN THE SYSTEM SHALL refuse
+  to emit a request, SHALL discard any request artifact the model wrote, and
+  SHALL complete the step exactly as it does today.
+- WHILE `ISSUE_INVESTIGATOR_RESOLVER_MODE` is not `declarative` THE SYSTEM
+  SHALL treat the capability as ungranted, because the legacy builder
+  (`orchestrator/options.py:build_issue_investigator_options`) has no plan to
+  read eligibility from.
+- WHEN eligibility is granted THE SYSTEM SHALL add the capability's tool name
+  to `allowed_tools` only when the mctl MCP surface is actually configured,
+  matching the existing two-fact conjunction documented at
+  `orchestrator/options.py:425`.
 
-### Responding
+### Yield and pod release
 
-- WHEN an authorized response arrives whose `request_id` and `request_hash`
-  both match the outstanding request THE SYSTEM SHALL record it and release
-  the workflow's wait.
-- IF a response carries a `request_hash` that does not match the outstanding
-  request THEN THE SYSTEM SHALL reject it as stale and leave the workflow
-  waiting.
-- IF a response arrives for a request that is expired, cancelled or
-  superseded THEN THE SYSTEM SHALL reject it and leave the workflow in the
-  state that expiry/cancellation already produced.
-- WHEN a duplicate delivery of an already-recorded response arrives THE
-  SYSTEM SHALL treat it as an idempotent no-op and SHALL NOT resume the
-  workflow a second time.
-- WHEN two distinct valid responses race THE SYSTEM SHALL accept the first
-  by `received_at` (ties broken by response id) and record the second as
-  `superseded-by-first`, never silently merging them.
-- IF the respondent is not authorized for the request's `requested_from`
-  audience THEN THE SYSTEM SHALL reject the response and emit
-  `human_input.rejected` with the reason code, without revealing the
-  question to that respondent.
-- WHILE a request is outstanding THE SYSTEM SHALL expose only
-  `question`, `reason`, `response` and safe `context_refs` to a surface —
-  never the agent's prompt, tool output or clone contents.
+- WHEN an eligible agent step emits a valid request THE SYSTEM SHALL finish the
+  step with outcome `needs_input`, SHALL NOT poll for an answer, and SHALL
+  return from `_run_agent` so the process exits and the Argo pod terminates.
+- WHILE a workflow is in `WAITING_FOR_INPUT` THE SYSTEM SHALL hold no Argo
+  workflow, no Claude Agent SDK session and no activity slot for that loop.
+- WHEN a step emits more than `MAX_OUTSTANDING_REQUESTS_PER_EXECUTION` requests
+  THE SYSTEM SHALL keep the first and reject the rest with a typed error.
 
-### Continuation
+### Durable wait and state
 
-- WHEN a valid response is recorded THE SYSTEM SHALL start a FRESH Argo/model
-  step for the same Temporal workflow and the same WorkItem, incrementing
-  `resume_count`.
-- WHEN a continuation step starts THE SYSTEM SHALL build a child
-  `ContextSnapshot` whose `StepRef.parent_snapshot_id` is the snapshot the
-  request cited, carrying the answer as one `ContextSource` of kind
-  `human-input` and one `EvidenceRef` of kind `human-input-response`.
-- WHILE assembling a continuation prompt THE SYSTEM SHALL wrap the human
-  answer in a delimiter block, neutralize forged delimiters in the answer
-  text the way `run_issue_investigator._neutralize_prompt_tags` does for
-  issue bodies, and state explicitly that the answer is human-provided
-  information that resolves the cited ambiguity, does not waive policy or
-  approval, and confers no instruction authority.
-- WHILE a continuation step runs THE SYSTEM SHALL NOT replay the surface
-  transcript — only the sealed `HumanInputResponse.value` and the prior
-  context refs.
-- IF a continuation agent asks a question whose normalized `question_hash`
-  equals one already answered in this workflow THEN THE SYSTEM SHALL refuse
-  the request and require the step to continue with the recorded answer.
-- IF a clarification response arrives THEN THE SYSTEM SHALL NOT set
-  `_approved`, SHALL NOT flip any `.status.yaml`, and SHALL NOT satisfy any
-  approval gate.
+- WHEN `DevLoopWorkflow` observes a `needs_input` outcome from the investigate
+  step THE SYSTEM SHALL enter `WAITING_FOR_INPUT` and SHALL await a
+  `human_input_response` signal, a cancel, or the request deadline.
+- WHILE in `WAITING_FOR_INPUT` THE SYSTEM SHALL answer the `human_input_state`
+  query with the pending `request_id`, `request_hash`, `question_hash`,
+  `expires_at`, `round` and the state string `WAITING_FOR_INPUT`, which SHALL
+  never equal the approval state string `WAITING_FOR_APPROVAL`.
+- WHEN a valid response is signalled THE SYSTEM SHALL move to `RUNNING`, record
+  `resume_count`, and launch a fresh continuation step.
+- IF no response arrives before `expires_at` THEN THE SYSTEM SHALL move to
+  `INPUT_TIMED_OUT` and SHALL end the loop with that outcome recorded in
+  `DevLoopResult`, rather than waiting forever.
+- IF the request is cancelled or superseded by a newer request for the same
+  execution THEN THE SYSTEM SHALL stop honouring the older `request_id`.
+- WHILE replaying a history recorded before this change THE SYSTEM SHALL take
+  the pre-change command sequence, gated by `workflow.patched("human-input")`,
+  so no in-flight loop is wedged by a nondeterminism error.
 
-### Limits, timeout and cancellation
+### Response validation
 
-- WHILE a workflow has an outstanding request THE SYSTEM SHALL refuse to
-  create a second outstanding request for the same execution.
-- IF a workflow has already completed `MAX_CLARIFICATION_ROUNDS` (2) answered
-  rounds THEN THE SYSTEM SHALL refuse further requests and require the agent
-  to proceed with its existing information.
-- IF a request is not answered within `expires_at` THEN THE SYSTEM SHALL
-  transition to `INPUT_TIMED_OUT`, emit `human_input.timed_out`, and start
-  one continuation step told that the question went unanswered, so the run
-  produces a proposal recording the ambiguity under `## Open questions`
-  rather than failing.
-- IF the workflow is cancelled while waiting THEN THE SYSTEM SHALL mark the
-  request `cancelled`, emit `human_input.cancelled`, and reject any later
-  response for it.
-- WHEN a retried or replayed step would re-create an equivalent request THE
-  SYSTEM SHALL return the existing `request_id` instead of creating a second
-  one, so a human is never asked the same question twice.
+- WHEN a `HumanInputResponse` is submitted THE SYSTEM SHALL accept it only if
+  its `request_id` matches the pending request, its `request_hash` matches that
+  request's hash exactly, and the request has not expired.
+- IF a response carries a `request_hash` that does not match THEN THE SYSTEM
+  SHALL reject it and SHALL NOT resume.
+- IF a response's `respondent` is not in the request's resolved
+  `requested_from` audience THEN THE SYSTEM SHALL reject it as unauthorized.
+- WHEN the same response is delivered more than once THE SYSTEM SHALL treat
+  every delivery after the first as an idempotent no-op — one resume, one
+  `resume_count` increment.
+- IF a second, different response arrives for an already-answered request THEN
+  THE SYSTEM SHALL keep the first answer (deterministic first-answer policy)
+  and SHALL record the rejection.
+- WHEN a response value is validated against `response.type` THE SYSTEM SHALL
+  reject a value outside the declared `options` for a choice-typed request.
+
+### Dedupe and loop controls
+
+- WHEN a request is sealed THE SYSTEM SHALL compute
+  `question_hash = sha256(normalized question + normalized response spec)`.
+- IF an agent emits a request whose `question_hash` equals that of a request
+  already outstanding or already answered in this execution THEN THE SYSTEM
+  SHALL NOT create a new request; for an answered one it SHALL surface the
+  existing answer, and for an outstanding one it SHALL return the existing
+  `request_id`.
+- WHILE a step is retried by `SDK_STEP_RETRY_POLICY`
+  (`dev_loop.py:95`) THE SYSTEM SHALL deliver the same `request_id` rather than
+  a duplicate question.
+- IF the execution has already completed `MAX_CLARIFICATION_ROUNDS` THEN THE
+  SYSTEM SHALL refuse further requests and SHALL fail the step with a typed
+  `clarification_rounds_exhausted` error.
+
+### Continuation and provenance
+
+- WHEN the workflow resumes THE SYSTEM SHALL pass the answer to the
+  continuation step as a `human_input_response` parameter carrying only
+  `request_id`, `request_hash`, `value`, `respondent` reference, `surface` and
+  `received_at`, and never the surface transcript.
+- WHEN a continuation step assembles its context THE SYSTEM SHALL record the
+  answer as a `ContextSource` of kind `human-input-response` with
+  `trust: reported`, plus an `EvidenceRef`
+  (`orchestrator/context_snapshot.py:583`), and SHALL seal a new
+  `ContextSnapshot` whose `snapshot_id` differs from the pre-wait one.
+- WHILE building the continuation prompt THE SYSTEM SHALL wrap the answer in
+  the untrusted-DATA envelope already used for issue bodies
+  (`_neutralize_prompt_tags`, `run_issue_investigator.py:1098`) and SHALL state
+  that the answer is human-supplied information which does not waive policy,
+  authorization or approval.
+- WHEN a continuation step runs THE SYSTEM SHALL mark the answered
+  `question_hash` as resolved so the agent does not re-ask it.
+- IF a clarification answer contains text that reads as an approval THEN THE
+  SYSTEM SHALL NOT set `self._approved`; only the `approve` signal SHALL.
 
 ### Observability
 
-- WHEN each of `human_input.requested`, `.wait_started`, `.delivered`,
-  `.responded`, `.resumed`, `.timed_out`, `.cancelled` occurs THE SYSTEM
-  SHALL emit an event carrying only safe metadata: `request_id`,
-  `request_hash`, `request_version`, the correlation ids, agent/profile
-  version, surface, a respondent identity reference, wait duration, outcome,
-  and the before/after `snapshot_id`s.
-- THE SYSTEM SHALL NOT place `question`, `reason` or `value` text into
-  telemetry by default; `to_log_dict()` SHALL emit hashes, lengths and codes
-  only, following `context_snapshot.to_log_dict()`.
+- WHEN each lifecycle transition occurs THE SYSTEM SHALL emit exactly one of
+  `human_input.requested`, `human_input.wait_started`, `human_input.delivered`,
+  `human_input.responded`, `human_input.resumed`, `human_input.timed_out`,
+  `human_input.cancelled`.
+- WHILE emitting those events THE SYSTEM SHALL include only safe metadata —
+  `request_id`, `request_hash`, `question_hash`, `request_version`, work
+  item/workflow/execution IDs, agent and profile version, surface, respondent
+  identity reference, wait duration, outcome and the before/after
+  `snapshot_id` — and SHALL NOT include the question or answer text.
 
 ## Out of scope
 
-- The mctl-api endpoints and read model themselves (`mctlhq/mctl-api#261`
-  owns create/respond/get/list/cancel and the `WAITING_FOR_INPUT` projection).
-  This proposal defines the contract they serve and the Temporal side that
-  consumes it.
-- The Telegram surface adapter, its bot commands and its authorization
-  resolution (`mctlhq/mctl-telegram#571`).
-- The Argo `ClusterWorkflowTemplate` YAML changes in `mctlhq/mctl-gitops`
-  (new `human_input_ref` parameter, exit-code mapping). This proposal states
-  the required contract; the gitops PR is a sibling change.
-- Changing `approve()` / `control.requires_human_approval` semantics
-  (`orchestrator/proposal_state.py`, mctl-agents#198).
-- Granting the capability to `implementer`, `shepherd`, `service-agent`,
-  `mentor` or `incident-responder`. Only `issue-investigator` is piloted.
-- A general redaction engine. ADR 009 sec. 7 already records that none
-  exists in this repository; this proposal bounds and hashes instead.
-- Portal and GitHub-comment surfaces.
-- Flipping `ISSUE_INVESTIGATOR_RESOLVER_MODE` away from `legacy` by default.
+- Any change to a repository other than `mctlhq/mctl-agents`. The catalog grant
+  (`mctl-gitops#1277`), the response/read-model endpoints (`mctl-api#261`) and
+  the Telegram surface (`mctl-telegram#571`) are separate work items.
+- Replacing or weakening the `#198` approval semantics in
+  `DevLoopWorkflow.approve`.
+- A live end-to-end pilot through a real Telegram operator. The E2E in the
+  issue's "First E2E" section cannot run until the two sibling work items land;
+  this proposal delivers the deterministic equivalent under the Temporal test
+  environment and the replay harness.
+- Applying the capability to the implementer, shepherd, incident-responder,
+  mentor or service agents. This core wires exactly one producer — the
+  issue-investigator — and one consumer — `DevLoopWorkflow`.
+- A general evidence store. `#199` is referenced by `EvidenceRef` only.
+- Holding a model or Argo pod open for any part of the wait.
 
 ## Open questions
 
-- **The ADR number in the issue is already taken.** The issue names
-  "ADR-009", but `docs/adr/009-context-snapshot-contract.md` (accepted,
-  2026-09-11) and `docs/adr/010-lifecycle-ownership-contract.md` already
-  exist. This proposal writes `docs/adr/011-human-input-contract.md` and
-  cross-references it from the issue; `mctlhq/mctl-api#261` and
-  `mctlhq/mctl-telegram#571` must be told the number changed.
-- **Where the sealed request is persisted from.** The Temporal worker
-  deliberately holds no gitops checkout (`dev_loop.py` module docstring), so
-  this proposal has the Argo pod POST the sealed request to mctl-api with the
-  `MCTL_TOKEN` it already carries, and the workflow read it back through an
-  activity. The alternative — threading it out as an Argo output parameter
-  through `submit_and_wait` — is cheaper for mctl-api but changes
-  `WorkflowResult` more deeply. Proceeding with the POST.
-- **Capability naming.** The issue proposes `human.request_input`. The
-  Claude Agent SDK surfaces in-process tools as `mcp__<server>__<tool>`, so
-  the model actually sees `mcp__human__request_input`;
-  `ExecutionProfile.tools` carries the logical name `human.request_input`
-  and the options builder maps it. Recorded rather than resolved with
-  mctl-api.
-- **`work_item_id` has no producer in this repository today.** The canonical
-  WorkItem lives in `mctlhq/mctl-telegram#443`. The field is required by the
-  contract and populated from the Temporal workflow id
-  (`orchestrator/temporal/issue_ref.py:workflow_id_for`) until a real
-  WorkItem id exists.
-- **Timeout default.** The issue's example uses `24h`. Argo's own step
-  deadline is unrelated (the pod is gone), so 24h is adopted as the default
-  with a 7-day ceiling; whether an unanswered question should instead end
-  the run rather than continue with `## Open questions` is the one behaviour
-  a reviewer should confirm. This proposal continues, because the
-  investigator prompt already treats unresolved ambiguity that way.
-- **Authorization source of truth.** `requested_from.audience` is a closed
-  vocabulary here (`work_item_owner`, `repo_operator`, `tenant_operator`,
-  `platform_admin`); resolving an audience to concrete identities is
-  mctl-api's job and is not attempted in this repository.
+- **ADR number.** The issue names ADR-009, but `docs/adr/009-context-snapshot-contract.md`
+  and `docs/adr/010-lifecycle-ownership-contract.md` already exist. This
+  proposal writes **ADR-011**, `docs/adr/011-human-input-contract.md`, and
+  cross-references it from the issue. Renumbering a merged ADR is not an
+  option; a reviewer who disagrees should say so before implementation.
+- **Transport of the request out of the Argo pod.** The workflow reads
+  `WorkflowResult` (`activities/argo.py:71`), which exposes only
+  `phase` — there is no `outcome` channel from the pod to Temporal, and adding
+  one to mctl-api is out of boundary. This proposal has the agent write the
+  sealed request into `$PROPOSAL_DIR/human-input/`, which the existing
+  investigate CWFT already commits to gitops, and has the workflow read it back
+  through a new GitHub-contents activity modelled exactly on
+  `find_proposal_slug` (`activities/proposals.py:61`). If a reviewer prefers a
+  new mctl-api outcome field, that is a cross-repo change and a different
+  proposal.
+- **Threading the answer into the continuation CWFT.** The continuation passes
+  a new `human_input_response` parameter to `mctl-agents-investigate`. That
+  parameter must exist in the sibling CWFT before it can be submitted — the
+  same known cross-repo coupling already documented for the `service` parameter
+  at `dev_loop.py:938-949`. The ordering is self-consistent: with no catalog
+  grant no request is ever created, so the parameter is never sent, and the
+  loop behaves exactly as today. The rollout order is `mctl-gitops#1277` after
+  this core.
+- **`requested_from` resolution.** Who may answer is ultimately mctl-api's
+  identity question. This core stores the audience (`work_item_owner`,
+  `repo_operators`, `tenant_operators`) plus an explicit allow-list of actor
+  references on the request, and validates a response against that stored
+  list. Richer role resolution belongs to `#242`/`mctl-api#261`.
+- **`ContextSource.kind` vocabulary.** ADR 009 sec. 6 declares a closed source
+  kind set. Adding `human-input-response` extends it. This proposal treats that
+  as an additive change within `context.mctl.ai/v1alpha1` (new enum member, no
+  field change, `from_dict` still rejects unknown keys), and says so in
+  ADR-011. If a reviewer reads the closed set as requiring an `apiVersion`
+  bump, the alternative is an `EvidenceRef`-only linkage with no new source
+  kind, which loses the byte-accounting the snapshot budget gives.
+- **Timeout defaults.** The issue gives `24h` as an illustrative timeout. This
+  proposal defaults `DEFAULT_REQUEST_TTL = 24h`, caps `MAX_REQUEST_TTL = 7d`,
+  and sets `MAX_CLARIFICATION_ROUNDS = 3` and
+  `MAX_OUTSTANDING_REQUESTS_PER_EXECUTION = 1`. All four are module constants,
+  chosen rather than measured; they are the numbers to argue about in review.

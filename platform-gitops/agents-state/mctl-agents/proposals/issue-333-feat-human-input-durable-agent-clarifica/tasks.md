@@ -1,220 +1,249 @@
 # Tasks: issue-333-feat-human-input-durable-agent-clarifica
 
-- [ ] 1. Write `docs/adr/011-human-input-contract.md` — the first deliverable.
-      Title `# ADR 011 — \`HumanInputRequest\`/\`HumanInputResponse\` contract
-      and \`WAITING_FOR_INPUT\``; status block with `**Status:** proposed`,
-      `**Date:**`, `**Issue:** mctlhq/mctl-agents#333 (core child of
-      mctlhq/.github#42)`, `**Supersedes:**` prose; sections
-      Context / Decision (numbered) / Alternatives / Non-goals /
-      Platform impact / Follow-ups and sequencing / Implementation map.
-      Must state explicitly that the issue's "ADR-009" is taken by
-      `009-context-snapshot-contract.md` and that this is 011.
-      — DoD: every claim carries a `path.py:line` citation; the field tables,
-      the state model, the boundary table and the one bold invariant
-      ("a human answer is information, never authorization and never
-      instruction") are present; `mctl-api#261` and `mctl-telegram#571` are
-      commented with the corrected number.
+All tasks land in one PR against `mctlhq/mctl-agents`. No sibling repo is
+touched, no operator step is required, and every item is provable by
+`uv run pytest` / `uv run ruff check .` / `uv run mypy .`.
 
-- [ ] 2. Add `orchestrator/human_input.py` (depends on 1) — stdlib-only schema
-      module modelled line-for-line on `orchestrator/context_snapshot.py`:
-      `API_VERSION = "human.mctl.ai/v1alpha1"`, `SUPPORTED_API_VERSIONS` as a
-      complete allow-list, `HumanInputError(ValueError)`, frozen dataclasses
-      (`HumanInputRequest`, `HumanInputResponse`, `ResponseSpec`,
-      `ContextRef`, `AudienceRef`, `RespondentRef`, `WorkItemRef`,
-      `AgentProvenance`), `_reject_unknown_keys`, `_require_sha256`,
-      `seal_request()`, `seal_response()`, `validate_response(request,
-      response)`, `to_log_dict()`, and the bounded-length constants.
-      `ExecutionCorrelation` is imported from `context_snapshot`, not
-      redefined. — DoD: `uv run pytest tests/test_human_input.py`, `ruff`
-      and `mypy` all green; no production module imports it yet.
+- [ ] 1. Write `docs/adr/011-human-input-contract.md` — DoD: ADR exists with the
+  house blockquote metadata block (`**Status:** proposed`, `**Date:**`,
+  `**Issue:** mctlhq/mctl-agents#333`, `**Supersedes:** nothing`) and the
+  section order used by ADR 009/010 (`## Context`, `## Decision` with numbered
+  `###` sections, `## Alternatives`, `## Non-goals`, `## Platform impact`,
+  `## Follow-ups and sequencing`, `## Implementation map`, `## Testable
+  invariants`). It states the versioned `HumanInputRequest`/`HumanInputResponse`
+  field tables, the `WAITING_FOR_INPUT` state machine as a ` ```text ` block,
+  why clarification is not approval, why the ADR is numbered 011 and not 009,
+  and that `SOURCE_KINDS` gains `human-input-response` additively within
+  `context.mctl.ai/v1alpha1`. Every cross-reference is `path:line`.
 
-- [ ] 3. Extend `context_snapshot.SOURCE_KINDS` with `human-input` and
-      document `human-input-response` as an `EvidenceRef.kind` (depends on 2)
-      — DoD: an additive vocabulary entry only; the golden fixture
-      `tests/fixtures/context/investigator-snapshot.json` still validates and
-      its `content_hash` is unchanged.
+- [ ] 2. Add `orchestrator/human_input.py` (depends on 1) — DoD: stdlib-only
+  module, no I/O, no SDK import. Defines `API_VERSION =
+  "humaninput.mctl.ai/v1alpha1"`, `REQUEST_KIND`, `RESPONSE_KIND`,
+  `SUPPORTED_API_VERSIONS`, `RESPONSE_TYPES`, `AUDIENCES`,
+  `CONTEXT_REF_PREFIXES`, `DEFAULT_REQUEST_TTL_SECONDS = 86400`,
+  `MAX_REQUEST_TTL_SECONDS = 604800`, `MAX_CLARIFICATION_ROUNDS = 3`,
+  `MAX_OUTSTANDING_REQUESTS_PER_EXECUTION = 1`, `HumanInputError(ValueError)`,
+  frozen dataclasses `ResponseSpec`, `RequestedFrom`, `Respondent`,
+  `HumanInputRequest`, `HumanInputResponse` (each with `to_dict`/`from_dict` and
+  unknown-key rejection), and functions `seal_request`, `question_hash_for`,
+  `validate_response`, `request_log_dict`, `response_log_dict`. Hashing and
+  canonical JSON reuse the same rules as
+  `orchestrator/context_snapshot.py:79,83`; `request_id = "hir-" +
+  request_hash[7:23]`. `HumanInputRequest.execution` is
+  `context_snapshot.ExecutionCorrelation`, not a re-declared correlation block.
 
-- [ ] 4. Add `orchestrator/human_input_capability.py` (depends on 2): the
-      in-process SDK MCP server `human` with tool `request_input`. Refuses on
-      a second outstanding request, on `round > MAX_CLARIFICATION_ROUNDS`, and
-      on a repeated `question_hash`; seals, POSTs to mctl-api via
-      `orchestrator.temporal.mctl_client.auth_headers()`, writes
-      `$HUMAN_INPUT_DIR/request.json`, returns `{request_id, request_hash,
-      status: "needs_input"}`. All `claude_agent_sdk` imports deferred inside
-      functions, per `tests/test_worker_isolation.py`. — DoD: the worker can
-      still import every driver; a refused call leaves no file and no POST.
+- [ ] 3. Add `human-input-response` to `SOURCE_KINDS` in
+  `orchestrator/context_snapshot.py:50-60` (depends on 1) — DoD: the member is
+  added, `API_VERSION` is unchanged, `tests/test_context_snapshot.py`'s T7
+  vocabulary-closure test is extended rather than weakened, and the golden
+  fixture `tests/fixtures/context/investigator-snapshot.json` still round-trips
+  with its recorded `content_hash`.
 
-- [ ] 5. Wire eligibility into `orchestrator/options.py` (depends on 4): only
-      `build_issue_investigator_options_from_plan` gains the server, and only
-      when `"human.request_input" in plan.tools`, mapping the logical name to
-      `mcp__human__request_input`. The legacy builder is untouched.
-      — DoD: `tests/test_options.py` equivalence tests still pass for a plan
-      without the capability; a plan with it produces exactly one extra
-      allowed tool.
+- [ ] 4. Capability plumbing in `orchestrator/options.py` (depends on 2) —
+  DoD: adds `HUMAN_INPUT_CAPABILITY = "human.request_input"` and
+  `plan_grants_human_input(plan: ExecutionPlan) -> bool`;
+  `build_issue_investigator_options_from_plan` (`options.py:422`) filters the
+  capability out of `allowed_tools` alongside the existing `mcp__mctl__*`
+  special case at `:459-461`, so a granted capability never becomes a dead CLI
+  allow-list entry. `build_issue_investigator_options` (the legacy builder) is
+  unchanged.
 
-- [ ] 6. Bump the mctl-gitops catalog profile
-      `agent-platform/execution-profiles/issue-investigator-default/profile.yaml`
-      to add `human.request_input` to `spec.tools` and bump `spec.version`
-      (sibling repo; depends on 5) — DoD:
-      `uv run python -m orchestrator.validate_manifest` is green with
-      `MCTL_GITOPS_ROOT` pointed at the branch, i.e.
-      `_check_tool_policy_and_budget_match_options_py` and
-      `check_catalog_profiles_match_builders` both agree.
+- [ ] 5. Teach `orchestrator/validate_manifest.py` about capability entries
+  (depends on 4) — DoD: `_CAPABILITY_TOOLS = frozenset({"human.request_input"})`
+  is subtracted from both sides before the set-equality assertions at
+  `:351-357` (`_check_tool_policy_and_budget_match_options_py`) and `:610-615`
+  (`check_catalog_profiles_match_builders`), so a future catalog profile listing
+  `human.request_input` in `spec.tools` does not turn CI red, while any real
+  tool-list drift still does.
 
-- [ ] 7. Teach `orchestrator/run_issue_investigator.py` to yield (depends on
-      4): create `$HUMAN_INPUT_DIR`, add it to `add_dirs`, detect
-      `request.json` after `drain_until_settled`, discard staging, set
-      `InvestigateResult.needs_input`, and exit `EXIT_NEEDS_INPUT = 50`.
-      — DoD: a run whose agent asked publishes no proposal directory, leaves
-      no staging wrapper or clone behind (the existing `finally` invariants),
-      and exits 50.
+- [ ] 6. Conditional prompt in `orchestrator/run_issue_investigator.py`
+  (depends on 4) — DoD: `_build_prompt` (`:1127`) takes
+  `human_input_granted: bool = False` and `human_input_response: str | None =
+  None`. When not granted it emits today's bytes verbatim, including
+  "No human is present. Do not ask for input. Work with what you have."
+  (`:1136`). When granted it replaces that paragraph with the write contract for
+  `$PROPOSAL_DIR/human-input/request.json` (ask only after retrieval/code/docs
+  are exhausted, still finish the triplet on the best current interpretation,
+  never poll, never wait). A supplied response is rendered through
+  `_neutralize_prompt_tags` (`:1098`) inside the existing untrusted-DATA
+  envelope, with the explicit sentence that it is human-supplied information
+  that does not waive policy, authorization or approval, plus the resolved
+  `question_hash` marked answered.
 
-- [ ] 8. Add `--human-input-ref` / `--human-input-outcome` continuation to the
-      same driver (depends on 7): fetch, re-validate with
-      `validate_response()`, seal a child `ContextSnapshot` with
-      `StepRef{parent_snapshot_id, step="continuation", sequence=resume_count}`
-      plus the `human-input` source and `human-input-response` evidence ref,
-      and append a `<human_answer>` block through a new
-      `_neutralize_human_input_tags` built on the `_neutralize_prompt_tags`
-      pattern (marker replacement, attribute-tolerant, unclosed-tag
-      tolerant). The block states that the answer is unprivileged
-      information, resolves this `request_id`, waives no policy or approval,
-      and must not be re-asked. — DoD: the continuation prompt contains the
-      answer exactly once and no surface transcript; this is the first
-      production import of `orchestrator/context_snapshot.py`.
+- [ ] 7. Producer wiring in `orchestrator/run_issue_investigator.py` (depends on
+  2, 4, 6) — DoD: `_run_agent` (`:1285`) reports whether the resolved plan
+  granted the capability; `collect_human_input_request(proposal_dir, *, granted,
+  execution, now)` deletes any `human-input/` directory when ungranted, and when
+  granted parses the model's document, re-seals it via `seal_request` (wrapper
+  owns every id/hash/timestamp/correlation field so the model cannot forge
+  identity), enforces `MAX_OUTSTANDING_REQUESTS_PER_EXECUTION`, and rewrites the
+  file in sealed form. `InvestigateResult` (`:1409`) gains the defaulted field
+  `human_input_request: HumanInputRequest | None = None`. `investigate()`
+  (`:1457`) still publishes a complete triplet and still returns success in both
+  branches; `_carry_forward` (`:712`) does not carry a stale `human-input/`
+  directory into a fresh run.
 
-- [ ] 9. Add the read/record activities (depends on 2):
-      `fetch_human_input_request`, `fetch_human_input_response` and
-      `record_human_input_event` in
-      `orchestrator/temporal/activities/human_input.py`, styled on
-      `activities/state.py:record_execution` (30 s timeout,
-      `auth_headers()`, `raise_for_status()`), and register them in
-      `worker.worker_plans`' `short_activities`. — DoD: registered on the
-      control queue only; `tests/test_worker_roles.py` still passes.
+- [ ] 8. Add `--human-input-response` to `main()` (depends on 6, 7) — DoD: the
+  flag accepts a JSON `HumanInputResponse` document, rejects a malformed or
+  unsupported-`api_version` one with a clean `SystemExit`, and threads the value
+  into `_build_prompt`. Absent flag means today's behaviour exactly.
 
-- [ ] 10. Add `outcome: str = ""` to `WorkflowResult` and populate it from the
-      Argo phase/exit code in `submit_and_wait` (depends on 7) — DoD: a
-      defaulted field only; every recorded history in
-      `tests/fixtures/histories/` still deserializes and replays.
+- [ ] 9. Seal a continuation `ContextSnapshot` (depends on 3, 7, 8) — DoD:
+  when a response is supplied, the run calls `context_snapshot.seal()`
+  (`:885`) with a `ContextSource` of kind `human-input-response` at
+  `trust.tier = "reported"`, an `EvidenceRef {evidence_id: request_id, kind:
+  "human-input-response"}`, and a `StepRef` chaining it to the pre-wait
+  snapshot, so before/after `snapshot_id` values differ and are recorded.
 
-- [ ] 11. Add `WAITING_FOR_INPUT` to `DevLoopWorkflow` (depends on 9, 10):
-      `@workflow.signal human_input`, `@workflow.query waiting_for`,
-      `@workflow.query human_input_state`, the
-      `wait_condition(..., timeout=...)` park, the `INPUT_TIMED_OUT`
-      continuation, `MAX_CLARIFICATION_ROUNDS = 2`, `resume_count`, and the
-      seven events — all behind `workflow.patched("human-input")`.
-      — DoD: the signal never raises on a malformed payload and never sets
-      `self._approved`; `waiting_for()` answers `input` while parked on a
-      question and `approval` while parked on `approve()`.
+- [ ] 10. Add `orchestrator/temporal/activities/human_input.py` (depends on 2) —
+  DoD: `find_human_input_request(service: str, slug: str) -> str | None`,
+  structurally a copy of `find_proposal_slug`
+  (`orchestrator/temporal/activities/proposals.py:61`): same `GITOPS_REPO` /
+  `AGENTS_STATE_PREFIX`, same per-call `_resolve_token`, missing token raises
+  rather than falling through unauthenticated, 404 returns `None`, every other
+  failure raises the retryable `HumanInputListingError`. Registered in
+  `worker.py`'s `short_activities` list (`:452-473`).
 
-- [ ] 12. Record a new replay fixture (depends on 11): add a
-      `dev_loop_human_input` `Scenario` to `tests/replay_scenarios.py` and
-      record it with `tools/record_workflow_history.py`. Do NOT re-record any
-      existing `*.prepatch.json`. — DoD:
-      `tests/test_workflow_replay.py` passes including
-      `test_every_recorded_fixture_belongs_to_a_scenario`.
+- [ ] 11. `WAITING_FOR_INPUT` in `DevLoopWorkflow` (depends on 2, 10) — DoD:
+  `dev_loop.py` gains module constants `RUNNING`, `WAITING_FOR_APPROVAL`,
+  `WAITING_FOR_INPUT`, `INPUT_TIMED_OUT`; frozen dataclasses `HumanInputState`
+  and `HumanInputOutcome` with every field defaulted; `@workflow.signal
+  human_input_response(*args: object)` parsing defensively like `approve`
+  (`:788`) and never touching `self._approved`; `@workflow.query
+  human_input_state() -> HumanInputState`; and `_await_human_input(service,
+  slug)` performing a **bounded** `workflow.wait_condition(pred,
+  timeout=expires_at - now)`. `DevLoopResult` (`:449`) gains
+  `human_input: HumanInputOutcome | None = None`.
 
-- [ ] 13. Update `docs/temporal-flow.md`, its `.mmd` diagrams and
-      `docs/agent-inventory.yaml` (depends on 11) — DoD:
-      `uv run pytest tests/test_diagram_facts.py tests/test_agent_inventory.py`
-      is green; the sequence diagram shows the pod exiting before the wait.
+- [ ] 12. Gate it with `workflow.patched("human-input")` (depends on 11) — DoD:
+  the new `find_proposal_slug` hoist plus `find_human_input_request` and the
+  wait run only inside the patched branch; the unpatched branch's command
+  sequence is byte-for-byte the pre-change one. Response validation runs in
+  workflow code via the pure `human_input.validate_response`; no I/O is added to
+  workflow code (ADR 010 sec. 9).
 
-- [ ] 14. Run the first E2E on a controlled ambiguous issue (depends on 6, 8,
-      11, plus mctl-api#261 and mctl-telegram#571 deployed) — DoD: the pilot
-      demonstrations from the issue all hold, evidenced from
-      `mctl_get_workflow_status` and the Temporal history.
+- [ ] 13. Continuation submit (depends on 11, 12) — DoD: on a valid response the
+  workflow increments `resume_count`, re-submits `mctl-agents-investigate`
+  through `_run_cwft` (`:483`) with an added `human_input_response` param
+  carrying only `request_id`, `request_hash`, `value`, respondent reference,
+  `surface` and `received_at` — never a transcript — then falls through to the
+  existing `WAITING_FOR_APPROVAL` wait unchanged.
+
+- [ ] 14. Safe telemetry (depends on 2, 11) — DoD: `workflow.logger` emits
+  exactly `human_input.requested`, `human_input.wait_started`,
+  `human_input.delivered`, `human_input.responded`, `human_input.resumed`,
+  `human_input.timed_out`, `human_input.cancelled`, each carrying only
+  `request_log_dict`/`response_log_dict` output.
+
+- [ ] 15. Docs (depends on 11) — DoD: `docs/temporal-flow.md` and
+  `docs/diagrams/temporal-flow-states.mmd` show `WAITING_FOR_INPUT` as a state
+  distinct from the approval wait; `docs/diagrams/archify/facts.yaml` updated so
+  `tests/test_diagram_facts.py` stays green; `LLMS.md` mentions the new
+  contract module.
 
 ## Tests
 
-- [ ] T1. `tests/test_human_input.py` — seal/hash determinism
-      (`request_id == "hir-" + request_hash[7:23]`), `from_dict` rejects
-      unknown keys, `_require_sha256` on every hash field, typed-value
-      validation per `ResponseSpec.type`, option-membership rejection, and
-      every length bound.
-- [ ] T2. The ADR 009 invariant tests reused verbatim against the new schema:
-      `test_serialized_schema_has_no_authorization_field_name` (recursive
-      field-name scan for `allow`/`deny`/`permit`/`grant`/`approve`/
-      `authorized`) and `test_module_import_is_stdlib_only` (subprocess).
-- [ ] T3. Durable wait and resume: start `DevLoopWorkflow` under
-      `WorkflowEnvironment.start_time_skipping()` with a `submit_and_wait`
-      fake returning `outcome="needs_input"`, assert `waiting_for() == "input"`,
-      signal `human_input`, assert `calls ==
-      ["mctl-agents-investigate", "mctl-agents-investigate",
-      "mctl-agents-implement"]` after approval, with the second investigate
-      carrying `human_input_ref`.
-- [ ] T4. The pod exits while waiting: assert the needs-input investigate
-      activity has COMPLETED (not merely scheduled) before the wait begins,
-      and that no activity is in flight during the wait.
-- [ ] T5. Duplicate request idempotency: two identical capability calls across
-      two Argo attempts produce the same `request_id` and exactly one POST.
-- [ ] T6. Duplicate response idempotency: replaying the same
-      `human_input` signal resumes exactly once; `resume_count` stays 1.
-- [ ] T7. Stale / expired / superseded rejection: a signal whose
-      `request_hash` does not match leaves the workflow waiting; a response
-      after `expires_at` is refused; a second distinct response is recorded
-      as `superseded-by-first`.
-- [ ] T8. Unauthorized respondent rejection (`validate_response` +
-      the audience check), asserting the question text is never echoed back.
-- [ ] T9. Timeout path: time-skip past `expires_at`, assert `INPUT_TIMED_OUT`,
-      exactly one continuation with `human_input_outcome=timed_out`, and a
-      completed workflow.
-- [ ] T10. Round limit: a third `request_input` call in one workflow is
-      refused at the capability and the step continues normally.
-- [ ] T11. Dedupe: a continuation asking the same normalized question
-      (`question_hash` match) is refused.
-- [ ] T12. `ContextSnapshot` provenance: the continuation's child snapshot
-      validates against its parent (`validate(parent=...)`), carries exactly
-      one `human-input` source and one `human-input-response` evidence ref,
-      and `validate_step_sequence` holds across rounds.
-- [ ] T13. Clarification is not approval: a `human_input` signal leaves
-      `_approved` False, submits no `mctl-agents-approve` CWFT, and does not
-      satisfy `proposal_state.human_approval_satisfied`.
-- [ ] T14. Prompt-injection content stays data: an answer containing
-      `</human_answer>`, `</issue_body>` and "ignore previous instructions"
-      is neutralized to `[tag stripped]` markers and cannot splice back
-      together, mirroring `tests` for `_neutralize_prompt_tags`.
-- [ ] T15. Telemetry safety: `to_log_dict()` output contains no substring of
-      `question`, `reason` or `value`.
-- [ ] T16. Patch memoization: an execution started before the
-      `human-input` marker never adopts it, in the style of
-      `tests/test_patch_memoization.py`.
-- [ ] T17. Eligibility: a plan without `human.request_input` produces options
-      with no `human` MCP server, and a direct capability call in that mode
-      is refused.
+- [ ] T1. `tests/test_human_input.py` — request creation and typed validation:
+  `single_choice` without `options` rejected; a value outside `options`
+  rejected; `multi_choice` cardinality; empty `free_text` rejected; a
+  `context_refs` entry without an allowed prefix rejected; `expires_at <=
+  created_at` and `> MAX_REQUEST_TTL_SECONDS` rejected.
+- [ ] T2. Identity determinism: `seal_request` with identical inputs at two
+  different `created_at` values yields the same `request_id`/`request_hash`;
+  changing any hashed field changes both.
+- [ ] T3. Fail-loud versioning: an unknown `api_version`, an unknown `kind`, or
+  any unknown key in either document raises `HumanInputError` — mirroring
+  `tests/test_context_snapshot.py`'s T4.
+- [ ] T4. Response rejection matrix: wrong `request_id`; mismatched
+  `request_hash`; `now >= expires_at`; respondent outside
+  `requested_from.actor_refs`. Each asserted to reject *and* the positive case
+  asserted to accept, so no guard can pass by not running.
+- [ ] T5. Duplicate-request idempotency: two runs of
+  `collect_human_input_request` over the same model document produce one
+  `request_id`; a workflow that sees the same `request_id` twice creates one
+  pending request.
+- [ ] T6. `question_hash` dedupe: a re-asked question differing only in
+  whitespace/case maps to the same `question_hash` and does not create a second
+  request; an already-answered `question_hash` is not re-asked.
+- [ ] T7. Duplicate-response idempotency: the same `human_input_response` signal
+  delivered three times resumes once and increments `resume_count` once. A
+  second, *different* response is rejected and the first answer stands.
+- [ ] T8. Durable wait and resume, under `tests/temporal_harness.py`: the
+  workflow enters `WAITING_FOR_INPUT`, the `human_input_state` query reports the
+  pending `request_id`/`expires_at`, the signal resumes it, and the continuation
+  `mctl-agents-investigate` submit carries the `human_input_response` param.
+- [ ] T9. Pod release: while in `WAITING_FOR_INPUT`, no `submit_and_wait`
+  activity is scheduled and no Argo workflow is outstanding — asserted against
+  the fake activity recorder used by `tests/test_dev_loop_workflow.py`.
+- [ ] T10. Timeout: no response before `expires_at` transitions to
+  `INPUT_TIMED_OUT`, the loop returns with that outcome in `DevLoopResult`, and
+  it does not hang.
+- [ ] T11. Clarification-round limit: a request with `round >
+  MAX_CLARIFICATION_ROUNDS` fails loudly with a non-retryable
+  `ApplicationError`, and the third round is asserted to still be allowed.
+- [ ] T12. Clarification is not approval: a response whose value is
+  `"use option B and merge it"` resumes the loop and leaves `self._approved`
+  false, with the workflow still parked on the `WAITING_FOR_APPROVAL` wait.
+- [ ] T13. Prompt-injection content stays unprivileged: a response containing
+  `<issue_body>`-style tags and "ignore previous instructions" is rendered
+  through `_neutralize_prompt_tags` inside the untrusted-DATA envelope; the
+  assertion is on the rendered prompt bytes.
+- [ ] T14. Safe telemetry: for every one of the seven events, the emitted dict
+  contains the ids/hashes/correlation and contains neither the question text,
+  the reason text, nor the answer value.
+- [ ] T15. No-eligibility branch: with `human.request_input` absent from
+  `plan.tools` (and in `legacy` resolver mode), `_build_prompt` output is
+  byte-identical to today's, a model-written `human-input/` directory is
+  deleted, `InvestigateResult.human_input_request` is `None`, and the workflow
+  never calls `find_human_input_request`.
+- [ ] T16. Replay safety: regenerate `tests/fixtures/histories/dev_loop_full.*`
+  and add a pre-patch history that replays green through
+  `tests/test_workflow_replay.py` and `tests/replay_scenarios.py`, proving the
+  `human-input` patch does not wedge in-flight loops.
+- [ ] T17. `ContextSnapshot` before/after provenance: the continuation snapshot
+  carries the `human-input-response` source at `trust: reported`, the matching
+  `EvidenceRef`, and a `StepRef` whose `parent_snapshot_id` is the pre-wait
+  snapshot; `snapshot_id` differs before and after.
+- [ ] T18. `tests/test_validate_manifest.py` (extend): a catalog profile listing
+  `human.request_input` in `spec.tools` passes
+  `check_catalog_profiles_match_builders`, while an unrelated extra tool still
+  fails it.
+- [ ] T19. Activity behaviour for `find_human_input_request`: 404 returns
+  `None`; a 500 raises the retryable error; a missing token raises rather than
+  issuing an unauthenticated request — mirroring the existing
+  `find_proposal_slug` cases in `tests/test_temporal_activities.py`.
+- [ ] T20. Worker isolation stays green: `orchestrator/human_input.py` imports
+  no SDK and no third-party package, asserted by extending
+  `tests/test_worker_isolation.py`'s subprocess import check the way
+  `tests/test_context_snapshot.py`'s T5 does.
 
 ## Rollback
 
-Every piece is additive and independently revertible, in reverse dependency
-order:
+Every change is additive and gated, so rollback is graded rather than
+all-or-nothing.
 
-1. **Fastest kill switch, no deploy:** remove `human.request_input` from
-   `spec.tools` in the mctl-gitops catalog profile and bump `spec.version`.
-   The next resolved `ExecutionPlan` omits the capability, the options
-   builder stops mounting the `human` MCP server, and no agent can ask a
-   question. In-flight parked loops are unaffected — they still resume on a
-   valid response or time out into their `INPUT_TIMED_OUT` continuation.
-   Belt and braces: `ISSUE_INVESTIGATOR_RESOLVER_MODE` defaults to `legacy`,
-   whose builder never had the capability.
-2. **Drain parked loops before reverting code.** Query `waiting_for()` across
-   active dev loops (`activities/visibility.list_active_dev_loop_ids`);
-   answer or cancel each one. Reverting `DevLoopWorkflow` while an execution
-   is parked would be a command mismatch on replay.
-3. **Revert the workflow change.** Because every branch is behind
-   `workflow.patched("human-input")`, reverting it affects only executions
-   that recorded the marker — which is why step 2 comes first. Do not delete
-   the `dev_loop_human_input` replay fixture in the same commit;
-   `test_every_recorded_fixture_belongs_to_a_scenario` fails loudly either
-   way, which is the intended signal.
-4. **Revert the driver change.** `--human-input-ref` is optional and
-   `EXIT_NEEDS_INPUT` is unreachable without the capability, so the driver
-   can be reverted independently at any time.
-5. **`orchestrator/human_input.py` and the ADR can stay.** The schema module
-   is inert unless imported — the same position `context_snapshot.py` has
-   held since ADR 009 — and the ADR documents a decision whether or not the
-   code ships. Reverting them is only warranted if the contract itself is
-   wrong, in which case `mctl-api#261` and `mctl-telegram#571` must be
-   reverted with it, since they consume it as the schema of record.
-
-No data migration is involved: no stored schema changes, `.status.yaml` is
-untouched, and `WorkflowResult`'s new field is defaulted, so a rollback
-leaves no unreadable records behind.
+1. **Fastest, no deploy.** The producer path is unreachable unless the
+   mctl-gitops catalog profile grants `human.request_input`. Reverting
+   `mctl-gitops#1277` (or simply never landing it) means no request document is
+   ever written, `find_human_input_request` always returns `None`, and every
+   loop takes the pre-change path. This is also the state on day one of this
+   PR.
+2. **Revert the workflow behaviour.** Removing the body of the
+   `workflow.patched("human-input")` branch and redeploying the worker returns
+   new executions to the old sequence immediately. Do **not** delete the
+   `workflow.patched` call itself while pre-revert executions may still be
+   running — by `dev_loop.py:491-498`'s attrition rule, an execution that
+   recorded the marker must keep finding it. Retire it later with
+   `workflow.deprecate_patch` plus a second deploy, the step this repo has
+   never yet taken for any marker.
+3. **Full revert.** `git revert` the PR. `orchestrator/human_input.py` has no
+   other importer, the `SOURCE_KINDS` addition is unreferenced once the
+   producer is gone, and the `validate_manifest.py` subtraction is a no-op while
+   no profile declares the capability. The only ordering constraint is that the
+   catalog grant must be reverted first, or `check_catalog_profiles_match_builders`
+   goes red on the next CI run.
+4. **Stuck loop.** A loop parked in `WAITING_FOR_INPUT` self-heals at
+   `expires_at` (`INPUT_TIMED_OUT`, default 24 h). To unblock sooner, send the
+   `human_input_response` signal via `orchestrator/temporal/cli.py` — the same
+   path `approve` already uses — or terminate the execution; the intake label
+   plus `ALLOW_DUPLICATE_FAILED_ONLY` lets the issue start again.

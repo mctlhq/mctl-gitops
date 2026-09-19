@@ -2,384 +2,432 @@
 
 ## Current state
 
-**The only durable human checkpoint is authorization.** `DevLoopWorkflow`
-(`orchestrator/temporal/workflows/dev_loop.py`) runs
-investigate -> `wait_condition(lambda: self._approved)` -> approve flip ->
-implement -> watch. `approve()` is a `@workflow.signal` (`dev_loop.py:787`)
-carrying an optional approver string; `orchestrator/temporal/cli.py:approve`
-and `POST /api/v1/agents/dev-loop/{workflow_id}/approve` are its senders. The
-workflow exposes exactly two queries today — `shepherd_in_loop()` and
-`lifecycle_claim()` (`dev_loop.py:753`, `:766`) — and mctl-api's
-`mctl_get_dev_loop` reads `shepherd_in_loop` over HTTP. There is no state a
-caller can read that says "this run is blocked on a question", and
-`wait_condition` on `_approved` has no timeout, so a parked loop waits
-forever.
+### The approval primitive that exists
 
-**Agent steps are one-shot Argo runs.** Every model call is submitted through
-`_run_cwft` -> `submit_and_wait` (`orchestrator/temporal/activities/argo.py`),
-which POSTs to `/operations/{op}/execute` and polls, returning
-`WorkflowResult(workflow_name, phase, started_at, finished_at)` with
-`succeeded` as a `phase == "Succeeded"` property. The Temporal worker
-deliberately holds no gitops checkout — "every gitops write must go through
-Argo" (module docstring, `dev_loop.py:16-19`). `SDK_STEP_TIMEOUT` is two
-hours and the CWFT has its own `activeDeadlineSeconds`, so a synchronous wait
-for a human is impossible by construction as well as by policy.
+`DevLoopWorkflow` (`orchestrator/temporal/workflows/dev_loop.py:713`) is the only
+durable human-in-the-loop today. Its shape:
 
-**The investigator cannot ask.** `orchestrator/run_issue_investigator.py`
-clones the target repo read-only, builds one prompt (`_build_prompt`, the
-manifest's only `promptSources` entry), and runs the SDK with
-`build_issue_investigator_options` /
-`build_issue_investigator_options_from_plan`
-(`orchestrator/options.py:387`, `:422`). The prompt explicitly instructs the
-agent to "capture the ambiguity in `## Open questions`, never stop to ask".
-Untrusted issue text is wrapped in `<issue_title>`/`<issue_body>` blocks and
-run through `_neutralize_prompt_tags` (`run_issue_investigator.py:1098`),
-which strips forged and unclosed delimiters. `investigate()`'s `finally`
-discards the staging directory on any error path rather than publish work
-whose provenance it cannot vouch for. Exit codes are ad hoc (`SystemExit`,
-`sys.exit(1)`); `run_implementer.py` already reserves `45` for "batch was
-only blocked proposals".
+- one signal, `approve(self, *args: object)` (`dev_loop.py:788`), with **no
+  payload dataclass** — it parses `{"approver": ...}` or a bare string
+  defensively and sets `self._approved = True` (`dev_loop.py:800`);
+- one unbounded durable wait, `await workflow.wait_condition(lambda:
+  self._approved)` (`dev_loop.py:827`) — the file's only `wait_condition`, with
+  no timeout;
+- two queries, `shepherd_in_loop` (`:754`) and `lifecycle_claim` (`:767`);
+- state carried as plain `__init__` fields (`:714-751`), never an enum.
 
-**Capability eligibility already has a home.** ADR 007 makes
-`ExecutionProfile.tools` the client-side allow-list;
-`orchestrator/resolver.py`'s `ExecutionPlan` (`resolver.py:226-256`) pins
-`tools`, `permissions`, `policy_ref`, `budget_usd`, `timeout_seconds` and the
-four version/content hashes per run. `build_issue_investigator_options_from_plan`
-treats `plan.tools` as authoritative and refuses to hand back a tool the
-profile withheld even when the environment would allow it
-(`options.py:441-457`). `issue-investigator` is the one agent migrated to
-`agents.mctl.ai/v1alpha2` (`agents/_manifests/issue-investigator/agent.yaml`),
-resolving its profile from the mctl-gitops catalog; the resolver runs only
-under `ISSUE_INVESTIGATOR_RESOLVER_MODE=declarative`, default `legacy`
-(`docs/resolver-pilot-status.md`).
+There is **no workflow-phase vocabulary at all**. Phase is implicit in the
+program counter. The only state strings in the module are
+`WorkflowResult.phase` (`"Succeeded" | "Failed" | "Error"`,
+`activities/argo.py:71`), `DeployObservation.outcome`, `PRState.state`, and the
+lifecycle verdicts imported from `orchestrator/lifecycle/contract.py:231-234`.
+So "`WAITING_FOR_INPUT` must be distinguishable from `WAITING_FOR_APPROVAL`" is
+not a matter of splitting an enum — both names have to be introduced.
 
-**The provenance contract exists and is inert.** ADR 009 defines
-`ContextSnapshot` and `orchestrator/context_snapshot.py` implements it:
-stdlib-only, `seal()` as the sole constructor,
-`content_hash = "sha256:" + sha256(canonical JSON)` over every field except
-`content_hash`/`snapshot_id`/`created_at`, `snapshot_id = "cs-" +
-content_hash[7:23]`, `from_dict` rejecting unknown keys, `_require_sha256`,
-`ExecutionCorrelation`, `StepRef{parent_snapshot_id, step, sequence}`,
-`EvidenceRef{evidence_id, kind}`, `to_log_dict()`, and a test asserting no
-`allow`/`deny`/`permit`/`grant`/`authorized` field name exists anywhere in
-the schema. Nothing in production imports it yet.
+Every model step goes through one funnel, `_run_cwft(operation, params, *,
+step_timeout)` (`dev_loop.py:483`), which executes the `submit_and_wait`
+activity (`activities/argo.py:93`). Four operations use it:
+`mctl-agents-investigate` (`:817`), `mctl-agents-approve` (`:897`),
+`mctl-agents-implement` (`:957`), `mctl-agents-shepherd` (`:1268`). The
+activity returns `WorkflowResult` — `workflow_name`, `phase`, `started_at`,
+`finished_at` and nothing else. **There is no channel for a typed step outcome
+from the Argo pod back to Temporal**, and adding one is an mctl-api change,
+outside this DevLoop's boundary.
 
-**No in-process SDK tools today.** `grep` finds no `sdk_mcp_servers` or
-`create_sdk_mcp_server` in `orchestrator/`; the only SDK extension point in
-use is `hooks=_command_audit_hooks()` (`options.py:259`).
-`orchestrator/subagent_wait.py` documents the consequence that matters here:
-the SDK holds the CLI subprocess open past a result frame only when
-`sdk_mcp_servers or hooks` is truthy.
+Every behavioural change to this workflow is gated by `workflow.patched`;
+twelve markers exist (`exec-queue` `:499`, `registry-required` `:646,677`,
+`atomic-approve` `:864`, `slug-scoped-implement` `:869`, `merge-detection`
+`:966`, `deploy-observation` `:980`, `incident-watch` `:991`,
+`lifecycle-refusal-backoff` `:1572`, `fast-shepherd-cadence` `:2245`,
+`shepherd-in-loop` `:2247`, `concurrent-shepherd-tick` `:2281`,
+`lifecycle-ownership` `:2286`). `deprecate_patch` is never called; migration is
+by attrition (`dev_loop.py:491-498`, pinned by
+`tests/test_patch_memoization.py`).
+
+### Reading gitops from the workflow
+
+`find_proposal_slug` (`activities/proposals.py:61`) is the precedent for the
+workflow learning something the Argo step wrote: the Temporal worker pod mounts
+no gitops clone, so the activity reads `mctl-gitops` main through the GitHub
+contents API with a token resolved per-call by `_resolve_token`
+(`proposals.py:41`), raising the retryable `ProposalListingError` (`:37`) rather
+than mistaking an outage for absence.
+
+### Contract modules
+
+`orchestrator/context_snapshot.py` is the house pattern for a versioned,
+content-addressed, stdlib-only contract: `API_VERSION =
+"context.mctl.ai/v1alpha1"` (`:38`), the `SUPPORTED_API_VERSIONS` allow-list
+(`:44`), `_hash_bytes` (`:79`, `"sha256:" + sha256(...)`), `_canonical_json`
+(`:83`, sorted keys, no NaN), `_reject_unknown_keys` (`:92`), frozen dataclasses
+with `to_dict`/`from_dict`, a single keyword-only `seal()` constructor (`:885`)
+computing `content_hash` then `snapshot_id = "cs-" + content_hash[7:23]`, and
+`to_log_dict()` (`:807`) which deliberately omits `locator`/`selector`. Trust
+tiers (`:49`) are `authoritative | corroborated | reported | untrusted`; source
+kinds (`:50-60`) are a closed set; `EvidenceRef` (`:583`) is `{evidence_id,
+kind}` and nothing else. The module has **no production caller yet** — only
+`tests/test_context_snapshot.py:20` — and ADR 009's follow-up table names
+`run_issue_investigator.py` as its intended first producer.
+
+### Eligibility plumbing
+
+`issue-investigator` is the one v1alpha2 agent
+(`agents/_manifests/issue-investigator/agent.yaml:22-23`); its execution shape
+lives in the mctl-gitops catalog profile `issue-investigator-default`.
+`resolver.execute` (`resolver.py:788`) materialises an immutable `ExecutionPlan`
+(`:226`) whose `tools: tuple[str, ...]` (`:247`) comes straight from
+`profile.tools` (`:896`). At run time `_run_agent`
+(`run_issue_investigator.py:1285`) branches on `_resolver_mode()` (`:108`,
+env `ISSUE_INVESTIGATOR_RESOLVER_MODE`, default `legacy`) and, in
+`declarative` mode, builds options via
+`build_issue_investigator_options_from_plan` (`options.py:422`). That builder
+treats `plan.tools` as the authoritative allow-list and special-cases exactly
+one entry:
+
+```
+allowed_tools = [t for t in plan.tools if t != "mcp__mctl__*"]
+if "mcp__mctl__*" in plan.tools:
+    allowed_tools += _mctl_tool_globs()
+```
+
+(`options.py:459-461`). Everything else passes through verbatim.
+`validate_manifest.py` then enforces **set equality** between a manifest's
+declared tools and what the real builder returns (`:351-357`) and between the
+catalog profile's `spec.tools` and the builder's `allowed_tools`
+(`check_catalog_profiles_match_builders`, `:610-615`). There are no in-process
+SDK MCP servers anywhere (`create_sdk_mcp_server` has zero hits);
+`orchestrator/mcp_guard.py` guards MCP *connectivity*, not permissions.
+
+### The blocker in the prompt
+
+`_build_prompt` (`run_issue_investigator.py:1127`) currently emits, verbatim:
+
+> **No human is present. Do not ask for input. Work with what you have.**
+
+That line is the exact opposite of this issue's capability and must become
+conditional. Note that `spec.prompt.sources` for this agent is
+`inline: orchestrator/run_issue_investigator.py:_build_prompt`
+(`agent.yaml:30`), so editing it changes the prompt hash
+(`resolver._hash_prompt_source`, `resolver.py:744`) but not `agent.yaml`'s
+bytes, so the release binding's `sourceManifest.contentHash` pin does not need
+re-pinning.
 
 ## Proposed solution
 
-Five additive pieces. Nothing existing changes shape; every new branch in the
-workflow sits behind a `workflow.patched` marker.
+Five in-repo pieces plus an ADR. Nothing outside `mctlhq/mctl-agents` changes.
 
-### 1. `docs/adr/011-human-input-contract.md` — the schema of record
+### 1. ADR-011, `docs/adr/011-human-input-contract.md`
 
-Written first, because `mctl-api#261` and `mctl-telegram#571` consume it.
-Follows the house form of ADR 009/010 exactly: title with em dash,
-`> **Status:** proposed`, `> **Date:**`, `> **Issue:** mctlhq/mctl-agents#333
-(core child of mctlhq/.github#42)`, `> **Supersedes:**` prose, then
-`## Context` / `## Decision` with numbered subsections / `## Alternatives` /
-`## Non-goals` / `## Platform impact` / `## Follow-ups and sequencing` /
-`## Implementation map`, every claim anchored to a `path.py:line`.
+The issue asks for ADR-009; that number and 010 are taken
+(`docs/adr/009-context-snapshot-contract.md`,
+`docs/adr/010-lifecycle-ownership-contract.md`), so this ships as **ADR 011**.
+House style, copied from 009/010: H1 `# ADR 011 — \`HumanInputRequest\`,
+\`HumanInputResponse\` and \`WAITING_FOR_INPUT\``, a blockquote metadata block
+(`**Status:** proposed`, `**Date:**`, `**Issue:** mctlhq/mctl-agents#333 (child
+of mctlhq/.github#42)`, `**Supersedes:** nothing — it adds a primitive
+alongside #198's approval, and says why they are not the same gate`), then
+`## Context`, `## Decision` with numbered `###` sections, `## Alternatives`
+(numbered, each "**X.** Rejected: why"), `## Non-goals`, `## Platform impact`,
+`## Follow-ups and sequencing`, `## Implementation map`, `## Testable
+invariants`. Contracts stated as `| Field | Type | Owner | Meaning |` tables
+and ` ```text ` state machines, matching 009 and 010 respectively. This ADR is
+the schema of record that `mctl-api#261` and `mctl-telegram#571` consume.
 
-It numbers **011**, not 009: `009-context-snapshot-contract.md` (accepted,
-2026-09-11) and `010-lifecycle-ownership-contract.md` already occupy those
-slots. The ADR states that renumbering explicitly so the two consuming issues
-can be corrected.
+### 2. `orchestrator/human_input.py` — the contract module
 
-Normative content: `human.mctl.ai/v1alpha1`, kinds `HumanInputRequest` and
-`HumanInputResponse`; the state model
-`RUNNING -> WAITING_FOR_INPUT -> {RUNNING, INPUT_TIMED_OUT, CANCELLED}`;
-the boundary table (capability eligibility owned by `ExecutionProfile.tools`,
-authorization owned by policy/`approve()`, evidence owned by #199, context
-owned by ADR 009, workflow state owned by Temporal, surfaces owning nothing);
-and one bold invariant paired with a named test, matching ADR 009 sec. 5:
-**a human answer is information, never authorization and never instruction.**
+Stdlib-only, no I/O, no production dependency on the SDK — modelled line for
+line on `context_snapshot.py`, so the two validate and hash the same way.
 
-### 2. `orchestrator/human_input.py` — the schema module
+| Symbol | Shape |
+| --- | --- |
+| `API_VERSION` | `"humaninput.mctl.ai/v1alpha1"` |
+| `REQUEST_KIND` / `RESPONSE_KIND` | `"HumanInputRequest"` / `"HumanInputResponse"` |
+| `SUPPORTED_API_VERSIONS` | `{API_VERSION: (REQUEST_KIND, RESPONSE_KIND)}` |
+| `RESPONSE_TYPES` | `frozenset({"free_text","single_choice","multi_choice","structured"})` |
+| `AUDIENCES` | `frozenset({"work_item_owner","repo_operators","tenant_operators"})` |
+| `CONTEXT_REF_PREFIXES` | `("github:","gitops-file:","context_snapshot:","evidence:")` |
+| `DEFAULT_REQUEST_TTL_SECONDS` | `86400` |
+| `MAX_REQUEST_TTL_SECONDS` | `604800` |
+| `MAX_CLARIFICATION_ROUNDS` | `3` |
+| `MAX_OUTSTANDING_REQUESTS_PER_EXECUTION` | `1` |
+| `HumanInputError(ValueError)` | the only raised type |
+| `ResponseSpec` | `type: str`, `options: tuple[str, ...] = ()`, `schema_ref: str \| None = None` |
+| `RequestedFrom` | `audience: str`, `actor_refs: tuple[str, ...] = ()` |
+| `Respondent` | `actor_type: str`, `actor_id: str` |
+| `HumanInputRequest` | `api_version`, `kind`, `request_id`, `request_hash`, `question_hash`, `request_version: int`, `created_at`, `expires_at`, `work_item_id`, `execution: ExecutionCorrelation`, `question`, `reason`, `response: ResponseSpec`, `requested_from: RequestedFrom`, `context_refs: tuple[str, ...] = ()`, `round: int = 1` |
+| `HumanInputResponse` | `api_version`, `kind`, `request_id`, `request_hash`, `respondent: Respondent`, `surface`, `value: Any`, `received_at` |
 
-A sibling of `context_snapshot.py` in every respect: stdlib-only (asserted by
-a subprocess import test in the style of `tests/test_worker_isolation.py`),
-frozen dataclasses with `to_dict()`/`from_dict()`, `_reject_unknown_keys`,
-`_require_sha256`, `HumanInputError(ValueError)` fail-closed, and
-`SUPPORTED_API_VERSIONS` as a complete allow-list mirroring
-`manifest.py:35`.
+`execution` reuses `context_snapshot.ExecutionCorrelation` (`:406`) directly
+rather than re-declaring correlation fields — it already carries
+`temporal_workflow_id`, `temporal_run_id`, `argo_workflow_name`, `agent`,
+`environment`, `target_repository_sha` and the four version/hash pins.
 
-```
-HumanInputRequest
-  api_version   "human.mctl.ai/v1alpha1"
-  kind          "HumanInputRequest"
-  request_id    "hir-" + request_hash[7:23]        (derived, never random)
-  request_hash  "sha256:..."                        (over all fields except
-                                                     request_hash/request_id/
-                                                     created_at)
-  request_version int                               (1)
-  created_at / expires_at   ISO-8601
-  execution     ExecutionCorrelation                (imported unchanged from
-                                                     orchestrator.context_snapshot)
-  work_item     WorkItemRef{work_item_id, trace_id}
-  agent         AgentProvenance{name, definition_version, profile_version}
-  question      str  (bounded, MAX_QUESTION_LENGTH)
-  question_hash "sha256:..." over the normalized question — the dedupe key
-  reason        str  (bounded)
-  response      ResponseSpec{type, options[]}       type in
-                free_text|single_choice|multi_choice|structured
-  context_refs  tuple[ContextRef{kind, locator}]    bounded like ADR 009's
-                                                     MAX_LOCATOR_LENGTH
-  requested_from AudienceRef{audience}              closed vocabulary
-  context_snapshot_ref str                          the parent snapshot_id
-  round         int                                 1..MAX_CLARIFICATION_ROUNDS
+Functions:
 
-HumanInputResponse
-  api_version/kind/response_id (= "hia-" + response_hash[7:23])
-  request_id, request_hash      must match the outstanding request exactly
-  respondent    RespondentRef{actor_type, actor_id}  identity reference only
-  surface       str                                  telegram|portal|api|github
-  value         str | tuple[str] | Mapping           validated against
-                                                     ResponseSpec
-  received_at   ISO-8601
-  response_hash "sha256:..."
-```
+- `seal_request(*, work_item_id, execution, question, reason, response,
+  requested_from, created_at, expires_at, context_refs=(), round=1) ->
+  HumanInputRequest` — the only constructor. Computes
+  `request_hash = _hash_bytes(_canonical_json(payload))` over every field except
+  `request_id`, `request_hash` and `created_at`, then
+  `request_id = "hir-" + request_hash[7:23]`. Same rule as `seal()`
+  (`context_snapshot.py:915-916`), so sealing identical inputs twice at
+  different wall-clock times yields the same identity — that is what makes a
+  retried Argo step idempotent instead of duplicative.
+- `question_hash_for(question, response) -> str` — `sha256` over the
+  whitespace-collapsed, case-folded question plus the canonical JSON of the
+  response spec. The dedupe key. Deliberately *not* the `request_hash`:
+  `request_hash` includes `created_at`-independent but round- and
+  correlation-specific fields, so two retries of the same ambiguity share a
+  `question_hash` even when `round` differs.
+- `validate_response(request, response, *, now) -> None` — raises
+  `HumanInputError` on id mismatch, hash mismatch, `now >= expires_at`,
+  respondent outside `requested_from.actor_refs`, or a value that does not
+  satisfy `request.response` (non-listed option, wrong cardinality, empty
+  free text).
+- `to_dict`/`from_dict` on every dataclass, with `_reject_unknown_keys` and the
+  `SUPPORTED_API_VERSIONS` gate.
+- `request_log_dict(request) -> dict` / `response_log_dict(...)` — the safe
+  telemetry projection, mirroring `ContextSnapshot.to_log_dict`
+  (`context_snapshot.py:807`). It emits ids, hashes, versions, correlation,
+  audience, surface, respondent reference, `round`, `expires_at`, outcome —
+  and **never `question`, `reason` or `value`**.
 
-`seal_request()` / `seal_response()` are the only constructors that fill the
-hash and id, exactly as `context_snapshot.seal()` is. `validate_response(
-request, response)` is the single place that enforces id match, hash match,
-expiry, type/option conformance and length bounds — one function, so mctl-api
-and the workflow cannot drift into two answers. `to_log_dict()` emits
-`request_id`, `request_hash`, `question_hash`, `round`, lengths and codes;
-never `question`, `reason` or `value`.
+### 3. Producer side — `run_issue_investigator.py` and `options.py`
 
-The schema declares no field named or containing `allow`, `deny`, `permit`,
-`grant`, `approve` or `authorized`, and the recursive field-name test from
-`tests/test_context_snapshot.py` is reused verbatim against it. That is the
-executable form of "clarification is not approval".
+**Eligibility is a capability entry in `plan.tools`, not an SDK tool name.**
+`options.py` gains `HUMAN_INPUT_CAPABILITY = "human.request_input"` and
+`plan_grants_human_input(plan: ExecutionPlan) -> bool`, and
+`build_issue_investigator_options_from_plan` filters the capability out of
+`allowed_tools` the same way `mcp__mctl__*` is special-cased today
+(`options.py:459-461`) — a capability is not a tool the CLI can call, and
+leaking it into `allowed_tools` would produce a dead allow-list entry.
+`validate_manifest.py` subtracts the same `_CAPABILITY_TOOLS` frozenset before
+its two set-equality comparisons (`:351-357`, `:610-615`), so
+`mctl-gitops#1277` adding `human.request_input` to the profile's `spec.tools`
+does not turn CI red. In `legacy` resolver mode there is no plan, so the
+capability is never granted — the no-eligibility branch.
 
-### 3. `human.request_input` — the capability, and the yield
+**The agent emits a file; it does not call a synchronous tool.** With no
+in-process SDK MCP server in this repo and the durable boundary explicitly at
+Temporal, the capability is realised as a *write contract*: when granted,
+`_build_prompt` (`:1127`) replaces the "No human is present" paragraph with an
+instruction to write a single JSON document to
+`$PROPOSAL_DIR/human-input/request.json` when — and only when — retrieval,
+code and docs are exhausted and the ambiguity is consequential, then finish the
+proposal on its best current interpretation and stop. `PROPOSAL_DIR` is already
+exported into the child env and `add_dirs` (`options.py:407,416,459-472`), so
+no new capability surface is needed. The model never waits, never polls, and the
+process exits normally.
 
-Exposed as an in-process SDK MCP server (`create_sdk_mcp_server`, server name
-`human`, tool `request_input`), built in a new
-`orchestrator/human_input_capability.py` and wired only in
-`build_issue_investigator_options_from_plan` — i.e. only under the
-declarative resolver, only when `"human.request_input" in plan.tools`. The
-builder maps the logical profile name to the SDK's actual
-`mcp__human__request_input` tool string, the same conjunction
-`_mctl_tool_globs()` already applies to `mcp__mctl__*`. The legacy builder is
-untouched, so the default `legacy` path cannot acquire the capability by
-accident.
+**The proposal triplet is still written.** This is the load-bearing decision.
+`_landed_triplet_defects` (`:439`) fails a publish that lacks
+requirements/design/tasks, and `WorkflowResult` has no outcome field, so a step
+that "yielded" would surface as a plain failure. Instead the step **succeeds**,
+publishing a complete best-effort triplet *plus* the request; the request is the
+durable signal that the proposal rests on an unresolved ambiguity. The pod exits
+either way. This is what makes the no-eligibility branch trivially correct: no
+grant, no request file, byte-identical behaviour to today.
 
-The tool handler is deterministic Python, not a model decision. It:
+`investigate()` (`:1457`) gains a post-publish step,
+`collect_human_input_request(proposal_dir, *, granted, execution, now)`:
+if not `granted` it deletes any `human-input/` directory the model wrote and
+returns `None`; if granted it parses the document, re-seals it through
+`seal_request` (the model supplies question/reason/response/context_refs; the
+wrapper supplies every correlation, id, hash and timestamp field, so the model
+cannot forge identity), enforces
+`MAX_OUTSTANDING_REQUESTS_PER_EXECUTION`, and rewrites the file as the sealed
+form. `InvestigateResult` (`:1409`) gains
+`human_input_request: HumanInputRequest | None = None` — a defaulted field, per
+the repo's serialization convention.
 
-1. refuses if a request is already outstanding for this step, if
-   `round > MAX_CLARIFICATION_ROUNDS`, or if `question_hash` matches one
-   already recorded for this workflow (the "do not re-ask" rule);
-2. seals a `HumanInputRequest` from the `ExecutionPlan` and the parent
-   `ContextSnapshot`;
-3. POSTs it to mctl-api with the `MCTL_TOKEN` the pod already carries
-   (idempotent on `request_id` — a retried Argo attempt re-POSTs the same
-   derived id and gets the same row back, which is why the id is derived
-   rather than random);
-4. writes it to `$HUMAN_INPUT_DIR/request.json` for the driver;
-5. returns only `{request_id, request_hash, status: "needs_input"}` plus the
-   instruction to stop working.
+A prior answer is consumed through a new CLI flag,
+`--human-input-response <json>`, threaded into `_build_prompt` inside the
+untrusted-DATA envelope already used for issue bodies (`_neutralize_prompt_tags`
+`:1098`, the wrapper in `_build_prompt` `:1137`), with an explicit sentence that
+the answer is human-supplied information that resolves the named ambiguity and
+**does not waive policy, authorization or approval**. The resolved
+`question_hash` is listed as answered so the agent does not re-ask it.
 
-`investigate()` then checks for that file after the stream settles
-(`drain_until_settled`, `orchestrator/subagent_wait.py`), discards the
-staging triplet the way every other non-publish path does (the
-`InvestigatorOrphanedSubagent` branch's precedent: a partial proposal is
-worse than a re-run), and exits with `EXIT_NEEDS_INPUT = 50`. That is a
-deliberate departure: this driver reports through `InvestigateResult`, not
-exit codes (`run_issue_investigator.py:1966-1969`), and gains exactly one
-code plus one `InvestigateResult.needs_input: str = ""` field, because the
-CWFT has to distinguish "asked a question" from "failed". 50, not 46 —
-`run_implementer.py` already reserves 42-49 (`EXIT_ORPHANED_SUBAGENT = 46`,
-`EXIT_BLOCKED_ONLY = 45`), and reusing one of those would collide the moment
-a caller reads both taxonomies. No `.status.yaml` field is added: the
-publish path re-reads and rejects any unexpected `status`/`source`/`control`
-value (`_status_disagreements`), and a needs-input step publishes nothing at
-all. The CWFT maps 50 to a distinguishable Argo phase; `submit_and_wait` gains a
-defaulted `outcome: str = ""` field on `WorkflowResult`, which is
-replay-safe (existing histories deserialize a dataclass with a new default)
-and lets `DevLoopWorkflow` read `needs_input` without parsing logs. **The pod
-exits here.** Nothing is held open.
+### 4. Snapshot linkage
 
-### 4. `WAITING_FOR_INPUT` in `DevLoopWorkflow`
+Continuation seals a `ContextSnapshot` (`context_snapshot.seal`, `:885`) that
+includes the answer as a `ContextSource` of a new kind
+`human-input-response` with `trust.tier = "reported"` (the tier ADR 009
+sec. 6 already defines for human-authored platform state), plus an `EvidenceRef`
+`{evidence_id: request_id, kind: "human-input-response"}`. `StepRef`
+(`:480`) chains it to the pre-wait snapshot, so `snapshot_id` before/after is
+recorded exactly as the issue asks. Adding a member to `SOURCE_KINDS`
+(`context_snapshot.py:50-60`) is additive within
+`context.mctl.ai/v1alpha1` — no field change, unknown-key rejection unaffected
+— and ADR-011 says so explicitly. Because `context_snapshot.py` has no
+production caller today, this proposal makes the investigator its first one, in
+the position ADR 009's follow-up table already names.
 
-Additive state, all behind `workflow.patched("human-input")`:
+### 5. Consumer side — `DevLoopWorkflow`
 
-- `@workflow.signal human_input(payload)` — parses defensively and never
-  raises, exactly as `approve()` does; sets `self._human_response` only when
-  `request_id` and `request_hash` match the outstanding request, so a stale
-  or forged signal is a no-op rather than a resume. It never touches
-  `self._approved`.
-- `@workflow.query waiting_for() -> str` — closed vocabulary `"" |
-  "approval" | "input"`. This is the first-class distinction the issue
-  requires, and it reaches mctl-api the same way `shepherd_in_loop` already
-  does.
-- `@workflow.query human_input_state() -> HumanInputState` with
-  `request_id`, `request_hash`, `question_summary` (bounded), `expires_at`,
-  `round`, `resume_count`, `outcome` — the safe read model for surfaces.
-- After each agent step whose `outcome == "needs_input"`, the workflow runs
-  `fetch_human_input_request` (a thin mctl-api read activity beside
-  `record_execution`, bounded by `FAST_ACTIVITY_TIMEOUT` /
-  `FAST_ACTIVITY_RETRY_POLICY`), emits `human_input.requested` and
-  `.wait_started`, then:
+New activity `orchestrator/temporal/activities/human_input.py`:
 
-```python
-answered = await workflow.wait_condition(
-    lambda: self._human_response is not None,
-    timeout=self._input_deadline(),     # expires_at, capped at 7 days
-)
+```text
+find_human_input_request(service: str, slug: str) -> str | None
 ```
 
-  `wait_condition` with a timeout is the whole wait: no timer activity, no
-  poll, no pod. A `TimeoutError` becomes `INPUT_TIMED_OUT`.
-- Continuation re-submits `mctl-agents-investigate` with the extra param
-  `human_input_ref=<request_id>` and `resume_count` incremented — a FRESH
-  Argo run of the same agent, same Temporal workflow, same issue.
-  `MAX_CLARIFICATION_ROUNDS = 2` bounds the loop; the third request is
-  refused at the capability, so a runaway agent cannot spam an operator.
-- On timeout the workflow still runs exactly one continuation, with
-  `human_input_ref` plus `human_input_outcome=timed_out`. The investigator
-  then produces its proposal and records the unresolved ambiguity under
-  `## Open questions` — which is the behaviour its prompt already mandates,
-  so an unanswered question degrades to today's behaviour instead of losing
-  the run.
+A direct structural copy of `find_proposal_slug` (`proposals.py:61`) — same
+`GITOPS_REPO`/`AGENTS_STATE_PREFIX` constants, same `_resolve_token`, same
+retryable `HumanInputListingError` on transport/non-404 failure, same "404 means
+genuinely absent" rule. It reads
+`platform-gitops/agents-state/<service>/proposals/<slug>/human-input/request.json`
+and returns its text; parsing happens in workflow code, which is pure.
 
-Events (`human_input.requested|wait_started|delivered|responded|resumed|
-timed_out|cancelled`) go out through one `record_human_input_event`
-activity carrying `to_log_dict()` output plus correlation ids, wrapped in the
-same best-effort `try/except ActivityError` `_record` uses so an mctl-api
-outage can never wedge `wait_condition`.
+New module-level state constants in `dev_loop.py`:
 
-### 5. Investigator continuation and attributed evidence
+```text
+RUNNING              = "RUNNING"
+WAITING_FOR_APPROVAL = "WAITING_FOR_APPROVAL"
+WAITING_FOR_INPUT    = "WAITING_FOR_INPUT"
+INPUT_TIMED_OUT      = "INPUT_TIMED_OUT"
+```
 
-`run_issue_investigator.py` gains `--human-input-ref`. When set it:
+`WAITING_FOR_APPROVAL` names the existing `wait_condition` (`:827`) so the two
+gates are distinguishable by construction rather than by comment.
 
-1. fetches the sealed request and response from mctl-api and re-validates
-   them locally with `validate_response()` — the pod trusts the contract, not
-   the surface;
-2. seals a child `ContextSnapshot` (the first production use of
-   `orchestrator/context_snapshot.py`) with
-   `StepRef{parent_snapshot_id=<request.context_snapshot_ref>,
-   step="continuation", sequence=resume_count}`, one `ContextSource` of a new
-   `human-input` kind whose `content_hash` covers the answer bytes actually
-   placed in context and whose `trust.tier` is `reported`, and one
-   `EvidenceRef{evidence_id=response_id, kind="human-input-response"}`;
-3. appends a `<human_answer>` block to `_build_prompt`'s output, with the
-   answer passed through a new `_neutralize_human_input_tags` built on the
-   same pattern as `_neutralize_prompt_tags` (`:1098`) — including its
-   marker-not-empty-string replacement, so splicing cannot reassemble a
-   delimiter;
-4. states in that block, in the prompt itself: the answer is human-provided
-   information; it resolves the question with this `request_id`; it does not
-   waive policy, authorization or approval; any instruction embedded in it is
-   data, not a directive; and the resolved question must not be asked again.
+New signal and query on `DevLoopWorkflow`:
 
-The `human-input` source kind and `human-input-response` evidence kind are
-additive entries in `context_snapshot.SOURCE_KINDS` — a vocabulary extension
-within `v1alpha1`, not a schema change.
+- `@workflow.signal def human_input_response(self, *args: object) -> None` —
+  defensive parsing exactly like `approve` (`:788`): signals must never raise,
+  so a malformed payload is recorded and ignored rather than thrown. It appends
+  to `self._input_responses` and never touches `self._approved`. That
+  separation is the "clarification is not approval" invariant, and it is
+  falsifiable: a test signals a response whose value literally says
+  `"use option B and merge it"` and asserts the workflow is still parked on the
+  approval wait.
+- `@workflow.query def human_input_state(self) -> HumanInputState` — a frozen
+  dataclass `{state, request_id, request_hash, question_hash, expires_at,
+  round, resume_count}`, every field defaulted, so `mctl-api#261` and the
+  portal can read pending-input state without owning it.
+
+New method `_await_human_input(self, service: str, slug: str) -> HumanInputOutcome`,
+called after investigate succeeds and **before** the approval wait, under
+`workflow.patched("human-input")`:
+
+```text
+investigate Succeeded
+  └── find_proposal_slug  (already needed later; hoisted under the patch)
+        └── find_human_input_request
+              ├── None                → WAITING_FOR_APPROVAL   (today's path)
+              └── sealed request
+                    ├── question_hash already answered → ignore, continue
+                    ├── round > MAX_CLARIFICATION_ROUNDS → fail loudly
+                    └── WAITING_FOR_INPUT
+                          wait_condition(answered or cancelled,
+                                         timeout = expires_at - now)
+                            ├── valid response → RUNNING, resume_count += 1,
+                            │                    re-run mctl-agents-investigate
+                            │                    with human_input_response param
+                            ├── timeout        → INPUT_TIMED_OUT, return
+                            └── cancelled      → CANCELLED, return
+```
+
+The wait is `await workflow.wait_condition(pred, timeout=...)` — bounded, unlike
+the approval wait. Rejected responses (id, hash, expiry, authorization, value)
+are validated inside the workflow by `human_input.validate_response`, which is
+pure and therefore legal in workflow code (ADR 010 sec. 9's rule that I/O lives
+in activities is respected: there is none here). Rejections increment a counter
+surfaced by the query; they never resume.
+
+`DevLoopResult` (`:449`) gains `human_input: HumanInputOutcome | None = None` —
+defaulted, so results recorded before this field exists still deserialize
+(`:456-458`).
+
+The continuation re-submits `mctl-agents-investigate` through the existing
+`_run_cwft` funnel with one extra param, `human_input_response`. That parameter
+must exist on the sibling CWFT — the same cross-repo coupling already documented
+for `service` at `dev_loop.py:938-949`. The ordering is self-consistent and
+needs no flag: with no catalog grant, no request file is ever written, so the
+branch is never taken and the param is never sent.
 
 ## Alternatives
 
-1. **A synchronous MCP tool that blocks until a human answers.** Rejected —
-   it is the issue's stated non-negotiable boundary, and the code agrees:
-   `SDK_STEP_TIMEOUT` is 2 h, the CWFT carries its own
-   `activeDeadlineSeconds`, `ISSUE_INVESTIGATOR_BUDGET_USD` caps the stream,
-   and `submit_and_wait` heartbeats every 15 s. A 24-hour wait would burn a
-   pod, a model stream and an activity slot on the `mctl-dev-loop-exec` queue
-   that ADR 008 created precisely to stop long holds from starving short
-   activities.
+1. **A synchronous MCP tool that blocks the model until a human answers.**
+   Rejected: the issue names this as the non-negotiable architecture boundary,
+   and it is also unworkable here — `SDK_STEP_TIMEOUT` is 2 h
+   (`dev_loop.py:96`) with a 2 min heartbeat, so a pod parked on a human would
+   be killed and retried three times by `SDK_STEP_RETRY_POLICY` (`:95`),
+   asking the same question three times.
 
-2. **Reuse `approve()` / `control.requires_human_approval` in
-   `.status.yaml`.** Rejected — it conflates the two primitives the platform
-   has already paid to separate: `lifecycle/policy.py:merge_authority_for`
-   documents mctl-agents#344, where an ownership label was read as merge
-   authorization. It is also mechanically wrong: `run_implementer.py`
-   classifies an `accepted` proposal with no verified approver as `blocked`
-   (exit 45), so a clarification routed through that field would either
-   authorize an implement it must not authorize, or wedge the proposal.
+2. **A new `outcome` field on `WorkflowResult` carrying `needs_input` from the
+   Argo pod.** Architecturally the cleanest signal, and rejected only on
+   boundary: `WorkflowResult` (`activities/argo.py:71`) is populated from
+   mctl-api's Argo status response, so a typed outcome needs an mctl-api change
+   — `mctl-api#261`'s territory, and this DevLoop must be completable in one
+   mctl-agents PR. The gitops-file-plus-GitHub-read path reuses
+   `find_proposal_slug`'s proven mechanism and costs one cheap GET.
 
-3. **Keep pending-input state in `.status.yaml` and let the cron sweep it.**
-   Rejected — it makes a file (and, one step later, a surface) the source of
-   truth for workflow state, which the issue lists as a non-goal. It is also
-   invisible to a parked workflow: mctl-api's own `mctl_get_dev_loop`
-   documentation records that a hand-edited `.status.yaml` is invisible to a
-   workflow already parked on the approve signal. And the Temporal worker
-   holds no gitops checkout by design, so every write would need a whole
-   Argo run per answer.
+3. **A dedicated `HumanInputWorkflow` child workflow per request.** Rejected:
+   it buys isolation the loop does not need and costs a second durable identity
+   that surfaces, the portal, the reconciler and `mctl_get_dev_loop` would all
+   have to learn. The issue's requirement is that "the same canonical
+   WorkItem/workflow remains active"; a field on `DevLoopWorkflow` plus a
+   bounded `wait_condition` satisfies that with one patch marker.
 
-4. **Put the request on the Argo step's output parameters instead of POSTing
-   it from the pod.** Rejected for now — it keeps mctl-api out of the write
-   path, but `WorkflowResult` and `submit_and_wait` would have to carry
-   arbitrary structured output through a polling activity, and the surfaces
-   need a read model in mctl-api regardless (#261). Recorded in
-   requirements.md's open questions rather than silently dropped.
+4. **Make the request a *failed* investigate step with a typed
+   `needs_input` error.** Rejected: `_landed_triplet_defects` (`:439`) would
+   reject the publish, `SDK_STEP_RETRY_POLICY` would re-run the whole
+   investigation twice more before the workflow ever saw it, and a failed
+   investigate returns early at `dev_loop.py:821`. Succeeding with a
+   best-effort proposal *plus* a request is strictly more useful — a human who
+   declines to answer still has a proposal.
 
 ## Platform impact
 
-- **Migrations.** None. No stored schema changes; `.status.yaml`
-  (`orchestrator/proposal_state.py`) is untouched. `WorkflowResult` gains one
-  defaulted field, which older payloads deserialize unchanged.
+**Migrations.** None. No schema, no stored state, no gitops file moves. The
+first request document appears only after `mctl-gitops#1277` grants the
+capability; until then `human-input/` directories do not exist.
 
-- **Backward compatibility.** Every new workflow branch sits behind
-  `workflow.patched("human-input")`. Per `tests/test_patch_memoization.py`
-  and the `exec-queue` precedent (`dev_loop.py:499`), `patched()` memoizes per
-  execution, so in-flight loops replay their recorded command sequence for
-  the rest of their lives and only new executions get the state. The
-  investigator's `--human-input-ref` is optional; without it the driver is
-  byte-identical to today. The capability is absent from the default
-  `legacy` resolver path entirely.
+**Backward compatibility.** Three separate guards. (a) `workflow.patched(
+"human-input")` keeps every in-flight execution on its recorded command
+sequence — mandatory, because an unconditional `find_human_input_request`
+between investigate and the approval wait is exactly the command mismatch that
+wedged loops before (`dev_loop.py:845-852`). Migration is by attrition
+(`:491-498`). (b) Every new dataclass field is defaulted
+(`DevLoopResult.human_input`, `InvestigateResult.human_input_request`), per the
+convention stated at `activities/lifecycle.py:47-52`. (c) The capability is
+absent from `plan.tools` today and absent entirely in `legacy` resolver mode, so
+with no catalog change the producer path is unreachable.
 
-- **Cross-repo coupling.** Three sibling changes are required and are not in
-  this repository: mctl-api #261 (create/respond/get/list/cancel plus
-  `WAITING_FOR_INPUT` in the execution read model and a `waiting_for`
-  passthrough beside the existing `shepherd_in_loop` query), mctl-telegram
-  #571 (the surface), and mctl-gitops (the investigate CWFT's
-  `human_input_ref`/`human_input_outcome` parameters and the exit-46 phase
-  mapping). Note that `orchestrator/validate_manifest.py`'s
-  `_check_tool_policy_and_budget_match_options_py` compares
-  `set(options.allowed_tools)` against the manifest's resolved `tool_allow`,
-  and for `issue-investigator` that list comes from the mctl-gitops catalog
-  profile `issue-investigator-default` — so adding the capability to the
-  builder without the matching `spec.tools` entry in that profile turns
-  manifest validation red. The gitops profile bump must land first.
+**Resource impact.** One extra GitHub contents GET per successful investigate on
+patched executions. A `WAITING_FOR_INPUT` wait costs Temporal history storage
+only — no Argo workflow, no SDK session, no activity slot, which is the
+pod-release requirement. A resumed loop runs one additional
+`mctl-agents-investigate` (~$3 of subscription quota, bounded by
+`MAX_CLARIFICATION_ROUNDS = 3`).
 
-- **Resource impact.** Negative for compute: a clarification that today
-  either never happens or costs a failed run now costs one extra Argo step
-  per answered round, capped at 2. Temporal history grows by roughly a dozen
-  events per round; `wait_condition` with a timeout adds a single timer, far
-  below the budget `MERGE_WATCH_DEADLINE`'s ~1344 polls already justify.
-  mctl-api gains a small table and five endpoints.
+**Risks and mitigations.**
 
-- **Risks and mitigations.**
-  - *Operator spam / infinite asking.* Mitigated by the three-way bound:
-    one outstanding request per execution, `MAX_CLARIFICATION_ROUNDS = 2`,
-    and `question_hash` dedupe that survives a retry because `request_id` is
-    derived from content rather than random.
-  - *A stale or forged signal resuming the wrong run.* Mitigated by
-    requiring both `request_id` and `request_hash` to match, in a signal
-    handler that returns silently on mismatch and never raises.
-  - *Prompt injection via the answer.* Mitigated by
-    `_neutralize_human_input_tags`, by the explicit unprivileged-data framing
-    in the continuation block, and by the fact that the answer arrives as a
-    bounded `value` field rather than free-form transcript.
-  - *Privilege creep.* Mitigated by making `plan.tools` the sole gate and by
-    reusing ADR 009's recursive no-authorization-field-name test against the
-    new schema.
-  - *A leaked question exposing repository internals.* Mitigated by bounding
-    `question`/`reason` and by `context_refs` being `{kind, locator}` pointers
-    with no payload field declared — the same "no payload, ever, anywhere"
-    property ADR 009 sec. 7 relies on.
-  - *An unanswered question silently killing a run.* Mitigated by the
-    `INPUT_TIMED_OUT` continuation, which degrades to today's
-    `## Open questions` behaviour instead of failing.
+- *An agent asks a question on every retry.* Mitigated by `question_hash`
+  dedupe plus deterministic `request_id` from `seal_request` — a retried step
+  that seals the same inputs produces the same `request_id`, so the workflow
+  sees one request, not three. Proved by T5/T6.
+- *A human answer is read as an instruction or an approval.* Mitigated by the
+  untrusted-DATA envelope (`_neutralize_prompt_tags`, `:1098`) and by
+  `human_input_response` never touching `self._approved`. Proved by T12/T13 —
+  both by mutation, in both directions.
+- *A loop waits forever.* Mitigated by the bounded `wait_condition` timeout and
+  `INPUT_TIMED_OUT`, unlike the approval wait it sits next to.
+- *Question or answer text leaks into telemetry.* Mitigated by
+  `request_log_dict`/`response_log_dict` being the only emitters, mirroring
+  `to_log_dict`'s omission discipline (`context_snapshot.py:807`). Proved by T14.
+- *The continuation CWFT rejects an unknown `human_input_response` param.*
+  Unreachable before the catalog grant, and the grant and the CWFT parameter
+  land together in `mctl-gitops#1277`. Recorded as an open question, with the
+  `service`-param precedent (`dev_loop.py:938-949`) as the template.
+- *The prompt edit changes the investigator's behaviour for everyone.* Mitigated
+  by making the new paragraph conditional on the grant; the ungranted prompt is
+  asserted byte-identical to today's by T15.
 
-- **Security.** A `HumanInputResponse` sets no approval state anywhere: it
-  cannot reach `self._approved`, cannot flip `.status.yaml`, and cannot
-  satisfy `control.requires_human_approval`. Any consequential mutation
-  downstream still goes through `approve()` and the implementer's own
-  approval gate.
+**Security.** A response is data with provenance, never a capability. Three
+independent checks stand between a Telegram message and a resume: the request
+must be the current, unexpired one; `request_hash` must match exactly; and the
+respondent must appear in `requested_from.actor_refs`. None of them grants
+anything — they only decide whether the loop un-parks. Authorization for any
+subsequent consequential action still runs through `approve`
+(`dev_loop.py:788`) and the profile's `approval.requiredBefore` gate.
