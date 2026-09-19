@@ -39,8 +39,12 @@ metadata:
         3. commit-and-push — commits any .status.yaml transitions back
            to gitops main (implemented → review-fixing, review-fixing
            → implemented after followup, → merged on successful merge,
-           → rejected on closed-unmerged). Same `:(glob)` filter as
-           the implementer template.
+           → rejected on closed-unmerged), plus any adopted-prs/pr-<n>/
+           .prref.yaml records the run wrote. The `:(glob)` filter is
+           deliberately wider than the implementer template's — see
+           mctlhq/mctl-agents#334 (shepherd PR-adoption) and this
+           issue (mctl-gitops#1278) for why adoption records needed
+           the same durable-handoff path as .status.yaml.
         4. post-deploy-verify — sleeps 300s, then lists ArgoCD
            Applications that flipped to Health=Degraded since the run
            started. A non-empty result fails the workflow, which
@@ -283,10 +287,11 @@ spec:
     - name: run-shepherd
       outputs:
         artifacts:
-          # The `.status.yaml` flips THIS attempt made, at repo-relative paths.
-          # Fixed workflow-scoped key, read literally by commit-and-push — one
-          # of the primary/fallback pair is always skipped and a step reference
-          # would not resolve (mctl-gitops#1042).
+          # The `.status.yaml` flips and adopted-prs/pr-<n>/.prref.yaml records
+          # THIS attempt made, at repo-relative paths (mctlhq/mctl-agents#334,
+          # mctl-gitops#1278). Fixed workflow-scoped key, read literally by
+          # commit-and-push — one of the primary/fallback pair is always
+          # skipped and a step reference would not resolve (mctl-gitops#1042).
           - name: changes
             path: /tmp/state-out
             optional: true
@@ -490,8 +495,17 @@ spec:
             OUT = "/tmp/state-out"
             TREE = os.path.join(OUT, "tree")
             DELETED = os.path.join(OUT, "deleted.lst")
-            ALLOWED = re.compile(r"^platform-gitops/agents-state/.+/\.status\.yaml$")
-            PATHSPEC = ":(glob)platform-gitops/agents-state/**/.status.yaml"
+            # Widened for mctl-agents#334 (shepherd PR-adoption) / mctl-gitops#1278:
+            # an adoption record at agents-state/<svc>/adopted-prs/pr-<n>/.prref.yaml
+            # is now as legitimate a handoff as a .status.yaml flip.
+            ALLOWED = re.compile(
+                r"^platform-gitops/agents-state/(?:.+/\.status\.yaml"
+                r"|[^/]+/adopted-prs/pr-[0-9]+/\.prref\.yaml)$"
+            )
+            PATHSPECS = [
+                ":(glob)platform-gitops/agents-state/**/.status.yaml",
+                ":(glob)platform-gitops/agents-state/*/adopted-prs/*/**",
+            ]
             rc = int(sys.argv[1])
 
             # Cleared HERE, after the agent has exited, and owned by this script alone.
@@ -501,7 +515,7 @@ spec:
             shutil.rmtree(OUT, ignore_errors=True)
 
             raw = subprocess.run(
-                ["git", "-C", ROOT, "status", "--porcelain=v1", "-z", "-uall", "--", PATHSPEC],
+                ["git", "-C", ROOT, "status", "--porcelain=v1", "-z", "-uall", "--", *PATHSPECS],
                 capture_output=True, check=True).stdout
 
 
@@ -729,9 +743,10 @@ spec:
             readOnly: true
 
     # ── 3. Commit & push back to mctl-gitops ──────────────────────────────
-    # Only .status.yaml files should change in agents-state/
-    # (run_shepherd writes them after each proposal transition).
-    # Defensive: stage only that subtree.
+    # .status.yaml files (run_shepherd writes them after each proposal
+    # transition) and adopted-prs/pr-<n>/.prref.yaml adoption records
+    # (mctlhq/mctl-agents#334, mctl-gitops#1278) are the only things that
+    # should change in agents-state/. Defensive: stage only that subtree.
     - name: commit-and-push
       inputs:
         artifacts:
@@ -871,13 +886,23 @@ spec:
           git config user.name "mctl-agents[bot]"
           git config user.email "mctl-agents[bot]@users.noreply.github.com"
 
+          # The two pathspecs this step will ever stage or exclude, plus the
+          # equivalent regex for validating a handoff's file list — kept as
+          # single named values so each expression appears exactly once in
+          # this script. Widened for mctlhq/mctl-agents#334 (shepherd
+          # PR-adoption) / mctl-gitops#1278: an adopted-prs/pr-<n>/.prref.yaml
+          # record is as legitimate a commit target as a .status.yaml flip.
+          SPEC_STATUS=':(glob)platform-gitops/agents-state/**/.status.yaml'
+          SPEC_ADOPTED=':(glob)platform-gitops/agents-state/*/adopted-prs/*/**'
+          ALLOWED_RE='^platform-gitops/agents-state/(.+/\.status\.yaml|[^/]+/adopted-prs/pr-[0-9]+/\.prref\.yaml)$'
+
           # /tmp/onexit is the onExit channel, collected as an optional artifact.
           mkdir -p /tmp/onexit
 
           if [ ! -d /artifact ] \
              || { [ -z "$(find /artifact/tree -type f -print -quit 2>/dev/null)" ] \
                   && [ ! -s /artifact/deleted.lst ]; }; then
-            echo "ℹ️  No .status.yaml updates handed off — nothing to commit."
+            echo "ℹ️  No agents-state updates handed off — nothing to commit."
             echo -n "none" > /tmp/onexit/activity
             exit 0
           fi
@@ -892,16 +917,16 @@ spec:
             find /artifact -mindepth 1 ! -type d ! -type f >&2
             exit 1
           fi
-          BAD="$(cd /artifact/tree 2>/dev/null && find . -type f | sed 's|^\./||' | grep -vE '^platform-gitops/agents-state/.+/\.status\.yaml$' || true)"
+          BAD="$(cd /artifact/tree 2>/dev/null && find . -type f | sed 's|^\./||' | grep -vE "$ALLOWED_RE" || true)"
           if [ -n "$BAD" ]; then
-            echo "❌ Refusing a handoff with paths that are not .status.yaml under agents-state:" >&2
+            echo "❌ Refusing a handoff with paths outside the allowed agents-state subtree:" >&2
             printf '%s\n' "$BAD" >&2
             exit 1
           fi
           if [ -s /artifact/deleted.lst ]; then
-            BAD_DEL="$(grep -vE '^platform-gitops/agents-state/.+/\.status\.yaml$' /artifact/deleted.lst || true)"
+            BAD_DEL="$(grep -vE "$ALLOWED_RE" /artifact/deleted.lst || true)"
             if [ -n "$BAD_DEL" ]; then
-              echo "❌ Refusing a deletion list with paths that are not .status.yaml under agents-state:" >&2
+              echo "❌ Refusing a deletion list with paths outside the allowed agents-state subtree:" >&2
               printf '%s\n' "$BAD_DEL" >&2
               exit 1
             fi
@@ -922,25 +947,38 @@ spec:
             done < /artifact/deleted.lst
           fi
 
-          # Second layer, on the checkout: the same expression the PVC era used, now
-          # against a pristine clone holding only what the copy above laid down.
-          NON_STATUS_CHANGES="$(git status --porcelain -z -uall -- ':(exclude,glob)platform-gitops/agents-state/**/.status.yaml' | tr '\0' '\n' | cut -c4-)"
+          # Second layer, on the checkout: the same expressions the PVC era used, now
+          # against a pristine clone holding only what the copy above laid down. Both
+          # exclude pathspecs must be passed together — without SPEC_ADOPTED here, a
+          # .prref.yaml the copy above laid down would trip this guard as an
+          # unexpected change and fail the whole commit step.
+          NON_STATUS_CHANGES="$(git status --porcelain -z -uall -- ":(exclude,glob)platform-gitops/agents-state/**/.status.yaml" ":(exclude,glob)platform-gitops/agents-state/*/adopted-prs/*/**" | tr '\0' '\n' | cut -c4-)"
           if [ -n "$NON_STATUS_CHANGES" ]; then
-            echo "❌ Refusing to commit changes outside .status.yaml files under platform-gitops/agents-state/:" >&2
+            echo "❌ Refusing to commit changes outside the allowed agents-state subtree:" >&2
             printf '%s\n' "$NON_STATUS_CHANGES" >&2
             exit 1
           fi
 
-          STATUS_CHANGES="$(git status --porcelain -z -uall -- ':(glob)platform-gitops/agents-state/**/.status.yaml' | tr '\0' '\n' | cut -c4-)"
-          if [ -z "$STATUS_CHANGES" ]; then
-            echo "ℹ️  No .status.yaml updates — nothing to commit."
+          AGENT_STATE_CHANGES="$(git status --porcelain -z -uall -- "$SPEC_STATUS" "$SPEC_ADOPTED" | tr '\0' '\n' | cut -c4-)"
+          if [ -z "$AGENT_STATE_CHANGES" ]; then
+            echo "ℹ️  No agents-state updates — nothing to commit."
             echo -n "none" > /tmp/onexit/activity
             exit 0
           fi
-          git add -- ':(glob)platform-gitops/agents-state/**/.status.yaml'
+
+          # `git add` with a pathspec that matches nothing exits 128 under `set -e`,
+          # so only pass the pathspecs that actually have matching changes.
+          set --
+          if [ -n "$(git status --porcelain -z -uall -- "$SPEC_STATUS")" ]; then
+            set -- "$@" "$SPEC_STATUS"
+          fi
+          if [ -n "$(git status --porcelain -z -uall -- "$SPEC_ADOPTED")" ]; then
+            set -- "$@" "$SPEC_ADOPTED"
+          fi
+          git add -- "$@"
 
           if git diff --cached --quiet; then
-            # Defensive: STATUS_CHANGES already proved there are
+            # Defensive: AGENT_STATE_CHANGES already proved there are
             # matches, but keep this guard in case `git add` ever
             # ends up staging an empty diff (e.g. a permissions-only
             # change git ignores).
