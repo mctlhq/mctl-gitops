@@ -91,6 +91,23 @@ jobs:
             -schema-location "$CRD_SCHEMA_LOCATION" \
             "$tmpdir/bootstrap.yaml" "$tmpdir/argocd.yaml"
 
+      # issue-903: otelCollector.eval.enabled is false by default, so this
+      # overlay is the only place the eval-namespace/eval-candidates
+      # templates and a multi-backend fan-out ever render in CI. Proves the
+      # manifests mctlhq/mctl-gitops#1280 will flip on are schema-valid
+      # before that PR exists, not after.
+      - name: Render and validate the otel-collector eval overlay (issue-903)
+        run: |
+          set -euo pipefail
+          tmpdir=$(mktemp -d)
+          helm template test platform-gitops/bootstrap \
+            -f platform-gitops/bootstrap/values.yaml \
+            -f tests/fixtures/otel-eval-candidates.example-values.yaml \
+            > "$tmpdir/bootstrap-eval.yaml"
+          kubeconform -strict -summary -schema-location default \
+            -schema-location "$CRD_SCHEMA_LOCATION" \
+            "$tmpdir/bootstrap-eval.yaml"
+
       - name: Validate platform skill registry
         run: |
           python3 -m pip install --quiet pyyaml
@@ -316,3 +333,43 @@ jobs:
         run: |
           python3 -m pip install --quiet pyyaml
           python3 tests/test_otel_collector_alert_windows.py
+
+      - name: Unit-test the otel-collector backends/eval render (issue-903)
+        # T1/T2/T5: the default render must stay byte-identical to the
+        # committed golden file, the fan-out must render N independent
+        # otlp/<name> exporters plus the legacy scalar, and the gated eval
+        # manifests must render nothing by default and a correct
+        # Namespace/NetworkPolicy/Application set under the example overlay.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_otel_collector_backends_render.py
+
+      - name: Unit-test the DevLoop trace fixtures (issue-903)
+        # T3/T4: the representative fixture has one root span per execution,
+        # no orphaned parentSpanId, every correlation attribute, and at least
+        # one ERROR-status outcome; the poisoned fixture's four attributes are
+        # each matched by a pattern actually present in the committed
+        # redaction config, so the fixture and the block lists cannot
+        # silently drift apart.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_devloop_trace_fixture.py
+
+      - name: Check the ADR rubric stays frozen and Stage A honest (issue-903)
+        # T6/T7: weights sum to 100 and agree with the ADR's Markdown table,
+        # every score cell is null before any candidate is deployed, and no
+        # Stage A row whose evidence is only the issue text is promoted to
+        # SURVIVES on a load-bearing deployment claim.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_adr_rubric_frozen.py
+
+      - name: Check the otel-trace-fixture ConfigMap is up to date (issue-903)
+        # --selftest first, same reason as the other detectors in this job: a
+        # drift detector that has never been seen to fire is not known to
+        # work. tests/fixtures/devloop-trace*.json is the source of truth;
+        # this catches a hand edit to either file that left the in-cluster
+        # ConfigMap copy stale.
+        run: |
+          scripts/materialize-otel-trace-fixture.py --selftest
+          scripts/materialize-otel-trace-fixture.py --check

@@ -1,0 +1,278 @@
+# Frozen scoring rubric and Stage A paper screen for issue #903 (trace-backend
+# comparison: Traceway, Grafana Tempo, Langfuse, Arize Phoenix, SigNoz).
+#
+# Frozen means frozen: every `dimensions[].candidates[].score` and
+# `citation` below is null/empty in THIS commit, and stays that way until
+# mctlhq/mctl-gitops#1280 runs the live evaluation and fills them in from
+# measurements. tests/test_adr_rubric_frozen.py (T6) enforces both the
+# freeze and that this file's weights agree with the Markdown table in
+# docs/adr/0001-agent-execution-trace-backend.md, so the two cannot drift
+# apart and the rubric cannot be retrofitted to a favourite after scores
+# exist.
+#
+# Weights, cell scale, tie margin and decision rule are this proposal's
+# Open Questions "Weights" answer (requirements.md): trace reconstruction and
+# AI/agent observability are the two axes the issue names as primary; data
+# ownership/portability and operations are weighted to jointly outweigh
+# either single feature axis, on the reasoning that a decision this cluster
+# has to operate for years should not be won by a feature demo; evals is the
+# dimension most cheaply deferred to a later, separate decision.
+
+candidates:
+  - traceway
+  - tempo
+  - langfuse
+  - phoenix
+  - signoz
+
+dimensions:
+  - key: trace_reconstruction
+    name: Trace reconstruction
+    weight: 25
+    description: >-
+      Complete parent/child tree; async/queue/Temporal/Argo visibility;
+      search by workflow/repo/issue/PR/agent; error navigation; cross-link to
+      logs where useful.
+    candidates:
+      traceway: {score: null, citation: ""}
+      tempo: {score: null, citation: ""}
+      langfuse: {score: null, citation: ""}
+      phoenix: {score: null, citation: ""}
+      signoz: {score: null, citation: ""}
+
+  - key: ai_agent_observability
+    name: AI/agent observability
+    weight: 25
+    description: >-
+      Model/provider grouping; tool/MCP spans; token usage including
+      cache/reasoning dimensions; per-call and per-execution cost;
+      conversation/session/agent-run grouping; ability to show one DevLoop
+      run without storing full prompts/completions.
+    candidates:
+      traceway: {score: null, citation: ""}
+      tempo: {score: null, citation: ""}
+      langfuse: {score: null, citation: ""}
+      phoenix: {score: null, citation: ""}
+      signoz: {score: null, citation: ""}
+
+  - key: data_ownership_portability
+    name: Data ownership / portability
+    weight: 20
+    description: >-
+      Self-hosting license; raw data access/export; OTLP compatibility;
+      ability to remove the backend with zero producer-code changes;
+      backup/restore and retention controls.
+    candidates:
+      traceway: {score: null, citation: ""}
+      tempo: {score: null, citation: ""}
+      langfuse: {score: null, citation: ""}
+      phoenix: {score: null, citation: ""}
+      signoz: {score: null, citation: ""}
+
+  - key: operations
+    name: Operations
+    weight: 15
+    description: >-
+      Kubernetes/GitOps deployment quality; storage footprint; HA/upgrade
+      complexity; dependencies (ClickHouse/Postgres/Redis/object
+      storage/etc.); expected maintenance burden at mctl scale (three cx43
+      workers).
+    candidates:
+      traceway: {score: null, citation: ""}
+      tempo: {score: null, citation: ""}
+      langfuse: {score: null, citation: ""}
+      phoenix: {score: null, citation: ""}
+      signoz: {score: null, citation: ""}
+
+  - key: security_privacy
+    name: Security / privacy
+    weight: 10
+    description: >-
+      Prompts/completions off by default; no persisted credentials,
+      authorization headers, secret MCP arguments, unrestricted tool
+      payloads or private Telegram content; useful debugging/cost
+      attribution from metadata-first telemetry.
+    candidates:
+      traceway: {score: null, citation: ""}
+      tempo: {score: null, citation: ""}
+      langfuse: {score: null, citation: ""}
+      phoenix: {score: null, citation: ""}
+      signoz: {score: null, citation: ""}
+
+  - key: evals_quality_loop
+    name: Evals / quality loop
+    weight: 5
+    description: >-
+      Attaching deterministic or LLM-eval scores to executions;
+      datasets/experiments where relevant; compatibility with mctl-owned
+      evals rather than forcing backend-owned semantics; usefulness for
+      tool-selection/context/retrieval evaluation.
+    candidates:
+      traceway: {score: null, citation: ""}
+      tempo: {score: null, citation: ""}
+      langfuse: {score: null, citation: ""}
+      phoenix: {score: null, citation: ""}
+      signoz: {score: null, citation: ""}
+
+# 0-5 cell scale, shared across every dimension above. A score is only ever
+# assigned by #1280 from a measurement or a documented, reproducible test
+# against a deployed candidate -- never from vendor marketing copy.
+cell_scale:
+  - level: 0
+    definition: "Not supported, or support could not be verified in the live evaluation."
+  - level: 1
+    definition: "Present but unusable for this dimension without significant custom work."
+  - level: 2
+    definition: "Partially supports the dimension; a workaround is required for the representative DevLoop trace."
+  - level: 3
+    definition: "Adequately supports the dimension for the representative DevLoop trace, with minor friction."
+  - level: 4
+    definition: "Fully supports the dimension for the representative DevLoop trace with no notable friction."
+  - level: 5
+    definition: "Best-in-class support for the dimension among the five candidates, measured, not asserted."
+
+weighted_total_max: 500
+
+tie_margin: 25
+tie_break: >-
+  On a weighted-total tie within tie_margin points, prefer the candidate
+  with the smaller new operational dependency surface on this cluster --
+  decidable rather than a taste judgement, because no ClickHouse runs
+  anywhere in platform-gitops/infra-components/data/ today, so a
+  ClickHouse-backed candidate is a strictly larger new dependency than one
+  that is not.
+
+decision_rule:
+  - branch: 1
+    outcome: "single backend"
+    condition: >-
+      One candidate wins outright on both trace_reconstruction and
+      ai_agent_observability and is not last on operations.
+  - branch: 2
+    outcome: "general trace store + AI specialist"
+    condition: >-
+      Else the best general trace store and the best AI specialist each win
+      their own axis by more than tie_margin, and their combined measured
+      operations footprint fits the cluster. The specialist is explicitly
+      not the FinOps source of truth (mctlhq/.github#48).
+  - branch: 3
+    outcome: "ADOPT TEMPO / mctl-native only"
+    condition: >-
+      Else no candidate's ai_agent_observability score exceeds by more than
+      one point what the existing openclaw-llm-usage dashboard pattern
+      (infra-components/observability/grafana-dashboards/openclaw-llm-usage-dashboard-configmap.yaml)
+      already delivers. This is the deliberate default when the spike is
+      inconclusive: one values key, one Grafana datasource ConfigMap, one
+      bucket, trivially reversible.
+  - branch: 4
+    outcome: "CONTINUE COMPARISON"
+    condition: "Else, with one named blocker recorded in the ADR's Decision section."
+
+# Verbatim from issue #903's "Deliverable" section. The live evaluation
+# (#1280) selects exactly one of these; this proposal states them as a
+# closed list so the later decision cannot invent an eighth option.
+permitted_verdicts:
+  - "ADOPT TRACEWAY"
+  - "ADOPT TEMPO + AI SPECIALIST"
+  - "ADOPT LANGFUSE"
+  - "ADOPT PHOENIX for eval specialization"
+  - "ADOPT SIGNOZ"
+  - "ADOPT TEMPO / mctl-native only"
+  - "CONTINUE COMPARISON with an explicit unresolved blocker"
+
+verdict: null
+
+# Stage A paper screen: what was verified against this clone/issue text
+# versus what is only asserted by issue #903 itself. A row whose evidence is
+# `issue-903-body` may not be marked SURVIVES on a load-bearing deployment
+# claim (tests/test_adr_rubric_frozen.py T7) -- an unverified claim about a
+# young project must not be silently promoted to a measured fact.
+# Screened-out candidates keep their row and their reason; nothing is
+# deleted.
+stage_a:
+  - candidate: traceway
+    license: "MIT (per issue #903 body; not independently verifiable -- Traceway appears nowhere in this clone)"
+    deploy_path: "Self-hostable per issue #903 body; no chart or manifest coordinates found in this repository or its dependencies"
+    pinnable_version: "Unknown -- no chart/image reference could be located to pin"
+    dependencies: "Unknown -- not documented in any source available to this investigation"
+    otlp_ingestion: "Claimed native OTLP per issue #903 body; not independently verified"
+    raw_export: "Unknown"
+    footprint_claim: "Unknown -- no measurement or vendor documentation available"
+    evidence: issue-903-body
+    verdict: UNVERIFIED
+    reason: >-
+      Traceway appears nowhere in this clone and the issue text is the only
+      source available to this investigation; no chart, license file or
+      deployment manifest could be located or verified offline. #1280 must
+      resolve identity, license and a pinnable chart/image reference before
+      any cluster capacity is budgeted for it.
+
+  - candidate: tempo
+    license: "AGPL-3.0 (Grafana Tempo, upstream project)"
+    deploy_path: "Helm chart grafana/tempo-distributed or grafana/tempo, matching this repo's existing Grafana/Loki/VictoriaMetrics stack deployment style"
+    pinnable_version: "Yes -- upstream Helm chart is versioned and pinnable, matching the exact-pin convention already used for every other chart in this repo (otel-collector.yaml, loki.yaml)"
+    dependencies: "Object storage backend (this repo already runs Cloudflare R2 for Loki, per platform-gitops/infra-components/observability/secrets/loki-minio-externalsecret.yaml) plus the Tempo components themselves"
+    otlp_ingestion: "Native OTLP ingestion, no vendor SDK required"
+    raw_export: "TraceQL query API plus raw block storage in the configured object store"
+    footprint_claim: "General trace store only, no AI-specific token/cost UX by design"
+    evidence: "vendor-documentation"
+    verdict: SURVIVES
+    reason: ""
+
+  - candidate: langfuse
+    license: "MIT core, some enterprise governance features commercially licensed (per issue #903 body)"
+    deploy_path: "Self-hostable open-core per issue #903 body; official Helm chart exists upstream"
+    pinnable_version: "Yes -- upstream Helm chart is versioned"
+    dependencies: "ClickHouse, Postgres, Redis and blob storage (per issue #903 body) -- the heaviest stateful footprint of the five"
+    otlp_ingestion: "OpenTelemetry ingestion supported (per issue #903 body)"
+    raw_export: "Metrics API and dataset export documented upstream"
+    footprint_claim: "Heavier production stack than a general trace store alone -- ClickHouse/Postgres/Redis/blob storage, per issue #903 body"
+    evidence: issue-903-body
+    verdict: UNVERIFIED
+    reason: >-
+      The dependency list and OTLP-ingestion claim are asserted by the issue
+      body only; this investigation could not independently confirm the
+      current chart's OTLP ingestion path or exact dependency set. Not
+      screened out -- the claim is plausible and matches Langfuse's known
+      public architecture -- but not promoted to SURVIVES on a load-bearing
+      deployment claim without independent verification under #1280.
+
+  - candidate: phoenix
+    license: "Elastic License v2 (ELv2), source-available rather than permissive OSS (per issue #903 body)"
+    deploy_path: "Self-hostable per issue #903 body; OpenTelemetry/OpenInference-oriented tracing"
+    pinnable_version: "Yes -- container image is versioned upstream"
+    dependencies: "Unknown at Stage A -- not enumerated in issue #903 body beyond the tracing/eval stack itself"
+    otlp_ingestion: "OpenInference is the primary path per issue #903 body; plain-OTLP-only ingestion without OpenInference-specific instrumentation is NOT confirmed"
+    raw_export: "Unknown at Stage A"
+    footprint_claim: "Better suited as an AI eval/trace specialist than a general platform tracing backend, per issue #903 body"
+    evidence: issue-903-body
+    verdict: UNVERIFIED
+    reason: >-
+      requirements.md's Stage A portability gate requires plain OTLP (not a
+      vendor SDK, not OpenInference-only) as a supported ingestion path. The
+      issue text describes Phoenix as "OpenTelemetry/OpenInference-oriented"
+      without stating that plain OTLP alone is sufficient, and no
+      independent documentation was available to this investigation to
+      confirm it either way. This is exactly the load-bearing deployment
+      claim the UNVERIFIED verdict exists for; #1280 confirms plain-OTLP
+      ingestion before treating Phoenix as a live candidate.
+
+  - candidate: signoz
+    license: "MIT / Apache-2.0 dual-licensed core (SigNoz, upstream project); some enterprise features are commercial"
+    deploy_path: "Self-hostable Helm chart, OpenTelemetry-native per issue #903 body"
+    pinnable_version: "Yes -- upstream Helm chart is versioned"
+    dependencies: "ClickHouse-backed (per issue #903 body), plus SigNoz's own query and alert services"
+    otlp_ingestion: "OpenTelemetry-native ingestion, no vendor SDK required"
+    raw_export: "ClickHouse-backed raw storage, queryable directly"
+    footprint_claim: "Overlaps more heavily with the existing Loki/VictoriaMetrics/Grafana stack than a pure trace store, per issue #903 body; ClickHouse operational footprint must be measured, not assumed"
+    evidence: issue-903-body
+    verdict: UNVERIFIED
+    reason: >-
+      OTLP-native ingestion and the ClickHouse dependency are asserted by
+      the issue body; this investigation found nothing in this repository
+      to independently confirm the current chart's exact dependency set or
+      that plain OTLP (no vendor-specific instrumentation) is fully
+      sufficient for the AI-specific LLM observability features the issue
+      calls "investing in agent-native / MCP access". Recorded UNVERIFIED
+      rather than SURVIVES on that load-bearing claim; #1280 resolves it
+      before deployment.

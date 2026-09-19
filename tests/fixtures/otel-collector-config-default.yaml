@@ -1,0 +1,99 @@
+# Golden file: the otel-collector's rendered OpenTelemetry Collector
+# config (the `config:` block passed as chart values to the
+# opentelemetry-collector Application in
+# platform-gitops/bootstrap/templates/observability/otel-collector.yaml),
+# rendered from platform-gitops/bootstrap/values.yaml defaults
+# (otelCollector.backendEndpoint: "", otelCollector.backends: []).
+#
+# tests/test_otel_collector_backends_render.py compares this file byte
+# for byte against a fresh render, so a legitimate edit to the collector
+# config must regenerate it. Regenerate with:
+#
+#   python3 tests/test_otel_collector_backends_render.py --write-golden
+#
+# and review the diff -- this is what makes "this merge changes nothing"
+# a check instead of a claim.
+receivers:
+  jaeger: null
+  prometheus: null
+  zipkin: null
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 75
+    spike_limit_percentage: 20
+  k8sattributes:
+    extract:
+      metadata:
+      - k8s.namespace.name
+      - k8s.pod.name
+      - k8s.node.name
+      - k8s.deployment.name
+      labels:
+      - tag_name: mctl.team
+        key: mctl.ai/team
+        from: pod
+      - tag_name: mctl.component
+        key: mctl.ai/component
+        from: pod
+  resource:
+    attributes:
+    - key: k8s.cluster.name
+      value: mctl-preprod
+      action: insert
+    - key: deployment.environment
+      value: preprod
+      action: insert
+  redaction:
+    allow_all_keys: true
+    blocked_key_patterns:
+    - (?i).*(authorization|cookie|api[-_]?key|token|secret|password|credential).*
+    - (?i)^vault\..*
+    - (?i)^gen_ai\.(prompt|completion).*
+    - (?i).*\.messages$
+    - (?i)^mcp\.tool\.(arguments|result)$
+    - ^db\.statement$
+    - ^http\.(request|response)\.header\..*
+    blocked_values:
+    - ghp_[A-Za-z0-9]{36}
+    - gh[pousr]_[A-Za-z0-9]{20,}
+    - sk-[A-Za-z0-9]{20,}
+    - hvs\.[A-Za-z0-9]{20,}
+    - eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.
+  filter/health:
+    error_mode: ignore
+    traces:
+      span:
+      - attributes["url.path"] == "/healthz"
+      - attributes["url.path"] == "/readyz"
+      - attributes["http.target"] == "/healthz"
+      - attributes["http.target"] == "/readyz"
+  batch:
+    send_batch_size: 512
+    send_batch_max_size: 1024
+    timeout: 5s
+exporters:
+  debug:
+    verbosity: normal
+service:
+  pipelines:
+    logs: null
+    metrics: null
+    traces:
+      receivers:
+      - otlp
+      processors:
+      - memory_limiter
+      - k8sattributes
+      - resource
+      - redaction
+      - filter/health
+      - batch
+      exporters:
+      - debug

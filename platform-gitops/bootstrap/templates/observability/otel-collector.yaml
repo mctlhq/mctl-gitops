@@ -230,6 +230,35 @@ spec:
                   max_interval: 30s
                   max_elapsed_time: 300s
               {{- end }}
+              {{- /* issue-903: generalized fan-out for the trace-backend
+                  comparison spike. Each named entry in otelCollector.backends
+                  renders its own otlp/<name> exporter with its own queue and
+                  retry settings, alongside (never instead of) the legacy
+                  scalar above -- both render if both are set, per
+                  docs/runbooks/otel-collector.md. `headers` must only ever
+                  carry ${env:...} expansion expressions, never a literal
+                  value, so a credential never enters this file. */}}
+              {{- range .Values.otelCollector.backends }}
+              otlp/{{ .name }}:
+                endpoint: {{ .endpoint | quote }}
+                {{- if .insecure }}
+                tls:
+                  insecure: true
+                {{- end }}
+                {{- with .headers }}
+                headers:
+                  {{- toYaml . | nindent 18 }}
+                {{- end }}
+                sending_queue:
+                  enabled: true
+                  num_consumers: {{ .numConsumers | default 4 }}
+                  queue_size: {{ .queueSize | default 5000 }}
+                retry_on_failure:
+                  enabled: true
+                  initial_interval: 5s
+                  max_interval: 30s
+                  max_elapsed_time: 300s
+              {{- end }}
 
             service:
               pipelines:
@@ -252,6 +281,9 @@ spec:
                     - debug
                     {{- if .Values.otelCollector.backendEndpoint }}
                     - otlp/backend
+                    {{- end }}
+                    {{- range .Values.otelCollector.backends }}
+                    - otlp/{{ .name }}
                     {{- end }}
     - repoURL: {{ .Values.spec.source.repoURL }}
       targetRevision: {{ .Values.spec.source.targetRevision }}
