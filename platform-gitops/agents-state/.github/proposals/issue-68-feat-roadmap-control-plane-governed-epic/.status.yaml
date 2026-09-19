@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-09-18T21:11:33Z'
+status: merged
+updated_at: '2026-09-19T00:03:24Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -18,7 +18,8 @@ attempt:
   finished_at: '2026-09-18T13:28:34Z'
 pr: https://github.com/mctlhq/.github/pull/94
 github:
-  state: open
-  head_sha: 5559f0733f2919d7931b74f6c3bc0a38390ab7ec
-  observed_at: '2026-09-18T15:18:23Z'
-review_attempts: 1
+  state: merged
+  head_sha: 0a220d1d93543b7e42e307d9e8db575f6f12481c
+  observed_at: '2026-09-19T00:03:24Z'
+merged_at: '2026-09-19T00:03:24Z'
+merge_commit: cf8d3757cca7762e0683144a5a5b21a609572254
