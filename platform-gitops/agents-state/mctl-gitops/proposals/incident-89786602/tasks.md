@@ -1,14 +1,18 @@
 # Tasks: incident-89786602
 
-1. [ ] Check whether incident-89786271's timeout fix has already landed for
-       the mctl-agents-implement WorkflowTemplate/CronWorkflow; if so, this
-       proposal is satisfied by that same change and needs no separate edit.
-2. [ ] Otherwise, locate the Argo WorkflowTemplate/CronWorkflow that defines
-       the mctl-agents "implement" run-implementer step and confirm the
-       current timeout field name and value (expected around ~9500s based on
-       observed failure timing).
-3. [ ] Reduce that timeout to approximately 1800s (30 minutes), or the
-       team's agreed implementer runtime SLA if different.
-4. [ ] Verify the change only affects the implement workflow's timeout and
-       does not alter resource requests/limits or concurrency settings.
-5. [ ] No image tag bump needed — this is a values/manifest-only change.
+1. [ ] In `platform-gitops/argo-workflows/cluster-templates/cwft-mctl-agents-implement.yaml`,
+   add `activeDeadlineSeconds: 7200` to the `run-implementer` template
+   (the template starting at `- name: run-implementer`, currently line 238),
+   at the same indentation level as `outputs:` / `inputs:` / `container:`.
+2. [ ] In the same file, change `spec.activeDeadlineSeconds` from `7200` to
+   `16200` (line 59), and update the surrounding comment to explain the new
+   split: a 7200s ceiling per implementer attempt (now enforced on the
+   `run-implementer` template) plus headroom for a fallback attempt,
+   commit-and-push retries, and assert-attempt.
+3. [ ] Verify the YAML still parses and the `run-implementer` template block
+   is well-formed (correct indentation matching sibling keys).
+4. [ ] No image tag bump needed — this is a workflow-template-only config
+   change with no code changes to `mctl-agents`.
+   Note: if an earlier sibling proposal (incident-89786271 / -89786272)
+   already applied this exact change, this task becomes a no-op
+   verification instead of a duplicate edit.

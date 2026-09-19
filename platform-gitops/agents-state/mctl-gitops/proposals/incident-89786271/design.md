@@ -1,55 +1,50 @@
 # Design: incident-89786271
 
-## Confidence: LOW
-
 ## Diagnosis
-mctl-agents-implement-0eaa9853 (implementer run for mctlhq/mctl-telegram
-issue-438) was submitted at 2026-09-19T00:12:31Z. Its run-implementer step
-did start and produced a substantial transcript (~795KB), but transcript
-growth stopped around 02:12:32Z with no final result/completion message ever
-recorded — the implementer session hung. The Argo Workflow itself was not
-marked failed until 02:51:11Z, 9516.365s (~2h38m) after submission and ~39
-minutes after the transcript had already gone silent. No auto-fix skill
-matched because there is no application error to match against: this is a
-hung process plus an overly generous outer timeout, not an exception.
-
-The same ~2.3-2.6 hour delay-before-failure pattern shows up on five sibling
-implement workflows submitted 00:29:38-00:31:33 (shortly after a burst of six
-dev-loop approvals at 00:28:05-00:28:15), except those never logged a single
-byte from run-implementer at all — the signature of a pod that stayed
-Pending rather than one that ran and errored. The most likely mechanism: this
-workflow's implementer pod held resources in the shared "admins" namespace
-for over two hours while hung, leaving no ResourceQuota headroom for the
-burst of newly-submitted implement pods to schedule, so they sat Pending
-until the same long per-workflow timeout finally killed them too.
-
-I could not read the mctl-agents-implement WorkflowTemplate/CronWorkflow
-manifest in this gitops checkout (no read access from this run) to confirm
-the exact timeout field and its current value, so the current ~9500s figure
-below is inferred from observed failure timing, not read directly from
-config. Treat the field path as a best-effort pointer for the implementer to
-verify before editing.
+`platform-gitops/argo-workflows/cluster-templates/cwft-mctl-agents-implement.yaml`
+declares a single `spec.activeDeadlineSeconds: 7200` at the WORKFLOW level
+(line 59), even though the template's own comment describes it as a
+per-attempt "hard 2h safety ceiling." Argo applies `spec.activeDeadlineSeconds`
+to the workflow's total wall-clock runtime, not per step, so the
+`implement-fallback` retry, `commit-and-push`, and `assert-attempt` steps all
+share the SAME 7200s budget as the primary `implement` step. In this
+incident's workflow, the primary `implement` step ran until (almost) the full
+7200s doing genuine work (the run-implementer log shows active file edits,
+gofmt, go build, and go test in progress when the log ends). Once that step
+was killed for exceeding the deadline, `implement-fallback` and `commit-and-push`
+were started anyway but had no real time budget left, and both failed with
+"Step exceeded its deadline" / "retry exceeded workflow deadline
+2026-09-19 02:12:31 +0000 UTC" (that timestamp is exactly workflow start +
+7200s). `commit-and-push` normally finishes in well under a minute; it failed
+here purely because the shared deadline had already elapsed, not because of
+any problem in the commit logic itself. Net effect: the proposal's
+`.status.yaml` update is never pushed to `main`, so the run reports Failed
+and generates this incident even when the underlying SDK work substantially
+succeeded.
 
 ## Proposed Fix
-In the mctl-agents "implement" Argo WorkflowTemplate/CronWorkflow definition
-(expected under something like
-platform-gitops/services/admins/mctl-agents/*.yaml or a shared
-WorkflowTemplate chart), reduce the step/workflow-level timeout that is
-currently allowing an implement run to occupy a pod slot for roughly 9500s
-(~2h38m) down to something in the 1200-1800s (20-30 minute) range — for
-example an `activeDeadlineSeconds: 1800` on the run-implementer template, or
-the equivalent `timeout:` field if the CronWorkflow sets it centrally.
-Current value: ~9500s (inferred, not confirmed). New value: 1800s (30
-minutes), or whatever the team's target implementer runtime SLA already is,
-if lower.
-
-This makes a hung or unschedulable implementer pod fail fast and free its
-ResourceQuota slot for queued work, instead of blocking the "admins"
-namespace for over two hours before the failure is even visible.
+In `platform-gitops/argo-workflows/cluster-templates/cwft-mctl-agents-implement.yaml`:
+1. Add `activeDeadlineSeconds: 7200` to the `run-implementer` template itself
+   (currently starting at line 238), so the 2h ceiling bounds ONE implementer
+   attempt (primary or fallback) instead of the whole workflow.
+2. Raise the workflow-level `spec.activeDeadlineSeconds` (line 59) from
+   `7200` to `16200` (4.5h) — enough for a primary attempt (7200s) + a
+   fallback attempt (7200s) + commit-and-push with its existing retries
+   (~600s budget) + assert-attempt (~60s) + margin — so `commit-and-push`
+   always has real time to run regardless of how long the implementer
+   attempts took.
 
 ## Scope
-Minimal. Only touch the single timeout field controlling how long a
-mctl-agents-implement run-implementer step is allowed to run before Argo
-kills it. Do not change ResourceQuota sizing or concurrency limits here —
-verify need for that separately if timeout tightening alone does not resolve
-recurring starvation.
+Minimal. Only the two `activeDeadlineSeconds` values in
+`cwft-mctl-agents-implement.yaml` change — no changes to run_implementer.py,
+retry policy, mutex behavior, or other templates.
+
+## Confidence: MEDIUM
+The shared-deadline mechanism is directly confirmed by Argo's own failure
+messages ("Step exceeded its deadline", "retry exceeded workflow deadline
+<workflow_start>+7200s") cross-referenced with the literal
+`activeDeadlineSeconds: 7200` field in the CWFT source, and the same pattern
+repeats across multiple independent incidents from this template. The exact
+reason `implement-fallback` itself also consistently ran to a further
+~1100-1200s before being killed (rather than failing immediately) was not
+independently root-caused here and may warrant implementer follow-up.

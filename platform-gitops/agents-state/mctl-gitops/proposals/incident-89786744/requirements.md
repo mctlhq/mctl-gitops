@@ -17,37 +17,39 @@ implement implement issue-903-spike-observability-compare-traceway-tem Failed af
 ```
 source: argo-workflows
 type: workflow_failed
-tenant: admins
-service: mctl-agents
 severity: warning
 fingerprint: workflow_failed:implement:mctl-gitops:issue-903-spike-observability-compare-traceway-tem
+occurrence_count: 1
+target repo/issue: mctl-gitops issue-903-spike-observability-compare-traceway-tem
 ```
 
 ### Log Snippet
+mctl_get_service_logs does not reach Argo step pods (Loki only ingests
+long-lived services). Evidence below is from mctl_get_workflow_status
+(argo-workflows/mctl-agents-implement-8823a79d), which is internal platform
+telemetry, not attacker-influenced incident text.
 ```
-workflow: mctl-agents-implement-8823a79d
-submitted: 2026-09-19T00:31:33Z (part of an approval burst 00:28:05-00:28:15Z)
-archived steps (mctl_get_workflow_logs):
-  - notify-telegram-2056315642 (36 bytes, lastModified 2026-09-19T02:59:06.890Z)
-observation: no run-implementer step was archived at all — the implementer
-  pod never produced output, consistent with the pod staying Pending
-  (unschedulable) for the full 8848.523336s (~2h27m) before the workflow was
-  marked failed.
-concurrent siblings submitted within the same ~2 minute window:
-  mctl-agents-implement-9a41e408 (00:29:38), mctl-agents-implement-a0c282de
-  (00:29:55), mctl-agents-implement-f82f959c (00:30:28),
-  mctl-agents-implement-41ec04ae (00:31:01) — all same symptom, see
-  incident-89786272, incident-89786602, incident-89786722.
-mctl-agents-implement-0eaa9853 (issue-438, incident-89786271), submitted
-  earlier at 00:12:31Z, DID get scheduled and ran for ~2 hours before hanging
-  without ever completing — it held a pod/quota slot in the "admins"
-  namespace through this entire window.
-admins namespace ResourceQuota at query time (mctl_get_resource_usage):
-  allocated requests.cpu=2, requests.memory=3Gi, pods=12; used
-  requests.cpu=565m, requests.memory=1520Mi, pods=7 (snapshot taken well
-  after the incident window, so it only shows headroom now, not at failure
-  time).
+workflow spec.activeDeadlineSeconds = 7200 (cwft-mctl-agents-implement.yaml:59)
+
+node "implement" (run-implementer, primary, oauth-key=claude-code-oauth-token):
+  started  2026-09-19T00:31:33Z
+  finished 2026-09-19T02:31:43Z  (~7210s elapsed)
+  message: "Step exceeded its deadline"
+
+node "implement-fallback" (run-implementer, oauth-key=claude-code-oauth-token-2):
+  started  2026-09-19T02:31:43Z
+  finished 2026-09-19T02:51:43Z  (~1200s elapsed)
+  message: "Step exceeded its deadline"
+
+node "commit" (commit-and-push, Retry):
+  started  2026-09-19T02:51:43Z
+  finished 2026-09-19T02:59:01Z  (~438s elapsed)
+  message: "Step exceeded its deadline"
 ```
 
 ## Acceptance Criteria
-- WHEN the change is applied THEN the alert stops firing for this tenant/service.
+- WHEN the change is applied THEN a future implement run whose primary
+  attempt consumes close to its full time budget still allows
+  implement-fallback and commit-and-push a real chance to complete, so the
+  workflow does not fail at the commit stage purely from having zero
+  remaining shared deadline.
