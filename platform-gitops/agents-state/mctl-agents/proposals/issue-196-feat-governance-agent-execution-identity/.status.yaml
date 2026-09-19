@@ -1,5 +1,5 @@
-status: accepted
-updated_at: '2026-09-19T00:09:39Z'
+status: implemented
+updated_at: '2026-09-19T01:21:08Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -9,5 +9,11 @@ source:
 control:
   requires_human_approval: true
 approval:
-  approved_by: 'mashkovd'
+  approved_by: mashkovd
   approved_at: '2026-09-19T00:09:39Z'
+attempt:
+  id: bc45d795-c193-4e81-b6ec-b94d274d8003
+  started_at: '2026-09-19T00:47:33Z'
+  expires_at: '2026-09-19T02:57:33Z'
+  finished_at: '2026-09-19T01:21:08Z'
+pr: https://github.com/mctlhq/mctl-agents/pull/393
