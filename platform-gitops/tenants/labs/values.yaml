@@ -17,6 +17,13 @@ tenant:
   ghcrCredentials:
     enabled: false
   quotas:
+    # Bumped 2026-09-19 (3rd): projects-mcp deploy-service workflow's validate
+    # pod (needs limits.cpu=1) went Pending — used was 11300m/12000m with 16
+    # steady-state service pods, no workflow running yet. A rolling update
+    # also briefly runs old+new replicas of the deployed service (another
+    # 500m). Bump limits.cpu 12 -> 14 for ~2 cores headroom, matching the
+    # margin the 2026-05-10 bump used for the same class of problem.
+    #
     # Bumped 2026-05-10 (2nd): preview pod (pelican-proxy-pr-36) + workflow pod
     # exhausted limits.cpu (used 9100m/10000m) and limits.memory (9024Mi/9Gi)
     # and requests.memory (3920Mi/4Gi). Workflow needs limits.cpu=1, limits.memory=512Mi,
@@ -43,7 +50,7 @@ tenant:
     # Temporal worker alongside labs-openclaw (2600m / 1104Mi req).
     requests.cpu: "3"
     requests.memory: "5Gi"
-    limits.cpu: "12"
+    limits.cpu: "14"
     # Right-sized 2026-07: after the openclaw memory-limit trim (2560Mi ->
     # 2048Mi, mctl-gitops#532), current steady-state usage is 6560Mi/11Gi —
     # but labs-openclaw is scaled to 0 right now (see
