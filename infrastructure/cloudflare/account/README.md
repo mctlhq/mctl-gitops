@@ -14,7 +14,7 @@ about their own product. Access is the OAuth authorization server for that
 application; the origin only verifies the assertion Access forwards.
 
 **Access authenticates here; it does not authorize.** The policy admits any
-account from the Google provider below, and what each of those people may see
+account from either provider below, and what each of those people may see
 is decided by the server alone, from a grants list in Vault
 (`secret/teams/labs/projects-mcp`, field `grants_yaml`) that this root does not
 read. A caller with no grant reaches the server and is told nothing: an empty
@@ -30,19 +30,21 @@ branch can take — and the one thing it reads is the list being protected. The
 policy gave up naming people rather than hand that out.
 
 What that costs is worth stating: the origin is now reachable by anyone who can
-sign in with Google, not by a named few. The server holds no credential for
-anybody's documentation and serves it from a copy baked into its image, and
-`tests/leak.test.ts` in `mctlhq/projects-mcp` sweeps every tool for a caller
-with no grant at all.
+sign in with Google or receive a one-time PIN, not by a named few. The server
+holds no credential for anybody's documentation and serves it from a copy baked
+into its image, and `tests/leak.test.ts` in `mctlhq/projects-mcp` sweeps every
+tool for a caller with no grant at all.
 
-Sign-in is Google, and only Google since 2026-09-18. A one-time PIN mailed to
-the address was allowed at first, on the argument that a customer's work address
-is not necessarily a Google account; it was dropped because a code sent to
-whoever controls an inbox is a weaker thing to hold this behind than an account.
-The consequence is worth knowing before adding an address: a person in the
-grants list without a Google account is admitted by the policy and still cannot
-log in, and what they see is a product that does not work rather than a provider
-that is missing.
+Sign-in is Google, and only Google between 2026-09-18 and 2026-09-19. A
+one-time PIN mailed to the address was allowed at first, on the argument that a
+customer's work address is not necessarily a Google account; it was dropped
+because a code sent to whoever controls an inbox is a weaker thing to hold this
+behind than an account — then restored the next day, once grants (in Vault,
+never in this repo) actually existed for non-Google customer domains this org
+cannot confirm are Google-backed, and the alternative was a grant that is
+admitted by the policy and still cannot log in. The trade is accepted
+knowingly, address by address: whoever holds a granted inbox authenticates as
+it.
 
 The provider is named by UUID: a data source was tried and removed, because the
 read-only plan identity cannot see the account's identity configuration and
