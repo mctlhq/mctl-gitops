@@ -28,7 +28,16 @@
 # path (that edit lands with the routing flip, because release-deploy
 # fails loudly on a named path that does not exist yet).
 #
-# # Recreate, not the API server's default RollingUpdate. At replicas: 1 that
+# replicaCount: 1 is an ARCHITECTURAL INVARIANT of this phase, not a
+# sizing choice. IMPLEMENTATION_MAX_CONCURRENT_ACTIVITIES is a per-process
+# limit, not a distributed semaphore: capacity is replicas × N, so two
+# replicas at N=3 admit six. scripts/validate-implement-worker-singleton.py
+# fails CI if this leaves 1 — raise N instead, and if a hard N across
+# crashes and replicas is ever needed that is ADR-010's server-side claim
+# (mctlhq/mctl-api#337), not a second replica.
+replicaCount: 1
+
+# Recreate, not the API server's default RollingUpdate. At replicas: 1 that
 # default is maxSurge: 1 / maxUnavailable: 0, and with the readiness probe
 # nulled the new pod starts polling mctl-dev-loop-implement with its own N
 # the moment its container starts, while the old pod is still supervising up
@@ -43,14 +52,6 @@ strategy:
   # when ArgoCD applies this with server-side apply.
   rollingUpdate: null
 
-replicaCount: 1 is an ARCHITECTURAL INVARIANT of this phase, not a
-# sizing choice. IMPLEMENTATION_MAX_CONCURRENT_ACTIVITIES is a per-process
-# limit, not a distributed semaphore: capacity is replicas × N, so two
-# replicas at N=3 admit six. scripts/validate-implement-worker-singleton.py
-# fails CI if this leaves 1 — raise N instead, and if a hard N across
-# crashes and replicas is ever needed that is ADR-010's server-side claim
-# (mctlhq/mctl-api#337), not a second replica.
-replicaCount: 1
 image:
   repository: ghcr.io/mctlhq/mctl-agents
   tag: "1.47.0"
