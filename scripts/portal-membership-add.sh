@@ -34,6 +34,12 @@
 set -euo pipefail
 
 server="${1:-}"
+# A server_id can never look like a flag, so an omitted argument (--check
+# landing in $1) is caught here rather than proceeding into apply mode
+# against the literal string "--check" as a bogus server_id.
+case "$server" in
+  --check|--dry-run|"") echo "usage: $0 <server_id> [--check|--dry-run]  (server_id is required and cannot start with '-')" >&2; exit 2 ;;
+esac
 mode=apply
 case "${2:-}" in
   "")          mode=apply ;;
@@ -41,7 +47,6 @@ case "${2:-}" in
   --check)     mode=check ;;
   *) echo "usage: $0 <server_id> [--check|--dry-run]  (unknown argument: $2)" >&2; exit 2 ;;
 esac
-[ -n "$server" ] || { echo "usage: $0 <server_id> [--check|--dry-run]" >&2; exit 2; }
 [ $# -le 2 ] || { echo "usage: $0 <server_id> [--check|--dry-run]" >&2; exit 2; }
 
 here=$(cd "$(dirname "$0")/.." && pwd)
@@ -56,9 +61,11 @@ git -C "$here" rev-parse --git-dir >/dev/null 2>&1 \
 # The server this script is about to add to the portal must already be a
 # reviewed, committed Terraform resource -- otherwise it is being invented
 # here rather than declared in the one place this repository says a server
-# is declared.
+# is declared. A literal match, not a regex: $server can contain characters
+# ('.', '*', '[') that an ERE would treat as metacharacters and match loosely
+# against a resource this is not meant to find.
 git -C "$here" show "HEAD:$tf_rel" 2>/dev/null \
-  | grep -qE '^resource "cloudflare_zero_trust_access_ai_controls_mcp_server" "'"$server"'"' \
+  | grep -qF "resource \"cloudflare_zero_trust_access_ai_controls_mcp_server\" \"$server\"" \
   || { echo "no cloudflare_zero_trust_access_ai_controls_mcp_server resource named '$server' in $tf_rel@HEAD; add and merge that first" >&2; exit 1; }
 
 base="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/access/ai-controls/mcp"
@@ -102,9 +109,20 @@ tools=$(jq -c '[.result.tools // [] | .[].name]' <<<"$server_obj")
 
 # Shape copied from an existing member rather than invented, same rationale
 # as the hand-run recipe this replaces: it carries whatever fields this API
-# actually stores that are not documented anywhere.
-donor=$(jq -e '.result.servers[0]' <<<"$before") \
+# actually stores that are not documented anywhere. But this portal already
+# mixes registration styles (tg/projects are Terraform-declared OAuth
+# resources, api/seerrsense are DCR added out-of-band), and nothing here has
+# measured whether on_behalf/default_disabled vary by registration type --
+# so copying whichever entry happens to sort first is only safe once every
+# existing member is checked to agree on both fields. A donor that turned out
+# not to be representative would otherwise write a wrong value silently
+# rather than fail loudly.
+[ "$(jq '.result.servers // [] | length' <<<"$before")" -gt 0 ] \
   || { echo "portal '$portal' has no existing members to copy a shape from; this script assumes at least one" >&2; exit 1; }
+donor_values=$(jq -c '[.result.servers // [] | .[] | {on_behalf, default_disabled}] | unique' <<<"$before")
+[ "$(jq 'length' <<<"$donor_values")" -eq 1 ] \
+  || { echo "existing portal members do not agree on on_behalf/default_disabled, so there is no single safe default to copy for a new one: $(jq -c . <<<"$donor_values")" >&2; exit 1; }
+donor=$(jq '.result.servers[0]' <<<"$before")
 on_behalf=$(jq '.on_behalf' <<<"$donor")
 default_disabled=$(jq '.default_disabled' <<<"$donor")
 
