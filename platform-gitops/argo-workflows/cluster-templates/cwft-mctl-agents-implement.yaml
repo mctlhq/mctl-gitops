@@ -52,11 +52,34 @@ spec:
     secondsAfterCompletion: 86400
   # volumeClaimGC is gone with the PVC — there is no claim left to reclaim.
   #
-  # One proposal may still need clone + bounded SDK work + push + PR, so keep
-  # a hard 2h safety ceiling. Do not raise this to accommodate an unlimited
-  # batch: max_proposals=1 below is the quota and runtime boundary introduced
-  # after incident-0f3b9ea3.
-  activeDeadlineSeconds: 7200
+  # This is a RUNAWAY GUARD, not the work budget. The work budget is 7200s on
+  # the run-implementer template, where it belongs.
+  #
+  # It used to be 7200 here, and a spec-level deadline runs from SUBMIT, not
+  # from the moment the mutex below is acquired — so time spent queueing was
+  # charged to the implementer's own budget. mctl-agents-proposal-claims is a
+  # mutex (capacity 1) and one proposal takes 30-70 min, so only the first
+  # two or three submissions of a batch could ever start inside 2h. Everything
+  # behind them died Pending, having never created a pod.
+  #
+  # Worse than losing the attempt: the deadline is workflow-wide, so once
+  # `implement` had consumed it, `implement-fallback` AND `commit-and-push`
+  # were failed instantly with "Step exceeded its deadline" — and
+  # commit-and-push is the only step that writes `.status.yaml` back. The
+  # proposal stayed `accepted` with no branch, no PR and no failure recorded
+  # anywhere, which is exactly the state the `assert-produced` truthful-status
+  # design exists to prevent.
+  #
+  # 2026-09-19: six of nine implement runs lost this way in one night
+  # (mctl-agents#333 #334, mctl-telegram#438 #569, mctl-gitops#903 #1178).
+  #
+  # 8h = worst-case work (7200 primary + 7200 fallback + a bounded
+  # commit-and-push) plus room to queue behind two or three other runs. A
+  # deeper queue can still expire here, but it now expires having attempted
+  # nothing, instead of throwing away a finished attempt. Narrowing the mutex
+  # to the discovery+claim critical section is the real fix for the queue and
+  # is tracked separately.
+  activeDeadlineSeconds: 28800
   entrypoint: implement-proposals
   onExit: notify-telegram
   # NB: mctl-gitops-main-writes lives on the commit-and-push template, not
@@ -332,6 +355,18 @@ spec:
       synchronization:
         mutex:
           name: mctl-agents-proposal-claims
+      # The real work budget, and the reason the spec-level ceiling above is
+      # only a runaway guard. A template deadline is applied to the POD, so it
+      # runs from the pod's start — after the mutex above is acquired. Queue
+      # time is no longer charged to the attempt.
+      #
+      # 7200 is the same ceiling this template has always had, kept as the
+      # outer net around the 5400s IMPLEMENTER_TIMEOUT_SECONDS below; it bounds
+      # a hung model stream that the inner `anyio.fail_after` fails to unwind.
+      # It applies to `implement` and `implement-fallback` alike — both are
+      # this one template — so a primary that burns its full budget no longer
+      # leaves the fallback nothing to run in.
+      activeDeadlineSeconds: 7200
       container:
         image: "{{workflow.parameters.agent_image}}"
         imagePullPolicy: IfNotPresent
@@ -731,6 +766,11 @@ spec:
       synchronization:
         mutex:
           name: mctl-gitops-main-writes
+      # Bounded on its own now that the spec-level ceiling is 8h: this is a
+      # clone plus a rebase/push loop, so 15 min is already generous, and the
+      # step that records the outcome must not be the one that hangs. Per
+      # attempt — the retryStrategy below may spend it up to 3 times.
+      activeDeadlineSeconds: 900
       # The workflow mutex does not cover direct GitHub Actions image bumps.
       # Retry this bounded write step when one races the in-script rebase/push
       # loop (incident-17841555). Same policy as cwft-mctl-agents-run.
