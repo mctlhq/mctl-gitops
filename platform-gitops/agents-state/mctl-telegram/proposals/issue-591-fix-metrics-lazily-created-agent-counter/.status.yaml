@@ -1,6 +1,6 @@
-status: needs-triage
-updated_at: '2026-09-19T09:57:27Z'
-updated_by: mctl-agents[bot]
+status: accepted
+updated_at: '2026-09-09T17:30:00Z'
+updated_by: mashkovd
 source:
   type: github_issue
   repo: mctlhq/mctl-telegram
@@ -11,13 +11,19 @@ control:
 approval:
   approved_by: mashkovd
   approved_at: '2026-09-09T17:30:00Z'
-notes: 'agent: implementer produced no commits'
-attempt:
-  id: 0df481d6fdb37bbfc6789285c4d663abbaf64217830bced8bb662914146dea43
-  started_at: '2026-09-19T09:57:02Z'
-  expires_at: '2026-09-19T12:07:02Z'
-  finished_at: '2026-09-19T09:57:27Z'
-failure:
-  code: no-commits
-  stage: agent
-  message: implementer produced no commits
+notes: >-
+  Accepted after implementation. Scope grew during review of
+  mctlhq/mctl-telegram#593 to four metric families / 118 series; see
+  requirements.md "Scope expanded during implementation". Already implemented —
+  do not schedule an implementer attempt against this proposal.
+
+
+  Restored 2026-09-19: this proposal was approved by mistake during the
+  admission burst test for mctlhq/mctl-agents#395. The implementer ran, found
+  nothing to do, and recorded `status: needs-triage` with `failure:
+  code: no-commits`, overwriting the note above. The attempt and failure
+  blocks it wrote are removed with it: the implementation is not missing, it
+  landed in mctlhq/mctl-telegram#593 on 2026-09-09, and leaving a failure
+  record here would tell the shepherd and the reconciler the opposite. The
+  DevLoop execution dev-loop-mctlhq-mctl-telegram-591 was terminated so a
+  queued second attempt could not overwrite this again.
