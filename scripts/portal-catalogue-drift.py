@@ -113,8 +113,17 @@ class Undetermined(Exception):
     """The check could not be computed. Distinct from drift; exits 2."""
 
 
+# GitHub's REST API asks every caller to identify itself, and urllib's
+# default `Python-urllib/3.x` identifies nobody. Sent on the Cloudflare calls
+# too: one header, and a rate-limit conversation with either provider starts
+# from a name rather than from a packet capture.
+USER_AGENT = "mctl-gitops-portal-catalogue-drift"
+
+
 def _get(url: str, token: str | None, what: str, accept: str | None = None) -> dict:
-    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    headers = {"User-Agent": USER_AGENT}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     if accept:
         # The GitHub contents API answers base64 metadata by default and the
         # file itself under this Accept. json.load below wants the file.
@@ -944,14 +953,20 @@ def main() -> int:
         return 2
     account = args.account or os.environ.get("CLOUDFLARE_ACCOUNT_ID")
     applied: set[str] | None = None
-    if not account and not sys.stdin.isatty():
+    # State is read whenever it is piped in, not only when the account id has
+    # to come out of it. Those are two different questions, and reading it for
+    # one of them only means setting CLOUDFLARE_ACCOUNT_ID -- which looks like
+    # a harmless speed-up -- would silently stop `applied` being computed and
+    # take the not-applied-yet allowance in expected_missing() with it.
+    if not sys.stdin.isatty():
         # Broad on purpose, like the server loop below: state that parses as
         # JSON but is not the shape account_from_state walks raises
         # AttributeError or TypeError, and an uncaught one exits 1 -- the
         # status that sends someone through the re-snapshot recipe.
         try:
             state = json.load(sys.stdin)
-            account = account_from_state(state)
+            if not account:
+                account = account_from_state(state)
             applied = server_ids_from_state(state)
         except Undetermined as e:
             print(f"[2] {e}", file=sys.stderr)
