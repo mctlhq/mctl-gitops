@@ -10,8 +10,10 @@ metadata:
     backstage.io/kubernetes-namespace: admins
     argocd/app-name: admins-mctl-agents-worker-implement
     github.com/source-repo: mctlhq/mctl-agents
-    # Same image and tag as mctl-agents-worker; bumped by release-deploy,
-    # so not deployed from here by webhook.
+    # Same image as mctl-agents-worker, but NOT bumped by release-deploy yet:
+    # held at 1.47.0 in .github/deploy-signal.yaml until mctl-agents' own
+    # release-please dispatch names this values path (mctl-agents#396). Never
+    # deployed from here by webhook either way.
     mctl.me/auto-deploy: "false"
   links:
     - url: https://ops.mctl.ai/applications/argocd/admins-mctl-agents-worker-implement

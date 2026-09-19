@@ -28,7 +28,22 @@
 # path (that edit lands with the routing flip, because release-deploy
 # fails loudly on a named path that does not exist yet).
 #
-# replicaCount: 1 is an ARCHITECTURAL INVARIANT of this phase, not a
+# # Recreate, not the API server's default RollingUpdate. At replicas: 1 that
+# default is maxSurge: 1 / maxUnavailable: 0, and with the readiness probe
+# nulled the new pod starts polling mctl-dev-loop-implement with its own N
+# the moment its container starts, while the old pod is still supervising up
+# to N activities of 30-70 minutes. Capacity would be 2N for the length of
+# the termination grace period, on every mctl-agents release — the one
+# multiplier nobody edits deliberately and the one the singleton guard could
+# not see. A polling gap costs nothing here: with no worker the activities
+# simply stay Scheduled, which is what admission does anyway.
+strategy:
+  type: Recreate
+  # Explicit null removes the Deployment's default RollingUpdate settings
+  # when ArgoCD applies this with server-side apply.
+  rollingUpdate: null
+
+replicaCount: 1 is an ARCHITECTURAL INVARIANT of this phase, not a
 # sizing choice. IMPLEMENTATION_MAX_CONCURRENT_ACTIVITIES is a per-process
 # limit, not a distributed semaphore: capacity is replicas × N, so two
 # replicas at N=3 admit six. scripts/validate-implement-worker-singleton.py

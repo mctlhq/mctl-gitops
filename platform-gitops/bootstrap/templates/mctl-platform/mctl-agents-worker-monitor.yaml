@@ -1,4 +1,4 @@
-# Scrape the Temporal SDK metrics both mctl-agents workers now export
+# Scrape the Temporal SDK metrics the mctl-agents workers export
 # (mctl-agents#252, ADR-008 step 3).
 #
 # Native VMServiceScrape rather than monitoring.coreos.com/ServiceMonitor:
@@ -14,11 +14,14 @@
 # `metrics.enabled` instead would have opened a second port AND rendered the
 # ServiceMonitor this file exists to avoid.
 #
-# One object for both roles. They are separated by the `task_queue` label,
-# not by deployment: the SDK reports `service_name="temporal-core-sdk"` for
-# both, so a per-role scrape would buy nothing a PromQL selector does not
-# already give. Queue names are in orchestrator/temporal/constants.py —
-# `mctl-dev-loop` (control) and `mctl-dev-loop-exec` (execution).
+# One object for every role, however many there are. They are separated by
+# the `task_queue` label, not by deployment: the SDK reports
+# `service_name="temporal-core-sdk"` for all of them, so a per-role scrape
+# would buy nothing a PromQL selector does not already give — which is why
+# adding a role is one line in the instance list below and nothing else.
+# Queue names are in orchestrator/temporal/constants.py; today that is
+# `mctl-dev-loop` (control), `mctl-dev-loop-exec` (execution) and
+# `mctl-dev-loop-implement` (admission, mctl-agents#395).
 apiVersion: operator.victoriametrics.com/v1beta1
 kind: VMServiceScrape
 metadata:

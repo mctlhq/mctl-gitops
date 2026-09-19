@@ -75,6 +75,19 @@ def violations(values_path: Path) -> list[str]:
     # default role picks, which is not this worker at all. And the flag is
     # matched as an adjacent pair, so `["--role", "execution", "--tag",
     # "implementation"]` does not pass on a stray token.
+    # The multiplier nobody edits on purpose. Left unset, the Deployment
+    # takes the API server's default RollingUpdate, which at replicas: 1 is
+    # maxSurge: 1 — and with the readiness probe nulled the new pod polls
+    # with its own N while the old one still supervises its activities, so
+    # every release runs 2N for the grace period.
+    strategy = doc.get("strategy")
+    stype = strategy.get("type") if isinstance(strategy, dict) else strategy
+    if stype != "Recreate":
+        found.append(
+            f"strategy.type is {stype!r}, must be 'Recreate'; the default RollingUpdate "
+            "surges a second pod and doubles admission capacity on every release"
+        )
+
     command = doc.get("command")
     if not isinstance(command, list):
         found.append(
@@ -102,6 +115,7 @@ def _write(root: Path, body: str) -> Path:
 def selftest() -> int:
     """Prove the detector fires on every multiplier and stays quiet on the invariant."""
     good = (
+        "strategy:\n  type: Recreate\n"
         "replicaCount: 1\n"
         'command: ["python", "-m", "orchestrator.temporal.worker", "--role", "implementation"]\n'
         "env:\n  IMPLEMENTATION_MAX_CONCURRENT_ACTIVITIES: \"3\"\n"
@@ -112,6 +126,12 @@ def selftest() -> int:
         ("scaled to zero", good.replace("replicaCount: 1", "replicaCount: 0"), True),
         ("replicaCount missing", good.replace("replicaCount: 1\n", ""), True),
         ("hpa on", good + "autoscaling:\n  enabled: true\n  minReplicas: 1\n", True),
+        ("strategy missing", good.replace("strategy:\n  type: Recreate\n", ""), True),
+        (
+            "rolling update",
+            good.replace("  type: Recreate", "  type: RollingUpdate"),
+            True,
+        ),
         ("blue-green on", good + "blueGreen:\n  enabled: true\n  autoPromotionEnabled: true\n", True),
         ("blue-green off", good + "blueGreen:\n  enabled: false\n", False),
         ("rollout key, kept for a chart rename", good + "rollout:\n  enabled: true\n", True),
@@ -157,8 +177,8 @@ def selftest() -> int:
             return 1
     print(
         "selftest OK: detector fires on replicas != 1, a missing pin, an HPA, a "
-        "blue/green rollout, a missing or scalar command and a changed role; "
-        "stays quiet on the invariant"
+        "blue/green rollout, a rolling update, a missing or scalar command and a "
+        "changed role; stays quiet on the invariant"
     )
     return 0
 
