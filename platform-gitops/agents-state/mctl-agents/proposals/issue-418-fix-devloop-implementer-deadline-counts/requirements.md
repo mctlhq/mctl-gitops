@@ -1,129 +1,127 @@
-# Bind implementer admission to Argo's serialization width, and record a queue-kill distinctly
+# Stop counting mutex wait against the implementer deadline
 
 ## Context
 
-`run-implementer` in `cwft-mctl-agents-implement.yaml` is guarded by the
-capacity-1 Argo mutex `mctl-agents-proposal-claims`, while Temporal admits
-`IMPLEMENTATION_MAX_CONCURRENT_ACTIVITIES = 3` implement submits at once
-(`orchestrator/temporal/constants.py`, and `"3"` in
-`services/admins/mctl-agents-worker-implement/values.yaml`). The two numbers
-are set independently and nothing makes them agree. The 2026-09-19 00:12-00:31Z
-burst is what that costs: six implementers created inside 19 minutes, every one
-of them killed at creation time plus 2h00m, having done between zero and
-nineteen minutes of real work. `dev_loop.py` already records the coupling as an
-expectation ("N and the mutex capacity have to move together - ADR-008 D7
-records that the gitops mutex is expected to be at least N") but no code, test
-or CI check enforces it.
+`run-implementer` in `cwft-mctl-agents-implement.yaml` (mctl-gitops) carries
+`activeDeadlineSeconds: 7200` and is guarded by the capacity-1 Argo mutex
+`mctl-agents-proposal-claims`. Argo starts the deadline clock when the node is
+**created**, not when the lock is **acquired**, so every implementer queued behind
+the lock spends its whole two-hour budget waiting and is killed having executed
+nothing. On 2026-09-19, six implementers created between 00:12Z and 00:31Z each
+died at creation time plus ~2h00m; the first one held the mutex for the entire
+window. The tail of that burst got between zero and nineteen minutes of real work
+out of a two-hour allowance.
 
-Part of the hole is already closed. mctl-gitops moved the 7200s budget off the
-workflow spec and onto the `run-implementer` template, where it is applied to
-the pod and therefore starts after the mutex is acquired; the spec keeps a
-28800s runaway guard. mctl-agents #395 added the admission queue
-(`mctl-dev-loop-implement`), the node-graph classifier
-(`orchestrator/temporal/implement_outcome.py`) and the `pre_start` requeue.
-What remains is exactly what this issue names: admission width is still 3 where
-Argo's width is 1, so two of every three admitted submits burn an admission
-slot while queued inside Argo against the spec-level guard; the pod-scoped
-deadline invariant is unpinned and can silently regress; and `pre_start` lives
-only in Temporal runtime state, so nothing durable - not `assert-attempt`, not
-`.status.yaml`, not the execution record read by `mctl_list_agent_executions` -
-can tell "killed while queued" from "ran and produced nothing".
+ADR-008 D7 (`docs/adr/008-worker-queue-split-and-capacity.md`) already moved
+admission into Temporal: the implement submit routes to `mctl-dev-loop-implement`,
+whose slot limit N is the implementation capacity, and an activity with no free
+slot stays `Scheduled` with no Argo workflow created. That is the right shape, and
+it is incomplete in exactly two places the issue names. First, N and the Argo mutex
+width are set independently — N defaults to 3
+(`DEFAULT_IMPLEMENTATION_MAX_CONCURRENT_ACTIVITIES` in
+`orchestrator/temporal/constants.py`) while the mutex admits 1, so two of every
+three admitted submits still burn deadline inside Argo. ADR-008 D7 states the
+relation as an expectation ("the gitops mutex is expected to be at least N",
+mirrored in the comment above `PRESTART_REQUEUE_BACKOFF` in
+`orchestrator/temporal/workflows/dev_loop.py`) and nothing enforces it. Second,
+`implement_outcome.py` classifies a queued kill as `pre_start` but does not say
+**why** it never started — "killed while queued on a lock" and "accepted by Argo
+and never scheduled" are recorded identically, so downstream recovery cannot tell
+a capacity problem from a cluster problem.
 
 ## User stories
 
-- AS the DevLoop orchestrator I WANT surplus implement work to wait in
-  Temporal rather than inside Argo SO THAT a burst of approvals well past the
-  serialization width completes every item instead of losing its tail.
-- AS a platform operator I WANT admission capacity and Argo's serialization
-  width to be one coupled decision SO THAT raising N cannot silently create
-  runs that are killed before they execute.
-- AS a platform operator I WANT CI to fail when the implement CWFT stops
-  charging queue time outside the attempt SO THAT the pod-scoped deadline fix
-  cannot be reverted unnoticed by the repository that depends on it.
-- AS the recovery plane (incident responder, reconciler, a human on triage) I
-  WANT a run killed while it still held no lock to be recorded with a distinct
-  reason SO THAT it is requeued as unattempted work rather than triaged as an
-  agent that tried and produced nothing.
+- AS the dev-loop orchestrator I WANT an implementer's two-hour execution budget to
+  begin when it actually starts working SO THAT a burst of approvals cannot kill its
+  own tail before any of it runs.
+- AS a platform operator I WANT the Temporal admission width and the Argo mutex width
+  to be impossible to set independently SO THAT raising N cannot silently reintroduce
+  the 2026-09-19 failure.
+- AS the recovery plane (#353, mctl-api#294) I WANT a deadline kill suffered while
+  queued on a lock recorded with a distinct reason SO THAT I do not retry work that
+  never started as though the agent had tried and produced nothing.
+- AS a reviewer of this repository I WANT a regression test that replays the
+  00:12-00:31Z burst shape SO THAT a future change to capacity, routing or the CWFT
+  cannot re-open the hole without CI going red.
 
 ## Acceptance criteria (EARS)
 
-- WHEN the implementation worker starts THE SYSTEM SHALL log, on one line, the
-  configured `IMPLEMENTATION_MAX_CONCURRENT_ACTIVITIES`, the declared Argo
-  serialization width for `run-implementer`, and the effective capacity it will
-  poll with.
-- IF the configured capacity exceeds the declared Argo serialization width THEN
-  THE SYSTEM SHALL poll with the width as its effective capacity and SHALL warn
-  that the configured value was reduced, naming both settings.
-- IF no Argo serialization width is declared in the environment THEN THE SYSTEM
-  SHALL assume a width of 1, because the checked-in template declares a
-  capacity-1 mutex and the fail-closed direction is the one that never admits
-  work Argo cannot run.
-- WHILE every effective-capacity slot is occupied THE SYSTEM SHALL leave further
-  implement activities Scheduled in Temporal, creating no Argo workflow and
-  starting no Argo deadline for them.
-- WHEN an implement submit ends with no `run-implementer` pod having executed
-  THE SYSTEM SHALL classify the result `pre_start`, derive a pre-start reason
-  from Argo's node graph (`queued` when the node was blocked on a
-  synchronization lock, `unscheduled` when Argo accepted the workflow but never
-  placed a pod, `unknown` otherwise) and requeue without counting an attempt,
-  up to `MAX_PRESTART_REQUEUES`.
-- WHEN a `pre_start` outcome is observed THE SYSTEM SHALL include the outcome
-  and the pre-start reason in the durable execution record posted to
-  `/api/v1/agents/executions`, and SHALL expose both through the
-  `implement_execution` query.
-- IF mctl-api rejects the execution record because it does not yet understand
-  the added fields THEN THE SYSTEM SHALL retry once with the previous payload
-  so that the row is still recorded.
-- WHEN the loop gives up after `MAX_PRESTART_REQUEUES` THE SYSTEM SHALL fail
-  with `ImplementationNotStarted` and a message that names the pre-start reason
-  and the requeue count, never a generic implementation failure.
-- WHEN the test suite runs with `MCTL_GITOPS_ROOT` pointing at an mctl-gitops
-  checkout THE SYSTEM SHALL fail if `cwft-mctl-agents-implement.yaml` declares
-  no template-level `activeDeadlineSeconds` on `run-implementer`, if the
-  spec-level deadline is smaller than one full drain of the declared width, or
-  if the declared serialization width is smaller than this repository's default
-  admission capacity.
-- IF the mctl-gitops checkout is absent THEN THE SYSTEM SHALL error under CI
-  and warn locally, matching `orchestrator/validate_manifest.py`'s existing
-  treatment of a missing sibling checkout.
-- WHEN the burst regression test replays the 2026-09-19 00:12-00:31Z shape
-  against a submit fake that models Argo's serialization width THE SYSTEM SHALL
-  complete every item and SHALL produce no `pre_start` result.
+- WHEN a burst of N approvals well past the Argo mutex width is approved, THE SYSTEM
+  SHALL complete every item, holding the surplus as `Scheduled` activities on
+  `mctl-dev-loop-implement` rather than as Argo workflows burning
+  `activeDeadlineSeconds`.
+- WHILE the `mctl-agents-proposal-claims` mutex guards the long-timed
+  `run-implementer` template, THE SYSTEM SHALL refuse to start an `implementation`
+  role worker whose configured N exceeds the mirrored mutex width, with a startup
+  error naming both numbers.
+- WHEN the mutex guards only a short step (`commit-and-push`) that does not carry the
+  implementer's execution budget, THE SYSTEM SHALL allow N above the mutex width,
+  because lock waiting then happens outside the timed work.
+- IF the mirrored declaration in `orchestrator/temporal/constants.py`
+  (`ARGO_IMPLEMENT_MUTEX_NAME`, `ARGO_IMPLEMENT_MUTEX_TEMPLATE`,
+  `ARGO_IMPLEMENT_MUTEX_WIDTH`) disagrees with
+  `cwft-mctl-agents-implement.yaml` in the mctl-gitops checkout, THEN THE SYSTEM
+  SHALL fail the mctl-agents PR-validation run with a message naming the file and
+  both values.
+- IF the mctl-gitops checkout is absent while running under CI, THEN THE SYSTEM SHALL
+  report that as an error, not a skip, following
+  `orchestrator/validate_manifest.py::_gitops_missing`.
+- WHEN `submit_and_wait` observes an implement node waiting on a synchronization
+  lock (Argo's `synchronizationStatus` on the node, or a node message of the
+  "Waiting for argo-workflows/Mutex/... Lock status: 0/1" shape), THE SYSTEM SHALL
+  remember that observation across polls, so a terminal poll that has lost the
+  message still reports it.
+- WHEN an implement submit is classified `pre_start`, THE SYSTEM SHALL carry a
+  `pre_start_reason` of `lock_wait`, `unscheduled` or `unknown` into the workflow
+  result, into the `implement_execution` query state, into the durable execution
+  record, and into the `ImplementationNotStarted` error message.
+- WHILE `pre_start_reason` is unreadable, THE SYSTEM SHALL report `unknown` and MUST
+  NOT report `unscheduled` — an unreadable node graph is not evidence about the
+  cluster.
+- WHEN an implementer pod is observed to have executed, THE SYSTEM SHALL NOT report
+  any `pre_start_reason`, preserving today's rule that `startedAt` on a node Pending
+  on a mutex is never the attempt's start (`implement_outcome._pod_ran`).
+- WHEN the regression suite replays the 2026-09-19 00:12-00:31Z burst against a fake
+  Argo that enforces mutex width 1, THE SYSTEM SHALL assert that no run is killed
+  before it has executed and that every loop reaches a successful implement.
 
 ## Out of scope
 
-- Removing the `mctl-agents-proposal-claims` mutex. ADR-010's non-goals record
-  why it stays: the admin-only `mctl_trigger_implementer` bypasses Temporal
-  admission entirely, and the server-side claim that would replace the mutex is
-  mctl-api#337.
-- Routing `mctl_trigger_implementer` through Temporal admission. That is an
-  mctl-api change; this proposal only makes the bypass survivable by keeping
-  Argo's width honest and recording a queue-kill distinctly.
-- Editing `cwft-mctl-agents-implement.yaml` itself. The implementer's PR lands
-  in `mctlhq/mctl-agents`; the gitops half (an `assert-attempt` start-marker,
-  and any later widening of the mutex into a ConfigMap-backed semaphore) is
-  specified in design.md and tracked as a companion mctl-gitops change. This
-  repository's contribution is the CI guard that fails when the two drift.
-- Changing `IMPLEMENTER_TIMEOUT_SECONDS` (5400), the 7200s pod budget or the
-  28800s spec guard. Their sizing is not what this issue is about.
-- Writing an in-progress marker into git mid-attempt. ADR-008 keeps git as
-  durable lifecycle state and Temporal/Argo as durable runtime state; the
-  durable pre-start record belongs on the execution row, not in `.status.yaml`.
+- Removing `mctl-agents-proposal-claims` entirely. ADR-008 D7 and ADR-010's Non-goals
+  both record that it stays until the server-side claim is at `enforce`
+  (mctl-api#337), because the admin-only direct `mctl_trigger_implementer` bypasses
+  Temporal admission.
+- Making the direct `mctl_trigger_implementer` operation consult admission. That is an
+  mctl-api change (operations registry), tracked separately; this proposal only makes
+  that path stop being self-destructive by taking the lock wait off the timed step.
+- Per-service capacity `M` and any distributed semaphore (ADR-010 / mctl-api#337).
+- Adding `schedule_to_start_timeout` to the implement submit — ADR-008 D7 explicitly
+  refuses it, and it would turn a capacity wait back into a failure.
+- Lowering `EXECUTION_MAX_CONCURRENT_ACTIVITIES` from 40.
+- Changing `MAX_PRESTART_REQUEUES` or the requeue mechanism itself.
 
 ## Open questions
 
-- Does `mctl-api`'s `/api/v1/agents/executions` handler ignore unknown JSON
-  fields, or reject them? The design assumes "ignores" (the common Go
-  `encoding/json` default) and fails safe with a one-shot retry on the older
-  payload, so either answer is survivable. The persistence of `outcome` and
-  `pre_start_reason` needs a companion mctl-api issue either way.
-- Argo does not expose "did this node get a pod" as a step variable, so
-  `assert-attempt` cannot be fixed from this repository alone. The design
-  proposes an always-written, optional start-marker artifact per attempt, by
-  analogy with the `changes` handoff already in that template; whether Argo
-  resolves a parameter-interpolated artifact key for a skipped step must be
-  confirmed on a canary before that companion PR merges.
-- Whether the eventual widening uses `synchronization.semaphore` with a
-  `configMapKeyRef` (one number, read by both the template and the worker) or
-  waits for ADR-010's server-side claim at `enforce`. Both are compatible with
-  the width-coupling guard proposed here; the guard does not decide it.
+- Does `commit-and-push` in `cwft-mctl-agents-implement.yaml` genuinely need
+  `mctl-agents-proposal-claims` at all? Per-proposal duplicate-attempt safety already
+  comes from the deterministic `feat/agents-<slug>` branch, canonical-PR
+  reconciliation, and the ADR-010 `ExecutionClaim` push fence
+  (`orchestrator/run_implementer.py::_push_followup` with
+  `--force-with-lease=<branch>:<sha>`, pinned by
+  `tests/test_run_implementer_claims.py`). Proceeding with the issue's smallest
+  option — move the mutex onto `commit-and-push` alongside the existing
+  `mctl-gitops-main-writes` — rather than dropping it, which would be a larger
+  claim to defend in the same change.
+- Does mctl-api's `POST /api/v1/agents/executions` tolerate the two additional fields
+  (`outcome`, `pre_start_reason`)? Not answerable from this repository. Proceeding by
+  sending them only when non-empty; `_record` in `dev_loop.py` is already best-effort
+  and swallows a failed write, so the worst case is a missing audit field, not a
+  broken loop. Task 8 verifies against mctl-api and files the follow-up if needed.
+- Should the mirrored mutex width be read live from gitops at worker startup instead
+  of mirrored in `constants.py`? Proceeding with the mirror, following the precedent
+  in `orchestrator/resolver.py` (its `COMPAT_RE` / `parse_version` mirror of
+  mctl-gitops' `validate-agent-platform.py`, pinned by a test that loads that script)
+  — the worker pod has no gitops checkout, only the implement CWFT does.
+- Should a `lock_wait` requeue back off longer than `PRESTART_REQUEUE_BACKOFF`
+  (2 minutes)? With N bound to the mutex width a `lock_wait` should become rare;
+  keeping one backoff constant until the metric says otherwise.

@@ -1,146 +1,169 @@
 # Tasks: issue-418-fix-devloop-implementer-deadline-counts
 
-- [ ] 1. Add the declared Argo serialization width to
-      `orchestrator/temporal/constants.py`: `ARGO_IMPLEMENT_WIDTH_ENV =
-      "ARGO_IMPLEMENT_SERIALIZATION_WIDTH"`, `DEFAULT_ARGO_IMPLEMENT_WIDTH = 1`,
-      `argo_implement_serialization_width()` (reusing `_int_env`), and
-      `effective_implementation_capacity() -> tuple[int, int, int]` returning
-      (configured N, declared width, `min(N, width)`). Leave
-      `implementation_max_concurrent_activities()` unchanged as the raw reader.
-      Comment the fail-closed default against the capacity-1 mutex in
-      `cwft-mctl-agents-implement.yaml`. — DoD: unit tests cover unset env,
-      a width above N, a width below N, and a malformed value raising
-      `SystemExit` like every other `_int_env` consumer.
-- [ ] 2. Use it in `orchestrator/temporal/worker.py::implementation_plan()`
-      (depends on 1): poll with the effective capacity and log one line naming
-      configured N, declared width and effective capacity; warn explicitly when
-      the configured value was reduced, naming both settings. — DoD:
-      `tests/test_worker_roles.py` asserts the `implementation` plan's
-      `max_concurrent_activities` is the effective value and that the reduction
-      is logged; `tests/temporal_harness.py` is updated to build its worker
-      from the same helper so the tests and the worker cannot disagree.
-- [ ] 3. Lower `DEFAULT_IMPLEMENTATION_MAX_CONCURRENT_ACTIVITIES` from 3 to 1
-      (depends on 1) with a comment stating the rule - the default must equal
-      the width the checked-in CWFT declares, and both move in the commit that
-      widens Argo. — DoD: task 6's contract test passes against the current
-      `cwft-mctl-agents-implement.yaml`; the PR body notes that
-      `services/admins/mctl-agents-worker-implement/values.yaml` must drop to
-      `"1"` (or gain `ARGO_IMPLEMENT_SERIALIZATION_WIDTH`) in the companion
-      gitops PR, and that until it does the clamp makes the running worker
-      behave as 1 anyway.
-- [ ] 4. Add `PreStartReason` and `pre_start_reason(status_block)` to
-      `orchestrator/temporal/implement_outcome.py`: `queued` when a
-      never-ran `run-implementer` node carries a synchronization-lock message
-      or stayed `Pending`, `unscheduled` when it never ran with no such
-      evidence, `unknown` when the graph is unreadable. Pure function over the
-      status block; never inferred from `startedAt` (see `_pod_ran`). — DoD:
-      `tests/test_implement_outcome.py` covers the 2026-09-19 Pending-on-mutex
-      node, a never-scheduled node, an empty node map and a renamed template,
-      and asserts `classify` is unchanged by the addition.
-- [ ] 5. Carry the reason end to end (depends on 4): `pre_start_reason` on
-      `WorkflowResult` and the observation merge in
-      `orchestrator/temporal/activities/argo.py`; `pre_start_reason` on
-      `ImplementExecutionState`; the reason and requeue count named in
-      `dev_loop._implement`'s `ImplementationNotStarted` message and in its
-      requeue log line - all behind `workflow.patched("implement-prestart-reason")`.
-      — DoD: `tests/test_dev_loop_workflow.py` asserts the query exposes the
-      reason after a pre-start requeue and that the final error message names
-      it; `tests/test_workflow_replay.py`'s capability table records the new
-      marker.
-- [ ] 6. Make the durable record able to say "never started" (depends on 5):
-      add `outcome` and `pre_start_reason` to `ExecutionRecord` and the POST
-      body in `orchestrator/temporal/activities/state.py`, populate them from
-      `dev_loop._record`, and retry the POST once with the pre-existing body
-      shape if mctl-api answers 4xx on the extended one. — DoD:
-      `tests/test_temporal_activities.py` covers the extended body, the 4xx
-      fallback landing the row, and a non-implement operation still sending an
-      empty outcome; a companion mctl-api issue is opened for persisting and
-      exposing both fields through `mctl_list_agent_executions`.
-- [ ] 7. Add `tests/test_implement_cwft_contract.py` (depends on 3), resolving
-      the CWFT through `orchestrator.validate_manifest.GITOPS_CWFT_DIR` so it
-      honours `MCTL_GITOPS_ROOT` and actually runs in
-      `.github/workflows/pr-validation.yml` - not
-      `tests/test_agent_inventory.py`'s sibling-only path, which skips in CI.
-      Error on a missing checkout under CI, warn locally, following
-      `validate_manifest._gitops_missing`. — DoD: the three assertions in
-      design.md section 3 pass against today's template and each fails with a
-      message naming both repositories when fed a mutated copy.
-- [ ] 8. Update ADR-008 D7 and ADR-010's non-goals note (depends on 3): record
-      that the coupling between admission N and Argo's serialization width is
-      now enforced rather than expected, name the env var and the contract
-      test, and state that widening the mutex requires moving both numbers in
-      one change. — DoD: `tests/test_diagram_facts.py` /
-      `tools/diagram_facts.py` still pass; no diagram fact drifts.
-- [ ] 9. Open the companion mctl-gitops issue for the `assert-attempt` start
-      marker described in design.md (per-attempt `optional: true` artifact at a
-      parameter-keyed S3 key, a distinct exit code and a
-      `workflow_never_started:implement:*` fingerprint), noting the canary
-      needed to confirm Argo resolves that key for a skipped step. — DoD: the
-      issue links back to #418 and to the `run-implementer` deadline invariant
-      that task 7 now pins.
+- [ ] 1. Mirror the CWFT lock facts in `orchestrator/temporal/constants.py`: add
+      `ARGO_IMPLEMENT_MUTEX_NAME = "mctl-agents-proposal-claims"`,
+      `ARGO_IMPLEMENT_MUTEX_TEMPLATE = "run-implementer"`,
+      `ARGO_IMPLEMENT_MUTEX_WIDTH = 1`, and `argo_admission_width()` returning the
+      width while the mirror names `implement_outcome.IMPLEMENTER_TEMPLATE` and
+      `None` otherwise — DoD: comments state that these mirror
+      `cwft-mctl-agents-implement.yaml` in mctl-gitops and that task 3's check is
+      what keeps the mirror honest; `uv run ruff check orchestrator` and
+      `uv run mypy` pass; no import cycle introduced (`constants.py` may import
+      `implement_outcome`, which imports nothing from `constants`).
+
+- [ ] 2. Bind N to the ceiling (depends on 1): make
+      `implementation_max_concurrent_activities()` raise `SystemExit` when N
+      exceeds `argo_admission_width()`, naming N, the mutex, the guarded template
+      and mctl-agents#418; lower `DEFAULT_IMPLEMENTATION_MAX_CONCURRENT_ACTIVITIES`
+      to `ARGO_IMPLEMENT_MUTEX_WIDTH` — DoD: `worker_plans("implementation")` and
+      `worker_plans("all")` refuse a too-large `IMPLEMENTATION_MAX_CONCURRENT_ACTIVITIES`,
+      while `worker_plans("control")` and `worker_plans("execution")` still build
+      unaffected (the lazy `implementation_plan()` in
+      `orchestrator/temporal/worker.py` already guarantees this — assert it).
+
+- [ ] 3. Add `check_implement_admission_is_safe()` to
+      `orchestrator/validate_manifest.py` (depends on 1), beside
+      `_check_cluster_workflow_template`, reusing `GITOPS_CWFT_DIR` and
+      `_gitops_missing`. It loads `cwft-mctl-agents-implement.yaml`, accepts both
+      `synchronization.mutex` and `synchronization.mutexes[]`, and errors when the
+      guarded template is not `ARGO_IMPLEMENT_MUTEX_TEMPLATE`, when the mutex is
+      absent while the mirror names a template, when the guarded template's
+      `activeDeadlineSeconds` exceeds `MAX_LOCKED_STEP_DEADLINE_SECONDS` (1800), or
+      when `run-implementer` carries no `activeDeadlineSeconds` — DoD: wired into
+      `validate()`/`main()`; every error message names the file and both values; a
+      no-match never reads as a pass.
+
+- [ ] 4. Add `PreStartReason` to `orchestrator/temporal/implement_outcome.py`
+      (`"lock_wait" | "unscheduled" | "unknown"`), a `_lock_waiting(node)` helper
+      reading `synchronizationStatus.waiting` first and falling back to a
+      `message` matching `Mutex/` or `Lock status:`, a
+      `pre_start_reason: PreStartReason | None` field on `ImplementerObservation`,
+      and a `pre_start_reason()` renderer that maps `None` to `"unknown"` — DoD:
+      the reason is set only where `ran is False`; an unreadable or empty node graph
+      yields `None`, never `"unscheduled"`; `_pod_ran`'s refusal of `startedAt` is
+      untouched.
+
+- [ ] 5. Carry the reason through `orchestrator/temporal/activities/argo.py`
+      (depends on 4): make `lock_wait` sticky in `_merge_observations` the same way
+      `ran=True` is sticky, and add `pre_start_reason: str | None = None` to
+      `WorkflowResult`, populated from the folded `best` observation — DoD: a
+      mid-flight poll showing "Lock status: 0/1" survives a terminal poll whose node
+      message is gone; the field defaults so an older recorded payload still
+      deserializes.
+
+- [ ] 6. Surface the reason in `orchestrator/temporal/workflows/dev_loop.py`
+      (depends on 5): add `pre_start_reason` to `ImplementExecutionState`, include it
+      in `_implement`'s requeue warning and in the `ImplementationNotStarted`
+      message — DoD: the `implement_execution` query shows it live; the error type
+      set (`ImplementationNotStarted` / `ImplementationFailed` /
+      `ImplementationFinalizationFailed`) is unchanged.
+
+- [ ] 7. Persist it (depends on 5): add `outcome: str = ""` and
+      `pre_start_reason: str = ""` to `ExecutionRecord` in
+      `orchestrator/temporal/activities/state.py`, posted in the
+      `/api/v1/agents/executions` body only when non-empty; pass both from `_record`
+      in `dev_loop.py` — DoD: a `pre_start` implement that never held the lock is
+      distinguishable in the durable record from one that ran and produced nothing;
+      `_record`'s best-effort try/except is untouched.
+
+- [ ] 8. Verify mctl-api tolerates the two new fields (depends on 7) — DoD: either a
+      confirmed 2xx against `POST /api/v1/agents/executions` with the fields present,
+      or a filed mctl-api follow-up issue linked from the code comment, with the
+      fields still sent (the write is best-effort by design).
+
+- [ ] 9. Amend ADR-008 D7 in place in
+      `docs/adr/008-worker-queue-split-and-capacity.md` with a
+      `> **Amended <date> (mctlhq/mctl-agents#418).**` blockquote recording that N is
+      now bound to the mutex width in code, that the binding is checked in CI against
+      the CWFT, and that the ceiling lifts when the mutex moves off `run-implementer`
+      — DoD: no new ADR file; the existing D7 prose about "expected to be at least N"
+      is corrected rather than left contradicting the code.
+
+- [ ] 10. Open the mctl-gitops PR moving `synchronization.mutex:
+      mctl-agents-proposal-claims` off `run-implementer` onto `commit-and-push` in
+      `platform-gitops/argo-workflows/cluster-templates/cwft-mctl-agents-implement.yaml`
+      — DoD: PR open and linked from mctl-agents#418; it states that mctl-agents CI
+      will go red on merge until task 11 lands, by design.
+
+- [ ] 11. After task 10 merges: flip `ARGO_IMPLEMENT_MUTEX_TEMPLATE` to
+      `"commit-and-push"` and restore `DEFAULT_IMPLEMENTATION_MAX_CONCURRENT_ACTIVITIES`
+      to 3 (depends on 2, 3, 10) — DoD: a one-line-plus-one-line commit; the task-3
+      check passes against the merged CWFT; `argo_admission_width()` returns `None`
+      so N is no longer capped.
 
 ## Tests
 
-- [ ] T1. Rewrite `tests/test_dev_loop_workflow.py::TestImplementationAdmission::
-      test_a_burst_of_approvals_is_admitted_n_at_a_time` as
-      `test_the_2026_09_19_burst_completes_every_item`: nine approvals released
-      at once against a submit fake that models BOTH gates - Temporal admission
-      (the worker's effective capacity) and an inner Argo gate of
-      `argo_implement_serialization_width()` which, when an item cannot enter
-      within its simulated deadline, returns a `pre_start` result instead of a
-      success. Assert every loop completes, no result is `pre_start`, the peak
-      occupancy of the inner Argo gate never exceeds the declared width, and
-      the number of Argo submits equals the number of approvals. Pin it to the
-      burst in the docstring. — This test must fail on `main` (N=3, width 1:
-      two of every three submits enter the Argo gate and are killed) and pass
-      after tasks 1-3.
-- [ ] T2. `tests/test_worker_roles.py`: the `implementation` plan's capacity is
-      `min(N, width)` for N>width, N<width and N==width, and the clamp is
-      logged once with both numbers.
-- [ ] T3. `tests/test_implement_outcome.py`: `pre_start_reason` answers
-      `queued` for the Pending-on-mutex node shape, `unscheduled` for a
-      never-placed pod, `unknown` for an absent or renamed graph; and never
-      answers `queued` for a node that only has `startedAt`.
-- [ ] T4. `tests/test_temporal_activities.py`: an implement submit whose graph
-      shows a queued kill produces `implementer_ran is False` and
-      `pre_start_reason == "queued"` on `WorkflowResult`, and the heartbeat
-      never reports phase `running` for it (extending the existing
-      `test_a_deadline_killed_pending_node_is_not_a_run`).
-- [ ] T5. `tests/test_temporal_activities.py`: `record_execution` posts
-      `outcome`/`pre_start_reason`, and still records the row when the first
-      POST is refused with 400.
-- [ ] T6. `tests/test_implement_cwft_contract.py` (task 7): template-level
-      deadline present on `run-implementer`; spec deadline at least one full
-      drain of the declared width; declared width at least the checked-in
-      default N. Each assertion additionally exercised against an in-memory
-      mutated template so a green run cannot be a vacuous one.
-- [ ] T7. `tests/test_dev_loop_workflow.py`: an execution whose history
-      predates `implement-prestart-reason` still replays
-      (`tests/test_workflow_replay.py`), and the unpatched branch reports the
-      same `ImplementationNotStarted` it did before.
+- [ ] T1. `tests/test_implement_outcome.py`: the six 2026-09-19 node shapes.
+      A `Failed` `run-implementer` node with `synchronizationStatus.waiting` and no
+      pod marks is `pre_start` + `lock_wait`; the same node with only the
+      "Waiting for argo-workflows/Mutex/mctl-agents-proposal-claims. Lock status: 0/1"
+      message is also `lock_wait`; a `Failed` node with no pod and no lock mark is
+      `unscheduled`; a missing and an empty node map are both `unknown`; a node with
+      `hostNodeName` reports no reason at all.
+
+- [ ] T2. `tests/test_temporal_activities.py`: `_merge_observations` keeps
+      `lock_wait` when a later poll's node graph has lost the message, and
+      `implementer_ran=True` from any poll still clears the reason.
+
+- [ ] T3. `tests/test_temporal_activities.py`, extending
+      `TestSubmitAndWaitObservesTheImplementer`: a submit whose mid-flight poll shows
+      the lock wait and whose terminal poll shows `Failed` returns
+      `implementer_ran is False`, `pre_start_reason == "lock_wait"`,
+      `implementer_started_at is None`, and no heartbeat whose phase is `running`.
+
+- [ ] T4. Burst regression, `tests/test_dev_loop_workflow.py`: replay the
+      00:12-00:31Z shape — six approvals released within the burst window against a
+      fake mctl-api that enforces Argo mutex width 1 and kills any implement node
+      still queued after its `activeDeadlineSeconds`. Using `tests/temporal_harness.py`
+      (which mirrors production N on the implementation queue), assert every loop
+      completes with a successful implement, that no `WorkflowResult` reports
+      `pre_start`, and that the fake never sees more than `argo_admission_width()`
+      Argo implement workflows in flight at once. This is the acceptance criterion
+      "no run is killed before it has executed".
+
+- [ ] T5. `tests/test_worker_roles.py`: `IMPLEMENTATION_MAX_CONCURRENT_ACTIVITIES=3`
+      while the mirror names `run-implementer` makes `worker_plans("implementation")`
+      raise `SystemExit` naming both numbers; `worker_plans("control")` and
+      `worker_plans("execution")` still build; with the mirror on `commit-and-push`,
+      N=3 is accepted.
+
+- [ ] T6. `tests/test_manifest.py`: a fixture CWFT with the mutex on
+      `run-implementer` alongside a 7200 s deadline produces an error naming the
+      template; one with the mutex on `commit-and-push` produces none; a CWFT with
+      the mutex removed entirely while the mirror still names a template errors; and
+      an absent `GITOPS_CWFT_DIR` is a skip locally and an error under `CI` —
+      mirroring `test_a_missing_gitops_checkout_fails_under_ci`.
+
+- [ ] T7. `tests/test_workflow_replay.py` passes unchanged against the existing
+      `tests/fixtures/histories/*.prepatch.json`. DoD: the fixtures are NOT
+      re-recorded (see `tests/replay_scenarios.py`'s rule); if replay goes red, the
+      `_record` payload change is gated behind
+      `workflow.patched("implement-prestart-reason")` and a new pre-patch history is
+      recorded only for the new marker, never over an old one.
+
+- [ ] T8. Full gate: `uv run pytest tests/`, `uv run ruff check orchestrator config
+      tests`, `uv run mypy` all green, both with and without `MCTL_GITOPS_ROOT` set.
 
 ## Rollback
 
-Revert the mctl-agents release. Nothing persistent is created: no migration, no
-gitops write, no `.status.yaml` transition is introduced by this change, and
-the two new execution-record fields are additive and ignorable. The workflow
-change sits behind `workflow.patched("implement-prestart-reason")`, so loops
-started under the new release keep replaying their recorded branch and loops
-started before it never took it.
+Every step is independently revertible and none of them changes durable data.
 
-Partial rollbacks, in increasing order of preference:
-
-1. Set `ARGO_IMPLEMENT_SERIALIZATION_WIDTH` on the implement worker to the
-   value that restores the previous admission behaviour (3). This un-does only
-   the clamp, instantly, from a values file, and restores exactly the
-   2026-09-19 exposure - use it only to prove the clamp is what changed.
-2. Revert task 3 alone (default N back to 3) if the contract test is found to
-   be reading the CWFT wrongly; the clamp still protects the worker because the
-   width default is 1.
-3. Full revert if the pre-start classification is found to answer `queued` for
-   runs that actually executed - that would be a wrong durable record, which is
-   worse than no record. `classify` is untouched by this change, so requeue
-   behaviour is unaffected either way, but the incorrect field must not stand.
-
-The companion mctl-gitops and mctl-api changes are independently revertible and
-neither is required for this one to be correct.
+- **Tasks 1-2 (the ceiling).** Break-glass without a code revert: the refusal only
+  fires when N exceeds the width, so setting `IMPLEMENTATION_MAX_CONCURRENT_ACTIVITIES=1`
+  in `platform-gitops/services/admins/mctl-agents-worker-implement/values.yaml` is a
+  values edit that always satisfies it. To restore the old permissiveness, revert the
+  `SystemExit` branch; `DEFAULT_IMPLEMENTATION_MAX_CONCURRENT_ACTIVITIES` back to 3 is
+  a one-line revert.
+- **Task 3 (the CI check).** Revert the call from `validate()`; the helper can stay
+  dead. It gates PRs only — nothing in production reads it.
+- **Tasks 4-7 (the reason).** All fields are optional with defaults. Reverting them
+  leaves older records carrying a `pre_start_reason` mctl-api simply stops receiving;
+  no reader breaks, because `classify`'s verdict never depended on the reason.
+- **Task 10 (the gitops move).** `git revert` in mctl-gitops puts the mutex back on
+  `run-implementer`; ArgoCD reconciles the CWFT on the next sync. Task 11 must be
+  reverted in this repo in the same window, or the implementation worker will run at
+  N=3 against a width-1 mutex — which is the original bug. Pair the two reverts, and
+  note that the task-3 check turns the mismatch red rather than silent.
+- **Worst case.** Revert tasks 1-11 and the system is byte-for-byte where it is
+  today: admission at N=3, the mutex on `run-implementer`, and `pre_start` requeues
+  absorbing the losses. Nothing here is one-way.
