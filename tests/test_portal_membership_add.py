@@ -88,6 +88,19 @@ case "$url" in
     printf '{"success":true,"result":%s}' "$(cat "$SERVER_STATE_FILE")"
     ;;
   *"/portals/"*)
+    # Models an existing member's on_behalf being flipped by hand right
+    # after this script's FIRST portal read (the early already-member check)
+    # -- everything the donor and the write are derived from must come from
+    # a LATER read, or it would copy the value from before the flip.
+    if [ "$is_put" = no ] && [ -n "${MUTATE_AFTER_FIRST_GET:-}" ] && [ ! -f "$MUTATED_MARKER" ]; then
+      touch "$MUTATED_MARKER"
+    elif [ "$is_put" = no ] && [ -n "${MUTATE_AFTER_FIRST_GET:-}" ] && [ -f "$MUTATED_MARKER" ]; then
+      # Every existing member together, so they still agree with each other
+      # -- isolating "which read was this value taken from" from the
+      # separate disagreement/type checks tested elsewhere.
+      jq -c '.servers |= map(.on_behalf = false)' "$STATE_FILE" > "$STATE_FILE.m"
+      mv "$STATE_FILE.m" "$STATE_FILE"
+    fi
     if [ "$is_put" = yes ]; then
       cp "$PUT_BODY_FILE" "$STATE_FILE"
       # Wrap what was sent back in the shape a real GET-after-PUT would have:
@@ -102,6 +115,14 @@ case "$url" in
         jq -c '(.servers[] | select(.server_id=="tg") | .updated_tools[0].enabled) |= not' \
           "$STATE_FILE" > "$STATE_FILE.s"
         mv "$STATE_FILE.s" "$STATE_FILE"
+      fi
+      # Same measured behaviour, but on the just-inserted entry itself: the
+      # API accepts the PUT (200) but stores the new member with a tool
+      # already enabled that was sent disabled.
+      if [ -n "${SPOIL_NEW_ENABLED:-}" ]; then
+        jq -c '(.servers[] | select(.server_id=="projects") | .updated_tools[0].enabled) |= true' \
+          "$STATE_FILE" > "$STATE_FILE.n"
+        mv "$STATE_FILE.n" "$STATE_FILE"
       fi
     fi
     printf '{"success":true,"result":%s}' "$(cat "$STATE_FILE")"
@@ -134,11 +155,13 @@ def git(root, *args):
                    capture_output=True)
 
 
-def run(root, *args, portal=None, server=None, keep_state=False, spoil_tg=False):
+def run(root, *args, portal=None, server=None, keep_state=False, spoil_tg=False, spoil_new=False,
+        mutate_after_first_get=False):
     put_body = root / "put-body.json"
     put_body.unlink(missing_ok=True)
     if not keep_state:
         (root / "portal-state.json").unlink(missing_ok=True)
+    (root / "mutated-marker").unlink(missing_ok=True)
     server_state = root / "server-state.json"
     server_state.write_text(json.dumps(server if server is not None else SERVER_LIVE))
     auth = root / "curl-auth.txt"
@@ -157,6 +180,9 @@ def run(root, *args, portal=None, server=None, keep_state=False, spoil_tg=False)
         STATE_FILE=str(root / "portal-state.json"),
         SERVER_STATE_FILE=str(server_state),
         SPOIL_TG_ENABLED="1" if spoil_tg else "",
+        SPOIL_NEW_ENABLED="1" if spoil_new else "",
+        MUTATE_AFTER_FIRST_GET="1" if mutate_after_first_get else "",
+        MUTATED_MARKER=str(root / "mutated-marker"),
     )
     p = subprocess.run(["bash", str(root / SCRIPT_REL), *args],
                        capture_output=True, text=True, env=env)
@@ -320,6 +346,42 @@ def main():
         check("an omitted server_id (flag lands in $1) is a usage error, not a bogus add",
               p.returncode == 2 and sent is None and "usage:" in p.stderr,
               f"rc={p.returncode} {p.stderr[:200]}")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = fixture(tmp)
+        p, sent = run(root, "--help")
+        check("any leading-dash first argument, not just the two known flags, is a usage error",
+              p.returncode == 2 and sent is None and "usage:" in p.stderr,
+              f"rc={p.returncode} {p.stderr[:200]}")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = fixture(tmp)
+        p, sent = run(root, "projects", server={"id": "projects", "tools": [{"name": "projects_list"}, {"name": None}]})
+        check("a tool catalogue entry with no name is refused rather than written as {\"name\": null}",
+              p.returncode != 0 and sent is None and "a tool with no name" in p.stderr,
+              p.stderr[:200])
+
+    with tempfile.TemporaryDirectory() as tmp:
+        # The API accepts the insert (200) but stores the new member with a
+        # tool already enabled that this script asked to be disabled. Id
+        # presence alone would call this a clean add.
+        root = fixture(tmp)
+        p, sent = run(root, "projects", spoil_new=True)
+        check("the new entry is verified against what was sent, not just its id's presence",
+              p.returncode != 0 and "was not written as sent" in p.stderr,
+              f"rc={p.returncode} {p.stderr[:300]}")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        # An existing member's on_behalf is flipped (by hand, say) right
+        # after this script's first ("early", already-member) read. The
+        # donor value used for the new entry must come from a read taken
+        # AFTER that flip, not the stale one the early check happened to see.
+        root = fixture(tmp)
+        p, sent = run(root, "projects", mutate_after_first_get=True)
+        check("the donor is derived from a read taken at write-time, not an earlier stale one",
+              p.returncode == 0 and sent is not None
+              and [s for s in sent["servers"] if s["server_id"] == "projects"][0]["on_behalf"] is False,
+              f"rc={p.returncode} {json.dumps(sent)[:300] if sent else p.stderr[:300]}")
 
     with tempfile.TemporaryDirectory() as tmp:
         root = fixture(tmp)

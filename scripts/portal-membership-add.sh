@@ -34,11 +34,11 @@
 set -euo pipefail
 
 server="${1:-}"
-# A server_id can never look like a flag, so an omitted argument (--check
-# landing in $1) is caught here rather than proceeding into apply mode
-# against the literal string "--check" as a bogus server_id.
+# A server_id can never look like a flag, so ANY leading-dash first argument
+# (not just the two known flags -- "--help", a typo, anything) is caught
+# here rather than proceeding into apply mode against a bogus server_id.
 case "$server" in
-  --check|--dry-run|"") echo "usage: $0 <server_id> [--check|--dry-run]  (server_id is required and cannot start with '-')" >&2; exit 2 ;;
+  -*|"") echo "usage: $0 <server_id> [--check|--dry-run]  (server_id is required and cannot start with '-')" >&2; exit 2 ;;
 esac
 mode=apply
 case "${2:-}" in
@@ -58,18 +58,6 @@ command -v jq >/dev/null || { echo "jq is required" >&2; exit 2; }
 git -C "$here" rev-parse --git-dir >/dev/null 2>&1 \
   || { echo "$here is not a git checkout; run this from a clone" >&2; exit 1; }
 
-# The server this script is about to WRITE to the portal must already be a
-# reviewed, committed Terraform resource -- otherwise it is being invented
-# here rather than declared in the one place this repository says a server
-# is declared. That is a property of the write, not of asking a question:
-# `api` and `seerrsense` are both members of portal `mcp` today with no
-# Terraform resource at all, by design (they are DCR servers registered
-# out-of-band; see portal-auth-credentials-drift.py's DCR_SERVERS and the
-# README), so gating --check on this too would make `--check api` fail with
-# a misleading "add and merge that first" for a server that is already a
-# correctly-configured member. The gate therefore runs only for apply/dry-run,
-# below the --check branch (see tf_declared() below, defined once used).
-
 base="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/access/ai-controls/mcp"
 cf() { curl -sS -K <(printf 'header = "Authorization: Bearer %s"\nheader = "Content-Type: application/json"\n' "$CLOUDFLARE_API_TOKEN") "$@"; }
 must_succeed() { # $1 = label, stdin = API envelope; prints the envelope on success
@@ -79,13 +67,13 @@ must_succeed() { # $1 = label, stdin = API envelope; prints the envelope on succ
   fi
   printf '%s' "$body"
 }
+is_member() { jq -e --arg s "$server" '.result.servers // [] | any(.server_id == $s)' <<<"$1" || true; }
 
 portal=mcp
-before=$(cf "$base/portals/$portal" | must_succeed "read portal")
-already=$(jq -e --arg s "$server" '.result.servers // [] | any(.server_id == $s)' <<<"$before" || true)
+early=$(cf "$base/portals/$portal" | must_succeed "read portal")
 
 if [ "$mode" = check ]; then
-  if [ "$already" = true ]; then
+  if [ "$(is_member "$early")" = true ]; then
     echo "'$server' is already a member of portal '$portal'"
     exit 0
   fi
@@ -93,11 +81,20 @@ if [ "$mode" = check ]; then
   exit 1
 fi
 
-if [ "$already" = true ]; then
+if [ "$(is_member "$early")" = true ]; then
   echo "'$server' is already a member of portal '$portal'; nothing to add"
   exit 0
 fi
 
+# The server this script is about to WRITE to the portal must already be a
+# reviewed, committed Terraform resource -- otherwise it is being invented
+# here rather than declared in the one place this repository says a server
+# is declared. That is a property of the write, not of asking a question:
+# `api` and `seerrsense` are both members of portal `mcp` today with no
+# Terraform resource at all, by design (they are DCR servers registered
+# out-of-band; see portal-auth-credentials-drift.py's DCR_SERVERS and the
+# README), so the --check branch above never reaches this gate.
+#
 # A literal match, not a regex: $server can contain characters ('.', '*',
 # '[') that an ERE would treat as metacharacters and match loosely against a
 # resource this is not meant to find.
@@ -112,12 +109,32 @@ tf_declared \
 # it to the portal with no tools (or no prompts) listed is not the same as
 # "all disabled": an empty updated_tools/updated_prompts is undefined
 # behaviour this script has not measured, so every advertised tool and prompt
-# gets an explicit, disabled entry instead.
+# gets an explicit, disabled entry instead. A nameless entry is refused
+# rather than silently written as {"name": null}, which the portal has not
+# been measured to accept or reject.
 server_obj=$(cf "$base/servers/$server" | must_succeed "read server $server")
 tools=$(jq -c '[.result.tools // [] | .[].name]' <<<"$server_obj")
 prompts=$(jq -c '[.result.prompts // [] | .[].name]' <<<"$server_obj")
+jq -e 'all(.[]; . != null)' >/dev/null <<<"$tools" \
+  || { echo "server '$server' advertises a tool with no name; refusing" >&2; exit 1; }
+jq -e 'all(.[]; . != null)' >/dev/null <<<"$prompts" \
+  || { echo "server '$server' advertises a prompt with no name; refusing" >&2; exit 1; }
 [ "$(jq 'length' <<<"$tools")" -gt 0 ] \
   || { echo "server '$server' has no tools in its catalogue yet (authentication_status is probably 'waiting'); nothing to enable, refusing to add an empty member" >&2; exit 1; }
+
+# Everything from here on must come from ONE read, taken as close to the
+# write as this script gets: the donor fields below and the servers[] array
+# the write is built from must agree with each other, or a member edited
+# between two separate reads (on_behalf flipped by hand, say) would derive
+# its donor value from a snapshot older than the one actually being written
+# back -- silently reintroducing the "wrong value, no error" failure the
+# agreement/type checks below exist to prevent. `early` above is allowed to
+# be stale (it only ever gates an early exit); `fresh` is not.
+fresh=$(cf "$base/portals/$portal" | must_succeed "read portal")
+if [ "$(is_member "$fresh")" = true ]; then
+  echo "'$server' is already a member of portal '$portal' (added by something else just now); nothing to add"
+  exit 0
+fi
 
 # Shape copied from an existing member rather than invented, same rationale
 # as the hand-run recipe this replaces: it carries whatever fields this API
@@ -131,15 +148,15 @@ prompts=$(jq -c '[.result.prompts // [] | .[].name]' <<<"$server_obj")
 # projecting them, which `unique` would otherwise let through as "one
 # element" of null/null and this script would then send as explicit nulls --
 # exactly the wrong-value-silently case this check exists to prevent).
-[ "$(jq '.result.servers // [] | length' <<<"$before")" -gt 0 ] \
+[ "$(jq '.result.servers // [] | length' <<<"$fresh")" -gt 0 ] \
   || { echo "portal '$portal' has no existing members to copy a shape from; this script assumes at least one" >&2; exit 1; }
-donor_values=$(jq -c '[.result.servers // [] | .[] | {on_behalf, default_disabled}] | unique' <<<"$before")
+donor_values=$(jq -c '[.result.servers // [] | .[] | {on_behalf, default_disabled}] | unique' <<<"$fresh")
 [ "$(jq 'length' <<<"$donor_values")" -eq 1 ] \
   || { echo "existing portal members do not agree on on_behalf/default_disabled, so there is no single safe default to copy for a new one: $(jq -c . <<<"$donor_values")" >&2; exit 1; }
 jq -e '.[0] | (.on_behalf | type) == "boolean" and (.default_disabled | type) == "boolean"' \
   >/dev/null <<<"$donor_values" \
   || { echo "existing portal members agree, but not on a boolean value, for on_behalf/default_disabled: $(jq -c . <<<"$donor_values"); refusing to copy a non-boolean shape" >&2; exit 1; }
-donor=$(jq '.result.servers[0]' <<<"$before")
+donor=$(jq '.result.servers[0]' <<<"$fresh")
 on_behalf=$(jq '.on_behalf' <<<"$donor")
 default_disabled=$(jq '.default_disabled' <<<"$donor")
 
@@ -158,15 +175,14 @@ if [ "$mode" = dry-run ]; then
   exit 0
 fi
 
-servers_before=$(jq -cS '[.result.servers // [] | .[] | .server_id] | sort' <<<"$before")
-
-# Re-read immediately before the write, to narrow (not close -- there is no
-# conditional write on this API) the window in which an allowlist apply
-# landing on an existing member would be silently reverted by sending the
-# array back. See infrastructure/cloudflare/portal/README.md's re-snapshot
-# recipe for the same reasoning applied to an existing member's tool list.
-fresh=$(cf "$base/portals/$portal" | must_succeed "read portal")
-[ "$(jq -cS '[.result.servers // [] | .[] | .server_id] | sort' <<<"$fresh")" = "$servers_before" ] \
+# One last freshness check immediately before the write: everything above
+# this line since `fresh` was read is pure local computation (no network
+# calls), so this narrows the unavoidable window between a read and the PUT
+# to as little as bash allows -- it does not close it, since this API has no
+# conditional write.
+just_before=$(cf "$base/portals/$portal" | must_succeed "read portal")
+[ "$(jq -cS '[.result.servers // [] | .[] | .server_id] | sort' <<<"$just_before")" \
+  = "$(jq -cS '[.result.servers // [] | .[] | .server_id] | sort' <<<"$fresh")" ] \
   || { echo "the portal's membership moved while this script was reading; start again" >&2; exit 1; }
 
 body=$(jq -c --argjson new "$new_entry" '{servers: (.result.servers + [$new])}' <<<"$fresh")
@@ -197,11 +213,20 @@ if ! diff -q <(jq -S --arg s "$server" '.servers | map(select(.server_id != $s))
   exit 1
 fi
 
-jq -er --arg s "$server" --argjson before "$servers_before" '.result
-  | ([.servers // [] | .[] | .server_id] | sort) as $after
-  | ($before - $after) as $lost
-  | select(($after | index($s)) != null and ($lost | length) == 0)
-  | "added: server_id=\($s) mappings=\($after | join(","))"' <<<"$res" \
-  || { echo "update returned success but the portal does not match: either '$server' is not in the result, or an existing mapping was lost across the write" >&2; exit 1; }
+# The new entry's own mapping, checked against what was sent -- id presence
+# alone would pass a 200 that stored the new member with, say, every tool
+# left off updated_tools entirely (the insert half of the same "200 but not
+# what was sent" API behaviour the check above exists for on the other
+# half). Compared on exactly the fields this script sets; extra fields the
+# API computes on insert (id, authentication_status, tools, timestamps) are
+# not part of what was asked for and are not asserted here.
+if ! diff -q <(jq -cS '{server_id, on_behalf, default_disabled, updated_tools, updated_prompts}' <<<"$new_entry") \
+             <(jq -cS --arg s "$server" '.result.servers[] | select(.server_id == $s) | {server_id, on_behalf, default_disabled, updated_tools, updated_prompts}' <<<"$res") >/dev/null; then
+  echo "'$server' was not written as sent -- comparing the requested entry against what the portal now reports for it:" >&2
+  diff -u <(jq -cS '{server_id, on_behalf, default_disabled, updated_tools, updated_prompts}' <<<"$new_entry") \
+          <(jq -cS --arg s "$server" '.result.servers[] | select(.server_id == $s) | {server_id, on_behalf, default_disabled, updated_tools, updated_prompts}' <<<"$res") >&2 || true
+  exit 1
+fi
 
+echo "added: server_id=$server mappings=$(jq -r '[.result.servers // [] | .[] | .server_id] | sort | join(",")' <<<"$res")"
 echo "next: run scripts/portal-allowlist-apply.sh from a checkout of the repository that owns '$server' to enable its allowed tools (see docs/portal-allowlist.json there)"
