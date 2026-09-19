@@ -36,6 +36,17 @@ import urllib.request
 RESOURCE_TYPE = "cloudflare_zero_trust_access_ai_controls_mcp_server"
 API = "https://api.cloudflare.com/client/v4"
 
+# Servers registered by Dynamic Client Registration. They carry no
+# `auth_credentials` at all -- supplying one is what opts a server into manual
+# mode -- so there is no applied blob for this script to compare, and the
+# check for them is the absence itself.
+#
+# They are named here rather than detected, because in state "registered by
+# DCR" and "applied by something that did not record it" are the same empty
+# field. Detecting it would turn the second case, which the Undetermined below
+# exists to catch, into a silent skip for every server at once.
+DCR_SERVERS = {"projects"}
+
 
 class Undetermined(Exception):
     """The check could not be computed. Distinct from drift, and it exits 2.
@@ -68,6 +79,19 @@ def desired_from_state(state: dict) -> dict[str, dict]:
             raw = values.get("auth_credentials")
             sid = values.get("id")
             if not sid:
+                continue
+            if sid in DCR_SERVERS:
+                if raw:
+                    # It was registered by DCR and now holds a blob, so either
+                    # the registration changed mode or DCR_SERVERS is wrong.
+                    # Undetermined, not drift: there is no recorded desired
+                    # value to have drifted FROM, and comparing against one
+                    # this script invented is how a wrong answer gets a number.
+                    raise Undetermined(
+                        f"{sid}: registered by DCR but state holds "
+                        "auth_credentials; it is no longer the server this "
+                        "check was told it is"
+                    )
                 continue
             if not raw:
                 # Applied by something that did not record it, or never
@@ -266,6 +290,45 @@ def selftest() -> int:
     print(f"{'ok  ' if ok else 'FAIL'} an unknown live key is reported")
     if not ok:
         failures.append("unknown key")
+
+    # `desired_from_state` decides which servers this check has anything to
+    # say about, and the three answers it can give -- compare it, skip it,
+    # refuse to run -- had no cases. The skip is the one that matters: before
+    # it existed, one DCR server in state aborted the scan for every server,
+    # so a check that still reported "in sync" for `tg` yesterday reported
+    # "could not run" today with nothing about `tg` having changed.
+    def state_with(*resources):
+        return {"values": {"root_module": {"resources": [
+            {"type": RESOURCE_TYPE, "values": v} for v in resources
+        ]}}}
+
+    manual = {"id": "tg", "auth_credentials": json.dumps(base), "account_id": "a"}
+    dcr_res = {"id": "projects", "account_id": "a"}
+
+    want = desired_from_state(state_with(manual, dcr_res))
+    ok = set(want) == {"tg"}
+    print(f"{'ok  ' if ok else 'FAIL'} a DCR server is skipped and the rest still compared")
+    if not ok:
+        failures.append("dcr skipped")
+
+    try:
+        desired_from_state(state_with({"id": "seerrsense", "account_id": "a"}))
+        ok = False
+    except Undetermined:
+        ok = True
+    print(f"{'ok  ' if ok else 'FAIL'} a non-DCR server with no credentials is still undetermined")
+    if not ok:
+        failures.append("unapplied undetermined")
+
+    try:
+        desired_from_state(state_with(
+            {"id": "projects", "auth_credentials": json.dumps(base), "account_id": "a"}))
+        ok = False
+    except Undetermined:
+        ok = True
+    print(f"{'ok  ' if ok else 'FAIL'} a DCR server that grew credentials is undetermined")
+    if not ok:
+        failures.append("dcr with credentials")
 
     if failures:
         print(f"\n{len(failures)} failing: {', '.join(failures)}")
