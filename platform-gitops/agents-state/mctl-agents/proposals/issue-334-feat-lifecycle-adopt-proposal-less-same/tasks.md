@@ -1,217 +1,190 @@
 # Tasks: issue-334-feat-lifecycle-adopt-proposal-less-same
 
-- [ ] 1. Add the `PRRef` dataclass and its record IO in a new module
-  `orchestrator/pr_adoption.py`: fields `repo, number, service, head_ref,
-  head_sha, owner_type, attempt, refusals, refusals_head, outcome, record_dir`
-  plus derived `record_path = record_dir / ".prref.yaml"`, an `entity` property
-  returning `EntityRef.for_pull_request(repo, number, head_sha)`, the closed
-  `outcome` vocabulary (`adopted, review-fixing, merge-ready, review-stuck,
-  merged, closed, released`) with a `TERMINAL_OUTCOMES` frozenset, and
-  `load_prref` / `update_prref` built on
-  `orchestrator.proposal_state._write_status_atomic` so writes are atomic,
-  mode-preserving and merge-don't-clobber. Records live at
-  `<state_dir>/<service>/adopted-prs/pr-<number>/.prref.yaml` — a sibling of
-  `proposals/`, never inside it. — DoD: module imports with no dependency on
-  `run_shepherd`; round-trip of every field passes; an unknown `outcome` value
-  raises rather than being coerced; `_discover_refs` on a state dir containing
-  an `adopted-prs/` tree returns exactly the same refs as before.
+All tasks land in one PR against `mctlhq/mctl-agents`. No sibling repository is
+touched; no task requires a human step or a post-merge production action.
 
-- [ ] 2. Add `append_attempt(prref, *, head_sha, reviewer, finding, owner_type,
-  outcome)` to `orchestrator/pr_adoption.py` (depends on 1): appends one entry
-  to the record's `attempts:` list carrying `at, attempt, head_sha, reviewer,
-  finding, owner_type, outcome`, where `finding` is a bounded digest of the
-  triggering finding body (reuse the `MAX_NOTES_CHARS = 700` bound and the
-  `" ".join(body.split())[:N]` normalisation from
-  `run_shepherd._read_refusal_reason`). — DoD: the evidence fields required by
-  the issue (repo, PR, head SHA, triggering reviewer/finding, attempt, owner
-  type, outcome) are all readable from a single record file; the list is
-  append-only across writes; a finding body containing YAML metacharacters or
-  10 KB of text round-trips safely and truncated.
+- [ ] 1. Widen `PRSnapshot` with the two fields adoption needs — add
+  `head_branch: str = ""` and `is_cross_repository: bool = False` to the
+  dataclass in `orchestrator/run_shepherd.py` (L958-975), and request
+  `headRefName isCrossRepository headRepositoryOwner{login}
+  baseRepository{owner{login}}` in the `_fetch_pr_snapshot` GraphQL query
+  (L1352), populating both from the response. — DoD: both fields default so
+  every existing `PRSnapshot(...)` construction site and every fixture in
+  `tests/test_run_shepherd.py` still constructs; `_fetch_pr_snapshot` sets
+  `is_cross_repository` true when `isCrossRepository` is true OR the head
+  repository owner differs from the base repository owner; `pytest
+  tests/test_run_shepherd.py` passes unchanged.
 
-- [ ] 3. Implement `discover_adoptable_prs(state_dir, *, service_filter=None,
-  allowlist, excluded_paths)` in `orchestrator/pr_adoption.py` (depends on 1).
-  Enumerate `gh pr list --repo mctlhq/<service> --state open --json
-  number,headRefName,headRefOid,isCrossRepository,isDraft,url,author` for each
-  allowlisted service whose `run_shepherd._service_mode` is not `SKIP`, then
-  apply the nine rejection filters in design.md order (`fork`, `draft`/
-  `not-open`, `implementer-branch`, `proposal-owned`, `devloop-owned`,
-  `steward-owned`, `policy-excluded`, `owned`/`store-unknown`,
-  `no-blocking-findings`), reusing `run_shepherd._gh_api_json`, `_parse_pr_url`,
-  `_discover_refs(..., reconcile=True)` for the proposal index,
-  `_dev_loop_owns_answer`, `lifecycle.policy.default_owner_for`,
-  `OwnershipClient.get_many(KIND_PULL_REQUEST, PHASE_REVIEW_REMEDIATION, ids)`,
-  `_fetch_pr_snapshot`, and `read_codex_review(...).fresh_findings_p1_p2(
-  pr.head_sha, pr.head_pushed_at)`. Each rejection emits one
-  `adoption: skip <repo>#<n> reason=<slug>` line. — DoD: `blocks_others` true
-  and `UNKNOWN` both reject; the store read is one batched call per tick, not
-  one per PR; only `run_shepherd.GATING_BOTS` findings can make a PR adoptable
-  and `COPILOT_BOT` findings cannot; `isCrossRepository` PRs are rejected before
-  any snapshot or review read happens.
+- [ ] 2. Add the flag surface (depends on 1) — in a new
+  `orchestrator/pr_adoption.py`, add `adoption_enabled()` reading
+  `SHEPHERD_ADOPT_PRS` (default false), `adopt_repos()` reading
+  `SHEPHERD_ADOPT_REPOS` through the existing
+  `run_shepherd._service_set_from_env` (default empty), and
+  `max_prs_per_tick()` reading `SHEPHERD_ADOPT_MAX_PRS_PER_TICK` (default 1).
+  Document all three, commented out, in `.env.example`. — DoD: with none of the
+  three set, `adoption_enabled()` is False and `adopt_repos()` is empty; an
+  unrecognised repo name in the allowlist produces the same `warn:` line
+  `_service_set_from_env` already emits and is dropped.
 
-- [ ] 4. Implement `adopt(prref_candidate, *, client, dry_run)` (depends on 2, 3):
-  `acquire(entity, PHASE_REVIEW_REMEDIATION, Owner(OWNER_RECONCILER, id),
-  proposal_ref="", policy_ref=policy.policy_ref_for(service))`, then write the
-  record with `outcome: adopted` and the first attempt entry, then
-  `handoff_start(..., to=Owner(OWNER_SHEPHERD, id))`. Abort and write nothing
-  unless `acquire` answers `OWNED_BY_ME`. — DoD: no proposal directory,
-  `.status.yaml`, `requirements.md`, `design.md` or `tasks.md` is created on any
-  path; `proposal_ref` is never sent as a non-empty value; a failed or `UNKNOWN`
-  `acquire` leaves the filesystem untouched; an interrupted adoption leaves the
-  row in `handing-off`, which `lifecycle.reconciler.classify` already resolves as
-  `ACTION_COMPLETE_HANDOFF` / `handoff-incomplete`.
+- [ ] 3. Implement the `PRRef` record type (depends on 2) — in
+  `orchestrator/pr_adoption.py`, add `ADOPTED_DIRNAME`, `PRREF_FILENAME`,
+  `PRREF_KIND`, `slug_for(number)`, `record_dir(state_dir, service, number)`, a
+  `PRRef` dataclass subclassing `run_shepherd.ProposalRef` whose
+  `__post_init__` points `status_path` at `.prref.yaml` and whose `mode` is
+  `run_shepherd.FIX_ONLY` at construction, plus `load_prref` / `write_prref`
+  built on `orchestrator/proposal_state.py::load_status` and
+  `update_status_file`, and `append_evidence(...)` capped at `MAX_EVIDENCE = 20`
+  entries with the finding body truncated. — DoD: a round-trip writes and reads
+  the schema in design.md §1 including `kind: pr-ref`; no new YAML writer is
+  introduced; `PRRef.mode` is `FIX_ONLY` regardless of what the caller passes;
+  an evidence append on an unchanged PR leaves the file byte-identical.
 
-- [ ] 5. Add the explicit-branch review-feedback path to the implementer
-  (depends on 1). Add `--pr-repo`, `--pr-number`, `--pr-branch` to
-  `run_implementer`'s argparse as an alternative to `--service`/`--slug` in
-  `--review-feedback` mode, and an `adopted_review_feedback_one(...)` that
-  mirrors `review_feedback_one` but takes the branch from the argument instead
-  of `f"feat/agents-{ref.slug}"`, clones by repo, and calls a `_build_prompt`
-  variant carrying an explicit `branch` and no `$PROPOSAL_DIR` reference (the PR
-  description and the findings bundle are the whole specification). Reuse
-  `_branch_exists_on_origin`, `_checkout_existing_branch`,
-  `_stage_implementer_agent`, `_capture_head_sha`, the refusal-marker protocol
-  and `_review_feedback_exit_code` unchanged. — DoD: a missing branch on origin
-  still exits `EXIT_BRANCH_MISSING_ON_ORIGIN` and never creates the branch; no
-  `gh pr create` is reachable from this path; `--pr-branch` together with
-  `--slug` is a usage error; the prompt for an adopted PR contains no
-  `$PROPOSAL_DIR` or `platform-gitops/agents-state/.../proposals/` string.
+- [ ] 4. Implement the ownership and safety gates (depends on 3) — in
+  `orchestrator/pr_adoption.py`, add pure-ish predicates:
+  `_is_fork(pr)` (from task 1's fields), `_is_agents_branch(head_branch)`
+  (`feat/agents-` prefix), `_owned_by_proposal(state_dir, pr_url)` (one cached
+  pass over `<svc>/proposals/*/.status.yaml` for a matching `pr:`),
+  `_devloop_free(service, slug)` wrapping `run_shepherd._dev_loop_owns_answer`
+  and requiring `LEGACY_FREE` (fail closed on `LEGACY_UNKNOWN`),
+  `_mode_permits(service)` requiring `run_shepherd._service_mode(service) !=
+  SKIP`, and `_store_permits(entity)` consulting
+  `lifecycle.client.OwnershipClient().get(...)` on
+  `PHASE_REVIEW_REMEDIATION` only when `lifecycle.rollout.computes_new_answer()`
+  and admitting only `UNOWNED` / `OWNED_BY_ME`. — DoD: each gate is a separate
+  function with its own refusal reason string; every gate refuses on an
+  unanswerable input; no gate raises out of the discovery pass.
 
-- [ ] 6. Extend `run_shepherd.apply_followup` with keyword-only `branch: str |
-  None = None` and `pr_url: str | None = None` (depends on 5). When `branch` is
-  set, build the argv with `--pr-repo/--pr-number/--pr-branch` and no
-  `--service/--slug`; otherwise emit today's argv byte-for-byte. Temp-file
-  naming, the refusal-out file, the `finally` cleanup and the
-  `FollowupSubprocessError` exit-code classification are unchanged. — DoD:
-  `tests/test_run_shepherd.py::test_apply_followup_invokes_implementer_subprocess`
-  and `::test_apply_followup_propagates_state_dir` pass unmodified; the new argv
-  is asserted by its own test; both temp files are unlinked on every exit path.
+- [ ] 5. Implement discovery (depends on 4) — add
+  `discover_adoptable(state_dir, *, budget)` running the pipeline in design.md
+  §2: per allowlisted repo, `gh api graphql` for open PRs, apply the gates in
+  order, then `run_shepherd._fetch_pr_snapshot` + `read_codex_review` +
+  `fresh_findings_p1_p2(pr.head_sha, pr.head_pushed_at)`, and adopt only PRs
+  with at least one fresh P1/P2 from `GATING_BOTS`. On adoption write
+  `.prref.yaml` with the first evidence entry and — when
+  `rollout.records_writes()` — call `OwnershipClient().acquire(...,
+  proposal_ref="", policy_ref=lifecycle.policy.policy_ref_for(service))`,
+  treating any ownership failure as "do not adopt". Also add re-discovery of
+  existing `.prref.yaml` records. — DoD: returns at most `max_prs_per_tick()`
+  refs; a PR failing any gate is skipped with a one-line reason on stdout; an
+  unreachable ownership store yields zero adoptions and zero exceptions.
 
-- [ ] 7. Implement `process_adopted_one(prref, *, state_dir, dry_run)` in
-  `orchestrator/pr_adoption.py` (depends on 2, 4, 6). Reuse
-  `_fetch_pr_snapshot`, `read_codex_review`, `read_copilot_review`,
-  `trigger_review` and `decide(pr, review, fix_only=True)` — `fix_only=True`
-  unconditionally, so `merge` is unreachable and `merge_pr` is never called.
-  Complete a pending `handoff_complete` before any mutation. Map decisions:
-  `address-review` -> re-read the head, abort if it moved, acquire an
-  `ExecutionClaim` pinned to `entity_version=head_sha` with executor
-  `OWNER_IMPLEMENTER`, fork via `apply_followup(..., branch=prref.head_ref)`,
-  then `attempt += 1`, `outcome: review-fixing`, and
-  `progress(..., evidence="pushed <old>-><new> for <reviewer> <severity>")`;
-  `defer-merge` -> `outcome: merge-ready` plus a log line naming
-  `policy.merge_authority_for(service)`; `flip-to-merged`/`flip-to-rejected` ->
-  `outcome: merged`/`closed` plus `terminal(...)`; `wait` -> no write.
-  Honour `MAX_REVIEW_ATTEMPTS`, `MAX_HARNESS_FAILURES` and `MAX_REFUSALS`
-  (with `refusals_head` resetting the refusal budget on a head change), and on
-  the review-attempt cap write `outcome: review-stuck` plus `terminal(...,
-  reason=...)`. Release ownership with `outcome: released` whenever a proposal
-  or live DevLoop has appeared for the PR. — DoD: `merge_pr` is not referenced
-  anywhere in the new module; `progress` is called only after a push that moved
-  the head; a head change between `decide` and mutation aborts the attempt; once
-  the outcome is terminal no further implementer fork occurs.
+- [ ] 6. Thread the record through the shepherd (depends on 5) — in
+  `orchestrator/run_shepherd.py`: add an optional `status_path` parameter to
+  `find_pr_for_proposal` (L1320) and pass `ref.status_path` from `process_one`;
+  add `adopted_pr: str | None = None` to `apply_followup` (L2062) which
+  substitutes `--adopted-pr <pr-url>` for `--slug` in the subprocess argv
+  (L2124-2136) and changes nothing else; in `main()`, after
+  `_filter_dev_loop_owned` and only when adoption is enabled and neither
+  `--reconcile` nor `--slug` is set, extend `refs` with
+  `pr_adoption.discover_adoptable(...)`; add a `--adopt-prs` CLI override; and
+  print the `mctlhq/mctl-gitops#1278` durability warning when adoption is
+  enabled. — DoD: with `SHEPHERD_ADOPT_PRS` unset, `main()`'s argv to the
+  implementer and its stdout are byte-identical to today; `_print_summary`
+  renders a `PRRef` without change.
 
-- [ ] 8. Wire the entry point and flags (depends on 3, 7). Add `--adopt-prs`
-  (env `SHEPHERD_ADOPT_PRS`, default off), `SHEPHERD_ADOPT_SERVICES` (empty
-  allowlist by default, parsed with `run_shepherd._service_set_from_env`) and
-  `ADOPTION_EXCLUDED_PATHS` (default `.github/workflows/**`, `charts/**`,
-  `**/values.yaml`) to `run_shepherd.main()`. The adoption pass runs after
-  proposal-backed processing, its per-PR errors are caught and logged, and its
-  results append to `_print_summary`. Below `lifecycle.rollout.ENFORCE` it
-  discovers, records and logs but never forks the implementer; `--dry-run`
-  writes nothing at all; `--reconcile` and `--adopt-prs` together is a usage
-  error. Document the flags in `README.md` under "Tier 3 — PR shepherd" and in
-  `.env.example`. — DoD: with the flag unset, a full `pytest
-  tests/test_run_shepherd.py tests/test_run_shepherd_attempt_fresh.py` run
-  passes unmodified and no adoption code path executes; `--dry-run --adopt-prs`
-  creates no file, makes no `acquire` call and forks nothing.
+- [ ] 7. Accept a proposal-less target in the implementer (depends on 3) — in
+  `orchestrator/run_implementer.py`: add `--adopted-pr <pr-url>`, valid only
+  with `--review-feedback` and mutually exclusive with `--slug` (exit 2
+  otherwise); add `build_adopted_ref(state_dir, pr_url)` returning a
+  `ProposalRef` whose `proposal_dir` is
+  `<state-dir>/<service>/adopted-prs/pr-<n>/` and whose `status_path` is
+  `.prref.yaml`, exiting 2 when the record is absent; add a pre-clone
+  `isCrossRepository` re-check that exits 2 on a fork. — DoD: `--adopted-pr`
+  never creates a record; `find_accepted_proposals` is not called on this path;
+  a fork URL exits 2 before `_clone_target` runs.
 
-- [ ] 9. Companion `mctl-gitops` change and reviewer-identity follow-up
-  (depends on 1, 8). Open a PR in `mctl-gitops` extending the shepherd CWFT's
-  commit step to stage `':(glob)*/adopted-prs/*/**'` alongside the existing
-  proposal pathspec, and add a CI assertion that the two pathspecs together
-  cover everything the shepherd may write under `agents-state/`. Confirm whether
-  the issue's "agy" reviewer is a distinct bot login; if so, add it to
-  `run_shepherd.GATING_BOTS` with a fixture. — DoD: an adopted PR's `.prref.yaml`
-  appears in `mctl-gitops` `main` after a real tick; the production
-  `SHEPHERD_ADOPT_PRS` flag is not enabled until this PR merges, because an
-  uncommitted record resets `attempt` to 0 every tick and the bound stops being
-  a bound.
+- [ ] 8. Parameterise the branch and the prompt (depends on 7) — change
+  `review_feedback_one(ref, bundle, dry_run=False, branch=None)` so
+  `branch = branch or f"feat/agents-{ref.slug}"` (replacing the literal at
+  L1664), and `_build_prompt(ref, review_feedback=None, branch=None,
+  adopted=False)` so the hardcoded branch at L1299 uses the same value and the
+  adopted variant drops the `$PROPOSAL_DIR` spec-file sentence and the
+  `Proposal: platform-gitops/agents-state/...` trailer in favour of
+  `PR: <url>` and the subject `fix(review): address P1/P2 findings on
+  <repo>#<n>`. The adopted call passes `head_branch` read from `.prref.yaml`.
+  — DoD: with `branch=None` and `adopted=False` both functions produce output
+  identical to today (pinned by a test); the existing claim acquisition at
+  L1711-1719, the refusal marker handling and
+  `--force-with-lease={branch}:{old_head}` are unmodified.
+
+- [ ] 9. Documentation (depends on 6, 8) — extend the README "Tier 3 — PR
+  shepherd" section with an "Adopted PRs" subsection covering the record path,
+  the three env vars, the FIX_ONLY-always rule, and the
+  `mctlhq/mctl-gitops#1278` dependency; add a short note to
+  `docs/adr/010-lifecycle-ownership-contract.md`'s pilot-path-4 paragraph
+  recording that discovery shipped as `orchestrator/pr_adoption.py` with the
+  shepherd acquiring directly as `shepherd` rather than via `reconciler`, and
+  why. — DoD: `uv run python -m tools.check_diagrams` (or the repo's existing
+  docs check) still passes; no ADR decision is changed, only annotated.
 
 ## Tests
 
-- [ ] T1. `tests/test_pr_adoption_record.py` — `PRRef` round-trip, closed
-  `outcome` vocabulary rejecting unknown values, atomic write leaving the old
-  file intact on a serialisation error, `append_attempt` preserving prior
-  entries and truncating a 10 KB finding body, and a state dir with
-  `adopted-prs/` producing byte-identical `_discover_refs` output.
-- [ ] T2. `tests/test_pr_adoption_discovery.py` — the end-to-end happy path the
-  issue names: a manual/ChatGPT-authored same-repo PR in `mctl-gitops` with a
-  fresh `claude[bot]` P1 on the current head, no proposal, no DevLoop, no
-  steward -> adopted -> `address-review` -> fix push -> fresh clean review ->
-  `outcome: merge-ready` with `merge_pr` never called. Fixtures at the module
-  boundary, following `tests/test_run_shepherd.py`'s `tmp_path` worktree style.
-- [ ] T3. Ownership races, one test each: live DevLoop (`_dev_loop_owns_answer`
-  = owned) -> no adoption; a proposal whose `pr:` names the PR -> no adoption;
-  `_service_mode` = `SKIP` / `default_owner_for` = `pr-steward` -> no adoption;
-  store answers `OWNED_BY_OTHER` -> no adoption; store answers `UNKNOWN` ->
-  no adoption with reason `store-unknown`; a proposal appearing for an
-  already-adopted PR -> `release` plus `outcome: released`; `acquire` not
-  answering `OWNED_BY_ME` -> nothing written.
-- [ ] T4. Fork and policy exclusion: `isCrossRepository: true` is rejected with
-  reason `fork` and no snapshot, review, record or subprocess results; a PR
-  touching `.github/workflows/**` is rejected with reason `policy-excluded`; a
-  service absent from `SHEPHERD_ADOPT_SERVICES` is never enumerated.
-- [ ] T5. Head-SHA pinning: a P2 re-anchored onto the current head but with
-  `created_at` older than `head_pushed_at` never triggers adoption or a fix
-  (the `mctl-agents#359`/`#336` mechanism); a head that moves between `decide`
-  and mutation aborts the attempt with no fork and no record mutation; the
-  `ExecutionClaim` and the recorded attempt carry the same `entity_version`.
-- [ ] T6. Bounded remediation: five consecutive `address-review` cycles ->
-  `outcome: review-stuck` plus `terminal(...)` and no sixth fork; a refusal
-  sentinel (`EXIT_DELIBERATE_NO_OP`) does not charge a review attempt; a harness
-  failure (`EXIT_ORPHANED_SUBAGENT`) charges `harness_failures` and caps at 3; a
-  head change resets `refusals` via `refusals_head`.
-- [ ] T7. Merge authority: `decide` is always called with `fix_only=True` for an
-  adopted PR (asserted on the call, not only the outcome), a clean adopted PR in
-  a `FULL`-mode service still yields `merge-ready`, and `run_shepherd.merge_pr`
-  is not reachable from `orchestrator/pr_adoption.py` (import-level assertion).
-- [ ] T8. Flag and rollout gating: flag off -> zero adoption calls and existing
-  shepherd tests unchanged; `rollout.mode()` in `observe` -> records written and
-  decisions logged but no implementer fork; `--dry-run --adopt-prs` -> no file,
-  no `acquire`, no fork; one adoption candidate raising does not prevent the
-  remaining candidates or the proposal-backed results from being summarised.
-- [ ] T9. Evidence completeness: after adopt + one fix + terminalisation, a
-  single `.prref.yaml` contains repo, PR number, head SHA per attempt,
-  triggering reviewer login, finding digest, attempt ordinal, owner type and
-  outcome; and every rejection path emits exactly one reason-slug log line, so
-  "zero adoptions" is distinguishable from "never ran".
+New file `tests/test_pr_adoption.py` plus additions to
+`tests/test_run_shepherd.py`, following the existing conventions there (GitHub
+API and the implementer subprocess mocked at the module boundary, `.prref.yaml`
+round-tripping through a real `tmp_path`).
+
+- [ ] T1. End-to-end adoption: a manual/ChatGPT-authored open same-repo PR with
+  a fresh P1 from `claude[bot]` on the current head and no proposal is
+  discovered, adopted (`.prref.yaml` written with evidence), driven through
+  `process_one` to `address-review`, the implementer fork is asserted to carry
+  `--adopted-pr` and NOT `--slug`, and a follow-up tick with a clean review
+  ends in `defer-merge` with no `merge_pr()` call.
+- [ ] T2. Fork refusal: `is_cross_repository` true is never adopted, and
+  `--adopted-pr` on a fork URL exits 2 before `_clone_target` is called.
+- [ ] T3. Ownership races, one test per gate — (a) a `.status.yaml` elsewhere
+  carrying the same `pr:` URL; (b) a `feat/agents-*` head branch; (c)
+  `_dev_loop_owns_answer` returning `LEGACY_OWNED`; (d) it returning
+  `LEGACY_UNKNOWN` (must also refuse — the opposite of the sweep's fail-open);
+  (e) `_service_mode` resolving `SKIP`; (f) the ownership store answering
+  `OWNED_BY_OTHER`; (g) the store answering `UNKNOWN`. Each asserts zero
+  adoptions and no `.prref.yaml` written.
+- [ ] T4. Head-SHA pinning: a P1 whose `created_at` predates `head_pushed_at`
+  does not trigger adoption; a record whose stored `head_sha` is stale is
+  re-pinned and `refusals` reset before any action.
+- [ ] T5. Bounds: `review_attempts` reaching `MAX_REVIEW_ATTEMPTS`,
+  `harness_failures` reaching `MAX_HARNESS_FAILURES`, and `refusals` reaching
+  `MAX_REFUSALS` each flip the `.prref.yaml` to `review-stuck` with evidence;
+  exit codes 47 / 48 / 49 / 46 charge exactly what they charge for a proposal.
+- [ ] T6. Never merges: `decide()` on an adopted ref always returns
+  `defer-merge` and never `merge`, for a FULL-mode service as well as a
+  fix-only one; `process_one`'s defensive re-check also refuses.
+- [ ] T7. Default-off equivalence: with `SHEPHERD_ADOPT_PRS` unset,
+  `_discover_refs` output, `main()`'s stdout and the implementer argv are
+  identical to the pre-change behaviour; `discover_adoptable` is never called.
+- [ ] T8. Backward-compat pins: `review_feedback_one(..., branch=None)` still
+  resolves `feat/agents-<slug>`, and `_build_prompt(ref, review_feedback=b)`
+  with no new kwargs produces the exact string it produces today.
+- [ ] T9. Evidence schema: an adoption and a fix attempt each append an entry
+  carrying `repo`, `pr`, `head_sha`, `reviewer`, `finding`, `attempt`,
+  `owner_type`, `outcome`; the list is capped at `MAX_EVIDENCE` and the finding
+  body is truncated.
+- [ ] T10. Per-tick cap: with three adoptable PRs and
+  `SHEPHERD_ADOPT_MAX_PRS_PER_TICK=1`, exactly one implementer fork occurs and
+  the skipped candidates are logged rather than silently dropped.
 
 ## Rollback
 
-Three independent levels, cheapest first.
+The feature is inert by construction, so rollback is graded rather than
+all-or-nothing:
 
-1. **Unset the flag.** `SHEPHERD_ADOPT_PRS` (or removing every entry from
-   `SHEPHERD_ADOPT_SERVICES`) disables discovery, records, ownership calls and
-   forks on the next tick. Every task above is additive and defaulted, so the
-   proposal-backed shepherd path, `decide`, `apply_followup` and
-   `review_feedback_one` behave exactly as before with the flag off — T8 asserts
-   this. No Temporal workflow code changes, so no history incompatibility and no
-   `workflow.patched` marker to unwind.
-2. **Drop the rollout stage.** Setting `LIFECYCLE_ROLLOUT_MODE=observe` keeps
-   discovery and evidence while making mutation unreachable, which is the
-   diagnostic position: adoption volume and candidate quality stay observable
-   while nothing can touch a branch.
-3. **Revert the code.** `git revert` of the mctl-agents PR removes
-   `orchestrator/pr_adoption.py` and the additive parameters. Residue to clean
-   up afterwards, none of which breaks anything if left: (a) `adopted-prs/`
-   directories in `mctl-gitops` — inert, read by nothing else, removable with a
-   single gitops commit; (b) lifecycle ownership rows for
-   `(pull-request, review-remediation)` with `proposal_ref: ""` — release or
-   terminalise them with the audited recovery operation so the reconcile sweep
-   does not keep reporting `handoff-incomplete`; (c) the `mctl-gitops` CWFT
-   pathspec from task 9, which is harmless on its own and can be reverted
-   separately.
-
-In-flight PRs at rollback time are left exactly where they are: the fix commits
-already pushed remain on their branches and are merged or closed by the
-repository's normal human process, because adoption never granted merge
-authority and never opened a PR of its own.
+1. **Immediate, no deploy.** Unset `SHEPHERD_ADOPT_PRS` (or empty
+   `SHEPHERD_ADOPT_REPOS`) in the shepherd CronWorkflow's env. Discovery stops
+   on the next tick; no code path touches `adopted-prs/` again. Since every
+   other change is a defaulted keyword parameter or a defaulted dataclass
+   field, the shepherd and the implementer behave exactly as they did before
+   this PR.
+2. **Narrower.** Remove a single repository from `SHEPHERD_ADOPT_REPOS` to stop
+   adopting there while leaving the rest on; or set
+   `SHEPHERD_ADOPT_MAX_PRS_PER_TICK=0` to keep discovery observable while
+   performing no fix attempts.
+3. **Code revert.** Revert the PR. The only durable artefacts are
+   `adopted-prs/**` directories in `mctl-gitops` — and while
+   `mctlhq/mctl-gitops#1278` has not landed, none exist, because the CWFT does
+   not stage that path. If it has landed, `git rm -r` the
+   `agents-state/*/adopted-prs/` directories; nothing else in the pipeline
+   reads them.
+4. **In-flight PRs.** A follow-up commit already pushed to an adopted PR stays
+   on that PR. It is an ordinary commit on the PR's own branch, reviewable and
+   revertable by the repository's normal process; no branch was created and no
+   PR was opened, so there is nothing to clean up on GitHub.
