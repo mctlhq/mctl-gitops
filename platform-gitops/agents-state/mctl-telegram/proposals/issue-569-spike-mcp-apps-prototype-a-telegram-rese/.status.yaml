@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-09-19T11:21:58Z'
+updated_at: '2026-09-19T13:37:00Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -19,5 +19,5 @@ attempt:
 pr: https://github.com/mctlhq/mctl-telegram/pull/651
 github:
   state: open
-  head_sha: deab1975066d96158de1e1683e565205ed499710
-  observed_at: '2026-09-19T11:21:58Z'
+  head_sha: 4eb8c7fbbd2ba0a88f9a79c37b2576cf9690bc1f
+  observed_at: '2026-09-19T13:37:00Z'

@@ -1,5 +1,5 @@
-status: review-stuck
-updated_at: '2026-09-19T11:21:52Z'
+status: implemented
+updated_at: '2026-09-19T13:36:54Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -17,12 +17,7 @@ attempt:
   expires_at: '2026-09-19T11:36:48Z'
   finished_at: '2026-09-19T09:55:36Z'
 pr: https://github.com/mctlhq/mctl-telegram/pull/652
-harness_failures: 3
-notes: The platform lost the implementer's work 3 time(s) in a row (implementer follow-up
-  exited non-zero (46) for mctl-telegram/issue-438-feat-clients-model-notification-identity).
-  This is a harness defect, not a problem with the proposal — review_attempts was
-  never charged. Human triage required; see mctl-agents#366.
 github:
   state: open
-  head_sha: e192ce758b9fd2876f0680af6fafc4a3aec10158
-  observed_at: '2026-09-19T11:21:52Z'
+  head_sha: c0222ec085c92bdeeaa7468011ac82e7c4611bcc
+  observed_at: '2026-09-19T13:36:54Z'
