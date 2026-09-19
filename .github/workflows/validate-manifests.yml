@@ -282,6 +282,16 @@ jobs:
         # live portal.
         run: python3 tests/test_portal_controls_apply.py
 
+      - name: Unit-test the MCP portal membership-add script
+        # Adds a server_id to the same shared servers[] array as the script
+        # above, but this one's job is to touch that array, so the failures
+        # it must not have are different: an existing member's mapping lost
+        # across the insert, a donor shape copied from a member that
+        # disagrees with the others, or a server_id matched loosely by an ERE
+        # instead of literally. Driven against a stub Cloudflare API for the
+        # same reason as its sibling: CI holds no Cloudflare identity (#1111).
+        run: python3 tests/test_portal_membership_add.py
+
       - name: Unit-test the portal OAuth registration drift detector
         # The MCP server's `auth_credentials` is write-only: the API accepts it
         # and never returns it, so OpenTofu keeps what was last applied in

@@ -228,6 +228,35 @@ covered by them.
   state: an `OWNERS` entry that has not been applied yet is a plan, not an
   outage, which is the gap between merging this and clicking apply.
 
+## Adding a server to the portal
+
+Creating the Terraform resource above registers a server with Cloudflare, but
+does not make it reachable through `mcp.mctl.ai`: the portal keeps its own
+membership list (`servers[]` on the portal object), and inserting an entry
+into it is a different write against a different endpoint. Until
+`scripts/portal-membership-add.sh` existed, that write was always done by
+hand — `seerrsense`'s addition is the one-off recipe under "Re-snapshot"
+below, and `projects`'s addition on 2026-09-19 was a dashboard click with
+nothing committed at all, closed retroactively by writing this script.
+
+```
+CLOUDFLARE_API_TOKEN=… CLOUDFLARE_ACCOUNT_ID=… scripts/portal-membership-add.sh <server_id> [--check|--dry-run]
+```
+
+In write mode (the default, and `--dry-run`), it refuses to run against a
+`server_id` that is not already a committed Terraform resource in
+`mcp-servers.tf` -- `--check` skips that gate, since it only asks a question
+and must also work for `api`/`seerrsense`, both DCR-registered members with no
+Terraform resource at all. It writes every tool the server
+advertises with `enabled: false` — the same state a server has right after
+being added through the dashboard. It deliberately does not decide which
+tools go live: that is still `scripts/portal-allowlist-apply.sh`, run
+afterwards from a checkout of the repository that owns the new server,
+against its own `docs/portal-allowlist.json`. One script adds the mapping,
+the other one turns the owning repository's committed decisions into live
+`enabled: true` entries — kept separate so that adding a server can never
+also silently decide what it can do.
+
 ## Re-snapshot: refreshing a manual-OAuth server's tool catalogue
 
 The portal keeps a snapshot of each upstream's tools (`servers/{id}.tools`,
