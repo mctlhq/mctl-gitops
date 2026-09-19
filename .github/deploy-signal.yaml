@@ -46,6 +46,17 @@ services:
     sha_only: true  # bare commit sha, no main- prefix
 
   # --- deliberately held ---
+  - path: platform-gitops/services/admins/mctl-agents-worker-implement/values.yaml
+    pinned_to: "1.47.0"
+    # Held, not watched against mctlhq/mctl-agents, until that repo names this
+    # path in its release-please dispatch (mctl-agents#396, the routing flip).
+    # Until then release-deploy bumps mctl-agents-worker and -exec and leaves
+    # this file behind, so `release_repo` would fail the */30 cron on every
+    # mctl-agents release and report to workflow_failed each time — the very
+    # channel #1006 created, trained to be ignored. `pinned_to` still asserts
+    # something falsifiable: drifting off 1.47.0 by hand fires. Flip it back
+    # to `release_repo: mctlhq/mctl-agents` in the gitops change that follows
+    # the routing flip's release.
   - path: platform-gitops/services/ovk/mctl-academy/values.yaml
     pinned_to: "0.1.0"
     # The ovk tenant has never moved past 0.1.0 while labs is on 0.1.50.

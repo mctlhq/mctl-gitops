@@ -133,6 +133,17 @@ jobs:
           scripts/validate-openclaw-version-pin.py --selftest
           scripts/validate-openclaw-version-pin.py
 
+      - name: Check the implementation admission worker stays a single replica
+        run: |
+          set -euo pipefail
+          # --selftest first, as for every detector in this job. The
+          # invariant (mctl-agents#395, #1285): max_concurrent_activities is
+          # a per-process limit, so capacity on mctl-dev-loop-implement is
+          # replicas × N. One replica is what makes N mean N; this fails the
+          # PR that scales it instead of raising N.
+          scripts/validate-implement-worker-singleton.py --selftest
+          scripts/validate-implement-worker-singleton.py
+
       - name: Validate Argo local workdir invariants
         run: scripts/validate-local-workdir.py
 
