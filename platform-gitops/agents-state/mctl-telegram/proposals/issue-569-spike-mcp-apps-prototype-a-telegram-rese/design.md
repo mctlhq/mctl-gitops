@@ -2,399 +2,383 @@
 
 ## Current state
 
-### The MCP surface is tools-only
-
-`internal/mcp/server.go:198` `newMCPServer` is the single enumeration point of the
-protocol surface. It builds the server with exactly one capability:
+**The MCP server is tools-only.** `internal/mcp/server.go:198`
+(`newMCPServer`) is the single enumeration point of the surface:
 
 ```go
-srv := mcpserver.NewMCPServer("mctl-telegram", v, mcpserver.WithToolCapabilities(true))
+srv := mcpserver.NewMCPServer("mctl-telegram", v,
+    mcpserver.WithToolCapabilities(true))
 ```
 
-(`internal/mcp/server.go:203-207`), then registers 30 tools through `(*Server).addTool`
-(`:172`), which filters on `Annotations.ReadOnlyHint` when `ToolFilter == "read-only"`
-(`toolPassesFilter`, `:163`). There is no `WithResourceCapabilities`, no `AddResource`,
-no `AddResourceTemplate`, no `AddPrompt`, and no `_meta` emission anywhere in
-`internal/mcp`. A repo-wide grep confirms it: the only `mcp.Meta` use is read-side, in
-`internal/mcpprobe/modern.go:14`, which decodes `_meta` from a `server/discover`
-response and calls `parsed.Meta.ServerInfo()` (`:57`). So the concept exists in the
-vendored library; this server simply never writes one.
+Thirty `{t, h := s.toolXxx(); s.addTool(srv, t, h)}` blocks follow. There is no
+`AddResource`, no `AddResourceTemplate`, no `AddPrompt`, no
+`WithResourceCapabilities`, no `WithExtensions`, no hooks. The transport is
+`mcpserver.NewStreamableHTTPServer(..., WithHTTPContextFunc(httpContext))`
+(`server.go:178`), where `httpContext` (`server.go:190`) folds
+`edgectx.FromRequest(r)` into the tool context for audit correlation.
 
-Indirect evidence that `mark3labs/mcp-go v1.0.0` can carry the resource half:
-`go.mod` pulls `github.com/yosida95/uritemplate/v3 v3.0.2` as an indirect dependency,
-which mcp-go uses for resource templates, and `github.com/google/jsonschema-go` for
-schema reflection. That is suggestive, not conclusive — this clone is offline with no
-module cache — so the spike treats it as a hypothesis to falsify first, not a fact.
+**Every tool is a `(mcplib.Tool, mcpserver.ToolHandlerFunc)` pair.** The
+builder pattern is uniform, e.g. `toolListDialogs` (`internal/mcp/tools.go:183`):
+`mcplib.NewTool(name, WithTitleAnnotation, WithReadOnlyHintAnnotation,
+WithDestructiveHintAnnotation, WithOpenWorldHintAnnotation, outputSchema[T](),
+WithDescription, WithString/WithNumber ...)`. `outputSchema[T]`
+(`internal/mcp/output_schema.go:33`) is a local replacement for
+`WithOutputSchema` that strips `"additionalProperties": false` so added
+response fields are not breaking for a client holding a cached `tools/list`
+(the #631/#637 regression, documented at `output_schema.go:11`). Results go
+out through `jsonResult` (`tools.go:2180`), which emits both text and
+`StructuredContent`.
 
-### The read tools already emit the exact data an App would render
-
-Every read tool returns both a JSON text block and machine-readable structured
-content through one helper, `jsonResult` (`internal/mcp/tools.go:2180`):
+**Authorization is entirely server-side and context-derived.** Each handler
+starts with `id := auth.From(ctx)` (`internal/auth/identity.go:74`; the context
+key is an unexported empty struct at `identity.go:65`), then
+`requireScope(id, "...")` (`tools.go:1849`) or `requireAnyScope`
+(`tools.go:1872`). The identity is injected by `auth.Middleware`
+(`internal/auth/middleware.go:78`, injection at `:112`), which wraps the MCP
+handler in `cmd/server/main.go:579-587`:
 
 ```go
-res := mcplib.NewToolResultText(string(b))
-res.StructuredContent = v
+mcpHandler := auth.Middleware(provider, cfg.AuthRequired, m, resourceMeta)(
+    limiter.Middleware()(mcpSrv.HTTPHandler()))
+guarded := web.OriginGuard(mcpHandler, cfg.AllowedOrigins)
+mux.Mount(cfg.MCPPath, web.BrowserRedirect(guarded, "/"))
 ```
 
-Schemas are declared by `outputSchema[T]()` (`internal/mcp/output_schema.go:33`), which
-reflects the Go result struct and then strips every `"additionalProperties": false`
-via `openAdditiveFields` (`:85`) so additive fields never break a client holding a
-cached `tools/list` — the lesson of the Cloudflare portal incident documented at
-`internal/mcp/output_schema.go:10-31`. Result structs live at `tools.go:1925`
-(`listDialogsResult`), `:1932` (`messagesResult`), `:2355` (`searchMessagesResult`),
-and `media_tools.go:20`/`:32`. `search_messages` is the one read tool that bypasses
-`jsonResult`, hand-building its result so it can prefix `untrustedContentNotice`
-(`tools.go:2596-2602`) — it still sets `StructuredContent`.
+Because the middleware wraps the whole MCP handler, *every* JSON-RPC method on
+`/mcp` — including a future `resources/read` — is authenticated identically.
+Scope vocabulary in use: `telegram:dialogs:read`, `telegram:messages:read`,
+`telegram:messages:send`, `telegram:messages:pin`, `account:manage`,
+`admin:users`, `admin:users:read`.
 
-The consequence for this spike is large: **an App needs no new Telegram data path.**
-It can render `structuredContent` that the server already produces and already
-validates against a published schema.
+**Writes are gated four ways, not by the client.** `evaluateWriteGate`
+(`tools.go:1767`, wrapped by `evaluateSendGate` at `:1763`) requires: not the
+pinned demo-reviewer identity, `ALLOW_SEND=true`, the required scope on the
+identity, and per-account `send_enabled=true` in the DB — then
+`evaluateDirectSendLimiter` (`tools.go:1834`) debits a per-(identity, peer)
+bucket. A denied gate is not an error: `toolSendMessage`
+(`tools.go:343`, gate at `:390-407`) returns a successful `sent=false` dry-run
+preview audited as `send_message:draft`, and makes no Telegram call. There is
+no `mode`, `dry_run` or `preview` argument on the tool; the only place
+`args["mode"] = "send"` is set is server-side at `tools.go:416`, after the
+gate passed, to tell a Local Bridge daemon to really send.
 
-### Untrusted Telegram content is already marked, but marked for an LLM, not for a DOM
+**Exact-payload binding already exists, partly unused.**
+`internal/mcp/confirm.go` holds a single-shot in-memory `ConfirmStore` with a
+10-minute TTL (`ConfirmationTTL`, `:15`), `Issue` (`:45`), `Consume` (`:87`),
+`Claim`/`Unclaim`/`Finalize` (`:134`/`:172`/`:183`), the sentinels
+`ErrConfirmationNotFound` / `ErrConfirmationMismatch` /
+`ErrConfirmationWrongUser` / `ErrConfirmationInFlight` (`:66-81`), and three
+canonical hashes: `HashSendPayload(peer, text)` (`:212`),
+`HashMediaPayload` (`:222`), `HashPinPayload` (`:235`). `pin_message`
+(`tools.go:632`) consumes a confirmation from `prepare_pin_message`
+(`tools.go:568`); `get_media` (`media_tools.go:140`) claims one from
+`prepare_get_media` (`media_tools.go:50`). **`HashSendPayload` has no caller in
+non-test code** — the primitive for binding a send to its exact bytes is
+written and tested but never wired.
 
-`internal/mcp/format.go:47` `wrapMessages` sanitizes each message through
-`sanitize.UserContent` (control and invisible characters, excessive newlines, 4096-rune
-cap), `sanitize.SensitiveTelegramContent` (login codes, login IPs —
-`internal/sanitize/sanitize.go:85`) and `sanitize.Name`, then calls
-`WrapUntrustedContent` (`format.go:32`), which produces:
+**Untrusted Telegram content is already handled — for the model, not for a
+DOM.** `internal/mcp/format.go:47` `wrapMessages` runs each body through
+`sanitize.UserContent(m.Text, 4096)` then `sanitize.SensitiveTelegramContent`
+(`internal/sanitize/sanitize.go:40`, `:85` — control/invisible-char stripping
+and login-code/IP redaction), sanitizes `From`/`PeerTitle` via
+`sanitize.Name`, and wraps the body in
+`<telegram-content origin="telegram" peer=%q untrusted="true">…</telegram-content>`
+(`format.go:33`), escaping any embedded closing tag so a sender cannot pivot
+out of the block. `untrustedContentNotice` (`format.go:21`) is prepended to
+read-tool results. Note what this is: an instruction-vs-data boundary for an
+LLM. `internal/sanitize` performs **no HTML escaping** — it is not an XSS
+sanitizer, and the wrapper it adds is itself tag-shaped text that a naive DOM
+renderer would mangle.
 
-```
-<telegram-content origin="telegram" peer="..." untrusted="true">BODY</telegram-content>
-```
+**HTML is served today by embedding and inlining, never as static files.**
+`internal/ui/chrome.go:24-34` `//go:embed`s four assets into `string` vars and
+concatenates them into the template source (`chrome.go:71/76/77/131`). There
+is no `embed.FS`, no `http.FileServer`, no `/assets/*` route anywhere in the
+repo. The package has two tiers: full chrome (external Google Fonts plus
+`https://ui.mctl.ai/0.5.0/mctl.css`, version-pinned and enforced by
+`TestStylesheetIsVersionPinned`, `chrome_test.go:55`) and a lite strict-CSP
+tier (`ui_head_lite`, `chrome.go:127`) with no external dependency at all,
+locked in by `TestLiteChromeHasNoExternalDeps` (`chrome_test.go:76`), which
+asserts the lite output contains no `mctl.css`, no `fonts.googleapis.com` and
+no `<script` whatsoever. Strict pages set
+`default-src 'none'; style-src 'unsafe-inline'; img-src https://ui.mctl.ai;
+form-action 'self'; base-uri 'none'` (`internal/web/manage.go:244`,
+`connect.go:356`, `internal/oauth/enable_access_page.go:355`).
 
-escaping any forged closing tag in the body. Two facts matter for a UI. First, that
-envelope is *inside* `Message.Text` in the structured content, so an App that renders
-the field naively shows literal angle-bracket markup to the user. Second,
-`sanitize.UserContent` does **not** HTML-escape — it was designed for an LLM
-transcript, not a document. Rendering that string through `innerHTML` would be a
-stored-XSS path fed directly by arbitrary Telegram senders.
+**`OriginGuard` is on `/mcp` only and checks `Origin` alone**
+(`internal/web/origin.go:22`): absent `Origin` is allowed on purpose, because
+server-to-server MCP clients send none. An empty allowlist is a no-op;
+`cmd/server/main.go` defaults it to the `PUBLIC_BASE_URL` origin.
 
-### Writes are gated server-side, but `send_message` has no payload binding
+**Diagnostics already exist for compatibility evidence.** `cmd/mcpprobe`
+(`main.go`) plus `internal/mcpprobe` (`run.go:14` `Run`, `report.go:72`
+`Report`, `modern.go`, `legacy.go`, `negative.go`, `readonly.go`,
+`oauthprobe.go`) is a hand-run diagnostic whose stated purpose is to "produce
+one row of compatibility evidence at a time".
 
-Two different mechanisms exist, and only one covers sends.
+**Build-time guard on the tool set.** `internal/mcp/portal_allowlist_test.go`
+re-derives each registered tool's gate set from the Go AST and fails the build
+unless `docs/portal-allowlist.json` carries an explicit decision and a
+matching `upstream_gates` list for every tool.
 
-The gate: `evaluateWriteGate` (`tools.go:1767`) and its pre-account half
-`evaluateWriteGateBeforeAccount` (`:1794`) decide, in order — demo reviewer identity
-(forced preview, `:1806`), `ALLOW_SEND` (`:1809`), the required scope (`:1812`), then
-per-account `send_enabled` via `evaluateSendGateAccountFlag` (`:1827`). A closed gate
-returns a *successful* dry-run preview with `sent=false` and a `dry_reason`
-(`tools.go:397-407`), never an error. Rate limiting is a separate tap:
-`evaluateDirectSendLimiterN` (`:1842`) against `audit.PeerSendCap` (20/hour/peer).
+**mcp-go v1.0.0 already has everything MCP Apps needs.** Checked in the module
+cache at `github.com/mark3labs/mcp-go@v1.0.0`:
 
-The binding: `ConfirmStore` (`internal/mcp/confirm.go`) issues a single-shot,
-10-minute, identity-bound confirmation whose `PayloadHash` pins the exact arguments —
-`Issue` (`:45`), `Consume` (`:87`, deletes before validating, collapses expiry and
-unknown into one error), `Claim`/`Unclaim`/`Finalize` for long downloads (`:134`,
-`:172`, `:183`). `prepare_pin_message`/`pin_message` use it (`tools.go:611`, `:686`)
-and `prepare_get_media`/`get_media` use it (`media_tools.go:121`, `:195`).
+| Need (SEP-1865) | mcp-go v1.0.0 symbol |
+| --- | --- |
+| `capabilities.extensions["io.modelcontextprotocol/ui"]` | `server.WithExtensions(map[string]any)` — `server/server.go:675`, applied at `:1261`; `mcp.ServerCapabilities.Extensions` — `mcp/types.go:633` |
+| Resource capability | `server.WithResourceCapabilities(subscribe, listChanged)` — `server/server.go:344` |
+| `ui://` resource with a non-standard mimeType | `MCPServer.AddResource(mcp.Resource, ResourceHandlerFunc)` — `server/server.go:797`; `Resource.URI` / `Resource.MIMEType` are free strings — `mcp/types.go:883,897`; no scheme validation in `AddResources` |
+| Resource `_meta` (`csp`, `prefersBorder`, …) | `mcp.Resource.Meta` — `mcp/types.go:881`; `mcp.TextResourceContents.Meta map[string]any` — `mcp/types.go:956`, doc: "Allows `_meta` to be used for MCP-UI features" |
+| Tool `_meta.ui` | `mcp.Tool.Meta *mcp.Meta` — `mcp/tools.go:657`; `Meta.AdditionalFields` — `mcp/types.go:217`; `mcp.ToolOption` is `func(*Tool)` — `mcp/tools.go:887`, so a local option composes with the existing builders |
+| Structured payloads for the UI | `CallToolResult.StructuredContent` — `mcp/tools.go:47`, already emitted by `jsonResult` |
+| Long-running work | `mcp/tasks.go`, `server/task_hooks.go`, `toolCallTasks` capability |
 
-`send_message` uses neither half of the binding. `toolSendMessage` (`tools.go:343`)
-declares only `peer` and `text` and relies on draft-by-default plus whatever
-confirmation UI the host chooses to show. Tellingly, `HashSendPayload`
-(`confirm.go:212`) exists with a doc comment describing exactly this flow and has
-**no caller in the repository.** For a chat-driven connector that is defensible: the
-host renders the tool call and the user reads the arguments. For an App it is not,
-because the thing the user reads is a textarea the App controls, and the issue is
-explicit that an iframe click must not substitute for server-side authorization.
-
-### Transport, guards and identity
-
-`HTTPHandler` (`server.go:178`) returns `mcpserver.NewStreamableHTTPServer` with
-`WithHTTPContextFunc(httpContext)`; there is no SSE server in the repo. The mount
-chain in `cmd/server/main.go:577-587` is, outermost first: `web.BrowserRedirect` →
-`web.OriginGuard(..., cfg.AllowedOrigins)` → `auth.Middleware(provider, ...)` →
-`limiter.Middleware()` → the MCP handler. `OriginGuard` (`internal/web/origin.go:22`)
-allows a request with no `Origin` header (server-to-server MCP clients send none) and
-403s a browser `Origin` outside the allowlist. Identity reaches tools only through
-`auth.From(ctx)` (`internal/auth/identity.go:71`), checked by `requireScope`
-(`tools.go:1849`) and `requireAnyScope` (`:1872`) against the scope set
-`telegram:dialogs:read`, `telegram:messages:read`, `telegram:messages:send`,
-`telegram:messages:pin`, `admin:users`, `admin:users:read`.
-
-Local Bridge mode diverts reads and writes to the user's daemon via `bridgeCall`
-(`tools.go:113`), which decodes the daemon's JSON generically into a map so
-`StructuredContent` stays present (`:164-168`). `fetch_media` is explicitly refused on
-that path (`:282`), which is why an App must use `prepare_get_media`/`get_media` there.
-
-### HTML, CSP and asset conventions
-
-Human pages are `go:embed`-ed templates rendered through `chromePage`
-(`internal/web/security.go:15`) with `Cache-Control: no-store`. The shared chrome
-package `internal/ui/chrome.go` documents two tiers (`:7-16`): a "full" tier that
-loads `https://ui.mctl.ai/0.5.0/mctl.css` and Google Fonts, and a "lite" tier for
-strict-CSP pages with everything inlined. The strict precedent is
-`internal/oauth/local_bridge_activate_page.go:131`:
-
-```
-default-src 'none'; style-src 'unsafe-inline'; img-src https://ui.mctl.ai; form-action 'self' https:; base-uri 'none'
-```
-
-with nonce-based variants at `internal/web/connect.go:358`, `manage.go:246` and
-`internal/oauth/enable_access_page.go:361`. There is no content-hash asset pipeline;
-local CSS/JS are inlined, and the two remote pins are hand-versioned strings
-(`chrome.go:50`, `:75`).
-
-### The submission currently declares the opposite of this spike
-
-`claude-connector-submission.md:191-194` states that this is a remote MCP server with
-no `ui/open-link`, no interactive UI components and no MCP-App widgets, and that
-MCP-App carousel screenshots are not applicable. That declaration is a deliverable of
-the spike, not a bystander: validating the hypothesis means amending it.
-
-### Guards that will fail the build if the spike is careless
-
-- `internal/mcp/portal_allowlist_test.go` re-derives each tool's gate set from the Go
-  source and holds `docs/portal-allowlist.json` to the exact tool list in
-  `newMCPServer`. A new registered tool without an allowlist entry fails CI.
-- `internal/mcp/annotations_test.go:14` `TestToolAnnotations` is a table over every
-  `toolXxx()` builder; a new builder must be added to it.
-- `internal/mcp/output_schema_open_test.go` `TestOutputSchemasStayOpenToAdditiveFields`
-  and `TestToolOutputSchemas` fail any tool that publishes no output schema or a
-  closed one.
-- CI (`.github/workflows/build.yml`) runs `go vet ./...`, `go build ./...` and
-  `go test -race ./...`; cross-compiles darwin/arm64 and windows/amd64 for `cmd/local`.
-  There is no Makefile.
+There is no MCP-Apps *helper* in the SDK — no `NewUIResource`, no
+`WithUIResourceMeta`. The metadata must be written by hand. That is a small
+amount of literal JSON, not an SDK gap.
 
 ## Proposed solution
 
-A single flag-gated vertical slice inside the existing Go service, plus a written
-evidence pack. Nothing new is deployed by default and no Telegram logic leaves Go.
+One flag-gated surface, added in a new package, composing tools that already
+exist. Nothing is duplicated and nothing is moved into JavaScript.
 
-### Shape
+### 1. Feature flag
+
+`internal/config/config.go` gains `AppsEnabled bool` from
+`MCP_APPS_ENABLED` (default `false`), documented in `.env.example` alongside
+`AGENT_ENABLED`, which it mirrors. `cmd/server/main.go` threads it through a
+new `mcpSrv.WithAppsEnabled(cfg.AppsEnabled)` in the existing option chain
+(`main.go:463`). With the flag off, `newMCPServer` takes exactly the path it
+takes today: the `initialize` response, `tools/list`, and every tool's `_meta`
+are byte-identical to the current production surface. This is the rollback.
+
+### 2. `internal/mcpui` — the App resource
+
+A new package, deliberately separate because `internal/mcp/tools.go` is
+already 123 KB, and because the asset-embedding precedent lives in a
+UI package (`internal/ui`), not in the MCP package.
+
+- `triage.html` — one self-contained document: markup, `<style>`, `<script>`,
+  no external origin of any kind. Same discipline as the lite chrome tier.
+- `app.go` — `//go:embed triage.html` into a `string` (matching
+  `internal/ui/chrome.go:24-34`; an `embed.FS` would imply a file server, and
+  there is no file server here), plus:
+  - `const ResourceURI = "ui://mctl-telegram/triage"`
+  - `const MIMEType = "text/html;profile=mcp-app"`
+  - `const ExtensionID = "io.modelcontextprotocol/ui"`
+  - `func Resource() mcplib.Resource` — name, title, description, MIMEType,
+    and `Meta` carrying `ui: {csp: {connectDomains: [], resourceDomains: [],
+    frameDomains: [], baseUriDomains: []}, prefersBorder: true}`.
+  - `func Contents(uri string) []mcplib.ResourceContents` — a single
+    `mcplib.TextResourceContents{URI, MIMEType, Text: triageHTML, Meta: …}`.
+  - `func ExtensionCapability() map[string]any` — `{ExtensionID:
+    {"mimeTypes": []string{MIMEType}}}`.
+  - `func ToolMeta() map[string]any` — `{"ui": {"resourceUri": ResourceURI,
+    "visibility": []string{"model", "app"}}}`, the nested form; the deprecated
+    flat `ui/resourceUri` key is not emitted.
+
+The URI is stable and unversioned; the build version travels in `_meta` and
+drift is caught by a content-hash test (see Platform impact). A versioned URI
+would break any host that cached the tool→resource link.
+
+Delivering the document **inline through `resources/read`** is the answer to
+the issue's hosting question. It needs no new HTTP route, no static origin, no
+CDN, no cache policy and no CORS story; it inherits `auth.Middleware`, so the
+App body is only readable by an authenticated identity; and it leaves
+`OriginGuard` untouched, because the iframe never contacts `tg.mctl.ai` at all
+— the host proxies `tools/call` and `resources/read` over its own MCP session.
+
+### 3. `internal/mcp/apps.go` — wiring
+
+- `func (s *Server) WithAppsEnabled(b bool) *Server` in `server.go`, plus an
+  `AppsEnabled bool` field, following the existing `WithToolFilter` shape.
+- In `newMCPServer`, when `s.AppsEnabled`:
+  - append `mcpserver.WithResourceCapabilities(false, false)` and
+    `mcpserver.WithExtensions(mcpui.ExtensionCapability())` to the
+    `NewMCPServer` options;
+  - `srv.AddResource(mcpui.Resource(), handler)` where the handler is
+    `func(ctx, req) ([]mcplib.ResourceContents, error)` returning
+    `mcpui.Contents(req.Params.URI)`. It reads `auth.From(ctx)` and refuses
+    when the identity is nil, so an unauthenticated read cannot retrieve the
+    App body even if a deployment runs with `AUTH_REQUIRED=false`.
+- `func withUIResource() mcplib.ToolOption` — sets `t.Meta` from
+  `mcpui.ToolMeta()`, preserving any existing `AdditionalFields`. Applied only
+  when the flag is on, so the option is passed conditionally by a tiny helper
+  rather than baked into the builders. The tools that receive it:
+  `list_dialogs`, `get_unread_messages`, `get_messages`, `search_messages`,
+  `prepare_get_media`, `prepare_send_message`, `send_message`.
+
+`s.addTool` and `toolPassesFilter` (`server.go:163`) are untouched, so
+`MCP_TOOL_FILTER=read-only` continues to remove every write tool from
+`tools/list` — including the new prepare tool — regardless of the App flag.
+
+### 4. The safe action surface
+
+The issue's hardest requirement is that the UI must not be able to substitute
+an iframe click for server authorization. The design answers it by adding
+**one** tool and **one optional argument**, and by wiring the
+already-written-but-unused `HashSendPayload`.
+
+- `toolPrepareSendMessage()` in `apps.go` registers `prepare_send_message`,
+  modelled on `toolPreparePinMessage` (`tools.go:568`). It takes `peer` and
+  `text`, requires authentication, makes **no Telegram call**, and returns
+  `{confirmation_id, peer_redacted, text, text_sha256, will_really_send,
+  dry_reason, expires_at}`. `will_really_send`/`dry_reason` come from
+  `evaluateSendGate(ctx, s.Store, id, s.AllowSend, s.DemoReviewerTGID)`, so
+  the App can render "this will be delivered" versus "this is a preview only,
+  because …" **before** the user clicks. `confirmation_id` comes from
+  `s.Confirms.Issue(id.UserID, "send", HashSendPayload(peer, text))`.
+  Registered only when `AppsEnabled`, so the default surface is unchanged.
+- `toolSendMessage` gains an **optional** `confirmation_id` string. When
+  non-empty, the handler calls
+  `s.Confirms.Consume(confID, id.UserID, HashSendPayload(peer, text))` before
+  `evaluateSendGate`, and maps the four sentinels to the same refusal messages
+  `get_media` already uses (`media_tools.go:207-213`). When empty, the handler
+  is byte-for-byte the behaviour it has today. Back-compat is deliberate: the
+  confirmation is an *additional* binding, not a new gate, because the send
+  gate was always the gate.
+
+The resulting chain is exactly the one the issue draws, with the iframe at the
+top and no shortcut around any box:
 
 ```
-MCP host (reference host, then Claude)
-  │  resources/read  ui://mctl-telegram/triage
-  ▼
-internal/mcp/appui  ──►  self-contained HTML/CSS/JS, go:embed, content-hashed
-  │
-  │  host renders in its sandboxed iframe (origin null)
-  │  iframe ──postMessage──► host ──tools/call──► tg.mctl.ai
-  ▼
-existing tool handlers, unchanged
-  auth.From(ctx) → requireScope → evaluateWriteGate → ConfirmStore → limiter → audit
-  ▼
-Telegram (hosted pool) or Local Bridge daemon
+App UI  --postMessage-->  host  --tools/call on the host's own MCP session-->
+  /mcp  ->  auth.Middleware (identity)  ->  limiter.Middleware
+        ->  requireScope                 ->  Confirms.Consume(HashSendPayload)
+        ->  evaluateSendGate (reviewer, ALLOW_SEND, scope, send_enabled)
+        ->  evaluateDirectSendLimiter    ->  Telegram | dry-run preview
 ```
 
-The load-bearing property is that the iframe never talks to `tg.mctl.ai`. It asks the
-host to call a tool; the host calls the same authenticated endpoint a chat turn would.
-`OriginGuard` therefore needs no allowlist change, and no browser origin gains access
-to `/mcp`. This is also why the App HTML must be fully self-contained: a sandboxed,
-`null`-origin document cannot be relied on to fetch anything, and fetching would
-reintroduce the origin problem we just avoided.
+A click grants nothing. The App cannot set a scope (scopes come from the OAuth
+token), cannot name an identity (there is no identity argument on any tool),
+cannot request a real send (no `mode` argument exists), cannot read another
+user's confirmation (`ErrConfirmationWrongUser`), and cannot silently swap the
+body after the user approved it (`ErrConfirmationMismatch`).
 
-### Change 1 — go/no-go probe on the SDK (before any UI work)
+### 5. Rendering untrusted Telegram content
 
-A throwaway `cmd/` harness or a `//go:build spike` test that attempts, against
-`mark3labs/mcp-go v1.0.0`: declaring a resource capability, registering a static
-resource and a resource template, serving a non-JSON MIME type, and attaching `_meta`
-to a tool declaration and reading it back over streamable HTTP. The outcome is
-recorded in `docs/plans/mcp-apps-spike.md` as one of: the SDK suffices; it needs a
-narrowly scoped upstream contribution (with the patch sketched); or it cannot express
-the contract and the direction is rejected. No UI work starts until this is written
-down. If the answer is "needs upstream", the fallback for the spike only is to attach
-the resource surface with a small in-repo `http.Handler` shim in front of the MCP
-handler that answers `resources/list` and `resources/read` and delegates everything
-else — a spike-local scaffold, explicitly not a shipping design.
+The App consumes `structuredContent` from the read tools, which already
+carries sanitized, redacted, envelope-wrapped text. On top of that:
 
-### Change 2 — `internal/mcp/appui`, a new package holding only presentation
+- Every Telegram-derived string reaches the DOM via `textContent` on an
+  element created with `document.createElement`. The document contains no
+  `innerHTML`, no `insertAdjacentHTML`, no `document.write`, no `eval`, no
+  `new Function`, no `setTimeout(string)`. A Go test greps the embedded asset
+  for those substrings and fails the build, mirroring
+  `TestLiteChromeHasNoExternalDeps`.
+- The `<telegram-content …>` envelope is stripped for display by a strict
+  prefix/suffix match against the exact literal shape `format.go:33` produces
+  — not by a regex over arbitrary markup, and not by HTML parsing. If the
+  shape does not match, the raw string is shown as-is (as text). The card
+  keeps a visible "untrusted · Telegram" marker either way.
+- The App never calls `ui/update-model-context` or `ui/message` with Telegram
+  text. The only thing it hands the host is a tool call with arguments the
+  user typed or selected.
+- `_meta.ui.csp` declares no allowed domains, so a conforming host renders
+  under `default-src 'none'`: no exfiltration channel exists even if a DOM
+  injection were found.
 
-`appui` owns the HTML document, the resource descriptor, and nothing else. It imports
-no Telegram package, holds no credential, and has no access to `*db.Store` or
-`*telegram.ClientPool`. It exposes roughly:
+### 6. Evidence, not assertions
 
-- `//go:embed assets/triage.html` plus a `Version()` that is the SHA-256 prefix of the
-  embedded bytes, computed in an `init`. That is the asset versioning story: the
-  content hash is the version, it appears in the resource URI
-  (`ui://mctl-telegram/triage?v=<hash>`) and in a corner of the UI so a screenshot
-  identifies its build. This is a strict improvement on the hand-pinned strings at
-  `internal/ui/chrome.go:50,75`, and deliberately avoids inventing a build pipeline.
-- `Resource() (mcplib.Resource, handler)` returning the document with the MIME type
-  the extension mandates (confirmed in change 1) and the strict-CSP meta baked in,
-  modelled on the "lite" tier — `default-src 'none'; style-src 'unsafe-inline'`, no
-  remote script, no remote font, no remote image. Unlike the lite tier it must not
-  allow `img-src https://ui.mctl.ai`, because the iframe has no reliable network.
-
-Registration happens in `newMCPServer` behind the flag:
-
-```go
-if s.AppUI {
-    srv = mcpserver.NewMCPServer(..., mcpserver.WithToolCapabilities(true),
-        mcpserver.WithResourceCapabilities(false, false))
-    srv.AddResource(appui.Resource())
-}
-```
-
-wired by a `WithAppUI(bool)` builder alongside the existing `WithToolFilter` /
-`WithDemoReviewer` chain (`server.go:86-159`), fed from a new `TG_MCP_APPS` config
-field defaulting to false. With the flag off the capability set, the tool list and
-every schema are byte-identical to today, which is the compatibility contract in
-requirements.
-
-### Change 3 — the research surface reuses existing tools verbatim
-
-The App composes `list_dialogs`, `get_unread_messages`, `get_messages`,
-`search_messages` and `prepare_get_media`/`get_media`. No tool gains an argument, no
-tool changes shape, and the App consumes `structuredContent` — so the open-schema
-discipline of `output_schema.go` keeps working in its favour rather than against it.
-
-Two presentation rules are non-negotiable and are the App's whole reason to exist as a
-security artifact rather than a demo:
-
-1. **Unwrap, then insert as text.** The renderer strips the
-   `<telegram-content …>` envelope that `WrapUntrustedContent` adds, and writes the
-   body via `textContent` only. `innerHTML` is banned outright; the CSP with no
-   `script-src` and no inline handlers is the backstop. Every message card carries a
-   persistent "from Telegram — untrusted" marker, so the UI keeps the boundary
-   `untrustedContentNotice` (`format.go:21`) states in prose.
-2. **No content-derived actions.** Nothing in a message body may populate a tool
-   argument, prefill a draft, or be forwarded to the host as a prompt without an
-   explicit user gesture. This is the iframe-side mirror of the rule the notice
-   already asks the model to follow.
-
-Pagination uses the tools' own `limit` and `next_before_id` (`messagesResult`,
-`tools.go:1932`) with a visible "showing N of more" state. Nothing polls. If a
-research flow genuinely outgrows a synchronous call, the spike records the shape and
-defers to `mctlhq/.github#41` rather than inventing job polling — the existing
-`internal/agent/queue` machinery is the Communication Agent's REST worker queue and is
-deliberately not reused here.
-
-In Local Bridge mode the App works unchanged over `bridgeCall`, except that media goes
-through `prepare_get_media`/`get_media` because `fetch_media` is refused on that path
-(`tools.go:282`). Under `ToolFilter = "read-only"` the research surface renders and
-the action surface renders as unavailable, driven by what `tools/list` actually
-contains rather than by a hardcoded assumption.
-
-### Change 4 — `prepare_send_message`, closing the binding gap
-
-A new tool `prepare_send_message` mirrors `prepare_pin_message` (`tools.go:568`):
-require `telegram:messages:send`, take the per-peer limiter tap, then
-`s.Confirms.Issue(id.UserID, "send", HashSendPayload(peer, text))` and return
-`{confirmation_id, peer_redacted, text_preview, expires_at, would_send, dry_reason}` —
-where `would_send` is `evaluateSendGate`'s verdict evaluated at prepare time, so the
-App can show "this will actually be delivered" versus "this will be a preview" *before*
-the user commits, which is precisely the "see exactly what will happen" clause of the
-issue's acceptance criteria.
-
-`send_message` gains one **optional** `confirmation_id` argument. When absent,
-behaviour is byte-identical to today (no existing client breaks, no argument becomes
-required). When present, the handler calls
-`s.Confirms.Consume(confID, id.UserID, HashSendPayload(peer, text))` before sending and
-maps the three sentinels to the same distinct messages `pin_message` uses
-(`tools.go:689-693`). The App always sends the id. The gate ordering follows
-`pin_message`: evaluate the write gate first, consume second, so a dry-run does not
-burn a confirmation.
-
-This is additive by construction and it makes the App's central claim testable: change
-the text after prepare and the send must fail with `ErrConfirmationMismatch`; present
-another user's id and it must fail with `ErrConfirmationWrongUser`.
-
-The new tool requires a `docs/portal-allowlist.json` entry with `upstream_gates`
-`["send-gate", "telegram:messages:send"]` and a row in `TestToolAnnotations`
-(`readOnly=false`, `destructive=false` — prepare mints a handle, it delivers nothing —
-`openWorld=false`), or CI fails.
-
-### Change 5 — the evidence pack
-
-Following the repo's existing convention (`docs/plans/<topic>.md` as the canonical
-dated plan, `docs/reports/<topic>-<phase>.md` for results, per
-`docs/plans/communication-agent.md`):
-
-- `docs/plans/mcp-apps-spike.md` — the plan, the SDK decision, and a dated status line.
-- `docs/reports/mcp-apps-host-matrix.md` — the compatibility matrix with observed
-  behaviour per host and the date each row was tested, since host support is moving.
-- `docs/reports/mcp-apps-threat-model.md` — iframe-to-tool invocation, untrusted
-  content rendering, identity and scope handling, confirmation binding, and the
-  residual risks the spike did not close.
-- A submission-positioning note stating what is new versus the plain tool connector,
-  with an explicit sentence that directory acceptance is not implied, plus the edit
-  that `claude-connector-submission.md:191-194` would need. The edit is *drafted*, not
-  applied, because the current declaration is accurate for the current shipping build.
-
-Screenshots and video go to the issue, not the repository — the repo has no media
-convention beyond `internal/web/walkthrough.mp4`, and a spike should not grow one.
-
-Fixtures for the polished flow are synthetic and reuse `Alice`/`Bob`/`Carol`/`Dana` as
-`.claude/CLAUDE.md` requires; the live non-destructive account run is performed against
-a throwaway account and recorded only as prose in the report.
+- `internal/mcpprobe` gains an Apps conformance step (`apps.go`) plus report
+  fields: does `initialize` advertise the extension id and mimeType; does
+  `resources/list` contain a `ui://` URI with mimeType
+  `text/html;profile=mcp-app`; does `resources/read` return non-empty inline
+  text; do the expected tools carry nested `_meta.ui.resourceUri`. This fills
+  the reference-host row of the compatibility matrix from an automated run
+  rather than a human's recollection, and gives #650 a repeatable command for
+  the live rows.
+- `docs/reports/mcp-apps-spike.md` is the deliverable report: the matrix (with
+  Claude/ChatGPT rows explicitly marked "not measured here — see #650" rather
+  than guessed), the threat model, the SDK decision with the mcp-go symbol
+  table above, the long-running-research assessment, and a
+  submission-positioning note that states plainly that nothing here predicts
+  directory acceptance. `claude-connector-submission.md:193` currently says
+  this server has "**no** `ui/open-link` / interactive UI components /
+  MCP-App widgets"; the report records that this becomes false once the flag
+  is enabled in a deployment, and that the submission document is #650's to
+  update.
 
 ## Alternatives
 
-**A Node/TypeScript MCP Apps sidecar using the official SDK, proxying to the Go
-service.** Attractive because the reference SDK would certainly support the extension
-on day one. Dropped: it creates a second process that must authenticate as the user to
-the Go server, which means either forwarding the caller's token (a new confidential
-hop that can strip or mint scopes) or minting a service credential (which breaks the
-invariant that identity comes from `auth.From(ctx)` on the original request). The
-issue names avoiding a sidecar as a non-goal, and `internal/workertoken` exists
-precisely because credential hops here are expensive to get right. The UI-only benefit
-does not justify a new trust boundary in front of `evaluateWriteGate`.
+**A thin Node/TypeScript MCP Apps adapter in front of the Go service.**
+Dropped. The official MCP Apps SDK would give ready-made UI resource helpers,
+but it buys nothing the Go side lacks: `WithExtensions`, `AddResource`, a
+free-form `MIMEType` and `Tool.Meta` are all present in the pinned v1.0.0. It
+would cost a second deployable, a second auth hop (the adapter would need a
+credential to reach `/mcp`, which is precisely the "duplicated credential
+path" the acceptance criteria forbid), a second place where Telegram
+semantics could drift, and a Node runtime in an image that is deliberately
+Go-only (`Dockerfile`; `Dockerfile.agent-worker` exists as a separate image
+precisely so the main one stays Go-only).
 
-**Serving the App HTML from `tg.mctl.ai` over HTTP, or from a dedicated static origin
-under `ui.mctl.ai`.** This is how the human pages work today (`internal/web`,
-`internal/ui/chrome.go`) so it is the path of least surprise. Dropped for the spike:
-an HTTP-fetched document in a host iframe is a real browser origin, which drags in
-`OriginGuard` allowlist changes (`internal/web/origin.go:22`), a CSP that must permit
-a remote origin, a cache policy, and subresource-integrity versioning — four new
-decisions, all of which the extension's own resource-delivery model makes unnecessary.
-Delivering the document through `resources/read` keeps the whole surface inside the
-authenticated MCP channel. If the extension turns out to require an HTTP-hosted asset,
-change 1 will surface it and this alternative becomes the design instead.
+**Serve the App from a static origin (`tg.mctl.ai/apps/*` or a CDN).**
+Dropped. It would be this repository's first static-asset route — there is no
+`embed.FS` and no `http.FileServer` anywhere today — and would drag in
+integrity hashing, cache policy, a CSP for a new HTML surface (the full-chrome
+pages set none today), and an `OriginGuard`/CORS question for iframe fetches.
+The spec's inline `resources/read` delivery avoids all of it and inherits
+`auth.Middleware` for free. If a future App grows past a single file, revisit.
 
-**Forking or patching `mark3labs/mcp-go` up front.** Dropped as a starting position:
-the indirect `uritemplate/v3` dependency and the existing `mcp.Meta` type in
-`internal/mcpprobe/modern.go:14` both suggest the library already carries what is
-needed, and a fork is a permanent maintenance cost taken on speculation. Change 1
-makes it a decision with evidence; a narrowly scoped upstream contribution remains the
-preferred outcome if the probe shows a gap.
+**Fork or patch `mark3labs/mcp-go` to add first-class MCP Apps helpers.**
+Dropped for this spike. A fork is a maintenance liability, and the metadata in
+question is a dozen literal JSON keys. An upstream contribution is worth
+considering *after* the prototype proves the shape, and the report records
+that as a possible follow-up — but it must not be on the critical path of a
+spike whose point is to answer a question.
 
-**Making `confirmation_id` required on `send_message`.** Cleaner as a security
-property, and it would put every send behind exact-payload binding. Dropped for this
-spike because it is a breaking change to a tool that ships in a connector already
-under directory review, and because `docs/portal-allowlist.json` and the Cloudflare
-portal hold cached catalogues whose staleness has already caused one production
-incident (`internal/mcp/output_schema.go:23-30`). Recorded as a child issue.
+**Wire the App to a prepare/confirm flow built from scratch.** Dropped.
+`ConfirmStore` already implements single-shot, TTL-bounded, identity-bound,
+payload-hash-bound confirmations with four well-distinguished failure
+sentinels and tests, and `HashSendPayload` is already written for exactly the
+`(peer, text)` binding this needs. Building a parallel mechanism for the App
+would be the "second weaker path" the issue explicitly warns against.
+
+**Attach `_meta.ui` to a new dedicated `open_telegram_triage` tool.** Dropped
+as the default (recorded as an open question). It adds a tool whose only
+purpose is to exist, needs its own portal-allowlist decision, and would be
+visible to the model in every session. Attaching the metadata to the read
+tools the App genuinely composes is cheaper and reversible.
 
 ## Platform impact
 
-**Migrations.** None. `ConfirmStore` is in-memory by design (`confirm.go:20`), the App
-holds no state, and no table changes.
+**Migrations.** None. No schema change, no new table, no new column. The
+confirmation store is in-memory and already exists.
 
-**Backward compatibility.** With `TG_MCP_APPS=false` — the default, and what
-production runs — the initialize response, the capability set, the tool list and every
-input and output schema are unchanged. With the flag on, the only protocol delta is an
-added resources capability and one resource; no existing tool changes, and
-`send_message`'s new argument is optional, so a client holding a cached `tools/list`
-keeps working. The additive-open schema discipline in `output_schema.go:33` already
-protects the `prepare_send_message` result from the frozen-catalogue failure mode of
-#637.
+**Backward compatibility.**
+- Flag off (the default, and what is deployed): `initialize`, `tools/list`,
+  `resources/list` (still absent) and every tool schema are unchanged.
+- Flag on: the only tool-schema change to an existing tool is the *optional*
+  `confirmation_id` on `send_message`. Optional input properties are additive.
+  Output schemas are already open to additive fields by construction
+  (`output_schema.go:33` strips `additionalProperties: false`), which is what
+  keeps a host holding a cached `tools/list` from breaking — the exact failure
+  mode of #631/#637.
+- `docs/portal-allowlist.json` must gain an entry for `prepare_send_message`
+  or `internal/mcp/portal_allowlist_test.go` fails the build. The entry is
+  recorded as `enabled: false`: a prototype affordance does not belong on the
+  shared Cloudflare portal surface. Because the tool is registered only when
+  `AppsEnabled`, that test must construct its server with the flag on so the
+  guard keeps covering the full set rather than silently skipping the new
+  tool.
 
-**Resource impact.** Negligible. One embedded HTML document of a few tens of
-kilobytes, served from memory. The App issues the same tool calls a chat turn would;
-if anything it issues fewer, because a UI filter re-invokes one tool instead of asking
-a model to re-read a transcript. Per-peer send limiting is unchanged.
+**Resource impact.** One embedded HTML document (tens of KB) in the binary and
+resident in memory — the same cost profile as `internal/ui/assets`. One extra
+`ConfirmStore` entry per drafted reply, bounded by the existing 10-minute TTL
+and dropped single-shot. No new goroutine, no new connection, no new DB query
+beyond the `IsSendEnabled` read that `prepare_send_message` performs and that
+`get_my_send_status` already performs today.
 
 **Risks and mitigations.**
 
-- *A host renders the App but does not enforce the confirmation step, and a UI click
-  reaches `send_message` directly.* Mitigated by the gate ordering, which is
-  server-side and host-independent: `evaluateSendGate` still applies, and with the App
-  always supplying a `confirmation_id` bound to the exact `(peer, text)`, a swapped
-  payload fails closed. Stated as an explicit test, not an assumption.
-- *Stored XSS from a Telegram message body.* Mitigated by text-only insertion, the
-  `innerHTML` ban, a CSP with no `script-src`, and an adversarial fixture set modelled
-  on `internal/agent/policy/adversarial_output_test.go`. The residual risk — a host
-  that ignores the CSP — is recorded in the threat model rather than waved away.
-- *Adding a resources capability breaks a client that assumed tools-only.* Mitigated by
-  the default-off flag and by probing the deployed surface with the existing
-  `cmd/mcpprobe` before and after enabling it anywhere.
-- *Claude does not support third-party MCP Apps during the spike window.* Accepted by
-  design: the reference host is the primary target and the Claude row becomes a dated
-  readiness checklist, which the issue explicitly permits.
-- *The spike quietly becomes a product.* Mitigated by keeping the flag off, keeping the
-  `claude-connector-submission.md` amendment drafted-not-applied, and requiring the
-  positioning note to state that acceptance is not implied.
-- *Scope creep into a Telegram client.* Mitigated by the single research flow plus a
-  single text-reply action, with media upload and multi-account explicitly out of
-  scope.
+| Risk | Mitigation |
+| --- | --- |
+| The extension contract shifts before `2026-07-28` ships broadly, and the literal keys go stale. | Every literal (`io.modelcontextprotocol/ui`, `ui://`, `text/html;profile=mcp-app`, `_meta.ui.resourceUri`) lives in exported constants in one package, `internal/mcpui`, and is asserted by the probe. A contract change is a one-file edit plus a probe run, not a hunt. |
+| A host renders the App and a DOM-injection bug turns Telegram text into markup. | Text nodes only; a build-failing grep for `innerHTML`/`insertAdjacentHTML`/`document.write`/`eval`/`new Function`; `_meta.ui.csp` with no allowed domains so there is no exfiltration channel; the spec requires host-side iframe sandboxing on top. |
+| The App is perceived as an authorization surface. | No server code path reads anything App-originated as authority. Identity comes only from `auth.From(ctx)`; scopes only from the token; the send gate is unchanged and still returns a dry-run preview whenever any conjunct fails. An adversarial test asserts a "send" issued through the App path with `send_enabled=false` produces `sent=false` and no Telegram call. |
+| `_meta.ui.visibility` is mistaken for a gate. | Stated in the report's threat model and in the code comment on `ToolMeta()`: `visibility` is host-side model-hygiene, never server authorization. |
+| The App surface accidentally ships enabled. | Default `false`; the flag is set nowhere in this PR; `cmd/server/main.go` logs the resolved value at startup; a test asserts the flag-off server advertises no `extensions` and no `resources` capability. |
+| A confirmation is bound to a body the user never saw, because the App re-renders between prepare and send. | `HashSendPayload(peer, text)` is computed by the server from the arguments of both calls; any drift is `ErrConfirmationMismatch` and the row is dropped single-shot. The App displays `text_sha256` from the prepare result next to the draft. |
+| `MCP_TOOL_FILTER=read-only` plus the App flag yields an App with a dead "send" button. | `prepare_send_message` carries `ReadOnlyHint=false`, so the existing filter removes it; the App feature-detects the tool in `tools/list` and hides the draft affordance when it is absent. Covered by a test. |
+| The report over-claims. | The requirements forbid it, the matrix marks unmeasured rows as unmeasured, and `mctlhq/mctl-telegram#650` owns every live claim. |

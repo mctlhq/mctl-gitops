@@ -1,261 +1,217 @@
-# Spike: MCP Apps prototype for a Telegram research and triage surface
+# Flag-gated MCP Apps prototype: Telegram research and triage App for Claude
 
 ## Context
 
-Issue #569 asks for a time-boxed spike answering two separable questions. First, a
-technical one: can `tg.mctl.ai` — a Go MCP server built on `mark3labs/mcp-go v1.0.0`
-and `mcpserver.NewStreamableHTTPServer` (`internal/mcp/server.go:178`) — expose a
-standards-compliant MCP App, given that the server today declares only
-`mcpserver.WithToolCapabilities(true)` (`internal/mcp/server.go:206`) and registers
-no MCP resources at all? A repository-wide grep for `AddResource`,
-`ResourceTemplate` and `mcplib.Resource` returns no non-test hit, so the resource
-half of the protocol is entirely unimplemented here. Second, a product one: does a
-Telegram research/triage App justify a new Claude connector submission on top of the
-existing 30-tool surface, without weakening the server-authoritative safety model
-(`evaluateWriteGate` at `internal/mcp/tools.go:1767`, `ConfirmStore` in
-`internal/mcp/confirm.go`, `OriginGuard` at `internal/web/origin.go:22`)?
+`tg.mctl.ai` is today a pure tool surface: `internal/mcp/server.go` builds an
+`mcpserver.NewMCPServer(...)` with `WithToolCapabilities(true)` and nothing
+else — 30 tools, no resources, no prompts, no extensions. MCP Apps (SEP-1865,
+extension id `io.modelcontextprotocol/ui`) standardises a second surface: a
+server-declared HTML resource under the `ui://` scheme with mimeType
+`text/html;profile=mcp-app`, linked to a tool through `_meta.ui`, rendered by
+the host in a sandboxed iframe that talks back to the *host* (never to the
+server) over postMessage using MCP JSON-RPC methods (`ui/initialize`,
+`tools/call`, `resources/read`, `ui/notifications/tool-result`, ...). Issue
+#569 asks whether this repository can expose such an App with the current Go
+stack, and whether a research/triage App is a materially stronger product
+shape than "Claude can call Telegram APIs".
 
-This matters because the server already has most of the ingredients an App needs and
-none of the delivery mechanism. Every read tool already returns machine-readable
-`structuredContent` through `jsonResult` (`internal/mcp/tools.go:2180`) against an
-additive-open output schema (`outputSchema[T]` at `internal/mcp/output_schema.go:33`),
-which is exactly the data contract a UI would consume — so an App can be built with
-no new Telegram data path. Conversely the write path has a gap the App makes visible:
-`HashSendPayload` (`internal/mcp/confirm.go:212`) exists but has no caller, because
-`send_message` takes only `peer` and `text` and relies on draft-by-default plus the
-host's own confirmation UI rather than an exact-payload binding of the kind
-`prepare_pin_message`/`pin_message` already use (`internal/mcp/tools.go:611`,
-`:686`). An iframe button click must not be allowed to stand in for that binding.
-The spike therefore has to close that gap before it can honestly demonstrate a safe
-action surface. This proposal covers the spike only: a flag-gated prototype, a host
-compatibility report, a threat model and an implementation-path decision — not a
-production connector submission.
+Both questions are answerable inside this repository. `mark3labs/mcp-go
+v1.0.0` — already the pinned dependency (`go.mod:14`) — carries every
+primitive the extension needs: `server.WithExtensions(map[string]any)`
+(`server/server.go:675`) for `capabilities.extensions`,
+`MCPServer.AddResource` (`server/server.go:797`) with a free-form
+`Resource.MIMEType`, `mcp.TextResourceContents.Meta map[string]any` whose own
+doc comment says it "allows `_meta` to be used for MCP-UI features", and
+`mcp.Tool.Meta *mcp.Meta` (`mcp/tools.go:657`) for the tool→UI link. What is
+missing is not SDK capability but a decision, an implementation, and evidence.
+This proposal builds the prototype behind a default-off flag, proves the
+iframe cannot bypass a single existing server-side gate, and writes the
+technical report from what the merged code actually does. Live host testing,
+screenshots and connector-submission positioning are explicitly someone
+else's work (`mctlhq/mctl-telegram#650`).
 
 ## User stories
 
-- AS a Telegram power user I WANT to open a research and triage view inside my MCP
-  host SO THAT I can scan unread dialogs, search history and read message context
-  without asking the assistant to re-narrate JSON at me.
-- AS the same user I WANT to draft a reply inside that view and see the exact
-  recipient and exact text that will be delivered SO THAT I can approve a
-  consequential action with full knowledge of its payload.
-- AS the same user I WANT the App to be unable to send anything the existing server
-  gates would have refused SO THAT adopting a richer UI does not quietly lower my
-  safety floor.
-- AS a maintainer of `mctl-telegram` I WANT a written decision on whether
-  `mark3labs/mcp-go v1.0.0` can carry MCP Apps metadata and resources SO THAT we
-  either adopt it, contribute upstream, or reject the direction on evidence instead
-  of on guesswork.
-- AS a maintainer I WANT a recorded host support matrix covering the MCP Apps
-  reference host and Claude surfaces SO THAT we do not build a UI that no host we
-  care about can render.
-- AS a security reviewer I WANT a threat model for the iframe-to-tool path, for
-  untrusted Telegram content rendered as HTML, and for identity/scope handling SO
-  THAT the App is reviewable against the guarantees `SECURITY.md` already makes.
-- AS an operator I WANT the whole prototype behind a default-off flag SO THAT a spike
-  cannot change the protocol surface that production clients and the Cloudflare MCP
-  portal already depend on.
+- AS a Telegram power user I WANT a research and triage view rendered inside
+  Claude SO THAT I can scan unread dialogs, search across channels and read
+  message context without the model re-narrating every result as prose.
+- AS the same user I WANT to draft a reply from a result card, see the exact
+  recipient and the exact bytes that will be delivered, and be told up front
+  whether the click will really send or only produce a preview SO THAT no
+  consequential action ever happens as a surprise.
+- AS the operator of `tg.mctl.ai` I WANT the App surface to be off by default
+  and removable by one environment variable SO THAT the production connector's
+  `tools/list` and `initialize` responses are byte-identical until I choose
+  otherwise.
+- AS a security reviewer I WANT proof that an iframe button click grants no
+  authority — no scope, no identity, no send permission — SO THAT the App adds
+  a rendering layer and not a second, weaker authorization path.
+- AS a future connector submitter I WANT a written host-compatibility and
+  readiness report grounded in the code SO THAT the live-host matrix in #650
+  is a matter of filling rows, not of rediscovering the contract.
 
 ## Acceptance criteria (EARS)
 
-### Extension surface
+Extension surface
 
-- WHEN the MCP Apps prototype flag is disabled THE SYSTEM SHALL advertise exactly the
-  capabilities and tool set it advertises today, declaring no resource capability and
-  registering no `ui://` resource.
-- WHEN the MCP Apps prototype flag is enabled THE SYSTEM SHALL additionally declare a
-  resources capability and serve at least one MCP App UI resource describing the
-  Telegram research and triage surface.
-- WHEN a host reads the App UI resource THE SYSTEM SHALL return a self-contained HTML
-  document with no external script, style, font or image reference.
-- WHILE the prototype flag is enabled THE SYSTEM SHALL keep every existing tool name,
-  input schema and output schema byte-identical to the flag-disabled build, so that a
-  client caching `tools/list` observes no change.
-- IF `mark3labs/mcp-go v1.0.0` cannot express the App metadata the extension requires
-  — resource registration, the App resource MIME type, or tool-level `_meta`
-  passthrough — THEN THE SYSTEM SHALL record the precise missing capability in the
-  implementation-path decision rather than silently shipping a partial surface.
+- WHILE `MCP_APPS_ENABLED` is false (the default) THE SYSTEM SHALL advertise
+  exactly the capabilities it advertises today — `tools` only, no `resources`,
+  no `extensions` — and SHALL register exactly the tool set enumerated in
+  `internal/mcp/server.go:newMCPServer` today, with no `_meta.ui` on any tool.
+- WHEN `MCP_APPS_ENABLED` is true THE SYSTEM SHALL advertise
+  `capabilities.extensions["io.modelcontextprotocol/ui"]` with
+  `mimeTypes: ["text/html;profile=mcp-app"]` and SHALL advertise resource
+  capability.
+- WHEN a client issues `resources/list` with the flag on THE SYSTEM SHALL
+  include a resource whose URI uses the `ui://` scheme and whose `mimeType` is
+  exactly `text/html;profile=mcp-app`.
+- WHEN a client issues `resources/read` for that URI THE SYSTEM SHALL return a
+  single self-contained HTML document inline as `text`, with no external
+  script, style, font, image or network origin referenced anywhere in it.
+- WHEN the flag is on THE SYSTEM SHALL attach `_meta.ui` carrying
+  `resourceUri` and `visibility` to the tools that back the App, using the
+  nested object form, not the deprecated flat `ui/resourceUri` key.
+- WHEN the App resource is read THE SYSTEM SHALL declare `_meta.ui.csp` with
+  empty `connectDomains`, `resourceDomains`, `frameDomains` and
+  `baseUriDomains`, so a conforming host applies a `default-src 'none'`
+  baseline.
 
-### Research surface
+Research and triage flow
 
-- WHEN the App requests dialog, unread, history or search data THE SYSTEM SHALL serve
-  it exclusively through the already-registered `list_dialogs`,
-  `get_unread_messages`, `get_messages`, `search_messages`, `prepare_get_media` and
-  `get_media` tools.
-- WHILE the App is rendering THE SYSTEM SHALL require it to consume the
-  `structuredContent` those tools already return, and SHALL NOT introduce a parallel
-  JSON shape, a second Telegram client, or any MTProto credential inside the UI
-  layer.
-- WHEN the App renders a result card THE SYSTEM SHALL present sender or channel,
-  timestamp, a text snippet and a stable source reference (canonical peer id plus
-  message id) sufficient to reopen that message in context.
-- WHEN the user applies a dialog, channel, date or query filter THE SYSTEM SHALL
-  satisfy it by re-invoking the corresponding tool with the matching arguments, not
-  by filtering a stale client-side cache without saying so.
-- WHEN the account is in Local Bridge mode THE SYSTEM SHALL keep the research surface
-  functional over the bridge path (`bridgeCall`, `internal/mcp/tools.go:113`), and
-  SHALL fall back to `prepare_get_media`/`get_media` for media rather than
-  `fetch_media`, which that path refuses (`internal/mcp/tools.go:282`).
-- IF a research query would exceed a single synchronous tool call's practical budget
-  THEN THE SYSTEM SHALL paginate through the tools' existing `limit` arguments and
-  show the user what was truncated, and SHALL NOT introduce an App-specific job
-  polling mechanism.
+- WHEN the App starts THE SYSTEM SHALL allow it to populate itself using only
+  the existing read tools `list_dialogs`, `get_unread_messages`,
+  `get_messages`, `search_messages` and `prepare_get_media`, called through
+  the host, with no new read tool introduced.
+- WHEN a read tool is invoked from the App THE SYSTEM SHALL apply the same
+  `requireScope` check it applies to a model-originated call
+  (`telegram:dialogs:read` for `list_dialogs`, `telegram:messages:read` for
+  the message tools) against the identity from `auth.From(ctx)`.
+- WHILE rendering any Telegram-origin string THE APP SHALL insert it through a
+  text node (`textContent`), never through `innerHTML`, `insertAdjacentHTML`,
+  `document.write`, or any dynamic code-evaluation path.
+- WHEN the App displays a message body THE SYSTEM SHALL have already passed
+  that body through `sanitize.UserContent`, `sanitize.SensitiveTelegramContent`
+  and `WrapUntrustedContent`, and the App SHALL strip only the outer
+  `<telegram-content …></telegram-content>` envelope for display while keeping
+  a visible untrusted-origin marker on the card.
+- THE APP SHALL NOT send raw Telegram message text to the host via
+  `ui/update-model-context` or `ui/message`.
 
-### Untrusted content
+Safe action surface
 
-- WHEN the App renders any Telegram-origin string THE SYSTEM SHALL insert it as text,
-  never as parsed markup, so that no message body can execute script or alter the
-  document structure.
-- WHILE rendering message bodies THE SYSTEM SHALL strip the
-  `<telegram-content origin="telegram" ... untrusted="true">` envelope that
-  `WrapUntrustedContent` (`internal/mcp/format.go:32`) adds to `Message.Text`, and
-  SHALL display the unwrapped body with a persistent visual marker that it is
-  untrusted third-party content.
-- WHILE rendering THE SYSTEM SHALL rely on the existing `internal/sanitize` helpers
-  as the single sanitization source and SHALL NOT introduce a second, weaker
-  client-side cleaning path that could diverge from them.
-- IF a message body contains text shaped like host or tool instructions THEN THE
-  SYSTEM SHALL keep it inert: it must not be forwarded to the host as a prompt, must
-  not populate a tool argument without an explicit user gesture, and must not
-  pre-fill a draft that could be sent without the user reading it.
-- WHEN a Telegram service message carries a login code or login IP THE SYSTEM SHALL
-  display it already redacted by `sanitize.SensitiveTelegramContent`
-  (`internal/sanitize/sanitize.go:85`), because the App reads the same tool output.
+- WHEN the user drafts a reply in the App THE SYSTEM SHALL require a
+  `prepare_send_message` call that returns a single-shot `confirmation_id`
+  bound to `sha256(peer, NUL, text)` via the existing
+  `HashSendPayload`, together with the verdict the send gate would reach right
+  now and, when it would not really send, the `dry_reason`.
+- WHEN `send_message` is called with a non-empty `confirmation_id` THE SYSTEM
+  SHALL consume it against `HashSendPayload(peer, text)` before evaluating the
+  send gate, and SHALL refuse the call if the confirmation is unknown,
+  expired, already used, owned by a different identity, or bound to a
+  different `(peer, text)` pair.
+- WHEN `send_message` is called without a `confirmation_id` THE SYSTEM SHALL
+  behave exactly as it does today, so existing model-driven clients are
+  unaffected.
+- WHILE any of the four send-gate conjuncts is unsatisfied — demo-reviewer
+  identity, `ALLOW_SEND=false`, missing `telegram:messages:send` scope, or
+  per-account `send_enabled=false` — THE SYSTEM SHALL return a successful
+  `sent=false` dry-run preview and SHALL make no Telegram API call, regardless
+  of what the App requested.
+- IF the App supplies any parameter that would widen authority — a mode, a
+  dry-run override, a scope, a subject, a user id — THEN THE SYSTEM SHALL
+  ignore it, because no such parameter exists on the tool schemas.
+- WHEN an App-originated send is evaluated THE SYSTEM SHALL debit the same
+  per-(identity, peer) limiter (`evaluateDirectSendLimiter`) as a
+  model-originated send.
 
-### Identity, scopes and the action surface
+Identity and isolation
 
-- WHILE any App-initiated tool call is executing THE SYSTEM SHALL derive the caller
-  identity solely from the authenticated MCP request context via `auth.From(ctx)`
-  (`internal/auth/identity.go:71`) and SHALL ignore any identity, user id or scope
-  asserted by the UI.
-- WHEN the App triggers a tool THE SYSTEM SHALL apply the same `requireScope` /
-  `requireAnyScope` checks (`internal/mcp/tools.go:1849`, `:1872`) that apply to a
-  chat-initiated call, with no App-specific exemption.
-- IF the UI names a tool the caller's scopes do not permit — including any admin tool
-  such as `set_telegram_access` or `mint_worker_token` — THEN THE SYSTEM SHALL refuse
-  it with the identical error a non-App caller receives.
-- WHEN the deployment runs with `ToolFilter = "read-only"`
-  (`internal/mcp/server.go:156`) THE SYSTEM SHALL render the App's research surface
-  normally and SHALL present the action surface as unavailable rather than offering a
-  control that cannot succeed.
-- WHEN the user submits a draft from the App THE SYSTEM SHALL route it through a
-  prepare step that snapshots the exact `(peer, text)` pair as a payload hash using
-  the existing `HashSendPayload` (`internal/mcp/confirm.go:212`) and returns a
-  single-shot confirmation id bound to the caller's `UserID`.
-- WHEN the corresponding send is invoked with that confirmation id THE SYSTEM SHALL
-  deliver the message only if `ConfirmStore.Consume` (`internal/mcp/confirm.go:87`)
-  accepts the id for this identity and for a payload hash matching the arguments
-  actually supplied.
-- IF the text or recipient changed between prepare and send THEN THE SYSTEM SHALL
-  refuse with `ErrConfirmationMismatch` and SHALL NOT deliver anything.
-- IF a confirmation id belonging to another identity is presented THEN THE SYSTEM
-  SHALL refuse with `ErrConfirmationWrongUser` and SHALL NOT reveal any state of that
-  other user's pending action.
-- WHILE a confirmation id is older than `ConfirmationTTL`
-  (`internal/mcp/confirm.go:15`) THE SYSTEM SHALL treat it as not found.
-- WHEN a send is attempted THE SYSTEM SHALL apply `evaluateSendGate`
-  (`internal/mcp/tools.go:1763`) unchanged, so that `ALLOW_SEND=false`, a missing
-  `telegram:messages:send` scope, per-account `send_enabled=false`, or the demo
-  reviewer identity each still force a dry-run preview.
-- WHEN a send is forced to dry run THE SYSTEM SHALL show the user an unambiguous
-  preview state carrying the server's `dry_reason`, visually distinct from a
-  delivered message, and SHALL NOT let the UI present a preview as sent.
-- WHILE sends are being issued THE SYSTEM SHALL continue to debit the per-peer
-  limiter (`evaluateDirectSendLimiterN`, `internal/mcp/tools.go:1842`) and SHALL
-  surface the refusal text to the user when the cap is reached.
-- WHEN any App-initiated tool call completes THE SYSTEM SHALL write the same audit
-  row `s.audit` (`internal/mcp/tools.go:2190`) writes for a chat-initiated call, and
-  the App SHALL show the user the resulting outcome reference.
-- WHILE the account is in Local Bridge mode THE SYSTEM SHALL keep device ownership
-  enforcement on the server and bridge, and SHALL NOT let the App address a daemon
-  the authenticated identity does not own.
+- WHILE the App is rendered THE SYSTEM SHALL never place a Telegram session,
+  MTProto credential, `TG_API_ID`/`TG_API_HASH`, OAuth token or bearer
+  credential into the resource body or into any tool result the App reads.
+- WHEN any App-originated call arrives THE SYSTEM SHALL derive identity solely
+  from `auth.From(ctx)` populated by `auth.Middleware`, and SHALL NOT read any
+  identity hint from tool arguments.
+- IF an App-originated call carries a `confirmation_id` issued to another
+  identity THEN THE SYSTEM SHALL fail with the existing
+  `ErrConfirmationWrongUser` path and SHALL NOT perform the action.
+- WHILE the flag is on THE SYSTEM SHALL keep `MCP_TOOL_FILTER=read-only`
+  meaningful: with that filter set, no write tool — including
+  `prepare_send_message` — is registered, and the App's draft affordance must
+  degrade rather than call a tool that is not there.
 
-### Hosting, transport and the existing guards
+Long-running research
 
-- WHILE the App is rendered THE SYSTEM SHALL require the UI to reach the server only
-  through the host's MCP bridge, and SHALL NOT require the iframe to make a direct
-  HTTP request to `tg.mctl.ai`.
-- WHILE the prototype flag is enabled THE SYSTEM SHALL leave `OriginGuard`'s
-  allowlist unchanged (`internal/web/origin.go:22`), because no new browser origin
-  needs to reach the MCP endpoint.
-- WHEN the App HTML is served THE SYSTEM SHALL carry a content security policy at
-  least as strict as the existing "lite" tier
-  (`default-src 'none'`, no remote script), matching the precedent in
-  `internal/oauth/local_bridge_activate_page.go:131`.
-- WHEN the App asset changes THE SYSTEM SHALL version it by content hash so a host
-  can cache it safely and a reviewer can tell which build a screenshot came from.
-- IF a registered tool is added or renamed for this spike THEN THE SYSTEM SHALL carry
-  a matching entry in `docs/portal-allowlist.json`, because
-  `internal/mcp/portal_allowlist_test.go` fails the build otherwise.
+- WHEN an App research flow would exceed a single synchronous tool call THE
+  SYSTEM SHALL bound it with the caps that already exist (`limit` arguments,
+  `BulkMediaFetchCap`, `MediaDownloadMaxBytes`) rather than introduce
+  App-specific job polling.
+- THE REPORT SHALL record which flows are near those bounds and what the
+  mcp-go task primitives (`mcp/tasks.go`, `server/task_*.go`,
+  `WithToolCallTasks`-style capability) would require, deferring to the MCP
+  Tasks spike `mctlhq/.github#41`.
 
-### Spike outputs
+Evidence
 
-- WHEN the spike concludes THE SYSTEM SHALL have produced a host compatibility matrix
-  covering the MCP Apps reference host, Claude.ai / the Claude connector, Claude
-  Desktop or Code where relevant, and any ChatGPT MCP surface reached, each with
-  observed rendering, tool invocation and confirmation behaviour.
-- WHEN the spike concludes THE SYSTEM SHALL have produced a threat model covering
-  iframe-to-tool invocation, untrusted Telegram content, identity and scope handling,
-  and confirmation binding.
-- WHEN the spike concludes THE SYSTEM SHALL have produced an implementation-path
-  decision for the Go service, with evidence for or against `mark3labs/mcp-go v1.0.0`.
-- WHEN the spike concludes THE SYSTEM SHALL have produced a submission-positioning
-  note stating what capability is new relative to the plain tool connector, and this
-  note SHALL NOT claim or imply that directory acceptance is assured.
-- IF the product hypothesis is validated THEN THE SYSTEM SHALL have produced child
-  implementation issues; IF it is not validated THEN THE SYSTEM SHALL have produced a
-  written rejection with the evidence that settled it.
+- WHEN CI runs THE SYSTEM SHALL fail if the embedded App document references
+  any external origin, uses `innerHTML`/`eval`/`Function(`/`document.write`,
+  or drifts from its recorded content hash without that hash being updated.
+- WHEN CI runs THE SYSTEM SHALL fail if `docs/portal-allowlist.json` does not
+  carry an explicit decision for every registered tool, including any tool
+  added by this proposal, per `internal/mcp/portal_allowlist_test.go`.
+- WHEN the merged branch is built THE SYSTEM SHALL ship a technical report at
+  `docs/reports/mcp-apps-spike.md` containing the host-compatibility matrix
+  with the reference-host row filled from an automated probe, the threat
+  model, the SDK/implementation-path decision with the concrete mcp-go symbols
+  that justify it, the long-running-research assessment, and the
+  submission-positioning note.
 
 ## Out of scope
 
-- Shipping the App to production, enabling it by default, or submitting anything to
-  the Claude connector directory or the ChatGPT app directory.
-- Rebuilding a general Telegram client UI, or adding UI for tools outside the
-  research/triage and single-draft-send flow.
-- Giving the UI layer any Telegram API credential, MTProto session, or direct network
-  path to Telegram.
-- Duplicating Telegram business logic in a Node or TypeScript sidecar.
-- Building a task, job or polling system for long-running App work; that belongs to
-  the MCP Tasks spike (`mctlhq/.github#41`).
-- Moving any authorization, rate limiting or confirmation decision into JavaScript.
-- Changing the existing `send_message` contract for non-App callers, or making any
-  new argument required on an existing tool.
-- Multi-account selection inside the App; the spike uses the single identity the MCP
-  request already carries.
-- Media upload or `send_media` from the App; the action surface is text reply only.
-- Any database migration or schema change.
+- Live testing against claude.ai, Claude Desktop, Claude Code or ChatGPT;
+  screenshots; video walkthrough; throwaway live Telegram account; connector
+  or directory submission. All of that is `mctlhq/mctl-telegram#650` and
+  depends on this prototype being merged and deployed.
+- Any change to a sibling repository (`mctl-gitops`, `mctlhq/.github`,
+  `mctl-web`). Deployment enablement of `MCP_APPS_ENABLED` is an operator
+  action, not part of this PR.
+- Turning the App on by default, or in production.
+- A Node/TypeScript sidecar, a vendored fork of `mark3labs/mcp-go`, or an
+  upstream SDK contribution.
+- A general-purpose Telegram client UI: no dialog list management, no
+  attachments composer, no contact management, no channel subscription.
+- New read tools. The App composes only tools that already exist.
+- A task/job system for long-running work. That is `mctlhq/.github#41`.
+- Moving any safety decision into JavaScript.
 
 ## Open questions
 
-- Which MCP Apps resource MIME type and metadata keys the current published extension
-  actually mandates cannot be settled from this read-only clone, which has no network
-  access and no module cache for `mark3labs/mcp-go`. Proceeding on the assumption
-  that the App is delivered as an HTML resource under a `ui://` scheme referenced
-  from tool `_meta`; task 1 verifies the exact contract against the live
-  specification and the reference host, and the design is written so that only the
-  adapter layer changes if the details differ.
-- Whether `mark3labs/mcp-go v1.0.0` exposes resource registration plus per-tool
-  `_meta` passthrough is unverified for the same reason. The library does carry an
-  `mcp.Meta` type — `internal/mcpprobe/modern.go:14` already decodes `_meta` from an
-  initialize response — which is evidence the concept exists in the library, not
-  proof that the tool-declaration side is writable. Proceeding by making task 1 a
-  hard go/no-go probe before any UI work starts.
-- Whether Claude production surfaces render third-party MCP Apps at all today is
-  explicitly flagged as unknown by the issue. Proceeding with the reference host as
-  the primary target and treating Claude as a readiness checklist, exactly as the
-  issue permits.
-- Whether the App should be gated on a distinct OAuth scope rather than reusing the
-  existing read scopes. Proceeding without a new scope, because the App invokes only
-  tools the caller could already invoke; recorded as a decision for the threat model
-  to revisit.
-- Whether `prepare_send_message` should become the only supported send path once the
-  spike ends, or remain an optional binding alongside today's draft-by-default
-  behaviour. Proceeding with optional-and-additive so no existing client breaks, and
-  deferring the stricter choice to a child issue.
-- Whether the prototype flag should be an environment variable or a build tag.
-  Proceeding with an environment variable, matching how `ALLOW_SEND`, `ToolFilter`
-  and the demo reviewer id are already configured.
-- What "realistic Telegram data fixtures" may contain is constrained by
-  `.claude/CLAUDE.md`: fixtures must be synthetic and must reuse the existing
-  `Alice`/`Bob`/`Carol`/`Dana` personas. Proceeding on that basis, with the live
-  non-destructive account test kept out of the repository entirely.
+- **Host-side `visibility` enforcement is not a server gate.** The spec has
+  hosts reject `tools/call` from an App for tools lacking `"app"` in
+  `_meta.ui.visibility`. That protects the *model* from App-only tools; it
+  gives the server nothing. This proposal therefore treats `visibility` as a
+  hint and keeps `requireScope` plus the send gate as the only authority.
+  Proceeding on that interpretation.
+- **Which tool carries `_meta.ui`.** The spec links a UI to a tool, and the
+  natural anchor here is `get_unread_messages` (the triage entry point). An
+  alternative is a thin dedicated `open_telegram_triage` tool. This proposal
+  attaches `_meta.ui` to the existing read tools that the App opens from and
+  adds no opener tool, to avoid a second tool whose only job is to exist.
+  Revisit if a host turns out to require a distinguished opener.
+- **`ui://` URI versioning.** The spec does not prescribe how a server
+  versions an App. This proposal uses a stable URI
+  (`ui://mctl-telegram/triage`) plus a build version inside `_meta` and a
+  content-hash test, rather than baking a version into the URI, because a
+  changing URI would break any host that cached the tool→resource link.
+- **Extension negotiation on a stateless streamable-HTTP server.** mcp-go
+  advertises `capabilities.extensions` from `initialize`; whether a host that
+  does not negotiate the extension will still call `resources/read` for a
+  `ui://` URI is host behaviour, not server behaviour. The prototype
+  advertises correctly and the probe records what a client actually does.
+- **`prepare_send_message` on the shared Cloudflare portal.** The portal
+  allowlist is a per-server on/off switch that cannot see users. This proposal
+  records the new tool as disabled there, since a prototype affordance should
+  not appear on a shared surface. An operator can flip it later.
+- **Whether the product hypothesis holds.** This proposal builds the artifact
+  and writes an honest assessment; it does not and cannot claim directory
+  acceptance, and the report is required to say so.
