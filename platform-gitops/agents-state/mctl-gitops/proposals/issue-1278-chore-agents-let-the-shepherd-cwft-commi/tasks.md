@@ -1,154 +1,143 @@
 # Tasks: issue-1278-chore-agents-let-the-shepherd-cwft-commi
 
-All file edits are in
+All edits are in
 `platform-gitops/argo-workflows/cluster-templates/cwft-mctl-agents-shepherd.yaml`
-unless stated otherwise. Tasks 1-6 are one logical change and must land in a
-single commit: any subset leaves the pipeline worse than before (see design,
-"Partial edit").
+unless stated otherwise. Line numbers refer to the file as of the commit this
+proposal was written against.
 
-The two shapes, used verbatim everywhere:
+- [ ] 1. Widen the handoff filter in `run-shepherd`'s `COLLECT` heredoc.
+  Replace the single `PATHSPEC` (L494) with a `PATHSPECS` list holding
+  `":(glob)platform-gitops/agents-state/**/.status.yaml"` and
+  `":(glob)platform-gitops/agents-state/*/adopted-prs/*/**"`, splat it into
+  the `git status` argv (L503-505), and widen `ALLOWED` (L493) to
+  `^platform-gitops/agents-state/(?:.+/\.status\.yaml|[^/]+/adopted-prs/pr-[0-9]+/\.prref\.yaml)$`.
+  — DoD: a worktree containing a `.prref.yaml` produces it in `/tmp/state-out/tree`;
+  a file at `adopted-prs/junk.txt` still exits 1 with the "refusing to hand
+  off paths outside the allowed subtree" message; the NUL-walk, rename/copy
+  handling, symlink skip and `follow_symlinks=False` copy are untouched.
 
-- pathspec `:(glob)platform-gitops/agents-state/*/adopted-prs/*/**`
-- ERE `^platform-gitops/agents-state/[^/]+/adopted-prs/[^/]+/[^/]+`
+- [ ] 2. Bind the filter expressions once in `commit-and-push`'s
+  `script.source` (depends on 1). Introduce `SPEC_STATUS`, `SPEC_ADOPTED` and
+  `ALLOWED_RE` near the top of the script, using the same two pathspecs and
+  the same regex as task 1.
+  — DoD: every filter site below references these variables; the two
+  expressions appear exactly once each in the file.
 
-- [ ] 1. In the `run-shepherd` `COLLECT` heredoc (~line 493), replace the
-  single `PATHSPEC` string with a `PATHSPECS` list holding the existing
-  `:(glob)platform-gitops/agents-state/**/.status.yaml` plus the adopted-prs
-  pathspec, and splat it into the `git status --porcelain=v1 -z -uall --`
-  argv. — DoD: the `git status` call passes both pathspecs; no other line of
-  the collector changes; a run that writes only `.status.yaml` produces a
-  byte-identical handoff tree to today's.
-- [ ] 2. In the same heredoc, widen `ALLOWED` to the alternation of the
-  existing `.+/\.status\.yaml` and the adopted-prs ERE, anchored `^...$`, with
-  a comment stating that `ALLOWED` and `PATHSPECS` must describe the same set.
-  (depends on 1) — DoD: a `.prref.yaml` under a record directory passes; a file
-  directly under `agents-state/<svc>/adopted-prs/` (no record dir) and anything
-  under `agents-state/<svc>/` that is neither shape still hits the
-  "refusing to hand off paths outside the allowed subtree" `sys.exit(1)`.
-- [ ] 3. In `commit-and-push`'s `script.source`, define `ALLOWED_RE` once
-  (single-quoted assignment, the ERE above alternated with the `.status.yaml`
-  shape) and use `grep -vE "$ALLOWED_RE"` for both the `BAD` check over
-  `/artifact/tree` (~line 895) and the `BAD_DEL` check over
-  `/artifact/deleted.lst` (~line 902). Keep both error messages, updating their
-  text to name both allowed shapes. (depends on 2) — DoD: one regex literal in
-  the step; both checks still exit 1 on a disallowed path; the symlink /
-  special-file `find` guard above them is unchanged and still runs first.
-- [ ] 4. Add the adopted-prs pathspec as a second `:(exclude,glob)` term to the
-  out-of-scope guard (~line 927) and rename the variable
-  `NON_STATUS_CHANGES` -> `OUT_OF_SCOPE`, matching
-  `cwft-mctl-agents-investigate.yaml`. Update the refusal message to
-  "outside .status.yaml or an adopted-prs record under
-  platform-gitops/agents-state/". (depends on 3) — DoD: a checkout holding only
-  an adoption record reports nothing out of scope; a checkout holding a change
-  anywhere else still exits 1.
-- [ ] 5. Add the adopted-prs pathspec to the change detector (~line 934) and
-  rename `STATUS_CHANGES` -> `IN_SCOPE_CHANGES`; update its
-  "No .status.yaml updates — nothing to commit" message to cover both shapes.
-  (depends on 4) — DoD: a tick whose only change is a `.prref.yaml` does NOT
-  short-circuit to `activity=none`; a tick with no change in either shape still
-  writes `none` and exits 0 before `git add`.
-- [ ] 6. Add the adopted-prs pathspec to the `git add --` invocation
-  (~line 940), keeping the existing `.status.yaml` pathspec first.
-  (depends on 5) — DoD: `git diff --cached` after staging contains both shapes;
-  the following `git diff --cached --quiet` defensive branch, the commit
-  message construction, the mutex block, and the 5x push/rebase loop are
-  untouched.
-- [ ] 7. Correct the in-file documentation: step 3 of the
-  `workflows.argoproj.io/description` annotation (the "Same `:(glob)` filter as
-  the implementer template" sentence, ~line 42) and the
-  `# Only .status.yaml files should change in agents-state/` comment above
-  `- name: commit-and-push` (~line 732). State both shapes, name
-  `mctlhq/mctl-agents#334` as the writer, and state the ordering: this template
-  merges first, `SHEPHERD_ADOPT_PRS` is enabled only afterwards.
-  (depends on 6) — DoD: no sentence in the file still claims the commit is
-  `.status.yaml`-only; `grep -n 'implementer template' ` returns no stale
-  claim.
-- [ ] 8. Add `tests/test_shepherd_commit_scope.py` implementing T1-T7 below:
-  load the CWFT with `pyyaml`, locate the `commit-and-push` template, extract
-  `script.source`, and drive it with `sh` against a throwaway git repo (bare
-  remote via `file://`, stub `~/.ssh` steps skipped by pre-seeding the config
-  or by trimming the ssh preamble in the harness — document whichever the
-  implementation uses and assert the trim is anchored so it cannot silently
-  drop a guard). (depends on 6) — DoD: the test fails if any one of tasks 1-6
-  is reverted, and passes on the merged tree.
-- [ ] 9. Add a "Unit-test the shepherd commit scope" step to
-  `.github/workflows/validate-manifests.yml`, beside
-  `tests/test_tpl_git_commit_yq.py`, with a comment explaining why the scope of
-  an agent-driven commit to `main` is tested rather than reviewed.
-  (depends on 8) — DoD: the step runs `python3 tests/test_shepherd_commit_scope.py`
-  and the job is green on the PR.
-- [ ] 10. Record the ordering on both issues: comment on
-  `mctlhq/mctl-gitops#1278` and `mctlhq/mctl-agents#334` that this template
-  change merges first and `SHEPHERD_ADOPT_PRS` is enabled only after, linking
-  each to the other. (depends on 7) — DoD: both issues carry the statement;
-  acceptance bullet 3 of the issue is satisfiable by inspection.
-- [ ] 11. Post-merge verification note for the operator (in the PR body, not a
-  file): wait ~3 minutes for ArgoCD to sync the CWFT before the next tick, per
-  `CLAUDE.md` ("Argo snapshots templates at submit time"). — DoD: the PR body
-  states the wait and names the first tick to inspect.
+- [ ] 3. Widen the handoff validators `BAD` (L895) and `BAD_DEL` (L902) to
+  `grep -vE "$ALLOWED_RE"` (depends on 2).
+  — DoD: a tree containing only `.status.yaml` and `pr-<n>/.prref.yaml`
+  passes; a tree containing `platform-gitops/services/...` or
+  `adopted-prs/junk.txt` still exits 1 with the existing message; the
+  `! -type f` symlink/special-file refusal at L890-894 is unchanged.
+
+- [ ] 4. Widen the `NON_STATUS_CHANGES` guard (L927) to pass both
+  `:(exclude,glob)` pathspecs (depends on 2).
+  — DoD: with a `.prref.yaml` present in the checkout the guard is silent;
+  with a file outside the allowlist present it still exits 1.
+
+- [ ] 5. Widen the change probe (L934), renaming `STATUS_CHANGES` to
+  `AGENT_STATE_CHANGES`, to query both pathspecs (depends on 2).
+  — DoD: the empty case is behaviourally identical to today — logs
+  "nothing to commit", writes `none` to `/tmp/onexit/activity`, `exit 0`.
+
+- [ ] 6. Replace the unconditional `git add` (L940) with guarded argv
+  construction (depends on 5): probe each pathspec with `git status` and
+  append it via `set -- "$@" …` only when it matched, using `if` blocks rather
+  than `[ … ] && …`.
+  — DoD: `git add` is never handed a pathspec that matches nothing; a tick
+  with only `.status.yaml` changes passes exactly one pathspec; the
+  `git diff --cached --quiet` guard at L942 and everything below it —
+  commit-message construction, the 5-attempt push/rebase loop, the `activity`
+  writes — are unchanged.
+
+- [ ] 7. Correct the three prose blocks that assert the old contract (depends
+  on 1-6): the header annotation "Same `:(glob)` filter as the implementer
+  template" (L42-43), the "Only `.status.yaml` files should change" banner
+  above `commit-and-push` (L731-734), and the `changes` artifact description
+  (L285-289). Each names `mctlhq/mctl-agents#334` and this issue, and the
+  header note states that the divergence from the implementer template is
+  deliberate.
+  — DoD: no comment in the file claims the filter is `.status.yaml`-only.
+
+- [ ] 8. Confirm no other gate needs widening (depends on 1).
+  — DoD: written confirmation in the PR body that
+  `scripts/validate-agents-state-approval.py` globs `*/proposals/*/.status.yaml`
+  and is unaffected; that `cwft-mctl-agents-implement.yaml` and
+  `cwft-mctl-agents-reconcile.yaml` are deliberately left alone; and that no
+  `.gitignore` entry excludes `adopted-prs/`.
+
+- [ ] 9. State the rollout ordering (depends on 1-7). Comment on
+  `mctlhq/mctl-agents#334` and on this issue that `SHEPHERD_ADOPT_PRS` may be
+  enabled only after this PR is merged and ArgoCD has synced the CWFT.
+  — DoD: both issues carry the ordering statement, satisfying the issue's
+  third acceptance box.
 
 ## Tests
 
-- [ ] T1. Adoption-only handoff: `/artifact/tree` contains just
-  `platform-gitops/agents-state/mctl-web/adopted-prs/pr-42/.prref.yaml`. The
-  extracted script commits it, pushes, and writes `yes` to
-  `/tmp/onexit/activity`. (Fails today: `STATUS_CHANGES` is empty and the
-  script exits 0 with `none`.)
-- [ ] T2. Mixed handoff: one `.status.yaml` and one `.prref.yaml`. Exactly one
-  commit contains both paths, with the existing
-  `chore(agents): shepherd run <DATE>` message shape.
-- [ ] T3. Empty handoff: `/artifact` absent, and separately present-but-empty.
-  No commit is created, exit code 0, `activity=none` — byte-identical to the
-  pre-change behaviour (assert against the commit count on the remote).
-- [ ] T4. `.status.yaml`-only handoff: unchanged from today — one commit
-  containing exactly that path, `activity=yes`.
-- [ ] T5. Refusals: a handoff path outside both shapes
-  (`platform-gitops/services/labs/x/values.yaml`); a path inside
-  `agents-state/` but in neither shape
-  (`agents-state/mctl-web/notes.md`); a `deleted.lst` line outside both
-  shapes; and a symlink in the handoff. Each exits non-zero with its own
-  message and creates no commit.
-- [ ] T6. Deletion of an adoption record listed in `deleted.lst` is applied
-  with `git rm -- ':(literal)...'` and reaches the remote; a record whose name
-  contains `*` removes only itself (the `:(literal)` regression from
-  gitops#1046 must stay fixed for the new shape too).
-- [ ] T7. Pathspec pin: assert in a throwaway repo that
-  `:(glob)*/adopted-prs/*/**` matches nothing while
-  `:(glob)platform-gitops/agents-state/*/adopted-prs/*/**` matches the record,
-  so the issue's literal wording is never restored. Assert the collector's
-  `ALLOWED` and the step's `ALLOWED_RE` accept and reject the same sample set
-  (the "same set" invariant from task 2).
-- [ ] T8. `scripts/validate-local-workdir.py`,
-  `scripts/validate-agents-state-approval.py --selftest` and
-  `kubeconform` (the shepherd file is on the `-ignore-filename-pattern` list,
-  so it must stay excluded) all still pass: run the relevant
-  `validate-manifests.yml` steps locally before opening the PR.
-- [ ] T9. Live smoke, after merge and ~3 minutes of ArgoCD sync: submit a
-  one-shot Workflow referencing the CWFT with `dry_run=true` and no adoption
-  enabled. Expect `activity=none` or an ordinary `.status.yaml` commit and a
-  Succeeded run — proving the widened allow-list did not change the
-  no-adoption path.
+New file `tests/test_cwft_shepherd_commit_pathspec.py`, following the
+established pattern of `tests/test_tpl_git_commit_yq.py`: `yaml.safe_load` the
+CWFT, pull `script.source` out of the `commit-and-push` template by name, and
+run it under `sh` against a temporary git repository with a fabricated
+`/artifact` tree. Wire it into `.github/workflows/validate-manifests.yml` as a
+`python3 tests/test_cwft_shepherd_commit_pathspec.py` step, alongside the
+existing unit-test steps.
+
+- [ ] T1. Adoption record travels: a handoff containing
+  `platform-gitops/agents-state/mctl-web/adopted-prs/pr-42/.prref.yaml` is
+  accepted, staged and committed; the commit contains that path.
+- [ ] T2. **No-adoption regression** (the issue's second acceptance box): a
+  handoff containing only a `.status.yaml` change exits 0, produces a commit
+  identical in content to the pre-change behaviour, and never trips the
+  `git add` "pathspec did not match any files" failure.
+- [ ] T3. Guard compatibility: a checkout carrying a `.prref.yaml` does not
+  trip `NON_STATUS_CHANGES`.
+- [ ] T4. Empty handoff: no `/artifact`, or an `/artifact` with an empty tree
+  and empty `deleted.lst`, still logs "nothing to commit", writes `none` to
+  `/tmp/onexit/activity`, exits 0, and creates no commit.
+- [ ] T5. Fail-closed, tree: a handoff containing
+  `adopted-prs/junk.txt`, `adopted-prs/pr-42/evil.sh`, or any path under
+  `platform-gitops/services/` exits non-zero and creates no commit.
+- [ ] T6. Fail-closed, deletions: a `deleted.lst` naming a path outside the
+  allowlist exits non-zero; one naming a real `.prref.yaml` stages that
+  deletion.
+- [ ] T7. Symlink refusal still fires: a symlink anywhere under `/artifact`
+  exits 1 before anything touches the checkout.
+- [ ] T8. COLLECT unit test (may live in the same file, invoking the extracted
+  heredoc with `python3`): a worktree with a `.prref.yaml` hands it off; one
+  with an unexpected path under `adopted-prs/` exits 1.
+- [ ] T9. Pathspec sanity, guarding the issue's literal spelling: assert that
+  `:(glob)*/adopted-prs/*/**` matches nothing from the repository root and
+  that the rooted form matches the record. This is the trap that motivated the
+  rooted pathspec; pin it so nobody "simplifies" it back.
+- [ ] T10. CI gates pass unchanged: `scripts/validate-shell-param-interpolation.py`
+  and `scripts/validate-local-workdir.py` still succeed against the edited
+  template.
+
+Manual verification after merge, in order:
+
+- [ ] M1. Wait ~3 minutes for ArgoCD to sync the CWFT (Argo snapshots
+  templates at submit time — `CLAUDE.md`).
+- [ ] M2. Trigger a `dry_run=true` shepherd tick and confirm it is green and
+  commits nothing new.
+- [ ] M3. Only then, with `SHEPHERD_ADOPT_PRS` enabled in `mctl-agents`, run a
+  real tick against one allowlisted repo and confirm an `adopted-prs/` entry
+  appears in `main` — the issue's first acceptance box.
 
 ## Rollback
 
-1. **Immediate, no deploy needed on the `mctl-agents` side.** Leave
-   `SHEPHERD_ADOPT_PRS` unset in `cronworkflow-mctl-agents-shepherd.yaml`.
-   With no writer, both new expressions match nothing and the template behaves
-   exactly as it did before this change — so "rollback" and "merged but not
-   enabled" are the same state.
-2. **Revert the commit.** `git revert <sha>` on `main`; ArgoCD re-syncs the
-   previous CWFT within ~3 minutes and the next tick uses it (templates are
-   snapshotted at submit time, so an in-flight tick finishes on whichever
-   version it started with). The six gates return to `.status.yaml`-only.
-3. **If adoption was already enabled when the revert happens.** Unset
-   `SHEPHERD_ADOPT_PRS` in the same change, otherwise the shepherd resumes
-   writing records that are silently dropped and the attempt counters stop
-   being durable — the exact state `#334` warns about. Already-committed
-   records are harmless: nothing but `run_shepherd` reads them, and
-   `git rm -r platform-gitops/agents-state/*/adopted-prs/` removes them
-   cleanly (`#334` rollback step 3).
-4. **If a widened commit lands something unwanted on `main`.** It is an
-   ordinary commit under `agents-state/`: `git revert` or `git rm` it. No
-   ArgoCD Application watches `agents-state/`, so a bad file there cannot
-   degrade a workload; `post-deploy-verify` remains in place for the merge side
-   of the shepherd's behaviour, which this change does not touch.
+The change is confined to one file and is inert while `SHEPHERD_ADOPT_PRS` is
+off, so the ordering gives a free rollback window: if anything looks wrong,
+turn the flag off in `mctl-agents` first and the CWFT immediately behaves as
+it did before, with no gitops change required.
+
+If the template itself misbehaves — a commit step failing on ticks that
+previously succeeded — revert the single commit on a branch and merge it
+(`git revert <sha>`; per `CLAUDE.md` this repo's branch-protection exception
+covers only `gitops-bump.yaml` and `release-deploy.yaml`, so a revert still
+goes through a PR). ArgoCD re-syncs the CWFT within ~3 minutes and the next
+tick uses the restored template.
+
+Nothing needs undoing on `main`'s content: any `.prref.yaml` already committed
+becomes inert data that no code reads once the flag is off, and can be removed
+later in an ordinary cleanup commit. There is no state migration and no
+resource to reclaim.

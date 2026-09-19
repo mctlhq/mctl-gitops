@@ -5,127 +5,114 @@
 Everything relevant lives in one file:
 `platform-gitops/argo-workflows/cluster-templates/cwft-mctl-agents-shepherd.yaml`
 (1496 lines). The `shepherd-proposals` entrypoint runs
-`run-shepherd` -> (`shepherd-fallback`) -> `commit` -> `verify` ->
-`assert-produced`. There is no shared PVC: each step's `initContainer`
-SSH-clones `mctl-gitops` for itself, and cross-step state travels as Argo
-artifacts addressed by literal S3 keys (see the "No PVC" note on
-`spec.volumes`, and `mctl-gitops#856`).
+`shepherd` → `shepherd-fallback` → `commit` → `verify` → `assert-produced`.
+There is no shared PVC (removed in gitops#856): each pod SSH-clones
+`mctl-gitops` in its own `clone-gitops` initContainer, and cross-step state
+travels as Argo artifacts addressed by literal S3 keys.
 
-State produced by a tick therefore crosses **two** boundaries, and each one is
-independently scoped to `.status.yaml`:
+State reaches `main` through exactly two filters, and both are
+`.status.yaml`-only today.
 
-**1. The collector inside `run-shepherd`.** After the orchestrator exits, an
-inline `python - "$RC" <<'COLLECT'` heredoc (lines ~482-589) walks
-`git status --porcelain=v1 -z -uall` over a single pathspec and copies the
-matches into `/tmp/state-out/tree`, recording removals in
-`/tmp/state-out/deleted.lst`:
+**Filter 1 — the handoff, inside `run-shepherd`.** After the orchestrator
+exits, an inline Python heredoc (`COLLECT`, lines 482-589) copies changed
+files out of the pod's worktree into `/tmp/state-out`, which Argo uploads as
+the `changes` artifact (`{{workflow.name}}/agents-state.tgz`). It is governed
+by two constants:
 
 ```python
-ALLOWED  = re.compile(r"^platform-gitops/agents-state/.+/\.status\.yaml$")
-PATHSPEC = ":(glob)platform-gitops/agents-state/**/.status.yaml"
+ALLOWED  = re.compile(r"^platform-gitops/agents-state/.+/\.status\.yaml$")   # L493
+PATHSPEC = ":(glob)platform-gitops/agents-state/**/.status.yaml"            # L494
 ```
 
-Anything not matching `PATHSPEC` is never seen; anything matching `PATHSPEC`
-but failing `ALLOWED` (or containing `..` / control characters) is a hard
-`sys.exit(1)`. The result is uploaded as the `changes` artifact at
-`{{workflow.name}}/agents-state.tgz`.
+`PATHSPEC` is the sole `--` argument to `git status --porcelain=v1 -z -uall`
+(L503-505); the result is split into `copies` and `deletions` (a path git
+reports that is gone on disk is a deletion, because the receiving side
+overlays onto a fresh clone and is purely additive — claude P1 on #1046), and
+`ALLOWED` re-checks every path before anything is written (L548-556).
+Deletions are written to `deleted.lst`. An adoption record is invisible to
+`PATHSPEC`, so **today a `.prref.yaml` never leaves the run-shepherd pod** —
+exactly the drop the issue describes.
 
-**2. `commit-and-push`.** It holds the `mctl-gitops-main-writes` mutex at
-template level (hoisted down from spec level so the 5-minute
-`post-deploy-verify` sleep no longer holds the global write lock), clones a
-pristine checkout in its own `initContainer`, then in its `script.source`
-(lines ~831-981):
+**Filter 2 — the commit, inside `commit-and-push`.** This step holds the
+`mctl-gitops-main-writes` mutex (hoisted from spec-level to template-level so
+the 300s `post-deploy-verify` sleep no longer holds the global write lock) and
+runs `script.source` as root in `alpine/git:2.43.0` against its **own** fresh
+clone that the agent never touched (gitops#983 P1). Under `set -e` it:
 
-- short-circuits to `activity=none` if `/artifact` is absent or empty;
-- refuses any non-regular file in the handoff (`find /artifact -mindepth 1
-  ! -type d ! -type f`) — the guard that matters, because `git status` cannot
-  see into `.git/` (agy P1 on gitops#1042);
-- refuses handoff paths failing
-  `grep -vE '^platform-gitops/agents-state/.+/\.status\.yaml$'` (`BAD`), and
-  the same regex over `deleted.lst` (`BAD_DEL`);
-- `cp -a /artifact/tree/platform-gitops/agents-state/. ...` onto the fresh
-  clone, then applies `deleted.lst` with `git rm -- ':(literal)$rel'`;
-- refuses out-of-scope changes:
-  `NON_STATUS_CHANGES="$(git status ... -- ':(exclude,glob)platform-gitops/agents-state/**/.status.yaml' ...)"`;
-- short-circuits to `activity=none` if
-  `STATUS_CHANGES="$(git status ... -- ':(glob)platform-gitops/agents-state/**/.status.yaml' ...)"` is empty;
-- `git add -- ':(glob)platform-gitops/agents-state/**/.status.yaml'`, then
-  `git diff --cached --quiet` as a defensive second empty check;
-- commits `chore(agents): shepherd [<slug>|<service>|run] <DATE>` and pushes
-  with a 5x retry / `git pull --rebase` loop;
-- writes `yes` / `none` to `/tmp/onexit/activity`, collected as the
-  `onexit-activity.tgz` artifact (this file deliberately has **no**
-  `outputs.parameters` — see the long note above `templates:`, #530/#531 and
-  gitops#1186).
+1. exits early with `activity=none` if `/artifact` is absent or empty
+   (L877-883) — generic, filename-agnostic;
+2. refuses any non-regular file anywhere in the handoff (L890-894);
+3. refuses tree paths that do not match
+   `^platform-gitops/agents-state/.+/\.status\.yaml$` (`BAD`, L895) and the
+   same for `deleted.lst` (`BAD_DEL`, L901-908);
+4. `cp -a /artifact/tree/platform-gitops/agents-state/.` over its clone
+   (L910-913) — also generic;
+5. applies `deleted.lst` with `git rm --ignore-unmatch -- ":(literal)$rel"`
+   (L917-923) — generic;
+6. refuses anything changed outside the allowed subtree:
+   `NON_STATUS_CHANGES` via `:(exclude,glob)platform-gitops/agents-state/**/.status.yaml`
+   (L927-932);
+7. probes `STATUS_CHANGES` with the include pathspec and exits `activity=none`
+   if empty (L934-939);
+8. `git add -- ':(glob)platform-gitops/agents-state/**/.status.yaml'` (L940),
+   `git diff --cached --quiet` guard, commit, then a 5-attempt
+   push/rebase loop (L962-981).
 
-So there are **six** places, not one, that name the allow-listed shape. The
-issue's scope ("extend the commit step to stage the glob") is necessary but not
-sufficient: a `git add` widened alone would stage a file that never arrived,
-because the collector filtered it out one pod earlier.
+Steps 1, 4 and 5 already do the right thing for any path. Steps 2, 3, 6, 7 and
+8 are the ones pinned to `.status.yaml`.
 
-Sibling precedent for the wider shape already exists:
-`cwft-mctl-agents-investigate.yaml` uses
-`ALLOWED = ^platform-gitops/agents-state/[^/]+/proposals/[^/]+/[^/]+` with
-`PATHSPEC = ":(glob)platform-gitops/agents-state/*/proposals/*/**"` and the
-matching `:(exclude,glob)` guard (lines 392, 830, 840, 845).
-`cwft-mctl-agents-run.yaml` is the loose end of the family — it stages all of
-`platform-gitops/agents-state/` (lines 303-304, 696, 702) and would already
-commit an adoption record. `cwft-mctl-agents-implement.yaml` (895-908) and
-`cwft-mctl-agents-reconcile.yaml` (293, 476-491) carry the same
-`.status.yaml`-only allow-list as the shepherd.
+Two behaviours of git were **measured** in a scratch repository rather than
+assumed, because both decide the shape of the fix:
 
-The record shape comes from `#334`
-(`platform-gitops/agents-state/mctl-agents/proposals/issue-334-feat-lifecycle-adopt-proposal-less-same/design.md`):
-`ADOPTED_DIRNAME = "adopted-prs"`, `PRREF_FILENAME = ".prref.yaml"`, slug
-`pr-<number>`, so the repo-relative path is
-`platform-gitops/agents-state/<service>/adopted-prs/pr-<number>/.prref.yaml`.
-Nothing in `.gitignore` matches it, and no CI gate would trip on it:
-`scripts/validate-agents-state-approval.py` globs
-`*/proposals/*/.status.yaml` only, and `scripts/validate-local-workdir.py`
-asserts workdir/storage invariants over the five agent templates, not their
-pathspecs.
+- `git status --porcelain -- <spec-that-matches-nothing>` exits 0 and prints
+  nothing. `git add -- <spec-that-matches-nothing>` exits **128**
+  (`fatal: pathspec … did not match any files`) and stages *nothing at all*,
+  even when a sibling pathspec in the same invocation did match. Under the
+  `set -e` at the top of this script, naively appending the adopted-prs
+  pathspec to L940 would fail the commit step on every tick that adopts
+  nothing — which is the steady state, and a direct violation of the issue's
+  second acceptance box.
+- The issue's literal `':(glob)*/adopted-prs/*/**'` matches nothing from the
+  repository root. `:(glob)` follows fnmatch-with-`FNM_PATHNAME` semantics, so
+  `*` does not cross `/`; the expression asks for
+  `<one-component>/adopted-prs/<one-component>/**`. The rooted form
+  `:(glob)platform-gitops/agents-state/*/adopted-prs/*/**` does match
+  `platform-gitops/agents-state/mctl-web/adopted-prs/pr-42/.prref.yaml`.
 
-**Measured, not assumed.** In a throwaway repository containing
-`platform-gitops/agents-state/mctl-web/adopted-prs/pr-42/.prref.yaml`:
+The record's shape comes from `mctlhq/mctl-agents#334`, whose approved
+proposal is in this repo at
+`platform-gitops/agents-state/mctl-agents/proposals/issue-334-feat-lifecycle-adopt-proposal-less-same/design.md`:
+`ADOPTED_DIRNAME = "adopted-prs"`, `PRREF_FILENAME = ".prref.yaml"`, one
+directory per PR named `pr-<number>`, written through the same
+`proposal_state.update_status_file` atomic writer as `.status.yaml`. That
+design's "durability caveat" names this issue as the blocker.
 
-| pathspec | result |
-| --- | --- |
-| `:(glob)*/adopted-prs/*/**` (the issue's literal text) | matches nothing |
-| `:(glob)platform-gitops/agents-state/*/adopted-prs/*/**` | matches the `.prref.yaml` |
-| `:(exclude,glob)platform-gitops/agents-state/**/.status.yaml` | reports the `.prref.yaml` as out of scope |
-| both excludes together | reports nothing |
-
-Two consequences. First, the pathspec must be spelled from the repository root
-(both scripts run with cwd = repo root), because git pathspecs are
-cwd-relative and `*` does not cross `/`. Second, the out-of-scope guard **must**
-be widened in the same commit as the collector: widen the collector alone and
-`NON_STATUS_CHANGES` turns every adopting tick into a hard `exit 1` that also
-drops the `.status.yaml` flips the tick had earned. Today no such failure is
-possible only because the record never reaches that pod.
+Finally, `scripts/validate-agents-state-approval.py` (the CI gate that refuses
+an unrunnable `accepted` proposal) globs `*/proposals/*/.status.yaml`
+(L116, L348), so it never sees `adopted-prs/` and needs no change.
 
 ## Proposed solution
 
-One commit against `cwft-mctl-agents-shepherd.yaml`, adding a second
-allow-listed shape at each of the six gates and nowhere else. Define the shape
-once in prose at the top of each script block and use it verbatim:
+Widen both filters in `cwft-mctl-agents-shepherd.yaml`, from
+`.status.yaml`-only to `.status.yaml` **plus** `adopted-prs/pr-<n>/.prref.yaml`,
+keeping every other property of the step — mutex, rebase loop, commit message,
+symlink refusal, deletion handling, `activity` artifact — byte-for-byte.
 
-- pathspec: `:(glob)platform-gitops/agents-state/*/adopted-prs/*/**`
-- regex: `^platform-gitops/agents-state/[^/]+/adopted-prs/[^/]+/[^/]+`
+**One pair of constants, used everywhere.** Both filters get a
+two-element include set, defined once per step and referenced from every site,
+so the include expression and the `:(exclude,…)` expression can never drift
+apart. Drift matters concretely: if the exclude at step 6 were narrower than
+the include at step 8, a legitimate record would trip the "refusing to commit
+changes outside" guard; if it were wider, a stray file under `adopted-prs/`
+would slip past the guard that is supposed to catch it.
 
-The regex and the pathspec describe the same set by construction — that
-equality is the invariant a reviewer should check, and it is why the regex
-admits any file inside a record directory rather than `.prref.yaml` alone (the
-investigate template makes the same choice for `proposals/<slug>/`).
-
-**1. `run-shepherd` collector.** `PATHSPEC` becomes a list and is splatted
-into the `git status` argv; `ALLOWED` becomes an alternation:
+In `run-shepherd`'s `COLLECT`:
 
 ```python
 ALLOWED = re.compile(
-    r"^platform-gitops/agents-state/(?:"
-    r".+/\.status\.yaml"
-    r"|[^/]+/adopted-prs/[^/]+/[^/]+"
-    r")$"
+    r"^platform-gitops/agents-state/"
+    r"(?:.+/\.status\.yaml"
+    r"|[^/]+/adopted-prs/pr-[0-9]+/\.prref\.yaml)$"
 )
 PATHSPECS = [
     ":(glob)platform-gitops/agents-state/**/.status.yaml",
@@ -133,136 +120,145 @@ PATHSPECS = [
 ]
 ```
 
-`git status --porcelain=v1 -z -uall -- <p1> <p2>` takes the union, so a tick
-that writes only one kind is unaffected. The rename/copy NUL-walk, the
-`islink` skips, the `copy2(..., follow_symlinks=False)` secret-leak guard, the
-deletions channel and the `sys.exit(rc)` passthrough are all untouched — the
-change is two constants.
+and the `git status` call becomes `[..., "--", *PATHSPECS]`. Nothing else in
+that script changes: the NUL-walk, the rename/copy handling, the symlink
+skip, the `follow_symlinks=False` copy and the `bad` check all read from
+`ALLOWED` and are already path-generic.
 
-**2. `commit-and-push`.** Introduce one shell variable for the ERE and use it
-in both handoff checks, so the two regexes cannot drift:
+Note the deliberate asymmetry between pathspec and regex. The pathspec is
+broad (`adopted-prs/*/**`, the rooted form of what the issue asked for) and
+the regex is narrow (`pr-<n>/.prref.yaml`). That is the fail-closed direction:
+a stray file under `adopted-prs/` is *seen* by the pathspec and then
+*rejected* by the regex with a named error, instead of being silently outside
+the filter's view. Matching the two exactly would turn a refusal into a
+silent drop.
+
+In `commit-and-push`, the same two expressions are bound to shell variables at
+the top of the script and used at every site:
 
 ```sh
-ALLOWED_RE='^platform-gitops/agents-state/(.+/\.status\.yaml|[^/]+/adopted-prs/[^/]+/[^/]+)$'
+SPEC_STATUS=':(glob)platform-gitops/agents-state/**/.status.yaml'
+SPEC_ADOPTED=':(glob)platform-gitops/agents-state/*/adopted-prs/*/**'
+ALLOWED_RE='^platform-gitops/agents-state/(.+/\.status\.yaml|[^/]+/adopted-prs/pr-[0-9]+/\.prref\.yaml)$'
 ```
 
-then `grep -vE "$ALLOWED_RE"` for `BAD` and `BAD_DEL` (double quotes, and the
-value contains no shell metacharacters; `grep -E` is what alpine's busybox
-provides and it handles the alternation — asserted by the unit test in Tasks).
-The `cp -a` already copies the whole `agents-state/` subtree, so it needs no
-change. Then:
+- `BAD` and `BAD_DEL` switch from the inline `grep -vE '…\.status\.yaml$'` to
+  `grep -vE "$ALLOWED_RE"`.
+- `NON_STATUS_CHANGES` takes both excludes:
+  `git status … -- ":(exclude,glob)…/**/.status.yaml" ":(exclude,glob)…/*/adopted-prs/*/**"`.
+  Measured: with only the existing exclude, a `.prref.yaml` in the checkout
+  trips this guard and the step exits 1 — so this line is not optional
+  cosmetics, it is what stops the widened handoff from hard-failing the commit.
+- `STATUS_CHANGES` is renamed `AGENT_STATE_CHANGES` and probes both pathspecs.
+  The empty case keeps its current behaviour exactly: log, `activity=none`,
+  `exit 0`, no commit.
+- Staging becomes pathspec-by-pathspec, guarded, because of the `git add`
+  exit-128 behaviour above:
 
-- out-of-scope guard gains a second exclude term and is renamed `OUT_OF_SCOPE`
-  (matching the investigate template's name, since "NON_STATUS" no longer
-  describes what it means):
-  `git status --porcelain -z -uall -- ':(exclude,glob)platform-gitops/agents-state/**/.status.yaml' ':(exclude,glob)platform-gitops/agents-state/*/adopted-prs/*/**'`
-- the change detector gains the second glob and is renamed `IN_SCOPE_CHANGES`.
-  This is the edit that satisfies "an adoption-only tick still commits": today
-  a tick that wrote only a `.prref.yaml` would hit the
-  "No `.status.yaml` updates" short-circuit and report `activity=none`.
-- `git add -- '<p1>' '<p2>'`.
+  ```sh
+  set --
+  if [ -n "$(git status --porcelain -z -uall -- "$SPEC_STATUS")" ]; then
+    set -- "$@" "$SPEC_STATUS"
+  fi
+  if [ -n "$(git status --porcelain -z -uall -- "$SPEC_ADOPTED")" ]; then
+    set -- "$@" "$SPEC_ADOPTED"
+  fi
+  git add -- "$@"
+  ```
 
-The `git diff --cached --quiet` defensive check, the commit message, the mutex,
-the 5x push/rebase loop, `activity` semantics, artifact keys and resources stay
-byte-identical. Because both new expressions match nothing when no record was
-written, a non-adopting tick takes exactly the same code path as today — which
-is the "no empty commit" acceptance criterion, and is asserted directly rather
-than argued.
+  `if` blocks, **not** `[ … ] && set -- …`: `set -e` is active, and a
+  top-level and-or list whose left side fails takes the whole script down.
+  This file has been bitten by precisely that class of bug before — see the
+  `set +e` note at L462-467 explaining why `RC=$?` after a bare `"$@"` never
+  ran. Building argv with `set --` is also the pattern `run-shepherd` already
+  uses (L434-443) for the same reason.
 
-**3. Documentation in the file.** The `workflows.argoproj.io/description`
-block's step-3 text ("Same `:(glob)` filter as the implementer template") is
-now false and becomes a two-shape statement naming
-`mctlhq/mctl-agents#334`, the ordering (this template first, `SHEPHERD_ADOPT_PRS`
-second), and the reason the two shapes exist. The `# Only .status.yaml files
-should change in agents-state/` comment above `- name: commit-and-push` gets
-the same correction.
+  The `git diff --cached --quiet` guard at L942 stays, unchanged, as the last
+  defence against an empty commit.
 
-**4. A regression test in CI.** `tests/test_shepherd_commit_scope.py`, in the
-style of `tests/test_tpl_git_commit_yq.py` and
-`tests/test_release_deploy_bump.py`: parse the CWFT with `pyyaml`, extract the
-`commit-and-push` `script.source`, run it against a throwaway git repo with a
-stub remote and a stub `/artifact`, and assert the matrix in Tasks/Tests —
-including a pin that the issue's naive `*/adopted-prs/*/**` matches nothing, so
-nobody "simplifies" it back. Wired into `.github/workflows/validate-manifests.yml`
-beside the other extracted-script tests. This repository's CI convention is
-that a guard never seen to fire is not known to work; the same logic applies to
-an allow-list never seen to admit.
+**Comments.** Three prose blocks currently assert the narrower contract and
+must be corrected in the same commit, or the file starts lying about itself:
+the header annotation's "Same `:(glob)` filter as the implementer template"
+(L42-43 — it is no longer the same, and that is intentional), the
+"Only `.status.yaml` files should change in agents-state/" banner above
+`commit-and-push` (L731-734), and the `outputs.artifacts.changes` description
+"The `.status.yaml` flips THIS attempt made" (L285-289). Each should name
+`mctl-agents#334` and this issue so the next reader finds the writer.
 
-No change to `cronworkflow-mctl-agents-shepherd.yaml`: enabling adoption is
-`#334`'s rollout step and deliberately a separate commit.
+**Ordering.** Filter 1 before filter 2 is not merely tidy — widening only
+filter 1 makes every adopting tick *fail* at `NON_STATUS_CHANGES` instead of
+silently dropping the record, which is strictly worse than today. Both land in
+one commit.
 
 ## Alternatives
 
-**A. Widen to the whole `agents-state/` subtree, as `cwft-mctl-agents-run.yaml`
-already does.** One-line change at every gate, and immune to future record
-shapes. Dropped: the collector runs in the pod where the Claude SDK agent had
-Bash, and `commit-and-push` runs as root with a write-capable deploy key on
-`main`. The narrow allow-list is the boundary three separate review findings
-built (agy P1 on gitops#1042, claude P1/P2 on gitops#1046, agy P1 on
-gitops#1048); trading it for brevity spends security to save four lines. That
-`run` is looser is an argument for tightening `run`, not for loosening the
-shepherd.
+**Stage the whole `agents-state/` subtree** (`git add -- ':(glob)platform-gitops/agents-state/**'`,
+drop the regexes). One line, no `git add` exit-128 problem, no drift risk
+between include and exclude. Dropped: those regexes are a security boundary,
+not tidiness. This pod runs as root with a write-capable deploy key and pushes
+to `main`; the narrow allowlist is what stops an agent-authored path from
+reaching it, and the layered checks exist because review found real escapes
+twice (`agy` P1 on #1042 — a file smuggled into `.git/hooks/` is invisible to
+`git status`; `agy` P1 on #1048 — a symlink dereferenced by `copy2` landing
+token contents as an ordinary file). Widening the allowlist from "two known
+filenames" to "anything under agents-state" to save four lines trades that
+away for nothing.
 
-**B. A second, separate commit step for adoption state.** Keeps the existing
-step literally untouched and satisfies "keep the existing paths unchanged" in
-the most literal way. Dropped: it doubles the clone, the mutex acquisition and
-the push/rebase loop for state that belongs in the same commit as the
-`.status.yaml` flip it accompanies; two commits per tick on `main` where one
-suffices; and two independently-drifting copies of the SSH/known-hosts preamble
-and the retry loop — the exact duplication this file's own comments argue
-against.
+**Add a third, separate commit step for adoption records.** A dedicated
+template staging only `adopted-prs/**`, sequenced after `commit-and-push`.
+Dropped: it doubles the number of holders of the `mctl-gitops-main-writes`
+mutex per tick and the number of push/rebase races, splits one tick's state
+across two commits on `main` (so a crash between them leaves a `.status.yaml`
+flip whose adoption record never landed, or the reverse), and needs its own
+clone initContainer, its own artifact key and its own retry loop — roughly 120
+lines duplicated to avoid widening two regexes.
 
-**C. Stage `.prref.yaml` only, with regex
-`^platform-gitops/agents-state/[^/]+/adopted-prs/pr-[0-9]+/\.prref\.yaml$`.**
-Tightest possible, and it does match `#334`'s current writer exactly. Dropped
-as the default: the pathspec and the regex would then describe different sets
-unless the pathspec were equally tight, and a later `#334` revision writing a
-sibling file inside the record (evidence overflow, a lock file) would land as a
-`exit 1` in *this* repository with a confusing message. Recorded as an open
-question; switching is a one-line change if the record shape is frozen.
-
-**D. Store adoption state outside git (a PVC, S3, a table in `mctl-api`).**
-Dropped: it is a much larger change in the wrong repository, it loses the
-review/audit/`git rm` properties that make agents-state legible, and the
-shepherd pods deliberately have no shared volume since `mctl-gitops#856`.
+**Have `mctl-agents` write adoption state into the existing
+`proposals/<slug>/.status.yaml` shape** so no gitops change is needed at all.
+Dropped: it is not this repository's call, #334 has already shipped the
+`adopted-prs/` shape and its rationale (a `PRRef` is deliberately not a
+proposal — there is no `requirements.md`/`design.md`/`tasks.md` behind it, and
+`_discover_refs`' proposal glob is explicitly left untouched), and synthesising
+a fake proposal directory for every adopted PR would pollute the tree that
+`validate-agents-state-approval.py` and the mentor digest both walk.
 
 ## Platform impact
 
 **Migrations.** None. `adopted-prs/` is a new sibling directory that does not
-exist yet in `main`; nothing reads it but `run_shepherd`.
+exist in `main` yet; nothing in this repo reads it.
 
-**Backward compatibility.** Additive at every gate. With `SHEPHERD_ADOPT_PRS`
-unset — the state on merge — no `.prref.yaml` is ever written, both new
-expressions match nothing, and the tick's observable behaviour (commit content,
-commit message, `activity`, exit code, artifact keys) is identical. ArgoCD
-syncs the CWFT; per `CLAUDE.md`, allow ~3 minutes before the next tick picks up
-the new template, since Argo snapshots templates at submit time.
+**Backward compatibility.** Full, in both directions. With
+`SHEPHERD_ADOPT_PRS` off — its state on the day this merges — no `.prref.yaml`
+is ever written, both new pathspecs match nothing, the guarded `git add` falls
+back to exactly the single pathspec it passes today, and the tick produces a
+byte-identical commit or no commit at all. A shepherd image *older* than
+`#334` is equally unaffected. This change is inert until the flag flips, which
+is the whole point of merging it first.
 
-**Resource impact.** Negligible: a handful of small YAML files per adopting
-tick. `emptyDir` sizing (8Gi), the `ephemeral-storage` requests/limits and the
-3-day `ttlStrategy` are untouched. Commit volume on `main` rises only when
-adoption is enabled, and `SHEPHERD_ADOPT_MAX_PRS_PER_TICK` defaults to 1.
+**Resource impact.** Two extra `git status` invocations per commit step
+against a `--depth=1` clone: microseconds, and none of it inside the mutex
+window in any meaningful sense. Commit size grows by one small YAML file per
+adopted PR per tick, bounded by `SHEPHERD_ADOPT_MAX_PRS_PER_TICK` (default 1).
 
 **Risks and mitigations.**
 
-- *Widened write surface into `main`.* The new shape is bounded to
-  `agents-state/<service>/adopted-prs/<record>/`, still cannot reach `.git/`
-  (the non-regular-file guard runs first, before anything touches the
-  checkout), still cannot contain `..` or control characters, and still copies
-  symlinks as symlinks. Mitigation: keep the regex and pathspec equal, and pin
-  the refusal cases in the new unit test.
-- *Partial edit.* Widening the collector without the `OUT_OF_SCOPE` guard turns
-  every adopting tick into `exit 1` and loses that tick's `.status.yaml` flips
-  too. Mitigation: the six edits are enumerated as ordered tasks with a single
-  DoD, and the unit test covers the mixed case, which fails if either half is
-  missing.
-- *ERE portability.* The guards run in `alpine/git:2.43.0` (busybox `grep`).
-  Mitigation: the alternation is plain POSIX ERE, and the unit test runs the
-  extracted script rather than a paraphrase of it.
-- *Ordering.* Merging this before `#334` is safe and inert; merging `#334`'s
-  enablement before this reintroduces the unbounded loop. Mitigation: the
-  ordering is stated in the CWFT description, on both issues, and `#334` ships
-  default-off with a startup warning naming this issue.
-- *Rebase contention.* Unchanged: template-level mutex plus the 5x
-  `git pull --rebase` loop. A larger commit does not change the contention
-  window materially.
+- *A no-adoption tick fails at `git add`.* The measured exit-128 behaviour;
+  the single most likely way to get this wrong. Mitigated by the guarded argv
+  construction and by test T2, which exercises precisely that path.
+- *A widened handoff hard-fails at `NON_STATUS_CHANGES`.* Happens if the
+  exclude pathspec is not widened in lockstep with the include. Mitigated by
+  binding both expressions to one variable pair, and by T3.
+- *The allowlist is widened further than intended.* `adopted-prs/*/**` in the
+  pathspec is intentionally broader than the regex so that stray content is
+  refused loudly; a reviewer should check the regex is the narrow one and the
+  pathspec the broad one, not the reverse.
+- *Argo template snapshotting.* Per `CLAUDE.md`, Argo snapshots
+  ClusterWorkflowTemplates at submit time — wait ~3 minutes after merge for
+  ArgoCD to sync before triggering a verification tick, or the run will use
+  the old template and the change will look like it did nothing.
+- *Cross-repo ordering.* If `SHEPHERD_ADOPT_PRS` is enabled in `mctl-agents`
+  before this merges, records are written and dropped every tick and the
+  `MAX_REVIEW_ATTEMPTS` bound does not hold across ticks. #334 already ships
+  default-off, caps adoption at one PR per tick, and prints a startup warning
+  naming this issue; the mitigation here is to state the ordering in both
+  issues, as the acceptance list requires.
