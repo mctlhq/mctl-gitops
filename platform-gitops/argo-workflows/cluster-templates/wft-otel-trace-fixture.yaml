@@ -104,14 +104,18 @@ spec:
           # Reference point for shifting the fixture's baked-in timestamps to
           # "now" on every execution, while preserving relative span timing
           # (durations and inter-span offsets, including the two-execution
-          # fixture's ~10-minute gap).
-          reference_start_ns = min(
+          # fixture's ~10-minute gap). Anchored on the LATEST instant in the
+          # payload (across both start and end timestamps) so every rebased
+          # timestamp lands at or before "now" -- anchoring on the earliest
+          # span instead would push every later span into the future.
+          reference_end_ns = max(
               (
-                  int(span["startTimeUnixNano"])
+                  int(span[field])
                   for rs in template.get("resourceSpans", [])
                   for scope in rs.get("scopeSpans", [])
                   for span in scope.get("spans", [])
-                  if span.get("startTimeUnixNano") is not None
+                  for field in ("startTimeUnixNano", "endTimeUnixNano")
+                  if span.get(field) is not None
               ),
               default=0,
           )
@@ -122,7 +126,7 @@ spec:
                   break
               payload = copy.deepcopy(template)
               id_map = {}
-              offset_ns = time.time_ns() - reference_start_ns
+              offset_ns = time.time_ns() - reference_end_ns
               for rs in payload.get("resourceSpans", []):
                   for scope in rs.get("scopeSpans", []):
                       for span in scope.get("spans", []):

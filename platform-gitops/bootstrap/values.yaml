@@ -34,6 +34,9 @@ otelCollector:
   # Evaluation namespace and candidate Applications for the issue-903 spike,
   # gated off by default so merging this key's templates changes no cluster
   # state. Filled in and flipped on by mctlhq/mctl-gitops#1280, not here.
+  # Each candidates[] entry is {name, repoURL, chart, targetRevision,
+  # manifestsPath, values}. `values` is an optional map of Helm values
+  # passed to the candidate chart.
   eval:
     enabled: false
     teardownAfter: ""

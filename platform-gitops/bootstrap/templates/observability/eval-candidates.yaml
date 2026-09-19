@@ -42,6 +42,11 @@ spec:
     - repoURL: {{ .repoURL }}
       chart: {{ .chart }}
       targetRevision: {{ .targetRevision | quote }}
+      {{- if .values }}
+      helm:
+        valuesObject:
+          {{- .values | toYaml | nindent 10 }}
+      {{- end }}
     - repoURL: {{ $.Values.spec.source.repoURL }}
       targetRevision: {{ $.Values.spec.source.targetRevision }}
       path: {{ .manifestsPath }}
@@ -50,6 +55,11 @@ spec:
     repoURL: {{ .repoURL }}
     chart: {{ .chart }}
     targetRevision: {{ .targetRevision | quote }}
+    {{- if .values }}
+    helm:
+      valuesObject:
+        {{- .values | toYaml | nindent 8 }}
+    {{- end }}
   {{- end }}
   destination:
     server: {{ $.Values.spec.destination.server }}
