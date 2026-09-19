@@ -2,132 +2,135 @@
 
 ## Current state
 
-### The producer boundary already exists and is already vendor-neutral
+### The producer boundary exists and is already vendor-neutral
 
-Issue #902 merged on 2026-09-11 (`mctlhq/mctl-gitops#1189`). Everything the
-comparison needs on the producer side is in place:
+`platform-gitops/bootstrap/templates/observability/otel-collector.yaml`
+deploys a gateway-mode OpenTelemetry Collector (chart
+`opentelemetry-collector` 0.173.0, image
+`otel/opentelemetry-collector-contrib:0.160.0`, `replicaCount: 2`) into
+`monitoring` as an ArgoCD `Application` with `automated.prune` and
+`selfHeal: true`. Its traces pipeline is:
 
-- `platform-gitops/bootstrap/templates/observability/otel-collector.yaml` is an
-  ArgoCD `Application` with two sources. The first pulls chart
-  `opentelemetry-collector` `0.173.0` from
-  `https://open-telemetry.github.io/opentelemetry-helm-charts` with the image
-  overridden to `otel/opentelemetry-collector-contrib:0.160.0` and
-  `command.name: otelcol-contrib` (mandatory — `k8sattributes`, `redaction`
-  and the OTTL `filter` processor do not exist in the core distribution). The
-  second source is this repo at
-  `platform-gitops/infra-components/observability/otel-collector`. Destination
-  namespace `monitoring`, `syncPolicy.automated` with `prune` and `selfHeal`.
-- The traces pipeline is
-  `otlp -> memory_limiter -> k8sattributes -> resource -> redaction ->
-  filter/health -> batch -> [debug, otlp/backend?]`. `logs` and `metrics`
-  pipelines are explicitly `null`.
-- The single backend switch is
-  `platform-gitops/bootstrap/values.yaml:22-25`:
+```
+receivers: [otlp]  ->  memory_limiter, k8sattributes, resource, redaction,
+                       filter/health, batch  ->  exporters: [debug]
+```
 
-  ```yaml
-  otelCollector:
-    clusterName: mctl-preprod
-    environment: preprod
-    backendEndpoint: ""   # "Empty until a trace backend is chosen"
-  ```
+Three parts of that file matter for this proposal:
 
-  The `otlp/backend` exporter and its `sending_queue`
-  (`num_consumers: 4`, `queue_size: 5000`) and `retry_on_failure`
-  (`5s`/`30s`/`300s`) are wrapped in `{{- if .Values.otelCollector.backendEndpoint }}`
-  in both the `exporters:` map and the `service.pipelines.traces.exporters`
-  list. With the key empty, the rendered pipeline is `exporters: [debug]`.
-- `platform-gitops/helm-charts/base-service/values.yaml:199-201` carries a
-  default-off opt-in (`otel.enabled: false`,
-  `otel.endpoint: http://otel-collector.monitoring.svc.cluster.local:4318`)
-  rendered by `base-service.env` in
-  `platform-gitops/helm-charts/base-service/templates/_helpers.tpl:105-150`,
-  shared by `templates/deployment.yaml` and `templates/rollout.yaml` and
-  covered by `tests/test_base_service_otel_env.py`. No service has opted in.
-- `platform-gitops/infra-components/observability/otel-collector/networkpolicy.yaml`
-  (`allow-otel-collector-ingress`) allows 4317/4318 from `admins`, `mctl-api`,
-  `argo-workflows`, `temporal`, `monitoring` and any namespace labelled
-  `mctl.me/tenant`, plus a second rule for vmagent to :8888. Its `podSelector`
-  matches the collector's own pods, never `{}` — `monitoring` has no
-  namespace-wide NetworkPolicy
-  (`infra-components/observability/blackbox/blackbox-exporter.yaml:19-26`) and
-  a `{}` selector there would cut off Grafana, VMSingle, vmagent and Loki.
-- `platform-gitops/infra-components/observability/vm-rules/otel-collector-alerts.yaml`
-  defines `OtelCollectorDown`, `OtelCollectorRefusedSpans`,
-  `OtelCollectorExportFailures` and `OtelCollectorQueueNearFull`
-  (`otelcol_exporter_queue_size / otelcol_exporter_queue_capacity > 0.8`), all
-  labelled `mctl_agent_self: "true"` so they do not open incidents against the
-  platform's own collector. `tests/test_otel_collector_alert_windows.py`
-  enforces the `increase(...[W]) < for: H` invariant.
-- `docs/runbooks/otel-collector.md` documents the swap procedure and closes
-  with "Accepted residuals: **No trace backend selected.**"
+1. **The exporter block is already values-templated but scalar.**
+
+   ```yaml
+   {{- if .Values.otelCollector.backendEndpoint }}
+   otlp/backend:
+     endpoint: {{ .Values.otelCollector.backendEndpoint | quote }}
+     sending_queue: {enabled: true, num_consumers: 4, queue_size: 5000}
+     retry_on_failure: {enabled: true, initial_interval: 5s,
+                        max_interval: 30s, max_elapsed_time: 300s}
+   {{- end }}
+   ```
+
+   with the matching conditional inside
+   `service.pipelines.traces.exporters`. `platform-gitops/bootstrap/values.yaml`
+   sets `otelCollector.backendEndpoint: ""` and comments "Empty until a trace
+   backend is chosen". One endpoint, not a list — so it cannot feed a
+   comparison.
+
+2. **The `redaction` processor is the single safety-critical block**, running
+   `allow_all_keys: true` with `blocked_key_patterns` covering
+   authorization/cookie/api-key/token/secret/password/credential names,
+   `^vault\..*`, `^gen_ai\.(prompt|completion).*`, `.*\.messages$`,
+   `^mcp\.tool\.(arguments|result)$`, `^db\.statement$` and
+   `^http\.(request|response)\.header\..*`, plus `blocked_values` matching
+   `ghp_[A-Za-z0-9]{36}`, `gh[pousr]_[A-Za-z0-9]{20,}`, `sk-[A-Za-z0-9]{20,}`,
+   `hvs\.[A-Za-z0-9]{20,}` and a JWT prefix. There is exactly one copy of it.
+
+3. **`resource` uses `action: insert`, never `upsert`**, so a producer's own
+   `k8s.cluster.name` / `deployment.environment` wins. The runbook
+   (`docs/runbooks/otel-collector.md`) states this is deliberate and must not
+   be changed.
+
+`platform-gitops/infra-components/observability/otel-collector/networkpolicy.yaml`
+allows 4317/4318 ingress from `admins`, `mctl-api`, `argo-workflows`,
+`temporal`, `monitoring` and any namespace labelled `mctl.me/tenant`, with a
+second rule granting `monitoring` access to :8888 for the vmagent scrape. The
+`podSelector` matches the collector's own pods only, with an in-file comment
+explaining that `{}` would convert the whole policy-free `monitoring`
+namespace into an allowlist and cut off Grafana, VMSingle, vmagent and Loki.
+
+`platform-gitops/infra-components/observability/vm-rules/otel-collector-alerts.yaml`
+already alerts on `otelcol_receiver_refused_spans`, export failures and queue
+depth; those are per-exporter series, so they keep working unchanged and start
+naming which candidate is unhealthy the moment a second exporter exists.
+
+### What already exists to build tests on
+
+`.github/workflows/validate-manifests.yml` is the gate. It helm-lints the
+internal charts, renders every `platform-gitops/services/*/*/values.yaml` and
+the `bootstrap` and `argocd` charts through `kubeconform -strict`, runs
+`kubeconform` directly over `platform-gitops/{tenants,argo-workflows,mcp,infra-components}`,
+and then runs a long list of Python checks — most of them with a `--selftest`
+first, on the stated principle that "a detector that has never been seen to
+fire is not known to work". Two are OTEL-specific and are the direct model for
+the tests here:
+
+- `tests/test_base_service_otel_env.py` — shells out to `helm template`,
+  parses the rendering with `yaml.safe_load_all`, accumulates failures in a
+  list and exits non-zero with `FAIL:` lines. No pytest, no framework; plain
+  `python3 tests/<file>.py`.
+- `tests/test_otel_collector_alert_windows.py` — pure YAML parsing of a
+  committed manifest, same output convention.
+
+`scripts/materialize-openclaw-platform-skills.py` establishes the
+generate-then-`--check` pattern for a file that must exist in two places (a
+source of truth and a rendered copy), with CI running `--check` so a hand edit
+that leaves the copy stale fails the build.
+
+`scripts/validate-shell-param-interpolation.py` refuses any new
+`{{inputs.parameters.X}}` / `{{workflow.parameters.X}}` interpolated into a
+script body in `platform-gitops/argo-workflows/cluster-templates/`, with a
+frozen `BASELINE` that may shrink and never grow. Any new workflow template
+must bind parameters through `env:` and read them as `"$PARAM_X"`.
+
+`platform-gitops/bootstrap/templates/core-infra/argo-workflows-config.yaml`
+syncs `path: platform-gitops/argo-workflows` into the `argo-workflows`
+namespace, which is how a ConfigMap committed under
+`platform-gitops/argo-workflows/config/` becomes mountable by a workflow pod.
+
+`platform-gitops/helm-charts/tenant/templates/networkpolicy.yaml` shows the
+house layering for a namespace that is created and owned by the same chart:
+`default-deny-all` with `podSelector: {}`, then `allow-intra-namespace`, then
+an explicit cluster-egress allowance. That shape is correct precisely because
+the namespace comes into existence with the policies, which is the situation
+`observability-eval` will be in and `monitoring` is not.
 
 ### What is missing
 
-- **No trace backend of any kind.** No Tempo, Traceway, Langfuse, Phoenix or
-  SigNoz manifest exists anywhere in the repo. `backendEndpoint` is `""`.
-- **No Grafana tracing datasource.** Grafana `12.4.2` runs at
-  `grafana.mctl.ai` behind Dex OIDC
-  (`bootstrap/templates/observability/monitoring.yaml:314-390`) with a
-  datasource sidecar keyed on the `grafana_datasource: "1"` ConfigMap label.
-  Loki and academy-postgres are provisioned this way
-  (`bootstrap/templates/observability/loki-datasource.yaml`,
-  `academy-postgres-datasource.yaml`); nothing of type `tempo` or `jaeger`
-  exists.
-- **No `docs/adr/` directory.** Only `docs/plans/`, `docs/runbooks/`,
-  `docs/soc2/`. The ADR this spike produces creates it.
-- **No span producers.** `mctlhq/mctl-agent#38` and `mctlhq/mctl-agents#195`
-  have not shipped. There is no real DevLoop trace to compare backends with.
-  The #902 proposal parked exactly this
-  (`platform-gitops/agents-state/mctl-gitops/proposals/issue-902-feat-observability-deploy-opentelemetry/requirements.md:191-194`:
-  "Which trace backend, and when? ... Nothing in the repo references either.").
-- **No fan-out.** `backendEndpoint` is a scalar. Comparing five candidates
-  against it today means five sequential deploys, five values edits, and five
-  different span streams — which is not a comparison.
+- No way to send the same spans to more than one backend.
+- No representative trace. `mctlhq/mctl-agent#38` and `mctlhq/mctl-agents#195`
+  have not shipped, so no DevLoop emits spans at all; the collector's
+  `otelcol_receiver_accepted_spans` is zero in practice.
+- No `docs/adr/`. `docs/` holds `plans/`, `runbooks/`, `soc2/` only.
+- No rubric, no screen, nowhere to record a decision.
+- No evaluation namespace or any manifest shape for a disposable candidate.
 
-### The environment the candidates must fit in
+### The boundary this proposal works inside
 
-- `infrastructure/k3s-preview/kube.tf:120-150` — one `cx33` control plane and
-  three `cx43` agents in Hetzner `fsn1`, `cluster_name = "mctl-preprod"`.
-- Existing stateful observability footprint: VMSingle on a 25Gi PVC with
-  `retentionPeriod: "28d"` and a `vmbackup` sidecar to R2; Loki with
-  `persistence.enabled: false` writing tsdb chunks straight to R2
-  (`bucketnames: loki`, `retention_period: 336h`).
-- Object storage precedent is **Cloudflare R2**
-  (`https://6a09f637d20e1f66a8e9d45ebe778058.r2.cloudflarestorage.com`), used
-  by Loki, the VM backup sidecar, Argo Workflows artifacts
-  (`bootstrap/templates/core-infra/argo-workflows.yaml:164`) and CNPG backups
-  (`infra-components/data/cnpg/shared/cluster.yaml:26`). MinIO exists
-  (`bootstrap/templates/data/minio.yaml`, chart `5.4.0`, 40Gi, buckets
-  `platform-cache`/`platform-state`/`postgres-backups`) but is not the
-  established trace-scale store.
-- Data tier already present: CloudNativePG shared cluster
-  (`infra-components/data/cnpg/shared/`), Valkey
-  (`infra-components/data/valkey/`), Temporal
-  (`bootstrap/templates/data/temporal.yaml`). **No ClickHouse anywhere** —
-  `grep -rli clickhouse platform-gitops` returns nothing. Any ClickHouse-backed
-  candidate (Langfuse, SigNoz) introduces a brand-new stateful system class to
-  this cluster, not just a new workload.
-- mctl already has LLM cost telemetry without any tracing backend:
-  `infra-components/observability/grafana-dashboards/openclaw-llm-usage-dashboard-configmap.yaml`
-  and `vm-rules/openclaw-llm-alerts.yaml` alert on
-  `openclaw_llm_prompt_tokens_total{provider=...}` scraped from `/metrics`.
-  This is the baseline that a specialist AI backend has to beat, and it is
-  the reason "general trace store only" is a live outcome rather than a
-  strawman.
+The issue's 2026-09-19 note scopes this DevLoop to mctl-gitops repository
+artifacts and assigns every live-cluster step to `mctlhq/mctl-gitops#1280`.
+So the design question is not "how do we run the spike" but **"what can be
+merged now such that running the spike later is a values edit and a review of
+already-merged manifests"** — and such that merging it today does nothing.
 
 ## Proposed solution
 
-Three moving parts: a **fan-out harness** (a backwards-compatible values
-change to the existing collector), an **evaluation sandbox** (a disposable
-namespace with a declared teardown date), and a **decision artifact** (a
-weighted matrix and the repo's first ADR). Nothing touches producer code,
-because there is no producer code to touch.
+Seven artifacts, all in one PR, all inert on merge.
 
-### 1. Generalize `backendEndpoint` to `backends` (values-only, backwards compatible)
+### 1. Generalize the exporter list (backwards compatible, default no-op)
 
-Replace the single templated exporter in
-`bootstrap/templates/observability/otel-collector.yaml` with a loop, keeping
-the legacy scalar working:
+In `bootstrap/templates/observability/otel-collector.yaml`, keep the existing
+`{{- if .Values.otelCollector.backendEndpoint }}` block untouched and add a
+loop beside it:
 
 ```yaml
 exporters:
@@ -135,8 +138,7 @@ exporters:
     verbosity: normal
   {{- if .Values.otelCollector.backendEndpoint }}
   otlp/backend:
-    endpoint: {{ .Values.otelCollector.backendEndpoint | quote }}
-    # sending_queue / retry_on_failure unchanged
+    # ... unchanged
   {{- end }}
   {{- range .Values.otelCollector.backends }}
   otlp/{{ .name }}:
@@ -161,135 +163,140 @@ exporters:
   {{- end }}
 ```
 
-and the matching `{{- range }}` in
-`service.pipelines.traces.exporters`. `otelCollector.backends` defaults to
-`[]` in `bootstrap/values.yaml`, so **with no candidate configured the
-rendered ConfigMap is byte-identical to today's** and
-`docs/runbooks/otel-collector.md`'s one-key swap remains literally true.
+with the mirrored `{{- range }}` in `service.pipelines.traces.exporters`, and
+`backends: []` added under `otelCollector` in `bootstrap/values.yaml`.
 
-Why this shape and not five separate collectors, or a `routing` connector:
+Why this shape:
 
-- Every exporter gets its **own** `sending_queue`. In the OpenTelemetry
-  Collector, exporters in a pipeline are fanned out independently; a failing
-  or slow exporter drains into its own queue and drops on full, it does not
-  stall the receiver or the siblings. That is precisely the "backend outage
-  does not break producer workloads" acceptance criterion, and it is already
-  alerted on by the existing `OtelCollectorQueueNearFull` /
-  `OtelCollectorExportFailures` rules — which are per-exporter series, so they
-  keep working unchanged and now tell us *which* candidate is unhealthy.
-- A `routing` connector would send different spans to different candidates.
-  For a comparison that is the wrong primitive: the requirement is identical
-  input. `routing` becomes interesting only in outcome 2, after the decision.
-- Separate collector deployments would multiply the redaction config, which is
-  the single most safety-critical block in the file. One pipeline, one
-  redaction processor, N exporters keeps exactly one copy of the block lists.
+- **One pipeline, one redaction processor, N exporters.** Exporters in a
+  collector pipeline fan out independently: a slow or failed exporter drains
+  into its own `sending_queue` and drops on full; it does not stall the
+  receiver or its siblings. That is exactly the "backend outage does not break
+  producer workloads" criterion, and the existing per-exporter alert series
+  keep working. Running five collectors instead would mean five copies of the
+  redaction block — the one block in this repo that must never drift.
+- **Not a `routing` connector.** Routing sends *different* spans to different
+  backends. A comparison needs identical input. Routing becomes interesting
+  only after the verdict, in outcome 2.
+- **`headers` holds `${env:...}` expressions, never literals.** A candidate
+  needing HTTP Basic or a bearer token gets a Vault path, an `ExternalSecret`
+  in `infra-components/observability/otel-collector/` (the pattern used by
+  `infra-components/observability/secrets/loki-minio-externalsecret.yaml`) and
+  the chart's `extraEnvsFrom`. The credential never enters git; the values
+  entry carries only the expansion expression.
+- **The legacy scalar stays.** `docs/runbooks/otel-collector.md` documents the
+  one-key swap in four numbered steps; silently removing the key it names
+  would falsify a runbook that an operator reads under pressure. Both keys
+  render if both are set, and the runbook is updated to say so.
 
-**Credentials.** Candidates that need an auth header (Langfuse uses HTTP Basic
-over its OTLP endpoint; a managed tier of anything would need a key) must not
-put it in `values.yaml`. The pattern already used everywhere in this repo
-applies: a Vault path under `secret/data/teams/...`, an `ExternalSecret` in
-`infra-components/observability/otel-collector/`, the chart's `extraEnvsFrom`
-pointing at the synced Secret, and the config referencing
-`${env:CANDIDATE_AUTH_HEADER}`. The `headers` map in the values above holds
-the `${env:...}` expression, never a literal.
+`otelCollector.backends` defaults to `[]`, so the rendered ConfigMap is
+byte-identical to `main` until an operator changes values under #1280.
 
-### 2. A committed, representative DevLoop trace fixture
+### 2. Evaluation manifests, gated off
 
-Because #38/#195 have not shipped, the "same representative mctl execution"
-criterion has to be satisfied by a fixture. Add:
+Two new gated templates under `bootstrap/templates/observability/`:
 
-- `tests/fixtures/devloop-trace.json` — one trace, OTLP/JSON, with the span
-  tree the issue specifies: DevLoop root -> Temporal orchestration -> Argo
-  worker/pod -> agent/model invocation (child MCP/tool spans, GitHub
-  read/write spans) -> artifact generation -> terminal outcome, plus a second
-  execution whose outcome span is an error so error navigation is comparable.
-  Correlation attributes as enumerated in `requirements.md`.
-- `tests/fixtures/devloop-trace-redaction.json` — a deliberately poisoned
-  variant carrying `gen_ai.prompt.0.content`, `mcp.tool.arguments`,
-  `http.request.header.authorization` and a benign key
-  (`mctl.artifact.note`) whose value is `ghp_` + 36 chars. This is the
-  privacy proof: whatever reaches a candidate from this file is what the
-  redaction processor let through.
-- `platform-gitops/argo-workflows/cluster-templates/wft-otel-trace-fixture.yaml`
-  — a `ClusterWorkflowTemplate` that runs a container POSTing the fixture to
-  `http://otel-collector.monitoring.svc.cluster.local:4318/v1/traces` at a
-  declared rate for a declared duration. Argo Workflows already run in
-  `argo-workflows`, which the collector NetworkPolicy already allows on
-  4317/4318 — no policy change needed to emit the fixture. Parameters:
-  `ratePerSecond`, `durationMinutes`, `executionCount`.
+- `eval-namespace.yaml` — `{{- if .Values.otelCollector.eval.enabled }}`
+  renders the `observability-eval` Namespace with
+  `mctl.ai/purpose: "issue-903-spike"` and
+  `mctl.ai/teardown-after: {{ .Values.otelCollector.eval.teardownAfter }}`,
+  plus the three-policy layering copied from
+  `helm-charts/tenant/templates/networkpolicy.yaml`: `default-deny-all`
+  (`podSelector: {}` — correct here because this chart creates the namespace),
+  `allow-intra-namespace`, DNS/cluster egress, and one explicit ingress rule
+  admitting the `monitoring` namespace on the candidate ports. A `{}` selector
+  is safe in a namespace this template owns and is the documented hazard in
+  `monitoring`, which is why the two namespaces get different treatment and
+  the file says so.
+- `eval-candidates.yaml` — `{{- range .Values.otelCollector.eval.candidates }}`
+  renders one ArgoCD `Application` per entry into `observability-eval`:
+  pinned upstream `chart` + `targetRevision` from the entry, optional second
+  source `path: platform-gitops/infra-components/observability/eval/<name>`
+  rendered **only when the entry sets `manifestsPath`** (an Application
+  pointing at a directory that does not exist fails to sync and looks like a
+  candidate defect), `syncPolicy.automated.prune: true` with **`selfHeal`
+  omitted** so an operator can `kubectl scale --replicas=0` a candidate for
+  the outage test without ArgoCD fighting back.
 
-Running the fixture through the *real* collector rather than pointing an
-emitter at each candidate directly is the point: it proves the comparison ran
-through the redaction and enrichment the production path will have.
+`otelCollector.eval.enabled` defaults to `false` and `candidates` to `[]`, so
+merging renders nothing at all.
 
-### 3. Two-stage elimination: paper screen, then live PoC
+The candidate list is a values input rather than five hardcoded Applications
+because this investigation cannot verify any candidate's current chart
+coordinates or license offline (see Stage A below), and four of five would be
+deleted at teardown anyway. #1280 fills the list with the survivors' verified
+pins; the shape, the namespace, the policies and the sync semantics are
+already reviewed by then.
 
-**Stage A — architecture/ops-fit screen (no cluster changes).** For all five
-candidates record, in a single matrix file: license of the self-hostable
-artifact; whether a maintained Helm chart or Kubernetes manifests exist and at
-what pinnable version; the full stateful dependency list; whether plain OTLP
-(not a vendor SDK, not OpenInference-only) is a supported ingestion path; and
-raw-data export capability. The issue itself asks for this for SigNoz; this
-design applies it uniformly. A candidate fails the screen — and is recorded as
-failed, not omitted — if it has no pinnable self-host deployment path, if it
-requires producer-side vendor instrumentation, or if its dependency set cannot
-be sized onto three `cx43` workers alongside the existing VMSingle/Loki/
-Grafana/CNPG/Valkey/Temporal/MinIO footprint.
+A committed example overlay, `tests/fixtures/otel-eval-candidates.example-values.yaml`,
+drives both the render test and a new CI step that pipes the eval rendering
+through `kubeconform -strict` — so the manifests are schema-valid in this PR
+even though nothing deploys them.
 
-Traceway is the one candidate this investigation could not verify at all: it
-appears nowhere in the clone and the issue's description of it is the only
-evidence available. The screen resolves it first, because if it has no
-self-hostable chart the rest of the spike does not need to budget for it.
+### 3. The representative DevLoop trace fixture
 
-**Stage B — live PoC for survivors only.** Each survivor gets an ArgoCD
-`Application` at
-`platform-gitops/bootstrap/templates/observability/eval/<candidate>.yaml`,
-destination namespace `observability-eval`, single replica, smallest viable
-storage, `syncPolicy.automated` **without** `selfHeal` (so an operator can
-scale a candidate to zero for the outage test without ArgoCD fighting back).
-Supporting manifests at
-`platform-gitops/infra-components/observability/eval/<candidate>/`:
+`tests/fixtures/devloop-trace.json` — OTLP/JSON, two executions:
 
-- a NetworkPolicy with a `podSelector` matching that candidate's pods only —
-  never `{}` — allowing ingress from `monitoring` (the collector) and from
-  Traefik if the candidate has a UI;
-- a `VMServiceScrape` if the candidate exposes Prometheus metrics, so its own
-  health is visible in the stack we already trust;
-- an `ExternalSecret` for any credential.
+- **Execution 1 (success)**: `devloop.run` root -> `temporal.workflow`
+  (`DevLoopWorkflow`) -> `argo.workflow` / `argo.pod` -> `agent.invoke`
+  (implementer) -> `gen_ai.chat` model invocation -> two `mcp.tool.call`
+  spans -> two `github.request` spans (one read, one write) ->
+  `artifact.generate` -> `devloop.outcome` with `mctl.outcome=merged`.
+- **Execution 2 (error)**: the same tree with `devloop.outcome` carrying
+  `mctl.outcome=needs-triage` and an ERROR span status plus an exception
+  event, so error navigation is comparable.
 
-Each candidate's upstream chart repo must also be whitelisted. ArgoCD
-`AppProject`s in `platform-gitops/bootstrap/templates/projects/` restrict
-`sourceRepos` (for example `project-platform.yaml` lists
-`https://go.temporal.io/helm-charts`) and carry
-`clusterResourceWhitelist`/`namespaceResourceWhitelist`. A candidate chart
-pulled from a repo that is not listed, or rendering a kind that is not
-whitelisted, fails to sync with a project-permission error rather than a
-chart error — a cheap failure to mistake for a candidate defect, so it is
-called out as its own task DoD.
+Every correlation attribute from `requirements.md` appears at least once:
+`mctl.execution_id`, `mctl.temporal.workflow_id` (shaped like the real
+`dev-loop-mctlhq-mctl-telegram-296` ids the MCP tooling uses),
+`mctl.temporal.run_id`, `mctl.argo.workflow`, `mctl.argo.pod`,
+`mctl.agent.role`, `mctl.workflow.stage`, `mctl.repository`,
+`mctl.github.issue`, `mctl.github.pr`, `mctl.outcome`, `gen_ai.system`,
+`gen_ai.request.model`, `gen_ai.usage.{input,output,cache_read_input,reasoning}_tokens`,
+`mcp.tool.name`, `mctl.cost.usd`.
 
-The namespace itself carries
-`mctl.ai/teardown-after: "<date>"` and `mctl.ai/purpose: "issue-903-spike"` so
-an abandoned spike is greppable. `observability-eval` is a *new* namespace on
-purpose: a crashlooping ClickHouse in `monitoring` shares a namespace with
-Grafana, VMSingle, vmagent and Loki, and `monitoring` has no namespace-wide
-NetworkPolicy to contain it.
+`tests/fixtures/devloop-trace-redaction.json` — the poisoned variant carrying
+`gen_ai.prompt.0.content`, `mcp.tool.arguments`,
+`http.request.header.authorization` and `mctl.artifact.note` whose value is
+`ghp_` + 36 characters. This is not a secret: it is a syntactically valid but
+fabricated token shape whose only purpose is to match
+`blocked_values[0]`. A test asserts each of the four is matched by at least one
+pattern actually present in the committed collector config, so the fixture and
+the redaction rules cannot drift apart.
 
-The collector then gets, in `bootstrap/values.yaml`:
+### 4. The emitter, committed but not scheduled
 
-```yaml
-otelCollector:
-  backends:
-    - name: tempo
-      endpoint: tempo-distributor.observability-eval.svc.cluster.local:4317
-      insecure: true
-    # ... one entry per surviving candidate
-```
+`platform-gitops/argo-workflows/cluster-templates/wft-otel-trace-fixture.yaml`
+— a `ClusterWorkflowTemplate` named `otel-trace-fixture` following the
+conventions of `cwft-argo-local-workdir-canary.yaml`: a
+`workflows.argoproj.io/description` annotation, `serviceAccountName:
+argo-workflow-sa`, `activeDeadlineSeconds`, `ttlStrategy`, and a non-root
+container with `allowPrivilegeEscalation: false` and `capabilities.drop:
+["ALL"]`. Parameters `rate_per_second`, `duration_minutes`,
+`execution_count` and `fixture` are bound through `env:` and read as
+`"$RATE_PER_SECOND"` etc. — never interpolated into the script body, so
+`scripts/validate-shell-param-interpolation.py` stays green with no new
+BASELINE entry. It POSTs to
+`http://otel-collector.monitoring.svc.cluster.local:4318/v1/traces`, which
+needs no NetworkPolicy change because `argo-workflows` is already an allowed
+source namespace.
 
-### 4. Scoring and the decision rule
+The fixture bytes reach the pod by ConfigMap. To avoid two divergent copies,
+`scripts/materialize-otel-trace-fixture.py` generates
+`platform-gitops/argo-workflows/config/otel-trace-fixture-configmap.yaml`
+from `tests/fixtures/*.json`, and CI runs it with `--check` — the same
+generate-and-check contract
+`scripts/materialize-openclaw-platform-skills.py --check` already has in
+`validate-manifests.yml`. The ConfigMap lands in `argo-workflows` because that
+is the namespace `argo-workflows-config` syncs into and the namespace the
+emitter pod runs in.
 
-`docs/adr/0001-agent-execution-trace-backend.md` (creating `docs/adr/`) holds
-the matrix. Weights, fixed before any candidate is deployed so the rubric
-cannot be retrofitted to a favourite:
+A registered `ClusterWorkflowTemplate` executes nothing. There is deliberately
+no CronWorkflow: submission is #1280's job.
+
+### 5. The frozen rubric
+
+`docs/adr/0001-rubric.yaml`, machine-readable:
 
 | Dimension | Weight |
 |---|---|
@@ -300,148 +307,175 @@ cannot be retrofitted to a favourite:
 | Security / privacy | 10 |
 | Evals / quality loop | 5 |
 
-Each cell scores 0-5 with a one-line evidence citation (a screenshot path, a
-PromQL result, a query that worked). Weighted total out of 500. Tie margin:
-25 points; inside it, the candidate adding the smaller new dependency surface
-on this cluster wins, which given "no ClickHouse anywhere" is a concrete and
-decidable criterion rather than a taste judgement.
+Each cell is scored 0-5 with a written definition per level and a mandatory
+one-line evidence citation; weighted total out of 500; tie margin 25 points,
+broken in favour of the smaller new operational dependency surface on this
+cluster — which, given that no ClickHouse runs anywhere in
+`platform-gitops/infra-components/data/`, is a decidable criterion rather than
+a taste judgement.
 
-Decision rule:
+Decision rule, four branches:
 
-1. If one candidate wins outright on both trace reconstruction and AI/agent
-   observability and its operations score is not the lowest -> **single
-   backend** for that candidate.
-2. Else if the best general trace store and the best AI specialist each win
-   their own axis by more than the tie margin, and their combined measured
-   footprint fits the cluster -> **general trace store + AI specialist**
-   (outcome 2), with the specialist fed by a `routing` connector or a second
-   exporter and explicitly *not* the FinOps source of truth.
-3. Else if no candidate's AI/agent score exceeds what the existing
-   `openclaw-llm-usage` dashboard pattern already delivers by more than one
-   point -> **ADOPT TEMPO / mctl-native only**. This is the deliberate default
-   when the spike is inconclusive, because it costs one values key, one
-   Grafana datasource ConfigMap and an R2 bucket, and it is the only outcome
-   that is trivially reversible.
+1. One candidate wins outright on both trace reconstruction and AI/agent
+   observability and is not last on operations -> **single backend**.
+2. Else the best general trace store and the best AI specialist each win their
+   own axis by more than the tie margin and their combined measured footprint
+   fits the cluster -> **general trace store + AI specialist**, the specialist
+   explicitly not the FinOps source of truth.
+3. Else no candidate's AI/agent score exceeds by more than one point what the
+   existing `openclaw-llm-usage` dashboard pattern
+   (`infra-components/observability/grafana-dashboards/openclaw-llm-usage-dashboard-configmap.yaml`)
+   already delivers -> **ADOPT TEMPO / mctl-native only**. This is the
+   deliberate default when the spike is inconclusive: one values key, one
+   Grafana datasource ConfigMap, one bucket, trivially reversible.
 4. Else **CONTINUE COMPARISON** with one named blocker.
 
-### 5. Cost/FinOps boundary is enforced, not assumed
+The whole point of merging this before any candidate is deployed is that the
+rubric cannot then be retrofitted to a favourite. A test asserts the weights
+sum to 100, that the Markdown table in the ADR and the YAML agree, and that
+every score cell is null in this PR.
 
-A separate, explicit check: before the ADR is written, confirm that
-per-DevLoop spend can be computed from the collector's own
-`spanmetrics`-derived or producer-emitted metrics in VictoriaMetrics, without
-querying any candidate. If a candidate would become the only place token/cost
-data lives, that candidate loses points on portability regardless of how good
-its cost UI is. This is the `mctlhq/.github#48` boundary made testable.
+### 6. Stage A paper screen, with honesty about evidence
 
-### 6. Teardown is part of the change, not a follow-up
+The same rubric file carries a `stage_a` block, one row per candidate:
+license of the self-hostable artifact, deployment path and pinnable version,
+stateful dependency list, whether plain OTLP (not a vendor SDK, not
+OpenInference-only) is a supported ingestion path, raw-data export, footprint
+claim — and for each, an `evidence` field plus a verdict of `SURVIVES`,
+`SCREENED-OUT` or `UNVERIFIED`.
 
-The final PR of this proposal deletes every non-selected
-`bootstrap/templates/observability/eval/` Application, deletes
-`infra-components/observability/eval/`, removes the namespace (ArgoCD
-`prune: true` handles the workloads; PVCs are deleted explicitly), and leaves
-`otelCollector.backends` naming only the winner — or `[]` if the verdict is
-mctl-native only. `docs/runbooks/otel-collector.md`'s "Swapping the backend"
-and "Accepted residuals" sections are updated in the same PR.
+The critical rule, enforced by a test: a row whose evidence is
+`issue-903-body` may not be marked `SURVIVES` on a load-bearing deployment
+claim. Traceway is the clearest case — it appears nowhere in this clone and
+the issue text is the only source, so it is recorded `UNVERIFIED` and #1280
+resolves it first, before cluster capacity is budgeted for it. Screened-out
+candidates keep their row with the reason; the table never loses a candidate.
+
+This is a *paper* screen. It ranks nothing and scores nothing. The ADR says so.
+
+### 7. The ADR skeleton with the verdict deliberately unfilled
+
+`docs/adr/0001-agent-execution-trace-backend.md` creates `docs/adr/` and
+contains: status `Proposed`, context (the #902 boundary, the five candidates,
+the three architectural outcomes), the rubric table, the Stage A table, the
+decision rule, the FinOps boundary from `mctlhq/.github#48` (the backend is
+not automatically the financial source of truth; per-DevLoop spend must be
+reconstructible without it), the exit procedure, and the seven permitted
+verdicts verbatim from the issue.
+
+Its Decision section is exactly:
+
+```markdown
+## Decision
+
+<!-- VERDICT: UNFILLED -->
+
+Not yet decided. The live evaluation that produces the scores for the matrix
+above is tracked as mctlhq/mctl-gitops#1280. This section is filled by that
+issue with exactly one of the seven verdicts listed under "Permitted
+verdicts", and this ADR's status moves from Proposed to Accepted at the same
+time.
+```
+
+A test asserts the `VERDICT: UNFILLED` marker is present, that no score cell
+is populated, and that the status is `Proposed` — so an implementer or a later
+editor cannot half-fill it and leave a decision that nobody made.
 
 ## Alternatives
 
-**Sequential single-candidate evaluation using the existing
-`backendEndpoint`.** Zero template change: point the scalar at one candidate,
-observe, repeat. Dropped because each candidate would see a different span
-stream at a different time under different cluster load, which violates the
-issue's "same representative mctl execution is exported through the Collector
-to each viable candidate" criterion outright. It is also slower in wall-clock
-(five sequential soak windows) than the template change costs to write, and it
-gives no way to A/B two UIs side by side on the same trace id — which is the
-single most informative thing a reviewer can do.
+**Hardcode five candidate Applications with pinned charts now.** Rejected on
+verifiability: this investigation has no way to confirm any candidate's
+current chart repository, chart version, license or dependency set, and the
+repo's own convention is an exact pin with a comment recording the date it was
+resolved (`otel-collector.yaml` does exactly this for chart 0.173.0 / image
+0.160.0). Committing five unverified pins would put fabricated facts in a
+GitOps repo that ArgoCD treats as truth, and four of the five would be deleted
+at teardown. The parameterized list plus an example overlay gives the same
+review value with none of the invention.
 
-**Point a standalone OTLP emitter at each candidate directly, bypassing the
-collector.** Simpler to set up and needs no repo change at all. Dropped
-because it tests the candidates against a span stream that never went through
-`redaction`, `k8sattributes` or `resource`. The whole question this spike
-answers is "is this backend useful on *metadata-first, prompt-free*
-telemetry", and an emitter that bypasses redaction would answer a different,
-flattering question. It would also leave the privacy criterion unproven, since
-what reaches a candidate is exactly what redaction let through.
+**Deploy the candidates in this PR and let #1280 only measure.** Rejected
+because it violates the issue's own boundary — the implementation PR must not
+require post-merge production actions — and because a merge that immediately
+stands up several ClickHouse/Postgres-backed stacks on three `cx43` workers is
+exactly the kind of change that should be a deliberate, separately-reviewed
+operator step. The gate (`eval.enabled: false`) makes deploying them a
+one-line values edit with its own PR and its own review.
 
-**Adopt Tempo immediately, skip the comparison.** Defensible on the evidence
-already in the repo — Tempo is OTLP-native, writes to S3-compatible object
-storage (Cloudflare R2 is already the pattern for Loki, VM backups, Argo
-artifacts and CNPG), plugs into the existing Grafana `12.4.2` via one
-`grafana_datasource: "1"` ConfigMap exactly like `loki-datasource.yaml`, adds
-no new stateful system class, and is from the same vendor as the Loki already
-deployed. Dropped as the *starting* position because the issue explicitly
-asks for a comparative decision and because the AI/agent axis — token, cache
-and reasoning usage, per-execution cost, session grouping — is the one Tempo
-is weakest on and the one mctl actually needs (`mctlhq/.github#48`,
-`mctl-agents#195/#196/#199`). Adopting without measuring would make outcome 2
-unfalsifiable later. Tempo remains the strong prior and the documented default
-under decision rule 3.
+**Skip the fan-out and evaluate candidates one at a time by re-pointing
+`backendEndpoint`.** Rejected because serialized evaluation makes the
+comparison depend on when each candidate ran — different fixture batches,
+different cluster load, no way to prove identical input — and because the
+producer-isolation criterion ("a backend outage does not break producer
+workloads") is only demonstrable with siblings present: with one exporter,
+"the others kept working" is unobservable.
 
-**Deploy all five candidates for a full live PoC with no paper screen.** Most
-thorough, and dropped on capacity. Langfuse (ClickHouse + Postgres + Redis +
-blob) and SigNoz (ClickHouse) each introduce ClickHouse, which exists nowhere
-in this cluster today; running both plus three others alongside VMSingle,
-Loki, Grafana, CNPG, Valkey, Temporal and MinIO on three `cx43` workers risks
-node-pressure eviction of the production observability stack to answer a
-question a license file and a dependency list answer for free.
+**Put the fixture only in the Argo ConfigMap, or only in `tests/fixtures/`.**
+Rejected both ways. ConfigMap-only makes the fixture invisible to the schema
+test and hard to diff in review. Fixtures-only leaves the emitter with nothing
+to send. The generate-plus-`--check` pattern already proven by
+`materialize-openclaw-platform-skills.py` keeps one source of truth and fails
+CI on drift.
+
+**Use pytest for the new tests.** Rejected: `tests/` contains seven plain
+`python3 tests/<file>.py` scripts that accumulate `failures` and exit
+non-zero, invoked one per CI step with a comment explaining what each exists to
+catch. Introducing a runner for two new files would be the only pytest
+dependency in the repo.
 
 ## Platform impact
 
-**Migrations.** None. No schema, no data, no producer change. The collector
-ConfigMap changes shape only when `otelCollector.backends` is non-empty; with
-the default `[]` the rendered output is identical and a `helm template` diff
-against `main` proves it.
+**Migrations.** None. No CRD, no schema, no data move.
 
 **Backward compatibility.** `otelCollector.backendEndpoint` keeps working
-alongside `backends`, so `docs/runbooks/otel-collector.md`'s documented
-procedure does not become wrong mid-spike. If both are set, both exporters
-render — intentional, and the runbook says so.
+unchanged and stays documented; `backends`, `eval.enabled` and
+`eval.candidates` are new keys with inert defaults. The default render is
+asserted byte-identical to `main` by a golden-file test, which is the
+mechanism that makes "this merge changes nothing" a check rather than a claim.
+Every `platform-gitops/services/*/*/values.yaml` renders unchanged — this
+proposal does not touch `base-service`.
 
-**Resource impact.** The collector itself is unchanged
-(100m/384Mi request, 500m/512Mi limit, `replicaCount: 2`); N exporters add
-queue memory bounded by `queue_size * batch size`, which is why each entry
-can override `queueSize` and why evaluation candidates should run with a
-smaller queue than the 5000 default. The real cost is the candidates: a new
-`observability-eval` namespace on a cluster with three `cx43` workers already
-carrying VMSingle (25Gi PVC), Loki, Grafana, CNPG, Valkey, Temporal, MinIO
-(40Gi) and the platform's own services. Mitigation: the Stage A screen caps
-how many candidates ever get deployed; single replicas; smallest viable
-storage; explicit teardown date; and the candidates are scraped by the
-existing vmagent so their footprint shows up in the dashboards we already
-watch.
+**Resource impact at merge: zero.** Two new ArgoCD-synced objects appear —
+the `otel-trace-fixture` ClusterWorkflowTemplate and its ConfigMap in
+`argo-workflows` — and both are inert; a registered template runs nothing and
+a ConfigMap of a few KB costs nothing. No pod, no PVC, no namespace.
+
+**Resource impact later, under #1280.** Flipping `eval.enabled` stands up the
+candidates. The rubric's operations dimension requires measured footprint from
+existing VictoriaMetrics series rather than vendor documentation, and the
+namespace carries a teardown date, so an abandoned spike is greppable rather
+than silently permanent. Sizing that against three `cx43` workers is #1280's
+call, informed by Stage A's dependency lists.
 
 **Risks and mitigations.**
 
-- *An evaluation candidate destabilises the production observability stack.*
-  Separate namespace, per-candidate pod-scoped NetworkPolicy, no `selfHeal`
-  so an operator can scale to zero instantly, and resource limits on every
-  candidate workload. The collector's own `sending_queue` drop-on-full means
-  even a wedged candidate cannot backpressure the gateway.
-- *A `podSelector: {}` NetworkPolicy is copied into `monitoring` by accident.*
-  Documented hazard already
-  (`infra-components/observability/otel-collector/networkpolicy.yaml`,
-  runbook "NetworkPolicy" section). The eval policies live in a different
-  namespace and are reviewed for a non-empty selector as an explicit task DoD.
-- *A candidate's UI is exposed without authentication.* Any Ingress goes
-  through the same Traefik + Dex OIDC path as `grafana.mctl.ai`; the default
-  is no Ingress at all and `kubectl port-forward` for the human review.
-- *Redaction misses a new attribute the fixture introduces.* The poisoned
-  fixture exists specifically to fail loudly here, and the runbook's "When
-  #38/#195 land and add new attributes" section already prescribes adding a
-  *pattern* rather than an exact key.
-- *A candidate credential leaks into git.* Vault + `ExternalSecret` +
-  `${env:...}` only; a task DoD is that `git grep` for the credential shape
-  over the PR is empty. The repo's existing `blocked_values` patterns
-  (`ghp_`, `sk-`, `hvs.`, JWT) are the same shapes to grep for.
-- *The spike never ends.* Teardown annotation with a date, teardown is a
-  numbered task in this proposal rather than a follow-up issue, and decision
-  rule 3 supplies a concrete default so "inconclusive" still closes.
-- *The fixture's attribute names diverge from what #38/#195 actually emit.*
-  Accepted and recorded in the ADR. Relative backend ranking does not depend
-  on the exact strings; if a real trace is available before the ADR is
-  written, re-run and record the divergence.
-- *`selfHeal: true` on `otel-collector` reverts a manual exporter tweak.* Real
-  and intended: every collector change in this spike goes through
-  `bootstrap/values.yaml` and a PR, same as any other template/values change
-  in this repo.
+- *A reviewer waves the rubric through and it is later disputed.* Mitigated
+  only partly by a test — the test proves the weights are frozen and
+  consistent, not that they are right. This is called out in `requirements.md`
+  Open questions precisely so the PR review is the moment to argue about it.
+- *Fixture attribute names diverge from what #38/#195 actually ship.* The
+  fixture would then be wrong in its strings but not in its structure, and
+  candidate ranking does not depend on the exact attribute name. The ADR
+  records the caveat; re-running against a real execution once the producers
+  land is an explicit follow-up in #1280's scope.
+- *The poisoned fixture is mistaken for a real leaked credential.* The value
+  is fabricated and matches only the shape. The fixture file carries a header
+  comment saying so, and a test asserts the value matches
+  `blocked_values[0]` in the committed collector config — its entire reason to
+  exist. Secret scanners may still flag it; that is noted in the ADR's
+  security section and in the file itself.
+- *The golden file becomes stale friction.* Any legitimate collector-config
+  edit must regenerate it. The test prints the exact regeneration command in
+  its failure output, and the friction is the feature: it forces a reviewer to
+  look at a diff of the redaction block every time it moves.
+- *Someone flips `eval.enabled` without reading #1280.* The gate is one key,
+  which is the point, but candidates then deploy into a default-deny namespace
+  with no ingress except from `monitoring` and no credentials, so the blast
+  radius is contained to `observability-eval` and ArgoCD shows the
+  Applications by name. `selfHeal` is omitted so the same operator can scale
+  them to zero immediately.
+- *A candidate chart's own ServiceMonitor/PodMonitor double-scrapes.* vmagent
+  runs `selectAllByDefault: true`; this is incident #1159, already commented
+  in `otel-collector.yaml`. The eval Application shape carries the same note,
+  and disabling a candidate's built-in monitor preset is a documented
+  requirement on #1280's per-candidate manifests rather than something this PR
+  can pre-empt for charts it has not seen.
