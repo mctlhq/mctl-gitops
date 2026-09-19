@@ -1,146 +1,173 @@
-# Directive comments on issues must start a run and always answer
+# Make a directive comment on an issue a real, answered trigger
 
 ## Context
 
 A human who comments `@MCTL Please reinvestigate and rewrite the durable proposal
-for this issue` on a GitHub issue believes a re-investigation is queued. Nothing is.
-`orchestrator/run_issue_poller.py` discovers work with a single
-`gh search issues --owner mctlhq --label agents:intake` call and removes the label
-after dispatch (`remove_label`, line 133); it never reads comments. The only
-`issue_comment` handler in `.github/workflows/` is `claude-review.yml`, which is the
-PR reviewer. So the gesture is not a broken trigger — it is an absent one. On
-mctl-agents#395 two such comments (15:37:00Z, 17:16:56Z) produced no run and no
-reply, while `.status.yaml` stayed at `updated_at: 2026-09-19T15:18:29Z` for over
-four hours.
+for this issue` on a GitHub issue gets nothing: no run is scheduled, no durable
+state changes, and no reply says so. The issue reads as "waiting on the
+investigator" indefinitely. On mctl-agents#395 this burned four hours across two
+requests, whose durable proposal
+`issue-395-feat-devloop-admit-implementation-work-i/.status.yaml` never moved past
+`updated_at: 2026-09-19T15:18:29Z`.
 
-Re-investigation itself is already supported: `run_issue_investigator.resolve_slug`
-keys a proposal directory on the issue NUMBER and reuses whatever directory exists,
-and `investigate()` overwrites a proposal whose status is in
-`_OVERWRITABLE_STATUSES = {"proposed"}` (line 189) while carrying forward files the
-agent did not rewrite. Only the trigger and the acknowledgement are missing. The
-failure is silent in both directions — nothing runs, and nothing says nothing ran —
-so the issue reads as "waiting on the investigator" indefinitely. This proposal makes
-the gesture real and makes every outcome of it, including every refusal, audible.
+The comment was never a broken trigger — it is an absent one. `orchestrator/run_issue_poller.py`
+discovers work only through `search_labeled_issues()`, which runs
+`gh search issues --owner mctlhq --label agents:intake --state open` and never reads
+comments. The only `issue_comment` handler in `.github/workflows/` is
+`claude-review.yml`, the PR reviewer. Grepping this repo for `reinvestigate`,
+`@MCTL` or `directive` returns nothing outside an unrelated prompt-hardening
+sentence in `run_issue_investigator.py`.
+
+Worse, the documented workaround does not work either. `remove_label()` drops
+`agents:intake` after dispatch, so "ask again" means re-labelling — but
+`start_dev_loop_workflow()` starts `dev-loop-{owner}-{repo}-{issue}` with
+`WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY` and
+`WorkflowIDConflictPolicy.USE_EXISTING`. A re-label against a RUNNING loop is a
+true no-op; against a SUCCEEDED loop it raises `WorkflowAlreadyStartedError`,
+which the poller logs as `OK (already handled)` and then drops the label again.
+Both paths end in silence. Asking twice is not a repeatable gesture anywhere in
+the current system.
+
+The failure is silent in both directions: nothing runs, and nothing says nothing
+ran. This proposal makes the gesture real for one documented verb, and makes every
+other shape of the gesture loudly refused instead of ignored.
 
 ## User stories
 
-- AS a maintainer reviewing a `proposed` proposal I WANT to ask for a rewrite by
-  commenting a documented directive on the issue SO THAT I get a fresh proposal
-  without an out-of-band `mctl_trigger_issue` dispatch or a label round-trip.
-- AS a maintainer who posted a directive I WANT a reply naming the run that was
-  started SO THAT I have a durable handle instead of inferring progress from silence.
-- AS a maintainer whose directive cannot be honoured I WANT an explicit refusal
-  naming the reason SO THAT I retry or escalate in minutes rather than hours.
-- AS a platform operator I WANT each directive to cost at most one investigator run
-  SO THAT a repeated request, a retried poll cycle, or a comment storm cannot
-  multiply agent spend.
-- AS a platform operator I WANT a directive that never became a run to be surfaced by
-  the reconcile tick SO THAT a discovery gap is reported rather than absorbed.
+- AS an operator triaging an agent proposal I WANT to comment
+  `@MCTL reinvestigate` on the issue SO THAT the investigator rewrites that exact
+  proposal without me having to find and run an out-of-band `mctl_trigger_issue`
+  dispatch.
+- AS an operator I WANT a reply naming the run my comment started SO THAT I have a
+  durable handle to follow instead of inferring progress from silence.
+- AS an operator who typed the wrong thing I WANT an explicit "not a recognised
+  instruction" reply SO THAT I learn the request failed in minutes rather than
+  concluding hours later that the investigator is merely slow.
+- AS a platform maintainer I WANT a directive that was never picked up to surface
+  in the reconcile tick SO THAT a missed request is a reported condition rather
+  than an invisible one.
+- AS a platform maintainer I WANT one run per request and no unbounded SDK spend
+  SO THAT a comment-driven trigger cannot become a quota incident.
 
 ## Acceptance criteria (EARS)
 
-Recognition and authorization
+Recognition and parsing
 
-- WHEN a comment on an open issue under `mctlhq` begins with the configured directive
-  mention and a recognised verb THE SYSTEM SHALL treat it as a directive request
-  identified by that comment's GitHub node id.
-- WHEN a comment begins with the directive mention followed by an unrecognised verb
-  THE SYSTEM SHALL reply on the issue that it is not a recognised instruction and
-  SHALL list the recognised verbs, and SHALL NOT start any run.
-- IF a directive-shaped comment's author is a bot (login ending in `[bot]`) THEN THE
-  SYSTEM SHALL ignore it entirely and SHALL NOT reply, so the acknowledgement cannot
-  trigger itself.
-- IF a directive-shaped comment's `authorAssociation` is not one of `OWNER`,
-  `MEMBER`, `COLLABORATOR` THEN THE SYSTEM SHALL NOT start a run and SHALL record the
-  refusal in the poll log.
-- WHILE a comment does not begin with the directive mention THE SYSTEM SHALL ignore
-  it, however the mention appears later in its body.
+- WHEN a comment body contains a line beginning with the mention token `@MCTL`
+  THE SYSTEM SHALL parse the remainder of that line against a closed verb
+  vocabulary and classify the comment as `recognised`, `unrecognised`, or
+  `not-a-directive`.
+- WHEN the parsed verb is `reinvestigate` THE SYSTEM SHALL classify the comment as
+  a recognised re-investigation directive.
+- IF a comment contains the mention token but no supported verb THEN THE SYSTEM
+  SHALL classify it as `unrecognised` rather than ignoring it.
+- WHILE parsing a directive THE SYSTEM SHALL read only the verb from the closed
+  vocabulary and SHALL NOT forward any part of the comment body into an agent
+  prompt or a shell argument.
+- WHEN the comment author is the platform bot identity THE SYSTEM SHALL classify
+  it as `not-a-directive`, so an acknowledgement can never be re-read as a
+  request.
 
 Dispatch
 
-- WHEN an authorized `reinvestigate` directive is recognised on an issue whose durable
-  proposal exists at status `proposed` THE SYSTEM SHALL start exactly one
-  DevLoopWorkflow bound to that proposal's existing slug, with a workflow id derived
-  from the directive comment's id.
-- WHEN the same directive comment is observed on a later poll cycle THE SYSTEM SHALL
-  NOT start a second run for it.
-- WHEN two distinct directive comments are posted on the same issue THE SYSTEM SHALL
-  treat each as its own request, and SHALL refuse the second with a reply naming the
-  live run IF a run started by the first is still RUNNING.
-- WHILE dispatching directives THE SYSTEM SHALL NOT add, remove, or otherwise modify
-  any issue label.
-- IF the issue has no durable proposal THEN THE SYSTEM SHALL reply that a first
-  investigation is started by the `agents:intake` label, and SHALL NOT start a run.
-- IF the durable proposal's status is not in
-  `run_issue_investigator._OVERWRITABLE_STATUSES` THEN THE SYSTEM SHALL reply naming
-  that status and stating that a rewrite would clobber in-flight work, and SHALL NOT
-  start a run.
-- IF the issue's repository is not in `config.settings.SERVICES` THEN THE SYSTEM SHALL
-  reply that the repository is not a known service, and SHALL NOT start a run.
-- IF the issue owns more than one proposal directory (`ProposalAmbiguityError`) THEN
-  THE SYSTEM SHALL reply naming both directories, and SHALL NOT start a run.
+- WHEN a recognised `reinvestigate` directive is found on an open issue that
+  already owns exactly one `issue-<N>-*` proposal directory whose status is
+  overwritable (`proposed`, per `run_issue_investigator._OVERWRITABLE_STATUSES`)
+  THE SYSTEM SHALL submit exactly one `mctl-agents-investigate` run bound to that
+  proposal's `service` and `slug`.
+- WHEN that run is submitted THE SYSTEM SHALL reply on the issue naming the
+  returned Argo workflow name, the `service`/`slug` it is bound to, and the
+  commenter it answers.
+- WHEN the re-investigation writes the proposal THE SYSTEM SHALL record the
+  requesting GitHub login and the requesting comment URL in that proposal's
+  `.status.yaml`.
+- IF the issue owns no `issue-<N>-*` proposal directory THEN THE SYSTEM SHALL
+  reply that there is no proposal to rewrite and name the `agents:intake` label as
+  the way to create one, and SHALL NOT dispatch.
+- IF the issue's proposal is at a status outside `_OVERWRITABLE_STATUSES` THEN THE
+  SYSTEM SHALL reply naming that status and SHALL NOT dispatch, so a
+  re-investigation never races an implementer that owns the proposal.
+- IF `existing_slugs()` resolves more than one proposal directory for the issue
+  THEN THE SYSTEM SHALL reply naming the ambiguous directories and SHALL NOT
+  dispatch.
+- IF the commenter's `authorAssociation` is not one of OWNER, MEMBER or
+  COLLABORATOR THEN THE SYSTEM SHALL reply that the directive was not accepted
+  from an unprivileged author and SHALL NOT dispatch.
 
-Acknowledgement and provenance
+Exactly-once, and the loud absence
 
-- WHEN a directive produces a run THE SYSTEM SHALL reply on the issue naming the
-  workflow id, the service and the slug the run is bound to.
-- WHEN any reply is posted in answer to a directive THE SYSTEM SHALL embed that
-  directive's comment id in the reply as a machine-readable marker, and SHALL treat
-  the presence of such a marker as proof the directive was already answered.
-- IF a run was started but its reply could not be posted THEN THE SYSTEM SHALL count
-  the directive as failed and SHALL retry the reply on the next cycle without
-  starting a second run.
-- WHEN a directive-initiated investigation publishes its proposal THE SYSTEM SHALL
-  record the requester's login, the directive comment url, and the directive comment
-  id in the proposal's `.status.yaml` as an additive block that no existing reader
-  interprets.
+- WHILE an acknowledgement for a given comment id already exists on the issue THE
+  SYSTEM SHALL treat that directive as handled and SHALL NOT dispatch again,
+  however many poll ticks observe it.
+- WHEN the same directive text is posted twice as two distinct comments THE SYSTEM
+  SHALL produce exactly one run and one reply per comment id.
+- WHILE handling a directive THE SYSTEM SHALL NOT add or remove the
+  `agents:intake` label, so the comment path has no label side effects and cannot
+  perturb the label path.
+- WHEN a poll tick would exceed the configured per-tick directive cap THE SYSTEM
+  SHALL leave the remaining directives unacknowledged for a later tick and SHALL
+  log the number deferred.
+- IF a directive is recognised but dispatch fails THEN THE SYSTEM SHALL reply that
+  the dispatch failed, SHALL NOT write a handled-acknowledgement for that comment
+  id, and SHALL count the directive as a per-issue failure without failing the
+  whole tick.
+- WHEN the reconcile tick observes a proposal whose issue carries a
+  directive-shaped comment newer than the proposal's `.status.yaml` `updated_at`
+  and for which no acknowledgement exists THE SYSTEM SHALL report that proposal as
+  a stale directive in the tick's result.
+- WHILE reporting stale directives THE SYSTEM SHALL NOT dispatch or write anything
+  — reconcile stays read-only with respect to this condition.
 
-Bounds and backstop
+Operability
 
-- WHILE more authorized directives are pending than the configured per-cycle cap THE
-  SYSTEM SHALL dispatch at most the cap, SHALL log the remainder, and SHALL leave
-  them answerable by a later cycle.
-- IF the directive trigger is disabled by configuration THEN THE SYSTEM SHALL skip
-  the directive pass entirely and SHALL leave the `agents:intake` label path
-  unchanged.
-- WHEN the reconcile tick inspects an issue-sourced proposal whose issue carries a
-  directive-shaped comment newer than the proposal's `updated_at` and carrying no
-  answer marker THE SYSTEM SHALL report it as an unactioned directive in the tick's
-  result, without writing anything.
-- WHILE a directive pass fails for one issue THE SYSTEM SHALL continue with the
-  remaining issues and SHALL NOT fail the poll cycle.
+- WHEN the directive scan runs in dry-run mode THE SYSTEM SHALL print every
+  directive it would act on and SHALL neither submit a run nor post a reply.
+- IF the directive scan cannot read an issue's comments THEN THE SYSTEM SHALL log
+  the failure for that issue and continue with the rest, exiting the tick
+  non-zero only on a global failure.
 
 ## Out of scope
 
-- A GitHub Actions `issue_comment` workflow installed across the fifteen `SERVICES`
-  repositories for sub-minute latency. Considered in design.md and deliberately
-  deferred; the 15-minute poll tick matches the existing label path.
-- Directive verbs other than `reinvestigate` (no `reimplement`, `abandon`, `status`).
-- Directives on pull requests. `claude-review.yml` and pr-steward own PR comments.
-- Making `investigate()` able to overwrite a proposal past `proposed`. The refusal
-  becomes audible here; the guard itself is unchanged.
-- Any change to the `agents:intake` label semantics, to `remove_label`, or to the
-  canonical `dev-loop-{owner}-{repo}-{issue}` workflow id used by the label path.
-- Teaching mctl-api's `mctl_get_dev_loop` to resolve directive-suffixed workflow ids
-  (cross-repo follow-up; recorded as a risk in design.md).
+- Any verb other than `reinvestigate`. `approve`, `implement`, `cancel`, `retry`
+  and friends are deliberately not in the vocabulary; each has its own
+  authorization story (`mctl_approve_dev_loop`, `mctl_trigger_implementer`) and
+  the unrecognised-verb reply is what keeps them explicitly refused rather than
+  half-supported.
+- Adding a `reinvestigate` signal to `DevLoopWorkflow`, or otherwise changing the
+  approve `wait_condition` in `orchestrator/temporal/workflows/dev_loop.py`. See
+  design.md Alternatives — this proposal deliberately leaves a parked loop parked.
+- A GitHub Actions `issue_comment` workflow. The pipeline serves fourteen services
+  listed in `config/settings.py SERVICES`; a workflow file in this repo covers
+  only this repo.
+- Changing the label path: `search_labeled_issues()`, `remove_label()` and the
+  `agents:intake` semantics are untouched.
+- Reconcile acting on a stale directive. It reports; the directive scan dispatches.
+- PR comments. This is about issue comments on issues that own proposals.
 
 ## Open questions
 
-- "Exactly one investigator run bound to that proposal's slug" versus "one run per
-  request" leaves the double-post case ambiguous. Interpretation taken: each distinct
-  comment is a distinct request and gets its own workflow id, but a request arriving
-  while a prior directive run for the same issue is still RUNNING is refused with a
-  reply naming the live run, so the spend stays bounded. Tests assert both halves.
-- Is `@MCTL` a real GitHub account? If it resolves to an unrelated user, every
-  directive notifies a stranger. The mention token is a single constant
-  (`DIRECTIVE_MENTION`); if the account is not ours, prefer a non-account token such
-  as `/mctl`.
-- Should an unauthorized directive get a reply? Replying turns any GitHub user into a
-  way to make the bot comment. Default taken: log only, no reply, behind
-  `DIRECTIVE_REPLY_TO_UNAUTHORIZED` (default off).
-- Cooldown between two accepted directives on the same issue. Default taken: no timed
-  cooldown; the "prior run still RUNNING" refusal is the only rate gate, plus the
-  per-cycle cap.
-- GitHub code search indexes comments with lag, so `gh search --match comments` may
-  not see a directive for some minutes. Accepted; the reconcile backstop is what
-  reports a directive the search never surfaced.
+- `gh issue view --json comments` is already used by `gh_issue_view()` in
+  `orchestrator/run_issue_investigator.py` and by
+  `context_assembly.collect_issue_comments`, which read `id`, `author.login`,
+  `createdAt` and `body`. The authorization criterion above additionally needs
+  `authorAssociation` on each comment. If that field is unavailable on the
+  comments sub-object in the pinned `gh` version, fall back to a one-call
+  membership check per distinct commenter per tick (`gh api
+  /orgs/mctlhq/members/{login}`) and cache it for the tick; either way the
+  authorization criterion holds and no directive is silently dropped.
+- The mention token is written as `@MCTL` here because that is the spelling in
+  the issue's evidence. If `@mctl-agents[bot]` is the mention GitHub actually
+  renders, accept both — matching is case-insensitive over a fixed set of
+  tokens, so adding a spelling is a one-line vocabulary change and not a
+  redesign.
+- Whether `mctl-agents-investigate` accepts a `slug` parameter today, or whether
+  the slug must be re-derived inside the CWFT from `issue_url`. `resolve_slug()`
+  already reuses an existing `issue-<N>-*` directory, so re-derivation from
+  `issue_url` alone is correct; passing the slug explicitly is a scoping
+  belt-and-braces mirroring what `DevLoopWorkflow` does for the implement step
+  via `find_proposal_slug`. Proceed with `issue_url` as the required parameter and
+  `slug` as an optional one, adding it to the operation only if it is not already
+  accepted.
+- Per-tick directive cap default. Proceed with 3, matching the spirit of
+  `DEFAULT_MAX_ISSUES = 5` — a comment-triggered SDK run is the expensive thing
+  being bounded.
