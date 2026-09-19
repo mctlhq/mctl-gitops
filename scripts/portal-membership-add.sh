@@ -106,18 +106,21 @@ tf_declared \
 # The new server's own capability catalogue -- this is what a manual-OAuth
 # server's dashboard login (or a DCR server's automatic sync) has already
 # populated on the server resource itself, independent of any portal. Adding
-# it to the portal with no tools (or no prompts) listed is not the same as
-# "all disabled": an empty updated_tools/updated_prompts is undefined
-# behaviour this script has not measured, so every advertised tool and prompt
-# gets an explicit, disabled entry instead. A nameless entry is refused
-# rather than silently written as {"name": null}, which the portal has not
-# been measured to accept or reject.
+# it to the portal with no tools listed is not the same as "all disabled": an
+# empty updated_tools is undefined behaviour this script has not measured, so
+# every advertised tool gets an explicit, disabled entry instead -- hence the
+# non-empty assertion below. Prompts are different: a server legitimately has
+# none, and `updated_prompts: []` is the correct, not undefined, way to say
+# so; only tools are required to be non-empty. A nameless (null or empty
+# string) entry in either catalogue is refused rather than silently written
+# as {"name": null} or {"name": ""}, neither of which the portal has been
+# measured to accept or reject.
 server_obj=$(cf "$base/servers/$server" | must_succeed "read server $server")
 tools=$(jq -c '[.result.tools // [] | .[].name]' <<<"$server_obj")
 prompts=$(jq -c '[.result.prompts // [] | .[].name]' <<<"$server_obj")
-jq -e 'all(.[]; . != null)' >/dev/null <<<"$tools" \
+jq -e 'all(.[]; . != null and . != "")' >/dev/null <<<"$tools" \
   || { echo "server '$server' advertises a tool with no name; refusing" >&2; exit 1; }
-jq -e 'all(.[]; . != null)' >/dev/null <<<"$prompts" \
+jq -e 'all(.[]; . != null and . != "")' >/dev/null <<<"$prompts" \
   || { echo "server '$server' advertises a prompt with no name; refusing" >&2; exit 1; }
 [ "$(jq 'length' <<<"$tools")" -gt 0 ] \
   || { echo "server '$server' has no tools in its catalogue yet (authentication_status is probably 'waiting'); nothing to enable, refusing to add an empty member" >&2; exit 1; }
@@ -179,16 +182,30 @@ fi
 # this line since `fresh` was read is pure local computation (no network
 # calls), so this narrows the unavoidable window between a read and the PUT
 # to as little as bash allows -- it does not close it, since this API has no
-# conditional write.
+# conditional write. The body is built from THIS read, not `fresh`: a check
+# that validates one snapshot while writing another would leave the same gap
+# this re-read exists to close.
 just_before=$(cf "$base/portals/$portal" | must_succeed "read portal")
 [ "$(jq -cS '[.result.servers // [] | .[] | .server_id] | sort' <<<"$just_before")" \
   = "$(jq -cS '[.result.servers // [] | .[] | .server_id] | sort' <<<"$fresh")" ] \
   || { echo "the portal's membership moved while this script was reading; start again" >&2; exit 1; }
 
-body=$(jq -c --argjson new "$new_entry" '{servers: (.result.servers + [$new])}' <<<"$fresh")
+body=$(jq -c --argjson new "$new_entry" '{servers: (.result.servers + [$new])}' <<<"$just_before")
 echo "adding:"; jq . <<<"$new_entry"
 
 res=$(cf -X PUT "$base/portals/$portal" --data "$body" | must_succeed "update portal")
+
+# Canonical projection for both post-write diffs below, mirroring the
+# README's own mapping()/seerr() helpers: the five fields this script (and
+# scripts/portal-allowlist-apply.sh) actually own, with updated_tools and
+# updated_prompts sorted BY NAME. `jq -S` only sorts object keys, not array
+# elements -- comparing raw arrays would fail on a harmless reordering by the
+# API (e.g. returned in .tools[] order rather than the order this script sent
+# them in) exactly as readily as on a real dropped or altered entry, and the
+# whole point of these checks is to mean something when they fire.
+mapping_filter='{server_id, on_behalf, default_disabled,
+  updated_tools: (.updated_tools | sort_by(.name)),
+  updated_prompts: (.updated_prompts | sort_by(.name))}'
 
 # id-only would pass a write that reverted somebody else's tool decisions: this
 # script, unlike portal-controls-apply.sh, sends the whole `servers` array
@@ -201,15 +218,18 @@ res=$(cf -X PUT "$base/portals/$portal" --data "$body" | must_succeed "update po
 # keeping a field it was told to change"), and this script already has both
 # sides of that comparison in hand.
 #
-# Scoped to entries OTHER than $server: the new entry legitimately gains
-# fields the API computes (id, authentication_status, tools, timestamps) that
-# were never in $body, so comparing it here would fail on every successful
-# apply, not just a broken one. Its own shape is asserted separately below.
-if ! diff -q <(jq -S --arg s "$server" '.servers | map(select(.server_id != $s)) | sort_by(.server_id)' <<<"$body") \
-             <(jq -S --arg s "$server" '.result.servers | map(select(.server_id != $s)) | sort_by(.server_id)' <<<"$res") >/dev/null; then
+# Scoped to entries OTHER than $server, and to the fields this script (or an
+# allowlist-apply script) actually owns -- not the whole raw entry, which
+# also carries `tools`, `authentication_status`, timestamps and other fields
+# the API is free to refresh on its own schedule and that carry no allowlist
+# decision. Comparing those would fail on a cosmetic API-side change exactly
+# as readily as on a real dropped mapping.
+others_filter="[.[] | select(.server_id != \$s) | $mapping_filter] | sort_by(.server_id)"
+if ! diff -q <(jq -cS --arg s "$server" ".servers | $others_filter" <<<"$body") \
+             <(jq -cS --arg s "$server" ".result.servers | $others_filter" <<<"$res") >/dev/null; then
   echo "the portal does not match what was sent: an existing mapping was altered or lost across the write -- those entries carry the tool allowlists of mctl-telegram, mctl-api and seerrsense; compare them before touching anything else" >&2
-  diff -u <(jq -S --arg s "$server" '.servers | map(select(.server_id != $s)) | sort_by(.server_id)' <<<"$body") \
-          <(jq -S --arg s "$server" '.result.servers | map(select(.server_id != $s)) | sort_by(.server_id)' <<<"$res") >&2 || true
+  diff -u <(jq -cS --arg s "$server" ".servers | $others_filter" <<<"$body") \
+          <(jq -cS --arg s "$server" ".result.servers | $others_filter" <<<"$res") >&2 || true
   exit 1
 fi
 
@@ -217,14 +237,15 @@ fi
 # alone would pass a 200 that stored the new member with, say, every tool
 # left off updated_tools entirely (the insert half of the same "200 but not
 # what was sent" API behaviour the check above exists for on the other
-# half). Compared on exactly the fields this script sets; extra fields the
-# API computes on insert (id, authentication_status, tools, timestamps) are
-# not part of what was asked for and are not asserted here.
-if ! diff -q <(jq -cS '{server_id, on_behalf, default_disabled, updated_tools, updated_prompts}' <<<"$new_entry") \
-             <(jq -cS --arg s "$server" '.result.servers[] | select(.server_id == $s) | {server_id, on_behalf, default_disabled, updated_tools, updated_prompts}' <<<"$res") >/dev/null; then
+# half). Compared on the same five owned fields, name-sorted; extra fields
+# the API computes on insert (id, authentication_status, tools, timestamps)
+# are not part of what was asked for and are not asserted here.
+new_filter="select(.server_id == \$s) | $mapping_filter"
+if ! diff -q <(jq -cS "$mapping_filter" <<<"$new_entry") \
+             <(jq -cS --arg s "$server" ".result.servers[] | $new_filter" <<<"$res") >/dev/null; then
   echo "'$server' was not written as sent -- comparing the requested entry against what the portal now reports for it:" >&2
-  diff -u <(jq -cS '{server_id, on_behalf, default_disabled, updated_tools, updated_prompts}' <<<"$new_entry") \
-          <(jq -cS --arg s "$server" '.result.servers[] | select(.server_id == $s) | {server_id, on_behalf, default_disabled, updated_tools, updated_prompts}' <<<"$res") >&2 || true
+  diff -u <(jq -cS "$mapping_filter" <<<"$new_entry") \
+          <(jq -cS --arg s "$server" ".result.servers[] | $new_filter" <<<"$res") >&2 || true
   exit 1
 fi
 

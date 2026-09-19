@@ -42,8 +42,9 @@ PORTAL_LIVE = {
     "hostname": "mcp.mctl.ai",
     "servers": [
         {"server_id": "tg", "on_behalf": True, "default_disabled": False,
-         "updated_tools": [{"name": "send_message", "enabled": True}],
-         "updated_prompts": [], "tools": [{"name": "send_message"}],
+         "updated_tools": [{"name": "send_message", "enabled": True},
+                           {"name": "get_my_send_status", "enabled": False}],
+         "updated_prompts": [], "tools": [{"name": "send_message"}, {"name": "get_my_send_status"}],
          "authentication_status": "connected", "created_at": "2026-09-10T00:00:00Z"},
         {"server_id": "seerrsense", "on_behalf": True, "default_disabled": False,
          "updated_tools": [{"name": "search_media", "enabled": True}],
@@ -101,6 +102,18 @@ case "$url" in
       jq -c '.servers |= map(.on_behalf = false)' "$STATE_FILE" > "$STATE_FILE.m"
       mv "$STATE_FILE.m" "$STATE_FILE"
     fi
+    # Counts non-PUT portal reads (early=1, fresh=2, just_before=3) and
+    # mutates only once the count reaches $MUTATE_ON_GET_N -- isolating "the
+    # write reflects the LAST read (just_before)" from "the write reflects
+    # SOME read taken after the first" (already covered above).
+    if [ "$is_put" = no ] && [ -n "${MUTATE_ON_GET_N:-}" ]; then
+      n=$(( $(cat "$GET_COUNTER" 2>/dev/null || echo 0) + 1 ))
+      printf '%s' "$n" > "$GET_COUNTER"
+      if [ "$n" -ge "$MUTATE_ON_GET_N" ]; then
+        jq -c '.servers |= map(.on_behalf = false)' "$STATE_FILE" > "$STATE_FILE.m"
+        mv "$STATE_FILE.m" "$STATE_FILE"
+      fi
+    fi
     if [ "$is_put" = yes ]; then
       cp "$PUT_BODY_FILE" "$STATE_FILE"
       # Wrap what was sent back in the shape a real GET-after-PUT would have:
@@ -123,6 +136,13 @@ case "$url" in
         jq -c '(.servers[] | select(.server_id=="projects") | .updated_tools[0].enabled) |= true' \
           "$STATE_FILE" > "$STATE_FILE.n"
         mv "$STATE_FILE.n" "$STATE_FILE"
+      fi
+      # A harmless reordering, content unchanged: the API is free to return
+      # array elements in whatever order it stores them internally, and that
+      # must not read as a dropped or altered mapping.
+      if [ -n "${SHUFFLE_ORDER:-}" ]; then
+        jq -c '.servers |= map(.updated_tools |= reverse)' "$STATE_FILE" > "$STATE_FILE.o"
+        mv "$STATE_FILE.o" "$STATE_FILE"
       fi
     fi
     printf '{"success":true,"result":%s}' "$(cat "$STATE_FILE")"
@@ -156,12 +176,13 @@ def git(root, *args):
 
 
 def run(root, *args, portal=None, server=None, keep_state=False, spoil_tg=False, spoil_new=False,
-        mutate_after_first_get=False):
+        mutate_after_first_get=False, mutate_on_get_n=None, shuffle_order=False):
     put_body = root / "put-body.json"
     put_body.unlink(missing_ok=True)
     if not keep_state:
         (root / "portal-state.json").unlink(missing_ok=True)
     (root / "mutated-marker").unlink(missing_ok=True)
+    (root / "get-counter").unlink(missing_ok=True)
     server_state = root / "server-state.json"
     server_state.write_text(json.dumps(server if server is not None else SERVER_LIVE))
     auth = root / "curl-auth.txt"
@@ -181,8 +202,11 @@ def run(root, *args, portal=None, server=None, keep_state=False, spoil_tg=False,
         SERVER_STATE_FILE=str(server_state),
         SPOIL_TG_ENABLED="1" if spoil_tg else "",
         SPOIL_NEW_ENABLED="1" if spoil_new else "",
+        SHUFFLE_ORDER="1" if shuffle_order else "",
         MUTATE_AFTER_FIRST_GET="1" if mutate_after_first_get else "",
         MUTATED_MARKER=str(root / "mutated-marker"),
+        MUTATE_ON_GET_N=str(mutate_on_get_n) if mutate_on_get_n is not None else "",
+        GET_COUNTER=str(root / "get-counter"),
     )
     p = subprocess.run(["bash", str(root / SCRIPT_REL), *args],
                        capture_output=True, text=True, env=env)
@@ -382,6 +406,35 @@ def main():
               p.returncode == 0 and sent is not None
               and [s for s in sent["servers"] if s["server_id"] == "projects"][0]["on_behalf"] is False,
               f"rc={p.returncode} {json.dumps(sent)[:300] if sent else p.stderr[:300]}")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        # Isolates "the body is built from `just_before`" from "built from
+        # SOME read after the first": mutates only on the THIRD portal read
+        # (just_before), which the previous case's mutate-after-first-get
+        # cannot distinguish from a body still built from the second (fresh).
+        root = fixture(tmp)
+        p, sent = run(root, "projects", mutate_on_get_n=3)
+        check("the write body is built from the just-before-write read, not an earlier fresh one",
+              p.returncode == 0 and sent is not None
+              and [s for s in sent["servers"] if s["server_id"] == "tg"][0]["on_behalf"] is False,
+              f"rc={p.returncode} {json.dumps(sent)[:300] if sent else p.stderr[:300]}")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        # The API is free to return array elements in a different order than
+        # they were sent -- content unchanged. Comparing raw (unsorted)
+        # arrays would flag this as a lost or altered mapping; it must not.
+        root = fixture(tmp)
+        p, sent = run(root, "projects", shuffle_order=True)
+        check("a harmless reordering of updated_tools by the API is not mistaken for a lost mapping",
+              p.returncode == 0 and "added:" in p.stdout,
+              f"rc={p.returncode} {(p.stdout + p.stderr)[:300]}")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = fixture(tmp)
+        p, sent = run(root, "projects", server={"id": "projects", "tools": [{"name": "projects_list"}, {"name": ""}]})
+        check("a tool catalogue entry with an empty-string name is refused, not just a null one",
+              p.returncode != 0 and sent is None and "a tool with no name" in p.stderr,
+              p.stderr[:200])
 
     with tempfile.TemporaryDirectory() as tmp:
         root = fixture(tmp)
