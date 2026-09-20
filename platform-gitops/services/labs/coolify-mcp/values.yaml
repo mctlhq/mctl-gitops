@@ -1,0 +1,48 @@
+# Service: coolify-mcp
+# Team: labs
+
+# Chart: base-service
+
+image:
+  repository: ghcr.io/mctlhq/coolify-mcp
+  tag: "3.6.0"
+imagePullSecrets:
+  - name: ghcr-credentials
+service:
+  port: 8080
+backstage:
+  kubernetesId: coolify-mcp
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+env:
+  APP_ENV: production
+  MCP_TENANCY: multi
+  MCP_PUBLIC_URL: https://coolify.mctl.ai
+  VAULT_ADDR: https://secrets.mctl.ai
+  VAULT_KV_MOUNT: coolify-mcp-users
+  VAULT_ROLE: coolify-mcp
+  GITHUB_CLIENT_ID: Ov23liWO82B73sZxpZ4o
+ingress:
+  enabled: true
+  hosts:
+    - labs-coolify-mcp.mctl.ai
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls:
+    - secretName: coolify-mcp-tls
+      hosts:
+        - labs-coolify-mcp.mctl.ai
+externalSecret:
+  targetSecret: coolify-mcp-secrets
+  data:
+    - secretKey: GITHUB_CLIENT_SECRET
+      remoteKey: teams/labs/coolify-mcp
+      property: GITHUB_CLIENT_SECRET
+envFrom:
+  - secretRef:
+      name: coolify-mcp-secrets

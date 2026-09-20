@@ -1,0 +1,38 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: coolify-mcp
+  namespace: labs
+  description: "coolify-mcp service"
+  annotations:
+    backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=labs-coolify-mcp
+    backstage.io/kubernetes-id: coolify-mcp
+    backstage.io/kubernetes-namespace: labs
+    argocd/app-name: labs-coolify-mcp
+    github.com/source-repo: mctlhq/mctl-coolify-mcp
+    # mctl.me/auto-deploy — triggered by GitHub App webhook on tag push
+    #   "true" or "auto" — deploy immediately via scaffolder
+    #   "confirm"         — notify only, user deploys manually from UI
+    #   "false" or absent — skip
+    mctl.me/auto-deploy: "false"
+  links:
+    - url: https://ops.mctl.ai/applications/argocd/labs-coolify-mcp
+      title: ArgoCD
+      icon: dashboard
+    - url: https://github.com/mctlhq/mctl-coolify-mcp
+      title: Source Repository
+      icon: github
+    - url: https://workflows.mctl.ai
+      title: Argo Workflows
+      icon: github
+    - url: https://labs-coolify-mcp.mctl.ai
+      title: Service URL
+      icon: web
+  labels:
+    team: labs
+    env: apps
+spec:
+  type: service
+  lifecycle: production
+  owner: group:default/labs
+  system: system:default/team-labs
