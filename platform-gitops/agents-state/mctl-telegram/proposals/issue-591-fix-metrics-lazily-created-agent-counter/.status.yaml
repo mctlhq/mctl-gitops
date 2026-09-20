@@ -1,5 +1,5 @@
 status: needs-triage
-updated_at: '2026-09-20T09:27:36Z'
+updated_at: '2026-09-20T14:38:33Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -11,16 +11,11 @@ control:
 approval:
   approved_by: mashkovd
   approved_at: '2026-09-09T17:30:00Z'
-notes: 'admission: source issue mctlhq/mctl-telegram#591 is closed as completed (closed
-  2026-09-09T18:27:22Z); admission refused before any model attempt. Superseded by:
-  https://github.com/mctlhq/mctl-telegram/pull/579, https://github.com/mctlhq/mctl-telegram/pull/593,
-  https://github.com/mctlhq/mctl-telegram/pull/597. Reopen the issue, or re-publish
-  this proposal as ''proposed'', to make it runnable again.'
+notes: 'reconcile: no canonical GitHub PR found, source issue closed (source-resolved)'
 failure:
   code: source-resolved
-  stage: admission
-  message: 'source issue mctlhq/mctl-telegram#591 is closed as completed (closed 2026-09-09T18:27:22Z);
-    admission refused before any model attempt. Superseded by: https://github.com/mctlhq/mctl-telegram/pull/579,
-    https://github.com/mctlhq/mctl-telegram/pull/593, https://github.com/mctlhq/mctl-telegram/pull/597.
-    Reopen the issue, or re-publish this proposal as ''proposed'', to make it runnable
-    again.'
+  stage: reconcile
+  message: No canonical PR exists for the deterministic result branch, and the source
+    issue mctlhq/mctl-telegram#591 is closed as completed. The branch is missing because
+    this proposal was abandoned, not because a PR was lost. Retire it with a terminal
+    status (agents-state/OPERATOR.md) or reopen the issue.
