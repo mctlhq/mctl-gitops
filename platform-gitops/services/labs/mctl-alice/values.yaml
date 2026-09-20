@@ -57,6 +57,9 @@ envFrom:
       name: mctl-alice-secrets
   - secretRef:
       name: labs-mctl-alice-db-creds
+# PostgreSQL storage backend: SQLite data (oauth.db & telemetry.db) from the
+# dedicated 10Gi PVC was backed up out-of-band prior to cutover. Dedicated
+# volume persistence is removed in favor of shared-pg in platform-db.
 dbSecret:
   vaultPath: teams/labs/mctl-alice/database
   secretName: labs-mctl-alice-db-creds
