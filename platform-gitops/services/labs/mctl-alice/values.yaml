@@ -13,6 +13,8 @@ service:
 backstage:
   kubernetesId: mctl-alice
 replicaCount: 1
+strategy:
+  type: Recreate
 resources:
   requests:
     cpu: 50m
@@ -25,6 +27,17 @@ env:
   NODE_ENV: production
   PUBLIC_BASE_URL: https://alice.mctl.ai
   AUTH_REQUIRED: "true"
+  OAUTH_DB_PATH: /app/data/oauth.db
+  TELEMETRY_DB_PATH: /app/data/telemetry.db
+persistence:
+  data:
+    enabled: true
+    size: 5Gi
+    accessModes:
+      - ReadWriteOnce
+extraVolumeMounts:
+  - name: pvc-data
+    mountPath: /app/data
 probes:
   startup:
     path: /healthz
@@ -55,6 +68,9 @@ ingress:
 externalSecret:
   targetSecret: mctl-alice-secrets
   data:
+    - secretKey: ENCRYPTION_KEY
+      remoteKey: teams/labs/mctl-alice
+      property: ENCRYPTION_KEY
     - secretKey: YANDEX_COOKIE
       remoteKey: teams/labs/mctl-alice
       property: YANDEX_COOKIE
