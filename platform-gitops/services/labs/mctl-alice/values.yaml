@@ -61,6 +61,12 @@ externalSecret:
     - secretKey: YANDEX_OAUTH_TOKEN
       remoteKey: teams/labs/mctl-alice
       property: YANDEX_OAUTH_TOKEN
+    - secretKey: YANDEX_CLIENT_ID
+      remoteKey: teams/labs/mctl-alice
+      property: YANDEX_CLIENT_ID
+    - secretKey: YANDEX_CLIENT_SECRET
+      remoteKey: teams/labs/mctl-alice
+      property: YANDEX_CLIENT_SECRET
 envFrom:
   - secretRef:
       name: mctl-alice-secrets
