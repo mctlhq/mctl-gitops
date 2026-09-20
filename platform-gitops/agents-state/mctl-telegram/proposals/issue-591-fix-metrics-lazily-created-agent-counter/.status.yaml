@@ -1,6 +1,6 @@
-status: accepted
-updated_at: '2026-09-09T17:30:00Z'
-updated_by: mashkovd
+status: needs-triage
+updated_at: '2026-09-20T09:27:36Z'
+updated_by: mctl-agents[bot]
 source:
   type: github_issue
   repo: mctlhq/mctl-telegram
@@ -11,19 +11,16 @@ control:
 approval:
   approved_by: mashkovd
   approved_at: '2026-09-09T17:30:00Z'
-notes: >-
-  Accepted after implementation. Scope grew during review of
-  mctlhq/mctl-telegram#593 to four metric families / 118 series; see
-  requirements.md "Scope expanded during implementation". Already implemented —
-  do not schedule an implementer attempt against this proposal.
-
-
-  Restored 2026-09-19: this proposal was approved by mistake during the
-  admission burst test for mctlhq/mctl-agents#395. The implementer ran, found
-  nothing to do, and recorded `status: needs-triage` with `failure:
-  code: no-commits`, overwriting the note above. The attempt and failure
-  blocks it wrote are removed with it: the implementation is not missing, it
-  landed in mctlhq/mctl-telegram#593 on 2026-09-09, and leaving a failure
-  record here would tell the shepherd and the reconciler the opposite. The
-  DevLoop execution dev-loop-mctlhq-mctl-telegram-591 was terminated so a
-  queued second attempt could not overwrite this again.
+notes: 'admission: source issue mctlhq/mctl-telegram#591 is closed as completed (closed
+  2026-09-09T18:27:22Z); admission refused before any model attempt. Superseded by:
+  https://github.com/mctlhq/mctl-telegram/pull/579, https://github.com/mctlhq/mctl-telegram/pull/593,
+  https://github.com/mctlhq/mctl-telegram/pull/597. Reopen the issue, or re-publish
+  this proposal as ''proposed'', to make it runnable again.'
+failure:
+  code: source-resolved
+  stage: admission
+  message: 'source issue mctlhq/mctl-telegram#591 is closed as completed (closed 2026-09-09T18:27:22Z);
+    admission refused before any model attempt. Superseded by: https://github.com/mctlhq/mctl-telegram/pull/579,
+    https://github.com/mctlhq/mctl-telegram/pull/593, https://github.com/mctlhq/mctl-telegram/pull/597.
+    Reopen the issue, or re-publish this proposal as ''proposed'', to make it runnable
+    again.'
