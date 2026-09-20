@@ -56,12 +56,14 @@ env:
 ingress:
   enabled: true
   hosts:
+    - coolify.mctl.ai
     - labs-coolify-mcp.mctl.ai
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
   tls:
     - secretName: coolify-mcp-tls
       hosts:
+        - coolify.mctl.ai
         - labs-coolify-mcp.mctl.ai
 externalSecret:
   targetSecret: coolify-mcp-secrets
