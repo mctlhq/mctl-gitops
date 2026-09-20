@@ -25,6 +25,9 @@ env:
   NODE_ENV: production
   PUBLIC_BASE_URL: https://alice.mctl.ai
   AUTH_REQUIRED: "true"
+  MINIO_ENDPOINT: "http://minio.minio.svc.cluster.local:9000"
+  MINIO_BUCKET: "platform-state"
+  MINIO_PREFIX: "labs/mctl-alice"
 probes:
   startup:
     path: /healthz
@@ -52,9 +55,24 @@ ingress:
     - secretName: mctl-alice-tls
       hosts:
         - alice.mctl.ai
+extraExternalSecrets:
+  labs-mctl-alice-minio:
+    store: vault-backend
+    storeKind: ClusterSecretStore
+    targetSecret: mctl-alice-minio-creds
+    data:
+      - secretKey: MINIO_ACCESS_KEY
+        remoteKey: platform/minio
+        property: root-user
+      - secretKey: MINIO_SECRET_KEY
+        remoteKey: platform/minio
+        property: root-password
 externalSecret:
   targetSecret: mctl-alice-secrets
   data:
+    - secretKey: ENCRYPTION_KEY
+      remoteKey: teams/labs/mctl-alice
+      property: ENCRYPTION_KEY
     - secretKey: YANDEX_COOKIE
       remoteKey: teams/labs/mctl-alice
       property: YANDEX_COOKIE
@@ -70,4 +88,6 @@ externalSecret:
 envFrom:
   - secretRef:
       name: mctl-alice-secrets
+  - secretRef:
+      name: mctl-alice-minio-creds
 extraContainers: []
