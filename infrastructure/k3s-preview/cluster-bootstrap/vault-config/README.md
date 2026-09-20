@@ -215,11 +215,20 @@ Used by `mctl-coolify-mcp`'s multi-tenant mode (`mctlhq/mctl-coolify-mcp`,
 `MCP_TENANCY=multi`) to store per-tenant Coolify credentials and OAuth AS
 state, self-service: each tenant enrolls and revokes their own record while
 the process runs, which is why this cannot be served by ESO (read-only
-mount, no write path) the way `projects-mcp` is. Scoped to the service's own
-path under `secret/teams/labs/coolify-mcp/*`; no `delete` capability
-anywhere — only `destroy`, since KV v2's `delete` tombstones the current
-version but leaves every prior version readable, which would make a
-revocation not actually revoke (see `src/lib/vault.ts` in that repo).
+mount, no write path) the way `projects-mcp` is.
+
+**This service gets its own dedicated KV v2 mount, `coolify-mcp-users/`, not
+a path under the shared `secret/` mount.** Its `VaultClient` (`src/lib/vault.ts`
+in that repo) takes a single `mount` string and uses it verbatim as the Vault
+API path segment (`${mount}/data/${key}`), which only resolves if a secrets
+engine is actually enabled at that exact path — a subpath of `secret/` would
+404, since `secret/` itself is the mount and Vault does not treat `secret/teams/labs/coolify-mcp`
+as anything special within it. A small dedicated mount per hosted service
+that needs a write path (unlike everything else here, which reads through
+ESO) keeps its ACL off the shared mount's surface entirely. No `delete`
+capability anywhere — only `destroy`, since KV v2's `delete` tombstones the
+current version but leaves every prior version readable, which would make a
+revocation not actually revoke.
 
 No dedicated ServiceAccount exists yet for this service — `labs` currently
 shares its `default` SA across 15+ deployments in `platform-gitops/services/labs/`,
@@ -233,10 +242,13 @@ front, since the failure mode looks like a login bug rather than a missing
 identity.
 
 ```bash
-# 1. Policy
+# 1. Dedicated KV v2 mount — not a path under secret/, see above.
+vault secrets enable -path=coolify-mcp-users -version=2 kv
+
+# 2. Policy
 vault policy write coolify-mcp vault-policy-coolify-mcp.hcl
 
-# 2. Kubernetes auth role, bound to the ServiceAccount the service's own
+# 3. Kubernetes auth role, bound to the ServiceAccount the service's own
 #    values.yaml must create before this role can ever be assumed.
 vault write auth/kubernetes/role/coolify-mcp \
   bound_service_account_names=labs-coolify-mcp-base-service \
@@ -245,7 +257,11 @@ vault write auth/kubernetes/role/coolify-mcp \
   ttl=1h
 ```
 
-Applied 2026-09-20. Not confirmed live yet — no ServiceAccount, no deployment.
+Deployment must set `VAULT_KV_MOUNT=coolify-mcp-users` (not a `teams/...`
+path) to match.
+
+Applied 2026-09-20 (mount, policy and role all three). Not confirmed live yet
+— no ServiceAccount, no deployment.
 
 ## ESO tenant isolation
 

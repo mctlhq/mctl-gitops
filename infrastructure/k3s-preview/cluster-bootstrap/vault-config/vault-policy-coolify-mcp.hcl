@@ -1,6 +1,11 @@
 # Grants the coolify-mcp Kubernetes-auth role exactly what mctl-coolify-mcp's
-# multi-tenant mode needs: read/write on its own tenant records and OAuth
-# state, under its own team path, and nothing else.
+# multi-tenant mode needs, on its OWN dedicated KV v2 mount
+# (`coolify-mcp-users/`) — not a subpath of the shared `secret/` mount used by
+# every other team, since the app's VaultConfig.mount is used verbatim as the
+# Vault API path segment (`${mount}/data/${key}`), which only works if that
+# mount actually exists at that path. Enabling a small dedicated mount, one
+# per hosted service that needs its own write path, keeps this server's
+# credentials off a shared mount's ACL surface entirely.
 #
 # No "delete" capability anywhere: KV v2's delete is a tombstone that hides
 # the current version while every prior one stays readable, so a revocation
@@ -8,14 +13,14 @@
 # matching how VaultClient.destroy() (mctl-coolify-mcp's own Vault client)
 # is implemented — see src/lib/vault.ts.
 
-path "secret/data/teams/labs/coolify-mcp/*" {
+path "coolify-mcp-users/data/*" {
   capabilities = ["create", "read", "update"]
 }
 
-path "secret/metadata/teams/labs/coolify-mcp/*" {
+path "coolify-mcp-users/metadata/*" {
   capabilities = ["read", "update", "list"]
 }
 
-path "secret/destroy/teams/labs/coolify-mcp/*" {
+path "coolify-mcp-users/destroy/*" {
   capabilities = ["update"]
 }
