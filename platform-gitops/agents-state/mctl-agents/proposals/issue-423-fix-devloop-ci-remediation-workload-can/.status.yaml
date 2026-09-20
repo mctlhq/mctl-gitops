@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-09-20T11:09:22Z'
+updated_at: '2026-09-20T11:31:11Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -17,4 +17,7 @@ attempt:
   expires_at: '2026-09-20T12:09:29Z'
   finished_at: '2026-09-20T10:37:12Z'
 pr: https://github.com/mctlhq/mctl-agents/pull/425
-review_attempts: 1
+review_attempts: 2
+ci_blockers_head: 1591740de7119c3f7f2be123c4a179a54e9ce6fa
+ci_blockers:
+- PR validation / lint
