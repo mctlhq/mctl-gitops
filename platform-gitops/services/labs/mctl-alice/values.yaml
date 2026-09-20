@@ -51,4 +51,16 @@ ingress:
     - secretName: mctl-alice-tls
       hosts:
         - alice.mctl.ai
+externalSecret:
+  targetSecret: mctl-alice-secrets
+  data:
+    - secretKey: YANDEX_COOKIE
+      remoteKey: teams/labs/mctl-alice
+      property: YANDEX_COOKIE
+    - secretKey: YANDEX_OAUTH_TOKEN
+      remoteKey: teams/labs/mctl-alice
+      property: YANDEX_OAUTH_TOKEN
+envFrom:
+  - secretRef:
+      name: mctl-alice-secrets
 extraContainers: []
