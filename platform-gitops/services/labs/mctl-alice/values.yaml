@@ -24,6 +24,10 @@ env:
   PORT: "8080"
   NODE_ENV: production
   PUBLIC_BASE_URL: https://alice.mctl.ai
+envFrom:
+  - secretRef:
+      name: mctl-alice-secrets
+      optional: true
 probes:
   startup:
     path: /healthz
