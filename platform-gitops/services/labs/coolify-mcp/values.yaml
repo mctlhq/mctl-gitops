@@ -4,8 +4,8 @@
 # Chart: base-service
 
 image:
-  repository: ghcr.io/mctlhq/coolify-mcp
-  tag: "3.7.2"
+  repository: ghcr.io/mctlhq/mctl-coolify-mcp
+  tag: "3.8.0"
 imagePullSecrets:
   - name: ghcr-credentials
 # The image's default CMD (dist/index.js) is the stdio single-tenant
