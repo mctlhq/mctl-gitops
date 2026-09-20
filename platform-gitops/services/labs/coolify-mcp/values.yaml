@@ -19,6 +19,24 @@ backstage:
   kubernetesId: coolify-mcp
 serviceAccount:
   create: true
+# The server only implements /healthz, not the chart's default /readyz —
+# readiness probed /readyz and 404'd, keeping the pod Running but never Ready.
+probes:
+  startup:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    failureThreshold: 24
+  readiness:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
+  liveness:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 30
 resources:
   requests:
     cpu: 200m
