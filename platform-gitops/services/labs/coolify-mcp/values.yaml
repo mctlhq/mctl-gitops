@@ -8,10 +8,17 @@ image:
   tag: "3.6.0"
 imagePullSecrets:
   - name: ghcr-credentials
+# The image's default CMD (dist/index.js) is the stdio single-tenant
+# server, which requires COOLIFY_ACCESS_TOKEN and crash-loops without it.
+# This deployment needs the HTTP multi-tenant server instead.
+args:
+  - dist/http.js
 service:
   port: 8080
 backstage:
   kubernetesId: coolify-mcp
+serviceAccount:
+  create: true
 resources:
   requests:
     cpu: 200m
