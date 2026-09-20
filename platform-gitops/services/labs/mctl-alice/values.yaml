@@ -24,6 +24,12 @@ env:
   PORT: "8080"
   NODE_ENV: production
   PUBLIC_BASE_URL: https://alice.mctl.ai
+envFrom:
+  # Provisioned out-of-band in namespace labs (contains YANDEX_OAUTH_TOKEN, YANDEX_CLIENT_ID, YANDEX_CLIENT_SECRET).
+  # optional: false ensures Kubernetes fails loud if the secret is missing.
+  - secretRef:
+      name: mctl-alice-secrets
+      optional: false
 probes:
   startup:
     path: /healthz
