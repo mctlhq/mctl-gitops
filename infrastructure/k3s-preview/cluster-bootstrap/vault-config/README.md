@@ -260,8 +260,12 @@ vault write auth/kubernetes/role/coolify-mcp \
 Deployment must set `VAULT_KV_MOUNT=coolify-mcp-users` (not a `teams/...`
 path) to match.
 
-Applied 2026-09-20 (mount, policy and role all three). Not confirmed live yet
-— no ServiceAccount, no deployment.
+Applied and confirmed live 2026-09-20: mount, policy and role all three, plus
+the dedicated ServiceAccount from a follow-up PR. First deploy crash-looped
+until three separate fixes landed — wrong container command, `undici`/Node 20
+incompatibility, and this policy missing `create` on `metadata/*` — the last
+of which 403'd every first-ever write (including `oauth-state` on first boot)
+until fixed live, then backported to the `.hcl` file above.
 
 ## ESO tenant isolation
 
