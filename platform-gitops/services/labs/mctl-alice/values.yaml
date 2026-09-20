@@ -5,7 +5,7 @@
 
 image:
   repository: ghcr.io/mctlhq/mctl-alice
-  tag: "2.0.0"
+  tag: "2.1.0"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
@@ -13,10 +13,6 @@ service:
 backstage:
   kubernetesId: mctl-alice
 replicaCount: 1
-strategy:
-  type: Recreate
-podSecurityContext:
-  fsGroup: 1000
 resources:
   requests:
     cpu: 50m
@@ -29,17 +25,6 @@ env:
   NODE_ENV: production
   PUBLIC_BASE_URL: https://alice.mctl.ai
   AUTH_REQUIRED: "true"
-  OAUTH_DB_PATH: /app/data/oauth.db
-  TELEMETRY_DB_PATH: /app/data/telemetry.db
-persistence:
-  data:
-    enabled: true
-    size: 5Gi
-    accessModes:
-      - ReadWriteOnce
-extraVolumeMounts:
-  - name: pvc-data
-    mountPath: /app/data
 probes:
   startup:
     path: /healthz
@@ -67,6 +52,14 @@ ingress:
     - secretName: mctl-alice-tls
       hosts:
         - alice.mctl.ai
+envFrom:
+  - secretRef:
+      name: mctl-alice-secrets
+  - secretRef:
+      name: labs-mctl-alice-db-creds
+dbSecret:
+  vaultPath: teams/labs/mctl-alice/database
+  secretName: labs-mctl-alice-db-creds
 externalSecret:
   targetSecret: mctl-alice-secrets
   data:
@@ -85,7 +78,4 @@ externalSecret:
     - secretKey: YANDEX_CLIENT_SECRET
       remoteKey: teams/labs/mctl-alice
       property: YANDEX_CLIENT_SECRET
-envFrom:
-  - secretRef:
-      name: mctl-alice-secrets
 extraContainers: []

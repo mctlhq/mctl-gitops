@@ -152,6 +152,7 @@ spec:
       # mctl-academy migration 1755100000000_academy_readonly_role.mjs.
       - host labs-mctl-academy academy_readonly all scram-sha-256
       - host labs-seerrsense labs-seerrsense all scram-sha-256
+      - host labs-mctl-alice labs-mctl-alice all scram-sha-256
       - host all all 0.0.0.0/0 reject
 
   managed:
@@ -191,6 +192,12 @@ spec:
         ensure: present
         passwordSecret:
           name: labs-seerrsense-db-creds
+      - name: labs-mctl-alice
+        login: true
+        connectionLimit: 10
+        ensure: present
+        passwordSecret:
+          name: labs-mctl-alice-db-creds
       - name: labs-mctl-academy
         login: true
         connectionLimit: 10

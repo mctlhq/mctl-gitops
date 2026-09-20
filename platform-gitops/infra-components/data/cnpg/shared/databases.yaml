@@ -246,3 +246,14 @@ spec:
   cluster:
     name: shared-pg
   databaseReclaimPolicy: retain
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: labs-mctl-alice-db
+spec:
+  name: "labs-mctl-alice"
+  owner: "labs-mctl-alice"
+  cluster:
+    name: shared-pg
+  databaseReclaimPolicy: retain
