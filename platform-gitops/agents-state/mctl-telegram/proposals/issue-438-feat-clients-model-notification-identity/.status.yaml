@@ -1,5 +1,5 @@
-status: review-stuck
-updated_at: '2026-09-20T18:11:53Z'
+status: implemented
+updated_at: '2026-09-20T23:37:57Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -24,7 +24,3 @@ github:
 ci_blockers_head: c0222ec085c92bdeeaa7468011ac82e7c4611bcc
 ci_blockers:
 - build / test
-review_attempts: 5
-notes: Follow-up failed deterministically 5 time(s) (implementer follow-up exited
-  non-zero (44) for mctl-telegram/issue-438-feat-clients-model-notification-identity);
-  human triage required.
