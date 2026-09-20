@@ -210,6 +210,43 @@ After both commands run, the CronJob is self-sufficient and rotates auth on
 every run. The legacy static token at `secret/platform/vault/backup-token`
 can be deleted once the next scheduled run succeeds.
 
+### coolify-mcp
+Used by `mctl-coolify-mcp`'s multi-tenant mode (`mctlhq/mctl-coolify-mcp`,
+`MCP_TENANCY=multi`) to store per-tenant Coolify credentials and OAuth AS
+state, self-service: each tenant enrolls and revokes their own record while
+the process runs, which is why this cannot be served by ESO (read-only
+mount, no write path) the way `projects-mcp` is. Scoped to the service's own
+path under `secret/teams/labs/coolify-mcp/*`; no `delete` capability
+anywhere — only `destroy`, since KV v2's `delete` tombstones the current
+version but leaves every prior version readable, which would make a
+revocation not actually revoke (see `src/lib/vault.ts` in that repo).
+
+No dedicated ServiceAccount exists yet for this service — `labs` currently
+shares its `default` SA across 15+ deployments in `platform-gitops/services/labs/`,
+and binding this role to `default` would let every one of them authenticate
+as `coolify-mcp` and read tenant Coolify tokens. This role is bound ahead of
+that ServiceAccount's creation; **do not deploy `coolify-mcp` until
+`platform-gitops/services/labs/coolify-mcp/values.yaml` sets
+`serviceAccount: {create: true}`** (the `claude-remote` pattern), or the
+Kubernetes-auth login will fail closed — safe, but worth knowing why up
+front, since the failure mode looks like a login bug rather than a missing
+identity.
+
+```bash
+# 1. Policy
+vault policy write coolify-mcp vault-policy-coolify-mcp.hcl
+
+# 2. Kubernetes auth role, bound to the ServiceAccount the service's own
+#    values.yaml must create before this role can ever be assumed.
+vault write auth/kubernetes/role/coolify-mcp \
+  bound_service_account_names=labs-coolify-mcp-base-service \
+  bound_service_account_namespaces=labs \
+  policies=coolify-mcp \
+  ttl=1h
+```
+
+Applied 2026-09-20. Not confirmed live yet — no ServiceAccount, no deployment.
+
 ## ESO tenant isolation
 
 ESO reads Vault through three distinct identities. The split exists because a
