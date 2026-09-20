@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-09-20T01:47:07Z'
+updated_at: '2026-09-20T02:09:49Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -24,4 +24,4 @@ github:
 ci_blockers_head: c0222ec085c92bdeeaa7468011ac82e7c4611bcc
 ci_blockers:
 - build / test
-review_attempts: 3
+review_attempts: 4
