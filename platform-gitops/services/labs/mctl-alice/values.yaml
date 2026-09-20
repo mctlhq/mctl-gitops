@@ -5,7 +5,7 @@
 
 image:
   repository: ghcr.io/mctlhq/mctl-alice
-  tag: "1.9.2"
+  tag: "1.9.3"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
@@ -24,6 +24,7 @@ env:
   PORT: "8080"
   NODE_ENV: production
   PUBLIC_BASE_URL: https://alice.mctl.ai
+  AUTH_REQUIRED: "true"
 probes:
   startup:
     path: /healthz
