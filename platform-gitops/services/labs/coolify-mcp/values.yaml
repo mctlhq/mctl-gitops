@@ -5,7 +5,7 @@
 
 image:
   repository: ghcr.io/mctlhq/coolify-mcp
-  tag: "3.6.1"
+  tag: "3.7.0"
 imagePullSecrets:
   - name: ghcr-credentials
 # The image's default CMD (dist/index.js) is the stdio single-tenant
@@ -52,6 +52,7 @@ env:
   VAULT_KV_MOUNT: coolify-mcp-users
   VAULT_ROLE: coolify-mcp
   GITHUB_CLIENT_ID: Ov23liWO82B73sZxpZ4o
+  GOOGLE_CLIENT_ID: 195020011949-athrd44imdetadugqqumo233fhka7d53.apps.googleusercontent.com
 ingress:
   enabled: true
   hosts:
@@ -68,6 +69,9 @@ externalSecret:
     - secretKey: GITHUB_CLIENT_SECRET
       remoteKey: teams/labs/coolify-mcp
       property: GITHUB_CLIENT_SECRET
+    - secretKey: GOOGLE_CLIENT_SECRET
+      remoteKey: teams/labs/coolify-mcp
+      property: GOOGLE_CLIENT_SECRET
 envFrom:
   - secretRef:
       name: coolify-mcp-secrets
