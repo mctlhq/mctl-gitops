@@ -150,3 +150,50 @@ resource "cloudflare_zero_trust_access_ai_controls_mcp_server" "projects" {
     ignore_changes = [updated_tools, updated_prompts]
   }
 }
+
+# The fifth upstream, and the second registered by DCR rather than by hand —
+# but for a different reason than `projects`. `alice.mctl.ai` is not fronted
+# by Cloudflare Access at all; the service IS its own OAuth authorization
+# server (src/auth/oauth-controller.ts in mctlhq/mctl-alice), with a fully
+# open `POST /oauth/register` that accepts any client and
+# `token_endpoint_auth_methods_supported` including "none". Measured directly
+# before writing this: a probe registration against
+# https://alice.mctl.ai/oauth/register with this portal's own callback,
+# https://mcp.mctl.ai/servers-callback, as `redirect_uris` succeeds and
+# returns a client_id/client_secret pair — so, same as `projects`, no
+# `auth_credentials` and no `client_secret` here: supplying either is what
+# opts a server INTO manual mode, which this server does not need.
+#
+# What Terraform still cannot do is the first sync. The server sits in
+# `waiting` until an admin completes the upstream OAuth login once from the
+# dashboard; only then does its tool catalogue populate, and only then can
+# scripts/portal-membership-add.sh (which refuses an empty catalogue) add it
+# to the portal. Whoever logs in decides what the twelve tools in the
+# snapshot are: alice_list_devices, alice_send_command,
+# alice_say_phrase, alice_set_volume, alice_media_control,
+# alice_trigger_scenario, alice_control_device, alice_get_device_state,
+# alice_get_device_history, alice_set_light, alice_control_room,
+# alice_get_home_summary (mctlhq/mctl-alice src/tools/definitions.ts). No
+# tool allowlist doc exists yet for mctl-alice (unlike tg/api/seerrsense/
+# projects, each of which owns a docs/portal-allowlist.json) — until one
+# lands, portal-membership-add.sh adds every tool disabled, same as it always
+# does for a brand new member.
+resource "cloudflare_zero_trust_access_ai_controls_mcp_server" "alice" {
+  account_id = var.account_id
+  id         = "alice"
+  name       = "Yandex Alice Smart Home (alice.mctl.ai)"
+  hostname   = "https://alice.mctl.ai/mcp"
+  auth_type  = "oauth"
+
+  description = "Yandex Alice smart-home control (devices, scenarios, rooms). Registered by DCR: the upstream is its own authorization server, not fronted by Access. Refs mctlhq/.github#35."
+
+  secure_web_gateway               = false
+  is_shared_oauth_callback_enabled = false
+
+  lifecycle {
+    # Same reasoning as the servers above: a future docs/portal-allowlist.json
+    # in mctlhq/mctl-alice, applied from that repository, is what should own
+    # updated_tools/updated_prompts — not this file.
+    ignore_changes = [updated_tools, updated_prompts]
+  }
+}
