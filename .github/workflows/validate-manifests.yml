@@ -270,6 +270,17 @@ jobs:
         # extracted loop against a fixture with real yq.
         run: python3 tests/test_tpl_git_commit_yq.py
 
+      - name: Unit-test the shepherd's commit-and-push staging
+        # commit-and-push is the only step that writes agents-state back to
+        # git, and it stages through `git add` pathspecs. A pathspec that
+        # matches nothing exits 128, so under `set -e` a mis-chosen pathspec
+        # does not skip one file — it loses the whole durable write. That has
+        # now happened twice in this script (the `:(literal)` P1 on
+        # gitops#1046, then a staged deletion still being handed to `git add`,
+        # gitops#1295), and both reproduce against real git in a scratch repo,
+        # so the block's own text is replayed here.
+        run: python3 tests/test_cwft_shepherd_commit_pathspecs.py
+
       - name: Unit-test the MCP portal controls apply script
         # The script writes to the portal that fronts tg, seerrsense and api,
         # and the body it PUTs is the portal's own body with three switches

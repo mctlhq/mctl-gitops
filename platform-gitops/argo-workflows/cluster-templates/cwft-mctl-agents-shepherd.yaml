@@ -892,8 +892,12 @@ spec:
           # this script. Widened for mctlhq/mctl-agents#334 (shepherd
           # PR-adoption) / mctl-gitops#1278: an adopted-prs/pr-<n>/.prref.yaml
           # record is as legitimate a commit target as a .status.yaml flip.
-          SPEC_STATUS=':(glob)platform-gitops/agents-state/**/.status.yaml'
-          SPEC_ADOPTED=':(glob)platform-gitops/agents-state/*/adopted-prs/*/**'
+          PATH_STATUS='platform-gitops/agents-state/**/.status.yaml'
+          PATH_ADOPTED='platform-gitops/agents-state/*/adopted-prs/*/**'
+          SPEC_STATUS=":(glob)${PATH_STATUS}"
+          SPEC_ADOPTED=":(glob)${PATH_ADOPTED}"
+          EXCL_STATUS=":(exclude,glob)${PATH_STATUS}"
+          EXCL_ADOPTED=":(exclude,glob)${PATH_ADOPTED}"
           ALLOWED_RE='^platform-gitops/agents-state/(.+/\.status\.yaml|[^/]+/adopted-prs/pr-[0-9]+/\.prref\.yaml)$'
 
           # /tmp/onexit is the onExit channel, collected as an optional artifact.
@@ -952,7 +956,7 @@ spec:
           # exclude pathspecs must be passed together — without SPEC_ADOPTED here, a
           # .prref.yaml the copy above laid down would trip this guard as an
           # unexpected change and fail the whole commit step.
-          NON_STATUS_CHANGES="$(git status --porcelain -z -uall -- ":(exclude,glob)platform-gitops/agents-state/**/.status.yaml" ":(exclude,glob)platform-gitops/agents-state/*/adopted-prs/*/**" | tr '\0' '\n' | cut -c4-)"
+          NON_STATUS_CHANGES="$(git status --porcelain -z -uall -- "$EXCL_STATUS" "$EXCL_ADOPTED" | tr '\0' '\n' | cut -c4-)"
           if [ -n "$NON_STATUS_CHANGES" ]; then
             echo "❌ Refusing to commit changes outside the allowed agents-state subtree:" >&2
             printf '%s\n' "$NON_STATUS_CHANGES" >&2
@@ -967,15 +971,31 @@ spec:
           fi
 
           # `git add` with a pathspec that matches nothing exits 128 under `set -e`,
-          # so only pass the pathspecs that actually have matching changes.
+          # so only pass the pathspecs that actually have something left to add.
+          #
+          # "has changes" is NOT the same test: the `git rm` loop above has
+          # already staged its deletions, and `git status` keeps reporting them
+          # (`D `) while the paths are gone from both the index and the worktree.
+          # Handing such a pathspec to `git add` therefore matches nothing and
+          # exits 128, killing commit-and-push under `set -e` — losing the whole
+          # durable write, not just the deletion (agy P2 on gitops#1295). A
+          # deletion staged by `git rm` needs no `git add` at all, so a pathspec
+          # is only worth passing when something that is not an already-staged
+          # deletion is waiting for it.
+          needs_add() {
+            git status --porcelain -z -uall -- "$1" | tr '\0' '\n' | grep -qv '^D '
+          }
+
           set --
-          if [ -n "$(git status --porcelain -z -uall -- "$SPEC_STATUS")" ]; then
+          if needs_add "$SPEC_STATUS"; then
             set -- "$@" "$SPEC_STATUS"
           fi
-          if [ -n "$(git status --porcelain -z -uall -- "$SPEC_ADOPTED")" ]; then
+          if needs_add "$SPEC_ADOPTED"; then
             set -- "$@" "$SPEC_ADOPTED"
           fi
-          git add -- "$@"
+          if [ "$#" -gt 0 ]; then
+            git add -- "$@"
+          fi
 
           if git diff --cached --quiet; then
             # Defensive: AGENT_STATE_CHANGES already proved there are
