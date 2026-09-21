@@ -1,6 +1,6 @@
-status: proposed
-updated_at: '2026-09-21T14:34:35Z'
-updated_by: mashkovd
+status: accepted
+updated_at: '2026-09-21T14:37:43Z'
+updated_by: mctl-agents[bot]
 source:
   type: github_issue
   repo: mctlhq/mctl-agents
@@ -23,3 +23,6 @@ notes: >-
   have survived the sanctioned approve untouched. It lands as proposed and is
   approved through that CWFT against this slug, which writes its own
   approved_by/approved_at.
+approval:
+  approved_by: 'mashkovd'
+  approved_at: '2026-09-21T14:37:43Z'
