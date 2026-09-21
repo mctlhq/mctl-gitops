@@ -89,6 +89,20 @@ spec:
         # Registry version string (e.g. issue-investigator@1.2.0), carried
         # for the record only — not consumed by run-investigator. Left blank
         # by any caller not yet using the registry.
+      - name: work_item_id
+        value: ""
+        # Optional. Canonical WorkItem id, minted by the caller (the dev-loop
+        # control plane). Forwarded verbatim to run_issue_investigator.py as
+        # --work-item-id and omitted entirely when empty. NOT defaulted to a
+        # generated value: an invented id would bind the run to a WorkItem
+        # that does not exist. Consumed by mctl-agents#267 — requires an
+        # agent_image containing that change; an earlier pin does not
+        # recognise the flag and exits non-zero.
+      - name: execution_id
+        value: ""
+        # Optional. Execution identity for THIS attempt, minted by the same
+        # caller alongside work_item_id. Same omit-when-empty rule, and the
+        # same agent_image requirement as work_item_id above.
 
   # ── No PVC ──────────────────────────────────────────────────────────────
   # This used to be a `volumeClaimTemplates` entry requesting 4Gi, which Argo
@@ -337,6 +351,17 @@ spec:
             # the shell command. `set --` keeps it a single quoted token.
             set -- python -m orchestrator.run_issue_investigator \
               --issue-url "$WORKFLOW_ISSUE_URL"
+            # Optional work-context identifiers (gitops#1279). Appended only
+            # when the caller supplied them, so a submit that omits both
+            # produces the exact argv this template produced before they
+            # existed. No default is invented for either: an empty value
+            # means absent, not "derive one".
+            if [ -n "$WORKFLOW_WORK_ITEM_ID" ]; then
+              set -- "$@" --work-item-id "$WORKFLOW_WORK_ITEM_ID"
+            fi
+            if [ -n "$WORKFLOW_EXECUTION_ID" ]; then
+              set -- "$@" --execution-id "$WORKFLOW_EXECUTION_ID"
+            fi
             printf '→'
             printf ' %s' "$@"
             printf '\n'
@@ -493,6 +518,15 @@ spec:
           # the script body is a shell-injection vector.
           - name: WORKFLOW_ISSUE_URL
             value: "{{workflow.parameters.issue_url}}"
+          # Same reasoning as WORKFLOW_ISSUE_URL above, and enforced by
+          # scripts/validate-shell-param-interpolation.py: these names are in
+          # neither its BASELINE nor its CONSTRAINED set, so interpolating
+          # them into the script body above fails CI rather than merely
+          # being discouraged.
+          - name: WORKFLOW_WORK_ITEM_ID
+            value: "{{workflow.parameters.work_item_id}}"
+          - name: WORKFLOW_EXECUTION_ID
+            value: "{{workflow.parameters.execution_id}}"
           # entrypoint.sh symlinks <state>/<svc>/proposals onto the baked-in
           # agents/<svc>/; run_issue_investigator reads STATE_DIR directly.
           - name: STATE_DIR
