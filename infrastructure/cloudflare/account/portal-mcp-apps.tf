@@ -76,3 +76,39 @@ resource "cloudflare_zero_trust_access_application" "portal_member_projects" {
     },
   ]
 }
+
+# Same reasoning as portal_member_projects above, for the portal's fifth
+# member. `alice` (infrastructure/cloudflare/portal/mcp-servers.tf) is a
+# server resource and — once an admin completes its first DCR login and
+# scripts/portal-membership-add.sh runs — a portal `servers[]` entry, but
+# neither of those creates this third object, and without it the server is
+# invisible in the portal for everyone regardless of how many tools it has.
+resource "cloudflare_zero_trust_access_application" "portal_member_alice" {
+  account_id = var.account_id
+  name       = "MCP server: alice (via portal mcp.mctl.ai)"
+  type       = "mcp"
+
+  destinations = [
+    {
+      type          = "via_mcp_server_portal"
+      mcp_server_id = "alice"
+    },
+  ]
+
+  session_duration = "24h"
+
+  # Same two named addresses as every other portal member's app — this is
+  # still the owner's private aggregate view, not a customer-facing door.
+  policies = [
+    {
+      name       = "Phase 0 pilot users"
+      decision   = "allow"
+      precedence = 1
+
+      include = [
+        { email = { email = "mashkoffdmitry@gmail.com" } },
+        { email = { email = "mashkovdm.dm@gmail.com" } },
+      ]
+    },
+  ]
+}
