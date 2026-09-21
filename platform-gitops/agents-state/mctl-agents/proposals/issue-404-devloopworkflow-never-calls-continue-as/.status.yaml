@@ -1,5 +1,5 @@
 status: rejected
-updated_at: '2026-09-21T07:00:07Z'
+updated_at: '2026-09-21T16:19:49Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -16,4 +16,4 @@ github:
   state: closed
   observed_at: '2026-09-21T07:00:07Z'
   head_sha: 9981bcb4cb29aab3a9624bfc38a8846fcc332a54
-notes: GitHub PR was closed without merging.
+notes: PR was closed without merging.
