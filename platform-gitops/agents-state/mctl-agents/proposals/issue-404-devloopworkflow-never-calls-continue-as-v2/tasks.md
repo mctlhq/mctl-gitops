@@ -59,6 +59,14 @@
   `while ... and not self._abandoned` condition (`:2703`) is preserved
   verbatim.
 
+- [ ] 5a. Make the abandon guard resume-aware (depends on 5). `if self._abandoned:
+  return None` at `:2621-2622` runs BEFORE the deadline is computed at `:2623`;
+  on the resume path it must return the carried `last_pr` instead of `None`, so a
+  carried abandon does not erase the PR state earlier runs observed. The
+  unpatched/non-resume path keeps returning `None` unchanged.
+  — DoD: covered by T5; no behaviour change for an execution without a resume
+  record.
+
 - [ ] 6. Make the `finally` block (`:2843`) skip the relinquishing
   `release`/`terminal` write and `_report_claim_abandonment` (`:2905-2907`)
   when the watch is hopping (depends on 5), while still draining a finished
@@ -85,6 +93,14 @@
   — DoD: covered by T5; the early-exit path at `:2621` is reached without an
   intervening poll sleep.
 
+- [ ] 8a. Keep `DevLoopResult.ended` correct across a hop (depends on 7). The
+  field (`:544-550`) is written at seven return sites; `:1309`
+  (`ended=f"abandoned: {self._abandon_reason}" if self._abandoned else ""`) is
+  the only record of a merge-watch abandon and is what `cli.py status` prints on
+  a COMPLETED execution. The final run of a hopped watch must populate it exactly
+  as an unhopped watch would.
+  — DoD: asserted by T5b; no return site loses its `ended=` argument.
+
 - [ ] 9. Log one line per hop (depends on 7): service/slug, history length,
   polls completed this run, hop number, and time left to the carried deadline.
   — DoD: `workflow.logger.info`, plain words, no emoji (CONTRIBUTING.md code
@@ -96,7 +112,10 @@
   `python3 tools/diagram_facts.py --update` so `merge-watch-continue-as-new`
   joins the scraped `patched_markers` list, and update the dev-loop diagram
   sublabels in `docs/diagrams/archify/dev-loop.workflow.json` if they still say
-  "poll 30 min".
+  "poll 30 min". #434 is the precedent for how wide this goes: it also touched
+  `docs/temporal-flow.md`, `docs/diagrams/temporal-flow-states.mmd` and
+  `docs/diagrams/temporal-flow-devloop-sequence.mmd`. A change that adds a run
+  boundary to the state machine should expect the same set.
   — DoD: `uv run pytest tests/test_diagram_facts.py` green;
   `python3 tools/diagram_facts.py` reports no drift.
 
@@ -132,6 +151,14 @@
   predicate would otherwise fire, and assert the watch ends with the abandon
   path rather than continuing; and after a forced hop, assert `abandon_state`
   in the continued run still reports the carried `abandoned`/`reason`.
+- [ ] T5a. **A carried abandon does not erase the PR state**: force a hop, then
+  signal `abandon`, and assert the final result carries the last observed
+  `PRState` rather than `None` — i.e. the guard at `:2621-2622` took the resume
+  path (task 5a).
+- [ ] T5b. **`ended` survives the hop**: after a forced hop the final
+  `DevLoopResult.ended` is `""` for a normal terminal state and
+  `abandoned: <reason>` when the watch ended on a carried abandon, matching what
+  `:1309` produces today.
 - [ ] T6. Queries survive the boundary: after a forced hop, `shepherd_in_loop`
   still answers True, `implement_execution` still reports `stage="implementer"`
   with the pre-hop `outcome`, `lifecycle_claim` still names the same
@@ -145,9 +172,32 @@
   hop past `MERGE_WATCH_MAX_HOPS`, no hop while `_abandoned`, and a hop when
   only `is_continue_as_new_suggested()` is true.
 - [ ] T9. Attrition holds: `uv run pytest tests/test_workflow_replay.py` stays
-  green against `tests/fixtures/histories/dev_loop_full.prepatch.json`, plus a
-  new content guard asserting `"merge-watch-continue-as-new"` is absent from
-  the prepatch history's patch ids.
+  green, plus a new content guard asserting `"merge-watch-continue-as-new"` is
+  absent from the prepatch history's patch ids — mirror
+  `test_prepatch_history_predates_the_approval_watch`
+  (`tests/test_workflow_replay.py:218`), which #434 added for exactly this
+  purpose. Note `_STANDALONE_FIXTURES` (`:473`) and the parked-history replay
+  `test_parked_history_replays_against_current_definitions` (`:244`, over the
+  new `tests/fixtures/histories/dev_loop_parked.json`) impose the same fixture
+  discipline on any new marker.
+
+- [ ] T9a. **#434's suites stay green unmodified.** These pin the behaviour this
+  change builds on; if any needs editing, the change is wrong:
+  `tests/test_dev_loop_workflow.py` —
+  `test_abandon_signal_ends_a_parked_loop` (:630),
+  `test_parked_loop_ends_when_the_source_issue_closes` (:669),
+  `test_parked_loop_expires_at_the_approval_deadline` (:711),
+  `test_issue_state_failure_while_parked_keeps_waiting` (:737),
+  `test_parked_closed_issue_not_resurrected_by_late_approve` (:830),
+  `test_abandon_signal_cuts_short_a_merge_watch_and_releases_ownership` (:1598)
+  — **the most likely casualty**, since it pins that an abandon RELEASES the
+  ownership row while task 6 makes a HOP skip that release —
+  and `test_abandon_signal_before_pr_watch_terminates_cleanly` (:1659);
+  `tests/test_temporal_cli.py` :53, :70, :80; and
+  `tests/test_run_implementer_approval.py:337`.
+  Caution: the lifecycle-claim suite at `tests/test_dev_loop_workflow.py:2188-2310`
+  exercises `_claim_abandoned` (the ownership row), NOT `_abandoned` (the
+  operator signal). Similar names, different attributes — do not conflate them.
 - [ ] T10. Re-record only the patched fixture:
   `uv run python tools/record_workflow_history.py --kind patched dev_loop_full`,
   commit the diff, and confirm the existing patched-history assertions still

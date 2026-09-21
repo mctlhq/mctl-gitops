@@ -17,8 +17,11 @@ Everything after that (deploy observation at 1280, incident watch at 1291, the
 `DevLoopResult` at 1307) consumes the watch's result.
 
 `_watch_pr` (`dev_loop.py:2613`, signature
-`(self, service: str, slug: str) -> PRState | None`) is the whole cost. The
-loop condition is `while workflow.now() < deadline and not self._abandoned:`
+`(self, service: str, slug: str) -> PRState | None`) is the whole cost. It opens
+with `if self._abandoned: return None` (`:2621-2622`) and only then computes
+`deadline = workflow.now() + MERGE_WATCH_DEADLINE` (`:2623`) — the guard is
+**before** the deadline, which matters for resume (see §3 below). The loop
+condition is `while workflow.now() < deadline and not self._abandoned:`
 (2703) inside a `try` at 2697 with a `finally` at 2843. One poll is one
 `ACTIVITY_TASK_SCHEDULED`/`STARTED`/`COMPLETED` triple, one
 `TIMER_STARTED`/`FIRED` pair, and the workflow tasks between them — the
@@ -42,7 +45,16 @@ instance state: `implement_execution` (924), `shepherd_in_loop` (929),
 `shepherd_in_loop`, and stands the cron sweeper down when it answers True — so
 that query is load-bearing for "who shepherds this PR". `abandon_state` is what
 lets `cli.py status` distinguish "still parked" from "an operator ended this",
-per its own docstring.
+per its own docstring. #434 also added a `cli.py abandon <workflow_id> --reason`
+subcommand, so the signal is an operator-facing feature, not an internal detail.
+
+**`DevLoopResult.ended`.** #434 added a seventh field (`:544-550`), written at
+seven return sites (`:1029`, `:1086`, `:1093`, `:1116`, `:1206`, `:1257`,
+`:1309`). `:1309` is the one this change must preserve:
+`ended=f"abandoned: {self._abandon_reason}" if self._abandoned else ""`. It is
+the ONLY record that a merge-watch abandon happened, because `_watch_pr` returns
+normally rather than raising, and `cli.py status` prints it on a COMPLETED
+execution.
 
 **Instance state on `main`**, from `__init__`: `_implement_state`, `_cadence`,
 `_approved`, `_approver`, `_shepherd_in_loop`, `_owned_entity_id`,
@@ -152,6 +164,14 @@ implement submit. The tail of `run` (deploy observation, incident watch,
 `DevLoopResult`) is shared and builds its result from the carried
 `investigate`/`implement`/`approve` values.
 
+**3a. The abandon guard must not eat the carried state.** Because
+`if self._abandoned: return None` (`:2621-2622`) runs before anything else in
+`_watch_pr`, a continued run carrying `abandoned=True` would return `None` and
+throw away the `PRState` earlier runs observed — the final `DevLoopResult` would
+then report no PR for a watch that had been following one for days. On the
+resume path the guard returns the carried `last_pr` instead of `None`. The
+unpatched path keeps returning `None` exactly as today.
+
 **3. `_watch_pr` returns a decision and never raises the hop.** Its return type
 becomes `_WatchOutcome(last: PRState | None, resume: MergeWatchResume | None)`.
 At the top of each poll it evaluates a hop predicate; when it fires it sets a
@@ -193,6 +213,16 @@ valid.
 - `hops < MERGE_WATCH_MAX_HOPS` (new constant, 16). Past it the loop logs an
   error and keeps watching; the watch is observational and must never fail over
   its own bound.
+
+**4a. Two `finally` branches that look alike and are not.** The `finally` at
+`:2843` serves both "the watch ended" and "the watch is hopping". The existing
+test `test_abandon_signal_cuts_short_a_merge_watch_and_releases_ownership`
+(`tests/test_dev_loop_workflow.py:1598`) pins that an **abandon** releases the
+ownership row; this change makes a **hop** skip that release. Those must stay
+independent: the skip is conditioned on `hopping`, never on `self._abandoned`,
+and because the hop predicate refuses to fire while `_abandoned` is set the two
+conditions are mutually exclusive by construction. That existing test must stay
+green unmodified — if it needs editing, the change is wrong.
 
 **5. Signal safety across the boundary.** Temporal can lose a signal that
 races a continue-as-new. Before #434 this was a non-issue for this workflow;
@@ -295,6 +325,13 @@ input. No new activity, so no worker registration and no queue-routing change.
   ownership decisions as data rather than re-deriving them from markers. It
   remains a real, accepted narrowing of the attrition property and belongs in
   the PR description.
+- *A hop erases the observed PR state through the abandon guard.* Mitigated by
+  §3a (the guard returns the carried `last_pr` on the resume path) and by a test
+  asserting a carried abandon still yields the last observed `PRState` and an
+  `ended` of `abandoned: <reason>`.
+- *A hop silently loses `DevLoopResult.ended`.* Mitigated by building the final
+  result from carried state and by asserting `ended` after a forced hop, since
+  `cli.py status` is the operator's only view of why a watch stopped.
 - *Rollback while continued runs exist.* Mitigated by the two-step rollback in
   tasks.md: disable the hop predicate first, keep the resume path until the
   hopping executions drain.

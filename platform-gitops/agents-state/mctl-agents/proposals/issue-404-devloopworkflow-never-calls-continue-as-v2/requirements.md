@@ -61,6 +61,22 @@ Verified against current `main`, not against the superseded proposal's notes:
   after a hop.
 - **`_cadence` is instance state.** `self._cadence` is set in `__init__`
   and bound for real in `_watch_pr`; it is not only a local.
+- **`DevLoopResult` gained a seventh field, `ended: str`** (`dev_loop.py:544-550`),
+  written at seven return sites. `dev_loop.py:1309` —
+  `ended=f"abandoned: {self._abandon_reason}" if self._abandoned else ""` — is the
+  ONLY place a merge-watch abandon is recorded, because `_watch_pr` cuts the watch
+  short silently rather than raising. `cli.py status` prints it on a COMPLETED
+  execution, so it is operator-visible.
+- **The abandon guard sits before the deadline is computed.**
+  `if self._abandoned: return None` at `dev_loop.py:2621-2622` precedes
+  `deadline = workflow.now() + MERGE_WATCH_DEADLINE` at `:2623`. A continued run
+  that re-enters `_watch_pr` carrying `abandoned=True` would hit this guard first
+  and return `None`, discarding the `PRState` earlier runs observed.
+- **The approval park has its own relative deadline.** `APPROVAL_POLL_INTERVAL`
+  and `APPROVAL_WAIT_DEADLINE` (`dev_loop.py:183-184`) with
+  `approval_deadline = workflow.now() + APPROVAL_WAIT_DEADLINE` at `:1049` — the
+  same recompute-on-entry hazard as the merge watch, and a reason a resumed run
+  must not re-enter the park at all.
 - **Line numbers moved.** The watch is `_watch_pr` at `dev_loop.py:2613`
   (`(self, service: str, slug: str) -> PRState | None`), its `try` at 2697 and
   its `finally` at 2843; the four cadence/shepherd/ownership markers are now at
@@ -112,7 +128,7 @@ Verified against current `main`, not against the superseded proposal's notes:
   approval park, the stale-issue admission check, `find_proposal_slug`, the
   approve CWFT or the implement submit.
 - WHEN a continued run starts THE SYSTEM SHALL rehydrate `_implement_state`,
-  `_shepherd_in_loop`, `_cadence`, the full lifecycle-claim state
+  `_shepherd_in_loop`, `_cadence`, `_approved`, `_approver`, the full lifecycle-claim state
   (`_owned_entity_id`, `_owner_epoch`, `_owned_head_sha`,
   `_poll_index_for_heartbeat`, `_claim_refused`, `_claim_refused_until_poll`,
   `_refused_by_type`, `_refused_by_id`, `_refusals_observed`,
@@ -121,6 +137,14 @@ Verified against current `main`, not against the superseded proposal's notes:
   `_last_lifecycle_op_landed`, `_claim_abandoned`) and the abandon state from
   its input, so all FOUR `@workflow.query` handlers answer as the previous run
   would have.
+- IF a continued run re-enters the merge watch while its carried `abandoned` is
+  true THEN THE SYSTEM SHALL end the watch returning the carried `last_pr`, and
+  SHALL NOT return `None` from the guard at `dev_loop.py:2621-2622`, so an
+  abandon does not erase the PR state earlier runs observed.
+- WHEN the final run of a hopped watch returns THE SYSTEM SHALL populate
+  `DevLoopResult.ended` exactly as an unhopped watch would — in particular
+  `abandoned: <reason>` when the watch ended on a carried abandon — so
+  `cli.py status` reports the same thing whether or not the watch hopped.
 - WHILE hopping THE SYSTEM SHALL NOT issue a lifecycle `release` or `terminal`
   write, and SHALL keep the claim (owner id is `workflow.info().workflow_id`,
   stable across continue-as-new) and the epoch it already holds.
@@ -169,6 +193,9 @@ Verified against current `main`, not against the superseded proposal's notes:
   `ReconcileWorkflow`.
 - The lifecycle `handoff-start`/`handoff/complete` flip (#353).
 - Reducing per-poll event cost.
+- Changing `APPROVAL_POLL_INTERVAL` / `APPROVAL_WAIT_DEADLINE` or giving the
+  approval park an absolute carried deadline. A resumed run never re-enters the
+  park, so the same hazard exists there but is not this change's to fix.
 
 ## Open questions
 
