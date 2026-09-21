@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-09-21T00:17:45Z'
+status: review-stuck
+updated_at: '2026-09-21T00:30:34Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -24,4 +24,8 @@ github:
 ci_blockers_head: c0222ec085c92bdeeaa7468011ac82e7c4611bcc
 ci_blockers:
 - build / test
-harness_failures: 2
+harness_failures: 3
+notes: The platform lost the implementer's work 3 time(s) in a row (implementer follow-up
+  exited non-zero (46) for mctl-telegram/issue-438-feat-clients-model-notification-identity).
+  This is a harness defect, not a problem with the proposal — review_attempts was
+  never charged. Human triage required; see mctl-agents#366.
