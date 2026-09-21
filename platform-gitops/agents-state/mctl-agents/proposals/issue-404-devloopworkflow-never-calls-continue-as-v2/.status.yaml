@@ -1,5 +1,5 @@
-status: review-stuck
-updated_at: '2026-09-21T17:20:16Z'
+status: implemented
+updated_at: '2026-09-21T23:04:30Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -19,10 +19,5 @@ attempt:
 pr: https://github.com/mctlhq/mctl-agents/pull/442
 github:
   state: open
-  head_sha: b70f579bb4f0c6d428f35dba0cf5725ce8b07e3b
-  observed_at: '2026-09-21T16:19:50Z'
-harness_failures: 3
-notes: The platform lost the implementer's work 3 time(s) in a row (implementer follow-up
-  exited non-zero (46) for mctl-agents/issue-404-devloopworkflow-never-calls-continue-as-v2).
-  This is a harness defect, not a problem with the proposal — review_attempts was
-  never charged. Human triage required; see mctl-agents#366.
+  head_sha: 0e4bcf1d6391d236b4b59d81cc310af7488f2273
+  observed_at: '2026-09-21T23:04:30Z'

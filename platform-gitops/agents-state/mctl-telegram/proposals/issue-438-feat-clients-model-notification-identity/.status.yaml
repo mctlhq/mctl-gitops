@@ -1,5 +1,5 @@
-status: review-stuck
-updated_at: '2026-09-21T17:36:06Z'
+status: implemented
+updated_at: '2026-09-21T23:07:38Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -24,16 +24,3 @@ github:
 ci_blockers_head: c0222ec085c92bdeeaa7468011ac82e7c4611bcc
 ci_blockers:
 - build / test
-harness_failures: 3
-notes: 'The platform lost the implementer''s work 3 time(s) in a row (implementer
-  follow-up exited non-zero (51) for mctl-telegram/issue-438-feat-clients-model-notification-identity).
-  This is a harness defect, not a problem with the proposal — review_attempts was
-  never charged. Human triage required; see mctl-agents#366. Reason: The bounded CI
-  log excerpt for the failing ''test'' job elides the actual failure (178751 bytes
-  elided between runner setup and an unrelated macos test-cross-platform teardown
-  tail), so the real error (panic, race, or specific test failure) is not visible
-  in the evidence provided. I attempted to reproduce locally: ''go build ./...'' and
-  ''go vet ./...'' succeeded, but ''go test -race ./...'' (the exact CI command) did
-  not complete within the available run time, and a follow-up scoped run on ''go test
-  -race ./internal/db/...'' (the package with the largest diff for this proposal:
-  identity_capture.go, not'
