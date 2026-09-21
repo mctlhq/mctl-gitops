@@ -1,5 +1,5 @@
-status: accepted
-updated_at: '2026-09-21T14:37:43Z'
+status: implemented
+updated_at: '2026-09-21T15:48:49Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -8,21 +8,12 @@ source:
   url: https://github.com/mctlhq/mctl-agents/issues/404
 control:
   requires_human_approval: true
-notes: >-
-  Supersedes issue-404-devloopworkflow-never-calls-continue-as, whose
-  implementation PR mctlhq/mctl-agents#437 was closed without merging after it
-  conflicted with mctlhq/mctl-agents#434 (1.53.0). That slug cannot be revived:
-  a closed-unmerged PR pins it to rejected forever (mctlhq/mctl-agents#438), so
-  the work continues here under a new slug and a new deterministic branch. The
-  superseded proposal is kept as a historical artifact and must not be edited.
-  This proposal carries NO approval block on purpose. An earlier revision of
-  this PR copied v1's approved_by/approved_at forward; that forges the exact
-  record the gate exists to require (see issue-349-a-proposal-committed-
-  straight-to-accepte/design.md), and cwft-mctl-agents-approve.yaml only
-  appends an approval block when none is present, so a carried block would
-  have survived the sanctioned approve untouched. It lands as proposed and is
-  approved through that CWFT against this slug, which writes its own
-  approved_by/approved_at.
 approval:
-  approved_by: 'mashkovd'
+  approved_by: mashkovd
   approved_at: '2026-09-21T14:37:43Z'
+attempt:
+  id: 33a541b1a980161a9885e2f6bf6f636cc212e7e8d17c841c93e90232f050fab7
+  started_at: '2026-09-21T15:12:25Z'
+  expires_at: '2026-09-21T17:22:25Z'
+  finished_at: '2026-09-21T15:48:49Z'
+pr: https://github.com/mctlhq/mctl-agents/pull/442
