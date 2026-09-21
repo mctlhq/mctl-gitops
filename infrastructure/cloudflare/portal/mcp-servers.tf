@@ -168,8 +168,8 @@ resource "cloudflare_zero_trust_access_ai_controls_mcp_server" "projects" {
 # `waiting` until an admin completes the upstream OAuth login once from the
 # dashboard; only then does its tool catalogue populate, and only then can
 # scripts/portal-membership-add.sh (which refuses an empty catalogue) add it
-# to the portal. Whoever logs in decides what the eight — sorry, twelve —
-# tools in the snapshot are: alice_list_devices, alice_send_command,
+# to the portal. Whoever logs in decides what the twelve tools in the
+# snapshot are: alice_list_devices, alice_send_command,
 # alice_say_phrase, alice_set_volume, alice_media_control,
 # alice_trigger_scenario, alice_control_device, alice_get_device_state,
 # alice_get_device_history, alice_set_light, alice_control_room,
