@@ -1,0 +1,22 @@
+status: accepted
+updated_at: '2026-09-21T07:43:21Z'
+updated_by: mashkovd
+source:
+  type: github_issue
+  repo: mctlhq/mctl-agents
+  issue: 404
+  url: https://github.com/mctlhq/mctl-agents/issues/404
+control:
+  requires_human_approval: true
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-09-20T21:52:58Z'
+notes: >-
+  Supersedes issue-404-devloopworkflow-never-calls-continue-as, whose
+  implementation PR mctlhq/mctl-agents#437 was closed without merging after it
+  conflicted with mctlhq/mctl-agents#434 (1.53.0). That slug cannot be revived:
+  a closed-unmerged PR pins it to rejected forever (mctlhq/mctl-agents#438), so
+  the work continues here under a new slug and a new deterministic branch. The
+  approval block is the same human approval for the same source issue, carried
+  forward deliberately; the superseded proposal is kept as a historical
+  artifact and must not be edited.
