@@ -242,6 +242,16 @@ jobs:
               -ignore-filename-pattern '.*/vm-rules/tests/generated/.*' \
               -schema-location "$CRD_SCHEMA_LOCATION"
 
+      - name: Unit-test the investigate CWFT's optional work-context argv
+        # The omit-both argv is a cross-repo compatibility contract, not a
+        # style preference: mctl_trigger_issue, a hand-submitted Workflow,
+        # and the DevLoopWorkflow all submit without work_item_id or
+        # execution_id today, and the command line they get must stay
+        # byte-identical to what run-investigator built before these two
+        # optional parameters existed (gitops#1279). Also proves the `set --`
+        # construction resists a value carrying shell metacharacters.
+        run: python3 tests/test_cwft_investigate_work_context_argv.py
+
       - name: Unit-test the release-deploy bump script
         # The image-tag rewriter is a heredoc inside release-deploy.yaml, so
         # it only ever runs during a real release — a bug in it is found by
