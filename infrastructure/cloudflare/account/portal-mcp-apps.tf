@@ -40,8 +40,9 @@ resource "cloudflare_zero_trust_access_application" "portal_member_projects" {
 
   # The field shape is copied from the live `api` application rather than from
   # documentation: GET /accounts/{account_id}/access/apps/{id} on it returns
-  # exactly this destination type with the server id, `allowed_idps: []`,
-  # `auto_redirect_to_identity: false` and a 24h session.
+  # exactly this destination type with the server id, `allowed_idps: []` and
+  # `auto_redirect_to_identity: false`. Its session is raised to one year
+  # to match the portal's own application (portal-app.tf).
   destinations = [
     {
       type          = "via_mcp_server_portal"
@@ -49,7 +50,7 @@ resource "cloudflare_zero_trust_access_application" "portal_member_projects" {
     },
   ]
 
-  session_duration = "24h"
+  session_duration = "8760h"
 
   # Named addresses, deliberately NOT the "any account from the Google
   # provider" policy that projects-mcp.tf uses for projects.mctl.ai itself.
@@ -95,7 +96,7 @@ resource "cloudflare_zero_trust_access_application" "portal_member_alice" {
     },
   ]
 
-  session_duration = "24h"
+  session_duration = "8760h"
 
   # Same two named addresses as every other portal member's app — this is
   # still the owner's private aggregate view, not a customer-facing door.
