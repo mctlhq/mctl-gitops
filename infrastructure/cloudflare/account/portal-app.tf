@@ -23,7 +23,7 @@
 # connected client.
 import {
   to = cloudflare_zero_trust_access_application.mcp_portal
-  id = "accounts/6a09f637d20e1f66a8e9d45ebe778058/fd76d449-63a4-4c3a-83c5-4686a3815d2c"
+  id = "accounts/${var.account_id}/fd76d449-63a4-4c3a-83c5-4686a3815d2c"
 }
 
 resource "cloudflare_zero_trust_access_application" "mcp_portal" {
