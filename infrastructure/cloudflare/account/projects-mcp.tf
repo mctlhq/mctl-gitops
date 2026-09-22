@@ -87,7 +87,14 @@ resource "cloudflare_zero_trust_access_application" "projects_mcp" {
 
   # An MCP client is not a browser and has nobody to show a launcher to.
   app_launcher_visible = false
-  session_duration     = "24h"
+
+  # One year. Cloudflare's Session Management page documents "immediate
+  # timeout to one month" for an application session, but the API validates
+  # nothing here -- a probe app accepted 730h, 744h, 8760h and 87600h on
+  # 2026-09-23 and read each back unchanged. Chosen deliberately by the owner
+  # over the documented month; if Access turns out to clamp it at runtime the
+  # effect is the month, still thirty times the old 24h.
+  session_duration = "8760h"
 
   # Access as the OAuth authorization server for this application.
   oauth_configuration = {
@@ -153,9 +160,19 @@ resource "cloudflare_zero_trust_access_application" "projects_mcp" {
       allow_any_on_localhost = true
     }
 
+    # How long the refresh token lives, i.e. how often a person -- and the
+    # portal's own admin credential for capability sync -- must sign in again.
+    # At 24h the portal's daily sync ran into an expired refresh token every
+    # day: `projects` went `stale` / `Authorization failed: needs_reauth`
+    # (last good sync 2026-09-21 22:11, failed 2026-09-22 22:05) and the
+    # server showed "Authorization Required" to its users. Cloudflare
+    # documents no ceiling for this field and the API accepts any value; it
+    # matches the application session above (one year) rather than outliving
+    # it. The access token stays short: every refresh
+    # re-evaluates the Access policy.
     grant = {
       access_token_lifetime = "1h"
-      session_duration      = "24h"
+      session_duration      = "8760h"
     }
   }
 
