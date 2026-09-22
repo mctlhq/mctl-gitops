@@ -50,16 +50,21 @@ resource "cloudflare_zero_trust_access_application" "mcp_portal" {
 
   session_duration = "8760h"
 
+  # Pinned to the live values. Left unset, the provider plans
+  # `http_only_cookie_attribute` false -> true (its own default) and the other
+  # two false -> null, which would change the portal's cookie on import.
+  enable_binding_cookie      = false
+  http_only_cookie_attribute = false
+  options_preflight_bypass   = false
+
+  # The existing app-scoped policy (include: mashkoffdmitry@gmail.com,
+  # mashkovdm.dm@gmail.com), referenced by id so the import leaves it as it
+  # is. Writing it inline would rewrite the policy the portal's own door
+  # depends on as part of an import that exists only to change a duration.
   policies = [
     {
-      name       = "Phase 0 pilot users"
-      decision   = "allow"
+      id         = "5f0102c7-fd88-499c-9b15-9167633d6c63"
       precedence = 1
-
-      include = [
-        { email = { email = "mashkoffdmitry@gmail.com" } },
-        { email = { email = "mashkovdm.dm@gmail.com" } },
-      ]
     },
   ]
 }
