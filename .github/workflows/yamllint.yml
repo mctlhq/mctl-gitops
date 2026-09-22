@@ -34,13 +34,25 @@ jobs:
           pipx install yamllint==1.35.1
           cat > /tmp/yamllint.yml <<'CFG'
           extends: relaxed
-          # helm-charts/ templates and the two prod-placeholder files start with
-          # bare `{{- ... }}` Go-template directives, which aren't valid YAML on
-          # their own — yamllint can't parse them regardless of rule config.
+          # A file whose FIRST content is a bare `{{- ... }}` Go-template
+          # directive is not valid YAML on its own: the parser reads `{{` as
+          # the start of two nested flow mappings and dies on the `-`, which
+          # no rule config changes and a leading `---` does not fix either
+          # (both checked). helm-charts/ is excluded wholesale for this; the
+          # named files are the ones outside it that lead with a directive —
+          # the two prod placeholders, and the two issue-903 evaluation
+          # templates whose entire body sits inside an `{{- if }}` gate.
+          #
+          # Named files rather than excluding bootstrap/templates/ as a
+          # directory: that would drop 54 currently-linted templates to spare
+          # 2, and the duplicate-key class this job exists to catch
+          # (gitops#1102) lives in exactly those files.
           ignore: |
             platform-gitops/helm-charts/
             platform-gitops/bootstrap/templates/bootstrap/applicationset-prod.yaml
             platform-gitops/bootstrap/templates/projects/project-prod.yaml
+            platform-gitops/bootstrap/templates/observability/eval-namespace.yaml
+            platform-gitops/bootstrap/templates/observability/eval-candidates.yaml
           rules:
             # Helm templates routinely exceed 80 cols and carry Go-template
             # markers, so line-length / comments / document-start are noise.

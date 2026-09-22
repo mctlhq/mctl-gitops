@@ -1,0 +1,82 @@
+# issue-903: one ArgoCD Application per trace-backend candidate under
+# evaluation, into `observability-eval` (eval-namespace.yaml). Gated off by
+# default alongside it -- see that file's header for the full rationale.
+#
+# The candidate list is a values input, not five hardcoded Applications,
+# because this proposal's Stage A paper screen
+# (docs/adr/0001-rubric.yaml `stage_a`) could not verify any candidate's
+# current chart coordinates, license or dependency set offline -- committing
+# an unverified pin into a GitOps repo that ArgoCD treats as truth would put
+# a fabricated fact where a reviewed one belongs. mctlhq/mctl-gitops#1280
+# fills this list with the Stage A survivors' verified pins.
+#
+# When #1280 fills this in: disable each candidate chart's own
+# ServiceMonitor/PodMonitor preset if it has one. vmagent runs
+# selectAllByDefault: true
+# (bootstrap/templates/observability/monitoring.yaml:287), so a
+# chart-rendered ServiceMonitor/PodMonitor is discovered too, alongside
+# whatever this evaluation's own scrape config adds -- the same double-scrape
+# shape as incident #1159 (already worked around for otel-collector itself
+# in otel-collector.yaml's serviceMonitor/podMonitor: enabled: false). This
+# proposal cannot pre-empt it here for charts it has not seen; it is a
+# documented requirement on #1280's per-candidate values, not a gap in this
+# template.
+{{- if .Values.otelCollector.eval.enabled }}
+{{- range .Values.otelCollector.eval.candidates }}
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: otel-eval-{{ .name }}
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  {{- if .manifestsPath }}
+  # Second source only when the entry sets manifestsPath: an Application
+  # pointing at a repository directory that does not exist fails to sync and
+  # looks, from ArgoCD's UI, exactly like a candidate defect rather than a
+  # values mistake.
+  sources:
+    - repoURL: {{ .repoURL }}
+      chart: {{ .chart }}
+      targetRevision: {{ .targetRevision | quote }}
+      {{- if .values }}
+      helm:
+        valuesObject:
+          {{- .values | toYaml | nindent 10 }}
+      {{- end }}
+    - repoURL: {{ $.Values.spec.source.repoURL }}
+      targetRevision: {{ $.Values.spec.source.targetRevision }}
+      path: {{ .manifestsPath }}
+  {{- else }}
+  source:
+    repoURL: {{ .repoURL }}
+    chart: {{ .chart }}
+    targetRevision: {{ .targetRevision | quote }}
+    {{- if .values }}
+    helm:
+      valuesObject:
+        {{- .values | toYaml | nindent 8 }}
+    {{- end }}
+  {{- end }}
+  destination:
+    server: {{ $.Values.spec.destination.server }}
+    namespace: observability-eval
+  syncPolicy:
+    automated:
+      prune: true
+      # selfHeal deliberately omitted: an operator running the outage test
+      # under #1280 needs to `kubectl scale --replicas=0` a candidate without
+      # ArgoCD reverting it mid-test.
+    syncOptions:
+      - CreateNamespace=false
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+{{- end }}
+{{- end }}
