@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-09-21T23:56:46Z'
+status: review-stuck
+updated_at: '2026-09-22T00:24:59Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -24,4 +24,15 @@ github:
 ci_blockers_head: c0222ec085c92bdeeaa7468011ac82e7c4611bcc
 ci_blockers:
 - build / test
-harness_failures: 2
+harness_failures: 3
+notes: 'The platform lost the implementer''s work 3 time(s) in a row (implementer
+  follow-up exited non-zero (51) for mctl-telegram/issue-438-feat-clients-model-notification-identity).
+  This is a harness defect, not a problem with the proposal — review_attempts was
+  never charged. Human triage required; see mctl-agents#366. Reason: The bounded CI
+  log excerpt for the failing ''test'' check (build / test) contains only runner setup/provisioning
+  noise and unrelated test-cross-platform (macos-latest) git-credential cleanup lines
+  -- the actual go vet/build/test/postgres-guard failure output that would identify
+  a root cause is in the 178751-byte elided middle section, which is off-limits to
+  re-fetch. I attempted to reproduce locally: go build ./... passed, go vet ./...
+  passed, but go test -race ./... (and a scoped subset covering the touched packages:
+  internal/db, internal/digest, internal/mcp, internal/notify, internal/oauth, i'
