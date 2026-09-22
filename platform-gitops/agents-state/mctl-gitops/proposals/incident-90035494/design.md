@@ -1,42 +1,46 @@
 # Design: incident-90035494
 
-## Confidence: LOW
-
 ## Diagnosis
-This is not an mctl-agents code/orchestrator bug. The shepherd run correctly
-merged the one PR that was merge-clean (mctlhq/mctl-agents#442) and correctly
-left two others waiting (mctl-gitops#1286 pending review findings,
-mctl-telegram#652 sent back for review-fixes) -- none of those touched
-labs-mctl-telegram. Its `post-deploy-verify` step then did exactly what it is
-designed to do: it polled ArgoCD, found `argocd/labs-mctl-telegram` newly
-Degraded, waited out the rolling-update grace period, confirmed it was still
-Degraded, and failed the workflow so the incident would surface instead of
-being silently swallowed. That gate behaved correctly.
+This is a downstream symptom of mctl incident f79e783d-3400-4fd1-9656-09125ae3a90e
+(ArgoCD application labs-mctl-telegram Degraded), not an independent failure
+of the shepherd or of mctl-agents. The shepherd's post-deploy-verify step is
+a safety gate: after merging PRs it sleeps 300s for ArgoCD to reconcile, then
+checks for any ArgoCD Application that newly became Degraded since the
+workflow started (threshold 2026-09-21T23:40:39Z). It found
+argocd/labs-mctl-telegram newly Degraded, waited a further 120s grace period
+for a possible rolling-update blip, saw it was still Degraded, and correctly
+failed the whole run as a precaution -- this is the gate doing its job, not a
+bug in the gate.
 
-The underlying Degraded condition is the same one reported directly by mctl
-incident f79e783d-3400-4fd1-9656-09125ae3a90e (`ArgoCDApplicationDegraded`),
-already diagnosed and proposed in `mctl-gitops/proposals/incident-5ae3a90e`:
-a one-shot `labs-mctl-telegram-local-mode-flip-1` Job (extraObjects in
-`platform-gitops/services/labs/mctl-telegram/values.yaml`) failed against
-shared-pg-rw and, lacking an ArgoCD hook annotation, pins the Application's
-overall health as Degraded independent of the actual service's health.
+The timing lines up with incident-5ae3a90e's root cause: labs-mctl-telegram's
+one-shot `local-mode-flip-1` Job had two failed pod attempts at 23:51:20Z and
+23:51:21Z (transient `Connection refused` against the shared Postgres
+cluster) before succeeding at 23:51:37Z, all inside this workflow's
+23:40:39Z-00:04Z verification window. No evidence here implicates the
+shepherd's own PR merges, mctl-agents code, or any other Application.
 
 ## Proposed Fix
-Same fix as `mctl-gitops/proposals/incident-5ae3a90e`: add ArgoCD hook
-annotations to the `labs-mctl-telegram-local-mode-flip-1` Job (and, if a
-retry of its DB mutation is confirmed wanted, rename it to `-2`) in
-`platform-gitops/services/labs/mctl-telegram/values.yaml`. No change is
-needed in mctl-agents itself -- the shepherd's post-deploy-verify gate is
-working as intended and should keep failing loudly on a genuinely Degraded
-Application.
+No independent fix is needed for mctl-agents or the shepherd workflow itself.
+The proposed fix is the one already written for incident-5ae3a90e: remove the
+completed one-shot Job `labs-mctl-telegram-local-mode-flip-1` (and its
+explanatory comment block) from
+`platform-gitops/services/labs/mctl-telegram/values.yaml`, since that Job's
+transient failures are what most likely drove labs-mctl-telegram's ArgoCD
+health to Degraded during this window. See
+`mctl-gitops/proposals/incident-5ae3a90e/` for the full diagnosis and the
+exact edit.
 
-This proposal is written separately because it originated from a distinct
-incident record, but implementing `incident-5ae3a90e` resolves both. Do not
-implement this proposal a second time if that one has already merged; treat
-it as a duplicate and skip to verification.
+If `mctl-gitops/proposals/incident-5ae3a90e` has already been implemented
+(merged) by the time this proposal is picked up, no further action is
+required here -- this proposal exists so the workflow_failed incident has its
+own recorded resolution, not to duplicate the gitops change.
 
 ## Scope
-None beyond `mctl-gitops/proposals/incident-5ae3a90e`. If that proposal is
-already merged/in-flight when this one is picked up, verify
-`labs-mctl-telegram` is Healthy in ArgoCD and close this out as a duplicate
-with no further change.
+None beyond incident-5ae3a90e's change. This proposal intentionally makes no
+additional edits, to avoid two PRs racing on the same file.
+
+## Confidence: MEDIUM
+The timestamp correlation between the shepherd's post-deploy-verify window
+and the flip Job's failed attempts is direct and drawn from the workflow's
+own logs, but this agent cannot confirm via kubectl that the flip Job (rather
+than some other resource) is what ArgoCD's health aggregation flagged.

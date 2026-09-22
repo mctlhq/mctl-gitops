@@ -1,24 +1,14 @@
 # Tasks: incident-5ae3a90e
 
-1. [ ] In `platform-gitops/services/labs/mctl-telegram/values.yaml`, open the
-   `extraObjects` entry with `metadata.name: labs-mctl-telegram-local-mode-flip-1`
-   (kind: Job, `mctl.me/component: local-mode-flip`).
-2. [ ] Add `argocd.argoproj.io/hook: Sync` and
-   `argocd.argoproj.io/hook-delete-policy: HookSucceeded,HookFailed` under its
-   `metadata.annotations` (create the `annotations` map if absent).
-3. [ ] Confirm with a human/operator whether the one-shot DB mutation this Job
-   performs (flipping telegram account 8745115872 to `mode = 'local'`) still
-   needs to run, before proceeding to step 4. If it already succeeded via a
-   prior unlogged attempt, stop here and instead delete the stuck
-   `local-mode-flip-1` Job out-of-band (kubectl/ArgoCD UI) so its Failed
-   status stops blocking Application health.
-4. [ ] If a retry is confirmed wanted: rename `metadata.name` (and the
-   `local-mode-flip-1` reference in the Job's own labels/comments if any) from
-   `labs-mctl-telegram-local-mode-flip-1` to
-   `labs-mctl-telegram-local-mode-flip-2`, keeping the rest of the spec
-   (image, command, env, securityContext) unchanged.
-5. [ ] Verify the diff touches only this one `extraObjects` entry in this one
-   values.yaml file.
-6. [ ] After merge and sync, confirm in ArgoCD that `labs-mctl-telegram`
-   returns to Healthy and the new Job (if renamed) completes successfully or
-   is pruned per the hook-delete-policy.
+1. [ ] In `platform-gitops/services/labs/mctl-telegram/values.yaml`, delete
+   the comment block beginning `# One-shot: move the pilot account to Local
+   Bridge mode.` together with the `extraObjects` entry it documents (the
+   `apiVersion: batch/v1`, `kind: Job`, `metadata.name:
+   labs-mctl-telegram-local-mode-flip-1` block and everything nested under
+   it), stopping right before the next comment
+   `# labs-mctl-telegram-canary-rbac.yaml, which explains why at length.`
+2. [ ] Confirm the rest of `extraObjects` still parses as valid YAML (the two
+   demo CronJobs above it and the canary CronJob / Middleware / IngressRoute
+   below it must be untouched and still present).
+3. [ ] No image tag or other dependent change is needed — this is a
+   manifest-only removal of an already-completed migration Job.
