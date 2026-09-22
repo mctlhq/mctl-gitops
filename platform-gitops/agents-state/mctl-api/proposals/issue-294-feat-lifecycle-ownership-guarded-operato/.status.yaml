@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-09-21T23:49:44Z'
+status: merged
+updated_at: '2026-09-22T07:04:46Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -18,7 +18,8 @@ attempt:
   finished_at: '2026-09-19T00:47:01Z'
 pr: https://github.com/mctlhq/mctl-api/pull/336
 github:
-  state: open
+  state: merged
   head_sha: 245a9c1de40a69ac25d1560326ce05dbf662a5e2
-  observed_at: '2026-09-21T23:49:44Z'
-review_attempts: 1
+  observed_at: '2026-09-22T07:04:46Z'
+merged_at: '2026-09-22T07:04:46Z'
+merge_commit: 945fa832fc7f20c57716aec428291a4b79db79c7
