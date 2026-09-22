@@ -1,7 +1,8 @@
 # Trivy findings this repository has looked at and accepted, with the reason.
-# Auto-detected by trivy (>= v0.52) alongside the plain .trivyignore; the
-# `trivy` job in .github/workflows/security.yml passes it explicitly so the
-# scan does not depend on that auto-detection.
+# Lives here, not at the repo root where trivy would auto-detect it:
+# .github/workflows/no-root-yaml.yml rejects tracked top-level *.yaml. The
+# `trivy` job in .github/workflows/security.yml therefore passes this path
+# explicitly via `trivyignores:`.
 #
 # Nothing here suppresses a rule globally: every entry is pinned to the exact
 # path that produced it, so the same finding anywhere else still fails CI.

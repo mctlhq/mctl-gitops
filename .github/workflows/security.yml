@@ -25,8 +25,11 @@ jobs:
           exit-code: "1"
           ignore-unfixed: true
           version: v0.69.3
-          # Explicit rather than relying on trivy's auto-detection of
-          # .trivyignore.yaml: the file holds path-scoped acceptances with
-          # their reasons, and a silent failure to load it would turn this
-          # gate red on a finding the repository has already ruled on.
-          trivyignores: .trivyignore.yaml
+          # Under .github/ rather than at the repo root, because
+          # no-root-yaml.yml rejects any tracked top-level *.yaml — that guard
+          # exists because stray root YAML bypasses ArgoCD's lifecycle and is
+          # how plaintext-secret one-shots got committed. Trivy only
+          # auto-detects an ignore file at the root, so the path has to be
+          # passed explicitly here; that is the same explicitness that keeps a
+          # silent failure to load it from quietly re-opening the gate.
+          trivyignores: .github/trivyignore.yaml
