@@ -782,7 +782,7 @@ configMaps:
               "head_prefix": "claude/"
             },
             "merge_mode": "when-green",
-            "merge_method": "squash"
+            "merge_method": "merge"
           },
           {
             "name": "mctlhq/mctl-telegram",
@@ -790,7 +790,7 @@ configMaps:
               "head_prefix": "fix/"
             },
             "merge_mode": "when-green",
-            "merge_method": "squash"
+            "merge_method": "merge"
           },
           {
             "name": "mctlhq/mctl-telegram",
@@ -798,7 +798,7 @@ configMaps:
               "head_prefix": "feat/agents-"
             },
             "merge_mode": "when-green",
-            "merge_method": "squash"
+            "merge_method": "merge"
           },
           {
             "name": "mctlhq/mctl-pairdesk",
