@@ -246,7 +246,7 @@ extraVolumeMounts:
 # Restore workspace from MinIO before claude starts
 initContainers:
   - name: restore-state
-    image: minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+    image: quay.io/minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
     resources:
       requests:
         cpu: 25m
@@ -311,7 +311,7 @@ initContainers:
 # handles relay-TLS-drop via cheap in-pod --resume instead of pod restarts.
 extraContainers:
   - name: s3-sync
-    image: minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+    image: quay.io/minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
     resources:
       requests:
         cpu: 25m
@@ -658,7 +658,7 @@ extraContainers:
   # stdout is unreadable: claude --remote-control renders a TUI and needs a PTY,
   # so its output can't be ANSI-stripped without dropping it to --print mode.
   - name: steward-log
-    image: minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+    image: quay.io/minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
     resources:
       requests:
         cpu: 10m

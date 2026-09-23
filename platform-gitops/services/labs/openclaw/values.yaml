@@ -125,7 +125,7 @@ envFrom:
 initContainers:
   # 1. Restore state from MinIO (no-op for new tenants, preserves OAuth credentials on restart)
   - name: restore-state
-    image: minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+    image: quay.io/minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
     command: ["sh", "-c"]
     args:
       - |
@@ -189,7 +189,7 @@ initContainers:
         mountPath: /home/node/.openclaw
   # 2. Build whisper-cli (cached in MinIO platform-cache bucket)
   - name: install-whisper-cli
-    image: minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+    image: quay.io/minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
     resources:
       requests:
         cpu: 50m
@@ -507,7 +507,7 @@ extraVolumeMounts:
     mountPath: /home/node/.openclaw
 extraContainers:
   - name: s3-sync
-    image: minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+    image: quay.io/minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
     resources:
       requests:
         cpu: 25m
