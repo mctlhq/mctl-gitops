@@ -70,7 +70,7 @@ slice 2 wires the gateway.
       serialized schema, and a subprocess import-direction assertion that
       `orchestrator/capability.py` loads stdlib only.
 
-- [ ] T5. Consequence table loader — `config/capability-consequence.yaml` parses,
+- [ ] T15. Consequence table loader — `config/capability-consequence.yaml` parses,
       every advertised `mcp__mctl__*` tool name in the checked-in list has a
       class in `read-only | mutating | consequential`, an unknown name defaults
       to `consequential`, and the loader is pure (no I/O beyond the file read).
@@ -209,6 +209,12 @@ slice 1 has merged. Slice 2 = tasks 5-8 and 12; slice 3 = tasks 9-11 and
 - [ ] T14. Benchmark harness unit test — `tools/capability_bench.py`'s
       measurement functions compute schema bytes and token totals from recorded
       fixture messages without invoking a model.
+
+- [ ] T16. (Carried from revision 1's T4, for slice 2's task 6.) Consequential
+      invocation calls `PolicyCheckpoint.check` before dispatch; a `denied`
+      verdict returns `policy-denied` and performs no provider call; the
+      order membership → checkpoint → dispatch is asserted with a recording
+      fake provider.
 
 ### Sequencing note (from revision 1)
 land task 11 (mode-aware validation) before task 14 (the
