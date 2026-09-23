@@ -93,33 +93,32 @@ jobs:
         id: judge
         run: |
           set -euo pipefail
-          jq -r '.result[] | select(.status != "ready" or ((.error // "") != ""))
-                 | "\(.id)\t\(.name)\t\(.status)\t\(.error // "")\t\(.last_successful_sync // "never")"' \
-            servers.json > problems.tsv
-          if [ ! -s problems.tsv ]; then
+          jq '[.result[] | select(.status != "ready" or ((.error // "") != ""))]' servers.json > problems.json
+          if [ "$(jq length problems.json)" -eq 0 ]; then
             echo "all $(jq '.result | length' servers.json) servers ready"
             exit 0
           fi
           # Signature: which servers, in which state, with which error — not the
           # timestamps, so an hour passing is not a new problem.
-          echo "sig=$(cut -f1,3,4 problems.tsv | sort | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+          echo "sig=$(jq -c '[.[] | [.id, .status, (.error // "")]] | sort' problems.json | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
           echo "problem=true" >> "$GITHUB_OUTPUT"
-          {
-            echo "⚠️ MCP portal: $(wc -l < problems.tsv | tr -d ' ') server(s) not ready"
-            while IFS=$'\t' read -r id name status error ok; do
-              echo
-              echo "• ${name} (${id}): ${status}"
-              if [ -n "${error}" ]; then echo "  error: ${error}"; fi
-              echo "  last successful sync: ${ok}"
-              echo "  fix: Cloudflare Zero Trust → Access controls → MCP Portals → MCP servers → ${name} → ⋯ → Re-authenticate server"
-            done < problems.tsv
-            echo
-            echo "Until then its tools are served from a stale snapshot, or not at all."
-            echo "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          } > message.txt
-          while IFS=$'\t' read -r id _ status error _; do
-            echo "::error::${id} is ${status}${error:+: ${error}}"
-          done < problems.tsv
+          # Built by jq, not a shell read loop: every field goes through @html,
+          # because the message is sent as HTML (an unpaired _ such as the one
+          # in needs_reauth makes Telegram's default Markdown reject the whole
+          # message, see cloudflare-drift.yml), and an empty field cannot shift
+          # the others the way consecutive tabs do under `read`.
+          jq -r --arg run "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" '
+            "⚠️ <b>MCP portal: \(length) server(s) not ready</b>",
+            (.[] | "",
+              "• <b>\(.name | @html)</b> (<code>\(.id | @html)</code>): \(.status | @html)",
+              (if (.error // "") != "" then "  error: <code>\(.error | @html)</code>" else empty end),
+              "  last successful sync: \(.last_successful_sync // "never" | @html)",
+              "  fix: Cloudflare Zero Trust → Access controls → MCP Portals → MCP servers → \(.name | @html) → ⋯ → Re-authenticate server"),
+            "",
+            "Until then its tools are served from a stale snapshot, or not at all.",
+            "Run: \($run)"
+          ' problems.json > message.txt
+          jq -r '.[] | "::error::\(.id) is \(.status)\(if (.error // "") != "" then ": " + .error else "" end)"' problems.json
           exit 1
 
       # Once per problem per day. `always()` because the judge fails the job on
@@ -146,6 +145,7 @@ jobs:
           lookup-only: true
 
       - name: Notify Telegram — a server is not ready
+        id: notify_problem
         if: >-
           failure() && github.event_name == 'schedule'
           && steps.judge.outputs.problem == 'true' && steps.cache.outputs.cache-hit != 'true'
@@ -153,9 +153,11 @@ jobs:
         with:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          format: html
           message_file: message.txt
 
       - name: Notify Telegram — the check itself failed
+        id: notify_check
         if: >-
           failure() && github.event_name == 'schedule'
           && steps.judge.outputs.problem != 'true' && steps.cache.outputs.cache-hit != 'true'
@@ -163,14 +165,19 @@ jobs:
         with:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          format: html
           message: |
-            🔧 MCP portal health check could not run
+            🔧 <b>MCP portal health check could not run</b>
             It did not get as far as reading the servers, so this says nothing
             about them — the token, the API call or the runner failed.
             Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
+      # Only once Telegram has actually taken it: a send that failed must be
+      # retried next hour, not remembered as said.
       - name: Remember it was said
-        if: failure() && github.event_name == 'schedule' && steps.cache.outputs.cache-hit != 'true'
+        if: >-
+          failure() && github.event_name == 'schedule' && steps.cache.outputs.cache-hit != 'true'
+          && (steps.notify_problem.outcome == 'success' || steps.notify_check.outcome == 'success')
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .said
