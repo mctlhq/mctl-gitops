@@ -68,13 +68,24 @@ env:
   # into auto-merge explicitly. Ownership is partitioned with the Tier-3 shepherd
   # via SHEPHERD_SKIP_SERVICES (steward owns ONLY what the shepherd skips):
   #   mctl-design   = steward, when-green (gated by branch protection on its public main)
-  #   mctl-telegram = steward, when-green + squash (claude/* and fix/* and feat/agents-*)
+  #   mctl-telegram = steward, when-green + merge (claude/* and fix/* and feat/agents-*;
+  #                   the repo forbids squash — #1340)
   #   mctl-docs     = shepherd-owned (removed from steward — low churn, no strict protection)
   #   mctl-gitops   = steward phase A, never (inventory/escalation only; switch
   #                   to when-green after the existing implementer backlog is triaged)
   #   mctl-pairdesk = steward, when-green + merge (public + branch-protected; in SHEPHERD_SKIP_SERVICES)
   # Inert in the image until this flag is "true".
   PR_STEWARD_ENABLED: "true"
+  # The harness version is pinned by the image (Dockerfile ARG
+  # CLAUDE_CODE_NPM_VERSION, /usr/local/bin/claude on PATH). Claude Code's
+  # native auto-updater ignores that pin: it keeps downloading releases into
+  # /workspace/.local/share/claude/versions/ (~230 MB each, five of them on
+  # 2026-09-23) and /workspace/.local/bin, which the s3-sync sidecar then
+  # persists to MinIO and restore-state pulls back on every cold start — the
+  # debris that #892/#895/#900 added GC for, and the reason the TUI showed
+  # "Update installed · Restart to update" for a version the pod already ran.
+  # `autoUpdates: false` in .claude.json did not stop it; this env var does.
+  DISABLE_AUTOUPDATER: "1"
   # Built-in scheduler (0.4.0+): fire a headless `claude -p "Run the pr-steward
   # skill"` tick every 20 min so the steward runs without a human prompting the
   # live remote-control session (closes the manual-trigger gap, gitops #276).
