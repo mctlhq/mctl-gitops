@@ -78,7 +78,7 @@ relevant behaviour today:
 None of these distinguishes `approval_pending` — a receipt id exists in the
 `Decision` and is dropped.
 
-### `WAITING_FOR_APPROVAL` is declared but never projected
+### `WAITING_FOR_APPROVAL` is projected only by #479's child workflow
 
 `dev_loop.py` L123-134 already defines the phase vocabulary:
 
@@ -132,6 +132,40 @@ precedent for a small read-only activity backing a park.
 `orchestrator/temporal/constants.py` defines `TASK_QUEUE = "mctl-dev-loop"`,
 `EXECUTION_TASK_QUEUE`, and the admission queue for implementer submits.
 
+### The Temporal wait is built (#479)
+
+`orchestrator/temporal/workflows/action_approval.py` and
+`orchestrator/temporal/activities/action_approval.py` (mctl-agents#479,
+`feat/198-durable-approval-wait`, under review at the time of this
+revision) deliver the Temporal driver that revision 1 of this proposal
+designed as sections 1-3:
+
+- `GatedActionInput` / `GatedActionResult` and `run_gated()` — the
+  gated-action contract: decide with explicit identity, call the side
+  effect only on a permitted decision, recompute arguments on every call so
+  a changed action is `approval_intent_mismatch`.
+- `run_gated_action()` — runs the activity once; on `approval_pending`
+  starts the child `ActionApprovalWaitWorkflow`, id
+  `action-approval-<receipt id>` (`WORKFLOW_ID_PREFIX`), so mctl-api can
+  address the wake-up with the id it already stores.
+- The wait: signal `DECIDED_SIGNAL = "action_approval_decided"` (a wake-up
+  only; a foreign ref is ignored), query `STATE_QUERY =
+  "action_approval_state"` projecting `WAITING_FOR_APPROVAL` /
+  `RECHECKING` / `DONE`, a durable timer every `DEFAULT_POLL_SECONDS`
+  (15 min) running the read-only `read_action_approval`, bounded by the
+  receipt's `expires_at` and `DEFAULT_MAX_WAIT_SECONDS` (7 days), one last
+  read at the deadline.
+- Outcomes `ran | denied | expired | timed_out | consumed | mismatch |
+  refused | blocked | undecided`, and `next_attempt()` for a deliberate
+  re-request (`REREQUESTABLE`), which puts `attempt + 1` into the
+  idempotency key so a new human decision is required.
+- ADR 014 §7 rewritten from "design only" to **built**, listing what is
+  not: the mctl-api signal (mctl-api#381), the human surfaces, and a first
+  step that adopts `run_gated_action`.
+
+Everything in this proposal that touches Temporal is therefore *reuse*.
+The remaining gap is on the cron side.
+
 ### The boundary that shapes this design
 
 Temporal activities in this repo are thin. The *side effects* happen inside
@@ -147,10 +181,14 @@ explicitly out of scope.
 One contract, two wait drivers, and an authorization boundary that does not
 move.
 
-### 1. `orchestrator/approval_wait.py` — the transport-neutral contract
+### 1. Reuse from #479, and the one small contract this slice adds
 
-New stdlib-only module, sibling to `policy_checkpoint.py` and importable
-from the worker, the pollers and the CWFT entry points alike.
+Nothing Temporal is added. The Temporal driver, its signal, its query, its
+poll and its outcome vocabulary are #479's; a second gate would be a
+competing implementation and is explicitly out of scope.
+
+The cron driver needs one small stdlib-only contract of its own,
+`orchestrator/approval_ticket.py`:
 
 ```python
 @dataclass(frozen=True)
@@ -167,87 +205,39 @@ class ApprovalTicket:
     trace_id: str
     execution_id: str
     actor: str
-    artifact_ref: str = ""   # head SHA, diff URL, proposal slug
+    artifact_ref: str = ""   # head SHA, proposal slug
 ```
 
 - `ticket_from(decision, request, record)` builds it from an
-  `awaiting_approval` `Decision` plus the `ApprovalRecord` the lookup saw.
-- `to_json()` / `from_json()` — the serialization every driver and every
-  future surface uses. This is the "API so approval UI/channels can be
-  added later" the issue asks for: a surface renders an `ApprovalTicket`
-  and calls mctl-api; it never touches workflow state.
-- `WaitOutcome` enum: `APPROVED`, `DENIED`, `EXPIRED`, `MISMATCH`,
-  `UNDECIDED`.
+  `awaiting_approval` `Decision`, its `ActionRequest`, and the
+  `ApprovalRecord` returned by one read-only `ActionApprovalClient.get(
+  decision.approval_ref)`. Reading the record back is chosen over adding
+  passthrough fields to `Decision`/`ApprovalOutcome`: it keeps
+  `policy_checkpoint` untouched and reuses the same GET the Temporal driver's
+  `read_action_approval` performs.
+- `to_json()` / `from_json()` — the serialization the `.status.yaml` block
+  and any future surface use. It carries no raw action arguments.
+- Two vocabularies exist and are kept distinct on purpose. The *store
+  state* of a receipt is `action_approvals`' constants (`PENDING`,
+  `APPROVED`, `DENIED`, `EXPIRED`, `CONSUMED`; plus the client's own
+  `MISMATCH`, `NOT_FOUND`, `REFUSED`, `UNKNOWN` answers). The *decision*
+  the checkpoint returns is `policy_checkpoint`'s `Decision.code`
+  (`approved`, `approval_pending`, `approval_denied`, `approval_expired`,
+  `approval_consumed`, `approval_intent_mismatch`, `approval_lookup_error`),
+  produced by `action_approvals._outcome()` from the store answer. The
+  cron driver acts only on `Decision.code` (the outcome table in §3 uses
+  those codes); it reads store state solely to fill the ticket. No new
+  enum is added, and the driver never maps a store state to an action by
+  itself.
 
-To produce a ticket, `MctlApiApprovals.redeem()` must surface the
-`ApprovalRecord` it already read on the `APPROVAL_PENDING` path.
-`ApprovalOutcome` (`policy_checkpoint.py:228`) gains one optional field —
-`record: ApprovalRecord | None = None`, or, to keep `policy_checkpoint`
-free of any import from `action_approvals`, two scalar fields
-`expires_at: str = ""` and `intent_hash: str = ""`. The second form is
-chosen: `policy_checkpoint` currently imports nothing from
-`action_approvals` (the dependency runs the other way, `action_approvals`
-imports `policy_checkpoint as pc`), and inverting it would be a cycle.
-`Decision` gains the same two passthrough fields so a call site can build a
-ticket from the decision alone.
-
-### 2. `orchestrator/temporal/activities/action_approvals.py` — the read
-
-One activity, read-only, no side effect:
-
-```python
-@activity.defn
-async def get_action_approval(approval_ref: str) -> dict[str, str]:
-    """GET /action-approvals/{id}. Returns the state, intent hash,
-    expires_at and decided_by. Never consumes."""
-```
-
-It wraps the existing `ActionApprovalClient.get`. An unreachable store
-returns `UNKNOWN`, which the gate treats as "keep waiting", not as a
-decision. Registered on the control queue in
-`orchestrator/temporal/worker.py`.
-
-### 3. `orchestrator/temporal/approval_gate.py` — the Temporal wait driver
-
-A mixin/helper usable by any workflow, implementing ADR 014 §7 verbatim:
-
-```python
-async def await_action_approval(ticket: ApprovalTicket, *, woken) -> WaitOutcome
-```
-
-- The workflow stores the ticket in `self._pending_approval` and exposes it
-  via `@workflow.query def action_approval_state()`. This is the durable,
-  queryable `WAITING_FOR_APPROVAL` state, and it holds no pod: the
-  activity that hit the checkpoint already ended.
-- `@workflow.signal def action_approval_decided(*args)` — parsed
-  defensively like `approve`/`abandon`, accepts only an `approval_ref`
-  string, ignores any decision payload, and sets a flag when the ref
-  matches the parked one. It is a wake-up, never an approval.
-- The loop mirrors dev_loop's `approval-watch` block: bounded
-  `wait_condition` with `timeout=ACTION_APPROVAL_POLL_INTERVAL` (new
-  constant, 15 minutes per ADR 014 §7), inside a
-  `while workflow.now() < deadline` where `deadline` is parsed from
-  `ticket.expires_at`. On `TimeoutError` it runs `get_action_approval` and
-  continues; on a decisive state it breaks; the `else` arm is
-  `EXPIRED`.
-- Guarded by `workflow.patched("action-approval-gate")` so in-flight
-  histories written before the gate existed never see a new command at this
-  position — the same hazard `approval-watch` and `slug-scoped-implement`
-  guard against.
-- On any wake it re-runs the governed step with `approval_ref` set. The
-  gate itself never authorizes: the *activity* re-enters
-  `checkpoint(..., approval_ref=...)`, which recomputes the intent from the
-  action as it stands now and consumes atomically. The workflow's belief is
-  advisory, exactly as ADR 014 §7.4 requires.
-
-### 4. `TickApprovalGate` — the cron wait driver, for the shepherd
+### 2. The cron wait driver, for the shepherd (the first adopter)
 
 The shepherd's tick *is* a poll loop that holds nothing between firings, so
 it needs no timer — only durable ticket storage and re-entry.
 
 - `merge_pr` learns one new branch: if the decision `awaiting_approval`, it
-  builds the `ApprovalTicket`, persists it, logs
-  `APPROVAL_PENDING pr=... ref=...`, and returns `(False, None)` — the same
+  builds the `ApprovalTicket` (one `ActionApprovalClient.get`), persists it,
+  logs `APPROVAL_PARKED pr=... ref=...`, and returns `(False, None)` — the same
   `wait` it returns today, so no caller changes.
 - Persistence: a new `approval` block in
   `.status.yaml` via `orchestrator/proposal_state.py`, written the way every
@@ -264,14 +254,14 @@ it needs no timer — only durable ticket storage and re-entry.
   reused for a materially different action/target", and it falls out of the
   existing binding rather than needing new logic.
 
-### 5. Outcome handling per call site
+### 3. Outcome handling at the shepherd
 
 `approval_lookup_error` stays `undecided` and keeps its existing
 classification everywhere (harness/retryable, never the item's failure) —
 this proposal changes none of that. New handling is only for the decisive
 outcomes:
 
-| Outcome | Shepherd merge | Temporal-hosted step |
+| Outcome | Shepherd merge (this slice) | Temporal-hosted step (#479, for reference) |
 |---|---|---|
 | `approved` | merge runs once; ticket cleared | step resumes |
 | `pending` | `wait`, ticket kept | stay parked |
@@ -288,7 +278,7 @@ twice". This proposal keeps that and adds the reconcile: because
 GitHub PR state, a `consumed` receipt is resolved by asking GitHub whether
 the merge landed, not by guessing.
 
-### 6. Record
+### 4. Record
 
 Two records exist today and both are extended rather than replaced.
 
@@ -298,7 +288,7 @@ Two records exist today and both are extended rather than replaced.
 "#195's trace does not exist yet", `orchestrator/tracing.py` has since
 landed with `POLICY_DECISION_EVENT = "mctl.policy.decision"` carrying
 `mctl.policy.rule_id`, `.decision`, `.code`, `.version`, `.action_kind`,
-`.operation`. ADR 015 should correct that sentence.
+`.operation`. ADR 016 should correct that sentence.
 
 - **The span event.** `record_policy_decision` gains `approval_ref`,
   `approver` and `decided_at`, emitted as `mctl.policy.approval_ref`,
@@ -317,10 +307,10 @@ landed with `POLICY_DECISION_EVENT = "mctl.policy.decision"` carrying
 The approver is `ApprovalRecord.decided_by` as mctl-api recorded it. This
 is a materially stronger identity than the proposal-level `approve`
 signal's `approver` string, which `dev_loop.approve` accepts from any
-signaller as unverified free text — a distinction ADR 015 should state
+signaller as unverified free text — a distinction ADR 016 should state
 plainly.
 
-### 7. Rollout
+### 5. Rollout
 
 Nothing changes by default. The gate is reachable only when
 `MCTL_POLICY_APPROVALS=mctl-api` **and** a rule's verdict is
@@ -330,8 +320,23 @@ change, not a code change — exactly what ADR 014 §"Open decisions" item 3
 says: "whether to gate the merge or the push behind REQUIRE_APPROVAL is a
 policy change, not a code change."
 
-A new ADR, `docs/adr/015-human-approval-checkpoints.md`, supersedes ADR 014
+A new ADR, `docs/adr/016-human-approval-checkpoints.md`, supersedes ADR 014
 §7's "design only" status and records the two-driver decision.
+
+### 6. Companion work outside this repository
+
+- **mctl-api#381** — after `POST /action-approvals/{id}/decision` records a
+  decision, signal `action_approval_decided` with `{"approval_id": id}` to
+  workflow `action-approval-<id>`, best effort, not-found ignored. This is
+  the sender side of #479's receiver; the cron driver never depends on it.
+- **Approval surfaces (follow-up issue in mctl-api, to be opened by the
+  implementer as task 8).** mctl-api already exposes
+  `GET /action-approvals`, `GET /action-approvals/{id}` and
+  `POST /action-approvals/{id}/decision`; no MCP tool or notification renders
+  a pending ticket to a human yet. A surface reads the ticket fields and
+  calls the decision endpoint; it never touches workflow or shepherd state.
+  Until it exists, a parked merge is visible in `.status.yaml`, in the
+  `APPROVAL_PARKED` log line and in `GET /action-approvals?status=pending`.
 
 ## Alternatives
 
@@ -374,18 +379,24 @@ once in September 2026 and six dying of their own deadline while queued on
 a capacity-1 mutex. A human decision takes hours; an Argo deadline does
 not.
 
+**5. Build a second Temporal wait driver in `orchestrator/temporal/approval_gate.py`
+(revision 1 of this proposal).** Dropped: #479 built it as
+`ActionApprovalWaitWorkflow` while revision 1 was pending, with the same
+authorization boundary and a recorded replay fixture. A mixin alongside it
+would be two implementations of one contract.
+
 ## Platform impact
 
 **Migrations.** One additive `approval` block in `.status.yaml`. Readers
 must tolerate its absence, which `proposal_state.py` already does for
-optional blocks. No schema version bump; no backfill. Temporal histories
-are protected by `workflow.patched("action-approval-gate")`, so in-flight
-loops replay unchanged.
+optional blocks. No schema version bump; no backfill. No Temporal workflow
+definition changes in this slice, so no patch marker and no replay
+exposure; #479's own fixture covers the child workflow.
 
 **Backward compatibility.** Default-off twice over: the store must be
 enabled *and* a rule must be flipped. With `MCTL_POLICY_APPROVALS` unset,
 not one code path in this proposal executes — `redeem()` is never called,
-no ticket is ever built, no gate is entered. `merge_pr`'s signature and its
+no ticket is ever built, no child workflow is started. `merge_pr`'s signature and its
 `(False, None)` refusal contract are unchanged, so every existing caller
 and test is unaffected.
 
@@ -417,8 +428,7 @@ again.
   `approve` signal (`proposed -> accepted`) and the new action-level
   approval are different things at different layers. Mitigated by disjoint
   naming throughout — `action_approval_decided`, `ApprovalTicket`,
-  `ACTION_APPROVAL_POLL_INTERVAL`, `APPROVAL_PARKED` — and by an explicit
-  section in ADR 015.
+  `APPROVAL_PARKED` — and by an explicit section in ADR 016.
 - *A gated merge stalls the release train.* Mitigated by keeping the merge
   rule at `ALLOW` in the built-in policy and enabling it per-service via
   configuration, so the blast radius of the first flip is one service.
