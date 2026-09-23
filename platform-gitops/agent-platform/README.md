@@ -156,6 +156,39 @@ the real `orchestrator/options.py` builders, so it lives in mctl-agents'
 every field this catalog asserts about a running agent is now compared to
 the thing that actually runs.
 
+## Kill switch: `human.request_input`
+
+`issue-investigator-default` lists `human.request_input` in `spec.tools`
+(mctl-gitops#1277). It is a capability entry, not an SDK tool: mctl-agents
+(`orchestrator/options.py`, mctl-agents#333 / ADR 013) treats the durable
+human-clarification primitive as granted only when that exact literal is in
+the resolved `ExecutionPlan.tools`, and strips it from the SDK allow-list.
+`policy.yaml` lists it under `knownTools` with `category: capability` so the
+reference check accepts it.
+
+To turn the capability off, one reviewed PR here is the whole procedure:
+
+1. delete `human.request_input` from the profile's `spec.tools`;
+2. bump the profile's `spec.version` (`validate-profile-version-bumps.py`
+   rejects an unbumped edit);
+3. re-pin `releases/shadow/issue-investigator.yaml`: `profile.version` to the
+   new version, advance `bindingRevision`/`previousBindingRevision`, and
+   record the old pair in `history` (the resolver fails closed when the
+   binding and the profile disagree on the version).
+
+No image build, no CWFT change and no Argo/ArgoCD sync is involved:
+`mctl-agents-investigate` shallow-clones `mctl-gitops` `main` in each run's
+`clone-gitops` initContainer and points `MCTL_GITOPS_ROOT` at that clone, and
+the resolver reads the profile from there. The next run resolved after the
+merge gets a plan without the capability. A run that has already resolved
+its plan keeps it -- an `ExecutionPlan` is immutable per run.
+
+Turning it back on is the same three steps in reverse, with another version
+bump. Two things keep the capability inert today whatever this file says:
+the investigator CWFT does not set `ISSUE_INVESTIGATOR_RESOLVER_MODE`, so it
+runs in the `legacy` mode, which builds no plan at all; and on mctl-agents
+`main` nothing calls `plan_grants_human_input` yet.
+
 ## Rollback
 
 This catalog is additive and not runtime-load-bearing -- nothing resolves

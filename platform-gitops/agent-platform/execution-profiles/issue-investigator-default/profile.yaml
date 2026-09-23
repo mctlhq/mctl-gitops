@@ -29,7 +29,7 @@ metadata:
   name: issue-investigator-default
   owner: platform
 spec:
-  version: "1.2.0"
+  version: "1.3.0"
   modelPolicyRef:
     # The task key config/model-policy.yaml in mctl-agents actually defines.
     # This said `issue_investigator` until 2026-09-03, which is not a task
@@ -66,6 +66,14 @@ spec:
     - WebFetch
     - Bash
     - "mcp__mctl__*"
+    # Not an SDK tool: the durable human-clarification capability
+    # (mctl-agents#333, ADR 013). mctl-agents grants it only as the literal
+    # `"human.request_input" in plan.tools` (options.plan_grants_human_input)
+    # and filters it out of allowed_tools, so the model never sees it as a
+    # callable tool. Kill switch: delete this entry and bump spec.version
+    # plus the shadow binding's profile.version -- see "Kill switch:
+    # human.request_input" in this catalog's README (mctl-gitops#1277).
+    - human.request_input
   # Renamed from read-only-investigation: a profile granting Write, Edit and
   # Bash cannot carry a policy name asserting the opposite. The scope that IS
   # read-only -- the target repository -- is stated by permissions below,

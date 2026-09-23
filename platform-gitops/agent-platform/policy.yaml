@@ -29,7 +29,7 @@ spec:
     maxTimeoutSeconds: 7200
 
   # Every SDK tool name an ExecutionProfile.spec.tools entry may reference.
-  # "category" is informational classification only (read/write/exec/mcp) —
+  # "category" is informational classification only (read/write/exec/mcp/capability) —
   # it does not grant capability. Actual mutation capability comes from
   # spec.permissions + spec.approval, checked independently below.
   knownTools:
@@ -51,6 +51,14 @@ spec:
       category: exec
     - name: "mcp__mctl__*"
       category: mcp
+    # A capability entry, not an SDK tool name (mctl-agents#333, ADR 013):
+    # mctl-agents' resolver reads it from spec.tools as the grant for the
+    # durable human-clarification primitive and strips it from the SDK
+    # allow-list, and validate_manifest.py's _CAPABILITY_TOOLS excuses exactly
+    # this literal from its tool-list equality check. Listing it here grants
+    # nothing; a profile still has to name it in spec.tools (mctl-gitops#1277).
+    - name: human.request_input
+      category: capability
 
   # Platform-skill references an ExecutionProfile.spec.skills entry may
   # name. Source of truth for skill *content* stays

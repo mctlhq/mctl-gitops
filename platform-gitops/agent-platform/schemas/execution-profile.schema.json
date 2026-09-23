@@ -63,7 +63,7 @@
           "type": "array",
           "items": { "type": "string" },
           "uniqueItems": true,
-          "description": "SDK tool names only. Never authorization by itself -- see spec.permissions."
+          "description": "SDK tool names, plus capability entries policy.yaml knownTools lists with category capability (e.g. human.request_input). Never authorization by itself -- see spec.permissions."
         },
         "policyRef": { "type": "string", "minLength": 1 },
         "permissions": {
