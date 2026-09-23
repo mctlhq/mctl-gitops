@@ -217,9 +217,18 @@ class ApprovalTicket:
   `read_action_approval` performs.
 - `to_json()` / `from_json()` — the serialization the `.status.yaml` block
   and any future surface use. It carries no raw action arguments.
-- Outcome names are #479's `action_approvals` constants (`PENDING`,
-  `APPROVED`, `DENIED`, `EXPIRED`, `CONSUMED`, `MISMATCH`, `UNKNOWN`), not a
-  new enum.
+- Two vocabularies exist and are kept distinct on purpose. The *store
+  state* of a receipt is `action_approvals`' constants (`PENDING`,
+  `APPROVED`, `DENIED`, `EXPIRED`, `CONSUMED`; plus the client's own
+  `MISMATCH`, `NOT_FOUND`, `REFUSED`, `UNKNOWN` answers). The *decision*
+  the checkpoint returns is `policy_checkpoint`'s `Decision.code`
+  (`approved`, `approval_pending`, `approval_denied`, `approval_expired`,
+  `approval_consumed`, `approval_intent_mismatch`, `approval_lookup_error`),
+  produced by `action_approvals._outcome()` from the store answer. The
+  cron driver acts only on `Decision.code` (the outcome table in §3 uses
+  those codes); it reads store state solely to fill the ticket. No new
+  enum is added, and the driver never maps a store state to an action by
+  itself.
 
 ### 2. The cron wait driver, for the shepherd (the first adopter)
 
@@ -279,7 +288,7 @@ Two records exist today and both are extended rather than replaced.
 "#195's trace does not exist yet", `orchestrator/tracing.py` has since
 landed with `POLICY_DECISION_EVENT = "mctl.policy.decision"` carrying
 `mctl.policy.rule_id`, `.decision`, `.code`, `.version`, `.action_kind`,
-`.operation`. ADR 015 should correct that sentence.
+`.operation`. ADR 016 should correct that sentence.
 
 - **The span event.** `record_policy_decision` gains `approval_ref`,
   `approver` and `decided_at`, emitted as `mctl.policy.approval_ref`,
@@ -298,7 +307,7 @@ landed with `POLICY_DECISION_EVENT = "mctl.policy.decision"` carrying
 The approver is `ApprovalRecord.decided_by` as mctl-api recorded it. This
 is a materially stronger identity than the proposal-level `approve`
 signal's `approver` string, which `dev_loop.approve` accepts from any
-signaller as unverified free text — a distinction ADR 015 should state
+signaller as unverified free text — a distinction ADR 016 should state
 plainly.
 
 ### 5. Rollout
@@ -311,7 +320,7 @@ change, not a code change — exactly what ADR 014 §"Open decisions" item 3
 says: "whether to gate the merge or the push behind REQUIRE_APPROVAL is a
 policy change, not a code change."
 
-A new ADR, `docs/adr/015-human-approval-checkpoints.md`, supersedes ADR 014
+A new ADR, `docs/adr/016-human-approval-checkpoints.md`, supersedes ADR 014
 §7's "design only" status and records the two-driver decision.
 
 ### 6. Companion work outside this repository
@@ -419,7 +428,7 @@ again.
   `approve` signal (`proposed -> accepted`) and the new action-level
   approval are different things at different layers. Mitigated by disjoint
   naming throughout — `action_approval_decided`, `ApprovalTicket`,
-  `APPROVAL_PARKED` — and by an explicit section in ADR 015.
+  `APPROVAL_PARKED` — and by an explicit section in ADR 016.
 - *A gated merge stalls the release train.* Mitigated by keeping the merge
   rule at `ALLOW` in the built-in policy and enabling it per-service via
   configuration, so the blast radius of the first flip is one service.

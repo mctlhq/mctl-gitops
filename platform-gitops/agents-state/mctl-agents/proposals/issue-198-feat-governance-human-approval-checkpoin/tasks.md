@@ -63,8 +63,8 @@ modules beyond the `action_approvals` constants.
   either; the same fields are populated when #479's Temporal driver
   redeems, since both go through `checkpoint(..., approval_ref=...)`.
 
-- [ ] 6. ADR 015 (depends on 4, 5) —
-  `docs/adr/015-human-approval-checkpoints.md`: record the
+- [ ] 6. ADR 016 (depends on 4, 5) —
+  `docs/adr/016-human-approval-checkpoints.md`: record the
   one-contract/two-drivers decision (Temporal child workflow from #479;
   cron ticket from this slice), the outcome table, the approver record,
   the companion mctl-api#381 signal and the surfaces follow-up, and state
@@ -88,7 +88,7 @@ modules beyond the `action_approvals` constants.
   the human approval surfaces (an MCP tool pair to list pending approvals
   and submit a decision, reading `ApprovalTicket` fields), cross-linked to
   mctl-api#381 and #198; confirm mctl-api#381 is still the signal tracker.
-  — DoD: both issues are referenced from ADR 015 and from the #198 issue.
+  — DoD: both issues are referenced from ADR 016 and from the #198 issue.
 
 ## Tests
 
