@@ -155,7 +155,9 @@ hardcodes `"telegram"`.
 
 `envelope.go` holds the `workitem/v1` types (`ItemView{SchemaVersion,
 WorkItem{ID, Tenant, Title, State}, StateVersion, LatestExecution,
-PendingApproval, LatestSnapshot}`); decoding rejects any `schema_version`
+PendingApproval, LatestSnapshot}`, plus `ExecutionRequestView{ID, Kind, State,
+ExecutionID}` for the mctl-api#368 request, whose `ExecutionID` is only ever
+read back, never sent); decoding rejects any `schema_version`
 other than `workitem/v1`.
 
 `errors.go` maps mctl-api error codes onto sentinels the router renders as
@@ -280,7 +282,8 @@ behaviour change.
 `/mctl work "<title>"` creates the item (`origin_surface: telegram`),
 registers the Telegram thread as a surface ref and submits a `start` execution
 request → the platform dispatcher (mctl-agents#461) claims it, starts the
-investigator and attaches execution A (mctl-api#368) and seals ContextSnapshot v1 → `/mctl work status`
+investigator and attaches execution A through the platform-only fulfil route
+of mctl-api#368 and seals ContextSnapshot v1 → `/mctl work status`
 shows `latest_execution` and the snapshot pointer → a human opens the same
 `work_item_id` from the CLI/MCP or web surface and resumes → execution B,
 ContextSnapshot v2 → `/mctl work status` in Telegram reflects the new execution.
