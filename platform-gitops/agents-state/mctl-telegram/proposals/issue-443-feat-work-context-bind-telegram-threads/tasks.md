@@ -1,187 +1,203 @@
 # Tasks: issue-443-feat-work-context-bind-telegram-threads
 
-- [ ] 1. Add the `internal/workitem` port: `Ref`, `SurfaceRef`, `OpenRequest`,
-      `ExecRequest`, the `Client` interface, the sentinels `ErrDisabled`,
-      `ErrUnauthorized`, `ErrUnavailable`, and the `Disabled{}` implementation.
-      — DoD: package compiles with no dependency on `internal/db` or
-      `internal/agent`; `Disabled{}` returns `ErrDisabled` from all four
-      methods; `go vet` and `golangci-lint` clean.
+Ordered so every step is independently reviewable and the tree stays green.
+Tasks 1-4 are dark (nothing calls them); the surface only lights up at task 8,
+and only behind `WORK_CONTEXT_ENABLED`.
 
-- [ ] 2. Add `internal/workitem/httpclient` (depends on 1): bounded
-      `http.Client` timeout, bearer token, deterministic idempotency key sent on
-      create-or-open, retry only on idempotent verbs, status mapping
-      (401/403 → `ErrUnauthorized`, 5xx/timeout → `ErrUnavailable`).
-      — DoD: the `Authorization` header never appears in a returned error or a
-      log line; every error wraps with `fmt.Errorf("context: %w", err)`; no
-      panics; context propagated through every call.
+- [ ] 1. Add `work_item_bindings` to the schema — append the SQLite statements
+  to `agentSchemaSQLite()` (`internal/db/agent_schema.go:278`) and the
+  byte-parallel Postgres twin to `agentSchemaPG()` (`:527`), following the
+  `bot_updates` template (`internal/db/db.go:703` / `:948`): prose comment on
+  the SQLite copy, "see the sqliteSchema comment" on the PG copy.
+  Columns: `id`, `user_id` (`REFERENCES users(id) ON DELETE CASCADE`),
+  `chat_tg_id`, `root_tg_message_id`, `work_item_id`, `external_key`,
+  `last_state`, `last_state_version`, `last_execution_id`, `created_at`,
+  `updated_at`. Two unique indexes: `idx_work_item_bindings_thread` on
+  `(user_id, chat_tg_id, root_tg_message_id)` and
+  `idx_work_item_bindings_item` on `(user_id, work_item_id)`.
+  — DoD: `Migrate` succeeds on a fresh SQLite DB and on an existing Postgres
+  DB; the table has no column that can hold message text, a title or a peer
+  handle; `INTEGER`/`BIGINT` and `DATETIME`/`TIMESTAMPTZ` split matches the
+  house convention.
 
-- [ ] 3. Add config (depends on 2): `WORK_CONTEXT_ENABLED` (envBool, default
-      false), `WORK_CONTEXT_API_BASE_URL`, `WORK_CONTEXT_API_TOKEN`,
-      `WORK_CONTEXT_API_TIMEOUT` (envDuration, default 10s),
-      `WORK_CONTEXT_OPERATORS` (comma-separated Telegram ids, parsed like
-      `TG_LOGIN_ADMINS`) in `internal/config/config.go`, documented in
-      `.env.example`.
-      — DoD: zero-value config produces the current behaviour; enabling the flag
-      without a base URL fails fast at boot with a clear message rather than at
-      first command.
+- [ ] 2. Add the binding store (depends on 1) — new
+  `internal/db/work_item_bindings.go` in the `agent_saved_commands.go` style:
+  `GetWorkItemBinding`, `LatestWorkItemBinding`, `UpsertWorkItemBinding`,
+  `TouchWorkItemBindingState`. `$N` placeholders only, `time.Now().UTC()`
+  written from Go rather than `DEFAULT CURRENT_TIMESTAMP`, `sql.ErrNoRows`
+  translated to a `found bool`, errors wrapped `fmt.Errorf("verb noun: %w", err)`.
+  — DoD: methods compile, are `*Store` receivers, and pass the dual-dialect
+  tests from T1.
 
-- [ ] 4. Add `work_item_bindings` to `internal/db` (independent of 1-3): new
-      file `internal/db/work_context_schema.go` with
-      `migrateWorkContext(ctx, dbConn, pg)` and the
-      `workContextSchemaSQLite()` / `workContextSchemaPG()` statement-list pair
-      (both edited together — there is no versioned migration mechanism), the
-      two unique indexes, and the `thread_id_norm COALESCE(thread_id, 0)`
-      collision column; called from `Migrate` in `internal/db/db.go` next to
-      `migrateAgent`.
-      — DoD: migration is idempotent across repeated boots on both SQLite and
-      Postgres; a pre-existing database gains the table with no `ALTER` on any
-      existing table; `store_migration_test.go`-style assertions pass;
-      `thread_id` is written as NULL in this slice and no existing thread/topic
-      extraction is added to `internal/agent/listener/extract.go`, whose
-      `evt:v1:` event-id format must stay byte-identical.
+- [ ] 3. Add `Store.TelegramIDByUserID` (independent of 1-2) — the reverse of
+  `UserIDByTelegramID` (`internal/db/store.go:244`), returning a `found bool`
+  rather than an error for a user with no Telegram id.
+  — DoD: returns the id for a user created via `EnsureUserByTelegramID`, and
+  `found=false` (not an error) for a user without one.
 
-- [ ] 5. Add the store methods (depends on 4) in
-      `internal/db/work_context.go`: `Binding` struct,
-      `UpsertWorkItemBinding` (`INSERT ... ON CONFLICT DO NOTHING` + read-back,
-      returning `created bool`), `GetWorkItemBinding`,
-      `GetWorkItemBindingByWorkItem`, `SetWorkItemBindingExecution`,
-      `ErrBindingNotFound`, and `purgeWorkItemBindings` registered on the
-      per-user purge hook beside `purgeAgentJobs`.
-      — DoD: no method accepts or stores message text; every query is scoped by
-      `user_id`; concurrent `UpsertWorkItemBinding` for the same key yields one
-      row and both callers read the same `work_item_id`.
+- [ ] 4. Add `internal/workctx` — the mctl-api client, modelled on
+  `internal/agentworker/client.go:41-98`. `client.go` with `Client` and the
+  unexported `relay(ctx, method, path, actorTGID, idemKey, body, out)` setting
+  exactly `Authorization`, `X-MCTL-Surface-Actor` and `Idempotency-Key`;
+  the six public methods `RedeemLink`, `CreateWorkItem`, `GetWorkItem`,
+  `AppendIntent`, `Resume`, `AddSurfaceRef`. `envelope.go` with the
+  `workitem/v1` types and a decoder that rejects any other `schema_version`.
+  `errors.go` with the sentinels (`ErrLinkNotFound`, `ErrLinkRevoked`,
+  `ErrLinkExpired`, `ErrRelayRequired`, `ErrChallengeInvalid`,
+  `ErrLinkConflict`, `ErrActorNotAccepted`, `ErrStateVersionConflict`).
+  Request structs carry no actor-shaped field and no caller-settable
+  `origin_surface`.
+  — DoD: the package builds standalone; `go doc ./internal/workctx` shows only
+  the six routes from `docs/contracts/mctl-api-work-context.md:39-46`; no
+  method constructs a path containing `executions`, `snapshot`, `snapshots`,
+  `events` or `approvals`.
 
-- [ ] 6. Add `internal/workctx` (depends on 1, 5): `Service`, `Actor`,
-      `Authorizer` (allowlist implementation that can only narrow),
-      `IdempotencyKey(userID, chatTGID, threadID)`, `OpenOrResume`, `Inspect`.
-      Ordering is remote-call-first, local-insert-second.
-      — DoD: a `Client` failure writes no binding row; an existing non-terminal
-      binding takes the `Resume` path and never `CreateOrOpen`; an unauthorized
-      actor produces no outbound call.
+- [ ] 5. Add the deterministic key helpers (depends on 4) — `ExternalKey(chatTGID,
+  rootMsgID) string` returning `tg:v1:<chat>:<msg>`, and `IdempotencyKey(externalKey,
+  op string, stateVersion int64) string`.
+  — DoD: pure functions with no I/O, stable across process restarts, covered by
+  table tests.
 
-- [ ] 7. Enqueue a reference-only envelope on binding create/execution change
-      (depends on 6): extend `internal/events` with the work-context envelope
-      type and subject (identifiers only), routed through the existing
-      `internal/db/event_outbox.go` outbox and `internal/events/relay.go`.
-      — DoD: the envelope builder reads no body/meta field; a redelivery
-      produces the same envelope id; the relay drains it with no change to its
-      lease logic.
+- [ ] 6. Widen the Saved Messages router context (depends on 3) — introduce
+  `control.SavedMeta{UserID, SelfTGID, ChatTGID, TGMessageID}`, change
+  `listener.CommandRouter` and `Router.HandleSavedText`
+  (`internal/agent/control/router.go:44`) to take it, and thread the values the
+  listener already has (`internal/agent/listener/extract.go:63`,
+  `db.IncomingEvent.MessageID`) through the dispatch path. Update the fakes in
+  `listener_test.go` and `router_test.go`.
+  — DoD: `go build ./...` and `go test ./...` pass; the nine existing `/mctl`
+  subcommands are untouched in parsing and reply text; `SelfTGID` is non-zero
+  for a Saved Messages command in an integration-shaped listener test.
 
-- [ ] 8. Add `/mctl work` (depends on 6): `CmdWork` in
-      `internal/agent/control/command.go` (argument required for a new request,
-      optional for a status read) and `handleWork` in
-      `internal/agent/control/router.go`, with a `WorkContext *workctx.Service`
-      field on `Router`. Reply renders work id, execution id and canonical state.
-      — DoD: when `WorkContext` is nil the subcommand is not offered and `/mctl
-      work` yields the existing unknown-command help unchanged; pending-approval
-      state is rendered read-only and no `agent_actions` row or approval code is
-      created; `/mctl approve|reject` behaviour is byte-identical to today.
+- [ ] 7. Parse the new subcommands (depends on 6) — add `CmdWork` and `CmdLink`
+  to `internal/agent/control/command.go` plus a `Sub string` field on `Command`
+  populated only for `work` (`status`, `note`, `resume`, or empty meaning
+  create/open). Keep `ParseCommand` pure.
+  — DoD: existing `command_test.go` cases pass unchanged and the parse result
+  for all nine old subcommands has an empty `Sub`; `/mctl work`, `/mctl work
+  status`, `/mctl work note <text>`, `/mctl work resume`, `/mctl link <code>`
+  parse as specified; `/mctl work note` with no argument returns `ErrMissingArg`.
 
-- [ ] 9. Add the flag-gated `get_work_context` MCP tool (depends on 5): register
-      in `internal/mcp` only when `WORK_CONTEXT_ENABLED`; scope the lookup to
-      `Identity.UserID`; return identifiers and surface refs only.
-      — DoD: with the flag off, the tool list is byte-identical to today's seven
-      tools; with it on, the handler returns no Telegram message content and no
-      other user's binding.
+- [ ] 8. Add the work handlers (depends on 2, 4, 5, 7) — new
+  `internal/agent/control/work.go` with `WorkHandler{Store, Client, Notifier}`
+  and one method per subcommand. Actor resolution: use `SavedMeta.SelfTGID`,
+  cross-check against `Store.TelegramIDByUserID`, and fail closed with no
+  mctl-api call on mismatch or absence. Create/open reuses the binding when
+  `last_state` is `active` or `waiting` and creates a fresh item otherwise.
+  Resume does `GetWorkItem` → `Resume` with `expected_state_version`, and on
+  `ErrStateVersionConflict` re-reads and retries exactly once. Errors are
+  rendered as owner-facing text in the style of `approverErrText`
+  (`router.go:359`). Add a nilable `Work *WorkHandler` field to `Router` and
+  dispatch to it; when nil, fall through to the existing unknown-command reply.
+  — DoD: every branch replies to the owner exactly once; no handler ever
+  returns an error that would stall the listener; no code path reads
+  `TGLoginAdmins`, `TGLoginClients` or `AutoApproveClients` for attribution.
 
-- [ ] 10. Wire it in `cmd/server/main.go` (depends on 3, 6, 8, 9): construct
-      `workitem.Disabled{}` or the HTTP client from config, build
-      `workctx.Service`, attach to the `control.Router` and the MCP server.
-      — DoD: with the flag off the wiring is a no-op and boot logs are unchanged;
-      with it on, boot logs the base URL host (never the token).
+- [ ] 9. Add config and redaction (depends on 4) — `WorkContextEnabled`
+  (`envBool("WORK_CONTEXT_ENABLED", false)`), `MCTLAPIBaseURL`
+  (`MCTL_API_BASE_URL`, default `https://api.mctl.ai`),
+  `MCTLSurfaceTelegramToken` (bare `os.Getenv`, like `TG_API_HASH` at
+  `config.go:288`) and `WorkItemTenant` (`MCTL_WORK_ITEM_TENANT`) in
+  `internal/config/config.go`, with an inline `Load` validation block in the
+  style of `config.go:345-349`. Add `mctl_surface_telegram_token` to
+  `sensitiveKeys` (`internal/audit/redact.go:30`). Document all four
+  commented-out in `.env.example` with defaults shown.
+  — DoD: `Load()` errors when the flag is on and the token or tenant is empty,
+  and succeeds unchanged when the flag is off; a `slog` attr named
+  `mctl_surface_telegram_token` renders redacted.
 
-- [ ] 11. Docs (depends on 10): document the flag, the env vars, the new table
-      and the one content-bearing field (`Title`) in `README.md`, `.env.example`,
-      `SECURITY.md`'s data-flow table, and `docs/runbook.md` (enable, disable,
-      what an mctl-api outage looks like). Add `WORK_CONTEXT_API_TOKEN` to the
-      redaction field list in `internal/audit/redact.go`.
-      — DoD: `docs/runbook_test.go` passes; no emoji; English only.
+- [ ] 10. Wire it up (depends on 8, 9) — in `cmd/server/main.go`, next to the
+  `cfg.AgentEnabled` block (`:566`), construct the `workctx.Client` and assign
+  `agentRouter.Work` only when `cfg.WorkContextEnabled`. Log the flag state
+  alongside the existing `slog.Info` startup summary (`:940`). Add
+  `WorkContextRequestsTotal{route,outcome}` and
+  `WorkContextBindingsTotal{result}` to `internal/metrics/metrics.go`.
+  — DoD: with the flag off, the server starts with no client constructed and
+  `/mctl work` returns today's unknown-command reply; with it on and a token
+  set, the client is constructed and the startup log names the flag.
+
+- [ ] 11. Document it (depends on 10) — add a short `docs/work-context.md`
+  covering the one-time `/mctl link` flow, the four `/mctl work` forms, the
+  four env vars, and the manual cross-surface verification procedure. Link it
+  from `AGENTS.md` / `.claude/CLAUDE.md` key paths, and note in
+  `docs/contracts/mctl-api-work-context.md` that the adapter now exists.
+  — DoD: a reviewer can enable the flag and run the pilot from the doc alone.
 
 ## Tests
 
-- [ ] T1. `internal/workitem`: `Disabled{}` returns `ErrDisabled` from every
-      method; status-to-sentinel mapping table test for the HTTP adapter
-      (200, 401, 403, 409, 500, timeout) against `httptest.Server`.
-- [ ] T2. `internal/workitem/httpclient`: the bearer token never appears in any
-      returned error string or wrapped error chain, asserted by scanning
-      `err.Error()` for the token value.
-- [ ] T3. `internal/db`: `migrateWorkContext` is idempotent — run `Migrate`
-      twice on a fresh SQLite database and once more on a database created by the
-      pre-change schema; assert the table and both unique indexes exist and no
-      existing table was altered.
-- [ ] T4. `internal/db`: `UpsertWorkItemBinding` under concurrency — N goroutines
-      for the same `(user_id, chat_tg_id, thread_id)` produce exactly one row;
-      exactly one reports `created=true`; all read back the same `work_item_id`.
-- [ ] T5. `internal/db`: a NULL `thread_id` binding collides with itself (the
-      `thread_id_norm` guard), and two bindings differing only by `thread_id` do
-      not collide.
-- [ ] T6. `internal/db`: deleting a user cascades away their bindings; the purge
-      hook removes them for a retained user.
-- [ ] T7. `internal/workctx`: `OpenOrResume` with a fake client — first call
-      creates and starts an execution; second call for the same surface ref takes
-      the `Resume` path, creates no second WorkItem, and returns the same
-      `WorkItemID` with a new `ExecutionID`.
-- [ ] T8. `internal/workctx`: a `Client` returning `ErrUnavailable` leaves zero
-      rows in `work_item_bindings`; a `Client` returning `ErrUnauthorized`
-      produces a refusal and zero rows.
-- [ ] T9. `internal/workctx`: an actor excluded by `WORK_CONTEXT_OPERATORS` makes
-      no outbound call at all (fake client asserts zero invocations); an actor in
-      the allowlist still receives the platform's 403 verbatim when the fake
-      client refuses — the local list narrows and never grants.
-- [ ] T10. `internal/workctx`: `IdempotencyKey` is deterministic and stable across
-      process restarts for the same inputs, and differs when any input differs.
-- [ ] T11. `internal/agent/control`: `ParseCommand` table test for
-      `/mctl work <text>`, `/mctl work`, mixed case, and the untouched existing
-      subcommands; plus a golden assertion that with a nil `WorkContext` the
-      reply for `/mctl work` equals today's unknown-command help string.
-- [ ] T12. `internal/agent/control`: a pending-approval canonical state renders
-      read-only and asserts zero `agent_actions` rows were written.
-- [ ] T13. `internal/events`: the work-context envelope builder rejects any
-      attempt to include body/meta, and a redelivery yields the same envelope id.
-- [ ] T14. `internal/mcp`: with the flag off the registered tool list is
-      unchanged; with it on, `get_work_context` returns only identifiers and
-      refuses a binding belonging to another `user_id`.
-- [ ] T15. Cross-surface acceptance test (the issue's pilot path), end to end
-      against the contract fake: `/mctl work` creates a WorkItem and execution A
-      with snapshot v1 → `get_work_context` returns those references → a resume
-      call produces execution B with snapshot v2 against the same WorkItem, with
-      no Telegram message content read at any step.
-- [ ] T16. Regression: with `WORK_CONTEXT_ENABLED` unset, an existing-shape
-      integration test of the `agent_jobs` claim/complete path and the seven MCP
-      tools passes unchanged.
+- [ ] T1. Store round-trip, dual-dialect — `TestWorkItemBindings` with
+  `t.Run("sqlite")` using `newTestStore` (`internal/db/store_test.go:198`) and
+  `t.Run("postgres")` skipped unless `TEST_DATABASE_URL` is set, sharing one
+  assertion body. Covers upsert-then-get, the thread uniqueness constraint, the
+  work-item uniqueness constraint, `TouchWorkItemBindingState`, and
+  `ON DELETE CASCADE` when the user row goes away.
+- [ ] T2. No-actor invariant — a reflection test over every exported request
+  struct in `internal/workctx` asserting no field (and no JSON tag) matches
+  `actor`, `actor_subject`, `created_by`, `principal` or `on_behalf_of`.
+- [ ] T3. Route allowlist — a test asserting every path any client method can
+  build matches the six permitted routes, and that none contains `executions`,
+  `snapshot`, `snapshots`, `events`, `approvals`, or is a bare
+  `GET /api/v1/work-items` or a `PATCH`.
+- [ ] T4. Header discipline — an `httptest` server asserting the bearer is the
+  surface token, `X-MCTL-Surface-Actor` is digits-only and equals the expected
+  Telegram id, `Idempotency-Key` is present on every mutating call and stable
+  across a repeat, and `origin_surface` in the create body is always `telegram`
+  regardless of what the caller passed.
+- [ ] T5. Error mapping — `httptest` cases for `403 link_not_found`,
+  `link_revoked`, `link_expired`, `relay_required`, `400 actor_not_accepted`,
+  `403 challenge_invalid`, `409 link_conflict` and a `409` state-version
+  mismatch, each producing its sentinel and a distinct owner-facing reply.
+- [ ] T6. Idempotent open — calling the create/open handler twice for the same
+  `(user_id, chat_tg_id, root_tg_message_id)` issues exactly one
+  `POST /work-items`, and the second reuses the binding. A third call after the
+  binding's `last_state` is set to `completed` issues a new create.
+- [ ] T7. Resume concurrency — a fake returning `409` once then `200` proves a
+  single re-read-and-retry; a fake returning `409` twice proves the handler
+  stops and tells the owner instead of looping.
+- [ ] T8. Schema-version rejection — a response with
+  `"schema_version": "workitem/v2"` is rejected, no binding row is written, and
+  the owner is told the platform version is incompatible.
+- [ ] T9. Flag-off no-op — with `WorkContextEnabled` false, `/mctl work` and
+  `/mctl link` produce byte-identical output to today's unknown-command reply,
+  and a client whose transport fails the test on any request is never called.
+- [ ] T10. Existing-command regression — the full `command_test.go` and
+  `router_test.go` suites pass unchanged after the `SavedMeta` widening.
+- [ ] T11. Actor fail-closed — when `TelegramIDByUserID` returns `found=false`,
+  or disagrees with `SavedMeta.SelfTGID`, no HTTP request is made and the owner
+  is told the account is not linked.
+- [ ] T12. No transcript persisted — after a full create/note/status/resume
+  cycle with distinctive message text, a `SELECT *` over `work_item_bindings`
+  contains none of that text in any column.
 
-Test conventions to follow, as established in this repo: standard library only
-(no testify, no gomock), hand-written `if got != want { t.Fatalf(...) }`
-assertions, table-driven `t.Run` subtests, and in-memory SQLite stores built the
-way `newTestStore` (`internal/db/store_test.go:198`) and `newToolsTestStore`
-(`internal/mcp/tools_test.go:20`) build them — switching to a file-backed DSN
-with `busy_timeout` for the concurrency tests T4 and T5, as
-`store_access_tier_test.go:165` does.
-
-Fixtures must use the synthetic personas already in the tests (`Alice`, `Bob`,
-`Carol`, `Dana`) and synthetic numeric ids checked with `git grep` before use,
-per `.claude/CLAUDE.md`. No real Telegram account, handle or id in any fixture.
+All fixtures use the existing synthetic personas (`Alice`, `Bob`, `Carol`,
+`Dana`) and reuse existing synthetic numeric ids per the repository safety
+rules; no real Telegram id, handle or name appears anywhere.
 
 ## Rollback
 
-1. **Immediate, no deploy:** set `WORK_CONTEXT_ENABLED=false` and restart. The
-   MCP tool disappears from the tool list, `/mctl work` falls back to the
-   existing unknown-command help, `workitem.Disabled` short-circuits every call,
-   and no outbound request is made. All pre-existing behaviour returns because
-   nothing else in the service reads `work_item_bindings`.
-2. **Binary rollback:** revert the feature commits and redeploy the previous
-   image. `work_item_bindings` is a standalone table that no prior code path
-   reads or writes, so an old binary runs against the new schema unchanged. The
-   table is left in place deliberately — dropping it would discard the
-   correlation records that let an operator find the WorkItems already created,
-   which is exactly the information needed to reconcile after a failed rollout.
-3. **Data cleanup (only after reconciliation):** delete
-   `work_item_bindings` rows and drop the table in a separate, explicitly
-   reviewed change, after confirming the corresponding canonical WorkItems have
-   been closed or re-parented in mctl-api. Nothing in this rollback path touches
-   `conversations`, `incoming_events`, `agent_jobs`, `agent_actions` or the
-   outbox.
-4. **If the outage is mctl-api, not us:** no rollback is required. The adapter
-   already degrades to a "work tracking temporarily unavailable" reply and every
-   other `/mctl` subcommand, the agent job pipeline and the MCP tools keep
-   working.
+The adapter is designed so rollback is a config change, not a revert.
+
+1. **Immediate (seconds, no deploy):** set `WORK_CONTEXT_ENABLED=false` and
+   restart. The client is not constructed, no outbound request is made, and
+   `/mctl work` / `/mctl link` fall back to the existing unknown-command reply.
+   Every other `/mctl` subcommand, the listener, the executor and the notifier
+   are untouched. This is the full rollback for anything wrong in the adapter.
+2. **If the platform side is the problem:** leave the flag off and revoke the
+   `surface:telegram` token at mctl-api. Already-created work items remain
+   valid canonical state and stay reachable from other surfaces — nothing in
+   Telegram is needed to reach them, which is the point of the feature.
+3. **If the code must come out:** revert tasks 4-11 as one range. Leave task 1
+   (the table) in place — an empty or stale `work_item_bindings` costs nothing,
+   holds no user content, and dropping it is a destructive migration this
+   codebase has no mechanism for. If it must go, add a one-shot
+   `dropTableIfPresent` pass mirroring `dropLegacyColumns`
+   (`internal/db/db.go:406`).
+4. **Task 6 caveat:** the `SavedMeta` signature change is the only edit that
+   touches existing code paths, so it is the one thing a revert of 4-11 must
+   either keep or undo wholesale. Keeping it is safe (it is pure plumbing of
+   values the listener already had) and is the recommended choice, so that a
+   later retry of #443 does not have to redo it.
+5. **Verification after rollback:** run `/mctl status`, `/mctl conversations`
+   and one `/mctl approve` cycle in Saved Messages and confirm the replies match
+   the pre-change behaviour; confirm `work_context_requests_total` stops
+   incrementing.

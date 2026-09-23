@@ -1,178 +1,194 @@
-# Bind Telegram threads to a canonical WorkItem and a resume path
+# Bind Telegram threads to a canonical mctl-api WorkItem with a resume path
 
 ## Context
 
-Today `mctl-telegram` owns investigation state locally. An incoming Telegram
-message becomes an `incoming_events` row, which enqueues an `agent_jobs` row,
-which a worker claims over `/api/agent/v1` (`internal/agentapi/server.go`) and
-completes with an `agent_actions` or `job_leads` result. The owner drives that
-state from Saved Messages with `/mctl ...` commands parsed in
-`internal/agent/control/command.go` and routed in
-`internal/agent/control/router.go`. All of it — conversation identity, job
-lifecycle, approval codes — lives in this service's database
-(`internal/db/agent_schema.go`) and is reachable only from Telegram. Work
-started in a Telegram thread cannot be inspected, resumed, or approved from any
-other mctl surface.
+mctl-telegram today owns its own investigation-shaped state. The communication
+agent keeps `conversations`, `incoming_events`, `agent_actions` and
+`agent_jobs` rows (`internal/db/agent_schema.go`, `internal/db/agent_domain.go`)
+and drives them from `/mctl` commands the owner types into Saved Messages
+(`internal/agent/control/command.go`, `internal/agent/control/router.go`).
+Nothing in this repository talks *outbound* to mctl-api: the only references to
+mctl-api are inbound JWT verification (`internal/auth/sharedhmac/verifier.go`,
+`internal/auth/localjwt/issuer.go`). Work that starts in Telegram therefore
+cannot be seen, resumed or inspected from any other surface.
 
-Issue #443 asks us to invert that relationship for the investigator pilot:
-Telegram becomes a *surface adapter* over canonical mctl work state rather than
-the owner of it. A Telegram interaction should create or open a canonical
-WorkItem in the platform (mctl-api#227), start an investigator execution
-against it (mctl-agents#267), keep only a minimal correlation record locally,
-and expose a stable reference so the same work can be resumed from a second
-surface without replaying Telegram history. The service already has the right
-instinct for this: `internal/events` publishes reference-only `mctl.events/v1`
-envelopes that name a chat and message but never carry the body, on the stated
-principle that "an event is a signal, not a copy". This proposal applies the
-same principle to work state.
+Issue #443 asks Telegram to become a *surface adapter* over canonical mctl work
+state instead of an owner of it. The pilot is the investigator workflow: an
+owner interaction in Telegram creates or opens a canonical WorkItem, records
+the user's intent, and exposes stable references (work item id, latest
+execution, snapshot pointer) so the same work can be continued from a second
+surface without replaying any Telegram history. The binding contract is pinned
+in-repo at `docs/contracts/mctl-api-work-context.md` and is non-negotiable:
+the bot never supplies an actor, authenticates as the `surface:telegram`
+principal, relays the human via `X-MCTL-Surface-Actor`, and never touches
+execution, snapshot, approval, list or `PATCH` routes.
 
 ## User stories
 
-- AS a platform owner operating from Telegram I WANT `/mctl work <request>` to
-  create or open a canonical WorkItem SO THAT my investigation is tracked in
-  platform state rather than only in a chat thread.
-- AS a platform owner I WANT the bot to reply with a stable work and execution
-  reference SO THAT I can paste it into another surface and continue there.
-- AS a platform owner I WANT a repeated `/mctl work` in the same thread to
-  reopen the same WorkItem SO THAT a retried or double-tapped command never
-  forks my work into duplicates.
-- AS an operator on a second surface (MCP client or web) I WANT to inspect and
-  resume work that started in Telegram through the canonical API SO THAT I do
-  not need access to the Telegram transcript.
-- AS a security reviewer I WANT authorization and approval decisions to come
-  from platform contracts SO THAT being able to message the bot never by itself
-  grants the ability to start or approve platform work.
-- AS an operator of an existing deployment I WANT every current `/mctl` command,
-  the communication-agent job pipeline, and the MCP tool surface to behave
-  exactly as before when the feature flag is off SO THAT rollout carries no
-  regression risk.
+- AS a Telegram account owner I WANT `/mctl work <title>` to create or open a
+  canonical WorkItem SO THAT the work I start on my phone exists in the
+  platform rather than only in this bot's database.
+- AS a Telegram account owner I WANT `/mctl work status` to show the work item
+  id, state and latest execution reference SO THAT I can quote a stable
+  identifier when continuing the work elsewhere.
+- AS a Telegram account owner I WANT `/mctl work note <text>` to append an
+  intent to the bound work item SO THAT the platform investigator has my input
+  without the bot mirroring my whole chat transcript.
+- AS a Telegram account owner I WANT `/mctl work resume` to ask the platform to
+  continue SO THAT I do not need a second tool open to pick a stalled
+  investigation back up.
+- AS a Telegram account owner I WANT `/mctl link <code>` to bind my Telegram
+  identity to my platform identity once SO THAT the platform attributes my work
+  to me and not to the bot.
+- AS a platform operator I WANT the whole adapter behind a flag that is off by
+  default SO THAT rolling it out cannot regress the existing Telegram
+  workflows before mctl-api ships the surface principal.
+- AS a security reviewer I WANT authorization decided by mctl-api on the
+  relayed human SO THAT reachability over Telegram is never mistaken for
+  platform authorization.
 
 ## Acceptance criteria (EARS)
 
-Creation and binding
+### Identity and relay
 
-- WHEN an authorized owner sends `/mctl work <request>` in a Telegram context
-  that has no existing binding THE SYSTEM SHALL call the canonical WorkItem API
-  to create or open a WorkItem, persist a `work_item_bindings` row correlating
-  the Telegram context to the returned WorkItem id, and reply with the work
-  reference.
-- WHEN the system persists a binding THE SYSTEM SHALL store only correlation
-  identifiers — `user_id`, surface, `chat_tg_id`, `thread_id`, `root_message_id`,
-  work/execution/snapshot ids, timestamps — and SHALL NOT store the request
-  text, the reply text, or any other message body.
-- WHEN the system calls the canonical WorkItem API THE SYSTEM SHALL include
-  actor identity (`auth.Identity.Subject`, e.g. `tg:<telegram_id>`), surface
-  (`telegram`), the surface reference, and a deterministic idempotency key
-  derived from `(user_id, chat_tg_id, thread_id)`.
-- WHEN a WorkItem is created or opened from Telegram THE SYSTEM SHALL start an
-  investigator execution bound to that WorkItem and SHALL record the returned
-  execution id and ContextSnapshot reference on the binding row.
+- WHEN the adapter issues any request to mctl-api THE SYSTEM SHALL send
+  `Authorization: Bearer <MCTL_SURFACE_TELEGRAM_TOKEN>` and SHALL NOT send
+  `MCTL_API_TOKEN` or any `mctl-agent` credential.
+- WHEN the adapter issues a request on a relay route THE SYSTEM SHALL send
+  `X-MCTL-Surface-Actor` containing only the owner's Telegram user id as
+  decimal digits.
+- WHILE building any mctl-api request body THE SYSTEM SHALL omit every
+  actor-naming field (`actor`, `actor_subject`, `created_by`, `principal`,
+  `on_behalf_of`) and SHALL NOT construct a `tg:<id>` subject.
+- THE SYSTEM SHALL resolve the Telegram user id for the relay header from the
+  authenticated Saved Messages self-peer or the `users` row, and SHALL NOT
+  derive it from a deployment allowlist such as `telegram_owner_ids`.
+- IF the Telegram user id for the acting account cannot be resolved THEN THE
+  SYSTEM SHALL fail closed, make no mctl-api call, and tell the owner the
+  account is not linked.
+- WHEN the owner sends `/mctl link <code>` THE SYSTEM SHALL call
+  `POST /api/v1/surface-identities/redeem` with that code and the relay header,
+  and SHALL NOT echo the code back into any reply or log.
+- IF mctl-api answers `403 link_not_found`, `link_revoked`, `link_expired` or
+  `relay_required` THEN THE SYSTEM SHALL reply with instructions to run the
+  one-time link flow and SHALL NOT retry the original call.
+- IF mctl-api answers `400 actor_not_accepted` THEN THE SYSTEM SHALL treat it
+  as a programming defect: log a non-sensitive error, increment a failure
+  metric, and reply that the request was rejected by the platform.
 
-Idempotency
+### Route discipline
 
-- WHEN `/mctl work` is sent again in a Telegram context that already has a
-  binding in a non-terminal state THE SYSTEM SHALL reuse the bound WorkItem,
-  SHALL NOT create a second WorkItem, and SHALL reply with the existing work
-  reference and current state.
-- IF two `/mctl work` commands for the same Telegram context are processed
-  concurrently THEN THE SYSTEM SHALL let the unique index on
-  `(user_id, surface, chat_tg_id, thread_id)` arbitrate, re-read the winning
-  row, and have both commands report the same WorkItem id.
-- WHILE a binding exists THE SYSTEM SHALL send the same idempotency key on every
-  create-or-open call for that Telegram context so that a locally lost binding
-  row cannot cause the platform to mint a duplicate WorkItem.
+- THE SYSTEM SHALL call only `POST /api/v1/work-items`,
+  `GET /api/v1/work-items/{id}`, `POST /api/v1/work-items/{id}/intents`,
+  `POST /api/v1/work-items/{id}/resume`,
+  `POST /api/v1/work-items/{id}/surface-refs` and
+  `POST /api/v1/surface-identities/redeem`.
+- THE SYSTEM SHALL NOT call `GET /api/v1/work-items` (list),
+  `PATCH /api/v1/work-items/{id}`, any `/executions`, `/snapshot`,
+  `/snapshots`, `/events` or `/approvals` route.
+- WHEN the owner asks for execution or approval state THE SYSTEM SHALL read it
+  from the `latest_execution`, pending-approval and snapshot pointers returned
+  by `GET /api/v1/work-items/{id}` and SHALL NOT evaluate approval logic
+  locally.
 
-Authorization and approval
+### Binding and idempotency
 
-- IF the caller is not authorized for work-context operations by platform
-  contract THEN THE SYSTEM SHALL refuse the command with a non-disclosing
-  message and SHALL NOT call the WorkItem API on their behalf.
-- WHILE handling a work-context command THE SYSTEM SHALL treat Telegram
-  reachability (`client_bot_reachability`, `internal/db/reachability.go`) and
-  chat membership as routing facts only, never as an authorization input.
-- IF the canonical API answers 401 or 403 THEN THE SYSTEM SHALL surface that
-  refusal to the user unchanged and SHALL NOT fall back to any bot-local grant.
-- WHEN the bound work is in a pending-approval state THE SYSTEM SHALL render
-  that state read-only from the canonical API and SHALL NOT create an
-  `agent_actions` approval code, a local approval record, or any bot-local
-  approve/reject path for it.
+- WHEN the owner runs `/mctl work <title>` in a Saved Messages thread that has
+  no binding THE SYSTEM SHALL create a work item with
+  `origin_surface: telegram` and a deterministic `external_key` derived from
+  the Telegram chat id and root message id, then persist a binding row.
+- WHEN the owner repeats `/mctl work <title>` for a thread that already has a
+  binding whose work item is `active` or `waiting` THE SYSTEM SHALL reuse the
+  bound work item and SHALL NOT create a second one.
+- WHEN the adapter issues any mutating mctl-api request THE SYSTEM SHALL send
+  an `Idempotency-Key` derived deterministically from the binding key and the
+  operation, so that a retry after a crash or timeout is a no-op.
+- WHILE a binding row exists THE SYSTEM SHALL store only numeric Telegram
+  correlation identifiers (chat id, root message id, owning user id) plus the
+  work item id, its last observed state and state version, and SHALL NOT store
+  message bodies, titles, transcripts or peer handles.
+- WHEN a work item is created or opened THE SYSTEM SHALL register the Telegram
+  thread with `POST /api/v1/work-items/{id}/surface-refs` as correlation
+  metadata only.
+- IF a binding's work item has reached `completed`, `superseded` or `archived`
+  THEN THE SYSTEM SHALL create a new work item for the next `/mctl work` in
+  that thread rather than resuming a terminal one.
 
-Resume and second surface
+### Concurrency and resume
 
-- WHEN a work reference is reported to the user THE SYSTEM SHALL render a
-  stable, copyable form containing the WorkItem id and the current execution id.
-- WHEN an authorized identity requests work context for a bound Telegram thread
-  from a second surface THE SYSTEM SHALL return the WorkItem, execution and
-  ContextSnapshot references and SHALL NOT return Telegram message content.
-- WHEN a later Telegram interaction targets a bound WorkItem THE SYSTEM SHALL
-  continue it through the canonical resume path, producing a new execution
-  against the same WorkItem rather than a new WorkItem.
-- WHEN a binding is created or its bound execution changes THE SYSTEM SHALL
-  enqueue a reference-only envelope through the existing transactional outbox
-  (`internal/db/event_outbox.go`, `internal/events/relay.go`) whose subject
-  carries identifiers only.
+- WHEN the owner runs `/mctl work resume` THE SYSTEM SHALL first
+  `GET /api/v1/work-items/{id}` and send the returned `state_version` as
+  `expected_state_version` on the resume call.
+- IF a resume returns `409` for a state-version mismatch THEN THE SYSTEM SHALL
+  re-read the work item and retry at most once, and on a second mismatch SHALL
+  tell the owner the item changed and ask them to try again.
+- WHEN a response's `schema_version` is not `workitem/v1` THE SYSTEM SHALL
+  reject the response, make no state change, and report an incompatible
+  platform version.
 
-Rollout and degradation
+### Rollout and compatibility
 
 - WHILE `WORK_CONTEXT_ENABLED` is false THE SYSTEM SHALL behave exactly as it
-  does today: no new command is accepted, no outbound call is made, no binding
-  row is written, and every existing `/mctl` subcommand, agent job path and MCP
-  tool is unchanged.
-- IF the canonical WorkItem API is unreachable, returns 5xx, or exceeds its
-  timeout THEN THE SYSTEM SHALL reply that work tracking is temporarily
-  unavailable, SHALL NOT write a binding row claiming work that may not exist,
-  and SHALL leave all pre-existing Telegram functionality working.
-- WHEN a user record is deleted THE SYSTEM SHALL delete that user's
-  `work_item_bindings` rows through the same `ON DELETE CASCADE` and purge path
-  the other per-user agent tables use.
+  does today: no mctl-api client constructed, no outbound request, and
+  `/mctl work` and `/mctl link` answered by the existing unknown-command reply.
+- WHILE `WORK_CONTEXT_ENABLED` is true THE SYSTEM SHALL leave every existing
+  `/mctl` subcommand (`status`, `leads`, `conversations`, `show`, `continue`,
+  `pause`, `takeover`, `approve`, `reject`) byte-for-byte unchanged in parsing
+  and behaviour.
+- IF `WORK_CONTEXT_ENABLED` is true but `MCTL_SURFACE_TELEGRAM_TOKEN` is empty
+  THEN THE SYSTEM SHALL refuse to start the adapter, log the misconfiguration,
+  and leave the rest of the server running.
+- THE SYSTEM SHALL register `mctl_surface_telegram_token` in the
+  `internal/audit/redact.go` sensitive-key set so the surface bearer can never
+  reach a log line.
+- WHEN an mctl-api call fails for any reason THE SYSTEM SHALL leave all
+  existing communication-agent state untouched and SHALL NOT block or fail the
+  Saved Messages listener.
 
 ## Out of scope
 
+- The human-input relay routes (`GET /api/v1/human-input`,
+  `GET /api/v1/human-input/{request_id}`,
+  `POST /api/v1/human-input/{request_id}/response`) — owned by #571.
+- Minting surface-identity challenges, or listing and revoking links; the human
+  does those with their own GitHub credential, not through the bot.
+- Starting, attaching, correlating or sealing executions and context snapshots;
+  those are platform-owned and service-principal only.
 - Full chat synchronization between Telegram and other surfaces.
-- Making `mctl-telegram` the WorkItem database, or mirroring WorkItem fields
-  (title, body, status history) into local tables beyond the correlation row.
-- Persisting or replaying Telegram transcripts as canonical task state; message
-  bodies stay sealed in `incoming_events` under the existing per-user AES-GCM
-  key and are never forwarded as work state.
-- Generic cross-product CRM or session storage.
-- Migrating the existing communication-agent pipeline (`agent_jobs`,
-  `agent_actions`, `job_leads`, the `/mctl approve|reject` flow) onto WorkItems.
-  That pipeline is untouched by this proposal; only the new investigator path is
-  WorkItem-backed.
-- Implementing the canonical WorkItem API itself (mctl-api#227) or the
-  investigator execution/ContextSnapshot contract (mctl-agents#267).
-- Building the second surface. This proposal ships the read path the second
-  surface consumes and an end-to-end test against a contract fake.
+- Making Telegram the WorkItem database, or storing private message history for
+  later retrieval.
+- Forum-topic (`message_thread_id`) support. This repository's Telegram surface
+  is an MTProto *user account* (`internal/telegram/clientpool.go`), not a Bot
+  API bot in a forum; there is no topic id anywhere in the tree.
+- End-to-end acceptance against a live mctl-api; that waits on the release with
+  the surface principal token configured.
+- Changing the existing `conversations` / `agent_jobs` domain or the C1
+  communication-agent rollout gate.
 
 ## Open questions
 
-- The exact canonical contract from mctl-api#227 is not visible from this repo:
-  route paths, request and response field names, the idempotency mechanism
-  (request field versus `Idempotency-Key` header), and how a ContextSnapshot is
-  referenced. Proceeding with a narrow port interface (`workitem.Client`) plus a
-  contract fake so only one adapter file changes when the real shape lands.
-- Service-to-service credential for the outbound call. This repo has no
-  outbound client to `mctl-api` today; it only verifies inbound JWTs
-  (`internal/auth/sharedhmac`). Proceeding with a dedicated
-  `WORK_CONTEXT_API_TOKEN` sourced from Vault, on the assumption that reusing
-  `OAUTH_JWT_SECRET` to mint outbound tokens would re-entrench the shared-HMAC
-  coupling ROADMAP M3 is trying to remove.
-- "Thread" has no representation in this codebase at all. There is no
-  `message_thread_id`, `TopMsgID` or `reply_to_msg_id` anywhere:
-  `telegram.Message` has no thread field, `bot.Update` decodes only
-  `update_id` and `chat.id`, and `conversations` is keyed
-  `UNIQUE (user_id, peer_tg_id)` — per peer, not per thread. Proceeding with a
-  nullable `thread_id` column that is written as NULL in this slice, so the
-  binding is chat-scoped today and the column can be populated later without a
-  schema or index change on a table that by then holds production rows. This
-  should be confirmed against what mctl-api#227 expects in a surface reference.
-- Which second surface lands first (MCP tool versus web). Proceeding with a
-  flag-gated MCP tool, because ROADMAP declares the seven MCP tools locked for
-  v1.0 and a flag-gated eighth is the smallest reversible step.
-- Whether the ContextSnapshot is produced by the execution and merely referenced
-  by us, or must be requested. Proceeding with reference-only: we store an
-  opaque snapshot id returned by the platform and never construct one.
-- Whether authorization is decided solely by mctl-api or additionally gated by a
-  local operator allowlist. Proceeding with both: a local `WORK_CONTEXT_OPERATORS`
-  allowlist as a deployment-side restriction, with mctl-api remaining the
-  authoritative decision. The local list can only narrow, never widen.
+- **Which mctl-api tenant does a Telegram-originated work item belong to?**
+  `POST /api/v1/work-items` requires a `tenant`, but "tenant" in this repo means
+  the local owning user account (`internal/agent/profile/profile.go`), which is
+  not an mctl-api tenant. Proceeding with a single configured
+  `MCTL_WORK_ITEM_TENANT`, failing closed when it is unset; a per-link tenant
+  derived from the relayed human's tenants would be better once mctl-api
+  exposes one.
+- **What exactly is a "Telegram thread" for binding purposes?** There is no
+  forum topic id in this codebase. Proceeding with the pilot definition: a
+  thread is `(user_id, chat_tg_id, root_message_id)` where the root message is
+  the `/mctl work` command itself, in Saved Messages. Binding a recruiter
+  `conversations` row (`internal/db/agent_domain.go:479`) to a work item is a
+  plausible follow-up but is not the investigator pilot.
+- **Which second surface will close the cross-surface loop?** The issue leaves
+  it as "CLI/MCP or web, whichever becomes available first". Proceeding by
+  making the Telegram side surface-agnostic — it only needs the work item id —
+  and documenting the manual verification against whichever lands first.
+- **Does `POST /work-items` return the created item in the `workitem/v1` item
+  view shape, or a bare id?** The pinned contract lists the body but not the
+  response. Proceeding by decoding the item view and tolerating a response
+  that carries only `work_item.id` and `state_version`.
+- **What is the deployed namespace's egress posture for `api.mctl.ai`?** The
+  communication-agent plan notes the `labs` namespace is
+  `allowInternetEgress: true` namespace-wide. Proceeding on that assumption and
+  flagging it for the operator to confirm at rollout.
