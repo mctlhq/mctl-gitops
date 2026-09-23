@@ -1,17 +1,22 @@
 # Tasks: incident-2430bb39
 
-1. [ ] Edit `platform-gitops/infra-components/observability/vm-rules/mctl-telegram-slo.yaml`:
-   in the `mctl-telegram-slo-burn` group, `MctlTelegramSessionBorrowSlowBurn`
-   alert, append the "Known contributing risk" sentence (see design.md) to the
-   `annotations.description` block scalar. Do not change the `expr`, `for`,
-   `labels`, or `summary` fields, and do not touch any other alert in this
-   file.
-2. [ ] Verify the file still parses as valid YAML and the VMRule's `expr` for
-   every alert is byte-identical to before the edit (only the one
-   `description` string should differ in the diff).
-3. [ ] No dependent changes (no image tag bump, no other file touched). Note
-   in the PR description that the actual suspected root cause — the
-   out-of-band `mctl-telegram-canary` Secret's identity — is outside gitops
-   and requires a human to check/rotate it directly in Vault/Kubernetes; this
-   PR only documents the lead on the alert for whoever picks up the
-   reliability ticket.
+1. [ ] Add `docs/runbooks/mctl-telegram-session-borrow-slow-burn.md` (new
+       file) containing: the alert name and links to
+       `platform-gitops/infra-components/observability/vm-rules/mctl-telegram-slo.yaml`
+       and `mctl-telegram`'s `docs/slo.md`; the precise SLI definition
+       (`mctl_sessions_borrow_total{result="error"}` vs. `result=~"ok|error"`
+       over 6h, excluding `expired_idle`/`expired_absolute`); the triage path
+       (query the metric by `result` in VictoriaMetrics/Grafana before
+       reading logs, since base-service "mcp tool call" log lines do not
+       reflect `Pool.Borrow()`'s result); the log-tooling limitation recorded
+       in this proposal's design.md (a 6h `mctl_get_service_logs` pull
+       exceeds the output-size limit around 90-100 lines, so pull in smaller
+       `since` slices); and the out-of-scope follow-up correlating a
+       confirmed error rate against `TelegramClientErrors` and Telegram
+       flood-wait events before any pool/resource config change.
+2. [ ] Verify the new file follows the existing style/structure of
+       `docs/runbooks/otel-collector.md` (or another existing runbook in that
+       directory) and that both linked paths
+       (`mctl-telegram-slo.yaml` and `docs/slo.md`) resolve correctly.
+3. [ ] No dependent changes (no image tag bump, no values.yaml edit, no
+       alerting-rule edit) — this proposal is documentation-only.
