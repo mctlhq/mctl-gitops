@@ -1,5 +1,12 @@
 # Design: issue-242-feat-agent-platform-role-aware-capabilit
 
+> **Revision 2 (2026-09-23): delivered in three slices.** The design below is
+> unchanged. `tasks.md` now carries slice 1 only (ADR 017, `orchestrator/capability.py`,
+> the consequence table, the `PolicyCheckpoint` seam); the gateway, the builder
+> and the investigator mode follow as slices 2 and 3 after slice 1 merges. The ADR
+> is numbered 017: 011 is taken three times, 015 and 016 are claimed by the #199 and
+> #198 proposals.
+
 ## Current state
 
 **Tool exposure is one wildcard, applied eagerly, in five of six agents.**
@@ -89,7 +96,7 @@ Four artifacts, in the shape ADR 007 and ADR 009 established: a normative
 ADR, a stdlib-only contract module, a runtime module behind a default-off
 flag, and a benchmark.
 
-### 1. ADR 011 — `docs/adr/011-capability-discovery-and-gateway-contract.md`
+### 1. ADR 017 — `docs/adr/017-capability-discovery-and-gateway-contract.md`
 
 Normative for everything below and for `#197`/`#195` when they land: the
 descriptor shape and field owners, the sealing/identity rule, the
@@ -271,7 +278,7 @@ that rather than to confirm a hope.
    eligibility, `#197` checkpoints, correlation) would have to be
    reimplemented server-side, which the issue explicitly warns against. The
    in-process server reuses the existing process identity and the existing
-   connectivity-verification model, and ADR 011 keeps the contract
+   connectivity-verification model, and ADR 017 keeps the contract
    transport-agnostic so the gateway can be lifted out later without changing
    descriptors.
 4. **Ship discovery with no policy seam and let `#197` retrofit it.**
