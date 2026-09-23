@@ -1,0 +1,231 @@
+name: Cloudflare MCP portal health
+
+# Watches the upstream servers of the MCP portal (mcp.mctl.ai) and says so when
+# one stops working, which today nothing does.
+#
+# The failure it exists for is the one infrastructure/cloudflare/portal/README.md
+# names and leaves to "whatever watches the portal": the admin credential a
+# server syncs with expires on the upstream's schedule, `status` goes `stale`
+# with `Authorization failed: needs_reauth`, and the server's tools go on being
+# served from an old snapshot, or not at all, with nobody told. On 2026-09-23
+# `projects` had been in that state for two days; it surfaced only because a
+# release changed an outputSchema and every call through the portal failed
+# client-side validation against the stale one.
+#
+# Two jobs, split by credential:
+#
+#   * `health` (hourly, and on dispatch) reads with CF_PORTAL_READ_TOKEN,
+#     Account -> MCP Portals -> Read, the repository secret cloudflare-drift.yml
+#     already uses. It lists every server, so one added later is watched
+#     without an edit here, and fails when any is not `ready` or carries an
+#     `error`.
+#
+#   * `sync` (dispatch only) re-snapshots one server's tools after its release.
+#     POST servers/{id}/sync needs MCP Portals -> Edit, and a write credential
+#     in this repository lives only as an environment secret on
+#     `cloudflare-apply` (see cloudflare-apply.yml), so the job takes that
+#     environment: main only, a reviewer approves, then it runs. An hourly
+#     unattended sync would need that write token as a repository secret, which
+#     is exactly what the environment exists to prevent. Sync only does anything
+#     for a server registered by DCR (`projects` today); for a manual-OAuth one
+#     Cloudflare answers success and changes nothing (README, "Re-snapshot").
+#     The job reports whether `last_synced` moved, the only honest signal.
+#
+# Telegram is told once per distinct problem per UTC day: the problem's
+# signature and the date form a cache key, and a key that already exists means
+# this was said today. A red run every hour is still there for anyone looking.
+
+on:
+  schedule:
+    - cron: '41 * * * *'
+  workflow_dispatch:
+    inputs:
+      sync:
+        description: 'Server id to re-snapshot (e.g. projects) — needs cloudflare-apply approval. Empty: health check only.'
+        required: false
+        type: string
+  pull_request:
+    paths:
+      - '.github/workflows/cloudflare-portal-health.yml'
+
+permissions:
+  contents: read
+
+env:
+  CLOUDFLARE_ACCOUNT_ID: 6a09f637d20e1f66a8e9d45ebe778058
+
+jobs:
+  health:
+    name: every portal server is ready
+    runs-on: ubuntu-latest
+    # Per job, not per workflow: `sync` can sit in `waiting` on the
+    # cloudflare-apply reviewer for days, and a workflow-level group would keep
+    # only one pending health run behind it, replacing each hourly one with the
+    # next -- no health checks for the whole wait (cloudflare-apply.yml has the
+    # same reasoning).
+    concurrency:
+      group: cloudflare-portal-health
+      cancel-in-progress: false
+    steps:
+      - name: Read every server
+        id: read
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_PORTAL_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "${CLOUDFLARE_API_TOKEN}" \
+            || { echo "::error::CF_PORTAL_READ_TOKEN is not set"; exit 1; }
+          base="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/access/ai-controls/mcp"
+          # The token reaches curl in a config on a file descriptor, never as
+          # an argument, the same as mctl-telegram/scripts/portal-allowlist-apply.sh.
+          curl -fsS --retry 3 --retry-delay 5 --max-time 30 \
+            -K <(printf 'header = "Authorization: Bearer %s"\n' "${CLOUDFLARE_API_TOKEN}") \
+            "${base}/servers?per_page=100" > servers.json
+          # A 200 with an error envelope, or an empty list, is the check failing,
+          # not every server being healthy.
+          test "$(jq -r '.success' servers.json)" = "true" \
+            || { echo "::error::the API did not return success=true"; jq '.errors' servers.json; exit 1; }
+          test "$(jq '.result | length' servers.json)" -gt 0 \
+            || { echo "::error::the API returned no servers"; exit 1; }
+          jq -r '.result[] | "\(.id)\t\(.status)\t\(.last_successful_sync // "never")\t\(.error // "")"' servers.json \
+            | while IFS=$'\t' read -r id status ok error; do
+                echo "${id}: ${status}, last successful sync ${ok}${error:+, error: ${error}}"
+              done
+          echo "read=ok" >> "$GITHUB_OUTPUT"
+
+      - name: Judge
+        id: judge
+        run: |
+          set -euo pipefail
+          jq '[.result[] | select(.status != "ready" or ((.error // "") != ""))]' servers.json > problems.json
+          if [ "$(jq length problems.json)" -eq 0 ]; then
+            echo "all $(jq '.result | length' servers.json) servers ready"
+            exit 0
+          fi
+          # Signature: which servers, in which state, with which error — not the
+          # timestamps, so an hour passing is not a new problem.
+          echo "sig=$(jq -c '[.[] | [.id, .status, (.error // "")]] | sort' problems.json | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+          echo "problem=true" >> "$GITHUB_OUTPUT"
+          # Built by jq, not a shell read loop: every field goes through @html,
+          # because the message is sent as HTML (an unpaired _ such as the one
+          # in needs_reauth makes Telegram's default Markdown reject the whole
+          # message, see cloudflare-drift.yml), and an empty field cannot shift
+          # the others the way consecutive tabs do under `read`.
+          jq -r --arg run "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" '
+            "⚠️ <b>MCP portal: \(length) server(s) not ready</b>",
+            (.[] | "",
+              "• <b>\(.name | @html)</b> (<code>\(.id | @html)</code>): \(.status | @html)",
+              (if (.error // "") != "" then "  error: <code>\(.error | @html)</code>" else empty end),
+              "  last successful sync: \(.last_successful_sync // "never" | @html)",
+              "  fix: Cloudflare Zero Trust → Access controls → MCP Portals → MCP servers → \(.name | @html) → ⋯ → Re-authenticate server"),
+            "",
+            "Until then its tools are served from a stale snapshot, or not at all.",
+            "Run: \($run)"
+          ' problems.json > message.txt
+          jq -r '.[] | "::error::\(.id) is \(.status)\(if (.error // "") != "" then ": " + .error else "" end)"' problems.json
+          exit 1
+
+      # Once per problem per day. `always()` because the judge fails the job on
+      # purpose; the read step failing is a different message below.
+      - name: Already said today?
+        id: seen
+        if: always() && github.event_name == 'schedule'
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.judge.outputs.problem }}" = "true" ]; then
+            echo "key=portal-health-${{ steps.judge.outputs.sig }}-$(date -u +%F)" >> "$GITHUB_OUTPUT"
+          else
+            echo "key=portal-health-check-failed-$(date -u +%F)" >> "$GITHUB_OUTPUT"
+          fi
+          mkdir -p .said && date -u > .said/at
+
+      - name: Look up the key
+        id: cache
+        if: failure() && github.event_name == 'schedule'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .said
+          key: ${{ steps.seen.outputs.key }}
+          lookup-only: true
+
+      - name: Notify Telegram — a server is not ready
+        id: notify_problem
+        if: >-
+          failure() && github.event_name == 'schedule'
+          && steps.judge.outputs.problem == 'true' && steps.cache.outputs.cache-hit != 'true'
+        uses: appleboy/telegram-action@390cf7345777cd821dba28c72f436a78bce19cc5 # master 2026-05
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          format: html
+          message_file: message.txt
+
+      - name: Notify Telegram — the check itself failed
+        id: notify_check
+        if: >-
+          failure() && github.event_name == 'schedule'
+          && steps.judge.outputs.problem != 'true' && steps.cache.outputs.cache-hit != 'true'
+        uses: appleboy/telegram-action@390cf7345777cd821dba28c72f436a78bce19cc5 # master 2026-05
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          format: html
+          message: |
+            🔧 <b>MCP portal health check could not run</b>
+            It did not get as far as reading the servers, so this says nothing
+            about them — the token, the API call or the runner failed.
+            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      # Only once Telegram has actually taken it: a send that failed must be
+      # retried next hour, not remembered as said.
+      - name: Remember it was said
+        if: >-
+          failure() && github.event_name == 'schedule' && steps.cache.outputs.cache-hit != 'true'
+          && (steps.notify_problem.outcome == 'success' || steps.notify_check.outcome == 'success')
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .said
+          key: ${{ steps.seen.outputs.key }}
+
+  sync:
+    name: re-snapshot ${{ inputs.sync }}
+    if: github.event_name == 'workflow_dispatch' && inputs.sync != '' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # The write credential is an environment secret on cloudflare-apply, and
+    # only a job that requests the environment is issued it. Its branch policy
+    # (main) and required reviewer are what make this safe to dispatch; the
+    # `if` above is the visible half, see cloudflare-apply.yml.
+    environment: cloudflare-apply
+    concurrency:
+      group: cloudflare-portal-sync-${{ inputs.sync }}
+      cancel-in-progress: false
+    steps:
+      - name: Sync and check that it moved
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_APPLY_TOKEN_PORTAL }}
+          SERVER: ${{ inputs.sync }}
+        run: |
+          set -euo pipefail
+          test -n "${CLOUDFLARE_API_TOKEN}" \
+            || { echo "::error::CF_APPLY_TOKEN_PORTAL is not issued to this job"; exit 1; }
+          [[ "${SERVER}" =~ ^[a-z0-9-]+$ ]] \
+            || { echo "::error::not a server id: ${SERVER}"; exit 1; }
+          base="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/access/ai-controls/mcp/servers/${SERVER}"
+          cf() { curl -sS --retry 3 --retry-delay 5 --max-time 60 \
+                   -K <(printf 'header = "Authorization: Bearer %s"\n' "${CLOUDFLARE_API_TOKEN}") "$@"; }
+          cf -f "${base}" > before.json
+          before=$(jq -r '.result.last_synced // "never"' before.json)
+          # The sync answer is not reliable JSON; a 2xx is all it says. What
+          # happened is read back from the server afterwards.
+          code=$(cf -o /dev/null -w '%{http_code}' -X POST "${base}/sync")
+          case "${code}" in 2??) ;; *) echo "::error::sync answered HTTP ${code}"; exit 1 ;; esac
+          cf -f "${base}" > after.json
+          jq -r '"status: \(.result.status)\nerror: \(.result.error // "none")\nlast_synced: \(.result.last_synced)\nlast_successful_sync: \(.result.last_successful_sync)\ntools: \([.result.tools[]?.name] | join(", "))"' after.json
+          after=$(jq -r '.result.last_synced // "never"' after.json)
+          test "$(jq -r '.result.status' after.json)" = "ready" \
+            || { echo "::error::${SERVER} is $(jq -r '.result.status' after.json) after the sync; re-authenticate it in the dashboard"; exit 1; }
+          if [ "${before}" = "${after}" ]; then
+            echo "::warning::last_synced did not move (${before}): Cloudflare accepted the sync and changed nothing, as it does for a manual-OAuth server"
+          else
+            echo "last_synced ${before} -> ${after}"
+          fi
