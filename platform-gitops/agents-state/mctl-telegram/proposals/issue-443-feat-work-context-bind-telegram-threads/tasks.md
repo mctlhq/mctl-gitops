@@ -40,7 +40,7 @@ and only behind `WORK_CONTEXT_ENABLED`.
   unexported `relay(ctx, method, path, actorTGID, idemKey, body, out)` setting
   exactly `Authorization`, `X-MCTL-Surface-Actor` and `Idempotency-Key`;
   the six public methods `RedeemLink`, `CreateWorkItem`, `GetWorkItem`,
-  `AppendIntent`, `Resume`, `AddSurfaceRef`. `envelope.go` with the
+  `AppendIntent`, `RequestExecution`, `AddSurfaceRef`. `envelope.go` with the
   `workitem/v1` types and a decoder that rejects any other `schema_version`.
   `errors.go` with the sentinels (`ErrLinkNotFound`, `ErrLinkRevoked`,
   `ErrLinkExpired`, `ErrRelayRequired`, `ErrChallengeInvalid`,
@@ -48,7 +48,8 @@ and only behind `WORK_CONTEXT_ENABLED`.
   Request structs carry no actor-shaped field and no caller-settable
   `origin_surface`.
   — DoD: the package builds standalone; `go doc ./internal/workctx` shows only
-  the six routes from `docs/contracts/mctl-api-work-context.md:39-46`; no
+  the six routes from `docs/contracts/mctl-api-work-context.md:39-46`, with
+  `/resume` replaced by `/execution-requests` (mctl-api#368); no
   method constructs a path containing `executions`, `snapshot`, `snapshots`,
   `events` or `approvals`.
 
@@ -84,7 +85,8 @@ and only behind `WORK_CONTEXT_ENABLED`.
   cross-check against `Store.TelegramIDByUserID`, and fail closed with no
   mctl-api call on mismatch or absence. Create/open reuses the binding when
   `last_state` is `active` or `waiting` and creates a fresh item otherwise.
-  Resume does `GetWorkItem` → `Resume` with `expected_state_version`, and on
+  Resume does `GetWorkItem` → `RequestExecution{Kind: resume}` with
+  `expected_state_version`, and on
   `ErrStateVersionConflict` re-reads and retries exactly once. Errors are
   rendered as owner-facing text in the style of `approverErrText`
   (`router.go:359`). Add a nilable `Work *WorkHandler` field to `Router` and
@@ -136,8 +138,9 @@ and only behind `WORK_CONTEXT_ENABLED`.
   `actor`, `actor_subject`, `created_by`, `principal` or `on_behalf_of`.
 - [ ] T3. Route allowlist — a test asserting every path any client method can
   build matches the six permitted routes, and that none contains `executions`,
-  `snapshot`, `snapshots`, `events`, `approvals`, or is a bare
-  `GET /api/v1/work-items` or a `PATCH`.
+  `snapshot`, `snapshots`, `events`, `approvals`, `/resume`, or is a bare
+  `GET /api/v1/work-items` or a `PATCH`; and a reflection test asserting no
+  request struct has an `engine`, `engine_ref` or `execution_id` field.
 - [ ] T4. Header discipline — an `httptest` server asserting the bearer is the
   surface token, `X-MCTL-Surface-Actor` is digits-only and equals the expected
   Telegram id, `Idempotency-Key` is present on every mutating call and stable

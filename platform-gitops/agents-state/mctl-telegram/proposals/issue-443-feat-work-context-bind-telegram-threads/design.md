@@ -83,6 +83,29 @@ unique on `(user_id, peer_tg_id)`.
 - Identity: `Store.UserIDByTelegramID(ctx, tgID)` exists (`store.go:244`); the
   reverse lookup does not.
 
+## Platform prerequisites (owner decision 2026-09-23)
+
+A surface **requests** execution; it never **declares** execution identity. The
+bot never sends `execution_id`, `engine` or `engine_ref`, and it never starts,
+wakes or attaches an execution. Two platform pieces supply that, and #443
+depends on both in the canonical roadmap:
+
+- **mctl-api#368 — surface-originated execution requests.** The bot submits
+  `POST /api/v1/work-items/{id}/execution-requests` (`kind: start|resume`,
+  `expected_state_version`, optional `resumed_from_execution_id` / `intent_id`,
+  idempotency) through the relay. Only the platform fulfils a request by
+  attaching the canonical execution. `POST /work-items/{id}/resume` leaves the
+  surface allowlist with that change, so the bot does not call it.
+- **mctl-agents#461 — WorkItem execution dispatch.** The dispatcher claims the
+  request, starts the investigator bound to the exact WorkItem and request, and
+  creates the canonical execution. The bot only reads the result back through
+  `GET /api/v1/work-items/{id}` (`latest_execution`, snapshot pointers).
+
+The Telegram-side slice below can be built behind its flag before both land, but
+its client targets the #368 request route (update
+`docs/contracts/mctl-api-work-context.md` when #368 merges), and live end-to-end
+acceptance waits for #368, #461 and their deployment.
+
 ## Proposed solution
 
 Add a thin, flag-gated **surface adapter**: a new outbound client package, a
@@ -118,11 +141,14 @@ func (c *Client) RedeemLink(ctx, actorTGID int64, code string) error
 func (c *Client) CreateWorkItem(ctx, actorTGID int64, r CreateRequest) (*ItemView, error)
 func (c *Client) GetWorkItem(ctx, actorTGID int64, id string) (*ItemView, error)
 func (c *Client) AppendIntent(ctx, actorTGID int64, id string, r IntentRequest) error
-func (c *Client) Resume(ctx, actorTGID int64, id string, r ResumeRequest) error
+func (c *Client) RequestExecution(ctx, actorTGID int64, id string, r ExecutionRequest) (*ExecutionRequestView, error)
 func (c *Client) AddSurfaceRef(ctx, actorTGID int64, id string, r SurfaceRefRequest) error
 ```
 
-The request structs deliberately have **no** actor-shaped field, so
+`ExecutionRequest` carries `Kind` (`start`|`resume`), `ExpectedStateVersion`
+and optional `ResumedFromExecutionID` / `IntentID` only — **no** `engine`,
+`engine_ref` or `execution_id` field exists. The request structs deliberately
+have **no** actor-shaped field either, so
 `400 actor_not_accepted` is unreachable by construction rather than by
 convention. `CreateRequest` has no `origin_surface` setter either — `relay`
 hardcodes `"telegram"`.
@@ -222,7 +248,9 @@ empty `Sub`, so their parse results stay byte-identical):
   pending approval and snapshot pointer, and refresh the cached state.
 - `/mctl work note <text>` → `AppendIntent`.
 - `/mctl work resume` → `GetWorkItem` for a fresh `state_version`, then
-  `Resume` with `expected_state_version`; on 409, re-read and retry once.
+  `RequestExecution{Kind: resume}` with `expected_state_version`; on 409,
+  re-read and retry once. The reply says the request was accepted; execution
+  state is read later via `/mctl work status`.
 
 A new `internal/agent/control/work.go` holds these handlers, keeping
 `router.go` a dispatcher. The router gains one nilable field, `Work *WorkHandler`.
@@ -249,9 +277,10 @@ behaviour change.
 
 ### Cross-surface pilot path
 
-`/mctl work "<title>"` creates the item (`origin_surface: telegram`) and
-registers the Telegram thread as a surface ref → the platform starts
-investigator execution A and seals ContextSnapshot v1 → `/mctl work status`
+`/mctl work "<title>"` creates the item (`origin_surface: telegram`),
+registers the Telegram thread as a surface ref and submits a `start` execution
+request → the platform dispatcher (mctl-agents#461) claims it, starts the
+investigator and attaches execution A (mctl-api#368) and seals ContextSnapshot v1 → `/mctl work status`
 shows `latest_execution` and the snapshot pointer → a human opens the same
 `work_item_id` from the CLI/MCP or web surface and resumes → execution B,
 ContextSnapshot v2 → `/mctl work status` in Telegram reflects the new execution.
