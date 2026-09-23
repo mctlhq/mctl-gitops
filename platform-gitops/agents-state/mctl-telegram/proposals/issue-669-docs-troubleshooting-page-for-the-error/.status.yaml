@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-09-23T17:53:11Z'
+status: merged
+updated_at: '2026-09-23T18:08:55Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -17,9 +17,9 @@ attempt:
   expires_at: '2026-09-23T18:25:34Z'
   finished_at: '2026-09-23T16:28:50Z'
 pr: https://github.com/mctlhq/mctl-telegram/pull/675
-review_attempts: 1
-merge_owner: pr-steward
 github:
-  state: open
+  state: merged
   head_sha: 3db97365779410e76318270547c874fd709fec30
-  observed_at: '2026-09-23T17:53:11Z'
+  observed_at: '2026-09-23T18:08:55Z'
+merged_at: '2026-09-23T18:08:55Z'
+merge_commit: 40e36ce1db5a7e2e5123b2c610d681419bf39ba0
