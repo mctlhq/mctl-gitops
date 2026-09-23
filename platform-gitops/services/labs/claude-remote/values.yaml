@@ -86,6 +86,16 @@ env:
   # "Update installed · Restart to update" for a version the pod already ran.
   # `autoUpdates: false` in .claude.json did not stop it; this env var does.
   DISABLE_AUTOUPDATER: "1"
+  # Model of the interactive remote-control session (image 0.12.3+; older
+  # images ignore this and keep their built-in haiku pin). This deployment runs
+  # the inbound events Channel, and on Haiku the session never called
+  # mcp__mctl-events__ack_event — it wrote a fake acknowledgement to /tmp with
+  # Bash instead (mctl-claude-remote#66) — so nothing was acknowledged after
+  # the 0.12.1 haiku pin rolled on 2026-09-19 10:13Z, max_inflight saturated
+  # and the adapter stopped reading. Sonnet is the model the round trip was
+  # proven on (docs/claude-channels-spike.md). pr-steward is unaffected: its
+  # ticks pass --model explicitly (PR_STEWARD_MODEL, default sonnet).
+  CLAUDE_REMOTE_MODEL: "sonnet"
   # Built-in scheduler (0.4.0+): fire a headless `claude -p "Run the pr-steward
   # skill"` tick every 20 min so the steward runs without a human prompting the
   # live remote-control session (closes the manual-trigger gap, gitops #276).
