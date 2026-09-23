@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-09-23T16:58:11Z'
+updated_at: '2026-09-23T17:26:43Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -31,3 +31,4 @@ notes: 'implementer declined to act: The listed ''finding'' (Severity P2) is ''C
   pulls/674/comments and pulls/674/reviews): the review job at commit 1f285eb left
   a real verdict with 1 P2 and 2 P3 findings (SweepIdleSessions/SweepAbsoluteSessions
   not stamping revoked_re'
+merge_owner: pr-steward
