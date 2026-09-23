@@ -23,6 +23,29 @@ the bot never supplies an actor, authenticates as the `surface:telegram`
 principal, relays the human via `X-MCTL-Surface-Actor`, and never touches
 execution, snapshot, approval, list or `PATCH` routes.
 
+## Platform prerequisites (owner decision 2026-09-23)
+
+A surface **requests** execution; it never **declares** execution identity. The
+bot never sends `execution_id`, `engine` or `engine_ref`, and it never starts,
+wakes or attaches an execution. Two platform pieces supply that, and #443
+depends on both in the canonical roadmap:
+
+- **mctl-api#368 — surface-originated execution requests.** The bot submits
+  `POST /api/v1/work-items/{id}/execution-requests` (`kind: start|resume`,
+  `expected_state_version`, optional `resumed_from_execution_id` / `intent_id`,
+  idempotency) through the relay. Only the platform fulfils a request by
+  attaching the canonical execution. `POST /work-items/{id}/resume` leaves the
+  surface allowlist with that change, so the bot does not call it.
+- **mctl-agents#461 — WorkItem execution dispatch.** The dispatcher claims the
+  request, starts the investigator bound to the exact WorkItem and request, and
+  creates the canonical execution. The bot only reads the result back through
+  `GET /api/v1/work-items/{id}` (`latest_execution`, snapshot pointers).
+
+The Telegram-side slice below can be built behind its flag before both land, but
+its client targets the #368 request route (update
+`docs/contracts/mctl-api-work-context.md` when #368 merges), and live end-to-end
+acceptance waits for #368, #461 and their deployment.
+
 ## User stories
 
 - AS a Telegram account owner I WANT `/mctl work <title>` to create or open a
@@ -34,8 +57,8 @@ execution, snapshot, approval, list or `PATCH` routes.
 - AS a Telegram account owner I WANT `/mctl work note <text>` to append an
   intent to the bound work item SO THAT the platform investigator has my input
   without the bot mirroring my whole chat transcript.
-- AS a Telegram account owner I WANT `/mctl work resume` to ask the platform to
-  continue SO THAT I do not need a second tool open to pick a stalled
+- AS a Telegram account owner I WANT `/mctl work resume` to submit a resume
+  request that the platform picks up and continues SO THAT I do not need a second tool open to pick a stalled
   investigation back up.
 - AS a Telegram account owner I WANT `/mctl link <code>` to bind my Telegram
   identity to my platform identity once SO THAT the platform attributes my work
@@ -80,23 +103,29 @@ execution, snapshot, approval, list or `PATCH` routes.
 
 - THE SYSTEM SHALL call only `POST /api/v1/work-items`,
   `GET /api/v1/work-items/{id}`, `POST /api/v1/work-items/{id}/intents`,
-  `POST /api/v1/work-items/{id}/resume`,
+  `POST /api/v1/work-items/{id}/execution-requests` (mctl-api#368),
   `POST /api/v1/work-items/{id}/surface-refs` and
   `POST /api/v1/surface-identities/redeem`.
 - THE SYSTEM SHALL NOT call `GET /api/v1/work-items` (list),
-  `PATCH /api/v1/work-items/{id}`, any `/executions`, `/snapshot`,
+  `POST /api/v1/work-items/{id}/resume`, `PATCH /api/v1/work-items/{id}`, any `/executions`, `/snapshot`,
   `/snapshots`, `/events` or `/approvals` route.
 - WHEN the owner asks for execution or approval state THE SYSTEM SHALL read it
   from the `latest_execution`, pending-approval and snapshot pointers returned
   by `GET /api/v1/work-items/{id}` and SHALL NOT evaluate approval logic
   locally.
 
+- THE SYSTEM SHALL NOT send `execution_id`, `engine` or `engine_ref` in any
+  request body, and SHALL NOT start, wake or attach an execution itself; the
+  platform supplies execution identity (mctl-api#368, mctl-agents#461).
+
 ### Binding and idempotency
 
 - WHEN the owner runs `/mctl work <title>` in a Saved Messages thread that has
   no binding THE SYSTEM SHALL create a work item with
   `origin_surface: telegram` and a deterministic `external_key` derived from
-  the Telegram chat id and root message id, then persist a binding row.
+  the Telegram chat id and root message id, persist a binding row, and submit
+  one `kind: start` execution request for the new item (idempotent on the
+  binding key).
 - WHEN the owner repeats `/mctl work <title>` for a thread that already has a
   binding whose work item is `active` or `waiting` THE SYSTEM SHALL reuse the
   bound work item and SHALL NOT create a second one.
@@ -118,8 +147,8 @@ execution, snapshot, approval, list or `PATCH` routes.
 
 - WHEN the owner runs `/mctl work resume` THE SYSTEM SHALL first
   `GET /api/v1/work-items/{id}` and send the returned `state_version` as
-  `expected_state_version` on the resume call.
-- IF a resume returns `409` for a state-version mismatch THEN THE SYSTEM SHALL
+  `expected_state_version` on a `kind: resume` execution request.
+- IF a resume request returns `409` for a state-version mismatch THEN THE SYSTEM SHALL
   re-read the work item and retry at most once, and on a second mismatch SHALL
   tell the owner the item changed and ask them to try again.
 - WHEN a response's `schema_version` is not `workitem/v1` THE SYSTEM SHALL
@@ -160,8 +189,10 @@ execution, snapshot, approval, list or `PATCH` routes.
 - Forum-topic (`message_thread_id`) support. This repository's Telegram surface
   is an MTProto *user account* (`internal/telegram/clientpool.go`), not a Bot
   API bot in a forum; there is no topic id anywhere in the tree.
-- End-to-end acceptance against a live mctl-api; that waits on the release with
-  the surface principal token configured.
+- Launching, waking or correlating executions, and any execution identity; the
+  platform supplies them through mctl-api#368 and mctl-agents#461.
+- End-to-end acceptance against a live mctl-api; that waits on mctl-api#368,
+  mctl-agents#461 and a release with the surface principal token configured.
 - Changing the existing `conversations` / `agent_jobs` domain or the C1
   communication-agent rollout gate.
 
