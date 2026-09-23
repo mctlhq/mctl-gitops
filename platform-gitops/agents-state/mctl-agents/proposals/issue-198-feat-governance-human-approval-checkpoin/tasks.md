@@ -37,14 +37,16 @@ modules beyond the `action_approvals` constants.
   `approval_intent_mismatch`.
 
 - [ ] 4. Outcome handling (depends on 3) — implement the shepherd column
-  of design.md §3 using the `action_approvals` constants: `DENIED`
-  increments `denials` and goes terminal `needs-triage` with
-  `failure.code: approval-denied` at the cap (mirroring
-  `IMPLEMENT_MAX_POLICY_HANDBACKS`); `EXPIRED` and `MISMATCH` clear the
-  ticket so the next tick may open a fresh request for the current head;
-  `CONSUMED` reconciles against canonical GitHub PR state via
-  `orchestrator/pr_adoption.py` instead of re-merging;
-  `approval_lookup_error` keeps its existing undecided classification. —
+  of design.md §3 branching only on `policy_checkpoint`'s `Decision.code`
+  as returned by `checkpoint(..., approval_ref=...)` (never on the raw
+  store state, per design.md §1): `approval_denied` increments `denials`
+  and goes terminal `needs-triage` with `failure.code: approval-denied` at
+  the cap (mirroring `IMPLEMENT_MAX_POLICY_HANDBACKS`); `approval_expired`
+  and `approval_intent_mismatch` clear the ticket so the next tick may open
+  a fresh request for the current head; `approval_consumed` reconciles
+  against canonical GitHub PR state via `orchestrator/pr_adoption.py`
+  instead of re-merging; `approval_lookup_error` keeps its existing
+  undecided classification. —
   DoD: no outcome causes a second `gh pr merge`; no outcome re-asks
   unboundedly; a lost ticket is recovered by the deterministic
   `idempotency_key(intent)` find-or-create on the next tick (design.md
