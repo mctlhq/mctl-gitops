@@ -2,29 +2,41 @@
 
 ## Context
 
+**Revision 2 (2026-09-23).** This proposal was first written before
+mctl-agents#479 (`feat/198-durable-approval-wait`, "durable Temporal wait
+for action approvals") existed. #479 builds the Temporal half of #198 and is
+under review; this revision removes everything #479 already delivers and
+scopes the remaining work so that the implementer complements #479 instead
+of building a competing wait. Where a criterion below is already satisfied
+by #479 it is marked **[#479]** and kept only as a regression contract.
+
 Issue #197 landed the runtime policy checkpoint
 (`orchestrator/policy_checkpoint.py`, ADR 014) and the durable single-use
 approval store client (`orchestrator/action_approvals.py`, backed by
-mctl-api#366). Today a `REQUIRE_APPROVAL` verdict can already be redeemed:
+mctl-api#366/#367). #465 made `REQUIRE_APPROVAL` redeemable:
 `MctlApiApprovals.redeem()` finds-or-creates an `ActionApprovalRequest`,
 and `Decision.awaiting_approval` reports `approval_pending` with the
-receipt id. What does not exist is the other half — nothing ever *waits*
-for that receipt. Every governed call site treats a non-permitted decision
-as a terminal refusal for this attempt: `run_shepherd.merge_pr` answers
-`(False, None)`, `run_implementer` exits `EXIT_POLICY_REFUSED` (53) or
-hands the proposal back, and the MCP `PreToolUse` hook
-(`options._PolicyCheckpointHook`) denies the tool call. ADR 014 §7 sketches
-the wait but explicitly leaves it unbuilt, and §"Open decisions" item 1
-names it as #198.
+receipt id. #479 then built the Temporal wait: `run_gated_action()` runs a
+gated activity once and, on `approval_pending`, starts the child workflow
+`ActionApprovalWaitWorkflow` (id `action-approval-<receipt id>`), which
+holds no pod, wakes on the `action_approval_decided` signal or a bounded
+poll of mctl-api, re-runs the gated activity with `approval_ref` on every
+wake, and lets only the checkpoint's re-run authorize the side effect.
+ADR 014 §7 in #479 records that as **built** and names what is **not**:
+the mctl-api side of the signal (mctl-api#381), the approval surfaces for
+humans, and a first step that adopts `run_gated_action`.
 
-This proposal builds that half: a durable `WAITING_FOR_APPROVAL` state that
-holds no execution pod, resumes the *exact* blocked action once a human
-decides, and records approver, decision and timestamp in the execution
-trace. The authorization boundary does not move — mctl-api stays the sole
-approval authority and `policy_checkpoint.decide()` stays the sole place an
-approval is spent. What is added is a *wait driver* abstraction so a parked
-action can be resumed by whichever runtime hosts it, plus the first
-end-to-end governed path on a high-impact GitHub mutation.
+What is still missing for the issue's own acceptance criteria is the first
+end-to-end governed path on a high-impact GitHub mutation. The issue's
+initial candidate is the PR merge, and the merge is performed by the
+shepherd, which is cron-driven and not a Temporal workflow
+(`docs/temporal-flow.md`; ADR-006 phase 6, tracker #217). So the first
+adopter cannot be `run_gated_action`; it needs the *other* wait driver the
+original design already described: a durable ticket in the proposal's
+`.status.yaml` and re-entry through `checkpoint(..., approval_ref=...)` on a
+later tick. That driver, the outcome handling around it, the approver
+record on the trace, and the ADR that ties both drivers together are this
+proposal. The Temporal wait is reused, never re-implemented.
 
 ## User stories
 
@@ -54,30 +66,32 @@ end-to-end governed path on a high-impact GitHub mutation.
 ### Parking
 
 - WHEN `policy_checkpoint.decide()` returns a decision whose
-  `awaiting_approval` is true, THE SYSTEM SHALL emit an `ApprovalTicket`
-  carrying `approval_ref`, `intent_hash`, `expires_at`, and the
-  human-readable action summary (`action_kind`, `operation`, `target`,
-  `policy_rule_id`, `reason`, `trace_id`, `execution_id`, `actor`), and
-  SHALL NOT perform the side effect.
+  `awaiting_approval` is true at a cron-driven call site, THE SYSTEM SHALL
+  build an `ApprovalTicket` from the decision's `approval_ref` plus one
+  read-only `ActionApprovalClient.get()` of that receipt (`intent_hash`,
+  `expires_at`), carrying the human-readable action summary (`action_kind`,
+  `operation`, `target`, `policy_rule_id`, `reason`, `trace_id`,
+  `execution_id`, `actor`), and SHALL NOT perform the side effect.
 - WHEN a governed action returns an `ApprovalTicket`, THE SYSTEM SHALL
   record the ticket durably outside the executing process before that
   process exits.
 - WHILE an action is parked awaiting approval, THE SYSTEM SHALL hold no
   execution pod, no Argo workflow and no Claude model session attributable
   to that action.
-- WHEN a Temporal-hosted action parks, THE SYSTEM SHALL enter a queryable
+- **[#479]** WHEN a Temporal-hosted action parks, THE SYSTEM SHALL enter a queryable
   `WAITING_FOR_APPROVAL` state exposing the `approval_ref` and the
   `expires_at` it is bounded by.
 
 ### Waking and resuming
 
-- WHEN mctl-api records a decision on an approval request, THE SYSTEM SHALL
+- **[#479 receives; mctl-api#381 sends]** WHEN mctl-api records a decision on an approval request, THE SYSTEM SHALL
   accept a best-effort wake-up signal naming only the `approval_ref`.
-- IF a wake-up signal carries any decision payload, THEN THE SYSTEM SHALL
+- **[#479]** IF a wake-up signal carries any decision payload, THEN THE SYSTEM SHALL
   ignore that payload and treat the signal solely as a prompt to re-check
   the store.
 - WHILE parked and before `expires_at`, THE SYSTEM SHALL re-read the
-  approval state on a bounded poll cadence, so that a lost signal delays
+  approval state on a bounded poll cadence (**[#479]** for the Temporal driver;
+  the shepherd's own tick for the cron driver), so that a lost signal delays
   resumption by at most one poll interval and never loses it.
 - WHEN a parked action wakes, THE SYSTEM SHALL re-run the governed action
   with `approval_ref` set, so that `checkpoint(..., approval_ref=...)`
@@ -96,7 +110,7 @@ end-to-end governed path on a high-impact GitHub mutation.
   mctl-api before the side effect runs, so that a second attempt on the
   same receipt answers `approval_consumed`.
 - IF a retry or Temporal replay re-enters a governed action whose receipt
-  is already `consumed`, THEN THE SYSTEM SHALL treat the external mutation
+  is already `consumed` (**[#479]** for the Temporal driver), THEN THE SYSTEM SHALL treat the external mutation
   as already performed and SHALL NOT perform it a second time.
 
 ### Outcomes
@@ -140,6 +154,17 @@ end-to-end governed path on a high-impact GitHub mutation.
 
 ## Out of scope
 
+- The Temporal wait driver itself: `ActionApprovalWaitWorkflow`,
+  `run_gated_action()`, `read_action_approval`, `next_attempt()` and their
+  46 tests are mctl-agents#479. This proposal reuses their vocabulary and
+  must not add a second gate, signal handler, poll loop or patch marker.
+- Sending the wake-up signal from mctl-api after a decision: mctl-api#381,
+  a companion change in the other repository. Until it lands the Temporal
+  driver resolves on its poll (up to `DEFAULT_POLL_SECONDS` late), which
+  #479 already accepts.
+- A first *Temporal* adopter of `run_gated_action`. No DevLoop step reaches
+  `REQUIRE_APPROVAL` at the Temporal level today (every #469 GitHub rule is
+  `ALLOW`); the first adopter here is the cron-driven shepherd merge.
 - Approval user interfaces and notification channels (mctl UI, Telegram,
   GitHub comments). This proposal defines the data the surfaces read and
   the wake-up signal they trigger; building a surface is separate work.
@@ -161,6 +186,8 @@ end-to-end governed path on a high-impact GitHub mutation.
 
 ## Open questions
 
+(Settled since revision 1: the poll cadence is #479's `DEFAULT_POLL_SECONDS` = 15 min; the trace exists and `record_policy_decision` is the emission point.)
+
 1. **Where the merge ticket is persisted for the shepherd.** The shepherd
    is cron-driven and its durable per-proposal state is
    `.status.yaml` (`orchestrator/proposal_state.py`), written only from
@@ -170,23 +197,13 @@ end-to-end governed path on a high-impact GitHub mutation.
    viable alternative that avoids a gitops write; it is recorded in
    design.md as alternative 3. Proceeding with the `.status.yaml` block
    because it makes the parked state visible where operators already look.
-2. **Poll cadence for the Temporal gate.** ADR 014 §7 suggests 15 minutes.
-   The existing proposal-approval park uses `APPROVAL_POLL_INTERVAL` of 6
-   hours. Proceeding with 15 minutes for action approvals, as a gated
-   mutation is far more latency-sensitive than a proposal review, and
-   making it a named constant so it can be tuned without a code change to
-   the gate.
-3. **Default TTL for an action approval.** `MCTL_POLICY_APPROVAL_TTL_S`
+2. **Default TTL for an action approval.** `MCTL_POLICY_APPROVAL_TTL_S`
    defaults to 24h and mctl-api caps at 7 days. Whether a merge approval
    should have a shorter TTL than a generic action approval is unresolved;
    proceeding with the existing 24h default and a per-call-site override
    hook.
-4. **Whether a denied merge should be terminal for the proposal.** A denial
+3. **Whether a denied merge should be terminal for the proposal.** A denial
    could mean "never merge this" or "not yet". Proceeding with `wait` plus
    a recorded denial and a bounded denial counter, so a human denial does
    not silently strand the proposal but also does not re-ask every tick;
    the terminal interpretation can be added later as a call-site policy.
-5. **Trace emission.** ADR 014 §4 notes #195's trace does not exist yet and
-   `POLICY_DECISION` follows the structured-log convention instead.
-   Proceeding on that convention, with the approver fields shaped as trace
-   attributes so #195 can adopt them without a format change.
