@@ -527,6 +527,18 @@ spec:
             value: "{{workflow.parameters.work_item_id}}"
           - name: WORKFLOW_EXECUTION_ID
             value: "{{workflow.parameters.execution_id}}"
+          # The engine run this attempt belongs to (mctl-agents#455): the
+          # investigator attaches it to the work item as (argo, workflow name)
+          # and takes the store's `we_` id as its execution identity. The
+          # primary and the fallback share the workflow name, so a retry keeps
+          # the same execution. Read only past WORK_CONTEXT_ROLLOUT_MODE=off.
+          - name: WORKFLOW_NAME
+            value: "{{workflow.name}}"
+          # The primary attempt is not final: the fallback always runs after
+          # it fails, and the store never reopens an ended execution, so only
+          # the fallback may mark it Failed.
+          - name: MCTL_ENGINE_FINAL_ATTEMPT
+            value: "{{inputs.parameters.is-fallback}}"
           # entrypoint.sh symlinks <state>/<svc>/proposals onto the baked-in
           # agents/<svc>/; run_issue_investigator reads STATE_DIR directly.
           - name: STATE_DIR
