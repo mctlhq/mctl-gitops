@@ -103,6 +103,30 @@ spec:
         # Optional. Execution identity for THIS attempt, minted by the same
         # caller alongside work_item_id. Same omit-when-empty rule, and the
         # same agent_image requirement as work_item_id above.
+      - name: temporal_workflow_id
+        value: ""
+        # Optional. Id of the DevLoopWorkflow that submitted this run,
+        # forwarded as --temporal-workflow-id. A loop started by the
+        # execution-request dispatcher is `dev-loop-xr_<id>`, not the
+        # issue-keyed `dev-loop-<owner>-<repo>-<n>` the investigator derives
+        # from issue_url today, so without this the approve instructions and
+        # the sealed correlation name a loop that does not exist
+        # (mctl-agents#461, #451). Same omit-when-empty rule and agent_image
+        # requirement as work_item_id; empty means "not submitted by a
+        # loop", never "derive one".
+      - name: temporal_run_id
+        value: ""
+        # Optional. Run id of that same DevLoopWorkflow, forwarded as
+        # --temporal-run-id, so a record this run seals can be told apart
+        # from a leftover of an earlier run of the same workflow id
+        # (mctl-agents#451). Same rules as temporal_workflow_id.
+      - name: execution_request_id
+        value: ""
+        # Optional. The mctl-api execution request (xr_...) this run
+        # fulfils, forwarded as --execution-request-id for correlation only:
+        # the execution identity is still execution_id. Set only by the
+        # execution-request dispatcher path (mctl-agents#461). Same rules as
+        # work_item_id.
 
   # ── No PVC ──────────────────────────────────────────────────────────────
   # This used to be a `volumeClaimTemplates` entry requesting 4Gi, which Argo
@@ -362,6 +386,17 @@ spec:
             if [ -n "$WORKFLOW_EXECUTION_ID" ]; then
               set -- "$@" --execution-id "$WORKFLOW_EXECUTION_ID"
             fi
+            # DevLoop and execution-request correlation (mctl-agents#461,
+            # #451). Same omit-when-empty rule as the two above.
+            if [ -n "$WORKFLOW_TEMPORAL_WORKFLOW_ID" ]; then
+              set -- "$@" --temporal-workflow-id "$WORKFLOW_TEMPORAL_WORKFLOW_ID"
+            fi
+            if [ -n "$WORKFLOW_TEMPORAL_RUN_ID" ]; then
+              set -- "$@" --temporal-run-id "$WORKFLOW_TEMPORAL_RUN_ID"
+            fi
+            if [ -n "$WORKFLOW_EXECUTION_REQUEST_ID" ]; then
+              set -- "$@" --execution-request-id "$WORKFLOW_EXECUTION_REQUEST_ID"
+            fi
             printf '→'
             printf ' %s' "$@"
             printf '\n'
@@ -527,6 +562,12 @@ spec:
             value: "{{workflow.parameters.work_item_id}}"
           - name: WORKFLOW_EXECUTION_ID
             value: "{{workflow.parameters.execution_id}}"
+          - name: WORKFLOW_TEMPORAL_WORKFLOW_ID
+            value: "{{workflow.parameters.temporal_workflow_id}}"
+          - name: WORKFLOW_TEMPORAL_RUN_ID
+            value: "{{workflow.parameters.temporal_run_id}}"
+          - name: WORKFLOW_EXECUTION_REQUEST_ID
+            value: "{{workflow.parameters.execution_request_id}}"
           # The engine run this attempt belongs to (mctl-agents#455): the
           # investigator attaches it to the work item as (argo, workflow name)
           # and takes the store's `we_` id as its execution identity. The

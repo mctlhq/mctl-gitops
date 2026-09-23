@@ -1,11 +1,12 @@
-"""Exercise the optional work_item_id / execution_id argv build, taken from the
-template.
+"""Exercise the optional work-context argv build, taken from the template.
 
 `cwft-mctl-agents-investigate.yaml`'s `run-investigator` template builds its
 argv with `set --` and conditionally appends `--work-item-id` /
-`--execution-id` only when the caller supplied a non-empty value (gitops#1279).
-The acceptance criterion that matters most is that a submit omitting both
-parameters produces the exact argv the template produced before they existed —
+`--execution-id` only when the caller supplied a non-empty value (gitops#1279),
+and the same for `--temporal-workflow-id` / `--temporal-run-id` /
+`--execution-request-id` (mctl-agents#461, #451).
+The acceptance criterion that matters most is that a submit omitting all of
+them produces the exact argv the template produced before they existed —
 a regression here silently changes the command line for every existing caller
 (`mctl_trigger_issue`, a hand-submitted Workflow, the DevLoopWorkflow).
 
@@ -65,8 +66,9 @@ SLICE = argv_build_source()
 
 
 def run(issue_url="https://github.com/mctlhq/x/issues/1",
-        work_item_id="", execution_id=""):
-    """Run the extracted slice under /bin/sh with the three env vars set.
+        work_item_id="", execution_id="", temporal_workflow_id="",
+        temporal_run_id="", execution_request_id=""):
+    """Run the extracted slice under /bin/sh with the six env vars set.
 
     Returns the CompletedProcess. The slice's only observable stdout is the
     `-> ...` echo — it never invokes python. PATH is inherited so `sh` and
@@ -78,6 +80,9 @@ def run(issue_url="https://github.com/mctlhq/x/issues/1",
     env["WORKFLOW_ISSUE_URL"] = issue_url
     env["WORKFLOW_WORK_ITEM_ID"] = work_item_id
     env["WORKFLOW_EXECUTION_ID"] = execution_id
+    env["WORKFLOW_TEMPORAL_WORKFLOW_ID"] = temporal_workflow_id
+    env["WORKFLOW_TEMPORAL_RUN_ID"] = temporal_run_id
+    env["WORKFLOW_EXECUTION_REQUEST_ID"] = execution_request_id
     script = "set -e\n" + SLICE
     return subprocess.run(
         ["sh", "-c", script],
@@ -104,8 +109,9 @@ check("omit-both (unset) reproduces today's exact argv",
       proc.returncode == 0 and proc.stdout == BASE_ARGV,
       f"rc={proc.returncode} stdout={proc.stdout!r} stderr={proc.stderr!r}")
 
-proc = run(work_item_id="", execution_id="")
-check("omit-both (explicit empty string) reproduces today's exact argv",
+proc = run(work_item_id="", execution_id="", temporal_workflow_id="",
+           temporal_run_id="", execution_request_id="")
+check("omit-all (explicit empty string) reproduces today's exact argv",
       proc.returncode == 0 and proc.stdout == BASE_ARGV,
       f"rc={proc.returncode} stdout={proc.stdout!r} stderr={proc.stderr!r}")
 
@@ -157,6 +163,49 @@ proc = run(issue_url="", work_item_id="wi-abc", execution_id="ex-123")
 check("empty issue_url still exits non-zero with both identifiers set",
       proc.returncode != 0 and "issue_url parameter is required" in proc.stderr,
       f"rc={proc.returncode} stderr={proc.stderr!r}")
+
+# T6. The loop / request correlation identifiers (mctl-agents#461, #451):
+# all set — appended after the two identity flags, in a fixed order.
+proc = run(work_item_id="wi-abc", execution_id="we-123",
+           temporal_workflow_id="dev-loop-xr_1", temporal_run_id="run-9",
+           execution_request_id="xr_1")
+want = (f"{ARROW} python -m orchestrator.run_issue_investigator "
+        "--issue-url https://github.com/mctlhq/x/issues/1 "
+        "--work-item-id wi-abc --execution-id we-123 "
+        "--temporal-workflow-id dev-loop-xr_1 --temporal-run-id run-9 "
+        "--execution-request-id xr_1\n")
+check("all six set appends every flag in order",
+      proc.returncode == 0 and proc.stdout == want,
+      f"rc={proc.returncode} stdout={proc.stdout!r} stderr={proc.stderr!r}")
+
+# T7. Each correlation identifier alone appends only its own flag, so none of
+# them depends on another being present.
+for kwargs, flag in (
+    ({"temporal_workflow_id": "dev-loop-xr_1"}, "--temporal-workflow-id dev-loop-xr_1"),
+    ({"temporal_run_id": "run-9"}, "--temporal-run-id run-9"),
+    ({"execution_request_id": "xr_1"}, "--execution-request-id xr_1"),
+):
+    proc = run(**kwargs)
+    want = (f"{ARROW} python -m orchestrator.run_issue_investigator "
+            f"--issue-url https://github.com/mctlhq/x/issues/1 {flag}\n")
+    check(f"{next(iter(kwargs))} alone appends only its own flag",
+          proc.returncode == 0 and proc.stdout == want,
+          f"stdout={proc.stdout!r}")
+
+# T8. Injection through the new identifiers — same guarantee as T4.
+with tempfile.TemporaryDirectory() as d:
+    sentinel = pathlib.Path(d) / "pwned"
+    hostile = f"; touch {sentinel} ; "
+    proc = run(temporal_workflow_id=hostile, temporal_run_id=hostile,
+               execution_request_id=hostile)
+    check("an injecting correlation identifier does not execute",
+          not sentinel.exists(), f"sentinel created: {sentinel}")
+    check("hostile correlation values survive as single argv tokens",
+          proc.returncode == 0
+          and f"--temporal-workflow-id {hostile}" in proc.stdout
+          and f"--temporal-run-id {hostile}" in proc.stdout
+          and f"--execution-request-id {hostile}" in proc.stdout,
+          f"stdout={proc.stdout!r} stderr={proc.stderr!r}")
 
 if failures:
     print("\n".join(["", "FAILURES:"] + failures), file=sys.stderr)
