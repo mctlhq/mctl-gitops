@@ -51,10 +51,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: cloudflare-portal-health
-  cancel-in-progress: false
-
 env:
   CLOUDFLARE_ACCOUNT_ID: 6a09f637d20e1f66a8e9d45ebe778058
 
@@ -62,6 +58,14 @@ jobs:
   health:
     name: every portal server is ready
     runs-on: ubuntu-latest
+    # Per job, not per workflow: `sync` can sit in `waiting` on the
+    # cloudflare-apply reviewer for days, and a workflow-level group would keep
+    # only one pending health run behind it, replacing each hourly one with the
+    # next -- no health checks for the whole wait (cloudflare-apply.yml has the
+    # same reasoning).
+    concurrency:
+      group: cloudflare-portal-health
+      cancel-in-progress: false
     steps:
       - name: Read every server
         id: read
@@ -192,6 +196,9 @@ jobs:
     # (main) and required reviewer are what make this safe to dispatch; the
     # `if` above is the visible half, see cloudflare-apply.yml.
     environment: cloudflare-apply
+    concurrency:
+      group: cloudflare-portal-sync-${{ inputs.sync }}
+      cancel-in-progress: false
     steps:
       - name: Sync and check that it moved
         env:
