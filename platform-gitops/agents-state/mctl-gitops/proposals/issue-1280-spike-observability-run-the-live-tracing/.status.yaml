@@ -1,0 +1,15 @@
+status: proposed
+updated_at: '2026-09-24T06:44:19Z'
+updated_by: mctl-agents[bot]
+execution:
+  context_id: ex-59192fe7b189bd94
+  trace_id: b826901f3ccc7df11a1d79784d99294e
+  agent: issue-investigator
+  version: ''
+source:
+  type: github_issue
+  repo: mctlhq/mctl-gitops
+  issue: 1280
+  url: https://github.com/mctlhq/mctl-gitops/issues/1280
+control:
+  requires_human_approval: true
