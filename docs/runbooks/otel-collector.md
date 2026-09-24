@@ -225,6 +225,11 @@ trace and span ids per execution. A registered template runs nothing until
 submitted; there is no CronWorkflow, so this is inert until `#1280` submits
 it.
 
+For the sandbox's `ResourceQuota`/`LimitRange`, its per-candidate flags, the
+collector's candidate-derived exporter fan-out, the teardown-date CI gate,
+and the full open/soak/score/teardown procedure, see
+`docs/runbooks/tracing-bake-off.md` (issue #1355 / #1280).
+
 ## Verification commands
 
 ```bash

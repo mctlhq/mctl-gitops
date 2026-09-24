@@ -7,6 +7,11 @@
 # schema-correct manifests before mctlhq/mctl-gitops#1280 fills in real
 # candidate pins. No credential is present here: the `headers` entry is an
 # ${env:...} expansion expression, never a literal.
+#
+# issue #1355: both candidates[] entries below carry `enabled: true` --
+# required now that eval-candidates.yaml gates its range body on `.enabled`
+# (a candidate entry with no `enabled` key would render nothing and the T5
+# "expected two candidate Applications" assertion would fail).
 otelCollector:
   backends:
     - name: candidate-a
@@ -24,12 +29,14 @@ otelCollector:
     candidates:
       # No manifestsPath: renders a single-source Application only.
       - name: candidate-a
+        enabled: true
         repoURL: https://charts.example.com/candidate-a
         chart: candidate-a
         targetRevision: "1.2.3"
       # With manifestsPath: renders a second source pointing at a directory
       # in this repo (created later, under #1280, alongside the real pin).
       - name: candidate-b
+        enabled: true
         repoURL: https://charts.example.com/candidate-b
         chart: candidate-b
         targetRevision: "4.5.6"

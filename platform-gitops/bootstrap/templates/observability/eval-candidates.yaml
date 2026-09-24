@@ -21,8 +21,16 @@
 # proposal cannot pre-empt it here for charts it has not seen; it is a
 # documented requirement on #1280's per-candidate values, not a gap in this
 # template.
+#
+# issue #1355: each candidates[] entry also carries its own `enabled` flag
+# (the inner `if` below). The outer eval.enabled guard still dominates -- a
+# candidate flag on with the sandbox off renders nothing -- but with the
+# sandbox on, opening one candidate is now a single-flag edit against a
+# catalogue of already-committed, already-reviewed pins, rather than an
+# all-or-nothing candidates list.
 {{- if .Values.otelCollector.eval.enabled }}
 {{- range .Values.otelCollector.eval.candidates }}
+{{- if .enabled }}
 ---
 apiVersion: argoproj.io/v1alpha1
 kind: Application
@@ -78,5 +86,6 @@ spec:
         duration: 5s
         factor: 2
         maxDuration: 3m
+{{- end }}
 {{- end }}
 {{- end }}

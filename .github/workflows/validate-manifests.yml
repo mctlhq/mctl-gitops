@@ -436,3 +436,29 @@ jobs:
         run: |
           scripts/materialize-otel-trace-fixture.py --selftest
           scripts/materialize-otel-trace-fixture.py --check
+
+      - name: Check the observability-eval sandbox teardown date (issue-1355)
+        # --selftest first, same reason as every other detector in this job:
+        # a checker never seen to fire is not known to work. Proves all five
+        # branches (disabled+empty passes; enabled+within-14d passes;
+        # enabled+empty/expired/beyond-14d all fail), then runs for real
+        # against the committed platform-gitops/bootstrap/values.yaml. Also
+        # runs on push: [main] (this workflow's own trigger, see the header
+        # comment above), so an expired sandbox turns main red even with no
+        # open PR -- a two-week spike namespace must not become silently
+        # permanent.
+        run: |
+          scripts/validate-eval-teardown-date.py --selftest
+          scripts/validate-eval-teardown-date.py
+
+      - name: Unit-test the otel-collector redaction processor (issue-1355)
+        # gen_ai.usage.*_tokens (the AI/agent-observability rubric
+        # dimension's evidence) are currently caught by the bare `token`
+        # alternative in blocked_key_patterns[0] -- mctlhq/mctl-gitops#1332.
+        # This makes that status a CI-visible fact (an expected failure that
+        # names the issue and exits 0) instead of a claim in a comment, while
+        # still hard-failing on the credential block list every run, marker
+        # or no marker.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_otel_collector_redaction.py

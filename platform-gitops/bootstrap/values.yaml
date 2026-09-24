@@ -34,13 +34,114 @@ otelCollector:
   # Evaluation namespace and candidate Applications for the issue-903 spike,
   # gated off by default so merging this key's templates changes no cluster
   # state. Filled in and flipped on by mctlhq/mctl-gitops#1280, not here.
-  # Each candidates[] entry is {name, repoURL, chart, targetRevision,
-  # manifestsPath, values}. `values` is an optional map of Helm values
-  # passed to the candidate chart.
+  # Each candidates[] entry is {name, enabled, repoURL, chart,
+  # targetRevision, manifestsPath, otlpEndpoint, insecure, values}. `enabled`
+  # is the per-candidate flag (issue #1355): the outer eval.enabled guard
+  # still dominates, so a candidate flag on with the sandbox off renders
+  # nothing. `values` is an optional map of Helm values passed to the
+  # candidate chart. `otlpEndpoint`, when set, drives the collector fan-out
+  # in otel-collector.yaml (issue #1355) -- a candidate with no otlpEndpoint
+  # is deployed but receives no spans.
   eval:
     enabled: false
     teardownAfter: ""
-    candidates: []
+    # issue #1355 / #1280: ResourceQuota (eval-namespace.yaml's
+    # observability-eval-quota) rendered into observability-eval only while
+    # eval.enabled is true. The two mandated caps --
+    # persistentvolumeclaims/requests.storage -- exist because the sandbox's
+    # only measured precedent for a candidate's default PVC footprint is
+    # "whatever the chart ships", and this cluster's only current
+    # object-storage user is Loki on Cloudflare R2, not a candidate chart.
+    # Sized from the tenant chart's precedent
+    # (helm-charts/tenant/values.yaml:22-35), scaled up for a
+    # ClickHouse/Postgres-class candidate on three cx43 workers.
+    quota:
+      requests.cpu: "4"
+      requests.memory: "12Gi"
+      limits.cpu: "8"
+      limits.memory: "20Gi"
+      pods: "30"
+      persistentvolumeclaims: "4"
+      requests.storage: "40Gi"
+    # issue #1355 / #1280: LimitRange (eval-namespace.yaml's
+    # observability-eval-limits) container defaults, same shape as
+    # helm-charts/tenant/values.yaml:70-81's limitRange block.
+    limits:
+      default:
+        cpu: "1"
+        memory: "2Gi"
+      defaultRequest:
+        cpu: "100m"
+        memory: "256Mi"
+      max:
+        cpu: "4"
+        memory: "8Gi"
+    # issue #1355: committed, pinned, disabled candidate catalogue. Every
+    # `enabled` below stays false in this proposal -- mctlhq/mctl-gitops#1280
+    # flips exactly the candidates it is actively soaking. Candidate F
+    # (agento11y) is intentionally absent: it has no self-managed shape to
+    # pin (confirmed at implementation time against
+    # https://github.com/grafana/agento11y -- an SDK that ships telemetry to
+    # Grafana Cloud, no Helm chart, Docker image or Kubernetes manifest of
+    # its own), so committing a candidate entry or a manifestsPath directory
+    # for it would be exactly the fabricated-pin outcome this proposal
+    # refuses. See docs/runbooks/tracing-bake-off.md's preconditions section.
+    candidates:
+      - name: tempo
+        enabled: false
+        repoURL: https://grafana.github.io/helm-charts
+        chart: tempo-distributed
+        # Resolved 2026-09-24 from
+        # https://grafana.github.io/helm-charts/index.yaml (generated
+        # 2026-09-21): chart 1.61.3, appVersion 2.9.0 -- the newest entry
+        # for tempo-distributed in that index at implementation time,
+        # matching the exact-pin convention every other chart in this repo
+        # uses (loki.yaml, otel-collector.yaml).
+        targetRevision: "1.61.3"
+        manifestsPath: platform-gitops/infra-components/observability/eval/tempo
+        # Matches `values.fullnameOverride` below, so this endpoint does not
+        # depend on the ArgoCD Application/Helm release name
+        # (otel-eval-tempo) the chart would otherwise derive the service
+        # name from.
+        otlpEndpoint: "tempo-distributed-distributor.observability-eval.svc.cluster.local:4317"
+        insecure: true
+        values:
+          fullnameOverride: tempo-distributed
+          traces:
+            otlp:
+              grpc:
+                # The collector's eval fan-out (otel-collector.yaml) sends
+                # OTLP/gRPC only. Off by chart default; every other
+                # ingestion path (Jaeger, Zipkin, OpenCensus) stays off too.
+                enabled: true
+          # Ephemeral local-disk block storage, not object storage: this is
+          # a disposable bake-off trial, not a production trace store, and
+          # `backend: local` is also the chart's own default -- stated
+          # explicitly so a later values edit cannot silently repoint this
+          # candidate at object storage without a reviewer seeing the diff.
+          storage:
+            trace:
+              backend: local
+          # One replica, not the chart's default three: a bake-off trial
+          # under the fixed quota above (persistentvolumeclaims: "4"), not
+          # an HA deployment. Replication is exactly what
+          # docs/adr/0001-rubric.yaml's `operations` dimension scores
+          # post-soak.
+          ingester:
+            replicas: 1
+            persistence:
+              enabled: true
+              size: 10Gi
+          # Explicitly disabled, not left at the chart's already-false
+          # default -- vmagent runs selectAllByDefault: true
+          # (monitoring.yaml:287), the #1159 double-scrape shape
+          # eval-candidates.yaml's header (lines 14-23) warns about.
+          # tempo-distributed has no separate PodMonitor toggle;
+          # ServiceMonitor is its only Prometheus-Operator integration
+          # point.
+          metaMonitoring:
+            serviceMonitor:
+              enabled: false
 
 # Usage-writer principal for the FinOps usage ledger (mctlhq/.github#50,
 # variant B): service:mctl-agents-usage, which may only append usage records
