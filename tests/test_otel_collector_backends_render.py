@@ -247,6 +247,298 @@ for app in eval_apps:
     rev = (app["spec"].get("source") or app["spec"]["sources"][0]).get("targetRevision")
     check(isinstance(rev, str) and rev, f"{app['metadata']['name']} targetRevision must be a concrete string, got {rev!r}")
 
+# --- Quota and limits (issue #1355) -----------------------------------------
+
+default_quota = find(default_docs, "ResourceQuota", name="observability-eval-quota")
+default_limitrange = find(default_docs, "LimitRange", name="observability-eval-limits")
+check(not default_quota, "default render must not emit the observability-eval-quota ResourceQuota")
+check(not default_limitrange, "default render must not emit the observability-eval-limits LimitRange")
+
+eval_quota = find(fanout_docs, "ResourceQuota", name="observability-eval-quota", namespace="observability-eval")
+check(len(eval_quota) == 1, f"expected exactly one observability-eval-quota ResourceQuota, got {len(eval_quota)}")
+if eval_quota:
+    hard = eval_quota[0].get("spec", {}).get("hard", {})
+    # The two caps the issue mandates, asserted literally: a later values
+    # edit that widens either one must fail this check, not just "the quota
+    # rendered something".
+    check(
+        hard.get("persistentvolumeclaims") == "4",
+        f"observability-eval-quota must cap persistentvolumeclaims at \"4\", got {hard.get('persistentvolumeclaims')!r}",
+    )
+    check(
+        hard.get("requests.storage") == "40Gi",
+        f"observability-eval-quota must cap requests.storage at \"40Gi\", got {hard.get('requests.storage')!r}",
+    )
+
+eval_limitrange = find(fanout_docs, "LimitRange", name="observability-eval-limits", namespace="observability-eval")
+check(len(eval_limitrange) == 1, f"expected exactly one observability-eval-limits LimitRange, got {len(eval_limitrange)}")
+if eval_limitrange:
+    limits = eval_limitrange[0].get("spec", {}).get("limits", [])
+    container_limits = [l for l in limits if l.get("type") == "Container"]
+    check(len(container_limits) == 1, "observability-eval-limits must have exactly one type: Container entry")
+    if container_limits:
+        entry = container_limits[0]
+        for field in ("default", "defaultRequest", "max"):
+            check(field in entry, f"observability-eval-limits Container entry missing {field!r}")
+
+# Sanity check that the two literal assertions above are actually pinned to
+# the values input, not a hardcoded coincidence: a values overlay that
+# widens persistentvolumeclaims/requests.storage must change the render, so
+# a PR that widens either mandated cap in bootstrap/values.yaml is exactly
+# what this test catches.
+with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as fh:
+    yaml.safe_dump({
+        "otelCollector": {
+            "eval": {
+                "enabled": True,
+                "teardownAfter": "2026-10-31",
+                "quota": {"persistentvolumeclaims": "10", "requests.storage": "400Gi"},
+            }
+        }
+    }, fh)
+    widened_quota = pathlib.Path(fh.name)
+widened_docs = helm_template(DEFAULT_VALUES, widened_quota)
+widened_quota_obj = find(widened_docs, "ResourceQuota", name="observability-eval-quota")
+if widened_quota_obj:
+    hard = widened_quota_obj[0].get("spec", {}).get("hard", {})
+    check(
+        hard.get("persistentvolumeclaims") == "10" and hard.get("requests.storage") == "400Gi",
+        "sanity check: a values override of the quota caps should be reflected verbatim in the render "
+        "(if this fails, the literal assertions above are not actually pinned to the values input)",
+    )
+
+# --- Per-candidate enablement (issue #1355) ---------------------------------
+
+CANDIDATE_TEMPLATE = {
+    "repoURL": "https://charts.example.com/cand",
+    "chart": "cand",
+    "targetRevision": "1.0.0",
+}
+
+
+def _eval_values(eval_enabled, candidates):
+    return {"otelCollector": {"eval": {"enabled": eval_enabled, "teardownAfter": "2026-10-31", "candidates": candidates}}}
+
+
+def _write_values(doc):
+    fh = tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False)
+    yaml.safe_dump(doc, fh)
+    fh.close()
+    return pathlib.Path(fh.name)
+
+
+def _eval_apps(docs):
+    return [
+        a for a in find(docs, "Application")
+        if a.get("spec", {}).get("destination", {}).get("namespace") == "observability-eval"
+    ]
+
+
+all_disabled = _write_values(_eval_values(True, [
+    {"name": "cand-a", "enabled": False, **CANDIDATE_TEMPLATE},
+    {"name": "cand-b", "enabled": False, **CANDIDATE_TEMPLATE},
+]))
+all_disabled_docs = helm_template(DEFAULT_VALUES, all_disabled)
+check(
+    len(_eval_apps(all_disabled_docs)) == 0,
+    "eval.enabled=true with every candidate disabled must render zero Applications into observability-eval",
+)
+
+one_enabled = _write_values(_eval_values(True, [
+    {"name": "cand-a", "enabled": True, **CANDIDATE_TEMPLATE},
+    {"name": "cand-b", "enabled": False, **CANDIDATE_TEMPLATE},
+]))
+one_enabled_docs = helm_template(DEFAULT_VALUES, one_enabled)
+one_enabled_apps = _eval_apps(one_enabled_docs)
+check(
+    len(one_enabled_apps) == 1,
+    f"exactly one candidate enabled must render exactly one Application, got {len(one_enabled_apps)}",
+)
+if one_enabled_apps:
+    check(
+        one_enabled_apps[0]["metadata"]["name"] == "otel-eval-cand-a",
+        f"the enabled candidate's Application should be otel-eval-cand-a, got {one_enabled_apps[0]['metadata']['name']}",
+    )
+
+candidate_on_eval_off = _write_values(_eval_values(False, [
+    {"name": "cand-a", "enabled": True, **CANDIDATE_TEMPLATE},
+]))
+candidate_on_eval_off_docs = helm_template(DEFAULT_VALUES, candidate_on_eval_off)
+check(
+    len(_eval_apps(candidate_on_eval_off_docs)) == 0,
+    "a candidate flag true while eval.enabled is false must render nothing -- the namespace guard dominates",
+)
+check(
+    not find(candidate_on_eval_off_docs, "Namespace", name="observability-eval"),
+    "a candidate flag true while eval.enabled is false must not render the observability-eval Namespace either",
+)
+
+# --- Fan-out derived from candidates (issue #1355) ---------------------------
+
+one_enabled_with_endpoint = _write_values(_eval_values(True, [
+    {"name": "cand-a", "enabled": True, "otlpEndpoint": "cand-a.observability-eval.svc.cluster.local:4317", "insecure": True, **CANDIDATE_TEMPLATE},
+    {"name": "cand-b", "enabled": False, "otlpEndpoint": "cand-b.observability-eval.svc.cluster.local:4317", **CANDIDATE_TEMPLATE},
+]))
+fanout_one_docs = helm_template(DEFAULT_VALUES, one_enabled_with_endpoint)
+fanout_one_cfg = collector_config(fanout_one_docs)
+eval_exporter_keys = [k for k in fanout_one_cfg["exporters"] if k.startswith("otlp/eval-")]
+check(eval_exporter_keys == ["otlp/eval-cand-a"], f"expected exactly one otlp/eval-<name> exporter, got {eval_exporter_keys}")
+check(
+    fanout_one_cfg["service"]["pipelines"]["traces"]["exporters"] == ["debug", "otlp/eval-cand-a"],
+    f"traces pipeline exporters should be exactly [debug, otlp/eval-cand-a], got {fanout_one_cfg['service']['pipelines']['traces']['exporters']}",
+)
+check(
+    "sending_queue" in fanout_one_cfg["exporters"]["otlp/eval-cand-a"],
+    "otlp/eval-cand-a missing its own sending_queue",
+)
+check(
+    "retry_on_failure" in fanout_one_cfg["exporters"]["otlp/eval-cand-a"],
+    "otlp/eval-cand-a missing its own retry_on_failure",
+)
+
+# Structural diff: with one candidate enabled, receivers and the ordered
+# processor list of the traces pipeline must be byte-equal to the default
+# render -- the ONLY difference is the appended exporter.
+check(
+    fanout_one_cfg["service"]["pipelines"]["traces"]["receivers"] == default_cfg["service"]["pipelines"]["traces"]["receivers"],
+    "enabling a candidate must not change the traces pipeline's receivers",
+)
+check(
+    fanout_one_cfg["service"]["pipelines"]["traces"]["processors"] == default_cfg["service"]["pipelines"]["traces"]["processors"],
+    "enabling a candidate must not change the traces pipeline's ordered processor list",
+)
+
+# All eval candidate flags off (but present, with an otlpEndpoint) must
+# render no otlp/eval-* exporter at all and leave the pipeline exactly
+# ["debug"] -- same invariant T1 proves for an empty candidates list, proved
+# again here for a non-empty-but-disabled list.
+all_off_with_endpoint = _write_values(_eval_values(True, [
+    {"name": "cand-a", "enabled": False, "otlpEndpoint": "cand-a.observability-eval.svc.cluster.local:4317", **CANDIDATE_TEMPLATE},
+]))
+all_off_docs = helm_template(DEFAULT_VALUES, all_off_with_endpoint)
+all_off_cfg = collector_config(all_off_docs)
+check(
+    not [k for k in all_off_cfg["exporters"] if k.startswith("otlp/eval-")],
+    "every candidate disabled must render no otlp/eval-* exporter even with eval.enabled=true",
+)
+check(
+    all_off_cfg["service"]["pipelines"]["traces"]["exporters"] == ["debug"],
+    "every candidate disabled must leave the traces pipeline exporters exactly ['debug']",
+)
+
+
+def valid_eval_headers(headers):
+    """Every header value must be an ${env:...} expansion, never a literal --
+    the same rule test_otel_collector_backends_render.py already enforces
+    for otelCollector.backends[].headers (see candidate_b above)."""
+    if not headers:
+        return True
+    return all(str(v).startswith("${env:") for v in headers.values())
+
+
+# Prove the validator actually distinguishes the two cases before trusting
+# it against the real committed candidates below.
+assert valid_eval_headers(None) is True
+assert valid_eval_headers({"authorization": "${env:CANDIDATE_AUTH_HEADER}"}) is True
+assert valid_eval_headers({"authorization": "hardcoded-secret-value"}) is False
+
+# A literal (non-${env:) header value on an eval candidate must fail this
+# render test -- rendered here to prove the assertion actually fires, not
+# folded into `failures` (which would fail the whole suite).
+literal_header_candidate = _write_values(_eval_values(True, [
+    {
+        "name": "cand-a",
+        "enabled": True,
+        "otlpEndpoint": "cand-a.observability-eval.svc.cluster.local:4317",
+        "headers": {"authorization": "not-an-env-expansion"},
+        **CANDIDATE_TEMPLATE,
+    },
+]))
+literal_header_docs = helm_template(DEFAULT_VALUES, literal_header_candidate)
+literal_header_cfg = collector_config(literal_header_docs)
+literal_headers = literal_header_cfg["exporters"].get("otlp/eval-cand-a", {}).get("headers", {})
+check(
+    not valid_eval_headers(literal_headers),
+    "sanity check: a literal header value fixture should be rejected by valid_eval_headers "
+    "(if this fails, the negative-case fixture above stopped exercising the literal-value path)",
+)
+
+# Every real, committed eval candidate must satisfy the same rule.
+committed_candidates = yaml.safe_load(DEFAULT_VALUES.read_text())["otelCollector"]["eval"]["candidates"]
+for candidate in committed_candidates:
+    check(
+        valid_eval_headers(candidate.get("headers")),
+        f"committed candidate {candidate.get('name')!r} has a header value that is not an ${{env:...}} expansion",
+    )
+
+# --- Committed tempo candidate actually renders (issue #1355) ----------------
+# Every check above only exercises fabricated candidates (cand-a, cand-b,
+# CANDIDATE_TEMPLATE). The one candidate this PR actually ships -- tempo,
+# committed in bootstrap/values.yaml -- must be rendered through `helm
+# template` for real at least once, proving both that it renders at all and
+# that the ingester.config.replication_factor fix (issue #1355 finding 1)
+# actually reaches the rendered Application, not just the values.yaml source.
+
+tempo_candidate = next(c for c in committed_candidates if c.get("name") == "tempo")
+tempo_enabled = dict(tempo_candidate, enabled=True)
+
+tempo_values = _write_values(_eval_values(True, [tempo_enabled]))
+tempo_docs = helm_template(DEFAULT_VALUES, tempo_values)
+tempo_apps = _eval_apps(tempo_docs)
+check(len(tempo_apps) == 1, f"expected exactly one tempo Application, got {len(tempo_apps)}")
+if tempo_apps:
+    tempo_app = tempo_apps[0]
+    check(
+        tempo_app["metadata"]["name"] == "otel-eval-tempo",
+        f"the tempo candidate's Application should be otel-eval-tempo, got {tempo_app['metadata']['name']}",
+    )
+    check(
+        "sources" not in tempo_app["spec"] and "source" in tempo_app["spec"],
+        "otel-eval-tempo has no manifestsPath, so it should render a single chart source, "
+        f"got {sorted(tempo_app['spec'])!r}",
+    )
+    source = tempo_app["spec"].get("source") or {}
+    values_object = source.get("helm", {}).get("valuesObject", {})
+    check(
+        values_object.get("ingester", {}).get("replicas") == 1,
+        f"tempo ingester.replicas should be 1, got {values_object.get('ingester', {}).get('replicas')!r}",
+    )
+    check(
+        values_object.get("ingester", {}).get("config", {}).get("replication_factor") == 1,
+        "tempo ingester.config.replication_factor should be 1, got "
+        f"{values_object.get('ingester', {}).get('config', {}).get('replication_factor')!r}",
+    )
+
+# A manifestsPath directory becomes a second ArgoCD source synced as raw
+# Kubernetes manifests (no Chart.yaml), so every YAML document in it must be a
+# resource. ArgoCD's repo-server skips a non-resource file there in silence
+# (configuration that looks in force but is not), and hard-fails manifest
+# generation if the file's bytes contain apiVersion:, kind: and metadata:
+# anywhere, comments included. Either way it only surfaces once the candidate
+# is enabled -- exactly the case no default render can catch.
+for cand in committed_candidates:
+    mpath = cand.get("manifestsPath")
+    if not mpath:
+        continue
+    mdir = ROOT / mpath
+    check(mdir.is_dir(), f"candidate {cand.get('name')!r} manifestsPath {mpath} does not exist")
+    for f in sorted(mdir.rglob("*.y*ml")) if mdir.is_dir() else []:
+        for doc in yaml.safe_load_all(f.read_text()):
+            if doc is None:
+                continue
+            check(
+                isinstance(doc, dict) and "apiVersion" in doc and "kind" in doc,
+                f"{f.relative_to(ROOT)} is under candidate {cand.get('name')!r}'s manifestsPath "
+                "but is not a Kubernetes resource (no apiVersion/kind); ArgoCD would fail to sync it",
+            )
+
+tempo_fanout_cfg = collector_config(tempo_docs)
+tempo_pipeline_exporters = tempo_fanout_cfg["service"]["pipelines"]["traces"]["exporters"]
+check(
+    "otlp/eval-tempo" in tempo_pipeline_exporters,
+    f"otlp/eval-tempo missing from traces pipeline exporters, got {tempo_pipeline_exporters}",
+)
+
 if failures:
     for f in failures:
         print(f"FAIL: {f}", file=sys.stderr)

@@ -259,6 +259,40 @@ spec:
                   max_interval: 30s
                   max_elapsed_time: 300s
               {{- end }}
+              {{- /* issue-1355: fan-out derived from the enabled eval
+                  candidates themselves, rather than a second hand-synced
+                  list -- a candidate is deployed (eval-candidates.yaml) and
+                  receives spans (here) off the same flag, so it cannot be
+                  running with nothing sent to it or torn down while the
+                  collector keeps exporting to a dead endpoint. Nested
+                  inside eval.enabled so this whole block is gone, not just
+                  empty, with the sandbox off. The eval- prefix guarantees
+                  no collision with an operator-supplied backends[].name. */}}
+              {{- if .Values.otelCollector.eval.enabled }}
+              {{- range .Values.otelCollector.eval.candidates }}
+              {{- if and .enabled .otlpEndpoint }}
+              otlp/eval-{{ .name }}:
+                endpoint: {{ .otlpEndpoint | quote }}
+                {{- if .insecure }}
+                tls:
+                  insecure: true
+                {{- end }}
+                {{- with .headers }}
+                headers:
+                  {{- toYaml . | nindent 18 }}
+                {{- end }}
+                sending_queue:
+                  enabled: true
+                  num_consumers: {{ .numConsumers | default 4 }}
+                  queue_size: {{ .queueSize | default 5000 }}
+                retry_on_failure:
+                  enabled: true
+                  initial_interval: 5s
+                  max_interval: 30s
+                  max_elapsed_time: 300s
+              {{- end }}
+              {{- end }}
+              {{- end }}
 
             service:
               pipelines:
@@ -284,6 +318,13 @@ spec:
                     {{- end }}
                     {{- range .Values.otelCollector.backends }}
                     - otlp/{{ .name }}
+                    {{- end }}
+                    {{- if .Values.otelCollector.eval.enabled }}
+                    {{- range .Values.otelCollector.eval.candidates }}
+                    {{- if and .enabled .otlpEndpoint }}
+                    - otlp/eval-{{ .name }}
+                    {{- end }}
+                    {{- end }}
                     {{- end }}
     - repoURL: {{ .Values.spec.source.repoURL }}
       targetRevision: {{ .Values.spec.source.targetRevision }}
