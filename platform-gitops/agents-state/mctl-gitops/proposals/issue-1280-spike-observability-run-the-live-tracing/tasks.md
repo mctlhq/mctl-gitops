@@ -92,8 +92,9 @@ precede the instrument that consumes it.
 - [ ] 12a. Only if the owner has provisioned a Grafana Cloud stack token at
   Vault `secret/platform/observability-eval/grafana-cloud` (never create an
   account or a token yourself), and `agento11y-cloud` is in a wave, add a
-  single-destination egress
-  NetworkPolicy for exactly that candidate's pods (depends on 12) — DoD: the
+  single-destination egress NetworkPolicy for exactly that candidate's pods
+  (depends on 12); without that token the Cloud shape's cells are marked
+  unmeasured with that reason and nothing else waits for it — DoD: the
   policy names one destination and one port, `allow-cluster-egress` is
   unchanged, and the egress requirement is noted for scoring against
   `data_ownership_portability`; if the carve-out is refused on review, the Cloud
