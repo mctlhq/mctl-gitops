@@ -548,6 +548,16 @@ spec:
             sys.exit(rc)
             COLLECT
         env:
+          # Work-context rollout stage (mctl-agents orchestrator/work_context/
+          # rollout.py; the investigator is its only reader). `observe`: the
+          # investigator resolves the WorkItem, takes the store's `we_` id as
+          # its execution identity and seals its ContextSnapshot in mctl-api,
+          # but the issue URL still decides and a store failure never blocks
+          # (that starts at `enforce`). Gated on mctlhq/mctl-agents#455 (closed
+          # by #492, released in 1.57.0); live proof is mctlhq/mctl-agents#490.
+          # Roll back by setting "off".
+          - name: WORK_CONTEXT_ROLLOUT_MODE
+            value: "observe"
           # Workflow param injected as an env var so the shell layer can
           # quote it safely. Direct workflow.parameters.* interpolation in
           # the script body is a shell-injection vector.
