@@ -5,7 +5,7 @@
 # Chart: base-service
 
 image:
-  repository: ghcr.io/mctlhq/pelican-proxy
+  repository: ghcr.io/mctlhq/pelican-proxy-staging
   tag: "0.26.0"
 imagePullSecrets:
   - name: ghcr-credentials
