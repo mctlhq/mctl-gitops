@@ -80,14 +80,24 @@ RAW = "https://raw.githubusercontent.com"
 # named here is reported as undetermined, not skipped: an unchecked upstream
 # is how this class of drift stays invisible.
 #
-# The first three allowlists are fetched from raw.githubusercontent.com
-# WITHOUT a token, which works because those repositories are public --
-# measured 2026-09-13, `gh repo view --json isPrivate` is false for each.
+# Every allowlist here except `projects`'s is fetched from
+# raw.githubusercontent.com WITHOUT a token, which works because those
+# repositories are public -- measured 2026-09-13 for the first three,
+# 2026-09-24 for `mctl-alice` and `mctl-coolify-mcp`, `gh repo view --json
+# isPrivate` is false for each.
+#
+# `alice` and `coolify` are both mapped here even though only `coolify` gets a
+# Terraform resource in this change (mctlhq/mctl-gitops#1363): `alice` was
+# already a live DCR resource in mcp-servers.tf with no OWNERS entry, so
+# `expected_missing` could never see it and a mapped-but-forgotten server
+# stayed invisible to this check.
 OWNERS = {
     "tg": "mctlhq/mctl-telegram",
     "api": "mctlhq/mctl-api",
     "seerrsense": "mctlhq/seerrsense",
     "projects": "mctlhq/projects-mcp",
+    "alice": "mctlhq/mctl-alice",
+    "coolify": "mctlhq/mctl-coolify-mcp",
 }
 
 # `projects-mcp` is the case that comment anticipated: it is private on

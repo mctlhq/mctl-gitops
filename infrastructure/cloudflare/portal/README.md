@@ -228,7 +228,37 @@ covered by them.
   state: an `OWNERS` entry that has not been applied yet is a plan, not an
   outage, which is the gap between merging this and clicking apply.
 
-## Adding a server to the portal
+## The sixth upstream, `coolify`, and what this change does not do
+
+`coolify.mctl.ai` is registered the same way as `projects`/`alice`: DCR, no
+`auth_credentials`, no `client_secret` (mctlhq/mctl-gitops#1363). The apply
+leaves it in `waiting`, exactly like `projects` and `alice` before their first
+login — an admin completes the upstream OAuth login once from the dashboard,
+from the owner address, and only then does `scripts/portal-membership-add.sh
+coolify` succeed. Until that login happens, `cloudflare-portal-health.yml`
+reports `coolify` red every hour; that is expected, not a regression, and
+clears once the login is done. Which coolify tools go live afterwards is a
+separate decision for a `docs/portal-allowlist.json` in
+`mctlhq/mctl-coolify-mcp`, applied from that repository — not this one.
+
+`alice` (already a DCR resource in this file before this change) is added to
+`DCR_SERVERS` and `OWNERS` in the same commit: it had neither, so it was
+silently aborting `portal-auth-credentials-drift.py`'s whole nightly scan
+before this server was even the subject.
+
+This change deliberately stops short of the rest of mctlhq/mctl-gitops#1363:
+`seerrsense` and `api` are still live in manual OAuth mode with no Terraform
+resource here at all. Moving them to automatic (DCR) mode needs, in order: a
+live measurement of whether a manual registration can be cleared in place
+(mirroring "What moves the snapshot" above, but for `auth_config_summary`
+rather than the tool catalogue), a live DCR probe confirming each upstream
+restricts registration to `https://mcp.mctl.ai/servers-callback`, and —
+because that measurement and probe both write to production OAuth state —
+credentials and judgment this automated change does not have. Whoever
+performs them is expected to add the `import` blocks and resources here field
+for field on `tg`'s model (manual, interim) or `projects`'s (automatic,
+final), following mctlhq/mctl-gitops#1363's tasks 1, 2, 5 and 6, and extend
+`DCR_SERVERS`/`OWNERS` accordingly once the mode of each is settled.
 
 Creating the Terraform resource above registers a server with Cloudflare, but
 does not make it reachable through `mcp.mctl.ai`: the portal keeps its own

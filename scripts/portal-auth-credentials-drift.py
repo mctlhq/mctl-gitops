@@ -45,7 +45,15 @@ API = "https://api.cloudflare.com/client/v4"
 # DCR" and "applied by something that did not record it" are the same empty
 # field. Detecting it would turn the second case, which the Undetermined below
 # exists to catch, into a silent skip for every server at once.
-DCR_SERVERS = {"projects"}
+#
+# `alice` was already a DCR resource in mcp-servers.tf before this line named
+# it: every empty-blob server not in this set raises Undetermined from inside
+# the resource loop, so it was aborting the whole nightly scan for `tg` too
+# (mctlhq/mctl-gitops#1363). `coolify` is added the same way it is created --
+# DCR, no blob, no client_secret. `seerrsense` and `api` are not here: both
+# are still live in manual mode with no Terraform resource in mcp-servers.tf
+# at all, so there is no state entry for this script to see yet either way.
+DCR_SERVERS = {"projects", "alice", "coolify"}
 
 
 class Undetermined(Exception):
