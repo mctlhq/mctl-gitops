@@ -1,5 +1,5 @@
-status: accepted
-updated_at: '2026-09-24T06:53:59Z'
+status: needs-triage
+updated_at: '2026-09-24T06:57:34Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-59192fe7b189bd94
@@ -14,5 +14,15 @@ source:
 control:
   requires_human_approval: true
 approval:
-  approved_by: 'mashkovd'
+  approved_by: mashkovd
   approved_at: '2026-09-24T06:53:59Z'
+attempt:
+  id: 98efad6345d72c93b7a8d89ecba500c11ae337a55b10141933fe6c8e8445fb78
+  started_at: '2026-09-24T06:56:37Z'
+  expires_at: '2026-09-24T09:06:37Z'
+  finished_at: '2026-09-24T06:57:34Z'
+failure:
+  code: no-commits
+  stage: agent
+  message: implementer produced no commits
+notes: 'agent: implementer produced no commits'
