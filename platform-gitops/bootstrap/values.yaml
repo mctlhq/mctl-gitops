@@ -142,6 +142,16 @@ otelCollector:
             persistence:
               enabled: true
               size: 10Gi
+            # Explicit, not left at the chart's default true: zone-aware
+            # replication shards the ingester StatefulSet across zones, so
+            # even with replicas: 1 above the chart would still schedule
+            # roughly one ingester pod per zone. That silently multiplies
+            # pod and PVC usage against the fixed quota above (quota.pods
+            # now "10", tightened from "30" by this same change) -- pinned
+            # false because this bake-off trial wants exactly one ingester
+            # pod, not an HA/multi-zone deployment.
+            zoneAwareReplication:
+              enabled: false
           # Explicitly disabled, not left at the chart's already-false
           # default -- vmagent runs selectAllByDefault: true
           # (monitoring.yaml:287), the #1159 double-scrape shape
