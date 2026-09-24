@@ -36,24 +36,44 @@ depends on both in the canonical roadmap:
   idempotency) through the relay. Only the platform fulfils a request by
   attaching the canonical execution. `POST /work-items/{id}/resume` leaves the
   surface allowlist with that change, so the bot does not call it.
-- **mctl-agents#461 — WorkItem execution dispatch.** The dispatcher claims the
-  request, starts the investigator bound to the exact WorkItem and request, and
-  creates the canonical execution. The bot only reads the result back through
-  `GET /api/v1/work-items/{id}` (`latest_execution`, snapshot pointers).
+- **mctl-agents#461 — WorkItem execution dispatch** (landed 2026-09-24,
+  mctl-agents#487). The dispatcher claims the request and delivers it to the
+  issue's one DevLoop (`dev-loop-<owner>-<repo>-<n>`), which binds the canonical
+  execution. It runs **only** a work item whose `external_key` is a mctlhq GitHub
+  issue URL; any other item is rejected `no_runnable_target`. Outcomes are
+  asynchronous: a request ends `fulfilled` or `rejected` with a typed reason.
+  The bot reads both back: the request through
+  `GET /api/v1/work-items/{id}/execution-requests/{request_id}`, the execution
+  through `GET /api/v1/work-items/{id}` (`latest_execution`, snapshot pointers).
 
-The Telegram-side slice below can be built behind its flag before both land, but
-its client targets the #368 request route (update
-`docs/contracts/mctl-api-work-context.md` when #368 merges), and live end-to-end
-acceptance waits for #368, #461 and their deployment.
+## Owner decision (2026-09-24): an explicit GitHub issue is the runnable target
+
+- `/mctl work` takes an explicit mctlhq GitHub issue URL, and that URL is the
+  work item's `external_key`, which is the only thing the platform can run. The
+  pilot does **not** create issue-less ("title-only") work from Telegram, and
+  never guesses what to run.
+- `/mctl work status` shows the execution **request**, not only
+  `latest_execution`: its state (pending / claimed / fulfilled / failed) and,
+  for a failed one, the platform's typed reason (for example
+  `no_runnable_target`, `loop_active`, `resume_refused:<reason>`).
+
+Both dependencies have landed: #368 in mctl-api 4.51.0 (live) and #461 in
+mctl-agents 1.56.0 (live, dispatcher off until its rollout step). The
+Telegram-side slice is built behind its flag against the #368 request route
+(`docs/contracts/mctl-api-work-context.md` describes it). Live end-to-end
+acceptance of this slice waits for the dispatcher's own live proof
+(mctl-agents#490), as the out-of-scope section below states.
 
 ## User stories
 
-- AS a Telegram account owner I WANT `/mctl work <title>` to create or open a
-  canonical WorkItem SO THAT the work I start on my phone exists in the
-  platform rather than only in this bot's database.
+- AS a Telegram account owner I WANT `/mctl work <github-issue-url>` to create
+  or open the canonical WorkItem for that issue SO THAT the work I start on my
+  phone exists in the platform, and the platform knows exactly what to run.
 - AS a Telegram account owner I WANT `/mctl work status` to show the work item
-  id, state and latest execution reference SO THAT I can quote a stable
-  identifier when continuing the work elsewhere.
+  id, state, latest execution reference **and the state of my last execution
+  request, with the platform's reason when it was refused** SO THAT I can quote
+  a stable identifier elsewhere and never wait on a request that already
+  failed.
 - AS a Telegram account owner I WANT `/mctl work note <text>` to append an
   intent to the bound work item SO THAT the platform investigator has my input
   without the bot mirroring my whole chat transcript.
@@ -104,8 +124,11 @@ acceptance waits for #368, #461 and their deployment.
 - THE SYSTEM SHALL call only `POST /api/v1/work-items`,
   `GET /api/v1/work-items/{id}`, `POST /api/v1/work-items/{id}/intents`,
   `POST /api/v1/work-items/{id}/execution-requests` (mctl-api#368),
+  `GET /api/v1/work-items/{id}/execution-requests`,
+  `GET /api/v1/work-items/{id}/execution-requests/{request_id}`,
   `POST /api/v1/work-items/{id}/surface-refs` and
-  `POST /api/v1/surface-identities/redeem`.
+  `POST /api/v1/surface-identities/redeem`. (The two `GET` request routes are
+  on mctl-api's surface relay allowlist, `internal/api/handlers_surface_identity.go`.)
 - THE SYSTEM SHALL NOT call `GET /api/v1/work-items` (list),
   `POST /api/v1/work-items/{id}/resume`, `PATCH /api/v1/work-items/{id}`, any `/executions`, `/snapshot`,
   `/snapshots`, `/events` or `/approvals` route.
@@ -120,28 +143,74 @@ acceptance waits for #368, #461 and their deployment.
 
 ### Binding and idempotency
 
-- WHEN the owner runs `/mctl work <title>` in a Saved Messages thread that has
-  no binding THE SYSTEM SHALL create a work item with
-  `origin_surface: telegram` and a deterministic `external_key` derived from
-  the Telegram chat id and root message id, persist a binding row, and submit
-  one `kind: start` execution request for the new item (idempotent on the
-  binding key).
-- WHEN the owner repeats `/mctl work <title>` for a thread that already has a
+- THE SYSTEM SHALL accept as the `/mctl work` target only a GitHub issue URL of
+  the form `https://github.com/mctlhq/<repo>/issues/<number>` (scheme and host
+  case-insensitive; trailing slash, query and fragment stripped; normalised to
+  exactly that form). A pull request URL, another owner, another host, or a
+  missing argument is not a target.
+- IF the `/mctl work` argument is missing or is not such an issue URL THEN THE
+  SYSTEM SHALL reply with the usage (`/mctl work https://github.com/mctlhq/<repo>/issues/<n>`)
+  and SHALL make no mctl-api call and write no binding. THE SYSTEM SHALL NOT
+  create a work item without a runnable target, and SHALL NOT derive one from a
+  title or from Telegram message content.
+- WHEN the owner runs `/mctl work <issue-url>` in a Saved Messages thread that
+  has no binding THE SYSTEM SHALL `POST /api/v1/work-items` with
+  `origin_surface: telegram` and `external_key` = the normalised issue URL,
+  persist a binding row, and submit one `kind: start` execution request for the
+  item (idempotent on the thread key).
+- WHEN mctl-api answers that create with an existing open item for the same
+  `external_key` (its open-work dedupe, `200`) THE SYSTEM SHALL bind the thread
+  to that item and SHALL NOT create a second one; the `start` it then submits is
+  answered by the platform (a `loop_active` rejection when that issue's DevLoop
+  already runs).
+- IF mctl-api answers `409 external_key_in_use` (open work for that issue that
+  the owner cannot see) THEN THE SYSTEM SHALL tell the owner the issue already
+  has work they have no access to, and SHALL NOT write a binding.
+- WHEN the owner repeats `/mctl work <issue-url>` for a thread that already has a
   binding whose work item is `active` or `waiting` THE SYSTEM SHALL reuse the
-  bound work item and SHALL NOT create a second one.
+  bound work item and SHALL NOT create a second one; a different issue URL in a
+  bound thread SHALL be refused with a message to start a new thread.
 - WHEN the adapter issues any mutating mctl-api request THE SYSTEM SHALL send
   an `Idempotency-Key` derived deterministically from the binding key and the
   operation, so that a retry after a crash or timeout is a no-op.
 - WHILE a binding row exists THE SYSTEM SHALL store only numeric Telegram
   correlation identifiers (chat id, root message id, owning user id) plus the
-  work item id, its last observed state and state version, and SHALL NOT store
-  message bodies, titles, transcripts or peer handles.
+  work item id, its `external_key` (the issue URL), its last observed state and
+  state version, and the id of the last execution request it submitted, and
+  SHALL NOT store message bodies, titles, transcripts or peer handles.
 - WHEN a work item is created or opened THE SYSTEM SHALL register the Telegram
   thread with `POST /api/v1/work-items/{id}/surface-refs` as correlation
   metadata only.
 - IF a binding's work item has reached `completed`, `superseded` or `archived`
   THEN THE SYSTEM SHALL create a new work item for the next `/mctl work` in
   that thread rather than resuming a terminal one.
+
+### Execution request visibility
+
+- WHEN the adapter submits an execution request THE SYSTEM SHALL record the
+  returned request id on the binding and SHALL reply with that id and its state
+  (`pending`), never with "accepted" or "started".
+- WHEN the owner runs `/mctl work status` THE SYSTEM SHALL read the work item
+  (`GET /api/v1/work-items/{id}`) **and** the binding's last execution request
+  (`GET /api/v1/work-items/{id}/execution-requests/{request_id}`), and SHALL
+  render the request's id, kind and state as:
+  - `pending` → pending (waiting for the platform to pick it up);
+  - `claimed` → claimed (the platform is starting it);
+  - `fulfilled` → fulfilled, with the execution id it produced;
+  - `rejected` → **failed**, with the typed `reason` the platform returned.
+- WHEN a failed request's `reason` is one of the platform's documented reasons
+  (`no_runnable_target`, `loop_active`, `unsupported_kind`,
+  `resume_refused:<reason>`, `fulfil_refused:<code>`, `engine_run_ended`) THE
+  SYSTEM SHALL show that reason code verbatim plus a one-line owner-facing
+  explanation (`loop_active` → the issue's DevLoop is already running, not an
+  error); for any other value it SHALL show the code verbatim, labelled
+  unrecognised, and SHALL NOT show free text from mctl-api.
+- IF the binding has no recorded request id (lost row, older binding) THEN THE
+  SYSTEM SHALL read `GET /api/v1/work-items/{id}/execution-requests` and show
+  the newest request.
+- IF the request read fails THEN THE SYSTEM SHALL still render the work item
+  part and say the request state is unavailable, rather than failing the whole
+  reply.
 
 ### Concurrency and resume
 
@@ -191,8 +260,13 @@ acceptance waits for #368, #461 and their deployment.
   API bot in a forum; there is no topic id anywhere in the tree.
 - Launching, waking or correlating executions, and any execution identity; the
   platform supplies them through mctl-api#368 and mctl-agents#461.
-- End-to-end acceptance against a live mctl-api; that waits on mctl-api#368,
-  mctl-agents#461 and a release with the surface principal token configured.
+- Issue-less ("title-only") work items created from Telegram, and any inference
+  of a runnable target from a title or chat text (owner decision 2026-09-24).
+  Running work without a GitHub issue would need a new platform decision about
+  runnable targets first.
+- End-to-end acceptance against a live mctl-api; that waits on the
+  dispatcher's own live proof (mctl-agents#490: releases, credentials, the
+  dispatcher enabled) and a release with the surface principal token configured.
 - Changing the existing `conversations` / `agent_jobs` domain or the C1
   communication-agent rollout gate.
 
