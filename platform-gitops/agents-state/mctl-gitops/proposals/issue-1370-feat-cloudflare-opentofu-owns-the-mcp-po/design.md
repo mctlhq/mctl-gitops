@@ -218,9 +218,15 @@ convention exactly (executable `scripts/validate-*.py`, `--selftest` run first
 then the bare invocation, added to `validate-manifests.yml` beside steps 27-30,
 stdlib only, hand-rolled `check()`/`FAILURES` reporting). It enforces:
 
-- shape: each `allowlists/<id>.json` is `{"server", "tools"}` and nothing else;
-  `server == <id>`; `tools` a non-empty list; each entry exactly
-  `{"name": str non-empty, "enabled": bool}`; no duplicate names.
+- shape: each `allowlists/<id>.json` is the service repo's file byte-identical,
+  so its top-level keys are exactly the allowed set `{"$comment", "portal",
+  "server", "default_disabled", "tools"}` (any other key fails);
+  `portal == "mcp"`; `server == <id>`; `default_disabled == true`; `tools` a
+  non-empty list; each entry's keys drawn from `{"name", "enabled",
+  "reason", "upstream_gates"}` with `name` a non-empty string, `enabled` a
+  boolean and `reason` a non-empty string; no duplicate names. OpenTofu reads
+  only `name` and `enabled`; the other keys are audit trail, carried so the
+  vendored copy stays byte-identical and the bump diff is the service diff.
 - coverage: `{files} == {mapping.json servers where vendored}` and every
   vendored file has a `sources.json` entry; `mapping.json` non-vendored entries
   carry a literal `updated_tools`.
@@ -388,3 +394,23 @@ portal drift job, and one short workflow run per allowlist change.
   Recorded as the `#1363` seam in both the code comment and the validator's
   `UNMANAGED` list, so closing `#1363` is a deletion from one list rather than
   a rediscovery.
+
+
+## Amendment (owner, 2026-09-25)
+
+1. **Vendored-file shape.** The proposal first specified vendored files as
+   exactly `{"server", "tools"}` with tools exactly `{name, enabled}`, while
+   also requiring them byte-identical to the service files. The two cannot
+   both hold: every service file carries `$comment`, `portal`,
+   `default_disabled` and a per-tool `reason` (tg also `upstream_gates`), so
+   PR A would have failed its own validator on its own data. Byte-identical
+   wins; the validator checks against an allowed key set instead. OpenTofu
+   still reads only `name` and `enabled`.
+2. **Two different `default_disabled`s.** The service file's
+   `default_disabled: true` means *a tool absent from this file is
+   disabled*. The portal's `servers[].default_disabled` means *this server is
+   off by default for connecting clients*. They share a name only.
+   `mapping.json` takes the portal attribute from the live portal, never from
+   the service file; the validator only asserts the file's value is `true`.
+3. **Coolify's file enumerates its whole catalogue** (45 entries, 22
+   enabled), and PR A waits for `mctlhq/mctl-coolify-mcp#5` to merge.

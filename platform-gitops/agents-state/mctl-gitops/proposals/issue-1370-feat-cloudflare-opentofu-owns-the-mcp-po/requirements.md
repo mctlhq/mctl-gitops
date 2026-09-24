@@ -82,10 +82,14 @@ image tags are bumped today.
 - WHILE a server has no vendored allowlist file THE SYSTEM SHALL declare that
   server's `updated_tools` literally, matching its live mapping at import time.
 - WHEN `validate-manifests.yml` runs THE SYSTEM SHALL fail if any vendored
-  file is not an object of exactly `{"server", "tools"}`, if `server` does not
-  equal the file's stem, if `tools` is empty or not a list, if any tool entry
-  is not exactly `{"name": <non-empty string>, "enabled": <boolean>}`, or if a
-  tool name is duplicated.
+  file has a top-level key outside `{"$comment", "portal", "server",
+  "default_disabled", "tools"}`, if `portal` is not `"mcp"`, if `server` does
+  not equal the file's stem, if `default_disabled` is not `true`, if `tools` is
+  empty or not a list, if any tool entry has a key outside `{"name", "enabled",
+  "reason", "upstream_gates"}` or lacks a non-empty string `name`, a boolean
+  `enabled` or a non-empty string `reason`, or if a tool name is duplicated.
+  These are the keys all six service files carry today (measured 2026-09-25);
+  a byte-identical copy must pass its own validator.
 - WHEN `validate-manifests.yml` runs THE SYSTEM SHALL fail if a vendored file
   or a `mapping.json` entry names a server with no
   `resource "cloudflare_zero_trust_access_ai_controls_mcp_server" "<id>"` in
@@ -201,8 +205,9 @@ image tags are bumped today.
   plan says otherwise.
 - Whether the API materialises catalogue tools that are absent from
   `updated_tools` as implicit disabled entries on read. If it does, every
-  vendored file must enumerate all of a server's tools, which today is true
-  for five of six (coolify is 22 entries against a 45-tool catalogue).
+  vendored file must enumerate all of a server's tools. All six do
+  (measured 2026-09-25): coolify's file lists all 45 tools, 22 enabled and 23
+  disabled, gated in its own CI by `npm run check:portal-allowlist`.
 - Whether each of the six owning repos already holds the `GITOPS_TOKEN`
   secret used by the image bumps, or whether some only have it in the repos
   that deploy. Assumed present where a release workflow exists; the dispatch
