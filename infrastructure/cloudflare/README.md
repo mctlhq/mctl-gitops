@@ -447,7 +447,7 @@ job are chosen to be worth stealing as little as possible.
 
 ## Break-glass
 
-A dashboard change is permitted only to recover from an outage. It must be
-followed by a PR that either imports the change or reverts it — an unreconciled
-dashboard edit will surface as a drift failure and stay failing until someone
-resolves it.
+A dashboard change is permitted only to recover from an outage. What to record,
+the follow-up that imports or reverts it, drift reconciliation, apply and the
+state restore drill are in
+[`docs/runbooks/cloudflare-operations.md`](../../docs/runbooks/cloudflare-operations.md).
