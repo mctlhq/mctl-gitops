@@ -1,10 +1,10 @@
-status: accepted
-updated_at: '2026-09-24T10:40:16Z'
+status: implemented
+updated_at: '2026-09-24T11:32:56Z'
 updated_by: mctl-agents[bot]
 execution:
-  context_id: ex-be4cc4ea6f57d81c
-  trace_id: 85cb33a28f97e9640c167dc51cd73f91
-  agent: issue-investigator
+  context_id: ex-7055ca9bf744b37b
+  trace_id: 9615d3ed909f1ca13f64b073ccde8abc
+  agent: implementer
   version: ''
 source:
   type: github_issue
@@ -14,5 +14,11 @@ source:
 control:
   requires_human_approval: true
 approval:
-  approved_by: 'mashkovd'
+  approved_by: mashkovd
   approved_at: '2026-09-24T10:40:16Z'
+attempt:
+  id: 300e779b6e84428609b4d8b7a5e8c31d814609d6ba9b15c5b58a4b680ce472ac
+  started_at: '2026-09-24T10:41:54Z'
+  expires_at: '2026-09-24T12:51:54Z'
+  finished_at: '2026-09-24T11:32:56Z'
+pr: https://github.com/mctlhq/mctl-agents/pull/497
