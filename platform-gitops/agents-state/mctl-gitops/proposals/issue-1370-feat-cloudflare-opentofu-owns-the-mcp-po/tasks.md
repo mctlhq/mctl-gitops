@@ -11,7 +11,10 @@ writes to Cloudflare before task 9, and task 9 is an operator dispatch.
       byte-identical to each owning repo's `docs/portal-allowlist.json` on
       `main` (`OWNERS` in `scripts/portal-catalogue-drift.py` is the
       authoritative repo map) — DoD: six files committed; each is
-      `{"server", "tools"}` with `server` equal to the file stem; counts match
+      the service file unchanged (top-level `{"$comment", "portal", "server",
+      "default_disabled", "tools"}`, tools carrying `reason`) with `server`
+      equal to the file stem; `mctlhq/mctl-coolify-mcp#5` is merged first, so
+      coolify's file exists on `main`; counts match
       the issue's constraint line (alice 12/12, projects 8/8, tg 30/30, api
       75/75, coolify 22/45, seerrsense 5/5); the source commit sha of each is
       in the PR body.
@@ -178,8 +181,11 @@ writes to Cloudflare before task 9, and task 9 is an operator dispatch.
 
 - [ ] T1. `scripts/validate-portal-allowlists.py --selftest` covers, from
       fixtures under `scripts/tests/fixtures/portal-allowlists/{valid,invalid}`:
-      an extra top-level key; a `tools` map instead of a list; empty `tools`; a
-      tool with an extra key; a non-boolean `enabled`; an empty `name`; a
+      each of the six live files as-is (must pass: byte-identical copies are
+      valid); a top-level key outside the allowed set; `portal` not `"mcp"`;
+      `default_disabled` not `true`; a `tools` map instead of a list; empty
+      `tools`; a tool with a key outside the allowed set; a tool with no
+      `reason`; a non-boolean `enabled`; an empty `name`; a
       duplicate name; a `server` field disagreeing with the filename; a file
       with no `mapping.json` entry and a `mapping.json` entry with no file; a
       missing `sources.json` entry; a server id absent from `mcp-servers.tf`
