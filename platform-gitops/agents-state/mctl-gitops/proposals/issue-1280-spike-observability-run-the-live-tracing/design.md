@@ -275,6 +275,24 @@ datasource ConfigMap following the `grafana_datasource: "1"` label pattern of
 `bootstrap/templates/observability/loki-datasource.yaml` — and only then is the
 sandbox destroyed.
 
+### Owner constraints (added at approval, 2026-09-24)
+
+These bind every gate below and override anything in this design that conflicts with them.
+
+1. **Bounded storage cost.** Every `hcloud-volumes` PVC is a billed Hetzner volume, 10 GiB minimum. So:
+   - The Gate 2 `ResourceQuota` caps `persistentvolumeclaims: 4` and `requests.storage: 40Gi` for `observability-eval`.
+   - A candidate uses ephemeral storage (`emptyDir`) wherever its chart allows it. Soak data does not need to survive a restart; a restart is itself measured.
+   - A PVC that cannot be avoided is sized at the 10 GiB minimum.
+   - Each wave's `soak:` entry declares its PVC count and GiB.
+   - A candidate whose minimum footprint does not fit the quota is marked unmeasured with that reason. The quota is not raised.
+2. **One wave at a time.** Wave N is fully torn down before wave N+1 is deployed: its `otel-eval-*` Applications pruned, and zero PVCs and zero released volumes left for it (released volumes are deleted by hand, as the Rollback section says).
+3. **Short sandbox life.** `teardownAfter` is at most 14 days after the commit that sets `eval.enabled: true`. Extending it needs a new commit that states the reason.
+4. **Grafana Cloud (`agento11y-cloud`) is conditional and fixture-only.**
+   - Creating a Grafana Cloud account or stack is an owner action. The implementer never creates one.
+   - The Cloud shape is measured only if the owner has put a stack token at the Vault path named in task 12a. Without it, its cells are marked unmeasured with that reason, and nothing else blocks on it.
+   - When measured, only fixture spans may leave the cluster: a dedicated traces pipeline filters to the fixture emitter's resource attributes. Live producer telemetry never reaches the Cloud exporter. If that pipeline cannot be built, the Cloud shape is unmeasured.
+5. **Adopting a winner is a separate owner decision.** Task 27 (a permanent Application outside the sandbox) creates an ongoing cost. It is opened as its own pull request and is not merged without the owner's explicit approval on that PR. The spike is complete without it: the verdict and the teardown (tasks 23–26, 28, 29) do not depend on it.
+
 ## Alternatives
 
 **Skip the sandbox; point `otelCollector.backendEndpoint` at one candidate at a

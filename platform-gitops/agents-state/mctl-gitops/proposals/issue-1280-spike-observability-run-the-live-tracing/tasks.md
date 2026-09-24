@@ -70,24 +70,40 @@ precede the instrument that consumes it.
   `otelCollector.eval.quota` / `eval.limits` values block defaulted in
   `platform-gitops/bootstrap/values.yaml`, shaped after
   `helm-charts/tenant/templates/resourcequota.yaml` and `limitrange.yaml`; with
-  `eval.enabled: false` the rendered output is unchanged.
+  `eval.enabled: false` the rendered output is unchanged. The quota caps
+  `persistentvolumeclaims: 4` and `requests.storage: 40Gi` (design, owner
+  constraint 1), and a render test asserts both values.
 - [ ] 11. Open the sandbox (depends on 10) — DoD: one commit sets
   `otelCollector.eval.enabled: true` and
-  `otelCollector.eval.teardownAfter: "<date>"` together; ArgoCD reports the
+  `otelCollector.eval.teardownAfter: "<date>"` together, with the date at most
+  14 days after that commit (owner constraint 3); ArgoCD reports the
   `observability-eval` namespace, its four NetworkPolicies, the quota and the
   limit range as Synced/Healthy.
 - [ ] 12. Deploy wave 1 candidates (depends on 6, 7, 11) — DoD:
   `otelCollector.eval.candidates` lists only Stage A survivors with verified
   pins; each entry's `values` sets `serviceMonitor.enabled: false` and
-  `podMonitor.enabled: false`; each `otel-eval-*` Application is Synced/Healthy;
+  `podMonitor.enabled: false`; each entry uses ephemeral storage where its chart
+  allows it, and otherwise PVCs of exactly 10Gi; the wave's PVC count and GiB fit
+  the quota and are recorded in its `soak:` entry, and a candidate that does not
+  fit is marked unmeasured rather than the quota raised (owner constraint 1);
+  each `otel-eval-*` Application is Synced/Healthy;
   `count by (pod) (otelcol_receiver_accepted_spans)` still shows one series per
   collector pod (no `#1159` regression).
-- [ ] 12a. If `agento11y-cloud` is in a wave, add a single-destination egress
-  NetworkPolicy for exactly that candidate's pods (depends on 12) — DoD: the
+- [ ] 12a. Only if the owner has provisioned a Grafana Cloud stack token at
+  Vault `secret/platform/observability-eval/grafana-cloud` (never create an
+  account or a token yourself), and `agento11y-cloud` is in a wave, add a
+  single-destination egress NetworkPolicy for exactly that candidate's pods
+  (depends on 12); without that token the Cloud shape's cells are marked
+  unmeasured with that reason and nothing else waits for it — DoD: the
   policy names one destination and one port, `allow-cluster-egress` is
   unchanged, and the egress requirement is noted for scoring against
   `data_ownership_portability`; if the carve-out is refused on review, the Cloud
   shape's affected cells are marked unmeasured in task 20.
+- [ ] 12b. Tear a wave down before the next one (depends on 12, and on that
+  wave's measurements in Gate 4) — DoD: the wave's `otel-eval-*` Applications
+  are pruned, and `observability-eval` holds zero PVCs and Hetzner holds zero
+  released volumes for that wave before the next wave's `candidates` commit
+  (owner constraint 2).
 
 ## Gate 3 — declaration and fan-out
 
@@ -103,7 +119,10 @@ precede the instrument that consumes it.
   in-cluster candidates; any header is a `${env:...}` expansion backed by a
   Vault ExternalSecret surfaced through `extraEnvFrom`; no literal credential in
   git; `otelcol_exporter_queue_size{exporter="otlp/<name>"}` exists for every
-  candidate.
+  candidate. The `agento11y-cloud` exporter, if present, sits in a dedicated
+  traces pipeline that filters to the fixture emitter's resource attributes, so
+  live producer telemetry can never reach it; a render test asserts that filter
+  (owner constraint 4).
 - [ ] 15. Run the soak (depends on 14) — DoD: `otel-trace-fixture` submitted
   with exactly the declared parameters for both `devloop-trace.json` and
   `devloop-trace-redaction.json`; the workflow reports zero failed executions;
@@ -168,13 +187,15 @@ precede the instrument that consumes it.
   "The evaluation namespace and the fixture emitter (issue #903 / #1280)" is
   rewritten from pending-spike description into steady-state operating notes or
   a record that no backend was selected; "Accepted residuals" updated.
-- [ ] 27. Relocate the winner, if any (depends on 24) — DoD: a new Application
+- [ ] 27. Relocate the winner, if any (depends on 24; a separate pull request that
+  is not merged without the owner's explicit approval on it, owner constraint 5;
+  tasks 28 and 29 do not wait for it) — DoD: a new Application
   under `platform-gitops/infra-components/observability/<backend>/` outside
   `observability-eval`, with a Grafana trace datasource ConfigMap following the
   `grafana_datasource: "1"` label pattern of
   `bootstrap/templates/observability/loki-datasource.yaml`; the winner is
-  Synced/Healthy in its permanent home before task 28 runs.
-- [ ] 28. Tear down (depends on 27) — DoD: `otelCollector.backends: []`,
+  Synced/Healthy in its permanent home.
+- [ ] 28. Tear down (depends on 26) — DoD: `otelCollector.backends: []`,
   `otelCollector.eval.candidates: []`, `otelCollector.eval.enabled: false`,
   `teardownAfter: ""`; no `otel-eval-*` Application, no `observability-eval`
   namespace, no candidate `hcloud-volumes` PVC and no candidate Vault path
