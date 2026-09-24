@@ -2,221 +2,244 @@
 
 ## Context
 
-`mctl-agents` can already say, precisely, *what contract ran* (ADR 007,
-`orchestrator/resolver.py`'s `ExecutionPlan`) and *what was put in front of the
-model* (ADR 009, `orchestrator/context_snapshot.py`'s sealed `ContextSnapshot`,
-produced for real by `orchestrator/context_assembly.py` since
-mctlhq/mctl-agents#265). What it cannot say is whether that context was any
-**good**. `AssemblyMetrics` (`orchestrator/context_assembly.py:188`) already
-counts `dropped_stale`, `dropped_duplicate`, `excluded_budget`,
-`truncated_sources`, `used_sources`, `used_bytes`, `assembly_latency_ms` and
-`collector_calls`, and `run_issue_investigator._assemble_context`
-(`orchestrator/run_issue_investigator.py:1650`) prints them as one
-`[context] context_assembly={...}` line. Those are *activity* counters: they
-describe what the pipeline did, never whether the right evidence was selected,
-whether useful evidence was missed, or whether a ranking/filtering/config
-change made retrieval worse.
+`orchestrator/context_assembly.py` already assembles, ranks, deduplicates,
+budgets and seals a `ContextSnapshot` for every issue-investigation
+(mctlhq/mctl-agents#265, #471), and since #431 every snapshot of a store
+execution (`we_...`) is persisted in mctl-api at
+`WORK_CONTEXT_ROLLOUT_MODE` >= `observe` — proven live in #490. What does
+not exist is any statement of whether the context that was assembled was
+*good*: `AssemblyMetrics` (`orchestrator/context_assembly.py:258-306`)
+counts what the pipeline did (candidates, drops, bytes, latency), not
+whether the evidence the model needed was actually selected. ADR 009
+amendment 1 ends on exactly this gap: "Wiring promotion/rollback of
+strategies is mctlhq/mctl-agents#472; measuring them is #266"
+(`docs/adr/009-context-snapshot-contract.md:402`).
 
-This proposal adds a retrieval/context evaluation layer that is deliberately
-**distinct from final model-output evaluation** (issue #60), so the platform can
-tell apart bad model reasoning over good context, good reasoning over
-missing/stale/noisy context, and retrieval regressions caused by changing
-`AssemblyConfig`, the collector order, or a future ranker. It ships a small
-curated, labelled fixture set and a checked-in metric baseline so a regression
-fails CI instead of being discovered in a bad proposal. No evaluator stack of
-any kind exists in this repository today — `grep` for `#60`, an evaluator, a
-scorer, a rubric or a token counter returns nothing — so this work defines the
-seam #60 will plug into rather than competing with it.
+This proposal adds a retrieval/context evaluator that is *independent of*
+final model-output scoring, so the platform can tell bad reasoning over good
+context from good reasoning over missing, stale, noisy or duplicated
+context, and can detect a retrieval regression caused by a ranking, filter
+or config change. It reads stored snapshots and adds no new storage. It
+evaluates every fixture case under **both** shipped strategies —
+`deterministic-fixed-order` and `trust-freshness-ranked` — so the two can be
+compared against each other and against the execution outcome the store
+ledger records. It complements the final-output evaluator of #60 by joining
+on `execution_id` / `context_snapshot_id` rather than producing a competing
+single score.
 
 ## User stories
 
-- AS a platform engineer changing `AssemblyConfig` or the collector order in
-  `orchestrator/context_assembly.py` I WANT a CI check that recomputes
-  retrieval metrics against labelled fixtures SO THAT a ranking or filtering
-  regression is caught before it reaches a live investigation.
-- AS a reviewer of a poor agent proposal I WANT the run's context evaluation
-  next to its `ContextSnapshot` SO THAT I can tell whether the model reasoned
-  badly or was simply handed stale, noisy or incomplete evidence.
-- AS an operator comparing context strategies I WANT per-strategy token/latency
-  cost and per-source-kind contribution reported SO THAT I can judge whether a
-  richer strategy earns its cost.
-- AS the owner of final-output evaluation (#60) I WANT context evaluation to be
-  a separate, joinable document keyed on ids I already hold SO THAT I can
-  correlate retrieval quality with outcome without adopting a second,
-  incompatible evaluator stack.
-- AS a security reviewer I WANT evaluation telemetry to be payload-free by
-  construction SO THAT no raw production context leaks into an evaluation store.
+- AS a platform owner I WANT retrieval quality measured separately from the
+  model's answer SO THAT a bad proposal can be attributed to missing context
+  or to the model, not guessed at.
+- AS an agent developer I WANT every evaluation case scored under both
+  `deterministic-fixed-order` and `trust-freshness-ranked` SO THAT I can
+  decide whether to promote the ranked strategy (#472) on evidence.
+- AS a reviewer of a ranking/filter change I WANT staleness, noise and
+  duplicate rates as numbers against a committed baseline SO THAT a
+  regression fails a test instead of being discovered in production.
+- AS an operator I WANT context size, estimated token cost, assembly latency
+  and capability-call counts reported per strategy SO THAT a retrieval
+  improvement that triples prompt cost is visible at review time.
+- AS an incident investigator I WANT to replay the evaluation offline
+  against a stored snapshot by work item SO THAT I can inspect what a past
+  execution was given without re-running the agent or writing anything.
+- AS a security reviewer I WANT the evaluation record to carry only ids,
+  kinds, codes and counts SO THAT no raw production context reaches
+  evaluation telemetry.
 
 ## Acceptance criteria (EARS)
 
-### Contract and identity
+### Emission and safety
 
-- WHEN a `ContextEvaluation` is sealed THE SYSTEM SHALL compute its
-  `content_hash` as `"sha256:" + sha256(canonical JSON)` using
-  `orchestrator.context_snapshot.hash_bytes` and `canonical_json`, and SHALL NOT
-  introduce a second hashing or serialization convention.
-- WHEN a `ContextEvaluation` is sealed THE SYSTEM SHALL derive
-  `eval_id = "ce-" + content_hash[7:23]`, mirroring `seal()`'s `cs-` rule in
-  `orchestrator/context_snapshot.py:933`.
-- WHILE computing `content_hash` THE SYSTEM SHALL exclude `created_at` and
-  `cost.assembly_latency_ms`, so that evaluating identical inputs on two
-  machines at two wall-clock times yields one `eval_id`.
-- WHEN a `ContextEvaluation` document is loaded THE SYSTEM SHALL reject unknown
-  top-level or nested keys and an unsupported `api_version`/`kind`, failing
-  loudly exactly as `ContextSnapshot.from_dict` does, never falling back to a
-  default shape.
-- IF a label, outcome or rationale value lies outside its closed vocabulary
-  THEN THE SYSTEM SHALL raise a `ContextEvaluationError` rather than coerce it.
+- WHEN `ISSUE_INVESTIGATOR_CONTEXT_MODE` is `shadow` or `on` and a snapshot
+  has been sealed THE SYSTEM SHALL print exactly one
+  `[context] context_eval=<canonical json>` line, from its own guarded block
+  placed after the existing `[context] context_assembly=` line
+  (`orchestrator/run_issue_investigator.py:1837`, which is itself outside
+  the `try` at `:1791`).
+- WHEN the sealed snapshot carries a `WorkContextRef` THE SYSTEM SHALL
+  include `work_item_id`, `execution_id` and `execution_sequence` in that
+  line, and SHALL omit those keys when it does not.
+- WHILE `ISSUE_INVESTIGATOR_CONTEXT_MODE` is `off` THE SYSTEM SHALL emit no
+  `context_eval` line and run byte-for-byte as it does today.
+- THE SYSTEM SHALL NOT gate the `context_eval` line on
+  `WORK_CONTEXT_ROLLOUT_MODE`: it is emitted whenever the context mode is
+  not `off`, with or without a store execution (owner choice (b)).
+- WHILE `ISSUE_INVESTIGATOR_CONTEXT_EVAL` is `off` THE SYSTEM SHALL skip
+  evaluation entirely, so an operator can roll the feature back without a
+  redeploy; the variable is read fresh per call, like `_context_mode()`
+  (`orchestrator/run_issue_investigator.py:155`).
+- IF evaluation raises for any reason THEN THE SYSTEM SHALL print
+  `warn: context evaluation failed: <type>: <msg>` and continue the
+  investigation unchanged, in `shadow` and in `on` alike — measurement must
+  never be able to fail an investigation, which is a stricter policy than
+  `_assemble_context`'s (`:1827-1831`, where `on` re-raises).
+- WHILE emitting any record THE SYSTEM SHALL carry no `locator`, no
+  `selector`, no payload byte and no rendered text — only `source_id`s,
+  `kind`s, closed-vocabulary codes, counts and ratios, mirroring
+  `AssemblyMetrics.to_log_dict()`'s rule
+  (`orchestrator/context_assembly.py:285-306`).
 
-### Retrieval quality metrics, distinct from output score
+### Identity verification
 
-- WHEN a snapshot is evaluated against a label set THE SYSTEM SHALL report
-  `selected_precision` (useful-labelled included sources over all included
-  sources) and `useful_recall` (useful-labelled included sources over all
-  useful-labelled sources in the label set).
-- WHEN a snapshot is evaluated without a label set THE SYSTEM SHALL report
-  `labelled=false` with `selected_precision` and `useful_recall` set to `null`,
-  and SHALL still report `stale_rate`, `duplicate_rate`, `noise_rate`, cost and
-  per-source contribution.
-- WHEN a snapshot is evaluated THE SYSTEM SHALL report `stale_rate` and
-  `duplicate_rate` derived from `ContextSource.freshness.staleness` and
-  `selection.reason_code` values the assembler already writes
-  (`"stale"`, `"duplicate-content"` in `orchestrator/context_assembly.py:307`
-  and `:694`), never from a re-derivation of its own.
-- WHEN a label set declares expected evidence that appears in no source THE
-  SYSTEM SHALL report it as `missing_evidence_count` with per-entry
-  `rationale_code`, so a missing-evidence case is measurable rather than
-  invisible.
-- WHEN a snapshot is evaluated THE SYSTEM SHALL report, per
-  `ContextSource.kind`, the candidate count, included count, included bytes and
-  (when labelled) useful count.
-- WHILE any evaluation is produced THE SYSTEM SHALL NOT compute, contain or
-  name a score of the model's final output; that remains #60's exclusive
-  concern.
+- WHEN evaluating any snapshot THE SYSTEM SHALL first recompute both
+  identities: the document identity (`recompute_content_hash`,
+  `orchestrator/context_snapshot.py:1266`, and
+  `snapshot_id == "cs-" + content_hash[7:23]`, `:1245`, a hash that
+  excludes `created_at`), and the store identity
+  (`hash_bytes(canonical_bytes(snapshot))` over the whole canonical
+  document, `orchestrator/work_context/snapshots.py:88-99`).
+- WHEN a store snapshot is involved THE SYSTEM SHALL carry a `store_ref`
+  block of `{work_item_id, execution_id, store_snapshot_id,
+  store_content_hash}`, where `store_snapshot_id` is mctl-api's opaque
+  `cs_`-prefixed id (`snapshots.py:42`), carried and compared but never
+  recomputed.
+- IF either recomputed hash disagrees with the value it is checked against
+  THEN THE SYSTEM SHALL emit the record with `verdict: "hash-mismatch"`,
+  the two disagreeing field names, and no metrics at all — a document whose
+  identity does not hold is not measured.
+- IF no `store_ref` is available (no store execution, or the persist answer
+  was not `stored`) THEN THE SYSTEM SHALL still verify the document
+  identity and SHALL record `store_ref: null` rather than failing.
 
-### Cost
+### Metrics (distinct from final model output)
 
-- WHEN a snapshot is evaluated THE SYSTEM SHALL report `used_bytes`,
-  `estimated_tokens`, `estimator_name`, `estimator_version`,
-  `assembly_latency_ms` and `collector_calls`.
-- WHILE reporting `estimated_tokens` THE SYSTEM SHALL carry an explicit
-  estimator name and version and SHALL NOT present the figure as a tokenizer
-  measurement, because no tokenizer or token accounting exists anywhere in this
-  repository.
-- WHILE recording cost THE SYSTEM SHALL NOT add any token- or
-  context-window-named field to `ContextBudget`, which ADR 009 sec. 6 closes
-  against exactly that (`orchestrator/context_snapshot.py:553-560`).
+- WHEN a case carries labelled useful evidence THE SYSTEM SHALL report
+  `selected_precision`, `useful_recall` and `f1` over the labelled
+  candidates.
+- IF a case carries no labels THEN THE SYSTEM SHALL report those three as
+  `null`, never as `0.0` or `1.0`.
+- THE SYSTEM SHALL report `stale_rate`, `duplicate_rate`, `noise_rate`,
+  `context_bytes`, `context_tokens_estimate`, `assembly_latency_ms`,
+  `capability_calls` and per-source-kind coverage (candidates, included,
+  bytes) for every evaluated snapshot.
+- WHILE computing staleness THE SYSTEM SHALL count a source whose
+  `selection.reason_code` is `stale-demoted` as stale, alongside one whose
+  `freshness.staleness` is `stale` (the ranked strategy demotes rather than
+  drops, `orchestrator/context_assembly.py:521-530`).
+- WHEN deriving conflict metrics THE SYSTEM SHALL read `snapshot.conflicts`
+  only, and SHALL never re-derive a conflict from text.
+- THE SYSTEM SHALL report `context_tokens_estimate` as a declared estimate
+  derived from bytes, never as a billed token count; billed model cost stays
+  with `orchestrator/usage_ledger.py` and ADR 012.
+- THE SYSTEM SHALL name itself in every record with `evaluator_name` and
+  `evaluator_version`, so a metric change is attributable.
 
-### Fixtures and regression detection
+### Fixtures and both strategies
 
-- WHEN the evaluation harness runs THE SYSTEM SHALL execute a checked-in
-  curated case set covering, at minimum: relevant and irrelevant log evidence;
-  stale versus current deployment evidence; GitHub issue/PR evidence;
-  conflicting evidence; duplicated evidence; and a missing-evidence case.
-- WHEN a case is evaluated twice from the same inputs THE SYSTEM SHALL produce
-  a byte-identical `content_hash` and identical metrics, performing no network
-  call and reading no state outside the fixture directory.
-- WHEN computed metrics for any case differ from the checked-in baseline THE
-  SYSTEM SHALL fail the test suite and name the case and the differing metric.
-- IF a change to `AssemblyConfig`, the collector order, freshness table,
-  deduplication rule or a future ranker alters selection THEN THE SYSTEM SHALL
-  surface that as a baseline diff rather than silently absorbing it.
-- WHEN a baseline is intentionally updated THE SYSTEM SHALL require an explicit
-  `--update-baseline` invocation of the harness, so the diff is a reviewable
-  commit.
+- WHEN the fixture suite runs THE SYSTEM SHALL evaluate every case under
+  both `deterministic-fixed-order` and `trust-freshness-ranked`
+  (`context_assembly.STRATEGIES`) and produce one record per
+  (case, strategy) pair.
+- THE SYSTEM SHALL ship a committed fixture set containing at least:
+  relevant and irrelevant log evidence; stale versus current deployment
+  information; GitHub issue/PR evidence; duplicated evidence; conflicting
+  evidence that fires `CONFLICT_PRIOR_PROPOSAL_SUPERSEDED`
+  (`orchestrator/context_assembly.py:102`); a `stale-demoted` case; and a
+  missing-evidence case where the labelled useful evidence is absent from
+  every candidate.
+- WHEN a fixture case declares expected useful evidence that no candidate
+  carries THE SYSTEM SHALL report `missing_expected > 0` and
+  `useful_recall < 1.0` rather than silently scoring it.
+- WHEN the fixture suite runs against the committed baseline THE SYSTEM
+  SHALL fail if any metric of any (case, strategy) pair differs from the
+  baseline, so a ranking, filtering or config regression is a red test.
+- THE SYSTEM SHALL keep the default strategy's sealed bytes and
+  `snapshot_id`s unchanged: the golden fixture
+  `tests/fixtures/context/investigator-snapshot.json` and the pins in
+  `tests/test_context_ranking.py:120,148` must still pass untouched.
 
-### Correlation and the #60 seam
+### Correlation and outcome
 
-- WHEN a `ContextEvaluation` is sealed THE SYSTEM SHALL carry `snapshot_id`,
-  `snapshot_content_hash`, the snapshot's `ExecutionCorrelation` block and its
-  `ContextStrategy` block verbatim, so the chain `execution -> context_snapshot
-  -> strategy/version -> selected sources -> agent/profile/model -> context
-  evaluation` is closed by ids both sides already hold (ADR 009 sec. 4).
-- WHEN a downstream outcome becomes known THE SYSTEM SHALL record it as a
-  separate append-only `ContextOutcomeLink` document keyed on `eval_id`, and
-  SHALL NOT reseal or mutate the `ContextEvaluation`.
-- WHEN a `ContextOutcomeLink` is derived THE SYSTEM SHALL join it through the
-  additive `context:` block `run_issue_investigator.write_status_yaml`
-  (`orchestrator/run_issue_investigator.py:1043`, block written at `:1058-1063`)
-  already commits into each proposal's `.status.yaml` — `snapshot_id`,
-  `content_hash`, `strategy`, `strategy_version` — so no new cross-process
-  callback is invented.
-- WHILE recording an outcome THE SYSTEM SHALL restrict it to a closed
-  vocabulary drawn from the statuses this repository already writes: the
-  `.status.yaml` statuses (`proposed`, `accepted`, `implementing`,
-  `review-fixing`, `needs-triage`) plus the terminal set in
-  `orchestrator/pr_adoption.py:643` (`merged`, `rejected`, `review-stuck`).
-- WHEN #60's final-output evaluator exists THE SYSTEM SHALL be joinable to it
-  on `execution.temporal_workflow_id` and `eval_id` without either side
-  importing the other.
+- WHEN a record is emitted THE SYSTEM SHALL carry the chain
+  `execution_id -> context_snapshot_id -> strategy/version -> selected
+  source ids -> agent/profile/definition versions -> context evaluation`,
+  reading agent/profile identity from `snapshot.execution`
+  (`ExecutionCorrelation`, `orchestrator/context_snapshot.py:461`).
+- WHEN linking an evaluation to an outcome THE SYSTEM SHALL join on the
+  store ledger — `work_context.execution_id` (`we_`),
+  `work_context.prior_execution_ids` and
+  `work_context.resumed_from_snapshot_id` against
+  `WorkItemClient.get`'s `WorkItem.state` and `ExecutionRef.phase`
+  (`orchestrator/work_context/client.py:162`,
+  `orchestrator/work_context/contract.py:166-191,265-289`) — owner choice
+  (a).
+- IF a run has no store execution THEN THE SYSTEM SHALL fall back to the
+  published proposal's `.status.yaml` `status` field, and SHALL record
+  `outcome_source: "status-yaml"` so the weaker link is visible.
 
-### Telemetry safety
+### Offline replay
 
-- WHILE emitting evaluation telemetry THE SYSTEM SHALL emit ids, hashes,
-  counts, rates and durations only, and SHALL NOT emit a `locator`, a
-  `selector`, retrieved payload bytes, or any free text derived from a source.
-- WHEN a production run emits an evaluation line THE SYSTEM SHALL classify it
-  `retention: telemetry`, reserving `execution-record` for the durable
-  persistence follow-up ADR 009 already names.
-- IF the evaluation code raises for any reason during a `shadow`-mode
-  investigation THEN THE SYSTEM SHALL log a warning and continue the
-  investigation, matching `_assemble_context`'s existing failure policy
-  (`orchestrator/run_issue_investigator.py:1640`).
+- WHEN invoked as `python -m orchestrator.run_context_eval --work-item <id>
+  [--execution we_...]` THE SYSTEM SHALL read the work item, its execution
+  ledger and the stored snapshot through `WorkItemClient` only
+  (`get`, `execution_snapshot`, `client.py:162,251`) and SHALL write
+  nothing — no file, no gitops commit, no POST (owner choice (c)).
+- WHEN `--execution` is omitted THE SYSTEM SHALL evaluate the latest
+  execution in the ledger that sealed a snapshot.
+- IF the store answers `SNAPSHOT_ABSENT` or `SNAPSHOT_UNKNOWN` THEN THE
+  SYSTEM SHALL print the verdict and exit non-zero without inventing a
+  result.
+- WHEN invoked as `python -m orchestrator.run_context_eval --fixtures` THE
+  SYSTEM SHALL evaluate the committed fixture set offline with no network
+  access at all.
+
+### Documentation
+
+- THE SYSTEM SHALL add ADR **015** (`docs/adr/015-context-evaluation-contract.md`);
+  012 is taken by model-usage cost attribution and 014 by the policy
+  checkpoint, so 015 is the next free number.
+- THE SYSTEM SHALL update ADR 009's follow-up row (b)
+  (`docs/adr/009-context-snapshot-contract.md:513`), which still reads
+  "needs an issue", to record that snapshot persistence was delivered by
+  mctlhq/mctl-agents#431 and proven live in #490, and SHALL add a row for
+  measurement pointing at this issue.
 
 ## Out of scope
 
-- Training, shipping or tuning a production reranker, or any embedding,
-  semantic or vector retrieval. This proposal measures the existing
-  `deterministic-fixed-order` strategy and records where a future ranker's
-  identity and score already belong (`ContextStrategy.ranker_name`,
-  `Selection.score`).
-- Final model-output evaluation, rubrics, LLM-as-judge scoring, or any grading
-  of proposal quality — #60's territory.
-- A production-scale benchmark, a golden corpus of real issues, or statistical
-  significance machinery. The issue explicitly does not require it for v1.
-- Declaring one universal retrieval metric sufficient for every agent. Only the
-  issue-investigator assembles a snapshot today.
-- New mctl-api tables, HTTP endpoints or GitOps schema. Durable persistence of
-  snapshots and evaluations stays ADR 009 follow-up (b).
-- Adding a real tokenizer, per-model token accounting, or USD cost attribution.
-- Adding `loki-logs` or `incident` **collectors** to production assembly; those
-  kinds are exercised as fixture-declared candidates only.
-- Any change to agent prompts, tools, budgets or the `ISSUE_INVESTIGATOR_CONTEXT_MODE`
-  default (`off`).
+- Training or shipping a production reranker, or any learned model in the
+  evaluation path. Every rule here is fixed and deterministic.
+- Declaring one universal retrieval metric sufficient for all agents. The
+  fixture set and metrics are the *issue-investigator's*; other agents may
+  reuse the module, but no cross-agent metric is asserted.
+- Storing raw production context anywhere. No payload, locator or selector
+  leaves the process.
+- New storage or new mctl-api routes. Snapshots are already persisted
+  (#431/#490); this reads them and adds nothing.
+- Changing what the assembler selects. `run_pipeline` is an extraction, not
+  a behaviour change; the default strategy's snapshot ids and bytes are
+  pinned.
+- Replacing or re-implementing #60's final-output evaluation, or grading the
+  model's proposal text.
+- A production-scale benchmark, human relevance labelling at scale, or a
+  dashboard. Fixtures are small, curated and committed.
+- Promotion/rollback of a context strategy on the evidence produced here —
+  that is mctlhq/mctl-agents#472.
 
 ## Open questions
 
-- **Token estimator fidelity.** No tokenizer exists in the repo and adding one
-  would pull a dependency into a deliberately stdlib-only module. Proceeding
-  with a declared `bytes-div-4` estimator, versioned so a better one can
-  replace it without ambiguity about which figures are comparable.
-- **Who authors and maintains labels.** Labels are a human judgement that can
-  rot as the strategy changes. Proceeding with hand-authored label sets that
-  carry their own `version` and `content_hash`, recorded in every evaluation,
-  so a metric produced under old labels is never silently compared to one
-  produced under new labels.
-- **Where production evaluations durably live.** ADR 009 follow-up (b) already
-  owns snapshot persistence and needs an issue. Proceeding with a stdout
-  telemetry line only, `retention: telemetry`, and treating durable storage as
-  the same follow-up.
-- **Whether a separate `ISSUE_INVESTIGATOR_CONTEXT_EVAL` flag is warranted.**
-  Proceeding without one: evaluation is emitted whenever
-  `ISSUE_INVESTIGATOR_CONTEXT_MODE != "off"`, to avoid a second knob for a
-  strictly additive, payload-free log line.
-- **Outcome capture mechanics.** The proposal `.status.yaml` is the only honest
-  outcome signal today: the investigator already writes a `context:` block into
-  it (`run_issue_investigator.py:1058-1063`) and the shepherd/reconciler later
-  flip `status` via `proposal_state.update_status_file`. Proceeding with a
-  `ContextOutcomeLink` derived by reading those two fields out of one
-  `.status.yaml`, rather than inventing a cross-process callback; a scheduled
-  sweep that walks every proposal is left to the persistence follow-up.
-- **Per-file retrieval precision is unmeasurable today.** `collect_target_repo`
-  (`orchestrator/context_assembly.py:475`) emits one `target-repo` source with
-  `selector.mode: agent-directed`, because the model Globs/Greps/Reads the
-  clone itself and no tool-call hook records which files it opened (ADR 009
-  sec. 8, follow-up (e), which still needs an issue). Proceeding by labelling
-  `target-repo` at source granularity and stating the limitation in the report
-  rather than implying file-level precision this codebase cannot observe.
-- **Exact baseline tolerance.** Proceeding with exact equality for every metric
-  except `assembly_latency_ms`, which is excluded from both the baseline
-  comparison and the content hash and asserted only against a ceiling.
+- **Token estimate.** `context_tokens_estimate` is derived from bytes
+  (`ceil(used_bytes / 4)`), because no tokenizer is a dependency of this
+  stdlib-only module. Proceeding with the byte-derived estimate, explicitly
+  labelled as such; a real count can be joined later from the usage ledger
+  (ADR 012) by `execution_id`.
+- **Shape of the #60 join.** Whether #60's final-execution evaluation wants
+  the context record inline or joined by key is not settled in this repo.
+  Proceeding with join-by-key (`execution_id`, `context_snapshot_id`), which
+  is additive for either answer.
+- **Log evidence has no production collector.** `collect_*` covers five
+  kinds; Loki/incident sources are explicitly out of scope of #265
+  (`orchestrator/context_assembly.py:632-635`). The "relevant + irrelevant
+  logs" case therefore uses synthetic `loki-logs` candidates fed straight to
+  `run_pipeline`, which is kind-agnostic when a candidate supplies its own
+  `max_age_seconds`. Proceeding, and recording that this case measures the
+  pipeline, not a collector that exists.
+- **Baseline drift policy.** A deliberate ranking change must update the
+  committed baseline in the same PR. Proceeding with "baseline is a golden
+  fixture, regenerated only by an explicit `--write-baseline` run", matching
+  `tools/record_workflow_history.py`'s deliberate-regeneration convention.
+- **Owner choices from the review, adopted as proposed:** (a) outcome link
+  on the store ledger — yes; (b) gate the live line on
+  `WORK_CONTEXT_ROLLOUT_MODE >= observe` — no, emit whenever the context
+  mode is not `off`; (c) `--work-item` replay in v1 — yes, read-only.
