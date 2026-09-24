@@ -50,7 +50,10 @@ tenant:
     # Temporal worker alongside labs-openclaw (2600m / 1104Mi req).
     requests.cpu: "3"
     requests.memory: "5Gi"
-    limits.cpu: "14"
+    # Bumped 2026-09-25: pelican-proxy limits.cpu bumped 300m -> 1000m,
+    # raising steady-state usage to 13050m. Deploy workflow refresh pod (needs 1 core)
+    # exceeded 14 quota. Bump limits.cpu 14 -> 16 to provide ~3 cores headroom.
+    limits.cpu: "16"
     # Right-sized 2026-07: after the openclaw memory-limit trim (2560Mi ->
     # 2048Mi, mctl-gitops#532), current steady-state usage is 6560Mi/11Gi —
     # but labs-openclaw is scaled to 0 right now (see
