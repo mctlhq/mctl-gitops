@@ -2,13 +2,13 @@
 
 - [ ] 1. Add the allowlist to the OAuth config — `src/auth/config.ts`: add
   `SEERRSENSE_DCR_REDIRECT_URIS: z.string().optional()` to `OAuthEnvSchema`,
-  add `dcrRedirectUris: string[]` to `OAuthConfig`, and parse it: unset means
-  `["https://mcp.mctl.ai/servers-callback"]`, set means comma-split/trim/filter,
-  set-and-empty means `[]`. Validate each entry is a parseable URL with no
+  add `dcrRedirectUris: string[]` to `OAuthConfig`, and parse it: comma-split/trim/filter, with unset and set-and-empty both
+  meaning `[]` (off). No built-in default URI. Validate each entry is a parseable URL with no
   userinfo and throw on a bad entry, matching how `parsePreRegisteredClients`
-  throws. Comment why the polarity is opposite to `allowedEmails`.
-  — DoD: `loadAuthSettings` returns the default entry when the variable is
-  absent, the parsed list when set, `[]` when set to `""`, and throws on
+  throws. Comment that there is deliberately no default: the portal callback is one
+  operator's value and belongs in that deployment's values.
+  — DoD: `loadAuthSettings` returns `[]` when the variable is absent, the parsed
+  list when set, `[]` when set to `""`, and throws on
   `"not a url"`. `npm run typecheck` passes.
 
 - [ ] 2. Persist registered clients in the store (depends on 1) —
@@ -111,7 +111,9 @@
 All new tests go in the existing suites, matching their established style
 (`tests/oauth.test.ts` builds a server with a `stubFetch` standing in for Google
 and the client document; `tests/store.test.ts` runs one contract suite over both
-stores via `describe.each`).
+stores via `describe.each`). Because DCR is off by default, the DCR tests set
+`SEERRSENSE_DCR_REDIRECT_URIS=https://mcp.mctl.ai/servers-callback` explicitly
+in their setup. None of them may rely on a built-in default.
 
 - [ ] T1. `tests/oauth.test.ts` — a registration whose single `redirect_uris`
   entry is the portal callback answers 201 and returns a `client_id`; the
@@ -124,7 +126,8 @@ stores via `describe.each`).
   `/oauth/authorize` with a guessed id still fails `invalid_client`).
 - [ ] T3. `tests/oauth.test.ts` — a registration mixing one allowlisted and one
   non-allowlisted entry is refused: the check is over every entry, not any.
-- [ ] T4. `tests/oauth.test.ts` — with `SEERRSENSE_DCR_REDIRECT_URIS=""`,
+- [ ] T4. `tests/oauth.test.ts` — with `SEERRSENSE_DCR_REDIRECT_URIS` unset, and
+  again with it set to `""`,
   `POST /register` answers 404 and `registration_endpoint` is absent from both
   `.well-known/oauth-authorization-server` documents. With it non-empty, the key
   is present in both and equals `<issuer>/register`.
@@ -168,8 +171,8 @@ stores via `describe.each`).
   owns resolver-level assertions) — resolution order: a pre-registered entry
   wins over a DCR row with the same `client_id`; a DCR row wins over a CIMD
   fetch and triggers no fetch at all.
-- [ ] T15. `tests/auth-config.test.ts` — `dcrRedirectUris` is the portal default
-  when the variable is unset, the parsed list when set, `[]` when set to `""`,
+- [ ] T15. `tests/auth-config.test.ts` — `dcrRedirectUris` is `[]` when the
+  variable is unset (and `/register` is then 404, absent from metadata), the parsed list when set, `[]` when set to `""`,
   and `loadAuthSettings` throws on a malformed entry.
 - [ ] T16. Confirm `tests/portal-allowlist.test.ts` and
   `tests/source-hygiene.test.ts` still pass untouched — no tool was added or

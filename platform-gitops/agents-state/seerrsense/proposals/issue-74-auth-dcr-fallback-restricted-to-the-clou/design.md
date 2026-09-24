@@ -100,24 +100,19 @@ Five touch points. The shape of each is dictated by what already exists.
 
 Add `SEERRSENSE_DCR_REDIRECT_URIS: z.string().optional()` to `OAuthEnvSchema`
 and a `dcrRedirectUris: string[]` field to `OAuthConfig`. Parsing mirrors
-`allowedEmails`/`householdEmails` — split on `,`, trim, drop empties — with one
-deliberate difference in the *unset* case:
+`allowedEmails`/`householdEmails` — split on `,`, trim, drop empties — and has
+the same fail-closed polarity: unset and set-and-empty both mean off.
 
 ```ts
-const DEFAULT_DCR_REDIRECT_URIS = ["https://mcp.mctl.ai/servers-callback"];
-
-const dcrRedirectUris =
-  parsed.SEERRSENSE_DCR_REDIRECT_URIS === undefined
-    ? DEFAULT_DCR_REDIRECT_URIS
-    : parsed.SEERRSENSE_DCR_REDIRECT_URIS.split(",").map((u) => u.trim()).filter(Boolean);
+const dcrRedirectUris = (parsed.SEERRSENSE_DCR_REDIRECT_URIS ?? "")
+  .split(",").map((u) => u.trim()).filter(Boolean);
 ```
 
-Unset means the portal callback; set-and-empty means off. This is the opposite
-polarity from `allowedEmails`, which fails closed, and that is intentional and
-worth a comment in the code: the allowlist does not decide *who may sign in*,
-it decides *which callback may be registered*, and a registration for that one
-callback grants nothing on its own — the person still passes Google, the email
-allowlist and the consent screen. Each entry is validated at load time with the
+There is deliberately no built-in default. mctl's portal callback
+(`https://mcp.mctl.ai/servers-callback`) belongs to one operator's deployment,
+and baking it into the image would open registration to that portal on every
+self-hosted install that upgrades. The hosted deployment names it in its gitops
+values (mctlhq/mctl-gitops#1363). Each entry is validated at load time with the
 same rules `parseRedirectUri` applies (parseable URL, no userinfo) and a bad
 entry throws, consistent with how `parsePreRegisteredClients` throws on a
 malformed entry rather than silently dropping it.
@@ -343,10 +338,10 @@ with a comment naming the reason, in the style of the existing entries.
 ### 6. README
 
 `## Configuration` table gains `SEERRSENSE_DCR_REDIRECT_URIS` ("Comma-separated
-allowlist of `redirect_uris` a Dynamic Client Registration may claim. Unset
-defaults to `https://mcp.mctl.ai/servers-callback`; set to the empty string to
-turn registration off, in which case `/register` answers 404 and is absent from
-metadata"). The `## MCP` paragraph and the two `## Security Model` bullets that
+allowlist of `redirect_uris` a Dynamic Client Registration may claim. Unset or
+empty means registration is off: `/register` answers 404 and is absent from
+metadata. For the mctl Cloudflare portal, set it to
+`https://mcp.mctl.ai/servers-callback`"). The `## MCP` paragraph and the two `## Security Model` bullets that
 currently read "Dynamic Client Registration … is not implemented" are rewritten
 to describe the narrow endpoint, and the scopes bullet gains the
 per-registration-type defaults. The rewrite must be a rewrite, not an addition:
@@ -397,12 +392,10 @@ is altered, so the "`IF NOT EXISTS` never alters a table" caveat in
 constraint, and a rollback needs no down-migration — the table is simply unread
 by the previous image.
 
-**Backward compatibility.** Unset `SEERRSENSE_DCR_REDIRECT_URIS` turns
-registration *on* for the portal callback on every deployment, including
-self-hosters who never asked for it. That is the org rule's polarity and is
-argued for above, but it is the one behavioural change a self-hoster would not
-have chosen, and the README must say so plainly next to the variable. Nothing
-else changes without a registration: no existing client's default scope moves,
+**Backward compatibility.** Unset `SEERRSENSE_DCR_REDIRECT_URIS` leaves
+registration off, so an upgrade changes nothing for a deployment that does not
+opt in. The hosted deployment opts in through its values. Nothing else changes
+without a registration: no existing client's default scope moves,
 no existing redirect check loosens, the token, refresh and revoke endpoints are
 untouched, and `docs/portal-allowlist.json` and the tool set are untouched, so
 `tests/portal-allowlist.test.ts` stays green by construction.
