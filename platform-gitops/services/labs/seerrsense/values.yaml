@@ -58,6 +58,15 @@ env:
   # callback, this value changes and the server refuses the old one.
   # Format: client_id=redirect_uri[,redirect_uri];... (seerrsense#54).
   SEERRSENSE_OAUTH_CLIENTS: cloudflare-portal-mcp=https://mcp.mctl.ai/servers-callback
+  # Turns on the portal-restricted DCR fallback (seerrsense 1.11.0, seerrsense#74).
+  # Only a registration whose every redirect_uri is on this list is accepted, so
+  # the Cloudflare MCP portal can run the seerrsense upstream in automatic
+  # mode, where its catalogue re-syncs, instead of manual mode. A DCR client
+  # that names no scope is granted seerr:read seerr:request. Unset or empty
+  # means DCR is off: /register answers 404 and registration_endpoint is
+  # absent. The manual registration above keeps working until the portal
+  # switches (mctlhq/mctl-gitops#1363, task 0; rule in mctlhq/.github#137).
+  SEERRSENSE_DCR_REDIRECT_URIS: https://mcp.mctl.ai/servers-callback
   # Domain-verification token for the ChatGPT plugin directory submission
   # (OpenAI Platform > Plugins > SeerrSense, draft asdk_app_6aa303bd…). The
   # server serves it verbatim at /.well-known/openai-apps-challenge; unset, that
