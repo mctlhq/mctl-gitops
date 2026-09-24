@@ -492,26 +492,43 @@ if tempo_apps:
         tempo_app["metadata"]["name"] == "otel-eval-tempo",
         f"the tempo candidate's Application should be otel-eval-tempo, got {tempo_app['metadata']['name']}",
     )
-    sources = tempo_app["spec"].get("sources")
     check(
-        sources is not None and len(sources) == 2,
-        f"otel-eval-tempo with manifestsPath should have two sources, got {sources!r}",
+        "sources" not in tempo_app["spec"] and "source" in tempo_app["spec"],
+        "otel-eval-tempo has no manifestsPath, so it should render a single chart source, "
+        f"got {sorted(tempo_app['spec'])!r}",
     )
-    if sources:
-        values_object = sources[0]["helm"]["valuesObject"]
-        check(
-            values_object["ingester"]["replicas"] == 1,
-            f"tempo ingester.replicas should be 1, got {values_object['ingester'].get('replicas')!r}",
-        )
-        check(
-            values_object["ingester"]["config"]["replication_factor"] == 1,
-            "tempo ingester.config.replication_factor should be 1, got "
-            f"{values_object['ingester'].get('config', {}).get('replication_factor')!r}",
-        )
-        check(
-            sources[1]["path"] == "platform-gitops/infra-components/observability/eval/tempo",
-            f"otel-eval-tempo second source path should be the committed manifestsPath, got {sources[1].get('path')!r}",
-        )
+    source = tempo_app["spec"].get("source") or {}
+    values_object = source.get("helm", {}).get("valuesObject", {})
+    check(
+        values_object.get("ingester", {}).get("replicas") == 1,
+        f"tempo ingester.replicas should be 1, got {values_object.get('ingester', {}).get('replicas')!r}",
+    )
+    check(
+        values_object.get("ingester", {}).get("config", {}).get("replication_factor") == 1,
+        "tempo ingester.config.replication_factor should be 1, got "
+        f"{values_object.get('ingester', {}).get('config', {}).get('replication_factor')!r}",
+    )
+
+# A manifestsPath directory becomes a second ArgoCD source synced as raw
+# Kubernetes manifests (no Chart.yaml), so every YAML document in it must be a
+# resource. A Helm values file there renders fine and fails ArgoCD manifest
+# generation ("Object 'Kind' is missing") only once the candidate is enabled
+# -- exactly the case no default render can catch.
+for cand in committed_candidates:
+    mpath = cand.get("manifestsPath")
+    if not mpath:
+        continue
+    mdir = ROOT / mpath
+    check(mdir.is_dir(), f"candidate {cand.get('name')!r} manifestsPath {mpath} does not exist")
+    for f in sorted(mdir.rglob("*.y*ml")) if mdir.is_dir() else []:
+        for doc in yaml.safe_load_all(f.read_text()):
+            if doc is None:
+                continue
+            check(
+                isinstance(doc, dict) and "apiVersion" in doc and "kind" in doc,
+                f"{f.relative_to(ROOT)} is under candidate {cand.get('name')!r}'s manifestsPath "
+                "but is not a Kubernetes resource (no apiVersion/kind); ArgoCD would fail to sync it",
+            )
 
 tempo_fanout_cfg = collector_config(tempo_docs)
 tempo_pipeline_exporters = tempo_fanout_cfg["service"]["pipelines"]["traces"]["exporters"]

@@ -103,7 +103,12 @@ otelCollector:
         # matching the exact-pin convention every other chart in this repo
         # uses (loki.yaml, otel-collector.yaml).
         targetRevision: "1.61.3"
-        manifestsPath: platform-gitops/infra-components/observability/eval/tempo
+        # No manifestsPath: every setting is the inline `values` below
+        # (helm.valuesObject) and tempo needs no supplemental manifests. A
+        # manifestsPath directory is synced as raw Kubernetes manifests, so it
+        # must hold only resources with apiVersion/kind -- a Helm values file
+        # there fails manifest generation the moment the candidate is enabled
+        # (tests/test_otel_collector_backends_render.py guards this).
         # Matches `values.fullnameOverride` below, so this endpoint does not
         # depend on the ArgoCD Application/Helm release name
         # (otel-eval-tempo) the chart would otherwise derive the service
