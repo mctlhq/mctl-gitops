@@ -46,8 +46,8 @@ externalSecret:
     - secretKey: INGEST_SECRET
       remoteKey: teams/labs/pelican-proxy-staging
       property: INGEST_SECRET
-    # NOTE: CATALOG_INGEST_SECRET is intentionally omitted so staging
-    # rebuilds NEVER overwrite the production R2 catalog.
+      # NOTE: CATALOG_INGEST_SECRET is intentionally omitted so staging
+      # rebuilds NEVER overwrite the production R2 catalog.
 envFrom:
   - secretRef:
       name: pelican-proxy-staging-secrets
