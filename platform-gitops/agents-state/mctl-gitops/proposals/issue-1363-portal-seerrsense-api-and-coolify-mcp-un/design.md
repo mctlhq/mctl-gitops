@@ -214,7 +214,7 @@ because it contradicts mctlhq/.github#137, freezes both catalogues at their
 first login forever (the README's whole re-snapshot recipe exists to work
 around exactly that), and re-creates the hand-pinned-scope class of bug this
 issue is closing. Kept as the explicitly-labelled interim path for
-`seerrsense` only, if the fix is needed before #74 ships.
+`seerrsense` only, if its DCR precondition (task 0 and the task-2 probe) is not met and the fix is needed sooner.
 
 **C. Destroy and recreate the live servers in Terraform.** Guarantees the
 target mode and needs no measurement. Dropped as the default: it loses the

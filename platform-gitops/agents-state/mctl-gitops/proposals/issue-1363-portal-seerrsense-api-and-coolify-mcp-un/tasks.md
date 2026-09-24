@@ -55,8 +55,8 @@
 - [ ] 5. Add `seerrsense` to `mcp-servers.tf` with an `import` block
   (`id = "${var.account_id}/seerrsense"`) plus a resource (depends on 1, 2).
   Default path: the automatic shape (no `auth_credentials`, no
-  `client_secret`). Interim path, taken only if task 2 says #74 is not
-  released: manual, with a `local.seerrsense_scope` of
+  `client_secret`). Interim path, taken only if task 2's seerrsense DCR probe fails
+  (task 0 not effective, or the precondition otherwise unmet): manual, with a `local.seerrsense_scope` of
   `"seerr:read seerr:request offline_access"` in the same `locals` block as
   `local.tg_scope`, modelled field-for-field on the `tg` resource. — DoD: the
   PR plan shows an import and **no** replace for `seerrsense`; which path was
@@ -137,8 +137,8 @@
   closed as not planned when the approach moved here; record there, do not
   reopen),
   including the measured answer from task 1 and the acceptance results
-  (depends on T1-T5). — DoD: both issues carry the result; seerrsense#73 is
-  closed if the acceptance test passed.
+  (depends on T1-T5). — DoD: both issues carry the result. seerrsense#73 stays
+  closed and only gains the outcome note.
 
 ## Tests
 

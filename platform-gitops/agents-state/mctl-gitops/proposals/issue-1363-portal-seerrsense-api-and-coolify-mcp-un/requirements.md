@@ -60,7 +60,8 @@ at all.
   seerrsense deployment (mctlhq/seerrsense#74 shipped in 1.11.0 with DCR off by
   default), or while its DCR probe does not succeed, THE SYSTEM SHALL NOT switch the live
   `seerrsense` server out of manual mode.
-- IF the fix is needed before mctlhq/seerrsense#74 ships THEN THE SYSTEM SHALL
+- IF seerrsense's DCR precondition is not met (task 0 not yet effective, or
+  its DCR probe fails) and the fix is needed sooner THEN THE SYSTEM SHALL
   import `seerrsense` as manual with
   `scope = "seerr:read seerr:request offline_access"`, modelled on the `tg`
   resource and its `local.tg_scope`.
