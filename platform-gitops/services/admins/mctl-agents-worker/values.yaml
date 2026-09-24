@@ -116,6 +116,15 @@ env:
   # run "fits inside one token's TTL"; that stopped being true when issue-poll
   # moved into this permanent Temporal worker.
   GITHUB_TOKEN_FILE: /var/run/secrets/github/GITHUB_TOKEN
+  # The execution-request dispatcher (mctl-agents#461 option A, #487): claims
+  # pending mctl-api execution requests and delivers each to the issue's
+  # DevLoop with Update-with-Start. Code default is off; only this worker
+  # (the role that owns the schedules) runs it, and the exec/implement
+  # workers ignore the flag. It claims, fulfils and rejects as MCTL_TOKEN,
+  # the mctl-agent service principal mctl-api requires for those routes.
+  # Live proof: mctl-agents#490. Set to "false" to turn it off again; a
+  # request left claimed is re-claimable once its lease lapses.
+  EXECUTION_REQUEST_DISPATCHER: "true"
 envFrom:
   - secretRef:
       name: mctl-agents-worker-secrets
