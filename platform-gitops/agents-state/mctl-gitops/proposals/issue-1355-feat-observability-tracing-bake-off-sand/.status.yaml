@@ -1,5 +1,5 @@
-status: proposed
-updated_at: '2026-09-24T10:28:06Z'
+status: accepted
+updated_at: '2026-09-24T11:06:41Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-6a81781236bd726a
@@ -13,3 +13,6 @@ source:
   url: https://github.com/mctlhq/mctl-gitops/issues/1355
 control:
   requires_human_approval: true
+approval:
+  approved_by: 'mashkovd'
+  approved_at: '2026-09-24T11:06:41Z'
