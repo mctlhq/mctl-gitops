@@ -59,11 +59,14 @@ otelCollector:
 #
 # Owner steps, in this order:
 #   1. printf '%s' "$(openssl rand -hex 32)" \
-#        | vault kv patch secret/platform/mctl-agents usage-writer-token=-
+#        | vault kv patch -method=rw secret/platform/mctl-agents usage-writer-token=-
+#      (-method=rw: the admin policy has no `patch` capability, so HTTP PATCH
+#      is 403; rw reads and writes back with check-and-set on the version.)
 #      PATCH, never PUT: put would replace every other key at that path,
 #      including the Claude OAuth tokens. At least 32 characters, and it must
 #      differ from MCTL_AGENT_SERVICE_TOKEN and from every surface token, or
 #      mctl-api refuses it.
 #   2. Set enabled: true below (mctl-api then rolls to pick up the env).
+#   Done 2026-09-24: step 1 (Vault v2634), step 2 below.
 usageWriter:
-  enabled: false
+  enabled: true
