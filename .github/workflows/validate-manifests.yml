@@ -108,16 +108,17 @@ jobs:
             -schema-location "$CRD_SCHEMA_LOCATION" \
             "$tmpdir/bootstrap-eval.yaml"
 
-      # .github#50: usageWriter.enabled is false by default, so this is the
-      # only place the usage-writer ExternalSecret and the chart value render
-      # in CI. Both states are asserted: on, both appear and are
-      # schema-valid; off (the default render above), neither does.
+      # .github#50: both flag states are rendered explicitly with --set, so
+      # the assertion does not depend on the committed default (enabled
+      # since the owner-approved rollout). On: the usage-writer ExternalSecret
+      # and the chart value appear and are schema-valid. Off: neither does.
       - name: Render and validate the usage-writer overlay (.github#50)
         run: |
           set -euo pipefail
           tmpdir=$(mktemp -d)
           helm template test platform-gitops/bootstrap \
-            -f platform-gitops/bootstrap/values.yaml > "$tmpdir/off.yaml"
+            -f platform-gitops/bootstrap/values.yaml \
+            --set usageWriter.enabled=false > "$tmpdir/off.yaml"
           helm template test platform-gitops/bootstrap \
             -f platform-gitops/bootstrap/values.yaml \
             --set usageWriter.enabled=true > "$tmpdir/on.yaml"
