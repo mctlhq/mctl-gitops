@@ -108,6 +108,26 @@ jobs:
             -schema-location "$CRD_SCHEMA_LOCATION" \
             "$tmpdir/bootstrap-eval.yaml"
 
+      # .github#50: usageWriter.enabled is false by default, so this is the
+      # only place the usage-writer ExternalSecret and the chart value render
+      # in CI. Both states are asserted: on, both appear and are
+      # schema-valid; off (the default render above), neither does.
+      - name: Render and validate the usage-writer overlay (.github#50)
+        run: |
+          set -euo pipefail
+          tmpdir=$(mktemp -d)
+          helm template test platform-gitops/bootstrap \
+            -f platform-gitops/bootstrap/values.yaml > "$tmpdir/off.yaml"
+          helm template test platform-gitops/bootstrap \
+            -f platform-gitops/bootstrap/values.yaml \
+            --set usageWriter.enabled=true > "$tmpdir/on.yaml"
+          kubeconform -strict -summary -schema-location default \
+            -schema-location "$CRD_SCHEMA_LOCATION" "$tmpdir/on.yaml"
+          for marker in 'name: mctl-api-usage-writer' 'usageWriterTokenSecret: mctl-api-usage-writer' 'property: usage-writer-token'; do
+            grep -qF "$marker" "$tmpdir/on.yaml" || { echo "::error::flag on: missing '$marker'"; exit 1; }
+            if grep -qF "$marker" "$tmpdir/off.yaml"; then echo "::error::flag off: '$marker' rendered"; exit 1; fi
+          done
+
       - name: Validate platform skill registry
         run: |
           python3 -m pip install --quiet pyyaml

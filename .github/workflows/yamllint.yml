@@ -40,8 +40,9 @@ jobs:
           # no rule config changes and a leading `---` does not fix either
           # (both checked). helm-charts/ is excluded wholesale for this; the
           # named files are the ones outside it that lead with a directive —
-          # the two prod placeholders, and the two issue-903 evaluation
-          # templates whose entire body sits inside an `{{- if }}` gate.
+          # the two prod placeholders, the two issue-903 evaluation
+          # templates, and the .github#50 usage-writer ExternalSecret, whose
+          # entire body sits inside an `{{- if }}` gate.
           #
           # Named files rather than excluding bootstrap/templates/ as a
           # directory: that would drop 54 currently-linted templates to spare
@@ -53,6 +54,7 @@ jobs:
             platform-gitops/bootstrap/templates/projects/project-prod.yaml
             platform-gitops/bootstrap/templates/observability/eval-namespace.yaml
             platform-gitops/bootstrap/templates/observability/eval-candidates.yaml
+            platform-gitops/bootstrap/templates/mctl-platform/mctl-api-usage-writer.yaml
           rules:
             # Helm templates routinely exceed 80 cols and carry Go-template
             # markers, so line-length / comments / document-start are noise.
