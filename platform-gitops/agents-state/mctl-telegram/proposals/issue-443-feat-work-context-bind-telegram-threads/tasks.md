@@ -11,8 +11,8 @@ and only behind `WORK_CONTEXT_ENABLED`.
   the SQLite copy, "see the sqliteSchema comment" on the PG copy.
   Columns: `id`, `user_id` (`REFERENCES users(id) ON DELETE CASCADE`),
   `chat_tg_id`, `root_tg_message_id`, `work_item_id`, `external_key`,
-  `last_state`, `last_state_version`, `last_execution_id`, `created_at`,
-  `updated_at`. Two unique indexes: `idx_work_item_bindings_thread` on
+  `last_state`, `last_state_version`, `last_execution_id`, `last_request_id`,
+  `created_at`, `updated_at`. `external_key` holds the normalised issue URL. Two unique indexes: `idx_work_item_bindings_thread` on
   `(user_id, chat_tg_id, root_tg_message_id)` and
   `idx_work_item_bindings_item` on `(user_id, work_item_id)`.
   — DoD: `Migrate` succeeds on a fresh SQLite DB and on an existing Postgres
@@ -23,7 +23,7 @@ and only behind `WORK_CONTEXT_ENABLED`.
 - [ ] 2. Add the binding store (depends on 1) — new
   `internal/db/work_item_bindings.go` in the `agent_saved_commands.go` style:
   `GetWorkItemBinding`, `LatestWorkItemBinding`, `UpsertWorkItemBinding`,
-  `TouchWorkItemBindingState`. `$N` placeholders only, `time.Now().UTC()`
+  `TouchWorkItemBindingState`, `SetWorkItemBindingRequest`. `$N` placeholders only, `time.Now().UTC()`
   written from Go rather than `DEFAULT CURRENT_TIMESTAMP`, `sql.ErrNoRows`
   translated to a `found bool`, errors wrapped `fmt.Errorf("verb noun: %w", err)`.
   — DoD: methods compile, are `*Store` receivers, and pass the dual-dialect
@@ -39,25 +39,34 @@ and only behind `WORK_CONTEXT_ENABLED`.
   `internal/agentworker/client.go:41-98`. `client.go` with `Client` and the
   unexported `relay(ctx, method, path, actorTGID, idemKey, body, out)` setting
   exactly `Authorization`, `X-MCTL-Surface-Actor` and `Idempotency-Key`;
-  the six public methods `RedeemLink`, `CreateWorkItem`, `GetWorkItem`,
-  `AppendIntent`, `RequestExecution`, `AddSurfaceRef`. `envelope.go` with the
-  `workitem/v1` types and a decoder that rejects any other `schema_version`.
+  the eight public methods `RedeemLink`, `CreateWorkItem`, `GetWorkItem`,
+  `AppendIntent`, `RequestExecution`, `GetExecutionRequest`,
+  `ListExecutionRequests`, `AddSurfaceRef`. `envelope.go` with the
+  `workitem/v1` types (`ExecutionRequestView` carries `ID`, `Kind`, `State`,
+  `ExecutionID`, `Reason`, all read-only) and a decoder that rejects any other
+  `schema_version`.
   `errors.go` with the sentinels (`ErrLinkNotFound`, `ErrLinkRevoked`,
   `ErrLinkExpired`, `ErrRelayRequired`, `ErrChallengeInvalid`,
-  `ErrLinkConflict`, `ErrActorNotAccepted`, `ErrStateVersionConflict`).
+  `ErrLinkConflict`, `ErrActorNotAccepted`, `ErrStateVersionConflict`,
+  `ErrExternalKeyInUse`).
   Request structs carry no actor-shaped field and no caller-settable
   `origin_surface`.
   — DoD: the package builds standalone; `go doc ./internal/workctx` shows only
-  the six routes from `docs/contracts/mctl-api-work-context.md:39-46`, with
-  `/resume` replaced by `/execution-requests` (mctl-api#368); no
+  the routes from `docs/contracts/mctl-api-work-context.md:39-46`, with
+  `/resume` replaced by the three `/execution-requests` routes (mctl-api#368:
+  the `POST`, the list `GET` and the single `GET`); no
   method constructs a path containing `executions`, `snapshot`, `snapshots`,
   `events` or `approvals`.
 
-- [ ] 5. Add the deterministic key helpers (depends on 4) — `ExternalKey(chatTGID,
-  rootMsgID) string` returning `tg:v1:<chat>:<msg>`, and `IdempotencyKey(externalKey,
-  op string, stateVersion int64) string`.
+- [ ] 5. Add the target and key helpers (depends on 4) —
+  `CanonicalIssueURL(arg string) (string, error)`, accepting only
+  `https://github.com/mctlhq/<repo>/issues/<n>` (scheme/host case-insensitive;
+  trailing slash, query and fragment dropped) and returning exactly that form;
+  and a thread-scoped `IdempotencyKey(chatTGID, rootMsgID int64, op string,
+  stateVersion int64) string` returning `tg:v1:<chat>:<msg>:<op>[:<version>]`.
   — DoD: pure functions with no I/O, stable across process restarts, covered by
-  table tests.
+  table tests; `CanonicalIssueURL` refuses a PR URL, another owner, another
+  host, a non-numeric or missing issue number, and an empty argument.
 
 - [ ] 6. Widen the Saved Messages router context (depends on 3) — introduce
   `control.SavedMeta{UserID, SelfTGID, ChatTGID, TGMessageID}`, change
@@ -72,22 +81,35 @@ and only behind `WORK_CONTEXT_ENABLED`.
 
 - [ ] 7. Parse the new subcommands (depends on 6) — add `CmdWork` and `CmdLink`
   to `internal/agent/control/command.go` plus a `Sub string` field on `Command`
-  populated only for `work` (`status`, `note`, `resume`, or empty meaning
-  create/open). Keep `ParseCommand` pure.
+  populated only for `work` (`status`, `note`, `resume`, or `open` for
+  `/mctl work <issue-url>`, with the URL in the argument). Keep `ParseCommand`
+  pure; URL validation belongs to task 5's helper, not the parser.
   — DoD: existing `command_test.go` cases pass unchanged and the parse result
-  for all nine old subcommands has an empty `Sub`; `/mctl work`, `/mctl work
-  status`, `/mctl work note <text>`, `/mctl work resume`, `/mctl link <code>`
-  parse as specified; `/mctl work note` with no argument returns `ErrMissingArg`.
+  for all nine old subcommands has an empty `Sub`; `/mctl work <url>`, `/mctl
+  work status`, `/mctl work note <text>`, `/mctl work resume`, `/mctl link
+  <code>` parse as specified; bare `/mctl work` and `/mctl work note` with no
+  argument return `ErrMissingArg`.
 
 - [ ] 8. Add the work handlers (depends on 2, 4, 5, 7) — new
   `internal/agent/control/work.go` with `WorkHandler{Store, Client, Notifier}`
   and one method per subcommand. Actor resolution: use `SavedMeta.SelfTGID`,
   cross-check against `Store.TelegramIDByUserID`, and fail closed with no
-  mctl-api call on mismatch or absence. Create/open reuses the binding when
-  `last_state` is `active` or `waiting` and creates a fresh item otherwise.
+  mctl-api call on mismatch or absence. Open validates the target with
+  `CanonicalIssueURL` first and, on failure, replies with the usage line and
+  makes no call. It reuses the binding when `last_state` is `active` or
+  `waiting` (refusing a different URL in a bound thread) and otherwise creates
+  the item with `external_key` = the URL (binding to the item mctl-api returns
+  on a `200` dedupe; reporting `ErrExternalKeyInUse` without a binding), then
+  submits `RequestExecution{Kind: start}` and stores the request id. Status
+  reads the item and the binding's last request (newest from the list when none
+  is recorded) and renders the request state and typed reason as specified in
+  the design (fixed explanation table; unknown codes verbatim, never free
+  text; a failed request read degrades to "request state unavailable").
   Resume does `GetWorkItem` → `RequestExecution{Kind: resume}` with
   `expected_state_version`, and on
-  `ErrStateVersionConflict` re-reads and retries exactly once. Errors are
+  `ErrStateVersionConflict` re-reads and retries exactly once, then stores the
+  request id. Replies to a submitted request name its id and `pending`, never
+  "accepted". Errors are
   rendered as owner-facing text in the style of `approverErrText`
   (`router.go:359`). Add a nilable `Work *WorkHandler` field to `Router` and
   dispatch to it; when nil, fall through to the existing unknown-command reply.
@@ -119,7 +141,8 @@ and only behind `WORK_CONTEXT_ENABLED`.
   set, the client is constructed and the startup log names the flag.
 
 - [ ] 11. Document it (depends on 10) — add a short `docs/work-context.md`
-  covering the one-time `/mctl link` flow, the four `/mctl work` forms, the
+  covering the one-time `/mctl link` flow, the four `/mctl work` forms (with
+  the explicit-issue-URL rule and how to read request states and reasons), the
   four env vars, and the manual cross-surface verification procedure. Link it
   from `AGENTS.md` / `.claude/CLAUDE.md` key paths, and note in
   `docs/contracts/mctl-api-work-context.md` that the adapter now exists.
@@ -137,7 +160,7 @@ and only behind `WORK_CONTEXT_ENABLED`.
   struct in `internal/workctx` asserting no field (and no JSON tag) matches
   `actor`, `actor_subject`, `created_by`, `principal` or `on_behalf_of`.
 - [ ] T3. Route allowlist — a test asserting every path any client method can
-  build matches the six permitted routes, and that none contains `executions`,
+  build matches the eight permitted routes, and that none contains `executions`,
   `snapshot`, `snapshots`, `events`, `approvals`, `/resume`, or is a bare
   `GET /api/v1/work-items` or a `PATCH`; and a reflection test asserting no
   request struct has an `engine`, `engine_ref` or `execution_id` field.
@@ -150,10 +173,12 @@ and only behind `WORK_CONTEXT_ENABLED`.
   `link_revoked`, `link_expired`, `relay_required`, `400 actor_not_accepted`,
   `403 challenge_invalid`, `409 link_conflict` and a `409` state-version
   mismatch, each producing its sentinel and a distinct owner-facing reply.
-- [ ] T6. Idempotent open — calling the create/open handler twice for the same
-  `(user_id, chat_tg_id, root_tg_message_id)` issues exactly one
-  `POST /work-items`, and the second reuses the binding. A third call after the
-  binding's `last_state` is set to `completed` issues a new create.
+- [ ] T6. Idempotent open — calling the open handler twice with the same issue
+  URL for the same `(user_id, chat_tg_id, root_tg_message_id)` issues exactly
+  one `POST /work-items` (with `external_key` = the normalised URL) and one
+  `start` request, and the second reuses the binding. A third call after the
+  binding's `last_state` is set to `completed` issues a new create. A different
+  URL in the bound thread is refused with no call.
 - [ ] T7. Resume concurrency — a fake returning `409` once then `200` proves a
   single re-read-and-retry; a fake returning `409` twice proves the handler
   stops and tells the owner instead of looping.
@@ -171,6 +196,28 @@ and only behind `WORK_CONTEXT_ENABLED`.
 - [ ] T12. No transcript persisted — after a full create/note/status/resume
   cycle with distinctive message text, a `SELECT *` over `work_item_bindings`
   contains none of that text in any column.
+
+- [ ] T13. Explicit runnable target — `/mctl work` with no argument, a title, a
+  PR URL, `https://github.com/other/…/issues/1`, a non-GitHub host, and an issue
+  URL without a number each reply with the usage line, make **no** HTTP request
+  (transport fails the test on any call), and write no binding. Upper-case host,
+  trailing slash, query and fragment are normalised to one `external_key`.
+- [ ] T14. Request state rendering — table test over `status` with the request
+  in each of `pending`, `claimed`, `fulfilled` (execution id shown) and
+  `rejected` with each documented reason (`no_runnable_target`, `loop_active`
+  shown as "already running", `unsupported_kind`, `resume_refused:<r>`,
+  `fulfil_refused:<c>`, `engine_run_ended`), plus an unknown reason (shown
+  verbatim as unrecognised, with mctl-api's free-text message absent from the
+  reply), a binding with no recorded request (newest from the list is shown),
+  and a failing request read (item part still rendered, "request state
+  unavailable").
+- [ ] T15. Dedupe and conflict on the issue key — a `200` create that returns an
+  existing open item (opened from another surface) binds the thread to that
+  item's id; a `409 external_key_in_use` writes no binding and tells the owner
+  the issue has work they cannot access.
+- [ ] T16. Submitted-request replies — `open` and `resume` replies contain the
+  request id and `pending` and never the word "accepted", and the id is stored
+  as the binding's `last_request_id`.
 
 All fixtures use the existing synthetic personas (`Alice`, `Bob`, `Carol`,
 `Dana`) and reuse existing synthetic numeric ids per the repository safety

@@ -96,20 +96,42 @@ depends on both in the canonical roadmap:
   idempotency) through the relay. Only the platform fulfils a request by
   attaching the canonical execution. `POST /work-items/{id}/resume` leaves the
   surface allowlist with that change, so the bot does not call it.
-- **mctl-agents#461 — WorkItem execution dispatch.** The dispatcher claims the
-  request, starts the investigator bound to the exact WorkItem and request, and
-  creates the canonical execution. The bot only reads the result back through
-  `GET /api/v1/work-items/{id}` (`latest_execution`, snapshot pointers).
+- **mctl-agents#461 — WorkItem execution dispatch** (landed 2026-09-24,
+  mctl-agents#487). The dispatcher claims the request and delivers it, with
+  Temporal Update-with-Start, to the issue's one DevLoop
+  (`dev-loop-<owner>-<repo>-<n>`). It runs only an item whose `external_key` is
+  a mctlhq GitHub issue URL (`runnable_issue_url`; mctl-agents
+  `orchestrator/work_context/contract.py` sets `issue_url` only for that shape)
+  and rejects anything else `no_runnable_target`. A `start` for an issue whose
+  DevLoop already runs is rejected `loop_active`. Outcomes are asynchronous, so
+  the bot reads the request back as well as the item.
 
-The Telegram-side slice below can be built behind its flag before both land, but
-its client targets the #368 request route (update
-`docs/contracts/mctl-api-work-context.md` when #368 merges), and live end-to-end
-acceptance waits for #368, #461 and their deployment.
+The Telegram-side slice below can be built behind its flag before both are
+live, but its client targets the #368 request routes (update
+`docs/contracts/mctl-api-work-context.md` accordingly), and live end-to-end
+acceptance waits for the dispatcher's own live proof (mctl-agents#490).
+
+## Owner decision (2026-09-24): explicit issue URL, visible request state
+
+Variant A of the re-check against landed #461. Two consequences for this
+design, both reflected below:
+
+1. **The runnable target is explicit.** `/mctl work` takes a mctlhq GitHub
+   issue URL and uses it, normalised, as the work item's `external_key`. There
+   is no title-only form and no `tg:v1:<chat>:<msg>` key: an item keyed on a
+   Telegram thread is exactly what the dispatcher cannot run. Because
+   mctl-api dedupes open work on `(tenant, external_key)`, a Telegram thread
+   and any other surface that opened the same issue share one work item.
+2. **The request is a first-class thing the owner can see.** Every submitted
+   request's id is kept on the binding, and `/mctl work status` renders the
+   request's state and typed reason next to `latest_execution`. Without it, a
+   request rejected `no_runnable_target` or `loop_active` would look, from
+   Telegram, like work that simply never started.
 
 ## Proposed solution
 
 Add a thin, flag-gated **surface adapter**: a new outbound client package, a
-new binding table that can only hold identifiers, and four new `/mctl`
+new binding table that can only hold identifiers, and five new `/mctl`
 subcommands. No existing behaviour changes.
 
 ### 1. `internal/workctx` — the mctl-api work-context client
@@ -134,7 +156,9 @@ func (c *Client) relay(ctx context.Context, method, path string,
 `relay` sets exactly three headers: `Authorization: Bearer <token>`,
 `X-MCTL-Surface-Actor: strconv.FormatInt(actorTGID, 10)`, and
 `Idempotency-Key: <idemKey>` when non-empty. Public methods map one-to-one onto
-the six permitted routes and nothing else:
+the eight permitted routes and nothing else (six from the pinned contract with
+`/resume` replaced by #368's request routes: the request `POST`, and its two
+relay-allowed reads):
 
 ```go
 func (c *Client) RedeemLink(ctx, actorTGID int64, code string) error
@@ -142,6 +166,8 @@ func (c *Client) CreateWorkItem(ctx, actorTGID int64, r CreateRequest) (*ItemVie
 func (c *Client) GetWorkItem(ctx, actorTGID int64, id string) (*ItemView, error)
 func (c *Client) AppendIntent(ctx, actorTGID int64, id string, r IntentRequest) error
 func (c *Client) RequestExecution(ctx, actorTGID int64, id string, r ExecutionRequest) (*ExecutionRequestView, error)
+func (c *Client) GetExecutionRequest(ctx, actorTGID int64, id, requestID string) (*ExecutionRequestView, error)
+func (c *Client) ListExecutionRequests(ctx, actorTGID int64, id string) ([]ExecutionRequestView, error) // newest first
 func (c *Client) AddSurfaceRef(ctx, actorTGID int64, id string, r SurfaceRefRequest) error
 ```
 
@@ -156,14 +182,16 @@ hardcodes `"telegram"`.
 `envelope.go` holds the `workitem/v1` types (`ItemView{SchemaVersion,
 WorkItem{ID, Tenant, Title, State}, StateVersion, LatestExecution,
 PendingApproval, LatestSnapshot}`, plus `ExecutionRequestView{ID, Kind, State,
-ExecutionID}` for the mctl-api#368 request, whose `ExecutionID` is only ever
-read back, never sent); decoding rejects any `schema_version`
+ExecutionID, Reason}` for the mctl-api#368 request, whose `ExecutionID` and
+`Reason` are only ever read back, never sent; `State` is one of `pending`,
+`claimed`, `fulfilled`, `rejected`); decoding rejects any `schema_version`
 other than `workitem/v1`.
 
 `errors.go` maps mctl-api error codes onto sentinels the router renders as
 owner-facing text — `ErrLinkNotFound`, `ErrLinkRevoked`, `ErrLinkExpired`,
 `ErrRelayRequired`, `ErrChallengeInvalid`, `ErrLinkConflict`,
-`ErrActorNotAccepted`, `ErrStateVersionConflict` — following the
+`ErrActorNotAccepted`, `ErrStateVersionConflict`, `ErrExternalKeyInUse`
+(`409 external_key_in_use`) — following the
 `approverErrText` precedent at `router.go:359`.
 
 ### 2. `work_item_bindings` — identifiers only, by construction
@@ -184,6 +212,7 @@ CREATE TABLE IF NOT EXISTS work_item_bindings (
     last_state TEXT NOT NULL DEFAULT '',
     last_state_version INTEGER NOT NULL DEFAULT 0,
     last_execution_id TEXT NOT NULL DEFAULT '',
+    last_request_id TEXT NOT NULL DEFAULT '',
     created_at DATETIME NOT NULL,
     updated_at DATETIME NOT NULL
 );
@@ -201,12 +230,18 @@ here is user content.
 
 Store methods: `GetWorkItemBinding(ctx, userID, chatTGID, rootMsgID)`,
 `LatestWorkItemBinding(ctx, userID, chatTGID)`, `UpsertWorkItemBinding(ctx, b)`,
-`TouchWorkItemBindingState(ctx, userID, workItemID, state string, version int64, execID string)`.
+`TouchWorkItemBindingState(ctx, userID, workItemID, state string, version int64, execID string)`,
+`SetWorkItemBindingRequest(ctx, userID, workItemID, requestID string)`.
 
-**External key** is deterministic so mctl-api dedupes open work even if our row
-is lost: `tg:v1:<chat_tg_id>:<root_tg_message_id>`. The `Idempotency-Key` is
-`<external_key>:<op>` (and `:<state_version>` for resume), so a retry after a
-timeout or crash is a no-op at the platform rather than a duplicate work item.
+**External key** is the normalised issue URL,
+`https://github.com/mctlhq/<repo>/issues/<n>` (`CanonicalIssueURL`: scheme and
+host lower-cased, trailing slash, query and fragment dropped; anything else is
+refused before any call). It is what the dispatcher runs, and it makes
+mctl-api dedupe open work across surfaces even if our row is lost. The
+`Idempotency-Key` stays **thread-scoped**, `tg:v1:<chat_tg_id>:<root_tg_message_id>:<op>`
+(and `:<state_version>` for resume), so a retry after a timeout or crash is a
+no-op at the platform, while two threads on the same issue are still two
+distinct requests.
 
 ### 3. Widening the Saved Messages router context
 
@@ -243,16 +278,29 @@ makes no call. The deployment allowlists (`TGLoginAdmins`, `TGLoginClients`,
 empty `Sub`, so their parse results stay byte-identical):
 
 - `/mctl link <code>` → `RedeemLink`. The code is never echoed and never logged.
-- `/mctl work <title>` → reuse the thread's binding if its `last_state` is
-  `active`/`waiting`, otherwise `CreateWorkItem` + `AddSurfaceRef` + upsert the
-  binding.
-- `/mctl work status` → `GetWorkItem`, render id, state, `latest_execution`,
-  pending approval and snapshot pointer, and refresh the cached state.
+- `/mctl work <issue-url>` → `CanonicalIssueURL` (refuse with the usage line
+  and no call when it fails); reuse the thread's binding if its `last_state` is
+  `active`/`waiting` (a different URL in a bound thread is refused); otherwise
+  `CreateWorkItem{ExternalKey: url}` (a `200` dedupe onto an existing open item
+  binds to it; `409 external_key_in_use` is reported, no binding),
+  `AddSurfaceRef`, upsert the binding, then `RequestExecution{Kind: start}` and
+  store the returned request id. The reply names the request id and `pending`.
+- `/mctl work status` → `GetWorkItem` **and** `GetExecutionRequest` for the
+  binding's `last_request_id` (`ListExecutionRequests`, newest, when none is
+  recorded). Render: work item id, issue URL, state, `latest_execution`,
+  pending approval, snapshot pointer, then `request <xr_…> (<kind>): pending |
+  claimed | fulfilled → <execution id> | failed: <reason>`. A failed request
+  shows the typed reason code verbatim with a one-line explanation from a fixed
+  table (`no_runnable_target`, `loop_active` — "the issue's DevLoop is already
+  running", `unsupported_kind`, `resume_refused:<r>`, `fulfil_refused:<c>`,
+  `engine_run_ended`); any other code is shown verbatim as unrecognised, never
+  with mctl-api's free-text message. A failed request read degrades to
+  "request state unavailable" under the item part. Refreshes the cached state.
 - `/mctl work note <text>` → `AppendIntent`.
 - `/mctl work resume` → `GetWorkItem` for a fresh `state_version`, then
   `RequestExecution{Kind: resume}` with `expected_state_version`; on 409,
-  re-read and retry once. The reply says the request was accepted; execution
-  state is read later via `/mctl work status`.
+  re-read and retry once. Stores the request id; the reply names it and
+  `pending` (never "accepted"); its outcome is read with `/mctl work status`.
 
 A new `internal/agent/control/work.go` holds these handlers, keeping
 `router.go` a dispatcher. The router gains one nilable field, `Work *WorkHandler`.
@@ -279,15 +327,20 @@ behaviour change.
 
 ### Cross-surface pilot path
 
-`/mctl work "<title>"` creates the item (`origin_surface: telegram`),
-registers the Telegram thread as a surface ref and submits a `start` execution
-request → the platform dispatcher (mctl-agents#461) claims it, starts the
-investigator and attaches execution A through the platform-only fulfil route
-of mctl-api#368 and seals ContextSnapshot v1 → `/mctl work status`
-shows `latest_execution` and the snapshot pointer → a human opens the same
-`work_item_id` from the CLI/MCP or web surface and resumes → execution B,
-ContextSnapshot v2 → `/mctl work status` in Telegram reflects the new execution.
-No Telegram history is replayed at any step; the bot only ever moves ids.
+`/mctl work https://github.com/mctlhq/<repo>/issues/<n>` creates (or, through
+mctl-api's `external_key` dedupe, opens) the item for that issue
+(`origin_surface: telegram`), registers the Telegram thread as a surface ref and
+submits a `start` execution request → `/mctl work status` shows the request
+`pending`, then `claimed` → the platform dispatcher (mctl-agents#461) delivers
+it to the issue's DevLoop, which binds execution A through the platform-only
+fulfil route of mctl-api#368 and seals ContextSnapshot v1 → `/mctl work status`
+shows the request `fulfilled → <execution A>`, `latest_execution` and the
+snapshot pointer → a human opens the same `work_item_id` from the CLI/MCP or
+web surface and resumes → execution B, ContextSnapshot v2 → `/mctl work status`
+in Telegram reflects the new execution. If the issue's DevLoop was already
+running, the first step instead shows `failed: loop_active` ("already
+running"), and the owner continues with `note`/`resume`. No Telegram history is
+replayed at any step; the bot only ever moves ids.
 
 ## Alternatives
 
