@@ -49,22 +49,15 @@ tenant:
     # Earlier history (2026-05-06): bumped to fit kuptsi-app FastAPI +
     # Temporal worker alongside labs-openclaw (2600m / 1104Mi req).
     requests.cpu: "3"
-    requests.memory: "5Gi"
+    requests.memory: "6Gi"
     # Bumped 2026-09-25: pelican-proxy limits.cpu bumped 300m -> 1000m,
     # raising steady-state usage to 13050m. Deploy workflow refresh pod (needs 1 core)
     # exceeded 14 quota. Bump limits.cpu 14 -> 16 to provide ~3 cores headroom.
     limits.cpu: "16"
-    # Right-sized 2026-07: after the openclaw memory-limit trim (2560Mi ->
-    # 2048Mi, mctl-gitops#532), current steady-state usage is 6560Mi/11Gi —
-    # but labs-openclaw is scaled to 0 right now (see
-    # services/labs/openclaw/values.yaml) and documented to come back
-    # online. Budgeted for that: 6560Mi + 2048Mi (openclaw's trimmed limit,
-    # once re-enabled) + ~2Gi headroom (same margin the 2026-05-10 bump
-    # validated for concurrent workflow + preview pods) ~= 10.5Gi. Only a
-    # 512Mi trim vs the un-adjusted 9Gi first estimate, on purpose — this
-    # tenant has the documented history of workflow pods stuck Pending when
-    # headroom got too tight.
-    limits.memory: "10.5Gi"
+    # Bumped 2026-09-25: pelican-proxy-staging deployment brought steady-state
+    # memory limit usage to 10528Mi. Workflow refresh pod (needs 512Mi) exceeded
+    # 10.5Gi (10752Mi). Bump limits.memory 10.5Gi -> 14Gi and requests.memory 5Gi -> 6Gi.
+    limits.memory: "14Gi"
     # Bumped 2026-09-25: 19/20 services deployed. Raised pods 25 → 30 and services 20 → 25
     # for pelican-proxy-staging and future expansion.
     pods: "30"
