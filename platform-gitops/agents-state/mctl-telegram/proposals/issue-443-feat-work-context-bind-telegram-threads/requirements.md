@@ -57,10 +57,12 @@ depends on both in the canonical roadmap:
   for a failed one, the platform's typed reason (for example
   `no_runnable_target`, `loop_active`, `resume_refused:<reason>`).
 
-The Telegram-side slice below can be built behind its flag before both land, but
-its client targets the #368 request route (update
-`docs/contracts/mctl-api-work-context.md` when #368 merges), and live end-to-end
-acceptance waits for #368, #461 and their deployment.
+Both dependencies have landed: #368 in mctl-api 4.51.0 (live) and #461 in
+mctl-agents 1.56.0 (live, dispatcher off until its rollout step). The
+Telegram-side slice is built behind its flag against the #368 request route
+(`docs/contracts/mctl-api-work-context.md` describes it). Live end-to-end
+acceptance of this slice waits for the dispatcher's own live proof
+(mctl-agents#490), as the out-of-scope section below states.
 
 ## User stories
 

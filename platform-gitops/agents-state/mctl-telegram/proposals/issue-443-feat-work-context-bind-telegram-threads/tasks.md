@@ -12,9 +12,10 @@ and only behind `WORK_CONTEXT_ENABLED`.
   Columns: `id`, `user_id` (`REFERENCES users(id) ON DELETE CASCADE`),
   `chat_tg_id`, `root_tg_message_id`, `work_item_id`, `external_key`,
   `last_state`, `last_state_version`, `last_execution_id`, `last_request_id`,
-  `created_at`, `updated_at`. `external_key` holds the normalised issue URL. Two unique indexes: `idx_work_item_bindings_thread` on
-  `(user_id, chat_tg_id, root_tg_message_id)` and
-  `idx_work_item_bindings_item` on `(user_id, work_item_id)`.
+  `created_at`, `updated_at`. `external_key` holds the normalised issue URL. A unique index `idx_work_item_bindings_thread` on
+  `(user_id, chat_tg_id, root_tg_message_id)` and a **non-unique** index
+  `idx_work_item_bindings_item` on `(user_id, work_item_id)`: two threads of
+  one owner may bind the same work item (the external key is issue-scoped).
   — DoD: `Migrate` succeeds on a fresh SQLite DB and on an existing Postgres
   DB; the table has no column that can hold message text, a title or a peer
   handle; `INTEGER`/`BIGINT` and `DATETIME`/`TIMESTAMPTZ` split matches the
@@ -153,8 +154,10 @@ and only behind `WORK_CONTEXT_ENABLED`.
 - [ ] T1. Store round-trip, dual-dialect — `TestWorkItemBindings` with
   `t.Run("sqlite")` using `newTestStore` (`internal/db/store_test.go:198`) and
   `t.Run("postgres")` skipped unless `TEST_DATABASE_URL` is set, sharing one
-  assertion body. Covers upsert-then-get, the thread uniqueness constraint, the
-  work-item uniqueness constraint, `TouchWorkItemBindingState`, and
+  assertion body. Covers upsert-then-get, the thread uniqueness constraint, two threads
+  of one user bound to the same work item (both rows kept),
+  `TouchWorkItemBindingState` updating both, `SetWorkItemBindingRequest`
+  updating only its own thread, and
   `ON DELETE CASCADE` when the user row goes away.
 - [ ] T2. No-actor invariant — a reflection test over every exported request
   struct in `internal/workctx` asserting no field (and no JSON tag) matches
@@ -218,6 +221,11 @@ and only behind `WORK_CONTEXT_ENABLED`.
 - [ ] T16. Submitted-request replies — `open` and `resume` replies contain the
   request id and `pending` and never the word "accepted", and the id is stored
   as the binding's `last_request_id`.
+- [ ] T17. Two threads, one issue — the same owner runs `/mctl work <url>` for
+  the same issue in thread A and then thread B; mctl-api's dedupe returns the
+  same item for both. Both threads are bound (two rows, no constraint error),
+  each thread's `status` shows the request that thread submitted, and a state
+  change seen from either thread is reflected in both.
 
 All fixtures use the existing synthetic personas (`Alice`, `Bob`, `Carol`,
 `Dana`) and reuse existing synthetic numeric ids per the repository safety

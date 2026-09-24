@@ -218,9 +218,16 @@ CREATE TABLE IF NOT EXISTS work_item_bindings (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_work_item_bindings_thread
     ON work_item_bindings(user_id, chat_tg_id, root_tg_message_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_work_item_bindings_item
+CREATE INDEX IF NOT EXISTS idx_work_item_bindings_item
     ON work_item_bindings(user_id, work_item_id);
 ```
+
+`idx_work_item_bindings_item` is deliberately **not** unique. The external key
+is issue-scoped, so the same owner running `/mctl work <same-issue-url>` in two
+threads gets the same `work_item_id` back from mctl-api's open-work dedupe, and
+each thread gets its own binding row pointing at that one item. Uniqueness is
+per thread only (`idx_work_item_bindings_thread`); the item index exists for
+the item-level state updates below.
 
 There is no body, text, title or handle column. The "do not persist the
 transcript" requirement is enforced by the schema, not by reviewer vigilance —
@@ -231,7 +238,13 @@ here is user content.
 Store methods: `GetWorkItemBinding(ctx, userID, chatTGID, rootMsgID)`,
 `LatestWorkItemBinding(ctx, userID, chatTGID)`, `UpsertWorkItemBinding(ctx, b)`,
 `TouchWorkItemBindingState(ctx, userID, workItemID, state string, version int64, execID string)`,
-`SetWorkItemBindingRequest(ctx, userID, workItemID, requestID string)`.
+`SetWorkItemBindingRequest(ctx, userID, chatTGID, rootMsgID int64, requestID string)`.
+
+`TouchWorkItemBindingState` is item-level: the work item's state, version and
+latest execution are the same for every thread bound to it, so it updates all
+of the owner's rows for that item. `SetWorkItemBindingRequest` is thread-level:
+a request is submitted from one thread, and that thread's `status` shows the
+request it submitted, not one submitted from another thread.
 
 **External key** is the normalised issue URL,
 `https://github.com/mctlhq/<repo>/issues/<n>` (`CanonicalIssueURL`: scheme and
