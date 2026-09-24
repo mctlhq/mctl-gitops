@@ -641,6 +641,22 @@ spec:
                 name: mctl-agents-secrets
                 key: mctl-token
                 optional: true
+          # Usage-writer token (mctlhq/.github#50): the only credential the
+          # usage producer may use to append this run's model-usage records
+          # to mctl-api. It may do nothing else there. Optional: absent (the
+          # default until the owner provisions it) the producer logs once and
+          # records nothing; the run itself is unaffected.
+          - name: MCTL_USAGE_WRITER_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: usage-writer-token
+                optional: true
+          # The Argo run name, the join key of this run's usage records to
+          # its agent_executions row (argo_workflow_name). Read by nothing
+          # else in this runner.
+          - name: WORKFLOW_NAME
+            value: "{{workflow.name}}"
           # Soft cap per proposal. Raised 3.00 -> 10.00: large issue-driven
           # proposals (e.g. a full observability layer) blew the $3 cap and
           # the SDK raised error_max_budget_usd before opening a PR. Small
