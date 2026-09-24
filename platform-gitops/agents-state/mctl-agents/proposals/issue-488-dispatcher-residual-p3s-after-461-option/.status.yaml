@@ -1,0 +1,15 @@
+status: proposed
+updated_at: '2026-09-24T09:55:18Z'
+updated_by: mctl-agents[bot]
+execution:
+  context_id: ex-be4cc4ea6f57d81c
+  trace_id: 85cb33a28f97e9640c167dc51cd73f91
+  agent: issue-investigator
+  version: ''
+source:
+  type: github_issue
+  repo: mctlhq/mctl-agents
+  issue: 488
+  url: https://github.com/mctlhq/mctl-agents/issues/488
+control:
+  requires_human_approval: true
