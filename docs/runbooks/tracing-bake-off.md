@@ -50,9 +50,14 @@ Before flipping any flag, confirm all of the following:
   Cloud stack — no Helm chart, Docker image or Kubernetes manifest of its
   own exists to pin. There is no self-managed shape to commit. Before
   running the soak with candidate F in scope, #1280 must either locate a
-  genuine self-managed deployment shape (and add a candidate entry plus a
+  genuine self-managed deployment shape (and add a candidate entry the same
+  way `tempo`'s was added — its chart configuration goes in the entry's
+  inline `values`; only if it needs supplemental Kubernetes resources the
+  chart does not ship, add a
   `platform-gitops/infra-components/observability/eval/agento11y/` directory
-  the same way `tempo`'s was added) or drop candidate F from the soak
+  of raw manifests referenced by `manifestsPath`, never a values file there.
+  `tempo` has no such directory because everything it needs fits in
+  `helm.valuesObject`) or drop candidate F from the soak
   entirely and record that in the ADR's Decision section. Committing a
   Grafana Cloud endpoint or credential for it is explicitly out of scope
   everywhere in this repo (requirements.md "Out of scope").

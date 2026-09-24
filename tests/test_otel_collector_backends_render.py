@@ -511,9 +511,11 @@ if tempo_apps:
 
 # A manifestsPath directory becomes a second ArgoCD source synced as raw
 # Kubernetes manifests (no Chart.yaml), so every YAML document in it must be a
-# resource. A Helm values file there renders fine and fails ArgoCD manifest
-# generation ("Object 'Kind' is missing") only once the candidate is enabled
-# -- exactly the case no default render can catch.
+# resource. ArgoCD's repo-server skips a non-resource file there in silence
+# (configuration that looks in force but is not), and hard-fails manifest
+# generation if the file's bytes contain apiVersion:, kind: and metadata:
+# anywhere, comments included. Either way it only surfaces once the candidate
+# is enabled -- exactly the case no default render can catch.
 for cand in committed_candidates:
     mpath = cand.get("manifestsPath")
     if not mpath:

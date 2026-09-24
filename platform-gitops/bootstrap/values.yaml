@@ -106,9 +106,12 @@ otelCollector:
         # No manifestsPath: every setting is the inline `values` below
         # (helm.valuesObject) and tempo needs no supplemental manifests. A
         # manifestsPath directory is synced as raw Kubernetes manifests, so it
-        # must hold only resources with apiVersion/kind -- a Helm values file
-        # there fails manifest generation the moment the candidate is enabled
-        # (tests/test_otel_collector_backends_render.py guards this).
+        # must hold only resources with apiVersion/kind. ArgoCD skips a
+        # non-resource YAML there in silence -- but hard-fails manifest
+        # generation on one whose bytes happen to contain apiVersion:, kind:
+        # and metadata: (comments count). Both are traps: a silently skipped
+        # file reads as configuration in force that is not.
+        # tests/test_otel_collector_backends_render.py rejects both.
         # Matches `values.fullnameOverride` below, so this endpoint does not
         # depend on the ArgoCD Application/Helm release name
         # (otel-eval-tempo) the chart would otherwise derive the service
