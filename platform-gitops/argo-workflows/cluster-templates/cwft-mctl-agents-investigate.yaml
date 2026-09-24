@@ -558,6 +558,18 @@ spec:
           # Roll back by setting "off".
           - name: WORK_CONTEXT_ROLLOUT_MODE
             value: "observe"
+          # Context-assembly pilot stage (mctlhq/mctl-agents#265,
+          # run_issue_investigator._context_mode: off|shadow|on). `shadow`:
+          # assemble, seal and log the investigation's ContextSnapshot and,
+          # with WORK_CONTEXT_ROLLOUT_MODE=observe above, persist it in
+          # mctl-api under the store execution -- the prompt is left
+          # byte-identical, and any assembly/seal/persist error is caught and
+          # logged, never failing the investigation. At `off` the snapshot
+          # path returns before persisting anything, which is why #490 needs
+          # this. Do NOT set `on` here (it changes the prompt): a separate
+          # owner decision. Roll back by setting "off".
+          - name: ISSUE_INVESTIGATOR_CONTEXT_MODE
+            value: "shadow"
           # Workflow param injected as an env var so the shell layer can
           # quote it safely. Direct workflow.parameters.* interpolation in
           # the script body is a shell-injection vector.
