@@ -1,0 +1,54 @@
+# Service: pelican-proxy-staging
+# Team: labs
+# Staging track: parallel isolated instance for testing and colleague collaboration.
+
+# Chart: base-service
+
+image:
+  repository: ghcr.io/mctlhq/pelican-proxy
+  tag: "0.26.0"
+imagePullSecrets:
+  - name: ghcr-credentials
+service:
+  port: 8787
+backstage:
+  kubernetesId: pelican-proxy-staging
+resources:
+  requests:
+    cpu: 75m
+    memory: 192Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+env:
+  APP_ENV: staging
+  # Seed catalog from Cloudflare Worker on cold start (fast startup, ~2s)
+  CATALOG_INGEST_URL: https://pelican-catalog-worker.pelican-libertex.workers.dev/__ingest
+ingress:
+  enabled: true
+  hosts:
+    - labs-pelican-proxy-staging.mctl.ai
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls:
+    - secretName: pelican-proxy-staging-tls
+      hosts:
+        - labs-pelican-proxy-staging.mctl.ai
+externalSecret:
+  targetSecret: pelican-proxy-staging-secrets
+  data:
+    - secretKey: LIBERTEX_EMAIL
+      remoteKey: teams/labs/pelican-proxy-staging
+      property: LIBERTEX_EMAIL
+    - secretKey: LIBERTEX_PASSWORD
+      remoteKey: teams/labs/pelican-proxy-staging
+      property: LIBERTEX_PASSWORD
+    - secretKey: INGEST_SECRET
+      remoteKey: teams/labs/pelican-proxy-staging
+      property: INGEST_SECRET
+    # NOTE: CATALOG_INGEST_SECRET is intentionally omitted so staging
+    # rebuilds NEVER overwrite the production R2 catalog.
+envFrom:
+  - secretRef:
+      name: pelican-proxy-staging-secrets
+extraContainers: []

@@ -1,0 +1,34 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: pelican-proxy-staging
+  namespace: labs
+  description: "pelican-proxy staging service for colleague collaboration"
+  annotations:
+    backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=labs-pelican-proxy-staging
+    backstage.io/kubernetes-id: pelican-proxy-staging
+    backstage.io/kubernetes-namespace: labs
+    argocd/app-name: labs-pelican-proxy-staging
+    github.com/source-repo: mashkoffdmitry/pelican-libertex-social
+    mctl.me/auto-deploy: "false"
+  links:
+    - url: https://ops.mctl.ai/applications/argocd/labs-pelican-proxy-staging
+      title: ArgoCD
+      icon: dashboard
+    - url: https://github.com/mashkoffdmitry/pelican-libertex-social
+      title: Source Repository
+      icon: github
+    - url: https://workflows.mctl.ai
+      title: Argo Workflows
+      icon: github
+    - url: https://labs-pelican-proxy-staging.mctl.ai
+      title: Service URL
+      icon: web
+  labels:
+    team: labs
+    env: apps
+spec:
+  type: service
+  lifecycle: experimental
+  owner: group:default/labs
+  system: system:default/team-labs

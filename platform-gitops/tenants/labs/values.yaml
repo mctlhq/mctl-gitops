@@ -65,15 +65,11 @@ tenant:
     # tenant has the documented history of workflow pods stuck Pending when
     # headroom got too tight.
     limits.memory: "10.5Gi"
-    # Bumped 2026-08-03: 11/15 services already deployed, no room to onboard
-    # more without hitting the pod ceiling first. Raised pods 15 → 25 ahead
-    # of the services quota becoming the binding constraint.
-    pods: "25"
+    # Bumped 2026-09-25: 19/20 services deployed. Raised pods 25 → 30 and services 20 → 25
+    # for pelican-proxy-staging and future expansion.
+    pods: "30"
     persistentvolumeclaims: "2"
-    # Bumped 2026-08-15: 14/15 services in use (kube-state-metrics quota
-    # alert, incident 3ec8a575) — the 2026-08-03 pods bump anticipated
-    # exactly this; services is now the binding constraint.
-    services: "20"
+    services: "25"
   limitRange:
     enabled: true
     default:
