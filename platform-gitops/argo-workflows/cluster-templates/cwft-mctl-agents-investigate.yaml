@@ -641,6 +641,17 @@ spec:
                 name: mctl-agents-secrets
                 key: mctl-token
                 optional: true
+          # Usage-writer token (mctlhq/.github#50): the only credential the
+          # usage producer may use to append this run's model-usage records
+          # to mctl-api. It may do nothing else there. Optional: absent (the
+          # default until the owner provisions it) the producer logs once and
+          # records nothing; the run itself is unaffected.
+          - name: MCTL_USAGE_WRITER_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: usage-writer-token
+                optional: true
           # The investigator authors the requirements/design/tasks triplet the
           # implementer then treats as its specification, so its output quality
           # compounds through every downstream step. Pinned to Opus here rather

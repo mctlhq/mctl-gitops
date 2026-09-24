@@ -41,3 +41,29 @@ otelCollector:
     enabled: false
     teardownAfter: ""
     candidates: []
+
+# Usage-writer principal for the FinOps usage ledger (mctlhq/.github#50,
+# variant B): service:mctl-agents-usage, which may only append usage records
+# (POST /api/v1/usage/records). Off until the owner provisions the token.
+#
+# The token lives in ONE place, Vault secret/platform/mctl-agents, property
+# usage-writer-token. The agent runner pods already receive it from there
+# (mctl-agents-secrets extracts that whole path, and the investigate,
+# implement and shepherd templates reference the key as optional). Enabling
+# this flag is what hands the same value to mctl-api: it renders the
+# mctl-api-usage-writer ExternalSecret and points the chart at it.
+#
+# Why a flag and not just an optional reference: an ExternalSecret whose
+# Vault property does not exist goes Degraded, and ArgoCDApplicationDegraded
+# fires after 30m. With the flag off nothing is rendered at all.
+#
+# Owner steps, in this order:
+#   1. printf '%s' "$(openssl rand -hex 32)" \
+#        | vault kv patch secret/platform/mctl-agents usage-writer-token=-
+#      PATCH, never PUT: put would replace every other key at that path,
+#      including the Claude OAuth tokens. At least 32 characters, and it must
+#      differ from MCTL_AGENT_SERVICE_TOKEN and from every surface token, or
+#      mctl-api refuses it.
+#   2. Set enabled: true below (mctl-api then rolls to pick up the env).
+usageWriter:
+  enabled: false

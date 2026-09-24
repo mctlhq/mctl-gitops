@@ -211,6 +211,15 @@ spec:
           # carries issues/pull_requests/workflows write on that one
           # repository -- a recorded trade, not an oversight.
           githubAppTokenSecret: mctl-api-github-app
+          {{- if .Values.usageWriter.enabled }}
+
+          # The usage-writer token (mctlhq/.github#50), from the
+          # mctl-api-usage-writer ExternalSecret. Gated with it on
+          # usageWriter.enabled in bootstrap/values.yaml; the chart's
+          # reference is optional, so a Secret that has not synced yet
+          # leaves the principal disabled instead of failing the pod.
+          usageWriterTokenSecret: mctl-api-usage-writer
+          {{- end }}
 
           resources:
             requests:
