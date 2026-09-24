@@ -28,6 +28,14 @@ spec:
             GITOPS_REPO_URL: https://github.com/mctlhq/mctl-gitops.git
             GITOPS_BRANCH: main
             GITOPS_LOCAL_PATH: /data/mctl-gitops
+            # Restart marker, read by nothing. mctl-api initialises several
+            # stores once at startup and keeps a failed one nil (503) until
+            # the pod restarts (mctlhq/mctl-api#387); the chart has no pod
+            # annotation hook, so changing this value is how gitops restarts
+            # the pod. Last bumped 2026-09-24: recover the agent registry,
+            # surface identity, event outbox and domains stores after the
+            # 11:20Z rollout hit the role connection limit.
+            ROLLOUT_MARKER: "2026-09-24-store-init-recovery"
             ARGOCD_URL: https://ops.mctl.ai
             ARGO_WORKFLOWS_NAMESPACE: argo-workflows
             GITHUB_ORG: mctlhq
