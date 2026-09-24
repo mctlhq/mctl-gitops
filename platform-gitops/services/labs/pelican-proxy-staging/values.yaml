@@ -38,13 +38,13 @@ externalSecret:
   targetSecret: pelican-proxy-staging-secrets
   data:
     - secretKey: LIBERTEX_EMAIL
-      remoteKey: teams/labs/pelican-proxy
+      remoteKey: teams/labs/pelican-proxy-staging
       property: LIBERTEX_EMAIL
     - secretKey: LIBERTEX_PASSWORD
-      remoteKey: teams/labs/pelican-proxy
+      remoteKey: teams/labs/pelican-proxy-staging
       property: LIBERTEX_PASSWORD
     - secretKey: INGEST_SECRET
-      remoteKey: teams/labs/pelican-proxy
+      remoteKey: teams/labs/pelican-proxy-staging
       property: INGEST_SECRET
     # NOTE: CATALOG_INGEST_SECRET is intentionally omitted so staging
     # rebuilds NEVER overwrite the production R2 catalog.
