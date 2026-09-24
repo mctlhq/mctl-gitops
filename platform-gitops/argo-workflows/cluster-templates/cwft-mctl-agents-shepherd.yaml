@@ -729,6 +729,29 @@ spec:
             value: "mctl-design,mctl-telegram,mctl-gitops,mctl-pairdesk"
           - name: SHEPHERD_SKIP_SERVICES
             value: "mctl-academy"
+          # The lifecycle rollout stage (ADR-010 §12, mctlhq/.github#57).
+          #
+          # `observe` means: the shepherd reads the ownership store alongside
+          # its own DevLoop liveness probe, logs how the two compare, and the
+          # OLD answer still decides. Nothing about this tick's behaviour
+          # changes -- a test in mctl-agents asserts the filter's decisions AND
+          # the tick's own output are identical with the compare on and off.
+          #
+          # LAST of the three steps. The worker flipped first so the writer
+          # would be live, then the bootstrap imported the pull requests
+          # already in flight; starting the comparison before either would
+          # measure the migration rather than the contract.
+          #
+          # This is the ONLY rollout control. Not
+          # `workflow.patched("lifecycle-ownership")` in dev_loop.py, which is
+          # a history marker and can never be one, and not
+          # LIFECYCLE_OWNERSHIP_REQUIRED, which is the break-glass INSIDE
+          # enforce. Each is read in exactly one place.
+          #
+          # To STOP the soak: set this back to "off". That is the remedy
+          # LifecycleShadowDangerousDivergence names.
+          - name: LIFECYCLE_ROLLOUT_MODE
+            value: "observe"
           # How long run_implementer --review-feedback waits for an
           # asynchronously launched `implementer` sub-agent to reach a
           # terminal status before giving up with exit 46
