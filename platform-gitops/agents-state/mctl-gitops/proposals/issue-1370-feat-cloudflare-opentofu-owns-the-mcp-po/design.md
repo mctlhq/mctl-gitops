@@ -223,8 +223,9 @@ stdlib only, hand-rolled `check()`/`FAILURES` reporting). It enforces:
   "server", "default_disabled", "tools"}` (any other key fails);
   `portal == "mcp"`; `server == <id>`; `default_disabled == true`; `tools` a
   non-empty list; each entry's keys drawn from `{"name", "enabled",
-  "reason", "upstream_gates"}` with `name` a non-empty string, `enabled` a
-  boolean and `reason` a non-empty string; no duplicate names. OpenTofu reads
+  "reason", "upstream_gates", "override"}` with `name` a non-empty string,
+  `enabled` a boolean, `reason` a non-empty string, and `override`, when
+  present, equal to `"sensitive-read"` on an entry with `enabled: false`; no duplicate names. OpenTofu reads
   only `name` and `enabled`; the other keys are audit trail, carried so the
   vendored copy stays byte-identical and the bump diff is the service diff.
 - coverage: `{files} == {mapping.json servers where vendored}` and every
@@ -414,3 +415,8 @@ portal drift job, and one short workflow run per allowlist change.
    the service file; the validator only asserts the file's value is `true`.
 3. **Coolify's file enumerates its whole catalogue** (45 entries, 22
    enabled), and PR A waits for `mctlhq/mctl-coolify-mcp#5` to merge.
+4. **`override` (added 2026-09-25, mctlhq/mctl-coolify-mcp#5).** A service
+   file may disable a read-only tool for a non-write reason with
+   `"override": "sensitive-read"`. It only ever narrows exposure, so the
+   gitops validator accepts it only with `enabled: false`; OpenTofu ignores it
+   and applies `enabled` as usual.
