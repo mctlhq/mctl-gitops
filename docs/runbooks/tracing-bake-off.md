@@ -31,7 +31,7 @@ Before flipping any flag, confirm all of the following:
   `0`-with-reason on that dimension's cells (step 4), not a silent skip.
 - **Cluster headroom against the quota.** `otelCollector.eval.quota` reserves
   `requests.cpu: "4"`, `requests.memory: "12Gi"`, `limits.cpu: "8"`,
-  `limits.memory: "20Gi"`, `pods: "30"`, `persistentvolumeclaims: "4"` and
+  `limits.memory: "20Gi"`, `pods: "10"`, `persistentvolumeclaims: "4"` and
   `requests.storage: "40Gi"` out of the three-cx43-worker cluster. Confirm
   free capacity for that reservation with `kubectl top nodes` before opening
   the namespace — this is a real bite out of shared capacity, not a
