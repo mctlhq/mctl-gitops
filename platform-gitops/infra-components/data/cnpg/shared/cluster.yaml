@@ -181,7 +181,14 @@ spec:
       - name: mctl-api
         login: true
         inherit: true
-        connectionLimit: 20
+        # 40, not 20: mctl-api opens one pool per store and initialises every
+        # store once at startup under a shared deadline. During a rolling
+        # update the old pod still holds its connections while the new one
+        # initialises, and at 20 the new pod hit "too many connections for
+        # role" (2026-09-24 11:20Z); the agent registry, surface identities,
+        # event outbox and domains stores then stayed disabled (503) until
+        # the next restart. Steady state is ~8; 40 covers two pods at init.
+        connectionLimit: 40
         ensure: present
         passwordSecret:
           name: mctl-api-db-creds
