@@ -98,11 +98,17 @@ resource "cloudflare_zero_trust_access_ai_controls_mcp_server" "tg" {
 # The fourth upstream, and the first registered by dynamic client registration
 # rather than by hand.
 #
-# The three above are `auth_mode: manual`, which costs them the thing this one
-# is being registered to test: a manual server's capability catalogue is
-# captured once, at the first user authorization, and never refreshed. That is
+# `tg` above is the only `auth_mode: manual` resource in this file today. It
+# stays manual until mctl-telegram conforms to the automatic (DCR)
+# registration rule in mctlhq/.github#137 — its DCR default drops any scope
+# the client did not name, which would silently narrow what the portal is
+# granted. `seerrsense` and `api` are also live in manual mode but have no
+# Terraform resource at all yet (issue mctlhq/mctl-gitops#1363); until they
+# are adopted here, manual mode costs them the thing this one is being
+# registered to test: a manual server's capability catalogue is captured
+# once, at the first user authorization, and never refreshed. That is
 # Cloudflare's documented limitation, and it is why `POST servers/{id}/sync`
-# answers `success` on those three while `last_synced` does not move —
+# answers `success` on a manual server while `last_synced` does not move —
 # synchronisation runs with an admin credential that only DCR registration
 # has.
 #
@@ -194,6 +200,44 @@ resource "cloudflare_zero_trust_access_ai_controls_mcp_server" "alice" {
     # Same reasoning as the servers above: a future docs/portal-allowlist.json
     # in mctlhq/mctl-alice, applied from that repository, is what should own
     # updated_tools/updated_prompts — not this file.
+    ignore_changes = [updated_tools, updated_prompts]
+  }
+}
+
+# The sixth upstream, and a new member rather than an adoption: `coolify` is
+# not on the portal at all today. `coolify.mctl.ai` offers CIMD with a DCR
+# fallback and grants its `coolify` scope when no scope is named, so this is
+# registered the same way as `projects`/`alice` — `auth_type = "oauth"`, no
+# `auth_credentials`, no `client_secret` — which also sidesteps the
+# `client_secret` requirement, since that only applies to manual-mode
+# creates. Refs mctlhq/mctl-gitops#1363, mctlhq/.github#137.
+#
+# The apply leaves it in `waiting`. An admin then completes the upstream OAuth
+# login once from the dashboard, from the owner address to match the
+# `projects`/`alice` precedent, and that account becomes the admin credential
+# for every later sync. Only then does `scripts/portal-membership-add.sh
+# coolify` succeed — it refuses an empty catalogue by design — and it writes
+# every advertised tool `enabled: false`. Coolify's destructive tools
+# (`stop_all_apps`, deletes, bulk env updates) are reachable through the
+# upstream but not exposed here: which tools go live is a separate decision,
+# recorded in a `docs/portal-allowlist.json` in `mctlhq/mctl-coolify-mcp` and
+# applied from there, same split as every other member.
+resource "cloudflare_zero_trust_access_ai_controls_mcp_server" "coolify" {
+  account_id = var.account_id
+  id         = "coolify"
+  name       = "Coolify (coolify.mctl.ai)"
+  hostname   = "https://coolify.mctl.ai/mcp"
+  auth_type  = "oauth"
+
+  description = "Coolify deployment platform control, read-mostly by default. Registered by DCR: the upstream offers CIMD with a DCR fallback. Refs mctlhq/mctl-gitops#1363, mctlhq/.github#35, #137."
+
+  secure_web_gateway               = false
+  is_shared_oauth_callback_enabled = false
+
+  lifecycle {
+    # Same reasoning as the servers above: a future docs/portal-allowlist.json
+    # in mctlhq/mctl-coolify-mcp, applied from that repository, is what should
+    # own updated_tools/updated_prompts — not this file.
     ignore_changes = [updated_tools, updated_prompts]
   }
 }
