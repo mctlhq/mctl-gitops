@@ -60,7 +60,12 @@ otelCollector:
       requests.memory: "12Gi"
       limits.cpu: "8"
       limits.memory: "20Gi"
-      pods: "30"
+      # Kept close to the limits.cpu/limits.default.cpu ceiling (8
+      # max-limit containers), matching the tenant chart's own
+      # ~1.25x headroom precedent (helm-charts/tenant/values.yaml
+      # quotas.pods: "10" vs its 8 max-limit containers), not a
+      # loose 4x bound.
+      pods: "10"
       persistentvolumeclaims: "4"
       requests.storage: "40Gi"
     # issue #1355 / #1280: LimitRange (eval-namespace.yaml's
@@ -129,6 +134,11 @@ otelCollector:
           # post-soak.
           ingester:
             replicas: 1
+            # Must match replicas above: the chart defaults
+            # ingester.config.replication_factor to 3, which a single
+            # ingester replica can never quorum-write against.
+            config:
+              replication_factor: 1
             persistence:
               enabled: true
               size: 10Gi

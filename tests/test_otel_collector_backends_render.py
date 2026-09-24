@@ -471,6 +471,55 @@ for candidate in committed_candidates:
         f"committed candidate {candidate.get('name')!r} has a header value that is not an ${{env:...}} expansion",
     )
 
+# --- Committed tempo candidate actually renders (issue #1355) ----------------
+# Every check above only exercises fabricated candidates (cand-a, cand-b,
+# CANDIDATE_TEMPLATE). The one candidate this PR actually ships -- tempo,
+# committed in bootstrap/values.yaml -- must be rendered through `helm
+# template` for real at least once, proving both that it renders at all and
+# that the ingester.config.replication_factor fix (issue #1355 finding 1)
+# actually reaches the rendered Application, not just the values.yaml source.
+
+tempo_candidate = next(c for c in committed_candidates if c.get("name") == "tempo")
+tempo_enabled = dict(tempo_candidate, enabled=True)
+
+tempo_values = _write_values(_eval_values(True, [tempo_enabled]))
+tempo_docs = helm_template(DEFAULT_VALUES, tempo_values)
+tempo_apps = _eval_apps(tempo_docs)
+check(len(tempo_apps) == 1, f"expected exactly one tempo Application, got {len(tempo_apps)}")
+if tempo_apps:
+    tempo_app = tempo_apps[0]
+    check(
+        tempo_app["metadata"]["name"] == "otel-eval-tempo",
+        f"the tempo candidate's Application should be otel-eval-tempo, got {tempo_app['metadata']['name']}",
+    )
+    sources = tempo_app["spec"].get("sources")
+    check(
+        sources is not None and len(sources) == 2,
+        f"otel-eval-tempo with manifestsPath should have two sources, got {sources!r}",
+    )
+    if sources:
+        values_object = sources[0]["helm"]["valuesObject"]
+        check(
+            values_object["ingester"]["replicas"] == 1,
+            f"tempo ingester.replicas should be 1, got {values_object['ingester'].get('replicas')!r}",
+        )
+        check(
+            values_object["ingester"]["config"]["replication_factor"] == 1,
+            "tempo ingester.config.replication_factor should be 1, got "
+            f"{values_object['ingester'].get('config', {}).get('replication_factor')!r}",
+        )
+        check(
+            sources[1]["path"] == "platform-gitops/infra-components/observability/eval/tempo",
+            f"otel-eval-tempo second source path should be the committed manifestsPath, got {sources[1].get('path')!r}",
+        )
+
+tempo_fanout_cfg = collector_config(tempo_docs)
+tempo_pipeline_exporters = tempo_fanout_cfg["service"]["pipelines"]["traces"]["exporters"]
+check(
+    "otlp/eval-tempo" in tempo_pipeline_exporters,
+    f"otlp/eval-tempo missing from traces pipeline exporters, got {tempo_pipeline_exporters}",
+)
+
 if failures:
     for f in failures:
         print(f"FAIL: {f}", file=sys.stderr)
