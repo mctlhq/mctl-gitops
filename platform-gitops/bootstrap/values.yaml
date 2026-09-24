@@ -44,7 +44,7 @@ otelCollector:
 
 # Usage-writer principal for the FinOps usage ledger (mctlhq/.github#50,
 # variant B): service:mctl-agents-usage, which may only append usage records
-# (POST /api/v1/usage/records). Off until the owner provisions the token.
+# (POST /api/v1/usage/records). On since 2026-09-24; set false to disable.
 #
 # The token lives in ONE place, Vault secret/platform/mctl-agents, property
 # usage-writer-token. The agent runner pods already receive it from there
