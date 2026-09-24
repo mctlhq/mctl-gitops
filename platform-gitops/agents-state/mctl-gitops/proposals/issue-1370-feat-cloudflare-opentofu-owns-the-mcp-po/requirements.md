@@ -86,7 +86,8 @@ image tags are bumped today.
   "default_disabled", "tools"}`, if `portal` is not `"mcp"`, if `server` does
   not equal the file's stem, if `default_disabled` is not `true`, if `tools` is
   empty or not a list, if any tool entry has a key outside `{"name", "enabled",
-  "reason", "upstream_gates"}` or lacks a non-empty string `name`, a boolean
+  "reason", "upstream_gates", "override"}`, if an `override` is present on an
+  enabled entry or is not `"sensitive-read"`, or if any tool entry lacks a non-empty string `name`, a boolean
   `enabled` or a non-empty string `reason`, or if a tool name is duplicated.
   These are the keys all six service files carry today (measured 2026-09-25);
   a byte-identical copy must pass its own validator.
