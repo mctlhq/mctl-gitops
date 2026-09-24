@@ -677,6 +677,11 @@ spec:
                 name: mctl-agents-secrets
                 key: usage-writer-token
                 optional: true
+          # The Argo run name, the join key of this run's usage records to
+          # its agent_executions row (argo_workflow_name). Read by nothing
+          # else in this runner.
+          - name: WORKFLOW_NAME
+            value: "{{workflow.name}}"
           # Per-tick budget cap. Tier 3 spec sets the default to
           # $1.00 per tick; we bump to $5.00 here to absorb worst-case
           # ticks that drive multiple proposals through the
