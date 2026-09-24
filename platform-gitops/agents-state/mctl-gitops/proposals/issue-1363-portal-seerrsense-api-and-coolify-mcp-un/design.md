@@ -133,8 +133,11 @@ re-examined, satisfying the issue's rule 5.
 
 Ordering gates, taken from the issue and from mctlhq/.github#137:
 
-- `seerrsense` waits for mctlhq/seerrsense#74 (portal-restricted DCR, full
-  default for DCR clients). The gate is verified live, not assumed: a probe DCR
+- `seerrsense`: mctlhq/seerrsense#74 (portal-restricted DCR, full default for
+  DCR clients) shipped in 1.11.0 with DCR **off by default**. The deployment
+  must first set `SEERRSENSE_DCR_REDIRECT_URIS=https://mcp.mctl.ai/servers-callback`
+  in its values (task 0). A DCR client naming no scope then gets
+  `seerr:read seerr:request`. The gate is verified live, not assumed: a probe DCR
   registration with `redirect_uris = ["https://mcp.mctl.ai/servers-callback"]`
   must succeed, and the same probe from any other callback must be refused.
   Interim, only if the fix is needed sooner: import `seerrsense` as **manual**
@@ -143,7 +146,9 @@ Ordering gates, taken from the issue and from mctlhq/.github#137:
   no `client_secret` in state — the same asymmetry `tg` relies on.
 - `api` needs the same portal-callback restriction confirmed on
   `https://api.mctl.ai/oauth/register` (it advertises DCR, scope `mctl`, auth
-  `none`) before the switch.
+  `none`) before the switch. If it is not restricted, `api` is imported in its
+  current mode unchanged, the restriction goes to a mctl-api issue, and the
+  other servers proceed.
 
 ### 3. `coolify`: a new DCR resource, created from scratch
 
