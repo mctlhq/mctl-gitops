@@ -1,5 +1,5 @@
-status: review-stuck
-updated_at: '2026-09-24T01:57:04Z'
+status: needs-triage
+updated_at: '2026-09-24T13:19:23Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-f21f7d273c94c844
@@ -23,5 +23,13 @@ attempt:
   finished_at: '2026-09-24T00:10:03Z'
 pr: https://github.com/mctlhq/mctl-agents/pull/484
 review_attempts: 5
-notes: 'Current-head blockers persisted across 5 follow-up attempts: 1 review finding(s)
-  (claude[bot]). Human triage required.'
+notes: 'reconcile: open PR has a merge conflict'
+github:
+  state: open
+  head_sha: ce96096631f6b901a11728c31a7ffa8cdbb99e15
+  blocking_reason: conflict
+  observed_at: '2026-09-24T13:19:23Z'
+failure:
+  code: merge-conflict
+  stage: reconcile
+  message: GitHub reports a merge conflict with the base branch.
