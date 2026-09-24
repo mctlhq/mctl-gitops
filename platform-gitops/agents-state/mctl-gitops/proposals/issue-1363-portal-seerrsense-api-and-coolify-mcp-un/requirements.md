@@ -56,10 +56,12 @@ at all.
 - IF `tofu plan` for the portal root reports any resource as destroyed or
   replaced THEN THE SYSTEM SHALL fail the change and SHALL NOT be applied
   (`cloudflare-apply.yml` defaults `allow_destroy` to false).
-- WHILE mctlhq/seerrsense#74 (portal-restricted DCR granting the full default
-  to DCR clients) is unreleased THE SYSTEM SHALL NOT switch the live
+- WHILE `SEERRSENSE_DCR_REDIRECT_URIS` is not set to the portal callback in the
+  seerrsense deployment (mctlhq/seerrsense#74 shipped in 1.11.0 with DCR off by
+  default), or while its DCR probe does not succeed, THE SYSTEM SHALL NOT switch the live
   `seerrsense` server out of manual mode.
-- IF the fix is needed before mctlhq/seerrsense#74 ships THEN THE SYSTEM SHALL
+- IF seerrsense's DCR precondition is not met (task 0 not yet effective, or
+  its DCR probe fails) and the fix is needed sooner THEN THE SYSTEM SHALL
   import `seerrsense` as manual with
   `scope = "seerr:read seerr:request offline_access"`, modelled on the `tg`
   resource and its `local.tg_scope`.
@@ -102,6 +104,13 @@ at all.
 - WHEN acceptance for `coolify` is checked THE SYSTEM SHALL show the server out
   of `waiting` with a populated catalogue, and a read-only tool (for example
   `get_version`) answering through the portal once enabled.
+
+- WHEN seerrsense's DCR precondition is checked THE SYSTEM SHALL expect a DCR
+  client that names no scope to be granted `seerr:read seerr:request`
+  (seerrsense's `DCR_DEFAULT_SCOPE`, without `offline_access`).
+- IF `api.mctl.ai` accepts a DCR registration for a foreign callback THEN THE
+  SYSTEM SHALL import `api` in its current mode without switching it, and SHALL
+  open an issue in mctlhq/mctl-api, rather than block the other servers.
 
 ## Out of scope
 

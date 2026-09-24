@@ -1,5 +1,18 @@
 # Tasks: issue-1363-portal-seerrsense-api-and-coolify-mcp-un
 
+- [ ] 0. Turn DCR on for the portal callback in seerrsense, in its own PR
+  ahead of this one. mctlhq/seerrsense#74 shipped in **1.11.0** (live
+  2026-09-24) with DCR **off by default**: `SEERRSENSE_DCR_REDIRECT_URIS` has no
+  built-in value, and unset means `/register` answers 404 and
+  `registration_endpoint` is absent. Add
+  `SEERRSENSE_DCR_REDIRECT_URIS: https://mcp.mctl.ai/servers-callback` to the
+  env of `platform-gitops/services/labs/seerrsense/values.yaml`, merge it, and
+  wait for ArgoCD to sync. — DoD:
+  `https://seerrsense.mctl.ai/.well-known/oauth-authorization-server` carries
+  `registration_endpoint: https://seerrsense.mctl.ai/register`, and the service
+  is Healthy. Task 2's seerrsense probes depend on this: without it they get
+  404, and task 5 would fall back to the interim manual path for no reason.
+
 - [ ] 1. Measure whether a live manual-OAuth server can be switched to
   automatic in place, on a throwaway server only. Create one in manual mode
   (a create needs a non-empty `client_secret`), then try (a) a `PUT` with no
@@ -12,15 +25,17 @@
   and the throwaway server no longer exists.
 
 - [ ] 2. Verify the DCR preconditions on the two upstreams that are switching
-  (depends on 1, independent of it in practice). For `api.mctl.ai`: a probe
+  (depends on 0 for seerrsense; independent of 1 in practice). For `api.mctl.ai`: a probe
   registration at `/oauth/register` with
   `redirect_uris = ["https://mcp.mctl.ai/servers-callback"]` succeeds, and the
   same probe from a foreign callback is refused (mctlhq/.github#137). For
-  `seerrsense`: the same two probes, plus confirmation that mctlhq/seerrsense#74
-  is released and that a DCR client naming no scope is granted
-  `seerr:read seerr:request offline_access`. — DoD: both probe results
-  recorded in the PR description; if the seerrsense probe fails or #74 is
-  unreleased, task 5 takes the interim manual path instead of the automatic
+  `seerrsense`: the same two probes, plus confirmation that a DCR client naming
+  no scope is granted exactly `seerr:read seerr:request`. That is
+  seerrsense's `DCR_DEFAULT_SCOPE`. `offline_access` is not in it, and a
+  refresh token is issued regardless, so its absence is expected, not a
+  failure. #74 is already released (1.11.0). — DoD: both probe results
+  recorded in the PR description. If the seerrsense probe fails, task 5 takes
+  the interim manual path instead of the automatic
   one, and this is stated in the PR.
 
 - [ ] 3. Check whether `mctlhq/mctl-coolify-mcp` is private
@@ -40,8 +55,8 @@
 - [ ] 5. Add `seerrsense` to `mcp-servers.tf` with an `import` block
   (`id = "${var.account_id}/seerrsense"`) plus a resource (depends on 1, 2).
   Default path: the automatic shape (no `auth_credentials`, no
-  `client_secret`). Interim path, taken only if task 2 says #74 is not
-  released: manual, with a `local.seerrsense_scope` of
+  `client_secret`). Interim path, taken only if task 2's seerrsense DCR probe fails
+  (task 0 not effective, or the precondition otherwise unmet): manual, with a `local.seerrsense_scope` of
   `"seerr:read seerr:request offline_access"` in the same `locals` block as
   `local.tg_scope`, modelled field-for-field on the `tg` resource. — DoD: the
   PR plan shows an import and **no** replace for `seerrsense`; which path was
@@ -50,6 +65,12 @@
 - [ ] 6. Add `api` to `mcp-servers.tf` the same way — `import` block for
   `${var.account_id}/api` plus an automatic-shape resource (depends on 1, 2).
   — DoD: the PR plan shows an import and no replace for `api`.
+  If task 2 finds that `api.mctl.ai`'s DCR is **not** restricted to the portal
+  callback (a foreign-callback probe succeeds), do not switch `api`. Import it
+  in its current live mode with no mode change, so it is at least recorded,
+  and open an issue in mctlhq/mctl-api for the restriction (mctlhq/.github#137).
+  Do not block the rest of this PR on it. Note: such a probe leaves one
+  registration row on `api`, which is acceptable.
 
 - [ ] 7. Update the two nightly detectors in the same PR (depends on 4, 5, 6).
   `scripts/portal-auth-credentials-drift.py`: extend `DCR_SERVERS` to
@@ -112,10 +133,12 @@
   allowlist is merged on that repo's `main` and the portal reflects it; nothing
   destructive is enabled.
 
-- [ ] 15. Record the outcome on this issue and on mctlhq/seerrsense#73,
+- [ ] 15. Record the outcome on this issue and on mctlhq/seerrsense#73 (already
+  closed as not planned when the approach moved here; record there, do not
+  reopen),
   including the measured answer from task 1 and the acceptance results
-  (depends on T1-T5). — DoD: both issues carry the result; seerrsense#73 is
-  closed if the acceptance test passed.
+  (depends on T1-T5). — DoD: both issues carry the result. seerrsense#73 stays
+  closed and only gains the outcome note.
 
 ## Tests
 
