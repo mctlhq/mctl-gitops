@@ -113,3 +113,40 @@ resource "cloudflare_zero_trust_access_application" "portal_member_alice" {
     },
   ]
 }
+
+# Same reasoning as portal_member_projects above, for the portal's sixth
+# member. `coolify` got its server resource in mctl-gitops#1366 and its portal
+# `servers[]` entry through the dashboard, with 22 read-only tools enabled per
+# mctlhq/mctl-coolify-mcp docs/portal-allowlist.json -- and was still absent
+# from mcp.mctl.ai for the owner, exactly as alice was, until this third
+# object existed. Refs mctlhq/mctl-gitops#1363.
+resource "cloudflare_zero_trust_access_application" "portal_member_coolify" {
+  account_id = var.account_id
+  name       = "MCP server: coolify (via portal mcp.mctl.ai)"
+  type       = "mcp"
+
+  destinations = [
+    {
+      type          = "via_mcp_server_portal"
+      mcp_server_id = "coolify"
+    },
+  ]
+
+  session_duration = "8760h"
+
+  # Same two named addresses as every other portal member's app. Coolify
+  # controls the deployment estate, so this door must never be wider than
+  # the owner's.
+  policies = [
+    {
+      name       = "Phase 0 pilot users"
+      decision   = "allow"
+      precedence = 1
+
+      include = [
+        { email = { email = "mashkoffdmitry@gmail.com" } },
+        { email = { email = "mashkovdm.dm@gmail.com" } },
+      ]
+    },
+  ]
+}
