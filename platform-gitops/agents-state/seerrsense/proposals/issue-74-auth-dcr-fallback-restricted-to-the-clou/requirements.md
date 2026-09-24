@@ -17,11 +17,14 @@ seerr:request scope" (`src/mcp/server.ts`). That is mctlhq/seerrsense#73.
 
 This proposal implements the org rule from mctlhq/.github#137 for SeerrSense: a
 narrow RFC 7591 registration endpoint whose `redirect_uris` must all sit on an
-operator allowlist defaulting to the single portal callback
-`https://mcp.mctl.ai/servers-callback`, and a wider default scope
+operator allowlist that is **empty, and so off, by default**. The hosted
+deployment sets it to the single portal callback
+`https://mcp.mctl.ai/servers-callback` in its gitops values. The proposal also
+adds a wider default scope
 (`seerr:read seerr:request`) for clients that registered that way. DCR is not
-reopened generally: with the allowlist variable empty the endpoint is neither
-advertised nor served, and the wider default never reaches a CIMD or
+reopened generally: with the allowlist variable unset or empty the endpoint is
+neither advertised nor served, so no self-hosted deployment changes behaviour
+by upgrading, and the wider default never reaches a CIMD or
 pre-registered client. The consent screen already enumerates every granted
 scope, so the wider default stays visible to the person before any token is
 issued.
@@ -50,15 +53,17 @@ issued.
 ### Registration endpoint
 
 - WHEN `SEERRSENSE_DCR_REDIRECT_URIS` is unset THE SYSTEM SHALL treat the
-  allowlist as the single entry `https://mcp.mctl.ai/servers-callback`.
+  allowlist as empty, so DCR is off. No callback, including mctl's own portal
+  `https://mcp.mctl.ai/servers-callback`, is allowlisted by default; the hosted
+  deployment names it explicitly in its values.
 - WHEN `SEERRSENSE_DCR_REDIRECT_URIS` is set to a non-empty comma-separated
   list THE SYSTEM SHALL treat exactly those entries as the allowlist.
 - WHILE the allowlist is non-empty THE SYSTEM SHALL serve `POST /register` and
   SHALL include `registration_endpoint: "<issuer>/register"` in both
   `/.well-known/oauth-authorization-server` and
   `/.well-known/oauth-authorization-server/mcp`.
-- WHILE the allowlist is empty (`SEERRSENSE_DCR_REDIRECT_URIS` set to the empty
-  string or to only separators) THE SYSTEM SHALL omit `registration_endpoint`
+- WHILE the allowlist is empty (`SEERRSENSE_DCR_REDIRECT_URIS` unset, set to the
+  empty string, or set to only separators) THE SYSTEM SHALL omit `registration_endpoint`
   from both authorization-server metadata documents and SHALL answer
   `POST /register` with 404.
 - WHILE OAuth is not configured (no `oauth` block from `loadAuthSettings`) THE
@@ -138,6 +143,12 @@ issued.
   Configuration table SHALL list the new variable.
 
 ## Out of scope
+
+- Setting `SEERRSENSE_DCR_REDIRECT_URIS=https://mcp.mctl.ai/servers-callback`
+  in the hosted deployment's values
+  (`platform-gitops/services/labs/seerrsense/values.yaml`). That is a gitops
+  change tracked in mctlhq/mctl-gitops#1363, and it must land before that issue
+  switches the portal upstream to automatic mode.
 
 - Any change to `docs/portal-allowlist.json` or to the tool set: no tool is
   added, removed or re-annotated, so `tests/portal-allowlist.test.ts` is
