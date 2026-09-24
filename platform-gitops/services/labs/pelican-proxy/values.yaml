@@ -20,10 +20,10 @@ resources:
   # within ~20min of rollout. Re-set with margin over the 7d max instead
   # of the 24h one: ~4x CPU, ~1.9x mem over the 7d peak.
   requests:
-    cpu: 75m
+    cpu: 100m
     memory: 192Mi
   limits:
-    cpu: 300m
+    cpu: 1000m
     memory: 512Mi
 env:
   APP_ENV: production
