@@ -33,8 +33,8 @@
       "repo": "mctlhq/seerrsense",
       "path": "docs/portal-allowlist.json",
       "ref": "main",
-      "sha": "0efe127a9249c50d35ded0a1802041bd95f01b56",
-      "vendored_at": "2026-09-25T00:29:52Z"
+      "sha": "554d2ee22f04260343abf093d0c83207f390ce6d",
+      "vendored_at": "2026-09-25T12:34:20Z"
     },
     "tg": {
       "repo": "mctlhq/mctl-telegram",
