@@ -172,17 +172,15 @@ resource "cloudflare_zero_trust_access_ai_controls_mcp_server" "projects" {
 # What Terraform still cannot do is the first sync. The server sits in
 # `waiting` until an admin completes the upstream OAuth login once from the
 # dashboard; only then does its tool catalogue populate, and only then can
-# scripts/portal-membership-add.sh (which refuses an empty catalogue) add it
-# to the portal. Whoever logs in decides what the twelve tools in the
+# mcp-portal.tf map it on the portal. Whoever logs in decides what the twelve
+# tools in the
 # snapshot are: alice_list_devices, alice_send_command,
 # alice_say_phrase, alice_set_volume, alice_media_control,
 # alice_trigger_scenario, alice_control_device, alice_get_device_state,
 # alice_get_device_history, alice_set_light, alice_control_room,
-# alice_get_home_summary (mctlhq/mctl-alice src/tools/definitions.ts). No
-# tool allowlist doc exists yet for mctl-alice (unlike tg/api/seerrsense/
-# projects, each of which owns a docs/portal-allowlist.json) — until one
-# lands, portal-membership-add.sh adds every tool disabled, same as it always
-# does for a brand new member.
+# alice_get_home_summary (mctlhq/mctl-alice src/tools/definitions.ts). Which
+# of them are exposed is mctl-alice's docs/portal-allowlist.json, vendored as
+# allowlists/alice.json.
 resource "cloudflare_zero_trust_access_ai_controls_mcp_server" "alice" {
   account_id = var.account_id
   id         = "alice"
@@ -213,13 +211,12 @@ resource "cloudflare_zero_trust_access_ai_controls_mcp_server" "alice" {
 # The apply leaves it in `waiting`. An admin then completes the upstream OAuth
 # login once from the dashboard, from the owner address to match the
 # `projects`/`alice` precedent, and that account becomes the admin credential
-# for every later sync. Only then does `scripts/portal-membership-add.sh
-# coolify` succeed — it refuses an empty catalogue by design — and it writes
-# every advertised tool `enabled: false`. Coolify's destructive tools
-# (`stop_all_apps`, deletes, bulk env updates) are reachable through the
-# upstream but not exposed here: which tools go live is a separate decision,
-# recorded in a `docs/portal-allowlist.json` in `mctlhq/mctl-coolify-mcp` and
-# applied from there, same split as every other member.
+# for every later sync. Only then does it have a catalogue for mcp-portal.tf
+# to map. Coolify's destructive tools (`stop_all_apps`, deletes, bulk env
+# updates) are reachable through the upstream but not exposed here: which
+# tools go live is a separate decision, recorded in a
+# `docs/portal-allowlist.json` in `mctlhq/mctl-coolify-mcp` and vendored as
+# allowlists/coolify.json, same split as every other member.
 resource "cloudflare_zero_trust_access_ai_controls_mcp_server" "coolify" {
   account_id = var.account_id
   id         = "coolify"

@@ -8,7 +8,8 @@
 #      (cloudflare_zero_trust_access_ai_controls_mcp_server.projects, in
 #      infrastructure/cloudflare/portal/mcp-servers.tf),
 #   2. its membership in the portal's `servers[]` list, with the tool
-#      allowlist on it (mctlhq/projects-mcp scripts/portal-allowlist-apply.sh),
+#      allowlist on it (infrastructure/cloudflare/portal/mcp-portal.tf, built
+#      from the allowlist vendored from mctlhq/projects-mcp),
 #   3. and THIS: an Access application of type `mcp` whose destination is the
 #      server id via the portal. It is what carries the policy deciding which
 #      identities the portal may show that server to.
@@ -80,8 +81,9 @@ resource "cloudflare_zero_trust_access_application" "portal_member_projects" {
 
 # Same reasoning as portal_member_projects above, for the portal's fifth
 # member. `alice` (infrastructure/cloudflare/portal/mcp-servers.tf) is a
-# server resource and — once an admin completes its first DCR login and
-# scripts/portal-membership-add.sh runs — a portal `servers[]` entry, but
+# server resource and — once an admin completes its first DCR login and it
+# is mapped in infrastructure/cloudflare/portal/mcp-portal.tf — a portal
+# `servers[]` entry, but
 # neither of those creates this third object, and without it the server is
 # invisible in the portal for everyone regardless of how many tools it has.
 resource "cloudflare_zero_trust_access_application" "portal_member_alice" {

@@ -48,9 +48,7 @@ What this script enforces, and what it deliberately does not:
     are mapped on the portal but have no Terraform resource of their own
     yet) or has a literal
     `resource "cloudflare_zero_trust_access_ai_controls_mcp_server" "<id>"`
-    in `mcp-servers.tf` -- the same literal-grep technique
-    `portal-membership-add.sh`'s `tf_declared()` already uses, rather than a
-    HCL parser.
+    in `mcp-servers.tf` -- a literal grep rather than an HCL parser.
   - mapping entries: each `mapping.json` server carries exactly
     `vendored`, `default_disabled`, `on_behalf` and `updated_prompts`, plus
     `updated_tools` if and only if it is not vendored. The three switches are
@@ -353,8 +351,7 @@ def check_sources(vendored_ids: set[str], sources, errors: list[str]) -> None:
 def check_existence(server_ids: set[str], tf_text: str, errors: list[str]) -> None:
     """Every server named anywhere in the allowlists is either on UNMANAGED
     (the #1363 seam) or has a literal resource block in mcp-servers.tf --
-    the same technique portal-membership-add.sh's tf_declared() uses, a
-    literal grep rather than an HCL parser.
+    a literal grep rather than an HCL parser.
     """
     for sid in sorted(server_ids):
         if sid in UNMANAGED:

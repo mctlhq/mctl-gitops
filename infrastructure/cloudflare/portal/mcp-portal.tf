@@ -12,9 +12,8 @@
 # vendored -- is in allowlists/mapping.json, which the validator reads too,
 # so neither side needs an HCL parser.
 #
-# `mcp-portal-controls.json` and scripts/portal-controls-apply.sh still
-# describe the portal's switches until #1370's retirement PR deletes them.
-# The values agree; the script only ever re-asserts them.
+# Until #1370 the switches below were a scripted API call from a committed
+# JSON file; this resource is now their only writer.
 
 locals {
   portal_mapping = jsondecode(file("${path.module}/allowlists/mapping.json")).servers
@@ -70,8 +69,10 @@ resource "cloudflare_zero_trust_access_ai_controls_mcp_portal" "mcp" {
   # apply), so the live value is restated.
   allow_code_mode = false
 
-  # `servers` is a set in the provider, so the lexical order of this map's
-  # keys is not compared (the import plans 0 to change, #1382).
+  # `servers` has nesting_mode `set` in the provider 5.24.0 schema
+  # (`tofu providers schema -json`), so the lexical order of this map's keys
+  # is not compared; `updated_tools` inside it is a `list`, hence
+  # catalogue.json's order. The import planned 0 to change (#1382).
   servers = [
     for id, s in local.portal_mapping : {
       server_id        = id

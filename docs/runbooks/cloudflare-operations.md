@@ -39,9 +39,10 @@ What is **not** covered here, because it is not owned by these roots:
 - zone `dmitriimashkov.com` — intentionally unmanaged (#1089 decision 10), so a
   hand change there is the normal path, not break-glass, and nothing here will
   notice it;
-- the portal switches in `infrastructure/cloudflare/portal/mcp-portal-controls.json`,
-  applied by `scripts/portal-controls-apply.sh` — that is not OpenTofu and has
-  its own procedure in `infrastructure/cloudflare/portal/README.md`.
+- nothing on portal `mcp` any more: since mctlhq/mctl-gitops#1370 its switches
+  and its tool mappings are `infrastructure/cloudflare/portal/mcp-portal.tf`,
+  so a hand change there is break-glass like any other resource in that root,
+  and the nightly plan reports it.
 
 ## 1. Break-glass — a dashboard or API mutation
 

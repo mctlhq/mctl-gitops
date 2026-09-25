@@ -466,7 +466,10 @@ jobs:
                  # allowlists/catalogue.json, which mcp-portal.tf builds
                  # updated_tools from, was not updated. The portal root's plan
                  # above is red for the same reason; this names it.
-                 echo "> Update \`infrastructure/cloudflare/portal/allowlists/catalogue.json\` in a PR (and the owning repo's allowlist, if a new tool has no decision yet). Do NOT re-snapshot."; } >> "$GITHUB_STEP_SUMMARY" ;;
+                 echo "> Update \`infrastructure/cloudflare/portal/allowlists/catalogue.json\` in a PR (and the owning repo's allowlist, if a new tool has no decision yet). Do NOT re-snapshot."
+                 grep -q 'which this exit status does not name' catalogue.txt \
+                   && echo "> Other findings also fired tonight and this status does not name them — read the block above."
+                 true; } >> "$GITHUB_STEP_SUMMARY" ;;
             *) { echo "### \`portal\` — catalogue check could not run, or a server is serving no tools (exit $code)";
                  echo; echo '```'; cat catalogue.txt 2>/dev/null || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY" ;;
           esac
