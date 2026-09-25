@@ -791,6 +791,12 @@ def vendor_check(allowlists_dir: pathlib.Path, fetch=fetch_bytes) -> tuple[int, 
         else:
             lines.append(f"{sid}: in sync with {src['repo']}@{src['sha'][:7]} and main")
     code = 1 if tampered else 3 if lagging else 2 if undetermined else 0
+    if code in (1, 3) and undetermined:
+        # Exit 1 and 3 outrank 2, so say what the status does not name (the
+        # convention of portal-catalogue-drift.py's exit-4 and exit-5 notes).
+        n = sum(1 for ln in lines if "undetermined" in ln)
+        lines.append(f"(and {n} server(s) that could not be compared, undetermined, "
+                     "which this exit status does not name)")
     return code, lines
 
 
@@ -825,6 +831,23 @@ def vendor_check_selftest() -> list[str]:
         # of a bump PR's file; it must be git's blob sha (git hash-object).
         if want == 3 and not any("(blob 206a61de086a50dcac3be5aa7b5196bf4ef754f6)" in ln for ln in lines):
             problems.append(f"vendor-check: {label}: the lag line lacks main's git blob sha ({lines})")
+    # A lag outranks an undetermined server; the output must still name it.
+    with tempfile.TemporaryDirectory() as d:
+        dp = pathlib.Path(d)
+        ent = {"path": "docs/portal-allowlist.json", "ref": "main", "sha": "S",
+               "vendored_at": "2026-09-25T00:00:00Z"}
+        (dp / "sources.json").write_text(json.dumps({"servers": {
+            "w": {**ent, "repo": "mctlhq/w"}, "x": {**ent, "repo": "mctlhq/x"}}}))
+        (dp / "w.json").write_bytes(a)
+        (dp / "x.json").write_bytes(a)
+
+        def stub2(repo, path, ref):
+            if repo == "mctlhq/x":
+                raise Undetermined(f"{repo}@{ref}: stubbed 404")
+            return {"S": a, "main": b}[ref]
+        code, lines = vendor_check(dp, stub2)
+    if code != 3 or not any("1 server(s) that could not be compared" in ln for ln in lines):
+        problems.append(f"vendor-check: a lag must not hide an undetermined server: exit {code} ({lines})")
     return problems
 
 
