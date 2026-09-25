@@ -145,6 +145,15 @@ bindings plus `TURNSTILE_SECRET_KEY`, added 2026-08-31. OpenTofu does not deploy
 code, so owning the script here would split one deployable across two owners.
 The route patterns are part of the worker's contract — change them in one place.
 
+The five routes are declared in `zones/mctl-ai/workers.tf` (`mctl.ai/api/*`),
+`zones/mctl-me/workers.tf` and `zones/mctl-ru/workers.tf` (`<zone>/*` and
+`*.<zone>/*`) since #1179. The worker's `wrangler.toml` (`mctlhq/mctl-web`,
+`cloudflare-worker/`) must not declare `routes`: `wrangler deploy` publishes
+them with `PUT /workers/scripts/<name>/routes`, which replaces every route of
+the script, so a second declaration there would silently overwrite this one.
+Not representable in provider 5.24, and left at its default: the API's
+`request_limit_fail_open` (false on all five).
+
 ### Redirects: what actually serves them
 
 Worth stating because the wrong answer is the intuitive one. `mctl.me` and
