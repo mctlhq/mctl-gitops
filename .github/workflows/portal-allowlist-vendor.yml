@@ -204,14 +204,15 @@ jobs:
           if [ "$WIDENING" = "true" ]; then
             note=$'\n\n**This widens exposure.** validate-manifests fails until `baseline.json` is edited in this PR by someone who has decided the widening is intended.'
           fi
-          gh pr create --base main --head "$branch" \
+          url=$(gh pr create --base main --head "$branch" \
             --title "portal(${SERVER}): ${DELTA} tools" \
             --body "Vendors \`docs/portal-allowlist.json\` from ${SOURCE_REPO}@${SOURCE_SHA} into \`${file}\` (enabled/total ${DELTA}).${older:+ Supersedes #${older// /, #}.}
 
           Review the \`cloudflare-plan\` summary for \`infrastructure/cloudflare/portal\`: it lists every tool whose \`enabled\` flips. Merging writes nothing; the portal changes on the next approved \`cloudflare-apply\` for that root.${note}
 
-          Opened by portal-allowlist-vendor.yml (mctlhq/mctl-gitops#1370)."
-          new=$(gh pr view "$branch" --json number --jq .number)
+          Opened by portal-allowlist-vendor.yml (mctlhq/mctl-gitops#1370).")
+          echo "$url"
+          new="${url##*/}"
           for n in $older; do
             gh pr close "$n" --delete-branch --comment "Superseded by #${new}: ${SOURCE_REPO} has a newer docs/portal-allowlist.json. If this PR carried a baseline.json edit, make it again there." || true
           done
