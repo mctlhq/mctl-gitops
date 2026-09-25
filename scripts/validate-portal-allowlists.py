@@ -114,6 +114,23 @@ prompts file for this script to compare against in the first place.
 Usage:
     scripts/validate-portal-allowlists.py             validate the real
                                                         allowlists/ directory
+    scripts/validate-portal-allowlists.py --widening-ok
+                                                      the same, but a
+                                                        widening against
+                                                        baseline.json is a
+                                                        warning, not an error:
+                                                        the bump workflow
+                                                        still opens its PR,
+                                                        which stays red until
+                                                        a human edits
+                                                        baseline.json in it
+    scripts/validate-portal-allowlists.py --vendor-check
+                                                      compare each vendored
+                                                        file with its owning
+                                                        repo at the recorded
+                                                        sha and at main
+                                                        (network; see
+                                                        vendor_check())
     scripts/validate-portal-allowlists.py --selftest   replay
                                                         scripts/tests/fixtures/portal-allowlists/{valid,invalid}
                                                         and assert every
@@ -124,9 +141,13 @@ Usage:
 
 from __future__ import annotations
 
+import base64
 import json
+import os
 import pathlib
 import sys
+import urllib.error
+import urllib.request
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PORTAL_DIR = ROOT / "infrastructure" / "cloudflare" / "portal"
@@ -656,9 +677,151 @@ def run_selftest() -> tuple[list[str], int, int]:
     return problems, len(valid), len(invalid)
 
 
+# The phrases check_baseline() uses for a widening, and nothing else. Only
+# these become warnings under --widening-ok: a shape, coverage or catalogue
+# error still fails the bump workflow before it commits anything.
+WIDENING_MARKERS = (
+    "widens exposure",
+    "not in baseline.json's enabled_tools",
+    "not in baseline.json's enabled_prompts",
+)
+
+
+def is_widening(error: str) -> bool:
+    return any(m in error for m in WIDENING_MARKERS)
+
+
+# --vendor-check. Repositories whose files cannot be read anonymously; named
+# rather than probed, as in portal-catalogue-drift.py's PRIVATE_OWNERS.
+PRIVATE_REPOS = {"mctlhq/projects-mcp"}
+TOKEN_ENV = "ALLOWLIST_TOKEN"
+USER_AGENT = "mctl-gitops-validate-portal-allowlists"
+
+
+class Undetermined(Exception):
+    """A side of the comparison could not be read. Not drift."""
+
+
+def fetch_bytes(repo: str, path: str, ref: str) -> bytes:
+    """The owning repo's file at `ref`, byte for byte (the vendored copy is
+    compared byte-identical, so a JSON round-trip would hide a difference)."""
+    if repo in PRIVATE_REPOS:
+        token = os.environ.get(TOKEN_ENV)
+        if not token:
+            raise Undetermined(f"{repo} is private and ${TOKEN_ENV} is not set")
+        url = f"https://api.github.com/repos/{repo}/contents/{path}?ref={ref}"
+        headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github.raw"}
+    else:
+        url = f"https://raw.githubusercontent.com/{repo}/{ref}/{path}"
+        headers = {}
+    headers["User-Agent"] = USER_AGENT
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=30) as r:
+            return r.read()
+    except urllib.error.HTTPError as e:
+        raise Undetermined(f"{repo}@{ref}: answered {e.code}")
+    except (urllib.error.URLError, OSError) as e:
+        raise Undetermined(f"{repo}@{ref}: unreachable: {e!r}")
+
+
+def vendor_check(allowlists_dir: pathlib.Path, fetch=fetch_bytes) -> tuple[int, list[str]]:
+    """Each vendored file against its recorded source sha, and against main.
+
+    Four outcomes per server, reported distinctly because they have
+    different remedies:
+      - in sync: the file equals the sha and main -- quiet;
+      - lag: it equals the sha but main has moved -- a bump is due (the
+        owning repo's dispatch did not run, or its PR is not merged yet);
+      - tampered: it differs from the sha it claims to be -- someone edited
+        the vendored copy here, which only a bump PR may do;
+      - undetermined: a side could not be read -- not a finding.
+    Exit: 1 if anything is tampered, else 3 if anything lags, else 2 if
+    anything was undetermined, else 0.
+    """
+    lines: list[str] = []
+    tampered = lagging = undetermined = False
+    try:
+        sources = json.loads((allowlists_dir / "sources.json").read_text(encoding="utf-8"))["servers"]
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        return 2, [f"sources.json could not be read: {e!r}"]
+    for sid in sorted(sources):
+        src = sources[sid]
+        local_path = allowlists_dir / f"{sid}.json"
+        try:
+            local = local_path.read_bytes()
+        except OSError as e:
+            lines.append(f"{sid}: undetermined -- the vendored file could not be read: {e!r}")
+            undetermined = True
+            continue
+        try:
+            at_sha = fetch(src["repo"], src["path"], src["sha"])
+        except Undetermined as e:
+            lines.append(f"{sid}: undetermined -- {e}")
+            undetermined = True
+            continue
+        if local != at_sha:
+            lines.append(
+                f"{sid}: TAMPERED -- allowlists/{sid}.json differs from {src['repo']}@{src['sha'][:7]}, "
+                "the commit sources.json says it was vendored from; only a bump PR may change it")
+            tampered = True
+            continue
+        try:
+            at_main = fetch(src["repo"], src["path"], src.get("ref") or "main")
+        except Undetermined as e:
+            lines.append(f"{sid}: matches its recorded sha; main undetermined -- {e}")
+            undetermined = True
+            continue
+        if at_main != at_sha:
+            lines.append(
+                f"{sid}: lags -- {src['repo']} main has a newer {src['path']}; the bump dispatch did "
+                "not run or its PR is not merged (dispatch portal-allowlist-vendor.yml by hand if needed)")
+            lagging = True
+        else:
+            lines.append(f"{sid}: in sync with {src['repo']}@{src['sha'][:7]} and main")
+    code = 1 if tampered else 3 if lagging else 2 if undetermined else 0
+    return code, lines
+
+
+def vendor_check_selftest() -> list[str]:
+    """T2: the four outcomes, with the network replaced by a dict."""
+    import tempfile
+    problems: list[str] = []
+    a, b = b'{"v": 1}\n', b'{"v": 2}\n'
+    cases = [
+        ("equal to sha and main is quiet", a, {"S": a, "main": a}, 0),
+        ("equal to sha, main moved is a lag", a, {"S": a, "main": b}, 3),
+        ("differs from the recorded sha is tampered", b, {"S": a, "main": b}, 1),
+        ("an unreadable upstream is undetermined, not drift", a, {}, 2),
+        ("sha readable, main unreadable is undetermined", a, {"S": a}, 2),
+    ]
+    for label, local, remote, want in cases:
+        with tempfile.TemporaryDirectory() as d:
+            dp = pathlib.Path(d)
+            (dp / "sources.json").write_text(json.dumps({"servers": {"w": {
+                "repo": "mctlhq/w", "path": "docs/portal-allowlist.json", "ref": "main", "sha": "S",
+                "vendored_at": "2026-09-25T00:00:00Z"}}}))
+            (dp / "w.json").write_bytes(local)
+
+            def stub(repo, path, ref, remote=remote):
+                if ref not in remote:
+                    raise Undetermined(f"{repo}@{ref}: stubbed 404")
+                return remote[ref]
+            code, lines = vendor_check(dp, stub)
+        if code != want:
+            problems.append(f"vendor-check: {label}: exit {code}, expected {want} ({lines})")
+    return problems
+
+
 def main() -> int:
+    if "--vendor-check" in sys.argv[1:]:
+        code, lines = vendor_check(ALLOWLISTS_DIR)
+        for line in lines:
+            print(line, file=sys.stderr if code else sys.stdout)
+        return code
+
     if "--selftest" in sys.argv[1:]:
         problems, valid_n, invalid_n = run_selftest()
+        problems += vendor_check_selftest()
         if problems:
             for p in problems:
                 print(p, file=sys.stderr)
@@ -675,6 +838,10 @@ def main() -> int:
         print(f"{MCP_SERVERS_TF} not found -- the existence check has nothing to read", file=sys.stderr)
         return 2
     errors = run(ALLOWLISTS_DIR, MCP_SERVERS_TF.read_text(encoding="utf-8"))
+    if "--widening-ok" in sys.argv[1:]:
+        for w in (e for e in errors if is_widening(e)):
+            print(f"WIDENING (baseline.json must be edited in this PR): {w}")
+        errors = [e for e in errors if not is_widening(e)]
     if errors:
         for e in errors:
             print(e, file=sys.stderr)

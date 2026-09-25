@@ -1,5 +1,5 @@
 {
-  "$comment": "Provenance of each vendored copy: sha is that repo's most recent commit touching docs/portal-allowlist.json on main as of vendored_at (git log -1 --format=%H -- docs/portal-allowlist.json), not necessarily main's HEAD commit. --vendor-check (a later PR) compares the vendored file against this sha and against main.",
+  "$comment": "Provenance of each vendored copy: sha is that repo's most recent commit touching docs/portal-allowlist.json on main as of vendored_at (git log -1 --format=%H -- docs/portal-allowlist.json), not necessarily main's HEAD commit. scripts/validate-portal-allowlists.py --vendor-check compares the vendored file against this sha and against main, nightly in cloudflare-drift.yml; .github/workflows/portal-allowlist-vendor.yml is the only thing that updates an entry.",
   "servers": {
     "alice": {
       "repo": "mctlhq/mctl-alice",
