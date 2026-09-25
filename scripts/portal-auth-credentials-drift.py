@@ -50,10 +50,11 @@ API = "https://api.cloudflare.com/client/v4"
 # it: every empty-blob server not in this set raises Undetermined from inside
 # the resource loop, so it was aborting the whole nightly scan for `tg` too
 # (mctlhq/mctl-gitops#1363). `coolify` is added the same way it is created --
-# DCR, no blob, no client_secret. `seerrsense` and `api` are not here: both
-# are still live in manual mode with no Terraform resource in mcp-servers.tf
-# at all, so there is no state entry for this script to see yet either way.
-DCR_SERVERS = {"projects", "alice", "coolify"}
+# DCR, no blob, no client_secret. `seerrsense` joined on 2026-09-25, in the
+# same change that adopted it into mcp-servers.tf after its move to DCR:
+# without it here, its empty blob would abort the scan. `api` is not here: it
+# is still live in manual mode with no Terraform resource at all.
+DCR_SERVERS = {"projects", "alice", "coolify", "seerrsense"}
 
 
 class Undetermined(Exception):
@@ -320,7 +321,7 @@ def selftest() -> int:
         failures.append("dcr skipped")
 
     try:
-        desired_from_state(state_with({"id": "seerrsense", "account_id": "a"}))
+        desired_from_state(state_with({"id": "api", "account_id": "a"}))
         ok = False
     except Undetermined:
         ok = True
