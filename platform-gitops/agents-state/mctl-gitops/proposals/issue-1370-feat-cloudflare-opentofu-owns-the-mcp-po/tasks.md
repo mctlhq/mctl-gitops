@@ -33,12 +33,17 @@ writes to Cloudflare before task 9, and task 9 is an operator dispatch.
 
 - [ ] 2. Write `allowlists/mapping.json` (depends on 1) — DoD: a
       `{"servers": {"<id>": {"vendored": bool, "default_disabled": bool,
-      "on_behalf": bool, "updated_prompts": [...], "updated_tools": [...]}}}`
-      object covering all six live members; `default_disabled`/`on_behalf`
-      copied from the live portal (the same two fields
-      `scripts/portal-membership-add.sh` asserts are uniform across members);
-      `updated_prompts` literal per server (api 4/4, coolify 0/3, the rest
-      empty); `updated_tools` present only where `vendored` is false.
+      "on_behalf": bool, "updated_prompts": [...] | null, "updated_tools":
+      [...]}}}` object covering all six live members; `default_disabled`/
+      `on_behalf` copied from `live-snapshot-2026-09-25.json` (the same two
+      fields `scripts/portal-membership-add.sh` asserts are uniform across
+      members); `updated_prompts` copied from the snapshot as-is: the literal
+      3-entry all-disabled list for `coolify`, and `null` for the other five,
+      whose API response has no `updated_prompts` key at all ("no override").
+      `api`'s four prompts are enabled by *absence* of an override, not by a
+      4-entry list, so `api` gets `null`, not four `enabled: true` entries
+      (design amendment 5). `updated_tools` present only where `vendored` is
+      false.
 
 - [ ] 3. Write `allowlists/sources.json` and `allowlists/baseline.json`
       (depends on 1, 2) — DoD: `sources.json` has `{repo, path, ref, sha,
