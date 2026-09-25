@@ -1,5 +1,17 @@
 # Tasks: issue-1370-feat-cloudflare-opentofu-owns-the-mcp-po
 
+> **Slice 1 — the only slice this implementer run does (2026-09-25).** Implement
+> **PR A: tasks 1-5, plus T1 and T7**, as one PR, and stop. Do not start PR B
+> or anything after it; each later PR is its own run once the previous one has
+> merged. The first attempt (2026-09-24) stopped with no commits for two
+> reasons, both fixed here: the whole sequence was too large for one run, and
+> task 2 needs live values it had no credential to read. Those values are now
+> committed next to this file as `live-snapshot-2026-09-25.json`: take
+> `default_disabled`, `on_behalf` and `updated_prompts` for `mapping.json`
+> (task 2) and the per-server counts for `baseline.json` (task 3) from it, and
+> read no other source for them. Record in the PR body that they came from
+> that snapshot.
+
 Four PRs in mctl-gitops (A: vendoring, B: import + measurement, C: apply +
 record, D: retirements) plus one small PR per owning service repo. Nothing
 writes to Cloudflare before task 9, and task 9 is an operator dispatch.
