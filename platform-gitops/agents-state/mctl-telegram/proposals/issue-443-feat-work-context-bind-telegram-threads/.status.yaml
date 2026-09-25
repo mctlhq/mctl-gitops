@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-09-24T17:23:23Z'
+status: merged
+updated_at: '2026-09-25T18:23:11Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -22,8 +22,9 @@ execution:
   trace_id: 9b532fe92ec2bcc84514e6cfe8a634bf
   agent: implementer
   version: ''
-review_attempts: 3
 github:
-  state: open
-  head_sha: f7f07a4e94061759c17ab88caef1d08d123547af
-  observed_at: '2026-09-24T17:23:23Z'
+  state: merged
+  head_sha: f3bbbd383ffffe4d4ea25e5f1cbf8c70e8af115c
+  observed_at: '2026-09-25T18:23:11Z'
+merged_at: '2026-09-25T18:23:11Z'
+merge_commit: 4bfde728402d23223a7e15f31039b5adbd254e2f
