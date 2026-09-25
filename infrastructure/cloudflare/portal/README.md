@@ -240,9 +240,10 @@ builds each server's `updated_tools` from three committed files
 (mctlhq/mctl-gitops#1370):
 
 - `allowlists/<id>.json`, the decision for each tool. It is the owning repo's
-  `docs/portal-allowlist.json`, vendored byte-identical. `api` is the
-  exception: until it is vendored, its decisions are a literal list in
-  `mapping.json`.
+  `docs/portal-allowlist.json`, vendored byte-identical, for all six servers.
+  `mapping.json` can still carry a literal `updated_tools` for a server
+  marked `vendored: false`, for an owning repo whose file fails the shape
+  rules. `api` used that until mctlhq/mctl-api#396.
 - `allowlists/mapping.json`, the per-server settings that are not the owning
   repo's call: `default_disabled`, `on_behalf` and `updated_prompts`.
 - `allowlists/catalogue.json`, each server's synced tool names in the order

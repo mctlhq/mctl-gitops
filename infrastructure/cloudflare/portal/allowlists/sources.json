@@ -8,6 +8,13 @@
       "sha": "8aaecb1229d1d5f80af86af0ce4f8b90023468cd",
       "vendored_at": "2026-09-25T00:29:52Z"
     },
+    "api": {
+      "repo": "mctlhq/mctl-api",
+      "path": "docs/portal-allowlist.json",
+      "ref": "main",
+      "sha": "473df1e3f8bda7c16db1ad777b4fc135de0406b1",
+      "vendored_at": "2026-09-25T12:00:00Z"
+    },
     "coolify": {
       "repo": "mctlhq/mctl-coolify-mcp",
       "path": "docs/portal-allowlist.json",

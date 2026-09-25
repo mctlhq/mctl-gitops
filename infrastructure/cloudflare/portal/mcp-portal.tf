@@ -8,9 +8,8 @@
 # byte-identical into allowlists/<id>.json and checked by
 # scripts/validate-portal-allowlists.py. Everything about a server's
 # membership that is not the owning repo's call -- default_disabled,
-# on_behalf, the prompt override, and `api`'s literal tool list until it is
-# vendored -- is in allowlists/mapping.json, which the validator reads too,
-# so neither side needs an HCL parser.
+# on_behalf and the prompt override -- is in allowlists/mapping.json, which
+# the validator reads too, so neither side needs an HCL parser.
 #
 # Until #1370 the switches below were a scripted API call from a committed
 # JSON file; this resource is now their only writer.

@@ -1,5 +1,5 @@
 {
-  "$comment": "Non-widening reference for scripts/validate-portal-allowlists.py. tools_total/tools_enabled are the vendored FILE's own counts (every entry in allowlists/<id>.json, counted as committed in this PR) -- NOT the live/catalogue-restricted counts quoted in this proposal's requirements.md (alice 12/12, projects 8/8, tg 30/30, api 75/75, coolify 22/45, seerrsense 5/5). Those two agree for four of six servers; tg and api differ because their files list tools gated by scopes the portal's own OAuth grant does not request (measured 2026-09-25, design.md amendment 5) -- present upstream, absent from the live catalogue, and therefore invisible to a validator with no Cloudflare credential (#1111). See the module docstring of validate-portal-allowlists.py. prompts_total/prompts_enabled, which have no vendored file to read counts from, ARE the live-portal numbers, taken from live-snapshot-2026-09-25.json's catalogue_prompts/updated_prompts exactly as tasks.md's Slice 1 instructs. `api` is not vendored (mapping.json carries its 75 literal updated_tools, all enabled, matching live) and is gated here all the same: its counts are those literal entries, and its prompts_total/prompts_enabled 4/4 are the live catalogue shown with no override (updated_prompts: null). enabled_tools is the sorted list of the tool names counted in tools_enabled: the validator fails any enabled tool not named there, so a read-for-write swap at a constant count is caught (a count alone cannot see it), and it requires len(enabled_tools) == tools_enabled.",
+  "$comment": "Non-widening reference for scripts/validate-portal-allowlists.py. tools_total/tools_enabled are the vendored FILE's own counts (every entry in allowlists/<id>.json, counted as committed in this PR) -- NOT the live/catalogue-restricted counts quoted in this proposal's requirements.md (alice 12/12, projects 8/8, tg 30/30, api 75/75, coolify 22/45, seerrsense 5/5). Those two agree for four of six servers; tg and api differ because their files list tools gated by scopes the portal's own OAuth grant does not request (measured 2026-09-25, design.md amendment 5) -- present upstream, absent from the live catalogue, and therefore invisible to a validator with no Cloudflare credential (#1111). See the module docstring of validate-portal-allowlists.py. prompts_total/prompts_enabled, which have no vendored file to read counts from, ARE the live-portal numbers, taken from live-snapshot-2026-09-25.json's catalogue_prompts/updated_prompts exactly as tasks.md's Slice 1 instructs. api was vendored on 2026-09-25 once mctlhq/mctl-api#396 gave every entry a reason: its counts are its file's, 92/77, of which the 75 catalogue tools match live and 2 enabled entries (mctl_get_lifecycle_ownership, mctl_inspect_lifecycle_conflict) are not synced; its prompts_total/prompts_enabled 4/4 are the live catalogue shown with no override (updated_prompts: null). enabled_tools is the sorted list of the tool names counted in tools_enabled: the validator fails any enabled tool not named there, so a read-for-write swap at a constant count is caught (a count alone cannot see it), and it requires len(enabled_tools) == tools_enabled.",
   "servers": {
     "alice": {
       "tools_total": 12,
@@ -23,8 +23,8 @@
       "recorded": "2026-09-25"
     },
     "api": {
-      "tools_total": 75,
-      "tools_enabled": 75,
+      "tools_total": 92,
+      "tools_enabled": 77,
       "enabled_tools": [
         "mctl_acknowledge_incident",
         "mctl_add_custom_domain",
@@ -44,6 +44,7 @@
         "mctl_enable_tenant_skill",
         "mctl_get_dev_loop",
         "mctl_get_incident",
+        "mctl_get_lifecycle_ownership",
         "mctl_get_openclaw_sizing_recommendation",
         "mctl_get_operation",
         "mctl_get_resource_usage",
@@ -55,6 +56,7 @@
         "mctl_get_workflow_status",
         "mctl_grant_repo_access",
         "mctl_incident_summary",
+        "mctl_inspect_lifecycle_conflict",
         "mctl_list_agent_executions",
         "mctl_list_agent_versions",
         "mctl_list_domains",
