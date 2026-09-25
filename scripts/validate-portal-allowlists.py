@@ -501,7 +501,7 @@ def run(allowlists_dir: pathlib.Path, tf_text: str) -> list[str]:
     return errors
 
 
-def case_tf_text(case_dir: pathlib.Path) -> str:
+def case_tf_text(case_dir: pathlib.Path) -> str | None:
     """A fixture may ship its own mcp-servers.tf to exercise the existence
     check without depending on (or polluting) the real one -- the same
     opt-in shape validate-agent-platform.py uses for its own cross-checks.
@@ -511,7 +511,10 @@ def case_tf_text(case_dir: pathlib.Path) -> str:
     try:
         return path.read_text(encoding="utf-8")
     except OSError:
-        return ""  # every non-UNMANAGED server then fails the existence check, loudly
+        # Not "": a case whose servers are all UNMANAGED would then pass
+        # without the existence check having read anything. The caller
+        # reports the case as a selftest problem instead.
+        return None
 
 
 def case_dirs(parent: pathlib.Path) -> list[pathlib.Path]:
@@ -535,8 +538,17 @@ def run_selftest() -> tuple[list[str], int, int]:
         )
         return problems, len(valid), len(invalid)
 
+    def tf_or_problem(case_dir: pathlib.Path) -> str | None:
+        tf = case_tf_text(case_dir)
+        if tf is None:
+            problems.append(f"fixture {case_dir.name!r}: no readable mcp-servers.tf (own or fallback {MCP_SERVERS_TF})")
+        return tf
+
     for case_dir in valid:
-        errors = run(case_dir, case_tf_text(case_dir))
+        tf = tf_or_problem(case_dir)
+        if tf is None:
+            continue
+        errors = run(case_dir, tf)
         if errors:
             problems.append(f"valid fixture {case_dir.name!r} unexpectedly failed:")
             problems.extend(f"  {e}" for e in errors)
@@ -547,7 +559,10 @@ def run_selftest() -> tuple[list[str], int, int]:
             problems.append(f"invalid fixture {case_dir.name!r} has no expect.txt naming the error it exists for")
             continue
         expect = expect_path.read_text(encoding="utf-8").strip()
-        errors = run(case_dir, case_tf_text(case_dir))
+        tf = tf_or_problem(case_dir)
+        if tf is None:
+            continue
+        errors = run(case_dir, tf)
         if not any(expect in e for e in errors):
             problems.append(
                 f"invalid fixture {case_dir.name!r}: no error contains {expect!r}; got {errors or 'none'}"

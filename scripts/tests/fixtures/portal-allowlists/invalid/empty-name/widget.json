@@ -6,7 +6,7 @@
   "tools": [
     {
       "name": "",
-      "enabled": true,
+      "enabled": false,
       "reason": "test"
     },
     {

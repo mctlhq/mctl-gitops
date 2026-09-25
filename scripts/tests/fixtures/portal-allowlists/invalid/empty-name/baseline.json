@@ -2,9 +2,8 @@
   "servers": {
     "widget": {
       "tools_total": 3,
-      "tools_enabled": 2,
+      "tools_enabled": 1,
       "enabled_tools": [
-        "",
         "beta"
       ],
       "prompts_total": 0,
