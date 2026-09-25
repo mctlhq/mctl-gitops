@@ -3,6 +3,7 @@
     "widget": {
       "tools_total": 3,
       "tools_enabled": 0,
+      "enabled_tools": [],
       "prompts_total": 0,
       "prompts_enabled": 0,
       "recorded": "2026-09-25"

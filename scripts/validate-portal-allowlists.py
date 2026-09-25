@@ -17,9 +17,10 @@ script also checks:
   - `sources.json`  -- {"servers": {"<id>": {"repo", "path", "ref", "sha",
     "vendored_at"}}}, the provenance of each vendored copy.
   - `baseline.json` -- {"servers": {"<id>": {"tools_total", "tools_enabled",
-    "prompts_total", "prompts_enabled", "recorded"}}}, the non-widening
-    reference: a bump that raises a server's enabled/total tool count fails
-    here until a human edits this file in the same diff.
+    "enabled_tools", "prompts_total", "prompts_enabled", "recorded"}}}, the
+    non-widening reference: a bump that raises a server's enabled/total tool
+    count, or enables a tool NAME not listed in `enabled_tools`, fails here
+    until a human edits this file in the same diff.
 
 What this script enforces, and what it deliberately does not:
 
@@ -45,6 +46,11 @@ What this script enforces, and what it deliberately does not:
     in `mcp-servers.tf` -- the same literal-grep technique
     `portal-membership-add.sh`'s `tf_declared()` already uses, rather than a
     HCL parser.
+  - mapping entries: each `mapping.json` server carries exactly
+    `vendored`, `default_disabled`, `on_behalf` and `updated_prompts`, plus
+    `updated_tools` if and only if it is not vendored. The three switches are
+    booleans -- PR B sends `default_disabled`/`on_behalf` to the portal as
+    they stand, so a typo there must not reach the API.
   - literal mappings: a non-vendored server's `updated_tools` gets the same
     per-entry checks as a vendored file's tools (keys exactly `name` and
     `enabled`, `name` a non-empty unique string, `enabled` a boolean), minus
@@ -53,7 +59,10 @@ What this script enforces, and what it deliberately does not:
     or a list of such `{name, enabled}` entries.
   - non-widening, for EVERY server in `mapping.json`, vendored or not:
     tools_total/tools_enabled (counted from the vendored file, or from the
-    literal `updated_tools`) must not exceed `baseline.json`; and the
+    literal `updated_tools`) must not exceed `baseline.json`; every enabled
+    tool name must appear in the server's `enabled_tools` there, so turning a
+    read tool off and a write tool on at a constant count still fails (a
+    count alone cannot see that swap); and the
     effective number of enabled prompts must not exceed `prompts_enabled`,
     where `updated_prompts: null` counts as all `prompts_total` enabled (no
     override means the portal shows every catalogue prompt), so replacing a
@@ -69,18 +78,20 @@ expected to disagree; PR B must read the portal one from `mapping.json` only.
 What it does NOT do: compare a vendored file against the server's live,
 synced tool *catalogue*. CI holds no Cloudflare credential for this root
 (#1111), so it cannot know which of a file's entries the portal has even
-synced. Measured 2026-09-25 (design.md amendment 5): the `tg` and `api`
-files each list more tools than their live catalogue -- upstream-gated
-entries (`account:manage`, `admin:broadcast` scopes the portal's own OAuth
-grant does not request) that exist upstream but that the portal has never
-seen. This is why `baseline.json`'s tools_total/tools_enabled here are the
-vendored FILE's own counts, not the live/catalogue-restricted counts quoted
-in the proposal's requirements.md acceptance criteria (alice 12/12, projects
-8/8, tg 30/30, api 75/75, coolify 22/45, seerrsense 5/5) -- those two sets of
-numbers agree for four of six servers (alice, projects, coolify, seerrsense,
-whose files carry no such extra entries) and differ only for tg (37 file
-entries, 36 enabled) and api (92 file entries, 77 enabled), exactly the
-servers design.md's amendment names. This script has no way to compute the
+synced. Measured 2026-09-25 (design.md amendment 5): the `tg` file lists
+more tools than its live catalogue -- upstream-gated entries
+(`account:manage`, `admin:broadcast` scopes the portal's own OAuth grant does
+not request) that exist upstream but that the portal has never seen. This is
+why `baseline.json`'s tools_total/tools_enabled here are the vendored FILE's
+own counts, not the live/catalogue-restricted counts quoted in the
+proposal's requirements.md acceptance criteria (alice 12/12, projects 8/8,
+tg 30/30, api 75/75, coolify 22/45, seerrsense 5/5). For the vendored
+servers the two agree except tg (37 file entries, 36 enabled). `api` is not
+vendored: its baseline is its 75 literal `updated_tools` entries in
+mapping.json, all enabled, which is the live mapping itself. (mctl-api's own
+file, 92 entries / 77 enabled, is what design.md's amendment measured; it is
+not read here until that repo's file passes the shape rules and `api` is
+vendored.) This script has no way to compute the
 catalogue-restricted number, so it deliberately does not try to reproduce it;
 it only refuses a FUTURE bump that grows a file's own counts past what is
 already committed, which is the one thing it can check without a live
@@ -126,6 +137,8 @@ ALLOWED_TOOL_KEYS = {"name", "enabled", "reason", "upstream_gates", "override"}
 LITERAL_ENTRY_KEYS = {"name", "enabled"}
 PORTAL_ID = "mcp"
 TF_RESOURCE_TYPE = "cloudflare_zero_trust_access_ai_controls_mcp_server"
+MAPPING_SWITCHES = ("vendored", "default_disabled", "on_behalf")
+MAPPING_KEYS = {*MAPPING_SWITCHES, "updated_prompts"}
 
 # Mapped on the portal, no Terraform resource of their own yet -- the
 # `#1363` seam. Recorded here, not discovered, so closing #1363 is a
@@ -249,6 +262,27 @@ def check_literal_entries(where: str, entries, errors: list[str]) -> None:
             errors.append(f"{ep} ({name!r}): enabled is not a boolean ({e.get('enabled')!r})")
 
 
+def check_mapping_entry(sid: str, s, errors: list[str]) -> None:
+    """The keys PR B turns into the portal's `servers[]` element. Its
+    `default_disabled`/`on_behalf` go to the API verbatim, so a string or a
+    misspelt key here would be a live change, not a lint.
+    """
+    where = f"allowlists/mapping.json: {sid!r}"
+    if not isinstance(s, dict):
+        errors.append(f"{where}: entry is a {type(s).__name__}, expected an object")
+        return
+    allowed = MAPPING_KEYS if s.get("vendored") is True else MAPPING_KEYS | {"updated_tools"}
+    unknown = set(s) - allowed
+    if unknown:
+        errors.append(f"{where}: key(s) outside the allowed set: {sorted(unknown)}")
+    missing = MAPPING_KEYS - set(s)
+    if missing:
+        errors.append(f"{where}: missing key(s): {sorted(missing)}")
+    for key in MAPPING_SWITCHES:
+        if key in s and not isinstance(s[key], bool):
+            errors.append(f"{where}: {key} is not a boolean ({s[key]!r})")
+
+
 def check_coverage(file_ids: set[str], mapping, errors: list[str]) -> dict:
     """{files} == {mapping.json servers where vendored}, and a non-vendored
     entry declares its mapping literally (design.md's escape hatch for a
@@ -258,6 +292,9 @@ def check_coverage(file_ids: set[str], mapping, errors: list[str]) -> dict:
     if not isinstance(servers, dict):
         errors.append("allowlists/mapping.json: missing or malformed top-level 'servers' object")
         return {}
+
+    for sid in sorted(servers):
+        check_mapping_entry(sid, servers[sid], errors)
 
     vendored_ids = {sid for sid, s in servers.items() if isinstance(s, dict) and s.get("vendored") is True}
     non_vendored_ids = set(servers) - vendored_ids
@@ -356,7 +393,27 @@ def check_baseline(files: dict, servers: dict, baseline, errors: list[str]) -> N
             errors.append(f"allowlists/baseline.json: {sid!r} {', '.join(bad)} not integer(s)")
             continue
 
+        names = b.get("enabled_tools")
+        if not isinstance(names, list) or not all(isinstance(n, str) and n for n in names):
+            errors.append(f"allowlists/baseline.json: {sid!r} enabled_tools is not a list of non-empty strings")
+            continue
+        if len(set(names)) != ints["tools_enabled"]:
+            errors.append(
+                f"allowlists/baseline.json: {sid!r} enabled_tools names {len(set(names))} distinct tool(s) "
+                f"but tools_enabled is {ints['tools_enabled']} -- the two must agree"
+            )
+
         total = len(tools)
+        enabled_names = {
+            t["name"] for t in tools
+            if isinstance(t, dict) and t.get("enabled") is True and isinstance(t.get("name"), str)
+        }
+        unlisted = sorted(enabled_names - set(names))
+        if unlisted:
+            errors.append(
+                f"{where}: enables tool(s) not in baseline.json's enabled_tools for {sid!r}: {unlisted}; "
+                "add them there in the same change if this widening is intentional"
+            )
         enabled = sum(1 for t in tools if isinstance(t, dict) and t.get("enabled") is True)
         if enabled > ints["tools_enabled"] or total > ints["tools_total"]:
             errors.append(
@@ -448,7 +505,11 @@ def case_tf_text(case_dir: pathlib.Path) -> str:
     opt-in shape validate-agent-platform.py uses for its own cross-checks.
     """
     fixture_tf = case_dir / "mcp-servers.tf"
-    return (fixture_tf if fixture_tf.is_file() else MCP_SERVERS_TF).read_text(encoding="utf-8")
+    path = fixture_tf if fixture_tf.is_file() else MCP_SERVERS_TF
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return ""  # every non-UNMANAGED server then fails the existence check, loudly
 
 
 def case_dirs(parent: pathlib.Path) -> list[pathlib.Path]:
