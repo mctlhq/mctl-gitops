@@ -102,10 +102,10 @@ resource "cloudflare_zero_trust_access_ai_controls_mcp_server" "tg" {
 # stays manual until mctl-telegram conforms to the automatic (DCR)
 # registration rule in mctlhq/.github#137 — its DCR default drops any scope
 # the client did not name, which would silently narrow what the portal is
-# granted. `seerrsense` and `api` are also live in manual mode but have no
-# Terraform resource at all yet (issue mctlhq/mctl-gitops#1363); until they
-# are adopted here, manual mode costs them the thing this one is being
-# registered to test: a manual server's capability catalogue is captured
+# granted. `api` is also live in manual mode, with no Terraform resource yet
+# (issue mctlhq/mctl-gitops#1363, blocked on mctlhq/mctl-api#395); `seerrsense`
+# moved to DCR on 2026-09-25 and is adopted at the end of this file. Manual
+# mode costs a server the thing this one is being registered to test: a manual server's capability catalogue is captured
 # once, at the first user authorization, and never refreshed. That is
 # Cloudflare's documented limitation, and it is why `POST servers/{id}/sync`
 # answers `success` on a manual server while `last_synced` does not move —
@@ -232,6 +232,56 @@ resource "cloudflare_zero_trust_access_ai_controls_mcp_server" "coolify" {
   lifecycle {
     # Same reasoning as tg above: mcp-portal.tf writes the mapping, from
     # allowlists/coolify.json (vendored from mctlhq/mctl-coolify-mcp).
+    ignore_changes = [updated_tools, updated_prompts]
+  }
+}
+
+# The seventh resource, and an adoption: `seerrsense` was created by hand in
+# the dashboard on 2026-09-10 in manual mode, and moved to automatic (DCR)
+# mode on 2026-09-25 (mctlhq/mctl-gitops#1363). The move was done against the
+# API, not by Terraform, because the provider cannot express it:
+# `auth_credentials` is write-only, so leaving it out of a resource never
+# clears a manual registration that already exists. The measured sequence:
+#
+#   1. PUT {auth_type: "bearer", auth_credentials: "<dummy>"}, which clears the
+#      stored manual registration (auth_config_summary becomes null);
+#   2. PUT {auth_type: "oauth", name, description}, with no auth_credentials.
+#      A PUT carrying auth_type alone answers 7000 "D1_ERROR: near WHERE";
+#      with name and description it succeeds, and the dashboard then shows
+#      the server as "Automatic (recommended)";
+#   3. "Authenticate server" in the dashboard. Cloudflare registers itself
+#      at https://seerrsense.mctl.ai/register, which admits only the two
+#      portal callbacks in SEERRSENSE_DCR_REDIRECT_URIS (mctlhq/seerrsense#74),
+#      and the owner address signs in and consents.
+#
+# Afterwards: status ready, authentication_status connected, last_synced
+# moved from 2026-09-13 to 2026-09-25 23:13 on its own, and the portal
+# mapping (five tools, all enabled) survived untouched. From here the
+# catalogue is synced by Cloudflare, so a new seerrsense tool reaches the
+# portal without a re-snapshot.
+#
+# No auth_credentials and no client_secret, as for projects/alice/coolify:
+# supplying either is what opts a server INTO manual mode.
+import {
+  to = cloudflare_zero_trust_access_ai_controls_mcp_server.seerrsense
+  id = "${var.account_id}/seerrsense"
+}
+
+resource "cloudflare_zero_trust_access_ai_controls_mcp_server" "seerrsense" {
+  account_id = var.account_id
+  id         = "seerrsense"
+  name       = "seerrsense (seerrsense.mctl.ai)"
+  hostname   = "https://seerrsense.mctl.ai/mcp"
+  auth_type  = "oauth"
+
+  description = "Second upstream of the private aggregate portal. Registered by DCR (portal-restricted, mctlhq/seerrsense#74). Refs mctlhq/.github#35, #137, mctlhq/mctl-gitops#1363."
+
+  secure_web_gateway               = false
+  is_shared_oauth_callback_enabled = false
+
+  lifecycle {
+    # Same reasoning as tg above: mcp-portal.tf writes the mapping, from
+    # allowlists/seerrsense.json (vendored from mctlhq/seerrsense).
     ignore_changes = [updated_tools, updated_prompts]
   }
 }

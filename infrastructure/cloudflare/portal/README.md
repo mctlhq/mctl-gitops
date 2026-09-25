@@ -198,19 +198,15 @@ separate decision for a `docs/portal-allowlist.json` in
 silently aborting `portal-auth-credentials-drift.py`'s whole nightly scan
 before this server was even the subject.
 
-This change deliberately stops short of the rest of mctlhq/mctl-gitops#1363:
-`seerrsense` and `api` are still live in manual OAuth mode with no Terraform
-resource here at all. Moving them to automatic (DCR) mode needs, in order: a
-live measurement of whether a manual registration can be cleared in place
-(mirroring "What moves the snapshot" above, but for `auth_config_summary`
-rather than the tool catalogue), a live DCR probe confirming each upstream
-restricts registration to `https://mcp.mctl.ai/servers-callback`, and —
-because that measurement and probe both write to production OAuth state —
-credentials and judgment this automated change does not have. Whoever
-performs them is expected to add the `import` blocks and resources here field
-for field on `tg`'s model (manual, interim) or `projects`'s (automatic,
-final), following mctlhq/mctl-gitops#1363's tasks 1, 2, 5 and 6, and extend
-`DCR_SERVERS`/`OWNERS` accordingly once the mode of each is settled.
+`seerrsense` moved to automatic (DCR) mode on 2026-09-25 and is adopted in
+`mcp-servers.tf`; the resource's comment has the measured API sequence, since
+the provider cannot clear a manual registration (`auth_credentials` is
+write-only). `api` is still live in manual OAuth mode with no Terraform
+resource: its DCR keeps registrations in memory and does not allow the
+portal's callbacks (mctlhq/mctl-api#395). `tg` stays manual until
+mctl-telegram restricts its DCR to the portal's exact callbacks
+(mctlhq/.github#137). Each moves the same way as `seerrsense`, joining
+`DCR_SERVERS` in `scripts/portal-auth-credentials-drift.py` in the same change.
 
 Creating the Terraform resource above registers a server with Cloudflare, but
 it does not make the server reachable through `mcp.mctl.ai`. The portal keeps
@@ -312,7 +308,7 @@ inputs.
 
 The portal keeps a snapshot of each upstream's tools (`servers/{id}.tools`,
 including every `outputSchema`) and serves clients from it. For a server in
-manual OAuth mode — all three of ours — that snapshot is taken **once**, when
+manual OAuth mode — `tg` and `api` today — that snapshot is taken **once**, when
 the first user completes upstream OAuth, and is never refreshed. That is
 documented, not a bug: the MCP Portals limitations list says *"Manual OAuth
 capabilities are captured during the first user authorization … Background
@@ -391,7 +387,7 @@ Then the target and the two helpers:
 ```
 set -euo pipefail
 export CLOUDFLARE_ACCOUNT_ID=6a09f637d20e1f66a8e9d45ebe778058
-SERVER=tg                               # or api, or seerrsense
+SERVER=tg                               # or api
 
 cf() { curl -sS --fail-with-body \
   -K <(printf 'header = "Authorization: Bearer %s"\n' "$CLOUDFLARE_API_TOKEN") \
@@ -403,7 +399,7 @@ Steps 0 to 2, the destructive half:
 
 ```
 # 0. back up the registration, and refuse to go on without a file that has
-#    something in it. Step 1 clears it, and for api and seerrsense nothing
+#    something in it. Step 1 clears it, and for api nothing
 #    else records it (only tg is described in mcp-servers.tf).
 summary=$(cf)
 printf '%s' "$summary" | ok
