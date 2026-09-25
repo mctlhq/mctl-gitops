@@ -1,0 +1,1 @@
+'ghost' is not a mapping.json server

@@ -57,6 +57,10 @@ things:
        here; do NOT re-snapshot for either
     4  an upstream this script expects is not mapped on the portal at all --
        restore the mapping, or retire it from OWNERS
+    5  the portal is fine, but the catalogue committed in
+       infrastructure/cloudflare/portal/allowlists/catalogue.json no longer
+       matches it (a server re-synced) -- update that file in a PR, which is
+       what mcp-portal.tf builds updated_tools from. Do NOT re-snapshot
 
 Every non-zero status is a failure a caller must surface. The numbers say
 which one happened, never that any of them is ignorable.
@@ -68,6 +72,7 @@ import datetime as _dt
 import http.client
 import json
 import os
+import pathlib
 import sys
 import urllib.error
 import urllib.request
@@ -117,6 +122,12 @@ PRIVATE_OWNERS = {"projects"}
 TOKEN_ENV = "ALLOWLIST_TOKEN"
 GITHUB_API = "https://api.github.com"
 PORTAL = "mcp"
+
+# What mcp-portal.tf builds `servers[].updated_tools` from, because provider
+# 5.24 cannot read the catalogue itself (mctlhq/mctl-gitops#1382). Compared
+# here with the live catalogue, names and order both: the attribute is a list.
+CATALOGUE_FILE = (pathlib.Path(__file__).resolve().parents[1]
+                  / "infrastructure/cloudflare/portal/allowlists/catalogue.json")
 
 
 class Undetermined(Exception):
@@ -302,6 +313,30 @@ def closed_objects(schema, path: str = "") -> list[str]:
 # in selftest(), so a waiver naming a kind this file cannot produce fails on a
 # pull request instead of at night, where it would arrive as a stale catalogue
 # and a destructive instruction that fixes nothing.
+def catalogue_file_lag(server: str, snapshot: dict, committed: dict) -> str | None:
+    """One line when catalogue.json disagrees with the live catalogue, else None.
+
+    Not a KINDS finding: nothing about the portal is wrong, and a waiver is
+    not the remedy -- a one-file PR is. A server whose live side cannot be
+    read is left to compare(), which already reports it as undetermined.
+    """
+    live = [t.get("name") for t in (snapshot.get("tools") or []) if isinstance(t, dict)]
+    if not live:
+        return None
+    want = committed.get(server)
+    if want is None:
+        return f"{server}: not in catalogue.json; add its {len(live)} tool(s) in portal order"
+    if want == live:
+        return None
+    added = [n for n in live if n not in want]
+    gone = [n for n in want if n not in live]
+    if added or gone:
+        return (f"{server}: catalogue.json differs from the live catalogue "
+                f"(last_synced {snapshot.get('last_synced')}) -- synced but not "
+                f"committed: {added or 'none'}; committed but not synced: {gone or 'none'}")
+    return f"{server}: catalogue.json has the live tools in a different order; copy the portal's order"
+
+
 KINDS = ("missing-tool", "extra-tool",
          "closed-output-schemas", "closed-input-schemas")
 
@@ -942,6 +977,30 @@ def selftest() -> int:
     if not ok:
         failures.append("private fetch no token")
 
+    # catalogue.json against the live catalogue: quiet when equal, and each
+    # way it can disagree is named -- a list attribute diffs on order alone.
+    live3 = snap(["a", "b", "c"])
+    for label, committed_cat, server, want_fire in (
+        ("an identical committed catalogue is quiet", {"s": ["a", "b", "c"]}, "s", False),
+        ("a tool synced but not committed fires", {"s": ["a", "b"]}, "s", True),
+        ("a tool committed but no longer synced fires", {"s": ["a", "b", "c", "d"]}, "s", True),
+        ("the same tools in another order fire", {"s": ["c", "b", "a"]}, "s", True),
+        ("a server absent from the file fires", {}, "s", True),
+    ):
+        ok = (catalogue_file_lag(server, live3, committed_cat) is not None) == want_fire
+        print(f"{'ok  ' if ok else 'FAIL'} {label}")
+        if not ok:
+            failures.append(label)
+    ok = catalogue_file_lag("s", {"tools": None}, {}) is None
+    print(f"{'ok  ' if ok else 'FAIL'} a server with no readable catalogue is left to compare()")
+    if not ok:
+        failures.append("lag unreadable")
+    real = json.loads(CATALOGUE_FILE.read_text(encoding="utf-8")).get("servers")
+    ok = isinstance(real, dict) and set(real) == set(OWNERS)
+    print(f"{'ok  ' if ok else 'FAIL'} the committed catalogue.json names exactly the OWNERS servers")
+    if not ok:
+        failures.append("catalogue owners")
+
     if failures:
         print(f"\n{len(failures)} failing: {', '.join(map(str, failures))}")
         return 1
@@ -1016,11 +1075,23 @@ def main() -> int:
     # to cost the whole night's comparison: the run was red either way, but
     # the real finding waited until someone opened the raw step log.
     compared: set[str] = set()
+    lagging: list[str] = []
+    committed: dict | None = None
+    try:
+        committed = json.loads(CATALOGUE_FILE.read_text(encoding="utf-8"))["servers"]
+        if not isinstance(committed, dict):
+            raise ValueError("'servers' is not an object")
+    except Exception as e:  # noqa: BLE001 - the exit code is the point
+        undetermined.append(f"{CATALOGUE_FILE.name}: could not be read, so it was not compared: {e!r}")
     for server in servers:
         try:
             snapshot = live_snapshot(account, server, token)
             allowlist = owner_allowlist(server)
             findings += compare(server, snapshot, allowlist)
+            if committed is not None:
+                lag = catalogue_file_lag(server, snapshot, committed)
+                if lag:
+                    lagging.append(lag)
             checked.append(f"{server}={len(snapshot.get('tools') or [])}@{snapshot.get('last_synced')}")
             compared.add(server)
         except Undetermined as e:
@@ -1059,6 +1130,14 @@ def main() -> int:
               "(re-snapshot per infrastructure/cloudflare/portal/README.md):", file=sys.stderr)
         for line in failing:
             print(f"  {line}", file=sys.stderr)
+    if lagging:
+        # Its own heading and exit status: the portal is fine, and the remedy
+        # is a PR to one committed file, not the re-snapshot recipe.
+        print("the committed catalogue no longer matches the portal (update "
+              "infrastructure/cloudflare/portal/allowlists/catalogue.json; do "
+              "NOT re-snapshot):", file=sys.stderr)
+        for line in lagging:
+            print(f"  {line}", file=sys.stderr)
     if maintenance:
         # Its own heading and its own exit status: this one is fixed in this
         # file, not on the portal.
@@ -1076,12 +1155,16 @@ def main() -> int:
         print(f"compared: {', '.join(checked)}")
 
     # Ordered by how loud the finding is, not by exit number: a whole upstream
-    # gone outranks a stale catalogue, which outranks a server that could not
-    # be read, which outranks a waiver needing a delete.
+    # gone outranks a stale catalogue, which outranks a committed catalogue
+    # that lags the portal (the nightly plan is red for the same reason, and
+    # this names it), which outranks a server that could not be read, which
+    # outranks a waiver needing a delete.
     if vanished:
         return 4
     if failing:
         return 1
+    if lagging:
+        return 5
     if undetermined:
         return 2
     if maintenance:

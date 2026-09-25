@@ -36,29 +36,13 @@ locals {
     },
   )
 
-  # Each server's synced catalogue, in the order the portal stores it. The
-  # four servers this root manages come from their own resources; `api` and
-  # `seerrsense` are mapped on the portal without a resource here (#1363), so
-  # they are read. A server in mapping.json with no entry here fails the plan
-  # loudly on the lookup below, which is the intended behaviour.
-  portal_catalogue = {
-    tg         = cloudflare_zero_trust_access_ai_controls_mcp_server.tg.tools
-    projects   = cloudflare_zero_trust_access_ai_controls_mcp_server.projects.tools
-    alice      = cloudflare_zero_trust_access_ai_controls_mcp_server.alice.tools
-    coolify    = cloudflare_zero_trust_access_ai_controls_mcp_server.coolify.tools
-    api        = data.cloudflare_zero_trust_access_ai_controls_mcp_server.api.tools
-    seerrsense = data.cloudflare_zero_trust_access_ai_controls_mcp_server.seerrsense.tools
-  }
-}
-
-data "cloudflare_zero_trust_access_ai_controls_mcp_server" "api" {
-  account_id = var.account_id
-  id         = "api"
-}
-
-data "cloudflare_zero_trust_access_ai_controls_mcp_server" "seerrsense" {
-  account_id = var.account_id
-  id         = "seerrsense"
+  # Each server's synced catalogue: tool names in the order the portal stores
+  # them. Committed, not read, because provider 5.24 types the catalogue
+  # attribute `tools` as list(map(string)); the API's tool objects are nested,
+  # so the attribute is empty in state and in every data source (measured on
+  # #1382). scripts/portal-catalogue-drift.py compares this file with the live
+  # catalogue nightly.
+  portal_catalogue = jsondecode(file("${path.module}/allowlists/catalogue.json")).servers
 }
 
 # Adopting the live portal, the same pattern mcp-servers.tf uses for `tg`.
@@ -82,8 +66,9 @@ resource "cloudflare_zero_trust_access_ai_controls_mcp_portal" "mcp" {
 
   secure_web_gateway = false
   code_mode          = "off"
-  # allow_code_mode (false live) is deprecated in provider 5.24 and is
-  # optional+computed, so it is left to state rather than restated here.
+  # Deprecated in provider 5.24, but left out it plans as (known after
+  # apply), so the live value is restated.
+  allow_code_mode = false
 
   servers = [
     for id, s in local.portal_mapping : {
@@ -92,17 +77,17 @@ resource "cloudflare_zero_trust_access_ai_controls_mcp_portal" "mcp" {
       on_behalf        = s.on_behalf
       # null means no override: the portal shows every catalogue prompt.
       updated_prompts = s.updated_prompts
-      # Walk the catalogue, not the file: the portal stores exactly one entry
-      # per synced tool, in catalogue order. A file entry for a tool the
-      # portal has not synced (tg's upstream-gated tools, for one) would be
-      # a change the API never keeps -- a diff on every plan -- so it is left
-      # out until the tool appears in the catalogue, at which point it enters
-      # the plan by itself.
+      # Walk the catalogue, not the allowlist: the portal stores exactly one
+      # entry per synced tool, in catalogue order. An allowlist entry for a
+      # tool the portal has not synced (tg's upstream-gated tools, for one)
+      # would be a change the API never keeps -- a diff on every plan -- so
+      # it is left out until catalogue.json names the tool. A catalogue tool
+      # with no decision fails the lookup; the validator reports it first.
       updated_tools = [
-        for t in local.portal_catalogue[id] : {
-          name    = t["name"]
-          enabled = local.portal_decisions[id][t["name"]]
-        } if contains(keys(local.portal_decisions[id]), t["name"])
+        for name in local.portal_catalogue[id] : {
+          name    = name
+          enabled = local.portal_decisions[id][name]
+        }
       ]
     }
   ]

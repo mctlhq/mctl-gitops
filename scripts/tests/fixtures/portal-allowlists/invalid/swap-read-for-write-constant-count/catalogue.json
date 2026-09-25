@@ -1,0 +1,9 @@
+{
+  "servers": {
+    "widget": [
+      "alpha",
+      "beta",
+      "gamma"
+    ]
+  }
+}

@@ -23,6 +23,9 @@ script also checks:
     `enabled_tools` (or, in an `updated_prompts` list, a prompt name not in
     `enabled_prompts`), fails here until a human edits this file in the same
     diff.
+  - `catalogue.json` -- {"servers": {"<id>": ["<tool>", ...]}}, each server's
+    synced catalogue in portal order. mcp-portal.tf walks it to build
+    `updated_tools` (provider 5.24 cannot read the catalogue itself, #1382).
 
 What this script enforces, and what it deliberately does not:
 
@@ -59,6 +62,11 @@ What this script enforces, and what it deliberately does not:
     the `reason` requirement -- a missing reason is exactly why such a server
     is not vendored. Every server's `updated_prompts` is `null` (no override)
     or a list of such `{name, enabled}` entries.
+  - catalogue: `catalogue.json` names exactly the `mapping.json` servers,
+    each a non-empty list of unique non-empty strings, and every name in it
+    has a decision -- an entry in the vendored file or in the literal
+    `updated_tools`. A catalogue tool with no decision would fail the plan
+    on a lookup; here it fails with the server and tool named.
   - non-widening, for EVERY server in `mapping.json`, vendored or not:
     tools_total/tools_enabled (counted from the vendored file, or from the
     literal `updated_tools`) must not exceed `baseline.json`; every enabled
@@ -128,10 +136,10 @@ ALLOWLISTS_DIR = PORTAL_DIR / "allowlists"
 MCP_SERVERS_TF = PORTAL_DIR / "mcp-servers.tf"
 FIXTURES_ROOT = ROOT / "scripts" / "tests" / "fixtures" / "portal-allowlists"
 
-# mapping.json / sources.json / baseline.json are manifests about the
+# mapping.json / sources.json / baseline.json / catalogue.json are manifests about the
 # vendored files, not vendored files themselves -- excluded from the glob
 # that discovers "one file per server".
-SPECIAL_FILES = {"mapping.json", "sources.json", "baseline.json"}
+SPECIAL_FILES = {"mapping.json", "sources.json", "baseline.json", "catalogue.json"}
 
 ALLOWED_TOP_KEYS = {"$comment", "portal", "server", "default_disabled", "tools"}
 REQUIRED_TOP_KEYS = {"portal", "server", "default_disabled", "tools"}
@@ -360,6 +368,39 @@ def check_existence(server_ids: set[str], tf_text: str, errors: list[str]) -> No
             )
 
 
+def check_catalogue(files: dict, servers: dict, catalogue, errors: list[str]) -> None:
+    entries = catalogue.get("servers") if isinstance(catalogue, dict) else None
+    if not isinstance(entries, dict):
+        errors.append("allowlists/catalogue.json: missing or malformed top-level 'servers' object")
+        return
+    for sid in sorted(set(servers) - set(entries)):
+        errors.append(f"allowlists/catalogue.json: no catalogue for mapped server {sid!r}")
+    for sid in sorted(set(entries) - set(servers)):
+        errors.append(f"allowlists/catalogue.json: {sid!r} is not a mapping.json server")
+    for sid in sorted(set(entries) & set(servers)):
+        names = entries[sid]
+        where = f"allowlists/catalogue.json: {sid!r}"
+        if not isinstance(names, list) or not names or not all(isinstance(n, str) and n for n in names):
+            errors.append(f"{where}: is not a non-empty list of non-empty strings")
+            continue
+        if len(set(names)) != len(names):
+            errors.append(f"{where}: lists {sorted({n for n in names if names.count(n) > 1})} more than once")
+        s = servers[sid]
+        if not isinstance(s, dict):
+            continue  # already reported by coverage
+        tools = files.get(sid, {}).get("tools") if s.get("vendored") is True and isinstance(files.get(sid), dict) \
+            else (s.get("updated_tools") if s.get("vendored") is not True else None)
+        if not isinstance(tools, list) or not tools:
+            continue  # already reported by shape/coverage
+        decided = {t.get("name") for t in tools if isinstance(t, dict)}
+        undecided = [n for n in names if n not in decided]
+        if undecided:
+            errors.append(
+                f"{where}: catalogue tool(s) with no decision in the allowlist: {undecided} -- "
+                "the owning repo's allowlist must list every tool the portal has synced"
+            )
+
+
 def check_baseline(files: dict, servers: dict, baseline, errors: list[str]) -> None:
     """Non-widening, for every server in mapping.json: tools counted from the
     vendored file (see the module docstring for why the FILE's own counts,
@@ -522,6 +563,17 @@ def run(allowlists_dir: pathlib.Path, tf_text: str) -> list[str]:
         except Unreadable as e:
             errors.append(str(e))
     check_baseline(files, servers, baseline, errors)
+
+    catalogue_path = allowlists_dir / "catalogue.json"
+    catalogue: dict = {}
+    if not catalogue_path.is_file():
+        errors.append("allowlists/catalogue.json: missing")
+    else:
+        try:
+            catalogue = load_json(catalogue_path)
+        except Unreadable as e:
+            errors.append(str(e))
+    check_catalogue(files, servers, catalogue, errors)
 
     return errors
 
