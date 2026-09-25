@@ -1146,7 +1146,7 @@ def main() -> int:
         # line exit 4 prints, and the same phrase cloudflare-drift.yml greps.
         quieter = len(undetermined) + len(maintenance)
         if quieter and not (vanished or failing):
-            print(f"  (and {quieter} other finding(s) below -- servers that could "
+            print(f"  (and {quieter} other finding(s) in this output -- servers that could "
                   "not be compared, waivers to fix -- which this exit status "
                   "does not name)", file=sys.stderr)
     if maintenance:

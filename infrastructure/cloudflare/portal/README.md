@@ -264,6 +264,40 @@ re-snapshot below):
   repo's allowlist first, and `scripts/validate-portal-allowlists.py` refuses
   a catalogue tool that has none.
 
+### Changing what a server exposes: the bump path
+
+The decision is made in the owning repository: a change to its
+`docs/portal-allowlist.json` on `main`. That repository's workflow dispatches
+`.github/workflows/portal-allowlist-vendor.yml` here with the file (base64,
+so the copy stays byte-identical), the repo and the commit sha. The workflow
+then:
+
+1. checks that the repo is the owner `sources.json` records for that
+   server;
+2. writes `allowlists/<id>.json` and the `sources.json` entry;
+3. validates;
+4. opens `portal-allowlist/<id>-<sha7>` as a PR titled with the
+   enabled/total delta.
+
+The PR's `cloudflare-plan` summary names every tool that flips. Merging it
+writes nothing: the portal changes on the next approved `cloudflare-apply`
+for this root.
+
+A widening still gets its PR, and that PR fails `validate-manifests` until
+someone edits `baseline.json` in it. That edit is the human decision the
+baseline exists to force.
+
+Nightly, `scripts/validate-portal-allowlists.py --vendor-check`, run from
+`cloudflare-drift.yml`, compares each vendored file with its owning repo:
+
+- **tampered, exit 1**: the file differs from the recorded sha, so someone
+  edited the copy here;
+- **lag, exit 3**: the owning repo's `main` has a newer file that was never
+  vendored.
+
+To re-vendor by hand, dispatch the workflow yourself with the same four
+inputs.
+
 ## Re-snapshot: refreshing a manual-OAuth server's tool catalogue
 
 The portal keeps a snapshot of each upstream's tools (`servers/{id}.tools`,
