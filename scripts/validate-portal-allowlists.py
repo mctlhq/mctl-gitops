@@ -17,10 +17,12 @@ script also checks:
   - `sources.json`  -- {"servers": {"<id>": {"repo", "path", "ref", "sha",
     "vendored_at"}}}, the provenance of each vendored copy.
   - `baseline.json` -- {"servers": {"<id>": {"tools_total", "tools_enabled",
-    "enabled_tools", "prompts_total", "prompts_enabled", "recorded"}}}, the
-    non-widening reference: a bump that raises a server's enabled/total tool
-    count, or enables a tool NAME not listed in `enabled_tools`, fails here
-    until a human edits this file in the same diff.
+    "enabled_tools", "prompts_total", "prompts_enabled", ["enabled_prompts"],
+    "recorded"}}}, the non-widening reference: a bump that raises a server's
+    enabled/total tool count, or enables a tool NAME not listed in
+    `enabled_tools` (or, in an `updated_prompts` list, a prompt name not in
+    `enabled_prompts`), fails here until a human edits this file in the same
+    diff.
 
 What this script enforces, and what it deliberately does not:
 
@@ -399,6 +401,9 @@ def check_baseline(files: dict, servers: dict, baseline, errors: list[str]) -> N
         if not isinstance(names, list) or not all(isinstance(n, str) and n for n in names):
             errors.append(f"allowlists/baseline.json: {sid!r} enabled_tools is not a list of non-empty strings")
             names = None
+        elif len(set(names)) != len(names):
+            dups = sorted({n for n in names if names.count(n) > 1})
+            errors.append(f"allowlists/baseline.json: {sid!r} enabled_tools lists {dups} more than once")
         elif len(set(names)) != ints["tools_enabled"]:
             errors.append(
                 f"allowlists/baseline.json: {sid!r} enabled_tools names {len(set(names))} distinct tool(s) "
@@ -429,6 +434,26 @@ def check_baseline(files: dict, servers: dict, baseline, errors: list[str]) -> N
             p_enabled = ints["prompts_total"]  # no override: every catalogue prompt is shown
         elif isinstance(prompts, list):
             p_enabled = sum(1 for p in prompts if isinstance(p, dict) and p.get("enabled") is True)
+            # The name gate for prompts, as enabled_tools is for tools: a
+            # count alone passes one prompt off and another on. Only a list
+            # can be checked by name -- null means "every catalogue prompt",
+            # whose names this script cannot know -- and an absent
+            # enabled_prompts means none may be enabled.
+            allowed_p = b.get("enabled_prompts", [])
+            if not isinstance(allowed_p, list) or not all(isinstance(n, str) and n for n in allowed_p):
+                errors.append(f"allowlists/baseline.json: {sid!r} enabled_prompts is not a list of non-empty strings")
+            else:
+                unlisted_p = sorted(
+                    {p["name"] for p in prompts
+                     if isinstance(p, dict) and p.get("enabled") is True and isinstance(p.get("name"), str)}
+                    - set(allowed_p)
+                )
+                if unlisted_p:
+                    errors.append(
+                        f"allowlists/mapping.json: {sid!r} updated_prompts enables prompt(s) not in "
+                        f"baseline.json's enabled_prompts: {unlisted_p}; add them there in the same change "
+                        "if this widening is intentional"
+                    )
         else:
             continue  # already reported by check_literal_entries
         if p_enabled > ints["prompts_enabled"]:

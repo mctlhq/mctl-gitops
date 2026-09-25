@@ -83,6 +83,12 @@ def desired_from_state(state: dict) -> dict[str, dict]:
         for res in mod.get("resources", []) or []:
             if res.get("type") != RESOURCE_TYPE:
                 continue
+            # A data source of the same type is a read, not a registration
+            # this root applied: mcp-portal.tf reads `api` and `seerrsense`
+            # that way (#1363), and neither holds auth_credentials in state,
+            # so treating them as resources would make every run undetermined.
+            if res.get("mode") == "data":
+                continue
             values = res.get("values") or {}
             raw = values.get("auth_credentials")
             sid = values.get("id")
@@ -318,6 +324,18 @@ def selftest() -> int:
     print(f"{'ok  ' if ok else 'FAIL'} a DCR server is skipped and the rest still compared")
     if not ok:
         failures.append("dcr skipped")
+
+    data_read = {"mode": "data", "type": RESOURCE_TYPE,
+                 "values": {"id": "api", "account_id": "a"}}
+    st = state_with(manual)
+    st["values"]["root_module"]["resources"].append(data_read)
+    try:
+        ok = set(desired_from_state(st)) == {"tg"}
+    except Undetermined:
+        ok = False
+    print(f"{'ok  ' if ok else 'FAIL'} a data source of the same type is not read as a resource")
+    if not ok:
+        failures.append("data source skipped")
 
     try:
         desired_from_state(state_with({"id": "seerrsense", "account_id": "a"}))
