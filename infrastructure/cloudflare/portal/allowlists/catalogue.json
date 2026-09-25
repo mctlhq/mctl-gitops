@@ -1,5 +1,5 @@
 {
-  "$comment": "Each server's tool catalogue on portal `mcp`: first the names of its stored snapshot, in the order the portal stores them, then any tool the portal serves beyond that snapshot. A manual-OAuth server's snapshot is frozen at its first authorization, but the portal serves the upstream's live tools/list (measured 2026-09-25: tg and api tools absent from the snapshot answered through the portal), and a tool with no updated_tools entry falls to mapping.json's default_disabled. So every served tool must be listed here to get its decision. mcp-portal.tf walks this list to build servers[].updated_tools, taking `enabled` from the vendored allowlist (or mapping.json's literal list): provider 5.24 types the catalogue attribute `tools` as list(map(string)), which cannot hold the API's nested tool objects, so Terraform cannot read the catalogue itself (measured on #1382). Snapshot part recorded 2026-09-25 by a read-only GET of servers/<id>. scripts/portal-catalogue-drift.py requires the live snapshot to be exactly the head of each list every night (exit 5), and scripts/validate-portal-allowlists.py requires a decision for every name here.",
+  "$comment": "Each server's synced tool catalogue on portal `mcp`, as names in the order the portal stores them. mcp-portal.tf walks this list to build servers[].updated_tools, taking `enabled` from the vendored allowlist (or mapping.json's literal list): provider 5.24 types the catalogue attribute `tools` as list(map(string)), which cannot hold the API's nested tool objects, so Terraform cannot read the catalogue itself (measured on #1382). Recorded 2026-09-25 by a read-only GET of servers/<id>. It changes only when a server re-syncs: scripts/portal-catalogue-drift.py compares it with the live catalogue every night (exit 5), and scripts/validate-portal-allowlists.py requires a decision for every name here.",
   "servers": {
     "alice": [
       "alice_list_devices",
@@ -90,24 +90,7 @@
       "mctl_trigger_shepherd",
       "mctl_trigger_single_service",
       "mctl_verify_domain",
-      "mctl_whoami",
-      "mctl_bind_agent_release",
-      "mctl_get_agent",
-      "mctl_get_epic_status",
-      "mctl_get_ready_work_items",
-      "mctl_plan_epic_wave",
-      "mctl_start_epic_wave",
-      "mctl_get_lifecycle_ownership",
-      "mctl_inspect_lifecycle_conflict",
-      "mctl_request_lifecycle_reconcile",
-      "mctl_fence_lifecycle_claim",
-      "mctl_request_lifecycle_handoff",
-      "mctl_retry_lifecycle_handoff",
-      "mctl_list_agents",
-      "mctl_publish_agent_definition_version",
-      "mctl_publish_agent_profile_version",
-      "mctl_rollback_agent_binding",
-      "mctl_set_agent_version_lifecycle"
+      "mctl_whoami"
     ],
     "coolify": [
       "get_version",
@@ -203,14 +186,7 @@
       "set_account_send",
       "set_reaction",
       "set_send_consent",
-      "set_telegram_access",
-      "prepare_send_message",
-      "get_my_notification_preferences",
-      "set_my_notification_preferences",
-      "prepare_broadcast",
-      "list_broadcasts",
-      "get_broadcast",
-      "cancel_broadcast"
+      "set_telegram_access"
     ]
   }
 }
