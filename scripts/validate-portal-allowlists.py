@@ -393,11 +393,13 @@ def check_baseline(files: dict, servers: dict, baseline, errors: list[str]) -> N
             errors.append(f"allowlists/baseline.json: {sid!r} {', '.join(bad)} not integer(s)")
             continue
 
+        # No `continue` on a malformed enabled_tools: the count and prompt
+        # widening checks below still run, so one pass reports everything.
         names = b.get("enabled_tools")
         if not isinstance(names, list) or not all(isinstance(n, str) and n for n in names):
             errors.append(f"allowlists/baseline.json: {sid!r} enabled_tools is not a list of non-empty strings")
-            continue
-        if len(set(names)) != ints["tools_enabled"]:
+            names = None
+        elif len(set(names)) != ints["tools_enabled"]:
             errors.append(
                 f"allowlists/baseline.json: {sid!r} enabled_tools names {len(set(names))} distinct tool(s) "
                 f"but tools_enabled is {ints['tools_enabled']} -- the two must agree"
@@ -408,7 +410,7 @@ def check_baseline(files: dict, servers: dict, baseline, errors: list[str]) -> N
             t["name"] for t in tools
             if isinstance(t, dict) and t.get("enabled") is True and isinstance(t.get("name"), str)
         }
-        unlisted = sorted(enabled_names - set(names))
+        unlisted = sorted(enabled_names - set(names)) if names is not None else []
         if unlisted:
             errors.append(
                 f"{where}: enables tool(s) not in baseline.json's enabled_tools for {sid!r}: {unlisted}; "

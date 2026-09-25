@@ -14,7 +14,9 @@
     "unvendored": {
       "tools_total": 1,
       "tools_enabled": 1,
-      "enabled_tools": [],
+      "enabled_tools": [
+        "a"
+      ],
       "prompts_total": 0,
       "prompts_enabled": 0,
       "recorded": "2026-09-25"
