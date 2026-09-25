@@ -1,0 +1,984 @@
+{
+  "$comment": "Read-only GET /accounts/{account}/access/ai-controls/mcp/portals/mcp, 2026-09-25T00:10Z, by the operator (mashkovd) through the Cloudflare API, recorded for tasks 2-3 of this proposal because the implementer has no Cloudflare credential. `updated_prompts: null` means the key is ABSENT from the API response for that server (not an empty list). `catalogue_tools`/`catalogue_prompts` are the server's synced `tools`/`prompts`. `updated_tools_extra_keys` lists per-tool keys the API returns besides name/enabled. Secrets and auth fields are omitted.",
+  "portal": "mcp",
+  "hostname": "mcp.mctl.ai",
+  "secure_web_gateway": false,
+  "code_mode": "off",
+  "allow_code_mode": false,
+  "portal_modified_at": "2026-09-24T22:28:08.177Z",
+  "servers": {
+    "alice": {
+      "default_disabled": false,
+      "on_behalf": true,
+      "status": "ready",
+      "updated_prompts": null,
+      "catalogue_prompts": [],
+      "catalogue_tools": [
+        "alice_list_devices",
+        "alice_send_command",
+        "alice_say_phrase",
+        "alice_set_volume",
+        "alice_media_control",
+        "alice_trigger_scenario",
+        "alice_control_device",
+        "alice_get_device_state",
+        "alice_get_device_history",
+        "alice_set_light",
+        "alice_control_room",
+        "alice_get_home_summary"
+      ],
+      "updated_tools": [
+        {
+          "name": "alice_list_devices",
+          "enabled": true
+        },
+        {
+          "name": "alice_send_command",
+          "enabled": true
+        },
+        {
+          "name": "alice_say_phrase",
+          "enabled": true
+        },
+        {
+          "name": "alice_set_volume",
+          "enabled": true
+        },
+        {
+          "name": "alice_media_control",
+          "enabled": true
+        },
+        {
+          "name": "alice_trigger_scenario",
+          "enabled": true
+        },
+        {
+          "name": "alice_control_device",
+          "enabled": true
+        },
+        {
+          "name": "alice_get_device_state",
+          "enabled": true
+        },
+        {
+          "name": "alice_get_device_history",
+          "enabled": true
+        },
+        {
+          "name": "alice_set_light",
+          "enabled": true
+        },
+        {
+          "name": "alice_control_room",
+          "enabled": true
+        },
+        {
+          "name": "alice_get_home_summary",
+          "enabled": true
+        }
+      ],
+      "updated_tools_extra_keys": []
+    },
+    "projects": {
+      "default_disabled": false,
+      "on_behalf": true,
+      "status": "stale",
+      "updated_prompts": null,
+      "catalogue_prompts": [],
+      "catalogue_tools": [
+        "projects_list",
+        "projects_outline",
+        "projects_search",
+        "projects_read",
+        "projects_contacts",
+        "projects_status",
+        "projects_admin_grants",
+        "projects_admin_change"
+      ],
+      "updated_tools": [
+        {
+          "name": "projects_list",
+          "enabled": true
+        },
+        {
+          "name": "projects_outline",
+          "enabled": true
+        },
+        {
+          "name": "projects_search",
+          "enabled": true
+        },
+        {
+          "name": "projects_read",
+          "enabled": true
+        },
+        {
+          "name": "projects_contacts",
+          "enabled": true
+        },
+        {
+          "name": "projects_status",
+          "enabled": true
+        },
+        {
+          "name": "projects_admin_grants",
+          "enabled": true
+        },
+        {
+          "name": "projects_admin_change",
+          "enabled": true
+        }
+      ],
+      "updated_tools_extra_keys": [
+        "server_description"
+      ]
+    },
+    "tg": {
+      "default_disabled": false,
+      "on_behalf": true,
+      "status": "ready",
+      "updated_prompts": null,
+      "catalogue_prompts": [],
+      "catalogue_tools": [
+        "delete_messages",
+        "delete_telegram_account",
+        "disconnect_telegram_account",
+        "edit_message",
+        "forward_messages",
+        "get_media",
+        "get_messages",
+        "get_my_audit_log",
+        "get_my_identity",
+        "get_my_send_status",
+        "get_unread_messages",
+        "get_user_audit_log",
+        "list_dialogs",
+        "list_telegram_identities",
+        "mint_worker_token",
+        "pin_message",
+        "prepare_get_media",
+        "prepare_pin_message",
+        "provision_local_account",
+        "revoke_local_bridge_device",
+        "revoke_telegram_session",
+        "revoke_worker_token",
+        "search_messages",
+        "send_media",
+        "send_message",
+        "set_account_mode",
+        "set_account_send",
+        "set_reaction",
+        "set_send_consent",
+        "set_telegram_access"
+      ],
+      "updated_tools": [
+        {
+          "name": "delete_messages",
+          "enabled": true
+        },
+        {
+          "name": "delete_telegram_account",
+          "enabled": true
+        },
+        {
+          "name": "disconnect_telegram_account",
+          "enabled": true
+        },
+        {
+          "name": "edit_message",
+          "enabled": true
+        },
+        {
+          "name": "forward_messages",
+          "enabled": true
+        },
+        {
+          "name": "get_media",
+          "enabled": true
+        },
+        {
+          "name": "get_messages",
+          "enabled": true
+        },
+        {
+          "name": "get_my_audit_log",
+          "enabled": true
+        },
+        {
+          "name": "get_my_identity",
+          "enabled": true
+        },
+        {
+          "name": "get_my_send_status",
+          "enabled": true
+        },
+        {
+          "name": "get_unread_messages",
+          "enabled": true
+        },
+        {
+          "name": "get_user_audit_log",
+          "enabled": true
+        },
+        {
+          "name": "list_dialogs",
+          "enabled": true
+        },
+        {
+          "name": "list_telegram_identities",
+          "enabled": true
+        },
+        {
+          "name": "mint_worker_token",
+          "enabled": true
+        },
+        {
+          "name": "pin_message",
+          "enabled": true
+        },
+        {
+          "name": "prepare_get_media",
+          "enabled": true
+        },
+        {
+          "name": "prepare_pin_message",
+          "enabled": true
+        },
+        {
+          "name": "provision_local_account",
+          "enabled": true
+        },
+        {
+          "name": "revoke_local_bridge_device",
+          "enabled": true
+        },
+        {
+          "name": "revoke_telegram_session",
+          "enabled": true
+        },
+        {
+          "name": "revoke_worker_token",
+          "enabled": true
+        },
+        {
+          "name": "search_messages",
+          "enabled": true
+        },
+        {
+          "name": "send_media",
+          "enabled": true
+        },
+        {
+          "name": "send_message",
+          "enabled": true
+        },
+        {
+          "name": "set_account_mode",
+          "enabled": true
+        },
+        {
+          "name": "set_account_send",
+          "enabled": true
+        },
+        {
+          "name": "set_reaction",
+          "enabled": true
+        },
+        {
+          "name": "set_send_consent",
+          "enabled": true
+        },
+        {
+          "name": "set_telegram_access",
+          "enabled": true
+        }
+      ],
+      "updated_tools_extra_keys": []
+    },
+    "api": {
+      "default_disabled": false,
+      "on_behalf": true,
+      "status": "ready",
+      "updated_prompts": null,
+      "catalogue_prompts": [
+        "deploy_service",
+        "onboard_service",
+        "platform-skill",
+        "troubleshoot_incident"
+      ],
+      "catalogue_tools": [
+        "mctl_acknowledge_incident",
+        "mctl_add_custom_domain",
+        "mctl_apply_openclaw_resource_profile",
+        "mctl_approve_dev_loop",
+        "mctl_create_agent",
+        "mctl_create_preview",
+        "mctl_create_tenant",
+        "mctl_delete_openclaw_identity",
+        "mctl_delete_openclaw_skill",
+        "mctl_delete_preview",
+        "mctl_delete_tenant",
+        "mctl_deploy_openclaw",
+        "mctl_deploy_service",
+        "mctl_deprecate_platform_skill",
+        "mctl_disable_tenant_skill",
+        "mctl_enable_tenant_skill",
+        "mctl_get_dev_loop",
+        "mctl_get_incident",
+        "mctl_get_openclaw_sizing_recommendation",
+        "mctl_get_operation",
+        "mctl_get_resource_usage",
+        "mctl_get_service_config",
+        "mctl_get_service_logs",
+        "mctl_get_service_status",
+        "mctl_get_tenant",
+        "mctl_get_workflow_logs",
+        "mctl_get_workflow_status",
+        "mctl_grant_repo_access",
+        "mctl_incident_summary",
+        "mctl_list_agent_executions",
+        "mctl_list_agent_versions",
+        "mctl_list_domains",
+        "mctl_list_incidents",
+        "mctl_list_openclaw_identity",
+        "mctl_list_openclaw_skills",
+        "mctl_list_operations",
+        "mctl_list_platform_skills",
+        "mctl_list_previews",
+        "mctl_list_recent_agent_runs",
+        "mctl_list_recent_operations",
+        "mctl_list_repos",
+        "mctl_list_services",
+        "mctl_list_tenant_skill_bindings",
+        "mctl_list_tenants",
+        "mctl_list_workflows",
+        "mctl_promote_agent",
+        "mctl_provision_database",
+        "mctl_publish_agent_version",
+        "mctl_publish_platform_skill",
+        "mctl_read_openclaw_identity",
+        "mctl_read_openclaw_skill",
+        "mctl_read_platform_skill",
+        "mctl_remove_custom_domain",
+        "mctl_resolve_agent",
+        "mctl_resolve_incident",
+        "mctl_resume_openclaw_deploy",
+        "mctl_retire_service",
+        "mctl_rollback_agent",
+        "mctl_rollback_service",
+        "mctl_save_openclaw_identity",
+        "mctl_save_openclaw_skill",
+        "mctl_scale_service",
+        "mctl_sync_repos",
+        "mctl_trigger_agents_run",
+        "mctl_trigger_approve",
+        "mctl_trigger_implementer",
+        "mctl_trigger_incident_responder",
+        "mctl_trigger_issue",
+        "mctl_trigger_mentor_only",
+        "mctl_trigger_portal_server_auth_apply",
+        "mctl_trigger_reconcile",
+        "mctl_trigger_shepherd",
+        "mctl_trigger_single_service",
+        "mctl_verify_domain",
+        "mctl_whoami"
+      ],
+      "updated_tools": [
+        {
+          "name": "mctl_acknowledge_incident",
+          "enabled": true
+        },
+        {
+          "name": "mctl_add_custom_domain",
+          "enabled": true
+        },
+        {
+          "name": "mctl_apply_openclaw_resource_profile",
+          "enabled": true
+        },
+        {
+          "name": "mctl_approve_dev_loop",
+          "enabled": true
+        },
+        {
+          "name": "mctl_create_agent",
+          "enabled": true
+        },
+        {
+          "name": "mctl_create_preview",
+          "enabled": true
+        },
+        {
+          "name": "mctl_create_tenant",
+          "enabled": true
+        },
+        {
+          "name": "mctl_delete_openclaw_identity",
+          "enabled": true
+        },
+        {
+          "name": "mctl_delete_openclaw_skill",
+          "enabled": true
+        },
+        {
+          "name": "mctl_delete_preview",
+          "enabled": true
+        },
+        {
+          "name": "mctl_delete_tenant",
+          "enabled": true
+        },
+        {
+          "name": "mctl_deploy_openclaw",
+          "enabled": true
+        },
+        {
+          "name": "mctl_deploy_service",
+          "enabled": true
+        },
+        {
+          "name": "mctl_deprecate_platform_skill",
+          "enabled": true
+        },
+        {
+          "name": "mctl_disable_tenant_skill",
+          "enabled": true
+        },
+        {
+          "name": "mctl_enable_tenant_skill",
+          "enabled": true
+        },
+        {
+          "name": "mctl_get_dev_loop",
+          "enabled": true
+        },
+        {
+          "name": "mctl_get_incident",
+          "enabled": true
+        },
+        {
+          "name": "mctl_get_openclaw_sizing_recommendation",
+          "enabled": true
+        },
+        {
+          "name": "mctl_get_operation",
+          "enabled": true
+        },
+        {
+          "name": "mctl_get_resource_usage",
+          "enabled": true
+        },
+        {
+          "name": "mctl_get_service_config",
+          "enabled": true
+        },
+        {
+          "name": "mctl_get_service_logs",
+          "enabled": true
+        },
+        {
+          "name": "mctl_get_service_status",
+          "enabled": true
+        },
+        {
+          "name": "mctl_get_tenant",
+          "enabled": true
+        },
+        {
+          "name": "mctl_get_workflow_logs",
+          "enabled": true
+        },
+        {
+          "name": "mctl_get_workflow_status",
+          "enabled": true
+        },
+        {
+          "name": "mctl_grant_repo_access",
+          "enabled": true
+        },
+        {
+          "name": "mctl_incident_summary",
+          "enabled": true
+        },
+        {
+          "name": "mctl_list_agent_executions",
+          "enabled": true
+        },
+        {
+          "name": "mctl_list_agent_versions",
+          "enabled": true
+        },
+        {
+          "name": "mctl_list_domains",
+          "enabled": true
+        },
+        {
+          "name": "mctl_list_incidents",
+          "enabled": true
+        },
+        {
+          "name": "mctl_list_openclaw_identity",
+          "enabled": true
+        },
+        {
+          "name": "mctl_list_openclaw_skills",
+          "enabled": true
+        },
+        {
+          "name": "mctl_list_operations",
+          "enabled": true
+        },
+        {
+          "name": "mctl_list_platform_skills",
+          "enabled": true
+        },
+        {
+          "name": "mctl_list_previews",
+          "enabled": true
+        },
+        {
+          "name": "mctl_list_recent_agent_runs",
+          "enabled": true
+        },
+        {
+          "name": "mctl_list_recent_operations",
+          "enabled": true
+        },
+        {
+          "name": "mctl_list_repos",
+          "enabled": true
+        },
+        {
+          "name": "mctl_list_services",
+          "enabled": true
+        },
+        {
+          "name": "mctl_list_tenant_skill_bindings",
+          "enabled": true
+        },
+        {
+          "name": "mctl_list_tenants",
+          "enabled": true
+        },
+        {
+          "name": "mctl_list_workflows",
+          "enabled": true
+        },
+        {
+          "name": "mctl_promote_agent",
+          "enabled": true
+        },
+        {
+          "name": "mctl_provision_database",
+          "enabled": true
+        },
+        {
+          "name": "mctl_publish_agent_version",
+          "enabled": true
+        },
+        {
+          "name": "mctl_publish_platform_skill",
+          "enabled": true
+        },
+        {
+          "name": "mctl_read_openclaw_identity",
+          "enabled": true
+        },
+        {
+          "name": "mctl_read_openclaw_skill",
+          "enabled": true
+        },
+        {
+          "name": "mctl_read_platform_skill",
+          "enabled": true
+        },
+        {
+          "name": "mctl_remove_custom_domain",
+          "enabled": true
+        },
+        {
+          "name": "mctl_resolve_agent",
+          "enabled": true
+        },
+        {
+          "name": "mctl_resolve_incident",
+          "enabled": true
+        },
+        {
+          "name": "mctl_resume_openclaw_deploy",
+          "enabled": true
+        },
+        {
+          "name": "mctl_retire_service",
+          "enabled": true
+        },
+        {
+          "name": "mctl_rollback_agent",
+          "enabled": true
+        },
+        {
+          "name": "mctl_rollback_service",
+          "enabled": true
+        },
+        {
+          "name": "mctl_save_openclaw_identity",
+          "enabled": true
+        },
+        {
+          "name": "mctl_save_openclaw_skill",
+          "enabled": true
+        },
+        {
+          "name": "mctl_scale_service",
+          "enabled": true
+        },
+        {
+          "name": "mctl_sync_repos",
+          "enabled": true
+        },
+        {
+          "name": "mctl_trigger_agents_run",
+          "enabled": true
+        },
+        {
+          "name": "mctl_trigger_approve",
+          "enabled": true
+        },
+        {
+          "name": "mctl_trigger_implementer",
+          "enabled": true
+        },
+        {
+          "name": "mctl_trigger_incident_responder",
+          "enabled": true
+        },
+        {
+          "name": "mctl_trigger_issue",
+          "enabled": true
+        },
+        {
+          "name": "mctl_trigger_mentor_only",
+          "enabled": true
+        },
+        {
+          "name": "mctl_trigger_portal_server_auth_apply",
+          "enabled": true
+        },
+        {
+          "name": "mctl_trigger_reconcile",
+          "enabled": true
+        },
+        {
+          "name": "mctl_trigger_shepherd",
+          "enabled": true
+        },
+        {
+          "name": "mctl_trigger_single_service",
+          "enabled": true
+        },
+        {
+          "name": "mctl_verify_domain",
+          "enabled": true
+        },
+        {
+          "name": "mctl_whoami",
+          "enabled": true
+        }
+      ],
+      "updated_tools_extra_keys": []
+    },
+    "coolify": {
+      "default_disabled": false,
+      "on_behalf": true,
+      "status": "ready",
+      "updated_prompts": [
+        {
+          "name": "troubleshoot_application",
+          "enabled": false
+        },
+        {
+          "name": "explain_failed_deploy",
+          "enabled": false
+        },
+        {
+          "name": "estate_health",
+          "enabled": false
+        }
+      ],
+      "catalogue_prompts": [
+        "troubleshoot_application",
+        "explain_failed_deploy",
+        "estate_health"
+      ],
+      "catalogue_tools": [
+        "get_version",
+        "get_mcp_version",
+        "get_infrastructure_overview",
+        "diagnose_app",
+        "diagnose_server",
+        "find_issues",
+        "list_servers",
+        "get_server",
+        "server_resources",
+        "server_domains",
+        "list_destinations",
+        "validate_server",
+        "projects",
+        "environments",
+        "list_applications",
+        "get_application",
+        "application",
+        "logs",
+        "application_logs",
+        "list_databases",
+        "get_database",
+        "database",
+        "list_services",
+        "get_service",
+        "service",
+        "control",
+        "env_vars",
+        "list_deployments",
+        "deploy",
+        "deployment",
+        "private_keys",
+        "github_apps",
+        "database_backups",
+        "teams",
+        "cloud_tokens",
+        "storages",
+        "scheduled_tasks",
+        "hetzner",
+        "system",
+        "tags",
+        "search_docs",
+        "restart_project_apps",
+        "bulk_env_update",
+        "stop_all_apps",
+        "redeploy_project"
+      ],
+      "updated_tools": [
+        {
+          "name": "get_version",
+          "enabled": true
+        },
+        {
+          "name": "get_mcp_version",
+          "enabled": true
+        },
+        {
+          "name": "get_infrastructure_overview",
+          "enabled": true
+        },
+        {
+          "name": "diagnose_app",
+          "enabled": true
+        },
+        {
+          "name": "diagnose_server",
+          "enabled": true
+        },
+        {
+          "name": "find_issues",
+          "enabled": true
+        },
+        {
+          "name": "list_servers",
+          "enabled": true
+        },
+        {
+          "name": "get_server",
+          "enabled": true
+        },
+        {
+          "name": "server_resources",
+          "enabled": true
+        },
+        {
+          "name": "server_domains",
+          "enabled": true
+        },
+        {
+          "name": "list_destinations",
+          "enabled": true
+        },
+        {
+          "name": "validate_server",
+          "enabled": false
+        },
+        {
+          "name": "projects",
+          "enabled": false
+        },
+        {
+          "name": "environments",
+          "enabled": false
+        },
+        {
+          "name": "list_applications",
+          "enabled": true
+        },
+        {
+          "name": "get_application",
+          "enabled": true
+        },
+        {
+          "name": "application",
+          "enabled": false
+        },
+        {
+          "name": "logs",
+          "enabled": true
+        },
+        {
+          "name": "application_logs",
+          "enabled": true
+        },
+        {
+          "name": "list_databases",
+          "enabled": true
+        },
+        {
+          "name": "get_database",
+          "enabled": true
+        },
+        {
+          "name": "database",
+          "enabled": false
+        },
+        {
+          "name": "list_services",
+          "enabled": true
+        },
+        {
+          "name": "get_service",
+          "enabled": true
+        },
+        {
+          "name": "service",
+          "enabled": false
+        },
+        {
+          "name": "control",
+          "enabled": false
+        },
+        {
+          "name": "env_vars",
+          "enabled": false
+        },
+        {
+          "name": "list_deployments",
+          "enabled": true
+        },
+        {
+          "name": "deploy",
+          "enabled": false
+        },
+        {
+          "name": "deployment",
+          "enabled": false
+        },
+        {
+          "name": "private_keys",
+          "enabled": false
+        },
+        {
+          "name": "github_apps",
+          "enabled": false
+        },
+        {
+          "name": "database_backups",
+          "enabled": false
+        },
+        {
+          "name": "teams",
+          "enabled": true
+        },
+        {
+          "name": "cloud_tokens",
+          "enabled": false
+        },
+        {
+          "name": "storages",
+          "enabled": false
+        },
+        {
+          "name": "scheduled_tasks",
+          "enabled": false
+        },
+        {
+          "name": "hetzner",
+          "enabled": false
+        },
+        {
+          "name": "system",
+          "enabled": false
+        },
+        {
+          "name": "tags",
+          "enabled": false
+        },
+        {
+          "name": "search_docs",
+          "enabled": true
+        },
+        {
+          "name": "restart_project_apps",
+          "enabled": false
+        },
+        {
+          "name": "bulk_env_update",
+          "enabled": false
+        },
+        {
+          "name": "stop_all_apps",
+          "enabled": false
+        },
+        {
+          "name": "redeploy_project",
+          "enabled": false
+        }
+      ],
+      "updated_tools_extra_keys": []
+    },
+    "seerrsense": {
+      "default_disabled": false,
+      "on_behalf": true,
+      "status": "ready",
+      "updated_prompts": null,
+      "catalogue_prompts": [],
+      "catalogue_tools": [
+        "whoami",
+        "search_media",
+        "resolve_media",
+        "get_media",
+        "request_media"
+      ],
+      "updated_tools": [
+        {
+          "name": "whoami",
+          "enabled": true
+        },
+        {
+          "name": "search_media",
+          "enabled": true
+        },
+        {
+          "name": "resolve_media",
+          "enabled": true
+        },
+        {
+          "name": "get_media",
+          "enabled": true
+        },
+        {
+          "name": "request_media",
+          "enabled": true
+        }
+      ],
+      "updated_tools_extra_keys": [
+        "server_description"
+      ]
+    }
+  }
+}

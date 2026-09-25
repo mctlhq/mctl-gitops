@@ -420,3 +420,36 @@ portal drift job, and one short workflow run per allowlist change.
    `"override": "sensitive-read"`. It only ever narrows exposure, so the
    gitops validator accepts it only with `enabled: false`; OpenTofu ignores it
    and applies `enabled` as usual.
+5. **Measured live state, 2026-09-25** (`live-snapshot-2026-09-25.json`).
+   - All six servers: `default_disabled: false`, `on_behalf: true`.
+   - `updated_prompts` is **absent** from the API response for five servers.
+     It is present only for `coolify`: three prompts, all `enabled: false`.
+     `api`'s four catalogue prompts have no override and show as enabled.
+     `mapping.json` must preserve this difference: `null`/omitted for
+     "no override", not `[]`. Whether the provider round-trips an omitted
+     `updated_prompts` as `null` or `[]` is a question for PR B's plan.
+   - The API returns an extra per-tool key `server_description` on
+     `projects` and `seerrsense` tools. This is one concrete instance of the
+     "computed fields absent from config" question in task 7.
+   - **Vendored files list tools the portal catalogue does not have.**
+     - `tg`'s file has 37 entries against 30 catalogue tools. The 7 extra are
+       `prepare_send_message` (disabled) and six tools gated by
+       `upstream_gates` (`account:manage`, `admin:broadcast`) that the
+       portal's grant does not register.
+     - `api`'s file has 92 entries against 75. The 17 extra are unregistered
+       for the same kind of reason; 15 are disabled and 2 enabled.
+     - For every tool that *is* in the catalogue, the file's `enabled` equals
+       live on all six servers, so the vendored data never widens anything.
+     - Consequence for PR B: `updated_tools` sent to the API must be the
+       file's entries **intersected with the server's synced catalogue**.
+       Otherwise the plan carries entries the API never stores, which is a
+       perpetual diff. The catalogue comes from the `tools` attribute of the
+       `..._mcp_server` resource for managed servers, and from the
+       `..._mcp_servers` data source for `api`/`seerrsense`. When the
+       catalogue later syncs a new tool, it then enters the plan by itself,
+       which is the desired behaviour. PR A's validator does **not** reject
+       these extra entries: they are the service's decision for a tool that
+       exists upstream.
+   - `projects` is `status: stale` ("Authorization failed: needs_reauth"):
+     its admin credential needs a re-login. This is an operator task, not
+     this proposal's, but PR B's plan may show it.
