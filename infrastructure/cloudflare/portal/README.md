@@ -264,6 +264,49 @@ re-snapshot below):
   repo's allowlist first, and `scripts/validate-portal-allowlists.py` refuses
   a catalogue tool that has none.
 
+### Changing what a server exposes: the bump path
+
+The decision is made in the owning repository: a change to its
+`docs/portal-allowlist.json` on `main`. That repository's workflow dispatches
+`.github/workflows/portal-allowlist-vendor.yml` here with the file, the repo
+and the commit sha. The file goes as base64 so the copy stays
+byte-identical, and it must be unwrapped: on Linux use `base64 -w0`,
+because GNU `base64` wraps at 76 columns and the workflow rejects wrapped
+input. The workflow
+then:
+
+1. checks that the repo is the owner `sources.json` records for that
+   server;
+2. writes `allowlists/<id>.json` and the `sources.json` entry;
+3. validates;
+4. opens `portal-allowlist/<id>-<sha7>` as a PR titled with the
+   enabled/total delta.
+
+The PR's `cloudflare-plan` summary names every tool that flips. Merging it
+writes nothing: the portal changes on the next approved `cloudflare-apply`
+for this root.
+
+A widening still gets its PR, and that PR fails `validate-manifests` until
+someone edits `baseline.json` in it. That edit is the human decision the
+baseline exists to force.
+
+Nightly, `scripts/validate-portal-allowlists.py --vendor-check`, run from
+`cloudflare-drift.yml`, compares each vendored file with its owning repo:
+
+- **tampered, exit 1**: the file differs from the recorded sha, so someone
+  edited the copy here;
+- **lag, exit 3**: the owning repo's `main` has a newer file that was never
+  vendored. The nightly reports a lag without paging only when an open bump
+  PR carries exactly that newer file (same git blob), e.g. a widening waiting
+  on its `baseline.json` decision. A stale bump PR does not count.
+
+A re-dispatch of content that already has an open PR pushes nothing, so a
+commit a reviewer added there survives. A leftover branch with no open PR
+gets a new PR when it holds the same file, and fails the run otherwise.
+
+To re-vendor by hand, dispatch the workflow yourself with the same four
+inputs.
+
 ## Re-snapshot: refreshing a manual-OAuth server's tool catalogue
 
 The portal keeps a snapshot of each upstream's tools (`servers/{id}.tools`,

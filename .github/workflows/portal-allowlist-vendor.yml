@@ -1,0 +1,218 @@
+name: Portal allowlist vendor
+run-name: "portal-allowlist-vendor ${{ inputs.server }} @ ${{ inputs.source_sha }}"
+
+# The bump path of mctlhq/mctl-gitops#1370. An owning repository changes its
+# docs/portal-allowlist.json on main and dispatches this workflow with the
+# file's content; this workflow vendors it into
+# infrastructure/cloudflare/portal/allowlists/<server>.json and opens a PR.
+# The PR is where cloudflare-plan shows exactly which tools flip, and the
+# apply after it merges is the only thing that writes to the portal.
+#
+# It opens a PR rather than pushing to main. The mctl-agents App's bypass of
+# the main-protection ruleset is scoped to image.tag bumps; a change to what
+# the portal exposes is the opposite of trivial.
+#
+# The content travels through the dispatch, base64-encoded so the vendored
+# copy stays byte-identical (a trailing newline survives), rather than being
+# fetched here: that keeps this workflow from ever needing a token that reads
+# the private projects-mcp. scripts/validate-portal-allowlists.py
+# --vendor-check closes the loop nightly against the recorded sha and main.
+#
+# Caller requirements: a token with actions: write on mctl-gitops. Callers
+# mint it from the mctl-agents App (org secrets AGENTS_APP_ID /
+# AGENTS_APP_PRIVATE_KEY, `repositories: mctl-gitops`, `permission-actions:
+# write`), the way their release workflows already dispatch here since
+# mctlhq/mctl-gitops#761. No other secret.
+on:
+  workflow_dispatch:
+    inputs:
+      server:
+        description: "Portal server id (e.g. tg). Must already be vendored here."
+        required: true
+        type: string
+      allowlist_b64:
+        description: "base64 of the owning repo's docs/portal-allowlist.json, unwrapped (GNU: base64 -w0)"
+        required: true
+        type: string
+      source_repo:
+        description: "Owning repository (e.g. mctlhq/mctl-telegram). Must match sources.json."
+        required: true
+        type: string
+      source_sha:
+        description: "Full sha of the owning repo's commit the content was read at (the caller's github.sha)"
+        required: true
+        type: string
+
+concurrency:
+  group: portal-allowlist-vendor-${{ inputs.server }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  vendor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate GitHub App token
+        id: app_token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        with:
+          app-id: ${{ secrets.AGENTS_APP_ID }}
+          private-key: ${{ secrets.AGENTS_APP_PRIVATE_KEY }}
+          owner: mctlhq
+          repositories: mctl-gitops
+          permission-contents: write
+          permission-pull-requests: write
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: main
+          token: ${{ steps.app_token.outputs.token }}
+
+      - name: Vendor the allowlist
+        id: vendor
+        env:
+          SERVER: ${{ inputs.server }}
+          ALLOWLIST_B64: ${{ inputs.allowlist_b64 }}
+          SOURCE_REPO: ${{ inputs.source_repo }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          python3 <<'PYEOF'
+          import base64, binascii, datetime, json, os, pathlib, re, sys
+
+          server, repo, sha = os.environ["SERVER"], os.environ["SOURCE_REPO"], os.environ["SOURCE_SHA"]
+          d = pathlib.Path("infrastructure/cloudflare/portal/allowlists")
+
+          def die(msg):
+              print(f"::error::{msg}")
+              sys.exit(1)
+
+          # Inputs are data from another repository: every one is checked
+          # before a path is built from it.
+          if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", server):
+              die(f"server {server!r} is not a portal server id")
+          if not re.fullmatch(r"[0-9a-f]{40}", sha):
+              die("source_sha must be a full 40-hex commit sha")
+          mapping = json.loads((d / "mapping.json").read_text())["servers"]
+          sources_path = d / "sources.json"
+          sources = json.loads(sources_path.read_text())
+          if not (mapping.get(server) or {}).get("vendored"):
+              # A new server is a reviewed change to mapping/baseline/
+              # catalogue by a human, not something a dispatch can start.
+              die(f"{server!r} is not a vendored server in mapping.json")
+          entry = sources["servers"].get(server)
+          if not entry or entry.get("repo") != repo:
+              # Stops one repository's dispatch from rewriting another's file.
+              die(f"{repo!r} is not the recorded owner of {server!r} in sources.json")
+
+          try:
+              raw = base64.b64decode(os.environ["ALLOWLIST_B64"], validate=True)
+          except binascii.Error as e:
+              die(f"allowlist_b64 is not base64: {e}")
+          try:
+              doc = json.loads(raw)
+          except ValueError as e:
+              die(f"the decoded allowlist is not JSON: {e}")
+          if not isinstance(doc, dict) or doc.get("server") != server:
+              die(f"the allowlist names server {doc.get('server') if isinstance(doc, dict) else None!r}, not {server!r}")
+
+          target = d / f"{server}.json"
+          def counts(b):
+              tools = json.loads(b).get("tools")
+              tools = tools if isinstance(tools, list) else []
+              return sum(1 for t in tools if isinstance(t, dict) and t.get("enabled") is True), len(tools)
+          try:
+              before = counts(target.read_bytes())
+          except (OSError, ValueError, AttributeError) as e:
+              die(f"the current {target} could not be read as an allowlist: {e!r}")
+          target.write_bytes(raw)
+          after = counts(raw)
+
+          entry["sha"] = sha
+          entry["vendored_at"] = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+          sources_path.write_text(json.dumps(sources, indent=2, ensure_ascii=False) + "\n")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"delta={before[0]}/{before[1]} -> {after[0]}/{after[1]}\n")
+          PYEOF
+
+      - name: Validate before committing
+        id: validate
+        # --widening-ok: a widening still gets its PR, reported here and in
+        # the PR body, and that PR fails validate-manifests until a human
+        # edits baseline.json in it. Any other error fails this run instead,
+        # so a malformed dispatch never becomes a red PR.
+        run: |
+          set -euo pipefail
+          scripts/validate-portal-allowlists.py --widening-ok | tee validate.txt
+          if grep -q '^WIDENING' validate.txt; then echo "widening=true" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Open the bump PR
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          SERVER: ${{ inputs.server }}
+          SOURCE_REPO: ${{ inputs.source_repo }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          DELTA: ${{ steps.vendor.outputs.delta }}
+          WIDENING: ${{ steps.validate.outputs.widening }}
+        run: |
+          set -euo pipefail
+          file="infrastructure/cloudflare/portal/allowlists/${SERVER}.json"
+          if git diff --quiet -- "$file"; then
+            # Only vendored_at moved: the content is already vendored.
+            echo "No change to ${file}; nothing to open."
+            exit 0
+          fi
+          branch="portal-allowlist/${SERVER}-${SOURCE_SHA:0:7}"
+          # A re-dispatch of the same content never pushes: an open PR, and
+          # any commit a human added to it (the baseline.json edit a widening
+          # waits on), are left exactly as they are.
+          if [ -n "$(gh pr list --head "$branch" --state open --json number --jq '.[].number')" ]; then
+            echo "A PR from ${branch} is already open; this content is already proposed. Nothing pushed."
+            exit 0
+          fi
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
+            # A leftover branch with no open PR: a PR closed by hand, or a
+            # run that died before gh pr create. Reopen the proposal from it
+            # when it carries this exact content; otherwise fail loudly
+            # rather than exit green with no PR.
+            git fetch --quiet origin "refs/heads/${branch}"
+            if ! git diff --quiet FETCH_HEAD -- "$file"; then
+              echo "::error::branch ${branch} exists with different content for ${file} and no open PR; delete it and dispatch again"
+              exit 1
+            fi
+            echo "Branch ${branch} exists with this content and no open PR; opening one from it."
+          else
+            git config user.email "ci@mctl.ai"
+            git config user.name  "mctl-ci"
+            git switch -c "$branch"
+            git add "$file" infrastructure/cloudflare/portal/allowlists/sources.json
+            git commit -m "portal(${SERVER}): vendor allowlist ${DELTA} tools enabled/total" \
+                       -m "From ${SOURCE_REPO}@${SOURCE_SHA}. Refs mctlhq/mctl-gitops#1370."
+            git push origin "$branch"
+          fi
+          # Older open bump PRs for this server describe a file that is no
+          # longer the owner's latest; they are superseded, not left to merge
+          # in the wrong order. Anchored on the 7-hex suffix so server "foo"
+          # never matches "foo-bar"'s branches; --limit so a busy repo does
+          # not truncate the list.
+          older=$(gh pr list --state open --limit 500 --json number,headRefName \
+                    --jq "[.[] | select(.headRefName | test(\"^portal-allowlist/${SERVER}-[0-9a-f]{7}\$\")) | select(.headRefName != \"${branch}\") | .number] | join(\" \")")
+          note=""
+          if [ "$WIDENING" = "true" ]; then
+            note=$'\n\n**This widens exposure.** validate-manifests fails until `baseline.json` is edited in this PR by someone who has decided the widening is intended.'
+          fi
+          url=$(gh pr create --base main --head "$branch" \
+            --title "portal(${SERVER}): ${DELTA} tools" \
+            --body "Vendors \`docs/portal-allowlist.json\` from ${SOURCE_REPO}@${SOURCE_SHA} into \`${file}\` (enabled/total ${DELTA}).${older:+ Supersedes #${older// /, #}.}
+
+          Review the \`cloudflare-plan\` summary for \`infrastructure/cloudflare/portal\`: it lists every tool whose \`enabled\` flips. Merging writes nothing; the portal changes on the next approved \`cloudflare-apply\` for that root.${note}
+
+          Opened by portal-allowlist-vendor.yml (mctlhq/mctl-gitops#1370).")
+          echo "$url"
+          new="${url##*/}"
+          for n in $older; do
+            gh pr close "$n" --delete-branch --comment "Superseded by #${new}: ${SOURCE_REPO} has a newer docs/portal-allowlist.json. If this PR carried a baseline.json edit, make it again there." || true
+          done
