@@ -1,0 +1,48 @@
+{
+  "$comment": "Everything about a server's portal membership that is NOT the owning repo's decision. default_disabled/on_behalf/updated_prompts are copied verbatim from live-snapshot-2026-09-25.json (the operator's read-only GET, recorded because the implementer has no Cloudflare credential -- see proposals/issue-1370-.../tasks.md Slice 1 header). updated_tools is present only for a server with vendored: false (none today); a vendored server's updated_tools comes from allowlists/<id>.json instead. All six live members are vendored as of this PR (mctlhq/mctl-gitops#1370 PR A).",
+  "servers": {
+    "alice": {
+      "vendored": true,
+      "default_disabled": false,
+      "on_behalf": true,
+      "updated_prompts": null
+    },
+    "coolify": {
+      "vendored": true,
+      "default_disabled": false,
+      "on_behalf": true,
+      "updated_prompts": [
+        {
+          "name": "troubleshoot_application",
+          "enabled": false
+        },
+        {
+          "name": "explain_failed_deploy",
+          "enabled": false
+        },
+        {
+          "name": "estate_health",
+          "enabled": false
+        }
+      ]
+    },
+    "projects": {
+      "vendored": true,
+      "default_disabled": false,
+      "on_behalf": true,
+      "updated_prompts": null
+    },
+    "seerrsense": {
+      "vendored": true,
+      "default_disabled": false,
+      "on_behalf": true,
+      "updated_prompts": null
+    },
+    "tg": {
+      "vendored": true,
+      "default_disabled": false,
+      "on_behalf": true,
+      "updated_prompts": null
+    }
+  }
+}

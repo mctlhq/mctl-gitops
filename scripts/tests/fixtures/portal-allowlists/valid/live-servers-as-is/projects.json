@@ -1,0 +1,48 @@
+{
+  "$comment": "Source of truth for the Cloudflare MCP portal mapping of server `projects` (mctlhq/.github#35). Every tool this server registers must appear here with an explicit decision; tests/portal-allowlist.test.ts fails the build otherwise. An enabled tool must carry a `reason` that says what it exposes or changes and why that is acceptable on a shared surface. Note what this portal is NOT: customers reach this server by its direct URL, never through the portal, so the portal surface here is the owner's own and nothing on it is a customer-facing decision. Apply with the same operator-run flow as the other upstreams (mctl-telegram scripts/portal-allowlist-apply.sh, one file per server).",
+  "portal": "mcp",
+  "server": "projects",
+  "default_disabled": true,
+  "tools": [
+    {
+      "name": "projects_list",
+      "enabled": true,
+      "reason": "Returns the projects the caller holds a grant on and the level held on each. It is the caller's own access, never anybody else's, and an ungranted project is absent rather than named."
+    },
+    {
+      "name": "projects_outline",
+      "enabled": true,
+      "reason": "Returns one project's table of contents as far as the caller's level reaches; the names of closed sections and the reasons they are closed stay behind internal."
+    },
+    {
+      "name": "projects_search",
+      "enabled": true,
+      "reason": "Full-text search over one project, filtered to the caller's level by the same single decision point as every other read, with snippets drawn only from chunks that level may see."
+    },
+    {
+      "name": "projects_read",
+      "enabled": true,
+      "reason": "Returns one document the caller's level may read; a document above that level answers exactly as one that does not exist, so the tool cannot be used to enumerate."
+    },
+    {
+      "name": "projects_contacts",
+      "enabled": true,
+      "reason": "Returns the people and channels a project's manifest marks visible at the caller's level. Personal handles and operational channels are internal unless the manifest says otherwise."
+    },
+    {
+      "name": "projects_status",
+      "enabled": true,
+      "reason": "Returns liveness and version for one project from the source its manifest names. Below internal it carries no hostname, namespace or address of that source."
+    },
+    {
+      "name": "projects_admin_grants",
+      "enabled": true,
+      "reason": "Returns the whole access table, including every customer's address. Registered on the portal by owner decision 2026-09-19: what the portal catalogue carries is the tool's name and schema, which name nobody, and the server admits the call only from an address in ADMIN_EMAILS, which the portal neither sets nor can influence."
+    },
+    {
+      "name": "projects_admin_change",
+      "enabled": true,
+      "reason": "Works out one change to the access table and hands back the YAML to commit; it writes nothing anywhere, by design, so that access lives in one place. Same owner decision and same ADMIN_EMAILS gate as projects_admin_grants."
+    }
+  ]
+}

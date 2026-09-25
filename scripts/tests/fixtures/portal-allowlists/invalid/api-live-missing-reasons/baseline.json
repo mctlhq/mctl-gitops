@@ -1,0 +1,11 @@
+{
+  "servers": {
+    "api": {
+      "tools_total": 92,
+      "tools_enabled": 77,
+      "prompts_total": 4,
+      "prompts_enabled": 4,
+      "recorded": "2026-09-25"
+    }
+  }
+}
