@@ -87,10 +87,10 @@ resource "cloudflare_zero_trust_access_ai_controls_mcp_server" "tg" {
 
   lifecycle {
     # `tools` and `prompts` are the capability catalogue Cloudflare syncs from
-    # the upstream, and `updated_tools` / `updated_prompts` are the allowlists
-    # owned by mctl-telegram, mctl-api and seerrsense — applied from those
-    # repositories, and deliberately not described here. Nothing in this file
-    # sets them, so nothing in this file can revert them.
+    # the upstream. `updated_tools` / `updated_prompts` are written by the
+    # portal resource in mcp-portal.tf, built from the owning repo's
+    # allowlist vendored under allowlists/ (#1370). Declaring them here too
+    # would give this root two writers of one mapping, so they stay ignored.
     ignore_changes = [updated_tools, updated_prompts]
   }
 }
@@ -150,9 +150,8 @@ resource "cloudflare_zero_trust_access_ai_controls_mcp_server" "projects" {
   is_shared_oauth_callback_enabled = false
 
   lifecycle {
-    # Same reasoning as the servers above: the allowlist is owned by the
-    # source repository (mctlhq/projects-mcp docs/portal-allowlist.json) and
-    # applied from there, so nothing here can revert it.
+    # Same reasoning as tg above: mcp-portal.tf writes the mapping, from
+    # allowlists/projects.json (vendored from mctlhq/projects-mcp).
     ignore_changes = [updated_tools, updated_prompts]
   }
 }
@@ -197,9 +196,8 @@ resource "cloudflare_zero_trust_access_ai_controls_mcp_server" "alice" {
   is_shared_oauth_callback_enabled = false
 
   lifecycle {
-    # Same reasoning as the servers above: a future docs/portal-allowlist.json
-    # in mctlhq/mctl-alice, applied from that repository, is what should own
-    # updated_tools/updated_prompts — not this file.
+    # Same reasoning as tg above: mcp-portal.tf writes the mapping, from
+    # allowlists/alice.json (vendored from mctlhq/mctl-alice).
     ignore_changes = [updated_tools, updated_prompts]
   }
 }
@@ -235,9 +233,8 @@ resource "cloudflare_zero_trust_access_ai_controls_mcp_server" "coolify" {
   is_shared_oauth_callback_enabled = false
 
   lifecycle {
-    # Same reasoning as the servers above: a future docs/portal-allowlist.json
-    # in mctlhq/mctl-coolify-mcp, applied from that repository, is what should
-    # own updated_tools/updated_prompts — not this file.
+    # Same reasoning as tg above: mcp-portal.tf writes the mapping, from
+    # allowlists/coolify.json (vendored from mctlhq/mctl-coolify-mcp).
     ignore_changes = [updated_tools, updated_prompts]
   }
 }

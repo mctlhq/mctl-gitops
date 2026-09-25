@@ -287,6 +287,37 @@ the other one turns the owning repository's committed decisions into live
 `enabled: true` entries — kept separate so that adding a server can never
 also silently decide what it can do.
 
+## The portal mapping: `mcp-portal.tf` and `allowlists/`
+
+`cloudflare_zero_trust_access_ai_controls_mcp_portal.mcp` (in `mcp-portal.tf`)
+builds each server's `updated_tools` from three committed files
+(mctlhq/mctl-gitops#1370):
+
+- `allowlists/<id>.json`, the decision for each tool. It is the owning repo's
+  `docs/portal-allowlist.json`, vendored byte-identical. `api` is the
+  exception: until it is vendored, its decisions are a literal list in
+  `mapping.json`.
+- `allowlists/mapping.json`, the per-server settings that are not the owning
+  repo's call: `default_disabled`, `on_behalf` and `updated_prompts`.
+- `allowlists/catalogue.json`, each server's synced tool names in the order
+  the portal stores them.
+
+`updated_tools` is built by walking `catalogue.json` and taking `enabled` from
+the allowlist. `catalogue.json` exists because provider 5.24 types the
+catalogue attribute `tools` as `list(map(string))`, and the API's tool objects
+are nested. That attribute is therefore empty in state, and Terraform cannot
+read the catalogue itself (measured on #1382).
+
+**When a server re-syncs** (a tool added or removed upstream, or after the
+re-snapshot below):
+
+- the nightly `portal` plan in `cloudflare-drift.yml` goes red;
+- `scripts/portal-catalogue-drift.py` exits 5 and names the difference;
+- the fix is a PR that updates the server's list in `catalogue.json` to the
+  portal's order. A newly synced tool also needs a decision in the owning
+  repo's allowlist first, and `scripts/validate-portal-allowlists.py` refuses
+  a catalogue tool that has none.
+
 ## Re-snapshot: refreshing a manual-OAuth server's tool catalogue
 
 The portal keeps a snapshot of each upstream's tools (`servers/{id}.tools`,
