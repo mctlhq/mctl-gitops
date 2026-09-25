@@ -1,0 +1,1 @@
+entry is a str, expected an object
