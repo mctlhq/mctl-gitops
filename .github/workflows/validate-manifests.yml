@@ -329,28 +329,6 @@ jobs:
         # so the block's own text is replayed here.
         run: python3 tests/test_cwft_shepherd_commit_pathspecs.py
 
-      - name: Unit-test the MCP portal controls apply script
-        # The script writes to the portal that fronts tg, seerrsense and api,
-        # and the body it PUTs is the portal's own body with three switches
-        # replaced. Two failures there are invisible in review and answered
-        # 200 by the API: applying something other than the committed file,
-        # and carrying back less than it read -- that body holds the tool
-        # allowlists owned by three other repositories. Both are driven
-        # against a stub Cloudflare API here. CI holds no Cloudflare identity
-        # (#1111), so this tests the request the script would send, never a
-        # live portal.
-        run: python3 tests/test_portal_controls_apply.py
-
-      - name: Unit-test the MCP portal membership-add script
-        # Adds a server_id to the same shared servers[] array as the script
-        # above, but this one's job is to touch that array, so the failures
-        # it must not have are different: an existing member's mapping lost
-        # across the insert, a donor shape copied from a member that
-        # disagrees with the others, or a server_id matched loosely by an ERE
-        # instead of literally. Driven against a stub Cloudflare API for the
-        # same reason as its sibling: CI holds no Cloudflare identity (#1111).
-        run: python3 tests/test_portal_membership_add.py
-
       - name: Unit-test the portal OAuth registration drift detector
         # The MCP server's `auth_credentials` is write-only: the API accepts it
         # and never returns it, so OpenTofu keeps what was last applied in

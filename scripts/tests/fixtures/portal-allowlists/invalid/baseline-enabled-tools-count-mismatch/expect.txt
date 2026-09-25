@@ -1,1 +1,1 @@
-the two must agree
+enabled_tools names 1 distinct tool(s) but tools_enabled is 2 -- the two must agree

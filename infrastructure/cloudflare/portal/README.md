@@ -1,84 +1,36 @@
-# Cloudflare MCP Portal controls
+# Cloudflare MCP Portal: `mcp-portal.tf`
 
-`mcp-portal-controls.json` is the committed state of the account-level
-switches on portal `mcp` (`mcp.mctl.ai`, the private aggregate over `tg`,
-`seerrsense` and `api`). It is applied by `scripts/portal-controls-apply.sh`
-and compared against the live portal by the same script's `--check` mode.
-
-This is not OpenTofu. The portal was created through the API and the
-dashboard, and declarative ownership is an import task blocked on a CI
-Cloudflare write identity (`mctlhq/mctl-gitops#1092`, `mctlhq/.github#47`,
-`#1111`). Until that lands the switches are applied the way the tool
-allowlists are: a scripted API call from a repository-pinned file, run by an
-operator, with the state recorded here. When the import lands, this file
-becomes a resource and the script goes away.
+Portal `mcp` (`mcp.mctl.ai`, the private aggregate over the six upstreams) is
+described by `cloudflare_zero_trust_access_ai_controls_mcp_portal.mcp` in
+`mcp-portal.tf`. It was imported on 2026-09-25 without changing anything
+(mctlhq/mctl-gitops#1370: plan `1 to import, 0 to change`, apply run
+36117508212). From then on, `cloudflare-plan.yml`, `cloudflare-apply.yml` and
+the nightly `cloudflare-drift.yml` own it like every other resource in this
+root. Before the import, the switches were applied by a script from a
+committed JSON file, and the tool mappings by a script in each service repo.
+Both have been retired.
 
 ## What is pinned, and why each field
 
-- `secure_web_gateway` — whether the portal routes its traffic through
+- `secure_web_gateway`: whether the portal routes its traffic through
   Cloudflare Gateway. This is the Phase 2 subject (`mctlhq/.github#43`,
-  `#1181`): committed `false` is the baseline the POC returns to.
-- `code_mode` / `allow_code_mode` — pinned `off`/`false` because Phase 2 must
-  leave Code Mode untouched, and "untouched" is only checkable if something
-  records what it was. A drift here is as interesting as a drift in the
-  Gateway switch: it means the portal grew an execution surface nobody
-  decided on. `code_mode` is one of `off`, `opt_in`, `default_on`,
-  `enforced`, and defaults to `opt_in` when omitted on create — leaving it
-  unpinned is not the same as leaving it off. The two fields must agree: the
-  API answers `7001: code_mode and allow_code_mode disagree. Send only
-  code_mode, or a consistent pair.` — measured, not inferred — so the script
-  refuses a file where they do not, and then sends the pair. Sending both is
-  what makes an apply converge on a portal someone left at `opt_in`: naming
-  only `code_mode` would leave the stored `allow_code_mode` true under the
-  merge semantics below, and `--check` would stay red on a field the apply
-  had no way to settle.
-- `portal` and `hostname` — the address. The script refuses a file naming a
-  different portal: this file writes to a shared surface, and a retargeted
-  file would rewrite a mapping this repository does not own.
-
-The tool allowlists are **not** here. They live with the servers that
-register the tools — `mctl-telegram`, `mctl-api`, `seerrsense` — because the
-decision "this tool is safe to expose" belongs in the same diff as the tool.
-
-## What the write does not touch
-
-The endpoint is a `PUT` that behaves as a merge: a field the body leaves out
-keeps its stored value. Measured against the live portal — a write omitting
-`description` left it intact, and a write omitting `servers` left all three
-upstream mappings at 74/5/30 tools with `default_disabled` untouched.
-
-So the script sends `secure_web_gateway` and the two Code Mode fields, and
-nothing else.
-That is not tidiness. `servers` carries the tool allowlists owned by
-`mctl-telegram`, `mctl-api` and `seerrsense`, and sending it back as read
-would make every apply a read-modify-write over their state: an allowlist
-applied between this script's read and its write would be silently reverted,
-and the API would answer `200`. A field that is never sent cannot lose that
-race. The apply still checks that no mapping disappeared across the write —
-by id, not by contents, because a concurrent allowlist edit is legitimate
-and must not read as a failure.
-
-## Running it
-
-```
-CLOUDFLARE_API_TOKEN=… CLOUDFLARE_ACCOUNT_ID=… scripts/portal-controls-apply.sh --check
-CLOUDFLARE_API_TOKEN=… CLOUDFLARE_ACCOUNT_ID=… scripts/portal-controls-apply.sh --dry-run
-CLOUDFLARE_API_TOKEN=… CLOUDFLARE_ACCOUNT_ID=… scripts/portal-controls-apply.sh
-```
-
-`--check` exits non-zero on drift and prints the fields that differ; it is
-the operator's stand-in for `cloudflare-drift.yml`, which does not watch this
-file. Nothing in CI applies or checks it today.
-
-That is no longer for want of a credential: `CF_PORTAL_READ_TOKEN` and
-`CF_APPLY_TOKEN_PORTAL` (see the root below) are `Account -> MCP Portals`
-Read and Edit, and the portal object these switches live on is inside that
-permission. What is missing is the wiring, and the durable answer is the same
-one the servers took — describe the portal as
-`cloudflare_zero_trust_access_ai_controls_mcp_portal` and let plan and apply
-own it. That import is a separate decision, because the portal object also
-carries the tool allowlists owned by `mctl-telegram`, `mctl-api` and
-`seerrsense`.
+  `#1181`), and `false` is the baseline the POC returns to.
+- `code_mode` / `allow_code_mode`: pinned `off`/`false`. Phase 2 must leave
+  Code Mode untouched, and "untouched" can only be checked if something
+  records what it was. A drift here means the portal grew an execution
+  surface nobody decided on.
+  - `code_mode` is one of `off`, `opt_in`, `default_on`, `enforced`. It
+    defaults to `opt_in` when omitted on create, so leaving it unpinned is
+    not the same as leaving it off.
+  - The two fields must agree. The API answers `7001: code_mode and
+    allow_code_mode disagree` otherwise (measured).
+  - `allow_code_mode` is deprecated in provider 5.24, but it is restated:
+    left out, it plans as `(known after apply)`.
+- `name` / `description`: copied from the live object at import. The
+  description still says "Phase 0: tg only". Correcting it is a separate,
+  visible change.
+- `servers`: which upstreams are members and what each one exposes. See "The
+  portal mapping" below.
 
 # Cloudflare MCP Portal upstream OAuth registration — an OpenTofu root
 
@@ -234,12 +186,12 @@ covered by them.
 `auth_credentials`, no `client_secret` (mctlhq/mctl-gitops#1363). The apply
 leaves it in `waiting`, exactly like `projects` and `alice` before their first
 login — an admin completes the upstream OAuth login once from the dashboard,
-from the owner address, and only then does `scripts/portal-membership-add.sh
-coolify` succeed. Until that login happens, `cloudflare-portal-health.yml`
+from the owner address, and only then can it be mapped on the portal (see
+"To add a seventh server" below). Until that login happens, `cloudflare-portal-health.yml`
 reports `coolify` red every hour; that is expected, not a regression, and
 clears once the login is done. Which coolify tools go live afterwards is a
 separate decision for a `docs/portal-allowlist.json` in
-`mctlhq/mctl-coolify-mcp`, applied from that repository — not this one.
+`mctlhq/mctl-coolify-mcp`, vendored here as `allowlists/coolify.json`.
 
 `alice` (already a DCR resource in this file before this change) is added to
 `DCR_SERVERS` and `OWNERS` in the same commit: it had neither, so it was
@@ -261,31 +213,25 @@ final), following mctlhq/mctl-gitops#1363's tasks 1, 2, 5 and 6, and extend
 `DCR_SERVERS`/`OWNERS` accordingly once the mode of each is settled.
 
 Creating the Terraform resource above registers a server with Cloudflare, but
-does not make it reachable through `mcp.mctl.ai`: the portal keeps its own
-membership list (`servers[]` on the portal object), and inserting an entry
-into it is a different write against a different endpoint. Until
-`scripts/portal-membership-add.sh` existed, that write was always done by
-hand — `seerrsense`'s addition is the one-off recipe under "Re-snapshot"
-below, and `projects`'s addition on 2026-09-19 was a dashboard click with
-nothing committed at all, closed retroactively by writing this script.
+it does not make the server reachable through `mcp.mctl.ai`. The portal keeps
+its own membership list (`servers` on the portal object), and in this root
+that list is `mcp-portal.tf`. To add a seventh server, in this order:
 
-```
-CLOUDFLARE_API_TOKEN=… CLOUDFLARE_ACCOUNT_ID=… scripts/portal-membership-add.sh <server_id> [--check|--dry-run]
-```
+1. Add its `cloudflare_zero_trust_access_ai_controls_mcp_server` resource to
+   `mcp-servers.tf`, merge, and apply the root.
+2. An admin completes the first upstream OAuth login from the dashboard. A
+   DCR server stays in `waiting` until then, and the portal has no
+   catalogue to map.
+3. The owning repository commits a `docs/portal-allowlist.json` that
+   decides every tool. Vendor it here as `allowlists/<id>.json`, and add
+   the server to `mapping.json`, `sources.json`, `baseline.json` and
+   `catalogue.json` (catalogue in portal order). Then merge and apply.
+   `scripts/validate-portal-allowlists.py` refuses a catalogue tool with no
+   decision, and a server whose `baseline.json` entry is missing.
 
-In write mode (the default, and `--dry-run`), it refuses to run against a
-`server_id` that is not already a committed Terraform resource in
-`mcp-servers.tf` -- `--check` skips that gate, since it only asks a question
-and must also work for `api`/`seerrsense`, both DCR-registered members with no
-Terraform resource at all. It writes every tool the server
-advertises with `enabled: false` — the same state a server has right after
-being added through the dashboard. It deliberately does not decide which
-tools go live: that is still `scripts/portal-allowlist-apply.sh`, run
-afterwards from a checkout of the repository that owns the new server,
-against its own `docs/portal-allowlist.json`. One script adds the mapping,
-the other one turns the owning repository's committed decisions into live
-`enabled: true` entries — kept separate so that adding a server can never
-also silently decide what it can do.
+Adding the mapping and deciding what the server exposes are no longer two
+scripts run in two repositories. They are one reviewed plan: the plan names
+every tool with its `enabled` value before the apply writes anything.
 
 ## The portal mapping: `mcp-portal.tf` and `allowlists/`
 
@@ -530,9 +476,13 @@ case $rc in
   *) echo "diff could not run ($rc)"; exit 1 ;;
 esac
 
-# 5. give any new tool a decision in the owning repository's allowlist and
-#    apply it: scripts/portal-allowlist-apply.sh in mctl-telegram and mctl-api
-#    (then --check). seerrsense has no apply script yet (mctlhq/seerrsense#70).
+# 5. the catalogue moved, so the portal mapping follows it through a PR,
+#    not an API call: give any new tool a decision in the owning repository's
+#    docs/portal-allowlist.json, vendor that file into allowlists/, copy the
+#    refreshed catalogue (names, in portal order) into allowlists/catalogue.json,
+#    and merge. The nightly plan is red until this lands, and
+#    portal-catalogue-drift.py exits 5 and names the difference. Then
+#    dispatch cloudflare-apply.yml for this root.
 ```
 
 If the nested shell dies between step 1 and step 2, the server is in bearer
@@ -555,98 +505,11 @@ and serializes against other applies but knows nothing about this procedure.
 Do not run it while an apply of this root is in flight, and say in the channel
 that the window is open.
 
-Step 5 for `seerrsense` is **not** in the blocks above, and is a different
-endpoint: `cf()` addresses `servers/{id}`, while a tool allowlist lives on the
-portal object. `mctl-telegram` and `mctl-api` have
-`scripts/portal-allowlist-apply.sh` for this; `seerrsense` does not yet
-(mctlhq/seerrsense#70), so until it does,
-its mapping is written by hand the way Phase 0 wrote it — a read-modify-write
-`PUT` on `portals/mcp`. That carries the race described under "What the write
-does not touch": the body sends every server's mapping back, so a `tg` or
-`api` allowlist applied between the read and the write is silently reverted,
-with a `200`. Run it when no other apply is in flight.
-
-The new entry is **copied from an existing one** rather than written from
-scratch, so it carries whatever fields this API actually stores, and the body
-is printed for a human before anything is sent:
-
-```
-test "$SERVER" = seerrsense              # this block reads its step-4 file
-PORTAL=mcp
-pf() { curl -sS --fail-with-body \
-  -K <(printf 'header = "Authorization: Bearer %s"\n' "$CLOUDFLARE_API_TOKEN") \
-  "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/access/ai-controls/mcp/portals/$PORTAL" "$@"; }
-#     whole decisions, not counts: a revert that swaps one tool for another
-#     keeps the count identical.
-mapping() { jq -S '[.result.servers[]
-  | {server_id, default_disabled, on_behalf,
-     updated_tools: (.updated_tools | sort_by(.name)), updated_prompts}]'; }
-others() { mapping | jq -S '[.[] | select(.server_id != "seerrsense")]'; }
-
-before=$(pf); printf '%s' "$before" | ok
-printf '%s' "$before" | mapping > portal.mapping.before.json
-test -s portal.mapping.before.json
-
-TOOL="seerrsense_new_tool"              # a newly captured tool, or "" if the
-                                        # release only removed or renamed
-ENABLED=false                           # what the review of THAT tool decided.
-                                        # The allowlist is opt-in; a tool is
-                                        # enabled because someone said so, not
-                                        # because it appeared.
-
-# the decisions are REBUILT against the refreshed catalogue, not appended to.
-# A release that removes or renames a tool is one of the triggers for this
-# whole procedure, and the flip does not touch the mapping -- so the stale
-# decision survives, and a PUT that sends a name the portal has not seen is
-# rejected (error 7001), leaving step 5 unfinishable.
-names=$(jq -S '[.[].name]' "$SERVER.catalogue.after.json")
-body=$(jq -c --arg tool "$TOOL" --argjson enabled "$ENABLED" --argjson names "$names" \
-  '{servers: [.result.servers[]
-  | if .server_id == "seerrsense"
-    then .updated_tools = ([.updated_tools[]
-                            | select(.name != $tool and (.name | IN($names[])))]
-                           + (if $tool == "" then []
-                              else [(.updated_tools[0]
-                                     | .name = $tool | .enabled = $enabled)] end))
-    else . end]}' <<<"$before")
-printf '%s' "$body" | jq .          # READ THIS before the next line
-```
-
-Then, and only if that body is what you meant:
-
-```
-# re-read FIRST. This is a read-modify-write with no conditional write: an
-# allowlist apply that lands between the read above and this PUT is reverted
-# by it, and the check below would then compare the result against a copy
-# that already has the revert baked in -- a lost update that verifies clean.
-# Re-reading here narrows that window to these few lines. It does not close
-# it; only an apply script for seerrsense (mctlhq/seerrsense#70) does.
-fresh=$(pf); printf '%s' "$fresh" | ok
-diff -u portal.mapping.before.json <(printf '%s' "$fresh" | mapping) \
-  || { echo "the portal moved while you were reading: start again from the top of this step"; exit 1; }
-
-printf '%s' "$body" | pf -X PUT --json @- | ok
-result=$(pf); printf '%s' "$result" | ok
-
-# seerrsense's own mapping, decision for decision, against what was SENT --
-# not just "the new tool is there". ok() reads the envelope, and this API is
-# on record answering 200 while keeping a field it was told to change, so a
-# dropped removal or a flipped `enabled` on any of the others would otherwise
-# go unseen. This also covers the removals when TOOL is empty.
-seerr() { jq -S '[.[] | select(.server_id == "seerrsense")
-                 | .updated_tools | sort_by(.name)]'; }
-diff -u <(printf '%s' "$body" | jq '.servers' | seerr) \
-        <(printf '%s' "$result" | jq '.result.servers' | seerr)
-
-# and the other two mappings must be untouched, tool decisions included --
-# this is the race, not a formality, and a 200 says nothing about it either.
-diff -u <(printf '%s' "$before" | others) <(printf '%s' "$result" | others)
-```
-
-`updated_tools[0]` is the shape donor, so this needs `seerrsense` to have at
-least one entry already; it has five. If that ever stops being true, read a
-`tg` entry instead and change `server_id` nowhere — the entry shape is the
-same across servers.
+Step 5 is the same for every server, `seerrsense` included. Until #1370 it
+was a hand-written read-modify-write `PUT` on `portals/mcp`, which sent
+every server's mapping back and so silently reverted any allowlist applied
+between the read and the write. That race is gone: `mcp-portal.tf` is the
+only writer of the mapping, and an apply is serialized per root.
 
 Measured on the day: `seerrsense` `last_synced` 2026-09-10 19:32 → 2026-09-13
 05:42, `api` 74 → 75 tools with the allowlist re-applied 75/75. The portal

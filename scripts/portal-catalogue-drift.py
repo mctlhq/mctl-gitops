@@ -14,9 +14,9 @@ mctlhq/.github#64). Two things then go wrong silently:
     OLD schema. With `additionalProperties: false` in the snapshot, every
     added field is a failed call (mctlhq/mctl-telegram#637).
 
-Neither is visible to `tofu plan` (`tools` is a computed attribute) nor to
-the allowlist apply scripts, which hold back entries the portal has not
-synced rather than failing on them. This compares the live snapshot with
+Neither is visible to `tofu plan`: `tools` is a computed attribute, and
+mcp-portal.tf builds the mapping from the committed allowlists/catalogue.json,
+not from the live catalogue. This compares the live snapshot with
 the allowlist each owning repository commits on `main` -- that file is
 test-enforced there to equal the set of tools the server registers, so it
 is the honest statement of which tools the upstream advertises -- and
@@ -1142,6 +1142,13 @@ def main() -> int:
               "NOT re-snapshot):", file=sys.stderr)
         for line in lagging:
             print(f"  {line}", file=sys.stderr)
+        # Exit 5 outranks 2 and 3, so say when they also fired -- the same
+        # line exit 4 prints, and the same phrase cloudflare-drift.yml greps.
+        quieter = len(undetermined) + len(maintenance)
+        if quieter and not (vanished or failing):
+            print(f"  (and {quieter} other finding(s) below -- servers that could "
+                  "not be compared, waivers to fix -- which this exit status "
+                  "does not name)", file=sys.stderr)
     if maintenance:
         # Its own heading and its own exit status: this one is fixed in this
         # file, not on the portal.
