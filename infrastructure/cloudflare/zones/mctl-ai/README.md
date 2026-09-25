@@ -6,8 +6,12 @@ Access one — different roots, different blockers.
 
 ## Scope
 
-22 objects: 13 DNS records, the `http_request_firewall_custom` ruleset, seven
-Email Routing forward rules and the catch-all.
+23 objects: 13 DNS records, the `http_request_firewall_custom` ruleset, seven
+Email Routing forward rules, the catch-all, and the worker route
+`mctl.ai/api/*` → `mctl-landing-form` (`workers.tf`, #1179). The route is owned
+here; the worker script and its secrets stay in Wrangler (`mctlhq/mctl-web`,
+`cloudflare-worker/`), which must not declare the pattern again. See decision 9
+in `../../README.md`.
 
 `A *.mctl.ai` is the path every tenant host resolves through. Nothing else in
 this root is as load-bearing.

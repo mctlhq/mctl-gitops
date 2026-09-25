@@ -24,12 +24,15 @@ as #1089 item 5. So a change to that worker's routes moves the subdomain
 redirect, and nothing in this root will catch that regression. See the redirect
 subsection in `../../README.md`.
 
+## Worker routes
+
+`mctl.me/*` and `*.mctl.me/*` → `mctl-landing-form` are declared in
+`workers.tf` (#1179). The route objects are owned here; the worker script and
+its secrets stay in Wrangler (`mctlhq/mctl-web`, `cloudflare-worker/`), which
+must not declare the patterns again. See decision 9 in `../../README.md`.
+
 ## Deliberately not here
 
-- **Worker routes `mctl.me/*` and `*.mctl.me/*`.** #1089 item 9 settled the
-  ownership question — routes in OpenTofu, script and secrets in Wrangler — but
-  both zones' routes point at one shared worker, so they are their own slice
-  rather than part of a per-zone baseline.
 - **The in-zone `NS launch1/launch2.spaceship.net` records.** Registrar
   leftovers, deleted as #1089 item 6; the authoritative servers never served
   them.

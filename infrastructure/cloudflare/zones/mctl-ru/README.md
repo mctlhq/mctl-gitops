@@ -27,12 +27,10 @@ Deliberately **not** managed here:
   certificate issuer. Pinning it in Git would let a later write-capable apply
   restore a stale digest over a live challenge and break renewal. Leaving it
   out of the configuration is safe: OpenTofu only destroys what it tracks.
-- worker routes `mctl.ru/*` and `*.mctl.ru/*` → `mctl-landing-form`.
-  The ownership question is **settled** (#1089 item 9, 2026-09-09): the routes
-  belong here, the script and its secrets stay in Wrangler, because OpenTofu
-  does not deploy Worker code. They are still absent from this pilot only
-  because importing them is #1103's work, not because anything is undecided.
-  Do not read this entry as licence to skip them in the next slice.
+- the `mctl-landing-form` worker script and its secrets — Wrangler-owned
+  (`mctlhq/mctl-web`, `cloudflare-worker/`). Its routes `mctl.ru/*` and
+  `*.mctl.ru/*` **are** managed here, in `workers.tf` (#1179), and must not be
+  declared in `wrangler.toml` again. See decision 9 in `../../README.md`.
 - page rules — **deleted**, not deferred. They matched the same subdomains as
   the worker routes but never fired; the worker answers first. See the
   redirect subsection in `infrastructure/cloudflare/README.md`.
