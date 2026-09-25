@@ -326,15 +326,20 @@ def catalogue_file_lag(server: str, snapshot: dict, committed: dict) -> str | No
     want = committed.get(server)
     if want is None:
         return f"{server}: not in catalogue.json; add its {len(live)} tool(s) in portal order"
-    if want == live:
+    # The snapshot must be the head of the committed list. Names after it
+    # are tools the portal serves beyond a frozen manual-OAuth snapshot;
+    # they are listed so that each gets its updated_tools decision, and
+    # the validator holds every one of them to the owner's allowlist.
+    if want[:len(live)] == live:
         return None
     added = [n for n in live if n not in want]
-    gone = [n for n in want if n not in live]
+    gone = [n for n in want[:len(live)] if n not in live]
     if added or gone:
         return (f"{server}: catalogue.json differs from the live catalogue "
                 f"(last_synced {snapshot.get('last_synced')}) -- synced but not "
-                f"committed: {added or 'none'}; committed but not synced: {gone or 'none'}")
-    return f"{server}: catalogue.json has the live tools in a different order; copy the portal's order"
+                f"committed: {added or 'none'}; committed in the snapshot part but not synced: {gone or 'none'}")
+    return (f"{server}: catalogue.json does not start with the live tools in the portal's order; "
+            "copy the portal's order, and keep tools served beyond the snapshot after it")
 
 
 KINDS = ("missing-tool", "extra-tool",
@@ -983,7 +988,9 @@ def selftest() -> int:
     for label, committed_cat, server, want_fire in (
         ("an identical committed catalogue is quiet", {"s": ["a", "b", "c"]}, "s", False),
         ("a tool synced but not committed fires", {"s": ["a", "b"]}, "s", True),
-        ("a tool committed but no longer synced fires", {"s": ["a", "b", "c", "d"]}, "s", True),
+        ("a tool served beyond the snapshot, listed after it, is quiet", {"s": ["a", "b", "c", "d"]}, "s", False),
+        ("a tool dropped from the middle of the snapshot fires", {"s": ["a", "d", "b", "c"]}, "s", True),
+        ("a tool no longer synced fires", {"s": ["a", "x", "b", "c"]}, "s", True),
         ("the same tools in another order fire", {"s": ["c", "b", "a"]}, "s", True),
         ("a server absent from the file fires", {}, "s", True),
     ):
