@@ -1,0 +1,24 @@
+{
+  "$comment": "fixture",
+  "portal": "mcp",
+  "server": "widget",
+  "default_disabled": true,
+  "tools": [
+    {
+      "name": "alpha",
+      "enabled": false,
+      "reason": "test",
+      "override": "nope"
+    },
+    {
+      "name": "beta",
+      "enabled": true,
+      "reason": "test"
+    },
+    {
+      "name": "gamma",
+      "enabled": false,
+      "reason": "test"
+    }
+  ]
+}

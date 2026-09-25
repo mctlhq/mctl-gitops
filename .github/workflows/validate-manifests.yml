@@ -370,6 +370,24 @@ jobs:
         # could not run — with the catalogue unchecked meanwhile.
         run: scripts/portal-catalogue-drift.py --selftest
 
+      - name: Validate the vendored MCP portal allowlists
+        # mctlhq/mctl-gitops#1370 PR A: each owning repo's docs/portal-allowlist.json
+        # is pinned here byte-identical as allowlists/<server>.json, so the
+        # decision "this tool is safe to expose" still lands in the same diff
+        # as the tool, one repository away. This checks the vendored copies'
+        # shape, that allowlists/*.json, mapping.json and sources.json all
+        # agree on which servers are vendored, that every mapped server has a
+        # literal resource block in mcp-servers.tf (or is on the commented
+        # UNMANAGED list), and that no vendored file's own tool count exceeds
+        # allowlists/baseline.json -- a widening bump fails here until a
+        # human edits baseline.json in the same PR. It does not, and cannot,
+        # compare against the live Cloudflare catalogue: CI holds no
+        # credential for this root (#1111), same reason as its siblings
+        # above.
+        run: |
+          scripts/validate-portal-allowlists.py --selftest
+          scripts/validate-portal-allowlists.py
+
       - name: Unit-test wft-provision-database's values.yaml patch
         # The provisioner commits straight to main, so no PR check sees the
         # file it writes, and `helm template` above accepts duplicate keys
