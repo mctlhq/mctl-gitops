@@ -425,18 +425,24 @@ remove its line from `.local-state-roots` in the same PR, then run its
 import-only apply through `cloudflare-apply.yml` and confirm drift reads
 `in sync`. #1178 and #1281 are the precedent.
 
-## Current state (2026-09-24)
+## Current state (2026-09-25)
 
 - mctlhq/mctl-gitops#1111 (the apply identity) is closed; every root has a
-  write token mapped and `cloudflare-apply.yml` has applied the account and
-  portal roots.
-- The three zone roots have been on the R2 backend since #1178, but their
-  import-only applies are **not done**: the runs dispatched on 2026-09-22 are
-  still waiting on the `cloudflare-apply` reviewer (tracked in
-  mctlhq/mctl-gitops#1281). Until they run, nightly drift is red on those roots
-  with pending imports only — the "only will be imported" branch of the decision
-  tree. A drift-reconciliation or break-glass walkthrough on a zone root has to
-  wait for #1281; one on `account` or `portal` does not.
+  write token mapped, and `cloudflare-apply.yml` has applied every root.
+- The three zone roots' import-only applies ran on 2026-09-25, together with
+  the five `mctl-landing-form` worker routes (#1179):
+  [36190874599](https://github.com/mctlhq/mctl-gitops/actions/runs/36190874599)
+  `zones/mctl-ru` 9 imported,
+  [36191930779](https://github.com/mctlhq/mctl-gitops/actions/runs/36191930779)
+  `zones/mctl-me` 16 imported,
+  [36191967052](https://github.com/mctlhq/mctl-gitops/actions/runs/36191967052)
+  `zones/mctl-ai` 27 imported, each `0 added, 0 changed, 0 destroyed`. The
+  next drift run,
+  [36195820674](https://github.com/mctlhq/mctl-gitops/actions/runs/36195820674),
+  read `No changes` on all three. The runs dispatched on 2026-09-22 were
+  cancelled unapproved: they had been planned on an older commit.
+  mctlhq/mctl-gitops#1281 still wants one *scheduled* drift run and one
+  scheduled backup run observed against this state.
 
 ## Walkthrough record
 
@@ -450,3 +456,21 @@ that turned out wrong.
 | Break-glass (section 1) | — | — | not yet walked through |
 | Drift reconciliation (section 2) | — | — | not yet walked through |
 | State restore (section 4) | — | — | not yet walked through |
+
+## Git-only operations proof
+
+The evidence for mctlhq/mctl-gitops#1333: each leg of "operated only through
+Git" exercised once against cut-over resources. Record the run, not a summary
+of it.
+
+| Leg | Date | Evidence | Outcome |
+| --- | --- | --- | --- |
+| Reviewed apply | 2026-09-25 | [36190874599](https://github.com/mctlhq/mctl-gitops/actions/runs/36190874599) digest `95c6c6dcd71f6226`, [36191930779](https://github.com/mctlhq/mctl-gitops/actions/runs/36191930779) `9d587ab161508878`, [36191967052](https://github.com/mctlhq/mctl-gitops/actions/runs/36191967052) `0ba89c3f18522cb4` | Plan published by the unprivileged job, approved in `cloudflare-apply`, apply re-derived the same digest; 9 / 16 / 27 imported, nothing added, changed or destroyed. Includes the five worker routes. |
+| Scheduled drift detects an out-of-band change | 2026-09-19 | [35437386685](https://github.com/mctlhq/mctl-gitops/actions/runs/35437386685), `infrastructure/cloudflare/account` | Red, `1 to change`, nothing applied. `cloudflare_zero_trust_access_application.projects_mcp` carried an `allowed_uris` entry the dashboard had written during the portal's upstream login (`…/mcp-server/oauth-callback/projects`), which Git did not declare. The same plan also showed a merged but unapplied policy change on that resource. |
+| Reconciliation through a reviewed apply | 2026-09-19 / 20 | #1293 (`c0e314b`) declared the callback; apply [35452893925](https://github.com/mctlhq/mctl-gitops/actions/runs/35452893925) digest `cf58275744e11432`; next scheduled drift [35506004141](https://github.com/mctlhq/mctl-gitops/actions/runs/35506004141) | `account` green again. The out-of-band value was **accepted into Git** (the ACCEPT INTO GIT branch of section 2's decision tree), not reverted; the unapplied policy change on the same resource was brought to its declared value by that apply. The REVERT branch has not been exercised. |
+| Worker routes in the drift leg | — | — | Not drilled on purpose: every route is on the live path (the form API on `mctl.ai/api/*`, the `mctl.me` / `mctl.ru` redirects), so a deliberate change to one is a user-visible outage. They are covered by the reviewed-apply leg above and by nightly drift. |
+
+A deliberate drift-and-revert drill on a non-user-facing attribute would add
+the one thing this table does not show: the REVERT branch. It mutates production, so
+the attribute is the operator's choice (mctlhq/mctl-gitops#1333, Notes).
+
