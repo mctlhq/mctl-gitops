@@ -94,12 +94,10 @@ why `baseline.json`'s tools_total/tools_enabled here are the vendored FILE's
 own counts, not the live/catalogue-restricted counts quoted in the
 proposal's requirements.md acceptance criteria (alice 12/12, projects 8/8,
 tg 30/30, api 75/75, coolify 22/45, seerrsense 5/5). For the vendored
-servers the two agree except tg (37 file entries, 36 enabled). `api` is not
-vendored: its baseline is its 75 literal `updated_tools` entries in
-mapping.json, all enabled, which is the live mapping itself. (mctl-api's own
-file, 92 entries / 77 enabled, is what design.md's amendment measured; it is
-not read here until that repo's file passes the shape rules and `api` is
-vendored.) This script has no way to compute the
+servers the two agree except tg (37 file entries, 36 enabled) and api (92
+file entries, 77 enabled; vendored once mctlhq/mctl-api#396 gave every entry
+a reason). In both, the extra entries are tools the portal has not synced,
+and mcp-portal.tf leaves them out by walking catalogue.json. This script has no way to compute the
 catalogue-restricted number, so it deliberately does not try to reproduce it;
 it only refuses a FUTURE bump that grows a file's own counts past what is
 already committed, which is the one thing it can check without a live
