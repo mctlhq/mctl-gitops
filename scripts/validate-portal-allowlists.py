@@ -142,6 +142,7 @@ Usage:
 from __future__ import annotations
 
 import base64
+import http.client
 import json
 import os
 import pathlib
@@ -720,7 +721,9 @@ def fetch_bytes(repo: str, path: str, ref: str) -> bytes:
             return r.read()
     except urllib.error.HTTPError as e:
         raise Undetermined(f"{repo}@{ref}: answered {e.code}")
-    except (urllib.error.URLError, OSError) as e:
+    except (urllib.error.URLError, OSError, http.client.HTTPException) as e:
+        # HTTPException (IncompleteRead, BadStatusLine) is not an OSError and
+        # escapes urlopen/read; uncaught it would exit 1, the tamper alarm.
         raise Undetermined(f"{repo}@{ref}: unreachable: {e!r}")
 
 
@@ -744,8 +747,15 @@ def vendor_check(allowlists_dir: pathlib.Path, fetch=fetch_bytes) -> tuple[int, 
         sources = json.loads((allowlists_dir / "sources.json").read_text(encoding="utf-8"))["servers"]
     except (OSError, ValueError, KeyError, TypeError) as e:
         return 2, [f"sources.json could not be read: {e!r}"]
+    if not isinstance(sources, dict):
+        return 2, ["sources.json 'servers' is not an object"]
     for sid in sorted(sources):
         src = sources[sid]
+        if not isinstance(src, dict) or not all(isinstance(src.get(k), str) and src.get(k)
+                                                for k in ("repo", "path", "sha")):
+            lines.append(f"{sid}: undetermined -- its sources.json entry lacks repo/path/sha")
+            undetermined = True
+            continue
         local_path = allowlists_dir / f"{sid}.json"
         try:
             local = local_path.read_bytes()
@@ -812,9 +822,34 @@ def vendor_check_selftest() -> list[str]:
     return problems
 
 
+def widening_selftest() -> list[str]:
+    """--widening-ok downgrades exactly the widening findings. It decides
+    whether the bump workflow opens a PR or fails, and it works by matching
+    phrases, so a reworded message must fail here rather than silently move
+    a finding across that line."""
+    problems: list[str] = []
+    inv = FIXTURES_ROOT / "invalid"
+    for name in ("widening-more-enabled-than-baseline", "swap-read-for-write-constant-count",
+                 "prompts-enabled-widening", "prompt-swap-constant-count"):
+        tf = case_tf_text(inv / name)
+        errors = run(inv / name, tf) if tf is not None else []
+        if not errors or not all(is_widening(e) for e in errors):
+            problems.append(f"widening-ok: {name!r} should be all widening, got {errors}")
+    for name in ("tool-no-reason", "catalogue-tool-without-decision", "mapping-on-behalf-not-boolean",
+                 "baseline-enabled-tools-count-mismatch"):
+        tf = case_tf_text(inv / name)
+        errors = run(inv / name, tf) if tf is not None else []
+        if not errors or all(is_widening(e) for e in errors):
+            problems.append(f"widening-ok: {name!r} must keep a non-widening error, got {errors}")
+    return problems
+
+
 def main() -> int:
     if "--vendor-check" in sys.argv[1:]:
-        code, lines = vendor_check(ALLOWLISTS_DIR)
+        try:
+            code, lines = vendor_check(ALLOWLISTS_DIR)
+        except Exception as e:  # noqa: BLE001 - exit 1 is reserved for tampered
+            code, lines = 2, [f"the vendor check failed before it could compare: {e!r}"]
         for line in lines:
             print(line, file=sys.stderr if code else sys.stdout)
         return code
@@ -822,6 +857,7 @@ def main() -> int:
     if "--selftest" in sys.argv[1:]:
         problems, valid_n, invalid_n = run_selftest()
         problems += vendor_check_selftest()
+        problems += widening_selftest()
         if problems:
             for p in problems:
                 print(p, file=sys.stderr)

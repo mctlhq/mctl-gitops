@@ -14,6 +14,9 @@ on:
 
 permissions:
   contents: read
+  # Read-only: the vendored-allowlist step asks whether a lagging server
+  # already has an open bump PR before paging anyone.
+  pull-requests: read
 
 jobs:
   discover:
@@ -486,12 +489,29 @@ jobs:
         if: matrix.root == 'infrastructure/cloudflare/portal' && steps.plan.conclusion == 'success' && !cancelled()
         env:
           ALLOWLIST_TOKEN: ${{ steps.allowlist_token.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -uo pipefail
           set +e
           "$GITHUB_WORKSPACE/scripts/validate-portal-allowlists.py" --vendor-check > vendor.txt 2>&1
           code=$?
           set -e
+          # A lag whose bump PR is already open is waiting on review (a
+          # widening sits red there by design until someone edits
+          # baseline.json), so it is reported, not paged. Only when every
+          # lagging server has one.
+          if [ "$code" = 3 ]; then
+            open=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --json headRefName \
+                     --jq '[.[].headRefName | select(startswith("portal-allowlist/"))] | join(" ")' || echo "")
+            pending=0; waiting=""
+            while read -r sid; do
+              if tr ' ' '\n' <<< "$open" | grep -q "^portal-allowlist/${sid}-"; then waiting="$waiting $sid"; else pending=1; fi
+            done < <(sed -n 's/^\([a-z0-9-]*\): lags --.*/\1/p' vendor.txt)
+            if [ "$pending" = 0 ]; then
+              echo "bump PR open for:${waiting}; awaiting review, not paged" >> vendor.txt
+              code=0
+            fi
+          fi
           echo "code=$code" >> "$GITHUB_OUTPUT"
           case "$code" in
             0) heading="vendored allowlists match their owning repos" ;;

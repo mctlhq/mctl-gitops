@@ -268,8 +268,11 @@ re-snapshot below):
 
 The decision is made in the owning repository: a change to its
 `docs/portal-allowlist.json` on `main`. That repository's workflow dispatches
-`.github/workflows/portal-allowlist-vendor.yml` here with the file (base64,
-so the copy stays byte-identical), the repo and the commit sha. The workflow
+`.github/workflows/portal-allowlist-vendor.yml` here with the file, the repo
+and the commit sha. The file goes as base64 so the copy stays
+byte-identical, and it must be unwrapped: on Linux use `base64 -w0`,
+because GNU `base64` wraps at 76 columns and the workflow rejects wrapped
+input. The workflow
 then:
 
 1. checks that the repo is the owner `sources.json` records for that
