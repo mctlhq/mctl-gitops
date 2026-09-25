@@ -53,6 +53,9 @@ permissions:
 jobs:
   vendor:
     runs-on: ubuntu-latest
+    # A checkout, a validator run and a handful of gh calls; a hang must
+    # not hold the job for GitHub's 6-hour default.
+    timeout-minutes: 10
     steps:
       - name: Generate GitHub App token
         id: app_token
@@ -213,6 +216,13 @@ jobs:
           Opened by portal-allowlist-vendor.yml (mctlhq/mctl-gitops#1370).")
           echo "$url"
           new="${url##*/}"
+          # Only ever a PR number from gh's own output; anything else (an
+          # error text, an empty string) must not reach a comment that
+          # closes other PRs as "superseded by" it.
+          if ! [[ "$new" =~ ^[0-9]+$ ]]; then
+            echo "::error::gh pr create did not return a PR URL (got '${url}'); not closing older bump PRs"
+            exit 1
+          fi
           for n in $older; do
             gh pr close "$n" --delete-branch --comment "Superseded by #${new}: ${SOURCE_REPO} has a newer docs/portal-allowlist.json. If this PR carried a baseline.json edit, make it again there." || true
           done

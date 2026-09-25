@@ -522,8 +522,15 @@ jobs:
             # (exit 2): a long-lived widening PR must not hide it.
             if [ "$parsed" != "$(grep -c ': lags -- ' vendor.txt)" ]; then pending=1; fi
             if [ "$pending" = 0 ] && [ -n "$waiting" ]; then
-              echo "bump PR open with the owner's current file for:${waiting}; awaiting review, not paged" >> vendor.txt
-              if grep -q 'undetermined' vendor.txt; then code=2; else code=0; fi
+              # The lag itself is not paged, but an undetermined server
+              # still is (exit 2), so say which of the two this run is.
+              if grep -q 'undetermined' vendor.txt; then
+                code=2
+                echo "bump PR open with the owner's current file for:${waiting}; that lag awaits review, but a server could not be compared (undetermined), so this run is still paged" >> vendor.txt
+              else
+                code=0
+                echo "bump PR open with the owner's current file for:${waiting}; awaiting review, not paged" >> vendor.txt
+              fi
             else
               waiting=""
             fi
