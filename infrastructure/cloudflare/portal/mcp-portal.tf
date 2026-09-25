@@ -70,6 +70,8 @@ resource "cloudflare_zero_trust_access_ai_controls_mcp_portal" "mcp" {
   # apply), so the live value is restated.
   allow_code_mode = false
 
+  # `servers` is a set in the provider, so the lexical order of this map's
+  # keys is not compared (the import plans 0 to change, #1382).
   servers = [
     for id, s in local.portal_mapping : {
       server_id        = id
@@ -83,6 +85,10 @@ resource "cloudflare_zero_trust_access_ai_controls_mcp_portal" "mcp" {
       # would be a change the API never keeps -- a diff on every plan -- so
       # it is left out until catalogue.json names the tool. A catalogue tool
       # with no decision fails the lookup; the validator reports it first.
+      # The one direction nothing here can close: a tool the portal synced
+      # after catalogue.json was last updated gets no entry, so its exposure
+      # is the API's default for an unlisted tool until the file catches up.
+      # portal-catalogue-drift.py reports that lag nightly (exit 5).
       updated_tools = [
         for name in local.portal_catalogue[id] : {
           name    = name

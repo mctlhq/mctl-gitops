@@ -442,14 +442,15 @@ def check_baseline(files: dict, servers: dict, baseline, errors: list[str]) -> N
         if not isinstance(names, list) or not all(isinstance(n, str) and n for n in names):
             errors.append(f"allowlists/baseline.json: {sid!r} enabled_tools is not a list of non-empty strings")
             names = None
-        elif len(set(names)) != len(names):
-            dups = sorted({n for n in names if names.count(n) > 1})
-            errors.append(f"allowlists/baseline.json: {sid!r} enabled_tools lists {dups} more than once")
-        elif len(set(names)) != ints["tools_enabled"]:
-            errors.append(
-                f"allowlists/baseline.json: {sid!r} enabled_tools names {len(set(names))} distinct tool(s) "
-                f"but tools_enabled is {ints['tools_enabled']} -- the two must agree"
-            )
+        else:
+            if len(set(names)) != len(names):
+                dups = sorted({n for n in names if names.count(n) > 1})
+                errors.append(f"allowlists/baseline.json: {sid!r} enabled_tools lists {dups} more than once")
+            if len(set(names)) != ints["tools_enabled"]:
+                errors.append(
+                    f"allowlists/baseline.json: {sid!r} enabled_tools names {len(set(names))} distinct tool(s) "
+                    f"but tools_enabled is {ints['tools_enabled']} -- the two must agree"
+                )
 
         total = len(tools)
         enabled_names = {
@@ -484,6 +485,16 @@ def check_baseline(files: dict, servers: dict, baseline, errors: list[str]) -> N
             if not isinstance(allowed_p, list) or not all(isinstance(n, str) and n for n in allowed_p):
                 errors.append(f"allowlists/baseline.json: {sid!r} enabled_prompts is not a list of non-empty strings")
             else:
+                # The same two consistency rules enabled_tools has, so a stale
+                # name cannot sit here pre-authorising a prompt.
+                if len(set(allowed_p)) != len(allowed_p):
+                    errors.append(
+                        f"allowlists/baseline.json: {sid!r} enabled_prompts lists "
+                        f"{sorted({n for n in allowed_p if allowed_p.count(n) > 1})} more than once")
+                if len(set(allowed_p)) != ints["prompts_enabled"]:
+                    errors.append(
+                        f"allowlists/baseline.json: {sid!r} enabled_prompts names {len(set(allowed_p))} "
+                        f"distinct prompt(s) but prompts_enabled is {ints['prompts_enabled']} -- the two must agree")
                 unlisted_p = sorted(
                     {p["name"] for p in prompts
                      if isinstance(p, dict) and p.get("enabled") is True and isinstance(p.get("name"), str)}

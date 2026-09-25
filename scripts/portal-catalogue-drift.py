@@ -1086,12 +1086,15 @@ def main() -> int:
     for server in servers:
         try:
             snapshot = live_snapshot(account, server, token)
-            allowlist = owner_allowlist(server)
-            findings += compare(server, snapshot, allowlist)
+            # Before the owner's allowlist is fetched: the lag check needs only
+            # the portal and the committed file, so a GitHub read failure for
+            # this server must not hide it.
             if committed is not None:
                 lag = catalogue_file_lag(server, snapshot, committed)
                 if lag:
                     lagging.append(lag)
+            allowlist = owner_allowlist(server)
+            findings += compare(server, snapshot, allowlist)
             checked.append(f"{server}={len(snapshot.get('tools') or [])}@{snapshot.get('last_synced')}")
             compared.add(server)
         except Undetermined as e:
@@ -1116,10 +1119,11 @@ def main() -> int:
         # purpose. Say here that the quieter one also fired, so the heading and
         # the alert -- which are what get read first -- do not imply the
         # catalogues are otherwise in sync.
-        others = len(failing) + len(undetermined) + len(maintenance)
+        others = len(failing) + len(lagging) + len(undetermined) + len(maintenance)
         if others:
             print(f"  (and {others} other finding(s) below -- stale catalogues, "
-                  "servers that could not be compared, waivers to fix -- which "
+                  "a committed catalogue.json that lags the portal, servers "
+                  "that could not be compared, waivers to fix -- which "
                   "this exit status does not name)", file=sys.stderr)
     if undetermined:
         print("these servers were not compared:", file=sys.stderr)
