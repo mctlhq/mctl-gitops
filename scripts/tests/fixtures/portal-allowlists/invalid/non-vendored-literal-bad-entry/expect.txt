@@ -1,0 +1,1 @@
+'unvendored' updated_tools[0]: key(s) outside ['enabled', 'name']: ['reason']

@@ -1,11 +1,18 @@
 {
-  "$comment": "Non-widening reference for scripts/validate-portal-allowlists.py. tools_total/tools_enabled are the vendored FILE's own counts (every entry in allowlists/<id>.json, counted as committed in this PR) -- NOT the live/catalogue-restricted counts quoted in this proposal's requirements.md (alice 12/12, projects 8/8, tg 30/30, api 75/75, coolify 22/45, seerrsense 5/5). Those two agree for four of six servers; tg and api differ because their files list tools gated by scopes the portal's own OAuth grant does not request (measured 2026-09-25, design.md amendment 5) -- present upstream, absent from the live catalogue, and therefore invisible to a validator with no Cloudflare credential (#1111). See the module docstring of validate-portal-allowlists.py. prompts_total/prompts_enabled, which have no vendored file to read counts from, ARE the live-portal numbers, taken from live-snapshot-2026-09-25.json's catalogue_prompts/updated_prompts exactly as tasks.md's Slice 1 instructs.",
+  "$comment": "Non-widening reference for scripts/validate-portal-allowlists.py. tools_total/tools_enabled are the vendored FILE's own counts (every entry in allowlists/<id>.json, counted as committed in this PR) -- NOT the live/catalogue-restricted counts quoted in this proposal's requirements.md (alice 12/12, projects 8/8, tg 30/30, api 75/75, coolify 22/45, seerrsense 5/5). Those two agree for four of six servers; tg and api differ because their files list tools gated by scopes the portal's own OAuth grant does not request (measured 2026-09-25, design.md amendment 5) -- present upstream, absent from the live catalogue, and therefore invisible to a validator with no Cloudflare credential (#1111). See the module docstring of validate-portal-allowlists.py. prompts_total/prompts_enabled, which have no vendored file to read counts from, ARE the live-portal numbers, taken from live-snapshot-2026-09-25.json's catalogue_prompts/updated_prompts exactly as tasks.md's Slice 1 instructs. `api` is not vendored (mapping.json carries its 75 literal updated_tools, all enabled, matching live) and is gated here all the same: its counts are those literal entries, and its prompts_total/prompts_enabled 4/4 are the live catalogue shown with no override (updated_prompts: null).",
   "servers": {
     "alice": {
       "tools_total": 12,
       "tools_enabled": 12,
       "prompts_total": 0,
       "prompts_enabled": 0,
+      "recorded": "2026-09-25"
+    },
+    "api": {
+      "tools_total": 75,
+      "tools_enabled": 75,
+      "prompts_total": 4,
+      "prompts_enabled": 4,
       "recorded": "2026-09-25"
     },
     "coolify": {

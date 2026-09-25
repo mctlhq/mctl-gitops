@@ -45,9 +45,26 @@ What this script enforces, and what it deliberately does not:
     in `mcp-servers.tf` -- the same literal-grep technique
     `portal-membership-add.sh`'s `tf_declared()` already uses, rather than a
     HCL parser.
-  - non-widening: a vendored file's own tools_total/tools_enabled (every
-    entry in the file, counted as committed) must not exceed what
-    `baseline.json` records for that server.
+  - literal mappings: a non-vendored server's `updated_tools` gets the same
+    per-entry checks as a vendored file's tools (keys exactly `name` and
+    `enabled`, `name` a non-empty unique string, `enabled` a boolean), minus
+    the `reason` requirement -- a missing reason is exactly why such a server
+    is not vendored. Every server's `updated_prompts` is `null` (no override)
+    or a list of such `{name, enabled}` entries.
+  - non-widening, for EVERY server in `mapping.json`, vendored or not:
+    tools_total/tools_enabled (counted from the vendored file, or from the
+    literal `updated_tools`) must not exceed `baseline.json`; and the
+    effective number of enabled prompts must not exceed `prompts_enabled`,
+    where `updated_prompts: null` counts as all `prompts_total` enabled (no
+    override means the portal shows every catalogue prompt), so replacing a
+    narrowing list with `null` is caught as a widening too.
+
+Two keys share the name `default_disabled` and mean opposite things. In a
+vendored `allowlists/<id>.json` it is the owning repo's posture ("a tool this
+file does not list is disabled") and must be `true`. In `mapping.json` it is
+the portal object's per-server switch ("this server is off by default for
+connecting clients"), copied from the live portal and `false` today. They are
+expected to disagree; PR B must read the portal one from `mapping.json` only.
 
 What it does NOT do: compare a vendored file against the server's live,
 synced tool *catalogue*. CI holds no Cloudflare credential for this root
@@ -106,6 +123,7 @@ SPECIAL_FILES = {"mapping.json", "sources.json", "baseline.json"}
 ALLOWED_TOP_KEYS = {"$comment", "portal", "server", "default_disabled", "tools"}
 REQUIRED_TOP_KEYS = {"portal", "server", "default_disabled", "tools"}
 ALLOWED_TOOL_KEYS = {"name", "enabled", "reason", "upstream_gates", "override"}
+LITERAL_ENTRY_KEYS = {"name", "enabled"}
 PORTAL_ID = "mcp"
 TF_RESOURCE_TYPE = "cloudflare_zero_trust_access_ai_controls_mcp_server"
 
@@ -203,6 +221,34 @@ def check_shape(server_id: str, data, errors: list[str]) -> None:
                 )
 
 
+def check_literal_entries(where: str, entries, errors: list[str]) -> None:
+    """A `{name, enabled}` list written in mapping.json itself: a
+    non-vendored server's `updated_tools`, or any server's `updated_prompts`.
+    Same per-entry rules as a vendored file's tools, without `reason`.
+    """
+    if not isinstance(entries, list):
+        errors.append(f"{where}: is a {type(entries).__name__}, expected a list")
+        return
+    seen: set[str] = set()
+    for i, e in enumerate(entries):
+        ep = f"{where}[{i}]"
+        if not isinstance(e, dict):
+            errors.append(f"{ep}: entry is a {type(e).__name__}, expected an object")
+            continue
+        extra = set(e) - LITERAL_ENTRY_KEYS
+        if extra:
+            errors.append(f"{ep}: key(s) outside {sorted(LITERAL_ENTRY_KEYS)}: {sorted(extra)}")
+        name = e.get("name")
+        if not isinstance(name, str) or not name:
+            errors.append(f"{ep}: name is not a non-empty string ({name!r})")
+        elif name in seen:
+            errors.append(f"{where}: duplicate name {name!r}")
+        else:
+            seen.add(name)
+        if not isinstance(e.get("enabled"), bool):
+            errors.append(f"{ep} ({name!r}): enabled is not a boolean ({e.get('enabled')!r})")
+
+
 def check_coverage(file_ids: set[str], mapping, errors: list[str]) -> dict:
     """{files} == {mapping.json servers where vendored}, and a non-vendored
     entry declares its mapping literally (design.md's escape hatch for a
@@ -227,6 +273,15 @@ def check_coverage(file_ids: set[str], mapping, errors: list[str]) -> dict:
             errors.append(
                 f"allowlists/mapping.json: server {sid!r} is not vendored and must carry a literal "
                 "updated_tools list"
+            )
+            continue
+        check_literal_entries(f"allowlists/mapping.json: {sid!r} updated_tools", s["updated_tools"], errors)
+
+    for sid in sorted(servers):
+        s = servers[sid]
+        if isinstance(s, dict) and s.get("updated_prompts") is not None:
+            check_literal_entries(
+                f"allowlists/mapping.json: {sid!r} updated_prompts", s["updated_prompts"], errors
             )
 
     return servers
@@ -266,42 +321,63 @@ def check_existence(server_ids: set[str], tf_text: str, errors: list[str]) -> No
             )
 
 
-def check_baseline(files: dict, vendored_ids: set[str], baseline, errors: list[str]) -> None:
-    """Non-widening: a vendored file's own tools_total/tools_enabled must not
-    exceed what baseline.json records for that server. See the module
-    docstring for why this compares the FILE's own counts, not a
-    catalogue-restricted one.
+def check_baseline(files: dict, servers: dict, baseline, errors: list[str]) -> None:
+    """Non-widening, for every server in mapping.json: tools counted from the
+    vendored file (see the module docstring for why the FILE's own counts,
+    not a catalogue-restricted one) or from the literal updated_tools, and
+    prompts counted with `null` meaning all catalogue prompts enabled.
     """
     entries = baseline.get("servers") if isinstance(baseline, dict) else None
     if not isinstance(entries, dict):
         errors.append("allowlists/baseline.json: missing or malformed top-level 'servers' object")
         entries = {}
 
-    for sid in sorted(vendored_ids):
-        data = files.get(sid)
-        if not isinstance(data, dict):
-            continue  # already reported by load/coverage
-        tools = data.get("tools")
+    for sid in sorted(servers):
+        s = servers[sid]
+        if not isinstance(s, dict):
+            continue  # already reported by coverage
+        if s.get("vendored") is True:
+            data = files.get(sid)
+            tools = data.get("tools") if isinstance(data, dict) else None
+            where = f"allowlists/{sid}.json"
+        else:
+            tools = s.get("updated_tools")
+            where = f"allowlists/mapping.json: {sid!r} updated_tools"
         if not isinstance(tools, list):
-            continue  # already reported by check_shape
-
-        total = len(tools)
-        enabled = sum(1 for t in tools if isinstance(t, dict) and t.get("enabled") is True)
+            continue  # already reported by shape/coverage
 
         b = entries.get(sid)
         if not isinstance(b, dict):
-            errors.append(f"allowlists/baseline.json: no entry for vendored server {sid!r}")
+            errors.append(f"allowlists/baseline.json: no entry for server {sid!r}")
             continue
-        b_total, b_enabled = b.get("tools_total"), b.get("tools_enabled")
-        if not isinstance(b_total, int) or not isinstance(b_enabled, int):
-            errors.append(f"allowlists/baseline.json: {sid!r} tools_total/tools_enabled are not integers")
+        ints = {k: b.get(k) for k in ("tools_total", "tools_enabled", "prompts_total", "prompts_enabled")}
+        bad = [k for k, v in ints.items() if not isinstance(v, int) or isinstance(v, bool)]
+        if bad:
+            errors.append(f"allowlists/baseline.json: {sid!r} {', '.join(bad)} not integer(s)")
             continue
 
-        if enabled > b_enabled or total > b_total:
+        total = len(tools)
+        enabled = sum(1 for t in tools if isinstance(t, dict) and t.get("enabled") is True)
+        if enabled > ints["tools_enabled"] or total > ints["tools_total"]:
             errors.append(
-                f"allowlists/{sid}.json: widens exposure -- {enabled}/{total} tools enabled/total now, "
-                f"baseline.json records {b_enabled}/{b_total} for {sid!r}; update baseline.json in the "
-                "same change if this widening is intentional"
+                f"{where}: widens exposure -- {enabled}/{total} tools enabled/total now, "
+                f"baseline.json records {ints['tools_enabled']}/{ints['tools_total']} for {sid!r}; "
+                "update baseline.json in the same change if this widening is intentional"
+            )
+
+        prompts = s.get("updated_prompts")
+        if prompts is None:
+            p_enabled = ints["prompts_total"]  # no override: every catalogue prompt is shown
+        elif isinstance(prompts, list):
+            p_enabled = sum(1 for p in prompts if isinstance(p, dict) and p.get("enabled") is True)
+        else:
+            continue  # already reported by check_literal_entries
+        if p_enabled > ints["prompts_enabled"]:
+            shown = "null (no override, all shown)" if prompts is None else f"{p_enabled} enabled"
+            errors.append(
+                f"allowlists/mapping.json: {sid!r} updated_prompts widens exposure -- {shown}, "
+                f"baseline.json records {ints['prompts_enabled']}/{ints['prompts_total']}; update "
+                "baseline.json in the same change if this widening is intentional"
             )
 
 
@@ -361,7 +437,7 @@ def run(allowlists_dir: pathlib.Path, tf_text: str) -> list[str]:
             baseline = load_json(baseline_path)
         except Unreadable as e:
             errors.append(str(e))
-    check_baseline(files, vendored_ids, baseline, errors)
+    check_baseline(files, servers, baseline, errors)
 
     return errors
 
@@ -372,47 +448,59 @@ def case_tf_text(case_dir: pathlib.Path) -> str:
     opt-in shape validate-agent-platform.py uses for its own cross-checks.
     """
     fixture_tf = case_dir / "mcp-servers.tf"
-    if fixture_tf.is_file():
-        return fixture_tf.read_text(encoding="utf-8")
-    return MCP_SERVERS_TF.read_text(encoding="utf-8")
+    return (fixture_tf if fixture_tf.is_file() else MCP_SERVERS_TF).read_text(encoding="utf-8")
 
 
-def run_selftest() -> list[str]:
+def case_dirs(parent: pathlib.Path) -> list[pathlib.Path]:
+    return sorted(p for p in parent.iterdir() if p.is_dir()) if parent.is_dir() else []
+
+
+def run_selftest() -> tuple[list[str], int, int]:
     """A detector never seen to fire is not known to work: replay every
-    fixture under valid/ and invalid/ and assert the expected outcome.
+    fixture under valid/ and invalid/ and assert the expected outcome. Each
+    invalid/<case>/ names the error it exists for in expect.txt (a substring
+    one of its errors must contain), so a case cannot silently keep "failing"
+    on some other check after its own detector is gone. An absent or empty
+    fixture tree is a failure, not a pass.
     """
     problems: list[str] = []
+    valid, invalid = case_dirs(FIXTURES_ROOT / "valid"), case_dirs(FIXTURES_ROOT / "invalid")
+    if not valid or not invalid:
+        problems.append(
+            f"{FIXTURES_ROOT}: valid/ has {len(valid)} case(s) and invalid/ {len(invalid)} -- "
+            "refusing to pass vacuously"
+        )
+        return problems, len(valid), len(invalid)
 
-    valid_dir = FIXTURES_ROOT / "valid"
-    for case_dir in sorted(valid_dir.glob("*")) if valid_dir.is_dir() else []:
-        if not case_dir.is_dir():
-            continue
+    for case_dir in valid:
         errors = run(case_dir, case_tf_text(case_dir))
         if errors:
             problems.append(f"valid fixture {case_dir.name!r} unexpectedly failed:")
             problems.extend(f"  {e}" for e in errors)
 
-    invalid_dir = FIXTURES_ROOT / "invalid"
-    for case_dir in sorted(invalid_dir.glob("*")) if invalid_dir.is_dir() else []:
-        if not case_dir.is_dir():
+    for case_dir in invalid:
+        expect_path = case_dir / "expect.txt"
+        if not expect_path.is_file():
+            problems.append(f"invalid fixture {case_dir.name!r} has no expect.txt naming the error it exists for")
             continue
+        expect = expect_path.read_text(encoding="utf-8").strip()
         errors = run(case_dir, case_tf_text(case_dir))
-        if not errors:
-            problems.append(f"invalid fixture {case_dir.name!r} unexpectedly passed (expected at least one error)")
+        if not any(expect in e for e in errors):
+            problems.append(
+                f"invalid fixture {case_dir.name!r}: no error contains {expect!r}; got {errors or 'none'}"
+            )
 
-    return problems
+    return problems, len(valid), len(invalid)
 
 
 def main() -> int:
     if "--selftest" in sys.argv[1:]:
-        problems = run_selftest()
+        problems, valid_n, invalid_n = run_selftest()
         if problems:
             for p in problems:
                 print(p, file=sys.stderr)
             print(f"portal allowlists selftest: {len(problems)} problem(s)", file=sys.stderr)
             return 1
-        valid_n = len(list((FIXTURES_ROOT / "valid").glob("*"))) if (FIXTURES_ROOT / "valid").is_dir() else 0
-        invalid_n = len(list((FIXTURES_ROOT / "invalid").glob("*"))) if (FIXTURES_ROOT / "invalid").is_dir() else 0
         print(f"selftest OK: {valid_n} valid fixture(s), {invalid_n} invalid fixture(s)")
         return 0
 
@@ -420,6 +508,9 @@ def main() -> int:
         print(f"{ALLOWLISTS_DIR} not found -- refusing to pass vacuously", file=sys.stderr)
         return 2
 
+    if not MCP_SERVERS_TF.is_file():
+        print(f"{MCP_SERVERS_TF} not found -- the existence check has nothing to read", file=sys.stderr)
+        return 2
     errors = run(ALLOWLISTS_DIR, MCP_SERVERS_TF.read_text(encoding="utf-8"))
     if errors:
         for e in errors:

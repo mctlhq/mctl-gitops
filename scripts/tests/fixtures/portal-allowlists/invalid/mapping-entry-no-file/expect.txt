@@ -1,0 +1,1 @@
+server 'ghost' is vendored, but allowlists/ghost.json does not exist
