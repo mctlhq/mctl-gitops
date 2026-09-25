@@ -166,25 +166,40 @@ jobs:
             exit 0
           fi
           branch="portal-allowlist/${SERVER}-${SOURCE_SHA:0:7}"
-          # A re-dispatch of the same content: the PR, and any commit a
-          # human added to it (the baseline.json edit a widening waits on),
-          # are left exactly as they are. Nothing is pushed.
-          if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
-            echo "Branch ${branch} already exists; this content is already proposed. Nothing pushed."
+          # A re-dispatch of the same content never pushes: an open PR, and
+          # any commit a human added to it (the baseline.json edit a widening
+          # waits on), are left exactly as they are.
+          if [ -n "$(gh pr list --head "$branch" --state open --json number --jq '.[].number')" ]; then
+            echo "A PR from ${branch} is already open; this content is already proposed. Nothing pushed."
             exit 0
           fi
-          git config user.email "ci@mctl.ai"
-          git config user.name  "mctl-ci"
-          git switch -c "$branch"
-          git add "$file" infrastructure/cloudflare/portal/allowlists/sources.json
-          git commit -m "portal(${SERVER}): vendor allowlist ${DELTA} tools enabled/total" \
-                     -m "From ${SOURCE_REPO}@${SOURCE_SHA}. Refs mctlhq/mctl-gitops#1370."
-          git push origin "$branch"
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
+            # A leftover branch with no open PR: a PR closed by hand, or a
+            # run that died before gh pr create. Reopen the proposal from it
+            # when it carries this exact content; otherwise fail loudly
+            # rather than exit green with no PR.
+            git fetch --quiet origin "refs/heads/${branch}"
+            if ! git diff --quiet FETCH_HEAD -- "$file"; then
+              echo "::error::branch ${branch} exists with different content for ${file} and no open PR; delete it and dispatch again"
+              exit 1
+            fi
+            echo "Branch ${branch} exists with this content and no open PR; opening one from it."
+          else
+            git config user.email "ci@mctl.ai"
+            git config user.name  "mctl-ci"
+            git switch -c "$branch"
+            git add "$file" infrastructure/cloudflare/portal/allowlists/sources.json
+            git commit -m "portal(${SERVER}): vendor allowlist ${DELTA} tools enabled/total" \
+                       -m "From ${SOURCE_REPO}@${SOURCE_SHA}. Refs mctlhq/mctl-gitops#1370."
+            git push origin "$branch"
+          fi
           # Older open bump PRs for this server describe a file that is no
           # longer the owner's latest; they are superseded, not left to merge
-          # in the wrong order.
-          older=$(gh pr list --state open --json number,headRefName \
-                    --jq "[.[] | select(.headRefName | startswith(\"portal-allowlist/${SERVER}-\")) | .number] | join(\" \")")
+          # in the wrong order. Anchored on the 7-hex suffix so server "foo"
+          # never matches "foo-bar"'s branches; --limit so a busy repo does
+          # not truncate the list.
+          older=$(gh pr list --state open --limit 500 --json number,headRefName \
+                    --jq "[.[] | select(.headRefName | test(\"^portal-allowlist/${SERVER}-[0-9a-f]{7}\$\")) | select(.headRefName != \"${branch}\") | .number] | join(\" \")")
           note=""
           if [ "$WIDENING" = "true" ]; then
             note=$'\n\n**This widens exposure.** validate-manifests fails until `baseline.json` is edited in this PR by someone who has decided the widening is intended.'

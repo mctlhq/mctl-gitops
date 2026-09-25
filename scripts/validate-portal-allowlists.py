@@ -142,6 +142,7 @@ Usage:
 from __future__ import annotations
 
 import base64
+import hashlib
 import http.client
 import json
 import os
@@ -782,9 +783,12 @@ def vendor_check(allowlists_dir: pathlib.Path, fetch=fetch_bytes) -> tuple[int, 
             undetermined = True
             continue
         if at_main != at_sha:
+            # The git blob sha of main's content lets the drift workflow tell
+            # a bump PR that carries exactly this content from a stale one.
+            blob = hashlib.sha1(b"blob %d\0" % len(at_main) + at_main).hexdigest()
             lines.append(
-                f"{sid}: lags -- {src['repo']} main has a newer {src['path']}; the bump dispatch did "
-                "not run or its PR is not merged (dispatch portal-allowlist-vendor.yml by hand if needed)")
+                f"{sid}: lags -- {src['repo']} main has a newer {src['path']} (blob {blob}); the bump "
+                "dispatch did not run or its PR is not merged (dispatch portal-allowlist-vendor.yml by hand if needed)")
             lagging = True
         else:
             lines.append(f"{sid}: in sync with {src['repo']}@{src['sha'][:7]} and main")
@@ -819,6 +823,10 @@ def vendor_check_selftest() -> list[str]:
             code, lines = vendor_check(dp, stub)
         if code != want:
             problems.append(f"vendor-check: {label}: exit {code}, expected {want} ({lines})")
+        # cloudflare-drift.yml compares this against the contents API's sha
+        # of a bump PR's file; it must be git's blob sha (git hash-object).
+        if want == 3 and not any("(blob 206a61de086a50dcac3be5aa7b5196bf4ef754f6)" in ln for ln in lines):
+            problems.append(f"vendor-check: {label}: the lag line lacks main's git blob sha ({lines})")
     return problems
 
 

@@ -498,23 +498,35 @@ jobs:
           set -e
           # A lag whose bump PR is already open is waiting on review (a
           # widening sits red there by design until someone edits
-          # baseline.json), so it is reported, not paged. Only when every
-          # lagging server has one.
+          # baseline.json), so it is reported, not paged -- but only when
+          # that PR carries exactly the owner's current file: its
+          # allowlists/<id>.json blob equals the blob of main's content that
+          # --vendor-check printed. A stale bump PR (the owner has moved on
+          # and the newer dispatch failed) does not silence the lag. Only
+          # when every lagging server has one.
+          waiting=""
           if [ "$code" = 3 ]; then
-            open=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --json headRefName \
-                     --jq '[.[].headRefName | select(startswith("portal-allowlist/"))] | join(" ")' || echo "")
-            pending=0; waiting=""
-            while read -r sid; do
-              if tr ' ' '\n' <<< "$open" | grep -q "^portal-allowlist/${sid}-"; then waiting="$waiting $sid"; else pending=1; fi
-            done < <(sed -n 's/^\([a-z0-9-]*\): lags --.*/\1/p' vendor.txt)
-            if [ "$pending" = 0 ]; then
-              echo "bump PR open for:${waiting}; awaiting review, not paged" >> vendor.txt
+            pending=0
+            while read -r sid blob; do
+              found=0
+              for br in $(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 500 --json headRefName \
+                            --jq ".[].headRefName | select(test(\"^portal-allowlist/${sid}-[0-9a-f]{7}\$\"))" || true); do
+                pr_blob=$(gh api "repos/${GITHUB_REPOSITORY}/contents/infrastructure/cloudflare/portal/allowlists/${sid}.json?ref=${br}" --jq .sha 2>/dev/null || true)
+                if [ -n "$pr_blob" ] && [ "$pr_blob" = "$blob" ]; then found=1; fi
+              done
+              if [ "$found" = 1 ]; then waiting="$waiting $sid"; else pending=1; fi
+            done < <(sed -n 's/^\([a-z0-9-]*\): lags -- .* (blob \([0-9a-f]\{40\}\)).*/\1 \2/p' vendor.txt)
+            if [ "$pending" = 0 ] && [ -n "$waiting" ]; then
+              echo "bump PR open with the owner's current file for:${waiting}; awaiting review, not paged" >> vendor.txt
               code=0
+            else
+              waiting=""
             fi
           fi
           echo "code=$code" >> "$GITHUB_OUTPUT"
           case "$code" in
-            0) heading="vendored allowlists match their owning repos" ;;
+            0) if [ -n "$waiting" ]; then heading="a vendored allowlist lags; its bump PR is open, awaiting review"
+               else heading="vendored allowlists match their owning repos"; fi ;;
             1) heading="A VENDORED ALLOWLIST WAS EDITED HERE (tampered)" ;;
             3) heading="a vendored allowlist lags its owning repo's main" ;;
             *) heading="vendored allowlist check could not run (exit $code)" ;;

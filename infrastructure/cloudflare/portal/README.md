@@ -296,7 +296,13 @@ Nightly, `scripts/validate-portal-allowlists.py --vendor-check`, run from
 - **tampered, exit 1**: the file differs from the recorded sha, so someone
   edited the copy here;
 - **lag, exit 3**: the owning repo's `main` has a newer file that was never
-  vendored.
+  vendored. The nightly reports a lag without paging only when an open bump
+  PR carries exactly that newer file (same git blob), e.g. a widening waiting
+  on its `baseline.json` decision. A stale bump PR does not count.
+
+A re-dispatch of content that already has an open PR pushes nothing, so a
+commit a reviewer added there survives. A leftover branch with no open PR
+gets a new PR when it holds the same file, and fails the run otherwise.
 
 To re-vendor by hand, dispatch the workflow yourself with the same four
 inputs.
