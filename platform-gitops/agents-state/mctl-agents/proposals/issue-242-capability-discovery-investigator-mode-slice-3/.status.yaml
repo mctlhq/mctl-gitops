@@ -1,6 +1,6 @@
-status: proposed
-updated_at: '2026-09-26T11:45:00Z'
-updated_by: mashkovd
+status: accepted
+updated_at: '2026-09-26T12:29:59Z'
+updated_by: mctl-agents[bot]
 source:
   type: github_issue
   repo: mctlhq/mctl-agents
@@ -17,3 +17,6 @@ notes: >-
   edited. New slug for the same implementer-preflight reason as slice 2.
   Contains a product decision (ADR 017 sec. 8, option B) that this
   proposal's approval also approves.
+approval:
+  approved_by: 'mashkovd'
+  approved_at: '2026-09-26T12:29:59Z'
