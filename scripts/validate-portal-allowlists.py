@@ -741,7 +741,10 @@ def vendor_check(allowlists_dir: pathlib.Path, fetch=fetch_bytes) -> tuple[int, 
     anything was undetermined, else 0.
     """
     lines: list[str] = []
-    tampered = lagging = undetermined = False
+    tampered = lagging = False
+    # A count, not a flag: the note below says how many, and counting the
+    # rendered lines for a word would tie that number to message wording.
+    undetermined = 0
     try:
         sources = json.loads((allowlists_dir / "sources.json").read_text(encoding="utf-8"))["servers"]
     except (OSError, ValueError, KeyError, TypeError) as e:
@@ -753,20 +756,20 @@ def vendor_check(allowlists_dir: pathlib.Path, fetch=fetch_bytes) -> tuple[int, 
         if not isinstance(src, dict) or not all(isinstance(src.get(k), str) and src.get(k)
                                                 for k in ("repo", "path", "sha")):
             lines.append(f"{sid}: undetermined -- its sources.json entry lacks repo/path/sha")
-            undetermined = True
+            undetermined += 1
             continue
         local_path = allowlists_dir / f"{sid}.json"
         try:
             local = local_path.read_bytes()
         except OSError as e:
             lines.append(f"{sid}: undetermined -- the vendored file could not be read: {e!r}")
-            undetermined = True
+            undetermined += 1
             continue
         try:
             at_sha = fetch(src["repo"], src["path"], src["sha"])
         except Undetermined as e:
             lines.append(f"{sid}: undetermined -- {e}")
-            undetermined = True
+            undetermined += 1
             continue
         if local != at_sha:
             lines.append(
@@ -778,7 +781,7 @@ def vendor_check(allowlists_dir: pathlib.Path, fetch=fetch_bytes) -> tuple[int, 
             at_main = fetch(src["repo"], src["path"], src.get("ref") or "main")
         except Undetermined as e:
             lines.append(f"{sid}: matches its recorded sha; main undetermined -- {e}")
-            undetermined = True
+            undetermined += 1
             continue
         if at_main != at_sha:
             # The git blob sha of main's content lets the drift workflow tell
@@ -791,6 +794,11 @@ def vendor_check(allowlists_dir: pathlib.Path, fetch=fetch_bytes) -> tuple[int, 
         else:
             lines.append(f"{sid}: in sync with {src['repo']}@{src['sha'][:7]} and main")
     code = 1 if tampered else 3 if lagging else 2 if undetermined else 0
+    if code in (1, 3) and undetermined:
+        # Exit 1 and 3 outrank 2, so say what the status does not name (the
+        # convention of portal-catalogue-drift.py's exit-4 and exit-5 notes).
+        lines.append(f"(and {undetermined} server(s) that could not be compared, undetermined, "
+                     "which this exit status does not name)")
     return code, lines
 
 
@@ -825,6 +833,26 @@ def vendor_check_selftest() -> list[str]:
         # of a bump PR's file; it must be git's blob sha (git hash-object).
         if want == 3 and not any("(blob 206a61de086a50dcac3be5aa7b5196bf4ef754f6)" in ln for ln in lines):
             problems.append(f"vendor-check: {label}: the lag line lacks main's git blob sha ({lines})")
+    # A lag (3) or a tamper (1) outranks an undetermined server; the output
+    # must still name it. Both sides of the `code in (1, 3)` guard.
+    for label, local_w, want in (("a lag", a, 3), ("a tamper", b, 1)):
+        with tempfile.TemporaryDirectory() as d:
+            dp = pathlib.Path(d)
+            ent = {"path": "docs/portal-allowlist.json", "ref": "main", "sha": "S",
+                   "vendored_at": "2026-09-25T00:00:00Z"}
+            (dp / "sources.json").write_text(json.dumps({"servers": {
+                "w": {**ent, "repo": "mctlhq/w"}, "x": {**ent, "repo": "mctlhq/x"}}}))
+            (dp / "w.json").write_bytes(local_w)
+            (dp / "x.json").write_bytes(a)
+
+            def stub2(repo, path, ref):
+                if repo == "mctlhq/x":
+                    raise Undetermined(f"{repo}@{ref}: stubbed 404")
+                return {"S": a, "main": b}[ref]
+            code, lines = vendor_check(dp, stub2)
+        if code != want or not any("1 server(s) that could not be compared" in ln for ln in lines):
+            problems.append(
+                f"vendor-check: {label} must not hide an undetermined server: exit {code} ({lines})")
     return problems
 
 
