@@ -488,3 +488,8 @@ jobs:
         run: |
           python3 -m pip install --quiet pyyaml
           python3 tests/test_otel_collector_redaction.py
+
+      - name: Validate storage & finops Grafana dashboards
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_storage_finops_dashboard.py
