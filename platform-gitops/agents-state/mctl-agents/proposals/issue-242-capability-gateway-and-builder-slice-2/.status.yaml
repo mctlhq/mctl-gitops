@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-09-26T10:30:29Z'
+status: merged
+updated_at: '2026-09-26T11:24:27Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -22,3 +22,5 @@ execution:
   trace_id: 0fef72a7998546d2aff5704ab68a548b
   agent: implementer
   version: ''
+merged_at: '2026-09-26T11:24:27Z'
+merge_commit: 146133d6ce8f8c901ecc510f1f0ceaf34d9927e7
