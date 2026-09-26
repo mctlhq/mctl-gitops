@@ -26,21 +26,23 @@
   comment naming the migration-by-attrition rule
   `tests/test_patch_memoization.py` pins.
 
-- [ ] 4. Add `proposal_terminal_end: bool = False` to `MergeWatchResume`, set it
-  in `_watch_pr`'s `resume_record` (4913-4945), and read it in the
-  `if resume is not None:` arm (4801-4810) beside `fast_cadence` /
-  `shepherd_in_loop` / `track_ownership`. (depends on 3) — DoD: a continued run
-  uses the carried value and never re-derives the marker; the field is
-  defaulted so pre-existing resume records deserialize.
+- [ ] 4. Add `proposal_terminal_end: bool = False` and `saw_open_pr: bool =
+  False` to `MergeWatchResume`, set both in `_watch_pr`'s `resume_record`
+  (4913-4945), and read them in the `if resume is not None:` arm (4801-4810)
+  beside `fast_cadence` / `shepherd_in_loop` / `track_ownership`. (depends on 3)
+  — DoD: a continued run uses the carried values and never re-derives the
+  marker; both fields are defaulted so pre-existing resume records deserialize.
 
-- [ ] 5. Insert the terminal check in `_watch_pr`'s poll body, immediately after
-  the `get_pr_state` read, in BOTH the `state.found` branch (after the
-  `MERGED`/`CLOSED` arm, before `poll_index += 1`) and the not-found branch
-  (before the `pr_lookup_grace_polls` give-up). Use `break` with a local
-  `watch_ended` string, never `return`, and never set `hopping`. (depends on
-  1, 2, 3) — DoD: a merged/closed PR still takes its existing arm; a terminal
-  status ends the watch at that poll with no further tick, poll or hop; the
-  `finally` block still runs.
+- [ ] 5. Insert the terminal check in `_watch_pr`'s NOT-FOUND branch only
+  (before the `pr_lookup_grace_polls` give-up), guarded by `not saw_open_pr`;
+  set `saw_open_pr = True` in the `found` branch whenever the read resolves an
+  OPEN PR. Do NOT add any status check to the `found` branch and do not change
+  its shepherd tick scheduling. Use `break` with a local `watch_ended` string,
+  never `return`, and never set `hopping`. (depends on 1, 2, 3, 4) — DoD: a
+  merged/closed PR still takes its existing arm; an OPEN PR keeps watching and
+  ticking whatever the status; a terminal status with no PR (and no OPEN PR
+  seen earlier in the watch) ends the watch at that poll with no further poll
+  or hop; the `finally` block still runs.
 
 - [ ] 6. In `_watch_pr`'s `finally` (5091-5166), when `watch_ended` is set, pass
   a `reason` to `self._ownership(...)` that names the observed proposal status
@@ -75,13 +77,26 @@
   `proposal_status` from the same `.status.yaml` read, on the `found=True` path
   AND on the no-`pr:`-field path; `None` when the file 404s or is undecodable.
 - [ ] T2. `tests/test_dev_loop_workflow.py`: a `review-stuck` proposal on an
-  OPEN PR ends the watch within one poll; `DevLoopResult.ended` names the
-  status and `DevLoopResult.pr` still carries the last observed `PRState`.
+  OPEN PR does NOT end the watch and keeps its in-loop shepherd ticks; when the
+  status then returns to `implemented` (reconcile repair) and the PR merges,
+  the loop runs stages 6.2-6.4 as today.
+- [ ] T2b. A `needs-triage` proposal with `failure.code: merge-conflict` on an
+  OPEN PR (the mctl-agents#511 shape) keeps watching and ticking; after the
+  status returns to `implemented` and the PR merges, the loop completes via the
+  PR-state arm.
+- [ ] T2c. A terminal-set status with no pull request ends the watch;
+  `DevLoopResult.ended` names the status, and `DevLoopResult.pr` carries the
+  last observed `PRState` (or `None`).
+- [ ] T2d. An OPEN PR is resolved, then a later poll returns `found=False`
+  (transient 404) while the status is `needs-triage`: the watch does NOT end
+  on the status, and the existing `pr_lookup_grace_polls` rule applies;
+  `saw_open_pr` survives a `continue_as_new` hop.
 - [ ] T3. A `needs-triage` proposal with no `pr:` link ends on the FIRST poll —
   assert it does not spend `cadence.pr_lookup_grace_polls`.
 - [ ] T4. No in-loop shepherd tick is submitted at or after the terminal poll,
   and any tick already in flight is settled (no "workflow completed with a
-  pending task" error).
+  pending task" error). The terminal end fires at most once per execution,
+  including across a retry or replay (no duplicate relinquishing write).
 - [ ] T5. A `merged` proposal status does NOT end the watch early: the
   merged-PR path still reaches `_observe_deploy` / `_watch_incidents`.
 - [ ] T6. An unreadable status (`None`) and an unknown status (e.g.
