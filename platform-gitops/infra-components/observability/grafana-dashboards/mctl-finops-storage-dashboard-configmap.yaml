@@ -79,7 +79,7 @@ data:
           "targets": [
             {
               "datasource": { "type": "prometheus", "uid": "$datasource" },
-              "expr": "(kube_resourcequota{resourcequota=\"argo-workdir-local\", type=\"used\"} / ignoring(type) kube_resourcequota{resourcequota=\"argo-workdir-local\", type=\"hard\"}) * 100",
+              "expr": "(kube_resourcequota{namespace=\"argo-workflows\", resourcequota=\"argo-workdir-local\", resource=\"argo-workdir-local.storageclass.storage.k8s.io/requests.storage\", type=\"used\"} / ignoring(type) kube_resourcequota{namespace=\"argo-workflows\", resourcequota=\"argo-workdir-local\", resource=\"argo-workdir-local.storageclass.storage.k8s.io/requests.storage\", type=\"hard\"}) * 100",
               "legendFormat": "Quota %"
             }
           ]
@@ -428,7 +428,7 @@ data:
           "targets": [
             {
               "datasource": { "type": "prometheus", "uid": "$datasource" },
-              "expr": "sum by (storageclass) (kube_persistentvolume_capacity_bytes)",
+              "expr": "sum by (storageclass) (kube_persistentvolume_capacity_bytes * on (persistentvolume) group_left(storageclass) kube_persistentvolume_info)",
               "legendFormat": "{{storageclass}}"
             }
           ]
