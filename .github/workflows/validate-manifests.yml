@@ -310,6 +310,17 @@ jobs:
         # construction resists a value carrying shell metacharacters.
         run: python3 tests/test_cwft_investigate_work_context_argv.py
 
+      - name: Unit-test the implement/shepherd CWFTs' optional work-context env
+        # gitops#1408, mirroring gitops#1279 above onto cwft-mctl-agents-implement.yaml
+        # and cwft-mctl-agents-shepherd.yaml. The implement/shepherd argv is a
+        # cross-repo compatibility contract for the cron sweep,
+        # mctl_trigger_implementer and the shepherd cron: run_implementer.py and
+        # run_shepherd.py have no --work-item-id-style flags, so the five
+        # correlation values travel through env only, and env-only is what
+        # keeps a hostile identifier out of a root pod holding the gitops
+        # deploy key.
+        run: python3 tests/test_cwft_implement_shepherd_work_context_env.py
+
       - name: Unit-test the release-deploy bump script
         # The image-tag rewriter is a heredoc inside release-deploy.yaml, so
         # it only ever runs during a real release — a bug in it is found by
