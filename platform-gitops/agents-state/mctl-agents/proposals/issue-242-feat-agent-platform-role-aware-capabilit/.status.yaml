@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-09-24T13:19:30Z'
+status: merged
+updated_at: '2026-09-26T00:19:35Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -13,7 +13,8 @@ approval:
   approved_at: '2026-09-19T09:28:04Z'
 pr: https://github.com/mctlhq/mctl-agents/pull/485
 github:
-  state: open
-  head_sha: ddcccb31c9309d23b0dd6d15bb7bf7c69ae201ac
-  observed_at: '2026-09-24T13:19:30Z'
-review_attempts: 3
+  state: merged
+  head_sha: b3051b6380e8cd79e7f92bfb505f12ca154ab555
+  observed_at: '2026-09-26T00:19:35Z'
+merged_at: '2026-09-26T00:19:35Z'
+merge_commit: cf5adda9e4c870add44f76c971356d291d8a269f
