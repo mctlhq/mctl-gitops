@@ -196,7 +196,7 @@ workContext:
   enabled: false
   featureEnabled: false
   tenant: ""
-  tokenVaultKey: secret/data/platform/mctl-api/surface-tokens
+  tokenVaultKey: platform/mctl-api/surface-tokens
   tokenVaultProperty: telegram-token
   apiBaseUrl: ""
 extraContainers: []

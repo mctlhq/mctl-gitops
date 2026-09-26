@@ -215,7 +215,7 @@ workContext:
   tenant: ""                # -> MCTL_WORK_ITEM_TENANT
   apiBaseUrl: ""            # -> MCTL_API_BASE_URL, omitted while empty (mctl-telegram's own default applies)
   tokenEnvName: MCTL_SURFACE_TELEGRAM_TOKEN
-  tokenVaultKey: ""         # e.g. secret/data/platform/mctl-api/surface-tokens -- required when enabled: true
+  tokenVaultKey: ""         # e.g. platform/mctl-api/surface-tokens (bare path, no secret/data/ prefix) -- required when enabled: true
   tokenVaultProperty: ""    # e.g. telegram-token -- required when enabled: true
   tokenSecretName: ""       # target Secret name; defaults to <fullname>-work-context
   store: vault-backend
