@@ -99,8 +99,9 @@ mctl-api tightens.
 
 - Changing the mctl-gitops workflow templates. `cwft-mctl-agents-implement.yaml`
   and `cwft-mctl-agents-shepherd.yaml` must declare the optional parameters and
-  map them to pod env / CLI flags; that is mctl-gitops#1408 and it must deploy
-  first.
+  map them to pod env; that is mctl-gitops#1408 and it must deploy first.
+- Adding or persisting `temporal_run_id` in mctl-api. That is
+  mctlhq/mctl-api#402 and must deploy before this proposal emits the field.
 - Adding `--temporal-workflow-id` / `--temporal-run-id` CLI arguments to
   `orchestrator/run_implementer.py` or `orchestrator/run_shepherd.py`. The
   producer reads correlation from the pod environment
@@ -120,7 +121,7 @@ mctl-api tightens.
 - Any change to the approve CWFT, to `_record`, to the agent registry resolve,
   or to queue routing.
 
-## Open questions
+## Resolved design points and remaining questions
 
 - The issue's Scope asks for `execution_id` on the implement and shepherd
   submits. This proposal deliberately omits it. The loop's `dispatched.execution_id`
@@ -141,25 +142,16 @@ mctl-api tightens.
   repo. This proposal adds it. If mctl-gitops#1408 chose a different env var
   name for the pod side, the name here must match it exactly, and that is the
   one cross-repo string this change cannot verify from inside mctl-agents.
-- `temporal_run_id` is not a declared ADR-012 field.
-  `docs/adr/012-model-usage-cost-attribution-contract.md:143-153` lists the
-  correlation block without it, and lines 188-192 name `temporal_workflow_id`
-  as the join key to `agent_executions` with `argo_workflow_name`
-  disambiguating the Argo run inside it. Adding `temporal_run_id` to a usage
-  record is therefore an amendment to that contract and needs mctl-api's ingest
-  to accept the field first. This proposal treats the ADR amendment and the
-  mctl-api side as prerequisites for the producer half, and sequences tasks
-  accordingly. The reviewer should decide whether the run id is wanted at all,
-  or whether `temporal_workflow_id` + `argo_workflow_name` already answer owner
-  decision 4 — in which case this reduces to passing
-  `temporal_workflow_id` / `work_item_id` and nothing in `usage_ledger.py`
-  changes.
-- Whether mctl-api's `validateCorrelation` (`internal/usage/types.go`)
-  constrains `temporal_run_id`'s shape. `usage_ledger.py:152-155` warns that a
-  looser check on this side lets a record through that "costs its whole
-  batch". The three env-sourced fields are currently free text there; the
-  assumption is that a fourth is too. Worth confirming against mctl-api before
-  merge.
+- `temporal_run_id` is required by owner decision 4 on mctlhq/.github#50;
+  that is no longer an open product question. The missing durable API contract
+  is tracked in mctlhq/mctl-api#402, which adds `temporal_run_id` to the usage
+  record and persistence layer. #402 must be merged and deployed before this
+  proposal starts emitting `WORKFLOW_TEMPORAL_RUN_ID` into usage records.
+  This proposal owns only the mctl-agents producer/read side and the DevLoop
+  submit plumbing.
+- The API-side validation shape for `temporal_run_id` is owned by
+  mctlhq/mctl-api#402. Before merge, verify the deployed API accepts the field
+  and mirror any stricter validation here rather than guessing.
 - The issue asks for "replay of a pre-change history" as coverage.
   `tests/test_workflow_replay.py:15-46` measured, on temporalio 1.31.0, that
   "an extra argument added to an existing activity" is **invisible** to
