@@ -1,6 +1,6 @@
-status: proposed
-updated_at: '2026-09-26T14:40:00Z'
-updated_by: mashkovd
+status: accepted
+updated_at: '2026-09-26T14:38:35Z'
+updated_by: mctl-agents[bot]
 source:
   type: github_issue
   repo: mctlhq/mctl-agents
@@ -17,3 +17,6 @@ notes: >-
   is a separate, human-authored mctl-gitops PR that lands after this one.
   The live benchmark measurement is an operator step after both. This
   approval also approves the governance decision in design.md sec. 1.
+approval:
+  approved_by: 'mashkovd'
+  approved_at: '2026-09-26T14:38:35Z'
