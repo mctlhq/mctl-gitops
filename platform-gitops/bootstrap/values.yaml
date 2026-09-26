@@ -199,3 +199,27 @@ otelCollector:
 #   Done 2026-09-24: step 1 (Vault v2634), step 2 below.
 usageWriter:
   enabled: true
+
+# The surface:telegram principal's bearer token (mctlhq/mctl-telegram#443,
+# mctlhq/mctl-gitops#1405): mctl-api authenticates it from
+# MCTL_SURFACE_TELEGRAM_TOKEN (internal/auth/oidc.go, surfaceTokenEnv maps
+# telegram -> that variable, minSurfaceTokenLen = 32). Same pattern as
+# usageWriter above -- its own ExternalSecret and its own flag, so a Vault
+# property that does not exist degrades only this principal.
+#
+# Owner steps, in this order:
+#   0. The mctl-api Helm chart (a different repo, helm/ dir) needs an
+#      optional surfaceTelegramTokenSecret value mirroring
+#      usageWriterTokenSecret. Until that lands, mctl-api.yaml's reference is
+#      inert: Helm passes the value and mctl-api's chart simply ignores an
+#      unknown key.
+#   1. printf '%s' "$(openssl rand -hex 32)" \
+#        | vault kv patch -method=rw secret/platform/mctl-api/surface-tokens telegram-token=-
+#      (-method=rw, never `put`: put would replace every other key at that
+#      path. At least 32 bytes per minSurfaceTokenLen, and it must differ
+#      from MCTL_AGENT_SERVICE_TOKEN and from every other surface token, or
+#      mctl-api refuses it.)
+#   2. Set enabled: true below (mctl-api then rolls to pick up the env).
+# Not done yet: step 0 has not landed, so this stays false.
+surfaceTelegramToken:
+  enabled: false

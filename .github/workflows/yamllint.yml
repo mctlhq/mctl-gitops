@@ -55,6 +55,7 @@ jobs:
             platform-gitops/bootstrap/templates/observability/eval-namespace.yaml
             platform-gitops/bootstrap/templates/observability/eval-candidates.yaml
             platform-gitops/bootstrap/templates/mctl-platform/mctl-api-usage-writer.yaml
+            platform-gitops/bootstrap/templates/mctl-platform/mctl-api-surface-telegram.yaml
           rules:
             # Helm templates routinely exceed 80 cols and carry Go-template
             # markers, so line-length / comments / document-start are noise.

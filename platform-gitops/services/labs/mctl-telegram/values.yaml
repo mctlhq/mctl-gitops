@@ -165,6 +165,33 @@ ingress:
       hosts:
         - tg.mctl.ai
         - labs-mctl-telegram.mctl.ai
+# Telegram work-context adapter (mctlhq/mctl-telegram#443, shipped 0.69.0,
+# mctlhq/mctl-gitops#1405). Off by default: the chart's workContext.enabled
+# gate leaves every rendered manifest byte-identical to before this block
+# existed. tokenVaultKey/tokenVaultProperty are set now (they only take
+# effect once enabled: true) so the ExternalSecret's Vault reference is
+# correct the moment it is turned on, matching the surface:telegram token
+# mctl-api reads under the same Vault path (bootstrap/values.yaml
+# surfaceTelegramToken).
+#
+# Owner steps, in this order -- do not skip ahead, `strategy.type: Recreate`
+# plus mctl-telegram refusing to start without a token when
+# WORK_CONTEXT_ENABLED=true is exactly why steps 3 and 4 below are separate:
+#   1. printf '%s' "$(openssl rand -hex 32)" \
+#        | vault kv patch -method=rw secret/platform/mctl-api/surface-tokens telegram-token=-
+#      (same token bootstrap/values.yaml's surfaceTelegramToken step writes;
+#      write it once, both sides read it.)
+#   2. Set tenant below to the real tenant slug this deployment serves.
+#   3. Set enabled: true below and confirm the ExternalSecret's Secret
+#      synced: kubectl -n labs get secret labs-mctl-telegram-work-context.
+#   4. Only then set featureEnabled: true.
+workContext:
+  enabled: false
+  featureEnabled: false
+  tenant: ""
+  tokenVaultKey: platform/mctl-api/surface-tokens
+  tokenVaultProperty: telegram-token
+  apiBaseUrl: ""
 extraContainers: []
 dbSecret:
   vaultPath: "teams/labs/mctl-telegram/database"

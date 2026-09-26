@@ -223,6 +223,17 @@ spec:
           # leaves the principal disabled instead of failing the pod.
           usageWriterTokenSecret: mctl-api-usage-writer
           {{- end }}
+          {{- if (default dict .Values.surfaceTelegramToken).enabled }}
+
+          # The surface:telegram bearer token (mctlhq/mctl-telegram#443), from
+          # the mctl-api-surface-telegram ExternalSecret. Gated with it on
+          # surfaceTelegramToken.enabled in bootstrap/values.yaml. Requires
+          # the mctl-api chart (a different repo, helm/ dir) to carry an
+          # optional surfaceTelegramTokenSecret value mirroring
+          # usageWriterTokenSecret -- until that lands, Helm passes this
+          # value and the chart simply ignores the unknown key.
+          surfaceTelegramTokenSecret: mctl-api-surface-telegram
+          {{- end }}
 
           resources:
             requests:

@@ -118,7 +118,7 @@ spec:
           {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-          {{- if or .Values.env .Values.envValueFrom .Values.otel.enabled }}
+          {{- if or .Values.env .Values.envValueFrom .Values.otel.enabled (default dict .Values.workContext).enabled }}
           env:
             {{- include "base-service.env" . | trim | nindent 12 }}
           {{- end }}

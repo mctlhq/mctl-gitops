@@ -129,6 +129,26 @@ jobs:
             if grep -qF "$marker" "$tmpdir/off.yaml"; then echo "::error::flag off: '$marker' rendered"; exit 1; fi
           done
 
+      # mctlhq/mctl-gitops#1405: same both-states shape as the usage-writer
+      # overlay above. On: the mctl-api-surface-telegram ExternalSecret and
+      # the chart value appear and are schema-valid. Off: neither does.
+      - name: Render and validate the surface-telegram overlay (issue-1405)
+        run: |
+          set -euo pipefail
+          tmpdir=$(mktemp -d)
+          helm template test platform-gitops/bootstrap \
+            -f platform-gitops/bootstrap/values.yaml \
+            --set surfaceTelegramToken.enabled=false > "$tmpdir/off.yaml"
+          helm template test platform-gitops/bootstrap \
+            -f platform-gitops/bootstrap/values.yaml \
+            --set surfaceTelegramToken.enabled=true > "$tmpdir/on.yaml"
+          kubeconform -strict -summary -schema-location default \
+            -schema-location "$CRD_SCHEMA_LOCATION" "$tmpdir/on.yaml"
+          for marker in 'name: mctl-api-surface-telegram' 'surfaceTelegramTokenSecret: mctl-api-surface-telegram' 'property: telegram-token'; do
+            grep -qF "$marker" "$tmpdir/on.yaml" || { echo "::error::flag on: missing '$marker'"; exit 1; }
+            if grep -qF "$marker" "$tmpdir/off.yaml"; then echo "::error::flag off: '$marker' rendered"; exit 1; fi
+          done
+
       - name: Validate platform skill registry
         run: |
           python3 -m pip install --quiet pyyaml
@@ -383,6 +403,16 @@ jobs:
         run: |
           python3 -m pip install --quiet pyyaml
           python3 tests/test_base_service_otel_env.py
+
+      - name: Unit-test base-service's work-context env on both workload kinds
+        # mctlhq/mctl-gitops#1405, same defect class as the OTEL test above:
+        # gate off must change nothing, gate on must render the ExternalSecret
+        # and all 4 env vars identically on Deployment and Rollout, a
+        # service's own env/envValueFrom must win, and an empty
+        # tokenVaultKey/tokenVaultProperty must fail the render loudly.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_base_service_work_context_env.py
 
       - name: Check the otel-collector alert lookbacks against their holds
         # `increase(...[W]) > 0` with W longer than `for: H` pages for a spike
