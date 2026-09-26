@@ -99,7 +99,7 @@ spec:
             # holds the verifier. If a tenant ever moves under a basePath this
             # entry stops matching, which fails loudly and is the safer way to
             # find out.
-            OAUTH_ALLOWED_REDIRECT_URIS: "https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback,http://localhost:6274/oauth/callback,http://localhost:6274/oauth/callback/debug,https://chatgpt.com/connector/oauth/*,https://antigravity.google/*,https://admins-openclaw.mctl.ai/overview?mctl_oauth=1,https://labs-openclaw.mctl.ai/overview?mctl_oauth=1,https://ovk-openclaw.mctl.ai/overview?mctl_oauth=1"
+            OAUTH_ALLOWED_REDIRECT_URIS: "https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback,http://localhost:6274/oauth/callback,http://localhost:6274/oauth/callback/debug,https://chatgpt.com/connector/oauth/*,https://antigravity.google/*,https://admins-openclaw.mctl.ai/overview?mctl_oauth=1,https://labs-openclaw.mctl.ai/overview?mctl_oauth=1,https://ovk-openclaw.mctl.ai/overview?mctl_oauth=1,https://mcp.mctl.ai/servers-callback,https://dash.cloudflare.com/6a09f637d20e1f66a8e9d45ebe778058/one/access-controls/ai-controls/mcp-server/oauth-callback/api"
             # The private aggregate portal mcp.mctl.ai (Cloudflare MCP Server
             # Portal, mctlhq/.github#35) stores one client id per upstream at
             # configuration time and cannot re-register after a pod restart, so
