@@ -214,21 +214,16 @@ _CORRELATION_ENV = (
 Without this, change 1 is unobservable and the issue's acceptance criterion
 cannot be met by any amount of CWFT plumbing.
 
-This is a **contract addition, not just a code change**, and that is the
-finding most likely to change the shape of the work.
-`docs/adr/012-model-usage-cost-attribution-contract.md:143-153` enumerates the
-correlation block — `temporal_workflow_id`, `argo_workflow_name`, `agent`,
-`devloop_stage`, `target_repo`, `issue_number`, `pr_number`, `work_item_id`,
-`execution_id`, `trace_id`/`span_id` — and `temporal_run_id` is not in it.
-Lines 188-192 of the same ADR name `temporal_workflow_id` as "the join key" to
-`agent_executions`, with `argo_workflow_name` disambiguating the Argo run
-within it. So ADR-012 currently answers the attribution question with the
-workflow id plus the Argo name, and the run id is new surface that mctl-api's
-ingest must accept before it can be stored. The ADR needs a matching
-amendment, and `_CORRELATION_ENV` should not grow the entry until mctl-api
-accepts the field — otherwise every DevLoop pod sends a key the ingest may
-reject, and `usage_ledger.py:152-155` warns a rejected field "costs its whole
-batch".
+This is a **cross-repo contract addition**, not just a local code change.
+Owner decision 4 on mctlhq/.github#50 already requires the run id; the missing
+durable API side is tracked explicitly by mctlhq/mctl-api#402. #402 adds the
+optional `temporal_run_id` field to the usage record and persistence layer and
+must be merged and deployed before this producer change starts sending it.
+
+Accordingly, `_CORRELATION_ENV` must not grow the new entry until #402 is live:
+otherwise the producer would send correlation that the durable ledger cannot
+store/query consistently. The ADR amendment on the mctl-agents side records the
+producer mapping; #402 records the server-side field and persistence contract.
 
 The read path at
 `usage_ledger.py:371-375` already handles absence by producing `""`, which the

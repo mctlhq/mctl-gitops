@@ -1,7 +1,8 @@
 # Tasks: issue-505-feat-usage-devloopworkflow-passes-tempor
 
-Order matters. Tasks 1-2 are cross-repo confirmations that can invalidate the
-rest; do them before writing code. Tasks 3-6 are the mctl-agents change.
+Order matters. Task 1 confirms the mctl-gitops#1408 contract. Task 2 verifies
+the server-side mctlhq/mctl-api#402 prerequisite. Tasks 3-6 are the
+mctl-agents change; task 5 must not merge before #402 is deployed.
 
 - [ ] 1. Confirm the mctl-gitops#1408 contract before writing any code: read
   `cwft-mctl-agents-implement.yaml` and `cwft-mctl-agents-shepherd.yaml` on
@@ -15,16 +16,14 @@ rest; do them before writing code. Tasks 3-6 are the mctl-agents change.
   `WORKFLOW_WORK_ITEM_ID`, task 5 uses their names instead and the mismatch is
   called out in review.
 
-- [ ] 2. Resolve the `temporal_run_id` contract question (depends on 1).
-  `docs/adr/012-model-usage-cost-attribution-contract.md:143-153` does not
-  declare `temporal_run_id`; lines 188-192 make `temporal_workflow_id` the join
-  key. Confirm with the owner whether the run id is wanted on the record, and
-  whether mctl-api's usage ingest and `validateCorrelation`
-  (`internal/usage/types.go`) accept it. — DoD: a recorded decision. If yes, an
-  ADR-012 amendment is drafted and mctl-api accepts the field before task 5
-  merges. If no, task 5 is dropped and tasks 3/4 narrow to
-  `temporal_workflow_id` + `work_item_id`, which satisfies the join ADR-012
-  already defines.
+- [ ] 2. Verify the server-side prerequisite mctlhq/mctl-api#402 (depends on 1).
+  Owner decision 4 on mctlhq/.github#50 already requires `temporal_run_id`, so
+  there is no remaining product decision here. Before task 5 merges, confirm
+  #402 is merged **and deployed**, and verify the live usage ingest accepts and
+  round-trips `temporal_run_id` while preserving existing dedupe semantics.
+  — DoD: the PR description links the deployed #402 evidence; if #402 is not
+  live, this proposal may implement the workflow-side code but must not merge
+  the producer emission.
 
 - [ ] 3. Add the patch-id constant and the `_launch_correlation` helper to
   `orchestrator/temporal/workflows/dev_loop.py` (depends on 1). Put
@@ -49,7 +48,7 @@ rest; do them before writing code. Tasks 3-6 are the mctl-agents change.
   `ImplementSweepWorkflow` (`implement_sweep.py:168-170`) are provably
   unchanged; `git diff` touches only `dev_loop.py` in this task.
 
-- [ ] 5. Teach the producer to read the run id (depends on 2). Add
+- [ ] 5. Teach the producer to read the run id (depends on 2 and on deployed mctlhq/mctl-api#402). Add
   `("WORKFLOW_TEMPORAL_RUN_ID", "temporal_run_id")` to `_CORRELATION_ENV` at
   `orchestrator/usage_ledger.py:138-142`, and update the module docstring at
   `usage_ledger.py:51-52` so it lists four env-sourced fields instead of
